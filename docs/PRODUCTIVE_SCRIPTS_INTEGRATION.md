@@ -112,7 +112,7 @@ const result = await chain.execute(executor);
 **New Feature:** Pre-defined script templates for common workflows
 
 ```typescript
-import { runProductiveScript } from '@/lib/agent/productive-scripts';
+import { runProductiveScript } from '@bing/shared/agent/productive-scripts';
 
 // Run build script
 const result = await runProductiveScript('build', {
@@ -146,7 +146,7 @@ const result = await runProductiveScript('test', {
 ### Example 1: Build and Deploy Pipeline
 
 ```typescript
-import { runProductiveScript } from '@/lib/agent/productive-scripts';
+import { runProductiveScript } from '@bing/shared/agent/productive-scripts';
 
 // Build
 const buildResult = await runProductiveScript('build', {
@@ -166,7 +166,7 @@ if (buildResult.success) {
 ### Example 2: Custom Script with Capabilities
 
 ```typescript
-import { runCustomScript } from '@/lib/agent/productive-scripts';
+import { runCustomScript } from '@bing/shared/agent/productive-scripts';
 import { FILE_READ_CAPABILITY, FILE_WRITE_CAPABILITY } from '@/lib/tools/capabilities';
 
 const result = await runCustomScript([
@@ -194,7 +194,7 @@ const result = await runCustomScript([
 ### Example 3: Parallel Test Execution
 
 ```typescript
-import { createCapabilityChain } from '@/lib/agent/capability-chain';
+import { createCapabilityChain } from '@bing/shared/agent/capability-chain';
 
 const chain = createCapabilityChain({
   name: 'Parallel Tests',

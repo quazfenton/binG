@@ -1,0 +1,45 @@
+[2026-04-10T07:16:53.897Z] [INFO] ╔══════════════════════════════════════════════════════════════╗
+[2026-04-10T07:16:53.902Z] [INFO] ║  FULL WORKFLOW E2E TEST SUITE - ROUND 2                    ║
+[2026-04-10T07:16:53.902Z] [INFO] ╚══════════════════════════════════════════════════════════════╝
+[2026-04-10T07:16:53.902Z] [INFO] === AUTHENTICATION ===
+[2026-04-10T07:16:54.673Z] [INFO] 
+=== TEST 1: Google Gemini 3 Flash Preview ===
+[2026-04-10T07:17:17.212Z] [INFO] 
+=== TEST 2: Nvidia meta/llama-3.3-70b-instruct ===
+[2026-04-10T07:17:39.821Z] [INFO] 
+=== TEST 3: Non-Streaming Google ===
+[2026-04-10T07:18:02.476Z] [INFO] 
+=== TEST 4: Code Generation (Vite App) ===
+[2026-04-10T07:18:33.539Z] [INFO] 
+=== TEST 5: Multi-File Context Bundling ===
+[2026-04-10T07:18:58.114Z] [INFO] 
+=== TEST 6: Diff Application / Modify Existing File ===
+[2026-04-10T07:19:22.159Z] [INFO] 
+=== TEST 7: Empty Response Retry (...) ===
+[2026-04-10T07:19:46.387Z] [INFO] 
+=== TEST 8: MCP Tool Definitions ===
+[2026-04-10T07:19:49.445Z] [INFO] 
+=== TEST 9: VFS Path Resolution ===
+[2026-04-10T07:19:52.558Z] [INFO] 
+=== TEST 10: OpenRouter (openai/gpt-oss-120b:free) ===
+[2026-04-10T07:20:16.221Z] [INFO] 
+=== TEST 11: Nvidia Nemotron-4-340b ===
+[2026-04-10T07:20:39.296Z] [INFO] 
+=== TEST 12: Nvidia Nemotron Nano 12b ===
+[2026-04-10T07:21:01.496Z] [INFO] 
+=== TEST 13: OpenRouter Free (nemotron-3-nano-30b-a3b:free) ===
+[2026-04-10T07:21:25.135Z] [INFO] 
+=== TEST 14: Google Gemini 3.1 Flash Lite ===
+[2026-04-10T07:21:48.853Z] [INFO] 
+=== TEST 15: VFS Write → LLM Read → Modify Cycle ===
+[2026-04-10T07:22:12.938Z] [INFO] 
+=== TEST 16: Batch File Creation via LLM ===
+[2026-04-10T07:22:43.801Z] [INFO] 
+=== TEST 17: LLM Uses read_file Tool ===
+[2026-04-10T07:23:07.219Z] [INFO] 
+============================================================
+[2026-04-10T07:23:07.220Z] [INFO] FINAL RESULTS: 58/59 passed
+[2026-04-10T07:23:07.220Z] [INFO] 
+FAILED TESTS:
+[2026-04-10T07:23:07.220Z] [INFO]   ❌ Mentions version
+[2026-04-10T07:23:07.220Z] [INFO] ============================================================

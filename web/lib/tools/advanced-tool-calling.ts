@@ -197,19 +197,11 @@ const MODEL_PRICING: Record<string, { input: number; output: number }> = {
 
 // Task to model mapping (optimized for quality)
 const TASK_MODEL_MAPPING: Record<TaskType, { provider: string; model: string; reason: string }> = {
-  code_generation: {
-    provider: 'anthropic',
-    model: 'claude-3-5-sonnet-20241022',
-    reason: 'Claude excels at code generation with excellent understanding of context',
-  },
-  code_review: {
-    provider: 'anthropic',
-    model: 'claude-3-5-sonnet-20241022',
-    reason: 'Strong code analysis and attention to detail',
-  },
+  code_generation: { provider: 'anthropic', model: 'claude-3-5-sonnet-20241022', reason: 'Claude excels at code generation with excellent understanding of context' },
+  code_review: { provider: 'anthropic', model: 'claude-3-5-sonnet-20241022', reason: 'Strong code analysis and attention to detail' },
   debugging: {
-    provider: 'openai',
-    model: 'gpt-4o',
+    provider: 'google',
+    model: 'gemini-3-flash-preview',
     reason: 'Excellent problem-solving and error analysis',
   },
   documentation: {
@@ -218,13 +210,13 @@ const TASK_MODEL_MAPPING: Record<TaskType, { provider: string; model: string; re
     reason: 'Good natural language generation for documentation',
   },
   chat: {
-    provider: 'openai',
-    model: 'gpt-4o',
+    provider: 'google',
+    model: 'gemini-3-flash-preview',
     reason: 'Natural conversation flow and context retention',
   },
   analysis: {
-    provider: 'openai',
-    model: 'gpt-4o',
+    provider: 'google',
+    model: 'gemini-3-flash-preview',
     reason: 'Strong analytical capabilities',
   },
   creative: {
@@ -233,13 +225,13 @@ const TASK_MODEL_MAPPING: Record<TaskType, { provider: string; model: string; re
     reason: 'Creative and diverse output generation',
   },
   math: {
-    provider: 'openai',
-    model: 'o1-preview',
+    provider: 'google',
+    model: 'gemini-3-flash-preview',
     reason: 'Specialized reasoning model for mathematical tasks',
   },
   reasoning: {
-    provider: 'openai',
-    model: 'o1-preview',
+    provider: 'google',
+    model: 'gemini-3-flash-preview',
     reason: 'Advanced reasoning capabilities',
   },
   translation: {
@@ -256,31 +248,31 @@ const TASK_MODEL_MAPPING: Record<TaskType, { provider: string; model: string; re
 
 // Cost-optimized mappings
 const COST_OPTIMAL_MAPPING: Record<TaskType, { provider: string; model: string }> = {
-  code_generation: { provider: 'openai', model: 'gpt-4o-mini' },
-  code_review: { provider: 'openai', model: 'gpt-4o-mini' },
-  debugging: { provider: 'openai', model: 'gpt-4o-mini' },
-  documentation: { provider: 'google', model: 'gemini-pro' },
-  chat: { provider: 'openai', model: 'gpt-3.5-turbo' },
-  analysis: { provider: 'openai', model: 'gpt-4o-mini' },
-  creative: { provider: 'google', model: 'gemini-pro' },
-  math: { provider: 'openai', model: 'gpt-4o-mini' },
-  reasoning: { provider: 'openai', model: 'gpt-4o-mini' },
-  translation: { provider: 'google', model: 'gemini-pro' },
-  summarization: { provider: 'openai', model: 'gpt-3.5-turbo' },
+  code_generation: { provider: 'mistral', model: 'mistral-small-latest' },
+  code_review: { provider: 'mistral', model: 'mistral-small-latest' },
+  debugging: { provider: 'mistral', model: 'mistral-small-latest' },
+  documentation: { provider: 'google', model: 'gemini-3-flash-preview' },
+  chat: { provider: 'mistral', model: 'mistral-small-latest' },
+  analysis: { provider: 'mistral', model: 'mistral-small-latest' },
+  creative: { provider: 'google', model: 'gemini-3-flash-preview' },
+  math: { provider: 'mistral', model: 'mistral-small-latest' },
+  reasoning: { provider: 'mistral', model: 'mistral-small-latest' },
+  translation: { provider: 'google', model: 'gemini-3-flash-preview' },
+  summarization: { provider: 'google', model: 'gemini-3-flash-preview' },
 }
 
-// Speed-optimized mappings (fastest models)
+// Speed-optimized mappings
 const SPEED_OPTIMAL_MAPPING: Record<TaskType, { provider: string; model: string }> = {
-  code_generation: { provider: 'openai', model: 'gpt-4o-mini' },
+  code_generation: { provider: 'mistral', model: 'mistral-small-latest' },
   code_review: { provider: 'anthropic', model: 'claude-3-haiku-20240307' },
-  debugging: { provider: 'openai', model: 'gpt-4o-mini' },
-  documentation: { provider: 'google', model: 'gemini-1.5-flash' },
-  chat: { provider: 'openai', model: 'gpt-4o-mini' },
-  analysis: { provider: 'openai', model: 'gpt-4o-mini' },
-  creative: { provider: 'google', model: 'gemini-1.5-flash' },
-  math: { provider: 'openai', model: 'gpt-4o-mini' },
-  reasoning: { provider: 'openai', model: 'gpt-4o-mini' },
-  translation: { provider: 'google', model: 'gemini-1.5-flash' },
+  debugging: { provider: 'mistral', model: 'mistral-small-latest' },
+  documentation: { provider: 'google', model: 'gemini-3-flash-preview' },
+  chat: { provider: 'mistral', model: 'mistral-small-latest' },
+  analysis: { provider: 'mistral', model: 'mistral-small-latest' },
+  creative: { provider: 'google', model: 'gemini-3-flash-preview' },
+  math: { provider: 'mistral', model: 'mistral-small-latest' },
+  reasoning: { provider: 'mistral', model: 'mistral-small-latest' },
+  translation: { provider: 'google', model: 'gemini-3-flash-preview' },
   summarization: { provider: 'anthropic', model: 'claude-3-haiku-20240307' },
 }
 
@@ -345,11 +337,12 @@ class AdvancedToolRouterImpl implements AdvancedToolRouter {
 
     // Default estimates
     const defaults: Record<string, number> = {
-      openai: 1500,
-      anthropic: 2000,
+      mistral: 800,
       google: 1000,
+      anthropic: 2000,
+      openai: 1500,
     }
-    return defaults[provider] || 2000
+    return defaults[provider] || 1500
   }
 
   getOptimalProvider(goal?: OptimizationGoal): string {
@@ -357,36 +350,32 @@ class AdvancedToolRouterImpl implements AdvancedToolRouter {
 
     const allMetrics = Array.from(this.metrics.values())
     if (allMetrics.length === 0) {
-      return 'openai' // Default
+      return 'mistral' // Default
     }
 
     switch (effectiveGoal) {
       case 'cost':
-        // Find cheapest provider with acceptable success rate
         return allMetrics
           .filter(m => m.successRate >= 0.9)
-          .sort((a, b) => a.averageCostPerRequest - b.averageCostPerRequest)[0]?.name || 'openai'
+          .sort((a, b) => a.averageCostPerRequest - b.averageCostPerRequest)[0]?.name || 'mistral'
 
       case 'speed':
-        // Find fastest provider
         return allMetrics
           .filter(m => m.successRate >= 0.9)
-          .sort((a, b) => a.averageLatencyMs - b.averageLatencyMs)[0]?.name || 'openai'
+          .sort((a, b) => a.averageLatencyMs - b.averageLatencyMs)[0]?.name || 'mistral'
 
       case 'quality':
-        // Find most reliable provider
         return allMetrics
-          .sort((a, b) => b.successRate - a.successRate)[0]?.name || 'openai'
+          .sort((a, b) => b.successRate - a.successRate)[0]?.name || 'mistral'
 
       case 'balanced':
       default:
-        // Score based on combination of factors
         return allMetrics
           .map(m => ({
             name: m.name,
             score: m.successRate * 0.5 + (1 - m.averageCostPerRequest / 0.01) * 0.25 + (1 - m.averageLatencyMs / 5000) * 0.25,
           }))
-          .sort((a, b) => b.score - a.score)[0]?.name || 'openai'
+          .sort((a, b) => b.score - a.score)[0]?.name || 'mistral'
     }
   }
 

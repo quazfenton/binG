@@ -1,622 +1,350 @@
 /**
- * Vercel AI SDK Tool Integration
+ * Vercel AI SDK Tool Adapter — Type-Safe Tool Conversion
  *
- * Converts existing capability definitions and tools from lib/tools
- * into Vercel AI SDK tool format for seamless integration.
- *
- * @example
- * ```typescript
- * import { convertCapabilitiesToTools } from '@/lib/chat/vercel-ai-tools';
- *
- * const tools = await convertCapabilitiesToTools(['file.read', 'file.write', 'sandbox.execute']);
- *
- * const result = streamText({
- *   model: openai('gpt-4o'),
- *   messages,
- *   tools,
- * });
- * ```
+ * Converts capability definitions and MCP tools into Vercel AI SDK format
+ * with proper schema preservation, type safety, and priority-based filtering.
  */
 
-import { tool, type Tool } from 'ai';
+import { tool, type Tool, type ToolCallOptions } from 'ai';
 import { z } from 'zod';
 import { chatLogger } from './chat-logger';
 import type { ToolExecutionContext } from './vercel-ai-streaming';
+import type { ToolExecutionContext as RouterToolContext } from '@/lib/tools/tool-integration/types';
+import { isMCPAvailable, vfsTools as mcpVFSTools, toolContextStore, getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp';
+import { ALL_CAPABILITIES, type CapabilityDefinition } from '@/lib/tools/capabilities';
+import { normalizeSessionId } from '@/lib/virtual-filesystem/scope-utils';
+import { getCapabilityRouter } from '@/lib/tools/router';
 
-/**
- * Convert a capability definition to Vercel AI SDK tool
- *
- * @param capabilityId - Capability ID (e.g., 'file.read', 'sandbox.execute')
- * @param executeFn - Function to execute the capability
- * @param options - Tool options (description, parameters)
- * @returns Vercel AI SDK tool
- */
-export function createToolFromCapability(
-  capabilityId: string,
-  executeFn: (args: any, context: ToolExecutionContext) => Promise<any>,
-  options?: {
-    description?: string;
-    parameters?: z.ZodSchema;
-  }
-): Tool {
-  return tool({
-    description: options?.description || `Execute ${capabilityId} capability`,
-    parameters: options?.parameters || z.record(z.any()),
-    // @ts-ignore - Workaround for Vercel AI SDK tool() overload matching issue
-    execute: async (args: any) => {
-      const context: ToolExecutionContext = {};
+// ============================================================================
+// Types
+// ============================================================================
 
-      try {
-        chatLogger.debug('Executing capability via Vercel AI SDK tool', {
-          capabilityId,
-          args: sanitizeArgs(args),
-        });
+export type ToolSource = 'vfs' | 'capability' | 'capability-chain' | 'mcp';
+export type ToolPriority = ToolSource | 'none';
 
-        const result = await executeFn(args, context);
-
-        chatLogger.debug('Capability execution completed', {
-          capabilityId,
-          success: true,
-        });
-
-        return result;
-      } catch (error: any) {
-        chatLogger.error('Capability execution failed', {
-          capabilityId,
-          error: error.message,
-        });
-        throw error;
-      }
-    },
-  }) as unknown as Tool;
+export interface ToolSetOptions {
+  priority?: ToolPriority[];
+  allowedCapabilities?: string[];
+  excludedTools?: string[];
+  includeCapabilityChain?: boolean;
 }
 
-/**
- * Sanitize arguments for logging (remove sensitive data)
- */
-function sanitizeArgs(args: any): any {
+export interface ToolSet {
+  tools: Record<string, Tool>;
+  stats: {
+    vfs: number;
+    capability: number;
+    mcp: number;
+    total: number;
+    excluded: string[];
+  };
+}
+
+// ============================================================================
+// Schema Conversion
+// ============================================================================
+
+function toToolParameters(schema: z.ZodSchema | undefined): z.ZodObject<z.ZodRawShape> {
+  if (!schema) return z.object({}).describe('No parameters required');
+  if (schema instanceof z.ZodObject) return schema;
+
+  const typeName = (schema as any)._def?.typeName;
+  if (typeName === 'ZodOptional' || typeName === 'ZodNullable') {
+    const inner = (schema as any).unwrap?.();
+    if (inner) return toToolParameters(inner);
+  }
+  if (typeName === 'ZodEffects') {
+    const inner = (schema as any)._def?.schema;
+    if (inner) return toToolParameters(inner);
+  }
+  if (typeName === 'ZodLazy') {
+    try {
+      const inner = (schema as any)._def?.getter?.();
+      if (inner) return toToolParameters(inner);
+    } catch { /* fall through */ }
+  }
+  if (typeName === 'ZodDefault' || typeName === 'ZodCatch') {
+    const inner = (schema as any)._def?.innerType;
+    if (inner) return toToolParameters(inner);
+  }
+
+  chatLogger.warn('Capability schema is not a ZodObject, using empty params', {
+    schemaType: typeName || schema.constructor?.name || 'unknown',
+  });
+  return z.object({}).describe('Parameters not available');
+}
+
+function sanitizeArgs(args: unknown): unknown {
   if (!args || typeof args !== 'object') return args;
-
-  const sanitized: any = {};
-  const sensitiveKeys = ['apiKey', 'password', 'secret', 'token', 'authorization'];
-
-  for (const [key, value] of Object.entries(args)) {
-    if (sensitiveKeys.some(sensitive => key.toLowerCase().includes(sensitive))) {
+  const sensitiveKeys = ['apikey', 'password', 'secret', 'token', 'authorization', 'credential'];
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(args as Record<string, unknown>)) {
+    if (sensitiveKeys.some(s => key.toLowerCase().includes(s))) {
       sanitized[key] = '[REDACTED]';
     } else {
       sanitized[key] = value;
     }
   }
-
   return sanitized;
 }
 
-/**
- * File system tools for Vercel AI SDK
- */
-export function createFileSystemTools(context: ToolExecutionContext): Record<string, Tool> {
-  return {
-    read_file: createToolFromCapability(
-      'file.read',
-      async (args: { path: string; encoding?: string }) => {
-        // Lazy import to avoid circular dependencies
-        const { virtualFilesystem } = await import('../virtual-filesystem/virtual-filesystem-service');
-        const ownerId = context.userId || 'default';
-        const file = await virtualFilesystem.readFile(ownerId, args.path);
-        return {
-          success: true,
-          content: file.content,
-          path: file.path,
-          size: file.size,
-        };
-      },
-      {
-        description: 'Read contents of a file from the filesystem',
-        parameters: z.object({
-          path: z.string().describe('File path to read'),
-          encoding: z.enum(['utf-8', 'base64', 'binary']).optional().default('utf-8'),
-        }),
-      }
-    ),
+// ============================================================================
+// Tool Builders
+// ============================================================================
 
-    write_file: createToolFromCapability(
-      'file.write',
-      async (args: { path: string; content: string; encoding?: string; createDirs?: boolean }) => {
-        const { virtualFilesystem } = await import('../virtual-filesystem/virtual-filesystem-service');
-        const ownerId = context.userId || 'default';
-        const file = await virtualFilesystem.writeFile(
-          ownerId,
-          args.path,
-          args.content,
-          undefined,
-          { failIfExists: false, append: false }
-        );
-        return {
-          success: true,
-          path: file.path,
-          size: file.size,
-        };
-      },
-      {
-        description: 'Write content to a file. Creates new file or overwrites existing.',
-        parameters: z.object({
-          path: z.string().describe('File path to write'),
-          content: z.string().describe('Content to write'),
-          encoding: z.enum(['utf-8', 'base64', 'binary']).optional().default('utf-8'),
-          createDirs: z.boolean().optional().default(true),
-        }),
-      }
-    ),
-
-    delete_file: createToolFromCapability(
-      'file.delete',
-      async (args: { path: string; recursive?: boolean }) => {
-        const { virtualFilesystem } = await import('../virtual-filesystem/virtual-filesystem-service');
-        const ownerId = context.userId || 'default';
-        const result = await virtualFilesystem.deletePath(ownerId, args.path);
-        return {
-          success: true,
-          deletedCount: result.deletedCount,
-          path: args.path,
-        };
-      },
-      {
-        description: 'Delete a file or directory',
-        parameters: z.object({
-          path: z.string().describe('Path to delete'),
-          recursive: z.boolean().optional().default(false),
-        }),
-      }
-    ),
-
-    list_directory: createToolFromCapability(
-      'file.list',
-      async (args: { path?: string; pattern?: string; recursive?: boolean }) => {
-        const { virtualFilesystem } = await import('../virtual-filesystem/virtual-filesystem-service');
-        const ownerId = context.userId || 'default';
-        const listing = await virtualFilesystem.listDirectory(ownerId, args.path || 'project');
-        return {
-          success: true,
-          path: listing.path,
-          nodes: listing.nodes.map(node => ({
-            name: node.name,
-            path: node.path,
-            type: node.type,
-            size: node.size,
-          })),
-        };
-      },
-      {
-        description: 'List contents of a directory',
-        parameters: z.object({
-          path: z.string().optional().describe('Directory path to list'),
-          pattern: z.string().optional().describe('Glob pattern to filter'),
-          recursive: z.boolean().optional().default(false),
-        }),
-      }
-    ),
-  };
-}
-
-/**
- * Sandbox execution tools for Vercel AI SDK
- */
-export function createSandboxTools(context: ToolExecutionContext): Record<string, Tool> {
-  return {
-    execute_code: createToolFromCapability(
-      'sandbox.execute',
-      async (args: { code: string; language: string; timeout?: number }) => {
-        const { sandboxBridge } = await import('../sandbox');
-        const session = await sandboxBridge.getOrCreateSession(context.userId || 'default');
-        
-        if (!session.sandboxHandle) {
-          throw new Error('Sandbox not available');
-        }
-
-        const result = await session.sandboxHandle.executeCommand(
-          `${args.language} -e "${args.code.replace(/"/g, '\\"')}"`,
-          session.workspacePath,
-          { timeout: args.timeout || 30000 }
-        );
-
-        return {
-          success: result.success,
-          output: result.output,
-          exitCode: result.exitCode,
-        };
-      },
-      {
-        description: 'Execute code in a sandboxed environment',
-        parameters: z.object({
-          code: z.string().describe('Code to execute'),
-          language: z.enum(['javascript', 'typescript', 'python', 'bash']).describe('Programming language'),
-          timeout: z.number().optional().default(30000),
-        }),
-      }
-    ),
-
-    run_shell: createToolFromCapability(
-      'sandbox.shell',
-      async (args: { command: string; cwd?: string; timeout?: number }) => {
-        const { sandboxBridge } = await import('../sandbox');
-        const session = await sandboxBridge.getOrCreateSession(context.userId || 'default');
-        
-        if (!session.sandboxHandle) {
-          throw new Error('Sandbox not available');
-        }
-
-        const result = await session.sandboxHandle.executeCommand(
-          args.command,
-          args.cwd || session.workspacePath,
-          { timeout: args.timeout || 60000 }
-        );
-
-        return {
-          success: result.success,
-          stdout: result.output,
-          stderr: '',
-          exitCode: result.exitCode,
-        };
-      },
-      {
-        description: 'Execute a shell command in the sandbox environment',
-        parameters: z.object({
-          command: z.string().describe('Shell command to execute'),
-          cwd: z.string().optional().describe('Working directory'),
-          timeout: z.number().optional().default(60000),
-        }),
-      }
-    ),
-  };
-}
-
-/**
- * Web browsing tools for Vercel AI SDK
- */
-export function createWebTools(context: ToolExecutionContext): Record<string, Tool> {
-  return {
-    browse_url: createToolFromCapability(
-      'web.browse',
-      async (args: { url: string; action?: string }) => {
-        const { isHostnameBlocked } = await import('@/lib/utils/url-validation');
-        const fetch = (await import('node-fetch')).default;
-
-        // SSRF protection
-        let parsed: URL;
-        try {
-          parsed = new URL(args.url);
-        } catch {
-          return { success: false, error: 'Invalid URL format' };
-        }
-        if (parsed.protocol !== 'https:') {
-          return { success: false, error: 'Only HTTPS URLs are allowed' };
-        }
-        if (isHostnameBlocked(parsed.hostname)) {
-          return { success: false, error: `Hostname blocked: ${parsed.hostname}` };
-        }
-
-        const response = await fetch(args.url, {
-          headers: { 'User-Agent': 'Mozilla/5.0 (compatible; binG/1.0)' },
-          signal: AbortSignal.timeout(15000),
-          redirect: 'follow',
-        });
-
-        // Re-validate final URL after redirects to prevent SSRF via redirect chains
-        // (e.g., allowed HTTPS hostname redirects to blocked internal IP like 169.254.169.254)
-        const finalUrl = new URL(response.url || args.url);
-        if (finalUrl.protocol !== 'https:' || isHostnameBlocked(finalUrl.hostname)) {
-          return { success: false, error: 'Redirect to unsafe URL blocked' };
-        }
-
-        const content = await response.text();
-        return {
-          success: true,
-          content: content.slice(0, 10000),
-          url: finalUrl.href,
-          statusCode: response.status,
-        };
-      },
-      {
-        description: 'Fetch and parse web pages (HTTPS only, SSRF-protected)',
-        parameters: z.object({
-          url: z.string().describe('HTTPS URL to browse'),
-          action: z.enum(['fetch', 'extract']).optional().default('fetch'),
-        }),
-      }
-    ),
-  };
-}
-
-/**
- * Web search and fetch tools for Vercel AI SDK
- * Uses SSRF-safe URL validation from lib/utils/url-validation
- */
-export function createSearchTools(context: ToolExecutionContext): Record<string, Tool> {
-  return {
-    web_search: tool({
-      description: 'Search the web for information using DuckDuckGo. Returns titles, URLs, and snippets.',
-      parameters: z.object({
-        query: z.string().describe('Search query'),
-        limit: z.number().optional().default(5).describe('Max results to return (1-10)'),
-      }),
-      // @ts-ignore - Workaround for Vercel AI SDK tool() overload matching issue
-      execute: async (args: { query: string; limit?: number }) => {
-        const { isHostnameBlocked } = await import('@/lib/utils/url-validation');
-        const fetch = (await import('node-fetch')).default;
-        const limit = Math.min(args.limit || 5, 10);
-
-        try {
-          const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(args.query)}`;
-          const response = await fetch(searchUrl, {
-            headers: { 'User-Agent': 'Mozilla/5.0' },
-            signal: AbortSignal.timeout(10000),
-          });
-          const html = await response.text();
-
-          const results: Array<{ title: string; url: string; snippet: string }> = [];
-          const resultRegex = /<a rel="nofollow" class="result__a" href="([^"]*)"[^>]*>(.*?)<\/a>[\s\S]*?<a class="result__snippet"[^>]*>(.*?)<\/a>/g;
-          let match: RegExpExecArray | null;
-
-          while ((match = resultRegex.exec(html)) !== null && results.length < limit) {
-            let url = match[1];
-            const urlMatch = url.match(/uddg=([^&]+)/);
-            if (urlMatch) {
-              url = decodeURIComponent(urlMatch[1]);
-            }
-            const title = match[2].replace(/<[^>]+>/g, '').trim();
-            const snippet = match[3].replace(/<[^>]+>/g, '').trim();
-
-            // Only include HTTPS URLs that pass SSRF checks
-            if (title && url) {
-              try {
-                const parsed = new URL(url);
-                if (parsed.protocol === 'https:' && !isHostnameBlocked(parsed.hostname)) {
-                  results.push({ title, url, snippet });
-                }
-              } catch {
-                // Skip malformed URLs
-              }
-            }
-          }
-
-          return {
-            success: results.length > 0,
-            results,
-            query: args.query,
-            resultCount: results.length,
-          };
-        } catch (error: any) {
-          chatLogger.error('web_search failed', { query: args.query, error: error.message });
-          return {
-            success: false,
-            results: [],
-            query: args.query,
-            error: error.message,
-          };
-        }
-      },
-    }) as Tool,
-
-    web_fetch: tool({
-      description: `Fetch and read the content of a web page by URL. 
-USE THIS TOOL whenever:
-- The user sends a URL/link in their message (e.g. "https://example.com/article")
-- The user asks to read, fetch, scrape, or summarize a web page
-- The user references a web page they want you to look at
-Returns cleaned article body text with navigation, ads, footers, and boilerplate automatically removed. Prioritizes main content.`,
-      parameters: z.object({
-        url: z.string().describe('The HTTPS URL to fetch and read'),
-        maxChars: z.number().optional().default(12000).describe('Max characters of content to return'),
-      }),
-      // @ts-ignore - Workaround for Vercel AI SDK tool() overload matching issue
-      execute: async (args: { url: string; maxChars?: number }) => {
-        const { isHostnameBlocked } = await import('@/lib/utils/url-validation');
-        const fetch = (await import('node-fetch')).default;
-        const maxChars = args.maxChars || 12000;
-
-        try {
-          // Validate URL before fetching
-          let parsed: URL;
-          try {
-            parsed = new URL(args.url);
-          } catch {
-            return { success: false, content: '', url: args.url, error: 'Invalid URL format' };
-          }
-
-          // Enforce HTTPS only
-          if (parsed.protocol !== 'https:') {
-            return { success: false, content: '', url: args.url, error: 'Only HTTPS URLs are allowed' };
-          }
-
-          // SSRF protection — block private IPs and internal hostnames
-          if (isHostnameBlocked(parsed.hostname)) {
-            chatLogger.warn('web_fetch blocked unsafe hostname', { url: args.url, hostname: parsed.hostname });
-            return { success: false, content: '', url: args.url, error: `Hostname blocked: ${parsed.hostname}` };
-          }
-
-          const response = await fetch(args.url, {
-            headers: {
-              'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.5',
-              'Accept-Language': 'en-US,en;q=0.9',
-            },
-            signal: AbortSignal.timeout(15000),
-            redirect: 'follow',
-          });
-
-          // Re-validate hostname after redirects
-          const finalUrl = new URL(response.url || args.url);
-          if (finalUrl.protocol !== 'https:' || isHostnameBlocked(finalUrl.hostname)) {
-            return { success: false, content: '', url: args.url, error: 'Redirect to unsafe URL blocked' };
-          }
-
-          const contentType = response.headers.get('content-type') || '';
-          let content: string;
-          let extractedTitle = '';
-
-          if (contentType.includes('application/json')) {
-            const json = await response.json();
-            content = JSON.stringify(json, null, 2).slice(0, maxChars);
-          } else {
-            const raw = await response.text();
-
-            // Extract title before stripping
-            const titleMatch = raw.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-            if (titleMatch) {
-              extractedTitle = titleMatch[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
-            }
-
-            // ---- Noise removal: strip nav, ads, footers, sidebars, etc. ----
-            let cleaned = raw
-              // Remove script/style blocks
-              .replace(/<script[\s\S]*?<\/script>/gi, '')
-              .replace(/<style[\s\S]*?<\/style>/gi, '')
-              // Remove SVG icons (often decorative)
-              .replace(/<svg[\s\S]*?<\/svg>/gi, '')
-              // Remove nav, header, footer, aside (boilerplate)
-              .replace(/<nav[\s\S]*?<\/nav>/gi, '')
-              .replace(/<header[\s\S]*?<\/header>/gi, '')
-              .replace(/<footer[\s\S]*?<\/footer>/gi, '')
-              .replace(/<aside[\s\S]*?<\/aside>/gi, '')
-              // Remove iframes, embeds, objects (ads, trackers)
-              .replace(/<iframe[\s\S]*?<\/iframe>/gi, '')
-              .replace(/<embed[^>]*>/gi, '')
-              .replace(/<object[\s\S]*?<\/object>/gi, '')
-              // Remove noscript fallbacks
-              .replace(/<noscript[\s\S]*?<\/noscript>/gi, '')
-              // Remove form elements (login boxes, search bars)
-              .replace(/<form[\s\S]*?<\/form>/gi, '')
-              // Remove elements with common ad/noise class/id patterns
-              .replace(/<(div|section|span)[^>]*class="[^"]*(?:ad[s_-]|advert|banner|cookie|consent|modal|popup|sidebar|nav-|breadcrumb|social-|share-|comment|related|recommended|newsletter|signup|login|footer|header|copyright|legal|disclaimer|sponsor|promo|cta-?box|subscribe|paywall|gate|interstitial|overlay|toast|notification|alert)[^"]*"[^>]*>[\s\S]*?<\/\1>/gi, '')
-              .replace(/<(div|section|span)[^>]*id="[^"]*(?:ad[s_-]|advert|banner|cookie|consent|modal|popup|sidebar|nav-|breadcrumb|social-|share-|comment|related|recommended|newsletter|signup|login|footer|header|copyright|legal|disclaimer|sponsor|promo|subscribe|paywall|overlay|toast|notification)[^"]*"[^>]*>[\s\S]*?<\/\1>/gi, '');
-
-            // ---- Extract main content: try <main>, <article>, then <body> ----
-            let bodyContent = '';
-
-            // Try <article> first (most specific)
-            const articleMatch = cleaned.match(/<article[^>]*>([\s\S]*?)<\/article>/i);
-            if (articleMatch && articleMatch[1].length > 200) {
-              bodyContent = articleMatch[1];
-            } else {
-              // Try <main>
-              const mainMatch = cleaned.match(/<main[^>]*>([\s\S]*?)<\/main>/i);
-              if (mainMatch && mainMatch[1].length > 200) {
-                bodyContent = mainMatch[1];
-              } else {
-                // Try role="main"
-                const roleMainMatch = cleaned.match(/<[^>]+role="main"[^>]*>([\s\S]*?)<\/(?:div|section)>/i);
-                if (roleMainMatch && roleMainMatch[1].length > 200) {
-                  bodyContent = roleMainMatch[1];
-                } else {
-                  // Fall back to <body>
-                  const bodyMatch = cleaned.match(/<body[^>]*>([\s\S]*)<\/body>/i);
-                  bodyContent = bodyMatch ? bodyMatch[1] : cleaned;
-                }
-              }
-            }
-
-            // Strip remaining HTML tags and decode entities
-            content = bodyContent
-              .replace(/<[^>]+>/g, ' ')
-              .replace(/&nbsp;/g, ' ')
-              .replace(/&amp;/g, '&')
-              .replace(/&lt;/g, '<')
-              .replace(/&gt;/g, '>')
-              .replace(/&quot;/g, '"')
-              .replace(/&#x27;/g, "'")
-              .replace(/&#x2F;/g, '/')
-              .replace(/&hellip;/g, '...')
-              .replace(/&mdash;/g, '—')
-              .replace(/&ndash;/g, '–')
-              .replace(/\s+/g, ' ')
-              .trim()
-              .slice(0, maxChars);
-          }
-
-          return {
-            success: true,
-            title: extractedTitle,
-            content,
-            url: args.url,
-            statusCode: response.status,
-            contentType,
-          };
-        } catch (error: any) {
-          chatLogger.error('web_fetch failed', { url: args.url, error: error.message });
-          return {
-            success: false,
-            content: '',
-            url: args.url,
-            error: error.message,
-          };
-        }
-      },
-    }) as Tool,
-  };
-}
-
-/**
- * Get all available tools for a given context
- */
-export async function getAllTools(context: ToolExecutionContext): Promise<Record<string, Tool>> {
-  const fileTools = createFileSystemTools(context);
-  const sandboxTools = createSandboxTools(context);
-  const webTools = createWebTools(context);
-  const searchTools = createSearchTools(context);
-
-  return {
-    ...fileTools,
-    ...sandboxTools,
-    ...webTools,
-    ...searchTools,
-  };
-}
-
-/**
- * Get tools by category
- */
-export async function getToolsByCategory(
-  category: 'file' | 'sandbox' | 'web' | 'all',
+function createCapabilityTool(
+  capability: CapabilityDefinition,
   context: ToolExecutionContext
-): Promise<Record<string, Tool>> {
-  switch (category) {
-    case 'file':
-      return createFileSystemTools(context);
-    case 'sandbox':
-      return createSandboxTools(context);
-    case 'web':
-      return createWebTools(context);
-    case 'all':
-    default:
-      return getAllTools(context);
-  }
+): Tool {
+  const toolName = capability.id.replace(/\./g, '_');
+  const parameters = toToolParameters(capability.inputSchema);
+  const router = getCapabilityRouter();
+
+  return tool({
+    description: capability.description,
+    inputSchema: parameters,
+    execute: async (args, execOptions: ToolCallOptions) => {
+      try {
+        chatLogger.debug('Capability tool executing', { tool: capability.id, args: sanitizeArgs(args) });
+        const routerContext: RouterToolContext = {
+          userId: context.userId || 'system',
+          conversationId: context.conversationId,
+          scopePath: context.scopePath,
+        };
+        const result = await router.execute(capability.id, args as Record<string, unknown>, routerContext);
+        if (result.success) return result.output;
+        throw new Error(result.error || `${capability.id} execution failed`);
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        chatLogger.error('Capability tool failed', { tool: capability.id, error: message });
+        throw error;
+      }
+    },
+  });
 }
 
-/**
- * Extract public HTTPS URLs from user text.
- * Useful for pre-detecting URLs in prompts to auto-trigger web_fetch.
- */
-export function extractPublicUrls(text: string): string[] {
-  const urlRegex = /https:\/\/[^\s<>"{}|\\^`\[\]]+/g;
-  const matches = text.match(urlRegex) || [];
+function createVFSToolSet(context: ToolExecutionContext): Record<string, Tool> {
+  const userId = context.userId || 'default';
+  const sessionId = context.sessionId || normalizeSessionId(context.conversationId || '');
+  const scopePath = context.scopePath || 'project/sessions/000';
+  const tools: Record<string, Tool> = {};
 
-  // Deduplicate and filter to well-formed URLs
-  const seen = new Set<string>();
-  const urls: string[] = [];
+  for (const [name, vfsTool] of Object.entries(mcpVFSTools)) {
+    const baseTool = vfsTool as unknown as Tool;
+    const originalExecute = (baseTool as any).execute as ((args: unknown, opts?: ToolCallOptions) => Promise<unknown>) | undefined;
 
-  for (const raw of matches) {
-    // Strip trailing punctuation that's often part of prose
-    const cleaned = raw.replace(/[.,;:!?)\]>]+$/, '');
-    try {
-      const parsed = new URL(cleaned);
-      if (parsed.protocol === 'https:' && !seen.has(cleaned)) {
-        seen.add(cleaned);
-        urls.push(cleaned);
+    tools[name] = {
+      ...baseTool,
+      execute: async (args: unknown, opts?: ToolCallOptions) => {
+        return toolContextStore.run(
+          { userId, sessionId, scopePath },
+          () => originalExecute?.(args, opts)
+        );
+      },
+    };
+  }
+
+  return tools;
+}
+
+async function createMCPToolSet(context: ToolExecutionContext): Promise<Record<string, Tool>> {
+  const tools: Record<string, Tool> = {};
+  if (!isMCPAvailable()) return tools;
+
+  try {
+    const mcpToolDefs = await getMCPToolsForAI_SDK(context.userId);
+
+    for (const toolDef of mcpToolDefs) {
+      const { name, description, parameters } = toolDef.function;
+
+      let toolParams: z.ZodType<unknown>;
+      if (parameters && typeof parameters === 'object' && '_def' in parameters && 'parse' in parameters) {
+        toolParams = parameters as z.ZodType<unknown>;
+      } else {
+        toolParams = z.object({}).describe(description || `MCP tool: ${name}`);
       }
-    } catch {
-      // Skip malformed
+
+      const isVFSTool = name.startsWith('write_') || name.startsWith('read_') || name.startsWith('list_') ||
+        name.startsWith('search_') || name.startsWith('apply_') || name.startsWith('batch_') ||
+        name.startsWith('delete_') || name.startsWith('create_') || name.startsWith('get_workspace');
+
+      tools[name] = tool({
+        description: description || `MCP tool: ${name}`,
+        inputSchema: toolParams,
+        execute: async (args: unknown) => {
+          if (isVFSTool) {
+            chatLogger.info('[VFS MCP] Tool invoked', { tool: name, userId: context.userId, args: typeof args === 'object' && args ? Object.keys(args as Record<string, unknown>) : [] });
+          }
+          try {
+            const result = await callMCPToolFromAI_SDK(name, args as Record<string, unknown>, context.userId || '');
+            if (result.success) {
+              if (isVFSTool) chatLogger.info('[VFS MCP] Tool completed', { tool: name, userId: context.userId });
+              return result.output;
+            }
+            return { success: false, error: result.error || 'Tool execution failed' };
+          } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : String(error);
+            chatLogger.error('MCP tool failed', { tool: name, error: message });
+            return { success: false, error: message };
+          }
+        },
+      });
+    }
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    chatLogger.warn('Failed to create MCP tools', { error: message });
+  }
+
+  return tools;
+}
+
+function createCapabilityChainTool(context: ToolExecutionContext): Record<string, Tool> {
+  const router = getCapabilityRouter();
+  const availableCaps = ALL_CAPABILITIES.map(c => c.id).join(', ');
+
+  return {
+    run_capability_chain: tool({
+      description: `Execute a chain of capabilities in sequence. Available: ${availableCaps}`,
+      inputSchema: z.object({
+        name: z.string().describe('Chain name/description'),
+        steps: z.array(z.object({
+          capability: z.string().describe('Capability ID'),
+          args: z.record(z.unknown()).describe('Arguments for this step'),
+        })).describe('Ordered capabilities to execute'),
+        stop_on_failure: z.boolean().optional().default(false).describe('Stop chain on first failure'),
+      }),
+      execute: async (args) => {
+        try {
+          const { createCapabilityChain } = await import('@bing/shared/agent/capability-chain');
+          const chain = createCapabilityChain({
+            name: args.name,
+            enableParallel: false,
+            stopOnFailure: args.stop_on_failure ?? false,
+          });
+          for (const step of args.steps) {
+            chain.addStep(step.capability, step.args);
+          }
+          const result = await chain.execute({
+            execute: async (capName: string, config: unknown) => {
+              return router.execute(capName, config as Record<string, unknown>, {
+                userId: context.userId || 'system',
+                conversationId: context.conversationId,
+                scopePath: context.scopePath,
+              });
+            },
+          });
+          return {
+            success: result.success,
+            results: Object.fromEntries(result.results.entries()),
+            errors: result.errors,
+            steps: result.steps,
+            duration: result.duration,
+          };
+        } catch (error: unknown) {
+          const message = error instanceof Error ? error.message : String(error);
+          chatLogger.error('Capability chain failed', { error: message });
+          throw error;
+        }
+      },
+    }),
+  };
+}
+
+// ============================================================================
+// Priority-Based Tool Set Builder
+// ============================================================================
+
+export function createToolSet(
+  context: ToolExecutionContext,
+  options: ToolSetOptions = {}
+): ToolSet {
+  const {
+    priority = ['vfs', 'capability', 'mcp'],
+    allowedCapabilities = [],
+    excludedTools = [],
+    includeCapabilityChain = true,
+  } = options;
+
+  const sourceTools: Record<string, Record<string, Tool>> = {
+    vfs: {}, capability: {}, 'capability-chain': {}, mcp: {},
+  };
+
+  if (priority.includes('vfs')) {
+    sourceTools.vfs = createVFSToolSet(context);
+  }
+
+  if (priority.includes('capability')) {
+    for (const cap of ALL_CAPABILITIES) {
+      if (allowedCapabilities.length > 0 && !allowedCapabilities.includes(cap.id)) continue;
+      if (excludedTools.includes(cap.id) || excludedTools.includes(cap.id.replace(/\./g, '_'))) continue;
+      const toolName = cap.id.replace(/\./g, '_');
+      sourceTools.capability[toolName] = createCapabilityTool(cap, context);
     }
   }
 
-  return urls;
+  if (includeCapabilityChain) {
+    sourceTools['capability-chain'] = createCapabilityChainTool(context);
+  }
+
+  const merged: Record<string, Tool> = {};
+  const excluded: string[] = [];
+
+  for (const source of priority) {
+    const tools = sourceTools[source];
+    if (!tools) continue;
+    for (const [name, t] of Object.entries(tools)) {
+      if (merged[name]) {
+        excluded.push(`${name} (shadowed by ${source})`);
+        continue;
+      }
+      merged[name] = t;
+    }
+  }
+
+  if (includeCapabilityChain && sourceTools['capability-chain']) {
+    for (const [name, t] of Object.entries(sourceTools['capability-chain'])) {
+      if (!merged[name]) merged[name] = t;
+    }
+  }
+
+  return {
+    tools: merged,
+    stats: {
+      vfs: Object.keys(sourceTools.vfs).length,
+      capability: Object.keys(sourceTools.capability).length,
+      mcp: Object.keys(sourceTools.mcp).length,
+      total: Object.keys(merged).length,
+      excluded,
+    },
+  };
 }
+
+export async function getAllTools(
+  context: ToolExecutionContext,
+  options: ToolSetOptions = {}
+): Promise<Record<string, Tool>> {
+  const {
+    priority = ['vfs', 'capability', 'mcp'],
+    allowedCapabilities = [],
+    excludedTools = [],
+    includeCapabilityChain = true,
+  } = options;
+
+  const syncSet = createToolSet(context, { priority, allowedCapabilities, excludedTools, includeCapabilityChain });
+  const result = { ...syncSet.tools };
+
+  if (priority.includes('mcp')) {
+    const mcpTools = await createMCPToolSet(context);
+    for (const [name, t] of Object.entries(mcpTools)) {
+      if (!result[name] && !excludedTools.includes(name)) {
+        result[name] = t;
+      }
+    }
+  }
+
+  chatLogger.info('Tool set created', { total: Object.keys(result).length, priority, stats: syncSet.stats });
+  return result;
+}
+
+export { sanitizeArgs };
+export type { ToolExecutionContext } from './vercel-ai-streaming';

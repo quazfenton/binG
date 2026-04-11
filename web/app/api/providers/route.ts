@@ -1,34 +1,32 @@
 import { NextRequest, NextResponse } from "next/server";
-import { PROVIDERS, llmService, type LLMProvider } from "@/lib/chat/llm-providers";
 
-// Cache provider list to avoid repeated computation on every request
-// Since provider availability is based on env vars which don't change during runtime
-let cachedProviders: any = null;
-let cacheTimestamp = 0;
-const CACHE_TTL_MS = 300000; // Cache for 5 minutes
+// Use dynamic import to avoid pulling AWS SDK into client bundle
+// The PROVIDERS constant and llmService are server-only
+let _providersCache: any = null;
+let _cacheTime = 0;
+const CACHE_TTL_MS = 300000;
 
 export async function GET(request: NextRequest) {
   try {
     const now = Date.now();
 
     // Return cached result if available and not expired
-    const isStale = cachedProviders && (now - cacheTimestamp) >= CACHE_TTL_MS;
-    if (cachedProviders && !isStale) {
-      return NextResponse.json(cachedProviders, {
+    if (_providersCache && (now - _cacheTime) < CACHE_TTL_MS) {
+      return NextResponse.json(_providersCache, {
         headers: {
           'Cache-Control': 'public, max-age=300, stale-while-revalidate=600',
         },
       });
     }
 
-    // Cache is stale or empty - recompute below
+    // Dynamic import — server-side only, avoids client bundle contamination
+    const { PROVIDERS, llmService } = await import('@/lib/chat/llm-providers');
+    const availableProviderIds = new Set(
+      llmService.getAvailableProviders().map((p: any) => p.id)
+    );
 
-    // Use canonical llmService.getAvailableProviders() for availability checks
-    const availableProviderIds = new Set(llmService.getAvailableProviders().map(p => p.id));
-
-    // Build provider list from static PROVIDERS constant
-    const allProviders = (Object.values(PROVIDERS) as LLMProvider[])
-      .map((provider: LLMProvider) => ({
+    const allProviders = (Object.values(PROVIDERS) as any[])
+      .map((provider: any) => ({
         id: provider.id,
         name: provider.name,
         models: provider.models,
@@ -38,25 +36,23 @@ export async function GET(request: NextRequest) {
         isAvailable: availableProviderIds.has(provider.id)
       }));
 
-    // Sort: available providers first
-    const sortedProviders = allProviders.sort((a, b) => {
+    const sortedProviders = allProviders.sort((a: any, b: any) => {
       if (a.isAvailable && !b.isAvailable) return -1;
       if (!a.isAvailable && b.isAvailable) return 1;
       return 0;
     });
 
-    // Cache the result
-    cachedProviders = {
+    _providersCache = {
       success: true,
       data: {
         providers: sortedProviders,
-        defaultProvider: process.env.DEFAULT_LLM_PROVIDER || "openrouter",
-        defaultModel: process.env.DEFAULT_MODEL || "google/gemma-3-1b-it:free",
+        defaultProvider: process.env.DEFAULT_LLM_PROVIDER || "mistral",
+        defaultModel: process.env.DEFAULT_MODEL || "mistral-large-latest",
       },
     };
-    cacheTimestamp = now;
+    _cacheTime = now;
 
-    return NextResponse.json(cachedProviders, {
+    return NextResponse.json(_providersCache, {
       headers: {
         'Cache-Control': 'public, max-age=300, stale-while-revalidate=600',
       },

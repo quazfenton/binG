@@ -30,6 +30,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { PersistentCache } from "@/lib/cache";
+import { clipboard } from '@bing/platform/clipboard';
 
 // ==================== Types (Strict TypeScript) ====================
 
@@ -569,7 +570,7 @@ export default function ImmersiveView() {
   // Copy URL
   const copyUrl = useCallback(() => {
     if (!currentUrl) return;
-    navigator.clipboard.writeText(currentUrl);
+    clipboard.writeText(currentUrl);
     toast.success("URL copied");
   }, [currentUrl]);
 

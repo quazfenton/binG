@@ -60,7 +60,8 @@ export class ToolContextManager {
   async processToolRequest(
     messages: LLMMessage[],
     userId: string,
-    conversationId: string
+    conversationId: string,
+    scopePath?: string
   ): Promise<ToolProcessingResult> {
     // Check for OAuth integration capability requests first
     const oauthCapabilityResult = await this.checkOAuthCapabilityRequest(messages, userId, conversationId);
@@ -128,18 +129,21 @@ export class ToolContextManager {
     const arcadeUserId = strategy === 'email' && userEmail ? userEmail : userId;
 
     try {
+      const toolContext = {
+        userId,
+        conversationId,
+        metadata: {
+          sessionId: `session_${conversationId}`,
+          userEmail,
+          arcadeUserId,
+          scopePath,
+        }
+      };
+
       const toolResult = await toolManager.executeTool(
         detectionResult.detectedTool!,
         detectionResult.toolInput,
-        {
-          userId,
-          conversationId,
-          metadata: {
-            sessionId: `session_${conversationId}`,
-            userEmail,
-            arcadeUserId,
-          }
-        }
+        toolContext
       );
 
       if (toolResult.success) {

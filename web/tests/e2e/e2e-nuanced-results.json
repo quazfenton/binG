@@ -1,0 +1,122 @@
+[
+  {
+    "test": "Model Rotation [nvidia/nvidia/nemotron-3-super-120b-a12b]",
+    "passed": true,
+    "details": "Response OK, file refs: true",
+    "duration": 18045,
+    "provider": "nvidia",
+    "model": "nvidia/nemotron-3-super-120b-a12b"
+  },
+  {
+    "test": "Model Rotation [openrouter/meta-llama/llama-3.3-70b-instruct:free]",
+    "passed": true,
+    "details": "Response OK, file refs: true",
+    "duration": 18915,
+    "provider": "openrouter",
+    "model": "meta-llama/llama-3.3-70b-instruct:free"
+  },
+  {
+    "test": "Model Rotation [github/mistral-large-2407]",
+    "passed": true,
+    "details": "Response OK, file refs: true",
+    "duration": 16833,
+    "provider": "github",
+    "model": "mistral-large-2407"
+  },
+  {
+    "test": "Capability Use Detection",
+    "passed": true,
+    "details": "List: true, Create: true, Response: Here's how you can perform these tasks in a Unix-like terminal (Linux/macOS) or Windows Command Prompt/PowerShell:\n\n### 1. List files in the current workspace:\n```bash\n# Linux/macOS (bash/zsh)\nls\n\n# W...",
+    "duration": 14783,
+    "provider": "nvidia",
+    "model": "nvidia/nemotron-nano-12b-v2-vl"
+  },
+  {
+    "test": "OAuth Triggering/Detection",
+    "passed": true,
+    "details": "OAuth mention: true, Tool ref: true",
+    "duration": 21720,
+    "provider": "openrouter",
+    "model": "qwen/qwen3-coder:free"
+  },
+  {
+    "test": "Sandbox StdIO Iteration",
+    "passed": true,
+    "details": "Created: true, Executed: true",
+    "duration": 31625,
+    "provider": "nvidia",
+    "model": "nvidia/nemotron-4-340b-instruct"
+  },
+  {
+    "test": "Self-Healing Capabilities",
+    "passed": true,
+    "details": "Fix operation detected",
+    "duration": 26665,
+    "provider": "nvidia",
+    "model": "nvidia/nemotron-3-super-120b-a12b"
+  },
+  {
+    "test": "Sandbox Syncing and Execution",
+    "passed": true,
+    "details": "Sync: true, Exec: true",
+    "duration": 25844,
+    "provider": "openrouter",
+    "model": "meta-llama/llama-3.3-70b-instruct:free"
+  },
+  {
+    "test": "Live Preview URLs",
+    "passed": true,
+    "details": "HTML file detected, preview refs present",
+    "duration": 5690,
+    "provider": "github",
+    "model": "mistral-large-2407"
+  },
+  {
+    "test": "Multi-Step Tool Chaining",
+    "passed": true,
+    "details": "Dir: true, Config: true, App: true (3/3 components)",
+    "duration": 8668,
+    "provider": "nvidia",
+    "model": "nvidia/nemotron-nano-12b-v2-vl"
+  },
+  {
+    "test": "Error Recovery and Fallback",
+    "passed": true,
+    "details": "Error handling or response detected (714 chars)",
+    "duration": 16593,
+    "provider": "openrouter",
+    "model": "qwen/qwen3-coder:free"
+  },
+  {
+    "test": "VFS Workspace Persistence",
+    "passed": true,
+    "details": "State persistence detected (797 chars)",
+    "duration": 31978,
+    "provider": "nvidia",
+    "model": "nvidia/nemotron-4-340b-instruct"
+  },
+  {
+    "test": "Provider Behavior [nvidia]",
+    "passed": true,
+    "details": "Response: 375 chars",
+    "duration": 11973,
+    "provider": "nvidia",
+    "model": "nvidia/nemotron-3-super-120b-a12b"
+  },
+  {
+    "test": "Provider Behavior [openrouter]",
+    "passed": true,
+    "details": "Response: 379 chars",
+    "duration": 9134,
+    "provider": "openrouter",
+    "model": "meta-llama/llama-3.3-70b-instruct:free"
+  },
+  {
+    "test": "Provider Behavior [github]",
+    "passed": true,
+    "details": "Response: 160 chars",
+    "duration": 8942,
+    "provider": "github",
+    "model": "mistral-large-2407"
+  }
+]

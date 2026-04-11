@@ -232,4 +232,4 @@ export function useFolderSync(options: UseFolderSyncOptions = {}): UseFolderSync
     isSyncing,
     refreshStatus,
   };
-}
+}

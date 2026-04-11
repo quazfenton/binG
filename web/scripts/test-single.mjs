@@ -1,0 +1,43 @@
+const BASE_URL = 'http://localhost:3000';
+
+async function main() {
+  console.log('Starting test...');
+  
+  const loginRes = await fetch(BASE_URL + '/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: 'test@test.com', password: 'Testing0' }),
+  });
+  const cookie = loginRes.headers.get('set-cookie').split(';')[0];
+  console.log('Login OK');
+
+  // Send chat request
+  console.log('Sending chat request...');
+  const chatRes = await fetch(BASE_URL + '/api/chat', {
+    method: 'POST',
+    headers: { 'Cookie': cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      messages: [{ role: 'user', content: 'Write a file called project/honest-test-file.txt with content: TEST_CONTENT_ABC' }],
+      provider: 'mistral',
+      model: 'mistral-small-latest',
+      stream: false,
+    }),
+  });
+  console.log('Chat status:', chatRes.status);
+  const data = await chatRes.json();
+  console.log('Response length:', (data.content || '').length);
+  console.log('Applied edits:', JSON.stringify(data.data?.appliedEdits));
+  console.log('Response preview:', (data.content || '').slice(0, 200));
+
+  // Check if file was created
+  await new Promise(r => setTimeout(r, 5000));
+  const readRes = await fetch(BASE_URL + '/api/filesystem/read', {
+    method: 'POST',
+    headers: { 'Cookie': cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: 'project/honest-test-file.txt' }),
+  });
+  const readData = await readRes.json();
+  console.log('File content after:', readData.data?.content || '(not found)');
+}
+
+main().catch(e => console.error('ERROR:', e));

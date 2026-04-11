@@ -33,6 +33,7 @@ setInterval(() => {
 }, TERMINAL_LIMITS.CLEANUP_INTERVAL_MS);
 
 export async function POST(req: NextRequest) {
+  let sessionId: string | undefined;
   try {
     const authResult = await resolveRequestAuth(req, { allowAnonymous: true });
     if (!authResult.success || !authResult.userId) {
@@ -104,22 +105,38 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // ✅ SECURITY: Verify session ownership BEFORE any buffer operations
-    // Prevents cross-user command injection via buffer pollution
-    if (!userSession || userSession.sessionId !== sessionId) {
-      logger.warn('Unauthorized terminal input attempt', {
-        userId: authResult.userId,
+    // Interactive PTY sessions must receive raw bytes immediately.
+    // Only command-mode input is buffered for newline-based security validation.
+    if (terminalManager.hasPtyConnection(sessionId)) {
+      commandBuffers.delete(sessionId);
+      await terminalManager.sendInput(sessionId, data);
+
+      logger.debug('PTY terminal input sent immediately', {
         sessionId,
+        userId: authResult.userId,
+        inputLength: data.length,
       });
+
+      return NextResponse.json({ success: true, mode: 'pty' });
+    }
+
+    // Check if the terminal manager has ANY connection for this session
+    // (command-mode or WebSocket). If not, the PTY failed to start and
+    // the session is in a zombie state — tell the client gracefully.
+    if (!terminalManager.hasActiveSession(sessionId)) {
+      // Don't log as warn — this is expected when the client sends input
+      // before the sandbox PTY has finished initializing.
+      logger.debug('No active terminal session for input (client sent too early)', { sessionId });
       return NextResponse.json(
-        { error: 'Unauthorized: You do not own this terminal session' },
-        { status: 403 }
+        {
+          error: 'Terminal session is not active. The sandbox PTY may have failed to start.',
+          hint: 'Close and reopen the terminal to retry.',
+        },
+        { status: 503 }
       );
     }
 
-    // ✅ BUFFER ALL input for security validation
-    // We cannot distinguish between "PTY interactive" and "line-based" input reliably
-    // Attackers could bypass security by sending dangerous commands without newlines
+    // ✅ BUFFER command-mode input for security validation
     const bufferEntry = commandBuffers.get(sessionId) || { buffer: '', lastActivity: Date.now() };
     bufferEntry.buffer += data;
     bufferEntry.lastActivity = Date.now();
@@ -196,6 +213,19 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: true, buffered: true });
   } catch (error) {
     const err = error as Error;
+
+    // Graceful handling when PTY failed to start (sandbox in zombie state)
+    if (err.message?.includes('No active terminal session')) {
+      logger.warn('Terminal input rejected — no active session', { sessionId });
+      return NextResponse.json(
+        {
+          error: 'Terminal session is not active. The sandbox PTY may have failed to start.',
+          hint: 'Close and reopen the terminal to retry.',
+        },
+        { status: 503 }
+      );
+    }
+
     logger.error('Terminal input error', {
       message: err.message,
       stack: err.stack,

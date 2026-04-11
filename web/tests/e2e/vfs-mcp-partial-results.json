@@ -1,0 +1,142 @@
+{
+  "partial": true,
+  "completed": 20,
+  "passed": 1,
+  "failed": 19,
+  "details": [
+    {
+      "test": "Direct Parser: Compact file_edit tag",
+      "passed": false,
+      "details": "No files or markers found",
+      "duration": 30086
+    },
+    {
+      "test": "Direct Parser: Fenced diff format",
+      "passed": false,
+      "details": "No files or markers found",
+      "duration": 30800
+    },
+    {
+      "test": "Direct Parser: Bash heredoc",
+      "passed": false,
+      "details": "No files or markers found",
+      "duration": 28048
+    },
+    {
+      "test": "Direct Parser: batch_write fenced",
+      "passed": false,
+      "details": "No files or markers found",
+      "duration": 26749
+    },
+    {
+      "test": "Direct Parser: Special token format",
+      "passed": false,
+      "details": "No files or markers found",
+      "duration": 16367
+    },
+    {
+      "test": "Direct Parser: ```tool_call format",
+      "passed": false,
+      "details": "No files or markers found",
+      "duration": 13774
+    },
+    {
+      "test": "VFS Create File [Mistral Small]",
+      "passed": false,
+      "details": "Missing file reference or content",
+      "duration": 16321,
+      "provider": "mistral"
+    },
+    {
+      "test": "VFS Batch Write [Mistral Small]",
+      "passed": false,
+      "details": "File1: false, File2: false",
+      "duration": 23153,
+      "provider": "mistral"
+    },
+    {
+      "test": "VFS Apply Diff [Mistral Small]",
+      "passed": false,
+      "details": "No modification",
+      "duration": 56588,
+      "provider": "mistral"
+    },
+    {
+      "test": "Full App Generation [Mistral Small]",
+      "passed": false,
+      "details": "Files: 0/6, Code blocks: false, React code: false",
+      "duration": 26605,
+      "provider": "mistral"
+    },
+    {
+      "test": "Auto-Continue [Mistral Small]",
+      "passed": false,
+      "details": "Files: 0/8, Continue marker: false",
+      "duration": 27139,
+      "provider": "mistral"
+    },
+    {
+      "test": "Self-Healing [Mistral Small]",
+      "passed": false,
+      "details": "No fix",
+      "duration": 30189,
+      "provider": "mistral"
+    },
+    {
+      "test": "Shell/PTY [Mistral Small]",
+      "passed": false,
+      "details": "Creation: false, Execution: false",
+      "duration": 33152,
+      "provider": "mistral"
+    },
+    {
+      "test": "No Infinite Loops [Mistral Small]",
+      "passed": true,
+      "details": "Completed in 26s",
+      "duration": 26392,
+      "provider": "mistral"
+    },
+    {
+      "test": "Error Recovery [Mistral Small]",
+      "passed": false,
+      "details": "No response",
+      "duration": 26234,
+      "provider": "mistral"
+    },
+    {
+      "test": "VFS Create File [Nvidia Nemotron]",
+      "passed": false,
+      "details": "Missing file reference or content",
+      "duration": 25710,
+      "provider": "nvidia"
+    },
+    {
+      "test": "VFS Batch Write [Nvidia Nemotron]",
+      "passed": false,
+      "details": "File1: false, File2: false",
+      "duration": 25062,
+      "provider": "nvidia"
+    },
+    {
+      "test": "VFS Apply Diff [Nvidia Nemotron]",
+      "passed": false,
+      "details": "No modification",
+      "duration": 61810,
+      "provider": "nvidia"
+    },
+    {
+      "test": "Full App Generation [Nvidia Nemotron]",
+      "passed": false,
+      "details": "Files: 0/6, Code blocks: false, React code: false",
+      "duration": 12583,
+      "provider": "nvidia"
+    },
+    {
+      "test": "Auto-Continue [Nvidia Nemotron]",
+      "passed": false,
+      "details": "Files: 0/8, Continue marker: false",
+      "duration": 30652,
+      "provider": "nvidia"
+    }
+  ]
+}

@@ -10,12 +10,17 @@
 import { mcpToolRegistry } from './registry'
 import { parseMCPServerConfigs, initializeMCP, shutdownMCP, getMCPSettings, isMCPAvailable, getMCPToolCount } from './config'
 import { callMCPorterTool, getMCPorterToolDefinitions, mcporterIntegration } from './mcporter-integration'
+import { createHTTPTransport, isValidMCPURL, parseMCPURL, HTTPTransport, registerHTTPTransport, getRemoteMCPTools, callRemoteMCPTool, hasRemoteMCPServers } from './http-transport'
+import { startHealthMonitoring } from './health-check'
 import { createLogger } from '../utils/logger'
-import { BlaxelProvider } from '../sandbox/providers/blaxel-provider'
+// Dynamically imported to avoid pulling Node.js-only deps (database/fs) into client bundle
+import type { BlaxelProvider } from '../sandbox/providers/blaxel-provider'
 import { ArcadeService, getArcadeService } from '../integrations/arcade-service'
 import { nullclawMCPBridge } from './nullclaw-mcp-bridge'
-import { initializeNullclaw, isNullclawAvailable, getNullclawMode } from '../agent/nullclaw-integration'
-import { standaloneGitTools } from '../tools/git-tools'
+import { initializeNullclaw, isNullclawAvailable, getNullclawMode } from '@bing/shared/agent/nullclaw-integration'
+import { normalizeSessionId } from '../virtual-filesystem/scope-utils';
+// Dynamically imported to avoid pulling Node.js-only deps (fs, database) into client bundle
+// import { standaloneGitTools } from '../tools/git-tools'
 
 // Blaxel codegen tool definitions for LLM tool calling
 const getBlaxelCodegenToolDefinitions = (): Array<{
@@ -216,6 +221,9 @@ const getBlaxelCodegenToolDefinitions = (): Array<{
 
 const logger = createLogger('MCP:Integration')
 
+// Guard to prevent redundant reinitialization on every /api/mcp/connect click
+let mcpArch1Initialized = false;
+
 let cachedMCPorterTools: Array<{
   type: 'function'
   function: {
@@ -246,6 +254,13 @@ async function refreshMCPorterToolsCache(): Promise<void> {
  */
 export async function initializeMCPForArchitecture1(): Promise<void> {
   try {
+    // Guard: Don't reinitialize if already done (prevents mcporter restart on every connect click)
+    if (mcpArch1Initialized) {
+      logger.debug('MCP for Architecture 1 already initialized — skipping redundant initialization');
+      return;
+    }
+    mcpArch1Initialized = true;
+
     logger.info('Initializing MCP for Architecture 1 (AI SDK)...')
 
     // Initialize Nullclaw first (URL or container pool)
@@ -257,6 +272,11 @@ export async function initializeMCPForArchitecture1(): Promise<void> {
       logger.info(`Nullclaw initialized: mode=${mode}, available=${available}`);
     }
 
+    // CRITICAL: stdio (npx) MCP servers must ONLY be spawned in desktop mode.
+    // In web mode, the Next.js server should NEVER spawn child processes for MCP.
+    // Remote HTTP servers are fine in both modes.
+    const isDesktop = process.env.DESKTOP_MODE === 'true' || process.env.DESKTOP_LOCAL_EXECUTION === 'true';
+
     const configs = parseMCPServerConfigs()
 
     if (configs.length === 0) {
@@ -264,18 +284,76 @@ export async function initializeMCPForArchitecture1(): Promise<void> {
       return
     }
 
+    // Separate HTTP (remote) from stdio (local) server configs
+    const httpServers: Array<{ name: string; url: string; apiKey?: string; bearerToken?: string; headers?: Record<string, string> }> = []
+    const stdioConfigs: typeof configs = []
+
     for (const config of configs) {
-      mcpToolRegistry.registerServer(config)
+      // Check if it's a remote HTTP server (url lives inside transport config)
+      const transportUrl = config.transport?.url;
+      if (transportUrl && isValidMCPURL(transportUrl)) {
+        const parsedUrl = parseMCPURL(transportUrl)
+        httpServers.push({
+          name: config.name,
+          url: parsedUrl,
+          apiKey: config.transport?.apiKey,
+          bearerToken: config.transport?.bearerToken,
+          headers: config.transport?.headers,
+        })
+        logger.info(`Remote MCP server detected: ${config.name} at ${parsedUrl}`)
+      } else {
+        // Local stdio server — ONLY register in desktop mode
+        if (isDesktop) {
+          stdioConfigs.push(config)
+        } else {
+          logger.debug(`Skipping stdio MCP server in web mode: ${config.name}`)
+        }
+      }
     }
 
-    logger.info(`Connecting to ${configs.length} MCP server(s)...`)
-    await mcpToolRegistry.connectAll()
+    // Register and connect local stdio servers (desktop mode ONLY)
+    if (stdioConfigs.length > 0) {
+      for (const config of stdioConfigs) {
+        mcpToolRegistry.registerServer(config)
+      }
+
+      logger.info(`Connecting to ${stdioConfigs.length} local MCP server(s)...`)
+      await mcpToolRegistry.connectAll()
+    } else if (!isDesktop) {
+      logger.info('Web mode — local stdio MCP servers skipped (use remote HTTP servers instead)')
+    }
+
+    // Connect to remote HTTP servers (both desktop and web mode)
+    if (httpServers.length > 0) {
+      logger.info(`Connecting to ${httpServers.length} remote MCP server(s) via HTTP...`)
+      for (const server of httpServers) {
+        try {
+          const transport = createHTTPTransport({
+            url: server.url,
+            apiKey: server.apiKey,
+            bearerToken: server.bearerToken,
+            headers: server.headers,
+            transportType: 'streamable-http',
+          })
+          // Test connection by listing tools
+          await transport.listTools()
+          // Register the transport for tool discovery and execution
+          registerHTTPTransport(server.name, transport)
+          logger.info(`Connected to remote MCP server: ${server.name}`)
+        } catch (error: any) {
+          logger.warn(`Failed to connect to remote MCP server ${server.name}:`, error.message)
+        }
+      }
+    }
 
     await refreshMCPorterToolsCache()
 
     const toolCount = getMCPToolCount()
     const mcporterTools = cachedMCPorterTools.length
     logger.info(`MCP initialized with ${toolCount} native tools and ${mcporterTools} mcporter tools available`)
+
+    // Start health monitoring
+    startHealthMonitoring(30000)
 
   } catch (error) {
     logger.error('Failed to initialize MCP for Architecture 1', error as Error)
@@ -467,8 +545,14 @@ export async function getComposioMCPTools(
  *
  * Use this in your chat/agent implementation to get MCP tools
  * in the format expected by AI SDK's tool calling
+ *
+ * NOTE: This is called lazily on each chat request, NOT on web startup.
+ * Tool sources are initialized/configured at startup, but the actual
+ * tool list is assembled per-request to reflect current state.
  */
 export async function getMCPToolsForAI_SDK(userId?: string) {
+  const callStart = Date.now();
+
   if (mcporterIntegration.isEnabled()) {
     await refreshMCPorterToolsCache()
   }
@@ -520,6 +604,7 @@ export async function getMCPToolsForAI_SDK(userId?: string) {
   }> = process.env.COMPOSIO_API_KEY && userId ? await getComposioMCPTools(userId) : []
 
   // NEW: Include Git tools (shadow commits, VFS sync)
+  const { standaloneGitTools } = await import('../tools/git-tools')
   const gitTools: Array<{
     type: 'function'
     function: {
@@ -536,15 +621,195 @@ export async function getMCPToolsForAI_SDK(userId?: string) {
     },
   }))
 
-  const tools = [...nativeTools, ...cachedMCPorterTools, ...blaxelTools, ...arcadeTools, ...providerTools, ...nullclawTools, ...composioTools, ...gitTools]
+  // NEW: Include VFS filesystem tools (write_file, read_file, apply_diff, etc.)
+  // These let the LLM use function calling instead of tag-based parsing.
+  // When the LLM calls these tools, they execute directly against the VFS.
+  const { getVFSToolDefinitions } = await import('./vfs-mcp-tools')
+  const vfsTools = getVFSToolDefinitions().map(t => ({
+    type: 'function' as const,
+    function: {
+      name: t.function.name,
+      description: t.function.description,
+      parameters: t.function.parameters,
+    },
+  }))
+
+  // NEW: Include stdio shell tool (bash_execute) — single generic tool for all shell operations.
+  // ~50 tokens vs ~1000+ for 9 VFS tool schemas. LLM knows bash from training data.
+  // Session-scoped, self-healing, VFS-synced.
+  let bashTools: Array<{
+    type: 'function'
+    function: {
+      name: string
+      description?: string
+      parameters: any
+    }
+  }> = [];
+  try {
+    const { createBashTool, registerVFSSyncHook } = await import('../bash/bash-tool');
+    const { normalizeSessionId } = await import('../virtual-filesystem/scope-utils');
+
+    // Register VFS sync hook once (on first bash tool load) — syncs bash-created files to VFS
+    registerVFSSyncHook();
+
+    const sessionId = userId ? normalizeSessionId(userId, '000') : undefined;
+    const scopePath = sessionId ? `project/sessions/${sessionId}` : 'project';
+
+    const bashToolMap = createBashTool({
+      workingDir: scopePath,
+      enableSelfHealing: true,
+      persistToVFS: true,
+    });
+
+    bashTools = Object.entries(bashToolMap).map(([name, toolDef]: [string, any]) => ({
+      type: 'function' as const,
+      function: {
+        name: `bash_${name}`,
+        description: toolDef.description,
+        parameters: toolDef.parameters || (toolDef as any).inputSchema || {},
+      },
+    }));
+
+    if (bashTools.length > 0) {
+      logger.debug(`Bash shell tool available: ${bashTools.length} tool(s), scoped to ${scopePath}`);
+    }
+  } catch (error: any) {
+    logger.debug('Bash shell tool not available:', error.message);
+  }
+
+  // NEW: Include remote MCP tools (from HTTP-transport-connected servers)
+  // Use try/catch to avoid failing entire function if remote servers are unreachable
+  let remoteTools: Array<{
+    type: 'function'
+    function: {
+      name: string
+      description?: string
+      parameters: any
+    }
+  }> = [];
+  if (hasRemoteMCPServers()) {
+    try {
+      remoteTools = await getRemoteMCPTools();
+    } catch (error: any) {
+      logger.warn('Failed to get remote MCP tools:', error.message);
+    }
+  }
+
+  // NEW: Include Mem0 persistent memory tools when configured
+  // These let the LLM store, search, and manage memories across sessions
+  let mem0Tools: Array<{
+    type: 'function'
+    function: {
+      name: string
+      description?: string
+      parameters: any
+    }
+  }> = [];
+  try {
+    const { isMem0Configured, buildMem0Tools } = await import('../powers/mem0-power');
+    if (isMem0Configured()) {
+      const mem0ToolMap = await buildMem0Tools({ userId, sessionId: userId });
+      mem0Tools = Object.entries(mem0ToolMap).map(([name, toolDef]: [string, any]) => ({
+        type: 'function' as const,
+        function: {
+          name: `mem0_${name}`,
+          description: toolDef.description || `Mem0 operation: ${name}`,
+          parameters: toolDef.parameters || (toolDef as any).inputSchema || {} as any,
+        },
+      }));
+      logger.debug(`Mem0 memory tools available: ${mem0Tools.length} tools`);
+    }
+  } catch (error: any) {
+    logger.debug('Mem0 tools not available:', error.message);
+  }
+
+  const tools = [...nativeTools, ...cachedMCPorterTools, ...blaxelTools, ...arcadeTools, ...providerTools, ...nullclawTools, ...composioTools, ...gitTools, ...vfsTools, ...bashTools, ...mem0Tools, ...remoteTools]
+
+  const elapsed = Date.now() - callStart;
 
   if (tools.length === 0) {
-    logger.debug('MCP not available - no tools to return')
+    logger.debug('[MCP-Tools] No tools available')
     return []
   }
 
-  logger.debug(`Returning ${tools.length} MCP tools for AI SDK (${blaxelTools.length} Blaxel, ${arcadeTools.length} Arcade, ${providerTools.length} provider-specific, ${composioTools.length} Composio)`)
+  logger.info(`[MCP-Tools] Assembled ${tools.length} tools in ${elapsed}ms`, {
+    native: nativeTools.length,
+    mcporter: cachedMCPorterTools.length,
+    blaxel: blaxelTools.length,
+    arcade: arcadeTools.length,
+    provider: providerTools.length,
+    nullclaw: nullclawTools.length,
+    composio: composioTools.length,
+    git: gitTools.length,
+    vfs: vfsTools.length,
+    bash: bashTools.length,
+    mem0: mem0Tools.length,
+    remote: remoteTools.length,
+  })
+
   return tools
+}
+
+/**
+ * Startup health check — logs what MCP sources are available at boot time.
+ * Call this once from server.ts or similar startup entry point.
+ */
+export async function logMCPStartupHealth(): Promise<void> {
+  logger.info('═══════════════════════════════════════════════════');
+  logger.info('[MCP-HTTP] ┌─ MCP Tool Sources ──────────────────');
+
+  // Native MCP registry
+  const registryStatus = mcpToolRegistry.getAllServerStatuses();
+  const connectedServers = registryStatus.filter(s => s.info.state === 'connected');
+  logger.info(`[MCP-HTTP] │ Native MCP servers: ${registryStatus.length} (${connectedServers.length} connected)`);
+  for (const server of registryStatus) {
+    const status = server.info.state === 'connected' ? '✅' : server.info.state === 'connecting' ? '🔄' : '❌';
+    logger.info(`[MCP-HTTP] │   ${status} ${server.name} (${server.id})`);
+  }
+
+  // MCPorter
+  logger.info(`[MCP-HTTP] │ MCPorter: ${mcporterIntegration.isEnabled() ? '✅ enabled' : '❌ disabled'}`);
+
+  // Blaxel
+  const blaxelKey = !!process.env.BLAXEL_API_KEY;
+  logger.info(`[MCP-HTTP] │ Blaxel: ${blaxelKey ? '✅ configured' : '❌ not configured'}`);
+
+  // Arcade
+  const arcadeKey = !!process.env.ARCADE_API_KEY;
+  logger.info(`[MCP-HTTP] │ Arcade: ${arcadeKey ? '✅ configured' : '❌ not configured'}`);
+
+  // Provider tools (E2B, Daytona, CodeSandbox, Sprites)
+  const { getAllProviderAdvancedTools } = await import('./provider-advanced-tools');
+  const providerTools = getAllProviderAdvancedTools();
+  logger.info(`[MCP-HTTP] │ Provider tools: ${providerTools.length} loaded`);
+
+  // Nullclaw
+  const nullclawEnabled = process.env.NULLCLAW_ENABLED === 'true';
+  logger.info(`[MCP-HTTP] │ Nullclaw: ${nullclawEnabled ? '✅ enabled' : '❌ disabled'}`);
+
+  // Composio
+  const composioKey = !!process.env.COMPOSIO_API_KEY;
+  logger.info(`[MCP-HTTP] │ Composio: ${composioKey ? '✅ configured' : '❌ not configured'}`);
+
+  // Git tools
+  logger.info(`[MCP-HTTP] │ Git tools: ✅ always available`);
+
+  // VFS tools
+  logger.info(`[MCP-HTTP] │ VFS tools: ✅ always available`);
+
+  // Bash shell (stdio)
+  logger.info(`[MCP-HTTP] │ Bash shell: ✅ stdio (session-scoped, self-healing)`);
+
+  // Mem0
+  const mem0Configured = !!process.env.MEM0_API_KEY;
+  logger.info(`[MCP-HTTP] │ Mem0 memory: ${mem0Configured ? '✅ configured (cloud API)' : '❌ not configured (set MEM0_API_KEY)'}`);
+
+  // Remote MCP servers
+  const remoteCount = hasRemoteMCPServers() ? '✅' : '❌';
+  logger.info(`[MCP-HTTP] │ Remote MCP servers: ${remoteCount}`);
+
+  logger.info('[MCP-HTTP] └─────────────────────────────────────');
+  logger.info('═══════════════════════════════════════════════════');
 }
 
 // Cached Blaxel provider instance for tool execution
@@ -553,8 +818,9 @@ let cachedBlaxelProvider: BlaxelProvider | null = null
 // Cached Arcade service instance
 let cachedArcadeService: ArcadeService | null = null
 
-function getBlaxelProviderInstance(): BlaxelProvider {
+async function getBlaxelProviderInstance(): Promise<BlaxelProvider> {
   if (!cachedBlaxelProvider) {
+    const { BlaxelProvider } = await import('../sandbox/providers/blaxel-provider')
     cachedBlaxelProvider = new BlaxelProvider()
   }
   return cachedBlaxelProvider
@@ -615,7 +881,7 @@ async function executeBlaxelCodegenTool(
   args: Record<string, any>
 ): Promise<{ success: boolean; output: string; error?: string }> {
   try {
-    const blaxel = getBlaxelProviderInstance()
+    const blaxel = await getBlaxelProviderInstance()
 
     // Map tool name to method
     const methodName = toolName.replace(/^blaxel_/, '')
@@ -774,7 +1040,8 @@ async function executeArcadeTool(
 export async function callMCPToolFromAI_SDK(
   toolName: string,
   args: Record<string, any>,
-  userId: string  // Required for Arcade tools
+  userId: string,  // Required for Arcade tools
+  scopePath?: string  // VFS scope path for session-scoped file operations
 ): Promise<{ success: boolean; output: string; error?: string }> {
   try {
     logger.debug(`Calling MCP tool: ${toolName}`, { args })
@@ -802,6 +1069,91 @@ export async function callMCPToolFromAI_SDK(
     // NEW: Check if it's a Nullclaw tool
     if (toolName.startsWith('nullclaw_') && process.env.NULLCLAW_ENABLED === 'true') {
       return nullclawMCPBridge.executeTool(toolName, args, userId)
+    }
+
+    // NEW: Check if it's a remote MCP tool (from HTTP transport servers)
+    if (hasRemoteMCPServers()) {
+      // Check if tool name matches any remote server prefix
+      const remoteServerNames = (await import('./http-transport')).getHTTPTransportNames();
+      for (const serverName of remoteServerNames) {
+        if (toolName.startsWith(`${serverName}_`)) {
+          return callRemoteMCPTool(toolName, args);
+        }
+      }
+    }
+
+    // NEW: Check if it's a VFS filesystem tool (write_file, read_file, apply_diff, etc.)
+    // These are defined in vfs-mcp-tools.ts and execute directly against the VFS.
+    const { vfsTools, toolContextStore, getVFSTool } = await import('./vfs-mcp-tools');
+    const vfsTool = getVFSTool(toolName);
+    if (vfsTool) {
+      // Explicit logging for VFS MCP tool invocation
+      logger.info('[VFS MCP] Tool invoked (AI_SDK path)', {
+        tool: toolName,
+        userId,
+        args: Object.keys(args || {}),
+        path: args?.path || args?.files?.map((f: any) => f.path)?.join(', ') || undefined,
+      });
+
+      // Run inside request-scoped context so the tool gets the right userId and scopePath
+      // Compute session-aware scopePath from conversationId if not provided
+      const sessionIdFromConv = normalizeSessionId(args.conversationId || '');
+      const computedScopePath = scopePath
+        || (args as any).scopePath
+        || (sessionIdFromConv ? `project/sessions/${sessionIdFromConv}` : 'project/sessions/000');
+
+      const result = await toolContextStore.run(
+        {
+          userId,
+          sessionId: args.sessionId || sessionIdFromConv,
+          scopePath: computedScopePath,  // Use session-aware scope path
+        },
+        async () => vfsTool.execute(args || {}, {
+          messages: [],
+          toolCallId: crypto.randomUUID(),
+        })
+      );
+
+      return {
+        success: result?.success !== false,
+        output: typeof result?.output === 'string' ? result.output : JSON.stringify(result),
+        error: result?.error,
+      };
+    }
+
+    // NEW: Check if it's a bash/stdio shell tool (bash_execute)
+    if (toolName.startsWith('bash_')) {
+      const { createBashTool } = await import('../bash/bash-tool');
+      const sessionId = normalizeSessionId(args.conversationId || userId || '000');
+      const scopePath = `project/sessions/${sessionId}`;
+
+      const bashToolMap = createBashTool({
+        workingDir: scopePath,
+        enableSelfHealing: true,
+        persistToVFS: true,
+      });
+
+      const bashToolName = toolName.replace('bash_', '');
+      const bashTool = bashToolMap[bashToolName as keyof typeof bashToolMap];
+
+      if (bashTool) {
+        logger.info('[Bash] Tool invoked (AI_SDK path)', {
+          tool: toolName,
+          command: args?.command?.slice(0, 100),
+          workingDir: scopePath,
+        });
+
+        const result = await bashTool.execute(args || {}, {
+          messages: [],
+          toolCallId: crypto.randomUUID(),
+        } as any);
+
+        return {
+          success: result?.success !== false,
+          output: result?.output || JSON.stringify(result),
+          error: result?.error,
+        };
+      }
     }
 
     const nativeResult = await mcpToolRegistry.callTool(toolName, args)
@@ -845,7 +1197,7 @@ export async function initializeMCPForArchitecture2(port: number = 8888): Promis
     await initializeMCPForArchitecture1()
     
     // Start HTTP server for CLI agent to call
-    const { createMCPServerForCLI } = await import('./mcp-cli-server')
+    const { createMCPServerForCLI } = await import('./mcp-http-server')
     await createMCPServerForCLI(port)
     
     logger.info(`MCP HTTP server for CLI agent running on http://localhost:${port}`)

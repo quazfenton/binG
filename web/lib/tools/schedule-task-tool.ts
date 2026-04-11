@@ -185,11 +185,21 @@ export const SCHEDULE_TASK_TOOL_METADATA: ToolMetadata = {
 
 /**
  * Register all task scheduling tools with the tool registry
- * Called during bootstrap
+ *
+ * @deprecated Use bootstrap-events.ts registerEventTools() instead.
+ * This function is kept for backwards compatibility but is no longer called
+ * during the main bootstrap chain. The execute* functions are still used
+ * directly by bootstrap-events.ts.
  */
 export async function registerScheduleTaskTools(): Promise<void> {
   const { ToolRegistry } = await import('./registry');
   const registry = ToolRegistry.getInstance();
+
+  // Check if already registered by bootstrap-events.ts
+  if (registry.getTool('task.schedule')) {
+    console.log('[ScheduleTaskTool] Task tools already registered by bootstrap-events.ts');
+    return;
+  }
   
   // Register schedule_task
   await registry.registerTool({

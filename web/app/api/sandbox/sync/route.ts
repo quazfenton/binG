@@ -100,6 +100,12 @@ const USER_RATE_LIMIT = 10; // 10 syncs per minute
 const IP_RATE_LIMIT = 100; // 100 syncs per minute (global)
 const RATE_WINDOW_MS = 60000; // 1 minute
 
+// SECURITY: O(1) body size guard — checked BEFORE req.json() buffers into memory
+const MAX_SYNC_BODY_BYTES = 120 * 1024 * 1024; // 120MB (per-file is 100MB, allow overhead for JSON structure)
+
+// Per-file content size limit (matches VFS writeFile MAX_FILE_SIZE)
+const MAX_FILE_CONTENT_BYTES = 100 * 1024 * 1024; // 100MB
+
 /**
  * Check and update rate limit
  * Returns true if request is allowed, false if rate limited
@@ -232,6 +238,19 @@ export async function POST(req: NextRequest): Promise<NextResponse<SyncResponse>
 
     // STEP 3: Parse and validate request body
     let body: SyncRequest;
+
+    // SECURITY: O(1) body size check BEFORE buffering into memory via req.json()
+    const contentLength = req.headers.get('content-length');
+    if (contentLength && parseInt(contentLength, 10) > MAX_SYNC_BODY_BYTES) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: `Request body too large (max ${MAX_SYNC_BODY_BYTES / (1024 * 1024)}MB)`,
+        },
+        { status: 413 },
+      );
+    }
+
     try {
       body = await req.json();
     } catch (parseError) {
@@ -335,6 +354,16 @@ export async function POST(req: NextRequest): Promise<NextResponse<SyncResponse>
           {
             success: false,
             error: `File at index ${i} must have string content`,
+          },
+          { status: 400 }
+        );
+      }
+      // SECURITY: O(1) per-file content size guard
+      if (file.content.length > MAX_FILE_CONTENT_BYTES) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: `File at index ${i} exceeds size limit (${(file.content.length / (1024 * 1024)).toFixed(1)}MB > ${MAX_FILE_CONTENT_BYTES / (1024 * 1024)}MB)`,
           },
           { status: 400 }
         );

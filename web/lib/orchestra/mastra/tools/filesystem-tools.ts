@@ -40,6 +40,21 @@ export interface FilesystemToolOptions {
 }
 
 /**
+ * Resolve a file path relative to the workspace path.
+ * If the path already starts with the workspace path, use it as-is.
+ * Otherwise, prepend the workspace path to make it session-scoped.
+ */
+function resolveWorkspacePath(workspacePath: string, path: string): string {
+  if (!path) return workspacePath;
+  const cleanPath = path.replace(/\\/g, '/').replace(/\/+/g, '/').replace(/\/+$/, '');
+  // Already scoped
+  if (cleanPath === workspacePath || cleanPath.startsWith(`${workspacePath}/`)) {
+    return cleanPath;
+  }
+  return `${workspacePath}/${cleanPath}`;
+}
+
+/**
  * Filesystem tools for LLM agent
  * Factory function that creates tools bound to a specific user ID for tenant/session isolation
  */
@@ -47,6 +62,7 @@ export function createFilesystemTools(
   userId: string,
   options: FilesystemToolOptions = {},
 ): FilesystemTool[] {
+  const workspacePath = options.workspacePath || 'project';
   const tools: FilesystemTool[] = [
     {
       name: 'read_file',
@@ -63,7 +79,20 @@ export function createFilesystemTools(
       },
       execute: async ({ path }: { path: string }): Promise<ToolCallResult> => {
         try {
-          const file = await virtualFilesystem.readFile(userId, path);
+          if (!path || typeof path !== 'string' || !path.trim()) {
+            return {
+              success: false,
+              error: {
+                code: 'INVALID_ARGS',
+                message: 'Missing required argument: path',
+                retryable: true,
+                expectedFields: ['path'],
+                suggestedNextAction: 'Call read_file with a valid file path string.',
+              },
+            };
+          }
+          const scopedPath = resolveWorkspacePath(workspacePath, path);
+          const file = await virtualFilesystem.readFile(userId, scopedPath);
           return {
             success: true,
             content: file.content,
@@ -72,9 +101,43 @@ export function createFilesystemTools(
             lastModified: file.lastModified,
           };
         } catch (error: any) {
+          const msg = error.message || 'Failed to read file';
+          const isNotFound = /not found|enoent|does not exist/i.test(msg);
+
+          // On not-found, suggest listing the parent directory
+          if (isNotFound) {
+            const parentPath = path.includes('/') ? path.substring(0, path.lastIndexOf('/')) || '/' : '/';
+            // Try to list siblings for suggestions
+            let suggestedPaths: string[] = [];
+            try {
+              const siblings = await virtualFilesystem.listDirectory(userId, resolveWorkspacePath(workspacePath, parentPath));
+              suggestedPaths = (siblings as any[]).slice(0, 10).map((f: any) => f.name || f.path || String(f));
+            } catch { /* parent may not exist either */ }
+
+            return {
+              success: false,
+              error: {
+                code: 'PATH_NOT_FOUND',
+                message: `File "${path}" does not exist.`,
+                retryable: true,
+                attemptedPath: path,
+                parentPath,
+                suggestedPaths,
+                suggestedNextAction: suggestedPaths.length > 0
+                  ? `Try one of these paths: ${suggestedPaths.join(', ')}`
+                  : `Call list_directory("${parentPath}") to see what exists.`,
+              },
+            };
+          }
+
           return {
             success: false,
-            error: error.message || 'Failed to read file',
+            error: {
+              code: 'READ_ERROR',
+              message: msg,
+              retryable: false,
+              attemptedPath: path,
+            },
           };
         }
       },
@@ -103,8 +166,9 @@ export function createFilesystemTools(
       },
       execute: async ({ path, content, language }: { path: string; content: string; language?: string }): Promise<ToolCallResult> => {
         try {
-          const file = await virtualFilesystem.writeFile(userId, path, content, language);
-          
+          const scopedPath = resolveWorkspacePath(workspacePath, path);
+          const file = await virtualFilesystem.writeFile(userId, scopedPath, content, language);
+
           // CRITICAL FIX Bug #4: Emit filesystem-updated event after V2 file write
           // This ensures components update after V2 agent writes files via tools
           emitFilesystemUpdated({
@@ -113,7 +177,7 @@ export function createFilesystemTools(
             type: 'create',
             source: 'v2-tool',
           });
-          
+
           return {
             success: true,
             path: file.path,
@@ -145,7 +209,8 @@ export function createFilesystemTools(
       },
       execute: async ({ path }: { path: string }): Promise<ToolCallResult> => {
         try {
-          const listing = await virtualFilesystem.listDirectory(userId, path);
+          const scopedPath = resolveWorkspacePath(workspacePath, path);
+          const listing = await virtualFilesystem.listDirectory(userId, scopedPath);
           return {
             success: true,
             entries: listing.nodes.map(e => ({
@@ -179,13 +244,15 @@ export function createFilesystemTools(
       },
       execute: async ({ path }: { path: string }): Promise<ToolCallResult> => {
         try {
+          // Scope the path to workspace
+          const scopedPath = resolveWorkspacePath(workspacePath, path);
           // Create directory by writing a .keep file (VFS creates parent dirs automatically)
-          const keepFilePath = `${path}/.keep`;
+          const keepFilePath = `${scopedPath}/.keep`;
           await virtualFilesystem.writeFile(userId, keepFilePath, '');
           return {
             success: true,
-            path: path,
-            message: `Directory created: ${path}`,
+            path: scopedPath,
+            message: `Directory created: ${scopedPath}`,
           };
         } catch (error: any) {
           return {
@@ -211,12 +278,13 @@ export function createFilesystemTools(
       },
       execute: async ({ path }: { path: string }): Promise<ToolCallResult> => {
         try {
-          const result = await virtualFilesystem.deletePath(userId, path);
+          const scopedPath = resolveWorkspacePath(workspacePath, path);
+          const result = await virtualFilesystem.deletePath(userId, scopedPath);
           return {
             success: true,
-            path: path,
+            path: scopedPath,
             deletedCount: result.deletedCount,
-            message: `Deleted: ${path}`,
+            message: `Deleted: ${scopedPath}`,
           };
         } catch (error: any) {
           return {
@@ -247,10 +315,13 @@ export function createFilesystemTools(
       execute: async ({ query, path }: { query: string; path?: string }): Promise<ToolCallResult> => {
         try {
           const snapshot = await virtualFilesystem.exportWorkspace(userId);
+          // Scope the base path if provided
+          const scopedBasePath = path ? resolveWorkspacePath(workspacePath, path) : workspacePath;
 
           const results = snapshot.files.filter(f => {
-            // Filter by base path if specified
-            if (path && !f.path.startsWith(path)) {
+            // Filter by base path if specified — use exact match or strict prefix with trailing slash
+            // to prevent cross-scope leakage (e.g. "/001" matching "/0012")
+            if (scopedBasePath && f.path !== scopedBasePath && !f.path.startsWith(`${scopedBasePath}/`)) {
               return false;
             }
             // Search in filename or content
@@ -294,10 +365,11 @@ export function createFilesystemTools(
       },
       execute: async ({ path }: { path: string }): Promise<ToolCallResult> => {
         try {
+          const scopedPath = resolveWorkspacePath(workspacePath, path);
           // Try to read as file first
           try {
-            await virtualFilesystem.readFile(userId, path);
-            return { success: true, exists: true, type: 'file' };
+            await virtualFilesystem.readFile(userId, scopedPath);
+            return { success: true, exists: true, type: 'file', path: scopedPath };
           } catch (error: any) {
             if (!error.message?.includes('not found')) {
               throw error;  // Real error, not "not found"
@@ -306,16 +378,17 @@ export function createFilesystemTools(
 
           // File not found - check if it's a directory
           try {
-            const listing = await virtualFilesystem.listDirectory(userId, path);
+            const listing = await virtualFilesystem.listDirectory(userId, scopedPath);
             return {
               success: true,
               exists: true,
               type: 'directory',
+              path: scopedPath,
               entries: listing.nodes.length
             };
           } catch (error: any) {
             if (error.message?.includes('not found')) {
-              return { success: true, exists: false };
+              return { success: true, exists: false, path: scopedPath };
             }
             throw error;
           }

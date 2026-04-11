@@ -1,0 +1,23 @@
+HTTP/1.1 500 Internal Server Error
+Access-Control-Allow-Origin: *
+Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS
+Access-Control-Allow-Headers: Content-Type, Authorization
+Cross-Origin-Resource-Policy: cross-origin
+content-security-policy: default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; connect-src 'self' https: ws: wss: blob:; font-src 'self' data: https:; frame-src 'self' https: http://localhost:*; frame-ancestors 'self'; base-uri 'self'; form-action 'self';
+permissions-policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), magnetometer=(), gyroscope=(self "https://www.youtube.com"), accelerometer=(self "https://www.youtube.com")
+referrer-policy: strict-origin-when-cross-origin
+strict-transport-security: max-age=31536000; includeSubDomains; preload
+x-content-type-options: nosniff
+x-csp-nonce-script: d2JsIG_Q8BPQRRyJ4DnywptrTXiE3laV3raybBO1lV4
+x-csp-nonce-style: EFyesjpbmN9A9wUme0dXHzdCdshGm5vxoKwaHBzZSDg
+x-frame-options: SAMEORIGIN
+x-request-id: req_1775757388076_hkvh76fgnef
+x-xss-protection: 1; mode=block
+vary: rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch
+content-type: application/json
+set-cookie: anon-session-id=anon_1775757388291_ebfdc9a730003b4987; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly
+Date: Thu, 09 Apr 2026 17:56:33 GMT
+Connection: keep-alive
+Keep-Alive: timeout=5
+Transfer-Encoding: chunked
+

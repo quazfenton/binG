@@ -27,7 +27,7 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { secureRandomId } from "@/lib/utils/crypto-random";
 import type { Message } from "@/types";
-import type { LLMProvider } from "@/lib/chat/llm-providers";
+import type { LLMProviderConfig } from "@/lib/chat/llm-providers-types";
 
 import {
   X,
@@ -56,6 +56,7 @@ import {
   Copy,
   RefreshCw,
 } from "lucide-react";
+import { clipboard } from "@bing/platform/clipboard";
 
 // ============================================================================
 // Types
@@ -70,7 +71,7 @@ interface ChatThread {
 }
 
 interface EnhancedWorkspacePanelProps {
-  availableProviders: LLMProvider[];
+  availableProviders: LLMProviderConfig[];
   currentProvider: string;
   currentModel: string;
   onProviderChange: (provider: string, model: string) => void;
@@ -100,7 +101,7 @@ function MessageBubble({ message, isStreaming }: { message: Message; isStreaming
 
   const handleCopy = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(message.content);
+      await clipboard.writeText(message.content);
       setIsCopied(true);
       toast.success("Message copied");
       setTimeout(() => setIsCopied(false), 2000);

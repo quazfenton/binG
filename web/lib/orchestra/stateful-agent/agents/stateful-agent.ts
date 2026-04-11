@@ -1,16 +1,18 @@
-import { openai } from '@ai-sdk/openai';
+import { getVercelModel } from '../../../chat/vercel-ai-streaming';
+import { streamText, generateObject, type Tool as CoreTool } from 'ai';
 import type { SandboxHandle } from '@/lib/sandbox/providers/sandbox-provider';
+import type { ProjectServices } from '@/lib/project-context';
 import { ToolExecutor } from '../tools/tool-executor';
 import { reflectionEngine } from '@/lib/orchestra/reflection-engine';
-import { executionGraphEngine } from '@/lib/agent/execution-graph';
-import { generateObject } from 'ai';
+import { executionGraphEngine } from '@bing/shared/agent/execution-graph';
 import { z } from 'zod';
 import { createLogger } from '@/lib/utils/logger';
 import { contextPackService } from '@/lib/virtual-filesystem/context-pack-service';
 import { detectTemplate, templateToTaskGraph, type TemplateType } from './template-flows';
-import { createLoopDetector, type LoopDetectionResult } from '@/lib/agent/loop-detection';
-import { createCapabilityChain, type CapabilityChain } from '@/lib/agent/capability-chain';
-import { createBootstrappedAgency, type BootstrappedAgency } from '@/lib/agent/bootstrapped-agency';
+import { createLoopDetector, type LoopDetectionResult } from '@bing/shared/agent/loop-detection';
+import { createCapabilityChain, type CapabilityChain } from '@bing/shared/agent/capability-chain';
+import { createBootstrappedAgency, type BootstrappedAgency } from '@bing/shared/agent/bootstrapped-agency';
+import { chatRequestLogger } from '../../../chat/chat-request-logger';
 
 const log = createLogger('StatefulAgent');
 
@@ -57,6 +59,8 @@ async function acquireSessionLock(sessionId: string): Promise<() => void> {
 
 export interface StatefulAgentOptions {
   sessionId?: string;
+  userId?: string;
+  conversationId?: string;  // FIX: Separate conversationId for VFS session scoping
   sandboxHandle?: SandboxHandle;
   maxSelfHealAttempts?: number;
   enforcePlanActVerify?: boolean;
@@ -68,6 +72,8 @@ export interface StatefulAgentOptions {
   enableCapabilityChaining?: boolean;
   // Enable bootstrapped agency for learning from past executions
   enableBootstrappedAgency?: boolean;
+  // Project-scoped services for project-isolated memory and retrieval
+  projectServices?: ProjectServices;
 }
 
 export interface StatefulAgentResult {
@@ -180,15 +186,37 @@ export class StatefulAgent {
   private enableBootstrappedAgency: boolean;
   private agency?: BootstrappedAgency;
 
+  // Project-scoped services for project-isolated memory and retrieval
+  private projectServices?: ProjectServices;
+
   constructor(options: StatefulAgentOptions = {}) {
     this.sessionId = options.sessionId || crypto.randomUUID();
+    this.userId = options.userId || 'anonymous';
+    // FIX: Extract conversationId from the end of composite sessionId
+    // Composite keys can be "userId$001" or "anon:timestamp_random$001"
+    // We need just the trailing conversation segment (e.g., "001")
+    // SECURITY: Use indexOf (FIRST separator) not lastIndexOf, because:
+    // - userId is system-controlled and NEVER contains $ or :
+    // - conversationId MAY contain user-provided $ or : (e.g., folder named "my$project")
+    const firstDollar = options.sessionId?.indexOf('$');
+    const firstColon = options.sessionId?.indexOf(':');
+    let separatorIndex: number | undefined;
+    if (firstDollar !== undefined && firstDollar >= 0 && (firstColon === undefined || firstColon < 0 || firstDollar < firstColon)) {
+      separatorIndex = firstDollar;
+    } else if (firstColon !== undefined && firstColon >= 0) {
+      separatorIndex = firstColon;
+    }
+    this.conversationId = options.conversationId
+      || (separatorIndex !== undefined && separatorIndex >= 0 ? options.sessionId!.slice(separatorIndex + 1) : options.sessionId)
+      || crypto.randomUUID();
     this.sandboxHandle = options.sandboxHandle;
+    this.projectServices = options.projectServices;
     this.maxSelfHealAttempts = options.maxSelfHealAttempts || 3;
     this.enforcePlanActVerify = options.enforcePlanActVerify ?? true;
     this.enableReflection = options.enableReflection ?? true;
     this.enableTaskDecomposition = options.enableTaskDecomposition ?? true;
-    this.enableCapabilityChaining = options.enableCapabilityChaining ?? false;
-    this.enableBootstrappedAgency = options.enableBootstrappedAgency ?? false;
+    this.enableCapabilityChaining = options.enableCapabilityChaining ?? true;
+    this.enableBootstrappedAgency = options.enableBootstrappedAgency ?? true;
 
     this.toolExecutor = new ToolExecutor({
       sandboxHandle: this.sandboxHandle,
@@ -206,12 +234,23 @@ export class StatefulAgent {
     if (this.enableBootstrappedAgency) {
       this.agency = createBootstrappedAgency({
         sessionId: this.sessionId,
+        userId: this.userId,  // Pass real user ID — prevents 'agency' phantom workspace
         enableLearning: true,
         maxHistorySize: 1000,
         enablePatternRecognition: true,
         enableAdaptiveSelection: true,
       });
       log.info('Bootstrapped Agency initialized', { sessionId: this.sessionId });
+
+      // Wire agency into capability router for adaptive provider selection (non-blocking)
+      // Use .then() to avoid await in constructor
+      import('@/lib/tools/router')
+        .then(({ wireAgencyToRouter }) => {
+          wireAgencyToRouter(this.agency);
+        })
+        .catch((err: any) => {
+          log.warn('Failed to wire agency to capability router (non-fatal)', { error: err.message });
+        });
     }
   }
 
@@ -390,8 +429,9 @@ export class StatefulAgent {
         this.status = 'completed';
 
         const duration = Date.now() - startTime;
+        const success = this.errors.length === 0;
         const result: StatefulAgentResult = {
-          success: this.errors.length === 0,
+          success,
           response: `Completed ${this.steps} steps in ${Math.round(duration / 1000)}s. Modified ${this.transactionLog.length} files.`,
           steps: this.steps,
           errors: this.errors,
@@ -405,6 +445,38 @@ export class StatefulAgent {
           },
         };
 
+        // Record execution with bootstrapped agency for learning
+        // Isolated in its own try/catch so failures don't fail the main execution
+        if (this.enableBootstrappedAgency && this.agency) {
+          try {
+            await this.recordAgencyExecution(userMessage, {
+              success,
+              duration,
+              steps: this.steps,
+              errors: this.errors.map(e => e.message),
+              transactionLog: this.transactionLog,
+              toolMetrics: this.toolExecutor.getMetrics(),
+            });
+          } catch (err: any) {
+            log.warn('Agency execution recording failed (non-fatal)', { error: err.message });
+          }
+        }
+
+        // Trigger skill bootstrap after successful execution
+        // Isolated so bootstrap failures don't fail the main execution
+        if (success && this.transactionLog.length > 0) {
+          try {
+            await this.triggerSkillBootstrap(userMessage, {
+              duration,
+              steps: this.steps,
+              transactionLog: this.transactionLog,
+              toolMetrics: this.toolExecutor.getMetrics(),
+            });
+          } catch (err: any) {
+            log.warn('Skill bootstrap event emission failed (non-fatal)', { error: err.message });
+          }
+        }
+
         // Log completion metrics
         log.info('StatefulAgent execution completed', {
           sessionId: this.sessionId,
@@ -417,7 +489,24 @@ export class StatefulAgent {
           reflectionEnabled: this.enableReflection,
           taskDecompositionEnabled: this.enableTaskDecomposition,
           executionGraphId: this.executionGraphId,
+          agencyLearningApplied: this.enableBootstrappedAgency,
+          skillBootstrapTriggered: success && this.transactionLog.length > 0,
         });
+
+        // FIX: Record telemetry for StatefulAgent LLM calls
+        const modelString = process.env.DEFAULT_MODEL || 'gpt-4o';
+        const actualProvider = modelString.includes('/') ? modelString.split('/')[0] : 'openai';
+        const actualModel = modelString.includes('/') ? modelString.split('/').slice(1).join('/') : modelString;
+        chatRequestLogger.logRequestComplete(
+          `stateful-${this.sessionId}-${Date.now()}`,
+          result.success,
+          undefined,
+          undefined,
+          duration,
+          result.success ? undefined : result.errors.map(e => e.message).join('; '),
+          actualProvider,
+          actualModel,
+        ).catch(() => {});
 
         return result;
       } catch (error: any) {
@@ -437,6 +526,21 @@ export class StatefulAgent {
           errors: this.errors.length,
           duration: `${Math.round(duration / 1000)}s`,
         });
+
+        // FIX: Record failure telemetry for StatefulAgent
+        const modelString = process.env.DEFAULT_MODEL || 'gpt-4o';
+        const actualProvider = modelString.includes('/') ? modelString.split('/')[0] : 'openai';
+        const actualModel = modelString.includes('/') ? modelString.split('/').slice(1).join('/') : modelString;
+        chatRequestLogger.logRequestComplete(
+          `stateful-${this.sessionId}-${Date.now()}`,
+          false,
+          undefined,
+          undefined,
+          duration,
+          error.message || 'StatefulAgent execution failed',
+          actualProvider,
+          actualModel,
+        ).catch(() => {});
 
         return {
           success: false,
@@ -480,8 +584,19 @@ export class StatefulAgent {
   }
 
   private getModel() {
-    const modelString = (process.env.DEFAULT_MODEL || 'gpt-4o').replace('openai:', '');
-    return openai(modelString) as any;
+    // Use getVercelModel() which handles all provider variations (openai, nvidia, mistral, openrouter, etc.)
+    // instead of hardcoding openai() which only works for OpenAI-compatible providers
+    const modelString = process.env.DEFAULT_MODEL || 'gpt-4o';
+    try {
+      const [provider, modelName] = modelString.includes(':')
+        ? modelString.split(':', 2)
+        : ['openai', modelString];
+      return getVercelModel(provider, modelName);
+    } catch {
+      // Fallback to openai if provider not recognized by vercel-ai-streaming
+      const { openai } = require('@ai-sdk/openai');
+      return openai(modelString.replace('openai:', '')) as any;
+    }
   }
 
   private async runDiscoveryPhase(userMessage: string) {
@@ -495,8 +610,10 @@ Respond with a list of file paths, one per line. No other text.`;
       // First, try to use context pack for comprehensive context gathering
       if (process.env.STATEFUL_AGENT_USE_CONTEXT_PACK !== 'false') {
         try {
+          // FIX: Use userId (not composite sessionId) as ownerId for VFS reads.
+          // Composite keys like "userId:001" would cause VFS path mismatches.
           const contextPack = await contextPackService.generateContextPack(
-            this.sessionId,
+            this.userId,
             '/',
             {
               format: 'plain',
@@ -762,6 +879,61 @@ Use 'createFile' for new files.`;
     try {
       const { generateText } = await import('ai');
       const { allTools } = await import('../tools/sandbox-tools');
+      const { getCapabilityRouter } = await import('@/lib/tools/router');
+      const { ALL_CAPABILITIES } = await import('@/lib/tools/capabilities');
+
+      const router = getCapabilityRouter();
+      const availableCapabilities = ALL_CAPABILITIES.map(c => c.id);
+
+      // Build capability chain tool if enabled
+      const additionalTools: Record<string, any> = {};
+      if (this.enableCapabilityChaining) {
+        const { tool } = await import('ai');
+
+        additionalTools.run_capability_chain = tool({
+          description: `Execute a chain of capabilities in sequence. Use for multi-step workflows. Available: ${availableCapabilities.join(', ')}`,
+          parameters: z.object({
+            name: z.string().describe('Chain name'),
+            steps: z.array(z.object({
+              capability: z.string().describe('Capability ID (e.g., file.read, sandbox.shell, web.browse)'),
+              args: z.record(z.any()).describe('Arguments for this capability'),
+            })).describe('Sequence of capabilities to execute'),
+            stopOnFailure: z.boolean().optional().default(false).describe('Whether to stop the chain if a step fails'),
+          }),
+          execute: async (args: any) => {
+            try {
+              const chain = createCapabilityChain({
+                name: args.name,
+                enableParallel: false,
+                stopOnFailure: args.stopOnFailure ?? false,
+              });
+
+              for (const step of args.steps) {
+                chain.addStep(step.capability, step.args);
+              }
+
+              const result = await chain.execute({
+                execute: async (capName: string, config: any, _chainCtx: any) => {
+                  return router.execute(capName, config, {
+                    userId: this.userId,
+                    sessionId: this.sessionId,
+                  } as any);
+                },
+              });
+
+              const serializedResults = Object.fromEntries(result.results.entries());
+              return {
+                success: result.success,
+                results: serializedResults,
+                errors: result.errors,
+                steps: result.steps,
+              };
+            } catch (err: any) {
+              return { success: false, error: err.message };
+            }
+          },
+        } as any);
+      }
 
       const result = await generateText({
         model: this.getModel(),
@@ -770,6 +942,7 @@ Use 'createFile' for new files.`;
           applyDiff: allTools.applyDiff,
           createFile: allTools.createFile,
           execShell: allTools.execShell,
+          ...additionalTools,
         },
         onStepFinish: async ({ toolCalls, toolResults }) => {
           // Execute tool calls via ToolExecutor
@@ -861,6 +1034,44 @@ Use 'createFile' for new files.`;
           }
         }
       });
+
+      // FALLBACK: If native tool calls returned empty but text contains tool-like patterns,
+      // parse and execute them (handles models that don't support function calling)
+      if (result.toolCalls?.length === 0 && result.text) {
+        const { extractTextToolCallEdits, extractFlatJsonToolCalls, extractToolTagEdits } = await import('@/lib/chat/file-edit-parser');
+        const textEdits = [
+          ...extractTextToolCallEdits(result.text),
+          ...extractFlatJsonToolCalls(result.text),
+          ...extractToolTagEdits(result.text),
+        ];
+
+        if (textEdits.length > 0) {
+          log.info(`StatefulAgent: No native tool calls, found ${textEdits.length} text-based tool calls, executing fallback`);
+          for (const edit of textEdits) {
+            try {
+              // Map action to tool name
+              let toolName: string = edit.action;
+              if (edit.action === 'write') toolName = 'createFile';
+              else if (edit.action === 'patch') toolName = 'applyDiff';
+              else if (edit.action === 'delete') toolName = 'delete_file';
+
+              const callArgs: any = { path: edit.path };
+              if (edit.content) callArgs.content = edit.content;
+              if (edit.diff) callArgs.diff = edit.diff;
+
+              const execResult = await this.toolExecutor.execute(toolName, callArgs);
+
+              // Update VFS for successful file operations
+              if (execResult.success && edit.path) {
+                this.vfs[edit.path] = typeof execResult.content === 'string' ? execResult.content : (this.vfs[edit.path] || '');
+                await this.addMemoryNode('file', this.vfs[edit.path], edit.path);
+              }
+            } catch (err: any) {
+              log.warn(`Text-based tool execution failed: ${edit.action}`, err.message);
+            }
+          }
+        }
+      }
 
       this.status = 'verifying';
     } catch (error: any) {
@@ -1044,6 +1255,177 @@ Provide only the corrected code, no explanation.`;
     await this.runEditingPhase(`Fix the runtime error: ${error.message}`);
   }
 
+  /**
+   * Record execution with bootstrapped agency for learning
+   */
+  private async recordAgencyExecution(
+    task: string,
+    execution: {
+      success: boolean;
+      duration: number;
+      steps: number;
+      errors: string[];
+      transactionLog: Array<{ path: string; type: string; timestamp: number; originalContent?: string }>;
+      toolMetrics: any;
+    }
+  ): Promise<void> {
+    if (!this.agency) return;
+
+    try {
+      // Determine capabilities used from transaction log
+      const capabilities = this.deriveCapabilitiesFromExecution(execution);
+
+      // Record with agency for pattern learning
+      await this.agency.execute({
+        task,
+        capabilities,
+        chain: capabilities.length > 1,
+      });
+
+      log.debug('Agency execution recorded for learning', {
+        task: task.substring(0, 50),
+        success: execution.success,
+        capabilities,
+        duration: `${Math.round(execution.duration / 1000)}s`,
+      });
+    } catch (error: any) {
+      log.warn('Failed to record agency execution', { error: error.message });
+    }
+  }
+
+  /**
+   * Derive capabilities used from transaction log and tool metrics
+   */
+  private deriveCapabilitiesFromExecution(execution: {
+    transactionLog: Array<{ path: string; type: string; timestamp: number; originalContent?: string }>;
+    toolMetrics: any;
+  }): string[] {
+    const caps = new Set<string>();
+
+    // File operations from transaction log
+    const createOps = execution.transactionLog.filter(t => t.type === 'CREATE');
+    const updateOps = execution.transactionLog.filter(t => t.type === 'UPDATE');
+    const deleteOps = execution.transactionLog.filter(t => t.type === 'DELETE');
+    const readOps = execution.transactionLog.filter(t => t.type === 'READ');
+
+    if (createOps.length > 0) caps.add('file.write');
+    if (updateOps.length > 0) { caps.add('file.read'); caps.add('file.write'); }
+    if (deleteOps.length > 0) caps.add('file.delete');
+    if (readOps.length > 0) caps.add('file.read');
+
+    // File list/search operations
+    if (execution.toolMetrics?.byTool?.listFiles?.count > 0) {
+      caps.add('file.list');
+    }
+    if (execution.toolMetrics?.byTool?.searchFiles?.count > 0) {
+      caps.add('file.search');
+    }
+
+    // Shell executions (sandbox shell, terminal commands)
+    if (execution.toolMetrics?.byTool?.execShell?.count > 0) {
+      caps.add('sandbox.shell');
+    }
+    if (execution.toolMetrics?.byTool?.runCommand?.count > 0) {
+      caps.add('sandbox.shell');
+    }
+
+    // Sandbox execution
+    if (execution.toolMetrics?.byTool?.executeSandbox?.count > 0) {
+      caps.add('sandbox.execute');
+    }
+
+    // Web operations (fetch, browse, search)
+    if (execution.toolMetrics?.byTool?.webFetch?.count > 0) {
+      caps.add('web.fetch');
+    }
+    if (execution.toolMetrics?.byTool?.webBrowse?.count > 0) {
+      caps.add('web.browse');
+    }
+    if (execution.toolMetrics?.byTool?.webSearch?.count > 0) {
+      caps.add('web.search');
+    }
+
+    // Repository operations
+    if (execution.toolMetrics?.byTool?.git?.count > 0) {
+      caps.add('repo.git');
+    }
+    if (execution.toolMetrics?.byTool?.syntaxCheck?.count > 0) {
+      caps.add('repo.analyze');
+    }
+    if (execution.toolMetrics?.byTool?.repoSearch?.count > 0) {
+      caps.add('repo.search');
+    }
+
+    // Memory operations
+    if (execution.toolMetrics?.byTool?.memoryStore?.count > 0) {
+      caps.add('memory.store');
+    }
+    if (execution.toolMetrics?.byTool?.memoryRetrieve?.count > 0) {
+      caps.add('memory.retrieve');
+    }
+
+    // Automation / task operations
+    if (execution.toolMetrics?.byTool?.scheduleTask?.count > 0) {
+      caps.add('task.schedule');
+    }
+
+    // If nothing was actually recorded (execution failed immediately),
+    // don't falsely record file.read/write
+    if (caps.size === 0) {
+      return [];
+    }
+
+    return Array.from(caps);
+  }
+
+  /**
+   * Trigger skill bootstrap after successful execution
+   */
+  private async triggerSkillBootstrap(
+    task: string,
+    execution: {
+      duration: number;
+      steps: number;
+      transactionLog: Array<{ path: string; type: string; timestamp: number; originalContent?: string }>;
+      toolMetrics: any;
+    }
+  ): Promise<void> {
+    try {
+      const { emitEvent } = await import('@/lib/events/bus');
+
+      // Build successful run payload for skill extraction
+      const steps = execution.transactionLog.map(t => ({
+        action: t.type.toLowerCase(),
+        result: { path: t.path, type: t.type },
+        success: true,
+      }));
+
+      await emitEvent({
+        type: 'SKILL_BOOTSTRAP',
+        userId: this.userId || 'system',
+        sessionId: this.sessionId,
+        payload: {
+          successfulRun: {
+            steps,
+            totalDuration: execution.duration,
+            userId: this.userId || 'system',
+            taskDescription: task,
+            filesModified: execution.transactionLog.map(t => t.path),
+          },
+          model: process.env.DEFAULT_MODEL || 'gpt-4o',
+          storeSkill: true,
+        },
+      }, this.userId || 'system', this.sessionId);
+
+      log.info('Skill bootstrap event emitted', {
+        sessionId: this.sessionId,
+        filesModified: execution.transactionLog.length,
+      });
+    } catch (error: any) {
+      log.warn('Failed to emit skill bootstrap event', { error: error.message });
+    }
+  }
+
   getState() {
     return {
       sessionId: this.sessionId,
@@ -1055,6 +1437,32 @@ Provide only the corrected code, no explanation.`;
       status: this.status,
       metrics: this.toolExecutor.getMetrics(),
     };
+  }
+
+  /**
+   * Get learned capabilities from bootstrapped agency for a task
+   * Returns capabilities ranked by past success rate for similar tasks
+   */
+  getLearnedCapabilities(task: string, limit: number = 5): string[] {
+    if (!this.enableBootstrappedAgency || !this.agency) {
+      return ['file.read', 'file.write', 'sandbox.shell'];
+    }
+    return this.agency.getLearnedCapabilities(task, limit);
+  }
+
+  /**
+   * Get agency learning summary
+   */
+  getAgencyLearningSummary(): {
+    totalExecutions: number;
+    successRate: number;
+    topCapabilities: Array<{ capability: string; successRate: number; executions: number }>;
+    improvementTrend: 'improving' | 'stable' | 'declining';
+  } | null {
+    if (!this.enableBootstrappedAgency || !this.agency) {
+      return null;
+    }
+    return this.agency.getLearningSummary();
   }
 }
 
@@ -1068,4 +1476,161 @@ export async function runStatefulAgent(
 ): Promise<StatefulAgentResult> {
   const agent = new StatefulAgent(options);
   return agent.run(userMessage);
+}
+
+/**
+ * Streaming version of StatefulAgent using Vercel AI SDK
+ * Use this for real-time streaming responses to the client
+ */
+export interface StatefulAgentStreamingOptions extends StatefulAgentOptions {
+  /** Callback for each text chunk */
+  onChunk?: (chunk: string) => void;
+  /** Callback for tool execution */
+  onToolExecution?: (toolName: string, args: Record<string, any>, result: any) => void;
+  /** Maximum steps for streaming */
+  maxSteps?: number;
+}
+
+/**
+ * Run StatefulAgent with streaming using Vercel AI SDK
+ * Similar to Mastra's executeTaskStreaming pattern
+ */
+export async function* runStatefulAgentStreaming(
+  userMessage: string,
+  options?: StatefulAgentStreamingOptions
+): AsyncGenerator<string, StatefulAgentResult, unknown> {
+  const agent = new StatefulAgent(options);
+  const maxSteps = options?.maxSteps || 15;
+  let stepCount = 0;
+  const errors: Array<{ step: number; message: string; path?: string }> = [];
+  const vfs: Record<string, string> = {};
+
+  // Get the model — use getVercelModel for all provider support
+  const modelString = process.env.DEFAULT_MODEL || 'gpt-4o';
+  const [provider, modelName] = modelString.includes(':')
+    ? modelString.split(':', 2)
+    : ['openai', modelString];
+  const model = getVercelModel(provider, modelName);
+
+  // Initialize tools from vercel-ai-tools
+  const { getAllTools } = await import('@/lib/chat/vercel-ai-tools');
+  const tools = await getAllTools({
+    userId: agent['userId'],
+    conversationId: agent['conversationId'],
+    sessionId: agent['sessionId'],
+  });
+
+  // Convert tools to Vercel AI SDK format
+  const toolDefs = Object.fromEntries(
+    Object.entries(tools).map(([name, tool]) => [name, tool as unknown as CoreTool<any, any>])
+  );
+
+  // Build initial messages
+  const messages = [
+    {
+      role: 'user' as const,
+      content: userMessage,
+    },
+  ];
+
+  // Run streaming using Vercel AI SDK
+  const result = streamText({
+    model,
+    messages,
+    tools: toolDefs,
+    maxSteps,
+    onChunk: ({ chunk }) => {
+      if (chunk.type === 'text-delta' && (chunk as any).textDelta) {
+        options?.onChunk?.((chunk as any).textDelta);
+      }
+    },
+    onStepFinish: async ({ toolCalls, toolResults }) => {
+      stepCount++;
+
+      // Execute tool calls via ToolExecutor
+      for (const toolCall of toolCalls || []) {
+        try {
+          const execResult = await agent['toolExecutor'].execute(toolCall.toolName, (toolCall as any).args || {});
+
+          options?.onToolExecution?.(toolCall.toolName, (toolCall as any).args || {}, execResult);
+
+          // Update VFS
+          const args = (toolCall as any).args || {};
+          if (execResult.success && args.path) {
+            vfs[args.path] = typeof execResult.content === 'string' ? execResult.content : '';
+          }
+        } catch (err: any) {
+          errors.push({
+            step: stepCount,
+            message: err.message,
+          });
+        }
+      }
+    },
+  } as any);
+
+  // Yield text chunks
+  for await (const chunk of result.textStream) {
+    yield chunk;
+  }
+
+  // FALLBACK: If no tool calls were made but text contains tool-like patterns,
+  // parse and execute them (handles models that don't support function calling)
+  const finalToolCalls = await result.toolCalls;
+  if ((!finalToolCalls || finalToolCalls.length === 0) && agent) {
+    try {
+      const { extractTextToolCallEdits, extractFlatJsonToolCalls, extractToolTagEdits } = await import('@/lib/chat/file-edit-parser');
+      // Get the full response text from the result
+      const fullText = await result.text;
+      if (fullText) {
+        const textEdits = [
+          ...extractTextToolCallEdits(fullText),
+          ...extractFlatJsonToolCalls(fullText),
+          ...extractToolTagEdits(fullText),
+        ];
+
+        if (textEdits.length > 0) {
+          log.info(`StatefulAgent streaming: No native tool calls, found ${textEdits.length} text-based tool calls, executing fallback`);
+          for (const edit of textEdits) {
+            try {
+              let toolName: string = edit.action;
+              if (edit.action === 'write') toolName = 'createFile';
+              else if (edit.action === 'patch') toolName = 'applyDiff';
+              else if (edit.action === 'delete') toolName = 'delete_file';
+
+              const callArgs: any = { path: edit.path };
+              if (edit.content) callArgs.content = edit.content;
+              if (edit.diff) callArgs.diff = edit.diff;
+
+              const execResult = await agent['toolExecutor'].execute(toolName, callArgs);
+
+              if (execResult.success && edit.path) {
+                vfs[edit.path] = typeof execResult.content === 'string' ? execResult.content : (vfs[edit.path] || '');
+                options?.onToolExecution?.(toolName, callArgs, execResult);
+              }
+            } catch (err: any) {
+              log.warn(`Text-based tool execution failed: ${edit.action}`, err.message);
+            }
+          }
+        }
+      }
+    } catch (err: any) {
+      log.warn('StatefulAgent streaming: Text-based fallback parsing failed', err.message);
+    }
+  }
+
+  // Return final result
+  const finalResult: StatefulAgentResult = {
+    success: errors.length === 0,
+    response: '', // Text already streamed
+    steps: stepCount,
+    errors,
+    vfs,
+    metrics: {
+      duration: 0,
+      executionMode: options?.executionMode || 'standard',
+    },
+  };
+
+  return finalResult;
 }

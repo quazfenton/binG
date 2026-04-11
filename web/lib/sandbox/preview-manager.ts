@@ -225,6 +225,12 @@ export class PreviewManager {
     this.portManager = new PortManager();
   }
 
+  /** Clear preview cache for a specific sandbox (useful on destroy) */
+  clearCacheForSandbox(sandboxId: string): void {
+    this.cache.delete(sandboxId);
+    logger.debug(`Cleared preview cache for sandbox ${sandboxId}`);
+  }
+
   /**
    * Start a preview server and return URL
    * 

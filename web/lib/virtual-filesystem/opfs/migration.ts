@@ -64,7 +64,7 @@ export async function migrateFromServerVFS(options: MigrationOptions): Promise<M
     await opfsCore.initialize(workspaceId);
 
     // Get server snapshot via API
-    const snapshot = await getWorkspaceSnapshot(ownerId);
+    const snapshot = await getWorkspaceSnapshot();
     if (!snapshot) {
       return {
         success: false,
@@ -265,7 +265,7 @@ export async function getMigrationStatus(
 
   try {
     // Get server snapshot via API
-    const snapshot = await getWorkspaceSnapshot(ownerId);
+    const snapshot = await getWorkspaceSnapshot();
     if (!snapshot) {
       return {
         serverFileCount: 0,
@@ -394,7 +394,7 @@ async function verifyMigration(
   try {
     if (direction === 'server-to-opfs') {
       // Verify server files exist in OPFS
-      const snapshot = await getWorkspaceSnapshot(ownerId);
+      const snapshot = await getWorkspaceSnapshot();
       if (!snapshot) {
         errors.push('Failed to fetch snapshot from server for verification');
         return;
@@ -416,7 +416,7 @@ async function verifyMigration(
       // This would require walking OPFS tree and comparing
       // Simplified version: just check file counts
       const opfsStats = await opfsCore.getStats();
-      const snapshot = await getWorkspaceSnapshot(ownerId);
+      const snapshot = await getWorkspaceSnapshot();
       if (!snapshot) {
         errors.push('Failed to fetch snapshot from server for verification');
         return;

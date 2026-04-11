@@ -1,0 +1,62 @@
+{
+  "label": "09-google-flash-preview-app",
+  "status": 200,
+  "body": {
+    "messages": [
+      {
+        "role": "user",
+        "content": "Create index.html, style.css, and app.js for a tiny todo app in the current session root. Use tools to actually create the files."
+      }
+    ],
+    "provider": "google",
+    "model": "gemini-3-flash-preview",
+    "stream": true,
+    "conversationId": "e2e-google-flash-preview"
+  },
+  "tokens": "I'll create the three files for a tiny todo app in the current session root using the file editing tools. Let me create them now.",
+  "toolEvents": [],
+  "fileEvents": [],
+  "done": {
+    "event": "done",
+    "data": {
+      "success": true,
+      "content": "I'll create the three files for a tiny todo app in the current session root using the file editing tools. Let me create them now.",
+      "messageMetadata": {
+        "agent": "unified",
+        "mode": "v1-api",
+        "processingSteps": [
+          {
+            "step": "Start agentic pipeline",
+            "status": "started",
+            "timestamp": 1775797305844,
+            "stepIndex": 0
+          },
+          {
+            "step": "Start agentic pipeline",
+            "status": "completed",
+            "timestamp": 1775797309038,
+            "stepIndex": 1
+          }
+        ]
+      },
+      "data": {
+        "success": true,
+        "response": "I'll create the three files for a tiny todo app in the current session root using the file editing tools. Let me create them now.",
+        "steps": [],
+        "totalSteps": 0,
+        "mode": "v1-api",
+        "metadata": {
+          "provider": "mistral",
+          "model": "mistral-small-latest",
+          "duration": 2093,
+          "toolInvocations": [],
+          "fallbackChain": [
+            "google",
+            "mistral"
+          ]
+        }
+      }
+    }
+  },
+  "raw": "event: step\ndata: {\"step\":\"Start agentic pipeline\",\"status\":\"started\",\"timestamp\":1775797305844,\"stepIndex\":0}\n\nevent: token\ndata: {\"content\":\"I'll \",\"timestamp\":1775797307689}\n\nevent: token\ndata: {\"content\":\"create \",\"timestamp\":1775797307704}\n\nevent: token\ndata: {\"content\":\"the \",\"timestamp\":1775797307721}\n\nevent: token\ndata: {\"content\":\"three \",\"timestamp\":1775797307739}\n\nevent: token\ndata: {\"content\":\"files \",\"timestamp\":1775797307755}\n\nevent: token\ndata: {\"content\":\"for \",\"timestamp\":1775797307786}\n\nevent: token\ndata: {\"content\":\"a \",\"timestamp\":1775797307800}\n\nevent: token\ndata: {\"content\":\"tiny \",\"timestamp\":1775797307817}\n\nevent: token\ndata: {\"content\":\"todo \",\"timestamp\":1775797307832}\n\nevent: token\ndata: {\"content\":\"app \",\"timestamp\":1775797307847}\n\nevent: token\ndata: {\"content\":\"in \",\"timestamp\":1775797307864}\n\nevent: token\ndata: {\"content\":\"the \",\"timestamp\":1775797307884}\n\nevent: token\ndata: {\"content\":\"current \",\"timestamp\":1775797307909}\n\nevent: token\ndata: {\"content\":\"session \",\"timestamp\":1775797307939}\n\nevent: token\ndata: {\"content\":\"root \",\"timestamp\":1775797307954}\n\nevent: token\ndata: {\"content\":\"using \",\"timestamp\":1775797307970}\n\nevent: token\ndata: {\"content\":\"the \",\"timestamp\":1775797307987}\n\nevent: token\ndata: {\"content\":\"file \",\"timestamp\":1775797308016}\n\nevent: token\ndata: {\"content\":\"editing \",\"timestamp\":1775797308031}\n\nevent: token\ndata: {\"content\":\"tools. \",\"timestamp\":1775797308062}\n\nevent: token\ndata: {\"content\":\"Let \",\"timestamp\":1775797308094}\n\nevent: token\ndata: {\"content\":\"me \",\"timestamp\":1775797308123}\n\nevent: token\ndata: {\"content\":\"create \",\"timestamp\":1775797308138}\n\nevent: token\ndata: {\"content\":\"them \",\"timestamp\":1775797308153}\n\nevent: token\ndata: {\"content\":\"now.\",\"timestamp\":1775797309024}\n\nevent: step\ndata: {\"step\":\"Start agentic pipeline\",\"status\":\"completed\",\"timestamp\":1775797309038,\"stepIndex\":1}\n\nevent: done\ndata: {\"success\":true,\"content\":\"I'll create the three files for a tiny todo app in the current session root using the file editing tools. Let me create them now.\",\"messageMetadata\":{\"agent\":\"unified\",\"mode\":\"v1-api\",\"processingSteps\":[{\"step\":\"Start agentic pipeline\",\"status\":\"started\",\"timestamp\":1775797305844,\"stepIndex\":0},{\"step\":\"Start agentic pipeline\",\"status\":\"completed\",\"timestamp\":1775797309038,\"stepIndex\":1}]},\"data\":{\"success\":true,\"response\":\"I'll create the three files for a tiny todo app in the current session root using the file editing tools. Let me create them now.\",\"steps\":[],\"totalSteps\":0,\"mode\":\"v1-api\",\"metadata\":{\"provider\":\"mistral\",\"model\":\"mistral-small-latest\",\"duration\":2093,\"toolInvocations\":[],\"fallbackChain\":[\"google\",\"mistral\"]}}}\n\n"
+}

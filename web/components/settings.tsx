@@ -42,6 +42,7 @@ import { useTheme } from "next-themes";
 import { toast } from "sonner";
 import Image from "next/image";
 import { isBackgroundUrlAllowed } from "@/lib/utils/url-validation";
+import { useSpecEnhancementMode, getSpecEnhancementModeInfo, type SpecEnhancementMode } from "@/contexts/spec-enhancement-mode-context";
 
 interface SettingsProps {
   onClose: () => void;
@@ -51,6 +52,8 @@ interface SettingsProps {
   onVoiceToggle?: (enabled: boolean) => void;
   livekitEnabled?: boolean;
   onLivekitToggle?: (enabled: boolean) => void;
+  showResponseStyle?: boolean;
+  onResponseStyleToggle?: (enabled: boolean) => void;
 }
 
 const CUSTOM_BG_MEDIA_KEY = "custom_bg_media_url";
@@ -120,8 +123,11 @@ export default function Settings({
   onVoiceToggle,
   livekitEnabled = false,
   onLivekitToggle,
+  showResponseStyle = true,
+  onResponseStyleToggle,
 }: SettingsProps) {
   const { isAuthenticated, user, login, logout, register, getApiKeys, setApiKeys, isLoading } = useAuth();
+  const { config: specConfig, setMode: setSpecMode, setChain, isOverridden } = useSpecEnhancementMode();
   const [textSize, setTextSize] = useState(100);
   const [highContrast, setHighContrast] = useState(false);
   const [screenReader, setScreenReader] = useState(false);
@@ -145,23 +151,31 @@ export default function Settings({
 
   // Load user API keys from localStorage on mount
   useEffect(() => {
+    let cancelled = false;
     if (typeof window === 'undefined') return;
-    const saved = (await import('@bing/platform/secrets')).secrets.get('user-api-keys');
-    if (saved) {
+    (async () => {
       try {
-        setUserApiKeys(JSON.parse(saved));
+        const { secrets } = await import('@bing/platform/secrets');
+        const saved = await secrets.get('user-api-keys');
+        if (!cancelled && saved) {
+          setUserApiKeys(JSON.parse(saved));
+        }
       } catch (e) {
         console.error('Failed to load user API keys:', e);
       }
-    }
+    })();
+    return () => { cancelled = true; };
   }, []);
 
   // Save user API keys to localStorage
-  const handleSaveApiKeys = () => {
+  const handleSaveApiKeys = async () => {
     if (typeof window !== 'undefined') {
-      (await import('@bing/platform/secrets')).secrets.set('user-api-keys', JSON.stringify(userApiKeys));
+      const { secrets } = await import('@bing/platform/secrets');
+      await secrets.set('user-api-keys', JSON.stringify(userApiKeys));
       setHasApiKeyChanges(false);
       toast.success('API keys saved (stored locally in browser)');
+      // Notify other components (e.g., conversation-interface) to refresh provider availability
+      window.dispatchEvent(new CustomEvent('user-api-keys-changed'));
     }
   };
 
@@ -1285,6 +1299,22 @@ export default function Settings({
               </div>
             )}
 
+            {/* Response Style Selector Toggle */}
+            {onResponseStyleToggle && (
+              <div className="flex items-center justify-between">
+                <div className="flex items-center">
+                  <Palette className="h-4 w-4 mr-2 text-purple-400" />
+                  <Label htmlFor="response-style-enabled">Response Style Settings</Label>
+                </div>
+                <div
+                  className={`custom-toggle ${showResponseStyle ? 'active' : ''}`}
+                  onClick={() => onResponseStyleToggle && onResponseStyleToggle(!showResponseStyle)}
+                >
+                  <div className="custom-toggle-slider" />
+                </div>
+              </div>
+            )}
+
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <div className="flex items-center">
@@ -1379,6 +1409,62 @@ export default function Settings({
               >
                 <div className="custom-toggle-slider" />
               </div>
+            </div>
+
+            {/* Spec Enhancement Mode Selector */}
+            <div className="p-3 bg-black/20 rounded-lg border border-white/10">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex-1">
+                  <Label className="text-sm">Spec Enhancement Mode</Label>
+                  <p className="text-xs text-gray-500">Controls how SPEC is amplified during build</p>
+                </div>
+                {isOverridden && (
+                  <span className="text-[10px] px-2 py-0.5 bg-purple-500/20 text-purple-400 rounded">Custom</span>
+                )}
+              </div>
+              
+              <div className="grid grid-cols-2 gap-2 mb-2">
+                {(['normal', 'enhanced', 'max', 'super'] as SpecEnhancementMode[]).map((mode) => {
+                  const modeInfo = getSpecEnhancementModeInfo(mode);
+                  const isActive = specConfig.mode === mode;
+                  return (
+                    <button
+                      key={mode}
+                      onClick={() => setSpecMode(mode)}
+                      className={`p-2 rounded-lg border text-left transition-all ${
+                        isActive 
+                          ? 'border-purple-500/50 bg-purple-500/10' 
+                          : 'border-white/10 hover:border-white/20 hover:bg-white/5'
+                      }`}
+                    >
+                      <div className="text-xs font-medium text-white">{modeInfo.name}</div>
+                      <div className="text-[10px] text-gray-400 truncate">{modeInfo.description}</div>
+                    </button>
+                  );
+                })}
+              </div>
+              
+              {/* Show chain selector when super mode is selected */}
+              {specConfig.mode === 'super' && (
+                <div className="mt-3 pt-3 border-t border-white/10">
+                  <Label className="text-xs text-white/70 mb-2 block">Super Mode Chain</Label>
+                  <div className="flex flex-wrap gap-1">
+                    {(['default', 'frontend', 'backend', 'ml_ai', 'mobile', 'security', 'devops', 'data', 'api', 'system', 'web3'] as const).map((chain) => (
+                      <button
+                        key={chain}
+                        onClick={() => setChain(chain)}
+                        className={`px-2 py-1 text-[10px] rounded border transition-all ${
+                          specConfig.chain === chain
+                            ? 'border-cyan-500/50 bg-cyan-500/10 text-cyan-400'
+                            : 'border-white/10 text-gray-400 hover:border-white/20'
+                        }`}
+                      >
+                        {chain.replace('_', ' ')}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="flex items-center justify-between">
@@ -1660,6 +1746,8 @@ export default function Settings({
                     { id: 'openai', name: 'OpenAI', placeholder: 'sk-...', env: 'OPENAI_API_KEY' },
                     { id: 'anthropic', name: 'Anthropic', placeholder: 'sk-ant-...', env: 'ANTHROPIC_API_KEY' },
                     { id: 'google', name: 'Google', placeholder: 'AIza...', env: 'GOOGLE_API_KEY' },
+                    { id: 'nvidia', name: 'NVIDIA NIM', placeholder: 'nvapi-...', env: 'NVIDIA_API_KEY' },
+                    { id: 'github', name: 'GitHub Models', placeholder: 'ghp_...', env: 'GITHUB_MODELS_API_KEY' },
                     { id: 'mistral', name: 'Mistral', placeholder: '...', env: 'MISTRAL_API_KEY' },
                     { id: 'openrouter', name: 'OpenRouter', placeholder: 'sk-or-...', env: 'OPENROUTER_API_KEY' },
                     { id: 'together', name: 'Together AI', placeholder: '...', env: 'TOGETHER_API_KEY' },
@@ -1667,9 +1755,12 @@ export default function Settings({
                     { id: 'chutes', name: 'Chutes', placeholder: '...', env: 'CHUTES_API_KEY' },
                     { id: 'cohere', name: 'Cohere', placeholder: '...', env: 'COHERE_API_KEY' },
                     { id: 'groq', name: 'Groq', placeholder: 'gsk_...', env: 'GROQ_API_KEY' },
+                    { id: 'zen', name: 'Zen', placeholder: '...', env: 'ZEN_API_KEY' },
                     { id: 'perplexity', name: 'Perplexity', placeholder: 'pplx-...', env: 'PERPLEXITY_API_KEY' },
-                    { id: 'anyscale', name: 'Anyscale', placeholder: '...', env: 'ANYSCALE_API_KEY' },
+                    { id: 'anyscale', name: 'Anyscale', placeholder: 'es_...', env: 'ANYSCALE_API_KEY' },
                     { id: 'deepinfra', name: 'DeepInfra', placeholder: '...', env: 'DEEPINFRA_API_KEY' },
+                    { id: 'fireworks', name: 'Fireworks AI', placeholder: 'fw_...', env: 'FIREWORKS_API_KEY' },
+                    { id: 'lepton', name: 'Lepton AI', placeholder: '...', env: 'LEPTON_API_KEY' },
                   ].map((provider) => {
                     const value = userApiKeys[provider.id] || '';
                     const isSet = !!value;

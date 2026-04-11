@@ -1,5 +1,5 @@
 {
-  "name": "bing-monorepo",
+  "name": "bing",
   "private": true,
   "scripts": {
     "dev": "pnpm --filter web dev",
@@ -15,6 +15,7 @@
     "test": "pnpm --filter web test"
   },
   "devDependencies": {
+    "@playwright/mcp": "^0.0.70",
     "turbo": "^2.0.0"
   }
 }

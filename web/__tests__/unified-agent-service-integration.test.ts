@@ -11,7 +11,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   processUnifiedAgentRequest,
-  checkProviderHealth,
+  checkStartupCapabilities,
   getAvailableModes,
   type UnifiedAgentConfig,
 } from '@/lib/orchestra/unified-agent-service';
@@ -65,24 +65,23 @@ describe('Unified Agent Service', () => {
     process.env = { ...originalEnv };
   });
 
-  describe('checkProviderHealth()', () => {
-    it('should return health status for all providers', () => {
-      const health = checkProviderHealth();
-      
-      expect(health).toHaveProperty('v2Containerized');
-      expect(health).toHaveProperty('v2Local');
-      expect(health).toHaveProperty('v2Native');
-      expect(health).toHaveProperty('v1Api');
-      expect(health).toHaveProperty('preferredMode');
+  describe('checkStartupCapabilities()', () => {
+    it('should return capabilities status for all modes', () => {
+      const caps = checkStartupCapabilities();
+
+      expect(caps).toHaveProperty('v2Native');
+      expect(caps).toHaveProperty('v2Containerized');
+      expect(caps).toHaveProperty('v2Local');
+      expect(caps).toHaveProperty('v1Api');
+      expect(caps).toHaveProperty('statefulAgent');
+      expect(caps).toHaveProperty('mastraWorkflows');
+      expect(caps).toHaveProperty('desktop');
     });
 
-    it('should detect v2-native when OpenCode is available', () => {
-      process.env.OPENCODE_CONTAINERIZED = 'true';
-      process.env.DAYTONA_API_KEY = 'test-key';
-      
-      const health = checkProviderHealth();
-      
-      expect(health.v2Native).toBe(true);
+    it('should detect v2-native when LLM_PROVIDER=opencode', () => {
+      process.env.LLM_PROVIDER = 'opencode';
+      const caps = checkStartupCapabilities();
+      expect(caps.v2Native).toBe(true);
     });
   });
 

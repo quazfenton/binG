@@ -118,7 +118,7 @@ NULLCLAW_ENABLED=true
 
 ### Send Discord Message
 ```typescript
-import { sendNullclawDiscordMessage } from '@/lib/agent/nullclaw-integration';
+import { sendNullclawDiscordMessage } from '@bing/shared/agent/nullclaw-integration';
 
 const task = await sendNullclawDiscordMessage(
   '123456789012345678',  // Channel ID
@@ -132,7 +132,7 @@ console.log(`Task ${task.status}: ${task.result?.output}`);
 
 ### Browse URL
 ```typescript
-import { browseNullclawUrl } from '@/lib/agent/nullclaw-integration';
+import { browseNullclawUrl } from '@bing/shared/agent/nullclaw-integration';
 
 const task = await browseNullclawUrl(
   'https://example.com',
@@ -144,7 +144,7 @@ const task = await browseNullclawUrl(
 
 ### Execute Automation
 ```typescript
-import { automateNullclawTask } from '@/lib/agent/nullclaw-integration';
+import { automateNullclawTask } from '@bing/shared/agent/nullclaw-integration';
 
 const task = await automateNullclawTask(
   ['npm install', 'npm run build'],
@@ -156,7 +156,7 @@ const task = await automateNullclawTask(
 
 ### Check Status
 ```typescript
-import { getNullclawStatus, isNullclawAvailable } from '@/lib/agent/nullclaw-integration';
+import { getNullclawStatus, isNullclawAvailable } from '@bing/shared/agent/nullclaw-integration';
 
 if (isNullclawAvailable()) {
   const status = getNullclawStatus();

@@ -1,0 +1,248 @@
+{
+  "timestamp": "2026-04-09T21:02:47.038Z",
+  "total": 40,
+  "passed": 24,
+  "failed": 16,
+  "tests": [
+    {
+      "name": "Login succeeds",
+      "pass": true,
+      "detail": "status=200",
+      "timestamp": 1775768469573
+    },
+    {
+      "name": "Auth token received",
+      "pass": true,
+      "detail": "len=280",
+      "timestamp": 1775768469573
+    },
+    {
+      "name": "Google Gemini 2.5 Flash responds",
+      "pass": false,
+      "detail": "ERROR: HTTP 400: {\"error\":\"Model gemini-2.5-flash is not supported by google\",\"availableModels\":[\"gemini-3.1-flash-lite-preview\",\"gemini-3-flash-preview\",\"gemini-2.5-pro\",\"gemini-2.5-flash-lite\",\"gemini-2.5-flash-lite-preview-09-2025\"]}",
+      "timestamp": 1775768473020
+    },
+    {
+      "name": "Mistral Small streams tokens",
+      "pass": true,
+      "detail": "tokens=1",
+      "timestamp": 1775768481225
+    },
+    {
+      "name": "Mistral Small completes",
+      "pass": true,
+      "detail": "success",
+      "timestamp": 1775768481226
+    },
+    {
+      "name": "Mistral Small responds correctly",
+      "pass": true,
+      "detail": "text=\"4\"",
+      "timestamp": 1775768481226
+    },
+    {
+      "name": "Code gen responds",
+      "pass": true,
+      "detail": "chars=21",
+      "timestamp": 1775768487310
+    },
+    {
+      "name": "Code gen completes",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775768487310
+    },
+    {
+      "name": "Tool calls detected",
+      "pass": false,
+      "detail": "count=0",
+      "timestamp": 1775768487310
+    },
+    {
+      "name": "File edits detected",
+      "pass": false,
+      "detail": "count=0",
+      "timestamp": 1775768487311
+    },
+    {
+      "name": "Files created in VFS",
+      "pass": true,
+      "detail": "files=1",
+      "timestamp": 1775768490343
+    },
+    {
+      "name": "index.js created",
+      "pass": false,
+      "detail": "",
+      "timestamp": 1775768490343
+    },
+    {
+      "name": "package.json created",
+      "pass": false,
+      "detail": "",
+      "timestamp": 1775768490344
+    },
+    {
+      "name": "Multi-file context responds",
+      "pass": false,
+      "detail": "ERROR: HTTP 400: {\"error\":\"Model gemini-2.5-flash is not supported by google\",\"availableModels\":[\"gemini-3.1-flash-lite-preview\",\"gemini-3-flash-preview\",\"gemini-2.5-pro\",\"gemini-2.5-flash-lite\",\"gemini-2.5-flash-lite-preview-09-2025\"]}",
+      "timestamp": 1775768490696
+    },
+    {
+      "name": "Fallback chain responds",
+      "pass": true,
+      "detail": "chars=24",
+      "timestamp": 1775768498983
+    },
+    {
+      "name": "Fallback completes",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775768498983
+    },
+    {
+      "name": "Response contains expected text",
+      "pass": true,
+      "detail": "fallback test successful",
+      "timestamp": 1775768498983
+    },
+    {
+      "name": "Diff app responds",
+      "pass": true,
+      "detail": "chars=21",
+      "timestamp": 1775768506012
+    },
+    {
+      "name": "Diff app completes",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775768506012
+    },
+    {
+      "name": "File edits from diff",
+      "pass": false,
+      "detail": "edits=0",
+      "timestamp": 1775768506012
+    },
+    {
+      "name": "File still exists after diff",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775768509038
+    },
+    {
+      "name": "Non-streaming responds",
+      "pass": false,
+      "detail": "status=400",
+      "timestamp": 1775768509309
+    },
+    {
+      "name": "Non-streaming has content",
+      "pass": false,
+      "detail": "chars=0",
+      "timestamp": 1775768509309
+    },
+    {
+      "name": "Non-streaming correct answer",
+      "pass": false,
+      "detail": "text=\"\"",
+      "timestamp": 1775768509309
+    },
+    {
+      "name": "Empty-like prompt handled",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775768537798
+    },
+    {
+      "name": "Request completes",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775768537799
+    },
+    {
+      "name": "MCP tools/list responds",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775768538617
+    },
+    {
+      "name": "MCP has tools",
+      "pass": false,
+      "detail": "count=0",
+      "timestamp": 1775768538618
+    },
+    {
+      "name": "read_file available",
+      "pass": false,
+      "detail": "",
+      "timestamp": 1775768538618
+    },
+    {
+      "name": "write_file available",
+      "pass": false,
+      "detail": "",
+      "timestamp": 1775768538618
+    },
+    {
+      "name": "list_files available",
+      "pass": false,
+      "detail": "",
+      "timestamp": 1775768538618
+    },
+    {
+      "name": "read_files available",
+      "pass": false,
+      "detail": "",
+      "timestamp": 1775768538618
+    },
+    {
+      "name": "apply_diff available",
+      "pass": false,
+      "detail": "",
+      "timestamp": 1775768538618
+    },
+    {
+      "name": "nvidia/meta/llama-3.3-70b-instruct streams",
+      "pass": true,
+      "detail": "tokens=1",
+      "timestamp": 1775768564925
+    },
+    {
+      "name": "nvidia/meta/llama-3.3-70b-instruct completes",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775768564926
+    },
+    {
+      "name": "nvidia/meta/llama-3.3-70b-instruct responds correctly",
+      "pass": true,
+      "detail": "text=\"100\"",
+      "timestamp": 1775768564926
+    },
+    {
+      "name": "Nested path write",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775768566962
+    },
+    {
+      "name": "Leading slash write",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775768567000
+    },
+    {
+      "name": "Traversal rejected",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775768567020
+    },
+    {
+      "name": "Nested files created",
+      "pass": true,
+      "detail": "nodes=2",
+      "timestamp": 1775768567035
+    }
+  ]
+}

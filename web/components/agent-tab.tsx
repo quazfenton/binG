@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card, CardHeader, CardContent } from "@/components/ui/card";
@@ -20,6 +20,9 @@ import {
   AlertCircle,
   Play,
   Loader2,
+  GitBranch,
+  Cloud,
+  Users,
 } from "lucide-react";
 import { useOrchestrationMode, type OrchestrationMode } from "@/contexts/orchestration-mode-context";
 import { toast } from "sonner";
@@ -28,138 +31,102 @@ interface AgentTabProps {
   onClose?: () => void;
 }
 
-interface ModeInfo {
-  id: OrchestrationMode;
+interface ModeConfigOption {
+  type: 'select' | 'number' | 'text' | 'toggle';
+  label: string;
+  default: any;
+  options?: string[];
+  min?: number;
+  max?: number;
+  description?: string;
+}
+
+interface ModeData {
+  id: string;
   name: string;
   description: string;
-  icon: React.ComponentType<{ className?: string }>;
   status: 'stable' | 'experimental' | 'deprecated';
   features: string[];
   bestFor: string;
+  active: boolean;
+  providers: string[];
+  executionType: 'v1' | 'v2' | 'both';
+  v1Capabilities?: string[];
+  v2Capabilities?: string[];
+  configOptions?: Record<string, ModeConfigOption>;
 }
 
-const MODE_INFO: Record<OrchestrationMode, ModeInfo> = {
-  'task-router': {
-    id: 'task-router',
-    name: 'Task Router (Default)',
-    description: 'Routes tasks between OpenCode and Nullclaw based on task type',
-    icon: Route,
-    status: 'stable',
-    features: [
-      'Automatic task classification',
-      'OpenCode for coding tasks',
-      'Nullclaw for non-coding tasks',
-      'Execution policy selection',
-    ],
-    bestFor: 'General purpose - coding + automation tasks',
-  },
-  'unified-agent': {
-    id: 'unified-agent',
-    name: 'Unified Agent Service',
-    description: 'Intelligent fallback chain with multiple execution modes',
-    icon: Brain,
-    status: 'experimental',
-    features: [
-      'StatefulAgent for complex tasks',
-      'Fallback: StatefulAgent → V2 Native → V2 Local → V1 API',
-      'Mastra workflow integration',
-      'Tool execution support',
-    ],
-    bestFor: 'Complex multi-step agentic workflows',
-  },
-  'mastra-workflow': {
-    id: 'mastra-workflow',
-    name: 'Mastra Workflows',
-    description: 'Mastra workflow engine with proper tracking and evals',
-    icon: Workflow,
-    status: 'experimental',
-    features: [
-      'Workflow-based execution',
-      'Quality evaluations',
-      'Memory system',
-      'MCP integration',
-    ],
-    bestFor: 'Structured workflows with quality gates',
-  },
-  'crewai': {
-    id: 'crewai',
-    name: 'CrewAI Agents',
-    description: 'Role-based multi-agent collaboration',
-    icon: Bot,
-    status: 'experimental',
-    features: [
-      'Role-based agents (Planner, Coder, Critic)',
-      'Sequential/hierarchical processes',
-      'Self-healing execution',
-      'Knowledge base integration',
-    ],
-    bestFor: 'Complex tasks requiring multiple specialized agents',
-  },
-  'v2-executor': {
-    id: 'v2-executor',
-    name: 'V2 Containerized',
-    description: 'OpenCode containerized execution with sandbox isolation',
-    icon: Cpu,
-    status: 'stable',
-    features: [
-      'Containerized execution',
-      'Sandbox isolation',
-      'Direct file operations',
-      'Bash command execution',
-    ],
-    bestFor: 'Isolated code execution with full sandbox',
-  },
+const ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
+  'task-router': Route,
+  'unified-agent': Brain,
+  'stateful-agent': Cpu,
+  'agent-kernel': Zap,
+  'agent-loop': RotateCcw,
+  'execution-graph': GitBranch,
+  'nullclaw': Bot,
+  'opencode-sdk': Cloud,
+  'mastra-workflow': Workflow,
+  'crewai': Bot,
+  'v2-executor': Cpu,
+  'agent-team': Users,
 };
 
 export default function AgentTab({ onClose }: AgentTabProps) {
   const { config, setMode, resetToDefault, isOverridden } = useOrchestrationMode();
   const [isTesting, setIsTesting] = useState(false);
+  const [modes, setModes] = useState<ModeData[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  /**
-   * Check if a mode is ready/configured
-   * For now, checks if mode is stable and basic config is valid
-   * TODO: Implement actual readiness endpoint calls for each mode
-   */
-  const checkModeReadiness = async (mode: OrchestrationMode): Promise<{ ready: boolean; error?: string }> => {
-    // For stable modes, assume ready
-    // For experimental modes, do additional validation
-    const modeData = MODE_INFO[mode];
-    
-    if (modeData.status === 'deprecated') {
+  useEffect(() => {
+    fetchModes();
+  }, []);
+
+  const fetchModes = () => {
+    setLoading(true);
+    setError(null);
+    fetch('/api/chat/modes')
+      .then(res => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
+      .then(data => {
+        if (data.success) {
+          setModes(data.modes);
+        } else {
+          setError('Failed to load modes');
+        }
+      })
+      .catch(err => {
+        console.error('[AgentTab] Failed to fetch modes:', err);
+        setError(err.message || 'Failed to load modes');
+      })
+      .finally(() => setLoading(false));
+  };
+
+  const checkModeReadiness = async (mode: ModeData): Promise<{ ready: boolean; error?: string }> => {
+    if (mode.status === 'deprecated') {
       return { ready: false, error: 'This mode is deprecated' };
     }
-    
-    // Simulate readiness check - in production, call actual endpoint
-    // e.g., await fetch(`/api/modes/${mode}/readiness`)
     await new Promise(resolve => setTimeout(resolve, 500));
-    
-    // For now, all non-deprecated modes are considered ready
-    // TODO: Add real validation per mode:
-    // - task-router: Check if task-router service is available
-    // - unified-agent: Check if unified agent service is running
-    // - mastra-workflow: Check if Mastra is configured
-    // - crewai: Check if CrewAI Python service is available
-    // - v2-executor: Check if v2 executor is configured
-    
     return { ready: true };
   };
 
-  /**
-   * Check if mode config is valid (for gating Test button)
-   * Currently just checks if mode is not deprecated
-   */
-  const isModeConfigValid = (mode: OrchestrationMode): boolean => {
-    return MODE_INFO[mode].status !== 'deprecated';
+  const isModeConfigValid = (mode: ModeData): boolean => {
+    return mode.status !== 'deprecated' && mode.active;
   };
 
-  const handleModeSelect = (mode: OrchestrationMode) => {
-    setMode(mode);
+  const handleModeSelect = (modeId: string) => {
+    setMode(modeId as OrchestrationMode);
+    const mode = modes.find(m => m.id === modeId);
     toast.success(`Orchestration mode changed`, {
-      description: `Now using ${MODE_INFO[mode].name}`,
+      description: `Now using ${mode?.name || modeId}`,
     });
   };
 
-  const handleTestMode = async (mode: OrchestrationMode) => {
+  const handleTestMode = async (modeId: string) => {
+    const mode = modes.find(m => m.id === modeId);
+    if (!mode) return;
     setIsTesting(true);
     try {
       const result = await checkModeReadiness(mode);
@@ -167,7 +134,7 @@ export default function AgentTab({ onClose }: AgentTabProps) {
         throw new Error(result.error || 'Mode is not ready');
       }
       toast.success(`Mode test completed`, {
-        description: `${MODE_INFO[mode].name} is ready`,
+        description: `${mode.name} is ready`,
       });
     } catch (error) {
       toast.error(`Mode test failed`, {
@@ -177,6 +144,39 @@ export default function AgentTab({ onClose }: AgentTabProps) {
       setIsTesting(false);
     }
   };
+
+  if (loading) {
+    return (
+      <ScrollArea className="h-full">
+        <div className="p-4 flex items-center justify-center h-40">
+          <Loader2 className="h-5 w-5 text-white/40 animate-spin" />
+          <span className="ml-2 text-sm text-white/40">Loading modes...</span>
+        </div>
+      </ScrollArea>
+    );
+  }
+
+  if (error) {
+    return (
+      <ScrollArea className="h-full">
+        <div className="p-4 flex items-center justify-center h-40">
+          <div className="text-center">
+            <AlertCircle className="h-5 w-5 text-red-400 mx-auto mb-2" />
+            <p className="text-sm text-red-300">{error}</p>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={fetchModes}
+              className="mt-2 text-xs text-white/60 hover:text-white"
+            >
+              <RotateCcw className="h-3 w-3 mr-1" />
+              Retry
+            </Button>
+          </div>
+        </div>
+      </ScrollArea>
+    );
+  }
 
   return (
     <ScrollArea className="h-full">
@@ -208,7 +208,7 @@ export default function AgentTab({ onClose }: AgentTabProps) {
               <div className="text-xs text-blue-300">
                 <p className="font-medium mb-1">Orchestration Mode Selector</p>
                 <p>
-                  Choose which framework orchestrates agent tasks. Default is <strong>Task Router</strong>. 
+                  Choose which framework orchestrates agent tasks. Default is <strong>Task Router</strong>.
                   Select alternative modes for testing different execution strategies.
                 </p>
               </div>
@@ -235,25 +235,44 @@ export default function AgentTab({ onClose }: AgentTabProps) {
             </div>
           </CardHeader>
           <CardContent>
-            <div className="flex items-center gap-3 p-3 rounded-lg bg-gradient-to-r from-purple-500/20 to-blue-500/20 border border-purple-500/30">
-              {React.createElement(MODE_INFO[config.mode].icon, { className: "h-6 w-6 text-purple-400" })}
-              <div className="flex-1">
-                <p className="text-sm font-semibold text-white/90">{MODE_INFO[config.mode].name}</p>
-                <p className="text-xs text-white/60">{MODE_INFO[config.mode].description}</p>
-              </div>
-              <Badge
-                variant="secondary"
-                className={`text-[10px] ${
-                  MODE_INFO[config.mode].status === 'stable'
-                    ? 'bg-green-500/20 text-green-300 border border-green-500/30'
-                    : MODE_INFO[config.mode].status === 'experimental'
-                    ? 'bg-yellow-500/20 text-yellow-300 border border-yellow-500/30'
-                    : 'bg-red-500/20 text-red-300 border border-red-500/30'
-                }`}
-              >
-                {MODE_INFO[config.mode].status}
-              </Badge>
-            </div>
+            {(() => {
+              const currentMode = modes.find(m => m.id === config.mode);
+              if (!currentMode) return null;
+              const Icon = ICON_MAP[currentMode.id] || Cpu;
+              return (
+                <div className="flex items-center gap-3 p-3 rounded-lg bg-gradient-to-r from-purple-500/20 to-blue-500/20 border border-purple-500/30">
+                  <Icon className="h-6 w-6 text-purple-400" />
+                  <div className="flex-1">
+                    <p className="text-sm font-semibold text-white/90">{currentMode.name}</p>
+                    <p className="text-xs text-white/60">{currentMode.description}</p>
+                  </div>
+                  <Badge
+                    variant="secondary"
+                    className={`text-[10px] ${
+                      currentMode.status === 'stable'
+                        ? 'bg-green-500/20 text-green-300 border border-green-500/30'
+                        : currentMode.status === 'experimental'
+                        ? 'bg-yellow-500/20 text-yellow-300 border border-yellow-500/30'
+                        : 'bg-red-500/20 text-red-300 border border-red-500/30'
+                    }`}
+                  >
+                    {currentMode.status}
+                  </Badge>
+                  <Badge
+                    variant="secondary"
+                    className={`text-[10px] ${
+                      currentMode.executionType === 'v2'
+                        ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
+                        : currentMode.executionType === 'v1'
+                        ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30'
+                        : 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
+                    }`}
+                  >
+                    {currentMode.executionType === 'v1' ? 'V1 API' : currentMode.executionType === 'v2' ? 'V2 Agent' : 'V1+V2'}
+                  </Badge>
+                </div>
+              );
+            })()}
           </CardContent>
         </Card>
 
@@ -264,19 +283,17 @@ export default function AgentTab({ onClose }: AgentTabProps) {
           <p className="text-xs font-medium text-white/70">Available Orchestration Modes</p>
 
           <div className="grid grid-cols-1 gap-2">
-            {(Object.keys(MODE_INFO) as OrchestrationMode[]).map((modeId) => {
-              const mode = MODE_INFO[modeId];
-              const isSelected = config.mode === modeId;
-              const Icon = mode.icon;
+            {modes.map((mode) => {
+              const isSelected = config.mode === mode.id;
+              const Icon = ICON_MAP[mode.id] || Cpu;
 
               return (
                 <motion.div
-                  key={modeId}
+                  key={mode.id}
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.2 }}
                 >
-                  {/* Accessible mode selector card - uses div with radio role to avoid nested button issue */}
                   <div
                     role="radio"
                     tabIndex={0}
@@ -286,12 +303,12 @@ export default function AgentTab({ onClose }: AgentTabProps) {
                       isSelected
                         ? 'bg-gradient-to-br from-purple-500/20 to-blue-500/20 border-purple-500/40'
                         : 'bg-white/5 border-white/10 hover:border-white/20'
-                    }`}
-                    onClick={() => handleModeSelect(modeId)}
+                    } ${!mode.active ? 'opacity-50' : ''}`}
+                    onClick={() => mode.active && handleModeSelect(mode.id)}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' || e.key === ' ') {
                         e.preventDefault();
-                        handleModeSelect(modeId);
+                        mode.active && handleModeSelect(mode.id);
                       }
                     }}
                   >
@@ -314,6 +331,20 @@ export default function AgentTab({ onClose }: AgentTabProps) {
                             {isSelected && (
                               <CheckCircle2 className="h-3 w-3 text-green-400" aria-hidden="true" />
                             )}
+                            {!mode.active && (
+                              <Badge variant="secondary" className="text-[8px] bg-gray-500/20 text-gray-400">
+                                Not configured
+                              </Badge>
+                            )}
+                            <Badge variant="secondary" className={`text-[8px] ${
+                              mode.executionType === 'v2'
+                                ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
+                                : mode.executionType === 'v1'
+                                ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30'
+                                : 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
+                            }`}>
+                              {mode.executionType === 'v1' ? 'V1 API' : mode.executionType === 'v2' ? 'V2 Agent' : 'V1+V2'}
+                            </Badge>
                           </div>
                           <p className="text-xs text-white/50 mb-2">{mode.description}</p>
 
@@ -338,6 +369,16 @@ export default function AgentTab({ onClose }: AgentTabProps) {
                             )}
                           </div>
 
+                          {/* Config Options Preview */}
+                          {mode.configOptions && Object.keys(mode.configOptions).length > 0 && (
+                            <div className="mb-2">
+                              <p className="text-[10px] text-white/40 mb-1">
+                                <span className="font-medium">Config:</span> {Object.values(mode.configOptions).map((opt: ModeConfigOption) => opt.label).slice(0, 2).join(' · ')}
+                                {Object.keys(mode.configOptions).length > 2 && ` +${Object.keys(mode.configOptions).length - 2} more`}
+                              </p>
+                            </div>
+                          )}
+
                           {/* Best For */}
                           <p className="text-[10px] text-white/40">
                             <span className="font-medium">Best for:</span> {mode.bestFor}
@@ -350,12 +391,12 @@ export default function AgentTab({ onClose }: AgentTabProps) {
                           size="sm"
                           onClick={(e) => {
                             e.stopPropagation();
-                            handleTestMode(modeId);
+                            handleTestMode(mode.id);
                           }}
-                          disabled={isTesting || !isModeConfigValid(modeId)}
+                          disabled={isTesting || !isModeConfigValid(mode)}
                           className="h-8 w-8 p-0 hover:bg-white/10"
                           aria-label={`Test ${mode.name} mode`}
-                          title={!isModeConfigValid(modeId) ? 'Mode not available for testing' : `Test ${mode.name}`}
+                          title={!isModeConfigValid(mode) ? 'Mode not available for testing' : `Test ${mode.name}`}
                         >
                           {isTesting ? (
                             <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />

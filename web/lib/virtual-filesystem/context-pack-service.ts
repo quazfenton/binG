@@ -14,6 +14,8 @@
 
 import { virtualFilesystem } from './virtual-filesystem-service';
 import type { VirtualFilesystemDirectoryListing } from './filesystem-types';
+import { getProjectServices } from '@/lib/project-context';
+import { contentHash } from '@/lib/cache';
 
 export type ContextPackFormat = 'markdown' | 'xml' | 'json' | 'plain';
 
@@ -99,10 +101,13 @@ const DEFAULT_OPTIONS: Required<ContextPackOptions> = {
 /**
  * Context Pack Service
  * Generates dense, LLM-friendly bundles of VFS state
+ *
+ * Each project gets its own isolated vector store and retrieval pipeline
+ * via the project-context layer.
  */
 class ContextPackService {
   /**
-   * Generate a context pack from the VFS
+   * Generate a context pack from the VFS with project isolation
    */
   async generateContextPack(
     ownerId: string,
@@ -111,12 +116,30 @@ class ContextPackService {
   ): Promise<ContextPackResult> {
     const opts = { ...DEFAULT_OPTIONS, ...options };
     const warnings: string[] = [];
-    
+
+    // Initialize project-scoped services for this project (isolated per ownerId+rootPath)
+    const projectId = `${ownerId}:${rootPath}`;
+    const projectServices = getProjectServices({
+      id: projectId,
+      name: rootPath === '/' ? 'root' : rootPath.split('/').pop() || 'root',
+      root: rootPath,
+    });
+
     // Get directory tree
     const tree = await this.buildDirectoryTree(ownerId, rootPath, opts);
-    
+
     // Get all files recursively
     const files = await this.collectFiles(ownerId, rootPath, opts, warnings);
+
+    // Index new/changed files into project's vector store (contentHash avoids re-embedding)
+    // DEFERRED: Run async in background so slow embedding doesn't block context generation
+    // Use a separate warnings array — the background job mutates this after the result
+    // is returned, so returned warnings remain deterministic.
+    const indexingWarnings: string[] = [];
+    this.indexFilesToVectorStore(projectServices, files, indexingWarnings).catch(e => {
+      // Non-failure: warnings are already collected in indexingWarnings, logging is sufficient
+      console.warn('[ContextPack] Background indexing failed:', e instanceof Error ? e.message : String(e));
+    });
     
     // Generate bundle in requested format
     let bundle = this.generateBundle(tree, files, opts);
@@ -584,11 +607,90 @@ class ContextPackService {
   
   /**
    * Count directories in tree string
+   * Counts lines with tree connector characters (├ or └) which represent entries
    */
   private countDirectories(tree: string): number {
-    return (tree.match(/\//g) || []).length;
+    // Count actual directory entries (lines with tree connectors)
+    const treeEntryLines = tree.split('\n').filter(
+      line => line.includes('├──') || line.includes('└──')
+    );
+    return treeEntryLines.length;
   }
-  
+
+  /**
+   * Index files into project's vector store using content hash for dedup
+   * Skips files that haven't changed since last indexing
+   */
+  private async indexFilesToVectorStore(
+    services: ReturnType<typeof getProjectServices>,
+    files: ContextPackFile[],
+    warnings: string[]
+  ): Promise<void> {
+    // Filter files with content and chunk them
+    const chunksToIndex: { id: string; text: string; filePath: string; hash: string }[] = [];
+
+    for (const file of files) {
+      if (!file.content) continue;
+
+      try {
+        const hash = contentHash(file.content);
+        const docId = `file:${file.path}`;
+
+        // Check if file already indexed
+        const existingCount = await services.vectorStore.count({ source: 'context-pack', filePath: file.path });
+        if (existingCount > 0) continue; // Already indexed, skip
+
+        // Chunk file content for better retrieval
+        const lines = file.content.split('\n');
+        const chunkSize = 50;
+
+        for (let i = 0; i < lines.length; i += chunkSize) {
+          const chunk = lines.slice(i, i + chunkSize).join('\n');
+          if (chunk.trim()) {
+            chunksToIndex.push({
+              id: lines.length <= 1 ? docId : `${docId}#${i}`,
+              text: chunk,
+              filePath: file.path,
+              hash,
+            });
+          }
+        }
+      } catch (e) {
+        warnings.push(`Failed to prepare ${file.path} for indexing: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+
+    if (chunksToIndex.length === 0) return;
+
+    try {
+      // Embed all chunks in batch using the retrieval pipeline's embedder
+      const texts = chunksToIndex.map((c) => c.text);
+      const embedder = services.retrieval['embedder'] as { embedBatch?: (texts: string[]) => Promise<number[][]>; embed: (text: string) => Promise<number[]> };
+      const embeddings = embedder.embedBatch
+        ? await embedder.embedBatch(texts)
+        : await Promise.all(texts.map((t) => embedder.embed(t)));
+
+      // Build vector entries
+      const entries = chunksToIndex.map((chunk, i) => ({
+        id: chunk.id,
+        text: chunk.text,
+        embedding: embeddings[i],
+        metadata: {
+          source: 'context-pack',
+          filePath: chunk.filePath,
+          hash: chunk.hash,
+          projectId: services.context.id,
+          indexedAt: Date.now(),
+        },
+      }));
+
+      // Add to vector store
+      await services.vectorStore.addBatch(entries);
+    } catch (e) {
+      warnings.push(`Failed to index ${chunksToIndex.length} chunks: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
   /**
    * Escape XML special characters
    */

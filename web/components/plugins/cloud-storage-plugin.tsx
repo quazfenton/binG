@@ -5,7 +5,7 @@ import { Input } from '../ui/input';
 import { Cloud, X, Lock } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '@/contexts/auth-context';
-import { FEATURE_FLAGS } from '@/config/features';
+import { FEATURE_FLAGS } from '../../../infra/config/config/features';
 import { cloudStorage } from '@/lib/storage/cloud-storage';
 
 const CloudStoragePlugin: React.FC<{ onClose: () => void }> = ({ onClose }) => {

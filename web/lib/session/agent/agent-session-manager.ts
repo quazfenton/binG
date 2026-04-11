@@ -5,7 +5,7 @@
  * All new code should use sessionManager from lib/session/session-manager.
  * 
  * Migration guide:
- * - import { agentSessionManager } from '@/lib/agent/agent-session-manager'
+ * - import { agentSessionManager } from '@bing/shared/agent/agent-session-manager'
  * + import { sessionManager } from '@/lib/session/session-manager'
  * 
  * @see lib/session/session-manager.ts - Consolidated session manager

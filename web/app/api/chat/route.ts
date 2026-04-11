@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+﻿import { NextRequest, NextResponse } from "next/server";
 import { PROVIDERS } from "@/lib/chat/llm-providers";
 import { errorHandler } from "@/lib/chat/error-handler";
 import { responseRouter } from "@/lib/api/response-router";
@@ -8,6 +8,7 @@ import { detectRequestType } from "@/lib/utils/request-type-detector";
 import { generateSecureId } from '@/lib/utils';
 import { chatRequestLogger } from '@/lib/chat/chat-request-logger';
 import { chatLogger } from '@/lib/chat/chat-logger';
+import { setMetricsLogger } from '@/lib/agent/metrics';
 import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-service';
 import { filesystemEditSessionService } from '@/lib/virtual-filesystem/filesystem-edit-session-service';
 import { contextPackService } from '@/lib/virtual-filesystem/context-pack-service';
@@ -17,20 +18,27 @@ import { createNDJSONParser } from '@/lib/utils/ndjson-parser';
 import type { LLMMessage, StreamingResponse } from "@/lib/chat/llm-providers";
 import { checkRateLimit } from '@/lib/middleware/rate-limiter';
 import { createFilesystemTools, createAgentLoop } from '@/lib/orchestra/mastra';
-import { executeV2Task, executeV2TaskStreaming } from '@/lib/agent/v2-executor';
+import { executeV2Task, executeV2TaskStreaming } from '@bing/shared/agent/v2-executor';
 import { processUnifiedAgentRequest, type UnifiedAgentConfig } from '@/lib/orchestra/unified-agent-service';
 import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp';
-import { workforceManager } from '@/lib/agent/workforce-manager';
+import { workforceManager } from '@bing/shared/agent/workforce-manager';
+import { createTaskClassifier as createTaskClassifierShared } from '@bing/shared/agent/task-classifier';
+import { VFS_FILE_EDITING_TOOL_PROMPT } from '@bing/shared/agent/system-prompts';
+import { mem0Search, buildMem0SystemPrompt, isMem0Configured, mem0Add } from '@/lib/powers/mem0-power';
 import { createSSEEmitter, SSE_RESPONSE_HEADERS, SSE_EVENT_TYPES } from '@/lib/streaming/sse-event-schema';
+// Lazy imports — avoid 'ws' module resolution during instrumentation context
+// import { streamStateManager } from '@/lib/streaming/stream-state-manager';
+// import { notifyNeedMoreTurns, notifyStreamComplete } from '@/lib/streaming/stream-control-handler';
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
-import { llmProviderRouter, type LLMProviderType } from '@/lib/chat/llm-provider-router';
-import { getOrchestrationModeFromRequest, executeWithOrchestrationMode } from '@/lib/agent/orchestration-mode-handler';
+import { getRecentMcpFileEdits, clearRecentMcpFileEdits } from '@/lib/virtual-filesystem/file-events';
+import { getOrchestrationModeFromRequest, executeWithOrchestrationMode } from '@bing/shared/agent/orchestration-mode-handler';
 import {
-  sanitizeAssistantDisplayContent,
   parseFilesystemResponse,
+  extractAndSanitize,
   createIncrementalParser,
   extractIncrementalFileEdits,
   stripHeredocMarkers,
+  type ParsedFilesystemResponse,
 } from '@/lib/chat/file-edit-parser';
 import { isValidFilePath } from '@/lib/chat/file-edit-parser';
 import { applyUnifiedDiffToContent } from '@/lib/chat/file-diff-utils';
@@ -46,6 +54,7 @@ import {
   chatMessageSchema,
   chatRequestSchema,
 } from './chat-helpers';
+import { applyPromptModifiers, getPreset, PROMPT_PRESETS, generateDebugHeaderValue, emitTelemetryEvent, type PromptParameters } from '@bing/shared/agent/prompt-parameters';
 
 // Force Node.js runtime for Daytona SDK compatibility
 export const runtime = 'nodejs';
@@ -56,11 +65,6 @@ export const dynamic = 'force-dynamic';
 
 // Ensure route is compiled at build time
 export const dynamicParams = true;
-
-// LLM Agent Tools Configuration
-const LLM_AGENT_TOOLS_ENABLED = process.env.LLM_AGENT_TOOLS_ENABLED !== 'false';
-const LLM_AGENT_TOOLS_MAX_ITERATIONS = parseInt(process.env.LLM_AGENT_TOOLS_MAX_ITERATIONS || '10', 10);
-const LLM_AGENT_TOOLS_TIMEOUT_MS = parseInt(process.env.LLM_AGENT_TOOLS_TIMEOUT_MS || '30000', 10);
 
 // Note: Fast-Agent now has dedicated endpoint at /api/agent
 // This route uses priority router which includes Fast-Agent as Priority 1
@@ -73,6 +77,20 @@ const CHAT_RATE_LIMIT_MAX_ANONYMOUS = 10;
 const CHAT_AGENTIC_PIPELINE = (process.env.CHAT_AGENTIC_PIPELINE || 'auto').toLowerCase();
 const WORKFORCE_ENABLED = process.env.WORKFORCE_ENABLED === 'true';
 
+// AGENT_EXECUTION_ENGINE: Controls which execution engine handles agent tasks
+// - 'auto'           → Use unified-agent service (default)
+// - 'v1-api'         → Unified-agent V1 path (Vercel AI SDK with tool calling, provider fallback)
+// - 'v1-agent-loop'  → Direct Mastra/ToolLoopAgent path (createAgentLoop from mastra/agent-loop.ts)
+// - 'agent-loop'     → OpenCode-based agent loop (agent-loop.ts)
+const AGENT_EXECUTION_ENGINE = (process.env.AGENT_EXECUTION_ENGINE || 'auto').toLowerCase();
+
+// V1 agent-loop tools config (only used when AGENT_EXECUTION_ENGINE='v1-agent-loop')
+const LLM_AGENT_TOOLS_ENABLED = AGENT_EXECUTION_ENGINE === 'v1-agent-loop'
+  ? true
+  : process.env.LLM_AGENT_TOOLS_ENABLED === 'true';
+const LLM_AGENT_TOOLS_MAX_ITERATIONS = parseInt(process.env.LLM_AGENT_TOOLS_MAX_ITERATIONS || '10', 10);
+const LLM_AGENT_TOOLS_TIMEOUT_MS = parseInt(process.env.LLM_AGENT_TOOLS_TIMEOUT_MS || '60000', 10);
+
 // Provider/model validation cache to reduce repeated lookups
 const validationCache = new Map<string, { provider: string; isValid: boolean; timestamp: number }>();
 const VALIDATION_CACHE_TTL_MS = 30000;
@@ -82,7 +100,8 @@ const MAX_PENDING_EVENTS = 64;
 const SPEC_AMPLIFICATION_STREAM_EVENTS_ENABLED =
   process.env.SPEC_AMPLIFICATION_STREAM_EVENTS_ENABLED !== 'false';
 
-// FIX 2: Pre-compiled RegExp for isCodeOrAgenticRequest (module-level, not per request)
+// FIX 2: Pre-compiled RegExp for legacy fallback detection (used when task classifier is unavailable)
+// These patterns are now SECONDARY to the multi-factor task classifier
 const STRONG_CODE_PATTERN =
   /\b(refactor|bug\s*fix|stack\s*trace|typescript|javascript|python|react|next\.js|vue\.js|angular|node\.?js|endpoint|database|schema|compile|lint|migrations?|docker|kubernetes|k8s|redis|mongodb|postgresql|mysql|sqlite|express|fastapi|flask|django|spring|rails|laravel|symfony|golang|rust|java|c\+\+|cpp|c#|dotnet|swift|kotlin|flutter|react\s*native|electron|code|build|implement|create\s+app|create\s+project|scaffold|generate\s+app)\b/i
 
@@ -94,6 +113,100 @@ const WEAK_CODE_KEYWORDS = [
 const WEAK_CODE_PATTERNS = WEAK_CODE_KEYWORDS.map(
   kw => new RegExp(`\\b${kw}\\b`, 'i'),
 )
+
+// Task classifier cache — initialized lazily to avoid blocking module load
+let _taskClassifierCache: ReturnType<typeof createTaskClassifierShared> | null = null;
+
+function getTaskClassifier() {
+  if (!_taskClassifierCache) {
+    _taskClassifierCache = createTaskClassifierShared({
+      simpleThreshold: parseFloat(process.env.TASK_CLASSIFIER_SIMPLE_THRESHOLD || '0.3'),
+      complexThreshold: parseFloat(process.env.TASK_CLASSIFIER_COMPLEX_THRESHOLD || '0.7'),
+      keywordWeight: 0.4,
+      semanticWeight: parseFloat(process.env.TASK_CLASSIFIER_SEMANTIC_WEIGHT || '0.3'),
+      contextWeight: parseFloat(process.env.TASK_CLASSIFIER_CONTEXT_WEIGHT || '0.2'),
+      historicalWeight: parseFloat(process.env.TASK_CLASSIFIER_HISTORY_WEIGHT || '0.1'),
+      enableSemanticAnalysis: process.env.TASK_CLASSIFIER_ENABLE_SEMANTIC !== 'false',
+      enableHistoricalLearning: process.env.TASK_CLASSIFIER_ENABLE_HISTORY !== 'false',
+      enableContextAwareness: process.env.TASK_CLASSIFIER_ENABLE_CONTEXT !== 'false',
+    });
+  }
+  return _taskClassifierCache;
+}
+
+/**
+ * Classify request using multi-factor task classifier.
+ * Falls back to regex-based detection if classifier fails.
+ *
+ * IMPORTANT: Receives original `messages` from the request body — NOT
+ * processedMessages which has system prompts, workspace context, and memory
+ * prepended. This ensures the classifier only sees the user's actual input.
+ */
+async function classifyRequest(
+  messages: LLMMessage[],
+  attachedFiles: ChatFilesystemFileContext[],
+): Promise<{ isCodeRequest: boolean; complexity: string; confidence: number; recommendedMode: string }> {
+  // Attached files always indicate a code/agentic request
+  if (attachedFiles.length > 0) {
+    return { isCodeRequest: true, complexity: 'moderate', confidence: 0.9, recommendedMode: 'v2-native' };
+  }
+
+  // Extract the last user message text only
+  const lastUser = [...messages].reverse().find(m => m.role === 'user');
+  const content = typeof lastUser?.content === 'string' ? lastUser.content : '';
+
+  // Empty content — treat as simple query
+  if (!content || content.trim().length === 0) {
+    return { isCodeRequest: false, complexity: 'simple', confidence: 1, recommendedMode: 'v1-api' };
+  }
+
+  try {
+    const classifier = getTaskClassifier();
+    const result = await classifier.classify(content, {
+      projectSize: process.env.PROJECT_SIZE as any,
+    });
+
+    chatLogger.debug('Task classification result', {
+      complexity: result.complexity,
+      confidence: result.confidence,
+      recommendedMode: result.recommendedMode,
+      contentLength: content.length,
+      reasoning: result.reasoning?.slice(0, 2),
+    });
+
+    // Code/agentic request if classifier recommends v2-native or stateful-agent,
+    // or if complexity is moderate/complex
+    const isCodeRequest = result.recommendedMode === 'v2-native' ||
+                          result.recommendedMode === 'stateful-agent' ||
+                          result.complexity === 'moderate' ||
+                          result.complexity === 'complex';
+
+    return {
+      isCodeRequest,
+      complexity: result.complexity,
+      confidence: result.confidence,
+      recommendedMode: result.recommendedMode,
+    };
+  } catch (error: any) {
+    // FALLBACK: Use legacy regex detection
+    chatLogger.debug('Task classifier failed, using regex fallback', { error: error.message });
+
+    let isCodeRequest = false;
+    if (STRONG_CODE_PATTERN.test(content)) {
+      isCodeRequest = true;
+    } else {
+      let weakMatches = 0;
+      for (const re of WEAK_CODE_PATTERNS) {
+        if (re.test(content) && ++weakMatches >= 2) {
+          isCodeRequest = true;
+          break;
+        }
+      }
+    }
+
+    return { isCodeRequest, complexity: 'simple', confidence: 0, recommendedMode: 'v1-api' };
+  }
+}
 
 // FIX 3: Pre-compiled RegExp for shouldUseContextPack
 const CONTEXT_PACK_PATTERN = new RegExp(
@@ -215,6 +328,8 @@ export async function POST(request: NextRequest) {
 
     // Validate request body with Zod schema
     const parseResult = chatRequestSchema.safeParse(rawBody);
+    console.log('[ROUTE] Raw body keys:', Object.keys(rawBody));
+    console.log('[ROUTE] Parsed result:', parseResult.success ? 'success' : parseResult.error?.message);
     if (!parseResult.success) {
       const firstError = parseResult.error.errors[0];
       chatLogger.error('Schema validation failed', { requestId }, {
@@ -236,6 +351,14 @@ export async function POST(request: NextRequest) {
       userId: authResult.userId,
     });
 
+    // Wire metrics to chatLogger for this request
+    setMetricsLogger((level, message, data) => {
+      if (level === 'error') chatLogger.error(message, { requestId, ...data });
+      else if (level === 'warn') chatLogger.warn(message, { requestId, ...data });
+      else if (level === 'info') chatLogger.info(message, { requestId, ...data });
+      else chatLogger.debug(message, { requestId, ...data });
+    });
+
     const {
       messages,
       provider: requestedProvider,
@@ -248,6 +371,9 @@ export async function POST(request: NextRequest) {
       conversationId,
       agentMode,
       filesystemContext,
+      contextPack,
+      autoAttachFiles,
+      retryContext,
     } = body as {
       messages: LLMMessage[];
       provider: string;
@@ -260,9 +386,158 @@ export async function POST(request: NextRequest) {
       conversationId?: string;
       agentMode?: 'v1' | 'v2' | 'auto';
       filesystemContext?: ChatFilesystemContextPayload;
+      /** Request a bundled context pack (file tree + contents) for LLM */
+      contextPack?: {
+        format?: 'markdown' | 'xml' | 'json' | 'plain';
+        maxTotalSize?: number;
+        includePatterns?: string[];
+        excludePatterns?: string[];
+        maxLinesPerFile?: number;
+      };
+      /** Auto-attach relevant files to subsequent LLM calls as agent discovers areas to edit */
+      autoAttachFiles?: boolean;
+      /** Client-side empty response retry context */
+      retryContext?: {
+        isEmptyResponseRetry: boolean;
+        originalProvider?: string;
+        originalModel?: string;
+        retryProvider?: string;  // Client-requested provider for rotation
+        retryModel?: string;      // Client-requested model for rotation
+        toolExecutionSummary?: string;
+        failedToolCalls?: Array<{ name: string; error: string; args?: any }>;
+        filesystemChanges?: { applied: number; failed: number; failedDetails: any[] };
+      };
     };
     provider = requestedProvider;
     model = requestedModel;
+
+    // Handle client-side empty response retry context
+    // Inject tool execution feedback and failed call details into system message
+    // Also record failed tool calls in telemetry for smart retry model selection
+    let processedMessages = messages;
+    let selectedRetryModel: { provider: string; model: string } | null = null;
+    let retrySource = 'none'; // 'client-rotation', 'telemetry-ranker', or 'none'
+
+    if (retryContext?.isEmptyResponseRetry) {
+      chatLogger.info('Client-side empty response retry detected', {
+        requestId,
+        originalProvider: retryContext.originalProvider,
+        originalModel: retryContext.originalModel,
+        clientRetryProvider: retryContext.retryProvider,
+        clientRetryModel: retryContext.retryModel,
+        toolSummary: retryContext.toolExecutionSummary,
+        failedToolCalls: retryContext.failedToolCalls?.length,
+      });
+
+      // Record failed tool calls in telemetry for model ranking
+      if (retryContext.failedToolCalls && retryContext.failedToolCalls.length > 0 && retryContext.originalModel) {
+        const { toolCallTracker } = await import('@/lib/chat/tool-call-tracker');
+        const timestamp = Date.now();
+
+        const failedRecords = retryContext.failedToolCalls.map(tc => ({
+          model: retryContext.originalModel!,
+          provider: retryContext.originalProvider || 'unknown',
+          toolName: tc.name,
+          success: false,
+          error: tc.error,
+          timestamp,
+          conversationId,
+        }));
+
+        await toolCallTracker.recordToolCalls(failedRecords);
+        chatLogger.debug('Recorded failed tool calls in telemetry', {
+          count: failedRecords.length,
+          model: retryContext.originalModel,
+        });
+      }
+
+      // PRIORITY 1: Use client-requested provider/model rotation if set
+      // The client has already computed which provider/model to retry with
+      // based on its rotation strategy (next model → fallback provider chain)
+      if (retryContext.retryProvider && retryContext.retryModel) {
+        const isDifferentFromOriginal =
+          retryContext.retryProvider !== retryContext.originalProvider ||
+          retryContext.retryModel !== retryContext.originalModel;
+
+        if (isDifferentFromOriginal) {
+          selectedRetryModel = {
+            provider: retryContext.retryProvider,
+            model: retryContext.retryModel,
+          };
+          retrySource = 'client-rotation';
+          chatLogger.info('Using client-requested provider rotation for retry', {
+            from: `${retryContext.originalProvider}:${retryContext.originalModel}`,
+            to: `${retryContext.retryProvider}:${retryContext.retryModel}`,
+          });
+        }
+      }
+
+      // PRIORITY 2: Fall back to telemetry-based model ranker if client didn't rotate
+      if (!selectedRetryModel && retryContext.originalModel) {
+        try {
+          const { getRetryModel } = await import('@/lib/models/model-ranker');
+          const retryModel = await getRetryModel({
+            failedModel: retryContext.originalModel,
+            failedProvider: retryContext.originalProvider,
+          });
+
+          if (retryModel && (retryModel.model !== retryContext.originalModel || retryModel.provider !== retryContext.originalProvider)) {
+            selectedRetryModel = { provider: retryModel.provider, model: retryModel.model };
+            retrySource = 'telemetry-ranker';
+            chatLogger.info('Using telemetry-based model ranking for retry', {
+              from: `${retryContext.originalProvider}:${retryContext.originalModel}`,
+              to: `${retryModel.provider}:${retryModel.model}`,
+              avgToolScore: retryModel.avgToolScore,
+              toolSuccessRate: retryModel.toolSuccessRate,
+            });
+          }
+        } catch (error) {
+          chatLogger.warn('Failed to select retry model, using original', error);
+        }
+      }
+
+      // Build retry enhancement message
+      const retryEnhancementParts: string[] = [];
+
+      if (retryContext.toolExecutionSummary) {
+        retryEnhancementParts.push(`\n[RETRY CONTEXT] ${retryContext.toolExecutionSummary}`);
+      }
+
+      if (retryContext.failedToolCalls && retryContext.failedToolCalls.length > 0) {
+        const failedDetails = retryContext.failedToolCalls
+          .slice(0, 5)
+          .map(tc => `  - ${tc.name}(${tc.args ? JSON.stringify(tc.args).slice(0, 100) : ''}) → ${tc.error}`)
+          .join('\n');
+        retryEnhancementParts.push(`\n[FAILED TOOL CALLS]\n${failedDetails}`);
+      }
+
+      if (retryContext.filesystemChanges) {
+        const { applied, failed, failedDetails } = retryContext.filesystemChanges;
+        if (applied > 0) retryEnhancementParts.push(`\n[FILE EDITS] ${applied} applied successfully`);
+        if (failed > 0 && failedDetails.length > 0) {
+          retryEnhancementParts.push(`\n[FAILED FILE EDITS]\n${failedDetails.map(f => `  - ${f.path}: ${f.error}`).join('\n')}`);
+        }
+      }
+
+      if (selectedRetryModel) {
+        const sourceLabel = retrySource === 'client-rotation' ? 'client provider rotation' : 'telemetry model ranking';
+        retryEnhancementParts.push(`\n[MODEL SWITCH] Retrying with ${selectedRetryModel.provider}:${selectedRetryModel.model} (${sourceLabel})`);
+      }
+
+      if (retryEnhancementParts.length > 0) {
+        // Inject as system message at the start
+        processedMessages = [
+          { role: 'system' as const, content: retryEnhancementParts.join('\n') },
+          ...messages,
+        ];
+      }
+    }
+
+    // Apply retry model override if selected
+    if (selectedRetryModel) {
+      provider = selectedRetryModel.provider;
+      model = selectedRetryModel.model;
+    }
 
     // Log request start
     await chatRequestLogger.logRequestStart(
@@ -270,7 +545,7 @@ export async function POST(request: NextRequest) {
       userId,
       provider,
       model,
-      messages,
+      processedMessages,
       stream
     );
 
@@ -331,6 +606,16 @@ export async function POST(request: NextRequest) {
       m => m === model || m.startsWith(`${model}:`)
     ) || model;
     const attachedFilesystemFiles = normalizeFilesystemContext(filesystemContext?.attachedFiles);
+
+    // Extract @mentions from the last user message to prioritize files
+    const lastUserMessage = [...processedMessages].reverse().find(m => m.role === 'user');
+    const lastUserText = typeof lastUserMessage?.content === 'string' ? lastUserMessage.content : '';
+    const atMentionPattern = /@([\w\-/.]+\.(?:tsx?|jsx?|py|rs|go|java|css|scss|json|md|yaml|yml|toml|sh|bash|html|sql|graphql|proto|tf|hcl))/gi;
+    const explicitFilesFromMentions: string[] = [];
+    let match;
+    while ((match = atMentionPattern.exec(lastUserText)) !== null) {
+      explicitFilesFromMentions.push(match[1]);
+    }
     
     // Resolve the session folder name - use sequential naming (001, 002) instead of composite IDs
     let resolvedConversationId: string;
@@ -358,7 +643,17 @@ export async function POST(request: NextRequest) {
       // No conversationId provided - generate new sequential session name
       resolvedConversationId = await generateSessionName();
     }
-    
+
+    // O(1) Session File Tracking: Track file references incrementally as messages flow
+    // This avoids re-scanning messages with regex on every context generation
+    try {
+      const { trackSessionFiles } = await import('@/lib/virtual-filesystem/session-file-tracker');
+      await trackSessionFiles(resolvedConversationId, processedMessages);
+    } catch (error: any) {
+      // Don't fail the request if tracking fails
+      chatLogger.debug('Session file tracking failed (non-critical)', { error: error.message });
+    }
+
     const defaultScopePath = `project/sessions/${sanitizePathSegment(resolvedConversationId)}`;
     // Sanitize scopePath to ensure folder names are not corrupted with ownerId prefix
     // e.g., "project/sessions/anon:1774710784761_6TB03h8Ow:002" -> "project/sessions/002"
@@ -388,53 +683,124 @@ export async function POST(request: NextRequest) {
     const ownerResolution = await resolveFilesystemOwner(request);
     const filesystemOwnerId = ownerResolution.ownerId;
     anonSessionIdToSet = ownerResolution.anonSessionId; // Set cookie if new anon session
-    
+
     // Calculate these BEFORE parallel execution since they're dependencies
     const enableFilesystemEdits = shouldHandleFilesystemEdits(
-      messages,
+      processedMessages,
       attachedFilesystemFiles,
       filesystemContext,
     );
+    chatLogger.debug('Filesystem edits gate', {
+      enableFilesystemEdits,
+      attachedFilesCount: attachedFilesystemFiles.length,
+      applyFileEditsFlag: filesystemContext?.applyFileEdits,
+    });
     const useContextPack = shouldUseContextPack(messages);
-    const isCodeRequest = isCodeOrAgenticRequest(messages, attachedFilesystemFiles);
+    // Use multi-factor task classifier instead of regex-based detection
+    // IMPORTANT: classify on original messages (user's actual input), not processedMessages
+    // which has system prompts, workspace context, memory, etc. prepended
+    const classification = await classifyRequest(messages, attachedFilesystemFiles);
+    const isCodeRequest = classification.isCodeRequest;
     const useContextPackForAgentic = enableFilesystemEdits && isCodeRequest;
     const shouldUseContextPackFinal = useContextPack || useContextPackForAgentic;
     
     // PARALLEL EXECUTION: Run independent async operations concurrently
     // This reduces latency by 40-60% by not waiting for each operation sequentially
-    const [denialContext, workspaceSessionContext] = await Promise.all([
+    const userPrompt = typeof lastUserMessage?.content === 'string' ? lastUserMessage.content : '';
+    const scopePathForHybrid = sanitizeScopePath(requestedScopePath);
+
+    const [denialContext, workspaceSessionContext, mem0Result, hybridContext] = await Promise.all([
       // Get recent filesystem edit denials
       filesystemEditSessionService.getRecentDenials(
-        `${filesystemOwnerId}:${resolvedConversationId}`,
+        `${filesystemOwnerId}$${resolvedConversationId}`,
         4,
       ),
       // Build workspace session context (only if filesystem edits are enabled)
       enableFilesystemEdits
-        ? buildWorkspaceSessionContext(filesystemOwnerId, sanitizeScopePath(requestedScopePath), {
+        ? buildWorkspaceSessionContext(filesystemOwnerId, scopePathForHybrid, {
             useContextPack: shouldUseContextPackFinal,
             maxTokens: body.maxTokens,
           })
-        : Promise.resolve('')
+        : Promise.resolve(''),
+      // Search mem0 for relevant memories (runs in parallel)
+      isMem0Configured() && typeof lastUserMessage?.content === 'string'
+        ? mem0Search({
+            query: lastUserMessage.content,
+            userId: filesystemOwnerId,
+            limit: 5,
+          }).catch((memError: any) => {
+            chatLogger.warn('Mem0 search failed (non-critical)', { error: memError.message });
+            return { success: false, results: [] };
+          })
+        : Promise.resolve({ success: false, results: [] }),
+      // Hybrid retrieval: AST-based symbol retrieval with smart-context fallback
+      enableFilesystemEdits && userPrompt
+        ? buildHybridWorkspaceContext(filesystemOwnerId, scopePathForHybrid, {
+            prompt: userPrompt,
+            projectId: scopePathForHybrid, // Use scopePath as stable project ID
+            maxTokens: body.maxTokens,
+          })
+        : Promise.resolve(''),
     ]);
+
+    // Build memory context from mem0 results
+    let memoryContext = '';
+    if (mem0Result && mem0Result.success && mem0Result.results && mem0Result.results.length > 0) {
+      memoryContext = buildMem0SystemPrompt(mem0Result.results);
+      chatLogger.debug('Retrieved relevant memories from mem0', { requestId, memoryCount: mem0Result.results.length });
+    }
     
     const contextualMessages = appendFilesystemContextMessages(
-      messages,
+      processedMessages,
       attachedFilesystemFiles,
       enableFilesystemEdits,
       denialContext,
       workspaceSessionContext,
+      memoryContext,
+      hybridContext,
     );
+
+    // V1 / Regular LLM: Apply response style modifiers to messages
+    // This injects prompt parameters (depth, expertise, tone, etc.) into the V1 path
+    // by appending a system message suffix to the message array
+    const v1PromptParams: PromptParameters = {
+      responseDepth: body.responseDepth as any,
+      expertiseLevel: body.expertiseLevel as any,
+      reasoningMode: body.reasoningMode as any,
+      tone: body.tone as any,
+      creativityLevel: body.creativityLevel as any,
+      citationStrictness: body.citationStrictness as any,
+      outputFormat: body.outputFormat as any,
+      selfCorrection: body.selfCorrection as any,
+    };
+    let v1PromptSuffix = '';
+    if (body.presetKey && body.presetKey in PROMPT_PRESETS) {
+      const preset = getPreset(body.presetKey as keyof typeof PROMPT_PRESETS);
+      v1PromptSuffix = await applyPromptModifiers({ ...preset, ...v1PromptParams });
+    } else if (Object.values(v1PromptParams).some(v => v !== undefined)) {
+      v1PromptSuffix = await applyPromptModifiers(v1PromptParams);
+    }
+    if (v1PromptSuffix) {
+      // Append as system message — the LLM provider will prepend it to existing system messages
+      contextualMessages.push({ role: 'system', content: v1PromptSuffix });
+      emitTelemetryEvent(v1PromptParams, body.presetKey || null);
+      const debugHeaderValue = generateDebugHeaderValue(v1PromptParams, body.presetKey || null);
+      if (debugHeaderValue !== 'default') {
+        chatLogger.debug('V1 response style active', { requestId }, { style: debugHeaderValue });
+      }
+    }
 
     chatLogger.debug('Validation passed, routing through priority chain', { requestId, provider, model });
 
     // NEW: Add tool/sandbox detection
-    const requestType = detectRequestType(messages);
+    const requestType = (await detectRequestType(processedMessages)).type;
     const authenticatedUserId =
       authResult.success && authResult.source !== 'anonymous' ? authResult.userId : undefined;
 
     // V2 Agent Mode: route to OpenCode/Nullclaw workflow
-    // Auto-detect V2 for code-intensive requests
-    const isCodeRequestAuto = isCodeOrAgenticRequest(messages, attachedFilesystemFiles);
+    // Use task classifier result instead of redundant regex detection
+    const isCodeRequestAuto = classification.isCodeRequest;
+    console.log('[ROUTE] agentMode from request:', agentMode);
     const wantsV2 =
       agentMode === 'v2' ||
       (agentMode === 'auto' && (
@@ -485,6 +851,26 @@ export async function POST(request: NextRequest) {
           });
 
           if (gatewayResult.success) {
+            // FIX: Apply file edits from V2 gateway response before returning
+            try {
+              const gwResponse = typeof gatewayResult.response === 'string' ? gatewayResult.response : '';
+              if (gwResponse) {
+                await applyFilesystemEditsFromResponse({
+                  ownerId: filesystemOwnerId,
+                  conversationId: `${filesystemOwnerId}$${resolvedConversationId}`,
+                  requestId,
+                  scopePath: requestedScopePath,
+                  lastUserMessage: '',
+                  attachedPaths: [],
+                  responseContent: gwResponse,
+                  preParsedEdits: null,
+                });
+              }
+            } catch (editError: any) {
+              chatLogger.warn('Failed to apply file edits from V2 gateway response', { requestId }, {
+                error: editError.message,
+              });
+            }
             return NextResponse.json(gatewayResult);
           }
           // Fall through to v1 if gateway failed
@@ -525,6 +911,26 @@ export async function POST(request: NextRequest) {
               errorCode: v2Result.errorCode,
             });
           } else {
+            // FIX: Apply file edits from V2 local execution response before returning
+            try {
+              const v2Response = v2Result.content || v2Result.rawContent || '';
+              if (v2Response) {
+                await applyFilesystemEditsFromResponse({
+                  ownerId: filesystemOwnerId,
+                  conversationId: `${filesystemOwnerId}$${resolvedConversationId}`,
+                  requestId,
+                  scopePath: requestedScopePath,
+                  lastUserMessage: '',
+                  attachedPaths: [],
+                  responseContent: v2Response,
+                  preParsedEdits: null,
+                });
+              }
+            } catch (editError: any) {
+              chatLogger.warn('Failed to apply file edits from V2 local response', { requestId }, {
+                error: editError.message,
+              });
+            }
             return NextResponse.json(v2Result);
           }
         }
@@ -539,79 +945,174 @@ export async function POST(request: NextRequest) {
       chatLogger.info('Using v1 fallback path after V2 failure', { requestId, provider, model });
     }
 
-    // Agentic pipeline (non-V2) for code-centric requests
-    // Only route to agentic pipeline if it's actually an integration request (OAuth needed)
-    // Regular coding requests should use V2 (handled above) or regular chat
-    const isIntegrationRequest = requiresThirdPartyOAuth(messages);
-    if (isCodeRequest && !isIntegrationRequest && CHAT_AGENTIC_PIPELINE !== 'off') {
-      // For non-integration code requests that don't want V2, fall through to regular chat
-      // This allows "code a nextjs app" to get regular LLM response instead of agentic pipeline
-    } else if (isCodeRequest && isIntegrationRequest && CHAT_AGENTIC_PIPELINE !== 'off') {
-      // This is an integration request that needs OAuth
-      if (!authenticatedUserId) {
-        return NextResponse.json({
-          success: false,
-          status: 'auth_required',
-          authUrl: '/api/auth/signin', // Site login for integration OAuth
-          toolName: 'integration',
-          provider: 'integration',
-          error: {
-            type: 'auth_required',
-            message: 'This request requires connecting to an external service. Please log in.',
-          },
-        }, { status: 401 });
-      }
+    // ─── Integration/OAuth Detection — NON-BLOCKING ──────────────────
+    //
+    // OLD BEHAVIOR (REMOVED): If user message contained "gmail" or "slack",
+    // the regex detector (requiresThirdPartyOAuth) would intercept the request
+    // and either:
+    //   1. Return a JSON error blocking the LLM entirely (if unauthenticated)
+    //   2. Spawn the agentic pipeline which could take 30+ seconds
+    // This caused the conversation to freeze with no LLM response at all.
+    //
+    // NEW BEHAVIOR: The LLM ALWAYS responds first. OAuth/integration needs
+    // are handled AFTER the LLM responds via:
+    //   1. Generic `integration_connect` tool the LLM can call when it determines
+    //      an integration is needed (the LLM decides, not a regex)
+    //   2. Post-response parsing: if the LLM mentions connecting a service,
+    //      we emit an SSE event with the OAuth button alongside the response
+    //   3. The conversation never blocks — the user always gets a reply
+    //
+    // This means "send me an email via gmail" gets a conversational LLM
+    // response AND an OAuth trigger — not a frozen screen with just a button.
+    const isIntegrationRequest = false; // No longer blocks responses
 
-      const lastUserMessage = [...messages].reverse().find((m) => m.role === 'user')?.content;
-      const task = typeof lastUserMessage === 'string'
-        ? lastUserMessage
-        : JSON.stringify(lastUserMessage || '');
+    // The old agentic pipeline that was gated behind isIntegrationRequest is removed.
+    // OAuth detection no longer blocks responses. The LLM always responds.
 
-      const context = buildAgenticContext(contextualMessages);
+    // ─── Regular Chat Path (ALWAYS used now) ────────────────────────────
+    // Build unified agent config for the chat path
+    const lastUserMsgContent = [...messages].reverse().find((m) => m.role === 'user')?.content;
+    const task = typeof lastUserMsgContent === 'string'
+      ? lastUserMsgContent
+      : JSON.stringify(lastUserMsgContent || '');
 
-      if (WORKFORCE_ENABLED && /parallel|multi-agent|agents|crew|swarm/i.test(task)) {
-        await workforceManager.spawnTask(authenticatedUserId, resolvedConversationId, {
-          title: 'Research & context gathering',
-          description: `Gather context and research for: ${task}`,
-          agent: 'nullclaw',
-        });
-        await workforceManager.spawnTask(authenticatedUserId, resolvedConversationId, {
-          title: 'Implementation',
-          description: task,
-          agent: 'opencode',
-        });
-      }
+    const context = buildAgenticContext(contextualMessages);
 
-      const config: UnifiedAgentConfig = {
-        userMessage: context ? `${context}\n\nTASK:\n${task}` : task,
-        conversationHistory: contextualMessages.map((m) => ({
-          role: m.role,
-          content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
-        })),
-        systemPrompt: process.env.OPENCODE_SYSTEM_PROMPT,
-        maxSteps: parseInt(process.env.AI_SDK_MAX_STEPS || '15', 10),
-        temperature,
-        maxTokens,
-        mode: 'auto',
+    // Build system prompt with optional response style modifiers
+    let baseSystemPrompt = process.env.OPENCODE_SYSTEM_PROMPT || '';
+
+    // CRITICAL: Unified tool usage instructions with ENFORCED output formats.
+    // The LLM must use ONE consistent format for file operations.
+    baseSystemPrompt += `\n\n=== FILE OPERATION INSTRUCTIONS (READ CAREFULLY) ===
+
+You have file editing tools. USE them directly — do NOT explain HOW to do things or give terminal commands.
+
+TOOL USAGE:
+- To CREATE or MODIFY files: call the write_file or batch_write tools
+- To EDIT existing files: call the apply_diff tool with a unified diff
+- To READ files: call the read_file tool FIRST before making any changes
+- To LIST files: call the list_files tool
+
+CRITICAL RULES:
+1. ALWAYS read a file (read_file) before editing it. Never assume file contents.
+2. When asked to FIX code: read_file → understand the bug → write_file the corrected version
+3. When asked to CREATE files: write_file with complete content
+4. NEVER say "I can't modify files" — you CAN use the tools
+5. NEVER output bash commands like "echo 'content' > file" — use write_file tool
+6. NEVER output code in markdown blocks expecting the system to parse them — USE THE TOOLS
+
+SELF-HEALING / BUG FIXING — CRITICAL INSTRUCTIONS:
+When the user asks you to FIX a syntax error or bug in a specific file:
+1. FIRST, call the read_file tool to get the current broken content
+2. Analyze the actual code to identify the specific bug
+3. Then call write_file with the corrected version
+4. If tools are unavailable, output the corrected content using the \`\`\`file: path/to/file.ext format
+
+NEVER output generic suggestions like "here are common errors" or "If you share the code..." — read the actual file, find the actual bug, and fix it.
+
+Common fixes for incomplete JavaScript:
+- "const x = " (no value) → add a value: "const x = 42;"
+- Missing semicolon → add it
+- Unclosed brackets/quotes → close them
+- "let x =" (no value) → add a value: "let x = 10;"
+
+IMPORTANT: You have access to the file through your tools. DO NOT ask the user to share the file content. READ IT YOURSELF using read_file, then FIX IT.
+
+FILE OUTPUT FORMAT (when tools are unavailable or as fallback):
+If you cannot use tool calls, use EXACTLY this format:
+
+To CREATE or OVERWRITE a file:
+\`\`\`file: path/to/file.ext
+<complete file content here>
+\`\`\`
+
+To EDIT an existing file (unified diff):
+\`\`\`diff: path/to/file.ext
+--- a/path/to/file.ext
++++ b/path/to/file.ext
+@@ -old_start,old_count +new_start,new_count @@
+-line to remove
++line to add
+\`\`\`
+
+To CREATE a directory:
+\`\`\`mkdir: path/to/dir
+\`\`\`
+
+To DELETE a file:
+\`\`\`delete: path/to/file.ext
+\`\`\`
+
+FORMAT RULES:
+- ALWAYS use triple backticks with the exact fence tag (file:, diff:, mkdir:, delete:)
+- The path MUST follow the colon on the same line as the opening backticks
+- Content goes BETWEEN the opening and closing backticks
+- For diffs, use standard unified diff format with --- and +++ headers
+- Do NOT use other code block formats (e.g., \`\`\`javascript) for file content
+- Do NOT use XML tags like <file_edit> — use the backtick fence format above
+- Do NOT use @filename.txt format — use the backtick fence format above
+
+=== END FILE OPERATION INSTRUCTIONS ===`;
+
+    const promptParams: PromptParameters = {
+      responseDepth: body.responseDepth as any,
+      expertiseLevel: body.expertiseLevel as any,
+      reasoningMode: body.reasoningMode as any,
+      tone: body.tone as any,
+      creativityLevel: body.creativityLevel as any,
+      citationStrictness: body.citationStrictness as any,
+      outputFormat: body.outputFormat as any,
+      selfCorrection: body.selfCorrection as any,
+    };
+    let promptSuffix = '';
+    if (body.presetKey && body.presetKey in PROMPT_PRESETS) {
+      const preset = getPreset(body.presetKey as keyof typeof PROMPT_PRESETS);
+      promptSuffix = await applyPromptModifiers({ ...preset, ...promptParams });
+    } else if (Object.values(promptParams).some(v => v !== undefined)) {
+      promptSuffix = await applyPromptModifiers(promptParams);
+    }
+
+    const systemPrompt = promptSuffix ? baseSystemPrompt + promptSuffix : baseSystemPrompt;
+
+const config: UnifiedAgentConfig = {
+      userMessage: task,  // User message only — NOT the filesystem context
+      userId: authenticatedUserId || filesystemOwnerId,  // Pass real user ID for VFS scoping
+      conversationId: resolvedConversationId,  // FIX: Pass session ID for VFS session scoping (e.g., "001")
+      conversationHistory: contextualMessages.map((m) => ({
+        role: m.role,
+        content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+      })),
+      systemPrompt,
+      maxSteps: parseInt(process.env.AI_SDK_MAX_STEPS || '15', 10),
+      temperature,
+      maxTokens,
+      mode: 'auto',
+      // Pass user-selected provider and model to unified agent
+      provider,
+      model: normalizedModel,
+    };
+
+    const tools = await getMCPToolsForAI_SDK(authenticatedUserId);
+    config.tools = tools.map(t => ({
+      name: t.function.name,
+      description: t.function.description,
+      parameters: t.function.parameters,
+    }));
+    config.executeTool = async (name: string, args: Record<string, any>) => {
+      const result = await callMCPToolFromAI_SDK(name, args, authenticatedUserId, requestedScopePath);
+      return {
+        success: result.success,
+        output: result.output,
+        exitCode: result.success ? 0 : 1,
       };
+    };
 
-      const tools = await getMCPToolsForAI_SDK(authenticatedUserId);
-      config.tools = tools.map(t => ({
-        name: t.function.name,
-        description: t.function.description,
-        parameters: t.function.parameters,
-      }));
-      config.executeTool = async (name: string, args: Record<string, any>) => {
-        const result = await callMCPToolFromAI_SDK(name, args, authenticatedUserId);
-        return {
-          success: result.success,
-          output: result.output,
-          exitCode: result.success ? 0 : 1,
-        };
-      };
+    // FIX: When AGENT_EXECUTION_ENGINE='v1-agent-loop', skip unified-agent streaming
+    // and fall through to the direct Mastra/ToolLoopAgent path (createAgentLoop)
+    const useUnifiedAgentStream = stream && AGENT_EXECUTION_ENGINE !== 'v1-agent-loop';
 
-      if (stream) {
-        const streamBody = new ReadableStream({
+    if (useUnifiedAgentStream) {
+      const streamBody = new ReadableStream({
           async start(controller) {
             const emit = createSSEEmitter(controller);
             const processingSteps: Array<{
@@ -698,6 +1199,23 @@ export async function POST(request: NextRequest) {
                   result,
                   timestamp: Date.now(),
                 });
+
+                // Track tool call success/failure in telemetry for model ranking
+                // Uses generated toolCallId for deduplication
+                if (toolName) {
+                  import('@/lib/chat/tool-call-tracker').then(({ toolCallTracker }) => {
+                    toolCallTracker.recordToolCall({
+                      model: actualModel,
+                      provider: actualProvider,
+                      toolName,
+                      success: result?.success !== false,
+                      error: result?.error,
+                      timestamp: Date.now(),
+                      conversationId,
+                      toolCallId: `agent-${toolName}-${Date.now()}`,
+                    });
+                  }).catch(() => {});
+                }
               };
 
               const result = await processUnifiedAgentRequest(config);
@@ -752,9 +1270,94 @@ export async function POST(request: NextRequest) {
                   }
                 }
 
+                // VFS WRITE: Actually write extracted file edits to the virtual filesystem
+                // This mirrors the streaming path at line ~2340 — without this, edits are
+                // only emitted as SSE events (status: 'detected') but NEVER persisted to VFS.
+                const fullResponse = streamingContentBuffer + (typeof result.response === 'string' ? result.response : '') || '';
+                let appliedEditsResult: any = null;
+                if (enableFilesystemEdits && fullResponse.trim() && filesystemOwnerId) {
+                  try {
+                    const { enableVFSBatchMode, flushVFSBatchMode } = await import('@/lib/virtual-filesystem/git-backed-vfs');
+                    enableVFSBatchMode(filesystemOwnerId);
+
+                    appliedEditsResult = await applyFilesystemEditsFromResponse({
+                      ownerId: filesystemOwnerId,
+                      conversationId: `${filesystemOwnerId}$${resolvedConversationId}`,
+                      requestId: requestId,
+                      scopePath: requestedScopePath,
+                      lastUserMessage: (() => {
+                        const c = [...messages].reverse().find((m) => m.role === 'user')?.content;
+                        return typeof c === 'string' ? c : '';
+                      })(),
+                      attachedPaths: attachedFilesystemFiles.map((file) => file.path),
+                      responseContent: fullResponse,
+                      commands: {},
+                      forceExtract: true,
+                    });
+
+                    await flushVFSBatchMode(filesystemOwnerId);
+
+                    // Emit applied file edit events so UI shows status: 'applied'
+                    if (appliedEditsResult?.applied?.length) {
+                      for (const edit of appliedEditsResult.applied) {
+                        if (!isValidFilePath(edit.path)) continue;
+                        const editContent = edit.content || edit.diff || '';
+                        if (!editContent || editContent.trim().length === 0) continue;
+                        const hasDiff = !!edit.diff;
+                        const isPatch = edit.operation === 'patch' || hasDiff;
+                        emit(SSE_EVENT_TYPES.FILE_EDIT, {
+                          path: edit.path,
+                          status: 'applied',
+                          operation: isPatch ? 'patch' : (edit.operation || 'write'),
+                          timestamp: Date.now(),
+                          content: edit.content || '',
+                          diff: isPatch ? (edit.diff || '') : undefined,
+                        });
+                        chatLogger.debug('VFS file edit applied (agentic path)', {
+                          path: edit.path,
+                          operation: isPatch ? 'patch' : 'write',
+                        });
+                      }
+                      chatLogger.info('Agentic path: filesystem edits applied to VFS', {
+                        editCount: appliedEditsResult.applied.length,
+                        paths: appliedEditsResult.applied.map(e => e.path).join(', '),
+                      });
+                    } else if (appliedEditsResult?.errors?.length) {
+                      chatLogger.warn('Agentic path: VFS write errors', {
+                        errors: appliedEditsResult.errors.slice(0, 5),
+                      });
+                    }
+                  } catch (e) {
+                    chatLogger.warn('Agentic path: VFS write failed (non-fatal)', {
+                      error: e instanceof Error ? e.message : String(e),
+                    });
+                  }
+                }
+
+                // Collect file edits into result object for the done event
+                // This ensures the stream method returns fileEdits in the result
+                if (appliedEditsResult) {
+                  result.fileEdits = appliedEditsResult;
+                  result.metadata = result.metadata || {};
+                  result.metadata.appliedEditCount = appliedEditsResult.applied?.length || 0;
+                  result.metadata.extractedEditCount = finalEdits?.length || 0;
+                }
+
                 // SESSION NAMING: Detect if this is a new single-folder project
                 // If so, rename the session folder to match the project folder
                 const responseContent = streamingContentBuffer + (typeof result.response === 'string' ? result.response : '') || '';
+
+                // DEBUG LOGGING: Session naming detection
+                console.debug('[SessionNaming] Session folder detection', {
+                  detectedFolder,
+                  resolvedConversationId,
+                  isSequentialSession,
+                  isNewSession,
+                  responseContentLength: responseContent.length,
+                  responsePreview: responseContent.slice(0, 200),
+                  metadata: result.metadata,
+                });
+
                 const { detectSingleFolderFromResponse } = await import('@/lib/session-naming');
                 const detectedFolder = detectSingleFolderFromResponse(responseContent);
                 
@@ -823,7 +1426,7 @@ export async function POST(request: NextRequest) {
                     const { applyFilesystemEditsFromResponse } = await import('./route');
                     const appliedEdits = await applyFilesystemEditsFromResponse({
                       ownerId: filesystemOwnerId,
-                      conversationId: `${filesystemOwnerId}:${resolvedConversationId}`,
+                      conversationId: `${filesystemOwnerId}$${resolvedConversationId}`,
                       requestId,
                       scopePath: requestedScopePath,
                       lastUserMessage: task,
@@ -864,13 +1467,13 @@ export async function POST(request: NextRequest) {
                         count: appliedEdits.applied.length
                       });
 
-                      // CRITICAL FIX Bug #2: Emit filesystem-updated CustomEvent for ToolLoopAgent path
+                      // CRITICAL FIX Bug #2: Emit filesystem-updated CustomEvent for agent tool path
                       // This ensures components listening to CustomEvent update (not just SSE recipients)
                       emitFilesystemUpdated({
                         scopePath: requestedScopePath,
                         sessionId: resolvedConversationId,
                         applied: appliedEdits.applied,
-                        source: 'toolLoopAgent',
+                        source: 'agent-tool',
                       });
 
                       // CRITICAL: Add fallback message if content is empty but files were applied
@@ -992,10 +1595,12 @@ export async function POST(request: NextRequest) {
         });
 
         const orchestrationResult = await executeWithOrchestrationMode(orchestrationMode, {
-          task: context ? `${context}\n\nTASK:\n${task}` : task,
+          task: task,  // User task only — filesystem context already in conversationHistory
           sessionId: resolvedConversationId,
           ownerId: authenticatedUserId,
           stream: stream === true,
+          model: normalizedModel,
+          workspacePath: `project/sessions/${resolvedConversationId}`,
         });
 
         if (stream === true) {
@@ -1003,39 +1608,39 @@ export async function POST(request: NextRequest) {
           const encoder = new TextEncoder();
           const streamBody = new ReadableStream({
             async start(controller) {
+              const enqueue = (eventType: string, data: Record<string, unknown>) => {
+                try {
+                  controller.enqueue(encoder.encode(`event: ${eventType}\ndata: ${JSON.stringify({ ...data, timestamp: Date.now() })}\n\n`));
+                } catch {
+                  // Stream may be closed — ignore
+                }
+              };
+
               try {
                 // Send initial metadata
-                controller.enqueue(encoder.encode(
-                  `event: metadata\ndata: ${JSON.stringify({
-                    mode: orchestrationMode,
-                    agentType: orchestrationResult.metadata?.agentType,
-                  })}\n\n`
-                ));
+                enqueue('init', {
+                  agent: 'orchestrator',
+                  currentAction: `Running in ${orchestrationMode} mode`,
+                  mode: orchestrationMode,
+                });
 
                 // Send response content
                 if (orchestrationResult.response) {
-                  controller.enqueue(encoder.encode(
-                    `event: content\ndata: ${JSON.stringify({
-                      content: orchestrationResult.response,
-                    })}\n\n`
-                  ));
+                  enqueue('token', {
+                    content: orchestrationResult.response,
+                  });
                 }
 
                 // Send completion
-                controller.enqueue(encoder.encode(
-                  `event: done\ndata: ${JSON.stringify({
-                    success: orchestrationResult.success,
-                    metadata: orchestrationResult.metadata,
-                  })}\n\n`
-                ));
+                enqueue('done', {
+                  success: orchestrationResult.success,
+                  content: orchestrationResult.response,
+                  metadata: orchestrationResult.metadata,
+                });
 
                 controller.close();
               } catch (error: any) {
-                controller.enqueue(encoder.encode(
-                  `event: error\ndata: ${JSON.stringify({
-                    message: error.message,
-                  })}\n\n`
-                ));
+                enqueue('error', { message: error.message });
                 controller.close();
               }
             },
@@ -1054,22 +1659,93 @@ export async function POST(request: NextRequest) {
 
       // Default: Use existing unified agent flow (task-router mode)
       // This is the fallback when no custom orchestration mode is selected
-      const result = await processUnifiedAgentRequest(config);
-      return NextResponse.json({
-        success: result.success,
-        content: result.response,
-        data: result,
-      });
-    }
+      // FIX: Skip when AGENT_EXECUTION_ENGINE='v1-agent-loop' — fall through to direct Mastra path
+      console.log('[ROUTE-DEBUG] About to call processUnifiedAgentRequest, AGENT_EXECUTION_ENGINE:', AGENT_EXECUTION_ENGINE);
+      console.log('[ROUTE-DEBUG] enableFilesystemEdits BEFORE call:', enableFilesystemEdits);
+      if (AGENT_EXECUTION_ENGINE !== 'v1-agent-loop') {
+        const result = await processUnifiedAgentRequest(config);
+        console.log('[ROUTE-DEBUG] processUnifiedAgentRequest returned, result.success:', result.success, 'hasResponse:', !!result.response);
 
-    // Tool/sandbox actions require authenticated user identity for authorization and ownership checks.
-    if ((requestType === 'tool' || requestType === 'sandbox') && !authenticatedUserId) {
+        // GUARANTEED debug field — always appears if this code path is reached
+        const debugInfo = {
+          enableFilesystemEdits,
+          agentExecutionEngine: AGENT_EXECUTION_ENGINE,
+          resultSuccess: result.success,
+          hasResponse: !!result.response,
+          responseLength: result.response?.length || 0,
+        };
+        console.log('[ROUTE-DEBUG] debugInfo:', JSON.stringify(debugInfo));
+
+        // FIX: Extract and apply file edits from the LLM response text.
+        // The LLM may output code blocks, diffs, or write_file instructions
+        // that need to be parsed and written to the VFS.
+        // This bridges the gap between v1-api chat mode and actual file creation.
+        let appliedEdits = null;
+        console.log('[FILE-EDIT-DEBUG] enableFilesystemEdits:', enableFilesystemEdits, 'result.success:', result.success, 'response length:', result.response?.length);
+        if (result.success && result.response && enableFilesystemEdits) {
+          try {
+            console.log('[FILE-EDIT-DEBUG] Calling applyFilesystemEditsFromResponse, response preview:', result.response.slice(0, 200));
+            appliedEdits = await applyFilesystemEditsFromResponse({
+              ownerId: filesystemOwnerId,
+              conversationId: `${filesystemOwnerId}$${resolvedConversationId}`,
+              requestId: requestId || `v1-${Date.now()}`,
+              scopePath: requestedScopePath,
+              lastUserMessage: typeof lastUserMessage === 'string' ? lastUserMessage : '',
+              attachedPaths: attachedFilesystemFiles.map((f) => f.path),
+              responseContent: result.response,
+              commands: {},
+              forceExtract: true,
+            });
+
+            console.log('[FILE-EDIT-DEBUG] appliedEdits:', JSON.stringify({
+              writes: appliedEdits?.writes?.length,
+              patches: appliedEdits?.patches?.length,
+              applied: appliedEdits?.applied?.length,
+              errors: appliedEdits?.errors?.length,
+            }));
+
+            if (appliedEdits?.applied?.length) {
+              chatLogger.info('File edits extracted from v1-api response', {
+                requestId,
+                editCount: appliedEdits.applied.length,
+                edits: appliedEdits.applied.map((e: any) => ({ path: e.path, operation: e.operation })),
+              });
+            } else {
+              chatLogger.warn('No file edits extracted from v1-api response — response has no parseable file edits');
+            }
+          } catch (parseError: any) {
+            chatLogger.error('Failed to extract file edits from v1-api response', {
+              requestId,
+              error: parseError.message,
+            });
+            console.log('[FILE-EDIT-DEBUG] Error:', parseError.message, parseError.stack?.slice(0, 500));
+          }
+        } else {
+          console.log('[FILE-EDIT-DEBUG] SKIPPED: enableFilesystemEdits=', enableFilesystemEdits, 'success=', result.success, 'hasResponse=', !!result.response);
+        }
+
+        return NextResponse.json({
+          success: result.success,
+          content: result.response,
+          data: {
+            ...result,
+            appliedEdits: appliedEdits
+              ? { count: appliedEdits.applied?.length || 0, paths: appliedEdits.applied?.map((e: any) => e.path) || [] }
+              : null,
+            _debug: debugInfo,
+          },
+        });
+      }
+
+    // Sandbox actions require authenticated user identity for authorization and ownership checks.
+    // VFS MCP tools are handled inline via Vercel AI SDK tool calling and don't need this gate.
+    if (requestType === 'sandbox' && !authenticatedUserId) {
       return NextResponse.json({
         success: false,
         status: 'auth_required',
         error: {
           type: 'auth_required',
-          message: `${requestType === 'tool' ? 'Tool use' : 'Sandbox actions'} require authentication. Please log in first.`
+          message: 'Sandbox actions require authentication. Please log in first.'
         }
       }, { status: 401 });
     }
@@ -1091,20 +1767,44 @@ export async function POST(request: NextRequest) {
       stream,
       apiKeys,
       requestId,
-      userId: authenticatedUserId, // Include userId for tool and sandbox authorization
+      userId: authenticatedUserId || filesystemOwnerId, // Use filesystem owner for VFS tools when not authenticated
       // For filesystem operations (including spec enhancement background refinement),
       // use the resolved filesystem owner ID which handles anonymous users correctly
       filesystemOwnerId: filesystemOwnerId,
       // Include conversation ID for spec enhancement filesystem edits
-      conversationId: `${filesystemOwnerId}:${resolvedConversationId}`,
+      conversationId: `${filesystemOwnerId}$${resolvedConversationId}`,
+      // Spec enhancement mode from client
+      specMode: (body as any)?.specMode,
+      specChain: (body as any)?.specChain,
+      // Pass scopePath for session-scoped file operations
+      scopePath: requestedScopePath,
       // Keep these tri-state so router-level detection can still route specialized endpoints.
       // `false` means "explicitly disable", `undefined` means "auto-detect".
-      enableTools: requestType === 'tool' ? !!authenticatedUserId : undefined,
-      enableSandbox: requestType === 'sandbox' ? !!authenticatedUserId : undefined,
-      enableComposio: requestType === 'tool' ? !!authenticatedUserId : undefined,
+      // CRITICAL FIX: Enable tools by default for ALL users (authenticated + anonymous).
+      // authenticatedUserId is only set for non-anonymous users, but filesystemOwnerId
+      // covers both. VFS MCP tools (write_file, read_file, apply_diff) need this enabled.
+      enableTools: !!(authenticatedUserId || filesystemOwnerId),
+      enableSandbox: requestType === 'sandbox' ? !!(authenticatedUserId || filesystemOwnerId) : undefined,
+      enableComposio: requestType === 'tool' ? !!(authenticatedUserId || filesystemOwnerId) : undefined,
       mode: body.mode || 'enhanced', // Add mode from request
       // When Vercel AI SDK handles tool calling natively, skip regex intent parsing
-      nativeToolCalling: VERCEL_AI_PROVIDERS.has(provider) && !!authenticatedUserId,
+      nativeToolCalling: VERCEL_AI_PROVIDERS.has(provider) && !!(authenticatedUserId || filesystemOwnerId),
+      // Context pack: bundle workspace files into LLM-readable format
+      contextPack: contextPack ? {
+        ...contextPack,
+        // Pass @mentioned files as include patterns for highest priority
+        includePatterns: explicitFilesFromMentions.length > 0
+          ? [...(contextPack.includePatterns || []), ...explicitFilesFromMentions]
+          : contextPack.includePatterns,
+      } : undefined,
+      // Auto-attach relevant files as agent discovers areas to edit
+      autoAttachFiles,
+      // Pass abort signal for cancellation support
+      // Note: request.signal may be undefined on older Node.js versions (< 20)
+      // In that case, only the server-side timeout will provide cancellation
+      signal: (request as any).signal,
+      // Server-side timeout (90s) to prevent hanging on unresponsive providers
+      timeoutMs: 90000,
     };
 
     chatLogger.debug('Routing request through priority chain', { requestId, provider, model }, {
@@ -1131,6 +1831,7 @@ export async function POST(request: NextRequest) {
       timestamp: number;
     }
     const pendingEvents: PendingEvent[] = [];
+    let pendingEventsDropped = false;
     const placeholderEmit = (event: string, data: any) => {
       if (!acceptDeferredEvents) {
         return;
@@ -1139,6 +1840,13 @@ export async function POST(request: NextRequest) {
         emitRef.current(event, data);
       } else if (pendingEvents.length < MAX_PENDING_EVENTS) {
         pendingEvents.push({ event, data, timestamp: Date.now() });
+      } else if (!pendingEventsDropped) {
+        // Log warning only once to avoid spam
+        pendingEventsDropped = true;
+        chatLogger.warn('Pending event buffer full, events being dropped', {
+          requestId,
+          maxEvents: MAX_PENDING_EVENTS,
+        });
       }
     };
 
@@ -1147,13 +1855,13 @@ export async function POST(request: NextRequest) {
 
       // Spec amplification only works with V1 mode (regular LLM calls)
       // V2 agent mode has its own planning system
-      // CRITICAL: Use standard routing - spec amplification handled post-stream for ToolLoopAgent
+      // CRITICAL: Use standard routing - spec amplification handled post-stream
       if (agentMode === 'v2') {
         chatLogger.debug('V2 agent mode, using standard routing without spec amplification', { requestId })
         unifiedResponse = await responseRouter.routeAndFormat(routerRequest)
       } else if (stream && SPEC_AMPLIFICATION_STREAM_EVENTS_ENABLED) {
         // For streaming, use standard routing - spec amplification triggered post-stream if code detected
-        chatLogger.debug('V1 mode with streaming, using standard routing (post-stream spec amplification)', { requestId })
+        chatLogger.debug('V1 mode with streaming, using standard routing + later spec amplification)', { requestId })
         unifiedResponse = await responseRouter.routeAndFormat(routerRequest)
 
         // Check if response has streaming generator (real-time LLM streaming)
@@ -1167,8 +1875,16 @@ export async function POST(request: NextRequest) {
       }
 
       // Extract actual provider/model from response metadata (after fallbacks)
-      actualProvider = unifiedResponse.metadata?.actualProvider || unifiedResponse.source;
-      actualModel = unifiedResponse.metadata?.actualModel || routerRequest.model;
+      // CRITICAL: Use data.provider as fallback (set by response-router from metadata)
+      // instead of unifiedResponse.source (which is just the routing priority name like 'original-system')
+      actualProvider = unifiedResponse.metadata?.actualProvider ||
+                       unifiedResponse.data?.provider ||
+                       (unifiedResponse.source !== 'original-system' && unifiedResponse.source !== 'unknown'
+                         ? unifiedResponse.source
+                         : provider); // Fall back to the originally requested provider
+      actualModel = unifiedResponse.metadata?.actualModel ||
+                    unifiedResponse.data?.model ||
+                    routerRequest.model;
 
       // Note: Provider/model logging happens in streaming and non-streaming response paths
       // to show the actual LLM provider used (not 'original-system' which is just the router source)
@@ -1204,8 +1920,8 @@ export async function POST(request: NextRequest) {
       // This is assigned inside the stream completion handler and used in spec amp check
       let streamedEdits: Awaited<ReturnType<typeof applyFilesystemEditsFromResponse>> | null = null;
       
-      // CRITICAL FIX: Declare finalContent at function scope for ToolLoopAgent streaming path
-      // This is assigned inside the ToolLoopAgent stream and used in spec amp check
+      // CRITICAL FIX: Declare finalContent at function scope for streaming path
+      // This is assigned inside the stream and used in spec amp check
       let finalContent: string = '';
       
       // CRITICAL FIX: Declare allEdits at function scope for both streaming paths
@@ -1215,26 +1931,35 @@ export async function POST(request: NextRequest) {
       // CRITICAL FIX: Declare clientResponse early to avoid "used before declaration" errors
       // It's needed for spec amplification checks that run before the build call
       let clientResponse: any = null;
-      
+
+      // CRITICAL FIX: Declare streamRequestId at function scope to avoid TDZ errors
+      // in nested closures (agentic path, fallback streaming path)
+      let streamRequestId: string = requestId || '';
+
       const lastUserMessage =
         [...messages].reverse().find((m) => m.role === 'user')?.content;
       const v1AgentTask = typeof lastUserMessage === 'string'
         ? lastUserMessage
         : JSON.stringify(lastUserMessage || '');
       const v1AgentContext = buildAgenticContext(contextualMessages);
-      const v1AgentPrompt = v1AgentContext
-        ? `${v1AgentContext}\n\nTASK:\n${v1AgentTask}`
-        : v1AgentTask;
+      // FIX: Do NOT prepend filesystem context to the task — the LLM already sees it
+      // via contextualMessages in conversationHistory. Prepending it caused the
+      // StatefulAgent/BootstrappedAgency to receive the system prompt as the task,
+      // leading it to write "SYSTEM: Virtual filesystem tools..." to a file.
+      const v1AgentPrompt = v1AgentTask;
 
       // V1 agentic tools: reuse existing Mastra tool loop for coding/tool requests.
       let agentToolResults = null;
       let agentToolStreamingResult: any = null;
-      
+
       const shouldRunV1AgentLoop =
         LLM_AGENT_TOOLS_ENABLED &&
         enableFilesystemEdits &&
         !!v1AgentTask &&
-        (requestType === 'tool' || (agentMode !== 'v2' && isCodeRequest));
+        // When AGENT_EXECUTION_ENGINE='v1-agent-loop', always run the v1 agent-loop path
+        // regardless of requestType/agentMode/isCodeRequest detection
+        (AGENT_EXECUTION_ENGINE === 'v1-agent-loop' ||
+          requestType === 'tool' || (agentMode !== 'v2' && isCodeRequest));
 
       if (shouldRunV1AgentLoop) {
         try {
@@ -1278,11 +2003,11 @@ export async function POST(request: NextRequest) {
 
           // Check if agent supports streaming (ToolLoopAgent integration)
           const supportsStreaming = 'executeTaskStreaming' in agentLoop;
-          
+
           if (supportsStreaming && stream) {
             // Use streaming execution for real-time tool invocations and reasoning
             chatLogger.info('Using ToolLoopAgent streaming execution', { requestId, provider: actualProvider, model: actualModel });
-            
+
             // Store streaming result for later processing in stream handler
             agentToolStreamingResult = {
               agentLoop,
@@ -1337,13 +2062,22 @@ export async function POST(request: NextRequest) {
       const { enableVFSBatchMode, flushVFSBatchMode, disableVFSBatchMode } = await import('@/lib/virtual-filesystem/git-backed-vfs');
       enableVFSBatchMode(filesystemOwnerId);
 
+      // Declare before try so it's accessible in the post-try sanitization step
+      let preSanitizedContent = rawResponseContent;
+
       try {
+        // Single-pass: extract edits AND sanitize (avoids two regex sweeps of the same string)
+        const { edits: parsedEdits, sanitized } = enableFilesystemEdits
+          ? extractAndSanitize(rawResponseContent, true)
+          : { edits: null as unknown as ParsedFilesystemResponse, sanitized: rawResponseContent };
+        preSanitizedContent = sanitized;
+
         filesystemEdits =
           !enableFilesystemEdits
             ? null
             : await applyFilesystemEditsFromResponse({
                 ownerId: filesystemOwnerId,
-                conversationId: `${filesystemOwnerId}:${resolvedConversationId}`,
+                conversationId: `${filesystemOwnerId}$${resolvedConversationId}`,
                 requestId: requestId || generateSecureId('req'),
                 scopePath: requestedScopePath,
                 lastUserMessage: (() => {
@@ -1355,6 +2089,7 @@ export async function POST(request: NextRequest) {
                 attachedPaths: attachedFilesystemFiles.map((file) => file.path),
                 responseContent: rawResponseContent,
                 commands: unifiedResponse.commands,
+                preParsedEdits: parsedEdits,
               });
         chatLogger.debug('Filesystem edits processed', { requestId, appliedCount: filesystemEdits?.applied?.length || 0 });
 
@@ -1382,19 +2117,22 @@ export async function POST(request: NextRequest) {
       // SPEC AMPLIFICATION: Trigger after ToolLoopAgent completes (non-streaming path)
       // Runs AFTER filesystem edits are applied (line ~1242)
       // OPTIMIZATION: Use O(1) hasFileEdits check instead of O(n×m) code marker search
+      // Also check for file edits from MCP tool execution (function calling path)
       if (agentToolResults && !clientResponse?.metadata?.specAmplificationRun) {
         const hasFileEdits = filesystemEdits && filesystemEdits.applied.length > 0;
-        const hasCodeContent = rawResponseContent && (
-          ['```', '<file_edit', 'WRITE ', 'import ', 'export ', 'function ', 'const ', 'interface '].some(m => rawResponseContent.includes(m))
-        );
+        const mcpFileEdits = getRecentMcpFileEdits(resolvedConversationId);
+        const hasMcpFileEdits = mcpFileEdits.length > 0;
+        // Only trigger spec amplification when there are ACTUAL filesystem edits,
+        // not just because the response contains code snippets (const, function, etc.)
         // Spec amplification runs in 'enhanced' or 'max' mode
-        const isSpecAmplificationMode = routerRequest.mode === 'enhanced' || routerRequest.mode === 'max';
-        const shouldRunSpecAmplification = (hasFileEdits || hasCodeContent) && isSpecAmplificationMode;
+        const isSpecAmplificationMode = routerRequest.mode === 'enhanced' || routerRequest.mode === 'max' || routerRequest.mode === 'super';
+        const shouldRunSpecAmplification = (hasFileEdits || hasMcpFileEdits) && isSpecAmplificationMode;
 
         chatLogger.info('Spec amplification check (non-streaming)', {
           requestId,
           hasFileEdits,
-          hasCodeContent,
+          hasMcpFileEdits,
+          mcpFileEditCount: mcpFileEdits.length,
           mode: routerRequest.mode,
           isSpecAmplificationMode,
           specAmplificationRun: clientResponse?.metadata?.specAmplificationRun,
@@ -1414,7 +2152,8 @@ export async function POST(request: NextRequest) {
               ...messages,
               { role: 'assistant' as const, content: rawResponseContent },
             ],
-            mode: 'enhanced' as const,
+            mode: routerRequest.mode || 'enhanced',
+            specChain: routerRequest.specChain,
           };
 
           responseRouter.routeWithSpecAmplification(specRequest).catch(err => {
@@ -1423,14 +2162,16 @@ export async function POST(request: NextRequest) {
         } else {
           chatLogger.debug('Spec amplification NOT triggered (non-streaming)', {
             requestId,
-            reason: !hasFileEdits ? 'no filesystem edits' :
+            reason: !(hasFileEdits || hasMcpFileEdits) ? 'no filesystem edits' :
                     !isSpecAmplificationMode ? `mode is ${routerRequest.mode}` :
                     clientResponse?.metadata?.specAmplificationRun ? 'already run' : 'unknown',
           });
         }
+        // Clear tracker after check to prevent stale data on next request
+        clearRecentMcpFileEdits(resolvedConversationId);
       }
 
-      let sanitizedResponseContent = sanitizeAssistantDisplayContent(rawResponseContent);
+      let sanitizedResponseContent = preSanitizedContent;
       
       // CRITICAL: Add fallback message when content is empty but files were applied
       // This ensures users see feedback even when AI only makes file changes without explanation
@@ -1530,7 +2271,7 @@ export async function POST(request: NextRequest) {
       // Handle streaming response
       chatLogger.debug('Checking streaming conditions', { requestId, stream, supportsStreaming: selectedProvider.supportsStreaming });
       if (stream && selectedProvider.supportsStreaming) {
-        const streamRequestId = requestId || generateSecureId('stream');
+        streamRequestId = requestId || generateSecureId('stream');
         const streamStartTime = Date.now();
         let chunkCount = 0;
 
@@ -1568,6 +2309,18 @@ export async function POST(request: NextRequest) {
           let streamingContentBuffer = '';
           const fileEditParserState = createIncrementalParser();
 
+          // Track tool invocations for telemetry
+          const toolCallTracker = new Map<string, { toolName: string; args?: Record<string, any>; startTime: number }>();
+          const completedToolCalls: Array<{
+            toolCallId: string;
+            toolName: string;
+            state: 'call' | 'result';
+            args?: Record<string, any>;
+            result?: any;
+            latencyMs?: number;
+            success?: boolean;
+          }> = [];
+
           const readableStream = new ReadableStream({
             async start(controller) {
               const realEmit = (eventType: string, data: any) => {
@@ -1581,8 +2334,45 @@ export async function POST(request: NextRequest) {
 
               // Send initial 'init' event to establish stream connection immediately
               // This helps client-side rendering detect the stream has started
+              // Always have a valid AbortSignal for stream functions
+              const abortSignal = request.signal || new AbortController().signal;
+
+              // Create stream state for tracking and WebSocket control channel
+              // Lazy import to avoid 'ws' module resolution during instrumentation
+              const { streamStateManager: ssm, notifyStreamComplete: nsc } = await (async () => {
+                try {
+                  const [ssm, sc] = await Promise.all([
+                    import('@/lib/streaming/stream-state-manager'),
+                    import('@/lib/streaming/stream-control-handler'),
+                  ]);
+                  return { streamStateManager: ssm.streamStateManager, notifyStreamComplete: sc.notifyStreamComplete };
+                } catch {
+                  return { streamStateManager: null, notifyStreamComplete: null };
+                }
+              })();
+
+              let streamStateCreated = false;
+              if (ssm) {
+                try {
+                  ssm.create({
+                    streamId: streamRequestId,
+                    userId: userId || 'anonymous',
+                    provider: actualProvider,
+                    model: actualModel,
+                    maxTokens: clientResponse.usage?.total_tokens || 65536,
+                  });
+                  streamStateCreated = true;
+                } catch (e) {
+                  chatLogger.warn('Failed to create stream state', {
+                    streamRequestId,
+                    error: e instanceof Error ? e.message : String(e),
+                  });
+                }
+              }
+
               realEmit('init', {
                 requestId: streamRequestId,
+                streamId: streamRequestId, // For WebSocket control channel (same port, path-based routing)
                 timestamp: Date.now(),
               });
 
@@ -1601,6 +2391,8 @@ export async function POST(request: NextRequest) {
 
               if (request.signal) {
                 request.signal.addEventListener('abort', () => {
+                  if (ssm) ssm.abort(streamRequestId);
+                  if (nsc) nsc(streamRequestId);
                   cleanup();
                   chatLogger.warn('LLM stream cancelled by client', { requestId: streamRequestId });
                 });
@@ -1621,6 +2413,12 @@ export async function POST(request: NextRequest) {
                       timestamp: Date.now(),
                       type: 'token'
                     });
+                    // Track tokens in stream state (non-fatal if it fails)
+                    try {
+                      if (ssm) ssm.appendToken(streamRequestId, tokenBuffer);
+                    } catch (e) {
+                      // Non-fatal — stream state tracking shouldn't break the main stream
+                    }
                     tokenBuffer = '';
                     lastTokenEmitTime = Date.now();
                   }
@@ -1628,6 +2426,28 @@ export async function POST(request: NextRequest) {
 
                 for await (const streamChunk of unifiedResponse.stream as AsyncGenerator<StreamingResponse>) {
                   if (request.signal?.aborted) break;
+
+                  // CRITICAL: Track actualProvider/actualModel from streaming metadata chunks
+                  // This captures fallback events where the provider/model changes during streaming
+                  if (streamChunk.metadata?.actualProvider || streamChunk.metadata?.actualModel) {
+                    const newProvider = streamChunk.metadata.actualProvider;
+                    const newModel = streamChunk.metadata.actualModel;
+                    
+                    if (newProvider && newProvider !== actualProvider) {
+                      chatLogger.info('Streaming provider changed (fallback occurred)', {
+                        requestId: streamRequestId,
+                        oldProvider: actualProvider,
+                        newProvider,
+                        oldModel: actualModel,
+                        newModel,
+                      });
+                      actualProvider = newProvider;
+                    }
+                    
+                    if (newModel && newModel !== actualModel) {
+                      actualModel = newModel;
+                    }
+                  }
 
                   // Accumulate token content
                   if (streamChunk.content) {
@@ -1686,28 +2506,122 @@ export async function POST(request: NextRequest) {
                   }
 
                   // Handle tool calls if present
+                  // Skip partial tool calls with empty args (streamed incrementally by Vercel AI SDK)
+                  // — the tool_invocation event below will contain the full args once execution completes
                   if (streamChunk.toolCalls && streamChunk.toolCalls.length > 0) {
                     for (const toolCall of streamChunk.toolCalls) {
+                      const args = toolCall.arguments;
+                      if (!args || (typeof args === 'object' && Object.keys(args).length === 0)) continue;
                       realEmit('tool_call', {
                         toolCallId: toolCall.id,
                         toolName: toolCall.name,
-                        args: toolCall.arguments,
+                        args,
                         timestamp: Date.now(),
                       });
                     }
                   }
 
                   // Handle tool invocations if present
+                  // FIX: Only emit tool_invocation from stream when args are populated.
+                  // The onToolExecution callback (line ~893) emits with full args after tool execution completes.
+                  // Vercel AI SDK streams tool arguments incrementally, so early chunks may have empty args.
                   if (streamChunk.toolInvocations && streamChunk.toolInvocations.length > 0) {
                     for (const toolInvocation of streamChunk.toolInvocations) {
-                      realEmit('tool_invocation', {
-                        toolCallId: toolInvocation.toolCallId,
-                        toolName: toolInvocation.toolName,
-                        state: toolInvocation.state,
-                        args: toolInvocation.args,
-                        result: toolInvocation.result,
-                        timestamp: Date.now(),
-                      });
+                      // Skip emission when args are empty - onToolExecution callback will emit with full args
+                      const hasArgs = toolInvocation.args && 
+                        (typeof toolInvocation.args === 'object' ? Object.keys(toolInvocation.args).length > 0 : true);
+                      
+                      // Also skip partial call state (args not yet fully streamed)
+                      // Vercel AI SDK uses 'call' state for tool-call, 'result' for tool-result
+                      const isPartialCall = toolInvocation.state === 'call' && !hasArgs;
+                      
+                      if (isPartialCall) {
+                        continue; // Wait for result state with populated args
+                      }
+                      
+                      // For result state, try to get args from result if toolInvocation.args is empty
+                      let args = toolInvocation.args;
+                      const isEmptyArgs = !args || (typeof args === 'object' && Object.keys(args).length === 0);
+                      
+                      // DIAGNOSTIC: Log when args are empty at result state
+                      if (toolInvocation.state === 'result') {
+                        if (isEmptyArgs) {
+                          chatLogger.warn('[TOOL-INVOKE] Tool result has empty args', {
+                            toolCallId: toolInvocation.toolCallId,
+                            toolName: toolInvocation.toolName,
+                            hasCachedArgs: !!(toolInvocation.result?.input || toolInvocation.result?.args),
+                          });
+                        } else {
+                          chatLogger.info('[TOOL-INVOKE] Tool result with args', {
+                            toolCallId: toolInvocation.toolCallId,
+                            toolName: toolInvocation.toolName,
+                            argsKeys: Object.keys(args),
+                          });
+                        }
+                      }
+                      
+                      if (toolInvocation.state === 'result' && isEmptyArgs) {
+                        // Try to extract args from result if available
+                        if (toolInvocation.result?.input) {
+                          args = toolInvocation.result.input;
+                        } else if (toolInvocation.result?.args) {
+                          args = toolInvocation.result.args;
+                        }
+                      }
+
+                      // Only emit if we have args or it's a result state (to show completion)
+                      if (hasArgs || toolInvocation.state === 'result') {
+                        const finalArgs = args && typeof args === 'object' && Object.keys(args).length > 0 ? args : undefined;
+                        realEmit('tool_invocation', {
+                          toolCallId: toolInvocation.toolCallId,
+                          toolName: toolInvocation.toolName,
+                          state: toolInvocation.state,
+                          ...(finalArgs ? { args: finalArgs } : {}),
+                          result: toolInvocation.result,
+                          timestamp: Date.now(),
+                        });
+
+                        // Track tool call for telemetry + real-time model ranking
+                        if (toolInvocation.state === 'call') {
+                          toolCallTracker.set(toolInvocation.toolCallId, {
+                            toolName: toolInvocation.toolName,
+                            args: finalArgs,
+                            startTime: Date.now(),
+                          });
+                        } else if (toolInvocation.state === 'result') {
+                          const tracked = toolCallTracker.get(toolInvocation.toolCallId);
+                          const isSuccess = toolInvocation.result && toolInvocation.result.output !== undefined && toolInvocation.result.output !== null;
+                          const errorMsg = toolInvocation.result?.error;
+
+                          completedToolCalls.push({
+                            toolCallId: toolInvocation.toolCallId,
+                            toolName: toolInvocation.toolName,
+                            state: 'result',
+                            args: tracked?.args || finalArgs,
+                            result: toolInvocation.result,
+                            latencyMs: tracked ? Date.now() - tracked.startTime : undefined,
+                            success: isSuccess,
+                          });
+                          toolCallTracker.delete(toolInvocation.toolCallId);
+
+                          // Real-time: Record tool call for model ranking telemetry
+                          try {
+                            const { toolCallTracker: realTimeTracker } = await import('@/lib/chat/tool-call-tracker');
+                            await realTimeTracker.recordToolCall({
+                              model: actualModel,
+                              provider: actualProvider,
+                              toolName: toolInvocation.toolName,
+                              success: isSuccess,
+                              error: errorMsg,
+                              timestamp: Date.now(),
+                              conversationId,
+                              toolCallId: toolInvocation.toolCallId,
+                            });
+                          } catch {
+                            // Non-critical — don't break stream if tracker fails
+                          }
+                        }
+                      }
                     }
                   }
 
@@ -1750,11 +2664,45 @@ export async function POST(request: NextRequest) {
                     }
                   }
 
+                  // Handle auto-continue events from streamWithAutoContinue
+                  // These are yielded when the LLM stopped after list_files or requested continuation
+                  const streamChunkType = (streamChunk as any).type;
+                  if (streamChunkType === 'auto-continue' || streamChunkType === 'next') {
+                    realEmit(streamChunkType, {
+                      content: streamChunk.content || '',
+                      reason: (streamChunk as any).metadata?.reason,
+                      listedPath: (streamChunk as any).metadata?.listedPath,
+                      recursive: (streamChunk as any).metadata?.recursive,
+                      continuationCount: (streamChunk as any).metadata?.continuationCount,
+                      maxContinuations: (streamChunk as any).metadata?.maxContinuations,
+                      toolSummary: (streamChunk as any).toolSummary,
+                      contextHint: (streamChunk as any).contextHint,
+                      implicitFiles: (streamChunk as any).metadata?.implicitFiles,
+                      timestamp: Date.now(),
+                    });
+                    chatLogger.info('Emitted auto-continue/next event to client', {
+                      type: streamChunkType,
+                      reason: (streamChunk as any).metadata?.reason,
+                      continuationCount: (streamChunk as any).metadata?.continuationCount,
+                    });
+                  }
+
                   // Handle finish reason at end of stream
                   if (streamChunk.isComplete) {
                     // Post-processing: run filesystem edits on accumulated stream content
                     // This ensures WRITE/APPLY_DIFF from streamed output reaches the VFS
                     const streamedContent = streamingContentBuffer;
+
+                    // DIAGNOSTIC: Log why VFS writes may or may not happen
+                    chatLogger.debug('Stream complete — filesystem edit gate check', {
+                      enableFilesystemEdits,
+                      contentLength: streamedContent.length,
+                      contentTrimmed: streamedContent.trim().length,
+                      filesystemOwnerId,
+                      requestedScopePath,
+                      hasCommands: !!unifiedResponse.commands,
+                    });
+
                     if (enableFilesystemEdits && streamedContent.trim()) {
                       try {
                         // Enable batch mode to prevent circular Git commits
@@ -1765,7 +2713,7 @@ export async function POST(request: NextRequest) {
                         // that may have been missed during incremental parsing (e.g., last file)
                         streamedEdits = await applyFilesystemEditsFromResponse({
                           ownerId: filesystemOwnerId,
-                          conversationId: `${filesystemOwnerId}:${resolvedConversationId}`,
+                          conversationId: `${filesystemOwnerId}$${resolvedConversationId}`,
                           requestId: streamRequestId,
                           scopePath: requestedScopePath,
                           lastUserMessage: (() => {
@@ -1781,8 +2729,14 @@ export async function POST(request: NextRequest) {
                         // Flush batch mode to commit all changes at once
                         await flushVFSBatchMode(filesystemOwnerId);
 
-                        // Emit applied file edits
+                        // Emit applied file edits + tool_invocation events for UI display
+                        // CRITICAL FIX: When LLM doesn't support proper function calling,
+                        // the Vercel AI SDK streams empty args. We compensate by emitting
+                        // tool_invocation events with actual parsed args from streamedEdits.
                         if (streamedEdits?.applied?.length) {
+                          // Track if we found any edits that need tool_invocation emission
+                          let emittedAnyToolInvocation = false;
+
                           for (const edit of streamedEdits.applied) {
                             // Validate path before emitting
                             if (!isValidFilePath(edit.path)) {
@@ -1796,9 +2750,10 @@ export async function POST(request: NextRequest) {
                               continue;
                             }
                             // CRITICAL FIX: Determine operation type and send correct data format
-                            // Check for diff field to determine if it's a patch operation
                             const hasDiff = !!edit.diff;
                             const isPatch = edit.operation === 'patch' || hasDiff;
+
+                            // Emit file_edit event (existing behavior)
                             realEmit('file_edit', {
                               path: edit.path,
                               status: 'applied',
@@ -1806,6 +2761,53 @@ export async function POST(request: NextRequest) {
                               timestamp: Date.now(),
                               content: edit.content || '',
                               diff: isPatch ? (edit.diff || '') : undefined,
+                            });
+
+                            // FIX: Also emit tool_invocation with actual parsed args
+                            // This ensures the UI can display tool calls even when the LLM
+                            // didn't emit structured function calls (e.g., minimax/m2.5:free)
+                            // Use correct tool based on operation type (write vs patch)
+                            const editDiff = edit.diff || (isPatch ? edit.content : '');
+                            const toolCallId = streamedEdits?.commitId || (isPatch ? `apply_diff-${Date.now()}-${edit.path}` : `write_file-${Date.now()}-${edit.path}`);
+                            let toolName: string;
+                            let toolArgs: Record<string, any>;
+                            
+                            // Handle both content and diff fields (may be stored either way)
+                            if (isPatch && editDiff) {
+                              toolName = 'apply_diff';
+                              toolArgs = {
+                                path: edit.path,
+                                diff: editDiff,
+                              };
+                            } else if (edit.operation === 'delete') {
+                              toolName = 'delete_file';
+                              toolArgs = {
+                                path: edit.path,
+                              };
+                            } else {
+                              toolName = 'write_file';
+                              toolArgs = {
+                                path: edit.path,
+                                content: edit.content || editDiff || '',
+                              };
+                            }
+                            
+                            realEmit('tool_invocation', {
+                              toolCallId,
+                              toolName,
+                              state: 'result',
+                              args: toolArgs,
+                              result: { success: true, path: edit.path },
+                              timestamp: Date.now(),
+                            });
+                            emittedAnyToolInvocation = true;
+                          }
+
+                          if (emittedAnyToolInvocation) {
+                            chatLogger.debug('Emitted tool_invocation events for parsed filesystem edits', {
+                              requestId: streamRequestId,
+                              editCount: streamedEdits.applied.length,
+                              paths: streamedEdits.applied.map(e => e.path).join(', '),
                             });
                           }
                         }
@@ -1898,7 +2900,25 @@ export async function POST(request: NextRequest) {
                     // Emit any remaining buffered tokens before done event
                     emitBufferedTokens();
 
+                    // Update stream state and notify WebSocket control channel (non-fatal)
+                    try {
+                      if (ssm) ssm.complete(streamRequestId, doneEventData.finishReason);
+                      if (nsc) nsc(streamRequestId);
+                    } catch (e) {
+                      chatLogger.warn('Failed to update stream state on completion', {
+                        streamRequestId,
+                        error: e instanceof Error ? e.message : String(e),
+                      });
+                    }
+
                     realEmit('done', doneEventData);
+
+                    // Store conversation in mem0 for persistent memory (fire-and-forget, non-blocking)
+                    // Use streamingContentBuffer which has the full response
+                    if (isMem0Configured()) {
+                      storeConversationInMem0(messages, streamingContentBuffer, filesystemOwnerId, streamRequestId).catch(() => {});
+                    }
+
                     break; // Exit loop when complete
                   }
                 }
@@ -1911,19 +2931,23 @@ export async function POST(request: NextRequest) {
                 // OPTIMIZATION: Use O(1) hasFileEdits check instead of O(n×m) code marker search
                 // Note: allEdits is assigned inside streamChunk.isComplete block (line ~1833)
                 // If loop completed normally, allEdits should be set. Otherwise fall back to streamedEdits/filesystemEdits.
+                // Also check for file edits from MCP tool execution (function calling path)
                 const effectiveEdits = allEdits || streamedEdits || filesystemEdits;
                 const hasFileEdits = (effectiveEdits?.applied?.length || 0) > 0;
-                const hasCodeContent = streamingContentBuffer && (
-                  ['```', '<file_edit', 'WRITE ', 'import ', 'export ', 'function ', 'const ', 'interface '].some(m => streamingContentBuffer.includes(m))
-                );
-                const isSpecAmplificationMode = routerRequest.mode === 'enhanced' || routerRequest.mode === 'max';
-                const shouldRunSpecAmplification = (hasFileEdits || hasCodeContent) &&
+                const mcpFileEdits = getRecentMcpFileEdits(resolvedConversationId);
+                const hasMcpFileEdits = mcpFileEdits.length > 0;
+                const isSpecAmplificationMode = routerRequest.mode === 'enhanced' || routerRequest.mode === 'max' || routerRequest.mode === 'super';
+                // Only trigger spec amplification when there are ACTUAL filesystem edits,
+                // not just because the response contains code snippets (const, function, etc.)
+                const shouldRunSpecAmplification = (hasFileEdits || hasMcpFileEdits) &&
                   isSpecAmplificationMode &&
                   !clientResponse.metadata?.specAmplificationRun;
 
                 chatLogger.info('Spec amplification check (regular LLM stream)', {
                   requestId: streamRequestId,
                   hasFileEdits,
+                  hasMcpFileEdits,
+                  mcpFileEditCount: mcpFileEdits.length,
                   mode: routerRequest.mode,
                   isSpecAmplificationMode,
                   specAmplificationRun: clientResponse.metadata?.specAmplificationRun,
@@ -1935,6 +2959,7 @@ export async function POST(request: NextRequest) {
                     requestId: streamRequestId,
                     contentLength: streamingContentBuffer.length,
                     appliedEditsCount: effectiveEdits?.applied?.length || 0,
+                    mcpFileEdits: hasMcpFileEdits ? mcpFileEdits.map(e => e.path) : undefined,
                   });
 
                   // Build enhanced content including actual file edits
@@ -1951,6 +2976,18 @@ export async function POST(request: NextRequest) {
                         additionalContentLength: fileEditsContent.length,
                       });
                     }
+                  } else if (hasMcpFileEdits) {
+                    // MCP tool execution path: files were modified via function calling.
+                    // Do NOT inject WRITE markers with placeholder content into enhancedContent —
+                    // the background refinement engine would parse those markers and overwrite
+                    // the real file content with the placeholder text.
+                    // Instead, just note that files were created/updated via MCP.
+                    enhancedContent = streamingContentBuffer +
+                      `\n\n[Note: ${mcpFileEdits.length} file(s) were created/updated via tool calls: ${mcpFileEdits.map(e => e.path).join(', ')}]`;
+                    chatLogger.debug('Noting MCP tool file edits in spec amplification (no WRITE markers)', {
+                      fileCount: mcpFileEdits.length,
+                      paths: mcpFileEdits.map(e => e.path),
+                    });
                   }
 
                   // Trigger spec amplification in background - events stream via emitRef.current
@@ -1961,7 +2998,8 @@ export async function POST(request: NextRequest) {
                       ...messages,
                       { role: 'assistant' as const, content: enhancedContent },
                     ],
-                    mode: 'enhanced' as const,
+                    mode: routerRequest.mode || 'enhanced',
+            specChain: routerRequest.specChain,
                     emit: emitRef.current,  // CRITICAL: Pass emit function so spec amp events reach client
                   };
 
@@ -1971,11 +3009,28 @@ export async function POST(request: NextRequest) {
                 } else {
                   chatLogger.debug('Spec amplification NOT triggered (regular LLM path)', {
                     requestId: streamRequestId,
-                    reason: !hasFileEdits ? 'no filesystem edits' :
+                    reason: !(hasFileEdits || hasMcpFileEdits) ? 'no filesystem edits' :
                             !isSpecAmplificationMode ? `mode is ${routerRequest.mode}` :
                             clientResponse.metadata?.specAmplificationRun ? 'already run' : 'unknown',
                   });
                 }
+                // Clear tracker after check to prevent stale data
+                clearRecentMcpFileEdits(resolvedConversationId);
+
+                // Record comprehensive telemetry for stream completion
+                const streamDuration = Date.now() - streamStartTime;
+                chatRequestLogger.logRequestComplete(
+                  streamRequestId,
+                  true,
+                  streamingContentBuffer.length,
+                  undefined,
+                  streamDuration,
+                  undefined,
+                  actualProvider,
+                  actualModel,
+                  completedToolCalls.length > 0 ? completedToolCalls : undefined,
+                  streamingContentBuffer.length,
+                ).catch(() => {});
 
                 cleanup();
               } catch (streamError) {
@@ -2131,6 +3186,31 @@ export async function POST(request: NextRequest) {
                       })}\n\n`;
                       controller.enqueue(encoderRef.encode(toolEvent));
                       chunkCount++;
+
+                      // Real-time: Track tool call for model ranking telemetry
+                      if (chunk.toolInvocation.state === 'result') {
+                        const toolName = chunk.toolInvocation.toolName;
+                        const isSuccess = chunk.toolInvocation.result &&
+                          chunk.toolInvocation.result.output !== undefined &&
+                          chunk.toolInvocation.result.output !== null;
+                        const errorMsg = chunk.toolInvocation.result?.error;
+
+                        try {
+                          const { toolCallTracker: realTimeTracker } = await import('@/lib/chat/tool-call-tracker');
+                          await realTimeTracker.recordToolCall({
+                            model: actualModel,
+                            provider: actualProvider,
+                            toolName,
+                            success: isSuccess,
+                            error: errorMsg,
+                            timestamp: Date.now(),
+                            conversationId,
+                            toolCallId: chunk.toolInvocation.toolCallId,
+                          });
+                        } catch {
+                          // Non-critical
+                        }
+                      }
                     } else if (chunk.type === 'reasoning') {
                       const reasoningEvent = `event: reasoning\ndata: ${JSON.stringify({
                         requestId: streamRequestId,
@@ -2159,6 +3239,13 @@ export async function POST(request: NextRequest) {
                   // Same as regular LLM path (line ~1755)
                   allEdits = filesystemEdits;
                   const streamedContent = finalContent;
+                  
+                  // LOG what's being captured
+                  chatLogger.info('[STREAM] Final content for parsing', {
+                    streamedContentLength: streamedContent?.length || 0,
+                    streamedContentPreview: (streamedContent || '').slice(0, 300),
+                  });
+                  
                   if (enableFilesystemEdits && streamedContent.trim()) {
                     try {
                       // Enable batch mode to prevent circular Git commits
@@ -2169,7 +3256,7 @@ export async function POST(request: NextRequest) {
                       // that may have been missed during incremental parsing (e.g., last file)
                       const streamedEdits = await applyFilesystemEditsFromResponse({
                         ownerId: filesystemOwnerId,
-                        conversationId: `${filesystemOwnerId}:${resolvedConversationId}`,
+                        conversationId: `${filesystemOwnerId}$${resolvedConversationId}`,
                         requestId: streamRequestId,
                         scopePath: requestedScopePath,
                         lastUserMessage: (() => {
@@ -2295,25 +3382,50 @@ export async function POST(request: NextRequest) {
                 chatLogger.info('ToolLoopAgent stream completed', { requestId: streamRequestId }, {
                   chunkCount,
                   latencyMs: streamDuration,
+                  contentLength: finalContent?.length || 0,
                 });
+
+                // FIX: Record telemetry with the ACTUAL provider/model (handles fallbacks)
+                // Include content length for token efficiency scoring
+                chatRequestLogger.logRequestComplete(
+                  streamRequestId,
+                  true,
+                  undefined,
+                  undefined,
+                  streamDuration,
+                  undefined,
+                  actualProvider,
+                  actualModel,
+                  undefined, // ToolLoopAgent tools tracked separately
+                  finalContent?.length || 0,
+                ).catch(() => {}); // fire-and-forget — don't block stream
+
+                // Store conversation in mem0 for persistent memory (fire-and-forget, non-blocking)
+                if (isMem0Configured()) {
+                  storeConversationInMem0(messages, finalContent, filesystemOwnerId, streamRequestId).catch(() => {});
+                }
 
                 // SPEC AMPLIFICATION: Trigger after ToolLoopAgent streaming completes
                 // Runs AFTER final parse (inside stream callback) and FILE_EDIT events
                 // OPTIMIZATION: Use O(1) hasFileEdits check instead of O(n×m) code marker search
                 // Note: allEdits is set by final parse inside stream callback (line ~2165)
+                // Also check for file edits from MCP tool execution (function calling path)
                 const effectiveEdits = allEdits || filesystemEdits;
                 const hasFileEdits = (effectiveEdits?.applied?.length || 0) > 0;
-                const hasCodeContent = finalContent && (
-                  ['```', '<file_edit', 'WRITE ', 'import ', 'export ', 'function ', 'const ', 'interface '].some(m => finalContent.includes(m))
-                );
-                const isSpecAmplificationMode = routerRequest.mode === 'enhanced' || routerRequest.mode === 'max';
-                const shouldRunSpecAmplification = (hasFileEdits || hasCodeContent) &&
+                const mcpFileEdits = getRecentMcpFileEdits(resolvedConversationId);
+                const hasMcpFileEdits = mcpFileEdits.length > 0;
+                const isSpecAmplificationMode = routerRequest.mode === 'enhanced' || routerRequest.mode === 'max' || routerRequest.mode === 'super';
+                // Only trigger spec amplification when there are ACTUAL filesystem edits,
+                // not just because the response contains code snippets (const, function, etc.)
+                const shouldRunSpecAmplification = (hasFileEdits || hasMcpFileEdits) &&
                   isSpecAmplificationMode &&
                   !clientResponse.metadata?.specAmplificationRun;
 
                 chatLogger.info('Spec amplification check (ToolLoopAgent stream)', {
                   requestId: streamRequestId,
                   hasFileEdits,
+                  hasMcpFileEdits,
+                  mcpFileEditCount: mcpFileEdits.length,
                   mode: routerRequest.mode,
                   isSpecAmplificationMode,
                   specAmplificationRun: clientResponse.metadata?.specAmplificationRun,
@@ -2324,6 +3436,7 @@ export async function POST(request: NextRequest) {
                   chatLogger.info('Code/file edits detected, triggering spec amplification (ToolLoopAgent path)', {
                     requestId: streamRequestId,
                     finalContentLength: finalContent.length,
+                    mcpFileEdits: hasMcpFileEdits ? mcpFileEdits.map(e => e.path) : undefined,
                   });
 
                   // Trigger spec amplification in background - events stream via emitRef.current
@@ -2334,7 +3447,8 @@ export async function POST(request: NextRequest) {
                       ...messages,
                       { role: 'assistant' as const, content: finalContent },
                     ],
-                    mode: 'enhanced' as const,
+                    mode: routerRequest.mode || 'enhanced',
+            specChain: routerRequest.specChain,
                     emit: emitRef.current,  // CRITICAL: Pass emit function so spec amp events reach client
                   };
 
@@ -2344,11 +3458,13 @@ export async function POST(request: NextRequest) {
                 } else {
                   chatLogger.debug('Spec amplification NOT triggered (ToolLoopAgent path)', {
                     requestId: streamRequestId,
-                    reason: !hasFileEdits ? 'no filesystem edits' :
+                    reason: !(hasFileEdits || hasMcpFileEdits) ? 'no filesystem edits' :
                             !isSpecAmplificationMode ? `mode is ${routerRequest.mode}` :
                             clientResponse.metadata?.specAmplificationRun ? 'already run' : 'unknown',
                   });
                 }
+                // Clear tracker after check to prevent stale data
+                clearRecentMcpFileEdits(resolvedConversationId);
 
                 controller.close();
               } catch (error) {
@@ -2413,7 +3529,7 @@ export async function POST(request: NextRequest) {
 
             filesystemEdits = await applyFilesystemEditsFromResponse({
               ownerId: filesystemOwnerId,
-              conversationId: `${filesystemOwnerId}:${resolvedConversationId}`,
+              conversationId: `${filesystemOwnerId}$${resolvedConversationId}`,
               requestId: streamRequestId,
               scopePath: requestedScopePath,
               lastUserMessage: (() => {
@@ -2685,15 +3801,33 @@ export async function POST(request: NextRequest) {
                 tokenCount: tokenEvents.length,
               });
 
-              // Record latency for provider router (use actual provider after fallbacks)
-              try {
-                llmProviderRouter.recordRequest(actualProvider as LLMProviderType, streamDuration, true);
-              } catch (error) {
-                chatLogger.warn('Failed to record provider metrics', {
-                  provider: actualProvider,
-                  error: error instanceof Error ? error.message : String(error)
-                });
+              // Store conversation in mem0 for persistent memory (fire-and-forget, non-blocking)
+              // Use clientResponse.content for the fallback streaming path
+              if (isMem0Configured() && clientResponse.content) {
+                storeConversationInMem0(messages, clientResponse.content, filesystemOwnerId, streamRequestId).catch(() => {});
               }
+
+              // Log provider latency for observability
+              chatLogger.debug(`Provider ${actualProvider} streaming complete`, {
+                latencyMs: streamDuration,
+                success: true,
+                model: actualModel,
+              });
+
+              // FIX: Record telemetry with the ACTUAL provider/model (not the originally requested one)
+              // This ensures fallback model latency is tracked under the correct model name
+              chatRequestLogger.logRequestComplete(
+                streamRequestId,
+                true,
+                undefined,
+                undefined,
+                streamDuration,
+                undefined,
+                actualProvider,
+                actualModel,
+                undefined, // Tool calls tracked separately in agentic path
+                clientResponse.content?.length || 0,
+              ).catch(() => {}); // fire-and-forget — don't block stream
 
               if (!SPEC_AMPLIFICATION_STREAM_EVENTS_ENABLED) {
                 streamClosed = true;
@@ -2726,17 +3860,8 @@ export async function POST(request: NextRequest) {
                 error: error instanceof Error ? error.message : String(error),
                 chunkCount,
                 latencyMs: streamDuration,
+                success: false,
               });
-
-              // Record error latency for provider router
-              try {
-                llmProviderRouter.recordRequest(actualProvider as LLMProviderType, streamDuration, false);
-              } catch (recordError) {
-                chatLogger.warn('Failed to record provider error metrics', {
-                  provider: actualProvider,
-                  error: recordError instanceof Error ? recordError.message : String(recordError)
-                });
-              }
 
               // Only send error event if client hasn't disconnected
               if (!request.signal?.aborted) {
@@ -2793,14 +3918,26 @@ export async function POST(request: NextRequest) {
         success: clientResponse.success,
       });
 
-      // Record latency for provider router (use actual provider after fallbacks)
-      try {
-        llmProviderRouter.recordRequest(actualProvider as LLMProviderType, responseLatency, clientResponse.success !== false);
-      } catch (error) {
-        chatLogger.warn('Failed to record provider metrics', { 
-          provider: actualProvider, 
-          error: error instanceof Error ? error.message : String(error) 
-        });
+      // FIX: Record telemetry with the ACTUAL provider/model (handles fallbacks)
+      // Include content length for token efficiency scoring
+      chatRequestLogger.logRequestComplete(
+        requestId,
+        clientResponse.success,
+        undefined,
+        undefined,
+        responseLatency,
+        clientResponse.success ? undefined : (clientResponse.error || 'Non-streaming response failed'),
+        actualProvider,
+        actualModel,
+        undefined, // No tool calls in non-streaming path
+        clientResponse.content?.length || 0,
+      ).catch(() => {}); // fire-and-forget
+
+      // Store conversation in mem0 for persistent memory (fire-and-forget, non-blocking)
+      // This runs after the response is sent to not delay the client
+      const responseContentForMemory = clientResponse.content || '';
+      if (isMem0Configured()) {
+        storeConversationInMem0(messages, responseContentForMemory, filesystemOwnerId, requestId).catch(() => {});
       }
 
       const responseStatus = clientResponse.success ? 200 : 500;
@@ -2856,8 +3993,7 @@ export async function POST(request: NextRequest) {
         emitRef.current = null;
       }
     }
-  }
-  catch (error) {
+  } catch (error) {
     const errorLatency = Date.now() - requestStartTime;
     const errorMessage = error instanceof Error ? error.message : String(error);
     const isNotConfiguredError = errorMessage.includes('not configured');
@@ -2866,33 +4002,15 @@ export async function POST(request: NextRequest) {
       chatLogger.error('Critical chat API error', { requestId, provider: actualProvider, model: actualModel }, {
         error: errorMessage,
         latencyMs: errorLatency,
+        success: false,
         stack: error instanceof Error ? error.stack : undefined,
       });
-
-      // Record error latency for provider router (use actual provider)
-      try {
-        llmProviderRouter.recordRequest(actualProvider as LLMProviderType, errorLatency, false);
-      } catch (recordError) {
-        chatLogger.warn('Failed to record provider error metrics', { 
-          provider: actualProvider, 
-          error: recordError instanceof Error ? recordError.message : String(recordError) 
-        });
-      }
     } else {
       chatLogger.warn('Provider not available', { requestId, provider: actualProvider, model: actualModel }, {
         error: errorMessage,
         latencyMs: errorLatency,
+        success: false,
       });
-
-      // Record error latency for provider router (use actual provider)
-      try {
-        llmProviderRouter.recordRequest(actualProvider as LLMProviderType, errorLatency, false);
-      } catch (recordError) {
-        chatLogger.warn('Failed to record provider error metrics', { 
-          provider: actualProvider, 
-          error: recordError instanceof Error ? recordError.message : String(recordError) 
-        });
-      }
     }
 
     // Process error with enhanced error handler for logging
@@ -2952,6 +4070,9 @@ interface FilesystemEditSummary {
   existedBefore: boolean;
   content?: string;
   diff?: string;
+  commitId?: string;
+  commitMessage?: string;
+  message?: string;
 }
 
 interface FilesystemEditResult {
@@ -3211,6 +4332,17 @@ async function buildWorkspaceSessionContext(
   // Use context pack if requested and available - includes file contents!
   if (options?.useContextPack) {
     try {
+      // Quick gate: check if workspace has any files before expensive generation
+      const quickList = await virtualFilesystem.listDirectory(ownerId, scopePath || '/');
+      const hasFiles = (quickList.nodes || []).some(n => n.type === 'file');
+      if (!hasFiles && (quickList.nodes || []).length === 0) {
+        return [
+          `=== WORKSPACE CONTEXT ===`,
+          `Root: ${scopePath || '/'}`,
+          `No files in workspace yet. Create files by asking me to build something.`,
+        ].join('\n');
+      }
+
       const contextPack = await contextPackService.generateContextPack(ownerId, scopePath || '/', {
         format: 'plain',
         includeContents: true,
@@ -3341,12 +4473,98 @@ async function buildWorkspaceSessionContext(
   }
 }
 
+/**
+ * Hybrid workspace context — combines AST-based symbol retrieval with existing
+ * smart-context fallback. No breaking changes to existing behavior.
+ *
+ * When the vector store has indexed symbols for this project, uses the
+ * high-precision 7-signal ranking. Falls back to smart-context keyword scoring
+ * when no symbols are available.
+ */
+async function buildHybridWorkspaceContext(
+  ownerId: string,
+  scopePath?: string,
+  opts?: {
+    prompt?: string;
+    projectId?: string;
+    explicitFiles?: string[];
+    maxTokens?: number;
+    tabId?: string;
+  }
+): Promise<string> {
+  // Fast gate: if no prompt and no projectId, fall back to existing behavior
+  if (!opts?.prompt && !opts?.projectId) {
+    return ''; // Signal caller to use existing buildWorkspaceSessionContext
+  }
+
+  try {
+    const { retrieveHybrid } = await import('@/lib/retrieval/hybrid-retrieval');
+    const result = await retrieveHybrid({
+      userId: ownerId,
+      projectId: opts?.projectId,
+      prompt: opts?.prompt ?? '',
+      explicitFiles: opts?.explicitFiles,
+      currentProjectPath: scopePath,
+      scopePath,
+      tabId: opts?.tabId,
+      maxContextTokens: opts?.maxTokens,
+    });
+
+    if (result.source === 'fallback') {
+      // Neither retrieval path worked — fall back to existing function
+      return '';
+    }
+
+    // Log token usage for monitoring
+    console.debug('[Chat] Hybrid workspace context built', {
+      source: result.source,
+      symbolCount: result.symbolCount,
+      filesIncluded: result.filesIncluded,
+      estimatedTokens: result.estimatedTokens,
+      treeMode: result.treeMode,
+      budgetTier: result.budgetTier,
+      warnings: result.warnings.length > 0 ? result.warnings.join('; ') : undefined,
+    });
+
+    // For JSON format, prepend the tree so the LLM sees workspace structure
+    const treeSection = result.tree ? `Workspace structure:\n\`\`\`\n${result.tree}\n\`\`\`\n\n` : '';
+
+    return [
+      `${treeSection}=== WORKSPACE CONTEXT (${result.source === 'symbol-retrieval' ? 'AST Symbols' : 'Smart Context'}) ===`,
+      `Files: ${result.filesIncluded}`,
+      result.symbolCount > 0 ? `Symbols: ${result.symbolCount}` : '',
+      `Estimated Tokens: ${result.estimatedTokens}`,
+      result.warnings.length > 0 ? `⚠️ ${result.warnings.join('; ')}` : '',
+      '',
+      result.bundle,
+    ].filter(Boolean).join('\n');
+  } catch (err) {
+    // Silently fall back to existing behavior
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    const errorStack = err instanceof Error ? err.stack : undefined;
+    
+    console.error('[Chat] ❌ Hybrid retrieval failed, using existing context', {
+      error: errorMsg,
+      stack: errorStack?.split('\n').slice(0, 3).join('\n'),
+      ownerId,
+      projectId: opts?.projectId,
+      promptLength: opts?.prompt?.length || 0,
+      promptPreview: opts?.prompt?.slice(0, 100),
+      scopePath,
+    });
+    
+    return '';
+  }
+}
+
 function appendFilesystemContextMessages(
   messages: LLMMessage[],
   attachedFiles: ChatFilesystemFileContext[],
   allowFileEdits: boolean,
   denialContext: Array<{ reason: string; paths: string[]; timestamp: string }> = [],
   workspaceContext: string = '',
+  memoryContext: string = '',
+  hybridContext: string = '',
 ): LLMMessage[] {
   if (!attachedFiles.length && !allowFileEdits) {
     return messages;
@@ -3388,85 +4606,17 @@ function appendFilesystemContextMessages(
     role: 'system',
     content: [
       allowFileEdits
-        ? 'Virtual filesystem is available for this request. You may propose edits and create full project folder structures.'
+        ? 'Virtual filesystem tools are available for this request. Use function calling to read, write, edit, and delete files.'
         : 'Attached filesystem context for this request:',
       '',
       ...chunks,
       '',
       allowFileEdits
-        ? [
-            'For file changes, prefer one of these parseable schemas:',
-            '',
-            'CAPABILITY CHOICE:',
-            '- For modifying an existing file, use APPLY_DIFF first.',
-            '- For creating a brand-new file, use WRITE or <file_edit path="...">...</file_edit>.',
-            '- For deleting a file, use DELETE <path>.',
-            '- For reading or referring to existing workspace content, use <file_read path="..." /> when needed.',
-            '- For shell/runtime instructions meant for the user terminal, emit a single ```bash block.',
-            '',
-            'FOR EXISTING FILES, prefer surgical edits (APPLY_DIFF) over full rewrites:',
-            '  <apply_diff path="src/utils.ts">',
-            '    <search>function oldName() {',
-            '      return 1;',
-            '    }</search>',
-            '    <replace>function newName() {',
-            '      return 2;',
-            '    }</replace>',
-            '  </apply_diff>',
-            'Or in fs-actions blocks:',
-            '  APPLY_DIFF <path>',
-            '  <<<',
-            '  <exact code to find>',
-            '  ===',
-            '  <replacement code>',
-            '  >>>',
-            '',
-            'FOR NEW FILES, use full writes:',
-            '1) <file_edit path="...">...</file_edit>',
-            '2) COMMANDS write_diffs',
-            '3) ```fs-actions ...``` blocks with:',
-            '   WRITE <path>',
-            '   <<<',
-            '   <full file content>',
-            '   >>>',
-            '   PATCH <path>',
-            '   <<<',
-            '   <unified diff body>',
-            '   >>>',
-            '   DELETE <path>',
-            '',
-            'IMPORTANT: For edits to existing files, ALWAYS use APPLY_DIFF instead of WRITE.',
-            'APPLY_DIFF only replaces the exact block you specify, preventing context truncation.',
-            'Use WRITE only when creating new files or when a complete rewrite is explicitly needed.',
-            'Do not rewrite whole existing files unless the user explicitly wants a full rewrite.',
-            '',
-            'DIFF AUTHORING RULES:',
-            '- The <search> block or APPLY_DIFF search section must match the existing code exactly, including spacing and punctuation.',
-            '- Keep each diff surgical and minimal; prefer multiple small APPLY_DIFF operations over one large rewrite.',
-            '- Include enough surrounding context in the search block to uniquely identify the target.',
-            '- If multiple files are involved, emit one operation per file rather than mixing contents.',
-            '',
-            'DIFF-BASED SELF-HEALING:',
-            '- If an edit might fail because surrounding code may have drifted, first read/reference the latest file content and then emit a narrower APPLY_DIFF.',
-            '- If a search block is large, brittle, or repeated, reduce it to the smallest unique exact block.',
-            '- If an earlier attempted patch likely failed, do not repeat the same broad patch; emit a corrected APPLY_DIFF with fresher exact context.',
-            '- Prefer preserving user code and making the minimum viable edit rather than replacing entire functions or files.',
-            'Prefer concrete multi-file edits when user requests full project scaffolding.',
-            '',
-            'To read a file from the workspace, use: <file_read path="..." />',
-            '',
-            'When the user asks how to run code, include shell commands in ```bash blocks.',
-            'The user has a terminal that can execute these commands.',
-            'For multi-step setups, provide all commands in a single bash block so they can be run together.',
-            'Use bash blocks for user-facing commands only; use filesystem edit schemas for file mutations.',
-            'If a task is too large for a single response, end with the exact token: [CONTINUE_REQUESTED]',
-            'Example: ```bash',
-            'npm install',
-            'npm run dev',
-            '```',
-          ].join('\n')
+        ? VFS_FILE_EDITING_TOOL_PROMPT
         : '',
       workspaceContext ? `Current workspace session context:\n${workspaceContext}` : '',
+      hybridContext ? `Codebase retrieval context:\n${hybridContext}` : '',
+      memoryContext ? `User memory context:\n${memoryContext}` : '',
       denialContext.length > 0
         ? `Recent denied edits (avoid repeating without adjustment):\n${denialContext
             .map((entry) => `- ${entry.timestamp}: ${entry.reason}; files: ${entry.paths.join(', ')}`)
@@ -3487,31 +4637,9 @@ function appendFilesystemContextMessages(
   return [filesystemContextMessage, ...messages];
 }
 
-function isCodeOrAgenticRequest(
-  messages: LLMMessage[],
-  attachedFiles: ChatFilesystemFileContext[],
-): boolean {
-  if (attachedFiles.length > 0) return true;
-
-  const lastUser = [...messages].reverse().find(m => m.role === 'user');
-  const content =
-    typeof lastUser?.content === 'string'
-      ? lastUser.content
-      : JSON.stringify(lastUser?.content || '');
-
-  if (STRONG_CODE_PATTERN.test(content)) return true;
-
-  let weakMatches = 0;
-  for (const re of WEAK_CODE_PATTERNS) {
-    if (re.test(content) && ++weakMatches >= 2) return true;
-  }
-
-  return false;
-}
-
 /**
  * Check if request specifically needs 3rd party OAuth integration (not just general coding)
- * This is separate from isCodeOrAgenticRequest - it returns true ONLY for actual integrations
+ * This returns true ONLY for actual integration requests requiring OAuth
  */
 function requiresThirdPartyOAuth(messages: LLMMessage[]): boolean {
   const lastUser = [...messages].reverse().find(m => m.role === 'user');
@@ -3534,34 +4662,132 @@ function buildAgenticContext(messages: LLMMessage[]): string {
 }
 
 /**
+ * Store conversation in mem0 for persistent memory
+ * This runs after each chat response to build persistent context
+ */
+async function storeConversationInMem0(
+  messages: LLMMessage[],
+  responseContent: string,
+  userId: string,
+  requestId: string
+): Promise<void> {
+  if (!isMem0Configured()) {
+    return;
+  }
+
+  try {
+    // Extract user and assistant messages from the conversation
+    const conversationMessages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }> = [];
+    
+    for (const msg of messages) {
+      if (msg.role === 'user' && typeof msg.content === 'string') {
+        conversationMessages.push({ role: 'user', content: msg.content });
+      } else if (msg.role === 'assistant' && typeof msg.content === 'string') {
+        conversationMessages.push({ role: 'assistant', content: msg.content });
+      }
+    }
+
+    // Add the final response if we have one
+    if (responseContent && responseContent.trim().length > 0) {
+      conversationMessages.push({ role: 'assistant', content: responseContent });
+    }
+
+    // Only store if we have meaningful conversation (at least user message + response)
+    if (conversationMessages.length < 2) {
+      return;
+    }
+
+    // Call mem0 to store the conversation
+    const result = await mem0Add({
+      messages: conversationMessages,
+      userId,
+    });
+
+    if (result.success) {
+      chatLogger.debug('Stored conversation in mem0', { requestId, userId, messageCount: conversationMessages.length });
+    } else {
+      chatLogger.warn('Failed to store conversation in mem0', { requestId, error: result.error });
+    }
+  } catch (err: any) {
+    // Non-critical - don't fail the response if memory storage fails
+    chatLogger.warn('Mem0 storage failed (non-critical)', { requestId, error: err.message });
+  }
+}
+
+/**
  * Validate an extracted file path to prevent garbage paths from being written.
  * Rejects paths containing heredoc markers, control chars, or command names.
  */
 function validateExtractedPath(raw: string, isFolder: boolean = false): string | null {
   const path = (raw || '').trim().replace(/^['"`]|['"`]$/g, '');
-  if (!path) return null;
-  if (path.length > 300) return null;
-  if (PATH_CONTROL_CHARS_RE.test(path)) return null;
-  if (PATH_HEREDOC_RE.test(path)) return null;
-  if (PATH_UNSAFE_CHARS_RE.test(path)) return null;
-  if (PATH_BAD_START_RE.test(path)) return null;
-  if (PATH_TOO_MANY_DOTS_RE.test(path)) return null;
-  if (PATH_TRAVERSAL_RE.test(path)) return null;
-  if (PATH_COMMAND_RE.test(path)) return null;
+  if (!path) {
+    console.debug('[validateExtractedPath] Rejected: empty path', { raw });
+    return null;
+  }
+  if (path.length > 300) {
+    console.debug('[validateExtractedPath] Rejected: path too long (>300)', { path: path.slice(0, 100), length: path.length });
+    return null;
+  }
+  if (PATH_CONTROL_CHARS_RE.test(path)) {
+    console.debug('[validateExtractedPath] Rejected: control chars', { path: path.slice(0, 100) });
+    return null;
+  }
+  if (PATH_HEREDOC_RE.test(path)) {
+    console.debug('[validateExtractedPath] Rejected: heredoc markers', { path: path.slice(0, 100) });
+    return null;
+  }
+  if (PATH_UNSAFE_CHARS_RE.test(path)) {
+    console.debug('[validateExtractedPath] Rejected: unsafe chars', { path: path.slice(0, 100) });
+    return null;
+  }
+  if (PATH_BAD_START_RE.test(path)) {
+    console.debug('[validateExtractedPath] Rejected: bad start', { path: path.slice(0, 100) });
+    return null;
+  }
+  if (PATH_TOO_MANY_DOTS_RE.test(path)) {
+    console.debug('[validateExtractedPath] Rejected: too many dots', { path: path.slice(0, 100) });
+    return null;
+  }
+  if (PATH_TRAVERSAL_RE.test(path)) {
+    console.debug('[validateExtractedPath] Rejected: path traversal', { path: path.slice(0, 100) });
+    return null;
+  }
+  if (PATH_COMMAND_RE.test(path)) {
+    console.debug('[validateExtractedPath] Rejected: looks like command', { path: path.slice(0, 100) });
+    return null;
+  }
   // Reject paths that look like CSS classes, Vue directives, or code snippets
-  if (PATH_LOOKS_LIKE_CODE_RE.test(path)) return null;
+  if (PATH_LOOKS_LIKE_CODE_RE.test(path)) {
+    console.debug('[validateExtractedPath] Rejected: looks like code', { path: path.slice(0, 100) });
+    return null;
+  }
   // Reject paths with colons (CSS classes like hover:scale-105)
-  if (PATH_HAS_COLON_RE.test(path)) return null;
+  if (PATH_HAS_COLON_RE.test(path)) {
+    console.debug('[validateExtractedPath] Rejected: contains colon', { path: path.slice(0, 100) });
+    return null;
+  }
   // CRITICAL FIX: Reject CSS values and SCSS variables in last path segment
   // This catches "project/sessions/002/0.3s" where "0.3s" is invalid
-  if (PATH_CSS_VALUE_RE.test(path)) return null;  // CSS values like "/0.3s"
-  if (PATH_SCSS_VAR_RE.test(path)) return null;  // SCSS variables like "/$var"
+  if (PATH_CSS_VALUE_RE.test(path)) {
+    console.debug('[validateExtractedPath] Rejected: CSS value', { path: path.slice(0, 100) });
+    return null;
+  }  // CSS values like "/0.3s"
+  if (PATH_SCSS_VAR_RE.test(path)) {
+    console.debug('[validateExtractedPath] Rejected: SCSS var', { path: path.slice(0, 100) });
+    return null;
+  }  // SCSS variables like "/$var"
   // Must have a valid file extension or be a directory name
   // Allow brackets [] for Next.js dynamic routes like app/blog/[slug]/page.tsx
-  if (!/^[a-zA-Z0-9._\-\[\]]+(?:\/[a-zA-Z0-9._\-\[\]]+)*\/?$/.test(path)) return null;
+  if (!/^[a-zA-Z0-9._\-\[\]]+(?:\/[a-zA-Z0-9._\-\[\]]+)*\/?$/.test(path)) {
+    console.debug('[validateExtractedPath] Rejected: invalid format', { path: path.slice(0, 100) });
+    return null;
+  }
 
   // CRITICAL FIX: Use shared validation to reject JSON/object syntax in paths
-  if (!isValidFilePath(path, isFolder)) return null;
+  if (!isValidFilePath(path, isFolder)) {
+    console.debug('[validateExtractedPath] Rejected: isValidFilePath check', { path: path.slice(0, 100), isFolder });
+    return null;
+  }
 
   return path;
 }
@@ -3635,7 +4861,22 @@ function resolveScopedPath(input: {
   const normalizedRelative = rawPath.startsWith('project/')
     ? rawPath.slice('project/'.length)
     : rawPath;
-  return resolveScopeUtil(normalizedRelative, input.scopePath);
+  
+  const resolvedPath = resolveScopeUtil(normalizedRelative, input.scopePath);
+
+  // DEBUG LOGGING: Trace path resolution to debug session folder issues
+  console.debug('[resolveScopedPath] Path resolution', {
+    rawPath,
+    scopePath: input.scopePath,
+    normalizedRelative,
+    resolvedPath,
+    wasInAttached: attachedSet.has(rawPath),
+    wasInUserMessage: new RegExp(`\\b${escapedPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(input.lastUserMessage || ''),
+    baseNameInUserMessage: new RegExp(`\\b${escapedBaseName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(input.lastUserMessage || ''),
+    startsWithScope: rawPath.startsWith(`${input.scopePath}/`) || rawPath === input.scopePath,
+  });
+
+  return resolvedPath;
 }
 
 export async function applyFilesystemEditsFromResponse(input: {
@@ -3652,11 +4893,81 @@ export async function applyFilesystemEditsFromResponse(input: {
   };
   /** Force extraction even if previously emitted (for final parse after stream completes) */
   forceExtract?: boolean;
+  /** Pre-parsed edits (from extractAndSanitize) to skip redundant re-parsing */
+  preParsedEdits?: ParsedFilesystemResponse;
 }): Promise<FilesystemEditResult> {
   // FIX: If forceExtract is true, bypass deduplication to catch all edits including those
   // that may have been skipped during incremental parsing (e.g., last file with unclosed heredoc)
-  const parsedResponse = parseFilesystemResponse(input.responseContent || '', input.forceExtract ?? false);
+  const parsedResponse = input.preParsedEdits
+    ? input.preParsedEdits
+    : parseFilesystemResponse(input.responseContent || '', input.forceExtract ?? false);
   const folderCreateOps = extractFolderCreateTags(input.responseContent || '');
+
+  // DIAGNOSTIC: Log what edits were found by the parser
+  chatLogger.info('[PARSER] applyFilesystemEditsFromResponse — parse results', {
+    writesFound: parsedResponse.writes.length,
+    diffsFound: parsedResponse.diffs.length,
+    applyDiffsFound: parsedResponse.applyDiffs.length,
+    deletesFound: parsedResponse.deletes.length,
+    foldersFound: parsedResponse.folders.length,
+    forceExtract: input.forceExtract,
+    responseContentLength: input.responseContent?.length || 0,
+    responsePreview: (input.responseContent || '').slice(0, 200),
+  });
+
+  // FIX: Extract file writes from bash code blocks (echo "content" > file, cat > file << EOF)
+  // The LLM often outputs bash commands instead of markdown file blocks.
+  // This bridges the gap so bash-based file creation actually writes to the VFS.
+  function extractBashFileWrites(content: string): Array<{ path: string; content: string }> {
+    const writes: Array<{ path: string; content: string }> = [];
+
+    // Pattern 1: echo "content" > file or echo 'content' > file
+    const echoPattern = /```(?:bash|sh|shell)?\s*\n([\s\S]*?echo\s+["']([^"']*)["']\s*>\s*([^\s\n]+)[\s\S]*?)```/gi;
+    let match;
+    while ((match = echoPattern.exec(content)) !== null) {
+      const fileContent = match[2];
+      const filePath = match[3].trim();
+      const validPath = validateExtractedPath(filePath);
+      if (validPath) {
+        writes.push({ path: validPath, content: fileContent });
+        chatLogger.info('[BASH-EXTRACT] Found echo write:', { path: validPath, content: fileContent.slice(0, 50) });
+      }
+    }
+
+    // Pattern 2: cat > file << 'EOF'\ncontent\nEOF
+    const catPattern = /```(?:bash|sh|shell)?\s*\n[\s\S]*?cat\s*>\s*([^\s\n]+)\s*<<\s*['"]?(\w+)['"]?\s*\n([\s\S]*?)\n\s*\2/gi;
+    while ((match = catPattern.exec(content)) !== null) {
+      const filePath = match[1].trim();
+      const fileContent = match[3].trim();
+      const validPath = validateExtractedPath(filePath);
+      if (validPath) {
+        writes.push({ path: validPath, content: fileContent });
+        chatLogger.info('[BASH-EXTRACT] Found cat write:', { path: validPath, content: fileContent.slice(0, 50) });
+      }
+    }
+
+    // Pattern 3: printf "content" > file
+    const printfPattern = /```(?:bash|sh|shell)?\s*\n[\s\S]*?printf\s+["']([^"']*)["']\s*>\s*([^\s\n]+)[\s\S]*?```/gi;
+    while ((match = printfPattern.exec(content)) !== null) {
+      const fileContent = match[1];
+      const filePath = match[2].trim();
+      const validPath = validateExtractedPath(filePath);
+      if (validPath) {
+        writes.push({ path: validPath, content: fileContent });
+        chatLogger.info('[BASH-EXTRACT] Found printf write:', { path: validPath, content: fileContent.slice(0, 50) });
+      }
+    }
+
+    return writes;
+  }
+
+  const bashWrites = extractBashFileWrites(input.responseContent || '');
+
+  if (parsedResponse.writes.length > 0) {
+    chatLogger.debug('Parsed write edits', {
+      paths: parsedResponse.writes.map(w => w.path),
+    });
+  }
 
   // Track invalid paths to detect when ALL paths are invalid (prevents infinite retry loops)
   const invalidPathErrors: string[] = [];
@@ -3664,6 +4975,8 @@ export async function applyFilesystemEditsFromResponse(input: {
   // If forceExtract, we still need to deduplicate within the response but not skip based on prior emits
   const combinedWriteEdits = [
     ...parsedResponse.writes.map(edit => ({ path: edit.path, content: edit.content })),
+    // FIX: Include bash command extractions (echo/cat/printf > file)
+    ...bashWrites,
   ].map(edit => ({
     ...edit,
     // Universal sanitization: strip any leaked heredoc markers from all extractors
@@ -3736,11 +5049,19 @@ export async function applyFilesystemEditsFromResponse(input: {
   }).filter((p): p is string => !!p);
 
   // CRITICAL FIX: If ALL paths were invalid, return explicit error to prevent infinite retry loop
-  const totalRequestedPaths = parsedResponse.writes.length + parsedResponse.diffs.length + 
+  const totalRequestedPaths = parsedResponse.writes.length + parsedResponse.diffs.length +
                                parsedResponse.applyDiffs.length + parsedResponse.deletes.length;
-  const totalValidPaths = combinedWriteEdits.length + combinedDiffOperations.length + 
+  const totalValidPaths = combinedWriteEdits.length + combinedDiffOperations.length +
                           applyDiffOperations.length + deleteTargets.length;
-  
+
+  // DIAGNOSTIC: Log path validation results
+  chatLogger.debug('applyFilesystemEditsFromResponse — path validation', {
+    requestedPaths: totalRequestedPaths,
+    validPaths: totalValidPaths,
+    rejectedPaths: invalidPathErrors.length,
+    sampleErrors: invalidPathErrors.slice(0, 3),
+  });
+
   if (totalRequestedPaths > 0 && totalValidPaths === 0 && invalidPathErrors.length > 0) {
     chatLogger.error('[applyFilesystemEdits] ALL paths were invalid - returning explicit error to prevent infinite retry', {
       requestId: input.requestId,
@@ -3816,6 +5137,25 @@ export async function applyFilesystemEditsFromResponse(input: {
         }
 
         const file = await virtualFilesystem.writeFile(input.ownerId, targetPath, edit.content);
+        
+        // DEBUG LOGGING: Track where files are actually being written
+        console.info('[VFS Write] File written to VFS', {
+          ownerId: input.ownerId,
+          requestedPath: edit.path,
+          resolvedPath: targetPath,
+          actualVfsPath: file.path,
+          contentLength: edit.content?.length || 0,
+          contentPreview: edit.content?.slice(0, 100),
+          scopePath: input.scopePath,
+          conversationId: input.conversationId,
+        });
+        
+        chatLogger.debug('VFS write completed', {
+          ownerId: input.ownerId,
+          requestedPath: edit.path,
+          resolvedPath: targetPath,
+          contentLength: edit.content?.length || 0,
+        });
         result.applied.push({
           path: file.path,
           operation: 'write',
@@ -3883,10 +5223,27 @@ export async function applyFilesystemEditsFromResponse(input: {
 
         const patchedContent = applyUnifiedDiffToContent(currentContent, targetPath, diffOperation.diff);
         if (patchedContent === null) {
+          // DEBUG: Log why diff application failed
+          console.error('[DIFF-APPLY] Failed to apply diff', {
+            targetPath,
+            diffLength: diffOperation.diff.length,
+            diffPreview: diffOperation.diff.slice(0, 200),
+            currentContentLength: currentContent.length,
+            currentContentPreview: currentContent.slice(0, 200),
+            existedBefore,
+          });
           result.errors.push(`Failed to apply unified diff for ${targetPath}: patch could not be applied`);
           continue;
         }
         const file = await virtualFilesystem.writeFile(input.ownerId, targetPath, patchedContent);
+
+        // DEBUG: Log successful diff application
+        console.info('[DIFF-APPLY] Successfully applied diff', {
+          targetPath,
+          originalLength: currentContent.length,
+          patchedLength: patchedContent.length,
+          existedBefore,
+        });
 
         result.applied.push({
           path: file.path,
@@ -4175,15 +5532,20 @@ export async function applyFilesystemEditsFromResponse(input: {
         });
 
         const vfs: Record<string, string> = {};
-        for (const op of result.applied) {
-          if (op.operation !== 'delete') {
-            try {
-              const file = await virtualFilesystem.readFile(input.ownerId, op.path);
-              vfs[op.path] = file.content;
-              const txn = transactions.find(t => t.path === op.path);
-              if (txn) txn.newContent = file.content;
-            } catch (readError) {
-              void readError;
+
+        // DESKTOP MODE: Skip reading files — content is stripped by ShadowCommitManager.
+        const desktopMode = process.env.DESKTOP_MODE === 'true' || process.env.DESKTOP_LOCAL_EXECUTION === 'true';
+        if (!desktopMode) {
+          for (const op of result.applied) {
+            if (op.operation !== 'delete') {
+              try {
+                const file = await virtualFilesystem.readFile(input.ownerId, op.path);
+                vfs[op.path] = file.content;
+                const txn = transactions.find(t => t.path === op.path);
+                if (txn) txn.newContent = file.content;
+              } catch (readError) {
+                void readError;
+              }
             }
           }
         }
@@ -4238,6 +5600,15 @@ export async function applyFilesystemEditsFromResponse(input: {
       result.errors.push(`Requested read failed for ${requestedPath}: ${message}`);
     }
   }
+
+  // DIAGNOSTIC: Log final result of VFS edit application
+  chatLogger.info('applyFilesystemEditsFromResponse — final result', {
+    applied: result.applied.length,
+    appliedPaths: result.applied.map(a => a.path),
+    errors: result.errors.length,
+    errorMessages: result.errors.slice(0, 3),
+    status: result.status,
+  });
 
   return result;
 }
@@ -4301,16 +5672,20 @@ async function handleError(
   requestStartTime: number
 ) {
   const latencyMs = Date.now() - requestStartTime;
-  
+
   await chatRequestLogger.logRequestComplete(
     requestId,
     false,
     undefined,
     undefined,
     latencyMs,
-    error.message
+    error.message,
+    provider,
+    model,
+    undefined, // No tool calls on error path
+    0, // No content on error
   );
-  
+
   return errorHandler.processError(error instanceof Error ? error : new Error(error.message), {
     operation: 'chat_api',
     provider,

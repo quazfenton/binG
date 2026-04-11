@@ -65,7 +65,12 @@ export function ToolInvocationCard({ tool, compact = false }: ToolInvocationCard
 
   const config = getStatusConfig();
   const isToolCall = tool.toolName === 'execute_python' || tool.toolName === 'run_code';
+  const isVFSTool = tool.toolName === 'write_file' || tool.toolName === 'read_file' || tool.toolName === 'apply_diff' || tool.toolName === 'delete_file' || tool.toolName === 'batch_write';
+  // For VFS tools, extract path and content/diff; for code tools, extract code
   const codeContent = tool.args?.code as string | undefined;
+  const pathContent = tool.args?.path as string | undefined;
+  const contentPreview = tool.args?.content as string | undefined;
+  const diffPreview = tool.args?.diff as string | undefined;
 
   return (
     <div
@@ -107,11 +112,11 @@ export function ToolInvocationCard({ tool, compact = false }: ToolInvocationCard
       {expanded && (
         <div className="px-3 pb-3 space-y-2">
           {/* Code/Arguments Display */}
-          {codeContent && (
+          {(codeContent || pathContent) && (
             <div>
               <div className="mb-1 flex items-center justify-between">
                 <span className="text-[10px] uppercase tracking-wider opacity-60">
-                  Code
+                  {isVFSTool ? 'File' : 'Code'}
                 </span>
                 {tool.state === 'partial-call' && (
                   <span className="text-[10px] text-blue-600 dark:text-blue-400 animate-pulse">
@@ -119,8 +124,13 @@ export function ToolInvocationCard({ tool, compact = false }: ToolInvocationCard
                   </span>
                 )}
               </div>
+              {pathContent && (
+                <div className="text-xs font-mono text-gray-600 dark:text-gray-300 mb-1 truncate">
+                  {pathContent}
+                </div>
+              )}
               <pre className="max-h-64 overflow-auto rounded bg-black/90 p-3 text-xs font-mono text-gray-100">
-                <code>{codeContent}</code>
+                <code>{codeContent || contentPreview || diffPreview}</code>
               </pre>
             </div>
           )}

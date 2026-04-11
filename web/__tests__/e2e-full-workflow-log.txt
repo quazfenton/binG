@@ -1,0 +1,51 @@
+[2026-04-09T21:01:09.048Z] [INFO] ╔══════════════════════════════════════════════════════════════╗
+[2026-04-09T21:01:09.056Z] [INFO] ║  FULL WORKFLOW E2E TEST SUITE - LLM Agency + VFS + Tools   ║
+[2026-04-09T21:01:09.056Z] [INFO] ╚══════════════════════════════════════════════════════════════╝
+[2026-04-09T21:01:09.056Z] [INFO] === AUTHENTICATION ===
+[2026-04-09T21:01:09.574Z] [INFO] 
+=== TEST 1: Provider Rotation (Google → Nvidia → OpenRouter) ===
+[2026-04-09T21:01:09.574Z] [INFO] 
+--- Testing Google Gemini 2.5 Flash ---
+[2026-04-09T21:01:13.020Z] [INFO] 
+--- Testing Mistral Small ---
+[2026-04-09T21:01:23.236Z] [INFO] 
+=== TEST 2: Code Generation with File Writes ===
+[2026-04-09T21:01:30.344Z] [INFO] 
+=== TEST 3: Multi-File Context Bundling ===
+[2026-04-09T21:01:30.696Z] [INFO] 
+=== TEST 4: Provider Fallback Chain ===
+[2026-04-09T21:01:38.983Z] [INFO] 
+=== TEST 5: Diff Application ===
+[2026-04-09T21:01:49.039Z] [INFO] 
+=== TEST 6: Non-Streaming Path ===
+[2026-04-09T21:01:49.310Z] [INFO] 
+=== TEST 7: Empty Response Retry ===
+[2026-04-09T21:02:17.799Z] [INFO] 
+=== TEST 8: MCP Tool Definitions ===
+[2026-04-09T21:02:18.619Z] [INFO] 
+=== TEST 9: Nvidia Provider ===
+[2026-04-09T21:02:18.619Z] [INFO] --- Testing nvidia/meta/llama-3.3-70b-instruct ---
+[2026-04-09T21:02:46.927Z] [INFO] 
+=== TEST 10: VFS Path Resolution Edge Cases ===
+[2026-04-09T21:02:47.035Z] [INFO] 
+============================================================
+[2026-04-09T21:02:47.035Z] [INFO] FINAL RESULTS: 24/40 passed
+[2026-04-09T21:02:47.036Z] [INFO] 
+FAILED TESTS:
+[2026-04-09T21:02:47.036Z] [INFO]   ❌ Google Gemini 2.5 Flash responds: ERROR: HTTP 400: {"error":"Model gemini-2.5-flash is not supported by google","availableModels":["gemini-3.1-flash-lite-preview","gemini-3-flash-preview","gemini-2.5-pro","gemini-2.5-flash-lite","gemini-2.5-flash-lite-preview-09-2025"]}
+[2026-04-09T21:02:47.036Z] [INFO]   ❌ Tool calls detected: count=0
+[2026-04-09T21:02:47.036Z] [INFO]   ❌ File edits detected: count=0
+[2026-04-09T21:02:47.036Z] [INFO]   ❌ index.js created
+[2026-04-09T21:02:47.036Z] [INFO]   ❌ package.json created
+[2026-04-09T21:02:47.036Z] [INFO]   ❌ Multi-file context responds: ERROR: HTTP 400: {"error":"Model gemini-2.5-flash is not supported by google","availableModels":["gemini-3.1-flash-lite-preview","gemini-3-flash-preview","gemini-2.5-pro","gemini-2.5-flash-lite","gemini-2.5-flash-lite-preview-09-2025"]}
+[2026-04-09T21:02:47.037Z] [INFO]   ❌ File edits from diff: edits=0
+[2026-04-09T21:02:47.037Z] [INFO]   ❌ Non-streaming responds: status=400
+[2026-04-09T21:02:47.037Z] [INFO]   ❌ Non-streaming has content: chars=0
+[2026-04-09T21:02:47.037Z] [INFO]   ❌ Non-streaming correct answer: text=""
+[2026-04-09T21:02:47.037Z] [INFO]   ❌ MCP has tools: count=0
+[2026-04-09T21:02:47.037Z] [INFO]   ❌ read_file available
+[2026-04-09T21:02:47.037Z] [INFO]   ❌ write_file available
+[2026-04-09T21:02:47.037Z] [INFO]   ❌ list_files available
+[2026-04-09T21:02:47.038Z] [INFO]   ❌ read_files available
+[2026-04-09T21:02:47.038Z] [INFO]   ❌ apply_diff available
+[2026-04-09T21:02:47.038Z] [INFO] ============================================================

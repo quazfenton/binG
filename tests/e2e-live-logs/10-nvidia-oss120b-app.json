@@ -1,0 +1,59 @@
+{
+  "label": "10-nvidia-oss120b-app",
+  "status": 200,
+  "body": {
+    "messages": [
+      {
+        "role": "user",
+        "content": "Create index.html, style.css, and app.js for a tiny todo app in the current session root. Use tools to actually create the files."
+      }
+    ],
+    "provider": "nvidia",
+    "model": "openai/gpt-oss-120b",
+    "stream": true,
+    "conversationId": "e2e-nvidia-oss120b"
+  },
+  "tokens": "",
+  "toolEvents": [],
+  "fileEvents": [],
+  "done": {
+    "event": "done",
+    "data": {
+      "success": true,
+      "content": "No response generated",
+      "messageMetadata": {
+        "agent": "unified",
+        "mode": "v1-api",
+        "processingSteps": [
+          {
+            "step": "Start agentic pipeline",
+            "status": "started",
+            "timestamp": 1775797317179,
+            "stepIndex": 0
+          },
+          {
+            "step": "Start agentic pipeline",
+            "status": "completed",
+            "timestamp": 1775797326251,
+            "stepIndex": 1
+          }
+        ]
+      },
+      "data": {
+        "success": true,
+        "response": "No response generated",
+        "steps": [],
+        "totalSteps": 0,
+        "mode": "v1-api",
+        "metadata": {
+          "provider": "nvidia",
+          "model": "openai/gpt-oss-120b",
+          "duration": 7493,
+          "toolInvocations": [],
+          "fallbackChain": []
+        }
+      }
+    }
+  },
+  "raw": "event: step\ndata: {\"step\":\"Start agentic pipeline\",\"status\":\"started\",\"timestamp\":1775797317179,\"stepIndex\":0}\n\nevent: step\ndata: {\"step\":\"Start agentic pipeline\",\"status\":\"completed\",\"timestamp\":1775797326251,\"stepIndex\":1}\n\nevent: done\ndata: {\"success\":true,\"content\":\"No response generated\",\"messageMetadata\":{\"agent\":\"unified\",\"mode\":\"v1-api\",\"processingSteps\":[{\"step\":\"Start agentic pipeline\",\"status\":\"started\",\"timestamp\":1775797317179,\"stepIndex\":0},{\"step\":\"Start agentic pipeline\",\"status\":\"completed\",\"timestamp\":1775797326251,\"stepIndex\":1}]},\"data\":{\"success\":true,\"response\":\"No response generated\",\"steps\":[],\"totalSteps\":0,\"mode\":\"v1-api\",\"metadata\":{\"provider\":\"nvidia\",\"model\":\"openai/gpt-oss-120b\",\"duration\":7493,\"toolInvocations\":[],\"fallbackChain\":[]}}}\n\n"
+}

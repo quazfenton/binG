@@ -1,0 +1,28 @@
+[package]
+name = "skill"
+version = "0.1.0"
+edition = "2021"
+
+# cdylib produces the .wasm file; the _start export comes from our hand-rolled handle().
+# We DON'T use bin crate-type because we export handle(), not main().
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# wee_alloc: a tiny global allocator for no_std wasm targets
+wee_alloc = "0.4"
+
+# For production skills, uncomment these and switch to std serde parsing:
+# serde = { version = "1.0", features = ["derive"] }
+# serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
+
+[profile.release]
+# Optimize for size — important for wasm modules loaded at runtime
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"   # smaller panic handler
+
+# Required for no_std on wasm32-wasi
+[features]
+default = []

@@ -51,11 +51,25 @@ import type { SandboxProviderType } from './providers'
 const logger = createLogger('SandboxConnection')
 
 // Connection configuration
-const CONNECTION_TIMEOUT_MS = 10000 // 10 seconds
+const CONNECTION_TIMEOUT_MS = clampTimeout(
+  parseInt(process.env.NEXT_PUBLIC_TERMINAL_CONNECTION_TIMEOUT_MS || '30000', 10),
+  10000,  // minimum 10s
+  120000  // maximum 120s
+);
 const CONNECTION_COOLDOWN_MS = 5000 // 5 seconds
+
+/**
+ * Clamp timeout to sane bounds.
+ * Prevents NaN from invalid env vars and caps to avoid infinite waits.
+ */
+function clampTimeout(value: number, min: number, max: number): number {
+  if (isNaN(value) || value <= 0) return min;
+  return Math.min(max, Math.max(min, value));
+}
 const MAX_RECONNECT_ATTEMPTS = 5
 const INITIAL_RECONNECT_DELAY = 1000 // 1 second
 const HEALTH_CHECK_INTERVAL = 30000 // 30 seconds
+const CUSTOM_WS_BASE_URL = process.env.NEXT_PUBLIC_WEBSOCKET_URL?.replace(/\/+$/, '')
 
 // Spinner animation frames
 const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
@@ -164,17 +178,15 @@ export class SandboxConnectionManager {
     // Write connection message
     this.writeLine('')
     this.writeLine('\x1b[33m⟳ Connecting to sandbox...\x1b[0m')
-    this.writeLine('\x1b[90mThis may take a moment on first connection.\x1b[0m')
-    this.writeLine(`\x1b[90mTimeout after ${CONNECTION_TIMEOUT_MS / 1000}s will fall back to command-mode.\x1b[0m`)
+    this.writeLine('\x1b[90mStep 1/2: Creating or verifying sandbox instance...\x1b[0m')
+    this.writeLine('\x1b[90mThis may take 20-30s on first connection.\x1b[0m')
     this.writeLine('')
 
     // Start spinner
     this.startSpinner()
 
-    // Set connection timeout
-    this.connectionTimeout = setTimeout(() => {
-      this.handleConnectionTimeout()
-    }, CONNECTION_TIMEOUT_MS)
+    // Declare token at method scope so catch block can reuse it
+    let connectionToken: string | undefined
 
     try {
       // Create sandbox session
@@ -210,8 +222,10 @@ export class SandboxConnectionManager {
       const providerType = this.detectProviderType(sandboxId)
       logger.debug(`Detected provider type: ${providerType} for sandbox ${sandboxId}`)
 
-      // Get connection token
-      let connectionToken: string | undefined
+      // Update user with progress
+      this.writeLine('\x1b[90mStep 2/2: Establishing terminal connection...\x1b[0m')
+
+      // Get connection token (reuses outer-scope declaration)
       try {
         const tokenResponse = await fetch('/api/sandbox/terminal/stream', {
           method: 'POST',
@@ -231,70 +245,108 @@ export class SandboxConnectionManager {
         logger.warn('Failed to get connection token', err)
       }
 
-      // Try provider-specific PTY first (if supported)
+      // NOW start the timeout for the SSE/PTY connection phase only
+      this.connectionTimeout = setTimeout(() => {
+        this.handleConnectionTimeout()
+      }, CONNECTION_TIMEOUT_MS)
+
+      // Try SSE first — it uses standard HTTP/1.1 with no protocol upgrade,
+      // making it reliable behind Next.js proxies, load balancers, and reverse proxies.
+      logger.info('[Terminal] Attempting SSE connection (primary transport)')
+      await this.connectSSE(sessionId, sandboxId, connectionToken)
+      // SSE is event-based; connection success is confirmed via 'connected' message
+      // in handleSSEMessage which calls stopSpinner and updates state
+      logger.info('[Terminal] SSE connection established — using SSE transport')
+      return // SSE successful, exit early
+
+    } catch (sseError: any) {
+      // Check if this was an intentional abort (timeout already handled)
+      if (sseError.name === 'AbortError' || sseError.message?.includes('aborted')) {
+        logger.debug('[Terminal] Connection aborted (timeout or cancellation)')
+        // Timeout handler already fell back to local mode, don't attempt PTY fallback
+        return
+      }
+
+      // SSE failed — try provider-specific PTY WebSocket as fallback
+      // Reuse sessionId, sandboxId from state; reuse connectionToken from earlier fetch
+      const sessionState = this.state
+      const { sessionId, sandboxId } = sessionState
+
+      // Guard: skip PTY fallback if we don't have a session
+      if (!sessionId || !sandboxId) {
+        logger.warn('[Terminal] No session/sandbox ID for PTY fallback, skipping')
+        this.handleConnectionError(new Error('No session available for terminal connection'))
+        return
+      }
+
+      const providerType = this.detectProviderType(sandboxId)
+      // Reuse the connectionToken from the successful fetch above (don't redeclare)
+      logger.warn('[Terminal] SSE failed, trying provider PTY WebSocket', sseError)
+
       if (providerType && ['e2b', 'daytona', 'sprites', 'codesandbox', 'vercel-sandbox'].includes(providerType)) {
         try {
-          logger.debug(`Trying ${providerType} PTY connection first`)
+          logger.debug(`Trying ${providerType} PTY WebSocket connection`)
           const providerWs = await this.connectProviderPTY(providerType, sandboxId, sessionId)
           if (providerWs) {
-            logger.info(`${providerType} PTY connected successfully`)
+            logger.info(`${providerType} PTY connected via WebSocket fallback`)
             // Update state with provider WebSocket
             this.state.websocket = providerWs
             this.state.status = 'connected'
             this.state.mode = 'pty'
             this.stopSpinner()
             this.clearConnectionTimeout()
-            
+
             this.updateTerminalState({
               sandboxInfo: { sessionId, sandboxId, status: 'active' },
               websocket: providerWs,
               isConnected: true,
               mode: 'pty',
             })
-            
+
             this.writeLine('')
             this.writeLine(`\x1b[1;32m✓ Connected to ${providerType} sandbox!\x1b[0m`)
             this.writeLine('\x1b[90mYou now have full terminal access.\x1b[0m')
             this.writeLine('')
-            
+
             // Auto-cd to workspace
             if (this.filesystemScopePath) {
               const sandboxPath = this.toSandboxScopedPath(this.filesystemScopePath, sandboxId)
               this.setCwd(this.filesystemScopePath)
               this.writeLine(`\x1b[90m→ cd ${sandboxPath}\x1b[0m`)
-              this.sendInput(sandboxId, `cd ${sandboxPath}\n`)
+              this.sendInput(sessionId, `cd ${sandboxPath}\n`)
             }
-            
+
             // Send initial resize
-            this.sendResize(sandboxId, 120, 30)
-            
+            this.sendResize(sessionId, 120, 30)
+
             // Flush command queue
             for (const cmd of this.commandQueue) {
-              this.sendInput(sandboxId, cmd)
+              this.sendInput(sessionId, cmd)
             }
             this.commandQueue = []
             return // Provider PTY successful, exit early
           }
         } catch (providerError) {
-          logger.warn(`${providerType} PTY failed, falling back to generic WebSocket`, providerError)
-          // Fall through to generic WebSocket
+          logger.warn(`${providerType} PTY WebSocket also failed`, providerError)
+          // Fall through to generic WebSocket or error
         }
       }
 
-      // Try generic WebSocket
-      try {
-        await this.connectWebSocket(sessionId, sandboxId, connectionToken)
-        return // WebSocket successful, exit early
-      } catch (wsError) {
-        logger.warn('WebSocket not available, using SSE fallback', wsError)
-        // Fall through to SSE
+      // Try generic WebSocket only when a real custom WS endpoint is configured
+      if (CUSTOM_WS_BASE_URL) {
+        try {
+          logger.info('[Terminal] Attempting generic WebSocket as final fallback')
+          await this.connectWebSocket(sessionId, sandboxId, connectionToken)
+          logger.info('[Terminal] WebSocket fallback successful — using WS transport')
+          return // WebSocket successful, exit early
+        } catch (wsError) {
+          logger.warn('[Terminal] Generic WebSocket failed', wsError)
+          // Fall through to error handling
+        }
       }
 
-      // SSE fallback
-      await this.connectSSE(sessionId, sandboxId, connectionToken)
-
-    } catch (error) {
-      this.handleConnectionError(error)
+      // All transports failed
+      this.handleConnectionError(sseError)
     }
   }
 
@@ -315,7 +367,7 @@ export class SandboxConnectionManager {
     if (lowerId.startsWith('sprite-') || lowerId.startsWith('sprite_') || lowerId.startsWith('bing-')) return 'sprites'
     if (lowerId.startsWith('codesandbox-') || lowerId.startsWith('csb-')) return 'codesandbox'
     if (lowerId.startsWith('vercel-') || lowerId.startsWith('vc-')) return 'vercel-sandbox'
-    if (lowerId.startsWith('mistral-')) return 'mistral-agent'
+    if (lowerId.startsWith('mistral-agent-')) return 'mistral-agent'
     if (lowerId.startsWith('blaxel-')) return 'blaxel'
     if (lowerId.startsWith('micro-')) return 'microsandbox'
     
@@ -326,45 +378,64 @@ export class SandboxConnectionManager {
    * Connect via WebSocket
    */
   private async connectWebSocket(sessionId: string, sandboxId: string, connectionToken?: string): Promise<void> {
-    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const wsUrl = new URL(`${wsProtocol}//${window.location.host}/api/sandbox/terminal/ws`)
-    
+    if (!CUSTOM_WS_BASE_URL) {
+      throw new Error('Custom terminal WebSocket endpoint is not configured')
+    }
+
+    const wsUrl = new URL(`${CUSTOM_WS_BASE_URL}/ws`)
     wsUrl.searchParams.set('sessionId', sessionId)
     wsUrl.searchParams.set('sandboxId', sandboxId)
     if (connectionToken) {
       wsUrl.searchParams.set('token', connectionToken)
     }
 
-    const ws = new WebSocket(wsUrl.toString())
-    this.state.websocket = ws
+    await new Promise<void>((resolve, reject) => {
+      const ws = new WebSocket(wsUrl.toString())
+      let settled = false
 
-    ws.onopen = () => {
-      logger.debug('WebSocket connected', { sessionId, sandboxId })
-    }
-
-    ws.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data)
-        this.handleWebSocketMessage(msg)
-      } catch (err) {
-        logger.error('Failed to parse WebSocket message', err)
+      const rejectConnection = (error: Error) => {
+        if (settled) return
+        settled = true
+        this.state.websocket = null
+        reject(error)
       }
-    }
 
-    ws.onerror = (err) => {
-      logger.warn('WebSocket error', err)
-      this.handleWebSocketError()
-    }
+      this.state.websocket = ws
 
-    ws.onclose = (event) => {
-      this.handleWebSocketClose(event)
-    }
+      ws.onopen = () => {
+        if (settled) return
+        settled = true
+        logger.debug('WebSocket connected', { sessionId, sandboxId })
+        resolve()
+      }
 
-    // Update state
-    this.updateTerminalState({
-      sandboxInfo: { sessionId, sandboxId, status: 'creating' },
-      websocket: ws,
-      isConnected: false,
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data)
+          this.handleWebSocketMessage(msg)
+        } catch (err) {
+          logger.error('Failed to parse WebSocket message', err)
+        }
+      }
+
+      ws.onerror = (err) => {
+        logger.warn('WebSocket error', err)
+        rejectConnection(new Error('WebSocket connection failed'))
+      }
+
+      ws.onclose = (event) => {
+        if (!settled) {
+          rejectConnection(new Error(`WebSocket closed before connection (${event.code})`))
+          return
+        }
+        this.handleWebSocketClose(event)
+      }
+
+      this.updateTerminalState({
+        sandboxInfo: { sessionId, sandboxId, status: 'creating' },
+        websocket: ws,
+        isConnected: false,
+      })
     })
   }
 
@@ -408,15 +479,15 @@ export class SandboxConnectionManager {
           const sandboxPath = this.toSandboxScopedPath(this.filesystemScopePath, this.state.sandboxId!)
           this.setCwd(this.filesystemScopePath)
           this.writeLine(`\x1b[90m→ cd ${sandboxPath}\x1b[0m`)
-          this.sendInput(this.state.sandboxId!, `cd ${sandboxPath}\n`)
+          this.sendInput(this.state.sessionId!, `cd ${sandboxPath}\n`)
         }
 
         // Send initial resize
-        this.sendResize(this.state.sandboxId!, 120, 30)
+        this.sendResize(this.state.sessionId!, 120, 30)
 
         // Flush command queue
         for (const cmd of this.commandQueue) {
-          this.sendInput(this.state.sandboxId!, cmd)
+          this.sendInput(this.state.sessionId!, cmd)
         }
         this.commandQueue = []
         break
@@ -526,10 +597,12 @@ export class SandboxConnectionManager {
    * Reconnect WebSocket
    */
   private reconnectWebSocket(): void {
-    if (!this.state.sessionId || !this.state.sandboxId) return
+    if (!this.state.sessionId || !this.state.sandboxId || !CUSTOM_WS_BASE_URL) {
+      this.fallbackToCommandMode()
+      return
+    }
 
-    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const wsUrl = new URL(`${wsProtocol}//${window.location.host}/api/sandbox/terminal/ws`)
+    const wsUrl = new URL(`${CUSTOM_WS_BASE_URL}/ws`)
     
     wsUrl.searchParams.set('sessionId', this.state.sessionId)
     wsUrl.searchParams.set('sandboxId', this.state.sandboxId)
@@ -571,29 +644,70 @@ export class SandboxConnectionManager {
 
     const streamUrl = `/api/sandbox/terminal/stream?sessionId=${encodeURIComponent(sessionId)}&sandboxId=${encodeURIComponent(sandboxId)}${tokenParam}${anonymousParam}`
 
+    logger.info('[Terminal SSE] Connecting to', streamUrl)
+
     const eventSource = new EventSource(streamUrl)
     this.state.eventSource = eventSource
 
-    eventSource.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data)
-        this.handleSSEMessage(msg)
-      } catch (err) {
-        logger.error('Failed to parse SSE message', err)
-      }
-    }
+    // Wrap EventSource in a Promise so connect() waits for 'connected' or error
+    return new Promise<void>((resolve, reject) => {
+      let settled = false
 
-    eventSource.onerror = () => {
-      if (this.state.status === 'connected') {
-        this.writeLine('\x1b[31m⚠ Connection lost. Reconnecting...\x1b[0m')
-      }
-    }
+      // Set a connection timeout for SSE (slightly longer than overall timeout to allow PTY setup)
+      const sseTimeout = setTimeout(() => {
+        if (!settled) {
+          settled = true
+          eventSource.close()
+          this.state.eventSource = null
+          logger.warn('[Terminal SSE] Connection timeout — no response from server')
+          reject(new Error('SSE connection timed out — server did not respond'))
+        }
+      }, 35000) // 35s timeout for SSE (increased from 15s to allow slow PTY setup)
 
-    // Update state
-    this.updateTerminalState({
-      sandboxInfo: { sessionId, sandboxId, status: 'creating' },
-      eventSource,
-      isConnected: false,
+      eventSource.onopen = () => {
+        logger.info('[Terminal SSE] EventSource connection opened')
+      }
+
+      eventSource.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data)
+          logger.debug('[Terminal SSE] Received message:', msg.type)
+
+          // Check for 'connected' message to resolve the promise
+          if (msg.type === 'connected' && !settled) {
+            settled = true
+            clearTimeout(sseTimeout)
+            logger.info('[Terminal SSE] Connected — resolving promise')
+            resolve()
+          }
+
+          // Check for 'error' message to reject
+          if (msg.type === 'error' && !settled) {
+            settled = true
+            clearTimeout(sseTimeout)
+            eventSource.close()
+            this.state.eventSource = null
+            logger.error('[Terminal SSE] Server error:', msg.data)
+            reject(new Error(msg.data || 'SSE server error'))
+            return
+          }
+
+          // Handle all messages normally (including 'connected' which updates terminal state)
+          this.handleSSEMessage(msg)
+        } catch (err) {
+          logger.error('[Terminal SSE] Failed to parse SSE message', err)
+        }
+      }
+
+      eventSource.onerror = (err) => {
+        if (settled) return
+        settled = true
+        clearTimeout(sseTimeout)
+        eventSource.close()
+        this.state.eventSource = null
+        logger.error('[Terminal SSE] Connection error', err)
+        reject(new Error('SSE connection failed — server unreachable or CORS blocked'))
+      }
     })
   }
 
@@ -671,8 +785,7 @@ export class SandboxConnectionManager {
       }
 
       // Handle terminal input
-      const originalSendInput = this.sendInput
-      this.sendInput = (data: string) => {
+      this.sendInput = (_sessionId: string, data: string) => {
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: 'input', data }))
         }
@@ -729,8 +842,7 @@ export class SandboxConnectionManager {
       }
 
       // Handle terminal input
-      const originalSendInput = this.sendInput
-      this.sendInput = (data: string) => {
+      this.sendInput = (_sessionId: string, data: string) => {
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(data)
         }
@@ -787,8 +899,7 @@ export class SandboxConnectionManager {
       }
 
       // Handle terminal input
-      const originalSendInput = this.sendInput
-      this.sendInput = (data: string) => {
+      this.sendInput = (_sessionId: string, data: string) => {
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: 'input', data }))
         }
@@ -848,8 +959,7 @@ export class SandboxConnectionManager {
       }
 
       // Handle terminal input
-      const originalSendInput = this.sendInput
-      this.sendInput = (data: string) => {
+      this.sendInput = (_sessionId: string, data: string) => {
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: 'input', data }))
         }
@@ -905,8 +1015,7 @@ export class SandboxConnectionManager {
       }
 
       // Handle terminal input
-      const originalSendInput = this.sendInput
-      this.sendInput = (data: string) => {
+      this.sendInput = (_sessionId: string, data: string) => {
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: 'input', data }))
         }
@@ -946,11 +1055,11 @@ export class SandboxConnectionManager {
         this.writeLine('')
 
         // Send initial resize
-        this.sendResize(this.state.sandboxId!, 120, 30)
+        this.sendResize(this.state.sessionId!, 120, 30)
 
         // Flush command queue
         for (const cmd of this.commandQueue) {
-          this.sendInput(this.state.sandboxId!, cmd)
+          this.sendInput(this.state.sessionId!, cmd)
         }
         this.commandQueue = []
         break
@@ -1004,7 +1113,7 @@ export class SandboxConnectionManager {
    * Handle connection timeout
    */
   private handleConnectionTimeout(): void {
-    logger.warn('Connection timeout, falling back to local mode')
+    logger.warn('[Terminal] Connection timeout — falling back to local shell mode')
     this.stopSpinner()
     this.abortController?.abort()
 
@@ -1055,11 +1164,12 @@ export class SandboxConnectionManager {
 
     // Handle AbortError (timeout or cancellation)
     if (error?.name === 'AbortError') {
-      logger.debug('Connection aborted (timeout or cancellation)')
+      logger.debug('[Terminal] Connection aborted (timeout or cancellation)')
       return
     }
 
     const errMsg = error?.message || 'Unknown error'
+    logger.error(`[Terminal] Connection failed — falling back to command-mode: ${errMsg}`)
     this.updateTerminalState({
       sandboxInfo: { status: 'error' },
       isConnected: false,
@@ -1133,8 +1243,8 @@ export class SandboxConnectionManager {
    * Send input to sandbox
    */
   sendToSandboxInput(data: string): void {
-    if (this.state.status === 'connected' && this.state.sandboxId) {
-      this.sendInput(this.state.sandboxId, data)
+    if (this.state.status === 'connected' && this.state.sessionId) {
+      this.sendInput(this.state.sessionId, data)
     } else {
       // Queue for later
       this.commandQueue.push(data)
@@ -1145,8 +1255,8 @@ export class SandboxConnectionManager {
    * Send resize to sandbox
    */
   sendToSandboxResize(cols: number, rows: number): void {
-    if (this.state.status === 'connected' && this.state.sandboxId) {
-      this.sendResize(this.state.sandboxId, cols, rows)
+    if (this.state.status === 'connected' && this.state.sessionId) {
+      this.sendResize(this.state.sessionId, cols, rows)
     }
   }
 
@@ -1154,20 +1264,25 @@ export class SandboxConnectionManager {
    * Disconnect from sandbox
    */
   async disconnect(): Promise<void> {
+    const sessionId = this.state.sessionId
+
     this.stopSpinner()
     this.clearConnectionTimeout()
     this.abortController?.abort()
+
+    // CRITICAL: Close EventSource FIRST (synchronously) to prevent
+    // browser auto-reconnect. Must happen before any async operations.
+    if (this.state.eventSource) {
+      this.state.eventSource.close()
+      this.state.eventSource = null
+    }
 
     if (this.state.websocket) {
       this.state.websocket.close()
       this.state.websocket = null
     }
 
-    if (this.state.eventSource) {
-      this.state.eventSource.close()
-      this.state.eventSource = null
-    }
-
+    // Reset state immediately so reconnect handlers won't fire
     this.state.status = 'disconnected'
     this.state.mode = 'local'
     this.state.reconnectAttempts = 0
@@ -1178,6 +1293,26 @@ export class SandboxConnectionManager {
       isConnected: false,
       mode: 'local',
     })
+
+    // Async cleanup (fire and forget — don't block disconnect)
+    if (sessionId) {
+      fetch('/api/sandbox/terminal', {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          ...this.getAuthHeaders(),
+        },
+        credentials: 'include',
+        body: JSON.stringify({ sessionId }),
+        // Abort signal in case this takes too long
+        signal: AbortSignal.timeout(5000),
+      }).catch(() => {
+        // Ignore cleanup errors — server may already know session is gone
+      })
+    }
+
+    this.state.sessionId = undefined
+    this.state.sandboxId = undefined
   }
 
   /**

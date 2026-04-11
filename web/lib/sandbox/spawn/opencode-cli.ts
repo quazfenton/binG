@@ -59,6 +59,7 @@ import type { SandboxHandle, SandboxCreateConfig } from '../providers/sandbox-pr
 import { openCodeV2SessionManager, type V2SessionConfig, type OpenCodeV2Session } from '../../session/agent/opencode-v2-session-manager';
 import { nullclawMCPBridge } from '../../mcp/nullclaw-mcp-bridge';
 import { v4 as uuidv4 } from 'uuid';
+import { sandboxFilesystemSync } from '@/lib/virtual-filesystem/sync/sandbox-filesystem-sync';
 
 const logger = createLogger('OpenCode:V2Provider');
 
@@ -120,6 +121,8 @@ export class OpencodeV2Provider implements LLMProvider {
       executeTool,
       onToolExecution,
       onStreamChunk,
+      cwd: requestedCwd,
+      enableSelfHeal = true,
     } = options;
 
     // Get or create session
@@ -153,7 +156,28 @@ export class OpencodeV2Provider implements LLMProvider {
       const isWindows = process.platform === 'win32';
       let localWorkspaceDir: string;
 
-      if (isWindows) {
+      // If a specific cwd was requested, use it (with path safety validation)
+      if (requestedCwd) {
+        const path = await import('path');
+        const sanitized = this.sanitizePath(requestedCwd);
+        if (sanitized) {
+          // If it's a VFS scoped path like "project/sessions/xxx", convert to real path
+          if (sanitized.startsWith('project/')) {
+            // Strip "project/" prefix and append to workspace base
+            const relativePart = sanitized.replace(/^project\//, '');
+            localWorkspaceDir = isWindows
+              ? path.join(process.env.TEMP || process.env.TMP || 'C:\\temp', 'opencode-workspace', relativePart)
+              : path.join('/tmp/opencode-workspace', relativePart);
+          } else if (sanitized.startsWith('/workspace/')) {
+            localWorkspaceDir = sanitized.replace('/workspace/', isWindows ? (process.env.TEMP || 'C:\\temp') + '\\' : '/home/user/workspace/');
+          } else {
+            // Already an absolute path
+            localWorkspaceDir = sanitized;
+          }
+        }
+      }
+
+      if (!localWorkspaceDir) {
         // On Windows, use a temp directory or app data folder
         // SECURITY: Sanitize and escape user-provided values to prevent command injection
         const tempDir = process.env.TEMP || process.env.TMP || 'C:\\temp';
@@ -476,7 +500,18 @@ export class OpencodeV2Provider implements LLMProvider {
       resources: this.config.sandbox?.resources || { cpu: 2, memory: 4 },
     };
 
-    return sandboxProvider.createSandbox(config);
+    const handle = await sandboxProvider.createSandbox(config);
+    
+    // Start VFS sync for bidirectional file sync
+    try {
+      const sessionId = this.currentSession?.id || uuidv4();
+      sandboxFilesystemSync.startSync(handle.id, sessionId);
+      console.log(`[OpencodeV2] VFS sync started for sandbox: ${handle.id}`);
+    } catch (syncErr: any) {
+      console.warn(`[OpencodeV2] Failed to start VFS sync:`, syncErr.message);
+    }
+    
+    return handle;
   }
 
   /**
@@ -682,23 +717,373 @@ export class OpencodeV2Provider implements LLMProvider {
   }
 
   /**
-   * Direct command execution
-   * 
+   * Detect project type from the workspace directory by examining package.json, 
+   * Cargo.toml, go.mod, etc. Returns the appropriate run command.
+   */
+  private async detectProjectCommand(cwd: string): Promise<string | null> {
+    const fs = await import('fs/promises');
+    const path = await import('path');
+
+    try {
+      const pkgPath = path.join(cwd, 'package.json');
+      const pkgRaw = await fs.readFile(pkgPath, 'utf-8');
+      const pkg = JSON.parse(pkgRaw);
+      if (pkg.scripts) {
+        const s = pkg.scripts;
+        if (s.dev) return 'npm run dev';
+        if (s.start) return 'npm start';
+        if (s.serve) return 'npm run serve';
+        if (s.build) return 'npm install && npm run build';
+      }
+      return 'npm install';
+    } catch { /* no package.json */ }
+
+    try {
+      await (await import('fs/promises')).access(path.join(cwd, 'Cargo.toml'));
+      return 'cargo run';
+    } catch { /* not Rust */ }
+
+    try {
+      await (await import('fs/promises')).access(path.join(cwd, 'go.mod'));
+      return 'go run .';
+    } catch { /* not Go */ }
+
+    try {
+      const fs2 = await import('fs/promises');
+      await fs2.access(path.join(cwd, 'requirements.txt'));
+      for (const entry of ['main.py', 'app.py', 'run.py']) {
+        try { await fs2.access(path.join(cwd, entry)); return 'pip install -r requirements.txt && python ' + entry; } catch {}
+      }
+      return 'pip install -r requirements.txt';
+    } catch { /* not Python */ }
+
+    return null;
+  }
+
+  /**
+   * Translate natural language task descriptions into actual shell commands.
+   * Uses the shared project-detection module for consistency.
+   */
+  private async translateNaturalLanguageToCommand(task: string, cwd: string): Promise<string> {
+    // Import the shared project detection module
+    const { buildProjectContext, translateNaturalLanguageToCommand: translateNL } = await import('../../project-detection');
+
+    // Get file listing from the cwd directory for project detection
+    try {
+      const fs = await import('fs/promises');
+      const path = await import('path');
+      const files: string[] = [];
+
+      const walkDir = async (dir: string, maxDepth: number = 3) => {
+        if (maxDepth <= 0) return;
+        try {
+          const entries = await fs.readdir(dir, { withFileTypes: true });
+          for (const entry of entries) {
+            const fullPath = path.join(dir, entry.name);
+            const relativePath = fullPath.replace(cwd, '').replace(/^\//, '');
+            files.push(relativePath);
+            if (entry.isDirectory() && !entry.name.startsWith('.') && !entry.name.startsWith('node_modules')) {
+              await walkDir(fullPath, maxDepth - 1);
+            }
+          }
+        } catch { /* ignore permission errors */ }
+      };
+
+      await walkDir(cwd);
+
+      // Try to read package.json
+      const pkgPath = path.join(cwd, 'package.json');
+      let pkgContent: string | undefined;
+      try {
+        pkgContent = await fs.readFile(pkgPath, 'utf-8');
+      } catch { /* no package.json */ }
+
+      const projectCtx = await buildProjectContext(files, async (p: string) => {
+        if (p === 'package.json' || p === '/package.json') return pkgContent || null;
+        return null;
+      });
+
+      return translateNL(task, projectCtx);
+    } catch {
+      // Fallback if project detection fails
+      return task;
+    }
+  }
+
+  /**
+   * Self-heal: When a shell command fails, return structured error information
+   * so the LLM can reason about the failure and decide the next action.
+   *
+   * Previously this used regex patterns to auto-fix common errors. Now it returns
+   * structured error data that the LLM can use with its tools (project_analyze,
+   * terminal_get_output, etc.) to diagnose and fix the issue.
+   *
+   * Only truly trivial auto-fixes are attempted (e.g., missing dependency auto-install)
+   * before falling back to structured error reporting.
+   */
+  private async selfHealAndRetry(
+    originalCommand: string,
+    cwd: string,
+    errorOutput: string,
+    timeoutSeconds: number,
+    attempt: number = 1,
+  ): Promise<ToolResult> {
+    const maxAttempts = 3;
+    if (attempt > maxAttempts) {
+      return {
+        success: false,
+        output: JSON.stringify({
+          errorType: 'max_retries_exceeded',
+          message: `Command failed after ${maxAttempts} attempts`,
+          originalCommand,
+          errorOutput: this.truncateOutput(errorOutput),
+        }, null, 2),
+        exitCode: 1,
+      };
+    }
+
+    const el = errorOutput.toLowerCase();
+    const errorInfo = this.classifyError(el, errorOutput);
+
+    // Only auto-fix truly trivial cases
+    if (errorInfo.autoFixable && attempt === 1) {
+      logger.debug(`[OpencodeV2Provider] [AUTO-FIX] ${errorInfo.reason}`);
+      const retry = await this.executeCommandDirect(errorInfo.fixCommand!, cwd, timeoutSeconds, false);
+      if (retry.success) {
+        return {
+          success: true,
+          output: `[AUTO-FIX] ${errorInfo.reason}\n--- Recovery ---\n${this.truncateOutput(retry.output || '')}`,
+          exitCode: 0,
+        };
+      }
+      // Auto-fix failed — fall through to structured error
+    }
+
+    // Return structured error for the LLM to reason about
+    return {
+      success: false,
+      output: JSON.stringify({
+        errorType: errorInfo.type,
+        category: errorInfo.category,
+        message: errorInfo.message,
+        suggestions: errorInfo.suggestions,
+        originalCommand,
+        errorOutput: this.truncateOutput(errorOutput),
+        attempt,
+        maxAttempts,
+      }, null, 2),
+      exitCode: 1,
+    };
+  }
+
+  /**
+   * Classify an error output into a structured error object.
+   */
+  private classifyError(errorLower: string, originalOutput: string): {
+    type: string;
+    category: string;
+    message: string;
+    suggestions: string[];
+    autoFixable: boolean;
+    fixCommand?: string;
+    reason: string;
+  } {
+    const el = errorLower;
+
+    // Module/package not found
+    if (/(module\s+not\s+found|cannot\s+find\s+module|err_module_not_found|import\s+not\s+found|no\s+module\s+named)/i.test(el)) {
+      const pkgMatch = el.match(/(?:require|import)\s*['"]([^'"]+)['"]/) ||
+                       el.match(/module\s+['"]?([^'"\s]+)['"]?\s+(?:not found|cannot be found)/i);
+      const pkg = pkgMatch ? pkgMatch[1] : 'unknown';
+      return {
+        type: 'MODULE_NOT_FOUND',
+        category: 'dependency',
+        message: `Module "${pkg}" is not installed`,
+        suggestions: [
+          `Run "npm install ${pkg !== 'unknown' ? pkg : ''}" to install the missing package`,
+          `Check if the package name is correct`,
+          `Verify package.json has the dependency listed`,
+        ],
+        autoFixable: true,
+        fixCommand: 'npm install',
+        reason: 'Missing dependency — auto-installing',
+      };
+    }
+
+    // Command not found
+    if (/(command\s+not\s+found|is\s+not\s+recognized|not\s+found\s+in\s+path|executable\s+not\s+found)/i.test(el)) {
+      const cmdMatch = el.match(/['"]?(\w+)['"]?\s*(?:is\s+not|not\s+found|not\s+recognized)/);
+      const cmd = cmdMatch ? cmdMatch[1] : 'unknown';
+      return {
+        type: 'COMMAND_NOT_FOUND',
+        category: 'tooling',
+        message: `Command "${cmd}" is not installed or not in PATH`,
+        suggestions: [
+          `Run "which ${cmd}" or "command -v ${cmd}" to check if it exists`,
+          `Install the tool: "npm install -g ${cmd}" or "apt install ${cmd}"`,
+          `Check if the tool name is correct`,
+        ],
+        autoFixable: false,
+        reason: `Command "${cmd}" not found in PATH`,
+      };
+    }
+
+    // Port in use
+    if (/(eaddrinuse|address\s+already\s+in\s+use|port\s+\d+\s+already\s+in\s+use)/i.test(el)) {
+      const portMatch = el.match(/port\s+(\d+)/);
+      const port = portMatch ? portMatch[1] : 'unknown';
+      return {
+        type: 'EADDRINUSE',
+        category: 'network',
+        message: `Port ${port} is already in use by another process`,
+        suggestions: [
+          `Run "lsof -i :${port}" to find the process using this port`,
+          `Kill the process: "kill $(lsof -t -i :${port})"`,
+          `Use a different port`,
+        ],
+        autoFixable: false,
+        reason: `Port ${port} already in use`,
+      };
+    }
+
+    // File not found
+    if (/(enoent|no\s+such\s+file|no\s+such\s+directory|file\s+not\s+found|cannot\s+open\s+file)/i.test(el)) {
+      return {
+        type: 'ENOENT',
+        category: 'filesystem',
+        message: 'File or directory not found',
+        suggestions: [
+          'Run "ls -la" to see what files exist in the current directory',
+          'Check the file path is correct',
+          'Create the file or directory if needed',
+        ],
+        autoFixable: false,
+        reason: 'File or directory not found',
+      };
+    }
+
+    // Permission denied
+    if (/(permission\s+denied|eacces|eperm|operation\s+not\s+permitted)/i.test(el)) {
+      return {
+        type: 'EACCES',
+        category: 'permission',
+        message: 'Permission denied — cannot execute operation',
+        suggestions: [
+          'Check file/directory permissions',
+          'Use "chmod" or "chown" to fix permissions',
+          'Avoid running commands that require root access',
+        ],
+        autoFixable: false,
+        reason: 'Permission denied',
+      };
+    }
+
+    // Syntax/parse error
+    if (/(syntax\s+error|unexpected\s+token|parse\s+error|invalid\s+syntax|unexpected\s+end)/i.test(el)) {
+      return {
+        type: 'SYNTAX_ERROR',
+        category: 'code',
+        message: 'Syntax or parse error in command/code',
+        suggestions: [
+          'Read the file to check for syntax errors',
+          'Check for missing brackets, quotes, or semicolons',
+        ],
+        autoFixable: false,
+        reason: 'Syntax or parse error',
+      };
+    }
+
+    // Compilation/build error
+    if (/(compilation\s+failed|build\s+failed|compile\s+error|type\s+error|ts\d+:)/i.test(el)) {
+      return {
+        type: 'BUILD_ERROR',
+        category: 'code',
+        message: 'Build or compilation failed',
+        suggestions: [
+          'Read the error output for the specific file and line number',
+          'Fix the code errors and retry',
+        ],
+        autoFixable: false,
+        reason: 'Build or compilation failed',
+      };
+    }
+
+    // Timeout
+    if (/(timed?\s*out|timeout|deadline\s+exceeded)/i.test(el)) {
+      return {
+        type: 'TIMEOUT',
+        category: 'execution',
+        message: 'Command timed out',
+        suggestions: [
+          'Increase the timeout duration',
+          'Check if the command is stuck or running indefinitely',
+          'Run "ps aux" to check for hung processes',
+        ],
+        autoFixable: false,
+        reason: 'Command timed out',
+      };
+    }
+
+    // Out of memory
+    if (/(out\s+of\s+memory|oom|heap\s+out\s+of\s+memory|javascript\s+heap)/i.test(el)) {
+      return {
+        type: 'OOM',
+        category: 'resource',
+        message: 'Out of memory',
+        suggestions: [
+          'Increase available memory',
+          'Reduce the scope of the operation',
+          'Check for memory leaks in the code',
+        ],
+        autoFixable: false,
+        reason: 'Out of memory',
+      };
+    }
+
+    // Default: unknown error
+    return {
+      type: 'UNKNOWN',
+      category: 'other',
+      message: 'Command failed with an unrecognized error',
+      suggestions: [
+        'Read the error output for details',
+        'Try running the command manually to understand the issue',
+      ],
+      autoFixable: false,
+      reason: 'Unrecognized error',
+    };
+  }
+
+  /**
+   * Truncate output to avoid returning massive error dumps.
+   */
+  private truncateOutput(output: string, maxLength: number = 4000): string {
+    if (!output) return '';
+    if (output.length <= maxLength) return output;
+    const half = Math.floor(maxLength / 2);
+    return output.slice(0, half) + '\n\n... [truncated] ...\n\n' + output.slice(-half);
+  }
+
+  /**
+   * Direct command execution with self-heal retry
+   *
    * SECURITY NOTE: This executes commands via shell (/bin/sh -c or cmd.exe /c)
    * because opencode commands require shell features (stdin redirects, pipes).
-   * 
+   *
    * Security is provided by:
    * 1. Input validation in executeLocalCommand() - rejects dangerous patterns
    * 2. Sandboxed execution environment (container/isolated workspace)
    * 3. Timeout and resource limits
    * 4. Non-root user execution
-   * 
+   * 5. Command pattern filtering in executeLocalCommand
+   *
    * @see executeLocalCommand - Input sanitization
    */
-  private async executeCommandDirect(
+  async executeCommandDirect(
     command: string,
     cwd: string,
     timeoutSeconds: number,
+    enableSelfHeal: boolean = true,
   ): Promise<ToolResult> {
     return new Promise((resolve) => {
       const timeoutMs = timeoutSeconds * 1000;

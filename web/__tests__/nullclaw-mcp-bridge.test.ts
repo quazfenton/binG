@@ -5,7 +5,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // Mock dependencies
-vi.mock('../lib/agent/nullclaw-integration', () => ({
+vi.mock('@bing/shared/agent/nullclaw-integration', () => ({
   nullclawIntegration: {
     startContainer: vi.fn(),
     stopContainer: vi.fn(),
@@ -62,7 +62,7 @@ describe('NullclawMCPBridge', () => {
   describe('executeTool', () => {
     it('should return error when container not available', async () => {
       // Mock nullclawIntegration to return no container
-      const nullclaw = await import('../lib/agent/nullclaw-integration');
+      const nullclaw = await import('@bing/shared/agent/nullclaw-integration');
       vi.mocked(nullclaw.nullclawIntegration.startContainer).mockRejectedValue(
         new Error('Container not available')
       );

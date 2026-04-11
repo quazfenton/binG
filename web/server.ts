@@ -34,6 +34,7 @@ import { initializeBackend, getBackendStatus } from '@/lib/backend';
 import { terminalManager } from '@/lib/terminal/terminal-manager';
 import { createLogger } from '@/lib/utils/logger';
 import { getDatabaseSessionStore } from '@/lib/database/session-store';
+import { logMCPStartupHealth } from '@/lib/mcp';
 
 const logger = createLogger('Server');
 
@@ -51,11 +52,16 @@ interface TerminalSession {
   sandboxId: string;
   userId: string;
   ws: WebSocket;
+  createdAt: number; // FIX: Track creation time for TTL-based cleanup
   onData?: (data: string) => void;
   onPortDetected?: (info: any) => void;
 }
 
 const terminalSessions = new Map<string, TerminalSession>();
+
+// FIX (Bug 6): Maximum concurrent WebSocket connections to prevent OOM
+const MAX_WS_CONNECTIONS = parseInt(process.env.MAX_WS_CONNECTIONS || '500', 10);
+let activeWsConnections = 0;
 
 // Create server instance (must be defined before export)
 const server = createServer((req, res) => {
@@ -81,7 +87,7 @@ async function startup() {
     logger.info('Provider health checker started');
 
     // Start Agent Kernel (OS-like scheduler)
-    const { startAgentKernel } = await import('@/lib/agent/agent-kernel');
+    const { startAgentKernel } = await import('@bing/shared/agent/agent-kernel');
     await startAgentKernel();
     logger.info('Agent Kernel started');
 
@@ -92,6 +98,9 @@ async function startup() {
     if (!backendStatus.storage.healthy) {
       logger.warn('Storage backend unhealthy', backendStatus.storage.error);
     }
+
+    // Log MCP tool sources health (fire-and-forget, don't block startup)
+    logMCPStartupHealth().catch(e => logger.warn('MCP health check failed', e));
 
   } catch (error) {
     logger.error('Backend initialization failed', error as Error);
@@ -104,11 +113,48 @@ app.prepare().then(startup).then(() => {
   // WebSocket server for terminal streaming
   const wss = new WebSocketServer({ noServer: true });
 
-  server.on('upgrade', (req: IncomingMessage, socket, head) => {
+  server.on('upgrade', async (req: IncomingMessage, socket, head) => {
     const { pathname, query } = parse(req.url || '', true);
 
+    // FIX (Bug 7): Preserve Next.js HMR and other legitimate WebSocket connections.
+    // Only intercept our terminal streaming paths; pass everything else through
+    // to the default Next.js HMR handler (which uses its own WebSocket server).
+    const isTerminalWS = pathname === '/ws' || pathname === '/api/sandbox/terminal/ws';
+    const isStreamControl = pathname === '/stream-control';
+
+    if (!isTerminalWS && !isStreamControl) {
+      // Not our WebSocket — let Next.js HMR or other WS servers handle it.
+      socket.destroy();
+      return;
+    }
+
+    // Handle stream control WebSocket upgrade (LLM streaming control signals)
+    if (isStreamControl) {
+      // Guard: socket may have been destroyed by a concurrent handler or timeout
+      if (socket.destroyed) return;
+      try {
+        const { handleStreamControlUpgrade } = await import('@/lib/streaming/stream-control-handler');
+        // Re-check socket after dynamic import
+        if (!socket.destroyed) {
+          await handleStreamControlUpgrade(req, socket, head);
+        }
+      } catch (err: any) {
+        logger.error('Stream control WebSocket upgrade failed', err);
+        if (!socket.destroyed) socket.destroy();
+      }
+      return;
+    }
+
+    // FIX (Bug 6): Enforce maximum concurrent connections
+    if (activeWsConnections >= MAX_WS_CONNECTIONS) {
+      console.warn(`[WebSocket] Connection limit reached (${MAX_WS_CONNECTIONS}), rejecting`);
+      (socket as any).writeHead(503, { 'Content-Type': 'text/plain' });
+      socket.end('Service Unavailable: Too many WebSocket connections');
+      return;
+    }
+
     // Handle WebSocket upgrade for terminal streaming
-    if (pathname === '/ws' || pathname === '/api/sandbox/terminal/ws') {
+    if (isTerminalWS) {
       const sessionId = query.sessionId as string;
       const sandboxId = query.sandboxId as string;
       
@@ -242,10 +288,14 @@ app.prepare().then(startup).then(() => {
     const sessionKey = `${sessionId}-${userId}`;
     console.log(`[WebSocket] Client connected: ${sessionKey}`);
 
+    // FIX (Bug 6): Track active connections count
+    activeWsConnections++;
+
     // Check if there's an actual PTY connection available for this session
     const hasPty = terminalManager.hasPtyConnection(sessionId);
     if (!hasPty) {
       console.log(`[WebSocket] No PTY available for ${sessionId}, closing so client can fallback`);
+      activeWsConnections--; // Decrement before early return
       ws.send(JSON.stringify({
         type: 'error',
         error: 'PTY not available - using command-mode',
@@ -265,6 +315,7 @@ app.prepare().then(startup).then(() => {
       sandboxId,
       userId,
       ws,
+      createdAt: Date.now(), // FIX: Track creation time for TTL
     };
     terminalSessions.set(sessionKey, session);
 
@@ -335,7 +386,25 @@ app.prepare().then(startup).then(() => {
 
     // ✅ FIX: Keep-alive ping with pong timeout (detect dead connections)
     let pongTimeout: NodeJS.Timeout | null = null;
-    
+
+    // FIX (Bug 6): Shared cleanup function to avoid code duplication and
+    // ensure the connection counter is always decremented exactly once.
+    let cleanupCalled = false;
+    const cleanup = () => {
+      if (cleanupCalled) return;
+      cleanupCalled = true;
+
+      console.log(`[WebSocket] Client disconnected: ${sessionKey}`);
+      terminalSessions.delete(sessionKey);
+      terminalManager.unregisterWebSocketConnection(sessionId);
+      clearInterval(pingInterval);
+      activeWsConnections--; // FIX: Decrement connection counter
+      if (pongTimeout) {
+        clearTimeout(pongTimeout);
+        pongTimeout = null;
+      }
+    };
+
     // Ping interval - sends ping every 30s, expects pong within 60s
     const pingInterval = setInterval(() => {
       if (ws.readyState === WebSocket.OPEN) {
@@ -351,32 +420,16 @@ app.prepare().then(startup).then(() => {
       }
     }, 30000);
 
-    ws.on('close', () => {
-      console.log(`[WebSocket] Client disconnected: ${sessionKey}`);
-      terminalSessions.delete(sessionKey);
-      terminalManager.unregisterWebSocketConnection(sessionId);
-      clearInterval(pingInterval);
-      // ✅ FIX: Clear pong timeout on close
-      if (pongTimeout) {
-        clearTimeout(pongTimeout);
-      }
-    });
-
+    ws.on('close', cleanup);
     ws.on('error', (err) => {
       console.error('[WebSocket] Error:', err);
-      terminalSessions.delete(sessionKey);
-      terminalManager.unregisterWebSocketConnection(sessionId);
-      clearInterval(pingInterval);
-      // ✅ FIX: Clear pong timeout on error
-      if (pongTimeout) {
-        clearTimeout(pongTimeout);
-      }
+      cleanup();
     });
   });
 
   server.listen(port, () => {
     console.log(`> Ready on http://${hostname}:${port}`);
-    console.log(`> WebSocket server ready on ws://${hostname}:${port}`);
+    console.log(`> WebSocket paths: /ws (terminal PTY), /stream-control (LLM control)`);
   });
 });
 

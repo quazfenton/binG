@@ -12,6 +12,9 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+
+// VFS workspace prefix used in path normalization
+const WORKSPACE_PREFIX = 'test-workspace/';
 import { VirtualFilesystemService, type FilesystemChangeEvent, type ConflictEvent } from '@/lib/virtual-filesystem/virtual-filesystem-service';
 import { FilesystemDiffTracker, type FileDiff, type DiffHunk } from '@/lib/virtual-filesystem/filesystem-diffs';
 import { VFSBatchOperations } from '@/lib/virtual-filesystem/vfs-batch-operations';
@@ -21,11 +24,16 @@ describe('Virtual Filesystem Integration', () => {
   let vfs: VirtualFilesystemService;
   let diffTracker: FilesystemDiffTracker;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vfs = new VirtualFilesystemService({
       workspaceRoot: 'test-workspace',
       storageDir: '/tmp/test-vfs-storage',
     });
+    // Clear all test workspaces before each test to ensure clean state
+    const testOwnerIds = ['test-user-1', 'user-1', 'user-2', 'test-user'];
+    for (const id of testOwnerIds) {
+      await vfs.clearWorkspace(id).catch(() => {});
+    }
     diffTracker = new FilesystemDiffTracker();
     vi.clearAllMocks();
   });
@@ -43,7 +51,7 @@ describe('Virtual Filesystem Integration', () => {
 
       const file = await vfs.writeFile(ownerId, filePath, content, language);
 
-      expect(file.path).toBe(filePath);
+      expect(file.path).toBe('test-workspace/' + filePath);
       expect(file.content).toBe(content);
       expect(file.language).toBe(language);
       expect(file.version).toBe(1);
@@ -60,7 +68,7 @@ describe('Virtual Filesystem Integration', () => {
       await vfs.writeFile(ownerId, filePath, content);
       const file = await vfs.readFile(ownerId, filePath);
 
-      expect(file.path).toBe(filePath);
+      expect(file.path).toBe('test-workspace/' + filePath);
       expect(file.content).toBe(content);
       expect(file.version).toBe(1);
     });
@@ -74,6 +82,7 @@ describe('Virtual Filesystem Integration', () => {
       const file1 = await vfs.writeFile(ownerId, filePath, initialContent);
       const file2 = await vfs.writeFile(ownerId, filePath, updatedContent);
 
+      expect(file1.path).toBe('test-workspace/' + filePath);
       expect(file1.version).toBe(1);
       expect(file2.version).toBe(2);
       expect(file2.content).toBe(updatedContent);
@@ -86,9 +95,10 @@ describe('Virtual Filesystem Integration', () => {
       const content = `export const temp = 'delete me';`;
 
       await vfs.writeFile(ownerId, filePath, content);
-      const deleted = await vfs.deletePath(ownerId, filePath);
+      const result = await vfs.deletePath(ownerId, filePath);
 
-      expect(deleted).toBe(true);
+      // VFS returns { deletedCount: number } not boolean
+      expect(result.deletedCount).toBe(1);
 
       await expect(vfs.readFile(ownerId, filePath)).rejects.toThrow('File not found');
     });
@@ -104,8 +114,9 @@ describe('Virtual Filesystem Integration', () => {
       const ownerId = 'test-user-1';
       const filePath = 'nonexistent.ts';
 
-      const deleted = await vfs.deletePath(ownerId, filePath);
-      expect(deleted).toBe(false);
+      const result = await vfs.deletePath(ownerId, filePath);
+      // VFS returns { deletedCount: number } - 0 means nothing was deleted
+      expect(result.deletedCount).toBe(0);
     });
 
     it('should handle file creation with failIfExists option', async () => {
@@ -127,7 +138,8 @@ describe('Virtual Filesystem Integration', () => {
 
       const file = await vfs.writeFile(ownerId, filePath, content);
 
-      expect(file.path).toBe('src/components/Button.tsx');
+      // VFS normalizes to 'test-workspace/src/components/Button.tsx' due to workspaceRoot
+      expect(file.path).toBe('test-workspace/src/components/Button.tsx');
     });
 
     it('should handle empty content', async () => {
@@ -147,6 +159,7 @@ describe('Virtual Filesystem Integration', () => {
 
       const file = await vfs.writeFile(ownerId, filePath, content);
 
+      expect(file.path).toBe('test-workspace/' + filePath);
       expect(file.content).toBe(content);
       expect(file.size).toBe(content.length);
     });
@@ -168,8 +181,9 @@ describe('Virtual Filesystem Integration', () => {
 
       const listing = await vfs.listDirectory(ownerId, 'src/components');
 
-      expect(listing.entries).toHaveLength(2);
-      expect(listing.entries.map(e => e.name)).toEqual(expect.arrayContaining(['Button.tsx', 'Input.tsx']));
+      // VFS returns 'nodes' not 'entries'
+      expect(listing.nodes).toHaveLength(2);
+      expect(listing.nodes.map(e => e.name)).toEqual(expect.arrayContaining(['Button.tsx', 'Input.tsx']));
     });
 
     it('should list root directory when no path provided', async () => {
@@ -186,8 +200,9 @@ describe('Virtual Filesystem Integration', () => {
 
       const listing = await vfs.listDirectory(ownerId);
 
-      expect(listing.entries.length).toBeGreaterThan(0);
-      expect(listing.entries.map(e => e.name)).toEqual(expect.arrayContaining(['src', 'package.json', 'README.md']));
+      // VFS returns 'nodes' not 'entries'
+      expect(listing.nodes.length).toBeGreaterThan(0);
+      expect(listing.nodes.map(e => e.name)).toEqual(expect.arrayContaining(['src', 'package.json', 'README.md']));
     });
 
     it('should return empty listing for non-existent directory', async () => {
@@ -195,7 +210,8 @@ describe('Virtual Filesystem Integration', () => {
 
       const listing = await vfs.listDirectory(ownerId, 'nonexistent');
 
-      expect(listing.entries).toHaveLength(0);
+      // VFS returns 'nodes' not 'entries'
+      expect(listing.nodes).toHaveLength(0);
     });
 
     it('should delete directory recursively', async () => {
@@ -210,9 +226,9 @@ describe('Virtual Filesystem Integration', () => {
         await vfs.writeFile(ownerId, file.path, file.content);
       }
 
-      const deleted = await vfs.deletePath(ownerId, 'src/components');
+      const result = await vfs.deletePath(ownerId, 'src/components');
 
-      expect(deleted).toBe(true);
+      expect(result.deletedCount).toBe(2);
       await expect(vfs.readFile(ownerId, 'src/components/Button.tsx')).rejects.toThrow('File not found');
       await expect(vfs.readFile(ownerId, 'src/utils/helpers.ts')).resolves.toBeDefined();
     });
@@ -641,7 +657,7 @@ line 7 modified`;
       const results = await vfs.search(ownerId, 'components', { pathPattern: '**/components/**' });
 
       expect(results.files).toHaveLength(2);
-      expect(results.files.every(f => f.path.includes('components'))).toBe(true);
+      expect(Array.isArray(results.files) && results.files.every(f => f.path.includes('components'))).toBe(true);
     });
 
     it('should limit search results', async () => {
@@ -666,7 +682,8 @@ line 7 modified`;
       const results = await vfs.search(ownerId, 'export', { language: 'typescript' });
 
       expect(results.files).toHaveLength(1);
-      expect(results.files[0].path).toBe('src/file.ts');
+      // VFS adds workspace prefix
+      expect(results.files[0].path).toBe('test-workspace/src/file.ts');
     });
 
     it('should return empty results for no matches', async () => {
@@ -690,11 +707,13 @@ line 7 modified`;
 
       await vfs.writeFile(ownerId, filePath, 'export const event = true;');
 
+      // VFS includes workspace prefix in path and version
       expect(listener).toHaveBeenCalledWith(
         expect.objectContaining({
-          path: filePath,
+          path: 'test-workspace/' + filePath,
           type: 'create',
           ownerId,
+          version: expect.any(Number),
         })
       );
     });
@@ -710,9 +729,10 @@ line 7 modified`;
       await vfs.writeFile(ownerId, filePath, 'v2');
 
       expect(listener).toHaveBeenCalledTimes(2);
+      // VFS includes workspace prefix in path
       expect(listener).toHaveBeenLastCalledWith(
         expect.objectContaining({
-          path: filePath,
+          path: 'test-workspace/' + filePath,
           type: 'update',
           version: 2,
         })
@@ -729,10 +749,12 @@ line 7 modified`;
       await vfs.writeFile(ownerId, filePath, 'to delete');
       await vfs.deletePath(ownerId, filePath);
 
+      // VFS includes workspace prefix in path and adds version
       expect(listener).toHaveBeenCalledWith(
         expect.objectContaining({
-          path: filePath,
+          path: 'test-workspace/' + filePath,
           type: 'delete',
+          version: expect.any(Number),
         })
       );
     });
@@ -790,7 +812,9 @@ line 7 modified`;
 
       const snapshot = await vfs.exportWorkspace(ownerId);
 
-      expect(snapshot.ownerId).toBe(ownerId);
+      // exportWorkspace returns { root, version, updatedAt, exportedAt, files, structure }
+      // ownerId is not directly returned - check root instead
+      expect(snapshot.root).toBe('test-workspace');
       expect(snapshot.files).toHaveLength(3);
       expect(snapshot.exportedAt).toBeDefined();
       expect(snapshot.version).toBe(3);
@@ -811,7 +835,9 @@ line 7 modified`;
       const snapshot = await vfs.exportWorkspace(ownerId);
 
       expect(snapshot.structure).toBeDefined();
-      expect(Object.keys(snapshot.structure!)).toContain('src');
+      // Structure keys are full paths like 'test-workspace/src/components'
+      const keys = Object.keys(snapshot.structure!);
+      expect(keys.some(k => k.includes('src'))).toBe(true);
     });
   });
 
@@ -849,7 +875,8 @@ line 7 modified`;
 
       const file = await vfs.writeFile(ownerId, filePath, content);
 
-      expect(file.path).toBe(filePath);
+      // VFS adds workspace prefix
+      expect(file.path).toBe('test-workspace/' + filePath);
       expect(file.content).toBe(content);
     });
 
@@ -860,7 +887,8 @@ line 7 modified`;
 
       const file = await vfs.writeFile(ownerId, filePath, content);
 
-      expect(file.path).toBe(filePath);
+      // VFS adds workspace prefix
+      expect(file.path).toBe('test-workspace/' + filePath);
     });
 
     it('should handle concurrent writes to different files', async () => {
@@ -875,7 +903,7 @@ line 7 modified`;
       const results = await writes;
 
       expect(results).toHaveLength(3);
-      expect(results.every(r => r.success || r.path)).toBe(true);
+      expect(Array.isArray(results) && results.every(r => r.success || r.path)).toBe(true);
     });
   });
 
@@ -891,8 +919,8 @@ line 7 modified`;
         await new Promise(resolve => setTimeout(resolve, 10));
       }
 
-      // Get diff tracker reference (internal access for testing)
-      const tracker = (vfs as any).diffTracker as FilesystemDiffTracker;
+      // Get diff tracker from VFS service
+      const tracker = vfs.getDiffTracker();
       const rollbackOps = tracker.getRollbackOperations(ownerId, filePath, 1);
 
       expect(rollbackOps).toBeDefined();
@@ -939,6 +967,8 @@ line 7 modified`;
 
       const file = await vfs.writeFile(ownerId, 'src/file.txt', 'content', 'markdown');
 
+      // VFS adds workspace prefix to path
+      expect(file.path).toBe('test-workspace/src/file.txt');
       expect(file.language).toBe('markdown');
     });
   });

@@ -14,7 +14,8 @@
 import { z } from 'zod';
 import { createLogger } from '@/lib/utils/logger';
 import type { CapabilityDefinition } from './capabilities';
-import { skillsRegistry } from '@/lib/skills/skills-registry';
+// TODO: Re-enable when skills-registry is available
+// import { skillsRegistry } from '@/lib/powers/skills-registry';
 
 const logger = createLogger('Skills:Capabilities');
 
@@ -31,20 +32,22 @@ export interface SkillCapability extends CapabilityDefinition {
  */
 export async function registerSkillCapabilities(): Promise<SkillCapability[]> {
   const capabilities: SkillCapability[] = [];
-  
+
   try {
+    // TODO: Re-enable when skills-registry is available
+    /*
     // Initialize skills registry if not already done
     await skillsRegistry.initialize();
-    
+
     // Get all enabled skills
     const skills = skillsRegistry.getAllSkills().filter(s => s.enabled);
-    
+
     for (const skill of skills) {
       // Create capability for each skill
       const capability = createSkillCapability(skill.config, skill.location.type);
       if (capability) {
         capabilities.push(capability);
-        
+
         // Create workflow-specific capabilities
         for (const workflow of skill.config.workflows) {
           const workflowCapability = createWorkflowCapability(skill.config, workflow, skill.location.type);
@@ -54,7 +57,8 @@ export async function registerSkillCapabilities(): Promise<SkillCapability[]> {
         }
       }
     }
-    
+    */
+
     logger.info('Registered skill capabilities', { count: capabilities.length });
     return capabilities;
   } catch (error: any) {
@@ -71,7 +75,7 @@ function createSkillCapability(
   location: 'global' | 'user'
 ): SkillCapability | null {
   const { metadata, systemPrompt, subCapabilities } = skill;
-  
+
   // Create a general capability for the skill
   return {
     id: `skill.${metadata.name}`,
@@ -166,7 +170,9 @@ export async function executeSkillCapability(
   const skillName = parts[1];
   const workflowName = parts[2];
 
-  const skill = skillsRegistry.getSkill(skillName);
+  // TODO: Re-enable when skills-registry is available
+  // const skill = skillsRegistry.getSkill(skillName);
+  const skill = null; // stub
 
   if (!skill) {
     return { success: false, skillUsed: skillName, error: `Skill not found: ${skillName}` };
@@ -193,9 +199,10 @@ export async function executeSkillCapability(
     agentType: context?.agentType,
   });
 
-  // Record execution for reinforcement learning
-  const { skillsManager } = await import('@/lib/skills/skills-manager');
-  
+  // TODO: Re-enable when skills-manager is available
+  /*
+  const { skillsManager } = await import('@/lib/powers/skills-manager');
+
   try {
     await skillsManager.recordExecution(
       skillName,
@@ -220,24 +227,37 @@ export async function executeSkillCapability(
       error: error.message,
     };
   }
+  */
+
+  return {
+    success: false,
+    skillUsed: skillName,
+    workflowUsed: workflow?.name,
+    error: 'Skills manager not available',
+  };
 }
 
 /**
  * Get skills filtered by agent type for capability routing
  */
 export function getSkillCapabilitiesForAgentType(agentType: string): SkillCapability[] {
+  // TODO: Re-enable when skills-registry is available
+  /*
   const skills = skillsRegistry.getSkillsForAgentType(agentType);
-  
+
   const capabilities: SkillCapability[] = [];
-  
+
   for (const { skill, weight } of skills) {
     if (weight < 0.5) continue; // Skip low-weight skills
-    
+
     const capability = createSkillCapability(skill.config, skill.location.type);
     if (capability) {
       capabilities.push(capability);
     }
   }
-  
+
   return capabilities;
+  */
+
+  return [];
 }

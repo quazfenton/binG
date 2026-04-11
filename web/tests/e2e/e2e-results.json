@@ -1,0 +1,104 @@
+[
+  {
+    "test": "Authentication",
+    "passed": true,
+    "details": "Logged in as test@test.com",
+    "duration": 358
+  },
+  {
+    "test": "Parser: Compact format",
+    "passed": true,
+    "details": "Content contains expected path: test.txt",
+    "duration": 9928
+  },
+  {
+    "test": "Parser: Special token format",
+    "passed": true,
+    "details": "Content contains expected path: config.json",
+    "duration": 7384
+  },
+  {
+    "test": "Parser: Fenced batch_write",
+    "passed": true,
+    "details": "Content contains expected path: app.js",
+    "duration": 7638
+  },
+  {
+    "test": "Parser: Tool call fenced",
+    "passed": true,
+    "details": "Content contains expected path: readme.md",
+    "duration": 7336
+  },
+  {
+    "test": "File Edit: Compact file_edit tag",
+    "passed": true,
+    "details": "Response references expected files (1)",
+    "duration": 2500
+  },
+  {
+    "test": "File Edit: Fenced diff format",
+    "passed": true,
+    "details": "Response references expected files (1)",
+    "duration": 3996
+  },
+  {
+    "test": "File Edit: Bash heredoc",
+    "passed": true,
+    "details": "LLM responded about test.sh, EOF, cat (natural language, not structured)",
+    "duration": 3810
+  },
+  {
+    "test": "File Edit: Multi-file batch_write",
+    "passed": true,
+    "details": "Response references expected files (2)",
+    "duration": 4456
+  },
+  {
+    "test": "File Edit: LLM natural output (no forced format)",
+    "passed": true,
+    "details": "LLM responded about config.json (natural language, not structured)",
+    "duration": 7132
+  },
+  {
+    "test": "File Edit: ```tool_call format",
+    "passed": true,
+    "details": "Response references expected files (1)",
+    "duration": 9098
+  },
+  {
+    "test": "Auto-Continue Detection",
+    "passed": true,
+    "details": "Multi-file response detected",
+    "duration": 22337
+  },
+  {
+    "test": "VFS MCP Tool Calls",
+    "passed": true,
+    "details": "Tool call markers detected in response",
+    "duration": 10411
+  },
+  {
+    "test": "Shell/PTY Natural Language",
+    "passed": true,
+    "details": "Shell command execution detected",
+    "duration": 4104
+  },
+  {
+    "test": "Streaming Response",
+    "passed": true,
+    "details": "done=true, content=21 chars (token events may be missed due to timing)",
+    "duration": 7285
+  },
+  {
+    "test": "No Infinite Loops",
+    "passed": true,
+    "details": "Completed in 24053ms",
+    "duration": 24053
+  },
+  {
+    "test": "Context Bundling",
+    "passed": true,
+    "details": "Context from previous turn was maintained",
+    "duration": 16335
+  }
+]

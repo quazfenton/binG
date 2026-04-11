@@ -1,13 +1,13 @@
 // Merge local provider list with Puter list, mark external models and prioritise unknown models.
 // Exports helper to get flat model list and Puter adapter getter.
 
-import localProviders from './llm-providers-data' // adjust if your data file is elsewhere
+import { PROVIDERS } from './llm-providers' // use existing providers
 import { fetchPuterModels, getPuterAdapter } from './puter'
 
 type ProviderModel = { id: string; name?: string; meta?: any; external?: boolean; labelSymbol?: string }
 
 export async function getProvidersWithPuter(defaultApiKey?: string, puterBase?: string) {
-  const providers: Record<string, any> = { ...localProviders }
+  const providers: Record<string, any> = { ...PROVIDERS }
 
   const puterList = await fetchPuterModels(puterBase).catch(() => [])
   const puterModels: Record<string, ProviderModel> = {}

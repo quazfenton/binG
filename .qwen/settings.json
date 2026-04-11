@@ -10,7 +10,23 @@
       "Bash(@if *)",
       "Bash(move *)",
       "Bash(d *)",
-      "Bash(@echo *)"
+      "Bash(@echo *)",
+      "Bash(dir *)",
+      "Bash(git diff *)",
+      "Bash(set *)",
+      "Bash(%path%)",
+      "Bash(cargo check *)",
+      "Bash(npx *)",
+      "Bash(findstr *)",
+      "Bash(curl *)",
+      "Bash(fc *)",
+      "Bash(ren *)",
+      "Bash(type *)",
+      "Bash(timeout *)",
+      "Bash(copy *)"
+    ],
+    "exclude": [
+      "Bash(git checkout)"
     ]
   },
   "$version": 3

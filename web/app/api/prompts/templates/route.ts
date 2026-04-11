@@ -11,16 +11,6 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import {
-  getTemplates,
-  createTemplate,
-  updateTemplate,
-  deleteTemplate,
-  testPrompt,
-  comparePrompts,
-  getTestHistory,
-  type PromptCategory,
-} from '@/lib/prompt-engineering/prompt-service';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('API:Prompts');
@@ -28,16 +18,21 @@ const logger = createLogger('API:Prompts');
 // GET - List templates
 export async function GET(request: NextRequest) {
   try {
+    // TODO: Re-implement when prompt-service is available
+    /*
     const searchParams = request.nextUrl.searchParams;
     const category = searchParams.get('category') as PromptCategory | undefined;
-    
+
     const templates = await getTemplates(category);
-    
+
     return NextResponse.json({
       success: true,
       templates,
       count: templates.length,
     });
+    */
+
+    return NextResponse.json({ error: 'This endpoint is not implemented' }, { status: 501 });
   } catch (error: any) {
     logger.error('Failed to get templates:', error);
     return NextResponse.json(
@@ -50,15 +45,20 @@ export async function GET(request: NextRequest) {
 // POST - Create template
 export async function POST(request: NextRequest) {
   try {
+    // TODO: Re-implement when prompt-service is available
+    /*
     const body = await request.json();
     const template = await createTemplate(body);
-    
+
     logger.info('Template created:', { id: template.id });
-    
+
     return NextResponse.json({
       success: true,
       template,
     });
+    */
+
+    return NextResponse.json({ error: 'This endpoint is not implemented' }, { status: 501 });
   } catch (error: any) {
     logger.error('Failed to create template:', error);
     return NextResponse.json(

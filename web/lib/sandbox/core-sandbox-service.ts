@@ -6,6 +6,8 @@ import { provisionBaseImage, warmPool } from './base-image'
 import { randomUUID } from 'crypto'
 import { quotaManager } from '../management/quota-manager'
 import { createLogger } from '@/lib/utils/logger'
+import { isDesktopMode } from '@bing/platform/env'
+import { sandboxFilesystemSync } from '@/lib/virtual-filesystem/sync/sandbox-filesystem-sync'
 
 const log = createLogger('SandboxService')
 
@@ -31,8 +33,16 @@ export const coreSandboxService = {
   },
   destroySandbox: async (sandboxId: string) => {
     const service = new SandboxService()
-    // Find session and destroy
-    return { success: true }
+    try {
+      const provider = await service['resolveProviderForSandbox'](sandboxId)
+      await provider.destroySandbox(sandboxId)
+      service['sandboxProviderById'].delete(sandboxId)
+      log.info(`Sandbox destroyed via singleton: ${sandboxId}`)
+      return { success: true }
+    } catch (error: any) {
+      log.error(`Failed to destroy sandbox via singleton: ${error.message}`)
+      return { success: false, error: error.message }
+    }
   },
 }
 
@@ -42,8 +52,11 @@ export class SandboxService {
    private sandboxProviderById = new Map<string, SandboxProvider>()
 
    constructor() {
-     this.primaryProviderType = (process.env.SANDBOX_PROVIDER as SandboxProviderType) || 'daytona'
-     log.debug(`SandboxService initialized with primary provider: ${this.primaryProviderType}`)
+      // In desktop mode, default to the desktop provider
+      this.primaryProviderType = isDesktopMode()
+        ? 'desktop'
+        : (process.env.SANDBOX_PROVIDER as SandboxProviderType) || 'daytona';
+      log.debug(`SandboxService initialized with primary provider: ${this.primaryProviderType}`);
    }
 
    private async getProvider(): Promise<SandboxProvider> {
@@ -67,19 +80,36 @@ export class SandboxService {
   }
 
   private inferProviderFromSandboxId(sandboxId: string): SandboxProviderType | null {
+    // Explicit prefix matches (highest priority)
+    if (sandboxId.startsWith('daytona-')) return 'daytona'
+    if (sandboxId.startsWith('runloop-')) return 'runloop'
+    if (sandboxId.startsWith('desktop-')) return 'desktop'
+    if (sandboxId.startsWith('agentfs-')) return 'agentfs'
+    if (sandboxId.startsWith('modal-')) return 'modal'
     if (sandboxId.startsWith('mistral-agent-')) return 'mistral-agent'
-    if (sandboxId.startsWith('mistral-')) return 'mistral'
     // Check specific blaxel-mcp prefix BEFORE the general blaxel- prefix
     if (sandboxId.startsWith('blaxel-mcp-')) return 'blaxel-mcp'
     if (sandboxId.startsWith('blaxel-')) return 'blaxel'
     if (sandboxId.startsWith('sprite-') || sandboxId.startsWith('bing-')) return 'sprites'
-    if (sandboxId.startsWith('csb-') || sandboxId.length === 6) return 'codesandbox'
+    if (sandboxId.startsWith('csb-')) return 'codesandbox'
     if (sandboxId.startsWith('webcontainer-')) return 'webcontainer'
     if (sandboxId.startsWith('wc-fs-')) return 'webcontainer-filesystem'
     if (sandboxId.startsWith('wc-spawn-')) return 'webcontainer-spawn'
     if (sandboxId.startsWith('osb-ci-')) return 'opensandbox-code-interpreter'
     if (sandboxId.startsWith('osb-agent-')) return 'opensandbox-agent'
     if (sandboxId.startsWith('opensandbox-') || sandboxId.startsWith('osb-')) return 'opensandbox'
+    if (sandboxId.startsWith('microsandbox-') || sandboxId.startsWith('micro-')) return 'microsandbox'
+    // LocalSandboxHandle fallback (no container — skip VFS sync)
+    if (sandboxId.startsWith('local-')) return 'microsandbox'
+    // Pattern-based detection (lower priority)
+    // E2B: 18-25 char alphanumeric (no hyphens)
+    if (/^[a-z0-9]{18,25}$/i.test(sandboxId)) return 'e2b'
+    // CodeSandbox: exactly 6-char alphanumeric
+    if (/^[a-z0-9]{6}$/i.test(sandboxId)) return 'codesandbox'
+    // Blaxel/Runloop/Mistral: short codes (5-7 chars)
+    if (/^[a-z0-9]{5,7}$/i.test(sandboxId)) return 'blaxel'
+    // UUID format (Daytona)
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sandboxId)) return 'daytona'
     return null
   }
 
@@ -144,6 +174,15 @@ export class SandboxService {
 
     this.sandboxProviderById.set(handle.id, provider)
     quotaManager.recordUsage(provider.name)
+    
+    // Start VFS sync for bidirectional file sync between VFS database and sandbox
+    try {
+      sandboxFilesystemSync.startSync(handle.id, userId);
+      log.debug('VFS sync started for sandbox', { sandboxId: handle.id, userId });
+    } catch (syncErr: any) {
+      log.warn('Failed to start VFS sync for sandbox:', syncErr.message);
+    }
+    
     return handle
   }
 
@@ -176,6 +215,7 @@ export class SandboxService {
     // For resolving existing sandboxes, try ALL configured providers (not just quota-available ones)
     // Sandboxes created before quota was hit should remain accessible even if provider is now over quota
     const allProviderTypes: SandboxProviderType[] = [
+      'desktop',
       'daytona',
       'runloop',
       'blaxel',
@@ -190,7 +230,7 @@ export class SandboxService {
       'opensandbox-agent',
       'microsandbox',
       'e2b',
-      'mistral',
+      'mistral-agent',
       'vercel-sandbox'
     ]
     const configuredProviders: SandboxProviderType[] = []
@@ -239,7 +279,12 @@ export class SandboxService {
 
     // Only use warm pool when no custom config is specified
     // Custom configs (language, resources, env vars) require fresh sandbox
-    if (process.env.SANDBOX_WARM_POOL === 'true' && !config && preferredType === this.primaryProviderType) {
+    // Disable warm pool for desktop provider to avoid provider mismatch
+    const useWarmPool = process.env.SANDBOX_WARM_POOL === 'true'
+      && !config
+      && preferredType === this.primaryProviderType
+      && this.primaryProviderType !== 'desktop';
+    if (useWarmPool) {
       log.debug('Attempting to acquire sandbox from warm pool')
       try {
         handle = await warmPool.acquire(userId)

@@ -25,6 +25,27 @@ import { normalizeScopePath, resolveScopedPath } from '../scope-utils';
 import { createLogger } from '@/lib/utils/logger';
 import { buildApiHeaders } from '@/lib/utils';
 
+// ============================================================================
+// Comprehensive sync exclusion patterns — all languages
+// ============================================================================
+const SYNC_EXCLUDE_PATTERNS: RegExp[] = [
+  /\/node_modules\//, /\/\.next\//, /\/\.nuxt\//, /\/\.cache\//,
+  /\/\.parcel-cache\//, /\/\.turbo\//, /\/\.vite\//, /\/coverage\//,
+  /\/__pycache__\//, /\/\.venv\//, /\/venv\//, /\/\.virtualenv\//,
+  /\/site-packages\//, /\/\.eggs\//, /\/pip-selfcheck\.json/,
+  /\/\.pytest_cache\//, /\/\.mypy_cache\//, /\/\.tox\//, /\/\.nox\//,
+  /\/\.ruff_cache\//, /\/\.ipynb_checkpoints\//,
+  /\/target\//, /\/\.gradle\//, /\/\.cargo\/registry\//,
+  /\/vendor\//, /\/pkg\//, /\/bin\//, /\/obj\//, /\/\.nuget\//,
+  /\/\.bundle\//, /\/\.gem\//,
+  /\/dist\//, /\/build\//, /\/out\//, /\/\.idea\//,
+  /\/Thumbs\.db/, /\/\.DS_Store/, /\.tmp$/, /\.bak$/, /\.swp$/, /\.swo$/, /~$/, /\.part$/,
+];
+
+function shouldExcludeFromSync(filePath: string): boolean {
+  return SYNC_EXCLUDE_PATTERNS.some(pattern => pattern.test(filePath));
+}
+
 // VFS API endpoints - used instead of importing server-only virtualFilesystem
 const VFS_API_BASE = '/api/filesystem';
 
@@ -128,7 +149,7 @@ export class LocalFolderSyncService {
 
     try {
       // Initialize OPFS for this workspace
-      const workspaceId = `${ownerId}:${sessionId}`;
+      const workspaceId = `${ownerId}$${sessionId}`;
       await opfsCore.initialize(workspaceId);
 
       // Create OPFS root directory for synced folder
@@ -194,6 +215,16 @@ export class LocalFolderSyncService {
       
       for (const entry of entries) {
         if (entry.type === 'file') {
+          // === EXCLUSION CHECK: Use relative path to prevent false matches ===
+          // e.g., if opfsRoot is "/opfs/build" and entry.path is "/opfs/build/app.js",
+          // we should match "app.js" not "/opfs/build/app.js" which could contain "build"
+          const relativePath = entry.path.startsWith(folder.opfsRoot)
+            ? entry.path.slice(folder.opfsRoot.length)
+            : entry.path;
+          if (shouldExcludeFromSync(relativePath)) {
+            continue;
+          }
+
           try {
             // Read from OPFS
             const file = await opfsCore.readFile(entry.path);
@@ -277,6 +308,14 @@ export class LocalFolderSyncService {
       
       for (const node of listing.data.nodes) {
         if (node.type === 'file') {
+          // === EXCLUSION CHECK: Use relative VFS path to prevent false matches ===
+          const relativePath = node.path.startsWith(folder.vfsPath)
+            ? node.path.slice(folder.vfsPath.length)
+            : node.path;
+          if (shouldExcludeFromSync(relativePath)) {
+            continue;
+          }
+
           try {
             // Read from VFS
             const file = await vfsReadFile(folder.ownerId, node.path);

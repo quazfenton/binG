@@ -28,9 +28,18 @@ export async function handleAgentLoop(event: EventRecord): Promise<any> {
     // Get LLM service
     const { llmService } = await import('@/lib/chat/llm-providers');
 
+    // Derive provider from model name
+    const provider = model.startsWith('gpt') || model.startsWith('o1') || model.startsWith('o3')
+      ? 'openai'
+      : model.startsWith('claude')
+        ? 'anthropic'
+        : model.startsWith('gemini')
+          ? 'google'
+          : 'openrouter';
+
     // Run agent loop
     const response = await llmService.generateResponse({
-      provider: 'openrouter',
+      provider,
       model,
       messages: [
         {
@@ -264,19 +273,19 @@ Provide your analysis and recommendation.`,
 // Helper functions
 
 async function performSearch(query: string, depth: number): Promise<any[]> {
-  // Placeholder - integrate with search API
+  // TODO: Integrate with web.search capability via CapabilityRouter
   logger.info('Performing search', { query, depth });
-  return Array(depth).fill({ title: 'Search result', url: 'https://example.com' });
+  return [];
 }
 
 async function analyzeSource(source: any, query: string): Promise<string> {
-  // Placeholder - integrate with LLM for analysis
-  return `Analysis of ${source.title} for query: ${query}`;
+  // TODO: Integrate with LLM via CapabilityRouter for source analysis
+  return `[Analysis pending] Source: ${source.title || 'unknown'}`;
 }
 
 async function synthesizeResearch(analyses: any[], query: string): Promise<string> {
-  // Placeholder - integrate with LLM for synthesis
-  return `Synthesis of ${analyses.length} sources for: ${query}`;
+  // TODO: Integrate with LLM via CapabilityRouter for research synthesis
+  return `Research synthesis for "${query}" based on ${analyses.length} sources — integrate with LLM capability for full implementation`;
 }
 
 async function storeAgentOutput(userId: string, type: string, output: string): Promise<string> {
@@ -295,8 +304,40 @@ async function storeResearchResult(
 }
 
 async function storeSkill(userId: string, skill: any): Promise<string> {
-  // Placeholder - store in database
-  return `skill_${Date.now()}`;
+  const { powersRegistry } = await import('@/lib/powers');
+  const { skillStore } = await import('@/lib/services/skill-store');
+
+  // Build skill name from skill data
+  const skillName = skill.name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '') || `skill-${Date.now()}`;
+
+  // 1. Register in powers registry (replaces old SkillsManager filesystem storage)
+  (powersRegistry as any).registerPower({
+    id: skillName,
+    name: skill.name || skillName,
+    description: skill.description || 'Auto-extracted skill from successful execution',
+    actions: (skill.workflows || []).map((w: any) => ({ name: w.name || 'assist', description: w.description || '' })),
+    tags: [...(skill.tags || []), 'auto-extracted', `user:${userId}`],
+    rawMarkdown: skill.implementation || '',
+  });
+
+  // 2. Store in database via SkillStore
+  const dbSkill = await skillStore.create({
+    userId,
+    name: skillName,
+    description: skill.description || 'Auto-extracted skill from successful execution',
+    systemPrompt: skill.implementation || '// Skill implementation',
+    workflows: skill.workflows || [],
+    subCapabilities: skill.subCapabilities || [],
+    tags: [...(skill.tags || []), 'auto-extracted', `user:${userId}`],
+    location: `.agents/skills/user/${skillName}`,
+    source: 'auto-extracted',
+  });
+
+  logger.info('Skill stored (powers registry + DB)', { skillName, userId, dbId: dbSkill.id });
+  return skillName;
 }
 
 function parseSkillFromResponse(response: string): any {
@@ -312,24 +353,55 @@ function parseSkillFromResponse(response: string): any {
 }
 
 function checkConsensus(responses: any[]): { reached: boolean; result?: string } {
-  // Simple consensus check - all agree
-  const allSame = responses.every((r) => r.response === responses[0].response);
-  if (allSame) {
-    return { reached: true, result: responses[0].response };
+  // Check for semantic consensus — at least 2/3 of agents agree on core outcome
+  if (responses.length < 2) return { reached: true, result: responses[0]?.response };
+
+  const twoThirds = Math.ceil(responses.length * 2 / 3);
+  const keywordCounts = new Map<string, number>();
+
+  for (const r of responses) {
+    // Extract key outcome words (lowercased, no stop words)
+    const words = (r.response || '')
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(w => w.length > 4 && !['there', 'their', 'about', 'would', 'could', 'should', 'which'].includes(w));
+    for (const word of words) {
+      keywordCounts.set(word, (keywordCounts.get(word) || 0) + 1);
+    }
   }
+
+  // Find keywords that appear in >= 2/3 of responses
+  const consensusWords = [...keywordCounts.entries()]
+    .filter(([, count]) => count >= twoThirds)
+    .map(([word]) => word);
+
+  if (consensusWords.length >= 3) {
+    // Return the response with the most overlap with consensus keywords
+    const best = responses.reduce((best, r) => {
+      const words = (r.response || '').toLowerCase().split(/\s+/);
+      const overlap = consensusWords.filter(w => words.includes(w)).length;
+      return overlap > best.score ? { response: r.response, score: overlap } : best;
+    }, { response: '', score: 0 });
+
+    return { reached: true, result: best.response };
+  }
+
   return { reached: false };
 }
 
 function useMajorityVote(responses: any[]): string {
-  // Simple majority vote
-  return responses[0].response;
+  // Return the median-length response as a proxy for "most reasoned"
+  const sorted = [...responses].sort((a, b) =>
+    (b.response || '').length - (a.response || '').length
+  );
+  return sorted[Math.floor(sorted.length / 2)]?.response || sorted[0]?.response || '';
 }
 
 /**
  * Register binG custom handlers
  */
-export function registerbinGHandlers(): void {
-  const { registerHandler } = require('../router');
+export async function registerbinGHandlers(): Promise<void> {
+  const { registerHandler } = await import('../router');
 
   registerHandler('AGENT_LOOP', handleAgentLoop);
   registerHandler('RESEARCH_TASK', handleResearchTask);

@@ -79,6 +79,10 @@ export function isProviderConfigured(provider: string): boolean {
     'cohere': 'COHERE_API_KEY',
     'together': 'TOGETHER_API_KEY',
     'replicate': 'REPLICATE_API_TOKEN',
+    'nvidia': 'NVIDIA_API_KEY',
+    'groq': 'GROQ_API_KEY',
+    'deepinfra': 'DEEPINFRA_API_KEY',
+    'fireworks': 'FIREWORKS_API_KEY',
     // Note: Composio is a tool integration platform, not an LLM provider
   };
   

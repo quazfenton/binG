@@ -1,0 +1,87 @@
+{
+  "timestamp": "2026-04-09T21:05:17.993Z",
+  "body": {
+    "messages": [
+      {
+        "role": "user",
+        "content": "Create hello.py that prints exactly hello terminal e2e, then run it using the terminal or shell tool and show the command output."
+      }
+    ],
+    "provider": "mistral",
+    "model": "mistral-small-latest",
+    "stream": true,
+    "conversationId": "e2e-terminal-run"
+  },
+  "status": 200,
+  "headers": {
+    "access-control-allow-headers": "Content-Type, Authorization",
+    "access-control-allow-methods": "GET, POST, PUT, DELETE, OPTIONS",
+    "access-control-allow-origin": "*",
+    "cache-control": "no-cache, no-store, must-revalidate",
+    "connection": "keep-alive",
+    "content-security-policy": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; connect-src 'self' https: ws: wss: blob:; font-src 'self' data: https:; frame-src 'self' https: http://localhost:*; frame-ancestors 'self'; base-uri 'self'; form-action 'self';",
+    "content-type": "text/event-stream",
+    "cross-origin-resource-policy": "cross-origin",
+    "date": "Thu, 09 Apr 2026 21:05:10 GMT",
+    "expires": "0",
+    "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=(), magnetometer=(), gyroscope=(self \"https://www.youtube.com\"), accelerometer=(self \"https://www.youtube.com\")",
+    "pragma": "no-cache",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+    "transfer-encoding": "chunked",
+    "vary": "rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch",
+    "x-accel-buffering": "no",
+    "x-content-type-options": "nosniff",
+    "x-csp-nonce-script": "KX-JjUZohx6xbtU1cERGME1UhzS3RW4w0ICBl0JGYj4",
+    "x-csp-nonce-style": "v7cQYLe-j2HfxGMtI9XwjxC7GCYtSyNgWLtXfamgVDA",
+    "x-frame-options": "SAMEORIGIN",
+    "x-request-id": "req_1775768697735_q9fol0bzvvg",
+    "x-xss-protection": "1; mode=block"
+  },
+  "raw": "event: step\ndata: {\"step\":\"Start agentic pipeline\",\"status\":\"started\",\"timestamp\":1775768710597,\"stepIndex\":0}\n\nevent: step\ndata: {\"step\":\"Start agentic pipeline\",\"status\":\"completed\",\"timestamp\":1775768717987,\"stepIndex\":1}\n\nevent: done\ndata: {\"success\":true,\"content\":\"No response generated\",\"messageMetadata\":{\"agent\":\"unified\",\"mode\":\"v1-api\",\"processingSteps\":[{\"step\":\"Start agentic pipeline\",\"status\":\"started\",\"timestamp\":1775768710597,\"stepIndex\":0},{\"step\":\"Start agentic pipeline\",\"status\":\"completed\",\"timestamp\":1775768717987,\"stepIndex\":1}]},\"data\":{\"success\":true,\"response\":\"No response generated\",\"steps\":[],\"totalSteps\":0,\"mode\":\"v1-api\",\"metadata\":{\"provider\":\"mistral\",\"model\":\"mistral-small-latest\",\"duration\":753,\"toolInvocations\":[],\"fallbackChain\":[]}}}\n\n",
+  "eventCount": 3,
+  "tokenText": "",
+  "toolEvents": [],
+  "fileEvents": [],
+  "done": {
+    "event": "done",
+    "rawData": "{\"success\":true,\"content\":\"No response generated\",\"messageMetadata\":{\"agent\":\"unified\",\"mode\":\"v1-api\",\"processingSteps\":[{\"step\":\"Start agentic pipeline\",\"status\":\"started\",\"timestamp\":1775768710597,\"stepIndex\":0},{\"step\":\"Start agentic pipeline\",\"status\":\"completed\",\"timestamp\":1775768717987,\"stepIndex\":1}]},\"data\":{\"success\":true,\"response\":\"No response generated\",\"steps\":[],\"totalSteps\":0,\"mode\":\"v1-api\",\"metadata\":{\"provider\":\"mistral\",\"model\":\"mistral-small-latest\",\"duration\":753,\"toolInvocations\":[],\"fallbackChain\":[]}}}",
+    "data": {
+      "success": true,
+      "content": "No response generated",
+      "messageMetadata": {
+        "agent": "unified",
+        "mode": "v1-api",
+        "processingSteps": [
+          {
+            "step": "Start agentic pipeline",
+            "status": "started",
+            "timestamp": 1775768710597,
+            "stepIndex": 0
+          },
+          {
+            "step": "Start agentic pipeline",
+            "status": "completed",
+            "timestamp": 1775768717987,
+            "stepIndex": 1
+          }
+        ]
+      },
+      "data": {
+        "success": true,
+        "response": "No response generated",
+        "steps": [],
+        "totalSteps": 0,
+        "mode": "v1-api",
+        "metadata": {
+          "provider": "mistral",
+          "model": "mistral-small-latest",
+          "duration": 753,
+          "toolInvocations": [],
+          "fallbackChain": []
+        }
+      }
+    }
+  },
+  "cookies": {}
+}

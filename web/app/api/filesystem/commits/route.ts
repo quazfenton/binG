@@ -52,7 +52,7 @@ export async function GET(req: NextRequest) {
     const ownerId = authResolution.ownerId;
 
     // Session IDs are scoped to owner
-    const scopedSessionId = `${ownerId}:${sessionId}`;
+    const scopedSessionId = `${ownerId}$${sessionId}`;
 
     const commitManager = new ShadowCommitManager();
     const history = await commitManager.getCommitHistory(scopedSessionId, limit);

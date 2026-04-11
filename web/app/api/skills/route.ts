@@ -13,8 +13,6 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { auth0 } from '@/lib/auth0';
-import { skillsManager } from '@/lib/skills/skills-manager';
-import { promptEngineeringService } from '@/lib/skills/prompt-engineering';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('API:Skills');
@@ -25,6 +23,8 @@ const logger = createLogger('API:Skills');
 
 export async function GET(request: NextRequest) {
   try {
+    // TODO: Re-implement when skills-manager and prompt-engineering are available
+    /*
     const searchParams = request.nextUrl.searchParams;
     const agentType = searchParams.get('agentType');
     const query = searchParams.get('q');
@@ -62,6 +62,9 @@ export async function GET(request: NextRequest) {
       })),
       count: skills.length,
     });
+    */
+
+    return NextResponse.json({ error: 'This endpoint is not implemented' }, { status: 501 });
   } catch (error: any) {
     logger.error('Failed to list skills:', error);
     return NextResponse.json(
@@ -80,6 +83,8 @@ export async function GET_skill(
   { params }: { params: Promise<{ name: string }> }
 ) {
   try {
+    // TODO: Re-implement when skills-manager is available
+    /*
     const { name } = await params;
 
     await skillsManager.loadAllSkills();
@@ -102,6 +107,9 @@ export async function GET_skill(
         reinforcement: skill.reinforcement,
       },
     });
+    */
+
+    return NextResponse.json({ error: 'This endpoint is not implemented' }, { status: 501 });
   } catch (error: any) {
     logger.error('Failed to get skill:', error);
     return NextResponse.json(
@@ -114,6 +122,8 @@ export async function GET_skill(
 // Separate handler for POST to avoid method conflict
 export async function POST(request: NextRequest) {
   try {
+    // TODO: Re-implement when skills-manager is available
+    /*
     // Auth check
     const session = await auth0.getSession(request);
     if (!session?.user) {
@@ -152,6 +162,9 @@ export async function POST(request: NextRequest) {
       success: true,
       message: 'Skill added successfully',
     });
+    */
+
+    return NextResponse.json({ error: 'This endpoint is not implemented' }, { status: 501 });
   } catch (error: any) {
     logger.error('Failed to add skill:', error);
     return NextResponse.json(
@@ -167,6 +180,8 @@ export async function PUT(
   { params }: { params: Promise<{ name: string }> }
 ) {
   try {
+    // TODO: Re-implement when skills-manager is available
+    /*
     // Auth check
     const session = await auth0.getSession(request);
     if (!session?.user) {
@@ -214,6 +229,9 @@ export async function PUT(
       message: 'Weight updated successfully',
       weight: value,
     });
+    */
+
+    return NextResponse.json({ error: 'This endpoint is not implemented' }, { status: 501 });
   } catch (error: any) {
     logger.error('Failed to update weight:', error);
     return NextResponse.json(
@@ -229,6 +247,8 @@ export async function POST_feedback(
   { params }: { params: Promise<{ name: string }> }
 ) {
   try {
+    // TODO: Re-implement when prompt-engineering is available
+    /*
     const { name } = await params;
     const body = await request.json();
     const { agentType, workflowName, success, executionTime, notes, correction } = body;
@@ -254,6 +274,9 @@ export async function POST_feedback(
       success: true,
       message: 'Feedback recorded successfully',
     });
+    */
+
+    return NextResponse.json({ error: 'This endpoint is not implemented' }, { status: 501 });
   } catch (error: any) {
     logger.error('Failed to record feedback:', error);
     return NextResponse.json(
@@ -269,6 +292,8 @@ export async function GET_analytics(
   { params }: { params: Promise<{ name: string }> }
 ) {
   try {
+    // TODO: Re-implement when skills-manager is available
+    /*
     const { name } = await params;
 
     await skillsManager.loadAllSkills();
@@ -293,6 +318,9 @@ export async function GET_analytics(
         agentTypeWeights: skill.reinforcement.weights.byAgentType,
       },
     });
+    */
+
+    return NextResponse.json({ error: 'This endpoint is not implemented' }, { status: 501 });
   } catch (error: any) {
     logger.error('Failed to get analytics:', error);
     return NextResponse.json(
@@ -305,6 +333,8 @@ export async function GET_analytics(
 // GET handler for recommendations
 export async function GET_recommend(request: NextRequest) {
   try {
+    // TODO: Re-implement when prompt-engineering is available
+    /*
     const searchParams = request.nextUrl.searchParams;
     const task = searchParams.get('task');
     const agentType = searchParams.get('agentType') || 'cli';
@@ -327,6 +357,9 @@ export async function GET_recommend(request: NextRequest) {
       success: true,
       recommendations,
     });
+    */
+
+    return NextResponse.json({ error: 'This endpoint is not implemented' }, { status: 501 });
   } catch (error: any) {
     logger.error('Failed to get recommendations:', error);
     return NextResponse.json(

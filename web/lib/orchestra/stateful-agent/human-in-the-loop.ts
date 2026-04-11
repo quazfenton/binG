@@ -1,5 +1,6 @@
 import type { ApprovalRequest } from './schemas';
 import { hitlAuditLogger } from './hitl-audit-logger';
+import { minimatch } from 'minimatch';
 
 export interface InterruptRequest {
   type: 'approval_required';
@@ -24,6 +25,7 @@ class HumanInTheLoopManager {
     resolve: (response: InterruptResponse) => void;
     createdAt: Date;
     requestLogged: boolean;
+    resolved: boolean;  // Flag to prevent race condition
   }> = new Map();
 
   private handler: InterruptHandler | null = null;
@@ -64,10 +66,9 @@ class HumanInTheLoopManager {
         resolve,
         createdAt: new Date(),
         requestLogged: !!userId,
+        resolved: false,
       });
     });
-
-    this.handler(request);
 
     // Parse timeout with validation (default: 5 minutes, min: 10s, max: 30 minutes)
     const configuredTimeout = parseInt(process.env.HITL_TIMEOUT || '300000');
@@ -77,15 +78,40 @@ class HumanInTheLoopManager {
 
     const timeoutPromise = new Promise<InterruptResponse>((resolve) => {
       setTimeout(() => {
-        // Clean up pending interrupt to prevent memory leak
-        if (this.pendingInterrupts.has(interruptId)) {
+        // Check and set resolved flag atomically to prevent race condition
+        const pending = this.pendingInterrupts.get(interruptId);
+        if (pending && !pending.resolved) {
+          pending.resolved = true;
           this.pendingInterrupts.delete(interruptId);
           resolve({ approved: false, feedback: 'Approval request timed out' });
         }
       }, timeout);
     });
 
+    // Race handler completion against timeout - handler runs in background without blocking timeout
+    const handlerPromise = (async () => {
+      try {
+        await this.handler(request);
+      } catch (handlerError) {
+        console.error('[HITL] Handler error:', handlerError);
+        // Resolve with error fallback - don't leave pending
+        const pending = this.pendingInterrupts.get(interruptId);
+        if (pending && !pending.resolved) {
+          pending.resolved = true;
+          pending.resolve({ approved: false, feedback: `Handler error: ${handlerError instanceof Error ? handlerError.message : String(handlerError)}` });
+          this.pendingInterrupts.delete(interruptId);
+        }
+      }
+    })();
+
     const response = await Promise.race([promise, timeoutPromise]);
+    
+    // Ensure we only resolve once by checking the resolved flag
+    const pending = this.pendingInterrupts.get(interruptId);
+    if (pending && !pending.resolved) {
+      pending.resolved = true;
+      this.pendingInterrupts.delete(interruptId);
+    }
     
     // Log approval decision for audit
     const responseTimeMs = Date.now() - requestStartTime;
@@ -239,40 +265,18 @@ export function toolNameMatcher(names: string[]): ApprovalCondition {
 
 /**
  * Condition: Check if file path matches pattern
- * Supports glob patterns including ** for recursive directory matching
+ * Uses minimatch library for proper glob pattern matching
  */
 export function filePathMatcher(patterns: string[]): ApprovalCondition {
   return (_toolName: string, _params: any, context?: ApprovalContext) => {
     if (!context?.filePath) return false;
     const filePath = context.filePath;
     
-    return patterns.some(pattern => {
-      // Handle ** (recursive directory) patterns
-      if (pattern.includes('**')) {
-        // Convert glob pattern to regex
-        // **/.env* matches .env files in any directory
-        // **/secrets/* matches anything under any secrets/ directory
-        const regexPattern = pattern
-          .replace(/[.+?^${}()|[\]\\]/g, '\\$&') // Escape regex special chars
-          .replace(/\*\*/g, '.*') // ** matches any path segments
-          .replace(/\*/g, '[^/]*'); // * matches within a segment (not across /)
-        const regex = new RegExp(`^${regexPattern}$`);
-        return regex.test(filePath);
-      }
-      
-      // Handle simple * prefix patterns (e.g., *.env)
-      if (pattern.startsWith('*') && !pattern.includes('**')) {
-        return filePath.endsWith(pattern.slice(1));
-      }
-      
-      // Handle simple * suffix patterns (e.g., .env*)
-      if (pattern.endsWith('*') && !pattern.includes('**')) {
-        return filePath.startsWith(pattern.slice(0, -1));
-      }
-      
-      // Exact match
-      return filePath === pattern;
-    });
+    // Use minimatch for proper glob matching
+    // Options: dot=true allows matching dotfiles, nocase=true for case-insensitive
+    return patterns.some(pattern => 
+      minimatch(filePath, pattern, { dot: true, nocase: false })
+    );
   };
 }
 
@@ -312,7 +316,7 @@ export function createShellCommandRule(): ApprovalRule {
   return {
     id: 'shell-commands',
     name: 'Shell Command Approval',
-    condition: toolNameMatcher(['execShell', 'runCommand', 'executeCommand']),
+    condition: toolNameMatcher(['execShell', 'exec_shell', 'runCommand', 'run_command', 'executeCommand', 'execute_command']),
     action: 'require_approval',
     timeout: 300000, // 5 minutes
     description: 'Require approval for shell command execution',
@@ -340,7 +344,7 @@ export function createReadOnlyRule(): ApprovalRule {
   return {
     id: 'read-only',
     name: 'Read-Only Auto-Approval',
-    condition: toolNameMatcher(['readFile', 'listFiles', 'dir', 'ls', 'cat']),
+    condition: toolNameMatcher(['readFile', 'read_file', 'listFiles', 'list_dir', 'dir', 'ls', 'cat']),
     action: 'auto_approve',
     description: 'Auto-approve read-only operations',
   };
@@ -354,7 +358,7 @@ export function createHighRiskFileRule(): ApprovalRule {
     id: 'high-risk-files',
     name: 'High-Risk File Operations',
     condition: allConditions(
-      toolNameMatcher(['writeFile', 'deleteFile', 'applyDiff']),
+      toolNameMatcher(['writeFile', 'write_file', 'deleteFile', 'delete_file', 'applyDiff', 'apply_diff']),
       riskLevelMatcher(['high'])
     ),
     action: 'require_approval',
@@ -428,6 +432,70 @@ export const permissiveWorkflow: ApprovalWorkflow = {
   updatedAt: Date.now(),
 };
 
+/**
+ * Desktop workflow - auto-approves nearly everything for local execution.
+ * Only blocks truly destructive system-level operations (format disk, fork bomb).
+ */
+export const desktopWorkflow: ApprovalWorkflow = {
+  id: 'desktop',
+  name: 'Desktop Workflow',
+  type: 'auto',
+  rules: [
+    // FIX: Comprehensive destructive command matching - covers all dangerous shell patterns
+    {
+      id: 'system-destructive',
+      name: 'System-Destructive Operations',
+      condition: anyConditions(
+        // Filesystem destruction: rm -rf with dangerous targets
+        (toolName, params) => /rm\s+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*)\s+(\/|~|\/\*|\$HOME|\$PWD)/i.test(params?.command || ''),
+        (toolName, params) => /rm\s+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*)\s+--no-preserve-root/i.test(params?.command || ''),
+        (toolName, params) => /rm\s+.*--no-preserve-root/i.test(params?.command || ''),
+        (toolName, params) => /sudo\s+.*rm\s+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*)/i.test(params?.command || ''),
+
+        // Disk/partition destruction: mkfs, fdisk, format (but not --help)
+        (toolName, params) => {
+          const cmd = params?.command || '';
+          return /(^|\s|sudo\s+)(mkfs|mkfs\.\w+|fdisk|parted|format)\s/i.test(cmd) && !/\s--help/i.test(cmd);
+        },
+        (toolName, params) => /(^|\s|sudo\s+)dd\s+if=\/dev\/(zero|null)/i.test(params?.command || ''),
+        (toolName, params) => /sudo\s+.*dd\s+/i.test(params?.command || ''),
+
+        // Dangerous permission changes
+        (toolName, params) => /chmod\s+(-R\s+)?777\s+(\/|\/\w)/i.test(params?.command || ''),
+        (toolName, params) => /chmod\s+-R\s/i.test(params?.command || ''),
+        (toolName, params) => /chown\s+-R\s/i.test(params?.command || ''),
+        (toolName, params) => /sudo\s+.*(chmod|chown)\s/i.test(params?.command || ''),
+
+        // Device file overwrites: > /dev/sda, > /dev/hda, etc.
+        (toolName, params) => />\s*\/dev\/(sd[a-z]|hd[a-z]|nvme|vda|xvd|loop|ram|zero|null)/i.test(params?.command || ''),
+
+        // Fork bomb variants (multiple patterns to catch obfuscation)
+        (toolName, params) => /:\s*\(\)\s*\{.*:\|.*:&.*\}\s*;/.test(params?.command || ''),
+        (toolName, params) => /:\(\)/.test(params?.command || ''),
+        (toolName, params) => /fork\s*bomb/i.test(params?.command || ''),
+
+        // Pipe to shell execution: curl | bash, wget | sh
+        (toolName, params) => /(curl|wget)\s+.*\|\s*(bash|sh|zsh|fish|dash)/i.test(params?.command || ''),
+        (toolName, params) => /(curl|wget)\s+.*\|\|\s*(bash|sh|zsh|fish|dash)/i.test(params?.command || ''),
+
+        // System shutdown/reboot/init (but not --help)
+        (toolName, params) => {
+          const cmd = params?.command || '';
+          return /(^|\s|sudo\s+)(shutdown|reboot|halt|poweroff)(\s|$)/i.test(cmd) && !/\s--help/i.test(cmd);
+        },
+        (toolName, params) => /(^|\s|sudo\s+)init\s+[06]/i.test(params?.command || ''),
+        (toolName, params) => /systemctl\s+(reboot|poweroff|halt|suspend|hibernate)/i.test(params?.command || ''),
+      ),
+      action: 'require_approval',
+      timeout: 60000,
+      description: 'Block system-destructive commands in desktop mode',
+    },
+  ],
+  defaultAction: 'auto_approve',
+  createdAt: Date.now(),
+  updatedAt: Date.now(),
+};
+
 // ==================== Workflow Registry ====================
 
 /**
@@ -437,6 +505,7 @@ export const workflowRegistry: Map<string, ApprovalWorkflow> = new Map([
   ['default', defaultWorkflow],
   ['strict', strictWorkflow],
   ['permissive', permissiveWorkflow],
+  ['desktop', desktopWorkflow],
 ]);
 
 /**
@@ -457,7 +526,10 @@ export function registerWorkflow(workflow: ApprovalWorkflow): void {
  * Get active workflow from environment or use default
  */
 export function getActiveWorkflow(): ApprovalWorkflow {
-  const workflowId = process.env.HITL_WORKFLOW_ID || 'default';
+  // Desktop mode defaults to the permissive desktop workflow
+  const isDesktop = process.env.DESKTOP_MODE === 'true' || process.env.DESKTOP_LOCAL_EXECUTION === 'true';
+  const defaultId = isDesktop ? 'desktop' : 'default';
+  const workflowId = process.env.HITL_WORKFLOW_ID || defaultId;
   return getWorkflow(workflowId) || defaultWorkflow;
 }
 
@@ -492,7 +564,9 @@ export function evaluateWorkflow(
   }
 
   // No rules matched - use default action
-  const defaultAction = workflow.defaultAction || 'auto_approve';
+  // FIX: Fail closed (require approval) when rule evaluation fails to prevent bypassing security
+  // Only use auto_approve if explicitly set in defaultAction
+  const defaultAction = workflow.defaultAction || 'require_approval';
   return {
     requiresApproval: defaultAction === 'require_approval',
     action: defaultAction,

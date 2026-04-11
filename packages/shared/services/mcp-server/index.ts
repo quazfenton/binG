@@ -12,22 +12,41 @@
  */
 
 import { createServer } from 'http';
-import { createLogger } from '@/lib/utils/logger';
-import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp';
 
-const logger = createLogger('MCPServer');
+// Dynamic import of MCP tools — avoids @/ path alias issues in shared package
+// The web layer re-exports these, so we import from the web module at runtime
+let getMCPToolsForAI_SDK: ((userId: string) => Promise<any[]>) | undefined;
+let callMCPToolFromAI_SDK: ((name: string, args: Record<string, any>, userId: string) => Promise<any>) | undefined;
 
-// Configuration from environment
+async function ensureMCPFunctions() {
+  if (!getMCPToolsForAI_SDK || !callMCPToolFromAI_SDK) {
+    try {
+      const mcp = await import('../../../../web/lib/mcp/architecture-integration');
+      getMCPToolsForAI_SDK = mcp.getMCPToolsForAI_SDK;
+      callMCPToolFromAI_SDK = mcp.callMCPToolFromAI_SDK;
+    } catch (err) {
+      // Fallback: try absolute path from web build
+      console.warn('[MCPServer] Could not import MCP functions via relative path, trying dynamic import');
+    }
+  }
+}
+
 const PORT = parseInt(process.env.MCP_PORT || '8888', 10);
 const WORKSPACE_ROOT = process.env.WORKSPACE_ROOT || '/workspace';
 const VFS_ROOT = process.env.VFS_ROOT || '/workspace/vfs';
+
+function log(level: 'info' | 'warn' | 'error', msg: string, meta?: any) {
+  const prefix = `[MCPServer]`;
+  const tag = level === 'error' ? 'ERROR' : level === 'warn' ? 'WARN' : 'INFO';
+  console.log(`${prefix} ${tag}: ${msg}`, meta ?? '');
+}
 
 class MCPServerService {
   private tools: any[] = [];
   private initialized = false;
 
   async initialize(): Promise<void> {
-    logger.info('Initializing MCP server...', {
+    log('info', 'Initializing MCP server...', {
       port: PORT,
       workspaceRoot: WORKSPACE_ROOT,
       vfsRoot: VFS_ROOT,
@@ -35,10 +54,15 @@ class MCPServerService {
 
     // Load MCP tools
     try {
-      this.tools = await getMCPToolsForAI_SDK('mcp-server');
-      logger.info(`Loaded ${this.tools.length} MCP tools`);
+      await ensureMCPFunctions();
+      if (getMCPToolsForAI_SDK) {
+        this.tools = await getMCPToolsForAI_SDK('mcp-server');
+        log('info', `Loaded ${this.tools.length} MCP tools`);
+      } else {
+        log('warn', 'MCP tools not available — imports failed');
+      }
     } catch (error: any) {
-      logger.warn('Failed to load MCP tools:', error.message);
+      log('warn', `Failed to load MCP tools: ${error.message}`);
     }
 
     this.initialized = true;
@@ -67,7 +91,7 @@ class MCPServerService {
         error: result.error,
       };
     } catch (error: any) {
-      logger.error(`Tool execution failed: ${name}`, error.message);
+      log('error', `Tool execution failed: ${name}`, error.message);
       return {
         success: false,
         output: '',
@@ -186,7 +210,7 @@ async function main() {
     await mcpServerService.initialize();
 
     server.listen(PORT, () => {
-      logger.info(`MCP server listening on port ${PORT}`);
+      log('info', `MCP server listening on port ${PORT}`);
     });
 
     // Graceful shutdown
@@ -200,7 +224,7 @@ async function main() {
       process.exit(0);
     });
   } catch (error: any) {
-    logger.error('Failed to start MCP server:', error.message);
+    log('error', `Failed to start MCP server: ${error.message}`);
     process.exit(1);
   }
 }

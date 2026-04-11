@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { History, Clock, RotateCcw, FileCode, CheckCircle, XCircle, Loader2, ChevronDown, ChevronUp, ExternalLink } from 'lucide-react';
+import { History, Clock, RotateCcw, FileCode, CheckCircle, XCircle, Loader2, ChevronDown, ChevronUp, RefreshCw, ExternalLink } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
 import { buildApiHeaders } from '@/lib/utils';
@@ -81,25 +81,38 @@ export function VersionHistoryPanel({
     }
   }, [sessionId, isExpanded, fetchVersions]);
 
+  // Auto-refresh versions every 10 seconds when expanded (for live updates)
+  useEffect(() => {
+    if (!sessionId || !isExpanded) return;
+    const interval = setInterval(fetchVersions, 10000);
+    return () => clearInterval(interval);
+  }, [sessionId, isExpanded, fetchVersions]);
+
   const handleRollback = useCallback(async (version: number) => {
     if (!sessionId || isRollingBack) return;
-    
+
     setIsRollingBack(true);
     try {
       const response = await fetch(`/api/gateway/git/${sessionId}/rollback`, {
         method: 'POST',
         headers: buildApiHeaders(),
         credentials: 'include',
-        body: JSON.stringify({ version }),
+        body: JSON.stringify({ version, mode: 'shadow' }),
       });
-      
-      if (!response.ok) throw new Error('Rollback failed');
-      
+
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+        throw new Error(err.error || 'Rollback failed');
+      }
+
       const result = await response.json();
       
       if (result.success) {
+        const desc = result.filesRestored
+          ? `Restored ${result.filesRestored} file(s) to version ${version}`
+          : `Restored to version ${version}`;
         toast.success('Successfully rolled back', {
-          description: `Restored to version ${version}`,
+          description: desc,
         });
         onVersionSelect?.(version);
         fetchVersions(); // Refresh list
@@ -160,6 +173,13 @@ export function VersionHistoryPanel({
               v{currentVersion}
             </span>
           )}
+          <button
+            onClick={(e) => { e.stopPropagation(); fetchVersions(); }}
+            className="p-0.5 rounded hover:bg-blue-200/50 dark:hover:bg-blue-800/30 transition-colors"
+            title="Refresh version history"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 text-blue-500 dark:text-blue-400 ${isLoading ? 'animate-spin' : ''}`} />
+          </button>
           {isExpanded ? (
             <ChevronUp className="h-4 w-4 text-blue-600 dark:text-blue-400" />
           ) : (
@@ -185,7 +205,7 @@ export function VersionHistoryPanel({
                 No versions yet
               </p>
               <p className="text-[10px] text-blue-500 dark:text-blue-500 mt-1">
-                Versions will appear as files are modified
+                File edits via the LLM or API will create version entries here
               </p>
             </div>
           ) : (

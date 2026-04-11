@@ -17,6 +17,7 @@ import { MCPClient } from './client'
 import type {
   MCPServerConfig,
   MCPTransportConfig,
+  MCPTransportType,
   MCPTool,
   MCPToolResult,
 } from './types'
@@ -25,43 +26,109 @@ import { join } from 'path'
 
 /**
  * Load MCP configuration from JSON file
+ *
+ * Supports two file formats:
+ * 1. mcp.config.json — stdio servers (command/args, desktop mode)
+ * 2. mcp.web.json — HTTP/SSE remote servers (URL-based, web + desktop)
+ *
+ * Server format:
+ *   stdio:  { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-foo"] }
+ *   http:   { "transport": { "type": "http", "url": "https://..." } }
+ *   sse:    { "transport": { "type": "sse", "url": "https://.../sse" } }
+ *
+ * Auth (http/sse only):
+ *   { "transport": { "type": "http", "url": "...", "apiKey": "...", "bearerToken": "..." } }
  */
 export function loadMCPConfigFromJSON(configPath?: string): {
   servers: MCPServerConfig[]
   settings: MCPSettings
 } | null {
+  const servers: MCPServerConfig[] = []
+
+  // Try the default path first, then mcp.web.json if not found
   const path = configPath || join(process.cwd(), 'mcp.config.json')
-  
-  if (!existsSync(path)) {
-    console.log('[MCP Config] No config file found at', path)
-    return null
+  const webPath = join(process.cwd(), 'mcp.web.json')
+
+  for (const filePath of [path, webPath]) {
+    if (!existsSync(filePath)) continue
+
+    try {
+      const content = readFileSync(filePath, 'utf-8')
+      const config = JSON.parse(content)
+
+      const parsed = Object.entries(config.mcpServers || {})
+        .map(([id, server]: [string, any]): MCPServerConfig | null => {
+          // Detect transport type
+          if (server.transport?.type === 'http' || server.transport?.type === 'sse') {
+            // HTTP / SSE transport — web compatible
+            return {
+              id,
+              name: server.description || id,
+              enabled: server.enabled !== false,
+              timeout: server.timeout || 30000,
+              transport: {
+                type: server.transport.type as MCPTransportType,
+                url: server.transport.url,
+                apiKey: server.transport.apiKey,
+                bearerToken: server.transport.bearerToken,
+                headers: server.transport.headers,
+              } as MCPTransportConfig,
+            }
+          }
+
+          if (server.command) {
+            // stdio transport — desktop only
+            return {
+              id,
+              name: server.description || id,
+              enabled: server.enabled !== false,
+              timeout: server.timeout || 30000,
+              transport: {
+                type: 'stdio',
+                command: server.command,
+                args: server.args || [],
+                env: server.env,
+              } as MCPTransportConfig,
+            }
+          }
+
+          // Legacy: assume stdio if only 'url' is present without transport.type
+          if (server.url) {
+            return {
+              id,
+              name: server.description || id,
+              enabled: server.enabled !== false,
+              timeout: server.timeout || 30000,
+              transport: {
+                type: 'http',
+                url: server.url,
+              } as MCPTransportConfig,
+            }
+          }
+
+          return null
+        })
+        .filter((s): s is MCPServerConfig => s !== null)
+
+      servers.push(...parsed)
+      if (parsed.length > 0) {
+        console.log(`[MCP Config] Loaded ${parsed.length} server(s) from ${filePath}`)
+      }
+
+      // Load settings from the first file that has them
+      if (config.mcpSettings && Object.keys(globalSettings).length === 0) {
+        globalSettings = config.mcpSettings
+      }
+    } catch (error) {
+      console.error(`[MCP Config] Failed to load config file: ${filePath}`, error)
+    }
   }
 
-  try {
-    const content = readFileSync(path, 'utf-8')
-    const config = JSON.parse(content)
+  if (servers.length === 0) return null
 
-    const servers: MCPServerConfig[] = Object.entries(config.mcpServers || {})
-      .map(([id, server]: [string, any]) => ({
-        id,
-        name: server.description || id,
-        enabled: server.enabled !== false,
-        timeout: server.timeout || 30000,
-        transport: {
-          type: 'stdio',
-          command: server.command,
-          args: server.args || [],
-          env: server.env,
-        } as MCPTransportConfig,
-      }))
-
-    return {
-      servers,
-      settings: config.mcpSettings || {},
-    }
-  } catch (error) {
-    console.error('[MCP Config] Failed to load config file:', error)
-    return null
+  return {
+    servers,
+    settings: globalSettings,
   }
 }
 
@@ -164,19 +231,32 @@ export function parseMCPServerConfigs(): MCPServerConfig[] {
 
 /**
  * Initialize MCP with configurations from environment
+ *
+ * SAFETY: In web mode, stdio (npx) servers are skipped.
+ * Only remote HTTP servers are connected in web mode.
  */
 export async function initializeMCP(): Promise<MCPToolRegistry> {
+  const isDesktop = process.env.DESKTOP_MODE === 'true' || process.env.DESKTOP_LOCAL_EXECUTION === 'true';
   const configs = parseMCPServerConfigs()
-  
-  for (const config of configs) {
+
+  // Filter out stdio servers in web mode
+  const filteredConfigs = configs.filter(config => {
+    if (config.transport?.type === 'stdio' && !isDesktop) {
+      console.log(`[MCP] Skipping stdio server in web mode: ${config.name}`)
+      return false
+    }
+    return true
+  })
+
+  for (const config of filteredConfigs) {
     mcpToolRegistry.registerServer(config)
   }
-  
-  if (configs.length > 0) {
-    console.log(`[MCP] Connecting to ${configs.length} server(s)...`)
+
+  if (filteredConfigs.length > 0) {
+    console.log(`[MCP] Connecting to ${filteredConfigs.length} server(s)...`)
     await mcpToolRegistry.connectAll()
   }
-  
+
   return mcpToolRegistry
 }
 

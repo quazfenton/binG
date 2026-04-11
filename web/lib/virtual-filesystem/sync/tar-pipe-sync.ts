@@ -65,9 +65,24 @@ export async function syncVFSToSandbox(
 ): Promise<TarPipeSyncResult> {
   const {
     minFilesForTarPipe = 10,
-    exclude = [/node_modules/, /\.git/, /dist/, /\.next/],
+    exclude,
     onProgress,
   } = options;
+
+  // Use caller-provided patterns, or fall back to comprehensive defaults
+  const excludePatterns = exclude ?? [
+    /\.git\//,
+    /node_modules\//, /\.next\//, /\.nuxt\//, /dist\//, /build\//, /out\//,
+    /\.cache\//, /\.parcel-cache\//, /\.turbo\//, /\.vite\//,
+    /__pycache__\//, /\.venv\//, /venv\//, /\.virtualenv\//, /site-packages\//,
+    /pip-selfcheck\.json/, /\.pytest_cache\//, /\.mypy_cache\//, /\.tox\//, /\.nox\//,
+    /\.ruff_cache\//, /\.ipynb_checkpoints\//,
+    /target\//, /\.gradle\//, /\.cargo\/registry\//,
+    /vendor\//, /pkg\//, /bin\//, /obj\//, /\.nuget\//,
+    /\.bundle\//, /\.gem\//,
+    /\.hg\//, /\.svn\//, /\.idea\//,
+    /Thumbs\.db/, /\.DS_Store/, /\.tmp$/, /\.bak$/, /\.swp$/, /\.swo$/, /~$/, /\.part$/,
+  ];
 
   const startTime = Date.now();
 
@@ -75,7 +90,7 @@ export async function syncVFSToSandbox(
     // Get all files from VFS
     const files = await (vfs as any).getWorkspaceFiles?.(ownerId) || [];
     const filteredFiles = files.filter(f => {
-      return !exclude.some(pattern => pattern.test(f.path));
+      return !excludePatterns.some(pattern => pattern.test(f.path));
     });
 
     const totalFiles = filteredFiles.length;
@@ -200,9 +215,24 @@ export async function syncSandboxToVFS(
 ): Promise<TarPipeSyncResult> {
   const {
     minFilesForTarPipe = 10,
-    exclude = [/node_modules/, /\.git/, /dist/, /\.next/],
+    exclude,
     onProgress,
   } = options;
+
+  // Use caller-provided patterns, or fall back to comprehensive defaults
+  const excludePatternsBack = exclude ?? [
+    /\.git\//,
+    /node_modules\//, /\.next\//, /\.nuxt\//, /dist\//, /build\//, /out\//,
+    /\.cache\//, /\.parcel-cache\//, /\.turbo\//, /\.vite\//,
+    /__pycache__\//, /\.venv\//, /venv\//, /\.virtualenv\//, /site-packages\//,
+    /pip-selfcheck\.json/, /\.pytest_cache\//, /\.mypy_cache\//, /\.tox\//, /\.nox\//,
+    /\.ruff_cache\//, /\.ipynb_checkpoints\//,
+    /target\//, /\.gradle\//, /\.cargo\/registry\//,
+    /vendor\//, /pkg\//, /bin\//, /obj\//, /\.nuget\//,
+    /\.bundle\//, /\.gem\//,
+    /\.hg\//, /\.svn\//, /\.idea\//,
+    /Thumbs\.db/, /\.DS_Store/, /\.tmp$/, /\.bak$/, /\.swp$/, /\.swo$/, /~$/, /\.part$/,
+  ];
 
   const startTime = Date.now();
 
@@ -223,7 +253,7 @@ export async function syncSandboxToVFS(
 
     const files = (listResult.files as any[])
       .filter(f => f.type === 'file')
-      .filter(f => !exclude.some(pattern => pattern.test(f.path)));
+      .filter(f => !excludePatternsBack.some(pattern => pattern.test(f.path)));
 
     const totalFiles = files.length;
 

@@ -39,6 +39,11 @@ import type { FilesystemOwnerResolution } from '@/lib/virtual-filesystem/resolve
 
 export const runtime = 'nodejs';
 
+// SECURITY: O(1) body size guard — checked BEFORE buffering files into memory
+// Lower than FileImportService.MAX_TOTAL_SIZE (500MB) to prevent OOM from in-memory buffering
+// until streaming multipart parsing is implemented
+const MAX_IMPORT_BODY_BYTES = 120 * 1024 * 1024; // 120MB safety cap until streaming multipart parsing
+
 // Request schema for validation
 const importOptionsSchema = z.object({
   sessionId: z.string().min(1, 'Session ID is required').max(200),
@@ -114,12 +119,34 @@ export async function POST(req: NextRequest) {
 
     const options = optionsValidation.data;
 
+    // SECURITY: O(1) body size check BEFORE buffering files into memory
+    const contentLength = req.headers.get('content-length');
+    if (contentLength && parseInt(contentLength, 10) > MAX_IMPORT_BODY_BYTES) {
+      const errorResponse = NextResponse.json(
+        { error: `Request body too large (max ${MAX_IMPORT_BODY_BYTES / (1024 * 1024)}MB)` },
+        { status: 413 },
+      );
+      return withAnonSessionCookie(errorResponse, filesystemOwnerResolution || {
+        ownerId,
+        source: (authResult?.source as any) || 'anonymous',
+        isAuthenticated: !!authResult?.success,
+      });
+    }
+
     // Extract files from form data
     const files: Array<{ name: string; content: string; path?: string }> = [];
     const fileEntries = formData.getAll('files');
 
     for (const entry of fileEntries) {
       if (entry instanceof File) {
+        // SECURITY: O(1) per-file size check BEFORE reading content into memory.
+        // File.size is a native browser property — no buffering required.
+        const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
+        if (entry.size > MAX_FILE_SIZE) {
+          console.warn('[File Import] Skipping oversized file:', entry.name, 'size:', entry.size);
+          continue;
+        }
+
         try {
           const content = await entry.text();
           files.push({

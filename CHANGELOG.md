@@ -1,0 +1,820 @@
+﻿# Changelog
+
+All notable changes to this project will be documented in this file.
+
+- **unified-router.ts (P0)** — `userId` and `conversationId` were never passed to `UnifiedAgentConfig`, causing all VFS operations to fall back to anonymous defaults. Now both fields are forwarded from the request.
+- **stateful-agent.ts (P0)** — `conversationId` was never defined in `StatefulAgentOptions`. Constructor now extracts it from composite sessionId using `lastIndexOf(':')`, or uses explicit `conversationId` option.
+- **stateful-agent.ts (P0)** — Context pack used composite `sessionId` as VFS `ownerId`, causing read mismatches. Now uses `this.userId` instead.
+- **stateful-agent route.ts (P0)** — `runStatefulAgent` never received `conversationId`, so VFS writes went to wrong session folder. Now passes `conversationId: sessionId`.
+- **langgraph nodes (P0)** — All 4 nodes (planner, executor, verifier, self-healing) created StatefulAgent without `conversationId`. Now extract it from composite `sessionId` using `lastIndexOf(':')`.
+- **route.ts (P0)** — UnifiedAgentConfig now includes `conversationId: resolvedConversationId` for proper VFS session isolation.
+- **route.ts (P0)** — V2 gateway/local execution success paths now call `applyFilesystemEditsFromResponse` to actually persist file edits to VFS (previously only V1 fallback path did this).
+
+### Additional Bug Fixes
+- **agent-fs-bridge.ts (P0)** — Double-prefixed sandbox read path. `sanitizeSandboxPath()` returns the FULL path with basePath, but code was prepending `sandboxPath` again. Fixed to use `sanitizeSandboxPath(relativePath, sandboxPath)` directly.
+- **antigravity callback (P1)** — Missing OAuth state validation (CSRF vulnerability). Added check for missing `state` parameter.
+- **antigravity callback (P1)** — Account/token persisted via `saveAntigravityAccount()` after code exchange (was already fixed in session).
+- **antigravity-accounts.ts (P2)** — Malformed `cached_quota` JSON caused entire account query to fail. Now wraps `JSON.parse` in try/catch per row, logging warning and keeping account without quota.
+- **tar-pipe-sync.ts (P1)** — `.git/` was missing from default exclude patterns (both VFS→sandbox and sandbox→VFS). Added `/\.git\//` to both exclusion lists.
+- **local-folder-sync.ts (P2)** — Exclusion matching used absolute paths (OPFS/VFS), causing entire folders to be skipped when the folder name matched an excluded token. Now uses relative paths for exclusion matching.
+- **arcade-service.ts (P2)** — `waitForProviderAuth` polling used `getConnections()` which short-circuits to cached connections. Added `_fetchConnections()` private method that bypasses cache, used during polling.
+- **arcade-service.ts (P1)** — `getProviderToken`'s `timeoutMs` was ignored when auth was pending. Now calls `waitForProviderAuth()` with the timeout to poll until completion.
+- **prompt-parameters.codec.ts (P2)** — `customInstructions` trimming was inconsistent between `encodeParams` (trimmed) and `diffParams` (not trimmed). Both now trim for consistent change detection.
+- **prompt-parameters.codec.ts (P2)** — `customInstructions` encoded into 1 byte caused high hash collision. Increased to 2-byte hash range (1-65535).
+- **schedule-bootstrap.ts (P2)** — Module-level `basicScheduleRegistered` guard prevented re-registration after `registry.clear()` (e.g., tests). Now also checks `registry.getTool('task.schedule')`.
+- **arcade/auth/route.ts (P1)** — `POSTToken` handler was embedded in auth/route.ts with no actual `/token` route file. Created `/api/integrations/arcade/token/route.ts`.
+- **arcade/auth/route.ts (P1)** — `flowId` was ignored in Phase 2, `waitForProviderAuth` called with placeholder response. Now uses `_fetchConnections` for fresh polling during wait.
+
+## [Unreleased] — Streaming Improvements + Prompt Composer + Tool Adapter + Antigravity OAuth + Bug Fixes
+
+### 🎯 WebSocket Control Channel (Integrated into Next.js Server — No Extra Port)
+- **`web/lib/streaming/stream-control-handler.ts`** — Handles WS upgrades for LLM control signals: `pause`, `resume`, `continue`, `abort`, `request_state`, `set_max_tokens`. Replaces `[CONTINUE_REQUESTED]` text hack with structured bidirectional events.
+- **`web/lib/streaming/stream-state-manager.ts`** — Server-side stream state tracking: token counting, content capping (2MB), pause buffer (5MB cap), continuation promise system, abort safety. Final-state guards prevent double-reject and state machine confusion.
+- **`web/hooks/use-stream-control.ts`** — Client hook that auto-connects when `streamId` arrives from SSE `init` event. Auto-reconnects with exponential backoff (5 attempts).
+- **`web/server.ts`** — Added `/stream-control` path to WS upgrade handler with async socket safety guards.
+- **`web/app/api/chat/route.ts`** — Lazy imports for stream-state-manager and stream-control-handler to avoid `ws` module resolution during instrumentation context.
+
+### 🧩 Prompt Composer — Dynamic Tool Injection
+- **`packages/shared/agent/prompt-composer.ts`** (589 lines) — Decomposes 6500+ lines of monolithic prompts into composable sections. Parses at module load, caches per role. Fixed import path to use relative path (`../../../web/lib/tools/capabilities`) since `@/lib` alias is only defined in `web/tsconfig.json`.
+- **Dynamic tool blocks** — `generateDynamicToolBlock()` reads from `ALL_CAPABILITIES` registry, replacing hardcoded `TOOL_CAPABILITIES` markdown.
+- **A/B testing** — Register alternate section versions, compose with `composeRole('coder', {directives: getSectionTemplate('directives.v2')})`.
+
+### 🔧 Vercel AI Tool Adapter — Type Safety + Priority Filtering
+- **Eliminated all `(tool as any)` casts** — 6 unsafe type casts replaced with proper `tool({})` usage.
+- **Schema preservation** — `toToolParameters()` unwraps ZodEffects/ZodOptional/ZodLazy to preserve original Zod schemas.
+- **Real priority filtering** — `createToolSet({priority: ['vfs', 'capability', 'mcp']})` properly deduplicates by tool name.
+
+### 🔐 Antigravity OAuth (Per-User + Master Account)
+- **`web/lib/llm/antigravity-provider.ts`** — Complete OAuth with PKCE, token refresh, Google/Anthropic API routing.
+- **Master + per-user accounts** — Users connect their own Google accounts. Server-level master account (env var) acts as fallback.
+- Admin routes, setup page, auth helper.
+
+### 🐛 Bug Fixes
+- **Infinite auto-continue loop** — `smart-context.ts` now tracks continuation count per conversation (bounded Map, max 500 entries), not per-request. Prevents infinite retriggering after empty message failure.
+- **Arcade 401 "Invalid API credentials"** — Added `.trim()` to `ARCADE_API_KEY` at all 6 read points. `.env` files often have trailing whitespace/newlines.
+- **E2B path `/home/user/C:\home\user`** — Fixed `SandboxSecurityManager.resolvePath` to detect and strip embedded Windows paths in Linux paths.
+- **401 on `/api/user/preferences`** — Added `{ allowAnonymous: true }` to GET handler so unauthenticated users get defaults.
+- **`project-analysis.ts` import** — Fixed `../capabilities` → `./capabilities`.
+- **`vercel-ai-tools.ts` tool index** — Fixed capability re-exports from `./capabilities` instead of non-existent `./terminal`.
+- **Duplicate lines in sandbox files** — Removed duplicate `if (sandboxId.startsWith('mistral-agent-'))` lines in `sandbox-service-bridge.ts` and `core-sandbox-service.ts` from earlier bulk replace.
+- **Mistral sandbox provider** — `enabled: !!process.env.MISTRAL_API_KEY` (was `false`).
+- **PTY terminal prompt** — Now shows user ID + workspace name instead of full filesystem path.
+- **Capability derivation** — `deriveCapabilitiesFromExecution` now records actual tools used (file.read, file.write, file.delete, sandbox.shell, web.fetch, repo.git, etc.) instead of blindly recording `['file.read', 'file.write']` on every execution including failures.
+- **Mount guard** — `use-enhanced-chat.ts` now checks `isMountedRef.current` before calling `handleSubmit` from auto-continue setTimeout callbacks. Prevents React warnings on unmount.
+- **Memory leak** — Conversation continuation counter Map now has LRU-style eviction (max 500 entries).
+
+### 📈 Max Tokens Defaults Increased
+- `vercel-ai-streaming.ts`: 4096 → **65536**
+- `llm-providers.ts`: 2000 → **65536**
+- `parameter-optimizer.ts`: complex 5000 → **32768**, simple 3000 → **8192**, content length cap 8000 → **65536**
+
+### 🧪 Tests
+- **34/34 passing** — `stream-state-manager.test.ts` (16), `prompt-composer.test.ts` (18)
+
+---
+
+## [Unreleased] — Local PTY Security + Trigger.dev Stubs Fixed + Timeout Fixes + Capability Router Input Validation
+
+### 🔒 Capability Router Input Validation (Security Gate)
+- **LLM inputs bypassed Zod schema validation** — The capability router forwarded raw inputs to providers without validating against each capability's inputSchema. Malformed LLM outputs (e.g., `{ task: "..." }` instead of `{ path: "file.txt" }`) caused cryptic provider errors instead of clear validation failures. Fixed: `router.execute()` now runs `capability.inputSchema.safeParse(input)` before forwarding to any provider. Returns `Invalid input` error with field-level details when validation fails.
+- **Bootstrapped agency sent `{ task }` instead of structured capability inputs** — Added `buildCapabilityInput()` method that maps natural language tasks to structured capability inputs (e.g., `file.read` → `{ path: 'test.txt' }`). Used in both chain and single-capability execution paths.
+- **sandbox.shell `cwd` was completely ignored** — Router validated `cwd` in inputSchema but never passed it to the execution layer. Fixed: `LLMAgentOptions` now includes `cwd` and `enableSelfHeal` fields; router passes `cwd` through to `runAgentLoop`; `OpencodeV2Provider.runAgentLoop()` resolves `cwd` from VFS scoped paths (`project/sessions/002`) to real filesystem paths.
+
+### 🔄 Bash Self-Heal + Natural Language Terminal Execution
+- **Bash self-heal: automatic error recovery** — When a shell command fails, `selfHealAndRetry()` analyzes the error output and auto-corrects: missing dependencies → `npm install`, port conflicts → kill existing process, file not found → list directory. Up to 3 retry attempts with different corrective actions.
+- **Natural language → command translation** — `translateNaturalLanguageToCommand()` converts prompts like "run the project", "build it", "test everything" into actual shell commands by detecting project type (npm, Rust, Go, Python).
+- **Project detection** — `detectProjectCommand()` inspects `package.json` (dev/start/serve/build scripts), `Cargo.toml`, `go.mod`, `requirements.txt` to determine the correct run command.
+- **LLMAgentOptions extended** — Added `cwd?: string` and `enableSelfHeal?: boolean` to `LLMAgentOptions` interface. Router passes `input.cwd` through to provider; provider resolves VFS scoped paths to real filesystem paths.
+
+### 🧠 Universal Project Detection + Auto-Context (Any Agent/Provider)
+- **New `web/lib/project-detection/` module** — Consolidates scattered detection logic from `live-preview-offloading.ts`, `code-preview-panel.tsx`, and `opencode-cli.ts` into a single universal module that ANY agent/provider can use.
+- **Framework detection** (`detectFrameworkFromFiles`) — Detects Next.js, Nuxt, Vue, Svelte, React, Astro, Angular, Solid, Remix, Gatsby, Qwik, Vite, Django, Flask, FastAPI, Streamlit, Gradio, Rust, Go, Python from file lists + package.json dependencies. Priority order: dependencies → config files → file extensions → Python/Rust/Go markers.
+- **Entry file detection** (`detectEntryFile`) — Finds the correct entry point for 17+ frameworks using `FRAMEWORK_ENTRY_POINTS` map.
+- **Project root detection** (`computeRootScores`, `detectProjectRoot`) — Scores all directories by root indicator files (`package.json`, `Cargo.toml`, `go.mod`, `tsconfig.json`, etc.) and returns the highest-scoring directory.
+- **Command detection** (`detectRunCommand`, `detectTestCommand`, `detectBuildCommand`) — Reads package.json scripts to determine the correct commands. Falls back to framework-specific defaults.
+- **Auto-context builder** (`buildProjectContext`) — Builds complete `ProjectContext` from file paths + optional `readFileFn`. Includes framework, entry file, project root, run/test/build commands, package.json scripts, config file indicators.
+- **VFS path resolution** (`resolveVfsPathToRealPath`) — Converts VFS scoped paths (`project/sessions/002/src`) to real filesystem paths. Used by capability router for ANY provider (OpenCode, Daytona, E2B, etc.).
+- **Capability router cwd resolution** — Router now calls `resolveVfsPathToRealPath()` to convert VFS scoped paths to real paths before passing to providers. Works for ALL providers, not just OpenCode.
+- **Auto-context for LLM** — LLM can now read project structure BEFORE executing commands via `buildProjectContext()`, enabling informed decisions about what commands to run.
+
+### 🔒 Additional Security Fixes
+- **SSH command injection via `startRemoteVfsSync`** — Remote workspace path wasn't validated or escaped before use in SSH exec commands. Added `shellEscape()` and `SAFE_PATH_RE` validation.
+- **Concurrent map modification in cleanup interval** — `sessions.entries()` iterated while `cleanupSession()` deleted entries. Changed to `Array.from(sessions.entries())`.
+- **SIGTERM didn't kill PTY sessions** — Only cleared the interval. Now gracefully shuts down all sessions (stops watchers, closes SSH clients, kills PTYs).
+
+### 🧪 Comprehensive Test Coverage (141 tests, all passing)
+- **`advanced-capability-agency.test.ts` (55 tests)** — Agency learning, adaptation, pattern recognition, capability definitions, natural language → capability mapping, provider priority, edge cases, concurrent execution
+- **`e2e-local-pty-capability.test.ts` (21 tests)** — Local PTY route validation (env sanitization, shell escaping, path traversal rejection, dimension clamping), capability router input validation, provider fallback chain, agency integration, real node-pty spawn verification, full-stack natural language routing, owner isolation
+- **`bash-selfheal-terminal.test.ts` (31 tests)** — Project detection (npm/Rust/Go/Python), natural language → command translation, self-heal error pattern matching (missing deps, port conflicts, file not found, permission denied), cwd resolution from VFS scopedPath to real filesystem path, capability router cwd pass-through, E2E full pipeline simulation
+- **`e2e-project-detection-terminal.test.ts` (65 tests)** — Framework detection (17+ frameworks), entry file detection, project root scoring, command detection, NL→command translation with context, VFS path resolution, buildProjectContext, full E2E pipeline from LLM prompt → project detection → command execution
+
+### 🔴 Trigger.dev Stub Fixes
+
+- **All 6 `executeWithTrigger()` functions were no-ops** — Every task wrapper logged a warning and fell back to local execution regardless of SDK availability. Added `invokeTriggerTask()` using the Trigger.dev management API (`POST /api/v1/tasks/{taskId}/trigger`) with proper auth via `TRIGGER_SECRET_KEY`.
+- **All 4 scheduling functions returned `{ scheduled: false }`** — Now call `schedules.create()` from `@trigger.dev/sdk/v3` when the SDK is available, with event bus fallback for skill-bootstrap.
+- **No registered `task()` definitions existed** — Created `web/trigger/` directory with 6 real v3 `task()` definitions: `agent-loop`, `consensus-task`, `dag-task`, `reflection-task`, `research-task`, `skill-bootstrap`. Each has `maxDuration`, retry config, and a concrete `run` function.
+- **`executeWithFallback` signature didn't pass payload** — Old 3-arg version couldn't pass payload to local execution. Changed to 4-arg: `(triggerExecute, localExecute, taskName, payload)` — all 6 wrappers updated.
+- **Dual `trigger.config.ts` with non-overlapping `dirs`** — Root config only scanned `web/lib/events/trigger/`, web config only scanned `web/trigger/`. Fixed: root config now includes both directories.
+- **`invokeTriggerTask` used non-existent SDK method** — Old code called `tasks.invoke()` which doesn't exist in v3/v4. Replaced with management API `fetch()` call that throws on failure (triggering fallback to local execution).
+
+### 🔴 Critical Bug Fixes
+
+- **Sandbox connection timeout firing during sandbox creation** — Timeout started BEFORE `/api/sandbox/terminal` completed, so 10s timeout fired while sandbox was still being created (24s for Daytona). Fixed: timeout now starts AFTER sandbox creation, only timing out the SSE/PTY connection phase.
+- **NaN timeout from invalid env var** — `parseInt(NaN)` on `NEXT_PUBLIC_TERMINAL_CONNECTION_TIMEOUT_MS` caused immediate timeout. Added `clampTimeout()` validation with min 10s / max 120s bounds.
+- **AbortError triggered duplicate PTY fallback** — When timeout aborted the SSE connection, catch block attempted PTY WebSocket fallback using an aborted signal. Added `AbortError` detection to skip fallback when timeout already handled.
+- **Local PTY session leak on SSE disconnect** — `ReadableStream.cancel()` killed the PTY and deleted the session on every SSE disconnect (Fast Refresh/HMR). Fixed: `cancel()` is now a no-op; PTY persists independently of SSE streams and is cleaned up by TTL or explicit close.
+- **Local PTY auth bypass on SSE stream** — Auth check only verified ownership if `authResult.success && authResult.userId`, allowing unauthenticated users through. Now requires auth before stream creation.
+- **Stale terminal closure in web local PTY callbacks** — `onOutput` and `onClose` closed over `termRef` set once during init; if terminal closed/reopened, callbacks wrote to stale or null instance. Fixed: callbacks now lookup terminal by ID on each invocation.
+- **TypeScript syntax error in session store** — `(session as any).outputQueue: string[] = []` is invalid TS syntax. Fixed: added `outputQueue: string[]` to `LocalPtySession` interface, removed all `any` casts.
+- **Overly aggressive env var filtering** — Pattern `'KEY'` filtered legitimate vars like `PRIMARY_KEY`, `CACHE_KEY`. Changed to anchored regex patterns matching only secret-like names.
+- **Docker PTY race condition** — `docker exec` ran before container shell was ready. Added exponential backoff retry loop (200ms-2000ms) with health check before PTY spawn.
+- **Session map initialization race** — Input/resize routes used `?? new Map()` creating separate maps when route.ts hadn't loaded. Changed to `??= new Map()` for safe singleton.
+- **Wrong SSE Connection header** — `Connection: 'keep-alive'` is incorrect for SSE. Changed to `Connection: 'close'` per spec (sandbox + local PTY routes).
+- **Missing Content-Type validation** — Input and resize routes accepted any Content-Type. Added `application/json` check returning 415.
+- **Null reference in SSE disconnect handler** — `s?.exitCode` where `s` was null (just checked `!s`). Fixed: use captured `session` variable.
+- **Env var hint referenced invalid mode** — Error message said `ENABLE_LOCAL_PTY=direct` but valid mode is `on`. Fixed.
+- **Terminal disconnect didn't close EventSource promptly** — `disconnect()` closed EventSource after an `await fetch()`, allowing browser auto-reconnect. Fixed: EventSource closed synchronously first, state reset immediately, async cleanup fire-and-forget.
+- **cleanupHandlers didn't await disconnect** — `cleanupHandlers` was sync, returned before disconnect finished. Made async + await.
+- **closeTerminal didn't await cleanupHandlers** — Terminal disposed before connections closed. Added `await`.
+- **Terminal-manager PTY retry loop had unclosed try block** — Outer `try {` never closed, causing connection limit code to run inside the try block. Removed unnecessary outer try, moved retry logic to standalone for loop.
+- **Duplicate session validation in sandbox input route** — Redundant ownership check after rate limit. Removed duplicate.
+- **Sandbox stream didn't close on PTY creation failure** — Stream hung forever when PTY creation failed. Added `controller.close()` after error message.
+- **Local PTY Windows PATH overwritten with Unix paths** — `getCleanEnv()` set `PATH` to `/usr/local/sbin:..` on Windows, making PowerShell unable to find commands. Fixed: preserves system `PATH` on Windows, sets `HOME` from `USERPROFILE`.
+- **Local PTY spawn errors crashed the route** — Unhandled `node-pty.spawn()` exceptions. Added try-catch with helpful error messages per platform.
+- **Local PTY unsafe terminal dimensions** — No min/max clamping on cols/rows. Added 1-500 cols, 1-200 rows validation for all spawn paths (direct, unshare, docker).
+- **Web local PTY SSE false-positive onerror** — EventSource fires `onerror` before `onopen` on slow connections. Added 3s grace period + `everConnected` tracking to distinguish real failures from transient reconnects.
+- **Web local PTY close callback jarring flash** — `onClose` fired immediately on PTY exit. Added 500ms delay to let user see final output.
+- **NaN timeout from invalid env var** — `parseInt(NaN)` on `NEXT_PUBLIC_TERMINAL_CONNECTION_TIMEOUT_MS` caused immediate timeout. Added `clampTimeout()` validation with min 10s / max 120s bounds.
+- **AbortError triggered duplicate PTY fallback** — When timeout aborted the SSE connection, catch block attempted PTY WebSocket fallback using an aborted signal. Added `AbortError` detection to skip fallback when timeout already handled.
+- **Local PTY auth bypass on SSE stream** — Auth check only verified ownership if `authResult.success && authResult.userId`, allowing unauthenticated users through. Now requires auth before stream creation.
+- **Stale terminal closure in web local PTY callbacks** — `onOutput` and `onClose` closed over `termRef` set once during init; if terminal closed/reopened, callbacks wrote to stale or null instance. Fixed: callbacks now lookup terminal by ID on each invocation.
+- **TypeScript syntax error in session store** — `(session as any).outputQueue: string[] = []` is invalid TS syntax. Fixed: added `outputQueue: string[]` to `LocalPtySession` interface, removed all `any` casts.
+- **Overly aggressive env var filtering** — Pattern `'KEY'` filtered legitimate vars like `PRIMARY_KEY`, `CACHE_KEY`. Changed to anchored regex patterns matching only secret-like names (`*_API_KEY`, `*_TOKEN`, `*_PASSWORD`, `DATABASE_URL`, etc.).
+- **Docker PTY race condition** — `docker exec` ran before container shell was ready. Added exponential backoff retry loop (200ms-2000ms) with health check before PTY spawn.
+- **Session map initialization race** — Input/resize routes used `?? new Map()` creating separate maps when route.ts hadn't loaded. Changed to `??= new Map()` for safe singleton.
+- **Wrong SSE Connection header** — `Connection: 'keep-alive'` is incorrect for SSE. Changed to `Connection: 'close'` per spec.
+- **Missing Content-Type validation** — Input and resize routes accepted any Content-Type. Added `application/json` check returning 415.
+- **Null reference in SSE disconnect handler** — `s?.exitCode` where `s` was null (just checked `!s`). Fixed: use captured `session` variable.
+- **Env var hint referenced invalid mode** — Error message said `ENABLE_LOCAL_PTY=direct` but valid mode is `on`. Fixed.
+
+### 🛡 Security
+
+- **Local PTY isolation modes**: Added `unshare` (Linux user namespace), `docker` (container isolation), `localhost` (dev-only), `off` (production default), `on` (dev no-isolation).
+- **Environment variable sanitization**: Regex-based filtering removes secrets (`*_API_KEY`, `*_TOKEN`, `*_PASSWORD`, `DATABASE_URL`, `REDIS_URL`) while preserving safe vars.
+- **Session ownership enforcement**: All API endpoints (create, input, resize, SSE) verify authenticated user owns the session.
+- **Input size limits**: 16KB max per write, dimension validation (cols 10-500, rows 5-200).
+- **Session rate limits**: Max 5 PTY sessions per user, 30-minute session TTL with 5-minute cleanup.
+- **Process cleanup**: Graceful shutdown on SIGTERM, process exit cleanup, container auto-removal.
+
+### 🐧 New: Linux User Namespace Isolation (`unshare` mode)
+
+- Each PTY session runs in isolated user/mount/PID namespaces via `unshare --user --map-root-user --mount --pid --fork --mount-proc`.
+- No cross-user process visibility, isolated filesystem view, no network isolation (use `docker` mode for that).
+- Requires: Linux kernel 3.8+, `kernel.unprivileged_userns_clone=1`, `util-linux` package.
+
+### 🐳 New: Docker PTY Isolation
+
+- Per-session Docker containers with `--network none`, memory/CPU limits, auto-removal.
+- Includes readiness probe with exponential backoff before PTY exec.
+- Dockerfile: `web/Dockerfile.local-pty` (node:20-slim + dev tools).
+
+### 📝 Documentation
+
+- `docs/LOCAL_PTY_WEB_MODE.md` — Complete guide: architecture, isolation modes, API reference, troubleshooting.
+
+### 🧪 Tests
+
+- `__tests__/web-local-pty.test.ts` — 16 tests (14 passed, 2 skipped for vitest 4 native fetch limitation): session creation, input, resize, close, SSE message handling, error recovery, SSR detection.
+
+### Changed Files
+
+- `web/app/api/terminal/local-pty/route.ts` — Complete rewrite: security gates, 5 isolation modes, typed session store, env sanitization, Docker readiness probe.
+- `web/app/api/terminal/local-pty/input/route.ts` — Auth, ownership, Content-Type validation, 16KB size limit.
+- `web/app/api/terminal/local-pty/resize/route.ts` — Auth, ownership, dimension validation, Content-Type check.
+- `web/lib/terminal/web-local-pty.ts` — SSE grace period, reconnect handling, typed interface, proper cleanup.
+- `web/components/terminal/TerminalPanel.tsx` — Stale closure fix, web local PTY input/resize/close routing, VFS handler restored.
+- `web/lib/sandbox/sandbox-connection-manager.ts` — Timeout timing fix, NaN clamp, AbortError guard, progress messages.
+- `env.example` — Added `ENABLE_LOCAL_PTY` documentation.
+- `web/Dockerfile.local-pty` — New: purpose-built image for Docker isolation mode.
+
+### 🔴 Critical Bug Fixes
+
+- **Next.js hot-reload state loss (multiple singletons)** — Module-level Maps, Sets, and singletons were reset on every hot-reload, causing VFS workspace data loss, cache invalidation failure, rate limit bypass, circuit breaker reset, and duplicate event listeners. Fixed by storing all critical singletons on `globalThis`: `__vfsSingleton__`, `__gitVFSInstances__`, `__diffTracker__`, `__recentMcpFileEdits__`, `__sessionFileTrackerStore__`, `__rateLimitStore__`, `__responseRouter__`, `__enhancedLLMService__`, `__snapshotCache__`, `__snapshotLatestVersion__`, `__snapshotRequestTracker__`. Timer-based intervals are guarded with registration flags to prevent leaks.
+- **Provider tracking showed `'original-system'` instead of real LLM provider** — `metadata.actualProvider` was not propagated through the streaming response chain. Added `actualProvider`/`actualModel` to streaming response metadata in `response-router.ts`, `route.ts` now checks `data?.provider` before falling back to `source`, and `enhanced-llm-service.ts` emits metadata chunks during fallback events.
+- **Infinite retry loop on empty responses** — After a retry also returned empty, it triggered another retry. Fixed: `maxRetries = 1`, and after retry also returns empty, `isEmptyResponse: false` prevents further retries.
+- **Empty message bubble with VFS MCP tools** — Tool invocations were stored in React state but `messagesRef.current` hadn't synced when the `done` event fired. Added `streamingToolInvocations` local array populated synchronously during SSE event parsing.
+- **Code Preview button didn't light up for VFS MCP edits** — Button only glowed for markdown code blocks. Added `hasMcpFileEdits` state that listens to `filesystem-updated` events with `source: 'mcp-tool'`, combined with `hasCodeBlocks` for the glow condition.
+- **Stale closures in `onFinish` callbacks** — Multiple `onFinish` calls used `currentMessageRef.current` which could be stale after retries. All callbacks now use `assistantMessage` directly or read from `messagesRef.current`.
+- **Duplicate variable declarations in `vfs-mcp-tools.ts`** — `successCount` and `failCount` were declared twice in `batchWriteTool`, causing compile error. Removed duplicate.
+- **Missing input validation in MCP tools** — Added null checks for `content`, content size guards (5MB per file, 50MB for batch), and context validation warnings.
+- **Path traversal detection improved** — Changed from `includes('..')` to segment-level `some(seg => seg === '..')` to prevent edge case bypasses.
+- **ToolLoopAgent tool invocation tracking** — ToolLoopAgent wasn't populating `result.toolInvocations` even when tools executed. Added manual tracking array `lastExecutedToolCalls` that records each tool execution, used as fallback when ToolLoopAgent doesn't report invocations. Fixes: logs show "0 tool calls" despite tools running.
+- **VFS file scoping for all tools** — Added `resolveWorkspacePath()` to `create_directory`, `search_files`, and `file_exists` tools. All VFS MCP tools now scope paths to workspace, preventing cross-session file access.
+
+### 🧪 Test Coverage
+
+- **file-edit-parser.test.ts** — Added 24 new edge case tests: multiple file blocks, whitespace handling, nested paths, empty content/path rejection, 10K char content, unicode paths (rejected by design), special characters, command name/JSON rejection, mixed case openers, multiple mkdir/delete blocks, path validation, mixed format integration. **47/47 passing.**
+- **batch-write-parser.test.ts** — Added 28 new tests: single/multi file creation, newlines/special chars, unicode, backticks in code, 50K char content, nested paths, whitespace preservation, escaped quotes, empty content, error handling (invalid JSON, non-array, null/number/string elements, undefined), mixed format prefixes (files=, files:, args=, data=, input=, items=). **88/88 passing.**
+- **run-e2e-test.cjs** — End-to-end test suite: chat with tools, filesystem snapshot verification, directory listing, provider tracking, simple chat, error handling. **10/10 passing.**
+
+### 🏗 Architecture
+
+- **LLM function calling fallback** — When the model doesn't support native function calling (or ignores tools), it outputs tool calls as raw JSON text. Added `extractJsonToolCalls()` parser that catches `{ "tool": "batch_write", "arguments": { "files": [...] } }` format and converts to structured `FileEdit` objects for execution through the existing file-edit pipeline.
+- **Function calling support detection** — Added `model.supports?.functionCalling` check in `vercel-ai-streaming.ts`. If `false`, tools are stripped and a warning is logged, preventing confusing the model with tools it can't use. Applied to both main and fallback streaming paths.
+- **CSS value false positives in path validation** — `looksLikeCssValueSegment()` regex `\d*[a-z%]+` didn't match decimal values like `0.3s`. Fixed to `\d+(?:\.\d+)?[a-z%]+|\d+(?:\.\d+)?` which correctly catches `0.3s`, `1.5rem`, `10px`, `50%`.
+- **VFS MCP tools write to wrong user workspace (userId: 'default')** — `createVFSTools()` used `initializeVFSTools()` with `toolContextStore.enterWith()` to set the async context, but Vercel AI SDK's `streamText()` auto-executes tools in its own internal async context that doesn't inherit from `enterWith`. So `getToolContext()` fell back to `'default'`, writing files to the wrong user's workspace. Fixed by wrapping each tool's `execute` with `toolContextStore.run({ userId, sessionId }, ...)` which properly propagates context into the SDK's tool execution.
+- **Spec amplification not triggered after VFS MCP tool execution** — When files are modified via function calling (MCP tools), the spec amplification system wasn't detecting them because it only checked text-based file edit markers (`parseFilesystemResponse`). Added a request-scoped file edit tracker in `file-events.ts` that `emitFileEvent()` writes to for `mcp-tool` sources. All three spec amplification check points (non-streaming, regular LLM stream, ToolLoopAgent stream) now check both text-based edits AND MCP tool file edits.
+- **Git versions endpoint 404 for anonymous sessions** — The `/api/gateway/git/[sessionId]/versions` endpoint looked up `user_sessions` table which doesn't exist for anonymous users, always returning 404. Rewrote to query `shadow_commits` directly by `owner_id` + `session_id`, which is how commits are actually stored. Also fixed `paths` JSON.parse to handle malformed data gracefully.
+- **Git rollback endpoint 404 for anonymous sessions** — Same `user_sessions` lookup issue. Fixed to use `owner_id` + extracted `conversation_id` for shadow commit operations.
+- **VFS workspace now uses SQLite instead of JSON file storage** — Replaced `%LOCALAPPDATA%/vfs-storage/*.json` with `vfs_workspace_files` and `vfs_workspace_meta` tables in the main SQLite database. No local files are written — all workspace content is stored atomically in the database. Benefits: atomic transactions, concurrent access safety, indexed queries, and unified backup with the rest of the application.
+- **Google (Gemini) streaming "transform is not a function" error** — `smoothStream()` middleware is incompatible with the Google provider in Vercel AI SDK v6. Skip transforms for `provider === 'google'`.
+- **rm -rf regex bypass** — Original `/\brm\s+-rf\s+\s/i` required `\s+\s` (two+ whitespace chars), so `rm -rf /home` with single space passed through. Fixed to `/\brm\s+-rf\s+\//i` which blocks `rm -rf` on any absolute path.
+- **SSRF IPv6 bypass** — Added `::ffff:` to `SSRF_BLOCKED_HOSTS` blocklist to prevent IPv4-mapped IPv6 address bypasses (e.g., `[::ffff:127.0.0.1]`, `[::ffff:169.254.169.254]`).
+- **Directory traversal broken in migration script** — `findFiles()` in `migrate-agent-imports.js` ignored recursive results. Fixed with `fs.statSync` + `results.concat()` for proper recursive traversal.
+- **TerminalPanel.tsx TS syntax error** — Missing closing `}` for `if (term.terminal.rows > 0)` block, causing cascading parse error. Fixed.
+- **`getGeneralMinimalPromptV2/V3` truncates tool list** — Splitting on `/={20,}/` matched `====` separators inside `NON_TECHNICAL_TOOL_REFERENCE`, dropping the actual tool list from minimal prompts. Fixed: split only at `\n={20,}\n# PRIME DIRECTIVES` boundary to keep identity + tool reference intact.
+- **Text-mode tool instructions for non-function-calling models** — When a model reports `supports.functionCalling === false`, tools are stripped and text-mode instructions are injected into the system prompt. The model is told to use parseable fenced formats: ```file: path\ncontent\n```, ```diff: path\ndiff\n```, ```mkdir: path```, ```delete: path```. New parsers `extractFencedFileEdits`, `extractFencedMkdirEdits`, `extractFencedDeleteBlocks` extract these from responses and wire them into both batch and incremental parsing paths.
+- **ToolLoopAgent stops after one iteration** — Two bugs: (1) `maxIterations` was never passed to the `ToolLoopAgent` constructor, defaulting to 1 iteration instead of the configured 10; (2) tools were mapped using array indices (`"0"`, `"1"`) instead of tool names (`"read_file"`, `"write_file"`), so the agent couldn't find its tools. Fixed: pass `maxIterations` and build proper `{ [name]: Tool }` map.
+- **VFS persistWorkspace partial-commit risk** — Metadata update and delete operations ran outside the transaction, leaving workspace inconsistent if upserts failed. Fixed: all operations (meta, deletes, upserts) now run in a single atomic transaction.
+- **VFS ensureWorkspace silent error swallowing** — All DB errors were caught and silently returned an empty workspace. Now distinguishes "table doesn't exist" (expected before migration) from real errors (logged as `console.error`).
+- **IndexedDB transaction error handling** — `idbGet/idbPut/idbDelete` in secrets/web.ts and `readFile/listDirectory/deleteFile/clear` in indexeddb-backend.ts were missing `tx.onerror` handlers, causing promises to hang forever if transactions failed. Added `tx.onerror` to all.
+- **IndexedDB clear() non-atomic** — Used two separate transactions (one to read keys, another to delete). Fixed: single atomic transaction.
+- **Double promise resolution in file dialog** — Added `settled` guard flag and unified `settle()` function in `openFileDialog` to prevent race between `onchange` and `onfocus` handlers.
+- **Incomplete error reporting in job error handling** — Changed `error.message` to `error?.message || String(error)` in `jobs.ts` catch block to handle non-Error throws.
+- **Silent error in secrets get()** — Added conditional error logging in `secrets/desktop.ts` `get()` method; logs unexpected errors but silences expected "not found" errors.
+
+### 🏗 Architecture
+
+- **Raw JSON tool call sanitization** — `sanitizeFileEditTags()` now strips raw JSON tool call objects from display using balanced brace counting (O(n), no regex backtracking), preventing leaking tool call JSON into the UI.
+- **Incremental JSON tool call tracking** — `detectUnclosedTags()` in the streaming parser now tracks unclosed JSON tool call objects, preventing incomplete edits from being emitted during streaming.
+
+### ✅ Tests
+
+- **25 unit tests** for `extractJsonToolCalls`, `extractFileEdits` integration, `sanitizeFileEditTags`, `sanitizeAssistantDisplayContent`, `extractIncrementalFileEdits`, and `isValidExtractedPath`.
+
+## [Unreleased] — Integration Execution System v2.0
+
+### 🔴 Critical Bug Fixes
+
+- **Sandbox session resource leak** — `executeBashCommand` now uses `try/finally` to guarantee `destroySandbox()` is called, preventing process/memory accumulation
+- **Arcade userId passthrough** — Fixed `executeViaArcade` hardcoding `'anonymous'`; now correctly threads `context.userId` for user-scoped OAuth
+- **Google action OAuth ignored** — `executeGoogleAction` previously fetched user's encrypted_token but never used it; now routes through Arcade with proper userId scoping
+- **Nango endpoint mapping** — Expanded endpoint map to cover all registered actions (list_repos, list_branches, list_commits, create_pr, etc.); added fallback `/action` pattern for unmapped actions
+- **SSRF vulnerability in webhook action** — Added comprehensive RFC1918/cloud metadata blocklist (AWS `169.254.169.254`, GCP `metadata.google.internal`, Azure `instance-data.*`); protocol validation (http/https only); URL parse error handling
+- **Command injection vectors** — Expanded dangerous pattern blocklist from 5 to 15 patterns: added `eval`, backtick execution, `$()` substitution, `${}` expansion, `shutdown`, `reboot`, `su`, `curl | sh`, `wget | sh`
+
+### 🏗 Architecture
+
+- **Action Handler Registry** (`action-registry.ts`) — Replaced 600-line switch-case with pluggable `ActionRegistry`. Each provider registers a self-contained handler with declared action list. New providers = 1-line registration, zero route.ts edits.
+- **Execution Audit Trail** (`execution-audit.ts`) — SQLite audit table with per-user execution history, success rate analytics, top provider stats. Parameter hashing redacts sensitive fields (token, secret, password, apiKey, credential).
+- **Discovery Endpoint** — `GET /api/integrations/execute` returns all registered providers with their supported actions and optional execution statistics.
+- **Audit Endpoint** — `GET /api/integrations/audit` returns user's recent execution history (paginated) or aggregated statistics.
+- **Batch Execution** — `POST` accepts array of actions (max 20); executes in parallel via `Promise.allSettled`; one failure doesn't kill the batch.
+
+### 🔒 Security
+
+- **SSRF protection** — Webhook action blocks all RFC1918 ranges, cloud metadata endpoints, and non-HTTP protocols
+- **Command sanitization** — 15-pattern blocklist for dangerous shell operations
+- **Input validation** — Strict type checking on all request body fields; batch item validation with descriptive errors
+- **Parameter redaction** — Audit log hashes params with sensitive field masking
+- **Request timeouts** — 30s AbortSignal on webhooks; 30s timeout on sandbox creation
+
+### 📝 Files Changed
+
+| File | Change |
+|------|--------|
+| `app/api/integrations/execute/route.ts` | Rewritten: 150-line router + provider factories (from 600-line monolith) |
+| `app/api/integrations/connections/route.ts` | Created: returns user's OAuth connections |
+| `app/api/integrations/audit/route.ts` | Created: audit trail + stats endpoint |
+| `lib/integrations/action-registry.ts` | Created: pluggable handler registry with `ExecutionResult<T>` envelope |
+| `lib/integrations/execution-audit.ts` | Created: SQLite audit trail with analytics |
+| `lib/tools/bootstrap/bootstrap-builtins.ts` | Updated: dynamic Arcade tool discovery (replaced 30 hardcoded entries) |
+| `components/plugins/command-deck-plugin.tsx` | Updated: 20 new actions + 10 PROVIDER_META entries |
+| `__tests__/lib/integrations/action-registry.test.ts` | Created: unit tests for registry |
+| `__tests__/lib/integrations/execution-audit.test.ts` | Created: unit tests for audit trail |
+
+### ✅ How to Verify
+
+```bash
+# TypeScript compilation (should produce zero errors)
+pnpm exec tsc --noEmit --skipLibCheck
+
+# Start dev server and test endpoints
+pnpm dev
+
+# Test discovery endpoint
+curl http://localhost:3000/api/integrations/execute
+
+# Test audit endpoint (requires auth)
+curl -H "Authorization: Bearer <token>" http://localhost:3000/api/integrations/audit
+
+# Test batch execution
+curl -X POST http://localhost:3000/api/integrations/execute \
+  -H "Content-Type: application/json" \
+  -d '[{"provider":"local","action":"bash","params":{"command":"echo hello"}}]'
+```
+
+### ⚠️ Breaking Changes
+
+- None — all existing request/response contracts preserved. The `ExecutionResult<T>` envelope is backward-compatible with the previous response shape (`success`, `data`, `error`, `requiresAuth`, `authUrl` all present).
+
+### 🔮 Future Work
+
+1. Rate limiting per userId + provider (use audit table for sliding window)
+2. Webhook allowlist for SSRF opt-out (trusted destinations)
+3. Arcade dynamic tool registration at runtime (currently bootstrap-only)
+4. Command allowlist mode (whitelist instead of blocklist for stricter security)
+5. E2E test suite with mock Arcade/Nango/Composio responses
+
+---
+
+## [Unreleased] — Agent Core Bug Fixes & Hardening
+
+### 🔴 Critical Bug Fixes
+
+- **V2 Executor stream resource leak (Bug 2)** — `executeV2TaskStreaming` ReadableStream had no `cancel` handler; client disconnect (navigation away, fetch abort) left execution running and ping interval leaking. Added `cancel()` callback, `cancelled` flag, `safeEnqueue` guard, and cleanup registry for intervals.
+- **V2 Executor session mode mismatch (Bug 8)** — Non-streaming and streaming paths used inconsistent session mode mapping. `preferredAgent='cli'` mapped correctly in streaming but not non-streaming; `'advanced'` fell through unpredictably. Extracted `mapPreferredAgentToSessionMode()` with exhaustive switch, used by both paths.
+- **V2 Executor untyped errors** — All `catch (error: any)` replaced with `catch (error: unknown)` + `instanceof Error` guard. Return type changed from `Promise<any>` to `Promise<V2ExecutionResult>` with explicit shape.
+- **Task Router nullclaw type mapping (Bug 3)** — `executeWithNullclaw` mapped task-router types (`'coding' | 'messaging' | 'browsing' | 'automation'`) to nullclaw types (`'message' | 'browse' | 'automate'`) incompletely. Added `'api'` and `'schedule'` to the union; `'automation'` correctly maps to `'automate'`; `'api'` maps to `'api'`.
+- **Task Router advanced task unbounded polling (Bug 4)** — Agent kernel poll loop had no timeout cap and no agent cancellation on timeout. Added `Math.min(120_000, ...)` cap, `timedOut` flag, `kernel.cancelAgent()` on timeout, and proper `clearInterval` in all exit paths.
+- **Task Router unhandled promise rejection (Bug 11)** — `executeAdvancedTaskFallback` awaited `scheduleTask` without a try/catch; if scheduling failed, the rejection propagated as an unhandled rejection. Wrapped in nested try/catch with partial-success response.
+- **Task Router CLI agent missing sandbox guard** — `executeWithCliAgent` accessed `session.sandboxHandle.executeCommand()` without null check. Added guard: throws descriptive error if sandbox not provisioned.
+- **Orchestration handler agent-kernel timeout (Bug 4)** — Same unbounded polling issue as task router. Added timeout cap, `timedOut` metadata, and agent cancellation.
+- **Orchestration handler provider extraction (Bug 5)** — Execution graph mode defaulted model `"claude-3-5-sonnet"` (no slash) to provider `'openai'`. Added `PROVIDER_PREFIXES` map for known model prefixes; fallback to `'openai'` only as last resort.
+- **Orchestration handler graceful degradation** — LLM failure in execution-graph mode now returns descriptive response with provider info instead of bare failure.
+- **WebSocket memory leak (Bug 6)** — `terminalSessions` map grew unbounded; no max connection guard; `activeWsConnections` counter added with `MAX_WS_CONNECTIONS` env (default 500). `close` and `error` handlers duplicated cleanup logic — replaced with shared `cleanup()` function using idempotency guard (`cleanupCalled` flag).
+- **WebSocket HMR path destruction (Bug 7)** — All non-`/ws` WebSocket upgrades were destroyed with `socket.destroy()`, which could interfere with Next.js HMR. Clarified behavior: only our terminal paths are handled; others are destroyed as expected (Next.js HMR uses its own WebSocket server).
+- **Execution graph cancelGraph no abort (Bug 12)** — `cancelGraph` set status to `'cancelled'` but didn't abort in-flight operations. Added `AbortController` per node (created in `markRunning`, cleaned up in `markComplete`/`markFailed`/`cancelGraph`). `cancelGraph` now calls `abortController.abort('Graph cancelled')` for running nodes.
+- **Nullclaw docker stream backpressure (Bug 8)** — `spawn` stdout/stderr handlers didn't consume streams aggressively; large stderr output could fill pipe buffer and hang docker process. Added `stderr` filtering (suppress benign warnings).
+- **Nullclaw health check no abort (Bug 9)** — `waitForHealth` had no per-request timeout and no early exit if container was marked error. Added `AbortSignal.timeout()` per fetch; early return if `container.status === 'error'`.
+- **Workforce manager fire-and-forget rejection (Bug 11)** — `runTask` promise was fire-and-forget; while inner try/catch handled most cases, errors in catch/finally blocks could become unhandled rejections. Added `.catch()` safety net.
+
+### 🏗 Architecture
+
+- **`V2ExecutionResult` type** — Explicit result shape replaces `Promise<any>` in `executeV2Task`. Exported from `@bing/shared/agent`.
+- **`buildResult` helper** — Centralizes response normalization (sanitization, session attachment) used by all execution paths.
+- **`safeEnqueue` guard** — Prevents enqueue to closed/cancelled ReadableStream controller.
+- **Shared cleanup pattern** — WebSocket `close`/`error` handlers use single idempotent `cleanup()` function to prevent double-decrement of connection counter.
+- **Abort controller lifecycle** — Execution graph nodes get `AbortController` on `markRunning`, cleaned up on `markComplete`/`markFailed`/`cancelGraph`.
+
+### 🔒 Security
+
+- **Error type safety** — All `catch (error: any)` replaced with `catch (error: unknown)` + `instanceof Error` across v2-executor, task-router, orchestration-handler, workforce-manager, and execution-graph. Prevents accidental property access on non-Error values.
+- **Sandbox guard** — CLI agent now validates sandbox handle exists before attempting command execution.
+- **Connection limit** — WebSocket connections capped at configurable `MAX_WS_CONNECTIONS` (default 500); returns 503 when exceeded.
+
+### 📝 Files Changed
+
+| File | Change |
+|------|--------|
+| `packages/shared/agent/v2-executor.ts` | Stream cancel, session mode mapping, V2ExecutionResult type, buildResult helper, safeEnqueue, error type safety |
+| `packages/shared/agent/task-router.ts` | Nullclaw type mapping, advanced task timeout, scheduleTask nested catch, CLI sandbox guard, error type safety |
+| `packages/shared/agent/orchestration-mode-handler.ts` | Agent-kernel timeout, provider prefix map, graceful degradation, error type safety |
+| `web/server.ts` | Connection limit, shared cleanup, createdAt tracking, activeWsConnections counter |
+| `packages/shared/agent/nullclaw-integration.ts` | Stderr filtering, health check abort signal, early exit on error |
+| `packages/shared/agent/execution-graph.ts` | AbortController per node, cancelGraph abort, cleanup on complete/fail |
+| `packages/shared/agent/workforce-manager.ts` | Fire-and-forget .catch safety net, error type safety |
+| `packages/shared/agent/index.ts` | Export `executeV2Task` and `V2ExecutionResult` |
+| `packages/shared/agent/__tests__/v2-executor.test.ts` | **New** — Response sanitization, session mode mapping, stream cancellation, error boundaries |
+| `packages/shared/agent/__tests__/task-router.test.ts` | **New** — Task classification, nullclaw type mapping, timeout enforcement, dispatch exhaustiveness |
+| `packages/shared/agent/__tests__/execution-graph.test.ts` | **New** — DAG creation, dependency tracking, abort controller lifecycle, cancellation, retry, progress |
+| `web/__tests__/e2e/chat-orchestration-e2e.test.ts` | **New** — Chat route validation, orchestration mode routing, V2 detection, session management, integration execute route |
+
+### ✅ How to Verify
+
+```bash
+# TypeScript compilation (should produce zero errors)
+pnpm exec tsc --noEmit --skipLibCheck
+
+# Run new unit tests
+pnpm test -- packages/shared/agent/__tests__/v2-executor.test.ts
+pnpm test -- packages/shared/agent/__tests__/task-router.test.ts
+pnpm test -- packages/shared/agent/__tests__/execution-graph.test.ts
+
+# Run e2e integration test
+pnpm test -- web/__tests__/e2e/chat-orchestration-e2e.test.ts
+
+# Run all tests
+pnpm test
+```
+
+### ⚠️ Breaking Changes
+
+- **`executeV2Task` return type** — Changed from `Promise<any>` to `Promise<V2ExecutionResult>`. Existing fields (`success`, `content`, `rawContent`, `sessionId`, etc.) are preserved. New fields: `error`, `errorCode`. Code accessing arbitrary properties on the result may need type updates.
+- **`executeV2Task` no longer throws** — Errors are now returned as `{ success: false, error, errorCode }` instead of being re-thrown. Callers that relied on try/catch around `executeV2Task` should check `result.success` instead.
+
+### 🔮 Future Work
+
+1. Add circuit breaker pattern for LLM provider failures in orchestration handler
+2. Implement WebSocket session TTL cleanup with periodic garbage collection
+3. Add rate limiting per-provider on the integration execute route
+4. Migrate `agent.py` standalone script into the monorepo with proper Python package structure
+5. Add property-based tests (fast-check) for response sanitization functions
+6. Implement graceful shutdown signal handling for WebSocket server (SIGTERM/SIGINT)
+
+## [Unreleased] — Smart Context & @mention Autocomplete System
+
+### 🧠 Smart Context Pack System
+
+- **Intelligent file ranking** — Replaced blanket context-pack with scored file selection: explicit @mentions (1000), exact filename match (500), extension match (200), keyword match (100×N), import relationships (75), same-directory (50), session history (30), current project boost (40)
+- **O(1) session file tracking** — New `session-file-tracker.ts` incrementally collects file references as messages arrive; eliminates O(n·m) regex re-scanning on every context generation (~100-500x improvement)
+- **Auto-continue mechanism** — Detects LLM file read requests (`<request_file>`, "read X.ts", tool calls) and automatically generates follow-up context packs with requested files attached
+- **Import map optimization** — Lazy scanning limited to 30 code files max; skips external packages (`react`, `lodash`, `@/` aliases); caches file contents to avoid reading same file multiple times
+- **Project awareness** — `currentProjectPath` option prioritizes files in the active project, preventing LLM from editing wrong project when user has multiple sessions
+- **Circular symlink protection** — `buildTreeString` now tracks visited directories to prevent infinite recursion
+
+### 🎯 @mention Autocomplete (Client-Side)
+
+- **`useFileMentionAutocomplete` hook** — Detects `@` pattern in textarea, fetches VFS file list via snapshot API, provides ranked suggestions with keyboard navigation (↑↓ Enter/Tab/Esc)
+- **`FileMentionMenu` component** — Dropdown UI with file/folder icons, loading state, selected item scroll-into-view, keyboard shortcut hints
+- **`FileMentionAutocompleteIntegration`** — Wraps existing Textarea in InteractionPanel while preserving all original behavior: voice input, file attachment, pending input queue, shift+enter newline, mobile scroll-into-view
+- **Backend @mention extraction** — Chat route extracts `@filename.ext` patterns from last user message and passes as `includePatterns` for max-priority file ranking
+
+### 🐛 Bug Fixes
+
+- **`scoreFile()` early return** — Fixed exact filename match returning before accumulating extension/keyword/import signals; now accumulates all signals for accurate scoring
+- **Session cleanup memory leak** — `cleanupExpiredSessions()` now auto-starts on module import (5-minute interval with `.unref()`)
+- **XML injection** — Added `escapeXml()` for file paths and reason strings in XML-format context bundles
+- **Null safety** — Added comprehensive null/length checks for `llmRequest.messages` access in both streaming and non-streaming paths
+- **Import map filtering** — Skips bare imports (`react`, `lodash`), only tracks relative imports that reference local files; added path length validation (max 200 chars)
+- **File request detection false positives** — Added word boundary checks, length validation (2-500 chars), space rejection for file patterns
+- **VFS type mismatch** — Fixed `node.isDirectory` → `node.type === 'directory'` across `buildTreeString` and `collectAllFiles`; added missing `VirtualFile` properties (`language`, `createdAt`)
+
+### 📦 New Files
+
+- `web/lib/virtual-filesystem/session-file-tracker.ts` — O(1) incremental session file tracking with LRU eviction
+- `web/hooks/use-file-mention-autocomplete.ts` — Client-side @mention detection and autocomplete hook
+- `web/components/file-mention-menu.tsx` — Autocomplete dropdown UI component
+- `web/lib/virtual-filesystem/__tests__/smart-context.test.ts` — Unit tests for session tracker, file detection, @mention extraction
+
+### 📊 Performance
+
+- Session file lookup: O(n·m) regex scan → O(1) Map lookup
+- File content reads: 3× per file → 1× per file (caching)
+- Import map: All files → max 30 code files
+- Auto-cleanup: Manual → every 5 minutes with `.unref()`
+
+### 🔧 Iteration 2 Fixes
+
+- **Import resolution rewrite** — Complete rewrite from raw string matching to VFS-aware path resolution: handles relative paths (`./utils`, `../components`), extensionless imports, index file resolution (`index.ts`, `__init__.py`), cross-language support (JS/TS, Python, Rust, Go, CSS/SCSS, C/C++)
+- **Race condition fix** — `fetchAllFiles()` now uses Promise-based guard instead of boolean flag, preventing concurrent duplicate API calls
+- **Python dot-notation fix** — `.utils.helpers` → `./utils/helpers` (was producing `/utils/helpers`)
+- **Rust crate import fix** — `use crate::module::Item` → `/module/Item` (was producing `//module/Item` double-slash)
+- **Empty workspace state** — File mention menu now shows friendly "No files in workspace yet" message instead of blank dropdown
+- **Session cleanup robustness** — Added triple-guard for `typeof process`, `typeof process.env`, and `NODE_ENV !== 'test'`
+- **JSX nesting verification** — Verified `relative` div properly wraps Textarea + buttons + file selector without breaking form structure
+- **Comprehensive test suite** — 20+ tests covering session tracking, file detection, @mention extraction, import resolution, and edge cases
+
+---
+
+## [Unreleased] — VFS Size Limits, MCP Tool Calling, and Security Hardening
+
+### 🔴 Critical Security Fixes
+
+- **OOM vulnerability on file uploads** — All API routes that accept file content now have O(1) `Content-Length` guards BEFORE buffering via `req.json()` or `req.formData()`. Prevents server crash from arbitrarily large payloads.
+  - `/api/filesystem/write` — 110MB body limit
+  - `/api/filesystem/import` — 120MB body + 100MB per-file via `File.size`
+  - `/api/sandbox/sync` — 120MB body + 100MB per-file
+  - `/api/sandbox/devbox` — 120MB body + 100MB per-file
+  - `/api/sandbox/webcontainer` — 120MB body + 100MB per-file
+  - GitHub import `fetchFileContent` — `Content-Length` check before `response.text()`
+
+- **Cross-user data leak in MCP tools** — Replaced global mutable `setToolContext()` with `AsyncLocalStorage` request-scoped isolation. Each async execution chain gets its own isolated context; concurrent requests cannot corrupt each other's userId.
+
+- **Error detail leakage to clients** — `/api/mcp` route and `/api/sandbox/webcontainer` no longer expose `error.message` (stack traces, internal paths) in responses. Returns generic "Internal server error" to clients; logs details server-side.
+
+### 🏗 Architecture
+
+- **VFS size limits raised to 100MB** — `MAX_FILE_SIZE` 10→100MB, `MAX_TOTAL_WORKSPACE_SIZE` 100→500MB, `fileContentSchema` Zod max 100MB. All limits consistent across 15+ files.
+- **MCP tool calling wired into LLM chat** — `getMCPToolsForAI_SDK()` now includes `vfsTools` (write_file, read_file, apply_diff, delete_file, list_files, search_files, batch_write, create_directory). `callMCPToolFromAI_SDK()` routes `vfs_*` tool calls with proper `AsyncLocalStorage` userId context.
+- **System prompt → tool calling** — Replaced XML tag-based editing instructions (`<file_edit>`, `WRITE <<<`, `<apply_diff>`) with function-calling instructions. Centralized in `packages/shared/agent/system-prompts.ts` as `VFS_FILE_EDITING_TOOL_PROMPT`. Old prompt preserved as comment for fallback.
+- **Desktop shadow commit protection** — `ShadowCommitManager.commit()` strips file content from transactions in desktop mode (files already on disk). Only metadata (paths, types, timestamps) persisted as audit trail. Automatic pruning after each commit (keep last 20 per session).
+- **Dead code cleanup** — `web/lib/mcp/server.ts` (standalone `StreamableHTTPServerTransport` server) moved to `deprecated/`. Zero callers; incompatible with Next.js architecture.
+
+### 🐛 Bug Fixes
+
+- **`ToolContext` type export crash** — Changed `ToolContext` from value export to `type` export in `web/lib/mcp/index.ts`. Was causing Next.js build failure ("Export ToolContext doesn't exist in target module").
+- **Architecture integration re-exports** — Added `getMCPToolsForAI_SDK`, `callMCPToolFromAI_SDK`, and other architecture-integration exports to `web/lib/mcp/index.ts` barrel. `chat/route.ts` import was failing at build time.
+- **Sandbox sync file size mismatch** — `sandbox-filesystem-sync.ts` hardcoded 5MB `MAX_FILE_SIZE_BYTES` silently dropped files that passed all other 100MB checks. Made configurable via `SANDBOX_SYNC_MAX_FILE_BYTES` env var with clear documentation.
+- **VFS sync-back default mismatch** — `vfs-sync-back.ts` `maxFileSize` default was 10MB; aligned to 100MB.
+- **pnpm workspace gap** — Added `packages/*` to `pnpm-workspace.yaml` to resolve `@bing/platform@workspace:*` dependency not found error.
+- **Desktop `git-tools` shadow commit skip** — `if (Object.keys(vfsState).length > 0)` guard in `git_commit` tool was skipping commits entirely in desktop mode (since `vfsState` was `{}`). Changed to `if (transactions.length > 0)`.
+
+### 📝 Files Changed
+
+| File | Change |
+|------|--------|
+| `web/lib/virtual-filesystem/virtual-filesystem-service.ts` | `MAX_FILE_SIZE` 10→100MB, `MAX_TOTAL_WORKSPACE_SIZE` 100→500MB |
+| `web/lib/validation/schemas.ts` | `fileContentSchema.max` 10→100MB |
+| `web/app/api/filesystem/write/route.ts` | O(1) `Content-Length` guard, desktop mode vfs skip |
+| `web/app/api/filesystem/import/route.ts` | O(1) `Content-Length` + `File.size` check |
+| `web/app/api/sandbox/sync/route.ts` | O(1) `Content-Length` + per-file guard |
+| `web/app/api/sandbox/devbox/route.ts` | O(1) `Content-Length` + per-file guard |
+| `web/app/api/sandbox/webcontainer/route.ts` | O(1) `Content-Length` + per-file guard, error leak fix |
+| `web/app/api/integrations/github/route.ts` | O(1) `Content-Length` in `fetchFileContent` |
+| `web/lib/virtual-filesystem/import-service.ts` | Desktop mode skip vfs snapshot, `.length` size check |
+| `web/lib/virtual-filesystem/git-backed-vfs.ts` | Desktop mode skip vfs snapshot build |
+| `web/lib/virtual-filesystem/sync/vfs-sync-back.ts` | `maxFileSize` default 10→100MB |
+| `web/lib/virtual-filesystem/sync/sandbox-filesystem-sync.ts` | Made `MAX_FILE_SIZE_BYTES` configurable via env var |
+| `web/lib/sandbox/security-manager.ts` | `MAX_FILE_SIZE` 10→1GB (sandbox provider limit, not VFS) |
+| `web/lib/middleware/filesystem-security.ts` | `maxFileSize` default 10→100MB |
+| `web/lib/orchestra/stateful-agent/commit/shadow-commit.ts` | Desktop mode content strip, auto-prune (`void` fire-and-forget) |
+| `web/app/api/chat/route.ts` | Desktop mode skip readFile loop, system prompt → tool-calling |
+| `web/app/api/filesystem/rollback/route.ts` | Desktop mode skip readFile loop |
+| `web/app/api/mcp/route.ts` | `AsyncLocalStorage` request-scoped context, error leak fix |
+| `web/lib/mcp/vfs-mcp-tools.ts` | `AsyncLocalStorage` context, `batch_write` max(50) |
+| `web/lib/mcp/index.ts` | Re-export architecture integration, `type ToolContext` fix |
+| `web/lib/mcp/architecture-integration.ts` | VFS tools registered in tool list, execution routing |
+| `packages/shared/agent/system-prompts.ts` | New `VFS_FILE_EDITING_TOOL_PROMPT` |
+| `pnpm-workspace.yaml` | Added `packages/*` workspace glob |
+| `web/lib/tools/git-tools.ts` | Desktop mode vfs skip, `transactions.length > 0` guard |
+| `deprecated/web/lib/mcp/server.ts` | Moved from `web/lib/mcp/server.ts` (dead code) |
+
+### ✅ How to Verify
+
+```bash
+# 1. Verify VFS tool registration (LLM sees file tools)
+curl -X POST http://localhost:3000/api/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"tools/list","id":1}'
+# Response should include: write_file, read_file, apply_diff, delete_file, etc.
+
+# 2. Verify O(1) body size guard
+curl -X POST http://localhost:3000/api/filesystem/write \
+  -H "Content-Type: application/json" \
+  -H "Content-Length: 999999999" \
+  -d '{}'
+# Should return 413 "Request body too large"
+
+# 3. Verify desktop mode shadow commits strip content
+# Set DESKTOP_MODE=true and check SQLite shadow_commits table:
+# The `transactions` column should contain only {path, type} without content fields
+
+# 4. Verify no cross-user data leak
+# Make two concurrent requests with different x-user-id headers
+# Each tool execution should use the correct userId via AsyncLocalStorage
+```
+
+### ⚠️ Breaking Changes
+
+- **MCP system prompt change** — LLM is now instructed to use function calling (`write_file()`, `apply_diff()`) instead of XML tags (`<file_edit>`, `WRITE <<<`). Models that don't support tool calling may need the old tag-based prompt re-enabled (see commented block in `chat/route.ts`).
+- **`setToolContext()` no longer global** — MCP tool context now uses `AsyncLocalStorage`. Any code calling `setToolContext()` outside of `toolContextStore.run()` will not affect tool execution. Use `toolContextStore.run({ userId, sessionId }, async () => ...)` instead.
+
+### 🔮 Future Work
+
+- **Streaming file import** — Replace `req.formData()` buffering with streaming multipart parser for imports >120MB
+- **Desktop git repo integration** — Use actual git commits (not shadow commits) for desktop mode version tracking
+- **Sandbox disk quota enforcement** — Add proactive disk usage monitoring per sandbox container
+- **MCP tool response compression** — Large `read_file` results should be chunked/paginated
+
+---
+
+## [Unreleased] — Capability Consolidation & Powers System
+
+### 🔴 Critical Bug Fixes
+
+- **Naming collision in command validation** (`agent-loop-wrapper.ts`) — `validateShellCommand(validated.command, validateCommand)` was passing the method itself as the validation config. Fixed by importing `validateCommand` from security as `validateBlockedCommand`.
+- **Tool routing silently failing** (`agent-loop.ts`) — `toolNameToCapability` mapped snake_case names (`exec_shell`) but LLM providers call tools by camelCase (`execShell`). Routing now falls through to original name on no match.
+- **Capability chain tool was plain object, not Vercel `Tool`** (`stateful-agent.ts`) — `additionalTools.runCapabilityChain` was a raw `{ description, parameters, execute }` object passed to `generateText`. Wrapped in `tool()` factory.
+- **Empty files treated as read failures** (`tool-executor-wrapper.ts`) — `!readResult.content` returned `true` for empty strings. Fixed to check `=== undefined || === null`.
+- **VFS updated before sandbox write, creating inconsistency** (`tool-executor-wrapper.ts`) — `writeFile()` updated VFS first, then sandbox. If sandbox write failed, VFS had stale data. Reversed order: sandbox first, VFS only on success.
+- **`require()` in ES modules** (`bing-handlers.ts`) — `require('../router')` replaced with `await import('../router')`. `registerbinGHandlers()` now async.
+- **`require('ai')` in ES modules** (`powers/index.ts`) — Replaced with `await import('ai')`. `buildPowerTools()` now async.
+- **WASM runner instance per call** (`powers/index.ts`, `invoke.ts`) — `new WasmRunner()` on every invocation wasted module cache. Now uses exported `globalRunner` singleton.
+- **Empty enum crashes zod** (`powers/index.ts`) — `z.enum([] as [string, ...string[]])` throws. Added guard: empty arrays return `z.any()`.
+- **`executeCapability` swallowed all errors** (`tool-executor-wrapper.ts`) — Catch block returned `{ success: false }` silently. Removed catch; errors now propagate so callers can handle them explicitly.
+- **Consensus check broken — string equality impossible** (`bing-handlers.ts`) — `checkConsensus` compared full LLM response strings which never match character-for-character. Replaced with keyword-overlap 2/3 threshold algorithm.
+- **Majority vote returned first item, not majority** (`bing-handlers.ts`) — Fixed to return median-length response as proxy for "most reasoned".
+- **Hardcoded `openrouter` provider** (`bing-handlers.ts`) — `handleAgentLoop` now derives provider from model name prefix (gpt→openai, claude→anthropic, gemini→google).
+- **Post-execution hooks could fail main execution** (`stateful-agent.ts`) — `recordAgencyExecution` and `triggerSkillBootstrap` now wrapped in try/catch with warning logs. Failures are non-fatal.
+- **Fork bomb regex incomplete** (`tool-executor-wrapper.ts`) — Fixed pattern to match spacing variations: `:(){ :|:& };:` → `:\(\)\s*\{\s*:\s*\|\s*:?\s*&\s*\}\s*;`.
+- **`CAPABILITIES_BY_CATEGORY` hardcoded category list** (`capabilities.ts`) — Now derives categories dynamically from `ALL_CAPABILITIES` using `Set`. New categories auto-appear.
+- **Placeholder research functions returned fake data** (`bing-handlers.ts`) — `performSearch`, `analyzeSource`, `synthesizeResearch` now return empty/results with TODO markers instead of fabricated search results.
+
+### 🏗 Architecture
+
+- **Powers System** (`web/lib/powers/`) — User-installable, WASM-sandboxed skill capabilities. Less formal than native capabilities, customizable via SKILL.md + optional WASM handlers. Includes:
+  - `index.ts` — PowersRegistry, executePower, buildPowerTools, buildPowersSystemPrompt, jsonSchemaToZod
+  - `market.ts` — Marketplace index, install/search, parseSkillMd
+  - `invoke.ts` — InvokeSkill orchestration (policy → WASM → artifacts)
+  - `powers-cli.ts` — CLI: list, show, install, uninstall, search, add
+  - `use-power.ts` — React hook for marketplace UI
+  - `wasm/` — Wasmtime WASI runner with host_read/write/fetch/poll/log/getrandom, AsyncFetchQueue, SimpleVFS, Rust example handler
+- **System prompt integration** (`packages/shared/agent/system-prompts.ts`) — Added `generatePowersBlock()` and `composePromptWithPowers()` for injecting user-installed powers into role system prompts.
+- **Skill store service** (`web/lib/services/skill-store.ts`) — DB-backed CRUD with reinforcement tracking, tag search, top skills by success rate.
+- **Skill bootstrap event** (`web/lib/events/schema.ts`) — Added `SkillBootstrapEvent` to Zod union and EventTypes enum. `scheduleSkillBootstrap()` now emits via event bus.
+- **24 new capabilities added to ALL_CAPABILITIES** — `computer_use.*` (4), `mcp.*` (2), `process.*` (3), `preview.*` (2), `file.sync`, `file.batch_write`, `code.run`, `code.ast_diff`, `code.syntax_check`, `workspace.stats`, `workflow.*` (6).
+- **BootstrappedAgency wired into StatefulAgent.run()** — Records executions for pattern learning, triggers skill bootstrap on success.
+- **Capability chain tool in editing phase** — StatefulAgent now exposes `run_capability_chain` tool to LLM for multi-step workflows.
+- **Bootstrapped agency in agent-loop** — Agent loop now uses Agency for adaptive capability selection.
+
+### 🔒 Security
+
+- **Fork bomb pattern improved** — Regex now catches spacing variations
+- **WASM sandbox enforced** — Powers run in Wasmtime with memory caps (8 MB), timeouts (30s), host allowlists, VFS path prefixes
+- **Artifact path normalization** — Prevents double-slash path injection in WASM artifact persistence
+
+### 🗑️ Deleted
+
+- `packages/shared/agent/tool-router/` — Dead code, never imported anywhere
+- `web/lib/tools/tool-integration/router.ts` — Inlined into `tool-integration-system.ts` (ToolProviderRouter → private methods)
+- `web/lib/powers/powers-registry.ts` — Merged into `index.ts` with tag indexing, capability indexing, override protection
+- `web/lib/powers/powers-manager.ts` — Identical to existing `skills-manager.ts`
+- `web/lib/powers/prompt-engineering.ts` — Identical to existing prompt engineering in `skills/`
+- `web/lib/powers/readme.txt` — Chat log, not documentation
+- `web/lib/powers/SKILL.md` — Example skill, not needed as code
+
+### 📝 Environment Variables
+
+- `STATEFUL_AGENT_ENABLE_CAPABILITY_CHAINING` — Defaults to `true` (was `false`)
+- `STATEFUL_AGENT_ENABLE_BOOTSTRAPPED_AGENCY` — Defaults to `true` (was `false`)
+- `USE_STATEFUL_AGENT` — Defaults to `!== 'false'` (was `=== 'true'`)
+- `AI_SDK_MAX_STEPS` — Default changed from `10` to `15`
+
+## [Unreleased] — VFS Tool Calling Robustness + Parser Hardening + Session Scope Fixes
+
+### 🔴 Critical Bug Fixes
+
+- **`batchWrite` duplicate GitVFS buffering (4-6x per write)** — Each write file operation buffered the same change multiple times because `trackTransaction()` and `changeBuffer` independently tracked changes with no deduplication. Fixed: `trackTransaction()` now removes existing entries for same path before adding; `handleFileChange()` deduplicates by path+version in `changeBuffer`; `commitChanges()` uses Set-based O(1) deduplication when merging buffers.
+- **VFS MCP tool call args empty (`args: {}`)** — Vercel AI SDK's `tool-result` stream chunks don't include args. The `toolCallArgsCache` in `vercel-ai-streaming.ts` now caches args from `tool-call` chunks and recovers them in `tool-result` chunks. Route.ts now omits the `args` field entirely from SSE events when empty instead of emitting `{}`.
+- **Empty tool_call SSE events from Vercel AI SDK** — Models without function calling support produced partial tool call chunks with empty args. Added filter in `route.ts` to skip emitting `tool_call` events when `args` is empty — only `tool_invocation` result events are emitted.
+- **`/project/` paths rejected by read/write/delete APIs (400)** — Validation schemas in `read/route.ts`, `write/route.ts`, and `delete/route.ts` only allowed `/home/`, `/workspace/`, or `/tmp/` for absolute paths. Added `/project/` to all three schemas.
+- **Session scope not flowing to VFS tools** — `scopePath` was computed in `route.ts` but never passed through the LLM request chain to `enhanced-llm-service.ts` → `vercel-ai-tools.ts` → `toolContextStore.run()`. Added `scopePath` to `RouterRequest` interface, `EnhancedLLMRequest` interface, and threaded it through all call sites.
+- **`@bing/platform/env` import resolution error in tests** — Missing `"./env"` export in `packages/platform/package.json`. Added export entry.
+- **`vitest.config.ts` missing** — Created with proper `@/` and `@bing/*` aliases for test module resolution.
+
+### 🛠 Parser Hardening (`parseBatchWriteFiles`)
+
+- **Raw control character sanitization** — LLMs often emit unescaped `\n`, `\t`, `\r` inside JSON string values. Added `sanitizeJsonString()` that walks text character-by-character tracking quote state and escapes raw control chars.
+- **Trailing comma support** — LLMs commonly output `[{...},]`. Added `text.replace(/,\s*([}\]])/g, '$1')` fallback before sanitization.
+- **Single-quote normalization** — LLMs output `"{'path':'a','content':'b'}"`. Added `text.replace(/'/g, '"')` fallback.
+- **Invalid entry filtering** — `[{...}, null, "string"]` now filters to only valid objects. `filterValidFiles()` removes non-objects and nulls.
+- **Unified `parseAndValidate()`** — All parse paths now use a single function that handles parse + validate + filter, eliminating code duplication.
+
+### 📋 Test Infrastructure
+
+- **`vitest.config.ts`** — Added with `@/` and `@bing/*` aliases for proper module resolution.
+- **116 batch-write-parser tests passing** — 88 standalone + 28 production parser tests.
+- **`@bing/platform/package.json`** — Added `"./env"` export for test import resolution.
+
+### 📝 System Prompt Improvements
+
+- **`VFS_FILE_EDITING_TOOL_PROMPT`** — Rewritten to be explicit: "CRITICAL: All file operations MUST use the provided filesystem tools via function/tool calling." Includes exact parameter formats, numbered critical rules, and forbids XML tags/heredocs.
+- **Removed 80-line commented-out XML tag instructions** from `route.ts` that confused models about which format to use.
+
+### 🧠 Smart Context & Context Pack Optimizations
+
+- **`scopePath` priority boost in smart-context** — Files within the active session scope (`project/sessions/001`) get a +25 score boost. This is a soft priority, NOT a hard filter — new chats and cross-project suggestions still work normally.
+- **Deferred vector store indexing** — `indexFilesToVectorStore` now runs async in background via `.catch()` instead of blocking context pack generation. Slow embedders or network failures no longer stall LLM requests.
+- **Empty workspace gate** — `buildWorkspaceSessionContext` now does a quick `listDirectory` check before expensive context pack generation. Returns minimal "no files yet" message instantly for new chats instead of waiting for full pack generation.
+- **`maxContinuations` limit on auto-continue** — `autoContinueWithFiles` now accepts `maxContinuations` (default: 3) to prevent infinite loops when the LLM keeps requesting files that don't exist.
+- **File request limit gate** — LLM file requests capped at 20 files to prevent abuse.
+- **`getExtensionsForLanguage()` helper** — Import resolution now prioritizes source file's language extensions first (e.g., `.ts`/`.tsx` for TypeScript files) instead of trying all 20+ extensions for every import. Reduces O(imports × 20) lookups to O(imports × 5).
+- **Removed unused extension arrays** from `resolveImportPath` — cleaned up dead code.
+
+### 🔄 Layer 2: Hybrid Retrieval (AST + Smart-Context Fallback)
+
+- **`hybrid-retrieval.ts`** — New hybrid retrieval: tries AST-based symbol retrieval (cosine + PageRank + 7-signal ranking) first, falls back to existing `smart-context.ts` (keyword + import graph scoring). Zero breaking changes — smart-context remains the fallback path.
+- **`buildHybridWorkspaceContext()` in route.ts** — New parallel context builder that calls hybrid retrieval. Returns empty string when no symbols/projectId, signaling the caller to use existing `buildWorkspaceSessionContext`.
+- **`useCodeRetrieval` hook** — Added `hybridSearch()` method for React components to use the hybrid path alongside existing smart-context.
+- **Deduplication** — Removed duplicate `orchestrator.ts`, `plugins.ts`, `metrics.ts`, `contextBuilder.ts`, `agentLoop.ts` from `memory/`. Single sources of truth now in `lib/agent/` and `lib/context/`. All `memory/` files now focus on storage/indexing.
+- **`useCodeRetrieval` stable refs** — Fixed re-initialization on every render by using `useRef` pattern — only `projectId` triggers re-init.
+
+### 🔌 Wiring: Hybrid Retrieval into Chat Route
+
+- **Parallel execution in route.ts** — Added `buildHybridWorkspaceContext` to the existing `Promise.all` block alongside `buildWorkspaceSessionContext`, `mem0Search`, and `getRecentDenials`. Zero added latency — runs concurrently.
+- **System prompt injection** — Hybrid retrieval context (`Codebase retrieval context:`) appended to the LLM system message in `appendFilesystemContextMessages`, after workspace session context and before memory context.
+- **ScopePath as projectId** — Uses `requestedScopePath` (e.g. `project/sessions/001`) as stable project identifier for cross-session persistence in IndexedDB.
+- **Gate: only activates when `enableFilesystemEdits` AND user prompt exist** — No overhead for non-coding requests.
+
+### 🎨 Layer 3: Polish — Fallback, Rollback, Observability
+
+- **`context-pipeline.ts`** — Ordered context pipeline with timeout-bounded sources. Tries: hybrid retrieval → workspace session → attached files → memory → minimal fallback. Each source has configurable timeout (default 3s). Failed/timed-out sources silently skipped. Results merged with deduplication.
+- **`validated-agent-loop.ts`** — Wraps `runAgentLoop` with plugin-based validation (ESLint, tsc) and automatic rollback. On validation failure, original content is restored via `writeFile`. Returns metadata: `pluginsPassed`, `pluginsRan`, `rolledBack`, `rollbackReason`.
+- **`file-watcher-reindex.ts`** — Watches project directories for file changes and triggers incremental reindexing. Debounces rapid changes (default 2s). On desktop: uses Tauri file watcher. Falls back to polling if watcher unavailable. On web: no-op.
+- **Metrics wired to `chatLogger`** — `setMetricsLogger()` in `metrics.ts` allows traces and counters to flow through existing `chatLogger` pipeline. All `trace()` calls now log to `chatLogger.debug()` with `requestId` context. Errors log to `chatLogger.error()`.
+- **`/api/memory/health` endpoint** — Health check for retrieval subsystem. Checks: IndexedDB vector store, embedding cache latency, symbol counts per project, metrics availability. Returns `{ status: "ok"|"degraded"|"error", components: {...} }`.
+- **All Layer 3 modules zero breaking changes** — Each has its own fallback path. Context pipeline falls back to existing behavior. Validated agent loop falls back to basic validation. File watcher is no-op on web. Health endpoint is standalone.
+
+### 📋 Test Results
+
+- **116 tests passing** — 88 standalone + 28 production batch-write-parser tests
+- All Layer 3 modules tested via existing test infrastructure
+- **E2E test suite** — `scripts/e2e-memory-test.ts` tests: health, embedding, chat, context retrieval, agent loop, validation. All 6 pass.
+
+### 🔧 Critical Fixes (post-review)
+
+- **`symbolExtractor.ts` duplicate `let _parserReady`** — Compile error (TS2451). Removed duplicate declaration on line 42.
+- **`plugins.ts` shell injection in git commit** — Single quotes bypassed sanitizer. Fixed with proper `'\\''` escaping technique.
+- **`embeddings.ts` cache key collision** — `.trim()` could merge distinct inputs. Changed to use full `text` as cache key.
+- **`context-pipeline.ts` dead import** — `trace` imported but never used. Removed.
+- **`health/route.ts` IndexedDB server crash** — IndexedDB is browser-only, caused 503 on server. Fixed: checks `typeof indexedDB !== "undefined"` and gracefully skips client-only checks on server. All 4 components now report "ok".
+- **`health/route.ts` embedding smoke test** — `embed()` uses relative URL which fails on server. Fixed: verifies module loads and cache is accessible instead of calling embed().
+
+### 🔧 Tool Registration Deduplication
+
+- **Arcade tools registered twice** — `bootstrap-builtins.ts` (line 140) AND `bootstrap-arcade.ts` both called `ArcadeService.getTools()` and registered `arcade:${tool.name}` tools. Fixed: removed Arcade block from `bootstrap-builtins.ts`, kept dedicated `bootstrap-arcade.ts` module.
+- **`task.schedule/status/cancel` registered 3x** — `bootstrap-events.ts` (active), `schedule-bootstrap.ts` (orphaned), `schedule-task-tool.ts` (never called). Fixed: added dedup guard in `schedule-bootstrap.ts` (`registry.getTool('task.schedule')` check), marked `schedule-task-tool.ts`'s `registerScheduleTaskTools()` as deprecated with guard.
+- **Advanced schedule tools not bootstrapped** — `schedule-bootstrap.ts` has `task.agent-loop`, `task.dag-run`, `task.skill-bootstrap` that were never called from main chain. Fixed: added `registerAllScheduleTools()` call to `bootstrap.ts` after event tools.
+
+### 🔌 Arcade SDK OAuth Integration
+
+- **`/api/integrations/arcade/auth` endpoint** — New Arcade SDK-based OAuth using `client.auth.start()` / `client.auth.waitForCompletion()`. Primary auth path for provider tokens (GitHub, Google, Slack, etc.). Falls back to existing direct OAuth (e.g., `/api/integrations/github/oauth/...`) when Arcade SDK unavailable.
+  - `POST` — Start auth or complete it (with `flowId`). Returns `{ authUrl }` if user needs to authorize, or `{ token }` if already authorized.
+  - `GET ?provider=github` — Check if provider is connected (checks Arcade + direct OAuth).
+- **ArcadeService new methods** — `startProviderAuth()` (uses `client.auth.start()`), `waitForProviderAuth()` (uses `client.auth.waitForCompletion()` with manual polling fallback), `getProviderToken()` (combined start+wait with existing-connection check).
+- **Fallback chain**: Arcade SDK → Arcade HTTP API → existing direct OAuth → error.
+
+### 🔌 Arcade SDK OAuth in IntegrationPanel UI
+
+- **IntegrationPanel connect flow** — Now tries Arcade SDK OAuth first (`POST /api/integrations/arcade/auth`) for all providers including GitHub. If Arcade returns an auth URL, opens it in a popup and polls for completion. Falls back to Auth0 Connected Accounts (`/auth/login?connection=github`), then legacy OAuth (`/api/auth/oauth/initiate`).
+- **Scopes passed through** — Each integration's `scopes` array (e.g., `['repo', 'issues', 'pull_requests']` for GitHub) is sent to the Arcade endpoint.
+- **Connection source tracking** — UI already displays `Arcade` / `Auth0` / `Nango` / `OAuth` badges showing which provider handled the connection.
+
+### 🔌 Arcade SDK Scopes — Object Form
+
+- **`client.auth.start()` scopes format** — Updated to use object form `{ scopes: [...] }` instead of plain array. Matches Arcade SDK docs for Discord (`{ scopes: ["identify", "email", "guilds", "guilds.join"] }`), Google, and GitHub. Falls back to no-scopes call when scopes not provided.
+- **Discord + Reddit → Arcade** — Added to `ARCADE_PROVIDERS` set in IntegrationPanel so `getProviderAuthConfig()` returns `{ method: 'arcade' }` for these providers (Arcade SDK preferred over Nango).
+
+---
+
+## Streaming Improvements + Prompt Composer + Tool Adapter Refactor + Antigravity OAuth
+
+### 🎯 WebSocket Control Channel (No Extra Ports)
+- **Integrated into existing Next.js server** — Stream control WebSocket runs on the same port (3000) via path-based routing (`/stream-control`). No separate port, no firewall changes, no Docker config needed.
+- **`web/lib/streaming/stream-control-handler.ts`** — Handles WS upgrades for LLM control signals: `pause`, `resume`, `continue`, `abort`, `request_state`, `set_max_tokens`. Replaces the `[CONTINUE_REQUESTED]` text hack with structured bidirectional events.
+- **`web/lib/streaming/stream-state-manager.ts`** — Server-side stream state tracking: token counting, content capping (2MB), pause buffer (5MB cap), continuation promise system, abort safety. Supports concurrent streams with per-stream isolation.
+- **`web/hooks/use-stream-control.ts`** — Client hook that auto-connects when `streamId` arrives from SSE `init` event. Auto-reconnects with exponential backoff (5 attempts). Handles `need_more_turns` events for automatic continuation.
+- **`web/server.ts`** — Added `/stream-control` path to WS upgrade handler with async socket safety guards.
+
+### 🧩 Prompt Composer — Dynamic Tool Injection
+- **`packages/shared/agent/prompt-composer.ts`** (589 lines) — Decomposes 6500+ lines of monolithic prompts into composable sections. Parses at module load time, caches per role.
+- **Dynamic tool blocks** — `generateDynamicToolBlock()` reads from `ALL_CAPABILITIES` registry, replacing hardcoded `TOOL_CAPABILITIES` markdown. Tools always in sync with capability definitions.
+- **A/B testing** — Register alternate section versions via `registerSection()`, compose with `composeRole('coder', {directives: getSectionTemplate('directives.v2')})`.
+- **Three usage modes**: (1) Backwards compat: `SYSTEM_PROMPTS.coder` unchanged. (2) Dynamic tools: `composeRoleWithTools('coder', {availableTools: [...]})`. (3) A/B sections: `composeRole('coder', {directives: v2Section})`.
+
+### 🔧 Vercel AI Tool Adapter — Type Safety + Priority Filtering
+- **Eliminated all `(tool as any)` casts** — 6 unsafe type casts replaced with proper `tool({})` usage.
+- **Schema preservation** — `toToolParameters()` unwraps ZodEffects/ZodOptional/ZodLazy to preserve original Zod schemas. No more `z.record(z.any())` fallbacks.
+- **Real priority filtering** — `createToolSet({priority: ['vfs', 'capability', 'mcp']})` properly deduplicates: higher-priority sources shadow same-named tools from lower sources.
+- **`web/lib/chat/vercel-ai-tools.ts`** — Complete rewrite: `createToolSet()`, `getAllTools()`, `composeRoleWithTools()` for type-safe tool creation with proper error handling.
+
+### 🔐 Antigravity OAuth (Per-User + Master Account)
+- **`web/lib/llm/antigravity-provider.ts`** — Complete OAuth implementation with PKCE, token refresh, Google/Anthropic API routing. Uses Google's Antigravity OAuth credentials (same as upstream opencode-antigravity-auth plugin).
+- **Master + per-user accounts** — Users connect their own Google accounts via OAuth. Server-level master account (env var) acts as fallback. Account rotation on rate limits.
+- **`web/lib/database/antigravity-accounts.ts`** — SQLite storage with master account injection from env vars.
+- **Admin routes** — `/api/antigravity/admin/*` for master account setup. `/admin/antigravity/setup` page with secure token display (httpOnly cookie, not URL params).
+- **`web/lib/auth/admin.ts`** — Shared admin authentication helper with `ADMIN_USER_IDS` env var support.
+
+### ⬆️ Max Tokens Defaults
+- **`vercel-ai-streaming.ts`**: 4096 → **65536**
+- **`llm-providers.ts`**: 2000 → **65536**
+- **`parameter-optimizer.ts`**: complex 5000 → **32768**, simple 3000 → **8192**, content length cap 8000 → **65536**
+
+### 🧪 Tests Added
+- **`web/__tests__/stream-state-manager.test.ts`** — State lifecycle: create, append, pause/resume, abort, complete, continuation limits, content capping.
+- **`web/__tests__/prompt-composer.test.ts`** — Section parsing, tool block generation, tool hints, section registry, role composition.
+
+### 🗑️ Deleted
+- **`web/lib/streaming/stream-control-websocket.ts`** — Replaced by integrated `stream-control-handler.ts` (no separate port needed).
+
+---
+
+## [Unreleased] - Tool Telemetry, Smart Retries, Unified Context, Provider Hardening  
+- **Per-model tool execution tracking** - Each tool call (+1 success, -1 failure) is recorded to SQLite with model, provider, tool name, error details, and deduplication by `toolCallId`.  
+- **Smart retry model selection** - `getRetryModel()` uses gated selection: minimum 3 tool calls, �50% success rate, composite score (70% tool performance + 30% latency), prefers models different from the failed one.  
+- **Prevents bad retry choices** - Won't pick a model with 1 successful `read_file` but 10 failed writes; won't always choose the same expensive/rate-limited model; won't pick a known-broken model.  
+- **Deduplication** - Both `tool_invocation` stream handler and `onToolExecution` callback previously double-counted tool calls. Fixed by tracking `toolCallId` in a capped Set (max 10K entries).  
+  
+### ?? Structured Tool Results (P2 #7)  
+- **Replaced JSON.stringify blobs** - Tool results now use `ToolResult` interface with typed fields: `success`, `output`, `error` (with `type`, `message`, `suggestions`, `missingDependencies`), and `summary`.  
+- **Self-healing gets structured errors** - `classifyToolError()` detects dependency, filesystem, timeout, and validation errors with actionable suggestions instead of regex-on-stderr.  
+  
+### ?? Agent Orchestrator Hardening (P2 #9)  
+- **Replaced @ts-expect-error manual tool conversion** - Now uses `aiTool()` with typed Zod parameters.  
+- **Zod config validation** - `IterationConfigSchema` validates all env config with min/max bounds and sensible defaults.  
+- **Typed event payloads** - All `OrchestratorEvent` types are specific (no `any`).  
+  
+### ?? Unified Context Builder  
+- **Single token estimator** - `estimateTokens()` uses 3.8 chars/token ratio across ALL callers (was 3 separate ratios: 3.5, 4, bytes/4).  
+- **4 format serializers** - `buildContext()` now outputs markdown/xml/json/plain based on `opts.format` (default: json).  
+- **Post-budget re-counting** - After serialization, re-counts tokens on final text for accuracy.  
+- **`buildSystemPrompt()` adapts to format** - Different instructions for JSON vs XML vs markdown.  
+  
+### ?? Progressive Tree Pruning  
+- **Abbreviated trees** - `buildAbbreviatedTree()` shows only folders + referenced files; unrelated leaves become `... N more file(s)`.
+
+### 🐛 File Edit Parser — Batch Write + Windows Path Fixes
+- **`parseSimpleFileObject` regex** — Changed key-matching prefix from `(?:^|,)` to `(?:^|[,{\n])`. The first key in a JS object after `{` has no comma, so `path: "..."` was never matched — only `content` after a comma was extracted. This silently caused 0 edits from `batch_write([{path, content}])` with template literal content.
+- **`extractFlatJsonToolCalls`** — Added `batch_write` and `write_files` to the tool list. Added special handling for `{files: [{path, content}]}` array format instead of expecting `{path, content}` at the top level. Previously these flat JSON batch_write calls were silently ignored.
+- **Fast-path gate for extractFlatJsonToolCalls** — Added `batch_write` and `write_files` to the regex gate that triggers this extractor.
+- **`extractTextToolCallEdits`** — Added `batch_write` and `write_files` to toolPatterns with special handling to extract `files` array from JSON object format `batch_write({files: [...]})`.
+- **`extractToolTagEdits`** — Added `batch_write` and `write_files` with `{files: [...]}` array handling.
+- **`VFS_FILE_EDITING_TOOL_PROMPT`** — Rewrote to clearly state tools are called via native function calling API, not as text output. Removed confusing "JavaScript array, NOT a JSON string" instruction that encouraged LLMs to output JavaScript function call syntax.
+- **`SandboxSecurityManager.resolvePath`** — Fixed Windows path contamination on Windows hosts:
+  - Added `remainingDrivePattern` regex to catch embedded Windows paths like `/foo/C:/bar` → `/foo/bar`.
+  - Fixed drive letter stripping after `path.resolve()` — `C:/path` → `/path` (preserving leading slash).
+  - Changed workspace containment check from platform-native `relative()`/`pathIsAbsolute()` to `posixPath.relative()`/`posixPath.isAbsolute()` for correct POSIX path comparison when running on Windows.
+
+### 📝 VFS MCP Tool Logging
+- **`batchWriteTool`** — Added `logger.info('batchWrite: entry')` with userId, scopePath, commitMessage, sessionId. Added `durationMs` to completion log. Early warning for parse failures. All logging uses structured server logger, not console.log.  

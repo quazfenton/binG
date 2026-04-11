@@ -4,6 +4,14 @@ import { createLogger } from '../utils/logger'
 
 const logger = createLogger('MCP:Mcporter')
 
+/**
+ * Check if we're running in desktop mode (Tauri app).
+ * In web mode, mcporter should NEVER spawn stdio (npx) processes.
+ */
+function isDesktopMode(): boolean {
+  return process.env.DESKTOP_MODE === 'true' || process.env.DESKTOP_LOCAL_EXECUTION === 'true'
+}
+
 interface MCPorterToolEntry {
   qualifiedName: string
   serverId: string
@@ -25,13 +33,19 @@ class MCPorterIntegration {
 
   private toServerDefinitions(): ServerDefinition[] {
     const configs = parseMCPServerConfigs()
+    const isDesktop = isDesktopMode()
 
     return configs
       .filter((config) => config.enabled !== false)
       .flatMap((config) => {
         const transport = config.transport
 
+        // CRITICAL: Skip stdio servers in web mode — only spawn npx in desktop mode
         if (transport.type === 'stdio' && transport.command) {
+          if (!isDesktop) {
+            logger.debug(`Skipping stdio server in web mode: ${config.id}`)
+            return []
+          }
           return [
             {
               name: config.id,

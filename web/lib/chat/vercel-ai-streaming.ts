@@ -27,6 +27,7 @@ import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createMistral } from '@ai-sdk/mistral';
 import type { StreamingResponse, LLMMessage } from './llm-providers';
 import { chatLogger } from './chat-logger';
+
 import { getProviderForModel } from './openai-compat-wrapper';
 import { tokenTracker } from './ai-caching';
 import { createReasoningMiddleware, withRetry, createSmoothStream, isTokenLimitError, handleTokenLimitError } from './ai-middleware';
@@ -37,7 +38,9 @@ import { createReasoningMiddleware, withRetry, createSmoothStream, isTokenLimitE
 export interface ToolExecutionContext {
   userId?: string;
   conversationId?: string;
+  sessionId?: string;
   requestId?: string;
+  scopePath?: string;  // VFS scope path for session-scoped file operations (e.g., "project/sessions/001")
   [key: string]: any;
 }
 
@@ -63,6 +66,8 @@ export interface VercelStreamOptions {
   smoothStreaming?: boolean;
   maxRetries?: number;
   maxSteps?: number;
+  /** Request timeout in milliseconds (default: 120s) */
+  timeoutMs?: number;
   /** Provider-specific settings (e.g., Anthropic cache control) */
   providerOptions?: Record<string, any>;
 }
@@ -76,71 +81,68 @@ export interface VercelStreamOptions {
 interface OpenAICompatibleConfig {
   baseURL: string;
   apiKeyEnv: string;
-  compatibility?: 'compatible' | 'strict';  // 'compatible' for Chat Completions API
+  /** Use Chat Completions API (.chat) instead of Responses API (default) */
+  useChatEndpoint?: boolean;
 }
 
 /**
- * Configuration for all OpenAI-compatible providers
- * 
- * Compatibility modes:
- * - 'compatible': Use Chat Completions API format (legacy, widely supported)
- * - 'strict': Use Responses API format (new, not all models support it)
+ * Configuration for all OpenAI-compatible providers.
+ * Providers with `useChatEndpoint: true` use the Chat Completions API
+ * via `provider.chat(model)` instead of the Responses API `provider(model)`.
  */
 const OPENAI_COMPATIBLE_PROVIDERS: Record<string, OpenAICompatibleConfig> = {
   chutes: {
     baseURL: process.env.CHUTES_BASE_URL || 'https://llm.chutes.ai/v1',
     apiKeyEnv: 'CHUTES_API_KEY',
-    compatibility: 'compatible',  // Chutes uses Chat Completions format
   },
   github: {
     baseURL: process.env.GITHUB_MODELS_BASE_URL || 'https://models.inference.ai.azure.com',
     apiKeyEnv: 'GITHUB_MODELS_API_KEY',
-    compatibility: 'compatible',
   },
   zen: {
     baseURL: process.env.ZEN_BASE_URL || 'https://api.zen.ai/v1',
     apiKeyEnv: 'ZEN_API_KEY',
-    compatibility: 'compatible',
   },
   nvidia: {
     baseURL: process.env.NVIDIA_BASE_URL || 'https://integrate.api.nvidia.com/v1',
     apiKeyEnv: 'NVIDIA_API_KEY',
-    compatibility: 'compatible',  // NVIDIA requires Chat Completions format
+    // NVIDIA only supports Chat Completions API — use .chat(model) instead of (model)
+    useChatEndpoint: true,
   },
   together: {
     baseURL: process.env.TOGETHER_BASE_URL || 'https://api.together.xyz/v1',
     apiKeyEnv: 'TOGETHER_API_KEY',
-    compatibility: 'compatible',
+    useChatEndpoint: true,
   },
   groq: {
     baseURL: process.env.GROQ_BASE_URL || 'https://api.groq.com/openai/v1',
     apiKeyEnv: 'GROQ_API_KEY',
-    compatibility: 'compatible',
+    useChatEndpoint: true,
   },
   fireworks: {
     baseURL: process.env.FIREWORKS_BASE_URL || 'https://api.fireworks.ai/inference/v1',
     apiKeyEnv: 'FIREWORKS_API_KEY',
-    compatibility: 'compatible',
+    useChatEndpoint: true,
   },
   anyscale: {
     baseURL: process.env.ANYSCALE_BASE_URL || 'https://api.endpoints.anyscale.com/v1',
     apiKeyEnv: 'ANYSCALE_API_KEY',
-    compatibility: 'compatible',
+    useChatEndpoint: true,
   },
   deepinfra: {
     baseURL: process.env.DEEPINFRA_BASE_URL || 'https://api.deepinfra.com/v1/openai',
     apiKeyEnv: 'DEEPINFRA_API_KEY',
-    compatibility: 'compatible',
+    useChatEndpoint: true,
   },
   lepton: {
     baseURL: process.env.LEPTON_BASE_URL || 'https://models.lepton.ai/v1',
     apiKeyEnv: 'LEPTON_API_KEY',
-    compatibility: 'compatible',
+    useChatEndpoint: true,
   },
   openrouter: {
     baseURL: process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1',
     apiKeyEnv: 'OPENROUTER_API_KEY',
-    compatibility: 'compatible',  // CRITICAL: OpenRouter needs Chat Completions format for some models
+    useChatEndpoint: true,  // OpenRouter needs Chat Completions format for most models
   },
 };
 
@@ -155,7 +157,7 @@ const OPENAI_COMPATIBLE_PROVIDERS: Record<string, OpenAICompatibleConfig> = {
  * FIX: Added better error handling and provider validation for ToolLoopAgent compatibility
  * Also validates that model name doesn't look like a provider name
  */
-function getVercelModel(
+export function getVercelModel(
   provider: VercelProvider | string,
   model: string,
   apiKey?: string,
@@ -163,12 +165,15 @@ function getVercelModel(
 ) {
   const currentEnv: any = typeof process !== 'undefined' ? process.env : {};
 
+  // Guard against undefined/null model — use env default
+  const modelName = model || currentEnv.DEFAULT_MODEL || 'gpt-4o';
+
   // Validate model name - catch common mistakes where provider is passed as model
   const providerNames = ['openai', 'anthropic', 'google', 'mistral', 'openrouter', 'groq', 'together', 'chutes'];
-  if (providerNames.includes(model.toLowerCase())) {
+  if (providerNames.includes(modelName.toLowerCase())) {
     chatLogger.error('Model name appears to be a provider name', {
       provider,
-      model,
+      model: modelName,
       hint: `Did you mean to use a specific model like 'gpt-4o', 'claude-sonnet-4-5', or 'mistral-large-latest'?`,
     });
     // Don't throw - let it fail naturally if the provider accepts it
@@ -219,8 +224,8 @@ function getVercelModel(
         apiKey: apiKey || currentEnv[config.apiKeyEnv],
         baseURL: baseURL || config.baseURL,
       });
-      chatLogger.debug('Created OpenAI-compatible provider', { provider, baseURL: openai['baseURL'] });
-      return openai(model);
+      // Some providers (NVIDIA, etc.) only support Chat Completions API, not Responses API
+      return config.useChatEndpoint ? openai.chat(model) : openai(model);
     }
 
     // Unknown provider, try OpenAI as fallback
@@ -239,7 +244,6 @@ function getVercelModel(
         apiKey: apiKey || currentEnv.OPENAI_API_KEY,
         baseURL: baseURL || currentEnv.OPENAI_BASE_URL,
       });
-      chatLogger.debug('Created OpenAI provider', { baseURL: openai['baseURL'] });
       return openai(model);
     }
 
@@ -248,7 +252,6 @@ function getVercelModel(
         apiKey: apiKey || currentEnv.ANTHROPIC_API_KEY,
         baseURL: baseURL || currentEnv.ANTHROPIC_BASE_URL,
       });
-      chatLogger.debug('Created Anthropic provider');
       return anthropic(model);
     }
 
@@ -256,7 +259,6 @@ function getVercelModel(
       const google = createGoogleGenerativeAI({
         apiKey: apiKey || currentEnv.GOOGLE_API_KEY,
       });
-      chatLogger.debug('Created Google provider');
       return google(model);
     }
 
@@ -265,7 +267,6 @@ function getVercelModel(
         apiKey: apiKey || currentEnv.MISTRAL_API_KEY,
         baseURL: baseURL || currentEnv.MISTRAL_BASE_URL,
       });
-      chatLogger.debug('Created Mistral provider');
       return mistral(model);
     }
 
@@ -384,7 +385,7 @@ export async function* streamWithVercelAI(
     model: modelName,
     messages: msgs,
     temperature: temp = 0.7,
-    maxTokens: maxT = 4096,
+    maxTokens: maxT = 65536,
     apiKey: key,
     baseURL: url,
     signal,
@@ -392,19 +393,58 @@ export async function* streamWithVercelAI(
     toolCallStreaming = true,
     smoothStreaming = true,
     maxRetries = 0,
-    maxSteps = 5,
+    maxSteps = 12,
+    timeoutMs = 120000, // Default 120s timeout
     providerOptions,
   } = opts;
 
   const startTime = Date.now();
   const requestId = `vercel-ai-${Date.now()}`;
+  // Cache for tool call arguments - scoped to this stream invocation to prevent cross-request leaks
+  const toolCallArgsCache = new Map<string, any>();
   let useCompatibilityFallback = false;
+
+  // Time-to-first-token timeout: only cancels if NO content arrives within timeoutMs
+  // Once first token arrives, timeout is cleared to allow long legitimate streams
+  let ttftTimeoutId: NodeJS.Timeout | null = null;
+  let timeoutController: AbortController | null = null;
+  let firstTokenReceived = false;
+
+  if (timeoutMs > 0) {
+    timeoutController = new AbortController();
+    
+    // Chain with existing signal if present
+    if (signal) {
+      signal.addEventListener('abort', () => {
+        timeoutController?.abort(signal.reason);
+        if (ttftTimeoutId) clearTimeout(ttftTimeoutId);
+      }, { once: true });
+    }
+    
+    // Set time-to-first-token timeout
+    ttftTimeoutId = setTimeout(() => {
+      if (!firstTokenReceived) {
+        timeoutController?.abort(new Error(`No response within ${timeoutMs}ms (time-to-first-token timeout)`));
+      }
+    }, timeoutMs);
+  }
+
+  const effectiveSignal = timeoutController?.signal || signal;
+  
+  // Helper to clear TTFT timeout once first token arrives
+  const onFirstToken = () => {
+    if (!firstTokenReceived) {
+      firstTokenReceived = true;
+      if (ttftTimeoutId) {
+        clearTimeout(ttftTimeoutId);
+        ttftTimeoutId = null;
+      }
+    }
+  };
 
   try {
     const vercelModel = getVercelModel(provider, modelName, key, url);
     const { chatMessages, systemPrompt } = convertMessages(msgs);
-
-    chatLogger.debug('Vercel AI SDK streaming started', { requestId, provider, model: modelName });
 
     // Custom provider handling (Zo, etc.)
     const isCustomProvider = provider === 'zo';
@@ -420,9 +460,12 @@ export async function* streamWithVercelAI(
           maxTokens: maxT,
           apiKey: key,
         })) {
-          if (signal?.aborted) return;
+          if (effectiveSignal?.aborted) return;
 
           if (chunk.type === 'text-delta') {
+            // Clear time-to-first-token timeout once we receive content
+            onFirstToken();
+            
             yield {
               content: chunk.textDelta,
               isComplete: false,
@@ -459,11 +502,13 @@ export async function* streamWithVercelAI(
       }
     }
 
-    // Build middleware stack
+    // Build middleware stack — skip transforms for providers with known incompatibilities.
+    // Google (Gemini) throws "transform is not a function" with smoothStream in AI SDK v6.
+    const supportsTransforms = provider !== 'google';
     const transforms: any[] = [];
 
     // Smooth streaming for natural token flow
-    if (smoothStreaming && typeof smoothStream === 'function') {
+    if (supportsTransforms && smoothStreaming && typeof smoothStream === 'function') {
       try {
         transforms.push(smoothStream({ delayInMs: 15 }));
       } catch (smoothError) {
@@ -473,7 +518,7 @@ export async function* streamWithVercelAI(
 
     // Reasoning extraction for providers that support extended thinking
     const reasoningTag = getReasoningTag(provider);
-    if (reasoningTag && typeof extractReasoningMiddleware === 'function') {
+    if (supportsTransforms && reasoningTag && typeof extractReasoningMiddleware === 'function') {
       try {
         transforms.push(extractReasoningMiddleware(reasoningTag));
       } catch (reasoningError) {
@@ -489,7 +534,7 @@ export async function* streamWithVercelAI(
       maxOutputTokens: maxT,
       maxRetries,
       maxSteps,
-      abortSignal: signal,
+      abortSignal: effectiveSignal,
       toolCallStreaming,
       ...(transforms.length > 0 ? { experimental_transform: transforms } : {}),
       experimental_telemetry: {
@@ -505,8 +550,243 @@ export async function* streamWithVercelAI(
     }
 
     // Add tools if provided
+    // Log the initial tools status
+    const toolCount = tools ? Object.keys(tools).length : 0;
+    chatLogger.info('[TOOLS-INIT] Tools configured for request', {
+      provider,
+      model: modelName,
+      toolCount,
+      toolNames: tools ? Object.keys(tools) : [],
+    });
+
+    // PROVIDER-SPECIFIC FC FIX: Some providers (NVIDIA NIM) report supportsFC=true
+    // but specific models don't actually support function calling and return 400.
+    // Strip tools upfront for known incompatible provider+model combos.
+    let skipTools = false;
     if (tools && Object.keys(tools).length > 0) {
+      // Explicit list of models that DO NOT support function calling
+      const nonFCModels = [
+        // NVIDIA NIM models that don't support FC
+        'google/gemma-3-27b-it',
+        'google/gemma-3-12b-it',
+        'google/gemma-3-4b-it',
+        'meta/llama-3.1-8b-instruct',
+        'meta/llama-3.1-70b-instruct',
+        'meta/llama-3.3-70b-instruct',
+        // Mistral Small doesn't support FC reliably
+        'mistral-small-latest',
+        'mistral-small-2402',
+        // OpenRouter free models often don't support FC
+      ];
+
+      // Explicit list of models that DO support function calling (known good)
+      const knownGoodFCModels = [
+        'mistral-large-latest',
+        'mistral-large-2411',
+        'mistral-large-2407',
+        'mistral-medium-latest',
+        'gpt-4',
+        'gpt-3.5',
+        'claude-3',
+        'claude-sonnet',
+        'claude-opus',
+        'gemini-1.5',
+        'gemini-2.0',
+      ];
+
+      // Check if current model matches any non-FC model
+      const modelLower = modelName.toLowerCase();
+      if (nonFCModels.some(m => modelLower.includes(m.toLowerCase()) || m.toLowerCase().includes(modelLower))) {
+        skipTools = true;
+      }
+
+      // CRITICAL FIX: If model is known to support FC, don't strip tools even if SDK reports false
+      const isKnownGoodFC = knownGoodFCModels.some(m => modelLower.includes(m.toLowerCase()));
+      chatLogger.info('[FC-KNOWN] Checking function calling support', {
+        provider,
+        model: modelName,
+        modelLower,
+        isKnownGoodFC,
+        knownGoodFCModels,
+      });
+      if (isKnownGoodFC) {
+        chatLogger.info('[FC-KNOWN] Model is known to support function calling', {
+          provider,
+          model: modelName,
+          action: 'Keeping tools enabled regardless of SDK capability flags',
+        });
+      }
+
+      if (provider === 'nvidia' && nonFCModels.some(m => modelName.includes(m))) {
+        skipTools = true;
+        chatLogger.warn('[FC-BYPASS] NVIDIA model does not support function calling despite SDK reporting otherwise', {
+          provider,
+          model: modelName,
+          action: 'Stripping tools and using text-mode fallback',
+          knownIssue: 'NVIDIA NIM returns 400 "DEGRADED function cannot be invoked" for tool calls on these models',
+        });
+      }
+
+      if (provider === 'mistral' && /mistral-small/.test(modelName) && !isKnownGoodFC) {
+        skipTools = true;
+        chatLogger.warn('[FC-BYPASS] Mistral Small does not support function calling reliably', {
+          provider,
+          model: modelName,
+          action: 'Stripping tools and using text-mode fallback',
+        });
+      }
+    }
+
+    chatLogger.info('[TOOLS-FINAL] Tools assignment check', {
+      hasToolsArg: !!tools,
+      toolsCount: tools ? Object.keys(tools).length : 0,
+      skipTools,
+      provider,
+      model: modelName,
+    });
+
+    chatLogger.info('[TOOLS-FINAL-BEFORE] Pre-assignment check', {
+      hasToolsArg: !!tools,
+      toolsCount: tools ? Object.keys(tools).length : 0,
+      skipTools,
+      provider,
+      model: modelName,
+      streamOptionsHasTools: !!streamOptions.tools,
+    });
+
+    if (tools && Object.keys(tools).length > 0 && !skipTools) {
       streamOptions.tools = tools;
+      chatLogger.info('[TOOLS-FINAL] Tools assigned to streamOptions', {
+        toolsCount: Object.keys(tools).length,
+      });
+    } else if (skipTools && tools) {
+      chatLogger.warn('[TOOLS-STRIP] Provider-specific tool stripping applied', {
+        provider,
+        model: modelName,
+        strippedToolCount: Object.keys(tools).length,
+        reason: 'provider API returns 400 for tool calls on this model',
+      });
+      // Inject text-mode tool instructions since tools were stripped
+      const TEXT_MODE_TOOL_INSTRUCTIONS = `
+## FILE OPERATIONS (REQUIRED FORMAT)
+
+You do NOT have function calling. Use ONLY these exact formats for file operations:
+
+### CREATE/OVERWRITE FILE
+\`\`\`file: path/to/file.ext
+complete file content here (no truncation)
+\`\`\`
+
+### EDIT FILE (unified diff format)
+\`\`\`diff: path/to/file.ext
+--- a/path/to/file.ext
++++ b/path/to/file.ext
+@@ -1,3 +1,4 @@
+ context line
+-line to remove
++line to add
++new line
+\`\`\`
+
+### CREATE DIRECTORY
+\`\`\`mkdir: path/to/directory
+\`\`\`
+
+### DELETE FILE
+\`\`\`delete: path/to/file.ext
+\`\`\`
+
+### MULTIPLE FILES (use separate blocks)
+\`\`\`file: src/a.ts
+content of a.ts
+\`\`\`
+
+\`\`\`file: src/b.ts
+content of b.ts
+\`\`\`
+
+### CRITICAL RULES
+1. ONE file per \`\`\`file:\`\`\` or \`\`\`diff:\`\`\` block
+2. Use COMPLETE file content (never truncate with "..." or "// rest of file")
+3. Do NOT mix explanations inside file blocks
+4. Do NOT describe file operations in plain text — use the block formats above
+5. Paths are relative to workspace (e.g., "src/app.tsx", not "/src/app.tsx")
+`;
+      if (streamOptions.system) {
+        streamOptions.system = streamOptions.system + '\n\n' + TEXT_MODE_TOOL_INSTRUCTIONS;
+      } else {
+        streamOptions.system = TEXT_MODE_TOOL_INSTRUCTIONS;
+      }
+    } else {
+      // Log when tools are NOT provided (different from FC check)
+      chatLogger.warn('[TOOLS] ⚠ No tools provided to stream - file operations will use text parsing only', {
+        provider,
+        model: modelName,
+        hasToolsArg: !!tools,
+        toolsKeys: tools ? Object.keys(tools) : [],
+        implications: 'LLM will not use function calling - must rely on text-based tool parsing',
+      });
+    }
+
+    // FIX: Detect if model supports function calling (Vercel AI SDK v6+).
+    // If tools are passed but the model doesn't support function calling,
+    // the LLM will output tool-like JSON as raw text instead of using native tool calls.
+    // We detect this, strip tools, and inject text-mode instructions so the model
+    // can still perform file actions using a parseable text format.
+    if (streamOptions.tools) {
+      const supportsFC = (vercelModel as any)?.supports?.functionCalling;
+      const toolCount = Object.keys(streamOptions.tools).length;
+      chatLogger.info('[FC-GATE] Checking function calling support', {
+        provider,
+        model: modelName,
+        supportsFC,
+        toolCount,
+        toolNames: Object.keys(streamOptions.tools),
+      });
+      if (supportsFC === false) {
+        // FC BYPASS - model doesn't support function calling, stripping tools
+        chatLogger.error('[FC-GATE] ✗ FC BYPASSED - Model does NOT support function calling', {
+          provider,
+          model: modelName,
+          toolCount,
+          severity: 'HIGH',
+          action: 'Stripping tools and using text-mode fallback',
+          textModeFormats: ['```file: path\ncontent```', '```diff: path\n...```', '```mkdir: path```', '```delete: path```'],
+        });
+        // EXPLICITLY STRIP TOOLS - model doesn't support FC
+        chatLogger.warn('[TOOLS-STRIP] Explicitly stripping tools from request (FC not supported)', {
+          provider,
+          model: modelName,
+          strippedToolCount: toolCount,
+          strippedTools: Object.keys(streamOptions.tools || {}),
+          reason: 'model does not support function calling',
+          fallbackMode: 'text-mode tool instructions injected into system prompt',
+        });
+        delete streamOptions.tools;
+
+        // Inject text-mode tool instructions (reuse the same improved format)
+        if (streamOptions.system) {
+          streamOptions.system = streamOptions.system + '\n\n' + TEXT_MODE_TOOL_INSTRUCTIONS;
+        } else {
+          streamOptions.system = TEXT_MODE_TOOL_INSTRUCTIONS;
+        }
+      } else if (supportsFC === undefined) {
+        // Model doesn't report this capability — could be unknown provider.
+        // TWO-PHASE STRATEGY:
+        //   Phase 1: Use tools only (no text-mode instructions).
+        //   Phase 2: After streaming, if zero tool calls produced, check if
+        //            the response text contains tool-call patterns. If so,
+        //            issue a second completion with text-mode instructions.
+        chatLogger.info('[FC-GATE] Function calling ability UNKNOWN — using two-phase strategy', {
+          provider,
+          model: modelName,
+          toolCount,
+          strategy: 'Phase 1: tools only; Phase 2: text-mode fallback if no tool calls',
+        });
+        // Do NOT inject text-mode instructions yet — let the model try native tool calls first.
+      }
+    } else {
+      chatLogger.info('[FC-GATE] No tools provided, skipping function calling check', { provider, model: modelName });
     }
 
     // Provider-specific options (e.g., Anthropic cache control)
@@ -518,14 +798,21 @@ export async function* streamWithVercelAI(
 
     // Stream events including text, reasoning, and tool calls
     let reasoningContent = '';
+    let textContent = ''; // Track text for two-phase FC fallback
 
     for await (const chunk of result.fullStream) {
-      if (signal?.aborted) return;
+      if (effectiveSignal?.aborted) return;
 
       switch (chunk.type as string) {
         case 'text-delta': {
+          // Clear time-to-first-token timeout once we receive content
+          onFirstToken();
+
+          const deltaText = (chunk as any).text ?? '';
+          textContent += deltaText; // Track for two-phase FC fallback
+
           yield {
-            content: (chunk as any).text,
+            content: deltaText,
             isComplete: false,
             timestamp: new Date(),
           };
@@ -533,6 +820,9 @@ export async function* streamWithVercelAI(
         }
 
         case 'reasoning-start': {
+          // Clear time-to-first-token timeout once we receive any response
+          onFirstToken();
+          
           // reasoning-start contains reasoning content in text property for some providers
           const reasoningText = (chunk as any).text ?? '';
           reasoningContent += reasoningText;
@@ -584,13 +874,76 @@ export async function* streamWithVercelAI(
         }
 
         case 'tool-call': {
+            // Clear time-to-first-token timeout once we receive any response
+            onFirstToken();
+            
+            let callArgs = (chunk as any).args || (chunk as any).arguments || {};
+            const toolName = (chunk as any).toolName;
+            const toolCallId = (chunk as any).toolCallId;
+
+            // SELF-HEALING: Normalize tool args to fix common LLM mistakes
+            // (wrong field names like "filename" → "path", "code" → "content")
+            try {
+              const { normalizeToolArgs } = await import('../mcp/vfs-mcp-tools');
+              callArgs = normalizeToolArgs(toolName, callArgs);
+              (chunk as any).args = callArgs;
+            } catch {
+              // Normalization is best-effort
+            }
+
+            const hasArgs = !!callArgs && Object.keys(callArgs).length > 0;
+            const argsCount = Object.keys(callArgs).length;
+            
+            if (hasArgs) {
+              chatLogger.info('[TOOL-CALL] ✓ Tool invoked', {
+                toolCallId,
+                toolName,
+                argsCount,
+                argsKeys: Object.keys(callArgs),
+                argsPreview: JSON.stringify(callArgs).slice(0, 500),
+              });
+            } else {
+              // EMPTY ARGS — block execution, synthesize a failure result
+              chatLogger.error('[TOOL-CALL] ✗ EMPTY args — blocking execution', {
+                toolCallId,
+                toolName,
+                severity: 'HIGH',
+              });
+
+              // Yield a synthetic tool-result failure so the model sees the error
+              // and can retry with correct args
+              yield {
+                content: '',
+                isComplete: false,
+                toolInvocations: [{
+                  toolCallId,
+                  toolName,
+                  state: 'result' as const,
+                  args: {},
+                  result: {
+                    success: false,
+                    error: {
+                      code: 'EMPTY_ARGS',
+                      message: `Tool "${toolName}" was called with no arguments. This usually means the model response was truncated.`,
+                      retryable: true,
+                      suggestedNextAction: `Call ${toolName} again with all required arguments.`,
+                    },
+                  },
+                }],
+                timestamp: new Date(),
+              };
+              break; // Skip normal tool-call yield
+            }
+
+            // Cache args so tool-result can include them (AI SDK doesn't repeat args in result)
+            toolCallArgsCache.set(toolCallId, callArgs);
           yield {
             content: '',
             isComplete: false,
             toolCalls: [{
-              id: (chunk as any).toolCallId,
-              name: (chunk as any).toolName,
-              arguments: (chunk as any).args || (chunk as any).arguments || {},
+              id: toolCallId,
+              name: toolName,
+              arguments: callArgs,
             }],
             timestamp: new Date(),
           };
@@ -598,18 +951,79 @@ export async function* streamWithVercelAI(
         }
 
         case 'tool-result': {
+          // Recover args from the earlier tool-call event since tool-result doesn't include them
+          const resultToolCallId = (chunk as any).toolCallId;
+          const cachedArgs = toolCallArgsCache.get(resultToolCallId);
+          const finalArgs = cachedArgs || (chunk as any).args || (chunk as any).arguments || {};
+          const toolResult = (chunk as any).result;
+          const toolName = (chunk as any).toolName;
+          const resultSuccess = toolResult?.success ?? (toolResult?.error === undefined);
+
+          // SELF-HEALING: Enhanced error result for validation-like errors.
+          // Declared here so it's in scope for the yield below.
+          let enhancedResult: unknown = toolResult;
+
+          // ENHANCED: Log tool result with detailed info
+          if (resultSuccess) {
+            chatLogger.info('[TOOL-RESULT] ✓ Tool succeeded', {
+              toolCallId: resultToolCallId,
+              toolName,
+              hasCachedArgs: !!cachedArgs,
+              argsUsed: Object.keys(finalArgs),
+              resultKeys: toolResult ? Object.keys(toolResult) : [],
+            });
+          } else {
+            const errorObj = toolResult?.error;
+            const errorMsg = typeof errorObj === 'string' ? errorObj : errorObj?.message || 'Unknown error';
+            const isEmptyArgs = !finalArgs || Object.keys(finalArgs).length === 0;
+
+            chatLogger.error('[TOOL-RESULT] ✗ Tool failed', {
+              toolCallId: resultToolCallId,
+              toolName,
+              hasCachedArgs: !!cachedArgs,
+              error: errorMsg,
+              argsUsed: Object.keys(finalArgs),
+              isEmptyArgs,
+            });
+
+            // SELF-HEALING: Enhance error message with retry guidance for validation-like errors.
+            // Common validation failures: missing required fields, wrong types, empty args.
+            // The AI SDK multi-step loop will let the model see this error and retry.
+            const isValidationError =
+              isEmptyArgs ||
+              errorMsg.includes('required') ||
+              errorMsg.includes('Expected') ||
+              errorMsg.includes('Invalid') ||
+              errorMsg.includes('validation') ||
+              errorMsg.includes('EMPTY_ARGS') ||
+              errorMsg.includes('cannot be');
+
+            if (isValidationError && toolName) {
+              enhancedResult = {
+                ...toolResult,
+                error: {
+                  code: errorObj?.code || 'VALIDATION_ERROR',
+                  message: `Tool "${toolName}" failed: ${errorMsg}. Please re-emit the same tool call with valid JSON arguments. Required fields: path (string), content (string) for file operations. Do not abbreviate or truncate content.`,
+                  retryable: true,
+                  originalError: typeof errorObj === 'string' ? errorObj : errorMsg,
+                },
+                _enhanced: true,
+              };
+            }
+          }
           yield {
             content: '',
             isComplete: false,
             toolInvocations: [{
-              toolCallId: (chunk as any).toolCallId,
-              toolName: (chunk as any).toolName,
+              toolCallId: resultToolCallId,
+              toolName,
               state: 'result' as const,
-              args: (chunk as any).args || {},
-              result: (chunk as any).result,
+              args: finalArgs,
+              result: enhancedResult ?? toolResult,
             }],
             timestamp: new Date(),
           };
+          if (cachedArgs) toolCallArgsCache.delete(resultToolCallId);
           break;
         }
 
@@ -638,6 +1052,9 @@ export async function* streamWithVercelAI(
     const toolCalls = await result.toolCalls;
     const steps = await result.steps;
 
+    // Cleanup timeout
+    if (ttftTimeoutId) clearTimeout(ttftTimeoutId);
+
     // Collect all tool calls from steps (multi-step support)
     const allToolCalls: Array<{ id: string; name: string; arguments: Record<string, any> }> = [];
     if (steps) {
@@ -664,6 +1081,92 @@ export async function* streamWithVercelAI(
       }
     }
 
+    // DIAGNOSTIC: Log tool call summary to help debug VFS MCP tool invocation issues
+    if (tools) {
+      const toolCount = Object.keys(tools).length;
+      if (allToolCalls.length > 0) {
+        chatLogger.info('[TOOL-SUMMARY] LLM invoked tools', {
+          provider,
+          model: modelName,
+          toolsAvailable: toolCount,
+          toolsCalled: allToolCalls.length,
+          toolNames: allToolCalls.map(tc => tc.name),
+        });
+      } else {
+        chatLogger.warn('[TOOL-SUMMARY] LLM did NOT call any tools despite tools being available', {
+          provider,
+          model: modelName,
+          toolsAvailable: toolCount,
+          toolNames: Object.keys(tools),
+          finishReason,
+          hint: 'Check if model supports function calling — see [FC-GATE] logs above',
+        });
+
+        // TWO-PHASE FC FALLBACK (Phase 2):
+        // If supportsFC was undefined, zero tool calls were produced, and the
+        // response text contains tool-call-like patterns, issue a second completion
+        // with text-mode instructions.
+        const supportsFC = (vercelModel as any)?.supports?.functionCalling;
+        if (supportsFC === undefined && textContent) {
+          // Check for tool-call patterns in text content
+          const hasToolCallPattern =
+            textContent.includes('"tool"') ||
+            textContent.includes('"function"') ||
+            textContent.includes('"name"') ||
+            textContent.includes('"tool_name"') ||
+            textContent.includes('"arguments"') ||
+            textContent.includes('"args"') ||
+            textContent.includes('"input"') ||
+            textContent.includes('"batch_write"') ||
+            textContent.includes('"write_file"') ||
+            /```(?:file|diff|mkdir|delete):/i.test(textContent);
+
+          if (hasToolCallPattern) {
+            chatLogger.warn('[FC-GATE] Phase 2: No tool calls + tool-call patterns detected in text — retrying with text-mode instructions', {
+              provider,
+              model: modelName,
+              textContentLength: textContent.length,
+              patternsDetected: true,
+            });
+
+            // Issue second completion with text-mode instructions
+            const fallbackStreamOptions = { ...streamOptions };
+            delete fallbackStreamOptions.tools; // Strip tools
+            if (fallbackStreamOptions.system) {
+              fallbackStreamOptions.system = fallbackStreamOptions.system + '\n\n' + TEXT_MODE_TOOL_INSTRUCTIONS;
+            } else {
+              fallbackStreamOptions.system = TEXT_MODE_TOOL_INSTRUCTIONS;
+            }
+
+            try {
+              const fallbackResult = streamText(fallbackStreamOptions);
+              for await (const fallbackChunk of fallbackResult.fullStream) {
+                if (effectiveSignal?.aborted) break;
+                if (fallbackChunk.type === 'text-delta') {
+                  yield {
+                    content: (fallbackChunk as any).text ?? '',
+                    isComplete: false,
+                    timestamp: new Date(),
+                    metadata: { fcFallback: 'text-mode' },
+                  };
+                }
+              }
+              chatLogger.info('[FC-GATE] Phase 2 fallback completed', {
+                provider,
+                model: modelName,
+              });
+            } catch (fallbackError: any) {
+              chatLogger.error('[FC-GATE] Phase 2 fallback failed', {
+                provider,
+                model: modelName,
+                error: fallbackError.message,
+              });
+            }
+          }
+        }
+      }
+    }
+
     // Final chunk with completion status and metadata
     yield {
       content: '',
@@ -687,13 +1190,6 @@ export async function* streamWithVercelAI(
       },
     };
 
-    chatLogger.info('Vercel AI SDK streaming completed', { requestId, provider, model: modelName }, {
-      latencyMs: Date.now() - startTime,
-      tokensUsed: usage?.totalTokens || 0,
-      toolCallsCount: allToolCalls.length,
-      steps: steps?.length || 0,
-    });
-
   } catch (error: any) {
     if (error.name === 'AbortError') {
       chatLogger.info('Vercel AI SDK streaming aborted', { requestId, provider, model: modelName });
@@ -709,23 +1205,49 @@ export async function* streamWithVercelAI(
       (error.statusCode === 400 && error.message?.includes('Invalid'));
 
     if (isResponsesApiError && !useCompatibilityFallback && provider === 'openrouter') {
-      chatLogger.warn('Responses API failed, retrying with Chat Completions format', {
+      chatLogger.warn('Responses API failed, retrying with provider-agnostic fallback', {
         requestId,
         provider,
         model: modelName,
         error: error.message,
       });
-      
-      // Retry with compatibility mode forced
+
+      // Retry with provider-agnostic fallback — tries configured providers in order
       useCompatibilityFallback = true;
-      
-      // Create model for fallback
+
       const currentEnv: any = typeof process !== 'undefined' ? process.env : {};
-      const { createOpenAI } = await import('@ai-sdk/openai');
-      const fallbackModel = createOpenAI({
-        apiKey: key || currentEnv.OPENROUTER_API_KEY,
-        baseURL: url || process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1',
-      });
+      const fallbackProviderName = currentEnv.DEFAULT_FALLBACK_PROVIDER || 'mistral';
+      const fallbackModelName = currentEnv.FAST_MODEL || currentEnv.DEFAULT_MODEL || 'mistral-small-latest';
+      chatLogger.info('Streaming fallback activated', { fallbackProvider: fallbackProviderName, fallbackModel: fallbackModelName });
+
+      let fallbackModel: any;
+      try {
+        const { createMistral } = await import('@ai-sdk/mistral');
+        const { createGoogleGenerativeAI } = await import('@ai-sdk/google');
+        const { createAnthropic } = await import('@ai-sdk/anthropic');
+        const { createOpenAI } = await import('@ai-sdk/openai');
+
+        const providerFactories: Record<string, () => any> = {
+          mistral: () => createMistral({ apiKey: currentEnv.MISTRAL_API_KEY })(fallbackModelName),
+          google: () => createGoogleGenerativeAI({ apiKey: currentEnv.GOOGLE_API_KEY })(fallbackModelName),
+          anthropic: () => createAnthropic({ apiKey: currentEnv.ANTHROPIC_API_KEY })(fallbackModelName),
+          openai: () => createOpenAI({ apiKey: currentEnv.OPENAI_API_KEY })(fallbackModelName),
+        };
+
+        const factory = providerFactories[fallbackProviderName];
+        if (factory) {
+          fallbackModel = factory();
+        } else {
+          // Unknown provider — try OpenAI-compatible format
+          fallbackModel = createOpenAI({
+            apiKey: currentEnv.OPENAI_API_KEY,
+            baseURL: currentEnv.OPENAI_BASE_URL,
+          })(fallbackModelName);
+        }
+      } catch (fallbackInitError: any) {
+        chatLogger.error('All fallback provider initializations failed', { error: fallbackInitError.message });
+        throw error; // Re-throw original error — no viable fallback
+      }
 
       // Retry the stream with fallback model
       try {
@@ -739,7 +1261,7 @@ export async function* streamWithVercelAI(
           maxOutputTokens: maxT,
           maxRetries: 0,
           maxSteps,
-          abortSignal: signal,
+          abortSignal: effectiveSignal,
           toolCallStreaming,
           experimental_telemetry: {
             isEnabled: false,
@@ -750,12 +1272,68 @@ export async function* streamWithVercelAI(
 
         if (fallbackSystemPrompt) fallbackStreamOptions.system = fallbackSystemPrompt;
         if (tools && Object.keys(tools).length > 0) fallbackStreamOptions.tools = tools;
+        else {
+          chatLogger.warn('[TOOLS] Fallback: No tools provided', {
+            fallbackProvider: fallbackProviderName,
+            fallbackModel: fallbackModelName,
+          });
+        }
+
+        // Same function calling support check for fallback path
+        if (fallbackStreamOptions.tools) {
+          const supportsFC = (fallbackModel as any)?.supports?.functionCalling;
+          if (supportsFC === false) {
+            chatLogger.warn('Fallback model does not support function calling — using text-mode tool instructions', {
+              fallbackProvider: fallbackProviderName,
+              fallbackModel: fallbackModelName,
+            });
+            // EXPLICITLY STRIP TOOLS - fallback model doesn't support FC
+            chatLogger.warn('[TOOLS-STRIP] Fallback: Explicitly stripping tools', {
+              fallbackProvider: fallbackProviderName,
+              fallbackModel: fallbackModelName,
+              reason: 'fallback model does not support function calling',
+            });
+            delete fallbackStreamOptions.tools;
+
+            // Inject same text-mode instructions as main path
+            const TEXT_MODE_TOOL_INSTRUCTIONS = `
+FILE OPERATIONS — You do NOT have tool calls. Use EXACTLY these text formats:
+
+CREATE OR OVERWRITE A FILE:
+\`\`\`file: path/to/file.ext
+your full file content here
+\`\`\`
+
+EDIT EXISTING FILE (preferred — use unified diff):
+\`\`\`diff: path/to/file.ext
+--- a/path/to/file.ext
++++ b/path/to/file.ext
+@@ existing @@
+-line to remove
++line to add
+\`\`\`
+
+CREATE DIRECTORY:
+\`\`\`mkdir: path/to/directory
+\`\`\`
+
+DELETE FILE:
+\`\`\`delete: path/to/file.ext
+\`\`\`
+`;
+            if (fallbackStreamOptions.system) {
+              fallbackStreamOptions.system = fallbackStreamOptions.system + '\n\n' + TEXT_MODE_TOOL_INSTRUCTIONS;
+            } else {
+              fallbackStreamOptions.system = TEXT_MODE_TOOL_INSTRUCTIONS;
+            }
+          }
+        }
         
         const fallbackResult = streamText(fallbackStreamOptions);
         
         // Yield all chunks from fallback (simplified - same as main stream)
         for await (const chunk of fallbackResult.fullStream) {
-          if (signal?.aborted) return;
+          if (effectiveSignal?.aborted) return;
           
           if (chunk.type === 'text-delta') {
             yield { content: (chunk as any).text, isComplete: false, timestamp: new Date() };
@@ -789,14 +1367,17 @@ export async function* streamWithVercelAI(
         }
         return;
       } catch (fallbackError: any) {
+        // Cleanup timeout
+        if (ttftTimeoutId) clearTimeout(ttftTimeoutId);
+
         chatLogger.error('Fallback streaming also failed', {
           requestId,
           provider,
           model: modelName,
           error: fallbackError.message,
         });
-        // Throw original error
-        throw error;
+        // Throw the fallback error (more specific/recent) rather than the original
+        throw fallbackError instanceof Error ? fallbackError : new Error(String(fallbackError));
       }
     }
 
@@ -805,6 +1386,9 @@ export async function* streamWithVercelAI(
       statusCode: error.statusCode,
       latencyMs: Date.now() - startTime,
     });
+
+    // Cleanup timeout
+    if (ttftTimeoutId) clearTimeout(ttftTimeoutId);
 
     error.metadata = {
       ...error.metadata,
@@ -829,7 +1413,7 @@ export async function* streamWithTools(
   messages: LLMMessage[],
   tools: Record<string, Tool>,
   temperature: number = 0.7,
-  maxTokens: number = 4096,
+  maxTokens: number = 65536,
   apiKey?: string,
   baseURL?: string,
   signal?: AbortSignal,

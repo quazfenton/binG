@@ -1,6 +1,17 @@
-// Note: These imports are lazy-loaded to prevent Edge Runtime bundling issues
-// @opencode-ai/sdk uses node:child_process which is incompatible with Edge/client
-// AWS SDK (used by Cohere) uses node:fs/promises which is incompatible with Edge
+// ============================================================
+// CLIENT-SAFE SECTION — No SDK imports, no Node.js dependencies
+// This section is safe for webpack to bundle in client components.
+// ============================================================
+
+// Note: SDK imports below are lazy-loaded via dynamic import() to prevent
+// Edge Runtime bundling issues. However, webpack still statically analyzes
+// them when this file is imported from a Client Component.
+//
+// If you see "node:fs/promises" or "fs" errors in the browser, it means
+// this file is being bundled for the client. The fix is to ensure
+// Client Components only import from llm-providers-types.ts instead.
+
+// Lazy-loaded SDK variables — only initialized on the server
 let OpenAI: any = null
 let Anthropic: any = null
 let GoogleGenerativeAI: any = null
@@ -91,6 +102,7 @@ import {
 
 import { initializeComposioService, getComposioService, type ComposioService } from '../integrations/composio-service'
 import { chatLogger } from './chat-logger'
+import { withRetry, isRetryableError } from '../vector-memory/retry'
 
 export interface LLMProvider {
   id: string
@@ -252,6 +264,15 @@ export interface ProviderConfig {
     baseUrl?: string
     model?: string
   }
+  antigravity?: {
+    enabled?: boolean
+    clientId?: string
+    clientSecret?: string
+    masterRefreshToken?: string
+    masterEmail?: string
+    defaultProjectId?: string
+    // Per-user accounts are loaded from DB, not config
+  }
 }
 
 export const PROVIDERS: Record<string, LLMProvider> = {
@@ -259,6 +280,7 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     id: 'openai',
     name: 'OpenAI',
     models: [
+      'gpt-5-mini',
       'gpt-4',
       'gpt-4-turbo',
       'gpt-4o',
@@ -274,14 +296,13 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     id: 'openrouter',
     name: 'OpenRouter',
     models: [
-      'qwen/qwen3-30b-a3b:free',
+      'minimax/minimax-m2.5:free',
       'qwen/qwen3-coder:free',
       'openai/gpt-oss-120b:free',
       'z-ai/glm-4.5-air:free',
       'nvidia/nemotron-3-nano-30b-a3b:free',
       'meta-llama/llama-3.3-70b-instruct:free',
       'nvidia/nemotron-nano-12b-v2-vl:free',
-      'minimax/minimax-m2.5:free', 
       'nvidia/nemotron-3-super-120b-a12b:free', 
       'stepfun/step-3.5-flash:free', 
       'openai/gpt-oss-20b:free',  
@@ -307,6 +328,7 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     id: 'anthropic',
     name: 'Anthropic',
     models: [
+      'claude-4.6-sonnet',
       'claude-3-5-sonnet-latest',
       'claude-3-5-sonnet-20240620',
       'claude-3-opus-latest',
@@ -324,8 +346,6 @@ export const PROVIDERS: Record<string, LLMProvider> = {
       'gemini-3.1-flash-lite-preview',
       'gemini-3-flash-preview',
       'gemini-2.5-pro',
-      'gemini-2.5-flash',
-      'gemini-2.5-flash-preview-09-2025',
       'gemini-2.5-flash-lite',
       'gemini-2.5-flash-lite-preview-09-2025'
     ],
@@ -375,8 +395,6 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     id: 'portkey',
     name: 'Portkey AI Gateway',
     models: ['openrouter/auto',
-      'qwen/qwen3-30b-a3b:free',
-      'chutes/gemini-1.5-flash:free',
       'chutes/openrouter-auto:free',
       'chutes/grok-beta:free',
       'chutes/flux-dev:free',
@@ -452,7 +470,6 @@ export const PROVIDERS: Record<string, LLMProvider> = {
       'deepseek-r1',
       'gemini-1.5-pro',
       'gemini-1.5-flash',
-      'gemini-2.0-flash-exp',
       'llama-3.2-1b-instruct',
       'llama-3.2-3b-instruct'
     ],
@@ -468,8 +485,8 @@ export const PROVIDERS: Record<string, LLMProvider> = {
       'nvidia/nemotron-4-340b-instruct',
       'nvidia/nemotron-4-340b-reward',
       'nvidia/nemotron-3-super-120b-a12b',
-      'nvidia/nemotron-3-nano-30b-a3b:free',
-      'nvidia/nemotron-nano-12b-v2-vl:free',
+      'nvidia/nemotron-3-nano-30b-a3b',
+      'nvidia/nemotron-nano-12b-v2-vl',
       // DeepSeek models
       'deepseek-ai/deepseek-v3.2',
       'deepseek-ai/deepseek-v3.1',
@@ -607,6 +624,20 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     supportsStreaming: true,
     maxTokens: 128000,
     description: 'Cloudflare Workers AI - Serverless AI inference at the edge with 10,000 neurons/day free tier'
+  },
+  antigravity: {
+    id: 'antigravity',
+    name: 'Antigravity',
+    models: [
+      'antigravity-gemini-3-pro',
+      'antigravity-gemini-3.1-pro',
+      'antigravity-gemini-3-flash',
+      'antigravity-claude-sonnet-4-6',
+      'antigravity-claude-opus-4-6-thinking',
+    ],
+    supportsStreaming: true,
+    maxTokens: 1048576,
+    description: 'Google Antigravity — Gemini 3 & Claude 4.6 via Google OAuth quota'
   }
 }
 
@@ -819,109 +850,116 @@ class LLMService {
     // Initialize providers lazily on first use
     await this.initializeProviders()
 
-    const { provider = 'openai', model, messages, temperature = 0.7, maxTokens = 2000, requestId, apiKey } = request
-    const requestStartTime = Date.now();
+    const { provider = 'openai', model, messages, temperature = 0.7, maxTokens = 65536, requestId, apiKey } = request
 
-    try {
-      const responseStartTime = Date.now();
-      let response: LLMResponse;
+    return withRetry(
+      async () => {
+        const responseStartTime = Date.now();
+        let response: LLMResponse;
 
-      switch (provider) {
-        case 'openai':
-          response = await this.generateOpenAIResponse(model, messages, temperature, maxTokens, requestId, apiKey)
-          break;
-        case 'anthropic':
-          response = await this.generateAnthropicResponse(model, messages, temperature, maxTokens, requestId, apiKey)
-          break;
-        case 'google':
-          response = await this.generateGoogleResponse(model, messages, temperature, maxTokens, requestId, apiKey)
-          break;
-        case 'cohere':
-          response = await this.generateCohereResponse(model, messages, temperature, maxTokens, requestId, apiKey)
-          break;
-        case 'together':
-          response = await this.generateTogetherResponse(model, messages, temperature, maxTokens, requestId, apiKey)
-          break;
-        case 'replicate':
-          response = await this.generateReplicateResponse(model, messages, temperature, maxTokens, requestId, apiKey)
-          break;
-        case 'portkey':
-          response = await this.generatePortkeyResponse(model, messages, temperature, maxTokens, requestId, apiKey)
-          break;
-        case 'openrouter':
-          response = await this.generateOpenRouterResponse(model, messages, temperature, maxTokens, requestId, apiKey)
-          break;
-        case 'chutes':
-          response = await this.generateChutesResponse(model, messages, temperature, maxTokens, requestId, apiKey)
-          break;
-        case 'mistral':
-          response = await this.generateMistralResponse(model, messages, temperature, maxTokens, requestId, apiKey)
-          break;
-        case 'github':
-          response = await this.generateGitHubResponse(model, messages, temperature, maxTokens, requestId, apiKey)
-          break;
-        case 'zen':
-          response = await this.generatezenResponse(model, messages, temperature, maxTokens, requestId, apiKey)
-          break;
-        case 'opencode':
-          await this.initOpencodeClient()
-          response = await this.opencodeClient.provider.generateResponse(request)
-          break;
-        default:
-          throw createLLMError(`Unsupported provider: ${provider}`, {
-            code: ERROR_CODES.LLM.UNSUPPORTED_PROVIDER,
-            severity: 'high',
-            recoverable: false,
-            context: { provider }
-          });
+        switch (provider) {
+          case 'openai':
+            response = await this.generateOpenAIResponse(model, messages, temperature, maxTokens, requestId, apiKey)
+            break;
+          case 'anthropic':
+            response = await this.generateAnthropicResponse(model, messages, temperature, maxTokens, requestId, apiKey)
+            break;
+          case 'google':
+            response = await this.generateGoogleResponse(model, messages, temperature, maxTokens, requestId, apiKey)
+            break;
+          case 'cohere':
+            response = await this.generateCohereResponse(model, messages, temperature, maxTokens, requestId, apiKey)
+            break;
+          case 'together':
+            response = await this.generateTogetherResponse(model, messages, temperature, maxTokens, requestId, apiKey)
+            break;
+          case 'replicate':
+            response = await this.generateReplicateResponse(model, messages, temperature, maxTokens, requestId, apiKey)
+            break;
+          case 'portkey':
+            response = await this.generatePortkeyResponse(model, messages, temperature, maxTokens, requestId, apiKey)
+            break;
+          case 'openrouter':
+            response = await this.generateOpenRouterResponse(model, messages, temperature, maxTokens, requestId, apiKey)
+            break;
+          case 'chutes':
+            response = await this.generateChutesResponse(model, messages, temperature, maxTokens, requestId, apiKey)
+            break;
+          case 'mistral':
+            response = await this.generateMistralResponse(model, messages, temperature, maxTokens, requestId, apiKey)
+            break;
+          case 'github':
+            response = await this.generateGitHubResponse(model, messages, temperature, maxTokens, requestId, apiKey)
+            break;
+          case 'zen':
+            response = await this.generatezenResponse(model, messages, temperature, maxTokens, requestId, apiKey)
+            break;
+          case 'opencode':
+            await this.initOpencodeClient()
+            response = await this.opencodeClient.provider.generateResponse(request)
+            break;
+          case 'antigravity':
+            response = await this.generateAntigravityResponse(model, messages, temperature, maxTokens, requestId)
+            break;
+          default:
+            throw createLLMError(`Unsupported provider: ${provider}`, {
+              code: ERROR_CODES.LLM.UNSUPPORTED_PROVIDER,
+              severity: 'high',
+              recoverable: false,
+              context: { provider }
+            });
+        }
+
+        const responseLatency = Date.now() - responseStartTime;
+        response.provider = provider;
+        response.timestamp = new Date();
+
+        // Set metadata with actual provider/model that generated the response
+        // This is critical for fallback scenarios to log correct provider/model
+        response.metadata = {
+          ...response.metadata,
+          actualProvider: provider,
+          actualModel: model,
+        };
+
+        chatLogger.info('LLM provider response generated', { requestId, provider, model }, {
+          latencyMs: responseLatency,
+          tokensUsed: response.tokensUsed,
+          finishReason: response.finishReason,
+          contentLength: response.content.length,
+        });
+
+        return response;
+      },
+      {
+        maxRetries: 2,
+        baseDelay: 1000,
+        maxDelay: 10000,
+        backoffFactor: 2,
+        jitter: true,
+        context: `LLM.generateResponse(${provider}/${model})`,
+        shouldRetry: (error) => isRetryableError(error),
       }
-
-      const responseLatency = Date.now() - responseStartTime;
-      response.provider = provider;
-      response.timestamp = new Date();
-      
-      // Set metadata with actual provider/model that generated the response
-      // This is critical for fallback scenarios to log correct provider/model
-      response.metadata = {
-        ...response.metadata,
-        actualProvider: provider,
-        actualModel: model,
-      };
-
-      chatLogger.info('LLM provider response generated', { requestId, provider, model }, {
-        latencyMs: responseLatency,
-        tokensUsed: response.tokensUsed,
-        finishReason: response.finishReason,
-        contentLength: response.content.length,
-      });
-
-      return response;
-    } catch (error) {
-      const requestLatency = Date.now() - requestStartTime;
-      chatLogger.error('LLM provider request failed', { requestId, provider, model }, {
-        latencyMs: requestLatency,
-        error: error instanceof Error ? error.message : String(error),
-      });
-
-      // If it's already an LLMError, re-throw it instead of wrapping it again
-      if (error instanceof LLMError) {
-        throw error;
-      }
-
-      throw createLLMError(`LLM request failed: ${error instanceof Error ? error.message : String(error)}`, {
-        code: ERROR_CODES.LLM.REQUEST_FAILED,
-        severity: 'high',
-        recoverable: true,
-        context: { provider, error: error instanceof Error ? { message: error.message, name: error.name } : error }
-      });
-    }
+    );
   }
 
   async *generateStreamingResponse(request: LLMRequest): AsyncGenerator<StreamingResponse> {
-    // Initialize providers lazily on first use
-    await this.initializeProviders()
-    
-    const { provider = 'openai', model, messages, temperature = 0.7, maxTokens = 2000, requestId } = request
+    // Initialize providers lazily on first use, with retry for transient failures
+    const { provider = 'openai', model, messages, temperature = 0.7, maxTokens = 65536, requestId } = request
+
+    await withRetry(
+      async () => this.initializeProviders(),
+      {
+        maxRetries: 2,
+        baseDelay: 500,
+        maxDelay: 5000,
+        backoffFactor: 2,
+        jitter: true,
+        context: `LLM.initializeProviders(for streaming)`,
+        shouldRetry: (error) => isRetryableError(error),
+      }
+    );
+
     const streamStartTime = Date.now();
     let chunkCount = 0;
 
@@ -1006,6 +1044,12 @@ class LLMService {
             yield chunk;
           }
           break
+        case 'antigravity':
+          for await (const chunk of this.streamAntigravityResponse(model, messages, temperature, maxTokens)) {
+            chunkCount++;
+            yield chunk;
+          }
+          break
         default:
           throw new Error(`Streaming is not supported for provider: ${provider}`);
       }
@@ -1068,6 +1112,14 @@ class LLMService {
         return currentEnv.GITHUB_MODELS_API_KEY || currentEnv.AZURE_OPENAI_API_KEY || this.config.github?.apiKey || '';
       case 'zen':
         return currentEnv.ZEN_API_KEY || this.config.zen?.apiKey || '';
+      case 'nvidia':
+        return currentEnv.NVIDIA_API_KEY || '';
+      case 'groq':
+        return currentEnv.GROQ_API_KEY || '';
+      case 'deepinfra':
+        return currentEnv.DEEPINFRA_API_KEY || '';
+      case 'fireworks':
+        return currentEnv.FIREWORKS_API_KEY || '';
       default:
         return '';
     }
@@ -1967,10 +2019,17 @@ class LLMService {
         case 'composio':
           return !!process.env.COMPOSIO_API_KEY;
         case 'cloudflare':
-        case 'nvidia':
         case 'zo':
           // Providers with env vars configured but no request/stream handlers yet
           return false;
+        case 'nvidia':
+          return !!process.env.NVIDIA_API_KEY;
+        case 'groq':
+          return !!process.env.GROQ_API_KEY;
+        case 'deepinfra':
+          return !!process.env.DEEPINFRA_API_KEY;
+        case 'fireworks':
+          return !!process.env.FIREWORKS_API_KEY;
         case 'opencode':
           // OpenCode SDK - check if binary is available or server is running
           return true; // Always available as it's local
@@ -1995,6 +2054,140 @@ class LLMService {
   getProviderModels(providerId: string): string[] {
     const provider = PROVIDERS[providerId]
     return provider ? provider.models : []
+  }
+
+  // =========================================================================
+  // Antigravity Provider — Google OAuth-based access to Gemini 3 & Claude 4.6
+  // =========================================================================
+
+  private async generateAntigravityResponse(
+    model: string,
+    messages: LLMMessage[],
+    temperature: number,
+    maxTokens: number,
+    requestId?: string
+  ): Promise<LLMResponse> {
+    const { sendAntigravityChat, ANTIGRAVITY_MODELS } = await import('@/lib/llm/antigravity-provider');
+
+    // FIX: Prevent webpack/turbopack from bundling better-sqlite3 into client.
+    // The import path is constructed dynamically so the bundler cannot statically
+    // analyze the dependency chain (antigravity-accounts → connection → better-sqlite3).
+    const dbModulePath = '@/lib' + '/database/antigravity-accounts';
+    const { getAntigravityAccounts } = await import(dbModulePath);
+
+    const modelConfig = ANTIGRAVITY_MODELS[model];
+    if (!modelConfig) {
+      throw new Error(`Unknown Antigravity model: ${model}`);
+    }
+
+    // Load user's Antigravity accounts from DB
+    const accounts = await getAntigravityAccounts(requestId || 'default');
+    if (!accounts || accounts.length === 0) {
+      throw new Error('No Antigravity accounts connected. Authenticate via /api/antigravity/login');
+    }
+
+    // Try each account with rate-limit fallback
+    let lastError: Error | null = null;
+    for (const account of accounts) {
+      try {
+        const response = await sendAntigravityChat({
+          model,
+          messages: messages as any,
+          temperature,
+          maxTokens,
+          stream: false,
+        }, account);
+
+        return {
+          content: response.content,
+          reasoning: response.thinking,
+          tokensUsed: response.usage?.promptTokens + response.usage?.completionTokens || 0,
+          finishReason: response.finishReason,
+          timestamp: new Date(),
+          metadata: { provider: 'antigravity', model, email: account.email },
+          usage: response.usage ? {
+            prompt_tokens: response.usage.promptTokens,
+            completion_tokens: response.usage.completionTokens,
+            total_tokens: response.usage.promptTokens + response.usage.completionTokens,
+          } : undefined,
+        };
+      } catch (e: any) {
+        lastError = e;
+        if (e.message?.includes('Rate limited')) {
+          chatLogger.warn('Antigravity account rate limited, trying next', { email: account.email });
+          continue;
+        }
+        throw e;
+      }
+    }
+
+    throw lastError || new Error('All Antigravity accounts failed');
+  }
+
+  private async *streamAntigravityResponse(
+    model: string,
+    messages: LLMMessage[],
+    temperature: number,
+    maxTokens: number
+  ): AsyncGenerator<StreamingResponse> {
+    const { sendAntigravityChat, ANTIGRAVITY_MODELS } = await import('@/lib/llm/antigravity-provider');
+
+    // FIX: Guard server-only import to prevent webpack from bundling
+    // better-sqlite3 into client components.
+    if (typeof window !== 'undefined') {
+      throw new Error('Antigravity provider is server-only');
+    }
+
+    // Dynamic import with webpack ignore — prevents webpack from statically
+    // analyzing the dependency chain (antigravity-accounts → connection → better-sqlite3)
+    // eslint-disable-next-line @typescript-eslint/no-implied-eval
+    const { getAntigravityAccounts } = await import(
+      /* webpackIgnore: true */ '@/lib/database/antigravity-accounts'
+    );
+
+    const modelConfig = ANTIGRAVITY_MODELS[model];
+    if (!modelConfig) {
+      throw new Error(`Unknown Antigravity model: ${model}`);
+    }
+
+    const accounts = await getAntigravityAccounts('default');
+    if (!accounts || accounts.length === 0) {
+      throw new Error('No Antigravity accounts connected. Authenticate via /api/antigravity/login');
+    }
+
+    let lastError: Error | null = null;
+    for (const account of accounts) {
+      try {
+        const response = await sendAntigravityChat({
+          model,
+          messages: messages as any,
+          temperature,
+          maxTokens,
+          stream: true,
+        }, account);
+
+        yield {
+          content: response.content,
+          reasoning: response.thinking,
+          isComplete: true,
+          finishReason: response.finishReason,
+          provider: 'antigravity',
+          metadata: { model, email: account.email },
+          usage: response.usage ? {
+            promptTokens: response.usage.promptTokens,
+            completionTokens: response.usage.completionTokens,
+            totalTokens: response.usage.promptTokens + response.usage.completionTokens,
+          } : undefined,
+        };
+        return;
+      } catch (e: any) {
+        lastError = e;
+        if (e.message?.includes('Rate limited')) continue;
+        throw e;
+      }
+    }
+
+    throw lastError || new Error('All Antigravity accounts failed');
   }
 }
 
@@ -2042,6 +2235,14 @@ export const llmService = new LLMService({
     hostname: process.env.OPENCODE_HOSTNAME || '127.0.0.1',
     port: parseInt(process.env.OPENCODE_PORT || '4096'),
     model: process.env.OPENCODE_MODEL || 'anthropic/claude-3-5-sonnet-20241022',
+  },
+  antigravity: {
+    enabled: process.env.ANTIGRAVITY_ENABLED !== 'false',
+    clientId: process.env.ANTIGRAVITY_CLIENT_ID || process.env.GOOGLE_CLIENT_ID,
+    clientSecret: process.env.ANTIGRAVITY_CLIENT_SECRET || process.env.GOOGLE_CLIENT_SECRET,
+    masterRefreshToken: process.env.ANTIGRAVITY_REFRESH_TOKEN,
+    masterEmail: process.env.ANTIGRAVITY_MASTER_EMAIL || 'master@antigravity.local',
+    defaultProjectId: process.env.ANTIGRAVITY_DEFAULT_PROJECT_ID || 'rising-fact-p41fc',
   }
 })
 

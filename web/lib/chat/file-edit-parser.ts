@@ -28,6 +28,7 @@
 
 export { isFullFileContent } from './file-diff-utils';
 export { stripHeredocBodies } from './bash-file-commands';
+import { tolerantJsonParse, findBalancedJsonObject as findBalancedJson } from '../utils/json-tolerant';
 
 // Import for local use
 import { stripHeredocBodies as maskHeredocs } from './bash-file-commands';
@@ -36,7 +37,9 @@ import { stripHeredocBodies as maskHeredocs } from './bash-file-commands';
  * Check if a path segment looks like a CSS value (e.g., "0.3s", "10px")
  */
 function looksLikeCssValueSegment(segment: string): boolean {
-  return /^(?:\d*\.\d+|\d+[a-z%]+)$/i.test(segment);
+  // Match CSS values: "0.3s", "10px", "50%", "1.5rem", "0", "100"
+  // Pattern: optional decimal number followed by optional CSS unit
+  return /^(?:\d+(?:\.\d+)?[a-z%]+|\d+(?:\.\d+)?)$/i.test(segment);
 }
 
 /**
@@ -469,7 +472,8 @@ export function extractHtmlCommentFileEdits(content: string): FileEdit[] {
 export function extractCompactFileEdits(content: string): FileEdit[] {
   const edits: FileEdit[] = [];
   // Use \s* to handle both spaced and non-spaced variants
-  // FIX: Limit match scope to prevent catastrophic backtracking
+  // FIX: Match ONLY complete <file_edit> blocks — require both opening and closing tags
+  // The non-greedy ([\s\S]*?) matches all content including > characters (e.g. arrow functions)
   const regex = /<file_edit\s*path=["']([^"']+)["']\s*>([\s\S]*?)<\/file_edit>/gi;
   let match: RegExpExecArray | null;
 
@@ -583,10 +587,12 @@ export function extractMalformedFileEdits(content: string): FileEdit[] {
 
   // Check if content contains SVG - if so, we need to be more careful
   const hasSvgContent = content.includes('<svg') && content.includes('</svg>');
-  
-  // Match: <path>path</path> followed by content, ending with <file Edit> or <file_edit> or next <path>
-  // Handles variations: <file Edit>, <file_edit>, <FILE_EDIT>, <File_Edit>, etc. (case insensitive)
-  const regex = /<path>\s*([^\s<]+?)\s*<\/path>\s*([\s\S]*?)(?=<path>|<file\s*edit>|$)/gi;
+
+  // Match: <path>path</path> followed by content, ending with <file_edit>
+  // FIX: Require the closing <file_edit> marker — do NOT match at end of string ($)
+  // to prevent extracting arbitrary XML content as file edits.
+  // Handles: <file_edit>, <file edit>, <File_Edit>, <file_edit/>, <FILE_EDIT>
+  const regex = /<path>\s*([^\s<]+?)\s*<\/path>\s*([\s\S]*?)<file[\s_]edit\s*\/?>/gi;
   let match: RegExpExecArray | null;
 
   while ((match = regex.exec(content)) !== null) {
@@ -653,52 +659,31 @@ export function extractMalformedFileEdits(content: string): FileEdit[] {
 }
 
 /**
+ * Alias field names that LLMs use instead of the canonical "path" / "content".
+ * Kept narrow to avoid misinterpreting unrelated fields.
+ */
+const PATH_ALIASES = ['path', 'file', 'filename', 'filepath', 'file_path', 'target'];
+const CONTENT_ALIASES = ['content', 'contents', 'code', 'text', 'body'];
+
+/**
+ * Resolve a field from an object using a list of alias candidates.
+ */
+function resolveAlias(obj: Record<string, unknown>, aliases: string[]): unknown {
+  for (const key of aliases) {
+    if (obj[key] !== undefined && obj[key] !== null) return obj[key];
+  }
+  return undefined;
+}
+
+/**
  * Find the end of a balanced JSON object starting at `startIndex` (which should point to '{').
  * Accounts for string escaping, nested braces, and brackets.
  * Returns the exclusive end index, or -1 if no balanced object is found.
+ *
+ * Thin wrapper around the shared utility in json-tolerant.ts.
  */
 function findBalancedJsonObject(content: string, startIndex: number): number {
-  // Defensive: ensure startIndex points to an opening brace
-  if (startIndex < 0 || startIndex >= content.length || content[startIndex] !== '{') {
-    return -1;
-  }
-
-  let braceCount = 0;
-  let bracketCount = 0;
-  let inString = false;
-  let escape = false;
-
-  for (let i = startIndex; i < content.length; i++) {
-    const char = content[i];
-
-    if (escape) {
-      escape = false;
-      continue;
-    }
-
-    if (char === '\\' && inString) {
-      escape = true;
-      continue;
-    }
-
-    if (char === '"') {
-      inString = !inString;
-      continue;
-    }
-
-    if (!inString) {
-      if (char === '{') braceCount++;
-      if (char === '}') braceCount--;
-      if (char === '[') bracketCount++;
-      if (char === ']') bracketCount--;
-
-      if (braceCount === 0 && bracketCount === 0) {
-        return i + 1;
-      }
-    }
-  }
-
-  return -1;
+  return findBalancedJson(content, startIndex);
 }
 
 /**
@@ -723,7 +708,8 @@ export function extractWsActionEdits(content: string): FileEdit[] {
     const jsonStr = content.substring(startIndex, endIndex);
 
     try {
-      const obj = JSON.parse(jsonStr) as { ws_action?: string; path?: string; content?: string };
+      const obj = tolerantJsonParse(jsonStr) as { ws_action?: string; path?: string; content?: string };
+      if (!obj || typeof obj !== 'object') continue;
 
       // Only process CREATE actions with valid path (must be string) and content
       if (obj.ws_action !== 'CREATE' || typeof obj.path !== 'string' || !obj.path.trim()) continue;
@@ -763,7 +749,8 @@ export function extractSimpleJsonFileEdits(content: string): FileEdit[] {
     const jsonStr = content.substring(startIndex, endIndex);
 
     try {
-      const obj = JSON.parse(jsonStr) as { file_edit?: string; content?: string };
+      const obj = tolerantJsonParse(jsonStr) as { file_edit?: string; content?: string };
+      if (!obj || typeof obj !== 'object') continue;
 
       // Process if file_edit path exists and is a string
       if (typeof obj.file_edit !== 'string' || !obj.file_edit.trim()) continue;
@@ -850,8 +837,211 @@ export function extractMarkdownCodeBlockFiles(content: string): FileEdit[] {
 }
 
 /**
+ * Extract raw JSON tool calls from LLM text responses.
+ *
+ * FALLBACK: When function calling isn't supported (or the model ignores tools),
+ * the LLM may output tool calls as plain JSON text like:
+ *   { "tool": "batch_write", "arguments": { "files": [...] } }
+ *   { "tool": "write_file", "arguments": { "path": "...", "content": "..." } }
+ *
+ * This parser catches those and converts them to FileEdit objects so the
+ * legacy file-edit pipeline can still execute them.
+ */
+export function extractJsonToolCalls(content: string): FileEdit[] {
+  const edits: FileEdit[] = [];
+
+  // Fast-path: bail out if no JSON tool call signature present.
+  // Check for multiple variants of tool-name and args field names.
+  // Supports OpenAI ("tool"/"arguments"), Anthropic ("name"/"input"), and others.
+  const hasToolField =
+    content.includes('"tool"') ||
+    content.includes('"function"') ||
+    content.includes('"name"') ||
+    content.includes('"tool_name"');
+  const hasArgsField =
+    content.includes('"arguments"') ||
+    content.includes('"args"') ||
+    content.includes('"parameters"') ||
+    content.includes('"input"');
+  if (!hasToolField || !hasArgsField) {
+    return edits;
+  }
+
+  // Tool names that produce file edits
+  const FILE_TOOLS = new Set(['write_file', 'write_files', 'batch_write', 'apply_diff', 'delete_file']);
+
+  // Field name aliases (OpenAI, Anthropic, and other variants)
+  const TOOL_FIELD_NAMES = ['tool', 'function', 'name', 'tool_name'];
+  const ARGS_FIELD_NAMES = ['arguments', 'args', 'parameters', 'input'];
+
+  // Scan for potential JSON objects — match any of the tool field name variants
+  const toolPattern = /"(?:tool|function|name|tool_name)"\s*:\s*"([^"]+)"/gi;
+  let match: RegExpExecArray | null;
+
+  while ((match = toolPattern.exec(content)) !== null) {
+    const toolName = match[1]?.toLowerCase();
+    if (!FILE_TOOLS.has(toolName)) continue;
+
+    // Find the enclosing JSON object for this match
+    const toolIndex = match.index;
+    const braceStart = content.lastIndexOf('{', toolIndex);
+    if (braceStart === -1) continue;
+
+    const endIndex = findBalancedJsonObject(content, braceStart);
+    if (endIndex === -1) continue;
+
+    const jsonStr = content.substring(braceStart, endIndex);
+
+    // Use tolerant JSON parsing (handles trailing commas, single quotes, etc.)
+    const obj = tolerantJsonParse(jsonStr);
+    if (!obj || typeof obj !== 'object') continue;
+
+    // Resolve tool name from any of the alias field names
+    let resolvedToolName: string | undefined;
+    for (const field of TOOL_FIELD_NAMES) {
+      const val = (obj as Record<string, unknown>)[field];
+      if (typeof val === 'string') { resolvedToolName = val.toLowerCase(); break; }
+    }
+    if (!resolvedToolName || !FILE_TOOLS.has(resolvedToolName)) continue;
+
+    // Resolve args from any of the alias field names
+    let args: Record<string, unknown> | undefined;
+    for (const field of ARGS_FIELD_NAMES) {
+      const val = (obj as Record<string, unknown>)[field];
+      if (val && typeof val === 'object' && !Array.isArray(val)) {
+        args = val as Record<string, unknown>;
+        break;
+      }
+    }
+    if (!args || typeof args !== 'object') continue;
+
+    // Apply path/content alias resolution
+    const path = resolveAlias(args, PATH_ALIASES);
+    const contentField = resolveAlias(args, CONTENT_ALIASES);
+    const diffField = resolveAlias(args, ['diff', 'patch', 'content', 'changes', 'delta']);
+    const filesField = resolveAlias(args, ['files', 'items', 'operations']);
+
+    if (resolvedToolName === 'write_file') {
+      if (typeof path === 'string' && path.trim() && typeof contentField === 'string' && contentField.trim()) {
+        if (isValidExtractedPath(path.trim())) {
+          edits.push({ path: path.trim(), content: contentField });
+        }
+      }
+    } else if (resolvedToolName === 'batch_write' || resolvedToolName === 'write_files') {
+      if (Array.isArray(filesField)) {
+        for (const file of filesField) {
+          if (!file || typeof file !== 'object') continue;
+          const fp = resolveAlias(file as Record<string, unknown>, PATH_ALIASES);
+          const fc = resolveAlias(file as Record<string, unknown>, CONTENT_ALIASES);
+          if (typeof fp === 'string' && fp.trim() && typeof fc === 'string' && fc.trim()) {
+            if (isValidExtractedPath(fp.trim())) {
+              edits.push({ path: fp.trim(), content: fc });
+            }
+          }
+        }
+      }
+    } else if (resolvedToolName === 'apply_diff') {
+      if (typeof path === 'string' && path.trim() && typeof diffField === 'string' && diffField.trim()) {
+        if (isValidExtractedPath(path.trim())) {
+          edits.push({ path: path.trim(), content: diffField, action: 'patch' });
+        }
+      }
+    } else if (resolvedToolName === 'delete_file') {
+      if (typeof path === 'string' && path.trim()) {
+        if (isValidExtractedPath(path.trim())) {
+          edits.push({ path: path.trim(), content: '', action: 'delete' });
+        }
+      }
+    }
+  }
+
+  return edits;
+}
+
+/**
+ * Extract file edits from tool-name + fenced-code-block format.
+ *
+ * When the LLM can't do native function calling, it often outputs:
+ *   batch_write
+ *
+ *   ```javascript
+ *   [{ "path": "file.js", "content": "..." }]
+ *   ```
+ *
+ * Or for single files:
+ *   write_file
+ *
+ *   ```json
+ *   { "path": "file.js", "content": "..." }
+ *   ```
+ *
+ * This parser catches those patterns and converts them to FileEdit objects.
+ */
+function extractToolNameFencedBlocks(content: string): FileEdit[] {
+  const edits: FileEdit[] = [];
+
+  // Extract fenced code blocks — match ANY language tag (ts, tsx, python, etc.)
+  // Non-JSON content is safely skipped by tolerantJsonParse returning undefined.
+  const fencedRegex = /```[\w-]*\s*\n([\s\S]*?)```/gi;
+  let fencedMatch: RegExpExecArray | null;
+
+  while ((fencedMatch = fencedRegex.exec(content)) !== null) {
+    const codeBlock = fencedMatch[1]?.trim();
+    if (!codeBlock) continue;
+
+    // Use tolerant JSON parsing (handles trailing commas, single quotes, unescaped newlines)
+    const parsed = tolerantJsonParse(codeBlock);
+    if (!parsed || typeof parsed !== 'object') continue;
+
+    if (Array.isArray(parsed)) {
+      // batch_write format: [{ path, content }, ...]
+      for (const item of parsed) {
+        if (!item || typeof item !== 'object') continue;
+        const fp = resolveAlias(item as Record<string, unknown>, PATH_ALIASES);
+        const fc = resolveAlias(item as Record<string, unknown>, CONTENT_ALIASES);
+        if (typeof fp === 'string' && fp.trim() && typeof fc === 'string' && fc.trim()) {
+          const trimmedPath = fp.trim();
+          if (isValidExtractedPath(trimmedPath)) {
+            edits.push({ path: trimmedPath, content: fc as string });
+          }
+        }
+      }
+    } else {
+      // Single file format: { path, content } or { path, content, action? }
+      const obj = parsed as Record<string, unknown>;
+      const objPath = resolveAlias(obj, PATH_ALIASES);
+      const objContent = resolveAlias(obj, CONTENT_ALIASES);
+
+      if (typeof objPath === 'string' && typeof objContent === 'string') {
+        const trimmedPath = objPath.trim();
+        if (trimmedPath && isValidExtractedPath(trimmedPath)) {
+          const action = (obj.action as string) || 'write';
+          edits.push({ path: trimmedPath, content: objContent, action: action as FileEdit['action'] });
+        }
+      }
+      // Also handle nested files array: { files: [...] }
+      else if (Array.isArray(obj.files)) {
+        for (const file of obj.files) {
+          if (!file || typeof file !== 'object') continue;
+          const fp = resolveAlias(file as Record<string, unknown>, PATH_ALIASES);
+          const fc = resolveAlias(file as Record<string, unknown>, CONTENT_ALIASES);
+          if (typeof fp === 'string' && fp.trim() && typeof fc === 'string' && fc.trim()) {
+            const trimmedPath = fp.trim();
+            if (isValidExtractedPath(trimmedPath)) {
+              edits.push({ path: trimmedPath, content: fc as string });
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return edits;
+}
+
+/**
  * Extract both compact and multi-line file_edit formats
- * Also extracts file_write, ws_action, and simple JSON formats
+ * Also extracts file_write, ws_action, simple JSON formats, and raw JSON tool calls.
  * Uses conditional parsing - only runs regex if signature is detected
  *
  * NEW: Also extracts bash heredoc syntax (cat > file << 'EOF')
@@ -866,23 +1056,48 @@ export function extractFileEdits(content: string): FileEdit[] {
   // Fast-path: bail out if no file edit markers are present at all
   // Avoids running all individual extractors (and their sub-operations like maskHeredocs)
   // on content that contains no file edits — common in streaming parse windows
-  if (
-    !content.includes('<file_edit') &&
-    !content.includes('<file_write') &&
-    !content.includes('ws_action') &&
-    !content.includes('"file_edit"') &&
-    !content.includes('<!--') &&
-    !content.includes('<path>') &&
-    !content.includes('<<') &&
-    !content.includes('cat') &&
-    !content.includes('mkdir') &&
-    !content.includes('rm ') &&
-    !content.includes('sed')
-  ) {
+  const hasAnyMarker =
+    content.includes('<file_edit') ||
+    content.includes('<file_write') ||
+    content.includes('ws_action') ||
+    content.includes('"file_edit"') ||
+    content.includes('<!--') ||
+    content.includes('<path>') ||
+    content.includes('<<') ||
+    content.includes('cat') ||
+    content.includes('mkdir') ||
+    content.includes('rm ') ||
+    content.includes('sed') ||
+    content.includes('write_file(') ||
+    content.includes('delete_file(') ||
+    content.includes('apply_diff(') ||
+    content.includes('batch_write(') ||
+    content.includes('\nbatch_write') ||
+    content.includes('\nwrite_file') ||
+    content.startsWith('batch_write') ||
+    content.startsWith('write_file') ||
+    content.startsWith('write_files') ||
+    content.startsWith('delete_file') ||
+    content.startsWith('apply_diff') ||
+    content.includes('\nwrite_files') ||
+    content.includes('\ndelete_file') ||
+    content.includes('\napply_diff') ||
+    content.includes('```file:') ||
+    content.includes('```diff') ||
+    content.includes('```mkdir:') ||
+    content.includes('```delete:') ||
+    (content.includes('"tool"') && content.includes('"arguments"')) ||
+    content.includes('<|tool_call_begin|>') ||
+    (content.includes('```') && /\bbatch_write|write_files|create_files/i.test(content)) ||
+    content.includes('```tool_call') ||
+    content.includes('```tool-call') ||
+    content.includes('```toolcall');
+
+  if (!hasAnyMarker) {
     return [];
   }
 
-  const allEdits: FileEdit[] = [];
+  const allEdits: (FileEdit | DeleteEdit)[] = [];
 
   // Try bash heredoc syntax (writes, mkdir, deletes, patches)
   const bashEdits = extractBashFileEdits(content);
@@ -937,6 +1152,209 @@ export function extractFileEdits(content: string): FileEdit[] {
   if (content.includes('"file_edit"')) {
     allEdits.push(...extractSimpleJsonFileEdits(content));
   }
+
+  // FALLBACK: Parse raw JSON tool calls (when LLM outputs tool calls as text
+  // instead of using native function calling). Catches:
+  //   { "tool": "batch_write", "arguments": { "files": [{ "path": ..., "content": ... }] } }
+  //   { "tool": "write_file", "arguments": { "path": ..., "content": ... } }
+  if (content.includes('"tool"') && content.includes('"arguments"')) {
+    allEdits.push(...extractJsonToolCalls(content));
+  }
+
+  // FALLBACK: Parse tool-name + code-block format (common when LLM can't do FC).
+  // Catches patterns like:
+  //   batch_write
+  //
+  //   ```javascript
+  //   [{ "path": "...", "content": "..." }]
+  //   ```
+  //   OR
+  //   write_file
+  //
+  //   ```json
+  //   { "path": "...", "content": "..." }
+  //   ```
+  // O(1) gate: only when a known tool name appears as plain text AND there's a code block
+  const FILE_TOOL_NAMES = ['batch_write', 'write_file', 'write_files', 'delete_file', 'apply_diff', 'create_directory'];
+  const hasToolName = FILE_TOOL_NAMES.some(t => new RegExp(`^${t}\\b`, 'mi').test(content));
+  const hasFencedBlock = /```[\w-]*\s*\n/i.test(content); // Match ANY language tag (parser safely skips non-JSON)
+  if (hasToolName && hasFencedBlock) {
+    allEdits.push(...extractToolNameFencedBlocks(content));
+  }
+
+  // FALLBACK: Parse text-mode fenced file edits: ```file: path\ncontent\n```
+  // Used when model doesn't support function calling — text-mode tool instructions
+  // tell it to use this format for file creation/overwrite.
+  if (content.includes('```file:')) {
+    allEdits.push(...extractFencedFileEdits(content));
+  }
+
+  // FALLBACK: Parse text-mode fenced mkdir: ```mkdir: path\n```
+  if (content.includes('```mkdir:')) {
+    allEdits.push(...extractFencedMkdirEdits(content) as FileEdit[]);
+  }
+
+  // FALLBACK: Parse text-mode fenced delete: ```delete: path\n```
+  if (content.includes('```delete:')) {
+    allEdits.push(...extractFencedDeleteBlocks(content) as FileEdit[]);
+  }
+
+  // FALLBACK: Extract file edits from standard markdown code blocks with filename references
+  // Catches: ```javascript // calculator.js or ```python # hello.py
+  // This handles LLM output that uses standard code blocks instead of structured ```file: format
+  if (/```(?:javascript|js|typescript|ts|python|py|json)/i.test(content)) {
+    allEdits.push(...extractCodeBlockFileEdits(content));
+  }
+
+  // FALLBACK: Parse JavaScript-style MCP tool calls from ```javascript code blocks
+  // Catches: write_file("path", "content"), delete_file("path"), mkdir("path"), apply_diff("path", "diff")
+  // Only activates when there's a ```javascript/js block AND a tool call signature
+  // This handles models that output JS function calls instead of native function calling
+  // O(1) signature gate: only runs expensive regexes when both signatures are present
+  const hasJsBlock = /```(?:javascript|js)/i.test(content);
+  const hasToolSig = /(?:write_file|batch_write|delete_file|apply_diff|mkdir)\s*\(/i.test(content);
+  if (hasJsBlock && hasToolSig) {
+    const decodeEscapes = (s: string) => {
+      // Single-pass replacement handles all escape sequences including \\ -> \
+      // Order matters: \\ must be handled BEFORE \n, \t, etc.
+      return s.replace(/\\([\\ntr'"0])/g, (_, esc) => {
+        switch (esc) {
+          case '\\': return '\\';
+          case 'n': return '\n';
+          case 't': return '\t';
+          case 'r': return '\r';
+          case "'": return "'";
+          case '"': return '"';
+          case '0': return '\0';
+          default: return esc;
+        }
+      });
+    };
+
+    // Helper: extract calls like funcName("arg1", "arg2") with proper escape handling
+    // Uses a non-greedy match between quotes to handle nested opposite quotes
+    const extractJsToolCalls = (funcName: string, argCount: number): Array<string[]> => {
+      const results: Array<string[]> = [];
+      // Build pattern for N quoted string args
+      // Double-quoted: "(?:[^"\\]|\\.)*" - matches string with escape sequences
+      // Single-quoted: '(?:[^'\\]|\\.)*'
+      const dq = '"(?:[^"\\\\]|\\\\.)*"';
+      const sq = "'(?:[^'\\\\]|\\\\.)*'";
+
+      // Build patterns for each arg count
+      const dqPatterns: string[] = [];
+      const sqPatterns: string[] = [];
+      for (let i = 0; i < argCount; i++) {
+        dqPatterns.push(`\\s*(${dq})\\s*`);
+        sqPatterns.push(`\\s*(${sq})\\s*`);
+      }
+
+      const argsDq = dqPatterns.join(',');
+      const argsSq = sqPatterns.join(',');
+      const fullDq = new RegExp(`${funcName}\\s*\\(${argsDq}\\)`, 'gi');
+      const fullSq = new RegExp(`${funcName}\\s*\\(${argsSq}\\)`, 'gi');
+
+      for (const regex of [fullDq, fullSq]) {
+        let m: RegExpExecArray | null;
+        while ((m = regex.exec(content)) !== null) {
+          // Strip surrounding quotes from each captured arg
+          const args = m.slice(1).map(a => a?.slice(1, -1) ?? '');
+          results.push(args);
+        }
+      }
+      return results;
+    };
+
+    // write_file("path", "content")
+    for (const [path, rawContent] of extractJsToolCalls('write_file', 2)) {
+      const trimmedPath = path.trim();
+      const fileContent = decodeEscapes(rawContent);
+      if (trimmedPath && isValidExtractedPath(trimmedPath) && fileContent.trim()) {
+        if (!allEdits.some(e => e.path === trimmedPath && 'content' in e && (e as FileEdit).content.trim() === fileContent.trim())) {
+          allEdits.push({ path: trimmedPath, content: fileContent });
+        }
+      }
+    }
+
+    // delete_file("path")
+    for (const [path] of extractJsToolCalls('delete_file', 1)) {
+      const trimmedPath = path.trim();
+      if (trimmedPath && isValidExtractedPath(trimmedPath)) {
+        if (!allEdits.some(e => e.path === trimmedPath && 'action' in e && (e as FileEdit).action === 'delete')) {
+          allEdits.push({ path: trimmedPath, content: '', action: 'delete' } as FileEdit);
+        }
+      }
+    }
+
+    // apply_diff("path", "diff")
+    for (const [path, rawDiff] of extractJsToolCalls('apply_diff', 2)) {
+      const trimmedPath = path.trim();
+      const diff = decodeEscapes(rawDiff);
+      if (trimmedPath && isValidExtractedPath(trimmedPath) && diff.trim()) {
+        if (!allEdits.some(e => e.path === trimmedPath && 'action' in e && (e as FileEdit).action === 'patch')) {
+          allEdits.push({ path: trimmedPath, content: diff, action: 'patch' });
+        }
+      }
+    }
+
+    // mkdir("path")
+    for (const [path] of extractJsToolCalls('mkdir', 1)) {
+      const trimmedPath = path.trim();
+      if (trimmedPath && isValidExtractedPath(trimmedPath)) {
+        if (!allEdits.some(e => e.path === trimmedPath && 'action' in e && (e as FileEdit).action === 'mkdir')) {
+          allEdits.push({ path: trimmedPath, content: '', action: 'mkdir' });
+        }
+      }
+    }
+
+    // Handle JSON object format: write_file({ "path": "...", "content": "..." })
+    // Also handles: create_file({ ... }), writeToFile({ ... }), delete_file({ ... }), apply_diff({ ... })
+    allEdits.push(...extractTextToolCallEdits(content));
+
+    // Handle batch_write([{ path: "...", content: "..." }, ...]) format
+    // Common when LLM outputs multiple files in a single batch call
+    allEdits.push(...extractBatchWriteEdits(content));
+  }
+
+  // Handle flat JSON tool calls: { "tool": "write_file", "path": "...", "content": "..." }
+  // (no "arguments" wrapper — distinct from extractJsonToolCalls which expects nested "arguments")
+  // Fast gate: must have both "tool" key and a file-edit tool name
+  if (content.includes('"tool"') && /"write_file"|"create_file"|"write_files"|"batch_write"|"delete_file"|"apply_diff"|"mkdir"/i.test(content)) {
+    allEdits.push(...extractFlatJsonToolCalls(content));
+  }
+
+  // Handle tool tag format: [Tool: write_file] { "path": "...", "content": "..." }
+  if (content.includes('[Tool:')) {
+    allEdits.push(...extractToolTagEdits(content));
+  }
+
+  // Format D: <function=tool_name> format (Mistral)
+  if (content.includes('<function=')) {
+    const funcs = content.match(/<function=(\w+)>[\s\S]*?<\/function>/gi) || [];
+    for (const funcBlock of funcs) {
+      const nameMatch = /<function=(\w+)>/i.exec(funcBlock);
+      if (!nameMatch) continue;
+      const name = nameMatch[1].toLowerCase();
+      if (!['write_file','create_file','delete_file','apply_diff','mkdir'].includes(name)) continue;
+      
+      const pathMatch = /<parameter=path>([^<\n]+)/i.exec(funcBlock);
+      if (!pathMatch) continue;
+      const path = pathMatch[1].trim();
+      if (!path || !isValidExtractedPath(path)) continue;
+      
+      let action: 'write' | 'delete' | 'patch' | 'mkdir' = name === 'delete_file' ? 'delete' : name === 'apply_diff' ? 'patch' : name === 'mkdir' ? 'mkdir' : 'write';
+      let fileContent = '';
+      
+      if (action === 'write') {
+        const contentMatch = /<parameter=content>([\s\S]*?)(?:<\/parameter>|$)/i.exec(funcBlock);
+        fileContent = contentMatch ? contentMatch[1].trim() : '';
+        if (!fileContent) continue;
+      }
+      
+      allEdits.push({ path, content: fileContent, action });
+    }
+  }
+
   if (content.includes('<!--')) {
     allEdits.push(...extractHtmlCommentFileEdits(content));
   }
@@ -946,13 +1364,28 @@ export function extractFileEdits(content: string): FileEdit[] {
     allEdits.push(...extractMalformedFileEdits(content));
   }
 
+  // Format A — Special-token tool calls (<|tool_call_begin|> ... <|tool_call_end|>)
+  if (content.includes('<|tool_call_begin|>')) {
+    allEdits.push(...extractSpecialTokenToolCalls(content));
+  }
+
+  // Format B — Fenced batch_write (```javascript\nbatch_write([...])\n```)
+  if (content.includes('```') && /\bbatch_write|write_files|create_files/i.test(content)) {
+    allEdits.push(...extractFencedBatchWrite(content));
+  }
+
+  // Format C — ```tool_call fenced blocks
+  if (/```tool[-_]?call/i.test(content)) {
+    allEdits.push(...extractToolCallFencedBlock(content));
+  }
+
   // Deduplicate by path (first occurrence wins)
   // This handles cases where multiple parsers match the same file or LLM outputs duplicates
   const dedupedEdits = new Map<string, FileEdit>();
   for (const edit of allEdits) {
     // Only set if path not already in map (first wins)
-    if (!dedupedEdits.has(edit.path)) {
-      dedupedEdits.set(edit.path, edit);
+    if (!dedupedEdits.has(edit.path) && 'content' in edit) {
+      dedupedEdits.set(edit.path, edit as FileEdit);
     }
   }
 
@@ -960,20 +1393,724 @@ export function extractFileEdits(content: string): FileEdit[] {
 }
 
 /**
- * Extract fenced diff blocks: ```diff path\ncontent\n```
+ * Extract fenced diff blocks: ```diff path\ncontent\n``` or ```diff: path\ncontent\n```
  *
  * FIX: Now correctly distinguishes between:
  * - ```diff path\n<unified diff content>``` (diff patch for a file)
+ * - ```diff: path\n<unified diff content>``` (text-mode diff for non-FC models)
  * - ```diff\ndiff --git a/path b/path\n...``` (raw git diff output - should NOT be parsed as file edit)
  */
+/**
+ * Extract batch_write([{ path: "...", content: "..." }, ...]) format.
+ *
+ * Handles LLM output where multiple files are written in a single batch call:
+ *   batch_write([{
+ *     path: "package.json",
+ *     content: `{...}`
+ *   }, {
+ *     path: "src/main.js",
+ *     content: `...`
+ *   }])
+ *
+ * Also handles: create_files(...), write_files(...), batch_create(...)
+ */
+export function extractBatchWriteEdits(content: string): FileEdit[] {
+  const edits: FileEdit[] = [];
+
+  // Check for batch function patterns
+  const batchPattern = /(batch_write|create_files|write_files|batch_create)\s*\(/gi;
+  let batchMatch: RegExpExecArray | null;
+
+  while ((batchMatch = batchPattern.exec(content)) !== null) {
+    const startIdx = batchMatch.index + batchMatch[0].length;
+
+    // Find the matching closing paren with balanced bracket tracking
+    let bracketDepth = 0;
+    let parenDepth = 1; // We're already inside the opening (
+    let inString = false;
+    let stringChar = '';
+    let escapeNext = false;
+    let endIdx = -1;
+
+    for (let i = startIdx; i < content.length; i++) {
+      const ch = content[i];
+
+      if (escapeNext) {
+        escapeNext = false;
+        continue;
+      }
+      if (inString) {
+        if (ch === '\\') {
+          escapeNext = true;
+          continue;
+        }
+        if (ch === stringChar) {
+          inString = false;
+        }
+        continue;
+      }
+
+      if (ch === '"' || ch === "'" || ch === '`') {
+        inString = true;
+        stringChar = ch;
+        continue;
+      }
+
+      if (ch === '[') bracketDepth++;
+      else if (ch === ']') bracketDepth--;
+      else if (ch === '(') parenDepth++;
+      else if (ch === ')') {
+        parenDepth--;
+        if (parenDepth === 0 && bracketDepth <= 0) {
+          endIdx = i;
+          break;
+        }
+      }
+    }
+
+    if (endIdx === -1) continue;
+
+    // Extract the array content
+    const arrayContent = content.substring(startIdx, endIdx).trim();
+
+    // Now parse individual { path, content } objects from the array
+    // Use a state machine to handle nested objects with template literals
+    const fileObjects = parseFileObjectsFromArray(arrayContent);
+
+    for (const fileObj of fileObjects) {
+      if (fileObj.path && isValidExtractedPath(fileObj.path)) {
+        const fileContent = fileObj.content || fileObj.diff || '';
+        if (fileContent.trim()) {
+          const action = fileObj.diff ? 'patch' as const : 'write' as const;
+          if (!edits.some(e => e.path === fileObj.path)) {
+            edits.push({
+              path: fileObj.path,
+              content: fileContent,
+              action,
+            });
+          }
+        }
+      }
+    }
+  }
+
+  return edits;
+}
+
+/**
+ * Parse { path: "...", content: "..." } objects from a JavaScript array string.
+ * Handles both JSON-style ("key": "value") and JS-style (key: "value") objects.
+ * Also handles template literals with backticks for multi-line content.
+ */
+function parseFileObjectsFromArray(arrayContent: string): Array<{ path?: string; content?: string; diff?: string }> {
+  const objects: Array<{ path?: string; content?: string; diff?: string }> = [];
+
+  let i = 0;
+  while (i < arrayContent.length) {
+    // Skip whitespace and commas
+    while (i < arrayContent.length && /[\s,]/.test(arrayContent[i])) i++;
+    if (i >= arrayContent.length) break;
+
+    // Look for opening {
+    if (arrayContent[i] !== '{') {
+      i++;
+      continue;
+    }
+
+    // Find matching }
+    const objStart = i;
+    let braceDepth = 0;
+    let inString = false;
+    let stringChar = '';
+    let escapeNext = false;
+    let objEnd = -1;
+
+    for (let j = i; j < arrayContent.length; j++) {
+      const ch = arrayContent[j];
+
+      if (escapeNext) {
+        escapeNext = false;
+        continue;
+      }
+      if (inString) {
+        if (ch === '\\' && stringChar !== '`') {
+          escapeNext = true;
+          continue;
+        }
+        if (ch === stringChar) {
+          inString = false;
+        }
+        continue;
+      }
+
+      if (ch === '"' || ch === "'" || ch === '`') {
+        inString = true;
+        stringChar = ch;
+        continue;
+      }
+
+      if (ch === '{') braceDepth++;
+      else if (ch === '}') {
+        braceDepth--;
+        if (braceDepth === 0) {
+          objEnd = j;
+          break;
+        }
+      }
+    }
+
+    if (objEnd === -1) break;
+
+    // Extract and parse the object
+    const objStr = arrayContent.substring(objStart, objEnd + 1);
+    const parsed = parseSimpleFileObject(objStr);
+    if (parsed && (parsed.path || parsed.content)) {
+      objects.push(parsed);
+    }
+
+    i = objEnd + 1;
+  }
+
+  return objects;
+}
+
+/**
+ * Parse a single { path: "...", content: "..." } object string.
+ * Handles both quoted and unquoted keys, and template literal values.
+ * Now supports field aliases (file->path, code->content, etc.) for LLM robustness.
+ */
+function parseSimpleFileObject(objStr: string): { path?: string; content?: string; diff?: string } | null {
+  const result: { path?: string; content?: string; diff?: string } = {};
+
+  // Extended key patterns to support common LLM mistakes
+  // path aliases: path, file, filename, filepath, file_path, target
+  // content aliases: content, contents, code, text, body, data, source
+  // diff aliases: diff, patch, changes, delta
+  const kvRegex = /(?:^|[,{\n])\s*["']?(path|file|filename|filepath|file_path|filePath|target|content|contents|code|text|body|data|source|diff|patch|changes|delta)["']?\s*:\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)/gis;
+  let match: RegExpExecArray | null;
+
+  while ((match = kvRegex.exec(objStr)) !== null) {
+    const rawKey = match[1].toLowerCase();
+    let value = match[2];
+
+    // Strip surrounding quotes/backticks
+    if ((value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+      // Unescape
+      value = value.replace(/\\"/g, '"').replace(/\\'/g, "'").replace(/\\n/g, '\n').replace(/\\t/g, '\t');
+    } else if (value.startsWith('`') && value.endsWith('`')) {
+      value = value.slice(1, -1);
+    }
+
+    // Map aliases to canonical fields (only set if not already set - first match wins)
+    const pathAliases = ['path', 'file', 'filename', 'filepath', 'file_path', 'filePath', 'target'];
+    const contentAliases = ['content', 'contents', 'code', 'text', 'body', 'data', 'source'];
+    const diffAliases = ['diff', 'patch', 'changes', 'delta'];
+
+    if (pathAliases.includes(rawKey) && !result.path) {
+      result.path = value;
+    } else if (contentAliases.includes(rawKey) && !result.content) {
+      result.content = value;
+    } else if (diffAliases.includes(rawKey) && !result.diff) {
+      result.diff = value;
+    }
+  }
+
+  return Object.keys(result).length > 0 ? result : null;
+}
+
+/**
+ * Extract tool-call-style file edits using balanced paren/brace scanning.
+ *
+ * Handles LLM output formats where models without function calling still
+ * output tool-like text:
+ * - write_file({ "path": "...", "content": "..." })
+ * - create_file({ "path": "...", "content": "..." })
+ * - writeToFile({ "path": "...", "content": "..." })
+ * - delete_file({ "path": "..." })
+ * - apply_diff({ "path": "...", "diff": "..." })
+ * - mkdir({ "path": "..." })
+ *
+ * Uses balanced scanning to correctly handle nested braces, strings,
+ * and escape sequences (same technique as ToolLoopAgent.parseTextToolCalls).
+ */
+export function extractTextToolCallEdits(content: string): FileEdit[] {
+  const edits: FileEdit[] = [];
+
+  // Tool names that write/modify files
+  const toolPatterns = [
+    { name: 'write_file', args: ['path', 'content'], action: 'write' as const },
+    { name: 'create_file', args: ['path', 'content'], action: 'write' as const },
+    { name: 'writeToFile', args: ['path', 'content'], action: 'write' as const },
+    { name: 'delete_file', args: ['path'], action: 'delete' as const },
+    { name: 'apply_diff', args: ['path', 'diff'], action: 'patch' as const },
+    { name: 'mkdir', args: ['path'], action: 'mkdir' as const },
+  ];
+
+  for (const tool of toolPatterns) {
+    const pattern = new RegExp(`${tool.name}\\s*\\(`, 'gi');
+    let m: RegExpExecArray | null;
+    while ((m = pattern.exec(content)) !== null) {
+      try {
+        const startIdx = m.index + m[0].length;
+        // Balanced scan: find the closing ) while tracking brace depth and string state
+        let depth = 0, inString = false, escapeNext = false, endIdx = -1;
+        for (let i = startIdx; i < content.length; i++) {
+          const ch = content[i];
+          if (escapeNext) { escapeNext = false; continue; }
+          if (ch === '\\' && inString) { escapeNext = true; continue; }
+          if (ch === '"') { inString = !inString; continue; }
+          if (inString) continue;
+          if (ch === '{' || ch === '(') depth++;
+          else if (ch === '}' || ch === ')') {
+            if (depth <= 0 && ch === ')') { endIdx = i; break; }
+            depth--;
+          }
+        }
+        if (endIdx === -1) continue;
+
+        const argText = content.substring(startIdx, endIdx).trim();
+        const openBrace = argText.indexOf('{');
+        const closeBrace = argText.lastIndexOf('}');
+        if (openBrace === -1 || closeBrace === -1 || closeBrace <= openBrace) continue;
+
+        const jsonStr = argText.substring(openBrace, closeBrace + 1);
+        if (jsonStr.trim() === '{}') continue;
+
+        const args = tolerantJsonParse(jsonStr);
+        if (!args || typeof args !== 'object') continue;
+        const pathVal = (args as Record<string, unknown>)[tool.args[0]];
+        if (!pathVal) continue;
+
+        const trimmedPath = String(pathVal).trim();
+        if (!trimmedPath || !isValidExtractedPath(trimmedPath)) continue;
+
+        // For write/create/writeToFile, content/diff is required
+        if (tool.action === 'write' || tool.action === 'patch') {
+          const contentVal = args[tool.args[1]];
+          if (!contentVal || !String(contentVal).trim()) continue;
+          if (!edits.some(e => e.path === trimmedPath)) {
+            edits.push({
+              path: trimmedPath,
+              content: String(contentVal),
+              action: tool.action,
+            });
+          }
+        } else {
+          // delete/mkdir — no content required
+          if (!edits.some(e => e.path === trimmedPath)) {
+            edits.push({ path: trimmedPath, content: '', action: tool.action });
+          }
+        }
+      } catch {
+        // Skip malformed JSON or parse errors
+      }
+    }
+  }
+
+  return edits;
+}
+
+/**
+ * Extract flat JSON tool calls: { "tool": "write_file", "path": "...", "content": "..." }
+ *
+ * This handles the format where the LLM outputs a JSON object with a "tool" key
+ * and the file-edit fields directly at the top level (no "arguments" wrapper).
+ *
+ * Distinct from extractJsonToolCalls which expects nested "arguments": {...}.
+ *
+ * Uses balanced brace scanning to correctly extract complete JSON objects
+ * even when they contain nested braces (e.g., JSON content).
+ */
+export function extractFlatJsonToolCalls(content: string): FileEdit[] {
+  const edits: FileEdit[] = [];
+  const fileEditTools = ['write_file', 'create_file', 'writeToFile', 'write_files', 'batch_write', 'delete_file', 'apply_diff', 'mkdir'];
+  const patternStart = /\{/g;
+  let m: RegExpExecArray | null;
+
+  while ((m = patternStart.exec(content)) !== null) {
+    try {
+      const openIdx = m.index;
+      // Balanced scan to find matching }
+      let depth = 0, inString = false, escapeNext = false, closeIdx = -1;
+      for (let i = openIdx; i < content.length; i++) {
+        const ch = content[i];
+        if (escapeNext) { escapeNext = false; continue; }
+        if (ch === '\\' && inString) { escapeNext = true; continue; }
+        if (ch === '"') { inString = !inString; continue; }
+        if (inString) continue;
+        if (ch === '{') depth++;
+        else if (ch === '}') { depth--; if (depth === 0) { closeIdx = i; break; } }
+      }
+      if (closeIdx === -1) continue;
+
+      const jsonStr = content.substring(openIdx, closeIdx + 1);
+      // Quick gate: must contain "tool" or "name" key
+      if (!jsonStr.includes('"tool"') && !jsonStr.includes('"name"')) continue;
+
+      const parsed = tolerantJsonParse(jsonStr);
+      if (!parsed || typeof parsed !== 'object') continue;
+      const obj = parsed as Record<string, unknown>;
+      const toolName = String(obj.tool || obj.name || '').toLowerCase();
+      if (!fileEditTools.includes(toolName)) continue;
+
+      // Handle batch_write / write_files: { files: [{ path, content }, ...] }
+      if (toolName === 'batch_write' || toolName === 'write_files') {
+        const files = obj.files;
+        if (Array.isArray(files)) {
+          for (const file of files) {
+            if (!file || typeof file !== 'object') continue;
+            const f = file as Record<string, unknown>;
+            const path = resolveAlias(f, PATH_ALIASES);
+            const fileContent = resolveAlias(f, CONTENT_ALIASES);
+            if (typeof path === 'string' && path.trim() && typeof fileContent === 'string' && fileContent.trim()) {
+              const trimmedPath = path.trim();
+              if (isValidExtractedPath(trimmedPath) && !edits.some(e => e.path === trimmedPath)) {
+                edits.push({ path: trimmedPath, content: fileContent as string });
+              }
+            }
+          }
+        }
+        continue;
+      }
+
+      const pathVal = resolveAlias(obj, PATH_ALIASES);
+      if (!pathVal || !String(pathVal).trim()) continue;
+      const trimmedPath = String(pathVal).trim();
+      if (!isValidExtractedPath(trimmedPath)) continue;
+
+      // Map tool name to action, resolve content with alias support
+      let action: FileEdit['action'] = 'write';
+      let contentVal = resolveAlias(obj, CONTENT_ALIASES) || '';
+      if (toolName === 'delete_file') action = 'delete';
+      else if (toolName === 'apply_diff') {
+        action = 'patch';
+        contentVal = resolveAlias(obj, ['diff', 'patch', 'content', 'changes', 'delta']) || '';
+      }
+      else if (toolName === 'mkdir') action = 'mkdir';
+
+      // For write/patch actions, content/diff is required
+      if ((action === 'write' || action === 'patch') && (!contentVal || !String(contentVal).trim())) continue;
+
+      if (!edits.some(e => e.path === trimmedPath)) {
+        edits.push({ path: trimmedPath, content: String(contentVal), action });
+      }
+    } catch {
+      // Skip malformed JSON
+    }
+  }
+
+  return edits;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Format A — Special-token tool calls (<|tool_call_begin|> ... <|tool_call_end|>)
+// Format B — Fenced batch_write (```javascript\nbatch_write([...])\n```)
+// Format C — ```tool_call fenced blocks
+// ═══════════════════════════════════════════════════════════════════════════
+
+function findJsonEnd(text: string, start: number): number {
+  const opening = text[start];
+  if (opening !== '{' && opening !== '[') return -1;
+  const closing = opening === '{' ? '}' : ']';
+  let depth = 0, inStr = false, esc = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (esc) { esc = false; continue; }
+    if (ch === '\\' && inStr) { esc = true; continue; }
+    if (ch === '"') { inStr = !inStr; continue; }
+    if (inStr) continue;
+    if (ch === opening) depth++;
+    else if (ch === closing) { depth--; if (depth === 0) return i + 1; }
+  }
+  return -1;
+}
+
+function extractJsonString(source: string): { value: string; endOffset: number } | null {
+  if (!source.startsWith('"')) return null;
+  let i = 1, out = '', innerBrace = 0, innerBracket = 0;
+  while (i < source.length) {
+    const ch = source[i];
+    if (ch === '\\' && i + 1 < source.length) {
+      const next = source[i + 1];
+      switch (next) {
+        case 'n': out += '\n'; break; case 't': out += '\t'; break;
+        case 'r': out += '\r'; break; case '"': out += '"'; break;
+        case '\\': out += '\\'; break; case '/': out += '/'; break;
+        default: out += next; break;
+      }
+      i += 2; continue;
+    }
+    if (ch === '\n') { out += '\n'; i++; continue; }
+    if (ch === '\r') { i++; continue; }
+    if (ch === '{') innerBrace++; else if (ch === '}') innerBrace--;
+    else if (ch === '[') innerBracket++; else if (ch === ']') innerBracket--;
+    if (ch === '"' && innerBrace === 0 && innerBracket === 0) return { value: out, endOffset: i + 1 };
+    out += ch; i++;
+  }
+  return { value: out, endOffset: i };
+}
+
+function extractFilesRobust(body: string): Array<{ path: string; content: string }> {
+  const results: Array<{ path: string; content: string }> = [];
+  const pathRe = /"path"\s*:\s*"([^"]+)"/g;
+  let m: RegExpExecArray | null;
+  while ((m = pathRe.exec(body)) !== null) {
+    const path = m[1].trim();
+    if (!path) continue;
+    const contentKeyIdx = body.indexOf('"content"', m.index + m[0].length);
+    if (contentKeyIdx === -1) continue;
+    const afterColon = body.slice(contentKeyIdx + '"content"'.length).trimStart();
+    if (!afterColon.startsWith(':')) continue;
+    const val = afterColon.slice(1).trimStart();
+    let contentValue = '';
+    if (val.startsWith('"')) {
+      const extracted = extractJsonString(val);
+      if (extracted) contentValue = extracted.value;
+    } else if (val.startsWith('{') || val.startsWith('[')) {
+      const end = findJsonEnd(val, 0);
+      if (end !== -1) {
+        try { contentValue = JSON.stringify(JSON.parse(val.slice(0, end)), null, 2); } catch { contentValue = val.slice(0, end); }
+      }
+    }
+    if (contentValue) results.push({ path, content: contentValue });
+  }
+  return results;
+}
+
+function filesArrayToEdits(files: unknown[], out: FileEdit[], seenPaths: Set<string>): void {
+  for (const file of files) {
+    if (!file || typeof file !== 'object') continue;
+    const f = file as Record<string, unknown>;
+    const rawPath = f.path ?? f.file ?? f.filename;
+    if (typeof rawPath !== 'string' || !rawPath.trim()) continue;
+    const path = rawPath.trim();
+    if (!isValidExtractedPath(path)) continue;
+    if (seenPaths.has(path)) continue;
+    const rawContent = f.content ?? f.data ?? f.body ?? f.text ?? f.source;
+    let content: string;
+    if (typeof rawContent === 'string') { content = rawContent; }
+    else if (rawContent !== undefined && rawContent !== null) {
+      try { content = JSON.stringify(rawContent, null, 2); } catch { continue; }
+    } else { continue; }
+    if (!content.trim()) continue;
+    seenPaths.add(path);
+    out.push({ path, content });
+  }
+}
+
+export function extractSpecialTokenToolCalls(content: string): FileEdit[] {
+  const edits: FileEdit[] = [];
+  if (!content.includes('<|tool_call')) return edits;
+  const blockRe = /<\|tool_call_begin\|>\s*([\w.:-]+)\s*(?:<\|tool_call_argument_begin\|>)?\s*([\s\S]*?)<\|tool_call_end\|>/gi;
+  let block: RegExpExecArray | null;
+  while ((block = blockRe.exec(content)) !== null) {
+    const toolFull = block[1] ?? '';
+    const toolName = toolFull.replace(/^[^.]+\./, '').replace(/:\d+$/, '');
+    const body = (block[2] ?? '').trim();
+    if (!body) continue;
+    const firstBrace = body.search(/[{[]/);
+    if (firstBrace === -1) continue;
+    const seenPaths = new Set<string>();
+    const endIdx = findJsonEnd(body, firstBrace);
+    if (endIdx !== -1) {
+      try {
+        const parsed = tolerantJsonParse(body.slice(firstBrace, endIdx));
+        if (!parsed || typeof parsed !== 'object') continue;
+        const obj = parsed as Record<string, unknown>;
+        const files = obj.files ?? obj.data ?? obj.items;
+        if (Array.isArray(files)) { filesArrayToEdits(files, edits, seenPaths); continue; }
+        if (typeof obj.path === 'string') { filesArrayToEdits([obj], edits, seenPaths); continue; }
+        continue;
+      } catch { /* fall through */ }
+    }
+    const robustFiles = extractFilesRobust(body.slice(firstBrace));
+    for (const f of robustFiles) {
+      if (!isValidExtractedPath(f.path) || seenPaths.has(f.path)) continue;
+      seenPaths.add(f.path);
+      edits.push({ path: f.path, content: f.content });
+    }
+  }
+  return edits;
+}
+
+export function extractFencedBatchWrite(content: string): FileEdit[] {
+  const edits: FileEdit[] = [];
+  if (!content.includes('```')) return edits;
+  const BATCH_TOOL_RE = /\b(batch_write|write_files?|create_files?|batch_create)\s*\(\s*/gi;
+  if (!BATCH_TOOL_RE.test(content)) return edits;
+  BATCH_TOOL_RE.lastIndex = 0;
+  let pos = 0;
+  const FENCE = '```';
+  while (pos < content.length) {
+    const openIdx = content.indexOf(FENCE, pos);
+    if (openIdx === -1) break;
+    const bodyStart = content.indexOf('\n', openIdx + FENCE.length);
+    if (bodyStart === -1) break;
+    const closeIdx = content.indexOf(FENCE, bodyStart + 1);
+    if (closeIdx === -1) break;
+    const blockBody = content.slice(bodyStart + 1, closeIdx);
+    pos = closeIdx + FENCE.length;
+    BATCH_TOOL_RE.lastIndex = 0;
+    let callMatch: RegExpExecArray | null;
+    while ((callMatch = BATCH_TOOL_RE.exec(blockBody)) !== null) {
+      const afterParen = callMatch.index + callMatch[0].length;
+      const firstChar = blockBody[afterParen];
+      if (firstChar !== '[' && firstChar !== '{') continue;
+      const endIdx = findJsonEnd(blockBody, afterParen);
+      if (endIdx === -1) continue;
+      const argSlice = blockBody.slice(afterParen, endIdx);
+      let files: unknown[] | undefined;
+      try {
+        const parsed = JSON.parse(argSlice);
+        if (Array.isArray(parsed)) files = parsed;
+        else if (parsed && typeof parsed === 'object') {
+          const obj = parsed as Record<string, unknown>;
+          const inner = obj.files ?? obj.data ?? obj.items;
+          if (Array.isArray(inner)) files = inner;
+        }
+      } catch { /* skip */ }
+      if (files && files.length > 0) filesArrayToEdits(files, edits, new Set());
+    }
+  }
+  return edits;
+}
+
+export function extractToolCallFencedBlock(content: string): FileEdit[] {
+  const edits: FileEdit[] = [];
+  const TOOL_CALL_FENCE_RE = /```(?:tool[-_]?call|TOOL[-_]?CALL)\s*\n/gi;
+  if (!TOOL_CALL_FENCE_RE.test(content)) return edits;
+  TOOL_CALL_FENCE_RE.lastIndex = 0;
+  const TOOL_NAME_KEYS = ['tool_name', 'toolName', 'name', 'tool', 'function', 'function_name'];
+  const ARGS_KEYS = ['parameters', 'arguments', 'args', 'params', 'input'];
+  let fenceMatch: RegExpExecArray | null;
+  while ((fenceMatch = TOOL_CALL_FENCE_RE.exec(content)) !== null) {
+    const bodyStart = fenceMatch.index + fenceMatch[0].length;
+    const closeIdx = content.indexOf('```', bodyStart);
+    if (closeIdx === -1) break;
+    const blockBody = content.slice(bodyStart, closeIdx).trim();
+    if (!blockBody.startsWith('{')) continue;
+    const parsed = tolerantJsonParse(blockBody);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
+    const obj = parsed as Record<string, unknown>;
+    let toolName = '';
+    for (const key of TOOL_NAME_KEYS) { if (typeof obj[key] === 'string') { toolName = obj[key] as string; break; } }
+    if (!toolName) continue;
+    let args: Record<string, unknown> = obj;
+    for (const key of ARGS_KEYS) {
+      if (obj[key] && typeof obj[key] === 'object' && !Array.isArray(obj[key])) {
+        args = obj[key] as Record<string, unknown>; break;
+      }
+    }
+    const rawFiles = args.files ?? args.items ?? args.data ?? resolveAlias(args, ['files', 'items', 'operations', 'batch']) ?? (typeof args.path === 'string' ? [args] : null);
+    if (!rawFiles) continue;
+    const fileList = Array.isArray(rawFiles) ? rawFiles : [rawFiles];
+    filesArrayToEdits(fileList, edits, new Set());
+  }
+  return edits;
+}
+
+/**
+ * Extract tool tag format: [Tool: write_file] { "path": "...", "content": "..." }
+ *
+ * This handles the format where the LLM outputs a tool tag marker followed by
+ * a JSON object with file-edit fields directly at the top level.
+ *
+ * Uses balanced brace scanning to correctly extract complete JSON objects.
+ */
+
+
+
+
+export function extractToolTagEdits(content: string): FileEdit[] {
+  const edits: FileEdit[] = [];
+  const fileEditTools = ['write_file', 'create_file', 'writeToFile', 'write_files', 'batch_write', 'delete_file', 'apply_diff', 'mkdir'];
+  const pattern = /\[\s*Tool:\s*(\w+)\s*\]/gi;
+  let m: RegExpExecArray | null;
+
+  while ((m = pattern.exec(content)) !== null) {
+    const toolName = (m[1] || '').toLowerCase();
+    if (!fileEditTools.includes(toolName)) continue;
+
+    try {
+      const tagEndIdx = m.index + m[0].length;
+      const afterTag = content.substring(tagEndIdx);
+      const openBrace = afterTag.indexOf('{');
+      if (openBrace === -1) continue;
+
+      // Balanced scan to find matching }
+      let depth = 0, inString = false, escapeNext = false, closeIdx = -1;
+      for (let i = openBrace; i < afterTag.length; i++) {
+        const ch = afterTag[i];
+        if (escapeNext) { escapeNext = false; continue; }
+        if (ch === '\\' && inString) { escapeNext = true; continue; }
+        if (ch === '"') { inString = !inString; continue; }
+        if (inString) continue;
+        if (ch === '{') depth++;
+        else if (ch === '}') { depth--; if (depth === 0) { closeIdx = i; break; } }
+      }
+      if (closeIdx === -1) continue;
+
+      const jsonStr = afterTag.substring(openBrace, closeIdx + 1);
+      if (jsonStr.trim() === '{}') continue;
+
+      const parsed = JSON.parse(jsonStr);
+      if (jsonStr.trim() === '{}') continue;
+
+      // Handle batch_write / write_files: { files: [{ path, content }, ...] }
+      if (toolName === 'batch_write' || toolName === 'write_files') {
+        const files = parsed.files;
+        if (Array.isArray(files)) {
+          for (const file of files) {
+            const path = file.path;
+            const fileContent = file.content;
+            if (typeof path === 'string' && path.trim() && typeof fileContent === 'string' && fileContent.trim()) {
+              const trimmedPath = path.trim();
+              if (isValidExtractedPath(trimmedPath) && !edits.some(e => e.path === trimmedPath)) {
+                edits.push({ path: trimmedPath, content: fileContent });
+              }
+            }
+          }
+        }
+        continue;
+      }
+
+      const pathVal = parsed.path;
+      if (!pathVal || !String(pathVal).trim()) continue;
+      const trimmedPath = String(pathVal).trim();
+      if (!isValidExtractedPath(trimmedPath)) continue;
+
+      // Map tool name to action
+      let action: FileEdit['action'] = 'write';
+      let contentVal = parsed.content || '';
+      if (toolName === 'delete_file') action = 'delete';
+      else if (toolName === 'apply_diff') { action = 'patch'; contentVal = parsed.diff || ''; }
+      else if (toolName === 'mkdir') action = 'mkdir';
+
+      // For write/patch actions, content/diff is required
+      if ((action === 'write' || action === 'patch') && (!contentVal || !String(contentVal).trim())) continue;
+
+      if (!edits.some(e => e.path === trimmedPath)) {
+        edits.push({ path: trimmedPath, content: String(contentVal), action });
+      }
+    } catch {
+      // Skip malformed JSON
+    }
+  }
+
+  return edits;
+}
+
 export function extractFencedDiffEdits(content: string): DiffEdit[] {
   const edits: DiffEdit[] = [];
 
   // Fast-path signature check (consistent with other extractors)
-  // Use case-insensitive regex to match the actual parser regex behavior
+  // Match both ```diff path and ```diff: path formats
   if (!/```diff/i.test(content)) return edits;
 
-  const regex = /```diff\s+([^\n]+)\n([\s\S]*?)```/gi;
+  // Match both ```diff path\n...``` and ```diff: path\n...```
+  const regex = /```diff:?\s+([^\n]+)\n([\s\S]*?)```/gi;
   let match: RegExpExecArray | null;
 
   while ((match = regex.exec(content)) !== null) {
@@ -1007,6 +2144,191 @@ export function extractFencedDiffEdits(content: string): DiffEdit[] {
   }
 
   return edits;
+}
+
+/**
+ * Extract text-mode fenced file edits: ```file: path\ncontent\n```
+ * Used when the model doesn't support function calling — text-mode tool
+ * instructions tell it to use this format for file creation/overwrite.
+ */
+export function extractFencedFileEdits(content: string): FileEdit[] {
+  const edits: FileEdit[] = [];
+
+  // Guard: bail early if no file blocks (case-insensitive, handles whitespace)
+  if (!/```\s*file\s*:/i.test(content)) return edits;
+
+  // Extract all tracked paths to avoid duplicates across patterns
+  const seenPaths = new Set<string>();
+
+  /**
+   * Helper: extract path + content from a match, handling edge cases:
+   * - Whitespace around colon: ```file : path``` or ```file:   path```
+   * - Uppercase: ```FILE: path```
+   * - Extra inner language tags: ```file: path.ts\n```typescript\n...```
+   *   (inner fence is kept as part of content per plan recommendation)
+   *
+   * Always adds valid paths to seenPaths on first attempt (even if content is empty),
+   * so later patterns don't re-match the same path with different (incorrect) content.
+   *
+   * @returns true if an edit was added, false if rejected
+   */
+  function tryAddEdit(rawPath: string, rawContent: string): boolean {
+    if (!rawPath) return false;
+    const targetPath = rawPath.trim();
+    if (!targetPath || !isValidExtractedPath(targetPath)) return false;
+    if (seenPaths.has(targetPath)) return false; // already attempted
+
+    let fileContent = rawContent.trimEnd();
+    if (!fileContent || fileContent.trim().length === 0) {
+      seenPaths.add(targetPath); // mark as attempted (was empty)
+      return false;
+    }
+
+    seenPaths.add(targetPath);
+    edits.push({ path: targetPath, content: fileContent });
+    return true;
+  }
+
+  // Pattern 1: Standard ```file: path\ncontent\n``` (with optional whitespace around colon, case-insensitive)
+  const regex1 = /```\s*file\s*:\s*([^\n`]+)\n([\s\S]*?)```/gi;
+  let match: RegExpExecArray | null;
+  while ((match = regex1.exec(content)) !== null) {
+    tryAddEdit(match[1], match[2] ?? '');
+  }
+
+  // Pattern 2: Handle ```file: path without closing ``` (end of content only)
+  // Must NOT re-match paths already attempted by Pattern 1
+  const regex2 = /```\s*file\s*:\s*([^\n`]+)\n([\s\S]*?)$/gi;
+  while ((match = regex2.exec(content)) !== null) {
+    const path = match[1]?.trim();
+    if (!path || seenPaths.has(path)) continue; // skip if already attempted
+    const fileContent = match[2] ?? '';
+    if (fileContent.length >= 2) {
+      tryAddEdit(match[1], fileContent);
+    }
+  }
+
+  // Pattern 3: Handle malformed ```file: ```file: path (duplicate opening)
+  const regex3 = /```\s*file\s*:\s*```\s*file\s*:\s*([^\n`]+)\n([\s\S]*?)```/gi;
+  while ((match = regex3.exec(content)) !== null) {
+    const path = match[1]?.trim();
+    if (!path || seenPaths.has(path)) continue;
+    tryAddEdit(match[1], match[2] ?? '');
+  }
+
+  return edits;
+}
+
+/**
+ * Extract file edits from standard markdown code blocks that reference a filename.
+ * Handles LLM output like: ```javascript // calculator.js or ```javascript\n// filename: x.js
+ * Also handles: ```javascript file: utils.js (no newline after lang tag).
+ * This is a fallback when the LLM doesn't use the structured ```file: format.
+ *
+ * O(1) guard: checks for ```javascript/js/ts/py/json etc before expensive regex.
+ * Single combined filename regex instead of array iteration per block.
+ */
+export function extractCodeBlockFileEdits(content: string): FileEdit[] {
+  const edits: FileEdit[] = [];
+
+  // O(1) guard — bail out early if no code blocks exist
+  if (!/```(?:javascript|js|typescript|ts|python|py|json|html|css|bash|sh|md)\b/i.test(content)) {
+    return edits;
+  }
+
+  // Single combined regex for all filename patterns in first line
+  // Matches: // calc.js, # calc.py, "calc.js", 'calc.js', /* calc.js */, // file: x.js, // filename: x.js
+  const filenameRegex = /(?:\/\/|#)\s*(?:file(?:name)?[:\s]*)?([a-zA-Z0-9_\-/.]+\.[a-zA-Z]+)|["']([a-zA-Z0-9_\-/.]+\.[a-zA-Z]+)["']|\/\*\s*(?:file(?:name)?[:\s]*)?([a-zA-Z0-9_\-/.]+\.[a-zA-Z]+)\s*\*\//i;
+
+  // Regex handles both:
+  // - ```javascript\n// filename.js (lang tag, newline, then comment with filename)
+  // - ```javascript file: filename.js\n (lang tag + space + filename hint on same line)
+  // The langLine group only captures if it's NOT a comment (not starting with //, #, or /*)
+  // Uses negative lookahead to skip comment lines
+  const codeBlockRegex = /```(?:javascript|js|typescript|ts|jsx|tsx|python|py|json|html|css|bash|sh|markdown|md)(?:\s+(?!\/\/|#|\/\*)([^\n]+?))?\n([\s\S]*?)```/gi;
+  let match: RegExpExecArray | null;
+
+  while ((match = codeBlockRegex.exec(content)) !== null) {
+    const langLine = (match[1] || '').trim();
+    const blockContent = match[2] ?? '';
+
+    // If the line after ```lang is a filename hint (e.g., "file: utils.js"), use it directly
+    // This handles: ```javascript file: utils.js\nexport function...
+    if (langLine && /^file[:\s]/i.test(langLine)) {
+      const directPath = langLine.replace(/^file[:\s]+/i, '').trim();
+      if (directPath && isValidExtractedPath(directPath) && blockContent.trim()) {
+        edits.push({ path: directPath, content: blockContent.trimEnd() });
+        continue;
+      }
+    }
+
+    // Otherwise, look for filename in first line of blockContent
+    const firstLine = blockContent.split('\n')[0]?.trim() || '';
+
+    // O(1) combined filename check (was 4 separate regexes per block)
+    const m = firstLine.match(filenameRegex);
+    const targetPath = (m?.[1] || m?.[2] || m?.[3])?.trim();
+
+    if (!targetPath || !isValidExtractedPath(targetPath)) continue;
+
+    // Clean content: remove the first line if it's just a filename comment
+    let cleanContent = blockContent.trimEnd();
+    if (firstLine.startsWith('//') || firstLine.startsWith('#') || firstLine.startsWith('/*')) {
+      cleanContent = blockContent.split('\n').slice(1).join('\n').trimEnd();
+    }
+
+    // Skip empty content
+    if (!cleanContent || cleanContent.trim().length === 0) continue;
+
+    edits.push({ path: targetPath, content: cleanContent });
+  }
+
+  return edits;
+}
+
+/**
+ * Extract text-mode fenced mkdir: ```mkdir: path\n```
+ */
+export function extractFencedMkdirEdits(content: string): FileEdit[] {
+  const edits: FileEdit[] = [];
+  if (!/```\s*mkdir\s*:/i.test(content)) return edits;
+
+  // Match ```mkdir: path``` with optional whitespace, case-insensitive
+  const regex = /```\s*mkdir\s*:\s+([^\s`]+)[\s\S]*?```/gi;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(content)) !== null) {
+    const targetPath = match[1]?.trim();
+    if (!targetPath) continue;
+    if (!isValidExtractedPath(targetPath)) continue;
+
+    edits.push({ path: targetPath, content: '', action: 'mkdir' });
+  }
+
+  return edits;
+}
+
+/**
+ * Extract text-mode fenced delete: ```delete: path\n```
+ * Handles optional whitespace and uppercase variants: ```DELETE: path```, ```delete : path```
+ */
+export function extractFencedDeleteBlocks(content: string): DeleteEdit[] {
+  const deletes: DeleteEdit[] = [];
+  if (!/```\s*delete\s*:/i.test(content)) return deletes;
+
+  // Match ```delete: path``` with optional whitespace, case-insensitive
+  const regex = /```\s*delete\s*:\s+([^\s`]+)[\s\S]*?```/gi;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(content)) !== null) {
+    const targetPath = match[1]?.trim();
+    if (!targetPath) continue;
+    if (!isValidExtractedPath(targetPath)) continue;
+
+    deletes.push({ path: targetPath });
+  }
+
+  return deletes;
 }
 
 /**
@@ -1137,11 +2459,22 @@ export function extractFsActionWrites(content: string): FileEdit[] {
   }
 
   // Extract top-level WRITE commands (```language ... ``` with WRITE prefix)
-  const regularBlockRegex = /```[a-zA-Z]*\s*([\s\S]*?)```/gi;
+  // EXCLUDE fs-actions blocks which are already handled above
+  // NOTE: Language identifier is optional to support unlabeled triple-backtick blocks
+  // O(1) gate: only scan code blocks if WRITE + heredoc markers are present
+  if (!content.includes('WRITE') && !content.includes('<<<')) {
+    return writes;
+  }
+
+  const regularBlockRegex = /```(?:([a-zA-Z0-9_-]+)\s*)?([\s\S]*?)```/gi;
   let regularBlockMatch: RegExpExecArray | null;
 
   while ((regularBlockMatch = regularBlockRegex.exec(content)) !== null) {
-    const blockContent = regularBlockMatch[1] || '';
+    const lang = regularBlockMatch[1] || '';
+    // Skip fs-actions blocks - already handled above
+    if (lang === 'fs-actions') continue;
+    // Capture group shifted: group 2 is now content when lang is present, group 1 when absent
+    const blockContent = regularBlockMatch[2] || '';
     // Updated regex to handle both: WRITE path <<<...>>> and WRITE <path> <<<...>>>
     const writeRegex = /^WRITE\s*<?([^\s<>]+)>?\s*<<<\s*([\s\S]*?)\s*>>>$/gim;
     let writeMatch: RegExpExecArray | null;
@@ -1153,7 +2486,10 @@ export function extractFsActionWrites(content: string): FileEdit[] {
       if (!isValidExtractedPath(path)) continue;
       // CRITICAL FIX: Skip edits with empty content
       if (!fileContent || fileContent.trim().length === 0) continue;
-      writes.push({ path, content: fileContent });
+      // Deduplicate using trimmed content comparison
+      if (!writes.some(w => w.path === path && w.content.trim() === fileContent.trim())) {
+        writes.push({ path, content: fileContent });
+      }
     }
   }
 
@@ -1177,10 +2513,14 @@ export function extractTopLevelWrites(content: string): FileEdit[] {
     return writes;
   }
 
+  // CRITICAL FIX: Strip code blocks to avoid matching WRITE inside them
+  // (fs-actions blocks are already handled by extractFsActionWrites)
+  const contentWithoutCodeBlocks = content.replace(/```[\s\S]*?```/g, '');
+
   // Updated regex to handle both: WRITE path <<<...>>> and WRITE <path> <<<...>>>
   const topLevelWriteRegex = /^WRITE\s+<?([^\s<>]+)>?(?:\n\s*){0,2}<<<\s*\n([\s\S]*?)\s*>>>/gim;
   let match: RegExpExecArray | null;
-  while ((match = topLevelWriteRegex.exec(content)) !== null) {
+  while ((match = topLevelWriteRegex.exec(contentWithoutCodeBlocks)) !== null) {
     const path = match[1]?.trim();
     const fileContent = match[2] ?? '';
     if (!path) continue;
@@ -1188,15 +2528,15 @@ export function extractTopLevelWrites(content: string): FileEdit[] {
     if (!isValidExtractedPath(path)) continue;
     // CRITICAL FIX: Skip edits with empty content
     if (!fileContent || fileContent.trim().length === 0) continue;
-    // Deduplicate - check if we already have this exact edit
-    if (!writes.some(w => w.path === path && w.content === fileContent)) {
+    // Deduplicate using trimmed content comparison
+    if (!writes.some(w => w.path === path && w.content.trim() === fileContent.trim())) {
       writes.push({ path, content: fileContent });
     }
   }
 
   // Alternative regex for inline format: WRITE path <<<content>>> or WRITE <path> <<<content>>>
   const altWriteRegex = /^WRITE\s+<?([^\s<>]+)>?\s*<<<\s*([\s\S]*?)>>>/gim;
-  while ((match = altWriteRegex.exec(content)) !== null) {
+  while ((match = altWriteRegex.exec(contentWithoutCodeBlocks)) !== null) {
     const path = match[1]?.trim();
     const fileContent = match[2] ?? '';
     if (!path) continue;
@@ -1204,7 +2544,7 @@ export function extractTopLevelWrites(content: string): FileEdit[] {
     if (!isValidExtractedPath(path)) continue;
     // CRITICAL FIX: Skip edits with empty content
     if (!fileContent || fileContent.trim().length === 0) continue;
-    if (!writes.some(w => w.path === path && w.content === fileContent)) {
+    if (!writes.some(w => w.path === path && w.content.trim() === fileContent.trim())) {
       writes.push({ path, content: fileContent });
     }
   }
@@ -1566,6 +2906,77 @@ export function detectNewProjectFolder(content: string): string | null {
 }
 
 // ---------------------------------------------------------------------------
+// Additional Extractors (O(1) gated, Map-dedup compatible)
+// ---------------------------------------------------------------------------
+
+/**
+ * Pattern 5b: Code blocks where first line is ONLY a filename.
+ * Catches: ```javascript\nproject/file.js\nconst x = 42;\n```
+ * Only matches when the first line is a pure path (no code on same line).
+ * O(1) gate: skips unless ``` is present.
+ */
+export function extractCodeBlockFirstLineFilename(content: string): FileEdit[] {
+  if (!content.includes('```')) return [];
+  const edits: FileEdit[] = [];
+  const regex = /```(?:\w+)?\s*\n([\w./\-]+\.\w+)\s*\n([\s\S]*?)```/gi;
+  let m: RegExpExecArray | null;
+  while ((m = regex.exec(content)) !== null) {
+    const path = m[1].trim();
+    const fileContent = m[2].trim();
+    // Reject if first line contains code (only accept pure path)
+    if (!path.includes('(') && !path.includes('=') && path.includes('.') &&
+        fileContent.length > 5 && isValidExtractedPath(path)) {
+      edits.push({ path, content: fileContent });
+    }
+  }
+  return edits;
+}
+
+/**
+ * Pattern 11: Explicit creation commands — "create file called X with..." or
+ * "save to X". O(1) gate: skips unless "create" or "save" is present.
+ */
+export function extractExplicitCreateCommands(content: string): FileEdit[] {
+  const lower = content.toLowerCase();
+  if (!lower.includes('create') && !lower.includes('save')) return [];
+  const edits: FileEdit[] = [];
+  const patterns = [
+    /(?:create|write|make|add)\s+(?:file\s+)?(?:called|named)?\s*['"]?([\w./\-]+\.\w+)['"]?\s*(?:with|containing|:)?\s*\n?([\s\S]{1,5000})/gi,
+    /(?:save|store)\s+(?:this\s+)?(?:to\s+)?(?:file\s+)?['"]?([\w./\-]+\.\w+)['"]?\s*\n?([\s\S]{1,5000})/gi
+  ];
+  for (const pattern of patterns) {
+    let m: RegExpExecArray | null;
+    while ((m = pattern.exec(content)) !== null) {
+      const path = m[1]?.trim();
+      const fileContent = m[2]?.trim() || '';
+      if (path && isValidExtractedPath(path) && fileContent.length > 5) {
+        edits.push({ path, content: fileContent });
+      }
+    }
+  }
+  return edits;
+}
+
+/**
+ * Pattern 12: JSON-like path: "file" content: "..." patterns.
+ * O(1) gate: skips unless "path" and "content" keys are present.
+ */
+export function extractJsonLikePathContent(content: string): FileEdit[] {
+  if (!content.includes('path') || !content.includes('content')) return [];
+  const edits: FileEdit[] = [];
+  const regex = /(?:path|file)\s*[:=]\s*['"]([\w./\-]+\.\w+)['"][\s\S]{0,80}(?:content|text|body)\s*[:=]\s*['"]([\s\S]{1,3000})['"]/gi;
+  let m: RegExpExecArray | null;
+  while ((m = regex.exec(content)) !== null) {
+    const path = m[1]?.trim();
+    const fileContent = m[2]?.trim() || '';
+    if (path && isValidExtractedPath(path) && fileContent.length > 5) {
+      edits.push({ path, content: fileContent });
+    }
+  }
+  return edits;
+}
+
+// ---------------------------------------------------------------------------
 // Main Parser Function
 // ---------------------------------------------------------------------------
 
@@ -1602,12 +3013,21 @@ export function parseFilesystemResponse(content: string, forceExtract: boolean =
   for (const edit of extractBashHereDocWrites(content)) addWrite(edit);
   for (const edit of extractFilenameHintCodeBlocks(content)) addWrite(edit);
   for (const edit of extractFencedDiffEdits(content)) addDiff(edit);
+  for (const edit of extractFencedFileEdits(content)) addWrite(edit);
+  for (const edit of extractFencedMkdirEdits(content)) {
+    if (edit.path) folders.add(edit.path);
+  }
+  for (const edit of extractFencedDeleteBlocks(content)) deletes.add(edit.path);
   for (const edit of extractFsActionPatches(content)) addDiff(edit);
   for (const edit of extractPatchEdits(content)) addDiff(edit);
   for (const edit of extractApplyDiffOperations(content)) addApplyDiff(edit);
   for (const edit of extractFsActionDeletes(content)) deletes.add(edit);
   for (const edit of extractDeleteEdits(content)) deletes.add(edit.path);
   for (const folder of extractFolderCreateEdits(content)) folders.add(folder);
+  // New patterns — O(1) gated extractors with Map dedup
+  for (const edit of extractCodeBlockFirstLineFilename(content)) addWrite(edit);
+  for (const edit of extractExplicitCreateCommands(content)) addWrite(edit);
+  for (const edit of extractJsonLikePathContent(content)) addWrite(edit);
 
   return {
     writes: Array.from(writes.values()),
@@ -1616,6 +3036,36 @@ export function parseFilesystemResponse(content: string, forceExtract: boolean =
     deletes: Array.from(deletes.values()),
     folders: Array.from(folders.values()),
   };
+}
+
+/**
+ * Combined single-pass: extract edits AND sanitize for display.
+ *
+ * Replaces the redundant pattern of calling both parseFilesystemResponse()
+ * and sanitizeAssistantDisplayContent() on the same raw string.
+ *
+ * Returns:
+ *  - edits:    same shape as parseFilesystemResponse, with heredoc markers
+ *              stripped from content (exactly what route.ts applies to VFS)
+ *  - sanitized: display-safe string for the client
+ */
+export function extractAndSanitize(
+  content: string,
+  forceExtract: boolean = false,
+): { edits: ParsedFilesystemResponse; sanitized: string } {
+  // --- extraction (reuses existing extractors unchanged) ---
+  const edits = parseFilesystemResponse(content, forceExtract);
+
+  // Strip heredoc markers from write content — exactly what route.ts does
+  // at line 3967: content: stripHeredocMarkers(edit.content)
+  for (const w of edits.writes) {
+    w.content = stripHeredocMarkers(w.content);
+  }
+
+  // --- sanitization (reuses existing sanitizer unchanged) ---
+  const sanitized = sanitizeAssistantDisplayContent(content);
+
+  return { edits, sanitized };
 }
 
 /**
@@ -1741,6 +3191,11 @@ export function sanitizeFileEditTags(content: string): string {
     }
     // Remove orphaned closing tags
     sanitized = sanitized.replace(/<\/tool_call>/gi, '');
+
+  // Remove <function=tool_name> format (Mistral models)
+  if (sanitized.includes('<function=')) {
+    sanitized = sanitized.replace(/<function=[\s\S]*?<\/function>/gi, '');
+  }
   }
 
   // Remove leaked project/artifact XML tags and continuation markers
@@ -1757,6 +3212,42 @@ export function sanitizeFileEditTags(content: string): string {
   // Remove bare heredoc blocks (<<<...>>>) without command prefix
   // Exclude git merge conflict markers (<<<<<<, >>>>>>)
   sanitized = sanitized.replace(/(?:^|\n)\s*<<<(?!<)[\s\S]*?>>>(?!>)\s*(?=\n|$)/gm, '\n');
+
+  // Remove raw JSON tool calls (LLM outputs tool calls as text instead of function calling)
+  // Catches: { "tool": "batch_write", "arguments": { "files": [...] } }
+  // Strategy: find each "tool": marker, locate its enclosing { } via balanced brace
+  // counting, then remove the entire JSON object. This avoids regex backtracking.
+  if (sanitized.includes('"tool"') && sanitized.includes('"arguments"')) {
+    const fileToolNames = ['write_file', 'write_files', 'batch_write', 'apply_diff', 'delete_file', 'read_file', 'list_files', 'search_files', 'create_directory', 'get_workspace_stats'];
+    let searchFrom = 0;
+    while (searchFrom < sanitized.length) {
+      const toolIdx = sanitized.indexOf('"tool"', searchFrom);
+      if (toolIdx === -1) break;
+
+      // Find the opening brace before "tool"
+      let bracePos = sanitized.lastIndexOf('{', toolIdx);
+      if (bracePos === -1) { searchFrom = toolIdx + 6; continue; }
+
+      // Find the matching closing brace
+      let depth = 0;
+      let endPos = -1;
+      for (let i = bracePos; i < sanitized.length; i++) {
+        if (sanitized[i] === '{') depth++;
+        if (sanitized[i] === '}') { depth--; if (depth === 0) { endPos = i + 1; break; } }
+      }
+      if (endPos === -1) { searchFrom = toolIdx + 6; continue; }
+
+      // Check if this JSON object contains a known file tool name
+      const jsonObj = sanitized.substring(bracePos, endPos);
+      const hasKnownTool = fileToolNames.some(name => jsonObj.includes(`"${name}"`));
+      if (hasKnownTool) {
+        sanitized = sanitized.substring(0, bracePos) + sanitized.substring(endPos);
+        searchFrom = bracePos; // re-scan from where we removed
+      } else {
+        searchFrom = toolIdx + 6;
+      }
+    }
+  }
 
   // Remove command envelope markers
   sanitized = sanitized.replace(/===\s*COMMANDS_START\s*===([\s\S]*?)===\s*COMMANDS_END\s*===/gi, '');
@@ -1970,6 +3461,30 @@ function detectUnclosedTags(
     }
   }
 
+  // Raw JSON tool calls: detect incomplete/unclosed { "tool": "...", "arguments": {...} }
+  // If we find "tool" near the end but no balanced closing brace, mark it unclosed
+  if (tail.includes('"tool"') && tail.includes('"arguments"')) {
+    // Find each "tool" marker and check if its enclosing JSON object is balanced
+    const toolRe = /"tool"\s*:\s*"/gi;
+    let toolMatch: RegExpExecArray | null;
+    while ((toolMatch = toolRe.exec(tail)) !== null) {
+      // Find the opening brace before this "tool" by scanning backward and counting
+      let bracePos = tail.lastIndexOf('{', toolMatch.index);
+      if (bracePos === -1) continue;
+
+      // Check if braces are balanced from bracePos to end of tail
+      let depth = 0;
+      let balanced = false;
+      for (let i = bracePos; i < tail.length; i++) {
+        if (tail[i] === '{') depth++;
+        if (tail[i] === '}') { depth--; if (depth === 0) { balanced = true; break; } }
+      }
+      if (!balanced) {
+        positions.push(windowStart + scanStart + bracePos);
+      }
+    }
+  }
+
   return positions;
 }
 
@@ -2030,6 +3545,8 @@ export function extractIncrementalFileEdits(
   // Collect all edits from supported formats on the parse window.
   // Each extractor has its own fast-path check, so they bail out cheaply
   // when their markers aren't present.
+  // NOTE: extractFileEdits already includes extractJsonToolCalls internally,
+  // so no separate JSON tool call extraction needed here.
   const allEdits: FileEdit[] = [...extractFileEdits(parseWindow)];
 
   // fs-actions blocks (```fs-actions and <fs-actions>) with WRITE commands
@@ -2047,9 +3564,33 @@ export function extractIncrementalFileEdits(
     allEdits.push(edit);
   }
 
-  // Fenced diff blocks (```diff path\n...```)
+  // NEW: Standard markdown code blocks with filename references (```javascript // calc.js)
+  // This catches LLM output that uses standard code blocks instead of structured ```file: format
+  for (const edit of extractCodeBlockFileEdits(parseWindow)) {
+    // Only add if not already present (deduplicate)
+    if (!allEdits.some(e => e.path === edit.path)) {
+      allEdits.push(edit);
+    }
+  }
+
+  // Fenced diff blocks (```diff path\n...``` or ```diff: path\n...```)
   for (const edit of extractFencedDiffEdits(parseWindow)) {
     allEdits.push({ path: edit.path, content: edit.diff });
+  }
+
+  // Text-mode fenced file edits (```file: path\n...```) — for non-FC models
+  for (const edit of extractFencedFileEdits(parseWindow)) {
+    allEdits.push(edit);
+  }
+
+  // Text-mode fenced mkdir (```mkdir: path```) — for non-FC models
+  for (const edit of extractFencedMkdirEdits(parseWindow)) {
+    allEdits.push({ path: edit.path, content: '', action: 'mkdir' });
+  }
+
+  // Text-mode fenced delete (```delete: path```) — for non-FC models
+  for (const edit of extractFencedDeleteBlocks(parseWindow)) {
+    allEdits.push({ path: edit.path, content: '', action: 'delete' });
   }
 
   // Bash heredoc writes inside fenced ```bash blocks
@@ -2080,8 +3621,10 @@ export function extractIncrementalFileEdits(
   for (const edit of allEdits) {
     // CRITICAL FIX: Skip edits with empty content (incomplete streaming tags)
     // Check both content and diff fields since some edits use diff
+    // EXCEPTION: mkdir and delete actions legitimately have no content
     const editContent = edit.content || edit.diff || '';
-    if (!editContent || editContent.trim().length === 0) {
+    const isNonContentAction = edit.action === 'mkdir' || edit.action === 'delete';
+    if (!isNonContentAction && (!editContent || editContent.trim().length === 0)) {
       continue;
     }
 

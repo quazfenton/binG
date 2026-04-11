@@ -5,6 +5,7 @@ import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Calculator, Copy, Check, History } from 'lucide-react';
 import type { PluginProps } from './plugin-manager';
+import { clipboard } from '@bing/platform/clipboard';
 
 export const CalculatorPlugin: React.FC<PluginProps> = ({ 
   onClose, 
@@ -153,7 +154,7 @@ export const CalculatorPlugin: React.FC<PluginProps> = ({
 
   const copyResult = async () => {
     try {
-      await navigator.clipboard.writeText(display);
+      await clipboard.writeText(display);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch (error) {

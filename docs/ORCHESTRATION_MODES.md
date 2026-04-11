@@ -174,7 +174,7 @@ fetch('/api/chat', {
 ### Programmatically
 
 ```typescript
-import { executeWithOrchestrationMode } from '@/lib/agent/orchestration-mode-handler';
+import { executeWithOrchestrationMode } from '@bing/shared/agent/orchestration-mode-handler';
 
 const result = await executeWithOrchestrationMode('mastra-workflow', {
   task: 'Build a todo app with React',

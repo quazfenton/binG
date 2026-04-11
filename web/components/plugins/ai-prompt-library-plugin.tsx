@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import type { PluginProps } from './plugin-manager';
 import { toast } from 'sonner';
+import { clipboard } from '@bing/platform/clipboard';
 
 interface Prompt {
   id: string;
@@ -150,7 +151,7 @@ export default function AIPromptLibraryPlugin({ onClose }: PluginProps) {
 
   const copyPrompt = () => {
     if (!selectedPrompt) return;
-    navigator.clipboard.writeText(selectedPrompt.content);
+    clipboard.writeText(selectedPrompt.content);
     toast.success('Prompt copied');
   };
 

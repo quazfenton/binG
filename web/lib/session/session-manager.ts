@@ -29,8 +29,8 @@ import { getSandboxProvider, getSandboxProviderWithFallback } from '../sandbox/p
 import type { SandboxHandle, SandboxCreateConfig } from '../sandbox/providers/sandbox-provider';
 import { createOpencodeSessionManager, type OpencodeSessionManager } from '@/lib/opencode';
 import { normalizeSessionId } from '@/lib/virtual-filesystem/scope-utils';
-import { enhancedBackgroundJobsManager, type EnhancedJobConfig, type EnhancedJob } from '../agent/enhanced-background-jobs';
-import { executionGraphEngine } from '../agent/execution-graph';
+import { enhancedBackgroundJobsManager, type EnhancedJobConfig, type EnhancedJob } from '@bing/shared/agent/enhanced-background-jobs';
+import { executionGraphEngine } from '@bing/shared/agent/execution-graph';
 
 const logger = createLogger('Session:Manager');
 
@@ -681,7 +681,7 @@ export class SessionManager {
   // ============================================================================
 
   private getSessionKey(userId: string, conversationId: string): string {
-    return `${userId}:${conversationId}`;
+    return `${userId}$${conversationId}`;
   }
 
   private startCleanupTimer(): void {
@@ -708,7 +708,28 @@ export class SessionManager {
 
     for (const key of toRemove) {
       try {
-        const [userId, conversationId] = key.split(':');
+        // Session key format: "userId$conversationId" (modern) or "userId:conversationId" (legacy)
+        // SECURITY: Use indexOf (FIRST separator) not lastIndexOf, because:
+        // - userId is system-controlled and NEVER contains $ or :
+        // - conversationId MAY contain user-provided $ or : (e.g., folder named "my$project")
+        // - The FIRST separator is always our system separator
+        const dollarIndex = key.indexOf('$');
+        const colonIndex = key.indexOf(':');
+
+        let userId: string, conversationId: string;
+        if (dollarIndex !== -1 && (colonIndex === -1 || dollarIndex < colonIndex)) {
+          // $ appears first (or only $ exists) — modern format
+          userId = key.slice(0, dollarIndex);
+          conversationId = key.slice(dollarIndex + 1);
+        } else if (colonIndex !== -1) {
+          // : appears first (or only : exists) — legacy format
+          userId = key.slice(0, colonIndex);
+          conversationId = key.slice(colonIndex + 1);
+        } else {
+          // No separator found — treat entire key as userId with empty conversationId
+          userId = key;
+          conversationId = '';
+        }
         await this.destroySession(userId, conversationId);
       } catch (error: any) {
         logger.error(`Failed to cleanup session`, error);
@@ -913,7 +934,27 @@ export class SessionManager {
 
     for (const key of keys) {
       try {
-        const [userId, conversationId] = key.split(':');
+        // Session key format: "userId$conversationId" (modern) or "userId:conversationId" (legacy)
+        // SECURITY: Use indexOf (FIRST separator) not lastIndexOf, because:
+        // - userId is system-controlled and NEVER contains $ or :
+        // - conversationId MAY contain user-provided $ or : (e.g., folder named "my$project")
+        // - The FIRST separator is always our system separator
+        const dollarIndex = key.indexOf('$');
+        const colonIndex = key.indexOf(':');
+
+        let userId: string, conversationId: string;
+        if (dollarIndex !== -1 && (colonIndex === -1 || dollarIndex < colonIndex)) {
+          // $ appears first (or only $ exists) — modern format
+          userId = key.slice(0, dollarIndex);
+          conversationId = key.slice(dollarIndex + 1);
+        } else if (colonIndex !== -1) {
+          // : appears first (or only : exists) — legacy format
+          userId = key.slice(0, colonIndex);
+          conversationId = key.slice(colonIndex + 1);
+        } else {
+          userId = key;
+          conversationId = '';
+        }
         await this.destroySession(userId, conversationId);
       } catch (error: any) {
         logger.error(`Failed to cleanup session during shutdown`, error);

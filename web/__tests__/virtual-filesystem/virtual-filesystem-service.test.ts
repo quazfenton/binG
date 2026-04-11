@@ -335,29 +335,29 @@ describe('VirtualFilesystemService', () => {
 
     it('should search by content', async () => {
       const result = await vfs.search(testUserId, 'const');
-      
-      expect(result.length).toBeGreaterThanOrEqual(1);
+
+      expect(result.files.length).toBeGreaterThanOrEqual(1);
       // Search may not return content in results
-      expect(result.length).toBeGreaterThan(0);
+      expect(result.files.length).toBeGreaterThan(0);
     });
 
     it('should respect path filter', async () => {
       const result = await vfs.search(testUserId, 'test', { path: 'project/src' });
-      
+
       // All results should be within the filtered path
-      expect(result.every(r => r.path.includes('src') || r.path.includes('test'))).toBe(true);
+      expect(result.files.every(r => r.path.includes('src') || r.path.includes('test'))).toBe(true);
     });
 
     it('should respect limit', async () => {
       const result = await vfs.search(testUserId, 't', { limit: 2 });
-      
-      expect(result.length).toBeLessThanOrEqual(2);
+
+      expect(result.files.length).toBeLessThanOrEqual(2);
     });
 
     it('should return empty array for no matches', async () => {
       const result = await vfs.search(testUserId, 'nonexistent_pattern_xyz');
-      
-      expect(result.length).toBe(0);
+
+      expect(result.files.length).toBe(0);
     });
   });
 

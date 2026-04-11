@@ -1,0 +1,139 @@
+{
+  "summary": {
+    "passed": 26,
+    "failed": 0,
+    "total": 26
+  },
+  "details": [
+    {
+      "test": "Login: auth-token cookie",
+      "passed": true,
+      "details": "Set"
+    },
+    {
+      "test": "Admin OAuth connect: redirect",
+      "passed": true,
+      "details": "307 → https://accounts.google.com/o/oauth2/v2/auth?client_id=1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com&response_type=code&re"
+    },
+    {
+      "test": "Admin OAuth connect: Google URL",
+      "passed": true,
+      "details": "Contains OAuth URL"
+    },
+    {
+      "test": "Admin callback: no code → 400",
+      "passed": true,
+      "details": "Status: 400"
+    },
+    {
+      "test": "Admin callback: invalid code → error",
+      "passed": true,
+      "details": "Status: 500"
+    },
+    {
+      "test": "Setup page: requires auth",
+      "passed": true,
+      "details": "Shows unauthorized message"
+    },
+    {
+      "test": "Setup page: loads with auth",
+      "passed": true,
+      "details": "Status: 200, Has content: true"
+    },
+    {
+      "test": "Parser: Compact file_edit",
+      "passed": true,
+      "details": "Found parser-oauth-1.txt"
+    },
+    {
+      "test": "Parser: Batch write",
+      "passed": true,
+      "details": "Found parser-oauth-2.js"
+    },
+    {
+      "test": "Parser: Special token",
+      "passed": true,
+      "details": "Found parser-oauth-3.txt"
+    },
+    {
+      "test": "Parser: Tool call fenced",
+      "passed": true,
+      "details": "Found parser-oauth-4.md"
+    },
+    {
+      "test": "Parser: Bash heredoc",
+      "passed": true,
+      "details": "Found parser-oauth-5.sh"
+    },
+    {
+      "test": "LLM File Create [Mistral Small]",
+      "passed": true,
+      "details": "File created"
+    },
+    {
+      "test": "LLM Multi-File [Mistral Small]",
+      "passed": true,
+      "details": "Found 3/3: multi-oauth-1.js, multi-oauth-2.js, multi-oauth-3.js"
+    },
+    {
+      "test": "LLM Batch Write [Mistral Small]",
+      "passed": true,
+      "details": "Both files detected"
+    },
+    {
+      "test": "Auto-Continue [Mistral Small]",
+      "passed": true,
+      "details": "Files: 4/4: package.json, index.js, App.js, README"
+    },
+    {
+      "test": "Shell/PTY [Mistral Small]",
+      "passed": true,
+      "details": "Create: true, Run: true"
+    },
+    {
+      "test": "Self-Healing [Mistral Small]",
+      "passed": true,
+      "details": "Fix detected"
+    },
+    {
+      "test": "Error Recovery [Mistral Small]",
+      "passed": true,
+      "details": "Handled (1065 chars)"
+    },
+    {
+      "test": "LLM File Create [Nvidia Nemotron]",
+      "passed": true,
+      "details": "File created"
+    },
+    {
+      "test": "LLM Multi-File [Nvidia Nemotron]",
+      "passed": true,
+      "details": "Found 3/3: multi-oauth-1.js, multi-oauth-2.js, multi-oauth-3.js"
+    },
+    {
+      "test": "LLM Batch Write [Nvidia Nemotron]",
+      "passed": true,
+      "details": "Both files detected"
+    },
+    {
+      "test": "Auto-Continue [Nvidia Nemotron]",
+      "passed": true,
+      "details": "Files: 4/4: package.json, index.js, App.js, README"
+    },
+    {
+      "test": "Shell/PTY [Nvidia Nemotron]",
+      "passed": true,
+      "details": "Create: true, Run: true"
+    },
+    {
+      "test": "Self-Healing [Nvidia Nemotron]",
+      "passed": true,
+      "details": "Fix detected"
+    },
+    {
+      "test": "Error Recovery [Nvidia Nemotron]",
+      "passed": true,
+      "details": "Handled (1002 chars)"
+    }
+  ]
+}

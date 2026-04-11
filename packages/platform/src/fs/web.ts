@@ -63,11 +63,23 @@ class WebFs implements FsAdapter {
       input.accept = options?.accept ?? '*';
       input.multiple = options?.multiple ?? false;
 
-      input.onchange = () => {
-        const files = Array.from(input.files || []);
+      let settled = false;
+      const settle = (files: File[]) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutId);
+        window.removeEventListener('focus', onWindowFocus);
+        input.remove();
         resolve(files);
       };
 
+      const timeoutId = setTimeout(() => settle([]), 30000); // 30s safety net
+
+      const onWindowFocus = () => settle(Array.from(input.files || []));
+
+      input.onchange = () => settle(Array.from(input.files || []));
+
+      window.addEventListener('focus', onWindowFocus, { once: true });
       input.click();
     });
   }

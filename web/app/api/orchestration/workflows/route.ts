@@ -6,7 +6,6 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getWorkflows, executeWorkflow } from '@/lib/orchestration/agent-orchestrator';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('API:Orchestration:Workflows');
@@ -14,13 +13,18 @@ const logger = createLogger('API:Orchestration:Workflows');
 // GET - List workflows
 export async function GET() {
   try {
+    // TODO: Re-implement when agent orchestrator is available
+    /*
     const workflows = await getWorkflows();
-    
+
     return NextResponse.json({
       success: true,
       workflows,
       count: workflows.length,
     });
+    */
+
+    return NextResponse.json({ error: 'This endpoint is not implemented' }, { status: 501 });
   } catch (error: any) {
     logger.error('Failed to get workflows:', error);
     return NextResponse.json(
@@ -40,7 +44,9 @@ export async function POST(
     const body = await request.json().catch(() => ({}));
     const { params: workflowParams } = body;
 
-    const result = await executeWorkflow(id, workflowParams);
+    // TODO: Re-implement when agent orchestrator is available
+    /*
+    const result = await executeWorkflow(id) as any;
 
     logger.info('Workflow executed:', { workflowId: id, executionId: result.executionId });
 
@@ -48,6 +54,9 @@ export async function POST(
       success: true,
       ...result,
     });
+    */
+
+    return NextResponse.json({ error: 'This endpoint is not implemented' }, { status: 501 });
   } catch (error: any) {
     logger.error('Failed to execute workflow:', error);
     return NextResponse.json(

@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import React, { useState, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
@@ -19,8 +19,9 @@ import {
   Sparkles,
   Trash2
 } from 'lucide-react';
-import type { LLMProvider } from '../lib/chat/llm-providers';
+import type { LLMProviderConfig } from '../lib/chat/llm-providers-types';
 import { useMultiRotatingStatements } from '@/hooks/use-rotating-statements';
+import { clipboard } from "@bing/platform/clipboard";
 
 interface ModelResponse {
   provider: string;
@@ -35,7 +36,7 @@ interface ModelResponse {
 interface MultiModelComparisonProps {
   isOpen: boolean;
   onClose: () => void;
-  availableProviders: LLMProvider[];
+  availableProviders: LLMProviderConfig[];
 }
 
 function RunningButton() {
@@ -131,6 +132,9 @@ export default function MultiModelComparison({
         ));
         
         const token = (await import('@bing/platform/secrets')).secrets.get('auth-token');
+        const { secrets } = await import('@bing/platform/secrets');
+        const storedApiKeys = await secrets.get('user-api-keys');
+        const apiKeys = storedApiKeys ? JSON.parse(storedApiKeys) : undefined;
         const response = await fetch('/api/chat', {
           method: 'POST',
           headers: {
@@ -144,7 +148,8 @@ export default function MultiModelComparison({
             temperature: 0.7,
             maxTokens: 4096,
             stream: true,
-            agentMode: 'v1'
+            agentMode: 'v1',
+            apiKeys: Object.keys(apiKeys || {}).length > 0 ? apiKeys : undefined,
           }),
         });
 
@@ -283,6 +288,9 @@ export default function MultiModelComparison({
         ));
         
         const token = (await import('@bing/platform/secrets')).secrets.get('auth-token');
+        const { secrets } = await import('@bing/platform/secrets');
+        const storedApiKeys = await secrets.get('user-api-keys');
+        const apiKeys = storedApiKeys ? JSON.parse(storedApiKeys) : undefined;
         const response = await fetch('/api/chat', {
           method: 'POST',
           headers: {
@@ -296,7 +304,8 @@ export default function MultiModelComparison({
             temperature: 0.7,
             maxTokens: 4096,
             stream: true,
-            agentMode: 'v1'
+            agentMode: 'v1',
+            apiKeys: Object.keys(apiKeys || {}).length > 0 ? apiKeys : undefined,
           }),
         });
 
@@ -415,7 +424,7 @@ export default function MultiModelComparison({
   };
 
   const handleCopy = (text: string) => {
-    navigator.clipboard.writeText(text);
+    clipboard.writeText(text);
   };
 
   const getResponseTime = (response: ModelResponse) => {
@@ -511,7 +520,7 @@ export default function MultiModelComparison({
                 Model Comparison
               </h2>
               <p className="text-xs" style={{ color: 'rgba(255,255,255,0.5)' }}>
-                {responses.length} panel{responses.length !== 1 ? 's' : ''} · {responses.filter(r => r.status === 'complete').length} succeeded · {responses.filter(r => r.status === 'error').length} failed
+                {responses.length} panel{responses.length !== 1 ? 's' : ''} Â· {responses.filter(r => r.status === 'complete').length} succeeded Â· {responses.filter(r => r.status === 'error').length} failed
               </p>
             </div>
           </div>

@@ -16,7 +16,7 @@ import {
 } from '@/lib/backend';
 import { quotaManager } from '@/lib/management/quota';
 import { snapshotManager } from '@/lib/virtual-filesystem/sync/snapshot-manager';
-import { initializeMCPForArchitecture2 } from '@/lib/mcp';
+import { initializeMCPForArchitecture2 } from '@/lib/mcp/architecture-integration';
 
 const logger = createLogger('Backend:Init');
 
@@ -276,7 +276,7 @@ class BackendService {
   }
 
   private async initializeWebSocket(): Promise<void> {
-    logger.info('Starting WebSocket terminal server...', { port: this.config.websocketPort });
+    logger.info('Starting WebSocket servers...', { port: this.config.websocketPort });
 
     const websocketRequired = process.env.WEBSOCKET_REQUIRED === 'true';
     try {

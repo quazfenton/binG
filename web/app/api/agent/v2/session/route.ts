@@ -9,9 +9,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { agentSessionManager } from '@/lib/session/agent/agent-session-manager';
-import { agentFSBridge } from '@/lib/agent/agent-fs-bridge';
-import { nullclawIntegration, type NullclawTask } from '@/lib/agent/nullclaw-integration';
-import { cloudAgentOffload } from '@/lib/agent/cloud-agent-offload';
+import { agentFSBridge } from '@bing/shared/agent/agent-fs-bridge';
+import { nullclawIntegration, type NullclawTask } from '@bing/shared/agent/nullclaw-integration';
+import { cloudAgentOffload } from '@bing/shared/agent/cloud-agent-offload';
 import { createOpenCodeEngine } from '@/lib/session/agent/opencode-engine-service';
 import { createLogger } from '@/lib/utils/logger';
 
@@ -86,7 +86,7 @@ export async function POST(request: NextRequest) {
     // Initialize Nullclaw if enabled
     let nullclawAvailable = false;
     if (enableNullclaw) {
-      const { initializeNullclaw, isNullclawAvailable } = await import('@/lib/agent/nullclaw-integration');
+      const { initializeNullclaw, isNullclawAvailable } = await import('@bing/shared/agent/nullclaw-integration');
       await initializeNullclaw();
       nullclawAvailable = isNullclawAvailable();
     }
@@ -98,7 +98,7 @@ export async function POST(request: NextRequest) {
       success: true,
       data: {
         sessionId: session.id,
-        sessionKey: `${session.userId}:${session.conversationId}`,
+        sessionKey: `${session.userId}$${session.conversationId}`,
         userId: session.userId,
         conversationId: session.conversationId,
         status: session.state,
@@ -153,7 +153,7 @@ export async function GET(request: NextRequest) {
       success: true,
       data: {
         sessionId: session.id,
-        sessionKey: `${session.userId}:${session.conversationId}`,
+        sessionKey: `${session.userId}$${session.conversationId}`,
         userId: session.userId,
         conversationId: session.conversationId,
         status: session.state,

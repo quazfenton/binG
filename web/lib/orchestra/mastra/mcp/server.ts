@@ -362,75 +362,14 @@ async function startMCPServer() {
 }
 
 // ===========================================
-// MCP Client Helper Functions
-// ===========================================
-
-/**
- * MCP Client for connecting to the server
- * Can be used by workflows to call tools via MCP
- */
-export class MCPClient {
-  private serverUrl: string;
-
-  constructor(serverUrl: string = 'http://localhost:3000/mcp') {
-    this.serverUrl = serverUrl;
-  }
-
-  /**
-   * Call a tool via MCP server
-   */
-  async callTool(toolName: string, args: Record<string, any>) {
-    const response = await fetch(this.serverUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: Date.now(),
-        method: 'tools/call',
-        params: {
-          name: toolName,
-          arguments: args,
-        },
-      }),
-    });
-
-    const result = await response.json();
-
-    if (result.error) {
-      throw new Error(result.error.message);
-    }
-
-    return result.result;
-  }
-
-  /**
-   * List available tools
-   */
-  async listTools() {
-    const response = await fetch(this.serverUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: Date.now(),
-        method: 'tools/list',
-      }),
-    });
-
-    const result = await response.json();
-    return result.tools || [];
-  }
-}
-
-// ===========================================
 // Exports
 // ===========================================
 
 export { startMCPServer, server, mcpTools };
+
+// Re-export the canonical MCPClient from the main MCP module
+// (avoid duplicating the implementation)
+export { MCPClient } from '@/lib/mcp/client';
 
 // Start server if run directly
 if (process.argv[1]?.includes('mcp-server')) {

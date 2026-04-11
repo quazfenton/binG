@@ -60,7 +60,7 @@ export interface FilesystemConfig {
  */
 const DEFAULT_FILESYSTEM_CONFIG: FilesystemConfig = {
   baseDir: process.env.WORKSPACE_DIR || '/workspace',
-  maxFileSize: parseInt(process.env.MAX_FILE_SIZE || '10485760', 10), // 10MB
+  maxFileSize: parseInt(process.env.MAX_FILE_SIZE || '104857600', 10), // 100MB
   allowedExtensions: ['*', '.ts', '.js', '.tsx', '.jsx', '.json', '.md', '.txt', '.html', '.css', '.py', '.go', '.rs', '.java'],
   deniedPatterns: [
     /\.env(\..+)?$/,

@@ -19,6 +19,7 @@ import {
   Upload
 } from 'lucide-react';
 import type { PluginProps } from './plugin-manager';
+import { clipboard } from "@bing/platform/clipboard";
 
 interface ValidationResult {
   valid: boolean;
@@ -140,7 +141,7 @@ export const JsonValidatorPlugin: React.FC<PluginProps> = ({
 
   const copyToClipboard = async (text: string) => {
     try {
-      await navigator.clipboard.writeText(text);
+      await clipboard.writeText(text);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch (error) {
@@ -239,7 +240,7 @@ export const JsonValidatorPlugin: React.FC<PluginProps> = ({
                 variant="ghost"
                 onClick={async () => {
                   try {
-                    const text = await navigator.clipboard.readText();
+                    const text = await clipboard.readText();
                     setInput(text);
                   } catch (error) {
                     console.error('Failed to read clipboard:', error);

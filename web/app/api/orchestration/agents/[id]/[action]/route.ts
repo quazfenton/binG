@@ -8,7 +8,6 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { startAgent, stopAgent, pauseAgent, resumeAgent } from '@/lib/orchestration/agent-orchestrator';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('API:Orchestration:Control');
@@ -19,6 +18,9 @@ export async function POST(
 ) {
   try {
     const { id, action } = await params;
+
+    // TODO: Re-implement when agent orchestrator is available
+    /*
     const body = await request.json().catch(() => ({}));
     const { task } = body;
 
@@ -26,25 +28,29 @@ export async function POST(
 
     switch (action) {
       case 'start':
-        success = await startAgent(id, task);
+        await startAgent(id, task);
+        success = true;
         logger.info('Agent started:', { agentId: id, task });
         break;
-      
+
       case 'stop':
-        success = await stopAgent(id);
+        await stopAgent(id);
+        success = true;
         logger.info('Agent stopped:', { agentId: id });
         break;
-      
+
       case 'pause':
-        success = await pauseAgent(id);
+        await pauseAgent(id);
+        success = true;
         logger.info('Agent paused:', { agentId: id });
         break;
-      
+
       case 'resume':
-        success = await resumeAgent(id);
+        await resumeAgent(id);
+        success = true;
         logger.info('Agent resumed:', { agentId: id });
         break;
-      
+
       default:
         return NextResponse.json(
           { error: `Invalid action: ${action}` },
@@ -64,6 +70,9 @@ export async function POST(
       action,
       agentId: id,
     });
+    */
+
+    return NextResponse.json({ error: 'This endpoint is not implemented' }, { status: 501 });
   } catch (error: any) {
     logger.error('Agent control failed:', error);
     return NextResponse.json(

@@ -219,12 +219,31 @@ ${JSON.stringify(tool.inputSchema, null, 2)}
 
 Fix the arguments to match the schema. Return ONLY the corrected JSON object, no explanation.`;
 
-      // Try to use available LLM for healing
+      // Try to use available LLM for healing — prefer env-configured provider/model
       const { generateText } = await import('ai');
+      const { createMistral } = await import('@ai-sdk/mistral');
+      const { createGoogleGenerativeAI } = await import('@ai-sdk/google');
       const { createOpenAI } = await import('@ai-sdk/openai');
-      
-      const openai = createOpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
-      const model = openai('gpt-4o-mini') as any; // Type assertion for compatibility
+
+      const fallbackProvider = process.env.DEFAULT_FALLBACK_PROVIDER || 'mistral';
+      const fallbackModel = process.env.FAST_MODEL || 'mistral-small-latest';
+
+      let model: any;
+      try {
+        switch (fallbackProvider) {
+          case 'google':
+            model = createGoogleGenerativeAI({ apiKey: process.env.GOOGLE_API_KEY || '' })(fallbackModel);
+            break;
+          case 'openai':
+            model = createOpenAI({ apiKey: process.env.OPENAI_API_KEY || '' })(fallbackModel);
+            break;
+          default:
+            model = createMistral({ apiKey: process.env.MISTRAL_API_KEY || '' })(fallbackModel);
+        }
+      } catch {
+        // Last resort — try OpenAI
+        model = createOpenAI({ apiKey: process.env.OPENAI_API_KEY || '' })(fallbackModel);
+      }
 
       const result = await generateText({
         model,

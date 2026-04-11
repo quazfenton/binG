@@ -1,3 +1,4 @@
+// FORCE RECOMPILE: 1775662791909
 /**
  * Capability Router - Maps capabilities to actual tool providers
  *
@@ -55,6 +56,9 @@ export interface CapabilityProvider {
 
 /**
  * VFS Provider - handles file operations via Virtual Filesystem
+ *
+ * Uses a declarative method map instead of a switch statement.
+ * Each capability is a typed method with input/output schemas.
  */
 class VFSProvider implements CapabilityProvider {
   readonly id = 'vfs';
@@ -62,167 +66,136 @@ class VFSProvider implements CapabilityProvider {
   readonly capabilities = ['file.read', 'file.write', 'file.append', 'file.delete', 'file.list', 'file.search', 'memory.context', 'workspace.getChanges'];
 
   isAvailable(): boolean {
-    // VFS is available by default (works with default config)
-    // It's always available since virtualFilesystem service initializes with defaults
     return true;
   }
+
+  // ─── Declarative Method Map ──────────────────────────────────────────────
+
+  private readonly methods: Record<string, (ownerId: string, input: any) => Promise<any>> = {
+    'file.read': async (ownerId, input) => {
+      const { virtualFilesystem } = await import('../virtual-filesystem/virtual-filesystem-service');
+      const file = await virtualFilesystem.readFile(ownerId, input.path);
+      return {
+        content: file.content,
+        path: file.path,
+        language: file.language,
+        size: file.size,
+        version: file.version,
+        lastModified: file.lastModified,
+      };
+    },
+
+    'file.write': async (ownerId, input) => {
+      const { virtualFilesystem } = await import('../virtual-filesystem/virtual-filesystem-service');
+      const file = await virtualFilesystem.writeFile(
+        ownerId,
+        input.path,
+        input.content,
+        input.language,
+        input.append
+          ? { failIfExists: false, append: true }
+          : input.failIfExists
+            ? { failIfExists: true }
+            : undefined
+      );
+      return { success: true, path: file.path, bytesWritten: file.size };
+    },
+
+    'file.append': async (ownerId, input) => {
+      const { virtualFilesystem } = await import('../virtual-filesystem/virtual-filesystem-service');
+      const file = await virtualFilesystem.writeFile(
+        ownerId,
+        input.path,
+        input.content,
+        input.language,
+        { failIfExists: false, append: true }
+      );
+      return { success: true, path: file.path, bytesWritten: file.size };
+    },
+
+    'file.delete': async (ownerId, input) => {
+      const { virtualFilesystem } = await import('../virtual-filesystem/virtual-filesystem-service');
+      const result = await virtualFilesystem.deletePath(ownerId, input.path);
+      return { deletedCount: result.deletedCount, path: input.path };
+    },
+
+    'file.list': async (ownerId, input) => {
+      const { virtualFilesystem } = await import('../virtual-filesystem/virtual-filesystem-service');
+      const listing = await virtualFilesystem.listDirectory(ownerId, input.path || 'project');
+      return {
+        path: listing.path,
+        nodes: listing.nodes.map(node => ({
+          name: node.name,
+          path: node.path,
+          type: node.type,
+          language: node.language,
+          size: node.size,
+          lastModified: node.lastModified,
+        })),
+      };
+    },
+
+    'file.search': async (ownerId, input) => {
+      const { virtualFilesystem } = await import('../virtual-filesystem/virtual-filesystem-service');
+      const results = await virtualFilesystem.search(ownerId, input.query, {
+        path: input.path,
+        limit: input.limit,
+      });
+      return {
+        results: results.map(r => ({
+          path: r.path,
+          name: r.name,
+          language: r.language,
+          score: r.score,
+          snippet: r.snippet,
+          lastModified: r.lastModified,
+        })),
+        total: results.length,
+      };
+    },
+
+    'workspace.getChanges': async (ownerId, input) => {
+      const { diffTracker } = await import('../virtual-filesystem/filesystem-diffs');
+      const changedFiles = diffTracker.getChangedFilesForSync(ownerId, input.maxFiles || 50);
+      return { ownerId, count: changedFiles.length, files: changedFiles };
+    },
+
+    'memory.context': async (ownerId) => {
+      const { virtualFilesystem } = await import('../virtual-filesystem/virtual-filesystem-service');
+      const workspace = await virtualFilesystem.exportWorkspace(ownerId);
+      return {
+        root: workspace.root,
+        version: workspace.version,
+        fileCount: workspace.files.length,
+        files: workspace.files.map(f => ({
+          path: f.path,
+          language: f.language,
+          size: f.size,
+          lastModified: f.lastModified,
+        })),
+      };
+    },
+  };
 
   async execute(
     capabilityId: string,
     input: any,
     context: ToolExecutionContext
   ): Promise<ToolExecutionResult> {
-    const { virtualFilesystem } = await import('../virtual-filesystem/virtual-filesystem-service');
     const ownerId = input.ownerId || context.userId || 'default';
 
-    // Input validation
     if (!ownerId) {
       return { success: false, error: 'Missing ownerId/userId' };
     }
 
+    const handler = this.methods[capabilityId];
+    if (!handler) {
+      return { success: false, error: `Unknown capability: ${capabilityId}` };
+    }
+
     try {
-      switch (capabilityId) {
-        case 'file.read': {
-          const file = await virtualFilesystem.readFile(ownerId, input.path);
-          return {
-            success: true,
-            output: {
-              content: file.content,
-              path: file.path,
-              language: file.language,
-              size: file.size,
-              version: file.version,
-              lastModified: file.lastModified,
-            },
-          };
-        }
-
-        case 'file.write': {
-          const file = await virtualFilesystem.writeFile(
-            ownerId,
-            input.path,
-            input.content,
-            input.language,
-            input.append
-              ? { failIfExists: false, append: true }
-              : input.failIfExists
-                ? { failIfExists: true }
-                : undefined
-          );
-          return {
-            success: true,
-            output: {
-              success: true,
-              path: file.path,
-              bytesWritten: file.size,
-            },
-          };
-        }
-
-        case 'file.append': {
-          const file = await virtualFilesystem.writeFile(
-            ownerId,
-            input.path,
-            input.content,
-            input.language,
-            { failIfExists: false, append: true }
-          );
-          return {
-            success: true,
-            output: {
-              success: true,
-              path: file.path,
-              bytesWritten: file.size,
-            },
-          };
-        }
-
-        case 'file.delete': {
-          const result = await virtualFilesystem.deletePath(ownerId, input.path);
-          return {
-            success: true,
-            output: {
-              deletedCount: result.deletedCount,
-              path: input.path,
-            },
-          };
-        }
-
-        case 'file.list': {
-          const listing = await virtualFilesystem.listDirectory(ownerId, input.path || 'project');
-          return {
-            success: true,
-            output: {
-              path: listing.path,
-              nodes: listing.nodes.map(node => ({
-                name: node.name,
-                path: node.path,
-                type: node.type,
-                language: node.language,
-                size: node.size,
-                lastModified: node.lastModified,
-              })),
-            },
-          };
-        }
-
-        case 'file.search': {
-          const results = await virtualFilesystem.search(ownerId, input.query, {
-            path: input.path,
-            limit: input.limit,
-          });
-          return {
-            success: true,
-            output: {
-              results: results.map(r => ({
-                path: r.path,
-                name: r.name,
-                language: r.language,
-                score: r.score,
-                snippet: r.snippet,
-                lastModified: r.lastModified,
-              })),
-              total: results.length,
-            },
-          };
-        }
-
-        case 'workspace.getChanges': {
-          // Get git-style diffs for client sync
-          const { diffTracker } = await import('../virtual-filesystem/filesystem-diffs');
-          const changedFiles = diffTracker.getChangedFilesForSync(ownerId, input.maxFiles || 50);
-          return {
-            success: true,
-            output: {
-              ownerId,
-              count: changedFiles.length,
-              files: changedFiles,
-            },
-          };
-        }
-
-        case 'memory.context': {
-          // Get workspace state for context
-          const workspace = await virtualFilesystem.exportWorkspace(ownerId);
-          return {
-            success: true,
-            output: {
-              root: workspace.root,
-              version: workspace.version,
-              fileCount: workspace.files.length,
-              files: workspace.files.map(f => ({
-                path: f.path,
-                language: f.language,
-                size: f.size,
-                lastModified: f.lastModified,
-              })),
-            },
-          };
-        }
-
-        default:
-          return { success: false, error: `Unknown capability: ${capabilityId}` };
-      }
+      const output = await handler(ownerId, input);
+      return { success: true, output };
     } catch (error: any) {
       return { success: false, error: error.message };
     }
@@ -561,12 +534,91 @@ class OpenCodeV2Provider implements CapabilityProvider {
           ? `run ${input.language} code: ${input.code}`
           : input.command;
 
+        // Get project context for the system prompt (lightweight — just file listing)
+        let smartContextMd = '';
+        let projectRoot = '';
+        try {
+          const { buildProjectContext, formatSmartContextAsMarkdown } = await import('../project-detection');
+          const { virtualFilesystem } = await import('../virtual-filesystem/virtual-filesystem-service');
+          const ownerId = context.userId || 'default';
+          const workspace = await virtualFilesystem.exportWorkspace(ownerId);
+          const filePaths = workspace.files.map(f => f.path);
+
+          const projectContext = await buildProjectContext(filePaths, async (path: string) => {
+            if (path === 'package.json' || path === '/package.json') {
+              try {
+                const file = await virtualFilesystem.readFile(ownerId, path.replace(/^\//, ''));
+                return file.content;
+              } catch { return null; }
+            }
+            return null;
+          });
+
+          smartContextMd = formatSmartContextAsMarkdown(projectContext.smartContext);
+          projectRoot = projectContext.projectRoot || '';
+        } catch {
+          // Project detection failed — LLM will work without it
+        }
+
+        // Build the tool set for the LLM: extended sandbox tools including
+        // terminal sessions, project analysis, and port status.
+        const { EXTENDED_SANDBOX_TOOLS, mapToolToCapability } = await import('../sandbox/extended-sandbox-tools');
+
+        // Resolve cwd
+        let resolvedCwd: string | undefined;
+        if (input.cwd) {
+          try {
+            const { resolveVfsPathToRealPath } = await import('../project-detection');
+            resolvedCwd = resolveVfsPathToRealPath(input.cwd, session.workspacePath || process.cwd());
+          } catch {
+            resolvedCwd = input.cwd;
+          }
+        }
+
+        const systemPrompt = smartContextMd
+          ? `${smartContextMd}\n\nWorking directory: ${input.cwd || projectRoot || session.workspacePath || ''}\n\n` +
+            `Available tools: exec_shell, write_file, read_file, list_dir, project_analyze, ` +
+            `project_list_scripts, project_dependencies, project_structure, terminal_create_session, ` +
+            `terminal_send_input, terminal_get_output, port_status.\n` +
+            `If the command looks like natural language (e.g., "run the project"), ` +
+            `first call project_analyze to detect the framework and recommended commands.`
+          : `Working directory: ${input.cwd || session.workspacePath || ''}\n\n` +
+            `Available tools: exec_shell, write_file, read_file, list_dir, project_analyze, ` +
+            `project_list_scripts, project_dependencies, project_structure, terminal_create_session, ` +
+            `terminal_send_input, terminal_get_output, port_status.`;
+
         const result = await provider.runAgentLoop({
           userMessage: command,
-          tools: [],
-          systemPrompt: '',
-          maxSteps: 5,
-          executeTool: async () => ({ success: true, output: '', exitCode: 0 }),
+          tools: [...EXTENDED_SANDBOX_TOOLS] as any,
+          systemPrompt,
+          maxSteps: 8,
+          executeTool: async (name: string, args: Record<string, any>): Promise<any> => {
+            // exec_shell / sandbox.shell must NOT go through the capability router
+            // because that would route back to OpenCodeV2Provider → infinite recursion.
+            // Instead, execute directly on the provider.
+            if (name === 'exec_shell' || name === 'sandbox.shell' || name === 'sandbox.execute') {
+              const cmd = args.command || args.code || '';
+              const cwd = args.cwd || resolvedCwd;
+              const timeout = args.timeout || 30;
+              return provider.executeCommandDirect(cmd, cwd || '', timeout, true);
+            }
+
+            // All other tools go through the capability router
+            const capId = mapToolToCapability(name);
+            const router = getCapabilityRouter();
+            const routerResult = await router.execute(capId, args, {
+              userId: context.userId,
+              conversationId: context.conversationId || 'default',
+            });
+            return {
+              success: routerResult.success,
+              output: (routerResult as any).data || routerResult.output,
+              exitCode: (routerResult as any).exitCode ?? (routerResult.success ? 0 : 1),
+              error: routerResult.error,
+            };
+          },
+          cwd: resolvedCwd,
+          enableSelfHeal: true,
         });
 
         return {
@@ -595,7 +647,7 @@ class NullclawProvider implements CapabilityProvider {
   readonly capabilities = ['web.browse', 'web.search', 'automation.discord', 'automation.telegram', 'automation.workflow'];
 
   async isAvailable(): Promise<boolean> {
-    const { isNullclawAvailable } = await import('../agent/nullclaw-integration');
+    const { isNullclawAvailable } = await import('@bing/shared/agent/nullclaw-integration');
     return isNullclawAvailable();
   }
 
@@ -609,7 +661,7 @@ class NullclawProvider implements CapabilityProvider {
       sendNullclawDiscordMessage,
       sendNullclawTelegramMessage,
       executeNullclawTask,
-    } = await import('../agent/nullclaw-integration');
+    } = await import('@bing/shared/agent/nullclaw-integration');
 
     try {
       switch (capabilityId) {
@@ -1373,11 +1425,200 @@ class OAuthIntegrationProvider implements CapabilityProvider {
 }
 
 /**
+ * Terminal Provider — handles interactive terminal/PTY operations
+ *
+ * Provides:
+ * - terminal.create_session, terminal.send_input, terminal.get_output
+ * - terminal.resize, terminal.close_session, terminal.list_sessions
+ * - terminal.start_process, terminal.stop_process, terminal.list_processes
+ * - terminal.get_port_status
+ */
+class TerminalProvider implements CapabilityProvider {
+  readonly id = 'terminal';
+  readonly name = 'Terminal / PTY';
+  readonly capabilities = [
+    'terminal.create_session',
+    'terminal.send_input',
+    'terminal.get_output',
+    'terminal.resize',
+    'terminal.close_session',
+    'terminal.list_sessions',
+    'terminal.start_process',
+    'terminal.stop_process',
+    'terminal.list_processes',
+    'terminal.get_port_status',
+  ];
+
+  isAvailable(): boolean {
+    // Terminal manager is always available (in-memory singleton)
+    return true;
+  }
+
+  async execute(
+    capabilityId: string,
+    input: any,
+    context: ToolExecutionContext,
+  ): Promise<ToolExecutionResult> {
+    try {
+      const {
+        createTerminalSession,
+        sendTerminalInput,
+        getTerminalOutput,
+        resizeTerminal,
+        closeTerminalSession,
+        listTerminalSessions,
+        startProcess,
+        stopProcess,
+        listProcesses,
+        getPortStatus,
+      } = await import('./terminal');
+
+      const userId = context.userId || 'default';
+
+      switch (capabilityId) {
+        case 'terminal.create_session':
+          return { success: true, output: await createTerminalSession(userId, input) };
+
+        case 'terminal.send_input':
+          return {
+            success: true,
+            output: await sendTerminalInput(input.sessionId, input.input),
+          };
+
+        case 'terminal.get_output':
+          return {
+            success: true,
+            output: await getTerminalOutput(input.sessionId, {
+              lines: input.lines,
+              waitForPattern: input.waitForPattern,
+              timeoutMs: input.timeoutMs,
+            }),
+          };
+
+        case 'terminal.resize':
+          return {
+            success: true,
+            output: await resizeTerminal(input.sessionId, input.cols, input.rows),
+          };
+
+        case 'terminal.close_session':
+          return {
+            success: true,
+            output: await closeTerminalSession(input.sessionId),
+          };
+
+        case 'terminal.list_sessions':
+          return { success: true, output: await listTerminalSessions(userId) };
+
+        case 'terminal.start_process':
+          return {
+            success: true,
+            output: await startProcess(input.command, {
+              userId,
+              cwd: input.cwd,
+              env: input.env,
+              timeout: input.timeout,
+            }),
+          };
+
+        case 'terminal.stop_process':
+          return {
+            success: true,
+            output: await stopProcess(input.pid, {
+              userId,
+              signal: input.signal,
+            }),
+          };
+
+        case 'terminal.list_processes':
+          return {
+            success: true,
+            output: await listProcesses({ userId, filter: input.filter }),
+          };
+
+        case 'terminal.get_port_status':
+          return {
+            success: true,
+            output: await getPortStatus({ userId, port: input.port }),
+          };
+
+        default:
+          return {
+            success: false,
+            error: `Unknown terminal capability: ${capabilityId}`,
+          };
+      }
+    } catch (error: any) {
+      return {
+        success: false,
+        error: `Terminal provider error: ${error.message}`,
+      };
+    }
+  }
+}
+
+/**
+ * Provider ID Enum - Type-safe provider identifiers.
+ * Using this enum instead of string[] prevents typos from silently failing.
+ */
+export enum ProviderId {
+  VFS = 'vfs',
+  LOCAL_FS = 'local-fs',
+  MCP_FILESYSTEM = 'mcp-filesystem',
+  OPENCODE_V2 = 'opencode-v2',
+  NULLCLAW = 'nullclaw',
+  BLAXEL = 'blaxel',
+  MEMORY_SERVICE = 'memory-service',
+  RIPGREP = 'ripgrep',
+  CONTEXT_PACK = 'context-pack',
+  EMBEDDING_SEARCH = 'embedding-search',
+  GIT_HELPER = 'git-helper',
+  OAUTH_INTEGRATION = 'oauth-integration',
+  TERMINAL = 'terminal',
+  PROJECT_ANALYSIS = 'project-analysis',
+  CUSTOM = 'custom', // For dynamically registered providers
+}
+
+/**
+ * Dynamic provider registration options.
+ * Allows runtime registration of custom providers with full control over capabilities.
+ */
+export interface ProviderRegistrationOptions {
+  /** Unique provider ID (use ProviderId.CUSTOM for auto-generated ID) */
+  id?: string;
+  /** Human-readable name */
+  name: string;
+  /** Capabilities this provider supports */
+  capabilities: string[];
+  /** Availability check function */
+  isAvailable: () => boolean | Promise<boolean>;
+  /** Execution function for capability calls */
+  execute: (
+    capabilityId: string,
+    input: any,
+    context: ToolExecutionContext
+  ) => Promise<ToolExecutionResult>;
+  /** Priority in provider list (higher = checked first) */
+  priority?: number;
+}
+
+/**
  * Capability Router - selects and executes capabilities via providers
  */
 export class CapabilityRouter {
   private providers = new Map<string, CapabilityProvider>();
   private initialized = false;
+  /** Optional reference to bootstrapped agency for adaptive routing */
+  private agency: any = null;
+
+  /**
+   * Set the bootstrapped agency instance for adaptive routing.
+   * When set, the router uses learned capability success rates
+   * to influence provider selection.
+   */
+  setAgency(agency: any): void {
+    this.agency = agency;
+  }
 
   /**
    * Register a provider
@@ -1385,6 +1626,47 @@ export class CapabilityRouter {
   registerProvider(provider: CapabilityProvider): void {
     this.providers.set(provider.id, provider);
     logger.info(`[CapabilityRouter] Registered provider: ${provider.name} (${provider.id})`);
+  }
+
+  /**
+   * Dynamically register a custom provider at runtime.
+   * Returns the provider ID for use in capability definitions.
+   */
+  async registerCustomProvider(options: ProviderRegistrationOptions): Promise<string> {
+    const providerId = options.id || `custom-${options.name.toLowerCase().replace(/\s+/g, '-')}-${Date.now()}`;
+
+    const customProvider: CapabilityProvider = {
+      id: providerId,
+      name: options.name,
+      capabilities: options.capabilities,
+      isAvailable: options.isAvailable,
+      execute: options.execute,
+    };
+
+    this.registerProvider(customProvider);
+    return providerId;
+  }
+
+  /**
+   * Unregister a provider by ID.
+   * Returns true if provider was found and removed.
+   */
+  unregisterProvider(providerId: string): boolean {
+    return this.providers.delete(providerId);
+  }
+
+  /**
+   * Get list of registered provider IDs.
+   */
+  getProviderIds(): string[] {
+    return Array.from(this.providers.keys());
+  }
+
+  /**
+   * Get a provider by ID.
+   */
+  getProvider<T extends CapabilityProvider = CapabilityProvider>(providerId: string): T | undefined {
+    return this.providers.get(providerId) as T | undefined;
   }
 
   /**
@@ -1407,6 +1689,8 @@ export class CapabilityRouter {
     this.registerProvider(new GitHelperProvider());
     // Register OAuth integration provider (Nango/Composio/Arcade)
     this.registerProvider(new OAuthIntegrationProvider());
+    // Register Terminal provider (PTY, process management, port status)
+    this.registerProvider(new TerminalProvider());
 
     this.initialized = true;
     logger.info(`[CapabilityRouter] Initialized with ${this.providers.size} providers`);
@@ -1443,7 +1727,7 @@ export class CapabilityRouter {
   }
 
   /**
-   * Score a provider based on capability metadata
+   * Score a provider based on capability metadata and learned agency data
    * Higher score = better choice
    */
   private scoreProvider(providerId: string, capability: CapabilityDefinition): number {
@@ -1473,12 +1757,22 @@ export class CapabilityRouter {
       score += (capability.providerPriority.length - priorityIndex) * 5;
     }
 
+    // Agency adaptive scoring — if agency has learned success rates for this
+    // capability, boost providers with higher historical success
+    if (this.agency && typeof this.agency.getCapabilitySuccessRate === 'function') {
+      const rate = this.agency.getCapabilitySuccessRate(capability.id, providerId);
+      if (typeof rate === 'number') {
+        score += rate * 50; // Up to +50 for high success rate
+      }
+    }
+
     return score;
   }
 
   /**
    * Execute a capability - routes to best available provider
    * Uses intelligent provider selection based on metadata scoring
+   * with self-healing retry on failure.
    */
   async execute(
     capabilityId: string,
@@ -1492,6 +1786,22 @@ export class CapabilityRouter {
       return { success: false, error: `Unknown capability: ${capabilityId}` };
     }
 
+    // SECURITY: Validate input against the capability's Zod schema before forwarding.
+    const parsed = capability.inputSchema.safeParse(input);
+    if (!parsed.success) {
+      const fieldErrors = parsed.error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join('; ');
+      logger.warn(`[CapabilityRouter] Input validation failed for ${capabilityId}`, {
+        errors: fieldErrors,
+        inputKeys: Object.keys(input || {}),
+      });
+      return {
+        success: false,
+        error: `Invalid input for ${capabilityId}: ${fieldErrors}`,
+      };
+    }
+
+    const validatedInput = parsed.data;
+
     // Check permissions if specified
     if (capability.permissions && capability.permissions.length > 0) {
       const hasPermission = this.checkPermissions(capability.permissions, context);
@@ -1503,14 +1813,71 @@ export class CapabilityRouter {
       }
     }
 
-    // Get scored and sorted providers
-    const providerScores = this.getScoredProviders(capability);
+    // Try execution with self-healing retry
+    return this.executeWithSelfHeal(capabilityId, validatedInput, context, capability);
+  }
 
-    // Try each provider in score order (highest first)
+  /**
+   * Execute a capability with LLM-based self-healing retry.
+   * If all providers fail, the LLM analyzes the error and suggests
+   * a fix, then retries with the corrected input.
+   */
+  private async executeWithSelfHeal(
+    capabilityId: string,
+    input: any,
+    context: ToolExecutionContext,
+    capability: CapabilityDefinition,
+    maxAttempts: number = 2,
+  ): Promise<ToolExecutionResult> {
+    let lastError = '';
+    let attempt = 0;
+
+    while (attempt < maxAttempts) {
+      attempt++;
+      const result = await this.tryAllProviders(capabilityId, input, context, capability);
+
+      if (result.success) return result;
+
+      lastError = result.error || 'Unknown error';
+
+      // Don't self-heal if auth required or input is invalid
+      if ((result as any).authRequired) return result;
+      if (lastError.startsWith('Invalid input')) return result;
+
+      // Last attempt — return the error
+      if (attempt >= maxAttempts) break;
+
+      // Try self-healing
+      const healed = await this.selfHealAttempt(capabilityId, input, lastError, capability);
+      if (!healed) {
+        logger.debug(`[CapabilityRouter] Self-healing failed for ${capabilityId} (attempt ${attempt})`);
+        break; // Can't heal — return original error
+      }
+
+      logger.info(`[CapabilityRouter] Self-healing ${capabilityId}: attempt ${attempt} → retrying with fixed input`);
+      input = healed;
+    }
+
+    return {
+      success: false,
+      error: lastError || `All providers failed for ${capabilityId}`,
+      fallbackChain: capability.providerPriority as any,
+    };
+  }
+
+  /**
+   * Try all providers in score order for a single attempt.
+   */
+  private async tryAllProviders(
+    capabilityId: string,
+    input: any,
+    context: ToolExecutionContext,
+    capability: CapabilityDefinition,
+  ): Promise<ToolExecutionResult> {
+    const providerScores = this.getScoredProviders(capability);
     const errors: string[] = [];
 
     for (const { providerId, provider, score } of providerScores) {
-      // Check availability
       let available = false;
       try {
         available = await Promise.resolve(provider.isAvailable());
@@ -1540,10 +1907,7 @@ export class CapabilityRouter {
           errors.push(`${provider.name}: ${result.error}`);
         }
 
-        // If auth required, don't try other providers
-        if (result.authRequired) {
-          return result;
-        }
+        if ((result as any).authRequired) return result;
       } catch (error: any) {
         errors.push(`${provider.name}: ${error.message}`);
         logger.debug(`[CapabilityRouter] Provider ${provider.name} failed:`, error.message);
@@ -1553,8 +1917,50 @@ export class CapabilityRouter {
     return {
       success: false,
       error: `All providers failed for ${capabilityId}: ${errors.join('; ')}`,
-      fallbackChain: capability.providerPriority as any,  // string[] → IntegrationProvider[]
+      fallbackChain: capability.providerPriority as any,
     };
+  }
+
+  /**
+   * LLM-based self-healing: analyze the error and produce fixed input.
+   * Uses a lightweight model for fast healing.
+   */
+  private async selfHealAttempt(
+    capabilityId: string,
+    originalInput: any,
+    error: string,
+    capability: CapabilityDefinition,
+  ): Promise<Record<string, unknown> | null> {
+    try {
+      const { generateObject } = await import('ai');
+
+      // Use a fast, cheap model for healing
+      const { createMistral } = await import('@ai-sdk/mistral');
+      const model = createMistral({ apiKey: process.env.MISTRAL_API_KEY || '' })('mistral-small-latest');
+
+      const { object } = await generateObject({
+        model,
+        prompt: `A tool call failed. Fix the input arguments.
+
+Capability: ${capabilityId}
+Description: ${capability.description}
+Original Input: ${JSON.stringify(originalInput, null, 2)}
+Error: ${error}
+
+Expected Schema:
+${JSON.stringify(capability.inputSchema, null, 2)}
+
+Return ONLY the corrected input object as JSON.`,
+        schema: capability.inputSchema,
+        maxOutputTokens: 500,
+        temperature: 0.1,
+      });
+
+      return object as Record<string, unknown>;
+    } catch (healError: any) {
+      logger.debug(`[CapabilityRouter] Self-heal attempt failed for ${capabilityId}: ${healError.message}`);
+      return null;
+    }
   }
 
   /**
@@ -1636,6 +2042,15 @@ export function getCapabilityRouter(): CapabilityRouter {
     routerInstance = new CapabilityRouter();
   }
   return routerInstance;
+}
+
+/**
+ * Wire a bootstrapped agency into the capability router for adaptive routing.
+ * Call this after the agency is created (e.g., in StatefulAgent constructor).
+ */
+export function wireAgencyToRouter(agency: any): void {
+  const router = getCapabilityRouter();
+  router.setAgency(agency);
 }
 
 export async function initializeCapabilityRouter(): Promise<void> {

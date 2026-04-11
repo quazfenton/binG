@@ -159,7 +159,7 @@ export class OPFSShadowCommitManager {
 
     try {
       // Get current VFS state via API
-      const snapshot = await getWorkspaceSnapshot(options.ownerId);
+      const snapshot = await getWorkspaceSnapshot();
       if (!snapshot) {
         return {
           success: false,

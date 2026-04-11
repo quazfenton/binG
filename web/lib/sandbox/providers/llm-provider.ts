@@ -15,6 +15,10 @@ export interface LLMAgentOptions {
   executeTool: (name: string, args: Record<string, any>) => Promise<ToolResult>
   onToolExecution?: (toolName: string, args: Record<string, any>, result: ToolResult) => void
   onStreamChunk?: (chunk: string) => void
+  /** Working directory for shell commands (overrides session default) */
+  cwd?: string
+  /** Enable self-healing retry on command failure (default: true) */
+  enableSelfHeal?: boolean
 }
 
 export interface LLMAgentResult {

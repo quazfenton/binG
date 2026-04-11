@@ -13,6 +13,7 @@ import {
 import { Sparkles, Copy, Check, Loader2, XCircle } from 'lucide-react';
 import { toast } from 'sonner';
 import type { PluginProps } from './plugin-manager';
+import { clipboard } from '@bing/platform/clipboard';
 
 type EnhancementMode = 'professional' | 'casual' | 'technical' | 'creative' | 'concise';
 
@@ -73,34 +74,14 @@ export const AIEnhancerPlugin: React.FC<PluginProps> = ({
   const copyToClipboard = useCallback(() => {
     if (!enhanced) return;
 
-    if (navigator.clipboard && window.isSecureContext) {
-      navigator.clipboard.writeText(enhanced).then(() => {
-        setCopied(true);
-        toast.success('Copied to clipboard!');
-        setTimeout(() => setCopied(false), 2000);
-      }, (err) => {
-        toast.error('Failed to copy', { description: 'Could not copy text to clipboard.' });
-        console.error('Failed to copy:', err);
-      });
-    } else {
-      // Fallback for non-secure contexts or older browsers
-      try {
-        const textArea = document.createElement('textarea');
-        textArea.value = enhanced;
-        textArea.style.position = 'absolute';
-        textArea.style.left = '-9999px';
-        document.body.appendChild(textArea);
-        textArea.select();
-        document.execCommand('copy');
-        document.body.removeChild(textArea);
-        setCopied(true);
-        toast.success('Copied to clipboard!');
-        setTimeout(() => setCopied(false), 2000);
-      } catch (err) {
-        toast.error('Failed to copy', { description: 'Clipboard access is not available.' });
-        console.error('Fallback copy failed:', err);
-      }
-    }
+    clipboard.writeText(enhanced).then(() => {
+      setCopied(true);
+      toast.success('Copied to clipboard!');
+      setTimeout(() => setCopied(false), 2000);
+    }, (err) => {
+      toast.error('Failed to copy', { description: 'Could not copy text to clipboard.' });
+      console.error('Failed to copy:', err);
+    });
   }, [enhanced]);
 
   const clearFields = () => {

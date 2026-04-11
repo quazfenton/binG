@@ -50,6 +50,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { Label } from "@/components/ui/label";
+import { clipboard } from '@bing/platform/clipboard';
 
 // Fetch templates from API
 async function fetchTemplates(): Promise<PromptTemplate[]> {
@@ -333,7 +334,7 @@ export default function PromptLabTab() {
   };
 
   const handleCopyTemplate = (template: PromptTemplate) => {
-    navigator.clipboard.writeText(template.template);
+    clipboard.writeText(template.template);
     toast.success("Copied to clipboard");
   };
 

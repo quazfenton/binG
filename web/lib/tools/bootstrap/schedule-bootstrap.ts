@@ -23,9 +23,12 @@ import {
 
 const logger = createLogger('Tools:Bootstrap:Schedule');
 
+// Track registration to avoid duplicates when called alongside bootstrap-events.ts
+let basicScheduleRegistered = false;
+
 /**
  * Register task scheduling tools with registry
- * 
+ *
  * @param registry - Tool registry instance
  * @param config - Bootstrap configuration
  * @returns Number of tools registered
@@ -34,6 +37,20 @@ export async function registerScheduleTools(
   registry: ToolRegistry,
   config: BootstrapConfig
 ): Promise<number> {
+  // Skip if basic schedule tools already registered by bootstrap-events.ts
+  // FIX: Also check registry state — module-level guard persists across registry.clear() (e.g., tests)
+  if (basicScheduleRegistered && registry.getTool('task.schedule')) {
+    logger.debug('Basic schedule tools already registered, skipping');
+    return 0;
+  }
+
+  // Check if tools already exist (registered by bootstrap-events.ts)
+  if (registry.getTool('task.schedule')) {
+    logger.debug('task.schedule already registered by another bootstrap module');
+    basicScheduleRegistered = true;
+    return 0;
+  }
+
   try {
     logger.info('Registering task scheduling tools...');
 
@@ -110,6 +127,7 @@ export async function registerScheduleTools(
     registered++;
 
     logger.info(`Registered ${registered} task scheduling tools`);
+    basicScheduleRegistered = true;
     return registered;
   } catch (error: any) {
     logger.error('Failed to register task scheduling tools', error);
