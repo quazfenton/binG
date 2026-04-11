@@ -772,19 +772,18 @@ content of b.ts
         }
       } else if (supportsFC === undefined) {
         // Model doesn't report this capability — could be unknown provider.
-        // Most OpenAI-compatible providers support FC, so proceed but ALSO inject
-        // text-mode fallback instructions so the model can still perform file actions
-        // via parseable text format if native tool calls fail.
-        chatLogger.warn('[FC-GATE] Function calling ability UNKNOWN (model did not report) — attempting native tool calls with text-mode fallback', {
+        // TWO-PHASE STRATEGY:
+        //   Phase 1: Use tools only (no text-mode instructions).
+        //   Phase 2: After streaming, if zero tool calls produced, check if
+        //            the response text contains tool-call patterns. If so,
+        //            issue a second completion with text-mode instructions.
+        chatLogger.info('[FC-GATE] Function calling ability UNKNOWN — using two-phase strategy', {
           provider,
           model: modelName,
           toolCount,
-          warning: 'Model may not support function calling — text-mode instructions injected as safety net',
+          strategy: 'Phase 1: tools only; Phase 2: text-mode fallback if no tool calls',
         });
-
-        // NOTE: For unknown FC support, we DO NOT inject text-mode instructions
-        // This avoids confusing models that support FC but don't report it.
-        // The text-mode parser will still catch any text-based file operations.
+        // Do NOT inject text-mode instructions yet — let the model try native tool calls first.
       }
     } else {
       chatLogger.info('[FC-GATE] No tools provided, skipping function calling check', { provider, model: modelName });
@@ -799,6 +798,7 @@ content of b.ts
 
     // Stream events including text, reasoning, and tool calls
     let reasoningContent = '';
+    let textContent = ''; // Track text for two-phase FC fallback
 
     for await (const chunk of result.fullStream) {
       if (effectiveSignal?.aborted) return;
@@ -807,9 +807,12 @@ content of b.ts
         case 'text-delta': {
           // Clear time-to-first-token timeout once we receive content
           onFirstToken();
-          
+
+          const deltaText = (chunk as any).text ?? '';
+          textContent += deltaText; // Track for two-phase FC fallback
+
           yield {
-            content: (chunk as any).text,
+            content: deltaText,
             isComplete: false,
             timestamp: new Date(),
           };
@@ -953,35 +956,70 @@ content of b.ts
           const cachedArgs = toolCallArgsCache.get(resultToolCallId);
           const finalArgs = cachedArgs || (chunk as any).args || (chunk as any).arguments || {};
           const toolResult = (chunk as any).result;
+          const toolName = (chunk as any).toolName;
           const resultSuccess = toolResult?.success ?? (toolResult?.error === undefined);
-          
+
+          // SELF-HEALING: Enhanced error result for validation-like errors.
+          // Declared here so it's in scope for the yield below.
+          let enhancedResult: unknown = toolResult;
+
           // ENHANCED: Log tool result with detailed info
           if (resultSuccess) {
             chatLogger.info('[TOOL-RESULT] ✓ Tool succeeded', {
               toolCallId: resultToolCallId,
-              toolName: (chunk as any).toolName,
+              toolName,
               hasCachedArgs: !!cachedArgs,
               argsUsed: Object.keys(finalArgs),
               resultKeys: toolResult ? Object.keys(toolResult) : [],
             });
           } else {
+            const errorObj = toolResult?.error;
+            const errorMsg = typeof errorObj === 'string' ? errorObj : errorObj?.message || 'Unknown error';
+            const isEmptyArgs = !finalArgs || Object.keys(finalArgs).length === 0;
+
             chatLogger.error('[TOOL-RESULT] ✗ Tool failed', {
               toolCallId: resultToolCallId,
-              toolName: (chunk as any).toolName,
+              toolName,
               hasCachedArgs: !!cachedArgs,
-              error: toolResult?.error || 'Unknown error',
+              error: errorMsg,
               argsUsed: Object.keys(finalArgs),
+              isEmptyArgs,
             });
+
+            // SELF-HEALING: Enhance error message with retry guidance for validation-like errors.
+            // Common validation failures: missing required fields, wrong types, empty args.
+            // The AI SDK multi-step loop will let the model see this error and retry.
+            const isValidationError =
+              isEmptyArgs ||
+              errorMsg.includes('required') ||
+              errorMsg.includes('Expected') ||
+              errorMsg.includes('Invalid') ||
+              errorMsg.includes('validation') ||
+              errorMsg.includes('EMPTY_ARGS') ||
+              errorMsg.includes('cannot be');
+
+            if (isValidationError && toolName) {
+              enhancedResult = {
+                ...toolResult,
+                error: {
+                  code: errorObj?.code || 'VALIDATION_ERROR',
+                  message: `Tool "${toolName}" failed: ${errorMsg}. Please re-emit the same tool call with valid JSON arguments. Required fields: path (string), content (string) for file operations. Do not abbreviate or truncate content.`,
+                  retryable: true,
+                  originalError: typeof errorObj === 'string' ? errorObj : errorMsg,
+                },
+                _enhanced: true,
+              };
+            }
           }
           yield {
             content: '',
             isComplete: false,
             toolInvocations: [{
               toolCallId: resultToolCallId,
-              toolName: (chunk as any).toolName,
+              toolName,
               state: 'result' as const,
               args: finalArgs,
-              result: (chunk as any).result,
+              result: enhancedResult ?? toolResult,
             }],
             timestamp: new Date(),
           };
@@ -1063,6 +1101,69 @@ content of b.ts
           finishReason,
           hint: 'Check if model supports function calling — see [FC-GATE] logs above',
         });
+
+        // TWO-PHASE FC FALLBACK (Phase 2):
+        // If supportsFC was undefined, zero tool calls were produced, and the
+        // response text contains tool-call-like patterns, issue a second completion
+        // with text-mode instructions.
+        const supportsFC = (vercelModel as any)?.supports?.functionCalling;
+        if (supportsFC === undefined && textContent) {
+          // Check for tool-call patterns in text content
+          const hasToolCallPattern =
+            textContent.includes('"tool"') ||
+            textContent.includes('"function"') ||
+            textContent.includes('"name"') ||
+            textContent.includes('"tool_name"') ||
+            textContent.includes('"arguments"') ||
+            textContent.includes('"args"') ||
+            textContent.includes('"input"') ||
+            textContent.includes('"batch_write"') ||
+            textContent.includes('"write_file"') ||
+            /```(?:file|diff|mkdir|delete):/i.test(textContent);
+
+          if (hasToolCallPattern) {
+            chatLogger.warn('[FC-GATE] Phase 2: No tool calls + tool-call patterns detected in text — retrying with text-mode instructions', {
+              provider,
+              model: modelName,
+              textContentLength: textContent.length,
+              patternsDetected: true,
+            });
+
+            // Issue second completion with text-mode instructions
+            const fallbackStreamOptions = { ...streamOptions };
+            delete fallbackStreamOptions.tools; // Strip tools
+            if (fallbackStreamOptions.system) {
+              fallbackStreamOptions.system = fallbackStreamOptions.system + '\n\n' + TEXT_MODE_TOOL_INSTRUCTIONS;
+            } else {
+              fallbackStreamOptions.system = TEXT_MODE_TOOL_INSTRUCTIONS;
+            }
+
+            try {
+              const fallbackResult = streamText(fallbackStreamOptions);
+              for await (const fallbackChunk of fallbackResult.fullStream) {
+                if (effectiveSignal?.aborted) break;
+                if (fallbackChunk.type === 'text-delta') {
+                  yield {
+                    content: (fallbackChunk as any).text ?? '',
+                    isComplete: false,
+                    timestamp: new Date(),
+                    metadata: { fcFallback: 'text-mode' },
+                  };
+                }
+              }
+              chatLogger.info('[FC-GATE] Phase 2 fallback completed', {
+                provider,
+                model: modelName,
+              });
+            } catch (fallbackError: any) {
+              chatLogger.error('[FC-GATE] Phase 2 fallback failed', {
+                provider,
+                model: modelName,
+                error: fallbackError.message,
+              });
+            }
+          }
+        }
       }
     }
 
