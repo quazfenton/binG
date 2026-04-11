@@ -502,49 +502,44 @@ export const AgenticPresets = {
 // ─── Example Integration ──────────────────────────────────────────────────────
 
 /*
-EXAMPLE — drop into your existing app:
+ORIGINAL EXAMPLE (above) — see IMPLEMENTED VERSION below for actual codebase usage.
 
-import Anthropic from "@anthropic-ai/sdk";
-import { runAgenticProjectLoop, AgenticPresets } from "./agenticProjectLoop";
+The implemented version is at: /root/bing/web/lib/chat/progressive-build-engine.ts
 
-const client = new Anthropic();
+// ─── IMPLEMENTED USAGE EXAMPLES ──────────────────────────────────────────────
 
-// Your existing LLM call wrapped to match LLMCallFn signature:
-async function myLLMCall(messages: LLMMessage[]): Promise<string> {
-  const response = await client.messages.create({
-    model: "claude-opus-4-5",
-    max_tokens: 8096,
-    system: messages.find(m => m.role === "system")?.content ?? "",
-    messages: messages
-      .filter(m => m.role !== "system")
-      .map(m => ({ role: m.role as "user" | "assistant", content: m.content })),
-  });
-  return response.content
-    .filter(b => b.type === "text")
-    .map(b => b.text)
-    .join("");
-}
+import { runProgressiveBuild, BuildPresets, detectBuildComplete } from '@/lib/chat/progressive-build-engine';
 
-const result = await runAgenticProjectLoop({
-  userPrompt: `
-    Build a production-ready Express + TypeScript REST API with:
-    - JWT authentication (register/login/refresh)
-    - CRUD for a 'tasks' resource
-    - Prisma ORM + PostgreSQL
-    - Zod input validation
-    - Jest integration tests
-    - Dockerfile + docker-compose
-    - Full README
-  `,
-  projectRoot: "./generated-project",
-  llmCall: myLLMCall,
-  config: {
-    ...AgenticPresets.thorough,
-    verbose: true,
-    completionToken: "<<PROJECT_COMPLETE>>",  // must match system prompt
+// Example 1: Thorough build with reflection (medium project)
+const result = await runProgressiveBuild({
+  userId: 'user-123',
+  userPrompt: 'Build a REST API with auth, CRUD, and tests',
+  llmCall: myExistingLLMFunction,
+  config: { ...BuildPresets.thorough, verbose: true },
+  emit: (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`),
+  abortSignal: req.signal,
+});
+
+// Example 2: Fast mode — tree only, no reflection
+const fastResult = await runProgressiveBuild({
+  userId: 'user-123',
+  userPrompt: 'Create a simple todo app',
+  llmCall: myLLMFunction,
+  config: BuildPresets.fast,
+});
+
+// Example 3: Custom reflection with cheap model
+const customResult = await runProgressiveBuild({
+  userId: 'user-123',
+  userPrompt: 'Build a CLI tool...',
+  llmCall: expensiveLLM,
+  config: { ...BuildPresets.balanced, enableReflection: true },
+  reflectionFn: async (llmCall, prompt, tree, response) => {
+    const cheap = await cheapLLM([{ role: 'user', content: `Gaps in: ${prompt}\nTree: ${tree}\nOutput: ${response.slice(-1000)}` }]);
+    return { summary: cheap, gapsIdentified: ['parse from response'], score: 60 };
   },
 });
 
-console.log(`Done in ${result.iterations} iterations. Completed: ${result.completed}`);
-console.log("Final project tree:\n", result.projectTree);
+// Manual completion check:
+const { complete, reason } = detectBuildComplete(responseText);
 */
