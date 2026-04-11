@@ -1565,19 +1565,20 @@ function parseFileObjectsFromArray(arrayContent: string): Array<{ path?: string;
 /**
  * Parse a single { path: "...", content: "..." } object string.
  * Handles both quoted and unquoted keys, and template literal values.
+ * Now supports field aliases (file->path, code->content, etc.) for LLM robustness.
  */
 function parseSimpleFileObject(objStr: string): { path?: string; content?: string; diff?: string } | null {
   const result: { path?: string; content?: string; diff?: string } = {};
 
-  // Match key-value pairs: "key": "value" or key: "value" or key: `value`
-  // FIX: (?:^|[,{\n]) — keys can appear at start-of-string, after {, or after comma/newline.
-  // JS ^ only matches start-of-string, not start-of-line. The first key after `{` has no
-  // comma prefix, so we must also match `{` and `\n` as valid key-start positions.
-  const kvRegex = /(?:^|[,{\n])\s*["']?(path|content|diff)["']?\s*:\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)/gs;
+  // Extended key patterns to support common LLM mistakes
+  // path aliases: path, file, filename, filepath, file_path, target
+  // content aliases: content, contents, code, text, body, data, source
+  // diff aliases: diff, patch, changes, delta
+  const kvRegex = /(?:^|[,{\n])\s*["']?(path|file|filename|filepath|file_path|filePath|target|content|contents|code|text|body|data|source|diff|patch|changes|delta)["']?\s*:\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)/gis;
   let match: RegExpExecArray | null;
 
   while ((match = kvRegex.exec(objStr)) !== null) {
-    const key = match[1];
+    const rawKey = match[1].toLowerCase();
     let value = match[2];
 
     // Strip surrounding quotes/backticks
@@ -1588,12 +1589,20 @@ function parseSimpleFileObject(objStr: string): { path?: string; content?: strin
       value = value.replace(/\\"/g, '"').replace(/\\'/g, "'").replace(/\\n/g, '\n').replace(/\\t/g, '\t');
     } else if (value.startsWith('`') && value.endsWith('`')) {
       value = value.slice(1, -1);
-      // Template literal - just remove the backticks, keep content as-is
     }
 
-    if (key === 'path') result.path = value;
-    else if (key === 'content') result.content = value;
-    else if (key === 'diff') result.diff = value;
+    // Map aliases to canonical fields (only set if not already set - first match wins)
+    const pathAliases = ['path', 'file', 'filename', 'filepath', 'file_path', 'filePath', 'target'];
+    const contentAliases = ['content', 'contents', 'code', 'text', 'body', 'data', 'source'];
+    const diffAliases = ['diff', 'patch', 'changes', 'delta'];
+
+    if (pathAliases.includes(rawKey) && !result.path) {
+      result.path = value;
+    } else if (contentAliases.includes(rawKey) && !result.content) {
+      result.content = value;
+    } else if (diffAliases.includes(rawKey) && !result.diff) {
+      result.diff = value;
+    }
   }
 
   return Object.keys(result).length > 0 ? result : null;

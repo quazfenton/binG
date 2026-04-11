@@ -21,6 +21,7 @@ import { isMem0Configured } from '@/lib/powers/mem0-power';
 import { createHTTPTransport, isValidMCPURL } from '@/lib/mcp/http-transport';
 import { handleMCPHealthCheck } from '@/lib/mcp/health-check';
 import { createLogger } from '@/lib/utils/logger';
+import { buildCompositeSessionId, buildScopePath, extractSimpleSessionId } from '@/lib/identity';
 
 const logger = createLogger('MCP-Server');
 
@@ -266,16 +267,22 @@ export async function POST(request: NextRequest) {
       // Extract session identity from cookies — same as resolveFilesystemOwner
       const cookie = request.cookies.get('anon-session-id');
       const rawSessionId = cookie?.value;
+      // Strip anon_ prefix to get simple session ID (e.g., "001", "timestamp_random")
       const simpleSessionId = rawSessionId ? rawSessionId.replace(/^anon_/, '') : '';
 
-      // CRITICAL FIX: Use composite session ID format to match main chat flow
+      // CRITICAL FIX: Use composite session ID format (userId$sessionId) to match main chat flow
       // This ensures MCP tools write to the SAME workspace as the conversation
-      const compositeSessionId = simpleSessionId ? `anon:${simpleSessionId}` : 'anon:mcp-fallback';
-      const userId = compositeSessionId;
+      // Format: "anon$sessionId" for anonymous users (uses $ separator, NOT colon)
+      const compositeSessionId = simpleSessionId
+        ? buildCompositeSessionId('anon', simpleSessionId)  // "anon$001"
+        : 'anon$mcp-fallback';
 
-      // Build scopePath from actual session ID using composite format
-      // Matches the format used by main chat: project/sessions/{sessionId}
-      const scopePath = simpleSessionId ? `project/sessions/${simpleSessionId}` : 'project/sessions/000';
+      // userId for tool context is the anonymous user identifier
+      const userId = 'anon';
+
+      // Build scopePath from session ID — uses extractSimpleSessionId to handle
+      // composite IDs correctly even if user added $ to their folder names
+      const scopePath = buildScopePath(simpleSessionId || '000');
 
       const tool = vfsTools[name as keyof typeof vfsTools];
       if (!tool) {

@@ -169,19 +169,35 @@ export class ShadowCommitManager {
 
       // Extract owner_id from sessionId
       // sessionId format: 'ownerId$conversationId' (modern) or 'ownerId:conversationId' (legacy)
+      // SECURITY: Use indexOf (FIRST $) NOT lastIndexOf, because:
+      // - userId is system-controlled and NEVER contains $ or :
+      // - conversationId MAY contain user-provided $ or : (e.g., folder named "my$project")
+      // - The FIRST separator is always our system separator
       // Priority: author > sessionId with ownerId prefix > fallback
       let ownerId = options.author;
       if (!ownerId && (options.sessionId.includes('$') || options.sessionId.includes(':'))) {
-        // Try $ first (modern format), then fall back to : (legacy format)
-        const separator = options.sessionId.includes('$') ? '$' : ':';
-        const parts = options.sessionId.split(separator);
-        // If sessionId starts with 'anon' or contains @, use full first part
-        // Otherwise, check if author was passed
-        ownerId = parts[0].includes('anon') || parts[0].includes('@')
-          ? parts[0]
-          : parts.length > 1
-            ? `${parts[0]}${separator}${parts[1]}`
-            : undefined;
+        // Find the FIRST occurrence of $ or : to extract userId
+        const firstDollarIndex = options.sessionId.indexOf('$');
+        const firstColonIndex = options.sessionId.indexOf(':');
+
+        let separatorIndex: number;
+        if (firstDollarIndex !== -1 && (firstColonIndex === -1 || firstDollarIndex < firstColonIndex)) {
+          // $ appears first (or only $ exists) — modern format
+          separatorIndex = firstDollarIndex;
+        } else if (firstColonIndex !== -1) {
+          // : appears first (or only : exists) — legacy format
+          separatorIndex = firstColonIndex;
+        } else {
+          separatorIndex = -1;
+        }
+
+        if (separatorIndex !== -1) {
+          const userIdPart = options.sessionId.slice(0, separatorIndex);
+          // If userIdPart starts with 'anon' or contains @, use it as the full ownerId
+          ownerId = userIdPart.includes('anon') || userIdPart.includes('@')
+            ? userIdPart
+            : options.sessionId; // Fall back to full sessionId if unclear
+        }
       }
       ownerId = ownerId || 'anon$unknown';
 
@@ -456,9 +472,19 @@ export class ShadowCommitManager {
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
-      const ownerId = (commit.sessionId.includes('$') || commit.sessionId.includes(':'))
-        ? commit.sessionId.split(commit.sessionId.includes('$') ? '$' : ':')[0]
-        : 'anon$unknown';
+      // SECURITY: Use indexOf (FIRST $) NOT split, because:
+      // - userId is system-controlled and NEVER contains $ or :
+      // - conversationId MAY contain user-provided $ or : (e.g., folder named "my$project")
+      const firstDollarIndex = commit.sessionId.indexOf('$');
+      const firstColonIndex = commit.sessionId.indexOf(':');
+      let ownerId: string;
+      if (firstDollarIndex !== -1 && (firstColonIndex === -1 || firstDollarIndex < firstColonIndex)) {
+        ownerId = commit.sessionId.slice(0, firstDollarIndex);
+      } else if (firstColonIndex !== -1) {
+        ownerId = commit.sessionId.slice(0, firstColonIndex);
+      } else {
+        ownerId = 'anon$unknown';
+      }
 
       rollbackPointStmt.run(
         rollbackPointId,

@@ -79,6 +79,18 @@ export function createFilesystemTools(
       },
       execute: async ({ path }: { path: string }): Promise<ToolCallResult> => {
         try {
+          if (!path || typeof path !== 'string' || !path.trim()) {
+            return {
+              success: false,
+              error: {
+                code: 'INVALID_ARGS',
+                message: 'Missing required argument: path',
+                retryable: true,
+                expectedFields: ['path'],
+                suggestedNextAction: 'Call read_file with a valid file path string.',
+              },
+            };
+          }
           const scopedPath = resolveWorkspacePath(workspacePath, path);
           const file = await virtualFilesystem.readFile(userId, scopedPath);
           return {
@@ -89,9 +101,43 @@ export function createFilesystemTools(
             lastModified: file.lastModified,
           };
         } catch (error: any) {
+          const msg = error.message || 'Failed to read file';
+          const isNotFound = /not found|enoent|does not exist/i.test(msg);
+
+          // On not-found, suggest listing the parent directory
+          if (isNotFound) {
+            const parentPath = path.includes('/') ? path.substring(0, path.lastIndexOf('/')) || '/' : '/';
+            // Try to list siblings for suggestions
+            let suggestedPaths: string[] = [];
+            try {
+              const siblings = await virtualFilesystem.listDirectory(userId, resolveWorkspacePath(workspacePath, parentPath));
+              suggestedPaths = (siblings as any[]).slice(0, 10).map((f: any) => f.name || f.path || String(f));
+            } catch { /* parent may not exist either */ }
+
+            return {
+              success: false,
+              error: {
+                code: 'PATH_NOT_FOUND',
+                message: `File "${path}" does not exist.`,
+                retryable: true,
+                attemptedPath: path,
+                parentPath,
+                suggestedPaths,
+                suggestedNextAction: suggestedPaths.length > 0
+                  ? `Try one of these paths: ${suggestedPaths.join(', ')}`
+                  : `Call list_directory("${parentPath}") to see what exists.`,
+              },
+            };
+          }
+
           return {
             success: false,
-            error: error.message || 'Failed to read file',
+            error: {
+              code: 'READ_ERROR',
+              message: msg,
+              retryable: false,
+              attemptedPath: path,
+            },
           };
         }
       },

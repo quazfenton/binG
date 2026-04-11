@@ -193,11 +193,21 @@ export class StatefulAgent {
     this.sessionId = options.sessionId || crypto.randomUUID();
     this.userId = options.userId || 'anonymous';
     // FIX: Extract conversationId from the end of composite sessionId
-    // Composite keys can be "userId:001" or "anon:timestamp_random:001"
+    // Composite keys can be "userId$001" or "anon:timestamp_random$001"
     // We need just the trailing conversation segment (e.g., "001")
-    const lastColon = options.sessionId?.lastIndexOf(':');
+    // SECURITY: Use indexOf (FIRST separator) not lastIndexOf, because:
+    // - userId is system-controlled and NEVER contains $ or :
+    // - conversationId MAY contain user-provided $ or : (e.g., folder named "my$project")
+    const firstDollar = options.sessionId?.indexOf('$');
+    const firstColon = options.sessionId?.indexOf(':');
+    let separatorIndex: number | undefined;
+    if (firstDollar !== undefined && firstDollar >= 0 && (firstColon === undefined || firstColon < 0 || firstDollar < firstColon)) {
+      separatorIndex = firstDollar;
+    } else if (firstColon !== undefined && firstColon >= 0) {
+      separatorIndex = firstColon;
+    }
     this.conversationId = options.conversationId
-      || (lastColon !== undefined && lastColon >= 0 ? options.sessionId!.slice(lastColon + 1) : options.sessionId)
+      || (separatorIndex !== undefined && separatorIndex >= 0 ? options.sessionId!.slice(separatorIndex + 1) : options.sessionId)
       || crypto.randomUUID();
     this.sandboxHandle = options.sandboxHandle;
     this.projectServices = options.projectServices;
@@ -1490,7 +1500,7 @@ export async function* runStatefulAgentStreaming(
   options?: StatefulAgentStreamingOptions
 ): AsyncGenerator<string, StatefulAgentResult, unknown> {
   const agent = new StatefulAgent(options);
-  const maxSteps = options?.maxSteps || 10;
+  const maxSteps = options?.maxSteps || 15;
   let stepCount = 0;
   const errors: Array<{ step: number; message: string; path?: string }> = [];
   const vfs: Record<string, string> = {};

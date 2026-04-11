@@ -19,6 +19,13 @@ import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events
 import type { LLMMessage } from '@/lib/chat/llm-providers';
 import { generateId, generateText, tool as createTool } from 'ai';
 import type { Tool } from 'ai';
+import {
+  buildWorkspaceSnapshot,
+  buildAgentSystemPrompt,
+  createLoopDetectorState,
+  recordStepAndCheckLoop,
+  type LoopDetectorState,
+} from '@/lib/orchestra/shared-agent-context';
 
 // CoreMessage may not be exported in all AI SDK versions
 // @ts-ignore - CoreMessage is used for type hints but may not be available
@@ -480,9 +487,11 @@ export class AgentLoop {
   }
 
   /**
-   * Track recent failed tool calls to detect loops
+   * Track recent failed tool calls to detect loops.
+   * Uses shared loop detector from shared-agent-context.ts.
    */
   private failedToolCalls: Map<string, number> = new Map();
+  private loopState: LoopDetectorState = createLoopDetectorState();
 
   /**
    * Execute task using manual agent loop with Vercel AI SDK streaming
@@ -493,10 +502,14 @@ export class AgentLoop {
     const allText: string[] = [];
     const allToolCalls: any[] = [];
     
-    // Reset failed tool calls tracking for new task
+    // Reset all loop-detection state for new task
     this.failedToolCalls.clear();
+    this.loopState = createLoopDetectorState();
     
     log.info(`Executing task with Vercel AI SDK: ${task.substring(0, 100)}${task.length > 100 ? '...' : ''}`);
+
+    // Pre-build workspace snapshot before constructing system prompt
+    this.cachedWorkspaceSnapshot = await buildWorkspaceSnapshot(this.context.userId);
 
     // Add system prompt first
     const systemPrompt = this.buildSystemPrompt();
@@ -550,6 +563,11 @@ export class AgentLoop {
             if (tool) {
               try {
                 const result = await tool.execute(tc.arguments);
+                const isSuccess = result?.success !== false;
+
+                // Track with shared loop detector
+                const loopMsg = recordStepAndCheckLoop(this.loopState, tc.name, tc.arguments, isSuccess);
+
                 allToolCalls.push({
                   toolName: tc.name,
                   toolCallId: tc.id,
@@ -557,7 +575,7 @@ export class AgentLoop {
                   result,
                 });
                 results.push({
-                  iteration: 1,
+                  iteration: this.loopState.totalSteps,
                   tool: tc.name,
                   arguments: tc.arguments,
                   result,
@@ -570,7 +588,29 @@ export class AgentLoop {
                   toolCallId: tc.id,
                   toolName: tc.name,
                 });
+
+                // Check no-progress guard after each tool execution
+                if (loopMsg) {
+                  log.warn(`No-progress loop detected: ${loopMsg}`);
+                  return {
+                    success: false,
+                    results,
+                    iterations: allToolCalls.length,
+                    message: allText.join(''),
+                    error: loopMsg,
+                    toolInvocations: allToolCalls.map(tc => normalizeToolInvocation({
+                      toolCallId: tc.toolCallId,
+                      toolName: tc.toolName,
+                      state: 'completed',
+                      args: tc.args,
+                      result: tc.result,
+                      sourceSystem: 'mastra',
+                      sourceAgent: 'vercel-ai-sdk',
+                    })),
+                  };
+                }
               } catch (toolError: any) {
+                recordStepAndCheckLoop(this.loopState, tc.name, tc.arguments, false);
                 log.error(`Tool execution failed: ${tc.name}`, toolError.message);
                 
                 // Track failed tool calls to detect loops
@@ -723,70 +763,22 @@ export class AgentLoop {
   }
 
   /**
-   * Build system prompt for agent
+   * Cached workspace snapshot for prompt injection.
+   * Built lazily once per task via shared utility.
+   */
+  private cachedWorkspaceSnapshot: string | null = null;
+
+  /**
+   * Build system prompt for agent using shared prompt builder.
    */
   private buildSystemPrompt(): string {
-    return `You are an AI assistant working in a code workspace.
-You have access to workspace tools to read, write, edit files, and optionally run bash commands.
-
-Current workspace: ${this.context.workspacePath}
-
-Available Tools:
-${this.tools.map(t => `- ${t.name}: ${t.description}`).join('\n')}
-
-FILE OPERATIONS:
-- To read files: use the read_file tool
-- To write files: use the write_file tool  
-- To list directories: use the list_directory tool
-- To create directories: use the create_directory tool
-- To delete files/directories: use the delete_file tool
-- To run installs/tests/builds when available: use the execute_bash tool
-
-CAPABILITY USAGE RULES:
-1. Inspect before editing: use read_file, list_directory, file_exists, or context_pack before changing unfamiliar files.
-2. Prefer surgical changes to existing files. Read the target file, then write the smallest correct update.
-3. Use write_file freely for new files, generated files, and deliberate full rewrites.
-4. Use execute_bash only for real workspace commands such as installs, tests, builds, formatting, or grep/find style inspection.
-5. Do not use execute_bash if a filesystem capability can answer the question more directly.
-
-DIFF-BASED SELF-HEALING:
-1. If an edit or follow-up write seems likely to be stale, read the latest file again before applying the fix.
-2. When repairing a failed change, preserve unaffected code and change only the smallest necessary region.
-3. Do not repeat the same failing broad rewrite. Narrow the target after re-reading the file.
-4. After a fix, validate with read_file or execute_bash when appropriate.
-
-BASH RULES:
-- Keep commands scoped to the workspace.
-- Prefer deterministic commands such as pnpm, npm, yarn, node, python, git status, rg, ls, cat.
-- Avoid destructive commands unless the task explicitly requires them and the impact is clear.
-- If a command fails, use the stderr/stdout to choose the next minimal repair step.
-
-Examples:
-write_file({ "path": "package.json", "content": "{\\n  \\"name\\": \\"my-app\\",\\n  \\"version\\": \\"1.0.0\\"\\n}" })
-
-read_file({ "path": "src/index.js" })
-
-list_directory({ "path": "src" })
-
-create_directory({ "path": "src/components" })
-
-delete_file({ "path": "old-file.txt" })
-
-Best Practices:
-1. Always check if a file exists before editing (use read_file or list_directory)
-2. Use relative paths from workspace root (e.g., "toDoApp/src/app.js")
-3. Use create_directory to create directories before writing files in them
-4. After creating files, suggest or run validation commands when available
-5. Prefer minimal edits and preserve user-authored code outside the target change
-
-IMPORTANT - Use AI SDK Function Calling:
-- When you need to use a tool, make a function call - do NOT describe the tool call in text
-- The tools are available as functions: read_file(), write_file(), list_directory(), create_directory(), delete_file(), search_files(), file_exists(), context_pack(), execute_bash()
-- Call them directly with proper arguments - the system will execute them and return results
-- Do NOT output JSON or text like "[Tool: write_file]" - use actual function calls
-
-When task is complete, just respond naturally with your final answer.
-`;
+    return buildAgentSystemPrompt({
+      workspacePath: this.context.workspacePath,
+      workspaceSnapshot: this.cachedWorkspaceSnapshot || '(loading...)',
+      currentFile: this.context.currentFile,
+      lastAction: this.context.lastAction,
+      toolDescriptions: this.tools.map(t => `- **${t.name}**: ${t.description}`).join('\n'),
+    });
   }
 
   /**
