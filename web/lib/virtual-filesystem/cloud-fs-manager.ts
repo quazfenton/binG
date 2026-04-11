@@ -306,8 +306,12 @@ class CloudFSManager {
 
         // Invalidate cache entries that might contain the written path
         // to prevent getSnapshot from returning stale data
+        // SECURITY: Use indexOf (FIRST :) not split()[1], because:
+        // - cache key format is "ownerId:path" where ownerId never contains :
+        // - path MAY contain user-provided : (e.g., Windows paths)
         for (const [cacheKey, cached] of this.syncCache.entries()) {
-          const pathPrefix = cacheKey.split(':')[1];
+          const colonIndex = cacheKey.indexOf(':');
+          const pathPrefix = colonIndex !== -1 ? cacheKey.slice(colonIndex + 1) : cacheKey;
           if (path.startsWith(pathPrefix) || pathPrefix.startsWith(path.substring(0, path.lastIndexOf('/')))) {
             this.syncCache.delete(cacheKey);
           }
@@ -371,8 +375,12 @@ class CloudFSManager {
       }
 
       // Invalidate cache entries that might contain the written paths
+      // SECURITY: Use indexOf (FIRST :) not split()[1], because:
+      // - cache key format is "ownerId:path" where ownerId never contains :
+      // - path MAY contain user-provided : (e.g., Windows paths)
       for (const [cacheKey, cached] of this.syncCache.entries()) {
-        const pathPrefix = cacheKey.split(':')[1];
+        const colonIndex = cacheKey.indexOf(':');
+        const pathPrefix = colonIndex !== -1 ? cacheKey.slice(colonIndex + 1) : cacheKey;
         for (const writtenPath of successfulPaths) {
           if (writtenPath.startsWith(pathPrefix) || pathPrefix.startsWith(writtenPath.substring(0, writtenPath.lastIndexOf('/')))) {
             this.syncCache.delete(cacheKey);

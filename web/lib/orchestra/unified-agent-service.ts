@@ -36,6 +36,13 @@ import {
 } from './stateful-agent/agents/stateful-agent';
 import { createLogger } from '@/lib/utils/logger';
 import { mastraWorkflowIntegration } from '@bing/shared/agent/mastra-workflow-integration';
+import {
+  buildWorkspaceSnapshot,
+  buildAgentSystemPrompt,
+  normalizeToolArgs,
+  createLoopDetectorState,
+  recordStepAndCheckLoop,
+} from '@/lib/orchestra/shared-agent-context';
 
 import {
   AgentOrchestrator,
@@ -945,7 +952,9 @@ async function runMastraWorkflow(config: UnifiedAgentConfig): Promise<UnifiedAge
  * Expanded capability map covers: file operations, bash/terminal, search/glob, MCP tools
  */
 function createCapabilityToolExecutor(config: UnifiedAgentConfig) {
-  return async (name: string, args: Record<string, any>): Promise<ToolResult> => {
+  return async (name: string, rawArgs: Record<string, any>): Promise<ToolResult> => {
+    // Normalize args through shared alias resolver
+    const args = normalizeToolArgs(name, rawArgs) as Record<string, any>;
     const capabilityMap: Record<string, string> = {
       'file_operation': 'file.read', 'read_file': 'file.read', 'write_file': 'file.write',
       'edit_file': 'file.write', 'delete_file': 'file.delete', 'list_directory': 'file.list',
@@ -1083,15 +1092,33 @@ async function runV1ApiWithTools(
       result: any;
     }> = [];
 
+    const loopState = createLoopDetectorState();
+
     const aiSdkTools = Object.fromEntries(
       (config.tools || []).map((toolDef: any) => [
         toolDef.name,
         {
           description: toolDef.description,
           parameters: toolDef.parameters,
-          execute: async (args: Record<string, any>) => {
+          execute: async (rawArgs: Record<string, any>) => {
+            // Normalize args to fix common LLM mistakes (wrong field names, etc.)
+            const args = normalizeToolArgs(toolDef.name, rawArgs) as Record<string, any>;
             const toolResult = await capabilityExecuteTool(toolDef.name, args);
             config.onToolExecution?.(toolDef.name, args, toolResult);
+
+            // Track for no-progress loop detection
+            const loopMsg = recordStepAndCheckLoop(loopState, toolDef.name, args, toolResult.success);
+            if (loopMsg) {
+              log.warn(`[V1-API-WITH-TOOLS] Loop detected: ${loopMsg}`);
+              return {
+                success: false,
+                output: loopMsg,
+                exitCode: 1,
+                error: loopMsg,
+                _agentShouldStop: true,
+              };
+            }
+
             return {
               success: toolResult.success,
               output: toolResult.output,

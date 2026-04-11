@@ -194,6 +194,16 @@ export class VirtualFilesystemService {
     (fsBridge as any).onWatchEvent?.(watchHandler);
   }
 
+  /**
+   * Read a file from the virtual filesystem.
+   * 
+   * @param ownerId - The VFS owner identifier. This should be a composite session ID
+   *   in the format "userId$sessionId" (e.g., "1$001", "anon:xyz$004") for proper
+   *   session isolation. Use buildCompositeSessionId() from @/lib/identity to construct.
+   *   For anonymous users, this will be "anon:timestamp$sessionId".
+   * @param filePath - Path relative to the session workspace root (e.g., "src/App.tsx")
+   * @returns The virtual file object with content and metadata
+   */
   async readFile(ownerId: string, filePath: string): Promise<VirtualFile> {
     // Desktop mode: Use local filesystem instead of VFS
     if (isDesktopMode() && isUsingLocalFS()) {

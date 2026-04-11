@@ -95,14 +95,17 @@ export async function POST(
     // - "001" (raw conversation ID) → use as-is
     // - "session-xxx" (generated client ID) → strip prefix
     // - "ownerId$001" or "ownerId:001" (scoped format) → extract conversation ID part
+    // SECURITY: Use indexOf (FIRST $) not split().pop(), because:
+    // - userId is system-controlled and NEVER contains $
+    // - sessionId MAY contain user-provided $ (e.g., folder named "my$project")
     let conversationId = sessionId;
     if (conversationId.includes('$')) {
-      const parts = conversationId.split('$');
-      conversationId = parts[parts.length - 1];
+      const dollarIndex = conversationId.indexOf('$');
+      conversationId = conversationId.slice(dollarIndex + 1);
     } else if (conversationId.includes(':')) {
       // Legacy format fallback
-      const parts = conversationId.split(':');
-      conversationId = parts[parts.length - 1];
+      const colonIndex = conversationId.indexOf(':');
+      conversationId = conversationId.slice(colonIndex + 1);
     } else if (conversationId.startsWith('session-')) {
       conversationId = conversationId.replace(/^session-/, '');
     }

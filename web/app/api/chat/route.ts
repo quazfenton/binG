@@ -1346,6 +1346,18 @@ const config: UnifiedAgentConfig = {
                 // SESSION NAMING: Detect if this is a new single-folder project
                 // If so, rename the session folder to match the project folder
                 const responseContent = streamingContentBuffer + (typeof result.response === 'string' ? result.response : '') || '';
+
+                // DEBUG LOGGING: Session naming detection
+                console.debug('[SessionNaming] Session folder detection', {
+                  detectedFolder,
+                  resolvedConversationId,
+                  isSequentialSession,
+                  isNewSession,
+                  responseContentLength: responseContent.length,
+                  responsePreview: responseContent.slice(0, 200),
+                  metadata: result.metadata,
+                });
+
                 const { detectSingleFolderFromResponse } = await import('@/lib/session-naming');
                 const detectedFolder = detectSingleFolderFromResponse(responseContent);
                 
@@ -1760,14 +1772,10 @@ const config: UnifiedAgentConfig = {
       // use the resolved filesystem owner ID which handles anonymous users correctly
       filesystemOwnerId: filesystemOwnerId,
       // Include conversation ID for spec enhancement filesystem edits
-<<<<<<< Updated upstream
       conversationId: `${filesystemOwnerId}$${resolvedConversationId}`,
-=======
-      conversationId: `${filesystemOwnerId}:${resolvedConversationId}`,
       // Spec enhancement mode from client
       specMode: (body as any)?.specMode,
       specChain: (body as any)?.specChain,
->>>>>>> Stashed changes
       // Pass scopePath for session-scoped file operations
       scopePath: requestedScopePath,
       // Keep these tri-state so router-level detection can still route specialized endpoints.
@@ -4712,29 +4720,74 @@ async function storeConversationInMem0(
  */
 function validateExtractedPath(raw: string, isFolder: boolean = false): string | null {
   const path = (raw || '').trim().replace(/^['"`]|['"`]$/g, '');
-  if (!path) return null;
-  if (path.length > 300) return null;
-  if (PATH_CONTROL_CHARS_RE.test(path)) return null;
-  if (PATH_HEREDOC_RE.test(path)) return null;
-  if (PATH_UNSAFE_CHARS_RE.test(path)) return null;
-  if (PATH_BAD_START_RE.test(path)) return null;
-  if (PATH_TOO_MANY_DOTS_RE.test(path)) return null;
-  if (PATH_TRAVERSAL_RE.test(path)) return null;
-  if (PATH_COMMAND_RE.test(path)) return null;
+  if (!path) {
+    console.debug('[validateExtractedPath] Rejected: empty path', { raw });
+    return null;
+  }
+  if (path.length > 300) {
+    console.debug('[validateExtractedPath] Rejected: path too long (>300)', { path: path.slice(0, 100), length: path.length });
+    return null;
+  }
+  if (PATH_CONTROL_CHARS_RE.test(path)) {
+    console.debug('[validateExtractedPath] Rejected: control chars', { path: path.slice(0, 100) });
+    return null;
+  }
+  if (PATH_HEREDOC_RE.test(path)) {
+    console.debug('[validateExtractedPath] Rejected: heredoc markers', { path: path.slice(0, 100) });
+    return null;
+  }
+  if (PATH_UNSAFE_CHARS_RE.test(path)) {
+    console.debug('[validateExtractedPath] Rejected: unsafe chars', { path: path.slice(0, 100) });
+    return null;
+  }
+  if (PATH_BAD_START_RE.test(path)) {
+    console.debug('[validateExtractedPath] Rejected: bad start', { path: path.slice(0, 100) });
+    return null;
+  }
+  if (PATH_TOO_MANY_DOTS_RE.test(path)) {
+    console.debug('[validateExtractedPath] Rejected: too many dots', { path: path.slice(0, 100) });
+    return null;
+  }
+  if (PATH_TRAVERSAL_RE.test(path)) {
+    console.debug('[validateExtractedPath] Rejected: path traversal', { path: path.slice(0, 100) });
+    return null;
+  }
+  if (PATH_COMMAND_RE.test(path)) {
+    console.debug('[validateExtractedPath] Rejected: looks like command', { path: path.slice(0, 100) });
+    return null;
+  }
   // Reject paths that look like CSS classes, Vue directives, or code snippets
-  if (PATH_LOOKS_LIKE_CODE_RE.test(path)) return null;
+  if (PATH_LOOKS_LIKE_CODE_RE.test(path)) {
+    console.debug('[validateExtractedPath] Rejected: looks like code', { path: path.slice(0, 100) });
+    return null;
+  }
   // Reject paths with colons (CSS classes like hover:scale-105)
-  if (PATH_HAS_COLON_RE.test(path)) return null;
+  if (PATH_HAS_COLON_RE.test(path)) {
+    console.debug('[validateExtractedPath] Rejected: contains colon', { path: path.slice(0, 100) });
+    return null;
+  }
   // CRITICAL FIX: Reject CSS values and SCSS variables in last path segment
   // This catches "project/sessions/002/0.3s" where "0.3s" is invalid
-  if (PATH_CSS_VALUE_RE.test(path)) return null;  // CSS values like "/0.3s"
-  if (PATH_SCSS_VAR_RE.test(path)) return null;  // SCSS variables like "/$var"
+  if (PATH_CSS_VALUE_RE.test(path)) {
+    console.debug('[validateExtractedPath] Rejected: CSS value', { path: path.slice(0, 100) });
+    return null;
+  }  // CSS values like "/0.3s"
+  if (PATH_SCSS_VAR_RE.test(path)) {
+    console.debug('[validateExtractedPath] Rejected: SCSS var', { path: path.slice(0, 100) });
+    return null;
+  }  // SCSS variables like "/$var"
   // Must have a valid file extension or be a directory name
   // Allow brackets [] for Next.js dynamic routes like app/blog/[slug]/page.tsx
-  if (!/^[a-zA-Z0-9._\-\[\]]+(?:\/[a-zA-Z0-9._\-\[\]]+)*\/?$/.test(path)) return null;
+  if (!/^[a-zA-Z0-9._\-\[\]]+(?:\/[a-zA-Z0-9._\-\[\]]+)*\/?$/.test(path)) {
+    console.debug('[validateExtractedPath] Rejected: invalid format', { path: path.slice(0, 100) });
+    return null;
+  }
 
   // CRITICAL FIX: Use shared validation to reject JSON/object syntax in paths
-  if (!isValidFilePath(path, isFolder)) return null;
+  if (!isValidFilePath(path, isFolder)) {
+    console.debug('[validateExtractedPath] Rejected: isValidFilePath check', { path: path.slice(0, 100), isFolder });
+    return null;
+  }
 
   return path;
 }

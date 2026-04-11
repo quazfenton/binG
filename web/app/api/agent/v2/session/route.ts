@@ -98,7 +98,7 @@ export async function POST(request: NextRequest) {
       success: true,
       data: {
         sessionId: session.id,
-        sessionKey: `${session.userId}:${session.conversationId}`,
+        sessionKey: `${session.userId}$${session.conversationId}`,
         userId: session.userId,
         conversationId: session.conversationId,
         status: session.state,
@@ -153,7 +153,7 @@ export async function GET(request: NextRequest) {
       success: true,
       data: {
         sessionId: session.id,
-        sessionKey: `${session.userId}:${session.conversationId}`,
+        sessionKey: `${session.userId}$${session.conversationId}`,
         userId: session.userId,
         conversationId: session.conversationId,
         status: session.state,
