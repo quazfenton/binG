@@ -40,8 +40,10 @@ import {
   parseStructuredPathList,
 } from '@/lib/chat/file-edit-parser'
 
+// Import maximalist spec enhancer for 'max' mode
+import { enhanceWithSpec } from '@/lib/chat/maximalist-spec-enhancer'
+
 // Import router services
-import { fastAgentService, type FastAgentRequest, type FastAgentResponse } from '@/lib/chat/fast-agent-service'
 import { n8nAgentService, type N8nAgentRequest, type N8nAgentResponse } from '@/lib/chat/n8n-agent-service'
 import { customFallbackService, type CustomFallbackRequest, type CustomFallbackResponse } from '@/lib/chat/custom-fallback-service'
 import { enhancedLLMService, type EnhancedLLMRequest } from '@/lib/chat/enhanced-llm-service'
@@ -75,6 +77,7 @@ import {
   recordQuotaUsage,
   recordToolExecution,
 } from './response-router-telemetry'
+import { chatRequestLogger } from '@/lib/chat/chat-request-logger'
 
 const logger = createLogger('API:ResponseRouter')
 
@@ -112,10 +115,26 @@ export interface RouterRequest {
   enableSandbox?: boolean
   enableComposio?: boolean
   conversationId?: string
+  /** VFS scope path for session-scoped file operations (e.g., "project/sessions/001") */
+  scopePath?: string
   /** When true, the Vercel AI SDK handles tool calling natively — skip regex intent parsing */
   nativeToolCalling?: boolean
-  /** Spec amplification mode: 'normal' (disabled), 'enhanced', or 'max' */
-  mode?: 'normal' | 'enhanced' | 'max'
+  /** Spec amplification mode: 'normal' (disabled), 'enhanced', 'max', or 'super' */
+  mode?: 'normal' | 'enhanced' | 'max' | 'super'
+  /** Request a bundled context pack (file tree + contents) for LLM */
+  contextPack?: {
+    format?: 'markdown' | 'xml' | 'json' | 'plain'
+    maxTotalSize?: number
+    includePatterns?: string[]
+    excludePatterns?: string[]
+    maxLinesPerFile?: number
+  }
+  /** Auto-attach relevant files to subsequent LLM calls as agent discovers areas to edit */
+  autoAttachFiles?: boolean
+  /** Abort signal for cancellation support (from Next.js request.signal) */
+  signal?: AbortSignal
+  /** Request timeout in milliseconds for time-to-first-token (default: 90s) */
+  timeoutMs?: number
 }
 
 export interface RouterResponse {
@@ -184,7 +203,7 @@ export interface UnifiedResponse {
     streaming?: boolean // For real-time streaming responses
     specAmplification?: {
       enabled: boolean
-      mode: 'normal' | 'enhanced' | 'max'
+      mode: 'normal' | 'enhanced' | 'max' | 'super'
       fastModel: string
       sectionsGenerated: number
       refinementIterations: number
@@ -496,12 +515,17 @@ export class ResponseRouter {
           data: {
             ...routerResponse.data,
             streaming: true,
+            provider: (routerResponse.metadata as any)?.actualProvider || (routerResponse.data as any)?.provider,
+            model: (routerResponse.metadata as any)?.actualModel || (routerResponse.data as any)?.model,
           },
           source: routerResponse.source,
           priority: routerResponse.priority,
           metadata: {
             streaming: true,
             timestamp: new Date().toISOString(),
+            actualProvider: (routerResponse.metadata as any)?.actualProvider || (routerResponse.data as any)?.provider,
+            actualModel: (routerResponse.metadata as any)?.actualModel || (routerResponse.data as any)?.model,
+            fallbackChain: (routerResponse.metadata as any)?.fallbackChain,
           },
         }
       }
@@ -550,45 +574,21 @@ export class ResponseRouter {
   private async routeRequest(request: RouterRequest, span?: any): Promise<RouterResponse> {
     const errors: Array<{ endpoint: string; error: Error }> = []
     const fallbackChain: string[] = []
-    const requestType = detectRequestType(request.messages)
+    const requestType = (await detectRequestType(request.messages)).type
 
     // Define endpoint priority chain
     const endpoints = [
       {
-        name: 'fast-agent',
-        priority: 0,
-        // DISABLED - Fast-agent has known issues with empty responses and routing
-        // Even if FAST_AGENT_ENABLED is set, skip this endpoint
-        enabled: false,
-        service: fastAgentService,
-        healthCheck: () => fastAgentService.healthCheck(),
-        // Use shouldHandle for proper provider support and complexity gating
-        canHandle: (req: RouterRequest) => false,  // Always skip fast-agent
-        processRequest: async (req: RouterRequest) => {
-          const response = await fastAgentService.processRequest({
-            messages: req.messages,
-            provider: req.provider,
-            model: req.model,
-            temperature: req.temperature,
-            maxTokens: req.maxTokens,
-            stream: req.stream,
-            userId: req.userId,
-            requestId: req.requestId,
-          } as FastAgentRequest)
-          return this.normalizeFastAgentResponse(response)
-        },
-      },
-      {
         name: 'original-system',
-        priority: 1,
+        priority: 0,
         enabled: true,
         service: enhancedLLMService,
         healthCheck: async () => true,
         // Do not handle tool/sandbox requests - let specialized endpoints handle those
         // Tool requests need actual tool execution (Arcade/Nango APIs), not just LLM responses
         // Sandbox requests need actual sandbox execution, not just LLM responses
-        canHandle: (req: RouterRequest) => {
-          const detectedType = detectRequestType(req.messages)
+        canHandle: async (req: RouterRequest) => {
+          const detectedType = (await detectRequestType(req.messages)).type
           // When native tool calling is enabled (Vercel AI SDK), handle tool requests here
           // instead of routing to regex-based intent parsing
           if (detectedType === 'tool' && req.enableTools !== false && !req.nativeToolCalling) {
@@ -603,10 +603,12 @@ export class ResponseRouter {
         },
         processRequest: async (req: RouterRequest) => {
           // Pass all required fields including tool/sandbox flags
-          const detectedType = detectRequestType(req.messages)
+          const detectedType = (await detectRequestType(req.messages)).type
           
           // NEW: Use streaming method when stream=true for real-time token streaming
           if (req.stream === true) {
+            // DEBUG: Log scopePath being passed
+            console.log('[response-router] Streaming request - scopePath:', req.scopePath);
             // For streaming, we return an async generator that yields tokens as they arrive
             // The caller (routeWithSpecAmplification or routeAndFormat) handles the streaming
             const streamGenerator = enhancedLLMService.generateStreamingResponse({
@@ -619,9 +621,19 @@ export class ResponseRouter {
               userId: req.userId,
               requestId: req.requestId,
               conversationId: req.conversationId || req.requestId || `conv_${Date.now()}`,
-              enableTools: req.enableTools ?? (detectedType === 'tool' && !!req.userId),
+              // Pass scopePath for session-scoped file operations
+              scopePath: req.scopePath,
+              // Always enable tools — VFS tools (write_file, read_file, apply_diff) are
+              // always available and the LLM should use them for file operations.
+              enableTools: req.enableTools !== false,
               enableSandbox: req.enableSandbox ?? (detectedType === 'sandbox' && !!req.userId),
               isSandboxCommand: detectedType === 'sandbox',
+              apiKeys: req.apiKeys,
+              contextPack: req.contextPack,
+              autoAttachFiles: req.autoAttachFiles,
+              // Pass abort signal and timeout for cancellation support
+              signal: req.signal,
+              timeoutMs: req.timeoutMs,
             } as EnhancedLLMRequest)
             
             return {
@@ -632,6 +644,14 @@ export class ResponseRouter {
                 source: 'original-system',
                 type: 'streaming',
                 streaming: true,
+                provider: req.provider,
+                model: req.model,
+              },
+              metadata: {
+                actualProvider: req.provider,
+                actualModel: req.model,
+                // Note: These may be updated if fallbacks occur during streaming
+                // The streaming generator will yield metadata chunks with updated provider/model
               },
             }
           }
@@ -647,9 +667,18 @@ export class ResponseRouter {
             userId: req.userId,
             requestId: req.requestId,
             conversationId: req.conversationId || req.requestId || `conv_${Date.now()}`,
-            enableTools: req.enableTools ?? (detectedType === 'tool' && !!req.userId),
+            // Pass scopePath for session-scoped file operations
+            scopePath: req.scopePath,
+            // Always enable tools — VFS tools (write_file, read_file, apply_diff) are
+            // always available and the LLM should use them for file operations.
+            enableTools: req.enableTools !== false,
             enableSandbox: req.enableSandbox ?? (detectedType === 'sandbox' && !!req.userId),
             isSandboxCommand: detectedType === 'sandbox',
+            apiKeys: req.apiKeys,
+            // Context pack: bundle workspace files into LLM-readable format
+            contextPack: req.contextPack,
+            // Auto-attach relevant files as agent discovers areas to edit
+            autoAttachFiles: req.autoAttachFiles,
           } as EnhancedLLMRequest)
           return this.normalizeOriginalResponse(response)
         },
@@ -660,8 +689,8 @@ export class ResponseRouter {
         enabled: process.env.N8N_ENABLED === 'true',
         service: n8nAgentService,
         healthCheck: () => n8nAgentService.healthCheck(),
-        canHandle: (req: RouterRequest) => {
-          const detectedType = detectRequestType(req.messages)
+        canHandle: async (req: RouterRequest) => {
+          const detectedType = (await detectRequestType(req.messages)).type
           if (detectedType === 'tool' || detectedType === 'sandbox') {
             return false
           }
@@ -682,8 +711,8 @@ export class ResponseRouter {
         enabled: process.env.CUSTOM_FALLBACK_ENABLED === 'true',
         service: customFallbackService,
         healthCheck: () => customFallbackService.healthCheck(),
-        canHandle: (req: RouterRequest) => {
-          const detectedType = detectRequestType(req.messages)
+        canHandle: async (req: RouterRequest) => {
+          const detectedType = (await detectRequestType(req.messages)).type
           if (detectedType === 'tool' || detectedType === 'sandbox') {
             return false
           }
@@ -766,10 +795,12 @@ export class ResponseRouter {
           const health = await checkGatewayHealth()
           return health.healthy
         },
-        canHandle: (req: RouterRequest) => {
-          // V2 is best for code/agent tasks
-          const requestType = detectRequestType(req.messages)
-          return requestType === 'sandbox' || requestType === 'tool' || req.enableTools === true
+        canHandle: async (req: RouterRequest) => {
+          // V2 is best for code/agent tasks — detect by request type, not enableTools flag.
+          // enableTools is now true for ALL authenticated requests, so it's no longer
+          // a useful discriminator for routing. Rely on content detection instead.
+          const requestType = (await detectRequestType(req.messages)).type
+          return requestType === 'sandbox' || requestType === 'tool'
         },
         processRequest: async (req: RouterRequest) => this.processV2GatewayRequest(req),
       },
@@ -800,6 +831,9 @@ export class ResponseRouter {
             enableTools: false,  // Disable tools for fallback
             enableSandbox: false,  // Disable sandbox for fallback
             isSandboxCommand: false,
+            apiKeys: req.apiKeys,
+            contextPack: req.contextPack,
+            autoAttachFiles: req.autoAttachFiles,
           } as EnhancedLLMRequest)
           
           // Preserve normalized metadata (usage, model, provider) while adding fallback flags
@@ -840,7 +874,7 @@ export class ResponseRouter {
       }
 
       // Check if endpoint can handle request
-      if (!endpoint.canHandle(request)) {
+      if (!await endpoint.canHandle(request)) {
         continue
       }
 
@@ -1317,7 +1351,6 @@ export class ResponseRouter {
    */
   private mapEndpointToProvider(endpointName: string): string | null {
     switch (endpointName) {
-      case 'fast-agent':
       case 'n8n-agents':
       case 'custom-fallback':
       case 'original-system':
@@ -1326,33 +1359,6 @@ export class ResponseRouter {
         return null;
       default:
         return null;
-    }
-  }
-
-  /**
-   * Normalize FastAgent response
-   * Ensures all FastAgent-specific fields are properly passed through
-   */
-  private normalizeFastAgentResponse(response: FastAgentResponse): RouterResponse {
-    return {
-      success: response.success,
-      content: response.content || '',  // Keep original content (may be empty if tools/files only)
-      data: {
-        ...(response as any).data,
-        // Ensure all FastAgent fields are preserved
-        toolCalls: (response as any).toolCalls,
-        files: (response as any).files,
-        chainedAgents: (response as any).chainedAgents,
-        processingSteps: (response as any).processingSteps,
-        reflectionResults: (response as any).reflectionResults,
-        multiModalContent: (response as any).multiModalContent,
-        qualityScore: (response as any).qualityScore,
-        estimatedDuration: (response as any).estimatedDuration,
-        iterationCount: (response as any).iterationCount,
-        fallbackToOriginal: (response as any).fallbackToOriginal,
-      },
-      source: 'fast-agent',
-      priority: 0,
     }
   }
 
@@ -2046,7 +2052,20 @@ export class ResponseRouter {
         ? lastUserMsg.content 
         : JSON.stringify(lastUserMsg?.content || '')
       
-      logger.debug('Building spec prompt', { 
+      const specStartTime = Date.now();
+      
+      // FIX: Log spec amplification request start so telemetry row exists for completion update
+      await chatRequestLogger.logRequestStart(
+        specRequestId,
+        request.userId || 'anonymous',
+        fastModel.provider,
+        fastModel.model,
+        [], // Spec amplification doesn't need message history for telemetry
+        false,
+        { type: 'spec-amplification', primaryRequestId: request.requestId },
+      );
+      
+      logger.debug('Building spec prompt', {
         userContentLength: userContent.length,
         specRequestId,
       })
@@ -2057,19 +2076,59 @@ export class ResponseRouter {
         messages: buildSpecPrompt(userContent),
         maxTokens: 4000,
         stream: false,
-        requestId: specRequestId
+        requestId: specRequestId,
+        // CRITICAL FIX: Pass API keys and user context from original request
+        // so the spec amplification can authenticate with the same provider
+        apiKeys: request.apiKeys,
+        userId: request.userId,
       })
 
       // Wrap spec promise to match expected type for runBackgroundRefinement
-      const wrappedSpecPromise = specPromise.then(response => ({
-        success: true,
-        data: response,
-        error: null,
-      })).catch(err => ({
-        success: false,
-        data: null,
-        error: err,
-      }))
+      const wrappedSpecPromise = specPromise.then(response => {
+        // FIX: Record fast model telemetry for spec amplification under its ACTUAL name
+        const specLatency = Date.now() - specStartTime;
+        chatRequestLogger.logRequestComplete(
+          specRequestId,
+          true,
+          undefined,
+          undefined,
+          specLatency,
+          undefined,
+          fastModel.provider,
+          fastModel.model,
+        ).catch(() => {});
+
+        return {
+          success: true,
+          data: response,
+          error: null,
+        };
+      }).catch(err => {
+        // FIX: Record failed fast model call under its ACTUAL name
+        const specLatency = Date.now() - specStartTime;
+        chatRequestLogger.logRequestComplete(
+          specRequestId,
+          false,
+          undefined,
+          undefined,
+          specLatency,
+          err?.message || 'Spec generation failed',
+          fastModel.provider,
+          fastModel.model,
+        ).catch(() => {});
+
+        // LLM provider unavailable - graceful degradation
+        logger.debug('Spec generation LLM call failed, continuing without refinement', {
+          error: err?.message,
+          provider: fastModel?.provider,
+          model: fastModel?.model,
+        })
+        return {
+          success: false,
+          data: null,
+          error: err,
+        }
+      })
 
       // Trigger background refinement (fire-and-forget)
       this.runBackgroundRefinement({
@@ -2079,12 +2138,10 @@ export class ResponseRouter {
         fastModel,
         startTime,
       }).catch(err => {
-        logger.error('Background refinement failed', {
+        // Background refinement failure - non-critical, log at debug level
+        logger.debug('Background refinement failed (non-critical)', {
           error: err?.message,
-          stack: err?.stack,
           requestId: request.requestId,
-          hasPrimaryContent: !!primaryContent,
-          primaryContentLength: primaryData?.content?.length,
         })
       })
 
@@ -2129,8 +2186,24 @@ export class ResponseRouter {
     startTime: number
   }): Promise<void> {
     const { primaryData, specGenerationPromise, request, fastModel, startTime } = params
-    const { safeParseSpec, chunkSpec, explodeChunks } = await import('@/lib/chat/spec-parser')
-    const { validateSpec, scoreSpec } = await import('@/lib/prompts/spec-generator')
+
+    // Import spec parsing utilities
+    let safeParseSpec: any, chunkSpec: any, explodeChunks: any
+    let validateSpec: any, scoreSpec: any
+    try {
+      const specParser = await import('@/lib/chat/spec-parser')
+      safeParseSpec = specParser.safeParseSpec
+      chunkSpec = specParser.chunkSpec
+      explodeChunks = specParser.explodeChunks
+      const specValidator = await import('@/lib/prompts/spec-generator')
+      validateSpec = specValidator.validateSpec
+      scoreSpec = specValidator.scoreSpec
+    } catch (importErr) {
+      logger.debug('Spec: Failed to import spec utilities, skipping refinement', {
+        error: importErr?.message,
+      })
+      return
+    }
 
     logger.info('Spec: runBackgroundRefinement started', {
       requestId: request.requestId,
@@ -2219,8 +2292,127 @@ export class ResponseRouter {
       // Chunk spec
       let chunks = chunkSpec(parsed)
       logger.debug('Spec: Chunked', { chunkCount: chunks.length, mode: request.mode })
-      if (request.mode === 'max') {
-        chunks = explodeChunks(chunks)
+      
+      // SUPER MODE: Use the hyper-detailed multi-chain spec enhancer
+      if (request.mode === 'super') {
+        logger.info('Spec: Using super mode spec enhancer for super mode', {
+          requestId: request.requestId,
+          primaryContentLength: primaryData?.content?.length,
+        })
+        
+        // Extract user request for super mode enhancement
+        const lastUserMsg = [...request.messages].reverse().find(m => m.role === 'user')
+        const userRequest = typeof lastUserMsg?.content === 'string' 
+          ? lastUserMsg.content 
+          : JSON.stringify(lastUserMsg?.content || '')
+        
+        // Get specChain from request for targeted chain enhancement
+        const specChain = (request as any).specChain
+        
+        try {
+          // Import super mode executor
+          const { executeSuperMode, DEFAULT_SUPER_MODE_CONFIG } = await import('@/lib/chat/spec-super-mode')
+          
+          // Use super mode spec enhancer
+          const superModeResult = await executeSuperMode(
+            userRequest,
+            primaryData.content || '',
+            {
+              ...DEFAULT_SUPER_MODE_CONFIG,
+              // If specific chain requested, use only that chain
+              chains: specChain ? [specChain as any] : DEFAULT_SUPER_MODE_CONFIG.chains,
+              provider: primaryProvider,
+              model: primaryModel,
+            }
+          )
+          
+          logger.info('Spec: Super mode enhancement complete', {
+            totalPhases: superModeResult.summary.totalPhases,
+            successfulPhases: superModeResult.summary.successfulPhases,
+            chainsCompleted: superModeResult.summary.chainsCompleted,
+            finalOutputLength: superModeResult.finalOutput.length,
+          })
+          
+          // Use the super mode enhanced output
+          refinedOutput = superModeResult.finalOutput
+          
+          // Emit super mode-specific metadata
+          const emitSuper = request.emit || (() => {});
+          emitSuper('spec_amplification', {
+            stage: 'super_complete',
+            mode: 'super',
+            totalPhases: superModeResult.summary.totalPhases,
+            successfulPhases: superModeResult.summary.successfulPhases,
+            chainsCompleted: superModeResult.summary.chainsCompleted,
+            refinedContent: formatSuperModeRefinements(superModeResult),
+          })
+          
+        } catch (superModeErr) {
+          logger.error('Spec: Super mode enhancement failed, falling back to maximalist', {
+            error: superModeErr?.message,
+            stack: superModeErr?.stack,
+          })
+          // Fall back to maximalist mode
+          request.mode = 'max'
+        }
+      }
+      // MAXIMALIST MODE: Use the new maximalist spec enhancer for comprehensive enhancements
+      else if (request.mode === 'max') {
+        logger.info('Spec: Using maximalist spec enhancer for max mode', {
+          requestId: request.requestId,
+          primaryContentLength: primaryData?.content?.length,
+        })
+        
+        // Extract user request for maximalist enhancement
+        const lastUserMsg = [...request.messages].reverse().find(m => m.role === 'user')
+        const userRequest = typeof lastUserMsg?.content === 'string' 
+          ? lastUserMsg.content 
+          : JSON.stringify(lastUserMsg?.content || '')
+        
+        try {
+          // Use maximalist spec enhancer
+          const maximalistState = await enhanceWithSpec(
+            userRequest,
+            primaryData.content || '',
+            {
+              mode: 'maximalist',
+              provider: primaryProvider,
+              model: primaryModel,
+              userId: request.userId,
+              conversationId: request.conversationId,
+            }
+          )
+          
+          logger.info('Spec: Maximalist enhancement complete', {
+            totalRounds: maximalistState.rounds.length,
+            midPointRegen: maximalistState.midPointRegenOccurred,
+            finalOutputLength: maximalistState.finalOutput.length,
+          })
+          
+          // Use the maximalist enhanced output
+          refinedOutput = maximalistState.finalOutput
+          
+          // Emit maximalist-specific metadata
+          const emitMaximalist = request.emit || (() => {});
+          emitMaximalist('spec_amplification', {
+            stage: 'maximalist_complete',
+            mode: 'maximalist',
+            totalRounds: maximalistState.rounds.length,
+            midPointRegen: maximalistState.midPointRegenOccurred,
+            contextHistoryLength: maximalistState.contextHistory.length,
+            refinedContent: formatMaximalistRefinements(maximalistState),
+          })
+          
+        } catch (maximalistErr) {
+          logger.error('Spec: Maximalist enhancement failed, falling back to DAG', {
+            error: maximalistErr?.message,
+            stack: maximalistErr?.stack,
+          })
+          // Fall back to DAG refinement
+          chunks = explodeChunks(chunks)
+        }
+      } else if (request.mode === 'enhanced') {
+        // Enhanced mode uses standard chunking
       }
 
       const primaryProvider = primaryData.data?.provider || fastModel?.provider || 'openrouter'
@@ -2308,7 +2500,7 @@ export class ResponseRouter {
         // This prevents composite IDs like "anon:timestamp:001" from leaking into paths
         const { normalizeSessionId } = await import('@/lib/virtual-filesystem/scope-utils');
         const simpleSessionId = normalizeSessionId(rawConversationId) || rawConversationId; // Use original if normalize returns empty
-        const compositeConversationId = `${ownerIdForEdits}:${rawConversationId}`;
+        const compositeConversationId = `${ownerIdForEdits}$${rawConversationId}`;
 
         logger.debug('Spec: Applying refinement filesystem edits', {
           ownerId: ownerIdForEdits.toString(),
@@ -2513,6 +2705,66 @@ function formatSpecForThinking(spec: any, score: number): string {
  * Format refinement results as a clean, spaced list of improvements.
  * Replaces the raw "spec completed" message with actual improvement details.
  */
+/**
+ * Format maximalist enhancement state into a readable summary
+ */
+function formatSuperModeRefinements(result: any): string {
+  const lines: string[] = [];
+  
+  lines.push('### Super Mode Enhancement Complete');
+  lines.push('');
+  lines.push(`**Total Phases:** ${result.summary.totalPhases}`);
+  lines.push(`**Successful Phases:** ${result.summary.successfulPhases}`);
+  lines.push(`**Chains Completed:** ${result.summary.chainsCompleted}`);
+  lines.push('');
+  
+  if (result.state?.phases && result.state.phases.length > 0) {
+    lines.push('**Phases Executed:**');
+    const completedPhases = result.state.completedPhases || [];
+    for (const phase of completedPhases.slice(-10)) { // Show last 10 phases
+      lines.push(`- ${phase.phase.title} (${phase.success ? '✓' : '✗'})`);
+    }
+    if (completedPhases.length > 10) {
+      lines.push(`- ... and ${completedPhases.length - 10} more phases`);
+    }
+    lines.push('');
+  }
+  
+  lines.push(`**Final Output Length:** ${result.finalOutput?.length || 0} characters`);
+  lines.push('');
+  lines.push('The implementation has been hyper-detailed enhanced across all 10 meta-prompt chains.');
+  
+  return lines.join('\n');
+}
+
+function formatMaximalistRefinements(state: any): string {
+  const lines: string[] = [];
+  
+  lines.push('### Maximalist Enhancement Complete');
+  lines.push('');
+  lines.push(`**Total Rounds:** ${state.rounds.length}`);
+  lines.push(`**Mid-point Regeneration:** ${state.midPointRegenOccurred ? 'Yes' : 'No'}`);
+  lines.push('');
+  
+  if (state.rounds && state.rounds.length > 0) {
+    lines.push('**Enhancement Rounds:**');
+    for (const round of state.rounds) {
+      const roundNote = (round as any).note || '';
+      lines.push(`- Round ${round.roundNumber}: ${round.spec?.goal?.substring(0, 80) || 'Enhancement'} ${roundNote}`);
+    }
+    lines.push('');
+  }
+  
+  lines.push(`**Final Output Length:** ${state.finalOutput?.length || 0} characters`);
+  lines.push('');
+  lines.push('The implementation has been comprehensively enhanced with multi-file, production-ready code.');
+  
+  return lines.join('\n');
+}
+
+/**
+ * Format refinement results as a clean, spaced list of improvements.
+ */
 function formatRefinementsAsList(spec: any, refinedOutput: string, chunks: any[], fileWrites: any[]): string {
   const lines: string[] = [];
 
@@ -2549,9 +2801,15 @@ function formatRefinementsAsList(spec: any, refinedOutput: string, chunks: any[]
 
 // ============================================================================
 // Singleton Instance
+// CRITICAL FIX: Use globalThis to survive Next.js hot-reloading
+// Without this, circuit breaker states reset and failing providers resume receiving traffic
 // ============================================================================
+declare global {
+  // eslint-disable-next-line no-var
+  var __responseRouter__: ResponseRouter | undefined;
+}
 
-export const responseRouter = new ResponseRouter()
+export const responseRouter = globalThis.__responseRouter__ ?? (globalThis.__responseRouter__ = new ResponseRouter());
 
 // ============================================================================
 // Convenience Functions

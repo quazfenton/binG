@@ -1,6 +1,26 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { getDatabase } from '@/lib/database/connection';
+
+// Lazy import to avoid pulling Node.js-only modules (fs, better-sqlite3) into client bundle
+let _getDb: typeof import('@/lib/database/connection').getDatabase | null = null;
+async function getDb() {
+  if (!_getDb) {
+    const { getDatabase } = await import('@/lib/database/connection');
+    _getDb = getDatabase;
+  }
+  return _getDb();
+}
+
+/**
+ * Detect desktop mode from environment — mirrors isDesktopMode() from @bing/platform/env
+ * without creating a circular workspace dependency.
+ */
+function isDesktopMode(): boolean {
+  return process.env.DESKTOP_MODE === 'true' || process.env.DESKTOP_LOCAL_EXECUTION === 'true';
+}
+
+// Prune threshold: keep this many shadow commits per session
+const DEFAULT_PRUNE_KEEP = 20;
 
 export interface TransactionEntry {
   path: string;
@@ -38,12 +58,13 @@ export interface CommitHistoryEntry {
   filesChanged: number;
   workspaceVersion?: number | null;
   diff?: string;
+  paths?: string[];  // File paths changed in this commit
   createdAt: string;
 }
 
 export interface RollbackResult {
   success: boolean;
-  restoredFiles: number;
+  restoredFiles: number | Array<{ path: string; content?: string; action: 'restore' | 'delete' }>;
   error?: string;
   details?: any;
 }
@@ -85,18 +106,22 @@ export class ShadowCommitManager {
   /**
    * Create a commit stored in the database (not filesystem)
    * Handles schema changes - uses correct column names based on schema detection
+   *
+   * DESKTOP MODE: Strips file content from transactions to avoid duplicating
+   * data that already exists on the user's local disk. Only metadata (paths,
+   * types, timestamps) is stored as an audit trail.
    */
   async commit(
     vfs: Record<string, string>,
     transactions: TransactionEntry[],
     options: ShadowCommitOptions
   ): Promise<CommitResult> {
-    console.log('[ShadowCommit] Starting commit', { 
-      sessionId: options.sessionId, 
+    console.log('[ShadowCommit] Starting commit', {
+      sessionId: options.sessionId,
       transactionCount: transactions.length,
-      message: options.message 
+      message: options.message
     });
-    
+
     if (transactions.length === 0) {
       console.log('[ShadowCommit] No transactions, returning early');
       return { success: true, committedFiles: 0 };
@@ -107,46 +132,74 @@ export class ShadowCommitManager {
 
     try {
       // Get database instance
-      const db = getDatabase();
-      
+      const db = await getDb();
+
       // Handle case where database is not yet initialized
       if (!db) {
         console.warn('[ShadowCommit] Database not ready, using mock database');
         return { success: true, commitId, committedFiles: transactions.filter(t => t.type !== 'DELETE').length };
       }
 
+      // DESKTOP MODE: Strip file content from transactions.
+      // Files already exist on disk — storing them in SQLite is redundant duplication.
+      // We keep only metadata for audit/rollback tracking.
+      const desktopMode = isDesktopMode();
+
       console.log('[ShadowCommit] Generating diffs for', transactions.length, 'transactions');
-      const diff = transactions
-        .map(t => generateUnifiedDiff(
-          t.originalContent,
-          vfs[t.path],
-          t.path
-        ))
-        .join('\n');
+      const diff = desktopMode
+        ? `[desktop mode - content not stored]`
+        : transactions
+            .map(t => generateUnifiedDiff(
+              t.originalContent,
+              vfs[t.path],
+              t.path
+            ))
+            .join('\n');
 
       console.log('[ShadowCommit] Serializing transactions');
       const serializedTransactions = transactions.map(t => ({
         path: t.path,
         type: t.type,
-        originalContent: t.originalContent,
-        newContent: vfs[t.path] ?? t.newContent,
+        // DESKTOP MODE: Omit content to avoid duplicating local disk data
+        ...(desktopMode ? {} : {
+          originalContent: t.originalContent,
+          newContent: vfs[t.path] ?? t.newContent,
+        }),
       }));
 
       // Extract owner_id from sessionId
-      // sessionId format: 'ownerId:conversationId' or just 'conversationId'
+      // sessionId format: 'ownerId$conversationId' (modern) or 'ownerId:conversationId' (legacy)
+      // SECURITY: Use indexOf (FIRST $) NOT lastIndexOf, because:
+      // - userId is system-controlled and NEVER contains $ or :
+      // - conversationId MAY contain user-provided $ or : (e.g., folder named "my$project")
+      // - The FIRST separator is always our system separator
       // Priority: author > sessionId with ownerId prefix > fallback
       let ownerId = options.author;
-      if (!ownerId && options.sessionId.includes(':')) {
-        const parts = options.sessionId.split(':');
-        // If sessionId starts with 'anon:' or similar ownerId pattern, use full first part
-        // Otherwise, check if author was passed
-        ownerId = parts[0].includes('anon') || parts[0].includes('@')
-          ? parts[0]
-          : parts.length > 1
-            ? `${parts[0]}:${parts[1]}`
-            : undefined;
+      if (!ownerId && (options.sessionId.includes('$') || options.sessionId.includes(':'))) {
+        // Find the FIRST occurrence of $ or : to extract userId
+        const firstDollarIndex = options.sessionId.indexOf('$');
+        const firstColonIndex = options.sessionId.indexOf(':');
+
+        let separatorIndex: number;
+        if (firstDollarIndex !== -1 && (firstColonIndex === -1 || firstDollarIndex < firstColonIndex)) {
+          // $ appears first (or only $ exists) — modern format
+          separatorIndex = firstDollarIndex;
+        } else if (firstColonIndex !== -1) {
+          // : appears first (or only : exists) — legacy format
+          separatorIndex = firstColonIndex;
+        } else {
+          separatorIndex = -1;
+        }
+
+        if (separatorIndex !== -1) {
+          const userIdPart = options.sessionId.slice(0, separatorIndex);
+          // If userIdPart starts with 'anon' or contains @, use it as the full ownerId
+          ownerId = userIdPart.includes('anon') || userIdPart.includes('@')
+            ? userIdPart
+            : options.sessionId; // Fall back to full sessionId if unclear
+        }
       }
-      ownerId = ownerId || 'anon:unknown';
+      ownerId = ownerId || 'anon$unknown';
 
       console.log('[ShadowCommit] Inserting with commitId:', commitId, 'ownerId:', ownerId);
 
@@ -174,6 +227,11 @@ export class ShadowCommitManager {
 
       console.log('[ShadowCommit] Commit saved to database:', commitId);
 
+      // AUTOMATIC CLEANUP: Prune old shadow commits to prevent unbounded DB growth.
+      // Fire-and-forget — pruning runs in background, does not block the commit.
+      // Has its own try/catch so failures are silently swallowed.
+      void this.pruneOldCommits(options.sessionId, DEFAULT_PRUNE_KEEP);
+
       return {
         success: true,
         commitId,
@@ -192,7 +250,7 @@ export class ShadowCommitManager {
    */
   async getCommitHistory(sessionId: string, limit = 10): Promise<CommitHistoryEntry[]> {
     try {
-      const db = getDatabase();
+      const db = await getDb();
       
       // Handle case where database is not yet initialized
       if (!db) {
@@ -244,6 +302,7 @@ export class ShadowCommitManager {
           filesChanged: transactions.length,
           workspaceVersion: row.workspace_version ?? null,
           diff: row.diff,
+          paths: transactions.map((t: TransactionEntry) => t.path),
         };
       });
     } catch (error: any) {
@@ -257,7 +316,7 @@ export class ShadowCommitManager {
    */
   async getCommitHistoryByUser(ownerId: string, limit = 50): Promise<CommitHistoryEntry[]> {
     try {
-      const db = getDatabase();
+      const db = await getDb();
       
       // Handle case where database is not yet initialized
       if (!db) {
@@ -296,6 +355,7 @@ export class ShadowCommitManager {
           filesChanged: transactions.length,
           workspaceVersion: row.workspace_version ?? null,
           diff: row.diff,
+          paths: transactions.map((t: TransactionEntry) => t.path),
         };
       });
     } catch (error: any) {
@@ -309,7 +369,7 @@ export class ShadowCommitManager {
    */
   async getCommit(sessionId: string, commitId: string): Promise<CommitHistoryEntry & { transactions?: TransactionEntry[] } | null> {
     try {
-      const db = getDatabase();
+      const db = await getDb();
       
       // Handle case where database is not yet initialized
       if (!db) {
@@ -359,6 +419,8 @@ export class ShadowCommitManager {
 
   /**
    * Rollback to a specific commit
+   * Returns the files that need to be restored with their original content
+   * so the caller can apply them to the VFS.
    */
   async rollback(sessionId: string, commitId: string): Promise<RollbackResult> {
     const commit = await this.getCommit(sessionId, commitId);
@@ -372,36 +434,60 @@ export class ShadowCommitManager {
     }
 
     try {
-      const db = getDatabase();
-      
+      const db = await getDb();
+
       // Handle case where database is not yet initialized
       if (!db) {
-        console.warn('[ShadowCommit] Database not ready, rollback skipped');
+        console.warn('[ShadowCommit] Database not ready, returning rollback result without DB operations');
+        // Still return the file restoration data so caller can apply it
+        const filesToRestore = commit.transactions.map(t => ({
+          path: t.path,
+          content: t.originalContent,
+          action: t.type === 'DELETE' ? 'restore' as const : 'restore' as const,
+        }));
         return {
           success: true,
-          restoredFiles: 0,
-          details: 'Database not ready - rollback skipped but operation succeeded'
+          restoredFiles: filesToRestore,
+          details: 'Database not ready - file restoration data returned but not persisted'
         };
       }
 
-      // Save current state as a rollback point
-      const rollbackId = crypto.randomUUID();
+      // Save current state as a rollback point BEFORE we lose it
+      const rollbackPointId = crypto.randomUUID();
       const timestamp = new Date().toISOString();
 
-      // Store current VFS as a new commit for rollback capability
-      const stmt = db.prepare(`
+      // Get current VFS state for all files in this commit to create a rollback point
+      const currentTransactions = commit.transactions.map(t => ({
+        path: t.path,
+        type: t.type,
+        // We don't have current VFS content here, so store what we know
+        originalContent: t.originalContent,
+        newContent: t.newContent,
+      }));
+
+      const rollbackPointStmt = db.prepare(`
         INSERT INTO shadow_commits (
           id, session_id, owner_id, message, author, timestamp, source, integration,
           workspace_version, diff, transactions
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
-      // Get owner_id from the commit we're rolling back to
-      const commit = await this.getCommit(sessionId, commitId);
-      const ownerId = commit ? (sessionId.includes(':') ? sessionId.split(':')[0] : 'anon:unknown') : 'anon:unknown';
+      // SECURITY: Use indexOf (FIRST $) NOT split, because:
+      // - userId is system-controlled and NEVER contains $ or :
+      // - conversationId MAY contain user-provided $ or : (e.g., folder named "my$project")
+      const firstDollarIndex = commit.sessionId.indexOf('$');
+      const firstColonIndex = commit.sessionId.indexOf(':');
+      let ownerId: string;
+      if (firstDollarIndex !== -1 && (firstColonIndex === -1 || firstDollarIndex < firstColonIndex)) {
+        ownerId = commit.sessionId.slice(0, firstDollarIndex);
+      } else if (firstColonIndex !== -1) {
+        ownerId = commit.sessionId.slice(0, firstColonIndex);
+      } else {
+        ownerId = 'anon$unknown';
+      }
 
-      stmt.run(
-        rollbackId,
+      rollbackPointStmt.run(
+        rollbackPointId,
         sessionId,
         ownerId,
         `Pre-rollback to ${commitId}`,
@@ -411,32 +497,27 @@ export class ShadowCommitManager {
         'shadow-commit',
         null,
         '',
-        JSON.stringify([])
+        JSON.stringify(currentTransactions)
       );
 
-      let restoredCount = 0;
-      for (const transaction of commit.transactions) {
-        if (transaction.type === 'DELETE') {
-          // File was deleted in this commit - restore it by marking for recreation
-          // The caller will handle actual file restoration through VFS
-          restoredCount++;
-        } else {
-          // File was created/updated - restore to that version
-          restoredCount++;
-        }
-      }
+      // Build the list of files to restore with their content
+      const filesToRestore = commit.transactions.map(t => ({
+        path: t.path,
+        content: t.originalContent,
+        action: t.type === 'DELETE' ? 'restore' as const : 'restore' as const,
+      }));
 
-      console.log('[ShadowCommit] Rollback prepared:', restoredCount, 'files');
-      return { 
-        success: true, 
-        restoredFiles: restoredCount 
+      console.log('[ShadowCommit] Rollback prepared:', filesToRestore.length, 'files');
+      return {
+        success: true,
+        restoredFiles: filesToRestore,
       };
     } catch (error: any) {
       console.error('[ShadowCommit] Rollback failed:', error.message);
-      return { 
-        success: false, 
+      return {
+        success: false,
         restoredFiles: 0,
-        error: String(error) 
+        error: String(error)
       };
     }
   }
@@ -450,7 +531,7 @@ export class ShadowCommitManager {
     filesCount: number;
   }>> {
     try {
-      const db = getDatabase();
+      const db = await getDb();
       
       // Handle case where database is not yet initialized
       if (!db) {
@@ -490,7 +571,7 @@ export class ShadowCommitManager {
    */
   async pruneOldCommits(sessionId: string, keepCount: number = 50): Promise<number> {
     try {
-      const db = getDatabase();
+      const db = await getDb();
       
       // Handle case where database is not yet initialized
       if (!db) {
@@ -570,4 +651,4 @@ export const historyTool = tool({
     const history = await manager.getCommitHistory(session_id, limit);
     return { success: true, history };
   },
-} as any);
+} as any);

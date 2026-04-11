@@ -7,6 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Code, Copy, Check, Download, Loader2 } from 'lucide-react';
 import type { PluginProps } from './plugin-manager';
 import { toast } from 'sonner';
+import { clipboard } from '@bing/platform/clipboard';
 
 const LANGUAGES = [
   { value: 'javascript', label: 'JavaScript' },
@@ -151,26 +152,12 @@ export const CodeFormatterPlugin: React.FC<PluginProps> = ({
 
   const copyToClipboard = async () => {
     try {
-      await navigator.clipboard.writeText(formatted);
+      await clipboard.writeText(formatted);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch (error) {
       console.error('Failed to copy:', error);
-      // Fallback for browsers that don't support clipboard API
-      const textArea = document.createElement('textarea');
-      textArea.value = formatted;
-      document.body.appendChild(textArea);
-      textArea.select();
-      try {
-        document.execCommand('copy');
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-      } catch (fallbackError) {
-        console.error('Fallback copy failed:', fallbackError);
-        throw new Error('Copy to clipboard failed');
-      } finally {
-        document.body.removeChild(textArea);
-      }
+      throw new Error('Copy to clipboard failed');
     }
   };
 

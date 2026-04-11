@@ -45,8 +45,8 @@ export async function POST(req: NextRequest) {
   const timeoutId = setTimeout(() => controller.abort(), 180000) // 3 minute timeout
 
   try {
-    // Authentication check
-    const auth = await authenticateRequest(req, { allowAnonymous: false })
+    // Authentication check — allow anonymous users (rate limited by IP below)
+    const auth = await authenticateRequest(req, { allowAnonymous: true })
     if (!auth.authenticated) {
       clearTimeout(timeoutId)
       return NextResponse.json(

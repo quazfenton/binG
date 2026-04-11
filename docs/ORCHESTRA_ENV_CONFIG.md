@@ -75,7 +75,7 @@ AGENT_PREFERENCE=balanced
 ### Task Classifier
 
 ```typescript
-import { createTaskClassifier } from '@/lib/agent/task-classifier';
+import { createTaskClassifier } from '@bing/shared/agent/task-classifier';
 
 const classifier = createTaskClassifier({
   simpleThreshold: 0.3,
@@ -152,7 +152,7 @@ if (isComplexTask) {
 
 ```typescript
 // New approach
-import { classifyTask } from '@/lib/agent/task-classifier';
+import { classifyTask } from '@bing/shared/agent/task-classifier';
 
 const classification = await classifyTask(userMessage, {
   projectSize: 'large',

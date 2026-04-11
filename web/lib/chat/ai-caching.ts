@@ -228,7 +228,7 @@ class TokenUsageTracker {
       'anthropic:claude-3-opus-latest': 200000,
       // Google models
       'google:gemini-2.5-pro': 2000000,
-      'google:gemini-2.5-flash': 1000000,
+      'google:gemini-3-flash-preview': 1000000,
       // Default fallback
       'default': 128000,
     };

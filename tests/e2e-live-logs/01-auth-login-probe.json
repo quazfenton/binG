@@ -1,0 +1,52 @@
+{
+  "timestamp": "2026-04-09T21:03:38.215Z",
+  "url": "http://localhost:3000/api/auth/login",
+  "method": "POST",
+  "status": 200,
+  "headers": {
+    "access-control-allow-headers": "Content-Type, Authorization",
+    "access-control-allow-methods": "GET, POST, PUT, DELETE, OPTIONS",
+    "access-control-allow-origin": "*",
+    "connection": "keep-alive",
+    "content-security-policy": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; connect-src 'self' https: ws: wss: blob:; font-src 'self' data: https:; frame-src 'self' https: http://localhost:*; frame-ancestors 'self'; base-uri 'self'; form-action 'self';",
+    "content-type": "application/json",
+    "cross-origin-resource-policy": "cross-origin",
+    "date": "Thu, 09 Apr 2026 21:03:38 GMT",
+    "keep-alive": "timeout=5",
+    "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=(), magnetometer=(), gyroscope=(self \"https://www.youtube.com\"), accelerometer=(self \"https://www.youtube.com\")",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "set-cookie": "anon-session-id=; Path=/; Max-Age=0; HttpOnly; SameSite=lax",
+    "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+    "transfer-encoding": "chunked",
+    "vary": "rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch",
+    "x-content-type-options": "nosniff",
+    "x-csp-nonce-script": "ij_Stz2sPCLjqCNQA5Ia3aWZvPvFMbeu2YktY-32dvs",
+    "x-csp-nonce-style": "kWqr9ojerJbZQjtPVmRwDAKV2swCUMDG3JQOe2Hn0Yc",
+    "x-frame-options": "SAMEORIGIN",
+    "x-request-id": "req_1775768617614_cgxgvfkprfu",
+    "x-xss-protection": "1; mode=block"
+  },
+  "body": {
+    "email": "test@test.com",
+    "password": "Testing0"
+  },
+  "responseText": "{\"success\":true,\"user\":{\"id\":1,\"email\":\"test@test.com\",\"username\":null,\"createdAt\":\"2026-04-09T10:12:37.000Z\",\"lastLogin\":\"2026-04-10T01:01:09.000Z\",\"isActive\":true,\"subscriptionTier\":\"free\",\"emailVerified\":false},\"token\":\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiIxIiwiZW1haWwiOiJ0ZXN0QHRlc3QuY29tIiwianRpIjoiY2ZjNmRkNGM3ZjJhNDlkYmE0NDM1ODVjOWE2YzkzMjAiLCJpc3MiOiJiaW5nLWFwcCIsImF1ZCI6ImJpbmctdXNlcnMiLCJpYXQiOjE3NzU3Njg2MTgsImV4cCI6MTc3NjM3MzQxOH0.jl-OZnXQeJrDdblP2VmzaLqRR-oscNHw7AGvVFMZnt0\"}",
+  "responseJson": {
+    "success": true,
+    "user": {
+      "id": 1,
+      "email": "test@test.com",
+      "username": null,
+      "createdAt": "2026-04-09T10:12:37.000Z",
+      "lastLogin": "2026-04-10T01:01:09.000Z",
+      "isActive": true,
+      "subscriptionTier": "free",
+      "emailVerified": false
+    },
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiIxIiwiZW1haWwiOiJ0ZXN0QHRlc3QuY29tIiwianRpIjoiY2ZjNmRkNGM3ZjJhNDlkYmE0NDM1ODVjOWE2YzkzMjAiLCJpc3MiOiJiaW5nLWFwcCIsImF1ZCI6ImJpbmctdXNlcnMiLCJpYXQiOjE3NzU3Njg2MTgsImV4cCI6MTc3NjM3MzQxOH0.jl-OZnXQeJrDdblP2VmzaLqRR-oscNHw7AGvVFMZnt0"
+  },
+  "cookies": {
+    "session_id": "a4b8abfd-6a66-4450-99bd-80250943d8bc",
+    "anon-session-id": ""
+  }
+}

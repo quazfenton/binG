@@ -25,11 +25,39 @@
 
 import { parsePatch, applyPatch, createTwoFilesPatch } from 'diff';
 import diff_match_patch from 'diff-match-patch';
+import { withRetry, isRetryableError } from '@/lib/vector-memory/retry';
 
 export interface DiffEdit {
   path: string;
   diff: string;
 }
+
+/**
+ * Result of a smart patch application with metadata
+ */
+export interface PatchResult {
+  content: string | null;
+  strategy: 'unified' | 'fuzzy' | 'line' | 'symbol' | 'repaired' | 'full_file';
+  confidence: number;
+  attempts?: number;
+}
+
+/**
+ * Symbol context for structure-aware patching
+ */
+export interface SymbolContext {
+  name: string;
+  kind: 'function' | 'class' | 'method' | 'block';
+  startLine: number;
+  endLine: number;
+}
+
+/**
+ * LLM caller for the diff repair loop.
+ * Consumers wire in their own LLM call (e.g. llmService.generateResponse)
+ * so this module stays free of hard provider coupling.
+ */
+export type DiffRepairLLM = (prompt: string) => Promise<string>;
 
 /**
  * Apply unified diff to content with robust error handling
@@ -315,4 +343,346 @@ export function looksLikeCompleteFile(content: string): boolean {
   
   // Check for lack of diff markers (most reliable indicator)
   return isFullFileContent(content);
+}
+
+// ============================================================================
+// Symbol-based patching
+// ============================================================================
+
+/**
+ * Apply a patch by replacing a symbol's line range in the original content.
+ * Falls back gracefully if the symbol range is out of bounds.
+ */
+export function applySymbolPatch(
+  content: string,
+  symbol: SymbolContext,
+  newCode: string
+): string | null {
+  const lines = content.split('\n');
+
+  if (symbol.startLine < 0 || symbol.endLine >= lines.length) {
+    console.warn('[applySymbolPatch] Symbol range out of bounds', {
+      symbol: symbol.name,
+      startLine: symbol.startLine,
+      endLine: symbol.endLine,
+      totalLines: lines.length,
+    });
+    return null;
+  }
+
+  const before = lines.slice(0, symbol.startLine);
+  const after = lines.slice(symbol.endLine + 1);
+
+  const result = [...before, newCode, ...after].join('\n');
+
+  if (result.trim().length === 0 && content.trim().length > 0) {
+    return null;
+  }
+
+  return result;
+}
+
+/**
+ * Extract the "added" code from a unified diff (lines starting with +, excluding header).
+ */
+export function extractAddedCode(diff: string): string {
+  return diff
+    .split('\n')
+    .filter((line) => line.startsWith('+') && !line.startsWith('+++'))
+    .map((line) => line.slice(1))
+    .join('\n');
+}
+
+// ============================================================================
+// LLM Response Extraction
+// ============================================================================
+
+/**
+ * Extract file writes from bash/code blocks in LLM responses.
+ * Handles echo, cat heredocs, unified diffs, Before/After blocks,
+ * and code blocks with filename hints.
+ *
+ * CRITICAL: For diff patterns, matches ONLY the AFTER/CHANGED section,
+ * never the "before applying the diff" original content block.
+ */
+export function extractFileWritesFromLLMResponse(
+  content: string,
+  options: { scopePath?: string } = {}
+): Array<{ path: string; content: string }> {
+  const writes: Array<{ path: string; content: string }> = [];
+  const scopePath = options.scopePath || 'project';
+
+  // Pattern 1: echo "content" > file or echo 'content' > file in bash blocks
+  const bashBlockPattern = /```(?:bash|sh|shell)\s*\n([\s\S]*?)```/gi;
+  let bashBlockMatch;
+  while ((bashBlockMatch = bashBlockPattern.exec(content)) !== null) {
+    const blockContent = bashBlockMatch[1];
+    const echoPattern = /echo\s+(?:"((?:[^"\\]|\\.)*)"|'([^']*)')\s*>\s*([^\s\n;&|>]+)/gi;
+    let echoMatch;
+    while ((echoMatch = echoPattern.exec(blockContent)) !== null) {
+      const fileContent = echoMatch[1] ?? echoMatch[2] ?? '';
+      let filePath = echoMatch[3].trim();
+      if (!filePath.startsWith('project/') && !filePath.startsWith('/')) {
+        filePath = `${scopePath}/${filePath}`;
+      }
+      filePath = filePath.replace(/^\/+/, '');
+      if (filePath && fileContent) {
+        writes.push({ path: filePath, content: fileContent });
+      }
+    }
+    // cat heredoc: cat > file << 'EOF'\ncontent\nEOF
+    const catPattern = /cat\s*>\s*([^\s\n>]+)\s*<<\s*['"]?(\w+)['"]?\s*\n([\s\S]*?)\n\s*\2/gi;
+    let catMatch;
+    while ((catMatch = catPattern.exec(blockContent)) !== null) {
+      let filePath = catMatch[1].trim();
+      const fileContent = catMatch[3].trim();
+      if (!filePath.startsWith('project/') && !filePath.startsWith('/')) {
+        filePath = `${scopePath}/${filePath}`;
+      }
+      filePath = filePath.replace(/^\/+/, '');
+      if (filePath && fileContent) {
+        writes.push({ path: filePath, content: fileContent });
+      }
+    }
+  }
+
+  // Pattern 2: Unified diff blocks (```diff ... --- a/path +++ b/path ...)
+  const diffBlockPattern = /```(?:diff|patch)?\s*\n---\s*a\/([^\n]+)\n\+\+\+\s*b\/([^\n]+)\n@@[\s\S]*?```/gi;
+  let diffMatch;
+  while ((diffMatch = diffBlockPattern.exec(content)) !== null) {
+    let filePath = diffMatch[2].trim();
+    if (!filePath.startsWith('project/') && !filePath.startsWith('/')) {
+      filePath = `${scopePath}/${filePath}`;
+    }
+    filePath = filePath.replace(/^\/+/, '');
+    const fullDiffMatch = diffMatch[0];
+    const addedLines = fullDiffMatch.split('\n').filter(l => l.startsWith('+') && !l.startsWith('+++')).map(l => l.slice(1)).join('\n');
+    if (filePath && addedLines) {
+      writes.push({ path: filePath, content: addedLines });
+    }
+  }
+
+  // Pattern 2b: AFTER/RESULT code blocks from diff responses
+  // CRITICAL: These phrases ONLY appear in the AFTER section, never BEFORE.
+  const diffApplyPatterns = [
+    // "**After:**\n```" (Before/After blocks)
+    /\*\*After:\*\*\s*\n```\w*\s*\n([\s\S]*?)```/gi,
+    // "the file will contain:\n```" (ONLY in AFTER section)
+    /the\s+file\s+will\s+contain[\s:]*\n```\w*\s*\n([\s\S]*?)```/gi,
+    // "the content becomes:\n```" (ONLY in AFTER section)
+    /the\s+content\s+becomes[\s:]*\n```\w*\s*\n([\s\S]*?)```/gi,
+    // "(changed content):\n```" (ONLY after "After applying the diff")
+    /\(changed\s+content\)[\s:]*\n```\w*\s*\n([\s\S]*?)```/gi,
+    // "Here's the result after applying the diff:\n```"
+    /here['']?s?\s+(?:the\s+)?result\s+after\s+applying\s+(?:the\s+)?diff[\s:]*\n```\w*\s*\n([\s\S]*?)```/gi,
+    // "the result is:\n```" (ONLY in AFTER section)
+    /the\s+result\s+is[\s:]*\n```\w*\s*\n([\s\S]*?)```/gi,
+  ];
+  for (const diffApplyPattern of diffApplyPatterns) {
+    let diffApplyMatch;
+    while ((diffApplyMatch = diffApplyPattern.exec(content)) !== null) {
+      const fileContent = diffApplyMatch[1].trim();
+      const pathMatch = content.match(/[`'"]?(project\/[\w\-\/]+\.[\w]+)[`'"]?/i);
+      if (pathMatch && fileContent && fileContent.length > 3) {
+        let filePath = pathMatch[1].trim();
+        if (!filePath.startsWith('project/') && !filePath.startsWith('/')) {
+          filePath = `${scopePath}/${filePath}`;
+        }
+        filePath = filePath.replace(/^\/+/, '');
+        writes.push({ path: filePath, content: fileContent });
+        break;
+      }
+    }
+    if (writes.length > 0) break;
+  }
+
+  // Pattern 3: Code blocks with file path hints (```file: path or ```path/to/file)
+  const codeWithFilePattern = /```\w*\s*(?:file:\s*)?([^\s\n]+)\s*\n([\s\S]*?)```/gi;
+  let codeFileMatch;
+  while ((codeFileMatch = codeWithFilePattern.exec(content)) !== null) {
+    const pathHint = codeFileMatch[1].trim();
+    const isFilePath = pathHint.includes('/') || /\.(js|ts|tsx|jsx|py|html|css|json|md|txt|sh|bash)$/i.test(pathHint);
+    if (isFilePath && !pathHint.startsWith('bash') && !pathHint.startsWith('sh') && !pathHint.startsWith('javascript') && !pathHint.startsWith('python') && !pathHint.startsWith('diff')) {
+      let filePath = pathHint;
+      const fileContent = codeFileMatch[2].trim();
+      if (!filePath.startsWith('project/') && !filePath.startsWith('/')) {
+        filePath = `${scopePath}/${filePath}`;
+      }
+      filePath = filePath.replace(/^\/+/, '');
+      if (filePath && fileContent && fileContent.length > 5) {
+        writes.push({ path: filePath, content: fileContent });
+      }
+    }
+  }
+
+  // Pattern 4: JavaScript fs.writeFileSync calls
+  const jsBlockPattern = /```(?:javascript|js|node|typescript|ts)\s*\n([\s\S]*?)```/gi;
+  let jsBlockMatch;
+  while ((jsBlockMatch = jsBlockPattern.exec(content)) !== null) {
+    const blockContent = jsBlockMatch[1];
+    const fsWritePattern = /fs\.writeFileSync\(\s*(?:path\.join\([^)]*,\s*['"]([^'"]+)['"]\s*\)|['"]([^'"]+)['"])\s*,\s*['"]((?:[^"\\]|\\.)*)['"]/gi;
+    let fsMatch;
+    while ((fsMatch = fsWritePattern.exec(blockContent)) !== null) {
+      let filePath = (fsMatch[1] ?? fsMatch[2] ?? '').trim();
+      const fileContent = fsMatch[3] ?? '';
+      if (filePath && fileContent) {
+        if (!filePath.startsWith('project/') && !filePath.startsWith('/')) {
+          filePath = `${scopePath}/${filePath}`;
+        }
+        filePath = filePath.replace(/^\/+/, '');
+        writes.push({ path: filePath, content: fileContent });
+      }
+    }
+  }
+
+  // Pattern 5: Python file writes
+  const pyBlockPattern = /```(?:python|py)\s*\n([\s\S]*?)```/gi;
+  let pyBlockMatch;
+  while ((pyBlockMatch = pyBlockPattern.exec(content)) !== null) {
+    const blockContent = pyBlockMatch[1];
+    const pyWritePattern = /with\s+open\(\s*['"]([^'"]+)['"][\s\S]*?\.write\(\s*['"]((?:[^"\\]|\\.)*)['"]\)/gi;
+    let pyMatch;
+    while ((pyMatch = pyWritePattern.exec(blockContent)) !== null) {
+      let filePath = pyMatch[1].trim();
+      const fileContent = pyMatch[2] ?? '';
+      if (filePath && fileContent) {
+        if (!filePath.startsWith('project/') && !filePath.startsWith('/')) {
+          filePath = `${scopePath}/${filePath}`;
+        }
+        filePath = filePath.replace(/^\/+/, '');
+        writes.push({ path: filePath, content: fileContent });
+      }
+    }
+  }
+
+  // Deduplicate by path (keep last write for each path)
+  const deduped = new Map<string, { path: string; content: string }>();
+  for (const w of writes) deduped.set(w.path, w);
+  return Array.from(deduped.values());
+}
+
+/**
+ * Attempt to repair a broken diff by asking an LLM to fix it.
+ * The `llm` parameter is an injected caller so the module stays decoupled.
+ */
+export async function repairDiff(opts: {
+  original: string;
+  diff: string;
+  path: string;
+  llm: DiffRepairLLM;
+  maxAttempts?: number;
+}): Promise<PatchResult> {
+  const { original, diff, path, llm, maxAttempts = 3 } = opts;
+
+  const repairPrompt = [
+    'The following unified diff failed to apply to the file.',
+    'Fix the diff so it applies cleanly. Return ONLY a valid unified diff, nothing else.',
+    '',
+    `File: ${path}`,
+    '',
+    '--- Original ---',
+    original.length > 6000 ? original.slice(0, 6000) + '\n…(truncated)' : original,
+    '',
+    '--- Broken Diff ---',
+    diff,
+  ].join('\n');
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      const fixedDiff = await llm(repairPrompt);
+      if (!fixedDiff || fixedDiff.trim().length === 0) continue;
+
+      const result = applyDiffToContent(original, path, fixedDiff);
+      if (result !== null) {
+        return {
+          content: result,
+          strategy: 'repaired',
+          confidence: 0.7 - attempt * 0.1,
+          attempts: attempt + 1,
+        };
+      }
+    } catch (error) {
+      console.warn(`[repairDiff] Attempt ${attempt + 1} failed`, {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  return { content: null, strategy: 'repaired', confidence: 0, attempts: maxAttempts };
+}
+
+// ============================================================================
+// Smart apply — hybrid strategy with confidence metadata
+// ============================================================================
+
+// ============================================================================
+// LLM Response Extraction
+// ============================================================================
+
+export interface FileWrite {
+  path: string;
+  content: string;
+}
+
+export async function smartApply(opts: {
+  content: string;
+  path: string;
+  diff: string;
+  symbolContext?: SymbolContext;
+  llm?: DiffRepairLLM;
+}): Promise<PatchResult> {
+  const { content, path, diff, symbolContext, llm } = opts;
+
+  if (!diff || diff.trim().length === 0) {
+    return { content: null, strategy: 'unified', confidence: 0 };
+  }
+
+  // Strategy 0: full-file content
+  if (looksLikeCompleteFile(diff)) {
+    return { content: diff, strategy: 'full_file', confidence: 0.95 };
+  }
+
+  // Strategy 1: unified diff
+  const unified = applyUnifiedDiffToContent(content, path, diff);
+  if (unified !== null && unified.trim().length > 0) {
+    return { content: unified, strategy: 'unified', confidence: 0.95 };
+  }
+
+  // Strategy 2: fuzzy diff-match-patch
+  const fuzzy = applyDiffMatchPatch(content, diff);
+  if (fuzzy !== null && fuzzy.trim().length > 0) {
+    return { content: fuzzy, strategy: 'fuzzy', confidence: 0.8 };
+  }
+
+  // Strategy 3: simple line diff
+  const lineDiff = applySimpleLineDiff(content, diff);
+  if (lineDiff !== null && lineDiff.trim().length > 0) {
+    return { content: lineDiff, strategy: 'line', confidence: 0.6 };
+  }
+
+  // Strategy 4: symbol-based patching
+  if (symbolContext) {
+    const newCode = extractAddedCode(diff);
+    if (newCode.trim().length > 0) {
+      const symbolResult = applySymbolPatch(content, symbolContext, newCode);
+      if (symbolResult !== null) {
+        return { content: symbolResult, strategy: 'symbol', confidence: 0.7 };
+      }
+    }
+  }
+
+  // Strategy 5: LLM repair loop
+  if (llm) {
+    const repaired = await repairDiff({
+      original: content,
+      diff,
+      path,
+      llm,
+    });
+    if (repaired.content !== null) {
+      return repaired;
+    }
+  }
+
+  return { content: null, strategy: 'unified', confidence: 0 };
 }

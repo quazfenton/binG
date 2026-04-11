@@ -39,7 +39,7 @@ export async function registerNullclawTools(registry: ToolRegistry, config: Boot
       capability: 'automation.discord',
       provider: 'nullclaw',
       handler: async (args: any, context: any) => {
-        const { nullclawIntegration } = await import('../../agent/nullclaw-integration');
+        const { nullclawIntegration } = await import('@bing/shared/agent/nullclaw-integration');
         return await nullclawIntegration.sendDiscordMessage(args.channelId, args.message);
       },
       metadata: {
@@ -58,7 +58,7 @@ export async function registerNullclawTools(registry: ToolRegistry, config: Boot
       capability: 'automation.telegram',
       provider: 'nullclaw',
       handler: async (args: any, context: any) => {
-        const { nullclawIntegration } = await import('../../agent/nullclaw-integration');
+        const { nullclawIntegration } = await import('@bing/shared/agent/nullclaw-integration');
         return await nullclawIntegration.sendTelegramMessage(args.chatId, args.message);
       },
       metadata: {
@@ -77,7 +77,7 @@ export async function registerNullclawTools(registry: ToolRegistry, config: Boot
       capability: 'web.browse',
       provider: 'nullclaw',
       handler: async (args: any, context: any) => {
-        const { nullclawIntegration } = await import('../../agent/nullclaw-integration');
+        const { nullclawIntegration } = await import('@bing/shared/agent/nullclaw-integration');
         return await nullclawIntegration.browseUrl(args.url);
       },
       metadata: {
@@ -96,7 +96,7 @@ export async function registerNullclawTools(registry: ToolRegistry, config: Boot
       capability: 'web.search',
       provider: 'nullclaw',
       handler: async (args: any, context: any) => {
-        const { nullclawIntegration } = await import('../../agent/nullclaw-integration');
+        const { nullclawIntegration } = await import('@bing/shared/agent/nullclaw-integration');
         return await (nullclawIntegration as any).searchWeb(args.query);
       },
       metadata: {

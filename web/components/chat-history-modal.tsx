@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import type { ChatHistory } from "@/types"
 import { X, Download, Copy, Trash2, Search, MessageSquare, Calendar } from "lucide-react"
+import { clipboard } from "@bing/platform/clipboard"
 
 interface ChatHistoryModalProps {
   onClose: () => void
@@ -49,7 +50,7 @@ export default function ChatHistoryModal({
     // add Log details about the chat object being processed by the filter
     const chatText = (chat.messages || []).map((msg) => `${msg.role === "user" ? "You" : "AI"}: ${msg.content}`).join("\n\n")
 
-    navigator.clipboard.writeText(chatText)
+    clipboard.writeText(chatText)
   }
 
   const formatDate = (timestamp: number) => {

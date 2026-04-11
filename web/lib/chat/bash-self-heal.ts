@@ -439,7 +439,7 @@ export async function repairWithLLM(failure: BashFailure): Promise<string | null
 
     const response = await llmService.generateResponse({
       provider: 'openrouter',
-      model: 'gpt-4o-mini',  // Fast, cheap for simple fixes
+      model: 'mistral-small-latest',
       messages: [
         {
           role: 'system',

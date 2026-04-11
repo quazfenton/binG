@@ -138,6 +138,14 @@ class VoiceService {
       };
 
       this.recognition.onerror = (event) => {
+        // Don't log "not-allowed" on every interaction — it's a permission issue, not a runtime error
+        const isFatalError = event.error === 'not-allowed' || event.error === 'not-allowed-on-insecure-origin';
+        if (isFatalError) {
+          // Stop recognition permanently — user denied mic permission or page is not HTTPS
+          this.stopListening();
+          return;
+        }
+        // Other errors (no-speech, aborted, network) are transient — just log
         console.error("Speech recognition error:", event.error);
         this.emitEvent({
           type: "error",

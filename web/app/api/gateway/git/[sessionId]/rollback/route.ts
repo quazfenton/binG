@@ -88,37 +88,32 @@ export async function POST(
       }
     }
 
-    const db = getDatabase();
-
-    // Session IDs are scoped to owner
-    const scopedSessionId = `${ownerId}:${sessionId}`;
-
-    // Step 2: Verify session exists AND ownership check
-    const session = db.prepare(`
-      SELECT user_id, workspace_id FROM user_sessions
-      WHERE session_id = ? AND is_active = TRUE
-    `).get(scopedSessionId) as { user_id: number; workspace_id?: string } | undefined;
-
-    if (!session) {
-      logger.warn('[Git Rollback] Unauthorized access attempt', {
-        sessionId,
-        ownerId,
-        version,
-      });
-      const errorResponse = NextResponse.json(
-        { success: false, error: 'Session not found or access denied' },
-        { status: 404 }
-      );
-      return withAnonSessionCookie(errorResponse, authResolution);
+    // Extract conversation ID from the URL sessionId
+    // Shadow commits store session_id as the raw conversation ID (e.g., "001"),
+    // and owner_id as the full owner string (e.g., "anon:abc").
+    // The sessionId from the URL may be:
+    // - "001" (raw conversation ID) → use as-is
+    // - "session-xxx" (generated client ID) → strip prefix
+    // - "ownerId$001" or "ownerId:001" (scoped format) → extract conversation ID part
+    // SECURITY: Use indexOf (FIRST $) not split().pop(), because:
+    // - userId is system-controlled and NEVER contains $
+    // - sessionId MAY contain user-provided $ (e.g., folder named "my$project")
+    let conversationId = sessionId;
+    if (conversationId.includes('$')) {
+      const dollarIndex = conversationId.indexOf('$');
+      conversationId = conversationId.slice(dollarIndex + 1);
+    } else if (conversationId.includes(':')) {
+      // Legacy format fallback
+      const colonIndex = conversationId.indexOf(':');
+      conversationId = conversationId.slice(colonIndex + 1);
+    } else if (conversationId.startsWith('session-')) {
+      conversationId = conversationId.replace(/^session-/, '');
     }
 
-    logger.info('[Git Rollback] Rollback requested', {
-      sessionId,
-      ownerId,
-      version,
-      mode,
-      files: targetFiles?.length || 'all',
-    });
+    // For shadow commit operations, use the resolved owner and conversation ID.
+    // Shadow commits store session_id as the raw conversation ID (e.g., "001"),
+    // NOT the scoped "ownerId:001" format.
+    const fullOwnerId = typeof ownerId === 'string' ? ownerId : `user:${ownerId}`;
 
     // Step 3: Execute rollback based on mode
     let rollbackResult: {
@@ -130,15 +125,19 @@ export async function POST(
 
     switch (mode) {
       case 'shadow':
-        rollbackResult = await executeShadowRollback(scopedSessionId, ownerId, version, targetFiles);
+        // Shadow commits store session_id as the raw conversation ID (e.g., "001")
+        // Pass conversationId, not scopedSessionId
+        rollbackResult = await executeShadowRollback(conversationId, fullOwnerId, version, targetFiles) as any;
         break;
 
-      case 'vfs-snapshot':
-        rollbackResult = await executeVFSSnapshotRollback(db, scopedSessionId, version, ownerId, targetFiles);
+      case 'vfs-snapshot': {
+        const db = getDatabase();
+        rollbackResult = await executeVFSSnapshotRollback(db, conversationId, version, fullOwnerId, targetFiles);
         break;
+      }
 
       case 'git':
-        rollbackResult = await executeGitRollback(scopedSessionId, version, ownerId, targetFiles);
+        rollbackResult = await executeGitRollback(conversationId, version, fullOwnerId, targetFiles);
         break;
 
       default: {
@@ -198,10 +197,13 @@ export async function POST(
 
 /**
  * Execute rollback using shadow commit system
- * 
+ *
  * Shadow commits track all file changes with full history and diffs.
  * This is the recommended rollback mode.
- * 
+ *
+ * DESKTOP MODE: Shadow commits are metadata-only (no file content).
+ * Falls back to VFS diffTracker-based rollback which tracks content in-memory.
+ *
  * @param sessionId - Session ID (scoped as ownerId:sessionId)
  * @param ownerId - Owner ID for VFS operations
  * @param version - Version to rollback to
@@ -225,7 +227,30 @@ async function executeShadowRollback(sessionId: string, ownerId: string, version
       };
     }
 
-    // Parse commit transactions to get file contents
+    // DESKTOP MODE: Shadow commits are metadata-only (no content in transactions).
+    // Fall back to VFS diffTracker-based rollback which tracks content in-memory.
+    const isDesktopMode = process.env.DESKTOP_MODE === 'true' || process.env.DESKTOP_LOCAL_EXECUTION === 'true';
+    if (isDesktopMode) {
+      logger.info('[Git Rollback] Desktop mode detected, using VFS diffTracker rollback', {
+        sessionId,
+        version,
+      });
+      const result = await virtualFilesystem.rollbackToVersion(ownerId, version);
+      return {
+        success: result.success,
+        filesRestored: result.restoredFiles + result.deletedFiles,
+        error: result.errors.length > 0 ? result.errors.join('; ') : undefined,
+        details: {
+          commitId: targetCommit.commitId,
+          commitMessage: targetCommit.message,
+          commitDate: targetCommit.createdAt,
+          restoredFiles: result.restoredFiles,
+          deletedFiles: result.deletedFiles,
+        },
+      };
+    }
+
+    // Web mode: Parse commit transactions to get file contents
     let filesToRestore: Record<string, string> = {};
     
     // Use getCommit to reliably extract transactions from the full commit record

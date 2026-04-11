@@ -9,6 +9,8 @@
 
 import { createLogger } from '@/lib/utils/logger';
 import { getDatabase } from '@/lib/database/connection';
+import { getEmbeddingProvider } from '@/lib/vector-memory/embeddings';
+import { contentHash, embeddingCache } from '@/lib/cache';
 
 const logger = createLogger('RepoIndex');
 
@@ -550,19 +552,30 @@ export class RepoIndexer {
   }
 
   private async generateEmbeddings(content: string): Promise<number[]> {
-    // Placeholder for embedding generation
-    // In production, use actual embedding model (e.g., via API or local model)
-    // For now, return a simple hash-based vector
+    // Check cache first — avoids re-embedding unchanged content during incremental indexing
+    const hash = contentHash(content);
+    const cached = embeddingCache.get<number[]>(hash);
+    if (cached) return cached;
 
-    const vectorSize = 384; // Common embedding size
-    const vector = new Array(vectorSize).fill(0);
+    try {
+      const provider = getEmbeddingProvider();
+      const result = await provider.embed(content);
 
-    // Simple hash-based embedding (not semantic, just for demonstration)
-    for (let i = 0; i < content.length && i < vectorSize; i++) {
-      vector[i] = content.charCodeAt(i) / 255;
+      // Store in cache (24h TTL for repo content — content rarely changes)
+      embeddingCache.set(hash, result, 24 * 60 * 60 * 1000);
+      return result;
+    } catch (error: any) {
+      logger.warn('Embedding generation failed, using hash fallback', { error: error.message });
+      // Hash fallback so indexing never blocks on a missing provider
+      const vectorSize = 384;
+      const vector = new Array(vectorSize).fill(0);
+      for (let i = 0; i < content.length && i < vectorSize; i++) {
+        vector[i] = content.charCodeAt(i) / 255;
+      }
+      // Cache the fallback vector too
+      embeddingCache.set(hash, vector, 24 * 60 * 60 * 1000);
+      return vector;
     }
-
-    return vector;
   }
 
   private calculateMatchScore(line: string, query: string): number {

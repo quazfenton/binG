@@ -4,38 +4,44 @@
     "context7": {
       "command": "npx",
       "args": ["-y", "@upstash/context7-mcp"],
-      "enabled": true,
-      "description": "Live documentation + framework context injection"
+      "enabled": false,
+      "disabledReason": "stdio/npx server — only available in desktop mode",
+      "description": "Live documentation + framework context injection (disabled — stdio only)"
     },
     "filesystem": {
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-filesystem", "."],
-      "enabled": true,
-      "description": "Read/write local files with project root access"
+      "enabled": false,
+      "disabledReason": "stdio/npx server — only available in desktop mode",
+      "description": "Read/write local files with project root access (disabled — stdio only)"
     },
     "git": {
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/mcp-server-git", "."],
-      "enabled": true,
-      "description": "Git repository analysis and operations"
+      "enabled": false,
+      "disabledReason": "Package @modelcontextprotocol/mcp-server-git not found on npm registry",
+      "description": "Git repository analysis and operations (disabled — package unavailable)"
     },
     "fetch": {
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/mcp-server-fetch"],
-      "enabled": true,
-      "description": "HTTP requests and API fetching"
+      "enabled": false,
+      "disabledReason": "Package @modelcontextprotocol/mcp-server-fetch not found on npm registry",
+      "description": "HTTP requests and API fetching (disabled — package unavailable)"
     },
     "memory": {
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-memory"],
-      "enabled": true,
-      "description": "Persistent memory storage across sessions"
+      "enabled": false,
+      "disabledReason": "stdio/npx server — only available in desktop mode",
+      "description": "Persistent memory storage across sessions (disabled — stdio only)"
     },
     "sequential-thinking": {
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
-      "enabled": true,
-      "description": "Structured reasoning chains for complex tasks"
+      "enabled": false,
+      "disabledReason": "stdio/npx server — only available in desktop mode",
+      "description": "Structured reasoning chains for complex tasks (disabled — stdio only)"
     },
     "sqlite": {
       "command": "npx",
@@ -54,6 +60,12 @@
       "args": ["-y", "@modelcontextprotocol/server-bash"],
       "enabled": false,
       "description": "Run shell commands with safety controls (use with caution)"
+    },
+    "playwright": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest"],
+      "enabled": true,
+      "description": "Browser automation, page inspection, screenshots, and E2E testing via Playwright"
     }
   },
   "mcpSettings": {

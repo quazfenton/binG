@@ -17,7 +17,7 @@ export const TERMINAL_LIMITS = {
   
   // Timeouts
   CONNECTION_TIMEOUT_MS: parseInt(process.env.TERMINAL_CONNECTION_TIMEOUT_MS || '30000', 10), // 30 seconds
-  IDLE_TIMEOUT_MS: parseInt(process.env.TERMINAL_IDLE_TIMEOUT_MS || '1800000', 10), // 30 minutes
+  IDLE_TIMEOUT_MS: parseInt(process.env.TERMINAL_IDLE_TIMEOUT_MS || '300000', 10), // 5 minutes
   PING_INTERVAL_MS: 30000, // 30 seconds
   PONG_TIMEOUT_MS: 60000, // 60 seconds
   CLEANUP_INTERVAL_MS: 60000, // 1 minute

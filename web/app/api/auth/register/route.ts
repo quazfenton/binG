@@ -3,8 +3,43 @@ import { authService } from '@/lib/auth/auth-service';
 import { rateLimiters } from '@/lib/middleware/rate-limit';
 import { validateRequest, schemas } from '@/lib/middleware/validate';
 import { createLogger } from '@/lib/utils/logger';
+import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-service';
 
 const logger = createLogger('API:Auth:Register');
+
+/**
+ * Transfer anonymous VFS workspace to the newly authenticated user.
+ * Non-fatal — failures are logged but do not block registration.
+ */
+async function transferVFSFromAnonymous(
+  request: NextRequest,
+  user: { id: number | string } | undefined
+): Promise<void> {
+  const anonCookie = request.cookies.get('anon-session-id')?.value;
+  if (!anonCookie || !user?.id) return;
+
+  try {
+    const rawSessionId = anonCookie.startsWith('anon_') ? anonCookie.slice(5) : anonCookie;
+    const sanitizedSessionId = rawSessionId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
+    const anonOwnerId = `anon:${sanitizedSessionId}`;
+    const newOwnerId = String(user.id);
+
+    if (anonOwnerId !== newOwnerId) {
+      const transferResult = await virtualFilesystem.transferOwnership(anonOwnerId, newOwnerId);
+      if (transferResult.transferredFiles > 0) {
+        logger.info('VFS ownership transferred from anonymous to authenticated user', {
+          from: anonOwnerId,
+          to: newOwnerId,
+          transferredFiles: transferResult.transferredFiles,
+        });
+      }
+    }
+  } catch (err) {
+    logger.warn('VFS ownership transfer failed during registration (non-fatal)', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
 
 /**
  * Registration input validation schema
@@ -69,6 +104,9 @@ export const POST = validateRequest(registerSchema)(async (request, { validatedB
     if (result.requiresVerification) {
       logger.info('Registration successful, verification required', { email });
 
+      // Still transfer VFS ownership — the user exists even if not yet verified
+      await transferVFSFromAnonymous(request, result.user);
+
       return NextResponse.json({
         success: true,
         requiresVerification: true,
@@ -78,6 +116,9 @@ export const POST = validateRequest(registerSchema)(async (request, { validatedB
     }
 
     logger.info('Registration successful', { email, userId: result.user?.id });
+
+    // Transfer anonymous VFS data to the newly created authenticated user
+    await transferVFSFromAnonymous(request, result.user);
 
     // Set session cookie
     // SECURITY: Do NOT expose sessionId in response body - it's available via httpOnly cookie
@@ -93,6 +134,15 @@ export const POST = validateRequest(registerSchema)(async (request, { validatedB
         secure: process.env.NODE_ENV === 'production',
         sameSite: 'lax',
         maxAge: 7 * 24 * 60 * 60, // 7 days
+      });
+      // Clear anonymous session cookie — authenticated users should NOT
+      // fall back to their old anonymous workspace identity
+      response.cookies.set('anon-session-id', '', {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 0,
+        path: '/',
       });
     }
 

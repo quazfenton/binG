@@ -4,7 +4,17 @@ import { diffLines } from 'diff';
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { FEATURE_FLAGS } from '@/config/features';
+// Inlined feature flags to avoid Turbopack module resolution issues
+const FEATURE_FLAGS = {
+  NEXTCLOUD_URL: process.env.NEXTCLOUD_URL || '',
+  NEXTCLOUD_USERNAME: process.env.NEXTCLOUD_USERNAME || '',
+  NEXTCLOUD_PASSWORD: process.env.NEXTCLOUD_PASSWORD || '',
+  ENABLE_CLOUD_STORAGE: process.env.ENABLE_CLOUD_STORAGE === 'true',
+  CLOUD_STORAGE_PROVIDER: process.env.CLOUD_STORAGE_PROVIDER || 'gcp',
+  CLOUD_STORAGE_BUCKET: process.env.CLOUD_STORAGE_BUCKET || '',
+  CLOUD_STORAGE_PER_USER_LIMIT_BYTES: parseInt(process.env.CLOUD_STORAGE_PER_USER_LIMIT_BYTES || '5368709120', 10),
+  IS_DEVELOPMENT: process.env.NODE_ENV === 'development',
+};
 
 export const dynamic = 'force-dynamic';
 

@@ -27,10 +27,10 @@ export interface ModelRouterConfig {
 }
 
 const defaultModels: Record<ModelTier, ModelConfig> = {
-  fast: { provider: 'openai', model: 'gpt-4o-mini', temperature: 0.3 },
-  reasoning: { provider: 'openai', model: 'gpt-4o', temperature: 0.2 },
-  coder: { provider: 'openai', model: 'gpt-4o', temperature: 0.1 },
-  multimodal: { provider: 'openai', model: 'gpt-4o', temperature: 0.2 },
+  fast: { provider: 'openai', model: process.env.FAST_MODEL || 'gpt-4o-mini', temperature: 0.3 },
+  reasoning: { provider: 'openai', model: process.env.REASONING_MODEL || 'gpt-4o', temperature: 0.2 },
+  coder: { provider: 'anthropic', model: process.env.CODER_MODEL || 'claude-sonnet-4-20250514', temperature: 0.1 },
+  multimodal: { provider: 'openai', model: process.env.REASONING_MODEL || 'gpt-4o', temperature: 0.2 },
 };
 
 export class ModelRouter {

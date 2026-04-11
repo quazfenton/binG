@@ -364,6 +364,104 @@ const SERVER_FILES = [
 ];
 
 /**
+ * Backend-only dependency patterns. If a project has ONLY these deps (no frontend framework),
+ * it's a backend project that Sandpack cannot run.
+ */
+const BACKEND_ONLY_DEPS = new Set([
+  'express', 'fastify', 'koa', 'hapi',
+  'sqlite3', 'pg', 'mysql', 'mysql2', 'mongoose', 'sequelize', 'prisma', 'typeorm',
+  'cors', 'helmet', 'body-parser', 'morgan', 'dotenv', 'jsonwebtoken', 'bcrypt',
+  'socket.io', 'ws', 'nodemailer', 'stripe', 'firebase-admin',
+]);
+
+/**
+ * Frontend framework dependency patterns. If present, the project HAS a frontend
+ * even if it also has backend deps (like Next.js + Express).
+ */
+const FRONTEND_DEPS = new Set([
+  'react', 'react-dom', 'vue', 'angular', 'svelte', 'solid-js', 'preact',
+  '@angular/core', '@sveltejs/kit', 'next', 'nuxt', 'gatsby', 'remix', '@remix-run/node',
+]);
+
+/**
+ * Node.js code patterns that indicate backend-only code (not runnable in Sandpack)
+ */
+const NODE_BACKEND_PATTERNS = [
+  /require\(['"]express['"]\)/,
+  /from ['"]express['"]/,
+  /require\(['"]fastify['"]\)/,
+  /require\(['"]sqlite3['"]\)/,
+  /require\(['"]pg['"]\)/,
+  /require\(['"]mongoose['"]\)/,
+  /\.listen\(\d+\)/,
+  /app\.listen\(/,
+  /server\.listen\(/,
+  /process\.env\./,
+  /__dirname/,
+  /require\(['"]node:/,
+];
+
+/**
+ * File path patterns that indicate backend-only files (should be excluded from Sandpack)
+ */
+const BACKEND_FILE_PATTERNS = [
+  /\/server\//i,
+  /\/api\//i,
+  /\/routes\//i,
+  /\/middleware\//i,
+  /\/controllers?\//i,
+  /\/services?\//i,
+  /\/models?\//i,
+  /server\.(js|ts|mjs)$/,
+  /app\.(js|ts|mjs)$/,
+  /api\.(js|ts|mjs)$/,
+];
+
+/**
+ * Check if a project is backend-only (not runnable in Sandpack).
+ *
+ * A project is backend-only if:
+ * - It has backend deps but NO frontend framework deps
+ * - OR it has Node.js backend code patterns but no frontend files
+ *
+ * A project with BOTH frontend AND backend (e.g. Next.js + Express) is NOT backend-only
+ * — Sandpack can still render the frontend portion.
+ */
+export function isBackendOnlyProject(files: Record<string, string>, deps: string[]): { isBackendOnly: boolean; reasons: string[] } {
+  const reasons: string[] = [];
+  const depNames = deps.map(d => d.toLowerCase());
+  const filePaths = Object.keys(files);
+  const allContent = Object.values(files).join('\n').slice(0, 50000); // limit for perf
+
+  // Check: has backend deps
+  const backendDepsFound = depNames.filter(d => BACKEND_ONLY_DEPS.has(d));
+  const hasBackendDeps = backendDepsFound.length > 0;
+
+  // Check: has frontend framework deps
+  const frontendDepsFound = depNames.filter(d => FRONTEND_DEPS.has(d));
+  const hasFrontendDeps = frontendDepsFound.length > 0;
+
+  // Check: has frontend files (HTML, JSX, TSX, Vue, Svelte)
+  const hasFrontendFiles = filePaths.some(f =>
+    /\.(html|jsx|tsx|vue|svelte)$/i.test(f)
+  );
+
+  // Check: has backend code patterns
+  const backendPatternsFound = NODE_BACKEND_PATTERNS.filter(p => p.test(allContent));
+
+  // Decision: backend-only if has backend deps/patterns AND no frontend at all
+  if (hasBackendDeps && !hasFrontendDeps && !hasFrontendFiles) {
+    reasons.push(`Backend deps only: ${backendDepsFound.slice(0, 5).join(', ')}`);
+  }
+
+  if (backendPatternsFound.length >= 2 && !hasFrontendFiles && !hasFrontendDeps) {
+    reasons.push(`Backend code patterns: ${backendPatternsFound.map(p => p.source).slice(0, 3).join(', ')}`);
+  }
+
+  return { isBackendOnly: reasons.length > 0, reasons };
+}
+
+/**
  * Heavy computation patterns
  */
 const HEAVY_COMPUTATION_PATTERNS = ['tensorflow', 'pytorch', 'cuda', 'gpu', 'torch', 'keras'];
@@ -429,11 +527,12 @@ export class LivePreviewOffloading {
    */
   analyzeHeuristics(request: PreviewRequest): OffloadHeuristics {
     const { files } = request;
-    const filePaths = Object.keys(files);
-    const fileContents = Object.values(files);
+    const safeFiles = files || {};
+    const filePaths = Object.keys(safeFiles);
+    const fileContents = Object.values(safeFiles);
 
     // Detect node_modules size
-    const nodeModulesSizeMB = this.estimateNodeModulesSize(files);
+    const nodeModulesSizeMB = this.estimateNodeModulesSize(safeFiles);
 
     // Estimate build time based on project characteristics
     const estimatedBuildTime = this.estimateBuildTime(filePaths, fileContents);
@@ -442,7 +541,7 @@ export class LivePreviewOffloading {
     const estimatedMemoryMB = this.estimateMemoryUsage(filePaths, fileContents);
 
     // Analyze build logs if available
-    const buildLogs = this.extractBuildLogs(files);
+    const buildLogs = this.extractBuildLogs(safeFiles);
     const buildWarningsCount = this.countBuildWarnings(buildLogs);
     const buildErrorsCount = this.countBuildErrors(buildLogs);
 
@@ -675,15 +774,18 @@ export class LivePreviewOffloading {
    */
   detectProject(request: PreviewRequest): ProjectDetection & { heuristics?: OffloadHeuristics } {
     const { files, scopePath } = request;
-    
+
+    // Guard against undefined/null files
+    const safeFiles = files || {};
+
     // Handle both object format and array format for backward compatibility
-    const filesObj = Array.isArray(files) 
-      ? (files as Array<{name: string; content: string}>).reduce((acc, f) => {
+    const filesObj = Array.isArray(safeFiles)
+      ? (safeFiles as Array<{name: string; content: string}>).reduce((acc, f) => {
           if (f.name && f.content !== undefined) acc[f.name] = f.content;
           return acc;
         }, {} as Record<string, string>)
-      : files as Record<string, string>;
-    
+      : safeFiles as Record<string, string>;
+
     const filePaths = Object.keys(filesObj);
     const fileCount = filePaths.length;
 
@@ -797,13 +899,17 @@ export class LivePreviewOffloading {
     // Check for Node.js/Express backend - but NOT if there's a frontend framework
     // Must check ALL frontend frameworks to avoid misdetecting Next.js + Express as 'node'
     const hasExpress = deps.express || deps['express'] || deps['koa'] || deps['koa'] || deps['fastify'] || deps['fastify'];
-    const hasServerFiles = filePaths.some(p => SERVER_FILES.slice(0, 4).includes(p));
+    // Only check for specific server files (not generic ones like app.js which can be frontend entry points)
+    const hasSpecificServerFiles = filePaths.some(p => ['server.js', 'server.ts', 'server.mjs', 'index.mjs'].includes(p));
+    // Also check code content for backend patterns
+    const hasBackendCodePatterns = this.detectBackendCodePatterns(files);
     const hasFrontend = deps.react || deps['react'] || deps.vue || deps['@vue/core'] || deps.svelte || 
       deps['@sveltejs/kit'] || deps.next || deps['next'] || deps['@angular/core'] || deps['solid-js'] || 
       deps.astro || deps.gatsby || deps['@remix-run/react'] || deps['@builder.io/qwik'];
     
-    // Only detect as 'node' if there's no frontend framework
-    if ((hasExpress || hasServerFiles) && !hasFrontend) {
+    // Only detect as 'node' if there's strong evidence of backend (express deps OR specific server files OR backend code patterns)
+    // and no frontend framework detected
+    if ((hasExpress || hasSpecificServerFiles || hasBackendCodePatterns) && !hasFrontend) {
       return 'node';
     }
     
@@ -846,6 +952,14 @@ export class LivePreviewOffloading {
     const hasAngularFiles = filePaths.some(p => p.includes('.component.') || p.includes('.module.'));
     const hasAngular = deps['@angular/core'] || hasAngularFiles;
 
+    // Detect vanilla HTML/CSS/JS projects (no framework, no package.json)
+    const hasHtml = filePaths.some(p => p.endsWith('.html'));
+    const hasJsFiles = filePaths.some(p => /\.(js|mjs|cjs)$/.test(p));
+    const hasCssFiles = filePaths.some(p => p.endsWith('.css'));
+    if (hasHtml && (hasJsFiles || hasCssFiles) && !packageJson) {
+      return 'vanilla';
+    }
+
     // Check for config files
     const hasNextConfig = filePaths.some(p => p.includes('next.config'));
     const hasNuxtConfig = filePaths.some(p => p.includes('nuxt.config'));
@@ -865,7 +979,7 @@ export class LivePreviewOffloading {
       if (pythonContent.includes('from django import') || pythonContent.includes('django.setup()') || pythonContent.includes('DJANGO_')) return 'django';
       
       // Default to flask if Python but no specific framework detected
-      if (hasServerFiles) return 'node';  // Mixed Node + Python
+      if (hasSpecificServerFiles) return 'node';  // Mixed Node + Python
     }
 
     // JavaScript/TypeScript frameworks by file patterns
@@ -888,20 +1002,44 @@ export class LivePreviewOffloading {
     if (jsContent.includes('from "@sveltejs/') || jsContent.includes('svelte/store')) return 'svelte';
     if (jsContent.includes('from "@angular/') || jsContent.includes('@Component(')) return 'angular';
     
-    // Node.js/Express detection from code
-    if (jsContent.includes('express()') || jsContent.includes('express.') || jsContent.includes('app.get(') || jsContent.includes('app.post(')) return 'node';
-
-    // Check for HTML files - vanilla project
-    if (filePaths.some(p => p.endsWith('.html'))) return 'vanilla';
-
-    // Node.js detection from code content (fallback)
-    if (hasServerFiles || jsContent.includes('express()') || jsContent.includes('app.get(')) {
+    // Node.js/Express detection from code (only with specific server files)
+    if (hasSpecificServerFiles && (jsContent.includes('express()') || jsContent.includes('app.get('))) {
       if (!hasVue && !hasSvelte && !hasAngular && !hasJsx) {
         return 'node';
       }
     }
 
+    // Check for HTML files - vanilla project (should come BEFORE general node detection)
+    if (filePaths.some(p => p.endsWith('.html'))) return 'vanilla';
+
     return 'unknown';
+  }
+
+  /**
+   * Detect backend code patterns in JavaScript/TypeScript files
+   */
+  private detectBackendCodePatterns(files: Record<string, string>): boolean {
+    const jsFiles = Object.entries(files)
+      .filter(([p]) => /\.(js|ts|jsx|tsx|mjs|cjs)$/.test(p))
+      .map(([, c]) => c)
+      .join('\n');
+    
+    const backendPatterns = [
+      /require\(['"]express['"]\)/,
+      /from ['"]express['"]/,
+      /require\(['"]fastify['"]\)/,
+      /require\(['"]sqlite3['"]\)/,
+      /require\(['"]pg['"]\)/,
+      /require\(['"]mongoose['"]\)/,
+      /\.listen\(\d+\)/,
+      /app\.listen\(/,
+      /server\.listen\(/,
+      /process\.env\./,
+      /__dirname/,
+      /require\(['"]node:/,
+    ];
+    
+    return backendPatterns.filter(p => p.test(jsFiles)).length >= 2;
   }
 
   /**
@@ -1372,63 +1510,107 @@ export class LivePreviewOffloading {
    * Migrated from preview-offloader.ts
    */
   detectPort(files: Record<string, string>): number {
-    const packageJson = this.parsePackageJson(files['package.json'] || files['/package.json']);
+    // Guard against undefined/null
+    const safeFiles = files || {};
+    // Handle both Record and array formats for backward compatibility
+    const filesObj: Record<string, string> = Array.isArray(safeFiles)
+      ? (safeFiles as Array<{name: string; content: string}>).reduce((acc, f) => {
+          if (f.name && f.content !== undefined) acc[f.name] = f.content;
+          return acc;
+        }, {} as Record<string, string>)
+      : safeFiles as Record<string, string>;
+
+    const packageJson = this.parsePackageJson(filesObj['package.json'] || filesObj['/package.json']);
+
+    // 1. Check config files first (Vite, Webpack, etc.)
+    // Vite config pattern: server: { port: 5173 }
+    const viteConfig = filesObj['vite.config.js'] || filesObj['vite.config.ts'] || filesObj['vite.config.mjs'] || '';
+    if (viteConfig) {
+      const vitePortMatch = viteConfig.match(/server\s*:\s*\{[\s\S]*?port\s*:\s*(\d+)/);
+      if (vitePortMatch) {
+        return parseInt(vitePortMatch[1], 10);
+      }
+    }
+
+    // Webpack config pattern: devServer: { port: 8080 }
+    const webpackConfig = filesObj['webpack.config.js'] || filesObj['webpack.config.ts'] || '';
+    if (webpackConfig) {
+      const webpackPortMatch = webpackConfig.match(/devServer\s*:\s*\{[\s\S]*?port\s*:\s*(\d+)/);
+      if (webpackPortMatch) {
+        return parseInt(webpackPortMatch[1], 10);
+      }
+    }
+
+    // Next.js config pattern: const PORT = 3001 or env.PORT
+    const nextConfig = filesObj['next.config.js'] || filesObj['next.config.ts'] || filesObj['next.config.mjs'] || '';
+    if (nextConfig) {
+      const nextPortMatch = nextConfig.match(/(?:const\s+)?PORT\s*=\s*(\d+)|port\s*:\s*(\d+)/);
+      if (nextPortMatch) {
+        return parseInt(nextPortMatch[1] || nextPortMatch[2], 10);
+      }
+    }
+
+    // 2. Check package.json scripts for explicit port flags
     if (packageJson) {
       const scripts = packageJson.scripts || {};
-      const startScript = scripts.dev || scripts.start || '';
+      const startScript = scripts.dev || scripts.start || scripts.serve || '';
 
-      // Extract port from start script
+      // Extract port from start script: -p 3000, --port 3000, PORT=3000
       const portMatch = startScript.match(/-p\s+(\d+)|--port\s+(\d+)|PORT=(\d+)/);
       if (portMatch) {
         return parseInt(portMatch[1] || portMatch[2] || portMatch[3], 10);
       }
 
-      // Framework defaults from dependencies
+      // Framework defaults from dependencies (when no explicit port)
       const deps = { ...packageJson.dependencies, ...packageJson.devDependencies };
+      if (deps.vite || deps['vite']) return 5173;
+      if (deps.astro || deps['astro']) return 4321;
+      if (deps.gatsby || deps['gatsby']) return 8000;
       if (deps.next || deps['next']) return 3000;
-      if (deps.nuxt || deps['@nuxt/core']) return 3000;
-      if (deps.vite) return 5173;
-      if (deps.react) return 3000;
-      if (deps.vue) return 3000;
-      if (deps.svelte) return 3000;
-      if (deps.astro) return 4321;
-      if (deps.gatsby) return 8000;
-      if (deps.remix) return 3000;
+      if (deps.nuxt || deps['nuxt'] || deps['@nuxt/core']) return 3000;
+      if (deps.remix || deps['remix'] || deps['@remix-run/node']) return 3000;
+      if (deps.react || deps['react']) return 3000;
+      if (deps.vue || deps['vue']) return 3000;
+      if (deps.svelte || deps['svelte']) return 3000;
     }
 
-    // Check Python files for port
-    for (const [path, content] of Object.entries(files)) {
+    // 3. Check Python files for port
+    for (const [path, content] of Object.entries(filesObj)) {
       if (path.endsWith('.py')) {
-        // Flask/FastAPI pattern: app.run(port=8000) or uvicorn.run(port=8000)
-        const portMatch =
-          content.match(/\b(?:app|uvicorn)\.run\([\s\S]*?\bport\s*=\s*(\d+)\b/) ??
-          content.match(/\bport\s*=\s*(\d+)\b/);
-        if (portMatch) {
-          return parseInt(portMatch[1], 10);
+        // Flask pattern: app.run(port=5000) or app.run(host='0.0.0.0', port=5000)
+        const flaskPortMatch = content.match(/app\.run\([\s\S]*?port\s*=\s*(\d+)/);
+        if (flaskPortMatch) {
+          return parseInt(flaskPortMatch[1], 10);
         }
-        // Framework defaults
+
+        // FastAPI/Uvicorn pattern: uvicorn.run(app, port=8000)
+        const uvicornPortMatch = content.match(/uvicorn\.run\([\s\S]*?port\s*=\s*(\d+)/);
+        if (uvicornPortMatch) {
+          return parseInt(uvicornPortMatch[1], 10);
+        }
+
+        // Generic port= pattern
+        const genericPortMatch = content.match(/\bport\s*=\s*(\d+)\b/);
+        if (genericPortMatch) {
+          return parseInt(genericPortMatch[1], 10);
+        }
+
+        // Framework detection from imports
         if (content.includes('from flask import') || content.includes('Flask(')) return 5000;
         if (content.includes('from fastapi import') || content.includes('FastAPI(') || content.includes('uvicorn.')) return 8000;
         if (path.endsWith('manage.py') || content.includes('from django import')) return 8000;
-        // Streamlit default
         if (content.includes('import streamlit') || content.includes('st.')) return 8501;
-        // Gradio default
         if (content.includes('import gradio')) return 7860;
       }
     }
 
-    // Check JavaScript/TypeScript files for port
-    for (const [path, content] of Object.entries(files)) {
-      if (path.endsWith('.js') || path.endsWith('.ts') || path.endsWith('.jsx') || path.endsWith('.tsx')) {
+    // 4. Check JavaScript/TypeScript files for port
+    for (const [path, content] of Object.entries(filesObj)) {
+      if (/\.(js|ts|jsx|tsx|mjs|cjs)$/.test(path)) {
         // Express pattern: app.listen(3000) or app.listen({ port: 3000 })
-        const portMatch = content.match(/app\.listen\((\d+)|app\.listen\(\{.*port:\s*(\d+)/);
-        if (portMatch) {
-          return parseInt(portMatch[1] || portMatch[2], 10);
-        }
-        // HTTP server pattern: http.createServer().listen(3000)
-        const httpMatch = content.match(/\.listen\((\d+)/);
-        if (httpMatch) {
-          return parseInt(httpMatch[1], 10);
+        const expressPortMatch = content.match(/\.listen\(\s*(\d+)/) || content.match(/\.listen\(\{[^}]*port\s*:\s*(\d+)/);
+        if (expressPortMatch) {
+          return parseInt(expressPortMatch[1], 10);
         }
       }
     }
@@ -1488,7 +1670,10 @@ export class LivePreviewOffloading {
     const buildDirs = ['dist', 'build', '.next', '.nuxt', '.output', 'public'];
     const filteredFiles: Record<string, { code: string }> = {};
 
-    for (const [path, content] of Object.entries(detection.normalizedFiles)) {
+    // Guard: normalizedFiles may be undefined if not provided
+    const files = detection.normalizedFiles || {};
+
+    for (const [path, content] of Object.entries(files)) {
       // Skip build outputs
       if (buildDirs.some(dir => path.startsWith(dir + '/') || path.startsWith('/' + dir + '/'))) continue;
       // Skip node_modules
@@ -2028,8 +2213,38 @@ export const livePreviewOffloading = new LivePreviewOffloading();
 export const detectProject = (request: PreviewRequest) =>
   livePreviewOffloading.detectProject(request);
 
-export const getSandpackConfig = (detection: ProjectDetection) =>
-  livePreviewOffloading.getSandpackConfig(detection);
+export const getSandpackConfig = (filesOrDetection: Array<{name: string; content: string}> | Record<string, string> | ProjectDetection, framework?: AppFramework) => {
+  // Handle both old API (files, framework) and new API (detection)
+  if (framework) {
+    // Old API: files + framework
+    const files = Array.isArray(filesOrDetection)
+      ? (filesOrDetection as Array<{name: string; content: string}>).reduce((acc, f) => {
+          acc[f.name] = f.content;
+          return acc;
+        }, {} as Record<string, string>)
+      : filesOrDetection as Record<string, string>;
+
+    return livePreviewOffloading.getSandpackConfig({
+      framework: framework!,
+      bundler: 'unknown',
+      packageManager: 'npm',
+      entryPoint: null,
+      rootScores: new Map<string, number>(),
+      selectedRoot: '',
+      previewMode: 'sandpack',
+      hasBackend: false,
+      hasPython: false,
+      hasNodeServer: false,
+      hasNextJS: false,
+      hasHeavyComputation: false,
+      hasAPIKeys: false,
+      fileCount: Object.keys(files).length,
+      normalizedFiles: files,
+    });
+  }
+  // New API: detection object
+  return livePreviewOffloading.getSandpackConfig(filesOrDetection as ProjectDetection);
+};
 
 export const detectPreviewMode = (
   filePaths: string[],
@@ -2085,6 +2300,111 @@ export const detectPort = (files: Record<string, string>) =>
 
 export const getCodeSandboxTemplate = (framework: AppFramework) =>
   livePreviewOffloading.getCodeSandboxTemplate(framework);
+
+// ============================================================================
+// Cloud Preview Integration via PreviewManager
+// ============================================================================
+// Bridges the detection/offload decision (this module) with the actual
+// cloud preview execution (PreviewManager). Used by code-preview-panel.tsx
+// to start sandbox-based previews when local preview isn't suitable.
+// ============================================================================
+
+import { getPreviewManager, type StartPreviewConfig, type PreviewResult } from '../sandbox/preview-manager';
+import type { SandboxHandle } from '../sandbox/providers/sandbox-provider';
+
+export interface CloudPreviewConfig {
+  /** Sandbox handle (from sandbox provider) */
+  handle: SandboxHandle;
+  /** Project files (if not already in sandbox) */
+  files?: Record<string, string>;
+  /** Detected framework */
+  framework?: string;
+  /** Port to expose (auto-detected if not provided) */
+  port?: number;
+  /** Start command (auto-generated from framework if not provided) */
+  startCommand?: string;
+}
+
+/**
+ * Start a cloud preview for a sandbox session.
+ *
+ * Integrates PreviewManager with live-preview-offloading detection:
+ * 1. Detects framework from files (if not provided)
+ * 2. Auto-generates start command based on framework
+ * 3. Uses PreviewManager for port allocation, caching, and URL generation
+ *
+ * @returns Preview result with URL, port, and metadata
+ */
+export async function startCloudPreview(config: CloudPreviewConfig): Promise<PreviewResult> {
+  const { handle, files, framework: providedFramework, port: providedPort, startCommand } = config;
+  const previewManager = getPreviewManager();
+
+  // Detect framework from files if not provided
+  let detectedFramework = providedFramework;
+  if (files && !detectedFramework) {
+    const detectionResult = livePreviewOffloading.detectProject({ files });
+    detectedFramework = detectionResult.framework === 'unknown' ? 'vanilla' : detectionResult.framework;
+  }
+  const framework = detectedFramework || 'vanilla';
+
+  // Auto-generate start command based on framework
+  let cmd = startCommand;
+  if (!cmd) {
+    const frameworkCommands: Record<string, string> = {
+      react: 'npm run dev',
+      next: 'npm run dev',
+      vue: 'npm run dev',
+      svelte: 'npm run dev',
+      angular: 'npm start',
+      vite: 'npm run dev',
+      'vite-react': 'npm run dev',
+      vanilla: 'npx serve -l ' + (providedPort || 3000) + ' .',
+      flask: 'python app.py',
+      fastapi: 'uvicorn main:app --host 0.0.0.0 --port ' + (providedPort || 8000),
+      django: 'python manage.py runserver 0.0.0.0:' + (providedPort || 8000),
+      python: 'python main.py',
+      node: 'node index.js',
+    };
+    cmd = frameworkCommands[framework] || 'npm run dev';
+  }
+
+  // Auto-detect port from files if not provided
+  let finalPort = providedPort;
+  if (!finalPort && files) {
+    finalPort = livePreviewOffloading.detectPort(files);
+  }
+  finalPort = finalPort || 3000;
+
+  // Start the preview via PreviewManager (handles caching, port allocation, provider-specific methods)
+  const previewConfig: StartPreviewConfig = {
+    handle,
+    port: finalPort,
+    startCommand: cmd,
+    framework,
+    background: true,
+  };
+
+  logger.info('[startCloudPreview] Starting cloud preview', {
+    sandboxId: handle.id,
+    framework,
+    port: finalPort,
+    startCommand: cmd,
+  });
+
+  const result = await previewManager.startPreview(previewConfig);
+
+  logger.info('[startCloudPreview] Cloud preview started', {
+    sandboxId: handle.id,
+    url: result.url,
+    port: result.port,
+    framework,
+  });
+
+  return {
+    ...result,
+    metadata: { ...result.metadata, framework },
+  };
+}
 
 /**
  * Extract YouTube video ID from URL or plain ID

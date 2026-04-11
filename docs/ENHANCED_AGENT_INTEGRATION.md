@@ -15,7 +15,7 @@ import {
   workforceManager,
   mastraWorkflowIntegration,
   initializeOrchestration,
-} from '@/lib/agent/orchestration';
+} from '@bing/shared/agent/orchestration';
 
 // Initialize at app startup
 await initializeOrchestration();
@@ -71,7 +71,7 @@ interface EnhancedJobConfig {
 
 **Usage Example:**
 ```typescript
-import { enhancedBackgroundJobsManager } from '@/lib/agent/enhanced-background-jobs';
+import { enhancedBackgroundJobsManager } from '@bing/shared/agent/enhanced-background-jobs';
 
 // Set up integrations
 enhancedBackgroundJobsManager.setSessionManager(sessionManager);
@@ -128,7 +128,7 @@ class MastraWorkflowIntegration {
 
 **Usage Example:**
 ```typescript
-import { mastraWorkflowIntegration } from '@/lib/agent/mastra-workflow-integration';
+import { mastraWorkflowIntegration } from '@bing/shared/agent/mastra-workflow-integration';
 
 // Propose a task
 const proposal = await mastraWorkflowIntegration.proposeTask(

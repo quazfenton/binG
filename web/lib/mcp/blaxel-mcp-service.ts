@@ -479,11 +479,13 @@ export class BlaxelMcpService {
 /**
  * Verify callback signature from Blaxel webhook
  * @see https://docs.blaxel.ai/Agents/Asynchronous-triggers
+ * @param rawBody - The raw request body string (must be captured before JSON parsing)
  */
-export function verifyCallbackSignature(
+export async function verifyCallbackSignature(
   request: Request,
-  secret: string
-): { valid: boolean; error?: string } {
+  secret: string,
+  rawBody?: string
+): Promise<{ valid: boolean; error?: string }> {
   try {
     const signature = request.headers.get('x-blaxel-signature');
     const timestamp = request.headers.get('x-blaxel-timestamp');
@@ -495,11 +497,11 @@ export function verifyCallbackSignature(
     // Verify timestamp is recent (within 5 minutes)
     const now = Date.now() / 1000;
     const timestampNum = parseInt(timestamp, 10);
-    
+
     if (isNaN(timestampNum)) {
       return { valid: false, error: 'Invalid timestamp format' };
     }
-    
+
     if (Math.abs(now - timestampNum) > 300) {
       return { valid: false, error: 'Timestamp is too old or from the future' };
     }
@@ -510,23 +512,35 @@ export function verifyCallbackSignature(
       return { valid: false, error: 'Invalid signature format' };
     }
 
-    // Compute expected signature
-    // Note: In Node.js environment, we need to get the body differently
-    // This function should be called with the raw body string
-    const body = (request as any).bodyRaw || '';
+    // Use provided rawBody or clone the request to read body
+    const body = rawBody ?? await request.clone().text();
     if (!body) {
       return { valid: false, error: 'Request body is empty or not accessible' };
     }
 
-    const crypto = require('crypto');
-    const computedSignature = crypto
-      .createHmac('sha256', secret)
-      .update(body)
-      .digest('hex');
+    // Compute expected signature using Web Crypto API
+    const encoder = new TextEncoder();
+    const keyData = encoder.encode(secret);
+    const bodyData = encoder.encode(body);
+    const cryptoKey = await crypto.subtle.importKey(
+      'raw', keyData, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
+    );
+    const signatureBuffer = await crypto.subtle.sign('HMAC', cryptoKey, bodyData);
+    const computedSignature = Array.from(new Uint8Array(signatureBuffer))
+      .map(b => b.toString(16).padStart(2, '0'))
+      .join('');
 
     // Constant-time comparison to prevent timing attacks
-    const expectedBytes = Buffer.from(expectedSignature, 'hex');
-    const computedBytes = Buffer.from(computedSignature, 'hex');
+    function hexToBytes(hex: string): Uint8Array {
+      const bytes = new Uint8Array(hex.length / 2);
+      for (let i = 0; i < hex.length; i += 2) {
+        bytes[i / 2] = parseInt(hex.slice(i, i + 2), 16);
+      }
+      return bytes;
+    }
+
+    const expectedBytes = hexToBytes(expectedSignature);
+    const computedBytes = hexToBytes(computedSignature);
 
     if (expectedBytes.length !== computedBytes.length) {
       return { valid: false, error: 'Signature length mismatch' };
@@ -566,42 +580,31 @@ export function createMcpServerCode(tools: Array<{
   handler: string;
 }>): string {
   return `
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 
 const tools = ${JSON.stringify(tools, null, 2)};
 
-class MCP extends Server {
-  constructor() {
-    super({
-      name: 'blaxel-mcp-server',
-      version: '1.0.0',
-    }, {
-      capabilities: {
-        tools: {},
-      },
-    });
+const server = new McpServer({
+  name: 'blaxel-mcp-server',
+  version: '1.0.0',
+});
 
-    // Register tools
-    for (const tool of tools) {
-      this.registerTool(
-        tool.name,
-        {
-          description: tool.description,
-          inputSchema: tool.inputSchema,
-        },
-        async ({ args }) => {
-          // Execute tool handler
-          ${tools.map(t => `if (tool.name === '${t.name}') { ${t.handler} }`).join(' else ')}
-        }
-      );
+// Register tools dynamically
+for (const tool of tools) {
+  server.tool(
+    tool.name,
+    tool.description,
+    tool.inputSchema,
+    async (args) => {
+      ${tools.map(t => `if (args.name === '${t.name}') { return ${t.handler}; }`).join('\n      ')}
+      return { content: [{ type: 'text', text: 'Unknown tool' }] };
     }
-  }
+  );
 }
 
-const server = new MCP();
-const transport = new SSEServerTransport('/mcp', server);
-server.start(transport);
+const transport = new StdioServerTransport();
+await server.connect(transport);
 `;
 }

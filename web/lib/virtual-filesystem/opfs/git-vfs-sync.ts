@@ -104,7 +104,7 @@ export class GitVFSSync {
 
     try {
       // Get VFS snapshot via API
-      const snapshot = await getWorkspaceSnapshot(this.options.ownerId);
+      const snapshot = await getWorkspaceSnapshot();
       
       if (!snapshot) {
         return {
@@ -297,7 +297,7 @@ export class GitVFSSync {
     // Get VFS version
     let vfsVersion = 0;
     try {
-      const snapshot = await getWorkspaceSnapshot(this.options.ownerId);
+      const snapshot = await getWorkspaceSnapshot();
       if (snapshot) {
         vfsVersion = snapshot.version;
       }

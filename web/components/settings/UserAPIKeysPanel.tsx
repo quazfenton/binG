@@ -21,6 +21,7 @@ import {
   importUserAPIKeys,
   type UserAPIKeys,
 } from '@/lib/user/user-api-keys';
+import { clipboard } from "@bing/platform/clipboard";
 
 interface APIKeyField {
   key: keyof UserAPIKeys;
@@ -220,7 +221,7 @@ export default function UserAPIKeysPanel({ userId }: UserAPIKeysPanelProps) {
   const handleExport = async () => {
     try {
       const exported = await exportUserAPIKeys();
-      navigator.clipboard.writeText(exported);
+      clipboard.writeText(exported);
       toast.success('API keys exported to clipboard (keep this secure!)');
     } catch (error) {
       toast.error('Failed to export API keys');

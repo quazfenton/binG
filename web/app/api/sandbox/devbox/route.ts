@@ -14,21 +14,39 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge';
+import { sandboxFilesystemSync } from '@/lib/virtual-filesystem/sync/sandbox-filesystem-sync';
 import { createLogger } from '@/lib/utils/logger';
+import { SandboxSecurityManager } from '@/lib/sandbox/security-manager';
 
 const logger = createLogger('DevBoxAPI');
 
 export const runtime = 'nodejs';
 
+// SECURITY: O(1) body size guard — checked BEFORE req.json() buffers into memory
+const MAX_DEVBOX_BODY_BYTES = 120 * 1024 * 1024; // 120MB
+const MAX_DEVBOX_FILE_SIZE = 100 * 1024 * 1024; // 100MB per file
+
 // Rate limiting: track sandbox creations per user (simple in-memory, use Redis for production)
-const userSandboxCreations = new Map<string, { count: number; resetAt: number }>();
-const MAX_SANDBOXES_PER_USER = parseInt(process.env.MAX_SANDBOXES_PER_USER || '5', 10);
+// Disable in development for easier testing
+const MAX_SANDBOXES_PER_USER = process.env.NODE_ENV === 'development' 
+  ? 1000 
+  : parseInt(process.env.MAX_SANDBOXES_PER_USER || '5', 10);
 const RATE_LIMIT_WINDOW_MS = parseInt(process.env.SANDBOX_RATE_LIMIT_WINDOW_MS || '3600000', 10); // 1 hour default
+const userSandboxCreations = new Map<string, { count: number; resetAt: number }>();
+
+// Track active DevBox sessions per user
+const activeDevboxSessions = new Map<string, { sandboxId: string; createdAt: number; template: string }>();
 
 /**
  * Check rate limit for sandbox creation
+ * Skip in development
  */
 function checkRateLimit(userId: string): { allowed: boolean; remaining: number; resetAt: number } {
+  // Skip rate limiting in development
+  if (process.env.NODE_ENV === 'development') {
+    return { allowed: true, remaining: 999, resetAt: Date.now() + 3600000 };
+  }
+  
   const now = Date.now();
   const userRecord = userSandboxCreations.get(userId);
 
@@ -75,15 +93,24 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // SECURITY: O(1) body size check BEFORE buffering into memory via req.json()
+    const contentLength = req.headers.get('content-length');
+    if (contentLength && parseInt(contentLength, 10) > MAX_DEVBOX_BODY_BYTES) {
+      return NextResponse.json(
+        { error: `Request body too large (max ${MAX_DEVBOX_BODY_BYTES / (1024 * 1024)}MB)` },
+        { status: 413 },
+      );
+    }
+
     const body = await req.json();
     const { files } = body;
-    
+
     // Handle template with explicit default (don't use destructuring default)
     let templateFromBody = body.template;
     if (typeof templateFromBody !== 'string' || !templateFromBody.trim()) {
       templateFromBody = 'node';
     }
-    
+
     // Assign to outer-scoped template variable (don't shadow)
     template = templateFromBody;
 
@@ -92,6 +119,16 @@ export async function POST(req: NextRequest) {
         { error: 'Files must be a non-empty object with string values' },
         { status: 400 }
       );
+    }
+
+    // SECURITY: Per-file content size validation BEFORE buffering to sandbox
+    for (const [filePath, content] of Object.entries(files)) {
+      if (typeof content === 'string' && content.length > MAX_DEVBOX_FILE_SIZE) {
+        return NextResponse.json(
+          { error: `File '${filePath}' exceeds size limit (${(content.length / (1024 * 1024)).toFixed(1)}MB > ${MAX_DEVBOX_FILE_SIZE / (1024 * 1024)}MB)` },
+          { status: 400 },
+        );
+      }
     }
 
     logger.info('Creating DevBox', { userId, template, fileCount: Object.keys(files).length, rateLimitRemaining: rateLimit.remaining });
@@ -115,13 +152,45 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Map request template to valid CodeSandbox template IDs
+    // These are the official CodeSandbox template IDs from their SDK
+    const csbTemplateMap: Record<string, string> = {
+      'node': 'node',
+      'typescript': 'node',
+      'javascript': 'node',
+      'python': 'in2qez',           // Python template
+      'docker': 'hsd8ke',
+      'react': 'kd848j',            // React (JS)
+      'nextjs': 'fxis37',           // Next.js
+      'vue': 'pb6sit',              // Vue 3
+      'svelte': 'd2kl21',           // Solid (Vite) - or use svelteKit
+      'sveltekit': 'q6j99z',         // SvelteKit
+      'angular': 'angular',         // Angular
+      'gatsby': '4drgwm',           // Gatsby
+      'astro': 'j1qiqf',            // Astro
+      'flask': '4gppm4',            // Python Flask Server
+      'fastapi': 'in2qez',          // Use Python base
+      'django': 'in2qez',           // Use Python base
+      'express': '3mk9y8',           // Node Express Server
+      'nest': '4fqzwq',             // NestJS
+      'nuxt': 'b0tq18',             // Nuxt
+      'deno': 'kc6kgh',             // Deno
+      'rust': 'rk69p3',             // Rust
+      'go': 'ej14tt',               // Go
+      'ruby': 'n92lr8',            // Ruby on Rails
+      'php': 'ygkev0',              // PHP
+      'universal': 'pcz35m',       // Universal (all languages)
+    };
+    
+    const csbTemplate = csbTemplateMap[template.toLowerCase()] || 'node';
+
     // Get CodeSandbox provider directly - DevBox is specifically for CodeSandbox
     const provider = await sandboxBridge.getProvider('codesandbox');
 
     // Create a new CodeSandbox sandbox with proper config
     const sandboxHandle = await provider.createSandbox({
-      language: template,
-      labels: { userId: authResult.userId },  // Add user label for tracking
+      language: csbTemplate,
+      labels: { userId: authResult.userId },
     });
 
     const sandboxId = (sandboxHandle as any).sandboxId || sandboxHandle.id;
@@ -146,19 +215,123 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Get preview URL using SDK's getPreviewUrl or hosts.getUrl
-    // Format: https://{sandboxId}.csb.app
-    const previewUrl = `https://${sandboxId}.csb.app`;
+    // Detect and run appropriate package manager based on template
+    const templateLower = template.toLowerCase();
+    
+    // Determine default port based on template type
+    const defaultPorts: Record<string, number> = {
+      node: 3000,
+      javascript: 3000,
+      typescript: 3000,
+      react: 3000,
+      nextjs: 3000,
+      vue: 3000,
+      svelte: 5173,
+      python: 3000,
+      flask: 5000,
+      fastapi: 8000,
+      django: 8000,
+    };
+    const targetPort = defaultPorts[templateLower] || 3000;
+    
+    // Node.js/JavaScript projects (including React, Vue, Svelte, Next.js)
+    if (['node', 'javascript', 'typescript', 'react', 'nextjs', 'vue', 'svelte'].includes(templateLower)) {
+      if (files['package.json']) {
+        logger.info('Running npm install...');
+        try {
+          const installResult = await sandbox.executeCommand('npm install', '/workspace');
+          logger.debug('npm install output:', installResult.output || 'completed');
+        } catch (err: any) {
+          logger.warn('npm install warning:', err.message);
+        }
+
+        // Run start command in background
+        const packageJson = JSON.parse(files['package.json']);
+        const startCommand = packageJson?.scripts?.start || packageJson?.scripts?.dev;
+        if (startCommand) {
+          logger.info(`Starting server: ${startCommand}...`);
+          try {
+            const codeSandboxHandle = sandbox as any;
+            if (codeSandboxHandle.executeCommandBackground) {
+              await codeSandboxHandle.executeCommandBackground(startCommand, (output: string) => {
+                logger.debug('Server output:', output);
+              }, '/workspace');
+              logger.info('Server started');
+            }
+          } catch (err: any) {
+            logger.warn('Start command warning:', err.message);
+          }
+        }
+      }
+    }
+    
+    // Python projects
+    else if (templateLower === 'python' || templateLower === 'flask' || templateLower === 'fastapi' || templateLower === 'django') {
+      if (files['requirements.txt']) {
+        logger.info('Running pip install...');
+        try {
+          await sandbox.executeCommand('pip install -r requirements.txt', '/workspace');
+        } catch (err: any) {
+          logger.warn('pip install warning:', err.message);
+        }
+      }
+      
+      // Find and run Python main file
+      const pythonFiles = Object.keys(files).filter(f => f.endsWith('.py'));
+      if (pythonFiles.length > 0) {
+        const mainFile = pythonFiles.find(f => f.includes('main') || f.includes('app') || f.includes('server')) || pythonFiles[0];
+        logger.info(`Starting Python server: python ${mainFile}...`);
+        try {
+          const codeSandboxHandle = sandbox as any;
+          if (codeSandboxHandle.executeCommandBackground) {
+            await codeSandboxHandle.executeCommandBackground(`python ${mainFile}`, (output: string) => {
+              logger.debug('Server output:', output);
+            }, '/workspace');
+            logger.info('Server started');
+          }
+        } catch (err: any) {
+          logger.warn('Python start warning:', err.message);
+        }
+      }
+    }
+
+    // Wait for the port to be ready using CodeSandbox Ports API
+    let previewUrl = `https://${sandboxId}.csb.app`;
+    let actualPort = targetPort;
+    
+    logger.info(`Waiting for port ${targetPort} to be ready...`);
+    try {
+      const codeSandboxHandle = sandbox as any;
+      if (codeSandboxHandle.waitForPort) {
+        const portInfo = await codeSandboxHandle.waitForPort(targetPort, 30000);
+        previewUrl = portInfo.url;
+        actualPort = portInfo.port;
+        logger.info(`Port ready: ${actualPort} at ${previewUrl}`);
+      }
+    } catch (err: any) {
+      logger.warn(`Port wait failed, using default URL:`, err.message);
+    }
 
     logger.info('DevBox created successfully', {
       sandboxId,
       url: previewUrl,
+      port: actualPort,
     });
+
+    // Start VFS sync - sync files between VFS database and CodeSandbox
+    // This enables bidirectional sync: VFS → Sandbox and Sandbox → VFS
+    try {
+      sandboxFilesystemSync.startSync(sandboxId, authResult.userId);
+      logger.info('VFS sync started for DevBox', { sandboxId, userId: authResult.userId });
+    } catch (syncErr: any) {
+      logger.warn('Failed to start VFS sync for DevBox:', syncErr.message);
+    }
 
     return NextResponse.json({
       success: true,
       sandboxId,
       url: previewUrl,
+      port: actualPort,
       template,
       provider: 'codesandbox',
     });
@@ -237,5 +410,109 @@ export async function POST(req: NextRequest) {
       },
       { status: 500 }
     );
+  }
+}
+
+/**
+ * GET /api/sandbox/devbox
+ * Get active DevBox session info
+ */
+export async function GET(req: NextRequest) {
+  try {
+    const authResult = await resolveRequestAuth(req, { allowAnonymous: false });
+    if (!authResult.success || !authResult.userId) {
+      return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
+    }
+
+    const userId = authResult.userId;
+    const session = activeDevboxSessions.get(userId);
+
+    if (!session) {
+      return NextResponse.json({ 
+        success: true, 
+        hasActiveSession: false,
+        message: 'No active DevBox session'
+      });
+    }
+
+    // Check if session is stale (older than 30 minutes)
+    const isStale = Date.now() - session.createdAt > 30 * 60 * 1000;
+
+    return NextResponse.json({
+      success: true,
+      hasActiveSession: true,
+      session: {
+        sandboxId: session.sandboxId,
+        template: session.template,
+        createdAt: new Date(session.createdAt).toISOString(),
+        isStale,
+      },
+    });
+  } catch (error: any) {
+    logger.error('Failed to get DevBox session:', error);
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+}
+
+/**
+ * DELETE /api/sandbox/devbox
+ * Clean up/hibernate active DevBox session
+ */
+export async function DELETE(req: NextRequest) {
+  let authResult: Awaited<ReturnType<typeof resolveRequestAuth>> | null = null;
+  
+  try {
+    const url = new URL(req.nextUrl);
+    const sandboxId = url.searchParams.get('sandboxId');
+
+    authResult = await resolveRequestAuth(req, { allowAnonymous: false });
+    if (!authResult.success || !authResult.userId) {
+      return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
+    }
+
+    const userId = authResult.userId;
+    const session = activeDevboxSessions.get(userId);
+
+    // If specific sandboxId provided, use it; otherwise use stored session
+    const targetSandboxId = sandboxId || session?.sandboxId;
+    
+    if (!targetSandboxId) {
+      return NextResponse.json({ 
+        error: 'No active DevBox session to clean up',
+        code: 'NO_SESSION'
+      }, { status: 400 });
+    }
+
+    // Try to hibernate the sandbox via provider
+    try {
+      const provider = await sandboxBridge.getProvider('codesandbox');
+      // Use the hibernate method from the sandbox handle (CodeSandbox-specific)
+      const sandbox = await provider.getSandbox(targetSandboxId);
+      const csSandbox = sandbox as any;
+      if (csSandbox.hibernate) {
+        await csSandbox.hibernate();
+        logger.info(`Hibernated sandbox ${targetSandboxId}`);
+      } else if (csSandbox.shutdown) {
+        // Fallback to shutdown if hibernate not available
+        await csSandbox.shutdown();
+        logger.info(`Shutdown sandbox ${targetSandboxId}`);
+      }
+    } catch (err: any) {
+      logger.warn(`Failed to hibernate sandbox ${targetSandboxId}:`, err.message);
+    }
+
+    // Clear the session from tracking
+    activeDevboxSessions.delete(userId);
+
+    logger.info('DevBox session cleaned up', { userId, sandboxId: targetSandboxId });
+
+    return NextResponse.json({
+      success: true,
+      message: 'DevBox session cleaned up',
+      sandboxId: targetSandboxId,
+    });
+  } catch (error: any) {
+    logger.error('Failed to cleanup DevBox session:', error);
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }

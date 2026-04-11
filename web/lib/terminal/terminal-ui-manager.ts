@@ -237,7 +237,6 @@ export class TerminalUIManager {
             method: 'DELETE',
             headers: {
               'Content-Type': 'application/json',
-              ...(await this.getAuthHeaders()),
             },
             body: JSON.stringify({ sessionId: term.sandboxInfo.sessionId }),
           })
@@ -248,28 +247,10 @@ export class TerminalUIManager {
         }
       }
     } else if (sandboxStatus === 'disconnected') {
-      // Connect - create new sandbox session
       this.setSandboxStatus('connecting')
       try {
-        const res = await fetch('/api/sandbox/terminal', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(await this.getAuthHeaders()),
-          },
-        })
-        if (res.ok) {
-          const data = await res.json()
-          logger.info('Sandbox connected:', data.sandboxId)
-          this.setSandboxStatus('connected')
-          
-          // Reconnect terminal to sandbox
-          if (activeTerminalId) {
-            await this.connectTerminal(activeTerminalId)
-          }
-        } else {
-          logger.error('Failed to connect sandbox')
-          this.setSandboxStatus('disconnected')
+        if (activeTerminalId) {
+          await this.connectTerminal(activeTerminalId)
         }
       } catch (error) {
         logger.error('Failed to connect sandbox', error)

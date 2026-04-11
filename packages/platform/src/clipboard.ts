@@ -95,8 +95,12 @@ class DesktopClipboard implements ClipboardAdapter {
 
   async readFiles(): Promise<string[]> {
     try {
-      const { readFiles } = await import('@tauri-apps/plugin-clipboard-manager');
-      return await readFiles();
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const clipboardModule = await import('@tauri-apps/plugin-clipboard-manager') as any;
+      if (typeof clipboardModule.readFiles !== 'function') {
+        return [];
+      }
+      return await clipboardModule.readFiles();
     } catch (error) {
       console.error('[Clipboard] Failed to read files:', error);
       return [];
@@ -105,8 +109,13 @@ class DesktopClipboard implements ClipboardAdapter {
 
   async writeFiles(paths: string[]): Promise<void> {
     try {
-      const { writeFiles } = await import('@tauri-apps/plugin-clipboard-manager');
-      await writeFiles(paths);
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const clipboardModule = await import('@tauri-apps/plugin-clipboard-manager') as any;
+      if (typeof clipboardModule.writeFiles !== 'function') {
+        console.warn('[Clipboard] writeFiles is not supported by this Tauri clipboard plugin version');
+        return;
+      }
+      await clipboardModule.writeFiles(paths);
     } catch (error) {
       console.error('[Clipboard] Failed to write files:', error);
       throw error;

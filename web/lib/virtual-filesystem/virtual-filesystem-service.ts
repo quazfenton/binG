@@ -1,9 +1,12 @@
 // Server-only module - do not import directly in Client Components
 export const runtime = 'nodejs';
 
-import { promises as fs } from 'node:fs';
+import { isDesktopMode } from '@bing/platform/env';
+import { fsBridge, isUsingLocalFS, initializeFSBridge } from '@bing/shared/FS/fs-bridge';
+import type { FileSystemWatchEvent } from '@bing/shared/FS/index';
+import { emitFilesystemUpdated } from './sync/sync-events';
+
 import * as path from 'node:path';
-import * as crypto from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import type {
   VirtualFile,
@@ -16,17 +19,14 @@ import { diffTracker } from './filesystem-diffs';
 import { stripWorkspacePrefixes } from './scope-utils';
 import { VFSBatchOperations } from './vfs-batch-operations';
 import { createGitBackedVFS, getGitBackedVFSForOwner, type GitBackedVFS, type GitVFSOptions } from './git-backed-vfs';
+import { getDatabase } from '@/lib/database/connection';
 // import { emitFilesystemUpdated } from './sync/sync-events'; // Imported but not used - central emit deferred for now
 
 // Default configuration
 const DEFAULT_WORKSPACE_ROOT = process.env.DEFAULT_WORKSPACE_ROOT || 'project';
-const DEFAULT_STORAGE_DIR = process.env.VIRTUAL_FILESYSTEM_STORAGE_DIR 
-  || (process.platform === 'win32' 
-    ? path.join(process.env.LOCALAPPDATA || process.env.APPDATA || 'C:\\temp', 'vfs-storage')
-    : '/tmp/vfs-storage');
 const MAX_PATH_LENGTH = 1024;
-const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
-const MAX_TOTAL_WORKSPACE_SIZE = 100 * 1024 * 1024; // 100MB
+const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB per file
+const MAX_TOTAL_WORKSPACE_SIZE = 500 * 1024 * 1024; // 500MB total workspace
 const MAX_FILES_PER_WORKSPACE = 10000;
 const MAX_SEARCH_LIMIT = 100;
 
@@ -40,16 +40,6 @@ interface WorkspaceState {
   version: number;
   updatedAt: string;
   loaded: boolean;
-}
-
-/**
- * Persisted workspace data structure
- */
-interface PersistedWorkspace {
-  root: string;
-  version: number;
-  updatedAt: string;
-  files: VirtualFile[];
 }
 
 /**
@@ -82,9 +72,7 @@ const CONCURRENT_MODIFICATION_THRESHOLD_MS = process.env.NODE_ENV === 'test' ? 5
 
 export class VirtualFilesystemService {
   private readonly workspaceRoot: string;
-  private readonly storageDir: string;
   private readonly workspaces = new Map<string, WorkspaceState>();
-  private readonly persistQueues = new Map<string, Promise<void>>();
   private readonly events = new EventEmitter();
   private batchManager: Map<string, VFSBatchOperations> = new Map();
 
@@ -121,14 +109,122 @@ export class VirtualFilesystemService {
     this.events.emit('snapshotChange', ownerId, version);
   }
 
-  constructor(options: { workspaceRoot?: string; storageDir?: string } = {}) {
+  constructor(options: { workspaceRoot?: string } = {}) {
+    // Initialize FS Bridge for desktop mode - set flag BEFORE async call to prevent race condition
+    if (isDesktopMode()) {
+      // Mark as attempting initialization to prevent race condition
+      (this as any)._fsBridgeInitializing = true;
+      this.initializeFSBridge().catch(err => {
+        console.warn('[VFS] FS Bridge initialization deferred:', err.message);
+      }).finally(() => {
+        (this as any)._fsBridgeInitializing = false;
+      });
+    }
+
     this.workspaceRoot = (options.workspaceRoot || DEFAULT_WORKSPACE_ROOT).replace(/^\/+|\/+$/g, '') || DEFAULT_WORKSPACE_ROOT;
-    this.storageDir = options.storageDir
-      ? path.resolve(options.storageDir)
-      : path.resolve(process.env.VIRTUAL_FILESYSTEM_STORAGE_DIR || DEFAULT_STORAGE_DIR);
   }
 
+  private async initializeFSBridge(): Promise<void> {
+    try {
+      // Use environment variable or default path for workspace root
+      const workspaceRoot = process.env.DESKTOP_WORKSPACE_ROOT || undefined;
+      
+      // Read boundary settings from saved desktop settings (only in browser environment)
+      let boundaryEnabled = false;
+      if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
+        try {
+          const savedSettings = localStorage.getItem('desktop_settings');
+          if (savedSettings) {
+            const parsed = JSON.parse(savedSettings);
+            boundaryEnabled = parsed.boundaryEnabled === true;
+          }
+        } catch (e) {
+          // Use default (false) if settings can't be read
+        }
+      }
+      
+      await initializeFSBridge('desktop-user', { 
+        boundaryEnabled,
+        workspaceRoot 
+      });
+      
+      // Register handler for external file watch events to emit global sync events
+      this.registerWatchEventHandler();
+      
+      console.log('[VFS] FS Bridge initialized for desktop mode');
+    } catch (err: any) {
+      console.warn('[VFS] FS Bridge initialization failed:', err.message);
+    }
+  }
+  
+  /**
+   * Register handler for external file watcher events
+   * When files change externally (e.g., in another app), emit global sync events for UI refresh
+   */
+  private registerWatchEventHandler(): void {
+    const watchHandler = (event: FileSystemWatchEvent) => {
+      console.log('[VFS] External file change event received', { 
+        type: event.type, 
+        paths: event.paths 
+      });
+      
+      // Get current version after the change
+      const version = Date.now(); // Use timestamp as version for external changes
+      
+      // Emit global filesystem-updated event for cross-tab sync and real-time UI updates
+      emitFilesystemUpdated({
+        path: event.paths[0] || '',
+        paths: event.paths,
+        type: event.type === 'create' ? 'create' : 
+              event.type === 'modify' ? 'update' : 
+              event.type === 'delete' ? 'delete' : 'update',
+        workspaceVersion: version,
+        source: 'desktop-fs-external-watch',
+        sessionId: 'desktop-user',
+      });
+      
+      // Also emit internal events for local listeners
+      for (const filePath of event.paths) {
+        this.emitFileChange('desktop-user', filePath, event.type === 'delete' ? 'delete' : 'update', version);
+      }
+      this.emitSnapshotChange('desktop-user', version);
+    };
+    
+    // Register the handler with fsBridge
+    (fsBridge as any).onWatchEvent?.(watchHandler);
+  }
+
+  /**
+   * Read a file from the virtual filesystem.
+   * 
+   * @param ownerId - The VFS owner identifier. This should be a composite session ID
+   *   in the format "userId$sessionId" (e.g., "1$001", "anon:xyz$004") for proper
+   *   session isolation. Use buildCompositeSessionId() from @/lib/identity to construct.
+   *   For anonymous users, this will be "anon:timestamp$sessionId".
+   * @param filePath - Path relative to the session workspace root (e.g., "src/App.tsx")
+   * @returns The virtual file object with content and metadata
+   */
   async readFile(ownerId: string, filePath: string): Promise<VirtualFile> {
+    // Desktop mode: Use local filesystem instead of VFS
+    if (isDesktopMode() && isUsingLocalFS()) {
+      try {
+        const file = await fsBridge.readFile(ownerId, filePath);
+        return {
+          path: file.path,
+          content: file.content,
+          language: file.language,
+          lastModified: file.lastModified,
+          createdAt: file.createdAt,
+          size: file.size,
+          version: 1,
+        };
+      } catch (error: any) {
+        // In desktop mode, propagate error instead of falling back to VFS
+        // VFS won't have user's files - better to fail explicitly
+        throw new Error(`Failed to read file from local filesystem: ${error.message}`);
+      }
+    }
+    
     console.log('[VFS] readFile called', { ownerId, filePath });
     const workspace = await this.ensureWorkspace(ownerId);
     const normalizedPath = this.normalizePath(filePath);
@@ -147,7 +243,47 @@ export class VirtualFilesystemService {
     content: string,
     language?: string,
     options?: { failIfExists?: boolean; append?: boolean },
+    _sessionId?: string // optional: for GitBackedVFS session scoping (unused in base VFS)
   ): Promise<VirtualFile> {
+    // Desktop mode: Use local filesystem instead of VFS
+    if (isDesktopMode() && isUsingLocalFS()) {
+      try {
+        // Check if file already exists to determine change type
+        const existingFile = await fsBridge.exists(ownerId, filePath).catch(() => false);
+        const changeType: FilesystemChangeType = existingFile ? 'update' : 'create';
+        
+        const file = await fsBridge.writeFile(ownerId, filePath, content, language);
+        
+        // Emit filesystem change event for UI updates
+        const version = await fsBridge.getVersion(ownerId);
+        this.emitFileChange(ownerId, file.path, changeType, version);
+        this.emitSnapshotChange(ownerId, version);
+        
+        // Emit global filesystem-updated event for cross-tab sync and real-time UI updates
+        emitFilesystemUpdated({
+          path: file.path,
+          paths: [file.path],
+          type: changeType,
+          workspaceVersion: version,
+          source: changeType === 'update' ? 'desktop-fs-update' : 'desktop-fs-create',
+          sessionId: ownerId,
+        });
+        
+        return {
+          path: file.path,
+          content: file.content,
+          language: file.language,
+          lastModified: file.lastModified,
+          createdAt: file.createdAt,
+          size: file.size,
+          version: version,
+        };
+      } catch (error: any) {
+        // In desktop mode, propagate error instead of falling back to VFS
+        throw new Error(`Failed to write file to local filesystem: ${error.message}`);
+      }
+    }
+    
     console.log('[VFS] writeFile called', { ownerId, filePath, contentLength: content?.length, append: options?.append });
     const workspace = await this.ensureWorkspace(ownerId);
     const normalizedPath = this.normalizePath(filePath);
@@ -375,6 +511,32 @@ export class VirtualFilesystemService {
   }
 
   async deletePath(ownerId: string, targetPath: string): Promise<{ deletedCount: number }> {
+    // Desktop mode: Use local filesystem instead of VFS
+    if (isDesktopMode() && isUsingLocalFS()) {
+      try {
+        const result = await fsBridge.deletePath(ownerId, targetPath);
+        
+        // Emit filesystem change event for UI updates
+        const version = await fsBridge.getVersion(ownerId);
+        this.emitFileChange(ownerId, targetPath, 'delete', version);
+        this.emitSnapshotChange(ownerId, version);
+        
+        // Emit global filesystem-updated event for cross-tab sync and real-time UI updates
+        emitFilesystemUpdated({
+          path: targetPath,
+          paths: [targetPath],
+          type: 'delete',
+          workspaceVersion: version,
+          source: 'desktop-fs-delete',
+          sessionId: ownerId,
+        });
+        
+        return result;
+      } catch (error: any) {
+        throw new Error(`Failed to delete from local filesystem: ${error.message}`);
+      }
+    }
+
     const workspace = await this.ensureWorkspace(ownerId);
     const normalizedPath = this.normalizePath(targetPath);
     const normalizedPrefix = `${normalizedPath}/`;
@@ -430,6 +592,26 @@ export class VirtualFilesystemService {
   }
 
   async listDirectory(ownerId: string, directoryPath: string = this.workspaceRoot): Promise<VirtualFilesystemDirectoryListing> {
+    // Desktop mode: Use local filesystem instead of VFS
+    if (isDesktopMode() && isUsingLocalFS()) {
+      try {
+        const listing = await fsBridge.listDirectory(ownerId, directoryPath);
+        return {
+          path: listing.path,
+          nodes: listing.nodes.map(node => ({
+            type: node.type,
+            name: node.name,
+            path: node.path,
+            language: node.type === 'file' ? this.getLanguageFromPath(node.name) : undefined,
+            size: node.size,
+            lastModified: new Date().toISOString(),
+          })),
+        };
+      } catch (error: any) {
+        throw new Error(`Failed to list directory from local filesystem: ${error.message}`);
+      }
+    }
+
     const workspace = await this.ensureWorkspace(ownerId);
     const normalizedDirectoryPath = this.normalizePath(directoryPath);
     
@@ -514,6 +696,25 @@ export class VirtualFilesystemService {
       language?: string;
     } = {},
   ): Promise<{ files: VirtualFilesystemSearchResult[] }> {
+    // Desktop mode: Use local filesystem instead of VFS
+    if (isDesktopMode() && isUsingLocalFS()) {
+      try {
+        const results = await fsBridge.search(ownerId, query, { path: options.path, limit: options.limit });
+        return {
+          files: results.map(r => ({
+            path: r.path,
+            name: r.name,
+            language: r.language,
+            score: r.score,
+            snippet: r.snippet,
+            lastModified: r.lastModified,
+          })),
+        };
+      } catch (error: any) {
+        throw new Error(`Failed to search local filesystem: ${error.message}`);
+      }
+    }
+
     const workspace = await this.ensureWorkspace(ownerId);
     const normalizedQuery = query.trim().toLowerCase();
     if (!normalizedQuery) {
@@ -700,12 +901,12 @@ export class VirtualFilesystemService {
     }
 
     // CRITICAL VALIDATION: Reject composite IDs in session folder position
-    // This prevents paths like "project/sessions/anon:timestamp:001/file.ts"
+    // This prevents paths like "project/sessions/1$004/file.ts" or legacy "project/sessions/anon:timestamp:001/file.ts"
     // Session folder names must be simple: "001", "alpha", "001-1", etc.
     const sessionsMatch = strippedPath.match(/^project\/sessions\/([^/]+)/i);
     if (sessionsMatch) {
       const sessionSegment = sessionsMatch[1];
-      if (sessionSegment.includes(':')) {
+      if (sessionSegment.includes('$') || sessionSegment.includes(':')) {
         throw new Error(
           `Invalid session folder in path: "${inputPath}". ` +
           `Session folder names must be simple (e.g., "001", "alpha"), ` +
@@ -767,23 +968,15 @@ export class VirtualFilesystemService {
     return trimmed;
   }
 
-  private getWorkspaceStorageFile(ownerId: string): string {
-    const normalizedOwnerId = this.sanitizeOwnerId(ownerId);
-    const hash = crypto.createHash('sha256').update(normalizedOwnerId).digest('hex').slice(0, 32);
-    return path.join(this.storageDir, `${hash}.json`);
-  }
-
+  /**
+   * Load workspace from SQLite database.
+   * All workspace file content is stored in the main SQLite database.
+   */
   private async ensureWorkspace(ownerId: string): Promise<WorkspaceState> {
-    console.log('[VFS] ensureWorkspace called', { ownerId });
     const normalizedOwnerId = this.sanitizeOwnerId(ownerId);
     let workspace = this.workspaces.get(normalizedOwnerId);
 
     if (!workspace) {
-      console.log('[VFS] Creating new workspace', { ownerId: normalizedOwnerId });
-      
-      // DEBUG: Check if storage file exists
-      const storageFilePath = this.getWorkspaceStorageFile(normalizedOwnerId);
-      console.log('[VFS] Storage file path:', storageFilePath);
       workspace = {
         files: new Map<string, VirtualFile>(),
         version: 0,
@@ -794,114 +987,151 @@ export class VirtualFilesystemService {
     }
 
     if (!workspace.loaded) {
-      console.log('[VFS] Loading workspace from storage', { ownerId: normalizedOwnerId });
-      const storageFilePath = this.getWorkspaceStorageFile(normalizedOwnerId);
       try {
-        const raw = await fs.readFile(storageFilePath, 'utf8');
-        const parsed = JSON.parse(raw) as PersistedWorkspace;
-        
-        // Fix any corrupted paths (e.g., paths starting with tmp/, workspace/, etc.)
-        const fixedFiles = (parsed.files || []).map((file) => {
-          // Check if path needs normalization
-          const needsFix = file.path.startsWith('tmp/') || 
-                          file.path.startsWith('workspace/') ||
-                          file.path.startsWith('home/') ||
-                          (file.path.startsWith('/tmp/') && !file.path.startsWith('/tmp/vfs-storage')) ||
-                          (file.path.startsWith('/workspace/')) ||
-                          (!file.path.startsWith('project/') && !file.path.startsWith('/project/'));
-          
-          if (needsFix) {
-            const fixedPath = this.normalizePath(file.path);
-            console.log('[VFS] Fixed corrupted path:', file.path, '->', fixedPath);
-            return { ...file, path: fixedPath };
-          }
-          return file;
-        });
-        
-        workspace.files = new Map(
-          fixedFiles.map((file) => [file.path, file]),
-        );
-        workspace.version = Number.isFinite(parsed.version) ? parsed.version : workspace.files.size;
-        workspace.updatedAt = parsed.updatedAt || new Date().toISOString();
-        
-        // Persist the fixed paths back to storage
-        if (fixedFiles.some((f, i) => f.path !== (parsed.files || [])[i]?.path)) {
-          console.log('[VFS] Persisting fixed paths...');
-          this.persistWorkspace(normalizedOwnerId, workspace).catch(console.error);
+        const db = getDatabase();
+
+        // Load metadata
+        const meta = db.prepare(
+          'SELECT version, root, updated_at FROM vfs_workspace_meta WHERE owner_id = ?'
+        ).get(normalizedOwnerId) as { version: number; root: string; updated_at: string } | undefined;
+
+        // Load files
+        const rows = db.prepare(
+          'SELECT path, content, language, size, version, created_at, updated_at FROM vfs_workspace_files WHERE owner_id = ? ORDER BY path'
+        ).all(normalizedOwnerId) as Array<{
+          path: string;
+          content: string;
+          language: string;
+          size: number;
+          version: number;
+          created_at: string;
+          updated_at: string;
+        }>;
+
+        if (rows.length > 0 || meta) {
+          workspace.files = new Map(rows.map(row => {
+            // FIX: Normalize backslashes to forward slashes when loading from DB.
+            // Stale entries from Windows may contain backslashes that break path matching.
+            const normalizedPath = row.path.replace(/\\/g, '/');
+            return [normalizedPath, {
+              path: normalizedPath,
+              content: row.content,
+              language: row.language,
+              size: row.size,
+              version: row.version,
+              lastModified: row.updated_at,
+              createdAt: row.created_at,
+              isDirectoryMarker: normalizedPath.endsWith('/.directory'),
+            } as VirtualFile];
+          }));
+
+          workspace.version = meta?.version ?? rows.length;
+          workspace.updatedAt = meta?.updated_at ?? new Date().toISOString();
         }
+        // If no data exists in DB, workspace stays empty — files will be created on first write
       } catch (error: unknown) {
-        const errorCode = (error as NodeJS.ErrnoException)?.code;
-        if (errorCode !== 'ENOENT') {
-          console.warn('[virtual-filesystem] Failed to load workspace from storage:', error);
+        const msg = error instanceof Error ? error.message : String(error);
+        // Table not yet created — migration hasn't run. Start empty, will populate on write.
+        if (msg.includes('no such table') || msg.includes('SQLITE_ERROR')) {
+          // No-op — workspace stays empty
+        } else {
+          console.warn(`[VFS] Failed to load workspace for ${normalizedOwnerId}:`, msg);
         }
-        workspace.files = new Map<string, VirtualFile>();
-        workspace.version = 0;
-        workspace.updatedAt = new Date().toISOString();
       }
-      workspace.loaded = true;
     }
 
+    // BACKGROUND FIX: Normalize any stale backslash paths in the database.
+    // Windows writes paths like `foo\bar`, but VFS expects `foo/bar`.
+    // This one-time-per-owner fix updates any rows that still contain backslashes.
+    try {
+      const db = getDatabase();
+      // In JS template literals, '\\\\' → regex literal '%\\%' matches a literal backslash
+      // and REPLACE's '\\\\' → SQL literal '\\' → one literal backslash character
+      const backslashCount = (db.prepare(
+        "SELECT COUNT(*) as cnt FROM vfs_workspace_files WHERE owner_id = ? AND path LIKE '%\\\\%'"
+      ).get(normalizedOwnerId) as { cnt: number }).cnt;
+      if (backslashCount > 0) {
+        const normalizePaths = db.prepare(
+          "UPDATE vfs_workspace_files SET path = REPLACE(path, '\\\\', '/') WHERE owner_id = ? AND path LIKE '%\\\\%'"
+        );
+        normalizePaths.run(normalizedOwnerId);
+        console.log(`[VFS] Normalized ${backslashCount} backslash path(s) for owner ${normalizedOwnerId}`);
+        // Invalidate in-memory cache so reload picks up corrected paths
+        this.workspaces.delete(normalizedOwnerId);
+      }
+    } catch (err) {
+      // Non-fatal — stale paths will still be caught by load-time normalization
+    }
+
+    workspace.loaded = true;
     return workspace;
   }
 
+  /**
+   * Persist workspace to SQLite database.
+   * All operations (metadata update, deletes, upserts) run in a single
+   * transaction for atomicity — if any part fails, the workspace is unchanged.
+   */
   private async persistWorkspace(ownerId: string, workspace: WorkspaceState): Promise<void> {
     const normalizedOwnerId = this.sanitizeOwnerId(ownerId);
-    const storageFilePath = this.getWorkspaceStorageFile(normalizedOwnerId);
+    const db = getDatabase();
 
     // Get GitVFS instance and disable auto-commit during persist to prevent commit loops
     this.enableBatchMode(normalizedOwnerId);
 
-    // DEBUG: Log what's being persisted
-    console.log('[VFS persistWorkspace] Saving', workspace.files.size, 'files for owner:', normalizedOwnerId);
+    try {
+      const now = new Date().toISOString();
+      const currentPaths = new Set(workspace.files.keys());
 
-    const serialized: PersistedWorkspace = {
-      root: this.workspaceRoot,
-      version: workspace.version,
-      updatedAt: workspace.updatedAt,
-      files: Array.from(workspace.files.values()).sort((a, b) => a.path.localeCompare(b.path)),
-    };
+      // Prepare statements once (reused across calls)
+      const upsertMeta = db.prepare(
+        `INSERT OR REPLACE INTO vfs_workspace_meta (owner_id, version, root, updated_at) VALUES (?, ?, ?, ?)`
+      );
+      const selectPaths = db.prepare(
+        'SELECT path FROM vfs_workspace_files WHERE owner_id = ?'
+      );
+      const deleteFile = db.prepare(
+        'DELETE FROM vfs_workspace_files WHERE owner_id = ? AND path = ?'
+      );
+      const upsertFile = db.prepare(
+        `INSERT OR REPLACE INTO vfs_workspace_files
+         (id, owner_id, path, content, language, size, version, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      );
 
-    // DEBUG: Log file paths being saved
-    if (serialized.files.length > 0) {
-      console.log('[VFS persistWorkspace] File paths:', serialized.files.map(f => f.path).slice(0, 5));
-    }
+      // Wrap everything in a single transaction for atomicity
+      const persistTx = db.transaction(() => {
+        // 1. Update metadata
+        upsertMeta.run(normalizedOwnerId, workspace.version, this.workspaceRoot, workspace.updatedAt);
 
-    const previous = this.persistQueues.get(normalizedOwnerId) || Promise.resolve();
-    const next = previous
-      .catch(() => undefined)
-      .then(async () => {
-        const tmpFilePath = `${storageFilePath}.tmp-${Date.now()}`;
-        try {
-          // Ensure storage directory exists
-          await fs.mkdir(this.storageDir, { recursive: true });
+        // 2. Delete files that no longer exist
+        const existingRows = selectPaths.all(normalizedOwnerId) as Array<{ path: string }>;
+        for (const row of existingRows) {
+          if (!currentPaths.has(row.path)) {
+            deleteFile.run(normalizedOwnerId, row.path);
+          }
+        }
 
-          await fs.writeFile(tmpFilePath, JSON.stringify(serialized, null, 2), 'utf8');
-          await fs.rename(tmpFilePath, storageFilePath);
-          
-          // Re-enable auto-commit after persist completes
-          await this.flushBatchMode(normalizedOwnerId);
-        } catch (error: any) {
-          // Cleanup temp file if rename failed
-          try {
-            await fs.unlink(tmpFilePath).catch(() => { /* ignore cleanup errors */ });
-          } catch {}
-
-          console.error('[VFS] Persist failed:', {
-            ownerId: normalizedOwnerId,
-            storageDir: this.storageDir,
-            storageFilePath,
-            error: error.message,
-            platform: process.platform,
-          });
-          
-          // Re-enable auto-commit even on error
-          await this.flushBatchMode(normalizedOwnerId);
-          throw error;
+        // 3. Upsert all current files
+        for (const [filePath, file] of workspace.files) {
+          const id = `${normalizedOwnerId}:${filePath}`;
+          upsertFile.run(id, normalizedOwnerId, filePath, file.content, file.language, file.size, file.version, file.createdAt || now, now);
         }
       });
 
-    this.persistQueues.set(normalizedOwnerId, next);
-    await next;
+      persistTx();
+
+      // Re-enable auto-commit after persist completes
+      await this.flushBatchMode(normalizedOwnerId);
+    } catch (error: any) {
+      console.error('[VFS] DB persist failed:', {
+        ownerId: normalizedOwnerId,
+        error: error.message,
+      });
+      // Re-enable auto-commit even on error
+      await this.flushBatchMode(normalizedOwnerId);
+      throw error;
+    }
   }
 
   /**
@@ -953,20 +1183,110 @@ export class VirtualFilesystemService {
   }
 
   /**
+   * Transfer all VFS data from one owner to another.
+   * Used when an anonymous user creates an account — their anonymous
+   * workspace files, conversations, etc. move to the new authenticated user.
+   */
+  async transferOwnership(fromOwnerId: string, toOwnerId: string): Promise<{ transferredFiles: number }> {
+    const normalizedFrom = this.sanitizeOwnerId(fromOwnerId);
+    const normalizedTo = this.sanitizeOwnerId(toOwnerId);
+
+    if (normalizedFrom === normalizedTo) {
+      return { transferredFiles: 0 };
+    }
+
+    const db = getDatabase();
+
+    // Check if source has any data to transfer
+    const fileCount = (db.prepare('SELECT COUNT(*) as cnt FROM vfs_workspace_files WHERE owner_id = ?').get(normalizedFrom) as { cnt: number }).cnt;
+    if (fileCount === 0) {
+      return { transferredFiles: 0 };
+    }
+
+    const now = new Date().toISOString();
+
+    const transferTx = db.transaction(() => {
+      // 1. If target already has data, merge (skip conflicts) or replace?
+      // Strategy: overwrite — the authenticated user's new workspace takes precedence,
+      // but anonymous data fills in any gaps. First check what target already has.
+      const existingTargetPaths = db.prepare(
+        'SELECT path FROM vfs_workspace_files WHERE owner_id = ?'
+      ).all(normalizedTo) as Array<{ path: string }>;
+      const existingPaths = new Set(existingTargetPaths.map(r => r.path));
+
+      // 2. Transfer files that don't conflict
+      const transferFile = db.prepare(
+        `INSERT OR IGNORE INTO vfs_workspace_files
+         (id, owner_id, path, content, language, size, version, created_at, updated_at)
+         SELECT ?, ?, path, content, language, size, version, created_at, updated_at
+         FROM vfs_workspace_files WHERE owner_id = ? AND path = ?`
+      );
+
+      // 3. Transfer meta if target has none
+      const targetHasMeta = db.prepare(
+        'SELECT owner_id FROM vfs_workspace_meta WHERE owner_id = ?'
+      ).get(normalizedTo);
+
+      let transferredCount = 0;
+
+      // Get all source files
+      const sourceFiles = db.prepare(
+        'SELECT path, content, language, size, version, created_at, updated_at FROM vfs_workspace_files WHERE owner_id = ?'
+      ).all(normalizedFrom) as Array<{
+        path: string; content: string; language: string; size: number; version: number; created_at: string; updated_at: string;
+      }>;
+
+      for (const file of sourceFiles) {
+        if (!existingPaths.has(file.path)) {
+          const id = `${normalizedTo}:${file.path}`;
+          transferFile.run(id, normalizedTo, normalizedFrom, file.path);
+          transferredCount++;
+        }
+      }
+
+      // 4. Transfer meta only if target has none and source has it
+      if (!targetHasMeta) {
+        const sourceMeta = db.prepare(
+          'SELECT version, root, updated_at FROM vfs_workspace_meta WHERE owner_id = ?'
+        ).get(normalizedFrom) as { version: number; root: string; updated_at: string } | undefined;
+        if (sourceMeta) {
+          db.prepare(
+            'INSERT OR REPLACE INTO vfs_workspace_meta (owner_id, version, root, updated_at) VALUES (?, ?, ?, ?)'
+          ).run(normalizedTo, sourceMeta.version, sourceMeta.root, now);
+        }
+      }
+
+      // 5. Delete source data
+      db.prepare('DELETE FROM vfs_workspace_files WHERE owner_id = ?').run(normalizedFrom);
+      db.prepare('DELETE FROM vfs_workspace_meta WHERE owner_id = ?').run(normalizedFrom);
+
+      // 6. Clean up in-memory state
+      this.workspaces.delete(normalizedFrom);
+      diffTracker.clear(normalizedFrom);
+
+      // 7. Invalidate target's in-memory cache so it reloads from DB
+      this.workspaces.delete(normalizedTo);
+
+      return transferredCount;
+    });
+
+    const transferredCount = transferTx();
+
+    return { transferredFiles: transferredCount };
+  }
+
+  /**
    * Clear workspace state (for tests)
    */
   async clearWorkspace(ownerId: string): Promise<void> {
     const normalizedOwnerId = this.sanitizeOwnerId(ownerId);
     this.workspaces.delete(normalizedOwnerId);
     diffTracker.clear(ownerId);
-    
-    // Also delete storage file if it exists
-    const storageFilePath = this.getWorkspaceStorageFile(normalizedOwnerId);
-    try {
-      await fs.unlink(storageFilePath);
-    } catch {
-      // Ignore if not exists
-    }
+
+    // Also delete from database
+    const db = getDatabase();
+    db.prepare('DELETE FROM vfs_workspace_files WHERE owner_id = ?').run(normalizedOwnerId);
+    db.prepare('DELETE FROM vfs_workspace_meta WHERE owner_id = ?').run(normalizedOwnerId);
   }
 
   /**
@@ -1050,13 +1370,30 @@ class GitBackedVFSProxy {
     filePath: string,
     content: string,
     language?: string,
-    options?: { failIfExists?: boolean; append?: boolean }
+    options?: { failIfExists?: boolean; append?: boolean },
+    sessionId?: string // optional: for GitBackedVFS session scoping
   ): Promise<VirtualFile> {
-    const gitVFS = this.vfs.getGitBackedVFS(ownerId);
+    const gitVFS = this.vfs.getGitBackedVFS(ownerId, sessionId ? { sessionId } : undefined);
     return gitVFS.writeFile(ownerId, filePath, content, language, options);
   }
 
   async deletePath(ownerId: string, targetPath: string): Promise<{ deletedCount: number }> {
+    // Desktop mode: Use local filesystem instead of VFS
+    if (isDesktopMode() && isUsingLocalFS()) {
+      try {
+        const result = await fsBridge.deletePath(ownerId, targetPath);
+
+        // Emit filesystem change event for UI updates
+        const version = await fsBridge.getVersion(ownerId);
+        (this as any).emitFileChange(ownerId, targetPath, 'delete', version);
+        (this as any).emitSnapshotChange(ownerId, version);
+
+        return result;
+      } catch (error: any) {
+        throw new Error(`Failed to delete from local filesystem: ${error.message}`);
+      }
+    }
+
     // Track deletion in git
     const gitVFS = this.vfs.getGitBackedVFS(ownerId);
     const listing = await this.vfs.listDirectory(ownerId, targetPath);
@@ -1230,7 +1567,21 @@ class GitBackedVFSProxy {
     // Delegate to the proper clear (wipes in-memory map + diff tracker + disk file)
     await (this as any).vfs.clearWorkspace(ownerId);
   }
+
+  /**
+   * Transfer VFS ownership from one owner to another (e.g. anon → authenticated user)
+   */
+  async transferOwnership(fromOwnerId: string, toOwnerId: string): Promise<{ transferredFiles: number }> {
+    return this.vfs.transferOwnership(fromOwnerId, toOwnerId);
+  }
 }
 
 // Export singleton instance with Git-backed proxy
-export const virtualFilesystem = new GitBackedVFSProxy(new VirtualFilesystemService());
+// CRITICAL FIX: Use globalThis to survive Next.js hot-reloading in dev mode
+// Without this, each module reload creates a new instance with empty workspaces
+declare global {
+  // eslint-disable-next-line no-var
+  var __vfsSingleton__: GitBackedVFSProxy | undefined;
+}
+
+export const virtualFilesystem = globalThis.__vfsSingleton__ ?? (globalThis.__vfsSingleton__ = new GitBackedVFSProxy(new VirtualFilesystemService()));

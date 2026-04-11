@@ -14,7 +14,6 @@ import {
   createDefaultProviders,
 } from "@/lib/tools/tool-integration/providers";
 import { ToolProviderRegistry } from "@/lib/tools/tool-integration/provider-registry";
-import { ToolProviderRouter } from "@/lib/tools/tool-integration/router";
 import type {
   IntegrationConfig as BaseIntegrationConfig,
   IntegrationProvider as BaseIntegrationProvider,
@@ -605,16 +604,19 @@ export const TOOL_REGISTRY: Record<string, ToolConfig> = {
 export class ToolIntegrationManager {
   private readonly config: IntegrationConfig;
   private readonly providerRegistry: ToolProviderRegistry;
-  private readonly providerRouter: ToolProviderRouter;
   private readonly tools = new Map<string, ToolConfig>();
+
+  // Inlined ToolProviderRouter logic (was in tool-integration/router.ts)
+  private readonly retryableErrorPatterns: RegExp[] = [
+    /timeout/i, /rate.?limit/i, /temporar/i, /503/, /429/, /network/i,
+  ];
 
   constructor(config: IntegrationConfig) {
     this.config = config;
     this.providerRegistry = new ToolProviderRegistry();
     const providers = createDefaultProviders(config);
     providers.forEach((provider) => this.providerRegistry.register(provider));
-    this.providerRouter = new ToolProviderRouter(this.providerRegistry.list());
-    
+
     // Initialize tools cache from registry
     Object.entries(TOOL_REGISTRY).forEach(([key, config]) => {
       this.tools.set(key, config);
@@ -622,7 +624,8 @@ export class ToolIntegrationManager {
   }
 
   /**
-   * Execute a tool by its key
+   * Execute a tool by its key using provider fallback chain
+   * (Inlined from deleted tool-integration/router.ts)
    */
   async executeTool(
     toolKey: string,
@@ -638,12 +641,115 @@ export class ToolIntegrationManager {
       };
     }
 
-    return this.providerRouter.executeWithFallback({
+    return this.executeWithFallback({
       toolKey,
       config: toolConfig,
       input,
       context,
     });
+  }
+
+  private getProviderOrder(preferred: IntegrationProvider): IntegrationProvider[] {
+    const envChain = (process.env.TOOL_ROUTER_PROVIDER_CHAIN || '')
+      .split(',')
+      .map((p) => p.trim())
+      .filter(Boolean) as IntegrationProvider[];
+
+    const defaultChain: IntegrationProvider[] = ['arcade', 'nango', 'composio', 'mcp', 'smithery', 'tambo'];
+    const configuredChain = envChain.length > 0 ? envChain : defaultChain;
+    const deduped = [preferred, ...configuredChain].filter(
+      (provider, index, list) => list.indexOf(provider) === index,
+    );
+
+    return deduped;
+  }
+
+  private isRetryableError(error?: string): boolean {
+    if (!error) return false;
+    return this.retryableErrorPatterns.some((pattern) => pattern.test(error));
+  }
+
+  private async executeWithRetry(
+    provider: IntegrationProvider,
+    request: { toolKey: string; config: ToolConfig; input: any; context: ToolExecutionContext },
+    maxRetries: number = 3
+  ): Promise<ToolExecutionResult> {
+    let lastError = 'Unknown error';
+
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      const result = await this.executeOnProvider(provider, request);
+      if (result.success) return result;
+
+      lastError = result.error || 'Execution failed';
+
+      if (!this.isRetryableError(lastError)) {
+        return { ...result, error: lastError };
+      }
+
+      const delay = Math.min(1000 * Math.pow(2, attempt), 10000);
+      await new Promise(r => setTimeout(r, delay));
+    }
+
+    return { success: false, error: lastError, provider };
+  }
+
+  private async executeOnProvider(
+    provider: IntegrationProvider,
+    request: { toolKey: string; config: ToolConfig; input: any; context: ToolExecutionContext }
+  ): Promise<ToolExecutionResult> {
+    const p = this.providerRegistry.get(provider);
+    if (!p || !p.isAvailable()) {
+      return { success: false, error: `Provider ${provider} not available` };
+    }
+    if (!p.supports(request as any)) {
+      return { success: false, error: `Provider ${provider} does not support this tool` };
+    }
+    return p.execute(request as any);
+  }
+
+  private async executeWithFallback(request: {
+    toolKey: string;
+    config: ToolConfig;
+    input: any;
+    context: ToolExecutionContext;
+  }): Promise<ToolExecutionResult> {
+    const providerOrder = this.getProviderOrder(request.config.provider);
+    const errors: string[] = [];
+    const attempted: IntegrationProvider[] = [];
+
+    for (const providerName of providerOrder) {
+      const provider = this.providerRegistry.get(providerName);
+      if (!provider || !provider.isAvailable()) {
+        continue;
+      }
+
+      attempted.push(providerName);
+
+      if (!provider.supports(request as any)) {
+        continue;
+      }
+
+      const result = await this.executeWithRetry(providerName, request);
+      if (result.success) {
+        return { ...result, fallbackChain: attempted };
+      }
+
+      errors.push(`${providerName}: ${result.error || 'execution failed'}`);
+
+      if (result.authRequired) {
+        return { ...result, fallbackChain: attempted, provider: providerName };
+      }
+
+      if (!this.isRetryableError(result.error)) {
+        break;
+      }
+    }
+
+    return {
+      success: false,
+      error: errors.length > 0 ? errors.join('; ') : 'No provider could execute this tool',
+      fallbackChain: attempted,
+    };
   }
 
   /**

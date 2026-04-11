@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { verifyAuth } from '@/lib/auth/jwt';
 import {
   processUnifiedAgentRequest,
-  checkProviderHealth,
+  checkStartupCapabilities,
   getAvailableModes,
   type UnifiedAgentConfig,
 } from '@/lib/orchestra/unified-agent-service';
@@ -111,13 +111,13 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const health = checkProviderHealth();
+  const caps = checkStartupCapabilities();
   const modes = getAvailableModes();
 
-  // Return only health and modes - DO NOT expose environment variables
+  // Return only capabilities and modes - DO NOT expose environment variables
   // to avoid leaking infrastructure configuration
   return NextResponse.json({
-    health,
+    capabilities: caps,
     modes,
   });
 }

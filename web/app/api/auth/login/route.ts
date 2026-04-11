@@ -22,9 +22,12 @@ export async function POST(request: NextRequest) {
       : undefined;
 
     // Rate limiting: Check before processing (strict limits to prevent brute-force)
-    const rateLimitResult = rateLimitMiddleware(request, 'login', normalizedEmail);
-    if (!rateLimitResult.success && rateLimitResult.response) {
-      return rateLimitResult.response;
+    // Skip rate limiting in development for easier testing
+    if (process.env.NODE_ENV !== 'development') {
+      const rateLimitResult = rateLimitMiddleware(request, 'login', normalizedEmail);
+      if (!rateLimitResult.success && rateLimitResult.response) {
+        return rateLimitResult.response;
+      }
     }
 
     // Get client info for session
@@ -77,6 +80,27 @@ export async function POST(request: NextRequest) {
         maxAge: 7 * 24 * 60 * 60 // 7 days
       });
     }
+
+    // Set JWT token as auth-token cookie for admin auth and server components
+    if (result.token) {
+      response.cookies.set('auth-token', result.token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 7 * 24 * 60 * 60, // 7 days
+        path: '/',
+      });
+    }
+
+    // Clear anonymous session cookie — authenticated users should NOT
+    // fall back to their old anonymous workspace identity
+    response.cookies.set('anon-session-id', '', {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 0,
+      path: '/',
+    });
 
     return response;
 

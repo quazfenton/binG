@@ -48,17 +48,19 @@ import {
   parseCodeBlocksFromMessages,
   type CodeBlock as ParsedCodeBlock,
 } from "../lib/code-parser";
-import { createDebugLogger } from "@/config/features";
+import { createDebugLogger } from "../../infra/config/config/features";
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog";
 import { checkFileConflicts } from "@/lib/session-naming";
 import { buildApiHeaders } from "@/lib/utils";
 import { usePanel } from "@/contexts/panel-context";
+import { clipboard } from "@bing/platform/clipboard";
 
 // Import live preview offloading functions
 import {
   detectProject,
   getSandpackConfig,
   livePreviewOffloading,
+  isBackendOnlyProject,
   type ProjectDetection,
   type PreviewMode,
   type AppFramework,
@@ -360,7 +362,7 @@ export default function CodePreviewPanel({
   const [editingFileName, setEditingFileName] = useState("");
   
   // Clipboard state for cut/copy/paste
-  const [clipboard, setClipboard] = useState<{
+  const [codeClipboard, setClipboard] = useState<{
     path: string;
     operation: 'cut' | 'copy';
     sourcePath: string;
@@ -388,7 +390,14 @@ export default function CodePreviewPanel({
   const [newFileName, setNewFileName] = useState("");
 
   const filesystemNodes = useMemo(() => {
-    return [...filesystemRawNodes].sort((a, b) => {
+    // Deduplicate nodes by path to prevent React duplicate key warnings
+    const seen = new Set<string>();
+    const deduped = filesystemRawNodes.filter(node => {
+      if (seen.has(node.path)) return false;
+      seen.add(node.path);
+      return true;
+    });
+    return [...deduped].sort((a, b) => {
       if (a.type !== b.type) {
         return a.type === "directory" ? -1 : 1;
       }
@@ -787,20 +796,20 @@ export default function CodePreviewPanel({
 
   // Handle paste operation
   const handlePasteFile = useCallback(async (targetPath: string, isDirectory: boolean) => {
-    if (!clipboard) {
-      toast.error('No file in clipboard');
+    if (!codeClipboard) {
+      toast.error('No file in codeClipboard');
       return;
     }
     
     const targetDir = isDirectory ? targetPath : targetPath.split('/').slice(0, -1).join('/');
-    const fileName = clipboard.path.split('/').pop() || '';
+    const fileName = codeClipboard.path.split('/').pop() || '';
     const newPath = `${targetDir.replace(/\/+$/, '')}/${fileName}`;
     
     try {
       // Check if target already exists
       const targetExists = await readFilesystemFile(newPath).then(() => true).catch(() => false);
       
-      if (targetExists && clipboard.path !== newPath) {
+      if (targetExists && codeClipboard.path !== newPath) {
         // Generate unique name
         const ext = fileName.includes('.') ? '.' + fileName.split('.').pop() : '';
         const baseName = fileName.replace(ext, '');
@@ -811,9 +820,9 @@ export default function CodePreviewPanel({
           counter++;
         }
         
-        await performPaste(clipboard.path, uniquePath, targetDir);
+        await performPaste(codeClipboard.path, uniquePath, targetDir);
       } else {
-        await performPaste(clipboard.path, newPath, targetDir);
+        await performPaste(codeClipboard.path, newPath, targetDir);
       }
     } catch (err: any) {
       toast.error('Failed to paste: ' + err.message);
@@ -831,12 +840,12 @@ export default function CodePreviewPanel({
         await writeFilesystemFile(destPath, file.content);
         
         // If cut, delete original
-        if (clipboard.operation === 'cut') {
+        if (codeClipboard.operation === 'cut') {
           await deleteFilesystemPath(sourcePath);
           setClipboard(null);
         }
         
-        toast.success(clipboard.operation === 'cut' ? 'File moved' : 'File copied');
+        toast.success(codeClipboard.operation === 'cut' ? 'File moved' : 'File copied');
         await debouncedListDirectory(filesystemCurrentPath);
         await debouncedListDirectory(targetDir);
         
@@ -851,7 +860,7 @@ export default function CodePreviewPanel({
         toast.error('Failed to paste: ' + err.message);
       }
     }
-  }, [clipboard, readFilesystemFile, writeFilesystemFile, deleteFilesystemPath, filesystemCurrentPath, listFilesystemDirectory, normalizedFilesystemPath, emitFilesystemUpdated]);
+  }, [codeClipboard, readFilesystemFile, writeFilesystemFile, deleteFilesystemPath, filesystemCurrentPath, listFilesystemDirectory, normalizedFilesystemPath, emitFilesystemUpdated]);
 
   // Handle drag start
   const handleDragStart = useCallback((e: React.DragEvent, node: { path: string; name: string }) => {
@@ -2471,6 +2480,29 @@ Generated on: ${new Date().toLocaleString()}
     }
   }, [previewMode]);
 
+  // Auto-redirect backend-only projects to CodeSandbox/WebContainer (Sandpack can't run Node.js)
+  useEffect(() => {
+    if (previewMode !== 'sandpack') return;
+
+    // Check all possible file sources for backend patterns
+    const fileSources = [
+      scopedPreviewFiles, // VFS-synced files
+      projectDetection?.normalizedFiles || {}, // Manual preview normalized files
+      projectStructure?.files || {}, // Legacy parsed structure
+    ];
+
+    for (const files of fileSources) {
+      if (Object.keys(files).length === 0) continue;
+      const { isBackendOnly, reasons } = isBackendOnlyProject(files, []);
+      if (isBackendOnly) {
+        setPreviewMode('codesandbox');
+        toast.info(`Backend project detected — redirected to CodeSandbox for full Node.js support`);
+        previewLogger.log('[Preview] Backend-only project redirected from Sandpack to CodeSandbox', { reasons });
+        return;
+      }
+    }
+  }, [scopedPreviewFiles, projectDetection, projectStructure, previewMode]);
+
   // Function to detect popular dependencies from code content (only used when package.json is missing)
   const getPopularDependencies = (
     codeContent: string,
@@ -2502,6 +2534,27 @@ Generated on: ${new Date().toLocaleString()}
     }
     return deps;
   };
+
+  // VFS MCP TOOLS LOGGING: Log when tools are registered/invoked
+  useEffect(() => {
+    const logVFSActivity = async () => {
+      try {
+        const snapshot = getFilesystemSnapshot();
+        if (snapshot && Object.keys(scopedPreviewFiles).length > 0) {
+          previewLogger.log('[VFS] Files synced from VFS to preview panel', {
+            fileCount: Object.keys(scopedPreviewFiles).length,
+            files: Object.keys(scopedPreviewFiles).slice(0, 10),
+          });
+        }
+      } catch (err) {
+        previewLogger.warn('[VFS] Failed to log VFS activity', err);
+      }
+    };
+    logVFSActivity();
+  }, [scopedPreviewFiles, getFilesystemSnapshot]);
+
+  // Legacy markdown parsing DISABLED when VFS has files
+  // This prevents dual-source conflicts between VFS and JSON-parsed code blocks
 
   // Refs for preventing log spam in renderLivePreview
   const sandpackLogKeyRef = useRef<string>('');
@@ -5188,6 +5241,15 @@ root.render(<App />);` };
           </Suspense>
         );
       } catch (error) {
+        // If Sandpack fails, it might be a backend project we missed — try CodeSandbox
+        const errorMsg = (error as Error).message?.toLowerCase() || '';
+        if (errorMsg.includes('express') || errorMsg.includes('sqlite') || errorMsg.includes('backend') || errorMsg.includes('node:')) {
+          previewLogger.log('[Preview] Sandpack failed with backend error, redirecting to CodeSandbox', { error: errorMsg });
+          setPreviewMode('codesandbox');
+          toast.info(`Sandpack error — redirected to CodeSandbox for backend support`);
+          return null; // Re-render will use CodeSandbox path
+        }
+
         return (
           <div className="flex items-center justify-center h-96 bg-gray-900 rounded-lg">
             <div className="text-center">
@@ -5200,10 +5262,10 @@ root.render(<App />);` };
                 Error: {(error as Error).message}
               </p>
               <button
-                onClick={() => window.location.reload()}
-                className="mt-2 px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700"
+                onClick={() => { setPreviewMode('codesandbox'); }}
+                className="mt-2 px-3 py-1 bg-purple-600 text-white rounded text-sm hover:bg-purple-700"
               >
-                Retry
+                Try CodeSandbox
               </button>
             </div>
           </div>
@@ -5235,6 +5297,25 @@ root.render(<App />);` };
       const tsFromStructure =
         normalizedFiles.find((file) => file.lowerPath.endsWith(".ts"))?.content || null;
 
+      // Build a map of all available files for inlining external references
+      const fileMap = new Map<string, string>();
+      if (useStructure) {
+        Object.entries(useStructure.files).forEach(([path, content]) => {
+          if (typeof content === "string") {
+            // Store by full path and by basename for flexible matching
+            fileMap.set(path, content);
+            fileMap.set(path.replace(/^\/+/, ''), content);
+            const baseName = path.split('/').pop() || '';
+            fileMap.set(baseName, content);
+          }
+        });
+      }
+      // Also add code block files
+      codeBlocks.forEach((block) => {
+        if (block.filename) fileMap.set(block.filename, block.code);
+        fileMap.set(`file-${block.index}.${block.language || 'txt'}`, block.code);
+      });
+
       const htmlFile = htmlFromStructure
         ? { code: htmlFromStructure, language: "html" }
         : codeBlocks.find((block) => block.language === "html");
@@ -5251,6 +5332,61 @@ root.render(<App />);` };
         : codeBlocks.find(
             (block) => block.language === "typescript" || block.language === "ts",
           );
+
+      // Inline external CSS/JS references in HTML so iframe srcdoc can resolve them
+      // This replaces <link href="*.css"> and <script src="*.js"> with inlined content
+      const inlineExternalReferences = (html: string, allFiles: Map<string, string>): string => {
+        let result = html;
+
+        // Inline <link href="*.css"> tags
+        result = result.replace(
+          /<link[^>]+href=["']([^"']+\.css(?:\?[^"']*)?)["'][^>]*\/?>/gi,
+          (match, href) => {
+            // Strip query params and leading ./ or /
+            const cleanHref = href.replace(/\?.*$/, '').replace(/^\.\//, '').replace(/^\//, '');
+
+            // Try exact match first, then basename fallback
+            let cssContent = allFiles.get(cleanHref);
+            if (!cssContent && !/^(?:[a-z]+:)?\/\//i.test(href)) {
+              // Try basename match (e.g., "styles.css" from "css/styles.css")
+              // Only for relative paths — external URLs must not be replaced by local files
+              const baseName = cleanHref.split('/').pop() || '';
+              cssContent = allFiles.get(baseName);
+            }
+
+            if (cssContent) {
+              return `<style>/* Inlined: ${href} */\n${cssContent}\n</style>`;
+            }
+            // Keep original if not found — browser will attempt to load it
+            return match;
+          }
+        );
+
+        // Inline <script src="*.js"> tags (not inline scripts)
+        result = result.replace(
+          /<script[^>]+src=["']([^"']+\.(?:js|mjs)(?:\?[^"']*)?)["'][^>]*>\s*<\/script>/gi,
+          (match, src) => {
+            // Strip query params and leading ./ or /
+            const cleanSrc = src.replace(/\?.*$/, '').replace(/^\.\//, '').replace(/^\//, '');
+
+            // Try exact match first, then basename fallback
+            let jsContent = allFiles.get(cleanSrc);
+            if (!jsContent) {
+              // Try basename match
+              const baseName = cleanSrc.split('/').pop() || '';
+              jsContent = allFiles.get(baseName);
+            }
+
+            if (jsContent) {
+              return `<script>/* Inlined: ${src} */\n${jsContent}\n<\/script>`;
+            }
+            // Keep original if not found
+            return match;
+          }
+        );
+
+        return result;
+      };
 
       // Use Sandpack for HTML/CSS/JS bundling (preferred over iframe)
       const hasWebFiles = htmlFile || cssFile || jsFile || tsFile;
@@ -5468,6 +5604,8 @@ root.render(<App />);` };
       }
 
       // Enhanced HTML document with better error handling and console capture
+      // Inline external CSS/JS references so iframe srcdoc can resolve them
+      const inlinedHtml = htmlFile ? inlineExternalReferences(htmlFile.code, fileMap) : '';
       const combinedHtml = `
 <!DOCTYPE html>
 <html lang="en">
@@ -5497,7 +5635,7 @@ root.render(<App />);` };
   </style>
 </head>
 <body>
-  ${htmlFile.code}
+  ${inlinedHtml}
 
   <script>
     // Error handling and console capture
@@ -5592,6 +5730,14 @@ root.render(<App />);` };
 
   useEffect(() => {
     if (isOpen && messages.length > 0) {
+      // CRITICAL FIX: Only parse project structure from JSON code blocks when VFS is empty.
+      // The JSON-parsed system is a LEGACY fallback — VFS files take priority.
+      // If VFS has files, skip this to prevent dual-source conflicts.
+      if (Object.keys(scopedPreviewFiles).length > 0) {
+        log('[ProjectStructure] Skipping JSON parsing — VFS has files, using VFS as source');
+        return;
+      }
+
       // Extract project structure from messages
       const projectMessages = messages
         .filter((msg) => msg.role === "assistant")
@@ -5612,6 +5758,9 @@ root.render(<App />);` };
           try {
             const projectData = JSON.parse(jsonMatch[1]);
             setProjectStructure(projectData);
+            log('[ProjectStructure] Parsed from JSON code block (VFS empty, legacy fallback)', {
+              fileCount: Object.keys(projectData.files || {}).length,
+            });
           } catch (error) {
             console.error("Error parsing project structure:", error);
           }
@@ -5619,7 +5768,7 @@ root.render(<App />);` };
       }
 
     }
-  }, [messages, projectStructure, isOpen]);
+  }, [messages, projectStructure, isOpen, scopedPreviewFiles]);
   // NOTE: Keep component mounted even when closed to allow VFS sync for on-demand shell commands
   // The component will render nothing when isOpen is false, but effects will still run
   return (
@@ -5961,7 +6110,7 @@ root.render(<App />);` };
                                 )}
                               </div>
                               <div className="flex items-center gap-1">
-                                {clipboard && node.type === 'directory' && (
+                                {codeClipboard && node.type === 'directory' && (
                                   <button
                                     className="opacity-0 group-hover:opacity-100 p-1 hover:text-blue-400 transition-all text-xs"
                                     onClick={(e) => {
@@ -6214,7 +6363,7 @@ root.render(<App />);` };
                               <button
                                 className="flex items-center text-sm hover:bg-gray-200 px-2 py-1 rounded"
                                 onClick={() => {
-                                  navigator.clipboard.writeText(codeBlocks[selectedFileIndex].code);
+                                  clipboard.writeText(codeBlocks[selectedFileIndex].code);
                                 }}
                               >
                                 <CodeIcon className="w-4 h-4 mr-1" />
@@ -6329,7 +6478,7 @@ root.render(<App />);` };
                                   <button
                                     className="flex items-center text-sm hover:bg-gray-200 px-2 py-1 rounded"
                                     onClick={() => {
-                                      navigator.clipboard.writeText(selectedFilesystemContent);
+                                      clipboard.writeText(selectedFilesystemContent);
                                     }}
                                   >
                                     <CodeIcon className="w-4 h-4 mr-1" />
@@ -6472,8 +6621,8 @@ root.render(<App />);` };
               e.stopPropagation();
             }}
           >
-            {/* Paste option if clipboard has content and it's a directory */}
-            {clipboard && contextMenu.type === 'directory' && (
+            {/* Paste option if codeClipboard has content and it's a directory */}
+            {codeClipboard && contextMenu.type === 'directory' && (
               <>
                 <button
                   className="w-full px-4 py-2 text-left text-sm text-blue-400 hover:bg-gray-800 flex items-center gap-2"
@@ -6481,7 +6630,7 @@ root.render(<App />);` };
                     handlePasteFile(contextMenu.path, true);
                   }}
                 >
-                  <span className="w-4">📋</span> Paste {clipboard.operation === 'cut' ? '(Move)' : '(Copy)'}
+                  <span className="w-4">📋</span> Paste {codeClipboard.operation === 'cut' ? '(Move)' : '(Copy)'}
                 </button>
                 <hr className="my-1 border-gray-700" />
               </>

@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 //fix
 import React from "react";
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
@@ -20,6 +20,8 @@ import {
 import { Card, CardContent } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { toast } from "sonner";
+import { FileMentionMenu } from "./file-mention-menu";
+import { useFileMentionAutocomplete } from "@/hooks/use-file-mention-autocomplete";
 import {
   Select,
   SelectContent,
@@ -84,7 +86,7 @@ import BookOpen from "lucide-react/dist/esm/icons/book-open";
 import Archive from "lucide-react/dist/esm/icons/archive";
 import Monitor from "lucide-react/dist/esm/icons/monitor";
 import VNCConnectionTab from "./vnc-connection-tab";
-import type { LLMProvider } from "../lib/chat/llm-providers";
+import type { LLMProviderConfig } from "../lib/chat/llm-providers-types";
 import MultiModelComparison from "./multi-model-comparison";
 import PluginManager, { type Plugin } from "./plugins/plugin-manager";
 import AIEnhancerPlugin from "./plugins/ai-enhancer-plugin";
@@ -136,6 +138,9 @@ import SquareSplitHorizontal from "lucide-react/dist/esm/icons/square-split-hori
 import Bell from "lucide-react/dist/esm/icons/bell";
 import { ImportDialog } from "./file-import/import-dialog";
 import { useVoiceInput } from "../hooks/use-voice-input";
+import { getSponsorAd, trackAdView, adsEnabled, type EthicalAdResponse } from "../lib/ads/ethical-ads-service";
+import { ResponseStyleSelector } from "./response-style-selector";
+import { ResponseStyleProvider, useResponseStyle } from "@/contexts/response-style-context";
 
 // Pop-out plugin windows for Plugins tab
 const popOutPlugins: Plugin[] = [
@@ -327,14 +332,17 @@ interface InteractionPanelProps {
   error?: string | null;
   input: string;
   setInput: (value: string) => void;
-  availableProviders: LLMProvider[];
+  availableProviders: LLMProviderConfig[];
   onProviderChange: (provider: string, model: string) => void;
   hasCodeBlocks?: boolean;
+  /** VFS MCP tool file edits (lights up code preview button even without markdown code blocks) */
+  hasMcpFileEdits?: boolean;
   activeTab?: "chat" | "extras" | "integrations" | "shell" | "images" | "vnc";
   onActiveTabChange?: (tab: "chat" | "extras" | "integrations" | "shell" | "images" | "vnc") => void;
   userId?: string;
   onAttachedFilesChange?: (files: Record<string, AttachedVirtualFile>) => void;
   filesystemScopePath?: string;
+  showResponseStyle?: boolean; // Controlled by settings toggle
   // Note: useDiffsPoller removed - file changes synced via filesystem-updated events + SSE
 }
 
@@ -385,6 +393,15 @@ const ProviderSelector = React.memo(function ProviderSelector({
   );
 });
 
+/** Compact wrapper that provides the ResponseStyleProvider context for the selector */
+const ResponseStyleSelectorCompact = React.memo(function ResponseStyleSelectorCompact() {
+  return (
+    <ResponseStyleProvider>
+      <ResponseStyleSelector compact className="mb-2" />
+    </ResponseStyleProvider>
+  );
+});
+
 export default function InteractionPanel({
   onSubmit,
   onNewChat,
@@ -404,10 +421,12 @@ export default function InteractionPanel({
   availableProviders,
   onProviderChange,
   hasCodeBlocks = false,
+  hasMcpFileEdits = false,
   activeTab = "chat",
   onActiveTabChange,
   onAttachedFilesChange,
   filesystemScopePath,
+  showResponseStyle = false,
   // Note: useDiffsPoller removed - file changes synced via filesystem-updated events + SSE
 }: InteractionPanelProps) {
   const { togglePanel, isOpen: isPanelOpen } = usePanel();
@@ -487,6 +506,21 @@ export default function InteractionPanel({
 
   // Voice input
   const { isListening, startListening, stopListening, transcript } = useVoiceInput();
+
+  // Rotating sponsor ad (EthicalAds)
+  const [sponsorAd, setSponsorAd] = useState<EthicalAdResponse | null>(null);
+
+  useEffect(() => {
+    if (!adsEnabled()) return;
+    let cancelled = false;
+    const loadAd = async () => {
+      const ad = await getSponsorAd(['ai', 'chat', 'developer-tools']);
+      if (!cancelled && ad) setSponsorAd(ad);
+    };
+    void loadAd();
+    const interval = setInterval(loadAd, 60_000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, []);
 
   useEffect(() => {
     if (transcript) {
@@ -1397,7 +1431,7 @@ export default function InteractionPanel({
         color: "text-green-400",
         action: () =>
           setInput(
-            "Create a complete project scaffold including:\n\n📁 **Project Structure**\n- Organized folder hierarchy\n- Configuration files\n- Environment setup\n\n🔧 **Development Tools**\n- Build scripts\n- Linting configuration\n- Testing setup\n\n📚 **Documentation**\n- README with setup instructions\n- API documentation\n- Contributing guidelines\n\nProject Type: \nFramework: \nDeployment Target: ",
+            "Create a complete project scaffold including:\n\nðŸ“ **Project Structure**\n- Organized folder hierarchy\n- Configuration files\n- Environment setup\n\nðŸ”§ **Development Tools**\n- Build scripts\n- Linting configuration\n- Testing setup\n\nðŸ“š **Documentation**\n- README with setup instructions\n- API documentation\n- Contributing guidelines\n\nProject Type: \nFramework: \nDeployment Target: ",
           ),
       },
       {
@@ -1419,7 +1453,7 @@ export default function InteractionPanel({
         color: "text-purple-400",
         action: () =>
           setInput(
-            "Transform data between formats:\n\n**Supported Formats:**\n- JSON ↔ CSV ↔ XML ↔ YAML\n- Database schemas\n- API responses\n- Configuration files\n\n**Features:**\n- Format validation\n- Structure optimization\n- Data cleaning\n- Schema generation\n\nSource Format: \nTarget Format: \nPaste your data:\n```\n\n```",
+            "Transform data between formats:\n\n**Supported Formats:**\n- JSON â†” CSV â†” XML â†” YAML\n- Database schemas\n- API responses\n- Configuration files\n\n**Features:**\n- Format validation\n- Structure optimization\n- Data cleaning\n- Schema generation\n\nSource Format: \nTarget Format: \nPaste your data:\n```\n\n```",
           ),
       },
       {
@@ -1430,7 +1464,7 @@ export default function InteractionPanel({
         color: "text-blue-600",
         action: () =>
           setInput(
-            "Generate Docker configuration:\n\n🐳 **Docker Setup**\n- Multi-stage Dockerfile\n- Docker Compose with services\n- Environment configuration\n- Volume and network setup\n\n📦 **Services to Include**\n- Application containers\n- Database services\n- Caching layers\n- Reverse proxy\n\n🔧 **Production Ready**\n- Health checks\n- Resource limits\n- Security best practices\n- Logging configuration\n\nApplication Stack: \nServices Needed: \nEnvironment: ",
+            "Generate Docker configuration:\n\nðŸ³ **Docker Setup**\n- Multi-stage Dockerfile\n- Docker Compose with services\n- Environment configuration\n- Volume and network setup\n\nðŸ“¦ **Services to Include**\n- Application containers\n- Database services\n- Caching layers\n- Reverse proxy\n\nðŸ”§ **Production Ready**\n- Health checks\n- Resource limits\n- Security best practices\n- Logging configuration\n\nApplication Stack: \nServices Needed: \nEnvironment: ",
           ),
       },
       {
@@ -1441,7 +1475,7 @@ export default function InteractionPanel({
         color: "text-orange-600",
         action: () =>
           setInput(
-            "Create Git workflow automation:\n\n🌿 **Branch Strategy**\n- Branching model (GitFlow/GitHub Flow)\n- Branch protection rules\n- Merge strategies\n\n🔄 **CI/CD Pipeline**\n- GitHub Actions / GitLab CI\n- Automated testing\n- Deployment workflows\n\n🪝 **Git Hooks**\n- Pre-commit hooks\n- Commit message validation\n- Code quality checks\n\n📋 **Templates**\n- PR/MR templates\n- Issue templates\n- Contributing guidelines\n\nRepository Type: \nCI/CD Platform: \nTeam Size: ",
+            "Create Git workflow automation:\n\nðŸŒ¿ **Branch Strategy**\n- Branching model (GitFlow/GitHub Flow)\n- Branch protection rules\n- Merge strategies\n\nðŸ”„ **CI/CD Pipeline**\n- GitHub Actions / GitLab CI\n- Automated testing\n- Deployment workflows\n\nðŸª **Git Hooks**\n- Pre-commit hooks\n- Commit message validation\n- Code quality checks\n\nðŸ“‹ **Templates**\n- PR/MR templates\n- Issue templates\n- Contributing guidelines\n\nRepository Type: \nCI/CD Platform: \nTeam Size: ",
           ),
       },
       {
@@ -1453,7 +1487,7 @@ export default function InteractionPanel({
         color: "text-indigo-500",
         action: () =>
           setInput(
-            "Setup environment management:\n\n🔐 **Environment Variables**\n- Development, staging, production configs\n- Secret management strategy\n- Environment validation\n\n🛡️ **Security**\n- API key rotation\n- Encrypted secrets\n- Access control\n\n📁 **Configuration Files**\n- .env templates\n- Docker environment files\n- Kubernetes secrets\n- Cloud provider configs\n\n🔄 **Deployment**\n- Environment promotion\n- Configuration drift detection\n- Rollback strategies\n\nDeployment Platform: \nSecrets to Manage: \nEnvironments Needed: ",
+            "Setup environment management:\n\nðŸ” **Environment Variables**\n- Development, staging, production configs\n- Secret management strategy\n- Environment validation\n\nðŸ›¡ï¸ **Security**\n- API key rotation\n- Encrypted secrets\n- Access control\n\nðŸ“ **Configuration Files**\n- .env templates\n- Docker environment files\n- Kubernetes secrets\n- Cloud provider configs\n\nðŸ”„ **Deployment**\n- Environment promotion\n- Configuration drift detection\n- Rollback strategies\n\nDeployment Platform: \nSecrets to Manage: \nEnvironments Needed: ",
           ),
       },
       {
@@ -1464,7 +1498,7 @@ export default function InteractionPanel({
         color: "text-yellow-400",
         action: () =>
           setInput(
-            "Generate images using Hugging Face Spaces:\n\n🎨 **Available Models:**\n- DALL-E Mini/Mega\n- Stable Diffusion variants\n- Midjourney-style models\n- Artistic style transfer\n- Face generation models\n\n⚡ **Zero GPU Hosting:**\n- Free GPU access\n- Instant model loading\n- No setup required\n- Community models\n\n🖼️ **Image Generation:**\n- Text-to-image\n- Image-to-image\n- Style transfer\n- Upscaling\n- Inpainting\n\n**Prompt:** Describe the image you want to generate\n**Style:** (realistic, artistic, cartoon, etc.)\n**Dimensions:** (512x512, 1024x1024, etc.)\n\nDescribe your image: ",
+            "Generate images using Hugging Face Spaces:\n\nðŸŽ¨ **Available Models:**\n- DALL-E Mini/Mega\n- Stable Diffusion variants\n- Midjourney-style models\n- Artistic style transfer\n- Face generation models\n\nâš¡ **Zero GPU Hosting:**\n- Free GPU access\n- Instant model loading\n- No setup required\n- Community models\n\nðŸ–¼ï¸ **Image Generation:**\n- Text-to-image\n- Image-to-image\n- Style transfer\n- Upscaling\n- Inpainting\n\n**Prompt:** Describe the image you want to generate\n**Style:** (realistic, artistic, cartoon, etc.)\n**Dimensions:** (512x512, 1024x1024, etc.)\n\nDescribe your image: ",
           ),
       },
       {
@@ -1475,7 +1509,7 @@ export default function InteractionPanel({
         color: "text-green-400",
         action: () =>
           setInput(
-            "🕹️ **GITHUB ARCADE** 🕹️\n\n```\n┌─────────────────────────────────────┐\n│  🎮 SELECT TRENDING REPOSITORY 🎮   │\n├─────────────────────────────────────┤\n│ [A] 🔥 React 19 - Latest Features  │\n│ [B] ⚡ Vite 5.0 - Lightning Fast   │\n│ [C] 🤖 LangChain - AI Chains       │\n│ [D] 🎨 Tailwind CSS - Utility CSS  │\n│ [E] 📦 Next.js 14 - Full Stack     │\n│ [F] 🔧 TypeScript - Type Safety    │\n│ [G] 🚀 Astro - Static Site Gen     │\n│ [H] 💾 Prisma - Database ORM       │\n└─────────────────────────────────────┘\n```\n\n🎯 **MISSION:** Select a repository to:\n- 📋 Auto-fetch README.md\n- 📦 Parse package.json\n- 🔍 Extract main scripts\n- 📝 Generate project analysis\n- 🛠️ Suggest improvements\n\n**Enter your choice (A-H) or specify a custom repo:**\nRepository: ",
+            "ðŸ•¹ï¸ **GITHUB ARCADE** ðŸ•¹ï¸\n\n```\nâ”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”\nâ”‚  ðŸŽ® SELECT TRENDING REPOSITORY ðŸŽ®   â”‚\nâ”œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¤\nâ”‚ [A] ðŸ”¥ React 19 - Latest Features  â”‚\nâ”‚ [B] âš¡ Vite 5.0 - Lightning Fast   â”‚\nâ”‚ [C] ðŸ¤– LangChain - AI Chains       â”‚\nâ”‚ [D] ðŸŽ¨ Tailwind CSS - Utility CSS  â”‚\nâ”‚ [E] ðŸ“¦ Next.js 14 - Full Stack     â”‚\nâ”‚ [F] ðŸ”§ TypeScript - Type Safety    â”‚\nâ”‚ [G] ðŸš€ Astro - Static Site Gen     â”‚\nâ”‚ [H] ðŸ’¾ Prisma - Database ORM       â”‚\nâ””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜\n```\n\nðŸŽ¯ **MISSION:** Select a repository to:\n- ðŸ“‹ Auto-fetch README.md\n- ðŸ“¦ Parse package.json\n- ðŸ” Extract main scripts\n- ðŸ“ Generate project analysis\n- ðŸ› ï¸ Suggest improvements\n\n**Enter your choice (A-H) or specify a custom repo:**\nRepository: ",
           ),
       },
       {
@@ -1486,7 +1520,7 @@ export default function InteractionPanel({
         color: "text-blue-400",
         action: () =>
           setInput(
-            "☁️ **CLOUD STORAGE SETUP** (5GB Free)\n\n🗄️ **Storage Providers:**\n- Google Cloud Storage\n- AWS S3\n- Azure Blob Storage\n- DigitalOcean Spaces\n- Cloudflare R2\n\n📦 **Implementation Features:**\n- File upload/download API\n- Automatic backup system\n- CDN integration\n- Image optimization\n- Version control\n- Access permissions\n\n🔧 **Self-Hosting Option:**\n- MinIO server setup\n- Docker containerization\n- SSL/TLS encryption\n- Backup strategies\n\n**ENABLE_CLOUD_STORAGE = true** (set to false to disable)\n\nPreferred Provider: \nUse Case: \nSecurity Requirements: ",
+            "â˜ï¸ **CLOUD STORAGE SETUP** (5GB Free)\n\nðŸ—„ï¸ **Storage Providers:**\n- Google Cloud Storage\n- AWS S3\n- Azure Blob Storage\n- DigitalOcean Spaces\n- Cloudflare R2\n\nðŸ“¦ **Implementation Features:**\n- File upload/download API\n- Automatic backup system\n- CDN integration\n- Image optimization\n- Version control\n- Access permissions\n\nðŸ”§ **Self-Hosting Option:**\n- MinIO server setup\n- Docker containerization\n- SSL/TLS encryption\n- Backup strategies\n\n**ENABLE_CLOUD_STORAGE = true** (set to false to disable)\n\nPreferred Provider: \nUse Case: \nSecurity Requirements: ",
           ),
       },
       {
@@ -1497,7 +1531,7 @@ export default function InteractionPanel({
         color: "text-purple-400",
         action: () =>
           setInput(
-            "🖥️ **VPS DEPLOYMENT SYSTEM**\n\n🚀 **VPS Providers:**\n- DigitalOcean Droplets\n- Linode\n- Vultr\n- Hetzner Cloud\n- Google Compute Engine\n\n⚙️ **Automated Setup:**\n- Server provisioning\n- Docker installation\n- Nginx reverse proxy\n- SSL certificate (Let's Encrypt)\n- Firewall configuration\n- Monitoring setup\n\n🔄 **CI/CD Pipeline:**\n- GitHub Actions integration\n- Automated deployments\n- Health checks\n- Rollback capabilities\n- Log aggregation\n\n**ENABLE_VPS_DEPLOYMENT = true** (set to false to disable)\n\nApplication Type: \nTraffic Expected: \nBudget Range: ",
+            "ðŸ–¥ï¸ **VPS DEPLOYMENT SYSTEM**\n\nðŸš€ **VPS Providers:**\n- DigitalOcean Droplets\n- Linode\n- Vultr\n- Hetzner Cloud\n- Google Compute Engine\n\nâš™ï¸ **Automated Setup:**\n- Server provisioning\n- Docker installation\n- Nginx reverse proxy\n- SSL certificate (Let's Encrypt)\n- Firewall configuration\n- Monitoring setup\n\nðŸ”„ **CI/CD Pipeline:**\n- GitHub Actions integration\n- Automated deployments\n- Health checks\n- Rollback capabilities\n- Log aggregation\n\n**ENABLE_VPS_DEPLOYMENT = true** (set to false to disable)\n\nApplication Type: \nTraffic Expected: \nBudget Range: ",
           ),
       },
     ];
@@ -1888,14 +1922,14 @@ export default function InteractionPanel({
                     onClick={toggleCodePreview}
                     title="Code Preview"
                     className={`h-9 w-full sm:w-10 sm:h-10 p-0 bg-black/40 border-white/20 hover:bg-white/10 ${
-                      hasCodeBlocks
+                      hasCodeBlocks || hasMcpFileEdits
                         ? "ring-2 ring-white/30 shadow-lg shadow-white/20 animate-pulse"
                         : ""
                     }`}
                   >
                     <Code
                       className={`h-3 w-3 sm:h-4 sm:w-4 ${
-                        hasCodeBlocks ? "text-white" : ""
+                        hasCodeBlocks || hasMcpFileEdits ? "text-white" : ""
                       }`}
                     />
                   </Button>
@@ -1908,6 +1942,9 @@ export default function InteractionPanel({
                 availableProviders={availableProviders}
                 onValueChange={handleProviderSelect}
               />
+
+              {/* Response Style Selector (hidden by default, toggle in Settings) */}
+              {showResponseStyle && <ResponseStyleSelectorCompact />}
 
               {/* Tab Content Sections */}
               <TabsContent value="chat" className={`m-0 flex-1 flex flex-col min-h-0 overflow-visible ${activeTab === 'chat' ? DEFAULT_TAB_HEIGHT : ''} ${activeTab && activeTab !== 'chat' && TALL_TABS.includes(activeTab) ? 'min-h-[200px]' : ''} ${EXPAND_TRANSITION}`}>
@@ -1957,45 +1994,42 @@ export default function InteractionPanel({
                   className="flex flex-col gap-2 flex-1 min-h-0 overflow-visible"
                 >
                   <div className="relative flex-1 min-h-[60px] overflow-visible">
-                    <Textarea
-                      ref={textareaRef}
-                      value={input}
-                      onChange={(e) => setInput(e.target.value)}
-                      placeholder="Type your message..."
-                      className="min-h-[60px] max-h-[120px] bg-white/5 border border-white/20 pr-12 resize-none text-base sm:text-sm focus:border-white/40 focus:ring-1 focus:ring-white/20 rounded-2xl"
-                      rows={2}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" && !e.shiftKey) {
-                          e.preventDefault();
-                          const trimmed = input.trim();
-                          if (!trimmed) return;
-                          // If processing and queuing allowed, queue instead of submitting
-                          if (isProcessing && allowInputWhileProcessing) {
-                            setPendingInput(trimmed);
-                            setInput("");
-                            return;
-                          }
-                          onSubmit(trimmed);
-                          setInput("");
-                        }
-                      }}
-                      onFocus={() => {
-                        // Scroll to input on mobile when focused
-                        if (window.innerWidth <= 768 && textareaRef.current) {
-                          setTimeout(() => {
-                            textareaRef.current?.scrollIntoView({
-                              behavior: "smooth",
-                              block: "center",
-                            });
-                          }, 300);
-                        }
-                      }}
-                      disabled={isInputDisabled}
+                    {/* @mention autocomplete menu */}
+                    <FileMentionAutocompleteIntegration
+                      input={input}
+                      setInput={setInput}
+                      onSubmit={onSubmit}
+                      isInputDisabled={isInputDisabled}
+                      isProcessing={isProcessing}
+                      allowInputWhileProcessing={allowInputWhileProcessing}
+                      setPendingInput={setPendingInput}
+                      textareaRef={textareaRef}
                     />
                     <div className="absolute right-3 top-3 flex gap-1" style={{ zIndex: 10 }}>
                       <button
                         type="button"
-                        onClick={() => {
+                        onClick={async () => {
+                          // On desktop, use native Tauri file dialog
+                          if (process.env.DESKTOP_MODE === 'true' || process.env.DESKTOP_LOCAL_EXECUTION === 'true') {
+                            try {
+                              const { tauriDialogProvider } = await import('@/lib/hitl/tauri-dialog-provider');
+                              if (tauriDialogProvider.isAvailable()) {
+                                const result = await tauriDialogProvider.openFile({
+                                  title: 'Attach Files to Chat',
+                                  multiple: true,
+                                });
+                                if (result.success && result.data) {
+                                  const paths = Array.isArray(result.data) ? result.data : [result.data];
+                                  toast.info(`Selected ${paths.length} file(s) from desktop`);
+                                  // Paths are strings â€” bridge to VFS attachment via drag-drop or path input
+                                }
+                                return;
+                              }
+                            } catch (e) {
+                              console.warn('[InteractionPanel] Tauri file dialog failed, falling back', e);
+                            }
+                          }
+                          // Fallback: show file selector panel
                           setShowFileSelector(!showFileSelector);
                         }}
                         className={`p-1.5 rounded-md border transition-colors relative ${
@@ -2082,7 +2116,27 @@ export default function InteractionPanel({
                           <button
                             type="button"
                             className="w-full px-3 py-2 bg-purple-600/20 hover:bg-purple-600/30 border border-purple-400/30 rounded text-xs text-purple-300 flex items-center justify-center gap-2 transition-colors"
-                            onClick={() => setIsImportDialogOpen(true)}
+                            onClick={async () => {
+                              // On desktop, use native Tauri folder dialog
+                              if (process.env.DESKTOP_MODE === 'true' || process.env.DESKTOP_LOCAL_EXECUTION === 'true') {
+                                try {
+                                  const { tauriDialogProvider } = await import('@/lib/hitl/tauri-dialog-provider');
+                                  if (tauriDialogProvider.isAvailable()) {
+                                    const result = await tauriDialogProvider.openFolder({
+                                      title: 'Select Folder to Import',
+                                    });
+                                    if (result.success && result.data) {
+                                      const paths = Array.isArray(result.data) ? result.data : [result.data];
+                                      toast.info(`Selected ${paths.length} folder(s) from desktop`);
+                                    }
+                                    return;
+                                  }
+                                } catch (e) {
+                                  console.warn('[InteractionPanel] Tauri folder dialog failed, falling back', e);
+                                }
+                              }
+                              setIsImportDialogOpen(true);
+                            }}
                           >
                             <Upload className="w-3 h-3" />
                             Import Files/Folders
@@ -2404,6 +2458,20 @@ export default function InteractionPanel({
               </TabsContent>
             </Tabs>
           )}
+
+          {/* Rotating sponsor ad bar â€” subtle, blends with panel aesthetic */}
+          {sponsorAd && (
+            <a
+              href={sponsorAd.url}
+              target="_blank"
+              rel="noopener sponsored"
+              className="block px-4 py-1.5 border-t border-white/5 bg-gradient-to-r from-purple-500/5 via-transparent to-cyan-500/5 text-[10px] text-white/30 hover:text-white/60 hover:from-purple-500/10 hover:to-cyan-500/10 transition-all duration-500"
+              onClick={() => trackAdView(sponsorAd)}
+            >
+              <span className="uppercase tracking-wider opacity-50 mr-2">Sponsor</span>
+              {sponsorAd.text}
+            </a>
+          )}
         </div>
 
         {/* Import Files Dialog */}
@@ -2417,6 +2485,110 @@ export default function InteractionPanel({
           }}
         />
       </div>
+    </>
+  );
+}
+
+/**
+ * File Mention Autocomplete Integration Component
+ * 
+ * Wraps the Textarea with @mention autocomplete functionality.
+ * This component uses the useFileMentionAutocomplete hook to:
+ * - Detect @mentions in the input
+ * - Show autocomplete dropdown
+ * - Handle keyboard navigation
+ * - Insert selected files with @ syntax
+ */
+function FileMentionAutocompleteIntegration({
+  input,
+  setInput,
+  onSubmit,
+  isInputDisabled,
+  isProcessing,
+  allowInputWhileProcessing,
+  setPendingInput,
+  textareaRef,
+}: {
+  input: string;
+  setInput: (value: string) => void;
+  onSubmit: (content: string) => void;
+  isInputDisabled: boolean;
+  isProcessing: boolean;
+  allowInputWhileProcessing: boolean;
+  setPendingInput: (value: string | null) => void;
+  textareaRef: React.RefObject<HTMLTextAreaElement>;
+}) {
+  const {
+    showMenu,
+    query,
+    suggestions,
+    selectedIndex,
+    isLoading,
+    handleInputChange,
+    handleKeyDown,
+    handleSelect,
+  } = useFileMentionAutocomplete({
+    input,
+    setInput,
+    onFileSelect: (files) => {
+      // Files selected via @mention - they'll be sent with the message
+      // The backend will detect @mentions in the text and prioritize them
+    },
+  });
+
+  return (
+    <>
+      <Textarea
+        ref={textareaRef}
+        value={input}
+        onChange={(e) => handleInputChange(e.target.value)}
+        placeholder="Type your message... (use @ to mention files)"
+        className="min-h-[60px] max-h-[120px] bg-white/5 border border-white/20 pr-12 resize-none text-base sm:text-sm focus:border-white/40 focus:ring-1 focus:ring-white/20 rounded-2xl"
+        rows={2}
+        onKeyDown={(e) => {
+          // Let autocomplete handle navigation keys first
+          const handled = handleKeyDown(e);
+          if (handled) return;
+          
+          // Enter to submit
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            const trimmed = input.trim();
+            if (!trimmed) return;
+            // If processing and queuing allowed, queue instead of submitting
+            if (isProcessing && allowInputWhileProcessing) {
+              setPendingInput(trimmed);
+              setInput("");
+              return;
+            }
+            onSubmit(trimmed);
+            setInput("");
+          }
+        }}
+        onFocus={() => {
+          // Scroll to input on mobile when focused
+          if (window.innerWidth <= 768 && textareaRef.current) {
+            setTimeout(() => {
+              textareaRef.current?.scrollIntoView({
+                behavior: "smooth",
+                block: "center",
+              });
+            }, 300);
+          }
+        }}
+        disabled={isInputDisabled}
+      />
+      
+      {/* Autocomplete menu */}
+      <FileMentionMenu
+        visible={showMenu}
+        query={query}
+        suggestions={suggestions}
+        selectedIndex={selectedIndex}
+        isLoading={isLoading}
+        onSelect={handleSelect}
+        anchorEl={textareaRef.current}
+      />
     </>
   );
 }

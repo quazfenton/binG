@@ -43,12 +43,33 @@ import { createLogger } from '../../utils/logger';
 
 const logger = createLogger('VFS:SyncBack');
 
+// ============================================================================
+// Comprehensive sync exclusion patterns — all languages
+// ============================================================================
+const SYNC_EXCLUDE_PATTERNS: RegExp[] = [
+  /\/node_modules\//, /\/\.next\//, /\/\.nuxt\//, /\/\.cache\//,
+  /\/\.parcel-cache\//, /\/\.turbo\//, /\/\.vite\//, /\/coverage\//,
+  /\/__pycache__\//, /\/\.venv\//, /\/venv\//, /\/\.virtualenv\//,
+  /\/site-packages\//, /\/\.eggs\//, /\/pip-selfcheck\.json/,
+  /\/\.pytest_cache\//, /\/\.mypy_cache\//, /\/\.tox\//, /\/\.nox\//,
+  /\/\.ruff_cache\//, /\/\.ipynb_checkpoints\//,
+  /\/target\//, /\/\.gradle\//, /\/\.cargo\/registry\//,
+  /\/vendor\//, /\/pkg\//, /\/bin\//, /\/obj\//, /\/\.nuget\//,
+  /\/\.bundle\//, /\/\.gem\//,
+  /\/dist\//, /\/build\//, /\/out\//, /\/\.idea\//,
+  /\/Thumbs\.db/, /\/\.DS_Store/, /\.tmp$/, /\.bak$/, /\.swp$/, /\.swo$/, /~$/, /\.part$/,
+];
+
+function shouldExcludeFromSync(filePath: string): boolean {
+  return SYNC_EXCLUDE_PATTERNS.some(pattern => pattern.test(filePath));
+}
+
 /**
  * Default configuration
  */
 const DEFAULT_CONFIG: Partial<VFSyncConfig> = {
   syncMode: 'full',
-  maxFileSize: 10 * 1024 * 1024, // 10MB
+  maxFileSize: 100 * 1024 * 1024, // 100MB (aligned with VFS MAX_FILE_SIZE)
   fileTimeout: 30000, // 30 seconds
 };
 
@@ -104,8 +125,8 @@ export class VFSyncBackService {
         throw new Error(listResult.output || 'Failed to list directory');
       }
       
-      // Parse file list
-      const files = await this.parseFileList(listResult.output, session.cwd || '/workspace', handle);
+      // Parse file list (pass includePatterns so explicitly included files skip exclusions)
+      const files = await this.parseFileList(listResult.output, session.cwd || '/workspace', handle, mergedConfig.includePatterns);
       
       // Filter files by patterns
       const filteredFiles = this.filterFiles(files, mergedConfig.includePatterns, mergedConfig.excludePatterns);
@@ -191,15 +212,16 @@ export class VFSyncBackService {
   private async parseFileList(
     output: string,
     cwd: string,
-    handle: any
+    handle: any,
+    includePatterns?: string[]
   ): Promise<VFSFileEntry[]> {
     const files: VFSFileEntry[] = [];
     const lines = output.split('\n').filter(line => line.trim());
-    
+
     for (const line of lines) {
       // Parse ls -la format: "-rw-r--r-- 1 user user 1234 Jan 1 12:00 filename"
       const parts = line.trim().split(/\s+/);
-      
+
       if (parts.length < 9) continue;
       
       const permissions = parts[0];
@@ -208,13 +230,20 @@ export class VFSyncBackService {
       
       // Skip . and ..
       if (fileName === '.' || fileName === '..') continue;
-      
+
       // Skip directories
       if (permissions.startsWith('d')) continue;
-      
+
+      // FIX: Only apply hardcoded exclusions if the file is NOT explicitly included
+      // This prevents includePatterns from being silently overridden by exclusions
+      const filePath = `${cwd}/${fileName}`;
+      const isExplicitlyIncluded = includePatterns && includePatterns.length > 0
+        && includePatterns.some(pattern => this.matchGlob(filePath, pattern));
+
+      if (!isExplicitlyIncluded && shouldExcludeFromSync(filePath)) continue;
+
       // Read file content
       try {
-        const filePath = `${cwd}/${fileName}`
         const readResult = await handle.readFile(filePath)
         
         if (readResult.success && readResult.output !== undefined) {
@@ -284,7 +313,13 @@ export class VFSyncBackService {
         // Sync was cancelled
         break;
       }
-      
+
+      // === EXCLUSION CHECK: Skip node_modules, venvs, caches, build outputs, etc. ===
+      if (shouldExcludeFromSync(file.path)) {
+        skippedFiles++;
+        continue;
+      }
+
       // Update progress
       if (status.progress) {
         status.progress.currentFile = filesSynced + skippedFiles + failedFiles;

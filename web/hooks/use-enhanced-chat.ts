@@ -8,6 +8,7 @@ import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events
 import { buildApiHeaders } from '@/lib/utils';
 import type { AgentType, AgentStatus } from '@/components/agent-status-display';
 import { isValidExtractedPath } from '@/lib/chat/file-edit-parser';  // NEW: Server-side validation
+import { useStreamControl } from './use-stream-control';
 
 export interface UseChatOptions {
   api: string;
@@ -15,6 +16,8 @@ export interface UseChatOptions {
   onResponse?: (response: Response) => void | Promise<void>;
   onError?: (error: Error) => void;
   onFinish?: (message: Message) => void;
+  /** Orchestration mode override — always sends X-Orchestration-Mode when set. If omitted, server uses its default routing. */
+  orchestrationMode?: string;
 }
 
 export interface UseChatReturn {
@@ -40,14 +43,83 @@ export interface UseChatReturn {
   setAgentActivity?: (activity: any) => void;
 }
 
+// ─── Empty Response Retry Context Builder ────────────────────────────────────
+
+/**
+ * Builds diagnostic context for empty response retries.
+ * Captures tool execution state so server can enhance retry with feedback.
+ */
+function buildEmptyResponseRetryContext(ctx: {
+  toolInvocations?: Array<{ toolCallId: string; toolName: string; args?: any; result?: any; error?: string }>;
+  filesystemEdits?: { applied?: any[]; failed?: any[] };
+  fileEdits?: any[];
+  provider?: string;
+  model?: string;
+  finishReason?: string;
+}): { summary: string; failedToolCalls: any[]; filesystemChanges: any } {
+  const failedToolCalls: Array<{ name: string; error: string; args?: any }> = [];
+  const successfulToolCalls: Array<{ name: string; args?: any }> = [];
+
+  // Extract tool execution results
+  const tools = ctx.toolInvocations || [];
+  for (const tool of tools) {
+    if (tool.error || tool.result?.success === false) {
+      failedToolCalls.push({
+        name: tool.toolName,
+        error: tool.error || tool.result?.error || 'Unknown error',
+        args: tool.args,
+      });
+    } else if (tool.toolName) {
+      successfulToolCalls.push({ name: tool.toolName, args: tool.args });
+    }
+  }
+
+  // Check for filesystem changes
+  const fsApplied = ctx.filesystemEdits?.applied || [];
+  const fsFailed = ctx.filesystemEdits?.failed || [];
+  const filesystemChanges = {
+    applied: fsApplied.length,
+    failed: fsFailed.length,
+    failedDetails: fsFailed.slice(0, 3).map((f: any) => ({ path: f.path, error: f.error })),
+  };
+
+  // Build summary
+  const parts: string[] = [];
+  if (failedToolCalls.length > 0) {
+    parts.push(`${failedToolCalls.length} tool call(s) failed: ${failedToolCalls.map(t => t.name).join(', ')}`);
+  }
+  if (successfulToolCalls.length > 0) {
+    parts.push(`${successfulToolCalls.length} tool call(s) succeeded: ${successfulToolCalls.map(t => t.name).join(', ')}`);
+  }
+  if (filesystemChanges.applied > 0) {
+    parts.push(`${filesystemChanges.applied} file edit(s) applied`);
+  }
+  if (filesystemChanges.failed > 0) {
+    parts.push(`${filesystemChanges.failed} file edit(s) failed`);
+  }
+
+  const summary = parts.length > 0
+    ? `Previous attempt executed tools but returned empty response. ${parts.join('. ')}.`
+    : `Previous attempt returned empty response with no tool executions.`;
+
+  return { summary, failedToolCalls, filesystemChanges };
+}
+
 /**
  * Enhanced useChat hook that properly handles our Server-Sent Events format
  */
 export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
+  const { orchestrationMode } = options;
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<Error | undefined>();
+  
+  // Prompt queue: stores inputs submitted while a response is streaming
+  // When user presses Enter during streaming, the input is queued and auto-sent
+  // when the current response completes (one at a time, not all at once)
+  const [inputQueue, setInputQueue] = useState<string[]>([]);
+  const isInputOrIsLoading = isLoading || inputQueue.length > 0;
   
   // Rate limiting for invalid path warnings (prevents log spam from malformed LLM output)
   const invalidPathWarningCount = useRef(0);
@@ -108,6 +180,62 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
   const abortControllerRef = useRef<AbortController | null>(null);
   const currentMessageRef = useRef<Message | null>(null);
   const messagesRef = useRef<Message[]>([]);
+  const isMountedRef = useRef(true);
+
+  // Track mount state to prevent stale callbacks
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
+  // Stream control WebSocket state
+  const [streamId, setStreamId] = useState<string | null>(null);
+
+  // Stream control WebSocket hook — connects on the same port as the app
+  const streamControl = useStreamControl({
+    streamId,
+    authToken: null, // TODO: Get from your auth system (cookie, session, etc.)
+    enabled: !!streamId,
+    onNeedMoreTurns: (contextHint, payload) => {
+      // Server sent structured continue signal via WebSocket
+      const toolSummary = payload?.toolSummary || '';
+      const implicitFiles = payload?.implicitFiles || [];
+
+      console.log('[StreamControl] Server signaled need_more_turns', {
+        contextHint,
+        toolSummary: !!toolSummary,
+        implicitFileCount: implicitFiles.length,
+        fileConfidence: payload?.fileRequestConfidence,
+      });
+
+      // Build enhanced continuation prompt
+      let continuationPrompt = '';
+      if (toolSummary && toolSummary !== 'none') {
+        continuationPrompt += `[TOOLS EXECUTED] ${toolSummary}\n\n`;
+      }
+      if (implicitFiles.length > 0) {
+        continuationPrompt += `[FILES MENTIONED] ${implicitFiles.join(', ')}\n\n`;
+      }
+      continuationPrompt += contextHint
+        ? `[CONTINUATION] Continue from where you left off.\n\nYour last response: ${contextHint}\n\nResume the task — pick up exactly where you stopped.`
+        : 'Please continue with the remaining tasks.';
+
+      setInput(continuationPrompt);
+      setTimeout(() => { if (!isMountedRef.current) return;
+        const fakeEvent = { preventDefault: () => {}, currentTarget: { reset: () => {} } } as React.FormEvent<HTMLFormElement>;
+        handleSubmit(fakeEvent);
+      }, 100);
+    },
+    onStreamComplete: (stats) => {
+      console.log('[StreamControl] Stream complete', stats);
+    },
+    onError: (error) => {
+      console.warn('[StreamControl] WebSocket error:', error);
+      // Non-falling — SSE still works even if WS control channel fails
+    },
+  });
 
   useEffect(() => {
     messagesRef.current = messages;
@@ -123,17 +251,71 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
       abortControllerRef.current = null;
       setIsLoading(false);
       setAgentStatus('idle');
+      
+      // Process queued prompts when user stops generation
+      if (inputQueue.length > 0) {
+        console.log('[InputQueue] User stopped generation, processing next queued prompt');
+        setTimeout(() => processQueue(), 100);
+      }
     }
-  }, []);
+  }, [inputQueue]);
 
   const buildRequestHeaders = useCallback((): HeadersInit => {
-    return buildApiHeaders();
-  }, []);
+    const headers = buildApiHeaders();
+    // Always send X-Orchestration-Mode when explicitly configured.
+    // We don't skip 'task-router' here — if the user explicitly selects it,
+    // the server should honor that even if the server default changes later.
+    // Absence of the header means "use server default" (whatever that is).
+    if (orchestrationMode) {
+      return { ...headers, 'X-Orchestration-Mode': orchestrationMode };
+    }
+    return headers;
+  }, [orchestrationMode]);
+
+  // Process next queued prompt after current response completes
+  const processQueue = useCallback(async () => {
+    if (inputQueue.length === 0) {
+      return;
+    }
+    
+    // Get next queued input (FIFO - oldest first)
+    const nextInput = inputQueue[0];
+    
+    console.log('[InputQueue] Processing queued prompt:', {
+      queueLength: inputQueue.length,
+      nextInputPreview: nextInput.substring(0, 50),
+    });
+    
+    // Remove from queue before submitting to prevent re-queueing
+    setInputQueue(prev => prev.slice(1));
+    
+    // Set as current input and submit
+    setInput(nextInput);
+    
+    // Use a small delay to ensure state updates before submit
+    setTimeout(() => { if (!isMountedRef.current) return;
+      const fakeEvent = { preventDefault: () => {}, currentTarget: { reset: () => {} } } as React.FormEvent<HTMLFormElement>;
+      handleSubmit(fakeEvent);
+    }, 50);
+  }, [inputQueue]);
 
   const handleSubmit = useCallback(async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
 
-    if (!input.trim() || isLoading) {
+    if (!input.trim()) {
+      return;
+    }
+
+    // Queue input if already loading (streaming response in progress)
+    // The queued input will auto-send when the current response completes
+    if (isLoading) {
+      const queuedInput = input.trim();
+      console.log('[InputQueue] Queueing input (stream in progress):', {
+        queueLength: inputQueue.length + 1,
+        inputPreview: queuedInput.substring(0, 50),
+      });
+      setInputQueue(prev => [...prev, queuedInput]);
+      setInput(''); // Clear input after queueing
       return;
     }
 
@@ -228,11 +410,11 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
               : msg
           ));
           setIsLoading(false);
-          if (options.onFinish && currentMessageRef.current) {
+          if (options.onFinish) {
             options.onFinish({
-              ...currentMessageRef.current,
+              ...assistantMessage,
               content,
-              metadata: messageMetadata
+              metadata: { ...(assistantMessage.metadata || {}), ...messageMetadata }
             });
           }
           return;
@@ -243,7 +425,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
 
       // Some auth-required responses are returned as JSON, not SSE.
       const contentType = response.headers.get('content-type') || '';
-      
+
       // Check for JSON responses (errors, auth required, etc.)
       // Skip this for SSE streams which may include 'application/json' in content-type
       if (contentType.includes('application/json') && !contentType.includes('text/event-stream')) {
@@ -286,11 +468,11 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
               : msg
           ));
           setIsLoading(false);
-          if (options.onFinish && currentMessageRef.current) {
+          if (options.onFinish) {
             options.onFinish({
-              ...currentMessageRef.current,
+              ...assistantMessage,
               content,
-              metadata: messageMetadata
+              metadata: { ...(assistantMessage.metadata || {}), ...messageMetadata }
             });
           }
           return;
@@ -301,7 +483,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
         throw new Error('No response body for streaming');
       }
 
-      // Handle streaming response
+      // Handle streaming response (timeout is managed internally)
       await handleStreamingResponse(response.body, assistantMessage, abortController);
 
     } catch (err) {
@@ -333,17 +515,17 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
         // so the user knows the response may be incomplete.
         console.warn('Chat streaming interrupted (partial content preserved):', error);
 
-        if (hasContent && currentMessageRef.current) {
+        if (hasContent && currentMessage) {
           // Append a subtle indicator that the response was truncated
-          const partialContent = (currentMessage?.content || '') + '\n\n⚠️ _Response may be incomplete due to a connection issue._';
+          const partialContent = (currentMessage.content || '') + '\n\n⚠️ _Response may be incomplete due to a connection issue._';
           setMessages(prev => prev.map(msg =>
-            msg.id === currentMessageRef.current!.id
+            msg.id === currentMessage.id
               ? { ...msg, content: partialContent }
               : msg
           ));
           if (options.onFinish) {
             options.onFinish({
-              ...currentMessageRef.current,
+              ...currentMessage,
               content: partialContent,
             });
           }
@@ -351,6 +533,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
       }
 
       setIsLoading(false);
+      abortControllerRef.current = null;
     }
   }, [buildRequestHeaders, input, isLoading, options]);
 
@@ -358,15 +541,19 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
     body: ReadableStream<Uint8Array>,
     assistantMessage: Message,
     abortController: AbortController
-  ) => {
+  ): Promise<void> => {
     const reader = body.getReader();
     const decoder = new TextDecoder();
     let accumulatedContent = '';
     let currentEventType = '';
     let tokenCount = 0;  // Track token events for debugging
 
+    // CRITICAL: Track tool invocations locally during streaming
+    // messagesRef.current is stale (useEffect hasn't synced yet when done fires)
+    const streamingToolInvocations: Array<{ toolCallId: string; toolName: string; state: string }> = [];
+
     // Set up a timeout to ensure we don't get stuck
-    const timeoutId = setTimeout(() => {
+    const timeoutId = setTimeout(() => { if (!isMountedRef.current) return;
       console.warn('[Chat] Streaming timeout after 3min, finalizing with accumulated content', {
         accumulatedContentLength: accumulatedContent?.length,
         tokenCount,
@@ -379,10 +566,11 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
             : msg
         ));
         setIsLoading(false);
-        if (options.onFinish && currentMessageRef.current) {
+        if (options.onFinish) {
           options.onFinish({
-            ...currentMessageRef.current,
-            content: accumulatedContent
+            ...assistantMessage,
+            content: accumulatedContent,
+            metadata: assistantMessage.metadata || {}
           });
         }
       }
@@ -455,7 +643,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
 
               switch (determinedType) {
                 case 'init':
-                  // Initialization event - update agent status
+                  // Initialization event - update agent status and connect WebSocket control channel
                   console.log('Chat stream initialized:', eventData);
                   if (eventData.agent === 'planner') {
                     setAgentType('planner');
@@ -465,12 +653,19 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                     setAgentType('background');
                   }
                   setAgentStatus('thinking');
-                  // Update agent activity
                   setAgentActivity(prev => ({
                     ...prev,
                     status: 'thinking',
                     currentAction: eventData.currentAction || 'Initializing...',
                   }));
+
+                  // Extract streamId for WebSocket control channel (same port as app)
+                  if (eventData.streamId) {
+                    setStreamId(eventData.streamId);
+                    console.log('[StreamControl] Received streamId from SSE init', {
+                      streamId: eventData.streamId,
+                    });
+                  }
                   break;
 
                 case 'token':
@@ -486,9 +681,8 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                     ));
                   }
                   // Update agent status to executing if we're receiving tokens
-                  if (agentStatus === 'thinking') {
-                    setAgentStatus('executing');
-                  }
+                  // Use functional update to avoid stale closure
+                  setAgentStatus(prev => prev === 'thinking' ? 'executing' : prev);
                   break;
 
                 case 'primary_done':
@@ -576,21 +770,347 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                         }
                       : msg
                   ));
+                  
+                  // CRITICAL FIX: Detect empty responses and trigger re-request
+                  // Empty = no text content AND no tool invocations AND no filesystem edits
+                  // CRITICAL: Use streamingToolInvocations (local) instead of messagesRef.current
+                  // because messagesRef is stale (useEffect hasn't synced when done fires)
+                  const hasToolInvocations = eventData.toolInvocations?.length > 0 ||
+                    eventData.toolCalls?.length > 0 ||
+                    (eventData.messageMetadata?.toolInvocations?.length > 0) ||
+                    streamingToolInvocations.length > 0;  // ← Local tracking, always up-to-date
+                  const hasFileSystemEdits = eventData.filesystem?.applied?.length > 0 ||
+                    eventData.fileEdits?.length > 0;
+                  const isEmptyResponse = !doneContent.trim() && !hasToolInvocations && !hasFileSystemEdits;
+
+                  if (isEmptyResponse) {
+                    console.warn('[Chat] Empty response detected - content, tools, and filesystem edits all missing:', {
+                      messageId: assistantMessage.id,
+                      doneContentLength: doneContent?.length,
+                      streamingToolInvocationCount: streamingToolInvocations.length,  // ← Log local count
+                      hasToolInvocations,
+                      hasFileSystemEdits,
+                      provider: eventData.provider || doneMetadata.provider || 'unknown',
+                      model: eventData.model || doneMetadata.model || 'unknown',
+                      finishReason: eventData.finishReason,
+                    });
+                    
+                    // Mark message as needing retry
+                    setMessages(prev => prev.map(msg =>
+                      msg.id === assistantMessage.id
+                        ? {
+                            ...msg,
+                            metadata: { 
+                              ...(msg.metadata || {}), 
+                              ...doneMetadata,
+                              isEmptyResponse: true,
+                              retryCount: (msg.metadata as any)?.retryCount || 0,
+                            },
+                            content: doneContent
+                          }
+                        : msg
+                    ));
+                  }
+                  
                   // Update version if provided
                   if (eventData.version) {
                     setCurrentVersion(eventData.version);
                   }
-                  // Streaming complete (all background tasks finished)
+                  // CRITICAL FIX: Trigger filesystem refresh on stream done
+                  // This ensures file tree updates after MCP tool writes complete
+                  if (typeof window !== 'undefined' && (eventData.filesystem?.applied?.length > 0 || eventData.fileEdits?.length > 0)) {
+                    window.dispatchEvent(new CustomEvent('filesystem-updated', {
+                      detail: {
+                        source: 'stream-done',
+                        emittedAt: Date.now(),
+                        applied: eventData.filesystem?.applied,
+                      },
+                    }));
+                  }
+
+                  // CRITICAL FIX: Auto-retry empty responses
+                  // On the FIRST retry, create a NEW bubble. On subsequent retries,
+                  // reuse the same bubble and just keep it in loading state — no
+                  // endless bubble spam.
+                  if (isEmptyResponse) {
+                    const retryCount = (doneMetadata.retryCount || 0);
+                    const maxRetries = 3;
+
+                    if (retryCount < maxRetries) {
+                      const isFirstRetry = retryCount === 0;
+
+                      // Find the last user message content
+                      const currentMessages = messagesRef.current;
+                      const lastUserMsg = currentMessages.findLast(
+                        msg => msg.role === 'user' && msg.id !== assistantMessage.id
+                      );
+
+                      if (lastUserMsg?.content) {
+                        console.warn(`[Chat] Empty response detected, auto-retrying (attempt ${retryCount + 1}/${maxRetries})`);
+
+                        clearTimeout(timeoutId);
+
+                        const toolContext = buildEmptyResponseRetryContext({
+                          toolInvocations: streamingToolInvocations,
+                          filesystemEdits: eventData.filesystem,
+                          fileEdits: eventData.fileEdits,
+                          provider: doneMetadata.provider,
+                          model: doneMetadata.model,
+                          finishReason: eventData.finishReason,
+                        });
+
+                        // Determine which assistant message to retry.
+                        // First retry → retry the original.
+                        // Subsequent retries → reuse the same retry bubble.
+                        let retryAssistantMessage: Message;
+                        if (isFirstRetry) {
+                          // Mark the ORIGINAL as failed (keeps tool invocations visible)
+                          setMessages(prev => prev.map(msg =>
+                            msg.id === assistantMessage.id
+                              ? {
+                                  ...msg,
+                                  content: doneContent || '_Response returned empty content_',
+                                  metadata: {
+                                    ...(msg.metadata || {}),
+                                    ...doneMetadata,
+                                    isEmptyResponse: true,
+                                    emptyResponseAttempt: retryCount + 1,
+                                    toolInvocations: streamingToolInvocations.length > 0
+                                      ? streamingToolInvocations
+                                      : (msg.metadata as any)?.toolInvocations,
+                                  },
+                                }
+                              : msg
+                          ));
+
+                          retryAssistantMessage = {
+                            id: `assistant-retry-${Date.now()}`,
+                            role: 'assistant',
+                            content: '',
+                            metadata: {
+                              isRetry: true,
+                              retryCount: retryCount + 1,
+                              originalProvider: doneMetadata.provider,
+                              originalModel: doneMetadata.model,
+                              retryContext: toolContext,
+                            },
+                          };
+                          setMessages(prev => [...prev, retryAssistantMessage]);
+                        } else {
+                          // Reuse the existing retry bubble — just clear its content
+                          // and bump the retryCount. No new bubble.
+                          retryAssistantMessage = {
+                            id: assistantMessage.id,
+                            role: 'assistant',
+                            content: '',
+                            metadata: {
+                              ...(assistantMessage.metadata || {}),
+                              retryCount: retryCount + 1,
+                              isEmptyResponse: true,
+                              emptyResponseAttempt: retryCount + 1,
+                              retryContext: toolContext,
+                            },
+                          };
+                          setMessages(prev => prev.map(msg =>
+                            msg.id === assistantMessage.id
+                              ? {
+                                  ...msg,
+                                  content: '',
+                                  metadata: retryAssistantMessage.metadata,
+                                }
+                              : msg
+                          ));
+                        }
+
+                        setIsLoading(true);
+                        setAgentStatus('thinking');
+
+                        const retryAbortController = new AbortController();
+                        abortControllerRef.current = retryAbortController;
+                        currentMessageRef.current = retryAssistantMessage;
+
+                        // Re-fetch with ROTATED provider/model for better reliability
+                        try {
+                          // Build retry message history WITHOUT the empty assistant response
+                          const messagesWithoutEmpty = currentMessages.filter(
+                            msg => msg.id !== assistantMessage.id
+                          );
+
+                          const resolvedBody = typeof options.body === 'function'
+                            ? options.body()
+                            : (options.body || {});
+
+                          // Select a rotated provider/model for retry:
+                          // Retry 1: Next model from same provider
+                          // Retry 2+: Next provider in fallback chain
+                          const origProvider = doneMetadata.provider;
+                          const origModel = doneMetadata.model;
+                          let selectedProvider = origProvider;
+                          let selectedModel = origModel;
+
+                          // Lightweight client-side provider model map (avoids importing server-only llm-providers.ts)
+                          const PROVIDER_MODELS: Record<string, string[]> = {
+                            mistral: ['mistral-small-latest', 'mistral-large-latest', 'codestral-latest', 'mistral-medium-latest', 'ministral-3b-latest', 'ministral-8b-latest'],
+                            google: ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash', 'gemini-2.5-pro'],
+                            openai: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo'],
+                            anthropic: ['claude-sonnet-4-20250514', 'claude-opus-4-20250514', 'claude-3-5-sonnet-latest', 'claude-3-5-haiku-latest'],
+                            github: ['gpt-4o', 'llama-3.3-70b-instruct', 'phi-4', 'mistral-large-2407', 'mistral-small-2402', 'cohere-command-r-plus-08-2024'],
+                            nvidia: ['meta/llama-3.3-70b-instruct', 'meta/llama-3.1-405b-instruct', 'nvidia/nemotron-4-340b-instruct', 'mistralai/mistral-large-2-instruct', 'mistralai/mistral-large-3-675b-instruct-2512', 'deepseek-ai/deepseek-r1'],
+                            openrouter: ['mistralai/mistral-small-latest', 'meta-llama/llama-3.3-70b-instruct', 'google/gemini-2.5-flash', 'anthropic/claude-3.5-sonnet', 'openai/gpt-4o'],
+                            groq: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768', 'gemma2-9b-it'],
+                            together: ['meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo', 'mistralai/Mixtral-8x7B-Instruct-v0.1'],
+                            zen: ['zen'],
+                            chutes: ['deepseek-ai/DeepSeek-R1-0528', 'meta-llama/Llama-3.3-70B-Instruct'],
+                            fireworks: ['accounts/fireworks/models/llama-v3p1-70b-instruct'],
+                            deepinfra: ['meta-llama/Meta-Llama-3.1-70B-Instruct', 'mistralai/Mixtral-8x7B-Instruct-v0.1'],
+                          };
+
+                          if (retryCount === 0) {
+                            // First retry: try next model from same provider
+                            const providerModels = PROVIDER_MODELS[origProvider?.toLowerCase()];
+                            if (providerModels && providerModels.length > 1) {
+                              const currentIdx = providerModels.indexOf(origModel);
+                              const nextIdx = currentIdx >= 0
+                                ? (currentIdx + 1) % providerModels.length
+                                : 0;
+                              selectedModel = providerModels[nextIdx];
+                              console.warn(`[Chat] Rotating to next model from same provider: ${selectedProvider}/${selectedModel}`);
+                            }
+
+                            // If model didn't change, use fallback chain's first provider
+                            if (selectedProvider === origProvider && selectedModel === origModel) {
+                              try {
+                                const { getConfiguredFallbackChain } = await import('@/lib/chat/provider-fallback-chains');
+                                const fallbackChain = getConfiguredFallbackChain(origProvider);
+                                if (fallbackChain.length > 0) {
+                                  selectedProvider = fallbackChain[0];
+                                  const fallbackModels = PROVIDER_MODELS[selectedProvider.toLowerCase()];
+                                  selectedModel = fallbackModels?.[0] || 'mistral-small-latest';
+                                  console.warn(`[Chat] Falling back to provider: ${selectedProvider}/${selectedModel}`);
+                                }
+                              } catch {}
+                            }
+                          } else {
+                            // Subsequent retries: rotate through fallback providers
+                            try {
+                              const { getConfiguredFallbackChain } = await import('@/lib/chat/provider-fallback-chains');
+                              const fallbackChain = getConfiguredFallbackChain(origProvider);
+                              if (fallbackChain.length > 0) {
+                                const providerIdx = (retryCount - 1) % fallbackChain.length;
+                                selectedProvider = fallbackChain[providerIdx];
+                                const fallbackModels = PROVIDER_MODELS[selectedProvider.toLowerCase()];
+                                selectedModel = fallbackModels?.[0] || 'mistral-small-latest';
+                                console.warn(`[Chat] Rotating to fallback provider: ${selectedProvider}/${selectedModel} (retry ${retryCount + 1})`);
+                              }
+                            } catch {}
+                          }
+
+                          const retryRequestBody = {
+                            messages: [...messagesWithoutEmpty, lastUserMsg],
+                            ...resolvedBody,
+                            // Override provider/model for retry rotation
+                            provider: selectedProvider,
+                            model: selectedModel,
+                            // Server-side retry context for enhanced handling
+                            retryContext: {
+                              isEmptyResponseRetry: true,
+                              originalProvider: origProvider,
+                              originalModel: origModel,
+                              retryProvider: selectedProvider,
+                              retryModel: selectedModel,
+                              toolExecutionSummary: toolContext.summary,
+                              failedToolCalls: toolContext.failedToolCalls,
+                              filesystemChanges: toolContext.filesystemChanges,
+                            },
+                          };
+
+                          const retryResponse = await fetch(options.api, {
+                            method: 'POST',
+                            headers: buildRequestHeaders(),
+                            credentials: 'include',
+                            body: JSON.stringify(retryRequestBody),
+                            signal: retryAbortController.signal,
+                          });
+
+                          if (!retryResponse.ok || !retryResponse.body) {
+                            throw new Error(`Retry failed: HTTP ${retryResponse.status}`);
+                          }
+
+                          // Handle the retry streaming response
+                          await handleStreamingResponse(retryResponse.body, retryAssistantMessage, retryAbortController);
+                          return; // Don't continue with normal flow
+                        } catch (retryError) {
+                          console.error('[Chat] Retry failed:', retryError);
+                          setMessages(prev => prev.map(msg =>
+                            msg.id === retryAssistantMessage.id
+                              ? {
+                                  ...msg,
+                                  content: 'Retry failed. Please try resending your message.',
+                                  metadata: {
+                                    ...msg.metadata,
+                                    retryFailed: true,
+                                  },
+                                }
+                              : msg
+                          ));
+                          setIsLoading(false);
+                          setAgentStatus('error');
+                          return;
+                        }
+                      }
+                    } else {
+                      // Max retries reached — update the SAME bubble, don't create a new one
+                      console.warn('[Chat] Empty response after retry, stopping retries');
+                      
+                      // Process queued prompts when max retries reached
+                      if (inputQueue.length > 0) {
+                        console.log('[InputQueue] Max retries reached, processing next queued prompt');
+                        setTimeout(() => processQueue(), 100);
+                      }
+                      
+                      setMessages(prev => prev.map(msg =>
+                        msg.id === assistantMessage.id
+                          ? {
+                              ...msg,
+                              content: msg.content && msg.content.trim() ? msg.content : '_Response returned empty content_',
+                              metadata: {
+                                ...(msg.metadata || {}),
+                                maxRetriesReached: true,
+                                isEmptyResponse: false, // Clear flag to prevent further retries
+                              },
+                            }
+                          : msg
+                      ));
+                    }
+                  }
+
+                  // Streaming complete (all background tasks finished) - ONLY if not retrying
                   clearTimeout(timeoutId);
                   setIsLoading(false);
                   setAgentStatus('completed');
-                  if (options.onFinish && currentMessageRef.current) {
-                    options.onFinish({
-                      ...currentMessageRef.current,
-                      content: doneContent,
-                      metadata: doneMetadata
+                  
+                  // Process queued prompts AFTER response completes
+                  // This ensures queued prompts wait for any auto-retry loops to finish
+                  // Only process if we're not in a retry loop (retryCount check)
+                  const isRetrying = (doneMetadata.retryCount || 0) > 0 && isEmptyResponse;
+                  if (!isRetrying && inputQueue.length > 0) {
+                    console.log('[InputQueue] Response complete, processing next queued prompt:', {
+                      queueLength: inputQueue.length,
                     });
+                    // Use setTimeout to ensure state settles before processing next
+                    setTimeout(() => processQueue(), 100);
                   }
+
+                  if (options.onFinish) {
+                    // Build the final message directly instead of relying on stale messagesRef
+                    const finalMsg: Message = {
+                      ...assistantMessage,
+                      content: doneContent,
+                      metadata: { ...(assistantMessage.metadata || {}), ...doneMetadata },
+                    };
+                    options.onFinish(finalMsg);
+                  }
+
                   return;
 
                 case 'error': {
@@ -783,6 +1303,20 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                     }
                     return msg;
                   }));
+
+                  // CRITICAL FIX: Trigger filesystem refresh so file tree updates
+                  // MCP tool writes on the server can't emit browser events (window is undefined),
+                  // so we trigger the refresh from the client when we receive file_edit SSE events
+                  if (typeof window !== 'undefined') {
+                    window.dispatchEvent(new CustomEvent('filesystem-updated', {
+                      detail: {
+                        path: eventData.path,
+                        type: fileEditData.operation === 'write' ? 'create' : 'update',
+                        source: 'mcp-tool-sse',
+                        emittedAt: Date.now(),
+                      },
+                    }));
+                  }
 
                   // CRITICAL FIX #5: Handle isFinal edits - ensure stream completion logic waits
                   // When isFinal=true, this is from the post-stream parse, so we should NOT
@@ -1091,7 +1625,86 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   }));
                   break;
 
+                case 'tool_call':
+                  // Handle tool call events from Vercel AI SDK (tool execution starting)
+                  // This is similar to tool_invocation but emitted during streaming when
+                  // the model calls a tool before execution completes
+
+                  // CRITICAL: Track locally for done event detection (messagesRef is stale)
+                  if (!streamingToolInvocations.find(inv => inv.toolCallId === eventData.toolCallId)) {
+                    streamingToolInvocations.push({
+                      toolCallId: eventData.toolCallId,
+                      toolName: eventData.toolName,
+                      state: eventData.state || 'call',
+                    });
+                  }
+
+                  if (process.env.NODE_ENV === 'development') {
+                    console.log('[Chat] Tool call detected:', {
+                      toolCallId: eventData.toolCallId,
+                      toolName: eventData.toolName,
+                      args: eventData.args ? Object.keys(eventData.args) : 'none',
+                    });
+                  }
+                  setMessages(prev => prev.map(msg => {
+                    if (msg.id !== assistantMessage.id) return msg;
+                    const existing = Array.isArray((msg.metadata as any)?.toolInvocations)
+                      ? ([...(msg.metadata as any).toolInvocations] as any[])
+                      : [];
+
+                    // Check if this tool call already exists (from tool_invocation)
+                    const existingIndex = existing.findIndex(inv =>
+                      inv.toolCallId === eventData.toolCallId
+                    );
+
+                    if (existingIndex === -1) {
+                      // Add new tool call
+                      existing.push({
+                        toolCallId: eventData.toolCallId,
+                        toolName: eventData.toolName,
+                        state: 'call', // Tool is being called (execution starting)
+                        args: eventData.args || {},
+                      });
+                    }
+
+                    // Update agent activity to show tool is executing
+                    setAgentActivity(prev => ({
+                      ...prev,
+                      status: 'executing',
+                      currentAction: `Calling ${eventData.toolName}...`,
+                      toolInvocations: [...prev.toolInvocations.filter(t => t.toolCallId !== eventData.toolCallId), {
+                        toolCallId: eventData.toolCallId,
+                        toolName: eventData.toolName,
+                        state: 'call',
+                        args: eventData.args || {},
+                        timestamp: eventData.timestamp || Date.now(),
+                      }],
+                    }));
+
+                    return {
+                      ...msg,
+                      metadata: {
+                        ...(msg.metadata || {}),
+                        toolInvocations: existing,
+                      },
+                    };
+                  }));
+                  break;
+
                 case 'tool_invocation':
+                  // CRITICAL: Track locally for done event detection (messagesRef is stale)
+                  const existingLocalIdx = streamingToolInvocations.findIndex(inv => inv.toolCallId === eventData.toolCallId);
+                  if (existingLocalIdx === -1) {
+                    streamingToolInvocations.push({
+                      toolCallId: eventData.toolCallId,
+                      toolName: eventData.toolName,
+                      state: eventData.state || 'result',
+                    });
+                  } else {
+                    // Update state if already exists
+                    streamingToolInvocations[existingLocalIdx].state = eventData.state || streamingToolInvocations[existingLocalIdx].state;
+                  }
+
                   setMessages(prev => prev.map(msg => {
                     if (msg.id !== assistantMessage.id) return msg;
                     const existing = Array.isArray((msg.metadata as any)?.toolInvocations)
@@ -1303,6 +1916,128 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   }
                   break;
 
+                // Auto-continue: LLM signaled it needs more turns
+                // With WebSocket control: server sends 'need_more_turns' via WS
+                // Fallback (SSE only): LLM embeds [CONTINUE_REQUESTED] in text, server wraps in auto-continue event
+                case 'auto-continue':
+                case 'need_more_turns': {
+                  const contextHint = eventData.contextHint || '';
+                  const toolSummary = eventData.toolSummary || '';
+                  const implicitFiles = eventData.implicitFiles || [];
+                  const fileConfidence = eventData.fileRequestConfidence || '';
+
+                  // Build enhanced continuation prompt with tool execution context
+                  let continuationPrompt = '';
+                  if (toolSummary && toolSummary !== 'none') {
+                    continuationPrompt += `[TOOLS EXECUTED] ${toolSummary}\n\n`;
+                  }
+                  if (implicitFiles.length > 0) {
+                    continuationPrompt += `[FILES MENTIONED] ${implicitFiles.join(', ')}\n\n`;
+                  }
+                  if (contextHint) {
+                    continuationPrompt += `[CONTINUATION] Continue from where you left off.\n\nYour last response: ${contextHint}\n\nResume the task — pick up exactly where you stopped.`;
+                  } else {
+                    continuationPrompt += 'Please continue with the remaining tasks.';
+                  }
+
+                  // Strip [CONTINUE_REQUESTED] from response if present (SSE fallback only)
+                  if (eventType === 'auto-continue') {
+                    setMessages(prev => prev.map(msg =>
+                      msg.id === assistantMessage.id && msg.content.includes('[CONTINUE_REQUESTED]')
+                        ? { ...msg, content: msg.content.replace(/\[CONTINUE_REQUESTED\]/gi, '').trimEnd() }
+                        : msg
+                    ));
+                  }
+
+                  console.log('[Auto-continue] Triggering next request', {
+                    viaWS: eventType === 'need_more_turns',
+                    toolSummary: !!toolSummary,
+                    implicitFileCount: implicitFiles.length,
+                    fileConfidence,
+                  });
+
+                  // Set the input and submit after state settles
+                  setInput(continuationPrompt);
+                  setTimeout(() => { if (!isMountedRef.current) return;
+                    handleSubmit(
+                      {
+                        preventDefault: () => {},
+                        currentTarget: { reset: () => {} },
+                      } as React.FormEvent<HTMLFormElement>
+                    );
+                  }, 100);
+                  break;
+                }
+
+                // List-files auto-continue: LLM stopped after listing a directory
+                // Server detected this and sent a [NEXT] nudge to proceed
+                case 'next': {
+                  const nextContent = eventData.content || '';
+                  const reason = eventData.reason || '';
+                  const listedPath = eventData.listedPath || '';
+
+                  console.log('[Auto-continue] List-files completed, nudging LLM to proceed', {
+                    reason,
+                    listedPath,
+                    continuationCount: eventData.continuationCount,
+                  });
+
+                  // Append the [NEXT] nudge to the assistant message
+                  setMessages(prev => prev.map(msg => {
+                    if (msg.id !== assistantMessage.id) return msg;
+                    return {
+                      ...msg,
+                      content: msg.content + nextContent,
+                    };
+                  }));
+
+                  // Auto-submit with the [NEXT] content appended
+                  setInput(nextContent);
+                  setTimeout(() => { if (!isMountedRef.current) return;
+                    handleSubmit(
+                      {
+                        preventDefault: () => {},
+                        currentTarget: { reset: () => {} },
+                      } as React.FormEvent<HTMLFormElement>
+                    );
+                  }, 100);
+                  break;
+                }
+
+                // Orchestration progress events from mode handlers
+                case 'orchestration_progress':
+                  // Update agent activity with orchestration progress
+                  setAgentActivity(prev => ({
+                    ...prev,
+                    status: eventData.phase === 'responding' ? 'completed' :
+                            eventData.phase === 'planning' ? 'thinking' : 'executing',
+                    currentAction: eventData.currentAction || prev?.currentAction || '',
+                    phase: eventData.phase,
+                    mode: eventData.mode,
+                    nodeId: eventData.nodeId,
+                    nodeRole: eventData.nodeRole,
+                    nodeModel: eventData.nodeModel,
+                    nodeProvider: eventData.nodeProvider,
+                    steps: eventData.steps,
+                    currentStepIndex: eventData.currentStepIndex,
+                    totalSteps: eventData.totalSteps,
+                    nodes: eventData.nodes,
+                    nodeCommunication: eventData.nodeCommunication,
+                    errors: eventData.errors,
+                    hitlRequests: eventData.hitlRequests,
+                    metadata: eventData.metadata,
+                  }));
+
+                  // Update agent status based on phase
+                  if (eventData.phase === 'planning') {
+                    setAgentStatus('thinking');
+                  } else if (eventData.phase === 'acting' || eventData.phase === 'verifying') {
+                    setAgentStatus('executing');
+                  } else if (eventData.phase === 'responding') {
+                    setAgentStatus('completed');
+                  }
+                  break;
+
                 default:
                   // Handle unknown event types gracefully
                   if (process.env.NODE_ENV === 'development') {
@@ -1318,10 +2053,11 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
         clearTimeout(timeoutId);
         setIsLoading(false);
 
-        if (options.onFinish && currentMessageRef.current) {
+        if (options.onFinish) {
           options.onFinish({
-            ...currentMessageRef.current,
-            content: accumulatedContent
+            ...assistantMessage,
+            content: accumulatedContent,
+            metadata: assistantMessage.metadata || {}
           });
         }
     } catch (streamError) {
@@ -1440,18 +2176,19 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
     let accumulatedContent = '';
     
     // Set up a timeout
-    const timeoutId = setTimeout(() => {
+    const timeoutId = setTimeout(() => { if (!isMountedRef.current) return;
       if (accumulatedContent.trim()) {
-        setMessages(prev => prev.map(msg => 
-          msg.id === assistantMessage.id 
+        setMessages(prev => prev.map(msg =>
+          msg.id === assistantMessage.id
             ? { ...msg, content: accumulatedContent }
             : msg
         ));
         setIsLoading(false);
-        if (onFinish && currentMessageRef.current) {
+        if (onFinish) {
           onFinish({
-            ...currentMessageRef.current,
+            ...assistantMessage,
             content: accumulatedContent,
+            metadata: assistantMessage.metadata || {}
           });
         }
       }
@@ -1477,10 +2214,11 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
           if (dataString === '[DONE]') {
             clearTimeout(timeoutId);
             setIsLoading(false);
-            if (onFinish && currentMessageRef.current) {
+            if (onFinish) {
               onFinish({
-                ...currentMessageRef.current,
+                ...assistantMessage,
                 content: accumulatedContent,
+                metadata: assistantMessage.metadata || {}
               });
             }
             return;
@@ -1524,10 +2262,11 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
     // If we reach here without a 'done' event
     clearTimeout(timeoutId);
     setIsLoading(false);
-    if (onFinish && currentMessageRef.current) {
+    if (onFinish) {
       onFinish({
-        ...currentMessageRef.current,
+        ...assistantMessage,
         content: accumulatedContent,
+        metadata: assistantMessage.metadata || {}
       });
     }
   };
@@ -1553,5 +2292,8 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
     // Agent activity for experimental panel
     agentActivity,
     setAgentActivity,
+    // Input queue state for prompt cueing
+    isInputOrIsLoading,
+    inputQueue,
   };
 }

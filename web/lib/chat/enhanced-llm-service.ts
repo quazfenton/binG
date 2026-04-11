@@ -13,10 +13,12 @@
 
 import { enhancedAPIClient, type RequestConfig, type APIResponse } from './enhanced-api-client';
 import { llmService, type LLMRequest, type LLMResponse, type StreamingResponse, type LLMMessage, PROVIDERS } from './llm-providers';
+import { PROVIDER_FALLBACK_CHAINS } from './provider-fallback-chains';
 import { toolContextManager } from '../tools/tool-context-manager';
 import { getToolManager, TOOL_REGISTRY } from '../tools';
 import { sandboxBridge } from '../sandbox';
 import { getProviderForTask, getModelForTask } from '../config/task-providers';
+import { normalizeSessionId } from '../virtual-filesystem/scope-utils';
 import { advancedToolCallDispatcher } from '../tools/tool-integration/parsers/dispatcher';
 import { callMCPToolFromAI_SDK, getMCPToolsForAI_SDK } from '../mcp/architecture-integration';
 import { chatLogger } from './chat-logger';
@@ -37,7 +39,23 @@ export interface EnhancedLLMRequest extends LLMRequest {
   userId?: string;
   conversationId?: string;
   requestId?: string;
+  /** VFS scope path for session-scoped file operations (e.g., "project/sessions/001") */
+  scopePath?: string;
   task?: 'chat' | 'code' | 'embedding' | 'image' | 'tool' | 'agent' | 'ocr'; // Task-specific provider selection
+  /** Request a bundled context pack (file tree + contents) for LLM */
+  contextPack?: {
+    format?: 'markdown' | 'xml' | 'json' | 'plain';
+    maxTotalSize?: number;
+    includePatterns?: string[];
+    excludePatterns?: string[];
+    maxLinesPerFile?: number;
+  };
+  /** Auto-attach relevant files to subsequent LLM calls as agent discovers areas to edit */
+  autoAttachFiles?: boolean;
+  /** Abort signal for cancelling streaming requests */
+  signal?: AbortSignal;
+  /** Request timeout in milliseconds (default: 90s) */
+  timeoutMs?: number;
 }
 
 export interface LLMEndpointConfig {
@@ -115,7 +133,42 @@ export class EnhancedLLMService {
         apiKey: process.env.ZEN_API_KEY || '',
         models: PROVIDERS.zen.models,
         priority: 8
-      }
+      },
+      {
+        provider: 'nvidia',
+        baseUrl: process.env.NVIDIA_BASE_URL || 'https://integrate.api.nvidia.com/v1',
+        apiKey: process.env.NVIDIA_API_KEY || '',
+        models: PROVIDERS.nvidia.models,
+        priority: 9
+      },
+      {
+        provider: 'groq',
+        baseUrl: process.env.GROQ_BASE_URL || 'https://api.groq.com/openai/v1',
+        apiKey: process.env.GROQ_API_KEY || '',
+        models: PROVIDERS.groq?.models || [],
+        priority: 10
+      },
+      {
+        provider: 'together',
+        baseUrl: process.env.TOGETHER_BASE_URL || 'https://api.together.xyz/v1',
+        apiKey: process.env.TOGETHER_API_KEY || '',
+        models: PROVIDERS.together?.models || [],
+        priority: 11
+      },
+      {
+        provider: 'deepinfra',
+        baseUrl: process.env.DEEPINFRA_BASE_URL || 'https://api.deepinfra.com/v1/openai',
+        apiKey: process.env.DEEPINFRA_API_KEY || '',
+        models: PROVIDERS.deepinfra?.models || [],
+        priority: 12
+      },
+      {
+        provider: 'fireworks',
+        baseUrl: process.env.FIREWORKS_BASE_URL || 'https://api.fireworks.ai/inference/v1',
+        apiKey: process.env.FIREWORKS_API_KEY || '',
+        models: PROVIDERS.fireworks?.models || [],
+        priority: 13
+      },
     ];
 
     configs.forEach(config => {
@@ -125,24 +178,74 @@ export class EnhancedLLMService {
     });
   }
 
-  private setupFallbackChains(): void {
-    this.fallbackChains.set('openrouter', ['nvidia', 'mistral', 'google', 'github', 'groq', 'zen']);
-    this.fallbackChains.set('chutes', ['openrouter', 'anthropic', 'google', 'mistral', 'github', 'nvidia']);
-    this.fallbackChains.set('anthropic', ['nvidia', 'github','openrouter', 'mistral', 'google']);
-    this.fallbackChains.set('google', ['nvidia', 'mistral', 'openrouter', 'github', 'groq', 'zen']);
-    this.fallbackChains.set('mistral', ['openrouter', 'chutes', 'anthropic', 'google', 'github', 'nvidia']);
-    this.fallbackChains.set('github', ['nvidia', 'openrouter', 'mistral', 'google', 'groq', 'zen']);
-    this.fallbackChains.set('portkey', ['openrouter', 'google', 'mistral', 'github', 'nvidia']);
-    this.fallbackChains.set('zen', ['mistral', 'google', 'openrouter', 'github', 'nvidia', 'groq']);
-    this.fallbackChains.set('nvidia', ['openrouter', 'google', 'mistral', 'groq', 'together', 'deepinfra', 'fireworks']);
-    this.fallbackChains.set('groq', ['nvidia', 'openrouter', 'together', 'fireworks', 'deepinfra', 'mistral']);
-    this.fallbackChains.set('together', ['nvidia', 'groq', 'openrouter', 'fireworks', 'deepinfra', 'mistral']);
-    this.fallbackChains.set('fireworks', ['nvidia', 'groq', 'together', 'openrouter', 'deepinfra', 'mistral']);
-    this.fallbackChains.set('deepinfra', ['nvidia', 'groq', 'together', 'fireworks', 'openrouter', 'mistral']);
-    this.fallbackChains.set('anyscale', ['nvidia', 'groq', 'together', 'openrouter', 'mistral', 'google']);
-    this.fallbackChains.set('lepton', ['nvidia', 'groq', 'openrouter', 'together', 'mistral', 'google']);
-    this.fallbackChains.set('openai', ['google', 'mistral',  'openrouter', 'github', 'nvidia', 'groq']);
+  /**
+   * Dynamically register a provider config using a user-provided API key.
+   * This allows users to use any provider defined in PROVIDERS without
+   * requiring server-side env vars for each one.
+   */
+  private registerUserProviderConfig(provider: string, userApiKey: string): void {
+    const providerDef = PROVIDERS[provider];
+    if (!providerDef) {
+      chatLogger.warn('Unknown provider, cannot register config', { provider });
+      return;
+    }
 
+    // Get base URL from env var or use default based on provider
+    const baseUrl = this.getDefaultBaseUrlForProvider(provider);
+
+    const config: LLMEndpointConfig = {
+      provider,
+      baseUrl,
+      apiKey: userApiKey,
+      models: providerDef.models || [],
+      priority: 99 // Low priority for user-provided configs
+    };
+
+    this.endpointConfigs.set(provider, config);
+    chatLogger.debug('Registered user provider config', { provider, baseUrl });
+  }
+
+  /**
+   * Get default base URL for a provider
+   */
+  private getDefaultBaseUrlForProvider(provider: string): string {
+    const baseUrlMap: Record<string, string> = {
+      'openai': process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1',
+      'anthropic': 'https://api.anthropic.com/v1',
+      'google': 'https://generativelanguage.googleapis.com/v1beta',
+      'mistral': process.env.MISTRAL_BASE_URL || 'https://api.mistral.ai/v1',
+      'nvidia': process.env.NVIDIA_BASE_URL || 'https://integrate.api.nvidia.com/v1',
+      'openrouter': process.env.OPENROUTER_BASE_URL || process.env.OPENAI_BASE_URL || 'https://openrouter.ai/api/v1',
+      'github': process.env.GITHUB_MODELS_BASE_URL || 'https://models.inference.ai.azure.com',
+      'groq': 'https://api.groq.com/openai/v1',
+      'together': 'https://api.together.xyz/v1',
+      'deepinfra': 'https://api.deepinfra.com/v1/openai',
+      'fireworks': 'https://api.fireworks.ai/inference/v1',
+      'anyscale': 'https://api.endpoints.anyscale.com/v1',
+      'lepton': 'https://<your-workspace>.lepton.run/api/v1',
+      'chutes': 'https://llm.chutes.ai/v1',
+      'portkey': 'https://api.portkey.ai/v1',
+      'zen': process.env.ZEN_BASE_URL || 'https://api.zen.ai/v1',
+    };
+    return baseUrlMap[provider] || `https://api.${provider}.com/v1`;
+  }
+
+  private setupFallbackChains(): void {
+    // Use centralized fallback chains from provider-fallback-chains.ts
+    // This ensures all paths (enhanced-llm-service, unified-agent, etc.)
+    // use the same fallback provider order.
+    // Filter to providers supported by llmService.generateResponse (non-streaming path)
+    const nonStreamingSupportedProviders = [
+      'openai', 'anthropic', 'google', 'cohere', 'together', 'replicate',
+      'portkey', 'openrouter', 'chutes', 'mistral', 'github', 'zen',
+      'opencode', 'antigravity'
+    ];
+    for (const [provider, chain] of Object.entries(PROVIDER_FALLBACK_CHAINS)) {
+      const compatibleChain = chain.filter(fallbackProvider =>
+        nonStreamingSupportedProviders.includes(fallbackProvider)
+      );
+      this.fallbackChains.set(provider, compatibleChain);
+    }
   }
 
   private startHealthMonitoring(): void {
@@ -151,28 +254,123 @@ export class EnhancedLLMService {
   }
 
   async generateResponse(request: EnhancedLLMRequest): Promise<LLMResponse> {
-    const { enableTools, enableSandbox, userId, conversationId, requestId, provider, fallbackProviders, retryOptions, enableCircuitBreaker = true, task, ...llmRequest } = request;
+    const { enableTools, enableSandbox, userId, conversationId, requestId, provider, fallbackProviders, retryOptions, enableCircuitBreaker = true, task, apiKeys, contextPack, autoAttachFiles, ...llmRequest } = request;
     const requestStartTime = Date.now();
 
     // Use explicitly passed provider first, then task-specific provider, then default
     const actualProvider = provider || (task ? getProviderForTask(task) : getProviderForTask('chat'));
-    const actualModel = task 
-      ? getModelForTask(task, llmRequest.model) 
+    const actualModel = task
+      ? getModelForTask(task, llmRequest.model)
       : llmRequest.model || 'default';  // Default model if none specified
+
+    // CRITICAL FIX: Dynamically register provider if user provided API key but provider isn't in endpointConfigs.
+    // This allows user-provided keys to work for any provider defined in PROVIDERS,
+    // without requiring server-side env vars for every provider.
+    if (!this.endpointConfigs.has(actualProvider)) {
+      const userApiKey = apiKeys?.[actualProvider];
+      if (userApiKey && PROVIDERS[actualProvider]) {
+        this.registerUserProviderConfig(actualProvider, userApiKey);
+        chatLogger.debug('Dynamically registered user-provided provider config', { requestId, provider: actualProvider });
+      }
+    }
+
+    // Override API key with user-provided key if available for this provider
+    const userApiKey = apiKeys?.[actualProvider];
+    if (userApiKey) {
+      chatLogger.debug('Using user-provided API key', { requestId, provider: actualProvider });
+    }
+
+    // Generate smart context pack if requested — intelligently select and rank files
+    let contextPackBundle = '';
+    if (contextPack && userId && conversationId) {
+      try {
+        const { generateSmartContext } = await import('@/lib/virtual-filesystem/smart-context');
+        const rootPath = normalizeSessionId(conversationId) || '/';
+        
+        // O(1) Session File Lookup: Use incremental tracker instead of re-scanning messages
+        let recentFiles: string[] = [];
+        try {
+          const { getSessionFiles } = await import('@/lib/virtual-filesystem/session-file-tracker');
+          recentFiles = getSessionFiles(conversationId, 10); // O(1) lookup
+        } catch (error: any) {
+          chatLogger.debug('Session file lookup failed', { error: error.message });
+        }
+        
+        const pack = await generateSmartContext({
+          userId,
+          prompt: (llmRequest.messages && llmRequest.messages.length > 0 && typeof llmRequest.messages[llmRequest.messages.length - 1]?.content === 'string')
+            ? (llmRequest.messages[llmRequest.messages.length - 1].content as any)
+            : '',
+          conversationId,
+          explicitFiles: contextPack.includePatterns || [],
+          recentSessionFiles: recentFiles,
+          maxTotalSize: contextPack.maxTotalSize || 500000,
+          format: contextPack.format || 'json',
+          maxLinesPerFile: contextPack.maxLinesPerFile || 500,
+        });
+        
+        contextPackBundle = pack.bundle;
+        chatLogger.debug('Smart context pack generated', { requestId }, {
+          filesIncluded: pack.filesIncluded,
+          totalFilesInVfs: pack.totalFilesInVfs,
+          vfsIsEmpty: pack.vfsIsEmpty,
+          warnings: pack.warnings.length,
+        });
+      } catch (error: any) {
+        chatLogger.warn('Smart context pack generation failed, continuing without it', { requestId }, {
+          error: error.message,
+        });
+      }
+    }
+
+    // Inject context pack bundle into system message if available
+    let processedMessages = llmRequest.messages;
+    if (contextPackBundle) {
+      processedMessages = [
+        ...llmRequest.messages,
+      ];
+      // Prepend context pack to first system message or add as new system message
+      const systemMsgIdx = processedMessages.findIndex(m => m.role === 'system');
+      const contextFormat = contextPack?.format?.toUpperCase() || 'JSON';
+      const contextPrefix = `\n\n--- WORKSPACE CONTEXT (${contextFormat}) ---\n${contextPackBundle}\n--- END CONTEXT ---\n`;
+      if (systemMsgIdx >= 0) {
+        const sysMsg = processedMessages[systemMsgIdx];
+        processedMessages[systemMsgIdx] = {
+          ...sysMsg,
+          content: typeof sysMsg.content === 'string'
+            ? sysMsg.content + contextPrefix
+            : sysMsg.content,
+        };
+      } else {
+        processedMessages = [
+          { role: 'system' as const, content: contextPrefix },
+          ...processedMessages,
+        ];
+      }
+    }
 
     chatLogger.debug('Enhanced LLM service processing request', { requestId, provider: actualProvider, model: actualModel, userId }, {
       task,
       enableTools,
       enableSandbox,
       fallbackProviders: fallbackProviders?.length,
+      usesUserApiKey: !!userApiKey,
+      hasContextPack: !!contextPackBundle,
+      autoAttachFiles: !!autoAttachFiles,
     });
+
+    // Compute session-aware scopePath for VFS tools
+    const sessionIdFromConv = normalizeSessionId(conversationId || '');
+    const computedScopePath = request.scopePath 
+      || (sessionIdFromConv ? `project/sessions/${sessionIdFromConv}` : 'project/sessions/000');
 
     // If tools are enabled and user ID is provided, process tools
     if (enableTools && userId && conversationId) {
       const toolResult = await this.processToolRequest(
         llmRequest.messages,
         userId,
-        conversationId
+        conversationId,
+        computedScopePath
       );
 
       if (toolResult.requiresAuth && toolResult.authUrl) {
@@ -201,7 +399,9 @@ export class EnhancedLLMService {
           provider: actualProvider,
           model: actualModel,
           toolCalls: toolResult.toolCalls,
-          toolResults: toolResult.toolResults
+          toolResults: toolResult.toolResults,
+          // Pass user API key to provider after tool execution
+          apiKey: userApiKey,
         };
 
         return await this.callProviderWithEnhancedClient(actualProvider, updatedRequest, retryOptions, enableCircuitBreaker, requestId);
@@ -219,13 +419,20 @@ export class EnhancedLLMService {
         return response;
       }
 
-      return this.executeModelToolCallsFromResponse(response, userId, conversationId);
+      return this.executeModelToolCallsFromResponse(response, userId, conversationId, computedScopePath);
     };
 
     // Try primary provider first
     try {
-      const fullRequest = { ...llmRequest, provider: actualProvider, model: actualModel }
-      
+      const fullRequest = {
+        ...llmRequest,
+        messages: processedMessages,
+        provider: actualProvider,
+        model: actualModel,
+        // Use user's API key if provided, otherwise the provider config's key will be used
+        apiKey: userApiKey,
+      }
+
       // Log request start for telemetry
       await chatRequestLogger.logRequestStart(
         requestId || `llm-${Date.now()}`,
@@ -257,16 +464,18 @@ export class EnhancedLLMService {
 
       const result = await postProcessToolCalls(enhancedResponse)
       
-      // Record telemetry for model ranking
+      // Record telemetry for model ranking — use ACTUAL provider/model (handles fallbacks)
       await chatRequestLogger.logRequestComplete(
         requestId || `llm-${Date.now()}`,
         true,  // success
         undefined,  // responseSize
-        typeof response.tokensUsed === 'number' 
+        typeof response.tokensUsed === 'number'
           ? { prompt: 0, completion: 0, total: response.tokensUsed }
           : response.tokensUsed,
         latency,
-        undefined  // error
+        undefined,  // error
+        actualProvider,
+        actualModel,
       )
       
       return result
@@ -321,10 +530,14 @@ export class EnhancedLLMService {
 
           fallbackModelUsed = supportedModel;
 
+          // Resolve correct API key for this fallback provider
+          const fallbackApiKey = apiKeys?.[fallbackProvider] || fallbackConfig.apiKey || undefined;
           const fallbackRequest = {
             ...llmRequest,
+            messages: processedMessages,
             model: supportedModel,
-            provider: fallbackProvider
+            provider: fallbackProvider,
+            apiKey: fallbackApiKey,
           };
 
           const response = await this.callProviderWithEnhancedClient(
@@ -341,6 +554,20 @@ export class EnhancedLLMService {
             attempt: attemptIndex + 1,
             tokensUsed: response.tokensUsed,
           });
+
+          // FIX: Record fallback model telemetry under its ACTUAL name
+          await chatRequestLogger.logRequestComplete(
+            requestId || `llm-${Date.now()}`,
+            true,
+            undefined,
+            typeof response.tokensUsed === 'number'
+              ? { prompt: 0, completion: 0, total: response.tokensUsed }
+              : response.tokensUsed,
+            fallbackLatency,
+            undefined,
+            fallbackProvider,
+            supportedModel,
+          ).catch(() => {}); // don't throw on telemetry failure
 
           // Build successful fallback response with full metadata
           const fallbackResponse = {
@@ -375,18 +602,96 @@ export class EnhancedLLMService {
   }
 
   async *generateStreamingResponse(request: EnhancedLLMRequest): AsyncGenerator<StreamingResponse> {
-    const { provider, fallbackProviders, requestId, ...llmRequest } = request;
+    const { provider, fallbackProviders, requestId, apiKeys, contextPack, ...llmRequest } = request;
     const primaryProvider = provider || getProviderForTask('chat');
     const streamStartTime = Date.now();
 
-    chatLogger.debug('Starting streaming request', { requestId, provider: primaryProvider, model: llmRequest.model });
+    // CRITICAL FIX: Dynamically register provider if user provided API key but provider isn't in endpointConfigs.
+    if (!this.endpointConfigs.has(primaryProvider)) {
+      const userApiKey = apiKeys?.[primaryProvider];
+      if (userApiKey && PROVIDERS[primaryProvider]) {
+        this.registerUserProviderConfig(primaryProvider, userApiKey);
+        chatLogger.debug('Dynamically registered user-provided provider config (streaming)', { requestId, provider: primaryProvider });
+      }
+    }
+
+    // Use user-provided API key if available for this provider
+    const userApiKey = apiKeys?.[primaryProvider];
+    if (userApiKey) {
+      chatLogger.debug('Using user-provided API key (streaming)', { requestId, provider: primaryProvider });
+    }
+
+    // Generate smart context pack if requested — intelligently select and rank files
+    let contextPackBundle = '';
+    if (contextPack && request.userId && request.conversationId) {
+      try {
+        const { generateSmartContext } = await import('@/lib/virtual-filesystem/smart-context');
+        const rootPath = normalizeSessionId(request.conversationId) || '/';
+        
+        // O(1) Session File Lookup: Use incremental tracker instead of re-scanning messages
+        let recentFiles: string[] = [];
+        try {
+          const { getSessionFiles } = await import('@/lib/virtual-filesystem/session-file-tracker');
+          recentFiles = getSessionFiles(request.conversationId || '', 10); // O(1) lookup
+        } catch (error: any) {
+          chatLogger.debug('Session file lookup failed (streaming)', { error: error.message });
+        }
+        
+        const pack = await generateSmartContext({
+          userId: request.userId,
+          prompt: (llmRequest.messages && llmRequest.messages.length > 0 && typeof llmRequest.messages[llmRequest.messages.length - 1]?.content === 'string')
+            ? (llmRequest.messages[llmRequest.messages.length - 1].content as any)
+            : '',
+          conversationId: request.conversationId,
+          explicitFiles: contextPack.includePatterns || [],
+          recentSessionFiles: recentFiles,
+          maxTotalSize: contextPack.maxTotalSize || 500000,
+          format: contextPack.format || 'json',
+          maxLinesPerFile: contextPack.maxLinesPerFile || 500,
+        });
+        
+        contextPackBundle = pack.bundle;
+        chatLogger.debug('Smart context pack generated (streaming)', { requestId }, {
+          filesIncluded: pack.filesIncluded,
+          totalFilesInVfs: pack.totalFilesInVfs,
+          vfsIsEmpty: pack.vfsIsEmpty,
+          warnings: pack.warnings.length,
+        });
+      } catch (error: any) {
+        chatLogger.warn('Smart context pack generation failed (streaming)', { requestId }, {
+          error: error.message,
+        });
+      }
+    }
+
+    // Inject context pack into system message
+    let processedMessages = llmRequest.messages;
+    if (contextPackBundle) {
+      const systemMsgIdx = processedMessages.findIndex(m => m.role === 'system');
+      const contextFormat = contextPack.format?.toUpperCase() || 'JSON';
+      const contextPrefix = `\n\n--- WORKSPACE CONTEXT (${contextFormat}) ---\n${contextPackBundle}\n--- END CONTEXT ---\n`;
+      if (systemMsgIdx >= 0) {
+        const sysMsg = processedMessages[systemMsgIdx];
+        processedMessages = processedMessages.map((m, i) =>
+          i === systemMsgIdx
+            ? { ...m, content: typeof m.content === 'string' ? m.content + contextPrefix : m.content }
+            : m
+        );
+      } else {
+        processedMessages = [{ role: 'system' as const, content: contextPrefix }, ...processedMessages];
+      }
+    }
 
     try {
       // NEW: Use Vercel AI SDK for unified streaming across all providers
       const { streamWithVercelAI } = await import('./vercel-ai-streaming');
 
-      // Map provider names to Vercel AI SDK providers
-      // Supports both direct Vercel providers and OpenAI-compatible providers
+      // Map provider names to Vercel AI SDK identifiers.
+      // - Direct Vercel AI SDK providers use their own name.
+      // - OpenAI-compatible providers keep their own name — getVercelModel() resolves
+      //   the correct apiKey/baseURL via OPENAI_COMPATIBLE_PROVIDERS config.
+      // - Mapping them all to 'openai' caused the wrong API key (OPENAI_API_KEY)
+      //   and wrong baseURL to be used.
       const vercelProviderMap: Record<string, import('./vercel-ai-streaming').VercelProvider | string> = {
         // Direct Vercel AI SDK providers
         'openai': 'openai',
@@ -394,46 +699,145 @@ export class EnhancedLLMService {
         'google': 'google',
         'mistral': 'mistral',
         'openrouter': 'openrouter',
-        // OpenAI-compatible providers (via createOpenAI)
-        'chutes': 'openai', // Chutes AI
-        'github': 'openai', // GitHub Models (Azure OpenAI)
-        'zen': 'openai', // Zen AI
-        'nvidia': 'openai', // NVIDIA NIM (OpenAI-compatible API)
-        'together': 'openai', // Together AI (OpenAI-compatible)
-        'groq': 'openai', // Groq (OpenAI-compatible)
-        'fireworks': 'openai', // Fireworks AI (OpenAI-compatible)
-        'anyscale': 'openai', // Anyscale (OpenAI-compatible)
-        'deepinfra': 'openai', // DeepInfra (OpenAI-compatible)
-        'lepton': 'openai', // Lepton AI (OpenAI-compatible)
+        // OpenAI-compatible providers — keep original name for correct key/baseURL resolution
+        'chutes': 'chutes',
+        'github': 'github',
+        'zen': 'zen',
+        'nvidia': 'nvidia',
+        'together': 'together',
+        'groq': 'groq',
+        'fireworks': 'fireworks',
+        'anyscale': 'anyscale',
+        'deepinfra': 'deepinfra',
+        'lepton': 'lepton',
         // Custom providers (via compatibility wrapper)
-        'zo': 'zo', // Zo AI (requires custom wrapper)
+        'zo': 'zo',
       };
 
       const vercelProvider = vercelProviderMap[primaryProvider];
 
       if (vercelProvider) {
-        // Use Vercel AI SDK for streaming
-        // maxRetries=0: let the fallback system handle retries, not the SDK
-        chatLogger.info('Using Vercel AI SDK for streaming', { requestId, provider: primaryProvider, model: llmRequest.model });
-
         // Build tools if enabled — Vercel AI SDK handles tool calling natively
         let vercelTools: Record<string, any> | undefined;
-        if (request.enableTools && request.userId) {
+        
+        // CRITICAL FIX: Always build tools when file operations are possible.
+        // Previously required BOTH enableTools AND userId to be truthy, but
+        // anonymous users (userId from cookie) and auto-detected tool requests
+        // were being excluded, causing "No tools provided" warnings.
+        const shouldBuildTools = request.enableTools !== false;  // Default true unless explicitly disabled
+        
+        if (shouldBuildTools) {
+          const effectiveUserId = request.userId || 'anonymous';  // Allow anonymous users
           try {
-            const { getAllTools, extractPublicUrls } = await import('./vercel-ai-tools');
+            const { getAllTools } = await import('./vercel-ai-tools');
+            // Compute session-aware scopePath for VFS tools
+            const sessionIdFromConv = normalizeSessionId(request.conversationId || '');
+            const computedScopePath = (request as any).scopePath
+              || (sessionIdFromConv ? `project/sessions/${sessionIdFromConv}` : 'project/sessions/000');
+
             vercelTools = await getAllTools({
-              userId: request.userId,
+              userId: effectiveUserId,
               conversationId: request.conversationId,
+              sessionId: sessionIdFromConv,
               requestId,
+              scopePath: computedScopePath,  // Session-aware path for VFS tools
             });
+
+            chatLogger.info('[TOOLS] ✅ Tools built successfully', {
+              requestId,
+              toolCount: Object.keys(vercelTools).length,
+              toolNames: Object.keys(vercelTools),
+              userId: effectiveUserId,
+              wasAnonymous: !request.userId,
+            });
+
+            // FIX: Merge VFS MCP tools (write_file, read_file, apply_diff, etc.)
+            // into the Vercel AI SDK tool set so the LLM can call them during streaming.
+            try {
+              const { getVFSToolDefinitions, getVFSTool, toolContextStore } = await import('../mcp/vfs-mcp-tools');
+              const { tool: createTool } = await import('ai');
+              const vfsToolDefs = getVFSToolDefinitions();
+              for (const toolDef of vfsToolDefs) {
+                const toolName = toolDef.function.name;
+                // Don't overwrite existing tools
+                if (!vercelTools![toolName]) {
+                  vercelTools![toolName] = createTool({
+                    description: toolDef.function.description,
+                    parameters: toolDef.function.parameters,
+                    // @ts-expect-error AI SDK v6 tool execute signature changed frequently
+                    execute: async (args: Record<string, any>) => {
+                      const vfsTool = getVFSTool(toolName);
+                      if (!vfsTool) {
+                        throw new Error(`Unknown VFS tool: ${toolName}`);
+                      }
+
+                      // DEBUG: Log scopePath being passed to tool
+                      chatLogger.info('[VFS MCP] Tool invoked (streaming path)', {
+                        tool: toolName,
+                        userId: request.userId,
+                        requestId,
+                        scopePath: (request as any).scopePath,
+                        args: Object.keys(args || {}),
+                        path: args?.path || args?.files?.map((f: any) => f.path)?.join(', ') || undefined,
+                      });
+
+                      const result = await toolContextStore.run(
+                        {
+                          userId: request.userId || 'anonymous',
+                          sessionId: sessionIdFromConv,
+                          scopePath: computedScopePath,  // Use session-aware scope path
+                        },
+                        async () => vfsTool.execute(args || {}, {
+                          messages: [],
+                          toolCallId: `vfs-${toolName}-${Date.now()}`,
+                        })
+                      ) as any;
+
+                      // Log completion
+                      if (result?.success) {
+                        chatLogger.info('[VFS MCP] Tool completed (streaming path)', {
+                          tool: toolName,
+                          success: true,
+                          userId: request.userId,
+                          requestId,
+                          resultKeys: Object.keys(result || {}),
+                        });
+                        // Return just the message - LLM needs concise tool feedback
+                        return typeof result === 'object' && 'message' in result
+                          ? result.message
+                          : JSON.stringify(result);
+                      } else {
+                        chatLogger.warn('[VFS MCP] Tool failed (streaming path)', {
+                          tool: toolName,
+                          success: false,
+                          error: result?.error,
+                          userId: request.userId,
+                          requestId,
+                        });
+                        throw new Error(result?.error || `VFS tool ${toolName} execution failed`);
+                      }
+                    },
+                  });
+                }
+              }
+              chatLogger.debug('VFS tools merged into Vercel AI SDK tool set', {
+                requestId,
+                vfsToolCount: vfsToolDefs.length,
+                totalToolCount: Object.keys(vercelTools!).length,
+              });
+            } catch (vfsErr: any) {
+              chatLogger.warn('Failed to merge VFS tools into Vercel AI SDK', { requestId, error: vfsErr.message });
+            }
 
             // Pre-detect URLs in the last user message and inject a hint
             const lastUserMsg = [...llmRequest.messages].reverse().find(m => m.role === 'user');
             const lastText = typeof lastUserMsg?.content === 'string'
               ? lastUserMsg.content
               : (lastUserMsg?.content as any[])?.find?.((c: any) => c.type === 'text')?.text || '';
-            const detectedUrls = extractPublicUrls(lastText);
-            if (detectedUrls.length > 0 && vercelTools['web_fetch']) {
+            // Skip URL detection - extractPublicUrls not currently available
+            const urlRegex = /https?:\/\/[^\s]+/g;
+            const detectedUrls = lastText.match(urlRegex) || [];
+            if (detectedUrls.length > 0 && vercelTools?.['web_fetch']) {
               llmRequest.messages = [
                 ...llmRequest.messages,
                 {
@@ -446,19 +850,55 @@ export class EnhancedLLMService {
           } catch (toolErr: any) {
             chatLogger.warn('Failed to build Vercel AI tools, proceeding without', { requestId, error: toolErr.message });
           }
+        } else {
+          chatLogger.debug('[TOOLS] Tools explicitly disabled by request.enableTools=false', { requestId });
         }
 
-        yield* streamWithVercelAI({
+        // ENHANCED: Log tools being passed to stream
+        if (vercelTools && Object.keys(vercelTools).length > 0) {
+          chatLogger.info('[TOOLS] ✅ Tools passed to streamWithVercelAI', {
+            requestId,
+            toolCount: Object.keys(vercelTools).length,
+            toolNames: Object.keys(vercelTools),
+          });
+        } else {
+          // CRITICAL FIX: Provide actionable diagnostics for missing tools
+          chatLogger.warn('[TOOLS] ⚠ No tools provided to stream - file operations will use text parsing only', {
+            provider,
+            model: llmRequest.model,
+            requestId,
+            enableTools: request.enableTools,
+            userId: request.userId,
+            shouldHaveBuilt: request.enableTools !== false,
+            reason: request.enableTools === false ? 'explicitly disabled' : 'tool build failed (check errors above)',
+            implications: 'LLM will not use function calling - must rely on text-based tool parsing',
+          });
+        }
+
+        // Wrap with auto-continue support
+        const { streamWithAutoContinue } = await import('@/lib/virtual-filesystem/smart-context');
+        const baseStream = streamWithVercelAI({
           provider: vercelProvider,
           model: llmRequest.model || 'default',
-          messages: llmRequest.messages,
+          messages: processedMessages,
           temperature: llmRequest.temperature || 0.7,
           maxTokens: llmRequest.maxTokens || 4096,
-          apiKey: llmRequest.apiKey,
+          // Use user's API key if provided, otherwise the provider config's key
+          apiKey: userApiKey || llmRequest.apiKey,
           maxRetries: 0,
+          maxSteps: 10,  // Allow up to 10 tool call iterations for multi-file operations
           tools: vercelTools,
           toolCallStreaming: !!vercelTools,
           smoothStreaming: true,
+          // Pass abort signal and timeout for cancellation support
+          signal: request.signal,
+          timeoutMs: request.timeoutMs || 90000,
+        });
+
+        yield* streamWithAutoContinue(baseStream, {
+          userId: request.userId || 'anonymous',
+          conversationId: request.conversationId,
+          enableAutoContinue: true,
         });
 
         const streamLatency = Date.now() - streamStartTime;
@@ -470,9 +910,18 @@ export class EnhancedLLMService {
 
       // Fallback to legacy streaming for unsupported providers
       chatLogger.warn('Provider not supported by Vercel AI SDK, using legacy streaming', { provider: primaryProvider });
-      
-      const fullRequest = { ...llmRequest, provider: primaryProvider };
-      yield* llmService.generateStreamingResponse(fullRequest);
+
+      const fullRequest = { ...llmRequest, messages: processedMessages, provider: primaryProvider, apiKey: userApiKey || llmRequest.apiKey };
+
+      // Wrap with auto-continue support
+      const { streamWithAutoContinue } = await import('@/lib/virtual-filesystem/smart-context');
+      const baseStream = llmService.generateStreamingResponse(fullRequest);
+      yield* streamWithAutoContinue(baseStream, {
+        userId: request.userId || 'anonymous',
+        conversationId: request.conversationId,
+        enableAutoContinue: true,
+      });
+
       const streamLatency = Date.now() - streamStartTime;
       chatLogger.info('Legacy streaming completed successfully', { requestId, provider: primaryProvider, model: llmRequest.model }, {
         latencyMs: streamLatency,
@@ -484,12 +933,50 @@ export class EnhancedLLMService {
         error: error instanceof Error ? error.message : String(error),
       });
 
+      // FIX: Loop through ALL available fallback providers (not just the first one)
+      // This mirrors the behavior of generateResponse() which tries every fallback in the chain
       const fallbacks = fallbackProviders || this.fallbackChains.get(primaryProvider) || [];
-      const availableFallbacks = fallbacks.filter(fallbackProvider =>
-        this.endpointConfigs.has(fallbackProvider) &&
-        this.isProviderHealthy(fallbackProvider) &&
-        PROVIDERS[fallbackProvider]?.supportsStreaming
-      );
+      
+      // First pass: try healthy providers
+      let availableFallbacks = fallbacks.filter(fallbackProvider => {
+        const hasConfig = this.endpointConfigs.has(fallbackProvider);
+        const isHealthy = this.isProviderHealthy(fallbackProvider);
+        const supportsStream = !!PROVIDERS[fallbackProvider]?.supportsStreaming;
+        if (!hasConfig || !isHealthy || !supportsStream) {
+          chatLogger.debug('Streaming fallback excluded provider', {
+            requestId,
+            provider: fallbackProvider,
+            hasConfig,
+            isHealthy,
+            supportsStreaming: supportsStream,
+          });
+        }
+        return hasConfig && isHealthy && supportsStream;
+      });
+
+      // SAFETY NET: If no healthy providers available, try ALL configured providers as a last resort
+      // This prevents total failure when health checks incorrectly marked providers as unhealthy
+      if (availableFallbacks.length === 0) {
+        chatLogger.warn('No healthy fallback providers available, trying all configured providers as last resort', {
+          requestId,
+          fallbacks,
+        });
+        availableFallbacks = fallbacks.filter(fallbackProvider => {
+          const hasConfig = this.endpointConfigs.has(fallbackProvider);
+          const supportsStream = !!PROVIDERS[fallbackProvider]?.supportsStreaming;
+          return hasConfig && supportsStream;
+        });
+        chatLogger.info('Last resort fallback providers', {
+          requestId,
+          availableFallbacks,
+        });
+      }
+
+      chatLogger.debug('Streaming fallback candidates', {
+        requestId,
+        requestedFallbacks: fallbacks,
+        availableFallbacks: availableFallbacks,
+      });
 
       if (availableFallbacks.length === 0) {
         throw this.createEnhancedError(
@@ -499,30 +986,108 @@ export class EnhancedLLMService {
         );
       }
 
-      const fallbackProvider = availableFallbacks[0];
-      const fallbackConfig = this.endpointConfigs.get(fallbackProvider)!;
-      const supportedModel = this.findCompatibleModel(llmRequest.model, fallbackConfig.models);
+      const { streamWithAutoContinue } = await import('@/lib/virtual-filesystem/smart-context');
+      let lastFallbackError: Error = error as Error;
+      const fallbackChainLog: string[] = [];
+      fallbackChainLog.push(`${primaryProvider}/${llmRequest.model} failed: ${error instanceof Error ? error.message : String(error)}`);
 
-      if (supportedModel) {
-        chatLogger.info('Falling back to streaming provider', { requestId, provider: fallbackProvider, model: supportedModel });
-        const fallbackRequest = {
-          ...llmRequest,
-          model: supportedModel,
-          provider: fallbackProvider
-        };
+      for (let attemptIndex = 0; attemptIndex < availableFallbacks.length; attemptIndex++) {
+        const fallbackProvider = availableFallbacks[attemptIndex];
+        const fallbackConfig = this.endpointConfigs.get(fallbackProvider)!;
+        const supportedModel = this.findCompatibleModel(llmRequest.model, fallbackConfig.models);
 
-        yield* llmService.generateStreamingResponse(fallbackRequest);
-        const fallbackLatency = Date.now() - streamStartTime;
-        chatLogger.info('Streaming fallback completed', { requestId, provider: fallbackProvider, model: supportedModel }, {
-          latencyMs: fallbackLatency,
-        });
-      } else {
-        throw this.createEnhancedError(
-          `No compatible model found for streaming fallback`,
-          'NO_COMPATIBLE_MODEL',
-          error as Error
-        );
+        if (!supportedModel) {
+          chatLogger.debug('Streaming fallback skipped — model not supported', {
+            requestId,
+            provider: fallbackProvider,
+            model: llmRequest.model,
+          });
+          fallbackChainLog.push(`${fallbackProvider}/${llmRequest.model} skipped: model not supported`);
+          continue;
+        }
+
+        try {
+          chatLogger.info('Falling back to streaming provider', {
+            requestId,
+            provider: fallbackProvider,
+            model: supportedModel,
+            attempt: attemptIndex + 1,
+            totalAvailable: availableFallbacks.length,
+          });
+
+          // Resolve correct API key for this fallback provider
+          const fallbackApiKey = apiKeys?.[fallbackProvider] || fallbackConfig.apiKey || undefined;
+          const fallbackRequest = {
+            ...llmRequest,
+            messages: processedMessages,
+            model: supportedModel,
+            provider: fallbackProvider,
+            apiKey: fallbackApiKey,
+          };
+
+          const baseStream = llmService.generateStreamingResponse(fallbackRequest);
+
+          // Emit metadata chunk with actual fallback provider/model for telemetry tracking
+          yield {
+            content: '',
+            isComplete: false,
+            timestamp: new Date(),
+            metadata: {
+              actualProvider: fallbackProvider,
+              actualModel: supportedModel,
+              fallbackOccurred: true,
+              fallbackChain: fallbackChainLog,
+            }
+          };
+          
+          yield* streamWithAutoContinue(baseStream, {
+            userId: request.userId || 'anonymous',
+            conversationId: request.conversationId,
+            enableAutoContinue: true,
+          });
+
+          const fallbackLatency = Date.now() - streamStartTime;
+          chatLogger.info('Streaming fallback completed successfully', {
+            requestId,
+            provider: fallbackProvider,
+            model: supportedModel,
+            attempt: attemptIndex + 1,
+            latencyMs: fallbackLatency,
+          });
+          return; // Success — exit the generator
+        } catch (fallbackError) {
+          const fallbackLatency = Date.now() - streamStartTime;
+          const errorMsg = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+          chatLogger.warn('Streaming fallback provider failed', {
+            requestId,
+            provider: fallbackProvider,
+            model: supportedModel,
+            attempt: attemptIndex + 1,
+            latencyMs: fallbackLatency,
+            error: errorMsg,
+          });
+          fallbackChainLog.push(`${fallbackProvider}/${supportedModel} failed: ${errorMsg}`);
+          lastFallbackError = fallbackError instanceof Error ? fallbackError : new Error(errorMsg);
+          // Continue to next fallback in chain
+        }
       }
+
+      // All fallbacks exhausted — yield sassy message before throwing
+      yield {
+        content: 'Stfu!',
+        isComplete: true,
+        finishReason: 'error',
+        timestamp: new Date(),
+        metadata: {
+          error: `All streaming providers failed (primary: ${primaryProvider}, ${availableFallbacks.length} fallbacks attempted)`,
+        },
+      };
+
+      throw this.createEnhancedError(
+        `All streaming providers failed (primary: ${primaryProvider}, ${availableFallbacks.length} fallbacks attempted)`,
+        'ALL_STREAMING_PROVIDERS_FAILED',
+        lastFallbackError
+      );
     }
   }
 
@@ -538,12 +1103,18 @@ export class EnhancedLLMService {
       throw new Error(`Provider ${provider} not configured`);
     }
 
+    // Use request's API key if provided (user override), otherwise fall back to server config
+    const effectiveApiKey = (request.apiKey && request.apiKey.trim() !== '')
+      ? request.apiKey
+      : config.apiKey;
+
     // CRITICAL: Validate API key is present before making request
-    if (!config.apiKey || config.apiKey.trim() === '') {
+    if (!effectiveApiKey || effectiveApiKey.trim() === '') {
       chatLogger.error(`Provider ${provider} missing API key`, { requestId, provider }, {
-        hasApiKey: !!config.apiKey,
-        apiKeyLength: config.apiKey?.length || 0,
+        hasApiKey: !!effectiveApiKey,
+        apiKeyLength: effectiveApiKey?.length || 0,
         envVarName: this.getEnvVarNameForProvider(provider),
+        isUserProvided: !!request.apiKey,
       });
       throw new Error(`${provider} API key not configured. Please set ${this.getEnvVarNameForProvider(provider)} in your environment variables.`);
     }
@@ -557,10 +1128,8 @@ export class EnhancedLLMService {
     const providerRequest = {
       ...request,
       messages: filteredMessages,
-      // CRITICAL FIX: Pass API key explicitly in request for providers that support it
-      // This ensures API keys from env vars are used even if llmService wasn't initialized properly
-      // Note: Using 'apiKey' (singular) which is read by generateResponse method
-      apiKey: config.apiKey,
+      // Use effective API key (user-provided or server config)
+      apiKey: effectiveApiKey,
     };
 
     chatLogger.debug('Calling provider', { requestId, provider, model: request.model }, {
@@ -683,6 +1252,9 @@ export class EnhancedLLMService {
     if (!config) return false;
 
     const health = enhancedAPIClient.getEndpointHealth(config.baseUrl) as any;
+    // Default to healthy if no health data exists (avoids excluding providers that were
+    // incorrectly marked unhealthy by the old bogus health check pings)
+    if (!health || health.lastCheck === 0) return true;
     return health.isHealthy !== false;
   }
 
@@ -749,12 +1321,13 @@ export class EnhancedLLMService {
     }
   }
 
-  async processToolRequest(messages: LLMMessage[], userId: string, conversationId: string) {
+  async processToolRequest(messages: LLMMessage[], userId: string, conversationId: string, scopePath?: string) {
     try {
       const result = await toolContextManager.processToolRequest(
         messages,
         userId,
-        conversationId
+        conversationId,
+        scopePath
       );
 
       return {
@@ -779,7 +1352,8 @@ export class EnhancedLLMService {
   private async executeModelToolCallsFromResponse(
     response: LLMResponse,
     userId: string,
-    conversationId: string
+    conversationId: string,
+    scopePath?: string
   ): Promise<LLMResponse> {
     const toolCalls = await this.extractToolCallsFromLLMResponse(response, userId);
     if (toolCalls.length === 0) {
@@ -838,7 +1412,7 @@ export class EnhancedLLMService {
               metadata: { source: 'llm_tool_use' }
             }
           )
-        : await callMCPToolFromAI_SDK(selectedTool, call.arguments, userId);
+        : await callMCPToolFromAI_SDK(selectedTool, call.arguments, userId, scopePath);
 
       toolResults.push({
         name: selectedTool,
@@ -1279,4 +1853,11 @@ export function validateSandboxCommand(command: string): { isValid: boolean; com
     return { isValid: true, command: trimmedCommand };
   }
 
-export const enhancedLLMService = new EnhancedLLMService();
+// CRITICAL FIX: Use globalThis to survive Next.js hot-reloading
+// Without this, dynamically registered user-provider configs are lost
+declare global {
+  // eslint-disable-next-line no-var
+  var __enhancedLLMService__: EnhancedLLMService | undefined;
+}
+
+export const enhancedLLMService = globalThis.__enhancedLLMService__ ?? (globalThis.__enhancedLLMService__ = new EnhancedLLMService());

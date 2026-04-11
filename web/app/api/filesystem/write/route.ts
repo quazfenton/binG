@@ -8,7 +8,7 @@ import { fileContentSchema, languageSchema } from '@/lib/validation/schemas';
 import { resolveFilesystemOwnerWithFallback } from '../utils';
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import type { FilesystemOwnerResolution } from '@/lib/virtual-filesystem/resolve-filesystem-owner';
-import type { AuthResult } from '@/lib/auth/auth-service';
+import type { ResolvedRequestAuth } from '@/lib/auth/auth-cache';
 
 export const runtime = 'nodejs';
 
@@ -29,8 +29,8 @@ const writeRequestSchema = z.object({
       (path) => {
         // Allow relative paths (project, project/sessions, etc.)
         if (!path.startsWith('/')) return true;
-        // If absolute, must start with /home/, /workspace/, or /tmp/
-        return path.startsWith('/home/') || path.startsWith('/workspace/') || path.startsWith('/tmp/');
+        // If absolute, must start with /home/, /workspace/, /tmp/, or /project/
+        return path.startsWith('/home/') || path.startsWith('/workspace/') || path.startsWith('/tmp/') || path.startsWith('/project/');
       },
       'Invalid path format'
     ),
@@ -41,16 +41,19 @@ const writeRequestSchema = z.object({
   integration: z.string().min(1).max(100).optional(),
 });
 
+// SECURITY: O(1) body size guard — checked BEFORE req.json() buffers into memory
+const MAX_WRITE_BODY_BYTES = 110 * 1024 * 1024; // 110MB (slightly above 100MB fileContentSchema max)
+
 export async function POST(req: NextRequest) {
   let filesystemOwnerResolution: FilesystemOwnerResolution | undefined;
-  let authResult: AuthResult | undefined;
+  let authResult: ResolvedRequestAuth | undefined;
   let ownerId: string | undefined;
 
   try {
-    // Resolve owner: authenticated users via JWT/session, anonymous via x-anonymous-session-id header
+    // Resolve owner: authenticated users via JWT/session, anonymous via anon-session-id cookie
     authResult = await resolveRequestAuth(req, { allowAnonymous: true });
 
-    if (!authResult.success || !authResult.user?.id) {
+    if (!authResult.success || !authResult.userId) {
       // Fallback: resolve via resolveFilesystemOwner (checks header + cookie)
       filesystemOwnerResolution = await resolveFilesystemOwnerWithFallback(req, {
         route: 'write',
@@ -65,7 +68,21 @@ export async function POST(req: NextRequest) {
       }
       ownerId = filesystemOwnerResolution.ownerId;
     } else {
-      ownerId = String(authResult.user?.id);
+      ownerId = authResult.userId;
+    }
+
+    // SECURITY: O(1) body size check BEFORE buffering into memory via req.json()
+    const contentLength = req.headers.get('content-length');
+    if (contentLength && parseInt(contentLength, 10) > MAX_WRITE_BODY_BYTES) {
+      const errorResponse = NextResponse.json(
+        { success: false, error: `Request body too large (max ${MAX_WRITE_BODY_BYTES / (1024 * 1024)}MB)` },
+        { status: 413 },
+      );
+      return withAnonSessionCookie(errorResponse, filesystemOwnerResolution || {
+        ownerId,
+        source: authResult.source || 'jwt',
+        isAuthenticated: true,
+      });
     }
 
     // Parse JSON body with error handling
@@ -79,7 +96,7 @@ export async function POST(req: NextRequest) {
       );
       return withAnonSessionCookie(errorResponse, filesystemOwnerResolution || {
         ownerId,
-        source: (authResult.source as any) || 'jwt',
+        source: authResult.source || 'jwt',
         isAuthenticated: true,
       });
     }
@@ -100,7 +117,7 @@ export async function POST(req: NextRequest) {
       );
       return withAnonSessionCookie(errorResponse, filesystemOwnerResolution || {
         ownerId,
-        source: (authResult.source as any) || 'jwt',
+        source: authResult.source || 'jwt',
         isAuthenticated: true,
       });
     }
@@ -161,8 +178,13 @@ export async function POST(req: NextRequest) {
 
     if (resolvedSessionId) {
       const commitManager = new ShadowCommitManager();
+
+      // DESKTOP MODE: Skip passing content — stripped by ShadowCommitManager anyway.
+      const desktopMode = process.env.DESKTOP_MODE === 'true' || process.env.DESKTOP_LOCAL_EXECUTION === 'true';
+      const vfs: Record<string, string> = desktopMode ? {} : { [file.path]: file.content };
+
       const commitResult = await commitManager.commit(
-        { [file.path]: file.content },
+        vfs,
         [{
           path: file.path,
           type: existedBefore ? 'UPDATE' : 'CREATE',
@@ -171,7 +193,7 @@ export async function POST(req: NextRequest) {
           newContent: file.content,
         }],
         {
-          sessionId: `${ownerId}:${resolvedSessionId}`,
+          sessionId: `${ownerId}$${resolvedSessionId}`,
           message: `${source || 'filesystem'} write: ${file.path}`,
           author: ownerId,
           source: source || 'filesystem-write',

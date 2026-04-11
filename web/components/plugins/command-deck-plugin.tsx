@@ -15,7 +15,7 @@ import {
   List, Eye, ChevronRight, ChevronDown, ChevronUp, Settings,
   Plus, Trash2, Copy, Star, Heart, Bookmark, Hash, AtSign,
   Video, Image, MapPin, Mic, Smartphone, Layers, Box,
-  Workflow, Timer, BarChart3, PieChart, TrendingUp, X,
+  Workflow, Timer, BarChart3, PieChart, TrendingUp, X, Users,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -100,6 +100,35 @@ const PLATFORM_ACTIONS: ActionItem[] = [
   { id: "railway-deploy", label: "Deploy Service", description: "Deploy to Railway", icon: Upload, provider: "railway", category: "dev", requiresConnection: true, oauthProvider: "railway" },
   // Web
   { id: "web-search", label: "Web Search", description: "Search the web with Exa", icon: Globe, provider: "exa", category: "web", requiresConnection: true, oauthProvider: "exa" },
+  // Notion
+  { id: "notion-search", label: "Search Pages", description: "Search across your Notion workspace", icon: Search, provider: "notion", category: "productivity", requiresConnection: true, oauthProvider: "notion" },
+  { id: "notion-create", label: "Create Page", description: "Create a new page in Notion", icon: Plus, provider: "notion", category: "productivity", requiresConnection: true, oauthProvider: "notion" },
+  { id: "notion-db", label: "Query Database", description: "Query a Notion database", icon: Database, provider: "notion", category: "productivity", requiresConnection: true, oauthProvider: "notion" },
+  // Dropbox
+  { id: "dropbox-list", label: "List Files", description: "Browse files in Dropbox", icon: Cloud, provider: "dropbox", category: "productivity", requiresConnection: true, oauthProvider: "dropbox" },
+  { id: "dropbox-upload", label: "Upload File", description: "Upload a file to Dropbox", icon: Upload, provider: "dropbox", category: "productivity", requiresConnection: true, oauthProvider: "dropbox" },
+  // Stripe
+  { id: "stripe-balance", label: "Check Balance", description: "View your Stripe account balance", icon: BarChart3, provider: "stripe", category: "dev", requiresConnection: true, oauthProvider: "stripe" },
+  { id: "stripe-customers", label: "List Customers", description: "View Stripe customers", icon: Users, provider: "stripe", category: "dev", requiresConnection: true, oauthProvider: "stripe" },
+  // Zoom
+  { id: "zoom-meetings", label: "List Meetings", description: "View upcoming Zoom meetings", icon: Video, provider: "zoom", category: "communication", requiresConnection: true, oauthProvider: "zoom" },
+  { id: "zoom-create", label: "Schedule Meeting", description: "Create a new Zoom meeting", icon: Plus, provider: "zoom", category: "communication", requiresConnection: true, oauthProvider: "zoom" },
+  // Linear
+  { id: "linear-issues", label: "List Issues", description: "View Linear issues", icon: GitBranch, provider: "linear", category: "dev", requiresConnection: true, oauthProvider: "linear" },
+  { id: "linear-create", label: "Create Issue", description: "Create a Linear issue", icon: Plus, provider: "linear", category: "dev", requiresConnection: true, oauthProvider: "linear" },
+  // Jira
+  { id: "jira-issues", label: "List Issues", description: "View Jira issues", icon: GitBranch, provider: "jira", category: "dev", requiresConnection: true, oauthProvider: "jira" },
+  { id: "jira-create", label: "Create Issue", description: "Create a Jira issue", icon: Plus, provider: "jira", category: "dev", requiresConnection: true, oauthProvider: "jira" },
+  // HubSpot
+  { id: "hubspot-contacts", label: "List Contacts", description: "View HubSpot contacts", icon: Users, provider: "hubspot", category: "productivity", requiresConnection: true, oauthProvider: "hubspot" },
+  // Salesforce
+  { id: "salesforce-leads", label: "List Leads", description: "View Salesforce leads", icon: Users, provider: "salesforce", category: "productivity", requiresConnection: true, oauthProvider: "salesforce" },
+  // Airtable
+  { id: "airtable-list", label: "List Records", description: "List Airtable records", icon: Database, provider: "airtable", category: "productivity", requiresConnection: true, oauthProvider: "airtable" },
+  { id: "airtable-create", label: "Create Record", description: "Create an Airtable record", icon: Plus, provider: "airtable", category: "productivity", requiresConnection: true, oauthProvider: "airtable" },
+  // Asana
+  { id: "asana-tasks", label: "List Tasks", description: "View Asana tasks", icon: CheckCircle, provider: "asana", category: "productivity", requiresConnection: true, oauthProvider: "asana" },
+  { id: "asana-create", label: "Create Task", description: "Create an Asana task", icon: Plus, provider: "asana", category: "productivity", requiresConnection: true, oauthProvider: "asana" },
   // Local tools (no auth required)
   { id: "local-bash", label: "Run Command", description: "Execute a bash command in sandbox", icon: Terminal, provider: "local", category: "dev", requiresConnection: false },
   { id: "local-file", label: "Read File", description: "Read a file from the workspace", icon: FileText, provider: "local", category: "dev", requiresConnection: false },
@@ -124,6 +153,16 @@ const PROVIDER_META: Record<string, { name: string; icon: React.ComponentType<{ 
   vercel: { name: "Vercel", icon: Upload, color: "text-white/80", bgColor: "bg-white/5", borderColor: "border-white/15" },
   railway: { name: "Railway", icon: Upload, color: "text-purple-300", bgColor: "bg-purple-400/10", borderColor: "border-purple-400/20" },
   exa: { name: "Exa Search", icon: Search, color: "text-cyan-400", bgColor: "bg-cyan-500/10", borderColor: "border-cyan-500/20" },
+  notion: { name: "Notion", icon: FileText, color: "text-white/80", bgColor: "bg-white/5", borderColor: "border-white/15" },
+  dropbox: { name: "Dropbox", icon: Cloud, color: "text-blue-300", bgColor: "bg-blue-400/10", borderColor: "border-blue-400/20" },
+  stripe: { name: "Stripe", icon: BarChart3, color: "text-indigo-400", bgColor: "bg-indigo-500/10", borderColor: "border-indigo-500/20" },
+  zoom: { name: "Zoom", icon: Video, color: "text-blue-400", bgColor: "bg-blue-500/10", borderColor: "border-blue-500/20" },
+  linear: { name: "Linear", icon: GitBranch, color: "text-purple-300", bgColor: "bg-purple-400/10", borderColor: "border-purple-400/20" },
+  jira: { name: "Jira", icon: GitBranch, color: "text-blue-300", bgColor: "bg-blue-400/10", borderColor: "border-blue-400/20" },
+  hubspot: { name: "HubSpot", icon: Users, color: "text-orange-400", bgColor: "bg-orange-500/10", borderColor: "border-orange-500/20" },
+  salesforce: { name: "Salesforce", icon: Database, color: "text-blue-400", bgColor: "bg-blue-500/10", borderColor: "border-blue-500/20" },
+  airtable: { name: "Airtable", icon: Database, color: "text-yellow-400", bgColor: "bg-yellow-500/10", borderColor: "border-yellow-500/20" },
+  asana: { name: "Asana", icon: CheckCircle, color: "text-red-400", bgColor: "bg-red-500/10", borderColor: "border-red-500/20" },
   local: { name: "Local", icon: Terminal, color: "text-emerald-400", bgColor: "bg-emerald-500/10", borderColor: "border-emerald-500/20" },
 };
 
@@ -414,6 +453,25 @@ export default function CommandDeckPlugin() {
 
    // Execute action
    const handleExecute = useCallback(async (action: ActionItem) => {
+     // For local actions, prompt the user for input
+     let params: Record<string, unknown> = {};
+
+     if (action.provider === 'local') {
+       if (action.id === 'local-bash') {
+         const command = prompt('Enter bash command to execute:');
+         if (!command) return; // User cancelled
+         params = { command };
+       } else if (action.id === 'local-file') {
+         const path = prompt('Enter file path to read (e.g., src/index.ts):');
+         if (!path) return;
+         params = { path };
+       } else if (action.id === 'local-webhook') {
+         const url = prompt('Enter webhook URL:');
+         if (!url) return;
+         params = { url, method: 'POST' };
+       }
+     }
+
      const result: ActionResult = {
        success: false,
        message: "Connecting to " + action.provider + "...",
@@ -427,7 +485,7 @@ export default function CommandDeckPlugin() {
          body: JSON.stringify({
            provider: action.provider,
            action: action.id.split("-").slice(1).join("_"),
-           params: {},
+           params,
          }),
        });
 
