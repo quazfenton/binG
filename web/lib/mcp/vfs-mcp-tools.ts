@@ -26,6 +26,10 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { virtualFilesystem } from '../virtual-filesystem/virtual-filesystem-service';
 import { emitFileEvent, emitBatchFileEvents } from '../virtual-filesystem/file-events';
 import { createLogger } from '../utils/logger';
+import { tolerantJsonParse, sanitizeJsonString, findBalancedJsonObject } from '../utils/json-tolerant';
+
+// Re-export for backwards compatibility (other modules may import from here)
+export { tolerantJsonParse, sanitizeJsonString, findBalancedJsonObject };
 
 const logger = createLogger('VFS-MCP-Tools');
 
@@ -133,48 +137,121 @@ export function normalizeToolArgs(toolName: string, raw: unknown): any {
   }
 }
 
+// tolerantJsonParse is now imported from ../utils/json-tolerant (shared utility)
+
+// ============================================================================
+// Central Tool Call Normalization Pipeline (Plan 6.1)
+// ============================================================================
+
 /**
- * Tolerant JSON parser for malformed LLM output.
- * Handles: trailing commas, single quotes, unescaped control chars.
+ * Normalized tool call — the canonical shape after normalization.
+ * All callers (MCP host, text parser, Vercel AI handler) should use this.
  */
-export function tolerantJsonParse(text: string): unknown {
-  if (!text || typeof text !== 'string') return undefined;
-  const trimmed = text.trim();
-  if (!trimmed) return undefined;
+export interface NormalizedToolCall {
+  /** Canonical tool name (lowercase, e.g. 'write_file', 'batch_write') */
+  tool: string;
+  /** Arguments already normalized to expected schema shape */
+  args: Record<string, unknown>;
+  /** Whether normalization detected and corrected field-name aliases */
+  hadAliasCorrections?: boolean;
+}
 
-  // Sanitize control characters inside string values
-  function sanitizeJsonString(str: string): string {
-    let result = '', inString = false, escapeNext = false;
-    for (let i = 0; i < str.length; i++) {
-      const ch = str[i];
-      if (escapeNext) { result += ch; escapeNext = false; continue; }
-      if (ch === '\\' && inString) { result += ch; escapeNext = true; continue; }
-      if (ch === '"') { inString = !inString; result += ch; continue; }
-      if (inString) {
-        if (ch === '\n') result += '\\n';
-        else if (ch === '\r') result += '\\r';
-        else if (ch === '\t') result += '\\t';
-        else if (ch === '\b') result += '\\b';
-        else if (ch === '\f') result += '\\f';
-        else result += ch;
-      } else result += ch;
+/**
+ * Tool name aliases — alternate names LLMs use for our canonical tool names.
+ */
+const TOOL_NAME_ALIASES: Record<string, string> = {
+  writetofile: 'write_file',
+  create_file: 'write_file',
+  writetotext: 'write_file',
+  applydiff: 'apply_diff',
+  patch: 'apply_diff',
+  readfile: 'read_file',
+  readfiles: 'read_files',
+  listfiles: 'list_files',
+  ls: 'list_files',
+  searchfiles: 'search_files',
+  search: 'search_files',
+  batchwrite: 'batch_write',
+  write_files: 'batch_write',
+  writefiles: 'batch_write',
+  deletefile: 'delete_file',
+  remove_file: 'delete_file',
+  createdirectory: 'create_directory',
+  mkdir: 'create_directory',
+};
+
+/**
+ * Central tool call normalization pipeline.
+ *
+ * Takes a raw tool call (from any source: MCP, text parser, Vercel AI handler)
+ * and returns a normalized `NormalizedToolCall` or null on fatal problems.
+ *
+ * Steps:
+ * 1. Normalize tool name (lowercase, resolve aliases)
+ * 2. Normalize arguments via `normalizeToolArgs`
+ * 3. Validate required fields are present
+ *
+ * @param raw - Raw tool call object with any field naming convention
+ * @returns Normalized tool call or null if unparseable
+ */
+export function normalizeToolCall(raw: unknown): NormalizedToolCall | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const obj = raw as Record<string, unknown>;
+
+  // Step 1: Resolve tool name from any alias field
+  const TOOL_FIELD_NAMES = ['tool', 'function', 'name', 'tool_name', 'type'];
+  let rawToolName: string | undefined;
+  for (const field of TOOL_FIELD_NAMES) {
+    const val = obj[field];
+    if (typeof val === 'string') { rawToolName = val; break; }
+  }
+  if (!rawToolName) return null;
+
+  // Normalize and resolve aliases
+  const lowerName = rawToolName.toLowerCase();
+  const canonicalTool = TOOL_NAME_ALIASES[lowerName] || lowerName;
+
+  // Step 2: Resolve args from any alias field
+  const ARGS_FIELD_NAMES = ['arguments', 'args', 'parameters', 'input', 'data'];
+  let rawArgs: unknown = {};
+  for (const field of ARGS_FIELD_NAMES) {
+    if (obj[field] !== undefined) { rawArgs = obj[field]; break; }
+  }
+
+  // Step 3: Normalize args via the per-tool normalizer
+  const normalizedArgs = normalizeToolArgs(canonicalTool, rawArgs);
+  if (!normalizedArgs || typeof normalizedArgs !== 'object') return null;
+
+  // Step 4: Quick validation — check required fields for known tools
+  const requiredFields: Record<string, string[]> = {
+    write_file: ['path', 'content'],
+    apply_diff: ['path', 'diff'],
+    read_file: ['path'],
+    delete_file: ['path'],
+    create_directory: ['path'],
+    batch_write: ['files'],
+  };
+  const required = requiredFields[canonicalTool];
+  if (required) {
+    for (const field of required) {
+      const val = (normalizedArgs as Record<string, unknown>)[field];
+      if (val === undefined || val === null) {
+        // Missing required field — still return the result so the caller
+        // can log and decide whether to retry, but flag it.
+        return {
+          tool: canonicalTool,
+          args: normalizedArgs as Record<string, unknown>,
+          hadAliasCorrections: true,
+          _missingRequired: required.filter(f => (normalizedArgs as Record<string, unknown>)[f] === undefined || (normalizedArgs as Record<string, unknown>)[f] === null),
+        };
+      }
     }
-    return result;
   }
 
-  const attempts = [
-    () => JSON.parse(trimmed),
-    () => JSON.parse(trimmed.replace(/,\s*([}\]])/g, '$1')), // trailing commas
-    () => JSON.parse(trimmed.replace(/'/g, '"')), // single quotes
-    () => JSON.parse(sanitizeJsonString(trimmed)),
-    () => JSON.parse(sanitizeJsonString(trimmed.replace(/,\s*([}\]])/g, '$1'))),
-    () => JSON.parse(sanitizeJsonString(trimmed.replace(/'/g, '"'))),
-  ];
-
-  for (const attempt of attempts) {
-    try { return attempt(); } catch {}
-  }
-  return undefined;
+  return {
+    tool: canonicalTool,
+    args: normalizedArgs as Record<string, unknown>,
+  };
 }
 
 /**
@@ -207,42 +284,8 @@ export function parseBatchWriteFiles(files: unknown): Array<{ path: string; cont
     return null;
   }
 
-  /** Sanitize raw control characters within JSON string values (LLMs often emit unescaped newlines). */
-  function sanitizeJsonString(text: string): string {
-    let result = ''; let inString = false; let escapeNext = false;
-    for (let i = 0; i < text.length; i++) {
-      const ch = text[i];
-      if (escapeNext) { result += ch; escapeNext = false; continue; }
-      if (ch === '\\' && inString) { result += ch; escapeNext = true; continue; }
-      if (ch === '"') { inString = !inString; result += ch; continue; }
-      if (inString) {
-        if (ch === '\n') result += '\\n';
-        else if (ch === '\r') result += '\\r';
-        else if (ch === '\t') result += '\\t';
-        else if (ch === '\b') result += '\\b';
-        else if (ch === '\f') result += '\\f';
-        else result += ch;
-      } else result += ch;
-    }
-    return result;
-  }
-
-  /** Try to parse JSON with fallbacks for trailing commas, single quotes, and raw control chars. */
-  function tryParseJson(text: string, sanitize = false): unknown {
-    try { return JSON.parse(text); } catch {}
-    try { return JSON.parse(text.replace(/,\s*([}\]])/g, '$1')); } catch {}
-    // LLMs often output single-quoted JSON — normalize to double quotes
-    try { return JSON.parse(text.replace(/'/g, '"')); } catch {}
-    if (sanitize) {
-      try { return JSON.parse(sanitizeJsonString(text)); } catch {}
-      try { return JSON.parse(sanitizeJsonString(text.replace(/,\s*([}\]])/g, '$1'))); } catch {}
-      try { return JSON.parse(sanitizeJsonString(text.replace(/'/g, '"'))); } catch {}
-    }
-    return undefined;
-  }
-
   function parseAndValidate(text: string) {
-    const parsed = tryParseJson(text, true);
+    const parsed = tolerantJsonParse(text);
     if (Array.isArray(parsed)) {
       const valid = parsed.filter(item => item && typeof item === 'object' && !Array.isArray(item));
       return valid.length > 0 ? valid : (parsed.length === 0 ? [] : null);
@@ -424,15 +467,15 @@ export function initializeVFSTools(userId: string, sessionId?: string, scopePath
  * Use for new files or complete rewrites
  */
 export const writeFileTool = (tool as any)({
-  description: 'Create or overwrite a file. Required: path (e.g. "src/app.tsx"), content (complete file contents).',
+  description: 'Create or overwrite a file in the VFS. Required: path (e.g. "src/app.tsx"), content (complete file contents — do not abbreviate).',
   parameters: z.preprocess(
     (raw) => normalizeToolArgs('write_file', raw),
     z.object({
-      path: z.string().describe('File path like "src/app.tsx" (no leading slash required)'),
-      content: z.string().describe('Complete file contents - do not truncate or abbreviate'),
-      commitMessage: z.string().optional().describe('Optional change description'),
+      path: z.string().describe('Relative path like "src/app.tsx" (no URL, no query string, no leading slash)'),
+      content: z.string().describe('Complete file contents — do not abbreviate or truncate'),
+      commitMessage: z.string().optional().describe('Optional description of the change'),
     })
-  ),
+  ).passthrough(),
   execute: async ({ path, content, commitMessage = 'Write file via MCP tool' }) => {
     try {
   if (!path || typeof path !== 'string') {
@@ -530,11 +573,11 @@ export const applyDiffTool = (tool as any)({
   parameters: z.preprocess(
     (raw) => normalizeToolArgs('apply_diff', raw),
     z.object({
-      path: z.string().describe('File path to patch'),
-      diff: z.string().describe('Unified diff with --- +++ @@ format'),
-      commitMessage: z.string().optional().describe('Optional change description'),
+      path: z.string().describe('Relative path like "src/app.tsx" (the file to patch)'),
+      diff: z.string().describe('Unified diff with --- +++ @@ format — include full context lines'),
+      commitMessage: z.string().optional().describe('Optional description of the change'),
     })
-  ),
+  ).passthrough(),
   execute: async ({ path, diff, commitMessage = 'Applied diff via MCP tool' }) => {
     try {
   if (!path || typeof path !== 'string') {
@@ -633,9 +676,9 @@ export const readFileTool = (tool as any)({
   parameters: z.preprocess(
     (raw) => normalizeToolArgs('read_file', raw),
     z.object({
-      path: z.string().describe('File path to read'),
+      path: z.string().describe('Relative path like "src/app.tsx" (the file to read)'),
     })
-  ),
+  ).passthrough(),
   execute: async ({ path }) => {
     try {
   if (!path || typeof path !== 'string') {
@@ -689,9 +732,12 @@ export const readFileTool = (tool as any)({
  */
 export const readFilesTool = (tool as any)({
   description: 'Read multiple files at once from the Virtual File System. More efficient than calling read_file repeatedly when you need several files.',
-  parameters: z.object({
-    paths: z.array(z.string()).min(1).max(20, 'Cannot read more than 20 files at once').describe('Array of file paths to read'),
-  }),
+  parameters: z.preprocess(
+    (raw) => normalizeToolArgs('read_files', raw),
+    z.object({
+      paths: z.array(z.string()).min(1).max(20, 'Cannot read more than 20 files at once').describe('Array of file paths like ["src/a.ts", "src/b.ts"]'),
+    })
+  ).passthrough(),
   execute: async ({ paths }) => {
     try {
       const context = getToolContext();
@@ -742,10 +788,13 @@ export const readFilesTool = (tool as any)({
  */
 export const listFilesTool = (tool as any)({
   description: 'List files and directories in the Virtual File System. Use to explore project structure and find files.',
-  parameters: z.object({
-    path: z.string().default('/').describe('Directory path to list (default: root)'),
-    recursive: z.boolean().optional().default(false).describe('Whether to list recursively'),
-  }),
+  parameters: z.preprocess(
+    (raw) => normalizeToolArgs('list_files', raw),
+    z.object({
+      path: z.string().default('/').describe('Directory path to list (default: root, like "/")'),
+      recursive: z.boolean().optional().default(false).describe('Whether to list recursively (default: false)'),
+    })
+  ).passthrough(),
   execute: async ({ path, recursive = false }) => {
     try {
   const context = getToolContext();
@@ -785,11 +834,14 @@ export const listFilesTool = (tool as any)({
  */
 export const searchFilesTool = (tool as any)({
   description: 'Search across the Virtual File System for files containing specific text. Returns matching files and code snippets.',
-  parameters: z.object({
-    query: z.string().describe('Search term or natural language description'),
-    path: z.string().optional().describe('Optional path to search within'),
-    limit: z.number().optional().default(10).describe('Maximum number of results'),
-  }),
+  parameters: z.preprocess(
+    (raw) => normalizeToolArgs('search_files', raw),
+    z.object({
+      query: z.string().describe('Search term or natural language description'),
+      path: z.string().optional().describe('Optional path to search within (e.g. "src/")'),
+      limit: z.number().optional().default(10).describe('Maximum number of results (default: 10)'),
+    })
+  ).passthrough(),
   execute: async ({ query, path, limit = 10 }) => {
     try {
   if (!query || typeof query !== 'string') {
@@ -839,17 +891,17 @@ export const searchFilesTool = (tool as any)({
  * Efficient for creating several related files at once
  */
 export const batchWriteTool = (tool as any)({
-  description: 'Write multiple files at once. Required: files array of {path, content} objects. Example: {"files": [{"path": "src/a.ts", "content": "code"}]}',
+  description: 'Write multiple files at once. Required: files — array of {path, content} objects. Example: {"files": [{"path": "src/a.ts", "content": "full content here"}]}',
   parameters: z.preprocess(
     (raw) => normalizeToolArgs('batch_write', raw),
     z.object({
       files: z.array(z.object({
-        path: z.string().describe('File path'),
-        content: z.string().describe('File content'),
-      })).max(50, 'Cannot write more than 50 files').describe('Array of {path, content} objects'),
-      commitMessage: z.string().optional().describe('Optional description'),
+        path: z.string().describe('Relative file path like "src/utils.ts"'),
+        content: z.string().describe('Complete file contents — do not abbreviate'),
+      })).max(50, 'Cannot write more than 50 files').describe('Array of {path, content} objects — e.g. [{"path":"src/a.ts","content":"..."}]'),
+      commitMessage: z.string().optional().describe('Optional description of the batch change'),
     })
-  ),
+  ).passthrough(),
   execute: async ({ files, commitMessage = 'Batch write via MCP tool' }) => {
     try {
       const context = getToolContext();
@@ -1041,11 +1093,14 @@ export const batchWriteTool = (tool as any)({
  * delete_file - Delete a file or directory from the VFS
  */
 export const deleteFileTool = (tool as any)({
-  description: 'Delete a file or directory from the Virtual File System. Use with caution - this operation cannot be undone.',
-  parameters: z.object({
-    path: z.string().describe('Path to delete'),
-    reason: z.string().optional().describe('Reason for deletion'),
-  }),
+  description: 'Delete a file or directory from the Virtual File System. Use with caution — this operation cannot be undone.',
+  parameters: z.preprocess(
+    (raw) => normalizeToolArgs('delete_file', raw),
+    z.object({
+      path: z.string().describe('Relative path like "src/old.ts" (the file or directory to delete)'),
+      reason: z.string().optional().describe('Optional reason for deletion'),
+    })
+  ).passthrough(),
   execute: async ({ path, reason }) => {
     try {
   if (!path || typeof path !== 'string') {
@@ -1088,9 +1143,12 @@ export const deleteFileTool = (tool as any)({
  */
 export const createDirectoryTool = (tool as any)({
   description: 'Create a directory in the Virtual File System. Creates parent directories as needed.',
-  parameters: z.object({
-    path: z.string().describe('Directory path to create'),
-  }),
+  parameters: z.preprocess(
+    (raw) => normalizeToolArgs('create_directory', raw),
+    z.object({
+      path: z.string().describe('Directory path to create, like "src/components/utils"'),
+    })
+  ).passthrough(),
   execute: async ({ path }) => {
     try {
   if (!path || typeof path !== 'string') {
@@ -1198,68 +1256,68 @@ const TOOL_META: Record<string, { description: string; parameters: z.ZodType }> 
   write_file: {
     description: writeFileTool.description,
     parameters: z.object({
-  path: z.string().describe('Full virtual path'),
-  content: z.string().describe('Complete file content'),
-  commitMessage: z.string().optional(),
-    }),
+  path: z.string().describe('Relative path like "src/app.tsx" (no URL, no query string, no leading slash)'),
+  content: z.string().describe('Complete file contents — do not abbreviate or truncate'),
+  commitMessage: z.string().optional().describe('Optional description of the change'),
+    }).passthrough(),
   },
   apply_diff: {
     description: applyDiffTool.description,
     parameters: z.object({
-  path: z.string().describe('Target file path'),
-  diff: z.string().describe('Unified diff format'),
-  commitMessage: z.string().optional(),
-    }),
+  path: z.string().describe('Relative path like "src/app.tsx" (the file to patch)'),
+  diff: z.string().describe('Unified diff with --- +++ @@ format — include full context lines'),
+  commitMessage: z.string().optional().describe('Optional description of the change'),
+    }).passthrough(),
   },
   read_file: {
     description: readFileTool.description,
     parameters: z.object({
-  path: z.string().describe('Full path to the file'),
-    }),
+  path: z.string().describe('Relative path like "src/app.tsx" (the file to read)'),
+    }).passthrough(),
   },
   read_files: {
     description: readFilesTool.description,
     parameters: z.object({
-  paths: z.array(z.string()).min(1).max(20).describe('Array of file paths to read'),
-    }),
+  paths: z.array(z.string()).min(1).max(20).describe('Array of file paths like ["src/a.ts", "src/b.ts"]'),
+    }).passthrough(),
   },
   list_files: {
     description: listFilesTool.description,
     parameters: z.object({
-  path: z.string().default('/'),
-  recursive: z.boolean().optional().default(false),
-    }),
+  path: z.string().default('/').describe('Directory path to list (default: root, like "/")'),
+  recursive: z.boolean().optional().default(false).describe('Whether to list recursively (default: false)'),
+    }).passthrough(),
   },
   search_files: {
     description: searchFilesTool.description,
     parameters: z.object({
-  query: z.string().describe('Search term'),
-  path: z.string().optional(),
-  limit: z.number().optional().default(10),
-    }),
+  query: z.string().describe('Search term or natural language description'),
+  path: z.string().optional().describe('Optional path to search within (e.g. "src/")'),
+  limit: z.number().optional().default(10).describe('Maximum number of results (default: 10)'),
+    }).passthrough(),
   },
   batch_write: {
     description: batchWriteTool.description,
     parameters: z.object({
   files: z.array(z.object({
-    path: z.string(),
-    content: z.string(),
-  })),
-  commitMessage: z.string().optional(),
-    }),
+    path: z.string().describe('Relative file path like "src/utils.ts"'),
+    content: z.string().describe('Complete file contents — do not abbreviate'),
+  })).max(50).describe('Array of {path, content} objects — e.g. [{"path":"src/a.ts","content":"..."}]'),
+  commitMessage: z.string().optional().describe('Optional description of the batch change'),
+    }).passthrough(),
   },
   delete_file: {
     description: deleteFileTool.description,
     parameters: z.object({
-  path: z.string(),
-  reason: z.string().optional(),
-    }),
+  path: z.string().describe('Relative path like "src/old.ts" (the file or directory to delete)'),
+  reason: z.string().optional().describe('Optional reason for deletion'),
+    }).passthrough(),
   },
   create_directory: {
     description: createDirectoryTool.description,
     parameters: z.object({
-  path: z.string(),
-    }),
+  path: z.string().describe('Directory path to create, like "src/components/utils"'),
+    }).passthrough(),
   },
   get_workspace_stats: {
     description: getWorkspaceStatsTool.description,

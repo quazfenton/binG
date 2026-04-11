@@ -98,7 +98,7 @@ export function tolerantJsonParse(text: string, sanitize = true): unknown {
 
 /**
  * Find the end index of a balanced JSON object starting at braceStart.
- * Accounts for nested braces, strings, and escape sequences.
+ * Accounts for nested braces, brackets, strings, and escape sequences.
  *
  * @param text - The full text containing the JSON
  * @param braceStart - Index of the opening `{`
@@ -109,7 +109,8 @@ export function findBalancedJsonObject(text: string, braceStart: number): number
     return -1;
   }
 
-  let depth = 0;
+  let braceCount = 0;
+  let bracketCount = 0;
   let inString = false;
   let escapeNext = false;
 
@@ -130,10 +131,13 @@ export function findBalancedJsonObject(text: string, braceStart: number): number
     }
     if (inString) continue;
 
-    if (ch === '{') depth++;
-    else if (ch === '}') {
-      depth--;
-      if (depth === 0) return i + 1;
+    if (ch === '{') braceCount++;
+    else if (ch === '}') braceCount--;
+    else if (ch === '[') bracketCount++;
+    else if (ch === ']') bracketCount--;
+
+    if (braceCount === 0 && bracketCount === 0) {
+      return i + 1;
     }
   }
   return -1;
