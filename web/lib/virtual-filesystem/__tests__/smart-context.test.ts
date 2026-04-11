@@ -344,3 +344,113 @@ describe('Import Resolution', () => {
     expect(result).toBe('./utils');
   });
 });
+
+// =============================================================================
+// Context Mode Tests (diff, read, tree)
+// =============================================================================
+
+describe('Context Mode', () => {
+  it('should default to read mode when not specified', async () => {
+    const { generateSmartContext } = await import('@/lib/virtual-filesystem/smart-context');
+    const result = await generateSmartContext({
+      userId: '',
+      prompt: 'test',
+    });
+    expect(result.contextMode).toBe('read');
+  });
+
+  it('should pass through contextMode in result', async () => {
+    const { generateSmartContext } = await import('@/lib/virtual-filesystem/smart-context');
+    const result = await generateSmartContext({
+      userId: '',
+      prompt: 'test',
+      contextMode: 'tree',
+    });
+    expect(result.contextMode).toBe('tree');
+  });
+
+  it('should include diffCount in result', async () => {
+    const { generateSmartContext } = await import('@/lib/virtual-filesystem/smart-context');
+    const result = await generateSmartContext({
+      userId: '',
+      prompt: 'test',
+      contextMode: 'diff',
+      snapshotBefore: new Map(),
+      snapshotAfter: new Map(),
+    });
+    expect(result).toHaveProperty('diffCount');
+    expect(typeof result.diffCount).toBe('number');
+  });
+});
+
+describe('Unified Diff Generation', () => {
+  it('should detect file creation', async () => {
+    const { generateUnifiedDiffs } = await import('@/lib/virtual-filesystem/smart-context');
+    const before = new Map<string, string>();
+    const after = new Map([['src/new.ts', 'export const x = 1;']]);
+    const diffs = generateUnifiedDiffs(before, after);
+    expect(diffs).toHaveLength(1);
+    expect(diffs[0].status).toBe('created');
+    expect(diffs[0].path).toBe('src/new.ts');
+  });
+
+  it('should detect file deletion', async () => {
+    const { generateUnifiedDiffs } = await import('@/lib/virtual-filesystem/smart-context');
+    const before = new Map([['src/old.ts', 'export const x = 1;']]);
+    const after = new Map<string, string>();
+    const diffs = generateUnifiedDiffs(before, after);
+    expect(diffs).toHaveLength(1);
+    expect(diffs[0].status).toBe('deleted');
+    expect(diffs[0].path).toBe('src/old.ts');
+  });
+
+  it('should detect file modification', async () => {
+    const { generateUnifiedDiffs } = await import('@/lib/virtual-filesystem/smart-context');
+    const before = new Map([['src/app.ts', 'export const x = 1;']]);
+    const after = new Map([['src/app.ts', 'export const x = 2;\nexport const y = 3;']]);
+    const diffs = generateUnifiedDiffs(before, after);
+    expect(diffs).toHaveLength(1);
+    expect(diffs[0].status).toBe('modified');
+    expect(diffs[0].path).toBe('src/app.ts');
+    expect(diffs[0].diff).toContain('--- a/src/app.ts');
+    expect(diffs[0].diff).toContain('+++ b/src/app.ts');
+  });
+
+  it('should skip unchanged files', async () => {
+    const { generateUnifiedDiffs } = await import('@/lib/virtual-filesystem/smart-context');
+    const before = new Map([['src/same.ts', 'unchanged']]);
+    const after = new Map([['src/same.ts', 'unchanged']]);
+    const diffs = generateUnifiedDiffs(before, after);
+    expect(diffs).toHaveLength(0);
+  });
+
+  it('should sort by significance (most changed first)', async () => {
+    const { generateUnifiedDiffs } = await import('@/lib/virtual-filesystem/smart-context');
+    const before = new Map([
+      ['small.ts', 'a'],
+      ['large.ts', 'line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10'],
+    ]);
+    const after = new Map([
+      ['small.ts', 'b'],
+      ['large.ts', 'changed1\nchanged2\nchanged3\nchanged4\nchanged5\nchanged6\nchanged7\nchanged8\nchanged9\nchanged10\nchanged11\nchanged12'],
+    ]);
+    const diffs = generateUnifiedDiffs(before, after);
+    expect(diffs.length).toBe(2);
+    // large.ts should come first (more changes)
+    expect(diffs[0].path).toBe('large.ts');
+  });
+
+  it('should respect maxDiffEntries limit', async () => {
+    const { generateUnifiedDiffs } = await import('@/lib/virtual-filesystem/smart-context');
+    const before = new Map([['a.ts', '1'], ['b.ts', '2'], ['c.ts', '3']]);
+    const after = new Map([['a.ts', 'changed1'], ['b.ts', 'changed2'], ['c.ts', 'changed3']]);
+    const diffs = generateUnifiedDiffs(before, after, 2);
+    expect(diffs.length).toBeLessThanOrEqual(2);
+  });
+
+  it('should handle empty snapshots', async () => {
+    const { generateUnifiedDiffs } = await import('@/lib/virtual-filesystem/smart-context');
+    const diffs = generateUnifiedDiffs(new Map(), new Map());
+    expect(diffs).toHaveLength(0);
+  });
+});

@@ -51,6 +51,20 @@ export interface SmartContextOptions {
   format?: 'markdown' | 'xml' | 'json' | 'plain';
   /** Maximum lines per file */
   maxLinesPerFile?: number;
+  /** Context injection mode for iterative build loops.
+   *  - 'read' (default): Full file contents inlined. Highest quality, most tokens.
+   *  - 'diff': Only the changes since last iteration (unified diffs). Efficient for
+   *    multi-round build loops where the LLM already knows the prior state.
+   *  - 'tree': Directory tree only, no file content. Lightest weight — the LLM
+   *    infers what files contain from their names and the project structure. */
+  contextMode?: 'diff' | 'read' | 'tree';
+  /** Snapshot of file contents BEFORE the last iteration's writes.
+   *  Required when contextMode is 'diff'. Used to generate unified diffs
+   *  of what changed in the last round. Map of path → previous content. */
+  snapshotBefore?: Map<string, string>;
+  /** Snapshot of file contents AFTER the last iteration's writes.
+   *  Required when contextMode is 'diff'. Map of path → current content. */
+  snapshotAfter?: Map<string, string>;
 }
 
 export interface FileScore {
@@ -78,6 +92,10 @@ export interface SmartContextResult {
   treeMode?: 'full' | 'abbreviated' | 'minimal';
   /** Budget tier: 'compact' | 'balanced' | 'full' */
   budgetTier?: 'compact' | 'balanced' | 'full';
+  /** Context mode used: 'diff' | 'read' | 'tree' */
+  contextMode?: 'diff' | 'read' | 'tree';
+  /** Number of diff entries included (only for contextMode 'diff') */
+  diffCount?: number;
   /** Warnings during generation */
   warnings: string[];
 }
@@ -571,23 +589,298 @@ function scoreFile(
   return { path: file.path, score, reasons };
 }
 
+// ============================================================================
+// Diff Snapshot Utilities (for contextMode: 'diff')
+// ============================================================================
+
+/**
+ * Generate unified diff entries between two snapshots of file contents.
+ *
+ * @param before — Map of path → content BEFORE the last iteration
+ * @param after  — Map of path → content AFTER the last iteration (current VFS state)
+ * @param maxDiffEntries — Maximum number of diffs to include (default: 20)
+ * @param maxDiffLines   — Maximum lines per individual diff (default: 200)
+ * @returns Array of { path, diff } objects sorted by change significance
+ */
+export function generateUnifiedDiffs(
+  before: Map<string, string>,
+  after: Map<string, string>,
+  maxDiffEntries = 20,
+  maxDiffLines = 200
+): Array<{ path: string; diff: string; status: 'modified' | 'created' | 'deleted' }> {
+  const entries: Array<{ path: string; diff: string; status: 'modified' | 'created' | 'deleted'; significance: number }> = [];
+
+  // All unique paths across both snapshots
+  const allPaths = new Set([...before.keys(), ...after.keys()]);
+
+  for (const path of allPaths) {
+    const beforeContent = before.get(path) ?? null;
+    const afterContent = after.get(path) ?? null;
+
+    let diff: string;
+    let status: 'modified' | 'created' | 'deleted';
+    let significance: number;
+
+    if (beforeContent === null && afterContent !== null) {
+      // File created
+      status = 'created';
+      const lines = afterContent.split('\n');
+      const shown = lines.slice(0, maxDiffLines);
+      diff = `--- /dev/null\n+++ b/${path}\n@@ -0,0 +1,${shown.length} @@\n${shown.map(l => '+' + l).join('\n')}`;
+      significance = 100 + afterContent.length; // New files are important
+    } else if (beforeContent !== null && afterContent === null) {
+      // File deleted
+      status = 'deleted';
+      const lines = beforeContent.split('\n');
+      const shown = lines.slice(0, maxDiffLines);
+      diff = `--- a/${path}\n+++ /dev/null\n@@ -1,${shown.length} +0,0 @@\n${shown.map(l => '-' + l).join('\n')}`;
+      significance = 50; // Deletions are less significant
+    } else if (beforeContent !== afterContent) {
+      // File modified — generate a simple line-based unified diff
+      status = 'modified';
+      diff = generateSimpleUnifiedDiff(path, beforeContent!, afterContent!, maxDiffLines);
+      if (!diff) continue; // Too large, skip
+      const addedLines = (diff.match(/^\+/gm) || []).length;
+      const removedLines = (diff.match(/^-/gm) || []).length;
+      significance = 30 + addedLines * 2 + removedLines * 2;
+    } else {
+      // Unchanged
+      continue;
+    }
+
+    entries.push({ path, diff, status, significance });
+  }
+
+  // Sort by significance (most changed first) and take top N
+  entries.sort((a, b) => b.significance - a.significance);
+  return entries.slice(0, maxDiffEntries).map(({ path, diff, status }) => ({ path, diff, status }));
+}
+
+/**
+ * Generate a simple line-based unified diff between two strings.
+ * Falls back to a truncation marker if the diff is too large.
+ */
+function generateSimpleUnifiedDiff(
+  path: string,
+  before: string,
+  after: string,
+  maxLines: number
+): string | null {
+  const beforeLines = before.split('\n');
+  const afterLines = after.split('\n');
+
+  // Use LCS-based diff for accuracy
+  const ops = computeDiffOps(beforeLines, afterLines);
+
+  // Build diff lines with proper unified diff format
+  const diffLines: string[] = [];
+
+  // Group ops into hunks: consecutive changes with 3 lines of context
+  const hunks: Array<{
+    beforeStart: number;
+    afterStart: number;
+    beforeCount: number;
+    afterCount: number;
+    lines: string[];
+  }> = [];
+  let currentHunk: typeof hunks[0] | null = null;
+  let beforeIdx = 0;
+  let afterIdx = 0;
+
+  function startHunk(beforeLineNum: number, afterLineNum: number) {
+    currentHunk = {
+      beforeStart: beforeLineNum,
+      afterStart: afterLineNum,
+      beforeCount: 0,
+      afterCount: 0,
+      lines: [],
+    };
+  }
+
+  function endHunk() {
+    if (currentHunk && currentHunk.lines.length > 0) {
+      hunks.push(currentHunk);
+    }
+    currentHunk = null;
+  }
+
+  for (const op of ops) {
+    if (op.type === 'equal') {
+      // Context lines — show up to 3 before/after a change
+      const start = Math.max(0, op.count <= 3 ? 0 : op.count - 3);
+      for (let i = start; i < op.count; i++) {
+        if (!currentHunk) startHunk(beforeIdx + i + 1, afterIdx + i + 1);
+        currentHunk.lines.push(' ' + beforeLines[op.start + i]);
+        currentHunk.beforeCount++;
+        currentHunk.afterCount++;
+      }
+      // Flush hunk after context if no more changes follow
+      if (op.count > 3) endHunk();
+      beforeIdx += op.count;
+      afterIdx += op.count;
+    } else if (op.type === 'delete') {
+      if (!currentHunk) startHunk(beforeIdx + 1, afterIdx + 1);
+      for (let i = 0; i < op.count; i++) {
+        currentHunk.lines.push('-' + beforeLines[op.start + i]);
+        currentHunk.beforeCount++;
+      }
+      beforeIdx += op.count;
+    } else if (op.type === 'insert') {
+      if (!currentHunk) startHunk(beforeIdx + 1, afterIdx + 1);
+      for (let i = 0; i < op.count; i++) {
+        currentHunk.lines.push('+' + afterLines[op.start + i]);
+        currentHunk.afterCount++;
+      }
+      afterIdx += op.count;
+    }
+    // Cap output
+    if (diffLines.length > maxLines) {
+      diffLines.push('\\ ... (diff truncated for brevity)');
+      endHunk();
+      break;
+    }
+  }
+  endHunk();
+
+  // Format hunks
+  for (const hunk of hunks) {
+    diffLines.push(`@@ -${hunk.beforeStart},${hunk.beforeCount} +${hunk.afterStart},${hunk.afterCount} @@`);
+    diffLines.push(...hunk.lines);
+  }
+
+  if (diffLines.length === 0) return null;
+  return `--- a/${path}\n+++ b/${path}\n${diffLines.join('\n')}`;
+}
+
+/**
+ * Compute diff operations using a simple LCS algorithm.
+ * Returns a list of {type, start, count} operations.
+ */
+function computeDiffOps(
+  a: string[],
+  b: string[]
+): Array<{ type: 'equal' | 'delete' | 'insert'; start: number; count: number }> {
+  const ops: Array<{ type: 'equal' | 'delete' | 'insert'; start: number; count: number }> = [];
+  const m = a.length;
+  const n = b.length;
+
+  // For very large files, fall back to a simple approach
+  if (m > 500 || n > 500) {
+    // Simple approach: show first 50 and last 50 lines as context
+    if (m > 0) ops.push({ type: 'delete', start: 0, count: Math.min(m, 100) });
+    if (n > 0) ops.push({ type: 'insert', start: 0, count: Math.min(n, 100) });
+    return ops;
+  }
+
+  // Build LCS table
+  const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      if (a[i - 1] === b[j - 1]) {
+        dp[i][j] = dp[i - 1][j - 1] + 1;
+      } else {
+        dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+      }
+    }
+  }
+
+  // Backtrack to find operations
+  let i = m;
+  let j = n;
+  const reverseOps: Array<{ type: 'equal' | 'delete' | 'insert'; start: number; count: number }> = [];
+
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && a[i - 1] === b[j - 1]) {
+      // Check if we can merge with previous equal
+      if (reverseOps.length > 0 && reverseOps[reverseOps.length - 1].type === 'equal') {
+        reverseOps[reverseOps.length - 1].start--;
+        reverseOps[reverseOps.length - 1].count++;
+      } else {
+        reverseOps.push({ type: 'equal', start: i - 1, count: 1 });
+      }
+      i--; j--;
+    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+      if (reverseOps.length > 0 && reverseOps[reverseOps.length - 1].type === 'insert') {
+        reverseOps[reverseOps.length - 1].start--;
+        reverseOps[reverseOps.length - 1].count++;
+      } else {
+        reverseOps.push({ type: 'insert', start: j - 1, count: 1 });
+      }
+      j--;
+    } else {
+      if (reverseOps.length > 0 && reverseOps[reverseOps.length - 1].type === 'delete') {
+        reverseOps[reverseOps.length - 1].start--;
+        reverseOps[reverseOps.length - 1].count++;
+      } else {
+        reverseOps.push({ type: 'delete', start: i - 1, count: 1 });
+      }
+      i--;
+    }
+  }
+
+  // Reverse to get forward order
+  return reverseOps.reverse();
+}
+
+/**
+ * Capture a snapshot of current file contents for later diff generation.
+ * Reads the specified files from VFS and returns a Map of path → content.
+ */
+export async function captureFileSnapshot(
+  userId: string,
+  filePaths: string[]
+): Promise<Map<string, string>> {
+  const snapshot = new Map<string, string>();
+  for (const path of filePaths) {
+    try {
+      const file = await virtualFilesystem.readFile(userId, path);
+      snapshot.set(path, (file as any).content ?? '');
+    } catch {
+      // File doesn't exist or can't be read — skip
+    }
+  }
+  return snapshot;
+}
+
+/**
+ * Capture a snapshot of ALL files in the VFS (for comprehensive diff tracking).
+ */
+export async function captureFullSnapshot(userId: string): Promise<Map<string, string>> {
+  const snapshot = new Map<string, string>();
+  try {
+    const listing = await virtualFilesystem.listDirectory(userId, '/');
+    const allFiles = await collectAllFiles(userId, '/');
+    for (const file of allFiles) {
+      if (file.content) {
+        snapshot.set(file.path, file.content);
+      }
+    }
+  } catch {
+    // VFS not initialized or empty
+  }
+  return snapshot;
+}
+
 /**
  * Generate smart context — intelligently ranked file selection for LLM
  */
 export async function generateSmartContext(options: SmartContextOptions): Promise<SmartContextResult> {
-  const { 
-    userId, 
-    prompt, 
-    conversationId, 
-    explicitFiles: explicitFileList = [], 
+  const {
+    userId,
+    prompt,
+    conversationId,
+    explicitFiles: explicitFileList = [],
     recentSessionFiles: recentSessionFileList = [],
     currentProjectPath,
-    maxTotalSize = 500000, 
-    format = 'json', 
-    maxLinesPerFile = 500 
+    maxTotalSize = 500000,
+    format = 'json',
+    maxLinesPerFile = 500,
+    contextMode = 'read',
+    snapshotBefore,
+    snapshotAfter,
   } = options;
   const warnings: string[] = [];
-  
+
   // Validate inputs
   if (!userId) {
     logger.error('userId is required');
@@ -599,6 +892,7 @@ export async function generateSmartContext(options: SmartContextOptions): Promis
       filesIncluded: 0,
       estimatedTokens: 0,
       vfsIsEmpty: true,
+      contextMode,
       warnings: ['Missing userId'],
     };
   }
@@ -641,6 +935,7 @@ export async function generateSmartContext(options: SmartContextOptions): Promis
       vfsIsEmpty: true,
       treeMode: 'minimal',
       budgetTier: 'compact',
+      contextMode,
       warnings,
     };
   }
@@ -658,6 +953,7 @@ export async function generateSmartContext(options: SmartContextOptions): Promis
       vfsIsEmpty: true,
       treeMode: 'full',
       budgetTier: 'compact',
+      contextMode,
       warnings,
     };
   }
@@ -796,10 +1092,43 @@ export async function generateSmartContext(options: SmartContextOptions): Promis
     }
   }
 
-  // Generate bundle
-  const bundle = format === 'plain'
-    ? formatBundlePlain(selected, tree)
-    : formatBundle(selected, tree, format, signals, explicitFiles);
+  // Generate bundle based on contextMode
+  let bundle: string;
+  let diffCount = 0;
+
+  if (contextMode === 'tree') {
+    // TREE MODE: Only the directory tree, no file contents.
+    // The LLM infers what files contain from their names and structure.
+    bundle = format === 'json'
+      ? JSON.stringify({ tree, note: 'Tree-only mode — file contents not included. Infer file purpose from names.' }, null, 2)
+      : `--- PROJECT TREE ---\n${tree || '(empty)'}\n--- END TREE ---\n`;
+  } else if (contextMode === 'diff' && snapshotBefore && snapshotAfter) {
+    // DIFF MODE: Only the changes since last iteration (unified diffs).
+    // Efficient for multi-round build loops where the LLM already knows the prior state.
+    const diffs = generateUnifiedDiffs(snapshotBefore, snapshotAfter, 20, 150);
+    diffCount = diffs.length;
+
+    if (diffs.length === 0) {
+      // No changes since last snapshot — provide tree only
+      bundle = format === 'json'
+        ? JSON.stringify({ tree, note: 'No changes since last iteration.', diffs: [] }, null, 2)
+        : `--- PROJECT TREE ---\n${tree || '(empty)'}\n\nNo changes since last iteration.\n--- END TREE ---\n`;
+    } else {
+      const diffBlock = diffs.map(d => `## ${d.status === 'created' ? 'CREATED' : d.status === 'deleted' ? 'DELETED' : 'MODIFIED'}: ${d.path}\n\n\`\`\`diff\n${d.diff}\n\`\`\``).join('\n\n');
+      bundle = format === 'json'
+        ? JSON.stringify({ tree, diffs: diffs.map(d => ({ path: d.path, status: d.status, diff: d.diff })) }, null, 2)
+        : `--- CHANGES SINCE LAST ITERATION (${diffs.length} files) ---\n\n${tree ? `Project tree:\n${tree}\n\n` : ''}${diffBlock}\n--- END CHANGES ---\n`;
+    }
+  } else {
+    // READ MODE (default): Full file contents inlined.
+    if (contextMode === 'diff' && (!snapshotBefore || !snapshotAfter)) {
+      warnings.push('contextMode is "diff" but snapshotBefore/snapshotAfter not provided. Falling back to "read" mode.');
+    }
+
+    bundle = format === 'plain'
+      ? formatBundlePlain(selected, tree)
+      : formatBundle(selected, tree, format, signals, explicitFiles);
+  }
 
   // Compute detailed metrics for logging
   const bundleBytes = encoder.encode(bundle).length;
@@ -837,6 +1166,8 @@ export async function generateSmartContext(options: SmartContextOptions): Promis
     vfsIsEmpty: false,
     treeMode: treeMode as 'full' | 'abbreviated' | 'minimal',
     budgetTier,
+    contextMode,
+    diffCount,
     warnings,
   };
 }

@@ -54,6 +54,8 @@ export const SSE_EVENT_TYPES = {
   AUTO_CONTINUE: 'auto-continue',
   /** Next nudge: LLM stopped after list_files, prompt to proceed */
   NEXT: 'next',
+  /** Progressive build loop iteration progress */
+  PROGRESSIVE_BUILD: 'progressive_build',
 } as const;
 
 export type SSEEventTypeName = typeof SSE_EVENT_TYPES[keyof typeof SSE_EVENT_TYPES];
@@ -329,6 +331,44 @@ export interface SSENexPayload {
   timestamp: number;
 }
 
+/** Progressive build loop event — emitted at each iteration and completion */
+export interface SSEProgressiveBuildPayload {
+  /** Stage of the build loop */
+  stage:
+    | 'started'
+    | 'iteration_start'
+    | 'iteration_complete'
+    | 'iteration_error'
+    | 'complete'
+    | 'max_iterations_reached';
+  /** Current iteration number (1-based) */
+  iteration?: number;
+  /** Maximum allowed iterations */
+  maxIterations?: number;
+  /** Context mode used */
+  contextMode?: 'diff' | 'read' | 'tree';
+  /** Files created/written in this iteration */
+  filesCreatedThisRound?: string[];
+  /** Gaps identified by reflection pass */
+  gapsIdentified?: string[];
+  /** Summary from reflection/review */
+  reflectionSummary?: string;
+  /** Current project tree snapshot */
+  projectTree?: string;
+  /** Duration of this iteration in ms */
+  durationMs?: number;
+  /** Whether the build is fully complete */
+  buildComplete?: boolean;
+  /** Reason for completion (if buildComplete is true) */
+  completionReason?: string;
+  /** Total iterations completed */
+  totalIterations?: number;
+  /** Error message (for iteration_error stage) */
+  error?: string;
+  /** Timestamp */
+  timestamp: number;
+}
+
 // ---------------------------------------------------------------------------
 // Discriminated union (useful on the consumer side)
 // ---------------------------------------------------------------------------
@@ -352,7 +392,8 @@ export type SSEEvent =
   | { type: typeof SSE_EVENT_TYPES.ERROR; data: SSEErrorPayload }
   | { type: typeof SSE_EVENT_TYPES.HEARTBEAT; data: Record<string, unknown> }
   | { type: typeof SSE_EVENT_TYPES.AUTO_CONTINUE; data: SSEAutoContinuePayload }
-  | { type: typeof SSE_EVENT_TYPES.NEXT; data: SSENexPayload };
+  | { type: typeof SSE_EVENT_TYPES.NEXT; data: SSENexPayload }
+  | { type: typeof SSE_EVENT_TYPES.PROGRESSIVE_BUILD; data: SSEProgressiveBuildPayload };
 
 // ---------------------------------------------------------------------------
 // Encoder helpers (backend)

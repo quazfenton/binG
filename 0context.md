@@ -3,7 +3,43 @@ context modes (toggled via contextMode):
 "read" — inlines all current file contents each iteration. Most accurate, higher token cost.
 "tree" — tree only, no file content. Lightest weight, LLM infers what to build next.
 
-possible files to apply this to : smart-context.ts or the other context file it is exported to which i think is currently wired and builds upon it
+IMPLEMENTED in: /root/bing/web/lib/virtual-filesystem/smart-context.ts
+- SmartContextOptions.contextMode: 'diff' | 'read' | 'tree'
+- SmartContextResult.contextMode, diffCount
+- generateUnifiedDiffs(before, after) — LCS-based unified diff generator
+- captureFileSnapshot(userId, filePaths) — snapshot specific files
+- captureFullSnapshot(userId) — snapshot all VFS files
+
+Also exported from hybrid-retrieval.ts which re-exports smart-context.
+
+---
+
+IMPLEMENTED: Progressive Build Engine
+File: /root/bing/web/lib/chat/progressive-build-engine.ts
+
+Core concept: A multi-iteration, file-aware, self-stopping project build loop.
+The LLM is called repeatedly with updated project state until completion.
+
+Key features:
+- contextMode integration: uses smart-context.ts modes for context injection
+- mem0 integration: loads relevant memories from prior conversations
+- Optional reflection: enableReflection runs a separate LLM call for gap analysis
+- Completion detection: [BUILD_COMPLETE], [PROJECT_COMPLETE], JSON footer, etc.
+- SSE events: progressive_build events for real-time frontend progress
+- Abort signal support for user cancellation
+- Empty iteration detection: stops after N rounds with no new files
+- Time budget enforcement: global timeout
+- Modular: caller provides LLM function, optional reflection override
+
+BuildPresets:
+- large: diff mode, 20 iterations, reflection enabled
+- thorough: read mode, 12 iterations, reflection enabled
+- fast: tree mode, 10 iterations, no reflection
+- balanced: diff mode, 15 iterations, no reflection
+
+SSE Event Type: progressive_build
+Added to: /root/bing/web/lib/streaming/sse-event-schema.ts
+Stages: started, iteration_start, iteration_complete, iteration_error, complete, max_iterations_reached
 
 
 
