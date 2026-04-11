@@ -159,6 +159,8 @@ def fetch_page(page_path: str) -> dict:
         url = f"{DOCS_BASE}{page_path}"
 
     content = fetch_url(url)
+    if content.startswith("HTTP Error") or content.startswith("URL Error"):
+        return {"url": url, "error": content}
     return {"url": url, "content": content[:10000], "truncated": len(content) > 10000}
 
 

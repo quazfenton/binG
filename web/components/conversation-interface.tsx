@@ -377,17 +377,19 @@ export default function ConversationInterface() {
     const handleKeysChanged = async () => {
       const newKeys = await reloadUserApiKeys();
 
-      // Update providers directly in state â€” skip server re-fetch to avoid 5-min cache staleness.
-      // Mark any provider where the user has a key as available, regardless of server env vars.
-      setAvailableProviders((prev) => {
-        if (Object.keys(newKeys).length === 0 || prev.length === 0) return prev;
-        return prev.map((p) => {
-          if (newKeys[p.id]) {
-            return { ...p, isAvailable: true };
-          }
-          return p;
-        });
-      });
+      // Refresh providers from server and rebuild availability from scratch
+      // to properly handle both key additions and removals.
+      try {
+        const res = await fetch("/api/providers", { credentials: 'include', cache: 'no-store' });
+        const data = await res.json();
+        if (data.success) {
+          let providers: LLMProviderConfig[] = data.data.providers || [];
+          providers = providers.map((p) => (newKeys[p.id] ? { ...p, isAvailable: true } : p));
+          setAvailableProviders(providers);
+        }
+      } catch (e) {
+        console.error('[ConversationInterface] Failed to refresh providers after key change:', e);
+      }
     };
 
     window.addEventListener('user-api-keys-changed', handleKeysChanged);

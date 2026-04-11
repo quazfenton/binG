@@ -636,7 +636,7 @@ export async function executeWithOrchestrationMode(
           success: v2Result.success ?? true,
           response: v2Result.content || (v2Result as any).response,
           steps: (v2Result.data as any)?.steps,
-          error: (v2Result.data as any)?.error,
+          error: v2Result.error || (v2Result.data as any)?.error,
           metadata: {
             agentType: 'v2-executor',
             sessionId: v2Result.sessionId,

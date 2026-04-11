@@ -17,19 +17,19 @@ describe('Mem0 Power', () => {
       // Re-import to get fresh check
       const { isMem0Configured } = await import('../mem0-power');
       expect(isMem0Configured()).toBe(false);
-      
+
       // Restore
-      if (originalKey) process.env.MEM0_API_KEY = originalKey;
+      if (originalKey !== undefined) process.env.MEM0_API_KEY = originalKey;
     });
 
     it('should return false when MEM0_API_KEY is empty string', async () => {
       const originalKey = process.env.MEM0_API_KEY;
       process.env.MEM0_API_KEY = '';
-      
+
       const { isMem0Configured } = await import('../mem0-power');
       expect(isMem0Configured()).toBe(false);
-      
-      if (originalKey) process.env.MEM0_API_KEY = originalKey;
+
+      if (originalKey !== undefined) process.env.MEM0_API_KEY = originalKey;
       else delete process.env.MEM0_API_KEY;
     });
   });
@@ -65,22 +65,16 @@ describe('Mem0 Power', () => {
   describe('Mem0Client', () => {
     it('should be constructed with API key', async () => {
       const { getMem0Client } = await import('../mem0-power');
-      
+
       // Save original env
       const originalKey = process.env.MEM0_API_KEY;
       process.env.MEM0_API_KEY = 'test-api-key';
-      
-      // This will throw since we're not actually connected to mem0 API
-      // but we can verify the client is created
-      try {
-        const client = getMem0Client();
-        expect(client).toBeDefined();
-      } catch (e) {
-        // Expected - no real API call expected in test
-      }
-      
+
+      const client = getMem0Client();
+      expect(client).toBeDefined();
+
       // Restore
-      if (originalKey) process.env.MEM0_API_KEY = originalKey;
+      if (originalKey !== undefined) process.env.MEM0_API_KEY = originalKey;
       else delete process.env.MEM0_API_KEY;
     });
   });
@@ -90,18 +84,19 @@ describe('Mem0 Power', () => {
       // Clear env
       const originalKey = process.env.MEM0_API_KEY;
       delete process.env.MEM0_API_KEY;
-      
+
       // Reset the cached client
       const mem0Power = await import('../mem0-power');
-      
-      // The function returns success: false when not configured
-      // (not rejecting since we use getMem0Client which throws but it's caught internally)
-      // Actually we need to test it - let's test with a mock that simulates behavior
-      // For now just verify isMem0Configured works as expected
+
       expect(mem0Power.isMem0Configured()).toBe(false);
-      
+
+      const result = await mem0Power.mem0Search({ query: 'test' });
+      expect(result.success).toBe(false);
+      expect(result.error).toBeDefined();
+
       // Restore
-      if (originalKey) process.env.MEM0_API_KEY = originalKey;
+      if (originalKey !== undefined) process.env.MEM0_API_KEY = originalKey;
+      else delete process.env.MEM0_API_KEY;
     });
   });
 

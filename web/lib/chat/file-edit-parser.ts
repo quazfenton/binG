@@ -947,11 +947,10 @@ export function extractJsonToolCalls(content: string): FileEdit[] {
         }
       }
     } else if (resolvedToolName === 'delete_file') {
-      if (typeof path === 'string' && path.trim()) {
-        if (isValidExtractedPath(path.trim())) {
-          edits.push({ path: path.trim(), content: '', action: 'delete' });
-        }
-      }
+      // Do NOT emit delete as a write-edit. Deletions must be handled through
+      // a dedicated delete path — adding them to writes with empty content
+      // causes downstream code to write an empty file instead of deleting.
+      continue;
     }
   }
 
@@ -3228,12 +3227,19 @@ export function sanitizeFileEditTags(content: string): string {
       let bracePos = sanitized.lastIndexOf('{', toolIdx);
       if (bracePos === -1) { searchFrom = toolIdx + 6; continue; }
 
-      // Find the matching closing brace
+      // Find the matching closing brace using string-aware balancing
       let depth = 0;
       let endPos = -1;
+      let inStr = false;
+      let esc = false;
       for (let i = bracePos; i < sanitized.length; i++) {
-        if (sanitized[i] === '{') depth++;
-        if (sanitized[i] === '}') { depth--; if (depth === 0) { endPos = i + 1; break; } }
+        const ch = sanitized[i];
+        if (esc) { esc = false; continue; }
+        if (ch === '\\' && inStr) { esc = true; continue; }
+        if (ch === '"') { inStr = !inStr; continue; }
+        if (inStr) continue;
+        if (ch === '{') depth++;
+        if (ch === '}') { depth--; if (depth === 0) { endPos = i + 1; break; } }
       }
       if (endPos === -1) { searchFrom = toolIdx + 6; continue; }
 
@@ -3472,12 +3478,19 @@ function detectUnclosedTags(
       let bracePos = tail.lastIndexOf('{', toolMatch.index);
       if (bracePos === -1) continue;
 
-      // Check if braces are balanced from bracePos to end of tail
+      // Check if braces are balanced from bracePos to end of tail using string-aware balancing
       let depth = 0;
       let balanced = false;
+      let inStr = false;
+      let esc = false;
       for (let i = bracePos; i < tail.length; i++) {
-        if (tail[i] === '{') depth++;
-        if (tail[i] === '}') { depth--; if (depth === 0) { balanced = true; break; } }
+        const ch = tail[i];
+        if (esc) { esc = false; continue; }
+        if (ch === '\\' && inStr) { esc = true; continue; }
+        if (ch === '"') { inStr = !inStr; continue; }
+        if (inStr) continue;
+        if (ch === '{') depth++;
+        if (ch === '}') { depth--; if (depth === 0) { balanced = true; break; } }
       }
       if (!balanced) {
         positions.push(windowStart + scanStart + bracePos);
