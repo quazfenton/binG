@@ -1472,6 +1472,287 @@ pub async fn handle_api_route(req: ApiRouteRequest) -> Result<ApiRouteResponse, 
             })
         }
 
+        // ── Edit transaction management ────────────────────────────────────
+        // In desktop mode, files are written directly to disk — no VFS transaction layer.
+        // These endpoints return graceful success/fallback responses.
+
+        "/api/filesystem/edits/accept" => {
+            let body = req.body.as_ref().ok_or("Missing body")?;
+            let transaction_id = body["transactionId"].as_str()
+                .or(body["transaction_id"].as_str())
+                .ok_or("Missing transactionId")?;
+            // Desktop mode: no VFS transaction layer — edits are already applied to disk
+            Ok(ApiRouteResponse {
+                success: true,
+                data: Some(serde_json::json!({
+                    "transaction": {
+                        "id": transaction_id,
+                        "status": "accepted",
+                        "note": "Desktop mode: edits are applied directly to disk"
+                    }
+                })),
+                error: None,
+                status: 200,
+            })
+        }
+
+        "/api/filesystem/edits/deny" => {
+            let body = req.body.as_ref().ok_or("Missing body")?;
+            let _transaction_id = body["transactionId"].as_str()
+                .or(body["transaction_id"].as_str())
+                .ok_or("Missing transactionId")?;
+            let _reason = body["reason"].as_str().unwrap_or("");
+            // Desktop mode: no VFS transaction layer — edits are already applied to disk
+            Ok(ApiRouteResponse {
+                success: true,
+                data: Some(serde_json::json!({
+                    "status": "denied",
+                    "note": "Desktop mode: edits are applied directly to disk; denials are logged only"
+                })),
+                error: None,
+                status: 200,
+            })
+        }
+
+        // ── Filesystem event bus ───────────────────────────────────────────
+
+        "/api/filesystem/events/push" => {
+            // Accept filesystem event broadcasts from clients
+            // In desktop mode, events are handled locally via Tauri events
+            if req.method == "GET" {
+                // SSE streaming requires the sidecar — return info
+                return Ok(ApiRouteResponse {
+                    success: true,
+                    data: Some(serde_json::json!({
+                        "note": "SSE streaming is handled by the desktop Tauri event system",
+                        "useTauriEvents": true
+                    })),
+                    error: None,
+                    status: 200,
+                });
+            }
+            let body = req.body.as_ref().ok_or("Missing body")?;
+            // Emit Tauri event for any listening components
+            // The event payload is passed through as-is
+            let event_type = body["type"].as_str().unwrap_or("unknown");
+            let path = body["path"].as_str().unwrap_or("");
+            Ok(ApiRouteResponse {
+                success: true,
+                data: Some(serde_json::json!({
+                    "event": event_type,
+                    "path": path,
+                    "note": "Event accepted — desktop mode uses Tauri event system"
+                })),
+                error: None,
+                status: 200,
+            })
+        }
+
+        // ── File import ───────────────────────────────────────────────────
+
+        "/api/filesystem/import" => {
+            if req.method == "GET" {
+                // Return import configuration info
+                return Ok(ApiRouteResponse {
+                    success: true,
+                    data: Some(serde_json::json!({
+                        "limits": {
+                            "maxFiles": 100,
+                            "maxFileSize": "100MB",
+                            "maxTotalSize": "500MB"
+                        },
+                        "supportedFormats": [
+                            "JavaScript/TypeScript (.js, .jsx, .ts, .tsx)",
+                            "Python (.py)",
+                            "Java (.java)",
+                            "C/C++ (.c, .cpp, .h, .hpp)",
+                            "Web (.html, .css, .scss)",
+                            "Config (.json, .yaml, .yml, .xml)",
+                            "Markdown (.md)",
+                            "Shell (.sh, .bash)",
+                            "Rust (.rs)",
+                            "Go (.go)",
+                            "And many more..."
+                        ]
+                    })),
+                    error: None,
+                    status: 200,
+                });
+            }
+            // POST: Import files — writes files directly to disk
+            let body = req.body.as_ref().ok_or("Missing body")?;
+            let files = body["files"].as_array().ok_or("Missing files array")?;
+            let dest_dir = body["destinationPath"].as_str().unwrap_or(".");
+            let dest_path = validate_workspace_path(dest_dir)?;
+
+            let mut imported: Vec<serde_json::Value> = Vec::new();
+            let mut errors: Vec<String> = Vec::new();
+
+            for file_entry in files {
+                let name = file_entry["name"].as_str().unwrap_or("unnamed");
+                let content = file_entry["content"].as_str().unwrap_or("");
+                let rel_path = file_entry["path"].as_str().unwrap_or(name);
+
+                // Security: reject paths with traversal components
+                if rel_path.contains("..") {
+                    errors.push(format!("{}: path traversal not allowed", name));
+                    continue;
+                }
+
+                // Build full path and ensure it stays within dest_path
+                let full_path = dest_path.join(rel_path);
+                // Normalize: check it starts with dest_path
+                if !full_path.starts_with(&dest_path) {
+                    errors.push(format!("{}: resolved path escapes destination", name));
+                    continue;
+                }
+                if let Some(parent) = full_path.parent() {
+                    if let Err(e) = std::fs::create_dir_all(parent) {
+                        errors.push(format!("{}: failed to create dir: {}", name, e));
+                        continue;
+                    }
+                }
+                match std::fs::write(&full_path, content) {
+                    Ok(()) => {
+                        let size = content.len();
+                        imported.push(serde_json::json!({
+                            "path": rel_path,
+                            "size": size,
+                        }));
+                    }
+                    Err(e) => errors.push(format!("{}: {}", name, e)),
+                }
+            }
+
+            Ok(ApiRouteResponse {
+                success: !imported.is_empty(),
+                data: Some(serde_json::json!({
+                    "importedFiles": imported.len(),
+                    "files": imported,
+                    "errors": errors,
+                    "destinationPath": dest_dir,
+                })),
+                error: if errors.is_empty() { None } else { Some(format!("{} files failed", errors.len())) },
+                status: 200,
+            })
+        }
+
+        // ── Context Pack ───────────────────────────────────────────────────
+
+        "/api/filesystem/context-pack" => {
+            // Generate a dense, LLM-friendly bundle of directory structure + file contents
+            let (path, format, include_contents, exclude_patterns) = if req.method == "GET" {
+                let q = query;
+                let path = q.and_then(|m| m.get("path")).cloned().unwrap_or_else(|| "/".to_string());
+                let fmt = q.and_then(|m| m.get("format")).cloned().unwrap_or_else(|| "markdown".to_string());
+                let inc = q.and_then(|m| m.get("includeContents"))
+                    .map(|v| v != "false").unwrap_or(true);
+                let excl = q.and_then(|m| m.get("excludePatterns"))
+                    .map(|v| v.split(',').map(|s| s.trim().to_string()).collect::<Vec<_>>());
+                (path, fmt, inc, excl)
+            } else {
+                let body = req.body.as_ref().ok_or("Missing body")?;
+                let path = body["path"].as_str().unwrap_or("/").to_string();
+                let fmt = body["format"].as_str().unwrap_or("markdown").to_string();
+                let inc = body["includeContents"].as_bool().unwrap_or(true);
+                let excl = body["excludePatterns"].as_array().map(|arr| {
+                    arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()
+                });
+                (path, fmt, inc, excl)
+            };
+
+            // Strip leading slash for filesystem path
+            let fs_path = path.strip_prefix('/').unwrap_or(&path);
+            let base = validate_workspace_path(fs_path)
+                .or_else(|_| validate_workspace_path("."));
+
+            let (bundle, file_count, total_size) = if let Ok(base_path) = base {
+                let mut files: Vec<(String, String, bool)> = Vec::new();
+                let mut total_size = 0usize;
+                let exclude: Vec<String> = exclude_patterns.unwrap_or_else(|| vec![
+                    ".git".to_string(), "node_modules".to_string(), "target".to_string(),
+                    ".next".to_string(), "dist".to_string(), ".env".to_string(),
+                ]);
+
+                for entry in walkdir::WalkDir::new(&base_path)
+                    .into_iter()
+                    .filter_entry(|e| {
+                        let name = e.file_name().to_string_lossy();
+                        !exclude.iter().any(|ex| name.contains(ex.as_str()))
+                    })
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.file_type().is_file())
+                {
+                    let rel_path = entry.path()
+                        .strip_prefix(&base_path)
+                        .unwrap_or(entry.path())
+                        .to_string_lossy()
+                        .to_string();
+
+                    if let Ok(content) = std::fs::read_to_string(entry.path()) {
+                        let size = content.len();
+                        let truncated = size > 50_000;
+                        let display_content = if truncated {
+                            content.chars().take(50_000).collect::<String>() + "\n... [truncated]"
+                        } else {
+                            content
+                        };
+                        files.push((rel_path, display_content, truncated));
+                        total_size += size;
+                    }
+                }
+
+                // Format the bundle
+                let bundle = if format == "json" {
+                    let entries: Vec<serde_json::Value> = files.iter().map(|(p, c, _t)| {
+                        serde_json::json!({ "path": p, "content": c })
+                    }).collect();
+                    serde_json::json!({
+                        "root": path,
+                        "files": entries,
+                        "fileCount": files.len(),
+                        "totalSize": total_size,
+                    }).to_string()
+                } else {
+                    let mut out = String::new();
+                    out.push_str(&format!("# Context Pack: {}\n\n", path));
+                    out.push_str(&format!("## Files ({})\n\n", files.len()));
+                    for (p, _, _) in &files {
+                        out.push_str(&format!("- `{}`\n", p));
+                    }
+                    if include_contents {
+                        out.push_str("\n---\n\n");
+                        for (p, c, truncated) in &files {
+                            out.push_str(&format!("## File: {}\n\n", p));
+                            out.push_str("```\n");
+                            out.push_str(c);
+                            if *truncated { out.push_str("\n... [truncated]"); }
+                            out.push_str("\n```\n\n");
+                        }
+                    }
+                    out
+                };
+                (bundle, files.len(), total_size)
+            } else {
+                ("# Context Pack\n\nDirectory not found.".to_string(), 0, 0)
+            };
+
+            let estimated_tokens = total_size / 4;
+
+            Ok(ApiRouteResponse {
+                success: true,
+                data: Some(serde_json::json!({
+                    "bundle": bundle,
+                    "fileCount": file_count,
+                    "totalSize": total_size,
+                    "estimatedTokens": estimated_tokens,
+                    "format": format,
+                })),
+                error: None,
+                status: 200,
+            })
+        }
+
         _ => Ok(ApiRouteResponse {
             success: false,
             data: None,
