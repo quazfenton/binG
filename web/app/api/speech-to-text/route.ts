@@ -22,7 +22,7 @@ const TRANSCRIBE_MODEL = process.env.TRANSCRIBE_MODEL ?? "voxtral-mini-transcrib
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { audioData, provider = 'browser' } = body;
+    const { audioData, provider } = body;
 
     // If no audio data provided, return status
     if (!audioData) {

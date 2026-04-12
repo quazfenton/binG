@@ -97,7 +97,21 @@ export async function registerNullclawTools(registry: ToolRegistry, config: Boot
       provider: 'nullclaw',
       handler: async (args: any, context: any) => {
         const { nullclawIntegration } = await import('@bing/shared/agent/nullclaw-integration');
-        return await (nullclawIntegration as any).searchWeb(args.query);
+        const result = await nullclawIntegration.searchWeb(
+          args.query,
+          args.engine || 'ddg',
+          args.limit || 10
+        );
+        return {
+          success: result.status === 'completed',
+          results: result.result?.slice(0, args.limit || 10).map((r: any) => ({
+            title: r.title || 'No title',
+            url: r.link || r.url || '',
+            snippet: r.snippet || r.text || '',
+          })) || [],
+          query: args.query,
+          error: result.error,
+        };
       },
       metadata: {
         latency: 'medium',

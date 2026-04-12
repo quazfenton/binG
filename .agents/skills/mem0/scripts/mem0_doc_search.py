@@ -26,6 +26,7 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+from urllib.parse import urlparse
 
 DOCS_BASE = "https://docs.mem0.ai"
 SEARCH_ENDPOINT = f"{DOCS_BASE}/api/search"
@@ -79,11 +80,17 @@ SECTION_MAP = {
 
 
 def fetch_url(url: str) -> str:
-    """Fetch content from a URL."""
+    """Fetch content from a URL with UTF-8 decoding and content-type validation."""
     req = urllib.request.Request(url, headers={"User-Agent": "Mem0DocSearchAgent/1.0"})
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
+            # Validate Content-Type to ensure we're fetching text content
+            content_type = resp.headers.get("Content-Type", "").lower()
+            if content_type and not any(t in content_type for t in ["text/", "application/json", "application/javascript"]):
+                return f"Error: unsupported content type ({content_type})"
             return resp.read().decode("utf-8")
+    except UnicodeDecodeError:
+        return "Error: Unable to decode content as UTF-8 text."
     except urllib.error.HTTPError as e:
         return f"HTTP Error {e.code}: {e.reason}"
     except urllib.error.URLError as e:
@@ -106,7 +113,10 @@ def search_docs(query: str, section: str | None = None) -> dict:
             results = data["results"]
             if section and section in SECTION_MAP:
                 section_paths = SECTION_MAP[section]
-                results = [r for r in results if any(r.get("url", "").startswith(p) for p in section_paths)]
+                results = [
+                    r for r in results
+                    if any(urlparse(r.get("url", "")).path == p for p in section_paths)
+                ]
             return {"source": "mintlify_search", "results": results}
     except json.JSONDecodeError:
         pass  # Invalid JSON from search endpoint, fall back to index search
@@ -131,7 +141,10 @@ def search_docs(query: str, section: str | None = None) -> dict:
 
     if section and section in SECTION_MAP:
         section_paths = SECTION_MAP[section]
-        matching_urls = [u for u in matching_urls if any(p in u for p in section_paths)]
+        matching_urls = [
+            u for u in matching_urls
+            if any(urlparse(u).path == p for p in section_paths)
+        ]
 
     return {
         "source": "llms_txt_index",
@@ -156,6 +169,9 @@ def fetch_page(page_path: str) -> dict:
         # Relative path: must start with /, reject file://, ftp://, etc.
         if not page_path.startswith("/"):
             return {"error": "Page path must start with '/' or be a docs.mem0.ai URL"}
+        # Reject path traversal attempts
+        if ".." in page_path:
+            return {"error": "Access denied: path traversal not allowed"}
         url = f"{DOCS_BASE}{page_path}"
 
     content = fetch_url(url)

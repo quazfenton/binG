@@ -163,7 +163,7 @@ class VoiceService {
           this.settings.transcriptionEnabled
         ) {
           // Restart recognition if it should be continuous
-          setTimeout(() => this.startListening(), 100);
+          setTimeout(() => this.startListening().catch(console.error), 100);
         }
       };
     }
@@ -446,12 +446,22 @@ class VoiceService {
   }
 
   // Speech-to-text functionality
-  startListening(): boolean {
+  private mediaRecorder: MediaRecorder | null = null;
+  private audioChunks: Blob[] = [];
+  private mistralTranscribeInterval: ReturnType<typeof setInterval> | null = null;
+
+  async startListening(): Promise<boolean> {
     if (typeof window === "undefined") {
       console.warn("Speech recognition not available on server");
       return false;
     }
 
+    // Route based on configured STT provider
+    if (this.settings.sttProvider === 'mistral') {
+      return this.startMistralListening();
+    }
+
+    // Default: browser Speech Recognition
     if (!this.recognition) {
       console.warn("Speech recognition not supported");
       return false;
@@ -471,11 +481,87 @@ class VoiceService {
     }
   }
 
+  private async startMistralListening(): Promise<boolean> {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      console.warn("getUserMedia not supported for Mistral STT");
+      return false;
+    }
+
+    if (this.isListening) {
+      return true;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { sampleRate: 16000, echoCancellation: true, noiseSuppression: true },
+      });
+
+      this.mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+      this.audioChunks = [];
+
+      this.mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          this.audioChunks.push(event.data);
+        }
+      };
+
+      this.mediaRecorder.start();
+      this.isListening = true;
+
+      // Periodically collect chunks and send to Mistral for transcription
+      this.mistralTranscribeInterval = setInterval(async () => {
+        if (this.audioChunks.length === 0) return;
+
+        const blob = new Blob(this.audioChunks, { type: 'audio/webm' });
+        this.audioChunks = [];
+
+        try {
+          const text = await this.transcribeWithMistral(blob);
+          if (text) {
+            this.emitEvent({
+              type: 'transcription',
+              data: { text, isFinal: true, confidence: 1 },
+              timestamp: Date.now(),
+            });
+          }
+        } catch (error) {
+          console.warn('Mistral periodic transcription failed:', error);
+        }
+      }, 2000);
+
+      return true;
+    } catch (error) {
+      console.error("Failed to start Mistral STT:", error);
+      return false;
+    }
+  }
+
   stopListening() {
+    if (this.settings.sttProvider === 'mistral') {
+      this.stopMistralListening();
+      return;
+    }
+
     if (this.recognition && this.isListening) {
       this.recognition.stop();
       this.isListening = false;
     }
+  }
+
+  private stopMistralListening() {
+    if (this.mistralTranscribeInterval) {
+      clearInterval(this.mistralTranscribeInterval);
+      this.mistralTranscribeInterval = null;
+    }
+
+    if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
+      this.mediaRecorder.stop();
+      this.mediaRecorder.stream.getTracks().forEach(t => t.stop());
+      this.mediaRecorder = null;
+    }
+
+    this.audioChunks = [];
+    this.isListening = false;
   }
 
   isListeningToSpeech(): boolean {
@@ -511,7 +597,7 @@ class VoiceService {
         this.settings.microphoneEnabled &&
         this.settings.transcriptionEnabled
       ) {
-        this.startListening();
+        this.startListening().catch(console.error);
       } else {
         this.stopListening();
       }
