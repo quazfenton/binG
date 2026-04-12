@@ -21,6 +21,23 @@ export async function proxy(request: NextRequest) {
     return blockedResponse;
   }
 
+  // Desktop mode: validate sidecar token on API routes
+  const isDesktop = process.env.DESKTOP_MODE === 'true';
+  const sidecarToken = process.env.OPENCODE_SIDECAR_TOKEN;
+  if (isDesktop && sidecarToken && request.nextUrl.pathname.startsWith('/api/')) {
+    // Skip token check for routes handled directly by Tauri invoke()
+    const tauriRoutes = new Set(['/api/health', '/api/providers']);
+    if (!tauriRoutes.has(request.nextUrl.pathname)) {
+      const token = request.headers.get('x-sidecar-token');
+      if (!token || token !== sidecarToken) {
+        return NextResponse.json(
+          { error: 'Unauthorized — invalid or missing sidecar token' },
+          { status: 401 },
+        );
+      }
+    }
+  }
+
   // Auth0 middleware - handles /auth/* routes (login, logout, callback, profile)
   // Runs alongside existing auth system - NOT a replacement
   // Only run Auth0 middleware for /auth/* routes to avoid unnecessary OIDC discovery calls
