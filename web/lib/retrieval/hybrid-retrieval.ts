@@ -9,7 +9,7 @@
  */
 
 import { search, type SearchOptions, type SearchResult } from "../retrieval/search";
-import { buildContext, injectContextIntoPrompt, buildSystemPrompt } from "../context/contextBuilder";
+import { buildContext, injectContextIntoPrompt, buildContextSystemPrompt } from "../context/contextBuilder";
 import {
   generateSmartContext,
   type SmartContextOptions,

@@ -9,7 +9,7 @@
  */
 
 import { search } from "../retrieval/search";
-import { buildContext, injectContextIntoPrompt, buildSystemPrompt } from "../context/contextBuilder";
+import { buildContext, injectContextIntoPrompt, buildContextSystemPrompt } from "../context/contextBuilder";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -158,7 +158,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentResult>
 
   const contextObj = buildContext(searchResult.symbols, { maxTokens: 4000, maxPerFile: 2 });
   const contextText = contextObj.text;
-  const systemPrompt = buildSystemPrompt();
+  const systemPrompt = buildContextSystemPrompt();
 
   for (let i = 0; i < maxIterations; i++) {
     onIteration?.({ iteration: i + 1, status: "applying" });
