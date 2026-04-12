@@ -16,7 +16,7 @@ import { search, getTabMemory, type SearchOptions } from "../retrieval/search";
 import {
   buildContext,
   injectContextIntoPrompt,
-  buildSystemPrompt,
+  buildContextSystemPrompt,
   type ContextBuilderOptions,
 } from "../context/contextBuilder";
 import {
@@ -133,7 +133,7 @@ export class Retrieval {
     });
 
     const userPrompt = injectContextIntoPrompt(question, context);
-    const systemPrompt = buildSystemPrompt(this.config.projectName);
+    const systemPrompt = buildContextSystemPrompt(this.config.projectName);
 
     return this.config.llm(userPrompt, systemPrompt);
   }
@@ -153,7 +153,7 @@ export class Retrieval {
     });
 
     const userPrompt = injectContextIntoPrompt(question, context);
-    const systemPrompt = buildSystemPrompt(this.config.projectName);
+    const systemPrompt = buildContextSystemPrompt(this.config.projectName);
 
     yield* this.config.streamLLM(userPrompt, systemPrompt);
   }

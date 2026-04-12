@@ -38,11 +38,11 @@ import { createLogger } from '@/lib/utils/logger';
 import { mastraWorkflowIntegration } from '@bing/shared/agent/mastra-workflow-integration';
 import {
   buildWorkspaceSnapshot,
-  buildAgentSystemPrompt,
   normalizeToolArgs,
   createLoopDetectorState,
   recordStepAndCheckLoop,
 } from '@/lib/orchestra/shared-agent-context';
+import { composeRoleWithTools } from '@bing/shared/agent/prompt-composer';
 
 import {
   PlanActVerifyOrchestrator,
@@ -56,6 +56,22 @@ import {
   type ClassificationContext,
 } from '@bing/shared/agent/task-classifier';
 import { getProjectServices, type ProjectContext } from '@/lib/project-context';
+import {
+  runDualProcessMode,
+  runAdversarialVerifyMode,
+  runAttractorDrivenMode,
+  runIntentDrivenMode,
+  runEnergyDrivenMode,
+  runDistributedCognitionMode,
+  runCognitiveResonanceMode,
+  type DualProcessConfig,
+  type AdversarialConfig,
+  type AttractorConfig,
+  type IntentFieldConfig,
+  type EnergyDrivenConfig,
+  type DistributedConfig,
+  type ResonanceConfig,
+} from './modes';
 import {
   runRetrievalPipeline,
   type RetrievalPipelineOptions,
@@ -88,6 +104,8 @@ export interface UnifiedAgentConfig {
   userMessage: string;
   sandboxId?: string;
   systemPrompt?: string;
+  /** If set, use the prompt-composer to build the system prompt from a role template */
+  role?: 'coder' | 'reviewer' | 'planner' | 'architect' | 'researcher' | 'debugger';
   conversationHistory?: Array<{ role: string; content: string }>;
   userId?: string;  // Authenticated user ID — passed to BootstrappedAgency for VFS scoping
   conversationId?: string;  // Session/conversation ID for VFS session scoping (e.g., "001")
@@ -117,7 +135,16 @@ export interface UnifiedAgentConfig {
   model?: string;
 
   // Mode override (optional - auto-detected from env if not specified)
-  mode?: 'v1-api' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'mastra-workflow' | 'desktop' | 'v1-progressive-build' | 'auto';
+  mode?: 'v1-api' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'mastra-workflow' | 'desktop' | 'v1-progressive-build' | 'dual-process' | 'adversarial-verify' | 'attractor-driven' | 'intent-driven' | 'energy-driven' | 'distributed-cognition' | 'cognitive-resonance' | 'auto';
+
+  // Harness mode options
+  dualProcessConfig?: DualProcessConfig;
+  adversarialConfig?: AdversarialConfig;
+  attractorConfig?: AttractorConfig;
+  intentConfig?: IntentFieldConfig;
+  energyConfig?: EnergyDrivenConfig;
+  distributedConfig?: DistributedConfig;
+  resonanceConfig?: ResonanceConfig;
 
   // Mastra workflow options
   workflowId?: string; // Use specific Mastra workflow
@@ -147,7 +174,7 @@ export interface UnifiedAgentResult {
     result: ToolResult;
   }>;
   totalSteps?: number;
-  mode: 'v1-api' | 'v1-agent-loop' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'mastra-workflow' | 'desktop' | 'v1-progressive-build';
+  mode: 'v1-api' | 'v1-agent-loop' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'mastra-workflow' | 'desktop' | 'v1-progressive-build' | 'dual-process' | 'dual-process-fast' | 'dual-process-slow' | 'dual-process-fast-fallback' | 'dual-process-slow-failed' | 'adversarial-verify' | 'adversarial-verify-revised' | 'adversarial-verify-revision-failed' | 'attractor-driven' | 'intent-driven' | 'energy-driven' | 'distributed-cognition' | 'distributed-cognition-no-synthesis' | 'cognitive-resonance' | 'cognitive-resonance-converged' | 'cognitive-resonance-synthesized' | 'cognitive-resonance-single' | 'cognitive-resonance-fallback';
   error?: string;
   fileEdits?: Array<{
     path: string;
@@ -253,7 +280,7 @@ const startupCaps = checkStartupCapabilities();
  * Returns both mode and classification for logging/metrics.
  */
 async function determineMode(config: UnifiedAgentConfig): Promise<{
-  mode: 'v1-api' | 'v1-agent-loop' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'mastra-workflow' | 'desktop' | 'v1-progressive-build';
+  mode: 'v1-api' | 'v1-agent-loop' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'mastra-workflow' | 'desktop' | 'v1-progressive-build' | 'dual-process' | 'dual-process-fast' | 'dual-process-slow' | 'dual-process-fast-fallback' | 'dual-process-slow-failed' | 'adversarial-verify' | 'adversarial-verify-revised' | 'adversarial-verify-revision-failed' | 'attractor-driven' | 'intent-driven' | 'energy-driven' | 'distributed-cognition' | 'distributed-cognition-no-synthesis' | 'cognitive-resonance' | 'cognitive-resonance-converged' | 'cognitive-resonance-synthesized' | 'cognitive-resonance-single' | 'cognitive-resonance-fallback';
   classification?: TaskClassification;
 }> {
   // Explicit mode override
@@ -451,6 +478,34 @@ export async function processUnifiedAgentRequest(
       case 'v1-progressive-build':
         log.info('[UnifiedAgent] → v1-progressive-build mode (multi-iteration build loop)');
         return await runProgressiveBuildMode(config, classification);
+
+      case 'dual-process':
+        log.info('[UnifiedAgent] → dual-process mode (fast/slow cognition split)');
+        return await runDualProcessMode(config, config.dualProcessConfig);
+
+      case 'adversarial-verify':
+        log.info('[UnifiedAgent] → adversarial-verify mode (counterfactual critics)');
+        return await runAdversarialVerifyMode(config, config.adversarialConfig);
+
+      case 'attractor-driven':
+        log.info('[UnifiedAgent] → attractor-driven mode (goal-convergent iteration)');
+        return await runAttractorDrivenMode(config, config.attractorConfig);
+
+      case 'intent-driven':
+        log.info('[UnifiedAgent] → intent-driven mode (latent intent field)');
+        return await runIntentDrivenMode(config, config.intentConfig);
+
+      case 'energy-driven':
+        log.info('[UnifiedAgent] → energy-driven mode (unified objective function)');
+        return await runEnergyDrivenMode(config, config.energyConfig);
+
+      case 'distributed-cognition':
+        log.info('[UnifiedAgent] → distributed-cognition mode (multi-model roles)');
+        return await runDistributedCognitionMode(config, config.distributedConfig);
+
+      case 'cognitive-resonance':
+        log.info('[UnifiedAgent] → cognitive-resonance mode (independent agreement)');
+        return await runCognitiveResonanceMode(config, config.resonanceConfig);
 
       case 'v1-api':
       default:
@@ -1401,8 +1456,22 @@ async function runV1ApiWithTools(
       });
     }
 
-    // Build system prompt with RAG context
-    if (config.systemPrompt) {
+    // Build system prompt: role-based composition OR raw string + RAG context
+    if (config.role) {
+      // Use the prompt-composer to build from a role template with dynamic tools
+      const toolIds = (config.tools || []).map((t: any) => t.name);
+      const composedPrompt = composeRoleWithTools(config.role, {
+        availableTools: toolIds,
+        extras: ragContext ? [{ id: 'rag.knowledge', template: ragContext }] : undefined,
+      });
+      llmMessages.push({ role: 'system', content: composedPrompt });
+      log.info('[V1-API-WITH-TOOLS] Composed role prompt', {
+        role: config.role,
+        toolCount: toolIds.length,
+        promptLength: composedPrompt.length,
+        hasRag: !!ragContext,
+      });
+    } else if (config.systemPrompt) {
       const systemContent = config.systemPrompt + ragContext;
       llmMessages.push({ role: 'system', content: systemContent });
     } else if (ragContext) {
@@ -1707,9 +1776,13 @@ async function runV1ApiCompletion(
   startTime: number
 ): Promise<UnifiedAgentResult> {
   if (process.env.ENABLE_V1_ORCHESTRATOR === 'true') {
-    log.info('[V1-API-COMPLETION] → delegating to v1-orchestrator');
-    return runV1Orchestrated(config, messages, startTime);
+    // PlanActVerify orchestrator is available as a standalone mode
+    // (mode: 'energy-driven' or mode: 'attractor-driven') instead of
+    // being hidden behind this env flag.
+    log.info('[V1-API-COMPLETION] ENABLE_V1_ORCHESTRATOR is deprecated; use a harness mode instead');
   }
+
+  // Standard completion path
 
   log.info('[V1-API-COMPLETION] ┌─ ENTRY ──────────────────────────');
 

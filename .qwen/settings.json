@@ -32,6 +32,7 @@
       "Bash(npx *)",
       "Bash(cmd *)",
       "Bash(pnpm *)"
+      "Bash(grep *)"
     ],
     "exclude": [
       "Bash(git checkout)"
