@@ -296,6 +296,12 @@ export class VirtualFilesystemService {
       normalizedContent = (previous.content || '') + normalizedContent;
     }
 
+    // FIX: Skip write if content hasn't changed — prevents unnecessary version inflation
+    // This happens when spec amplification or other processes re-write the same file
+    if (previous && previous.content === normalizedContent) {
+      return previous; // Return existing file without incrementing version
+    }
+
     if (previous && options?.failIfExists && !options?.append) {
       throw new Error(`File already exists: ${normalizedPath}`);
     }
@@ -428,6 +434,12 @@ export class VirtualFilesystemService {
     // Create a marker file to represent the directory
     // Directories are implicit in VFS, but we create a .gitkeep-like marker for empty dirs
     const dirMarkerPath = `${normalizedPath}/.directory`;
+
+    // FIX: Skip if directory marker already exists — prevent duplicate version increments
+    if (workspace.files.has(dirMarkerPath)) {
+      return { path: normalizedPath, createdAt: workspace.files.get(dirMarkerPath)!.createdAt || now };
+    }
+
     const dirMarker: VirtualFile = {
       path: dirMarkerPath,
       content: '',
@@ -440,7 +452,7 @@ export class VirtualFilesystemService {
     };
 
     workspace.files.set(dirMarkerPath, dirMarker);
-    workspace.version += 1;
+    // FIX: Don't increment version for directory marker — it's internal bookkeeping, not user content
     workspace.updatedAt = now;
 
     // Persist FIRST before emitting events

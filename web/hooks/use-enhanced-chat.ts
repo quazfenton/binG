@@ -1282,22 +1282,45 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   };
 
                   // Update agent activity with progressive file edit
-                  setAgentActivity(prev => ({
-                    ...prev,
-                    status: 'executing',
-                    currentAction: `Editing ${eventData.path}...`,
-                    fileEdits: [...(prev.fileEdits || []), fileEditData],
-                  }));
+                  // DEDUPLICATION: If file already in the list, update it instead of adding duplicate
+                  setAgentActivity(prev => {
+                    const existingEdits = prev.fileEdits || [];
+                    const existingIndex = existingEdits.findIndex(e => e.path === eventData.path);
+                    let updatedEdits: typeof existingEdits;
+                    if (existingIndex >= 0) {
+                      // Update existing entry instead of adding duplicate
+                      updatedEdits = [...existingEdits];
+                      updatedEdits[existingIndex] = fileEditData;
+                    } else {
+                      // New file, add to list
+                      updatedEdits = [...existingEdits, fileEditData];
+                    }
+                    return {
+                      ...prev,
+                      status: 'executing',
+                      currentAction: `Editing ${eventData.path}...`,
+                      fileEdits: updatedEdits,
+                    };
+                  });
 
                   // ALSO store in message metadata for enhanced-diff-viewer display
+                  // DEDUPLICATION: Update existing entry instead of adding duplicate
                   setMessages(prev => prev.map(msg => {
                     if (msg.id === assistantMessage.id) {
                       const existingFileEdits = (msg.metadata as any)?.fileEdits || [];
+                      const existingIdx = existingFileEdits.findIndex((e: any) => e.path === eventData.path);
+                      let updatedFileEdits: typeof existingFileEdits;
+                      if (existingIdx >= 0) {
+                        updatedFileEdits = [...existingFileEdits];
+                        updatedFileEdits[existingIdx] = fileEditData;
+                      } else {
+                        updatedFileEdits = [...existingFileEdits, fileEditData];
+                      }
                       return {
                         ...msg,
                         metadata: {
                           ...(msg.metadata || {}),
-                          fileEdits: [...existingFileEdits, fileEditData],
+                          fileEdits: updatedFileEdits,
                         },
                       };
                     }

@@ -767,7 +767,7 @@ class TaskRouter {
       sandboxHandle: session.sandboxHandle,
     });
 
-    const tools = await getMCPToolsForAI_SDK(request.userId);
+    const tools = await getMCPToolsForAI_SDK(request.userId, request.task);
 
     const result = await provider.runAgentLoop({
       userMessage: request.task,

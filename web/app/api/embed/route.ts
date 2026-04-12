@@ -95,7 +95,7 @@ export async function POST(req: NextRequest) {
         },
         body: JSON.stringify({
           model: EMBED_MODEL,
-          inputs: [text.slice(0, 32000)],
+          input: [text.slice(0, 32000)],
           output_dimension: EMBED_DIMENSION,
         }),
       });
@@ -225,7 +225,7 @@ export async function PUT(req: NextRequest) {
         },
         body: JSON.stringify({
           model: EMBED_MODEL,
-          inputs: sanitizedTexts,
+          input: sanitizedTexts,
           output_dimension: EMBED_DIMENSION,
         }),
       });
