@@ -29,7 +29,8 @@
       "Bash(type *)",
       "Bash(timeout *)",
       "Bash(copy *)",
-      "Bash(npx *)"
+      "Bash(npx *)",
+      "Bash(grep *)"
     ],
     "exclude": [
       "Bash(git checkout)"
