@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Quaz Desktop — Setup Required</title>
+  <title>Quaz Desktop — Loading</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -12,92 +12,267 @@
       min-height: 100vh; background: #09090b; color: #e4e4e7;
     }
     .container {
-      max-width: 520px; padding: 2.5rem;
+      max-width: 540px; padding: 2.5rem; width: 100%;
       background: #18181b; border: 1px solid #27272a;
-      border-radius: 12px; text-align: center;
+      border-radius: 12px;
     }
-    .logo { font-size: 2rem; margin-bottom: 0.25rem; }
-    h1 { font-size: 1.35rem; font-weight: 600; margin-bottom: 0.5rem; }
-    p { color: #a1a1aa; font-size: 0.875rem; line-height: 1.6; margin-bottom: 1rem; }
-    .steps { text-align: left; background: #09090b; padding: 1rem 1.25rem; border-radius: 8px; margin: 1rem 0; }
-    .steps code { background: #27272a; padding: 0.15em 0.4em; border-radius: 4px; font-size: 0.8em; color: #e4e4e7; }
-    .steps li { margin-bottom: 0.5rem; color: #d4d4d8; font-size: 0.85rem; }
-    .steps ol { padding-left: 1.25rem; }
-    .status {
-      display: inline-block; padding: 0.3rem 0.8rem; border-radius: 9999px;
-      font-size: 0.75rem; font-weight: 500; margin-bottom: 1rem;
+    .header { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1.5rem; }
+    .logo { font-size: 1.5rem; }
+    h1 { font-size: 1.25rem; font-weight: 600; }
+
+    .status-section { text-align: center; margin-bottom: 1.5rem; }
+    .spinner {
+      width: 32px; height: 32px; border: 3px solid #27272a;
+      border-top-color: #3b82f6; border-radius: 50%;
+      animation: spin 0.8s linear infinite; margin: 0 auto 1rem;
     }
-    .pending { background: #713f12; color: #fde047; }
-    .check-btn {
-      display: inline-block; padding: 0.6rem 1.5rem; background: #3b82f6;
-      color: #fff; border: none; border-radius: 6px; font-size: 0.85rem;
-      cursor: pointer; font-weight: 500; margin-top: 0.5rem;
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .status-text { color: #a1a1aa; font-size: 0.875rem; margin-bottom: 0.75rem; }
+    .progress-bar {
+      height: 4px; background: #27272a; border-radius: 2px; overflow: hidden;
     }
-    .check-btn:hover { background: #2563eb; }
-    .check-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-    #nodeStatus { margin-top: 1rem; font-size: 0.8rem; }
-    .ok { color: #4ade80; }
-    .err { color: #f87171; }
+    .progress-fill {
+      height: 100%; background: #3b82f6; border-radius: 2px;
+      transition: width 0.5s ease;
+    }
+
+    .checks { margin: 1.5rem 0; }
+    .check-item {
+      display: flex; align-items: center; gap: 0.5rem;
+      padding: 0.5rem 0; font-size: 0.85rem; color: #a1a1aa;
+    }
+    .check-icon { width: 18px; text-align: center; flex-shrink: 0; }
+    .check-ok { color: #4ade80; }
+    .check-fail { color: #f87171; }
+    .check-pending { color: #facc15; }
+
+    .actions { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 1rem; }
+    .btn {
+      padding: 0.6rem 1.2rem; border: none; border-radius: 6px;
+      font-size: 0.85rem; cursor: pointer; font-weight: 500;
+      transition: background 0.15s;
+    }
+    .btn-primary { background: #3b82f6; color: #fff; }
+    .btn-primary:hover { background: #2563eb; }
+    .btn-secondary { background: #27272a; color: #e4e4e7; }
+    .btn-secondary:hover { background: #3f3f46; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .detail-log {
+      margin-top: 1rem; padding: 0.75rem; background: #09090b;
+      border-radius: 6px; font-family: monospace; font-size: 0.75rem;
+      color: #71717a; max-height: 120px; overflow-y: auto;
+      display: none;
+    }
+    .detail-log.visible { display: block; }
+    .detail-log .ok { color: #4ade80; }
+    .detail-log .err { color: #f87171; }
+    .detail-log .info { color: #60a5fa; }
+
+    .hidden { display: none; }
   </style>
 </head>
 <body>
   <div class="container">
-    <div class="logo">🚀</div>
-    <h1>Quaz Desktop</h1>
-    <div class="status pending">Setup Required</div>
-    <p>The Next.js web app requires <strong>Node.js</strong> to run. The sidecar server powers AI chat, agents, sandboxes, and LLM features. Local file operations work without it.</p>
+    <div class="header">
+      <span class="logo">🚀</span>
+      <h1>Quaz Desktop</h1>
+    </div>
 
-    <ol class="steps">
-      <li>Install <a href="https://nodejs.org/" target="_blank" style="color:#60a5fa">Node.js 20+</a> if not already installed</li>
-      <li>Open a terminal in the project <code>web/</code> folder</li>
-      <li>Run <code>pnpm build</code> to build the Next.js app</li>
-      <li>Relaunch Quaz Desktop</li>
-    </ol>
+    <!-- Loading state -->
+    <div id="loadingSection">
+      <div class="status-section">
+        <div class="spinner"></div>
+        <div class="status-text" id="statusText">Starting Next.js server...</div>
+        <div class="progress-bar">
+          <div class="progress-fill" id="progressFill" style="width: 0%"></div>
+        </div>
+      </div>
+    </div>
 
-    <button class="check-btn" id="checkBtn" onclick="checkNode()">Check Node.js</button>
-    <div id="nodeStatus"></div>
+    <!-- Checks display -->
+    <div class="checks">
+      <div class="check-item" id="checkNode">
+        <span class="check-icon check-pending">◌</span>
+        <span>Checking Node.js...</span>
+      </div>
+      <div class="check-item" id="checkSidecar">
+        <span class="check-icon check-pending">◌</span>
+        <span>Starting Next.js sidecar...</span>
+      </div>
+      <div class="check-item" id="checkInvoke">
+        <span class="check-icon check-pending">◌</span>
+        <span>Testing Tauri invoke commands...</span>
+      </div>
+    </div>
+
+    <!-- Actions -->
+    <div class="actions">
+      <button class="btn btn-secondary hidden" id="showLogBtn" onclick="toggleLog()">Show Details</button>
+      <button class="btn btn-secondary hidden" id="continueBtn" onclick="continueAnyway()">
+        Continue with Basic Features
+      </button>
+    </div>
+
+    <div class="detail-log" id="detailLog"></div>
   </div>
 
   <script>
-    async function checkNode() {
-      const status = document.getElementById('nodeStatus');
-      const btn = document.getElementById('checkBtn');
-      btn.disabled = true;
-      btn.textContent = 'Checking...';
-      status.innerHTML = '';
+    const statusText = document.getElementById('statusText');
+    const progressFill = document.getElementById('progressFill');
+    const detailLog = document.getElementById('detailLog');
+    const continueBtn = document.getElementById('continueBtn');
+    const showLogBtn = document.getElementById('showLogBtn');
+    let logLines = [];
 
+    function addLog(msg, cls = '') {
+      logLines.push(`<div class="${cls}">${msg}</div>`);
+      detailLog.innerHTML = logLines.join('');
+      detailLog.scrollTop = detailLog.scrollHeight;
+    }
+
+    function setCheck(id, icon, text, cls) {
+      const el = document.getElementById(id);
+      el.querySelector('.check-icon').textContent = icon;
+      el.querySelector('.check-icon').className = 'check-icon ' + cls;
+      el.querySelector('span:last-child').textContent = text;
+    }
+
+    function toggleLog() {
+      detailLog.classList.toggle('visible');
+      showLogBtn.textContent = detailLog.classList.contains('visible') ? 'Hide Details' : 'Show Details';
+    }
+
+    async function tryInvoke() {
       try {
-        // Tauri v2 uses window.__TAURI__.core.invoke()
         const tauri = window.__TAURI__;
         if (!tauri || !tauri.core) {
-          status.innerHTML = '<span class="err">✗ Tauri API not available — are you running inside the desktop app?</span>';
-          btn.textContent = 'Check Again';
-          btn.disabled = false;
-          return;
+          addLog('Tauri API not available', 'err');
+          return false;
         }
+        const result = await tauri.core.invoke('get_system_info', {});
+        if (result) {
+          addLog(`System info: platform=${result.os || 'unknown'}, arch=${result.arch || 'unknown'}`, 'ok');
+          return true;
+        }
+        return false;
+      } catch (e) {
+        addLog(`Invoke test failed: ${e.message || e}`, 'err');
+        return false;
+      }
+    }
 
-        const invoke = tauri.core.invoke;
-        const result = await invoke('execute_command', {
-          command: 'node --version',
+    async function checkNode() {
+      try {
+        const tauri = window.__TAURI__;
+        if (!tauri || !tauri.core) return false;
+        const result = await tauri.core.invoke('execute_command', {
+          command: cfg => 'node --version',
           cwd: undefined
         });
-
-        if (result.success && result.output && result.output.trim().startsWith('v')) {
-          const version = result.output.trim();
-          status.innerHTML = `<span class="ok">✓ Node.js ${version} detected</span>`;
-          btn.textContent = 'Check Again';
-        } else {
-          const msg = result.error || result.output || 'unknown error';
-          status.innerHTML = `<span class="err">✗ Node.js not found in PATH: ${msg}</span>`;
-          btn.textContent = 'Check Again';
+        // Handle both {success, output} and direct string returns
+        const output = result.output || result.stdout || '';
+        if (output.trim().startsWith('v')) {
+          addLog(`Node.js ${output.trim()} found`, 'ok');
+          setCheck('checkNode', '✓', `Node.js ${output.trim()}`, 'check-ok');
+          return true;
         }
+        addLog(`Node.js check output: ${output}`, 'err');
+        setCheck('checkNode', '✗', 'Node.js not found', 'check-fail');
+        return false;
       } catch (e) {
-        const msg = e?.message || String(e);
-        status.innerHTML = `<span class="err">✗ Check failed: ${msg}</span>`;
-        btn.textContent = 'Check Again';
+        addLog(`Node.js check failed: ${e.message || e}`, 'err');
+        setCheck('checkNode', '✗', 'Node.js not available', 'check-fail');
+        return false;
       }
-      btn.disabled = false;
     }
+
+    async function init() {
+      addLog('App initialized', 'info');
+
+      // 1. Check Node.js
+      const hasNode = await checkNode();
+      if (!hasNode) {
+        addLog('Node.js not found — sidecar will be unavailable', 'err');
+        setCheck('checkSidecar', '✗', 'Sidecar requires Node.js', 'check-fail');
+        showFallback();
+        return;
+      }
+
+      // 2. Wait for sidecar (the Rust code is already trying to start it)
+      addLog('Waiting for Next.js server on port 3000...', 'info');
+      
+      // Poll the sidecar every 1s for up to 90s
+      let attempts = 0;
+      const maxAttempts = 90;
+      const pollInterval = setInterval(async () => {
+        attempts++;
+        progressFill.style.width = `${Math.min((attempts / maxAttempts) * 100, 100)}%`;
+        statusText.textContent = `Starting Next.js... (${attempts}s / ${maxAttempts}s)`;
+
+        if (attempts % 10 === 0) {
+          addLog(`Still waiting... (${attempts}s)`, 'info');
+        }
+
+        try {
+          const resp = await fetch('http://127.0.0.1:3000/', { 
+            method: 'HEAD', 
+            mode: 'no-cors',
+            signal: AbortSignal.timeout(2000)
+          });
+          // no-cors mode returns opaque response, but if it doesn't throw, the server is up
+          clearInterval(pollInterval);
+          addLog('Next.js server is responding!', 'ok');
+          setCheck('checkSidecar', '✓', 'Next.js sidecar running', 'check-ok');
+          statusText.textContent = 'Connected! Loading app...';
+          progressFill.style.width = '100%';
+
+          // Test invoke commands
+          const invokeOk = await tryInvoke();
+          setCheck('checkInvoke', invokeOk ? '✓' : '✗', 
+            invokeOk ? 'Tauri commands working' : 'Tauri cmds unavailable',
+            invokeOk ? 'check-ok' : 'check-fail');
+
+          // Give it 1s then redirect
+          setTimeout(() => {
+            window.location.href = `http://127.0.0.1:3000/`;
+          }, 1000);
+        } catch (e) {
+          // Server not ready yet
+          if (attempts >= maxAttempts) {
+            clearInterval(pollInterval);
+            addLog('Sidecar failed to start within 90s', 'err');
+            setCheck('checkSidecar', '✗', 'Sidecar timed out (90s)', 'check-fail');
+            showFallback();
+          }
+        }
+      }, 1000);
+
+      // Also test invoke commands in parallel
+      const invokeOk = await tryInvoke();
+      setCheck('checkInvoke', invokeOk ? '✓' : '~',
+        invokeOk ? 'Tauri commands working' : 'Tauri cmds unavailable (sidecar needed)',
+        invokeOk ? 'check-ok' : 'check-pending');
+
+      showLogBtn.classList.remove('hidden');
+    }
+
+    function showFallback() {
+      statusText.textContent = 'Sidecar unavailable — basic features work';
+      progressFill.style.width = '100%';
+      progressFill.style.background = '#f59e0b';
+      continueBtn.classList.remove('hidden');
+      showLogBtn.classList.remove('hidden');
+    }
+
+    function continueAnyway() {
+      addLog('User chose to continue with basic features', 'info');
+      statusText.textContent = 'Basic mode: filesystem, PTY, and checkpoints available';
+      // The static page stays — invoke commands work for TAURI_ROUTES
+    }
+
+    // Start initialization
+    init();
   </script>
 </body>
 </html>
