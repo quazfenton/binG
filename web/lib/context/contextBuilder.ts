@@ -314,7 +314,7 @@ ${userMessage}`;
  * Builds a system prompt that tells the model how to use the injected context.
  * Adapts instructions based on the context format.
  */
-export function buildSystemPrompt(projectName?: string, format?: ContextFormat): string {
+export function buildContextSystemPrompt(projectName?: string, format?: ContextFormat): string {
   const project = projectName ? ` for the "${projectName}" project` : '';
 
   const contextInstructions: Record<ContextFormat, string> = {
