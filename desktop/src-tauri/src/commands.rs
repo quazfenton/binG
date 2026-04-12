@@ -998,3 +998,496 @@ pub async fn get_system_info() -> Result<SystemInfo, String> {
             .unwrap_or_else(|_| "unknown".to_string()),
     })
 }
+
+// ---------------------------------------------------------------------------
+// Generic API route dispatcher — maps API paths to existing Tauri commands
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct ApiRouteRequest {
+    pub route: String,
+    pub method: String,
+    pub body: Option<serde_json::Value>,
+    pub query: Option<HashMap<String, String>>,
+    pub headers: Option<HashMap<String, String>>,
+}
+
+#[derive(Serialize)]
+pub struct ApiRouteResponse {
+    pub success: bool,
+    pub data: Option<serde_json::Value>,
+    pub error: Option<String>,
+    pub status: u16,
+}
+
+#[tauri::command]
+pub async fn handle_api_route(req: ApiRouteRequest) -> Result<ApiRouteResponse, String> {
+    let query = req.query.as_ref();
+
+    match req.route.as_str() {
+        "/api/filesystem/read" => {
+            let path = query.and_then(|q| q.get("path")).cloned().unwrap_or_default();
+            match read_file(path).await {
+                Ok(content) => Ok(ApiRouteResponse {
+                    success: true,
+                    data: Some(serde_json::json!({ "content": content })),
+                    error: None,
+                    status: 200,
+                }),
+                Err(e) => Ok(ApiRouteResponse {
+                    success: false,
+                    data: None,
+                    error: Some(e),
+                    status: 404,
+                }),
+            }
+        }
+        "/api/filesystem/list" => {
+            let path = query.and_then(|q| q.get("path")).cloned().unwrap_or_default();
+            match list_directory(path).await {
+                Ok(entries) => Ok(ApiRouteResponse {
+                    success: true,
+                    data: Some(serde_json::json!({ "entries": entries })),
+                    error: None,
+                    status: 200,
+                }),
+                Err(e) => Ok(ApiRouteResponse {
+                    success: false,
+                    data: None,
+                    error: Some(e),
+                    status: 404,
+                }),
+            }
+        }
+        "/api/filesystem/write" => {
+            // Requires AppHandle for file-change events — use invoke('write_file') directly
+            Ok(ApiRouteResponse {
+                success: false,
+                data: None,
+                error: Some("Use invoke('write_file', ...) directly".to_string()),
+                status: 501,
+            })
+        }
+        "/api/providers" => {
+            Ok(ApiRouteResponse {
+                success: true,
+                data: Some(serde_json::json!({
+                    "providers": [
+                        { "id": "openai", "name": "OpenAI", "isAvailable": true },
+                        { "id": "anthropic", "name": "Anthropic", "isAvailable": true },
+                        { "id": "google", "name": "Google", "isAvailable": true },
+                        { "id": "mistral", "name": "Mistral", "isAvailable": true },
+                    ]
+                })),
+                error: None,
+                status: 200,
+            })
+        }
+        "/api/health" => {
+            Ok(ApiRouteResponse {
+                success: true,
+                data: Some(serde_json::json!({ "status": "ok", "mode": "desktop" })),
+                error: None,
+                status: 200,
+            })
+        }
+
+        // ── Filesystem operations ──────────────────────────────────────────
+
+        "/api/filesystem/mkdir" => {
+            let path = req.body.as_ref()
+                .and_then(|b| b["path"].as_str()).or_else(|| query.and_then(|q| q.get("path")).map(|s| s.as_str()))
+                .unwrap_or("");
+            match validate_workspace_path(path) {
+                Ok(canonical) => {
+                    match std::fs::create_dir_all(&canonical) {
+                        Ok(()) => Ok(ApiRouteResponse {
+                            success: true,
+                            data: Some(serde_json::json!({ "path": path })),
+                            error: None,
+                            status: 200,
+                        }),
+                        Err(e) => Ok(ApiRouteResponse {
+                            success: false,
+                            data: None,
+                            error: Some(e.to_string()),
+                            status: 500,
+                        }),
+                    }
+                }
+                Err(e) => Ok(ApiRouteResponse {
+                    success: false,
+                    data: None,
+                    error: Some(e),
+                    status: 403,
+                }),
+            }
+        }
+
+        "/api/filesystem/delete" => {
+            let path = req.body.as_ref()
+                .and_then(|b| b["path"].as_str()).or_else(|| query.and_then(|q| q.get("path")).map(|s| s.as_str()))
+                .unwrap_or("");
+            match validate_workspace_path(path) {
+                Ok(canonical) => {
+                    let result = if canonical.is_dir() {
+                        std::fs::remove_dir_all(&canonical)
+                    } else {
+                        std::fs::remove_file(&canonical)
+                    };
+                    match result {
+                        Ok(()) => Ok(ApiRouteResponse {
+                            success: true,
+                            data: Some(serde_json::json!({ "path": path })),
+                            error: None,
+                            status: 200,
+                        }),
+                        Err(e) => Ok(ApiRouteResponse {
+                            success: false,
+                            data: None,
+                            error: Some(e.to_string()),
+                            status: 500,
+                        }),
+                    }
+                }
+                Err(e) => Ok(ApiRouteResponse {
+                    success: false,
+                    data: None,
+                    error: Some(e),
+                    status: 403,
+                }),
+            }
+        }
+
+        "/api/filesystem/rename" => {
+            let body = req.body.as_ref().ok_or("Missing body")?;
+            let old_path = body["oldPath"].as_str().or(body["old_path"].as_str()).ok_or("Missing oldPath")?;
+            let new_path = body["newPath"].as_str().or(body["new_path"].as_str()).ok_or("Missing newPath")?;
+            let old_canonical = validate_workspace_path(old_path)?;
+            let new_canonical = validate_workspace_path(new_path)?;
+            // Ensure parent of new path exists
+            if let Some(parent) = new_canonical.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            match std::fs::rename(&old_canonical, &new_canonical) {
+                Ok(()) => Ok(ApiRouteResponse {
+                    success: true,
+                    data: Some(serde_json::json!({ "oldPath": old_path, "newPath": new_path })),
+                    error: None,
+                    status: 200,
+                }),
+                Err(e) => Ok(ApiRouteResponse {
+                    success: false,
+                    data: None,
+                    error: Some(e.to_string()),
+                    status: 500,
+                }),
+            }
+        }
+
+        "/api/filesystem/move" => {
+            // Move is implemented as rename
+            let body = req.body.as_ref().ok_or("Missing body")?;
+            let old_path = body["source"].as_str().or(body["from"].as_str()).ok_or("Missing source")?;
+            let new_path = body["destination"].as_str().or(body["to"].as_str()).ok_or("Missing destination")?;
+            let old_canonical = validate_workspace_path(old_path)?;
+            let new_canonical = validate_workspace_path(new_path)?;
+            if let Some(parent) = new_canonical.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            match std::fs::rename(&old_canonical, &new_canonical) {
+                Ok(()) => Ok(ApiRouteResponse {
+                    success: true,
+                    data: Some(serde_json::json!({ "source": old_path, "destination": new_path })),
+                    error: None,
+                    status: 200,
+                }),
+                Err(e) => Ok(ApiRouteResponse {
+                    success: false,
+                    data: None,
+                    error: Some(e.to_string()),
+                    status: 500,
+                }),
+            }
+        }
+
+        "/api/filesystem/create-file" => {
+            // Same as write — just create/overwrite a file
+            let body = req.body.as_ref().ok_or("Missing body")?;
+            let path = body["path"].as_str().ok_or("Missing path")?;
+            let content = body["content"].as_str().unwrap_or("");
+            match write_file_content(path, content) {
+                Ok(()) => Ok(ApiRouteResponse {
+                    success: true,
+                    data: Some(serde_json::json!({ "path": path })),
+                    error: None,
+                    status: 200,
+                }),
+                Err(e) => Ok(ApiRouteResponse {
+                    success: false,
+                    data: None,
+                    error: Some(e),
+                    status: 500,
+                }),
+            }
+        }
+
+        "/api/filesystem/search" => {
+            let search_query = query.and_then(|q| q.get("q")).cloned()
+                .or_else(|| req.body.as_ref().and_then(|b| b["q"].as_str().map(String::from)))
+                .unwrap_or_default();
+            let search_dir = query.and_then(|q| q.get("dir")).cloned()
+                .or_else(|| req.body.as_ref().and_then(|b| b["dir"].as_str().map(String::from)))
+                .unwrap_or_else(|| ".".to_string());
+            let base = validate_workspace_path(&search_dir).ok();
+            let results: Vec<serde_json::Value> = if let Some(base_path) = base {
+                walkdir::WalkDir::new(&base_path)
+                    .into_iter()
+                    .filter_map(|e| e.ok())
+                    .filter(|e| {
+                        let name = e.file_name().to_string_lossy().to_lowercase();
+                        name.contains(&search_query.to_lowercase())
+                    })
+                    .take(100)
+                    .map(|e| {
+                        let path = e.path().strip_prefix(&base_path)
+                            .unwrap_or(e.path())
+                            .to_string_lossy().to_string();
+                        serde_json::json!({
+                            "path": path,
+                            "isDirectory": e.file_type().is_dir(),
+                            "size": e.metadata().map(|m| m.len()).unwrap_or(0),
+                        })
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            Ok(ApiRouteResponse {
+                success: true,
+                data: Some(serde_json::json!({ "results": results })),
+                error: None,
+                status: 200,
+            })
+        }
+
+        "/api/filesystem/diffs" => {
+            let workspace = query.and_then(|q| q.get("dir")).cloned()
+                .unwrap_or_else(|| ".".to_string());
+            let ws_path = validate_workspace_path(&workspace)?;
+            let output = Command::new("git")
+                .args(["diff", "--name-status"])
+                .current_dir(&ws_path)
+                .output()
+                .map_err(|e| format!("Failed to run git diff: {}", e))?;
+            let diff_text = String::from_utf8_lossy(&output.stdout).to_string();
+            let lines: Vec<&str> = diff_text.lines().collect();
+            Ok(ApiRouteResponse {
+                success: true,
+                data: Some(serde_json::json!({ "diffs": lines })),
+                error: None,
+                status: 200,
+            })
+        }
+
+        "/api/filesystem/diffs/apply" => {
+            let body = req.body.as_ref().ok_or("Missing body")?;
+            let diff = body["diff"].as_str().ok_or("Missing diff content")?;
+            let workspace = body["dir"].as_str().unwrap_or(".");
+            let ws_path = validate_workspace_path(workspace)?;
+            // Write diff to temp file
+            let temp_path = ws_path.join(".temp_patch.diff");
+            std::fs::write(&temp_path, diff)
+                .map_err(|e| format!("Failed to write temp diff: {}", e))?;
+            let output = Command::new("git")
+                .args(["apply", "--whitespace=fix", ".temp_patch.diff"])
+                .current_dir(&ws_path)
+                .output()
+                .map_err(|e| format!("Failed to run git apply: {}", e))?;
+            let _ = std::fs::remove_file(&temp_path);
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                return Ok(ApiRouteResponse {
+                    success: false,
+                    data: None,
+                    error: Some(stderr),
+                    status: 400,
+                });
+            }
+            Ok(ApiRouteResponse {
+                success: true,
+                data: Some(serde_json::json!({ "message": "Diff applied successfully" })),
+                error: None,
+                status: 200,
+            })
+        }
+
+        "/api/filesystem/commits" => {
+            // Use git log to get commit history
+            let workspace = query.and_then(|q| q.get("dir")).cloned()
+                .unwrap_or_else(|| ".".to_string());
+            let ws_path = validate_workspace_path(&workspace)?;
+            let output = Command::new("git")
+                .args(["log", "--pretty=format:%H|%s|%aI", "-n", "50"])
+                .current_dir(&ws_path)
+                .output()
+                .map_err(|e| format!("Failed to run git log: {}", e))?;
+            let commits: Vec<serde_json::Value> = String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .filter_map(|line| {
+                    let parts: Vec<&str> = line.splitn(3, '|').collect();
+                    if parts.len() == 3 {
+                        Some(serde_json::json!({
+                            "id": parts[0],
+                            "name": parts[1],
+                            "created_at": parts[2],
+                            "file_count": 0,
+                            "workspace_path": workspace,
+                            "commit_hash": parts[0],
+                        }))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            Ok(ApiRouteResponse {
+                success: true,
+                data: Some(serde_json::json!({ "commits": commits })),
+                error: None,
+                status: 200,
+            })
+        }
+
+        "/api/filesystem/rollback" => {
+            // Use git reset to restore a commit
+            let body = req.body.as_ref().ok_or("Missing body")?;
+            let workspace = body["workspace"].as_str().unwrap_or(".");
+            let commit_id = body["commitId"].as_str().or(body["commit_id"].as_str()).ok_or("Missing commitId")?;
+            let ws_path = validate_workspace_path(workspace)?;
+            let output = Command::new("git")
+                .args(["reset", "--hard", commit_id])
+                .current_dir(&ws_path)
+                .output()
+                .map_err(|e| format!("Failed to run git reset: {}", e))?;
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                return Ok(ApiRouteResponse {
+                    success: false,
+                    data: None,
+                    error: Some(stderr),
+                    status: 400,
+                });
+            }
+            let files_restored = String::from_utf8_lossy(&output.stdout).lines().count();
+            Ok(ApiRouteResponse {
+                success: true,
+                data: Some(serde_json::json!({ "filesRestored": files_restored })),
+                error: None,
+                status: 200,
+            })
+        }
+
+        "/api/filesystem/snapshot" => {
+            // Use git add + commit to create a snapshot
+            let body = req.body.as_ref();
+            let workspace = body.and_then(|b| b["workspace"].as_str()).unwrap_or(".");
+            let name = body.and_then(|b| b["name"].as_str()).unwrap_or("snapshot");
+            let ws_path = validate_workspace_path(workspace)?;
+            let _ = Command::new("git")
+                .args(["add", "."])
+                .current_dir(&ws_path)
+                .output();
+            let output = Command::new("git")
+                .args(["commit", "-m", name])
+                .current_dir(&ws_path)
+                .output();
+            match output {
+                Ok(out) if out.status.success() => {
+                    let hash_output = Command::new("git")
+                        .args(["rev-parse", "HEAD"])
+                        .current_dir(&ws_path)
+                        .output();
+                    let hash = hash_output.ok()
+                        .and_then(|o| String::from_utf8(o.stdout).ok())
+                        .map(|s| s.trim().to_string())
+                        .unwrap_or_default();
+                    Ok(ApiRouteResponse {
+                        success: true,
+                        data: Some(serde_json::json!({
+                            "snapshot": {
+                                "id": hash,
+                                "name": name,
+                                "commit_hash": hash,
+                                "workspace_path": workspace,
+                            }
+                        })),
+                        error: None,
+                        status: 200,
+                    })
+                }
+                Ok(out) => {
+                    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+                    Ok(ApiRouteResponse {
+                        success: false,
+                        data: None,
+                        error: Some(stderr),
+                        status: 400,
+                    })
+                }
+                Err(e) => Ok(ApiRouteResponse {
+                    success: false,
+                    data: None,
+                    error: Some(format!("Failed to run git commit: {}", e)),
+                    status: 500,
+                }),
+            }
+        }
+
+        "/api/filesystem/snapshot/restore" => {
+            // Same as rollback — use git reset
+            let body = req.body.as_ref().ok_or("Missing body")?;
+            let workspace = body["workspace"].as_str().unwrap_or(".");
+            let snapshot_id = body["snapshotId"].as_str().or(body["snapshot_id"].as_str()).ok_or("Missing snapshotId")?;
+            let ws_path = validate_workspace_path(workspace)?;
+            let output = Command::new("git")
+                .args(["reset", "--hard", snapshot_id])
+                .current_dir(&ws_path)
+                .output()
+                .map_err(|e| format!("Failed to run git reset: {}", e))?;
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                return Ok(ApiRouteResponse {
+                    success: false,
+                    data: None,
+                    error: Some(stderr),
+                    status: 400,
+                });
+            }
+            let files_restored = String::from_utf8_lossy(&output.stdout).lines().count();
+            Ok(ApiRouteResponse {
+                success: true,
+                data: Some(serde_json::json!({ "filesRestored": files_restored })),
+                error: None,
+                status: 200,
+            })
+        }
+
+        _ => Ok(ApiRouteResponse {
+            success: false,
+            data: None,
+            error: Some("Route not handled by Tauri — use sidecar".to_string()),
+            status: 501,
+        }),
+    }
+}
+
+/// Simple file write helper (without AppHandle event emission)
+fn write_file_content(path: &str, content: &str) -> Result<(), String> {
+    let canonical = validate_workspace_path(path)?;
+    if let Some(parent) = canonical.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create directory: {}", e))?;
+    }
+    std::fs::write(&canonical, content)
+        .map_err(|e| format!("Failed to write file: {}", e))
+}
