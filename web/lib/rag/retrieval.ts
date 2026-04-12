@@ -17,6 +17,7 @@
 
 import { createLogger } from '@/lib/utils/logger';
 import { embed } from '@/lib/memory/embeddings';
+import { estimateTokens } from '@/lib/context/contextBuilder';
 import { getKnowledgeStore } from './knowledge-store';
 import type { KnowledgeSearchResult, KnowledgeSearchOptions, KnowledgeType, KnowledgeChunk } from './knowledge-store';
 
@@ -223,7 +224,7 @@ export async function runRetrievalPipeline(
 
   // ── Step 6: Format for Prompt ────────────────────────────────────────────
   const context = formatKnowledgeForPrompt(filtered, { includeSource, maxTokens });
-  const estimatedTokens = Math.ceil(context.length / 3.8); // ~3.8 chars/token
+  const estimatedTokens = estimateTokens(context);
 
   const duration = Date.now() - startTime;
   const avgScore = filtered.length > 0
@@ -273,7 +274,7 @@ function formatKnowledgeForPrompt(
   if (results.length === 0) return '';
 
   const { includeSource, maxTokens } = options;
-  const maxChars = maxTokens * 4; // Conservative: 4 chars/token
+  const maxChars = maxTokens * 3.8; // Token budget → char budget (3.8 chars/token)
 
   let output = '\n## Relevant Knowledge\n\n';
   let charCount = output.length;

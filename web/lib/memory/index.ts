@@ -72,7 +72,7 @@ export type { ExtractedSymbol, SymbolKind, Language } from "../retrieval/symbolE
 export {
   buildContext,
   injectContextIntoPrompt,
-  buildSystemPrompt,
+  buildContextSystemPrompt,
   estimateTokens,
 } from "../context/contextBuilder";
 export type { BuiltContext, ContextBuilderOptions } from "../context/contextBuilder";
