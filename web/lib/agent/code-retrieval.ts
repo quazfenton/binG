@@ -1,5 +1,5 @@
 /**
- * orchestrator.ts — Central command orchestrator (aliased as Retrieval)
+ * code-retrieval.ts — Code retrieval, indexing, and Q&A engine
  *
  * The single entry point for all AI coding operations.
  * Handles: indexing, search, context building, agent loops, command routing.

@@ -45,10 +45,10 @@ import {
 } from '@/lib/orchestra/shared-agent-context';
 
 import {
-  AgentOrchestrator,
+  PlanActVerifyOrchestrator,
   type OrchestratorConfig,
   type OrchestratorEvent
-} from '@bing/shared/agent/orchestration/agent-orchestrator';
+} from '@bing/shared/agent/orchestration/plan-act-verify';
 
 import {
   createTaskClassifier,
@@ -56,6 +56,15 @@ import {
   type ClassificationContext,
 } from '@bing/shared/agent/task-classifier';
 import { getProjectServices, type ProjectContext } from '@/lib/project-context';
+import {
+  runRetrievalPipeline,
+  type RetrievalPipelineOptions,
+  ingestFewShot,
+  ingestExperience,
+  ingestTrajectory,
+  ingestRule,
+  ingestAntiPattern,
+} from '@/lib/rag/retrieval';
 
 const log = createLogger('UnifiedAgentService');
 
@@ -108,11 +117,25 @@ export interface UnifiedAgentConfig {
   model?: string;
 
   // Mode override (optional - auto-detected from env if not specified)
-  mode?: 'v1-api' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'mastra-workflow' | 'desktop' | 'auto';
+  mode?: 'v1-api' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'mastra-workflow' | 'desktop' | 'v1-progressive-build' | 'auto';
 
   // Mastra workflow options
   workflowId?: string; // Use specific Mastra workflow
   enableMastraWorkflows?: boolean; // Enable Mastra workflow routing
+
+  // Progressive build options (for v1-progressive-build mode)
+  progressiveBuild?: {
+    /** Maximum iterations for the build loop. Default: 15 */
+    maxIterations?: number;
+    /** Context strategy: 'diff' | 'read' | 'tree'. Default: 'diff' */
+    contextMode?: 'diff' | 'read' | 'tree';
+    /** Enable reflection pass after each iteration. Default: false */
+    enableReflection?: boolean;
+    /** Global timeout in ms. Default: 300,000 */
+    timeBudgetMS?: number;
+    /** Custom completion indicator. Default: '[BUILD_COMPLETE]' */
+    completionIndicator?: string;
+  };
 }
 
 export interface UnifiedAgentResult {
@@ -124,7 +147,7 @@ export interface UnifiedAgentResult {
     result: ToolResult;
   }>;
   totalSteps?: number;
-  mode: 'v1-api' | 'v1-agent-loop' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'mastra-workflow' | 'desktop';
+  mode: 'v1-api' | 'v1-agent-loop' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'mastra-workflow' | 'desktop' | 'v1-progressive-build';
   error?: string;
   fileEdits?: Array<{
     path: string;
@@ -230,7 +253,7 @@ const startupCaps = checkStartupCapabilities();
  * Returns both mode and classification for logging/metrics.
  */
 async function determineMode(config: UnifiedAgentConfig): Promise<{
-  mode: 'v1-api' | 'v1-agent-loop' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'mastra-workflow' | 'desktop';
+  mode: 'v1-api' | 'v1-agent-loop' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'mastra-workflow' | 'desktop' | 'v1-progressive-build';
   classification?: TaskClassification;
 }> {
   // Explicit mode override
@@ -253,6 +276,10 @@ async function determineMode(config: UnifiedAgentConfig): Promise<{
   if (engine === 'v1-agent-loop') {
     log.info('AGENT_EXECUTION_ENGINE=v1-agent-loop, using direct Mastra/ToolLoopAgent path (route.ts will bypass unified-agent)');
     return { mode: 'v1-agent-loop' as const, classification: null as any };
+  }
+  if (engine === 'progressive-build' || engine === 'v1-progressive-build') {
+    log.info('AGENT_EXECUTION_ENGINE=progressive-build, using multi-iteration build loop');
+    return { mode: 'v1-progressive-build' as const, classification: null as any };
   }
   if (engine === 'agent-loop') {
     log.info('AGENT_EXECUTION_ENGINE=agent-loop, using OpenCode agent loop execution path');
@@ -379,7 +406,8 @@ export async function processUnifiedAgentRequest(
   log.info('[UnifiedAgent] └──────────────────────────────────────────');
 
   // Verify mode is v1-only when in auto mode
-  if (process.env.AGENT_EXECUTION_ENGINE === 'auto' && !['v1-api', 'v1-agent-loop'].includes(mode)) {
+  const v1Modes = ['v1-api', 'v1-agent-loop', 'v1-progressive-build'];
+  if (process.env.AGENT_EXECUTION_ENGINE === 'auto' && !v1Modes.includes(mode)) {
     log.error('[BUG] Auto mode selected non-v1 mode!', {
       mode,
       engine: process.env.AGENT_EXECUTION_ENGINE,
@@ -419,6 +447,10 @@ export async function processUnifiedAgentRequest(
       case 'mastra-workflow':
         log.info('[UnifiedAgent] → mastra-workflow mode');
         return await runMastraWorkflow(config);
+
+      case 'v1-progressive-build':
+        log.info('[UnifiedAgent] → v1-progressive-build mode (multi-iteration build loop)');
+        return await runProgressiveBuildMode(config, classification);
 
       case 'v1-api':
       default:
@@ -946,6 +978,218 @@ async function runMastraWorkflow(config: UnifiedAgentConfig): Promise<UnifiedAge
 }
 
 /**
+ * Run V1 Progressive Build mode — multi-iteration, file-aware, self-stopping build loop.
+ *
+ * Integrates the progressive-build-engine with the unified agent's tool execution,
+ * VFS scoping, and streaming support.
+ *
+ * Each iteration:
+ * 1. Gets current project tree + diffs from last round (via smart-context.ts)
+ * 2. Calls LLM with "build the next piece" instructions
+ * 3. Applies file writes through VFS MCP tools
+ * 4. Optional reflection pass identifies gaps
+ * 5. Stops when LLM emits [BUILD_COMPLETE] or maxIterations/timeout
+ */
+async function runProgressiveBuildMode(
+  config: UnifiedAgentConfig,
+  classification?: TaskClassification,
+): Promise<UnifiedAgentResult> {
+  const startTime = Date.now();
+  const buildConfig = config.progressiveBuild || {};
+
+  log.info('[ProgressiveBuild] ┌─ ENTRY ──────────────────────────');
+  log.info('[ProgressiveBuild] │ userMessage:', config.userMessage.slice(0, 120));
+  log.info('[ProgressiveBuild] │ maxIterations:', buildConfig.maxIterations ?? 15);
+  log.info('[ProgressiveBuild] │ contextMode:', buildConfig.contextMode ?? 'diff');
+  log.info('[ProgressiveBuild] │ enableReflection:', buildConfig.enableReflection ?? false);
+  log.info('[ProgressiveBuild] │ timeBudgetMS:', buildConfig.timeBudgetMS ?? 300_000);
+  log.info('[ProgressiveBuild] └─────────────────────────────────────');
+
+  // Ensure tool system is initialized
+  if (!isToolSystemReady()) {
+    await initToolSystem({ userId: config.userId || 'system', enableMCP: true, enableSandbox: true });
+  }
+
+  // Build the LLM call wrapper that uses the Vercel AI SDK (same as runV1ApiWithTools)
+  const capabilityExecuteTool = createCapabilityToolExecutor(config);
+  const primaryProvider = config.provider || process.env.LLM_PROVIDER || 'mistral';
+  const normalizedModel = config.model || process.env.LLM_MODEL || 'mistral-small-latest';
+
+  const llmCall = async (messages: Array<{ role: string; content: string }>): Promise<string> => {
+    const { streamText } = await import('ai');
+    const { getVercelModel } = await import('../chat/vercel-ai-streaming');
+
+    const systemMsg = messages.find(m => m.role === 'system');
+    const nonSystemMsgs = messages.filter(m => m.role !== 'system');
+
+    const vercelModel = getVercelModel(primaryProvider, normalizedModel);
+
+    // Convert tools to Vercel AI SDK format
+    const vercelTools: Record<string, any> = {};
+    if (config.tools && config.tools.length > 0) {
+      for (const tool of config.tools) {
+        vercelTools[tool.name] = {
+          description: tool.description,
+          parameters: tool.parameters,
+          execute: async (args: Record<string, any>) => {
+            const result = await capabilityExecuteTool(tool.name, args);
+            return result;
+          },
+        };
+      }
+    }
+
+    let fullResponse = '';
+    try {
+      const result = streamText({
+        model: vercelModel,
+        messages: nonSystemMsgs,
+        system: systemMsg?.content,
+        maxTokens: config.maxTokens || 8000,
+        temperature: config.temperature ?? 0.7,
+        tools: Object.keys(vercelTools).length > 0 ? vercelTools : undefined,
+        maxSteps: config.maxSteps || 10, // Allow multi-step tool calling
+      });
+
+      for await (const chunk of result.fullStream) {
+        if (chunk.type === 'text-delta') {
+          const text = (chunk as any).text || '';
+          fullResponse += text;
+          config.onStreamChunk?.(text);
+        }
+      }
+    } catch (err: any) {
+      log.error('[ProgressiveBuild] LLM call failed', { error: err.message });
+      // Return partial response so the loop can continue
+      if (fullResponse) return fullResponse;
+      throw err;
+    }
+
+    return fullResponse;
+  };
+
+  // Create the build engine LLM call wrapper
+  const buildLlmCall = async (msgs: Array<{ role: string; content: string }>): Promise<string> => {
+    return llmCall(msgs);
+  };
+
+  // Determine which files have been written (for SSE events)
+  const allFilesWritten: string[] = [];
+
+  // SSE event emitter wrapper
+  const emitBuildEvent = (event: string, data: unknown) => {
+    log.info(`[ProgressiveBuild] Event: ${event}`, data);
+    if (config.onStreamChunk && typeof data === 'object' && data !== null) {
+      // Emit structured build progress as JSON through the stream chunk handler
+      config.onStreamChunk(JSON.stringify({ type: 'progressive_build', event, ...data }));
+    }
+  };
+
+  // Import and run the progressive build engine
+  let buildResult: any;
+  try {
+    const { runProgressiveBuild, BuildPresets } = await import('../chat/progressive-build-engine');
+
+    // Use balanced preset as base, override with user config
+    const preset = buildConfig.contextMode === 'tree' ? BuildPresets.fast
+      : buildConfig.contextMode === 'read' ? BuildPresets.thorough
+      : buildConfig.enableReflection ? BuildPresets.large
+      : BuildPresets.balanced;
+
+    buildResult = await runProgressiveBuild({
+      userId: config.userId || 'system',
+      sessionId: config.conversationId,
+      userPrompt: config.userMessage,
+      llmCall: buildLlmCall,
+      emit: emitBuildEvent,
+      config: {
+        ...preset,
+        maxIterations: buildConfig.maxIterations ?? preset.maxIterations,
+        contextMode: buildConfig.contextMode ?? preset.contextMode,
+        enableReflection: buildConfig.enableReflection ?? false,
+        timeBudgetMS: buildConfig.timeBudgetMS ?? preset.maxIterations === 20 ? 600_000 : 300_000,
+        completionIndicator: buildConfig.completionIndicator ?? '[BUILD_COMPLETE]',
+        verbose: false, // Use logging instead
+      },
+      // Optional: override reflection with the existing ReflectionEngine if enabled
+      reflectionFn: buildConfig.enableReflection ? async (llmCallFn, userPrompt, tree, lastResponse) => {
+        try {
+          const { reflectionEngine } = await import('./reflection-engine');
+          const reflections = await reflectionEngine.reflect(lastResponse, {
+            context: { originalPrompt: userPrompt, projectTree: tree },
+          });
+          const synthesized = reflectionEngine.synthesizeReflections(reflections);
+          return {
+            summary: synthesized.prioritizedImprovements.join('\n'),
+            gapsIdentified: synthesized.prioritizedImprovements,
+            score: Math.round(synthesized.overallScore * 100),
+          };
+        } catch {
+          // Fall back to default reflection
+          const { defaultReflectionFn } = await import('../chat/progressive-build-engine');
+          return defaultReflectionFn(llmCallFn, userPrompt, tree, lastResponse);
+        }
+      } : false,
+    });
+  } catch (err: any) {
+    log.error('[ProgressiveBuild] Engine import or execution failed', { error: err.message });
+    throw err; // Re-throw to trigger fallback
+  }
+
+  // Collect files written from all iterations (heuristic)
+  for (const iter of buildResult.allIterations || []) {
+    if (iter.filesWritten) {
+      allFilesWritten.push(...iter.filesWritten);
+    }
+  }
+
+  // Build file edits array from the final response
+  const fileEdits = extractFileWritesFromLLMResponse(buildResult.finalResponse || '');
+
+  const totalDurationMs = Date.now() - startTime;
+
+  log.info('[ProgressiveBuild] ┌─ COMPLETE ──────────────────────────');
+  log.info('[ProgressiveBuild] │ completed:', buildResult.completed);
+  log.info('[ProgressiveBuild] │ completionReason:', buildResult.completionReason);
+  log.info('[ProgressiveBuild] │ iterations:', buildResult.iterations);
+  log.info('[ProgressiveBuild] │ totalDurationMs:', totalDurationMs);
+  log.info('[ProgressiveBuild] │ filesWritten:', allFilesWritten.length);
+  log.info('[ProgressiveBuild] │ warnings:', buildResult.warnings?.length || 0);
+  log.info('[ProgressiveBuild] └──────────────────────────────────────');
+
+  return {
+    success: buildResult.completed || buildResult.iterations > 0,
+    response: buildResult.finalResponse || '',
+    mode: 'v1-progressive-build',
+    totalSteps: buildResult.iterations,
+    fileEdits,
+    metadata: {
+      model: normalizedModel,
+      provider: primaryProvider,
+      duration: totalDurationMs,
+      progressiveBuild: {
+        completed: buildResult.completed,
+        completionReason: buildResult.completionReason,
+        iterations: buildResult.iterations,
+        allIterations: (buildResult.allIterations || []).map((a: any) => ({
+          iteration: a.iteration,
+          durationMs: a.durationMs,
+          filesWritten: a.filesWritten || [],
+          reflectionSummary: a.reflectionSummary,
+          gapsIdentified: a.gapsIdentified || [],
+        })),
+        projectTree: buildResult.projectTree,
+        warnings: buildResult.warnings || [],
+      },
+      classification: classification ? {
+        complexity: classification.complexity,
+        confidence: classification.confidence,
+      } : undefined,
+    },
+  };
+}
+
+/**
  * Create a capability-based tool executor that uses the centralized tool system
  * This enables all execution paths (v1, v2, streaming, non-Mastra) to use the same tool capabilities
  *
@@ -1131,8 +1375,39 @@ async function runV1ApiWithTools(
     );
 
     const llmMessages: any[] = [];
+
+    // RAG Knowledge Retrieval — inject relevant knowledge into system prompt
+    let ragContext = '';
+    try {
+      const ragResult = await runRetrievalPipeline(config.userMessage, {
+        topK: 3,
+        coarseTopN: 10,
+        minQuality: 0.3,
+        includeSource: false,
+        maxTokens: 1500,
+      });
+      if (ragResult.hasResults) {
+        ragContext = ragResult.context;
+        log.info('[V1-API-WITH-TOOLS] RAG knowledge injected', {
+          chunks: ragResult.chunks.length,
+          tokens: ragResult.estimatedTokens,
+          avgScore: ragResult.metadata.avgScore.toFixed(3),
+          durationMs: ragResult.metadata.durationMs,
+        });
+      }
+    } catch (error) {
+      log.warn('[V1-API-WITH-TOOLS] RAG retrieval failed, continuing without it', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    // Build system prompt with RAG context
     if (config.systemPrompt) {
-      llmMessages.push({ role: 'system', content: config.systemPrompt });
+      const systemContent = config.systemPrompt + ragContext;
+      llmMessages.push({ role: 'system', content: systemContent });
+    } else if (ragContext) {
+      // No custom system prompt but we have RAG context — add a minimal system message
+      llmMessages.push({ role: 'system', content: `You are an AI coding assistant.${ragContext}` });
     }
     llmMessages.push(...messages);
 
@@ -1239,6 +1514,30 @@ async function runV1ApiWithTools(
         log.info(`[Telemetry] ${requestId}: ${toolCallTelemetry.length} tools (${successCount}✓/${toolCallTelemetry.length - successCount}✗)`);
       }
 
+      // RAG: Log successful trajectory to knowledge store for future retrieval
+      if (toolCallTelemetry.length > 0 && toolCallTelemetry.every(t => t.success)) {
+        try {
+          const toolCallSummary = toolCallTelemetry
+            .map(t => `${t.toolName}(${JSON.stringify(t.args).slice(0, 100)})`)
+            .join('\n');
+          await ingestTrajectory({
+            task: config.userMessage.slice(0, 500),
+            toolCalls: toolCallSummary,
+            model: `${providerName}/${modelForProvider}`,
+            quality: 1.0 - (toolInvocations.length * 0.05), // Slightly lower quality for more retries
+          });
+          log.info('[RAG] Trajectory logged', {
+            taskType: 'tool_execution',
+            toolCount: toolCallTelemetry.length,
+            model: `${providerName}/${modelForProvider}`,
+          });
+        } catch (error) {
+          log.warn('[RAG] Failed to log trajectory', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+
       return {
         success: true,
         response: response || 'No response generated',
@@ -1314,7 +1613,7 @@ async function runV1Orchestrated(
     executeTool: capabilityExecuteTool,
   };
 
-  const orchestrator = new AgentOrchestrator(orchestratorConfig);
+  const orchestrator = new PlanActVerifyOrchestrator(orchestratorConfig);
   let content = '';
   let stepsCount = 0;
   const steps: any[] = [];

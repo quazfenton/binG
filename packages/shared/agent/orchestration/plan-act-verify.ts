@@ -1,13 +1,13 @@
 /**
- * UNIFIED AGENT ORCHESTRATION ARCHITECTURE
+ * Plan-Act-Verify Orchestrator
  *
- * This module provides a best-in-class orchestration layer for LLM agents, unifying the
- * "v1" standard API chat path with the advanced multi-step capabilities of "v2" OpenCode,
- * CrewAI (Planner/Coder/Critic), and Mastra workflows.
+ * This module provides a Plan-Act-Verify state machine for LLM agents,
+ * supporting iteration budgets, tool execution with self-healing,
+ * file verification, and streaming SSE events.
  *
  * CORE COMPONENTS:
  * 1. IterationController: Enforces budgets (max steps, tokens, time) to prevent infinite loops.
- * 2. AgentOrchestrator: The state machine managing Plan -> Act -> Verify -> Respond phases.
+ * 2. PlanActVerifyOrchestrator: The state machine managing Plan -> Act -> Verify -> Respond phases.
  * 3. Self-Healing: Error classification and automatic retry/reprompt mechanisms.
  * 4. Streaming: Native SSE event emission at every state transition.
  */
@@ -19,7 +19,7 @@ import { SelfHealingExecutor } from '@/lib/crewai/runtime/self-healing';
 import { getVercelModel } from '@/lib/chat/vercel-ai-streaming';
 import { createLogger } from '@/lib/utils/logger';
 
-const log = createLogger('AgentOrchestrator');
+const log = createLogger('PlanActVerify');
 
 // ─── Typed Configuration ─────────────────────────────────────────────────────
 
@@ -293,9 +293,9 @@ export class IterationController {
   }
 }
 
-// ─── Agent Orchestrator ──────────────────────────────────────────────────────
+// ─── Plan-Act-Verify Orchestrator ────────────────────────────────────────────
 
-export class AgentOrchestrator {
+export class PlanActVerifyOrchestrator {
   private validatedConfig: IterationConfig;
   /** SDK tools built via proper adapter (no @ts-expect-error) — P2 #9 */
   private sdkTools: Record<string, Tool> = {};
@@ -578,3 +578,6 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
     };
   }
 }
+
+/** @deprecated Use PlanActVerifyOrchestrator instead */
+export const AgentOrchestrator = PlanActVerifyOrchestrator;

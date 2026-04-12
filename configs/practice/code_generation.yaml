@@ -1,0 +1,49 @@
+# @package _global_
+#
+# Example practice config for code generation tasks.
+# Adapted from Youtu-Agent's math_reasoning.yaml
+#
+
+exp_id: "code_generation_practice"
+
+# Evaluation configuration
+evaluation:
+  exp_id: "code_eval"
+  agent:
+    name: "code-agent"
+    instructions: "You are an expert software engineer. Write correct, efficient code."
+    model:
+      model_provider:
+        type: chat.completions
+        model: gpt-4o
+      model_settings:
+        temperature: 0.7
+  data:
+    dataset: "CodeTasks"
+    type: "single"
+  concurrency: 8
+  pass_k: 3
+  verify_filename: "math.py"
+  verify_func_name: "verify_func"
+
+# Practice arguments
+practice:
+  epochs: 3
+  batch_size: 16
+  grpo_n: 3
+  rollout_concurrency: 8
+  rollout_temperature: 0.7
+  task_timeout: 1800
+  do_eval: false
+  eval_strategy: "epoch"
+  agent_objective: |
+    input: A coding task description
+    output: Working code that solves the task
+  learning_objective: |
+    Help the agent improve code generation quality by extracting best practices
+    and common pitfalls.
+  num_experiences_per_query: 2
+
+# Data arguments
+data:
+  practice_dataset_name: "CodeTasks"

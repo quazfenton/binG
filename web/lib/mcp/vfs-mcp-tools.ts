@@ -38,6 +38,40 @@ const logger = createLogger('VFS-MCP-Tools');
 // ============================================================================
 
 /**
+ * Unwrap markdown code fences from content strings.
+ * Some models wrap file content in ```lang ... ``` blocks.
+ */
+function unwrapCodeBlock(s: string): string {
+  // Match fenced blocks: ```lang\ncontent\n```
+  const match = s.match(/^```[\w.+-]*\n([\s\S]*?)```$/);
+  if (match) return match[1].trim();
+  // Also match without language: ```\ncontent\n```
+  const match2 = s.match(/^```\n([\s\S]*?)```$/);
+  if (match2) return match2[1].trim();
+  // Match fenced with language and no trailing newline before close
+  const match3 = s.match(/^```[\w.+-]*\n([\s\S]*?)\n?```$/);
+  if (match3) return match3[1].trim();
+  return s;
+}
+
+/**
+ * Normalize a file path: strip leading `./`, reject `../`, handle absolute paths.
+ */
+function normalizeFilePath(inputPath: string): string {
+  let p = inputPath;
+  // Strip leading `./` (repeated)
+  while (p.startsWith('./')) p = p.slice(2);
+  // Reject directory traversal
+  if (p.includes('..')) {
+    // Best-effort: remove the traversal segments
+    p = p.split('/').filter(s => s !== '..' && s !== '.').join('/');
+  }
+  // Strip leading `/` (absolute path → make relative)
+  if (p.startsWith('/')) p = p.slice(1);
+  return p;
+}
+
+/**
  * Normalize tool arguments before Zod validation.
  * Maps common LLM field-name mistakes to expected schema fields.
  * This dramatically improves success rates across different models.
@@ -58,28 +92,39 @@ export function normalizeToolArgs(toolName: string, raw: unknown): any {
     case 'create_file':
     case 'writetofile': {
       const path = alias(['path', 'file', 'filename', 'filepath', 'file_path', 'filePath', 'target']);
-      const content = alias(['content', 'contents', 'code', 'text', 'body', 'data', 'source']);
+      let content = alias(['content', 'contents', 'code', 'text', 'body', 'data', 'source']);
       const commitMessage = alias(['commitMessage', 'commit_message', 'message', 'description']);
-      return { path, content, commitMessage };
+      // Unwrap code fences if LLM wrapped content in ``` blocks
+      if (typeof content === 'string') content = unwrapCodeBlock(content);
+      // Normalize path (strip ./, leading /, reject ../)
+      const normalizedPath = typeof path === 'string' ? normalizeFilePath(path) : path;
+      return { path: normalizedPath, content, commitMessage };
     }
     case 'apply_diff':
     case 'applydiff':
     case 'patch': {
       const path = alias(['path', 'file', 'filename', 'filepath', 'file_path', 'target']);
-      const diff = alias(['diff', 'patch', 'content', 'changes', 'delta']);
+      let diff = alias(['diff', 'patch', 'content', 'changes', 'delta']);
+      // Unwrap code fences if LLM wrapped diff in ``` blocks
+      if (typeof diff === 'string') diff = unwrapCodeBlock(diff);
       const commitMessage = alias(['commitMessage', 'commit_message', 'message']);
-      return { path, diff, commitMessage };
+      // Normalize path
+      const normalizedPath = typeof path === 'string' ? normalizeFilePath(path) : path;
+      return { path: normalizedPath, diff, commitMessage };
     }
     case 'read_file':
     case 'readfile': {
       const path = alias(['path', 'file', 'filename', 'filepath', 'file_path']);
-      return { path };
+      const normalizedPath = typeof path === 'string' ? normalizeFilePath(path) : path;
+      return { path: normalizedPath };
     }
     case 'read_files':
     case 'readfiles': {
       let paths = alias(['paths', 'files', 'filenames', 'file_paths']);
       // Handle single path string
-      if (typeof paths === 'string') paths = [paths];
+      if (typeof paths === 'string') paths = [normalizeFilePath(paths)];
+      // Normalize each path
+      if (Array.isArray(paths)) paths = paths.map(normalizeFilePath);
       return { paths };
     }
     case 'delete_file':
@@ -87,14 +132,16 @@ export function normalizeToolArgs(toolName: string, raw: unknown): any {
     case 'remove_file': {
       const path = alias(['path', 'file', 'filename', 'filepath', 'target']);
       const reason = alias(['reason', 'message', 'description']);
-      return { path, reason };
+      const normalizedPath = typeof path === 'string' ? normalizeFilePath(path) : path;
+      return { path: normalizedPath, reason };
     }
     case 'list_files':
     case 'listfiles':
     case 'ls': {
       const path = alias(['path', 'directory', 'dir', 'folder']);
       const recursive = alias(['recursive', 'recurse', 'deep']);
-      return { path: path ?? '/', recursive };
+      const normalizedPath = typeof path === 'string' ? normalizeFilePath(path) : path;
+      return { path: normalizedPath ?? '/', recursive };
     }
     case 'batch_write':
     case 'batchwrite':
@@ -110,9 +157,13 @@ export function normalizeToolArgs(toolName: string, raw: unknown): any {
       // Normalize each file's fields
       if (Array.isArray(files)) {
         files = files.filter(f => f && typeof f === 'object').map((f: any) => {
-          const path = f.path ?? f.file ?? f.filename ?? f.filepath ?? f.file_path;
-          const content = f.content ?? f.contents ?? f.code ?? f.text ?? f.body ?? f.data;
-          return { path, content };
+          const path = f.path ?? f.file ?? f.filename ?? f.filepath ?? f.file_path ?? f.target ?? f.name;
+          let content = f.content ?? f.contents ?? f.code ?? f.text ?? f.body ?? f.data ?? f.source ?? f.value ?? f.body_content ?? f.file_content;
+          // Unwrap markdown code fences if LLM wrapped content in ``` blocks
+          if (typeof content === 'string') content = unwrapCodeBlock(content);
+          // Normalize path
+          const normalizedPath = typeof path === 'string' ? normalizeFilePath(path) : path;
+          return { path: normalizedPath, content };
         });
       }
       const commitMessage = alias(['commitMessage', 'commit_message', 'message']);
@@ -122,7 +173,8 @@ export function normalizeToolArgs(toolName: string, raw: unknown): any {
     case 'createdirectory':
     case 'mkdir': {
       const path = alias(['path', 'directory', 'dir', 'folder', 'name']);
-      return { path };
+      const normalizedPath = typeof path === 'string' ? normalizeFilePath(path) : path;
+      return { path: normalizedPath };
     }
     case 'search_files':
     case 'searchfiles':
@@ -130,7 +182,8 @@ export function normalizeToolArgs(toolName: string, raw: unknown): any {
       const query = alias(['query', 'search', 'term', 'pattern', 'text']);
       const path = alias(['path', 'directory', 'dir', 'folder', 'scope']);
       const limit = alias(['limit', 'max', 'count', 'maxResults']);
-      return { query, path, limit };
+      const normalizedPath = typeof path === 'string' ? normalizeFilePath(path) : path;
+      return { query, path: normalizedPath, limit };
     }
     default:
       return obj;
@@ -467,7 +520,31 @@ export function initializeVFSTools(userId: string, sessionId?: string, scopePath
  * Use for new files or complete rewrites
  */
 export const writeFileTool = (tool as any)({
-  description: 'Create or overwrite a file in the VFS. Required: path (e.g. "src/app.tsx"), content (complete file contents — do not abbreviate).',
+  description: [
+    'Create or overwrite a file in the VFS.',
+    '',
+    'Required arguments:',
+    '  • path (string) — relative file path like "src/app.tsx" (no leading slash, no URL, no query string)',
+    '  • content (string) — complete file contents, do not abbreviate or truncate',
+    '',
+    'Examples of correct usage:',
+    '  write_file(path="hello.py", content="print(\'Hello, World!\')")',
+    '  write_file(path="src/App.tsx", content="export default function App() { return <div>Hello</div>; }")',
+    '  write_file(path="README.md", content="# My Project\\n\\nThis is a sample project.")',
+    '',
+    'Common mistakes to avoid:',
+    '  ✗ create_file(...)          → Use write_file instead (wrong tool name)',
+    '  ✗ writeFile(path=...)       → Use write_file (underscore, not camelCase)',
+    '  ✗ write_file(file=...)      → Use path, not file or filename or filepath',
+    '  ✗ write_file(path=..., code=...)  → Use content, not code or text or body',
+    '  ✗ write_file(path="/src/app.tsx", ...)  → No leading slash, use "src/app.tsx"',
+    '  ✗ write_file(path="https://example.com/src/app.tsx", ...)  → No URLs, use relative paths',
+    '',
+    'Workflow:',
+    '  • For creating new files: use write_file for single file, batch_write for multiple files',
+    '  • For modifying existing files: use apply_diff (surgical patch), NOT write_file (full rewrite)',
+    '  • Always read existing files with read_file before editing them',
+  ].join('\n'),
   parameters: z.preprocess(
     (raw) => normalizeToolArgs('write_file', raw),
     z.object({
@@ -484,6 +561,8 @@ export const writeFileTool = (tool as any)({
   if (content === undefined || content === null) {
     return { success: false, path, error: 'Content is required' };
   }
+  // Unwrap code fences if LLM wrapped content in ``` blocks (safety net)
+  if (typeof content === 'string') content = unwrapCodeBlock(content);
   // Guard against extremely large content that could cause memory issues
   const MAX_CONTENT_SIZE = 5 * 1024 * 1024; // 5MB
   if (content.length > MAX_CONTENT_SIZE) {
@@ -569,7 +648,42 @@ export const writeFileTool = (tool as any)({
  * Preferred for targeted edits - much more reliable than full rewrite
  */
 export const applyDiffTool = (tool as any)({
-  description: 'Apply a diff patch to modify an existing file. Required: path, diff (unified format with --- +++ @@ lines).',
+  description: [
+    'Apply a diff patch to modify an existing file.',
+    '',
+    'Required arguments:',
+    '  • path (string) — relative file path like "src/app.tsx"',
+    '  • diff (string) — unified diff format with --- and +++ headers',
+    '',
+    'Unified diff format:',
+    '  --- a/src/file.ts',
+    '  +++ b/src/file.ts',
+    '  @@ -line,count +line,count @@',
+    '   unchanged context line',
+    '  -removed line',
+    '  +added line',
+    '   unchanged context line',
+    '',
+    'Examples of correct usage:',
+    '  apply_diff(path="src/App.tsx", diff="--- a/src/App.tsx\\n+++ b/src/App.tsx\\n@@ -1,5 +1,5 @@\\n import React\\n-function OldName() {\\n+function NewName() {\\n   return <div>hello</div>',
+    '',
+    'Common mistakes to avoid:',
+    '  ✗ apply_diff(path=..., patch=...)  → Use diff, not patch (wrong field name)',
+    '  ✗ apply_diff(path=..., changes=...)  → Use diff, not changes',
+    '  ✗ apply_diff(file=..., diff=...)  → Use path, not file',
+    '  ✗ Diff missing --- or +++ headers  → Must include both --- a/path and +++ b/path',
+    '  ✗ Diff with no context lines  → Include at least 2-3 unchanged lines around your changes',
+    '',
+    'When to use apply_diff vs write_file:',
+    '  • apply_diff — modifying part of an existing file (PREFERRED)',
+    '  • write_file — creating a brand new file, or completely rewriting an entire file',
+    '  • Never use write_file to change just a few lines in an existing file — use apply_diff instead',
+    '',
+    'Workflow for editing existing files:',
+    '  1. read_file(path) → review current content',
+    '  2. apply_diff(path, diff) → apply surgical patch',
+    '  3. Use multiple small apply_diff calls rather than one large rewrite',
+  ].join('\n'),
   parameters: z.preprocess(
     (raw) => normalizeToolArgs('apply_diff', raw),
     z.object({
@@ -586,6 +700,19 @@ export const applyDiffTool = (tool as any)({
   if (!diff || typeof diff !== 'string') {
     return { success: false, path, error: 'Diff content is required' };
   }
+
+  // Unwrap code fences if LLM wrapped diff in ``` blocks
+  diff = unwrapCodeBlock(diff);
+
+  // Auto-generate ---/+++ headers if LLM sent diff without them
+  // Common failure: models send just @@ hunk lines without the file headers
+  if (!diff.includes('--- ') && !diff.includes('+++ ')) {
+    // Check if it looks like a diff (has @@ hunk headers)
+    if (diff.includes('@@')) {
+      diff = `--- a/${path}\n+++ b/${path}\n${diff}`;
+    }
+  }
+
   const context = getToolContext();
   const scopedPath = resolveScopedPath(path);
   
@@ -672,7 +799,22 @@ function reverseNormalizePath(originalPath: string, scopedPath: string): string 
  * Critical for the agent to see what exists before editing
  */
 export const readFileTool = (tool as any)({
-  description: 'Read a file. Required: path (e.g. "src/app.tsx"). Returns file content.',
+  description: [
+    'Read the content of a file. ALWAYS call this before editing an existing file.',
+    '',
+    'Required arguments:',
+    '  • path (string) — relative file path like "src/app.tsx"',
+    '',
+    'Examples of correct usage:',
+    '  read_file(path="src/App.tsx")',
+    '  read_file(path="package.json")',
+    '',
+    'Common mistakes to avoid:',
+    '  ✗ readFile(path=...)  → Use read_file (underscore, not camelCase)',
+    '  ✗ read_file(file=...)  → Use path, not file or filename',
+    '',
+    'Workflow: Always read_file before applying a diff to an existing file.',
+  ].join('\n'),
   parameters: z.preprocess(
     (raw) => normalizeToolArgs('read_file', raw),
     z.object({
@@ -787,7 +929,22 @@ export const readFilesTool = (tool as any)({
  * Use for navigation and exploration
  */
 export const listFilesTool = (tool as any)({
-  description: 'List files and directories in the Virtual File System. Use to explore project structure and find files.',
+  description: [
+    'List files and directories in the Virtual File System.',
+    '',
+    'Arguments:',
+    '  • path (string, default: "/") — directory to list',
+    '  • recursive (boolean, default: false) — whether to list recursively',
+    '',
+    'Examples of correct usage:',
+    '  list_files(path="/")',
+    '  list_files(path="src/", recursive=true)',
+    '',
+    'Common mistakes to avoid:',
+    '  ✗ listFiles(path=...)  → Use list_files (underscore, not camelCase)',
+    '  ✗ ls(path=...)  → Use list_files, not ls',
+    '  ✗ list_files(directory=...)  → Use path, not directory or dir or folder',
+  ].join('\n'),
   parameters: z.preprocess(
     (raw) => normalizeToolArgs('list_files', raw),
     z.object({
@@ -833,7 +990,23 @@ export const listFilesTool = (tool as any)({
  * Helps the agent find where to make changes
  */
 export const searchFilesTool = (tool as any)({
-  description: 'Search across the Virtual File System for files containing specific text. Returns matching files and code snippets.',
+  description: [
+    'Search across the Virtual File System for files containing specific text.',
+    '',
+    'Arguments:',
+    '  • query (string) — search term or text pattern',
+    '  • path (string, optional) — limit search to a directory like "src/"',
+    '  • limit (number, default: 10) — maximum results',
+    '',
+    'Examples of correct usage:',
+    '  search_files(query="TODO")',
+    '  search_files(query="useState", path="src/", limit=20)',
+    '',
+    'Common mistakes to avoid:',
+    '  ✗ searchFiles(query=...)  → Use search_files (underscore, not camelCase)',
+    '  ✗ search_files(term=...)  → Use query, not term or pattern or text',
+    '  ✗ search_files(search=...)  → Use query, not search',
+  ].join('\n'),
   parameters: z.preprocess(
     (raw) => normalizeToolArgs('search_files', raw),
     z.object({
@@ -891,7 +1064,38 @@ export const searchFilesTool = (tool as any)({
  * Efficient for creating several related files at once
  */
 export const batchWriteTool = (tool as any)({
-  description: 'Write multiple files at once. Required: files — array of {path, content} objects. Example: {"files": [{"path": "src/a.ts", "content": "full content here"}]}',
+  description: [
+    'Write multiple files at once in a single tool call.',
+    '',
+    'Required arguments:',
+    '  • files (array) — array of {path, content} objects',
+    '',
+    'Optional arguments:',
+    '  • commitMessage (string) — description of the batch change',
+    '',
+    'Examples of correct usage:',
+    '  batch_write(files=[{path:"src/app.py", content:"from flask import Flask\\napp = Flask(__name__)"},{path:"requirements.txt", content:"flask\\ngunicorn"}])',
+    '  batch_write(files=[{path:"src/App.tsx", content:"export default function App() {}"},{path:"src/App.css", content:".app { margin: 0 }"}])',
+    '  batch_write(files=[{path:"README.md", content:"# Project"},{path:"LICENSE", content:"MIT"},{path:".gitignore", content:"node_modules/"}])',
+    '',
+    'Common mistakes to avoid:',
+    '  ✗ batch_write(files="[{\\"path\\":...}]")  → Do NOT stringify the files array — pass as a proper JSON/array',
+    '  ✗ batch_write(files={path:"a.py", content:"..."})  → files must be an ARRAY [...], not a single object {...}',
+    '  ✗ batch_write(items=[...])  → Use files, not items or operations or data',
+    '  ✗ write_file(path="a.py", ...) + write_file(path="b.py", ...)  → Use batch_write for 2+ files instead',
+    '  ✗ batch_write with file= instead of path=  → Each entry needs path and content keys',
+    '',
+    'When to use batch_write vs write_file:',
+    '  • batch_write — creating 2 or more files in one go',
+    '  • write_file — creating a single new file',
+    '',
+    'Important rules:',
+    '  • Maximum 50 files per batch',
+    '  • Total content size limit: 50MB across all files',
+    '  • Each file entry must have both "path" and "content" keys',
+    '  • Parent directories are created automatically',
+    '  • Use batch_write for NEW files only — for editing existing files, use apply_diff',
+  ].join('\n'),
   parameters: z.preprocess(
     (raw) => normalizeToolArgs('batch_write', raw),
     z.object({
@@ -1093,7 +1297,22 @@ export const batchWriteTool = (tool as any)({
  * delete_file - Delete a file or directory from the VFS
  */
 export const deleteFileTool = (tool as any)({
-  description: 'Delete a file or directory from the Virtual File System. Use with caution — this operation cannot be undone.',
+  description: [
+    'Delete a file or directory from the Virtual File System. Use with caution.',
+    '',
+    'Arguments:',
+    '  • path (string) — relative file path like "src/old.ts"',
+    '  • reason (string, optional) — why this file is being deleted',
+    '',
+    'Examples of correct usage:',
+    '  delete_file(path="src/old.ts")',
+    '  delete_file(path="temp/", reason="Temporary files no longer needed")',
+    '',
+    'Common mistakes to avoid:',
+    '  ✗ deleteFile(path=...)  → Use delete_file (underscore, not camelCase)',
+    '  ✗ delete_file(file=...)  → Use path, not file or filename',
+    '  ✗ remove_file(path=...)  → Use delete_file, not remove_file',
+  ].join('\n'),
   parameters: z.preprocess(
     (raw) => normalizeToolArgs('delete_file', raw),
     z.object({
@@ -1142,7 +1361,21 @@ export const deleteFileTool = (tool as any)({
  * create_directory - Create a directory in the VFS
  */
 export const createDirectoryTool = (tool as any)({
-  description: 'Create a directory in the Virtual File System. Creates parent directories as needed.',
+  description: [
+    'Create a directory in the Virtual File System. Parent directories are created automatically.',
+    '',
+    'Arguments:',
+    '  • path (string) — directory path to create like "src/components/utils"',
+    '',
+    'Examples of correct usage:',
+    '  create_directory(path="src/components")',
+    '  create_directory(path="tests/unit")',
+    '',
+    'Common mistakes to avoid:',
+    '  ✗ createDirectory(path=...)  → Use create_directory (underscore, not camelCase)',
+    '  ✗ mkdir(path=...)  → Use create_directory, not mkdir',
+    '  ✗ create_directory(directory=...)  → Use path, not directory or dir or folder or name',
+  ].join('\n'),
   parameters: z.preprocess(
     (raw) => normalizeToolArgs('create_directory', raw),
     z.object({
