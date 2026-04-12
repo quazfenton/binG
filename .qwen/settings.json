@@ -29,7 +29,9 @@
       "Bash(type *)",
       "Bash(timeout *)",
       "Bash(copy *)",
-      "Bash(npx *)"
+      "Bash(npx *)",
+      "Bash(cmd *)",
+      "Bash(pnpm *)"
     ],
     "exclude": [
       "Bash(git checkout)"

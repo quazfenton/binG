@@ -4,9 +4,10 @@
   "version": "0.1.0",
   "identifier": "com.quaz.desktop",
   "build": {
-    "beforeDevCommand": "cd ../web && pnpm dev",
+    "beforeDevCommand": "pnpm --dir web dev",
     "devUrl": "http://localhost:3000",
-    "beforeBuildCommand": "cd ../web && pnpm build"
+    "beforeBuildCommand": "",
+    "frontendDist": "./static"
   },
   "app": {
     "withGlobalTauri": true,
@@ -17,13 +18,18 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis"],
     "category": "DeveloperTool",
     "shortDescription": "Creator workspace",
     "longDescription": "Quaz Desktop - Workspace for creators, developers, & agents for software, automation, cloud storage, sandboxes and code execution",
     "icon": [
       "icons/favicon.ico"
     ],
-    "resources": []
+    "resources": {},
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      }
+    }
   }
 }

@@ -382,7 +382,7 @@ export const WEB_SEARCH_CAPABILITY: CapabilityDefinition = {
     url: z.string(),
     snippet: z.string(),
   })),
-  providerPriority: ['nullclaw', 'mcp-search'],
+  providerPriority: ['nullclaw'],
   tags: ['web', 'search', 'google', 'find'],
 };
 

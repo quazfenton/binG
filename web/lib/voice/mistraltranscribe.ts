@@ -358,8 +358,7 @@ export async function startRealtimeTranscription(options: {
       if (event.data.size > 0) {
         const arrayBuffer = await event.data.arrayBuffer();
         const uint8Array = new Uint8Array(arrayBuffer);
-        // In production, you'd convert to PCM and stream in real-time
-        // This is a simplified version that collects and transcribes at the end
+        session.sendAudioChunk(uint8Array);
       }
     };
 
@@ -368,12 +367,13 @@ export async function startRealtimeTranscription(options: {
   };
 
   const stop = async () => {
-    if (mediaRecorder) {
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
       mediaRecorder.stop();
     }
     if (stream) {
       stream.getTracks().forEach((track) => track.stop());
     }
+    // Signal session to finalize transcription
     await session.stop();
   };
 

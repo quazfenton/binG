@@ -166,8 +166,8 @@ export class OpencodeV2Provider implements LLMProvider {
             // Strip "project/" prefix and append to workspace base
             const relativePart = sanitized.replace(/^project\//, '');
             localWorkspaceDir = isWindows
-              ? path.join(process.env.TEMP || process.env.TMP || 'C:\\temp', 'opencode-workspace', relativePart)
-              : path.join('/tmp/opencode-workspace', relativePart);
+              ? path.join(process.env.TEMP || process.env.TMP || 'C:\\temp', 'workspace', relativePart)
+              : path.join('/tmp/workspace', relativePart);
           } else if (sanitized.startsWith('/workspace/')) {
             localWorkspaceDir = sanitized.replace('/workspace/', isWindows ? (process.env.TEMP || 'C:\\temp') + '\\' : '/home/user/workspace/');
           } else {
@@ -186,14 +186,14 @@ export class OpencodeV2Provider implements LLMProvider {
         
         // Build path safely using path.join instead of string interpolation
         const path = await import('path');
-        localWorkspaceDir = path.join(tempDir, 'opencode-workspace', 'users', userId || 'guest', 'sessions', convId || 'default');
+        localWorkspaceDir = path.join(tempDir, 'workspace', 'users', userId || 'guest', 'sessions', convId || 'default');
       } else {
         // On Linux, convert /workspace/... to /home/user/workspace/...
         // SECURITY: Sanitize workspace directory path
         const sanitizedWorkspace = this.sanitizePath(workspaceDir);
         localWorkspaceDir = sanitizedWorkspace && sanitizedWorkspace.startsWith('/workspace/')
           ? sanitizedWorkspace.replace('/workspace/', '/home/user/workspace/')
-          : (sanitizedWorkspace || '/tmp/opencode-workspace');
+          : (sanitizedWorkspace || '/tmp/workspace');
       }
 
       // Write the prompt to a temp file (use OS-appropriate temp directory)

@@ -12,6 +12,7 @@ allowBuilds:
   es5-ext: true
   esbuild: true
   msgpackr-extract: true
+  node-pty: true
   protobufjs: false
   sharp: false
   ssh2: false

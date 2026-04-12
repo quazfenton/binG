@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { blockSensitiveFiles } from './lib/security/file-access-blocker';
 import { generateAndStoreNonces, generateCspHeader } from './lib/security/nonce-generator';
 import { auth0 } from './lib/auth0-edge';
+import { checkRateLimitMiddleware } from './lib/middleware/rate-limit';
+import { rateLimitMiddleware as authRateLimit, RATE_LIMIT_CONFIGS } from './lib/middleware/rate-limiter';
 
 /**
  * Next.js Proxy
@@ -11,7 +13,8 @@ import { auth0 } from './lib/auth0-edge';
  * 2. Generates cryptographic nonces for CSP
  * 3. Adds security headers with nonce-based CSP
  * 4. Handles Auth0 authentication routing (sidelayer for future integrations)
- * 5. Can add authentication checks, rate limiting, etc.
+ * 5. Validates sidecar tokens in desktop mode
+ * 6. Applies rate limiting to API routes (auth and generic)
  */
 
 export async function proxy(request: NextRequest) {
@@ -24,7 +27,14 @@ export async function proxy(request: NextRequest) {
   // Desktop mode: validate sidecar token on API routes
   const isDesktop = process.env.DESKTOP_MODE === 'true';
   const sidecarToken = process.env.OPENCODE_SIDECAR_TOKEN;
-  if (isDesktop && sidecarToken && request.nextUrl.pathname.startsWith('/api/')) {
+  if (isDesktop && request.nextUrl.pathname.startsWith('/api/')) {
+    if (!sidecarToken) {
+      return NextResponse.json(
+        { error: 'Server misconfiguration — missing sidecar token' },
+        { status: 500 },
+      );
+    }
+
     // Skip token check for routes handled directly by Tauri invoke()
     const tauriRoutes = new Set(['/api/health', '/api/providers']);
     if (!tauriRoutes.has(request.nextUrl.pathname)) {
@@ -34,6 +44,44 @@ export async function proxy(request: NextRequest) {
           { error: 'Unauthorized — invalid or missing sidecar token' },
           { status: 401 },
         );
+      }
+    }
+  }
+
+  // Rate limiting for API routes
+  if (request.nextUrl.pathname.startsWith('/api/')) {
+    // Authentication routes: strict rate limiting to prevent brute-force attacks
+    if (request.nextUrl.pathname.startsWith('/api/auth/')) {
+      const authPath = request.nextUrl.pathname;
+
+      // Determine auth operation for appropriate rate limit config
+      let configKey: keyof typeof RATE_LIMIT_CONFIGS = 'generic';
+      if (authPath.includes('/login') || authPath.includes('/signin')) {
+        configKey = 'login';
+      } else if (authPath.includes('/register') || authPath.includes('/signup')) {
+        configKey = 'register';
+      } else if (authPath.includes('/password-reset') || authPath.includes('/reset-password')) {
+        configKey = 'passwordReset';
+      } else if (authPath.includes('/verify') || authPath.includes('/send-verification')) {
+        configKey = 'sendVerification';
+      }
+
+      // Apply auth rate limiting
+      const rateLimitResult = authRateLimit(request, configKey);
+      if (!rateLimitResult.success) {
+        return rateLimitResult.response;
+      }
+    } else {
+      // Generic API rate limiting for all other /api/* routes
+      // 100 requests per minute (moderate tier)
+      const rateLimitResponse = checkRateLimitMiddleware(
+        request,
+        'api:global',
+        100,
+        60 * 1000 // 1 minute window
+      );
+      if (rateLimitResponse) {
+        return rateLimitResponse;
       }
     }
   }

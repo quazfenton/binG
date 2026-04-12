@@ -869,7 +869,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                             msg.id === assistantMessage.id
                               ? {
                                   ...msg,
-                                  content: doneContent || '_Response returned empty content_',
+                                  content: doneContent || '_Still working..._',
                                   metadata: {
                                     ...(msg.metadata || {}),
                                     ...doneMetadata,

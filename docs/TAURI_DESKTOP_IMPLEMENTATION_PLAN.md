@@ -162,7 +162,7 @@ export class DesktopSandboxHandle implements SandboxHandle {
 
   constructor(sandboxId: string) {
     this.id = sandboxId
-    this.workspaceDir = `/Users/${process.env.USER}/opencode-workspace/${sandboxId}`
+    this.workspaceDir = `/Users/${process.env.USER}/workspace/${sandboxId}`
   }
 
   async executeCommand(
@@ -611,7 +611,7 @@ pub async fn create_sandbox(
 
     let work_dir = workspace_dir.unwrap_or_else(|| {
         format!(
-            "{}/opencode-workspace/{}",
+            "{}/workspace/{}",
             std::env::var("HOME").unwrap(),
             sandbox_id
         )

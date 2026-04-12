@@ -958,7 +958,7 @@ export class EnhancedLLMService {
               chatLogger.warn('Failed to merge VFS tools into Vercel AI SDK', { requestId, error: vfsErr.message });
             }
 
-            // Pre-detect URLs in the last user message and inject a hint
+            // Pre-detect URLs in the last user message and inject enhanced hint with context
             const lastUserMsg = [...llmRequest.messages].reverse().find(m => m.role === 'user');
             const lastText = typeof lastUserMsg?.content === 'string'
               ? lastUserMsg.content
@@ -967,14 +967,25 @@ export class EnhancedLLMService {
             const urlRegex = /https?:\/\/[^\s]+/g;
             const detectedUrls = lastText.match(urlRegex) || [];
             if (detectedUrls.length > 0 && vercelTools?.['web_fetch']) {
+              // Extract the question/context (everything except the URLs)
+              const textWithoutUrls = lastText.replace(urlRegex, '').trim();
+              const questionContext = textWithoutUrls.length > 500 
+                ? textWithoutUrls.substring(0, 500) 
+                : textWithoutUrls;
+              
               llmRequest.messages = [
                 ...llmRequest.messages,
                 {
                   role: 'system' as const,
-                  content: `[Tool hint: URLs detected in user message. Use the web_fetch tool to read: ${detectedUrls.join(', ')}]`,
+                  content: `[Tool hint: URLs detected: ${detectedUrls.join(', ')}| Use the web_fetch tool to read these pages and answer the question. Context: ${questionContext || 'Extract all meaningful content from these URLs'}]`,
                 },
               ];
-              chatLogger.info('URL detected in prompt, injected web_fetch hint', { requestId, urls: detectedUrls });
+              chatLogger.info('URL detected in prompt, injected web_fetch hint with context', { 
+                requestId, 
+                urls: detectedUrls,
+                hasContext: !!questionContext,
+                contextLength: questionContext.length,
+              });
             }
           } catch (toolErr: any) {
             chatLogger.warn('Failed to build Vercel AI tools, proceeding without', { requestId, error: toolErr.message });

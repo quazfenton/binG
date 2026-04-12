@@ -192,16 +192,9 @@ export async function tauriFetch(
   }
 
   // -----------------------------------------------------------------------
-  // Route 2: Sidecar HTTP (LLM, chat, streaming)
+  // Route 2: Try Tauri generic handler, then sidecar, then native fetch
   // -----------------------------------------------------------------------
-  if (SIDECAR_ROUTES.has(pathname) || pathname.startsWith('/api/chat') || pathname.startsWith('/api/agent') || pathname.startsWith('/api/sandbox') || pathname.startsWith('/api/mcp') || pathname.startsWith('/api/terminal')) {
-    return await handleSidecarRoute(pathname, url, init, headers);
-  }
-
-  // -----------------------------------------------------------------------
-  // Route 3: Fallback — try Tauri generic handler, then sidecar, then native
-  // -----------------------------------------------------------------------
-  // Try generic Tauri handler first
+  // Try generic Tauri handler first (works without sidecar)
   try {
     const { invoke } = await importTauri();
     const result = await invoke('handle_api_route', {
@@ -213,14 +206,22 @@ export async function tauriFetch(
     });
     return jsonResponse(result);
   } catch {
-    // Tauri handler not available — try sidecar
-    try {
-      return await handleSidecarRoute(pathname, url, init, headers);
-    } catch {
-      // Last resort: native fetch (will fail in production Tauri)
-      console.warn('[tauriFetch] Falling back to native fetch for', pathname);
-      return fetch(input, init);
+    // Tauri handler not available for this route — try sidecar
+    if (SIDECAR_ROUTES.has(pathname) || pathname.startsWith('/api/chat') || pathname.startsWith('/api/agent') || pathname.startsWith('/api/sandbox') || pathname.startsWith('/api/mcp') || pathname.startsWith('/api/terminal')) {
+      try {
+        return await handleSidecarRoute(pathname, url, init, headers);
+      } catch {
+        console.warn('[tauriFetch] Sidecar unavailable for', pathname, '— returning stub response');
+        return jsonResponse({
+          success: false,
+          error: 'Sidecar not available — this route requires the Node.js server',
+          hint: 'Ensure Node.js is installed and the app was built with `pnpm build`',
+        }, 503);
+      }
     }
+    // Last resort: native fetch (will fail in production Tauri)
+    console.warn('[tauriFetch] Falling back to native fetch for', pathname);
+    return fetch(input, init);
   }
 }
 
