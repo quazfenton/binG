@@ -214,7 +214,8 @@ export function useVirtualFilesystem(
   const offlineMode = options?.offlineMode ?? false;
 
   // Derive session ID from initialPath if it's a scoped path (e.g., "project/sessions/004")
-  const deriveSessionIdFromPath = (path: string): string | null => {
+  const deriveSessionIdFromPath = (path: string | undefined | null): string | null => {
+    if (!path) return null;
     const match = path.match(/^project\/sessions\/([^/]+)/);
     return match ? match[1] : null;
   };

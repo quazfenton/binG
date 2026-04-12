@@ -1240,8 +1240,8 @@ export function WorkspacePanel() {
   const [newItemName, setNewItemName] = useState("");
   const [creatingParentPath, setCreatingParentPath] = useState("/");
 
-  // File operations state (cut/copy/paste, rename, drag-drop)
-  const [fileClipboard, setFileClipboard] = useState<{ sourcePath: string; operation: 'cut' | 'copy' } | null>(null);
+  // File operations state (copy/paste, rename, drag-drop)
+  const [fileClipboard, setFileClipboard] = useState<{ sourcePath: string; operation: 'copy' } | null>(null);
   const [renamingFile, setRenamingFile] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [draggedFile, setDraggedFile] = useState<string | null>(null);
@@ -2072,11 +2072,6 @@ export function WorkspacePanel() {
   }, []);
 
   // File operation handlers
-  const handleCutFile = useCallback((path: string) => {
-    setFileClipboard({ sourcePath: path, operation: 'cut' });
-    toast.info('File cut - click paste in a folder');
-  }, []);
-
   const handleCopyFile = useCallback((path: string) => {
     setFileClipboard({ sourcePath: path, operation: 'copy' });
     toast.info('File copied - click paste in a folder');
@@ -2139,20 +2134,8 @@ export function WorkspacePanel() {
       // Write to target
       await writeFile(targetPath, content);
 
-      // If cut, delete source
-      if (activeClipboard.operation === 'cut') {
-        const deleteResponse = await fetch('/api/filesystem/delete', {
-          method: 'POST',
-          headers: buildApiHeaders(),
-          body: JSON.stringify({ path: resolveScopedPath(activeClipboard.sourcePath, vfs?.currentPath || '/') }),
-        });
-        if (!deleteResponse.ok) {
-          throw new Error('Failed to delete source file');
-        }
-      }
-
       await listDirectory(vfs?.currentPath || '/');
-      toast.success(`File ${activeClipboard.operation === 'cut' ? 'moved' : 'copied'} successfully`);
+      toast.success('File copied successfully');
 
       // Emit filesystem SSE event for paste operation
       emitFilesystemUpdated({
@@ -2528,19 +2511,6 @@ export function WorkspacePanel() {
                 <span className="text-white/80 truncate flex-1 min-w-0">{node.name}</span>
               )}
             </button>
-            {/* Paste button when file clipboard has content */}
-            {fileClipboard && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handlePasteToFolder(node.path);
-                }}
-                className="p-1 hover:bg-white/10 rounded opacity-0 group-hover:opacity-100 transition-opacity text-green-400"
-                title="Paste file here"
-              >
-                <Plus className="h-3 w-3" />
-              </button>
-            )}
             {/* Add file button for folders */}
             <button
               onClick={(e) => {
@@ -2632,16 +2602,6 @@ export function WorkspacePanel() {
           <button
             onClick={(e) => {
               e.stopPropagation();
-              handleCutFile(node.path);
-            }}
-            className="p-0.5 hover:bg-white/10 rounded"
-            title="Cut"
-          >
-            <Edit className="h-3 w-3 text-blue-400" />
-          </button>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
               handleCopyFile(node.path);
             }}
             className="p-0.5 hover:bg-white/10 rounded"
@@ -2652,7 +2612,7 @@ export function WorkspacePanel() {
         </div>
       </div>
     );
-  }, [expandedFolders, selectedFile, toggleFolder, handleFileSelect, handleCreateFile, handleRenameFile, renamingFile, renameValue, confirmRename, cancelRename, fileClipboard, handlePasteToFolder, dragOverFolder, handleDragOver, handleDragLeave, handleDrop, handleDragStart, handleCutFile, handleCopyFile, openMonacoEditor]);
+  }, [expandedFolders, selectedFile, toggleFolder, handleFileSelect, handleCreateFile, handleRenameFile, renamingFile, renameValue, confirmRename, cancelRename, fileClipboard, handlePasteToFolder, dragOverFolder, handleDragOver, handleDragLeave, handleDrop, handleDragStart, handleCopyFile, openMonacoEditor]);
 
   // Check GitHub auth status and fetch repos when modal opens
   useEffect(() => {
@@ -3135,7 +3095,7 @@ export function WorkspacePanel() {
                       {fileClipboard && (
                         <div className="mb-2 p-2 bg-yellow-500/10 border border-yellow-500/30 rounded flex items-center justify-between">
                           <span className="text-xs text-yellow-300">
-                            {fileClipboard.operation === 'cut' ? '✂️ Cut' : '📋 Copied'}: {fileClipboard.sourcePath.split('/').pop()}
+                            📋 Copied: {fileClipboard.sourcePath.split('/').pop()}
                           </span>
                           <button
                             onClick={() => setFileClipboard(null)}
@@ -4741,15 +4701,6 @@ export function WorkspacePanel() {
           >
             {!contextMenu.isDirectory && (
               <>
-                <button
-                  onClick={() => {
-                    handleCutFile(contextMenu.path);
-                    setContextMenu(null);
-                  }}
-                  className="w-full px-3 py-1.5 text-left text-xs text-white/80 hover:bg-white/10 flex items-center gap-2"
-                >
-                  <Edit className="h-3 w-3 text-yellow-400" /> Cut
-                </button>
                 <button
                   onClick={() => {
                     handleCopyFile(contextMenu.path);

@@ -1016,7 +1016,7 @@ export class EnhancedLLMService {
         }
 
         // Wrap with auto-continue support
-        const { streamWithAutoContinue } = await import('@/lib/virtual-filesystem/smart-context');
+        const { streamWithAutoContinue, streamWithServerAutoRePrompt } = await import('@/lib/virtual-filesystem/smart-context');
         const baseStream = streamWithVercelAI({
           provider: vercelProvider,
           model: llmRequest.model || 'default',
@@ -1035,10 +1035,25 @@ export class EnhancedLLMService {
           timeoutMs: request.timeoutMs || 90000,
         });
 
-        yield* streamWithAutoContinue(baseStream, {
+        // Chain: streamWithAutoContinue detects continuation needs,
+        // streamWithServerAutoRePrompt actually re-calls LLM with tool results
+        const autoContinueStream = streamWithAutoContinue(baseStream, {
           userId: request.userId || 'anonymous',
           conversationId: request.conversationId,
           enableAutoContinue: true,
+        });
+
+        yield* streamWithServerAutoRePrompt(autoContinueStream, {
+          userId: request.userId || 'anonymous',
+          conversationId: request.conversationId,
+          messages: processedMessages,
+          tools: vercelTools,
+          provider: primaryProvider,
+          model: llmRequest.model || 'default',
+          temperature: llmRequest.temperature || 0.7,
+          maxTokens: llmRequest.maxTokens || 4096,
+          maxRePrompts: 3,
+          signal: request.signal,
         });
 
         const streamLatency = Date.now() - streamStartTime;
@@ -1054,12 +1069,24 @@ export class EnhancedLLMService {
       const fullRequest = { ...llmRequest, messages: processedMessages, provider: primaryProvider, apiKey: userApiKey || llmRequest.apiKey };
 
       // Wrap with auto-continue support
-      const { streamWithAutoContinue } = await import('@/lib/virtual-filesystem/smart-context');
+      const { streamWithAutoContinue, streamWithServerAutoRePrompt } = await import('@/lib/virtual-filesystem/smart-context');
       const baseStream = llmService.generateStreamingResponse(fullRequest);
-      yield* streamWithAutoContinue(baseStream, {
+      const autoContinueStream = streamWithAutoContinue(baseStream, {
         userId: request.userId || 'anonymous',
         conversationId: request.conversationId,
         enableAutoContinue: true,
+      });
+
+      yield* streamWithServerAutoRePrompt(autoContinueStream, {
+        userId: request.userId || 'anonymous',
+        conversationId: request.conversationId,
+        messages: processedMessages,
+        provider: primaryProvider,
+        model: llmRequest.model || 'default',
+        temperature: llmRequest.temperature || 0.7,
+        maxTokens: llmRequest.maxTokens || 4096,
+        maxRePrompts: 3,
+        signal: request.signal,
       });
 
       const streamLatency = Date.now() - streamStartTime;

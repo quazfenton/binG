@@ -1092,7 +1092,7 @@ const config: UnifiedAgentConfig = {
       model: normalizedModel,
     };
 
-    const tools = await getMCPToolsForAI_SDK(authenticatedUserId);
+    const tools = await getMCPToolsForAI_SDK(authenticatedUserId, lastUserMsgContent);
     config.tools = tools.map(t => ({
       name: t.function.name,
       description: t.function.description,

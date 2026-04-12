@@ -37,6 +37,7 @@ export function VersionHistoryPanel({
   const [isExpanded, setIsExpanded] = useState(!compact);
   const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
   const [isRollingBack, setIsRollingBack] = useState(false);
+  const [currentVfsVersion, setCurrentVfsVersion] = useState<number | null>(null);
 
   const fetchVersions = useCallback(async () => {
     // Don't fetch if sessionId is empty or "default" (not a real session)
@@ -44,32 +45,42 @@ export function VersionHistoryPanel({
       setVersions([]);
       return;
     }
-    
+
     setIsLoading(true);
     try {
       const response = await fetch(`/api/gateway/git/${sessionId}/versions?limit=20`, {
         headers: buildApiHeaders(),
         credentials: 'include',
       });
-      
+
       // Handle auth/session errors gracefully
       if (response.status === 401 || response.status === 403) {
         setVersions([]);
         return;
       }
-      
+
       if (response.status === 404) {
         setVersions([]);
         return;
       }
-      
+
       if (!response.ok) throw new Error('Failed to fetch versions');
-      
+
       const data = await response.json();
-      setVersions(data.versions || []);
+      const fetchedVersions = data.versions || [];
+      setVersions(fetchedVersions);
+
+      // Track the highest workspace_version from shadow commits
+      if (fetchedVersions.length > 0) {
+        const maxCommitVersion = Math.max(...fetchedVersions.map((v: VersionHistory) => v.version));
+        setCurrentVfsVersion(maxCommitVersion);
+      } else {
+        setCurrentVfsVersion(null);
+      }
     } catch (error: any) {
       console.error('Failed to fetch version history:', error);
       setVersions([]);
+      setCurrentVfsVersion(null);
     } finally {
       setIsLoading(false);
     }
@@ -91,6 +102,19 @@ export function VersionHistoryPanel({
   const handleRollback = useCallback(async (version: number) => {
     if (!sessionId || isRollingBack) return;
 
+    // FIX: Validate that the requested version actually exists in shadow commit history
+    // The VFS workspace version can be inflated by writes/deletes without corresponding
+    // shadow commits. Attempting to rollback to a non-existent version will fail.
+    const availableVersions = versions.map(v => v.version);
+    if (!availableVersions.includes(version)) {
+      toast.error('Version not available', {
+        description: availableVersions.length > 0
+          ? `Version ${version} has no shadow commit. Available versions: ${availableVersions.sort((a, b) => b - a).slice(0, 5).join(', ')}`
+          : 'No shadow commits exist yet. Files must be committed before rollback is available.',
+      });
+      return;
+    }
+
     setIsRollingBack(true);
     try {
       const response = await fetch(`/api/gateway/git/${sessionId}/rollback`, {
@@ -106,7 +130,7 @@ export function VersionHistoryPanel({
       }
 
       const result = await response.json();
-      
+
       if (result.success) {
         const desc = result.filesRestored
           ? `Restored ${result.filesRestored} file(s) to version ${version}`
@@ -128,7 +152,7 @@ export function VersionHistoryPanel({
       setIsRollingBack(false);
       setSelectedVersion(null);
     }
-  }, [sessionId, isRollingBack, onVersionSelect, fetchVersions]);
+  }, [sessionId, isRollingBack, onVersionSelect, fetchVersions, versions]);
 
   const formatTimestamp = (timestamp: number) => {
     const date = new Date(timestamp);

@@ -3082,7 +3082,7 @@ export default app;`,
           // Create a copy of baseSandpackFiles to work with
           const filesCopy = { ...baseSandpackFiles };
 
-          // Add entry file stub if missing (using same logic as addEntryFileIfMissing but as pure function)
+          // Check if entry files exist
           const existingEntryFile = Object.keys(filesCopy).some(path => {
             const fileName = path.split('/').pop() || '';
             return /^index\.(js|jsx|ts|tsx|mjs|cjs|vue)$/.test(fileName) ||
@@ -3091,6 +3091,16 @@ export default app;`,
                    /^page\.(js|jsx|ts|tsx)$/.test(fileName);
           });
 
+          // CRITICAL FIX: Always ensure index.html exists for React projects,
+          // even when entry JS files are present. Sandpack's React template needs
+          // <div id="root"></div> in index.html for ReactDOM.createRoot to work.
+          const hasIndexHtml = Object.keys(filesCopy).some(path =>
+            path.endsWith('index.html') || path === 'index.html'
+          );
+
+          const isReactProject = ['react', 'next', 'vite-react'].includes(effectiveFramework);
+
+          // If no entry file at all, add full stub
           if (!existingEntryFile) {
             // Add framework-specific stub files
             const framework = effectiveFramework;
@@ -3166,6 +3176,23 @@ root.render(<App />);` };
 </html>` };
                 break;
             }
+          }
+
+          // CRITICAL FIX: For React projects that have entry JS files but no index.html,
+          // inject index.html so ReactDOM.createRoot(document.getElementById("root")) works.
+          // This fixes the "Target container is not a DOM element" error in Sandpack.
+          if (isReactProject && !hasIndexHtml) {
+            filesCopy["index.html"] = { code: `<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Preview</title>
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>` };
           }
 
           // For auto-detected projects (not manual preview), strip scope prefix and project subfolders
