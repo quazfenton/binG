@@ -31,7 +31,7 @@ export interface KnowledgeChunk {
   id: string;           // UUID or auto-generated
   type: KnowledgeType;
   content: string;      // The actual text to retrieve
-  embedding: number[];  // 1536-dim (OpenAI text-embedding-3-small)
+  embedding: number[];  // Vector embedding (Mistral codestral-embed: 512-dim, OpenAI: 1536-dim)
   metadata: {
     taskType?: string;      // 'vfs_write', 'vfs_batch', 'code_gen', etc.
     model?: string;         // which model this is relevant for
@@ -70,7 +70,11 @@ export interface KnowledgeSearchResult {
  */
 class InMemoryKnowledgeStore {
   private chunks: Map<string, KnowledgeChunk> = new Map();
-  private readonly EMBED_DIM = 1536; // text-embedding-3-small
+  private readonly EMBED_DIM: number;
+
+  constructor(dimension: number = 512) {
+    this.EMBED_DIM = dimension;
+  }
 
   // ── Insert / Update / Delete ──────────────────────────────────────────────
 

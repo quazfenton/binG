@@ -1437,7 +1437,7 @@ export default function Settings({
                           : 'border-white/10 hover:border-white/20 hover:bg-white/5'
                       }`}
                     >
-                      <div className="text-xs font-medium text-white">{modeInfo.name}</div>
+                      <div className="text-xs font-medium text-white">{modeInfo.label}</div>
                       <div className="text-[10px] text-gray-400 truncate">{modeInfo.description}</div>
                     </button>
                   );

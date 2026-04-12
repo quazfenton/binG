@@ -50,6 +50,56 @@ export interface ToolExecutionContext {
 export type VercelProvider = 'openai' | 'anthropic' | 'google' | 'mistral' | 'openrouter';
 
 /**
+ * Instructions for models that don't support function calling.
+ * Tells the model to use text-based formats for file operations.
+ */
+const TEXT_MODE_TOOL_INSTRUCTIONS = `
+## FILE OPERATIONS (REQUIRED FORMAT)
+
+You do NOT have function calling. Use ONLY these exact formats for file operations:
+
+### CREATE/OVERWRITE FILE
+\`\`\`file: path/to/file.ext
+complete file content here (no truncation)
+\`\`\`
+
+### EDIT FILE (unified diff format)
+\`\`\`diff: path/to/file.ext
+--- a/path/to/file.ext
++++ b/path/to/file.ext
+@@ -1,3 +1,4 @@
+ context line
+-line to remove
++line to add
++new line
+\`\`\`
+
+### CREATE DIRECTORY
+\`\`\`mkdir: path/to/directory
+\`\`\`
+
+### DELETE FILE
+\`\`\`delete: path/to/file.ext
+\`\`\`
+
+### MULTIPLE FILES (use separate blocks)
+\`\`\`file: src/a.ts
+content of a.ts
+\`\`\`
+
+\`\`\`file: src/b.ts
+content of b.ts
+\`\`\`
+
+### CRITICAL RULES
+1. ONE file per \`\`\`file:\`\`\` or \`\`\`diff:\`\`\` block
+2. Use COMPLETE file content (never truncate with "..." or "// rest of file")
+3. Do NOT mix explanations inside file blocks
+4. Do NOT describe file operations in plain text — use the block formats above
+5. Paths are relative to workspace (e.g., "src/app.tsx", not "/src/app.tsx")
+`;
+
+/**
  * Options for Vercel AI SDK streaming
  */
 export interface VercelStreamOptions {
@@ -667,51 +717,6 @@ export async function* streamWithVercelAI(
         reason: 'provider API returns 400 for tool calls on this model',
       });
       // Inject text-mode tool instructions since tools were stripped
-      const TEXT_MODE_TOOL_INSTRUCTIONS = `
-## FILE OPERATIONS (REQUIRED FORMAT)
-
-You do NOT have function calling. Use ONLY these exact formats for file operations:
-
-### CREATE/OVERWRITE FILE
-\`\`\`file: path/to/file.ext
-complete file content here (no truncation)
-\`\`\`
-
-### EDIT FILE (unified diff format)
-\`\`\`diff: path/to/file.ext
---- a/path/to/file.ext
-+++ b/path/to/file.ext
-@@ -1,3 +1,4 @@
- context line
--line to remove
-+line to add
-+new line
-\`\`\`
-
-### CREATE DIRECTORY
-\`\`\`mkdir: path/to/directory
-\`\`\`
-
-### DELETE FILE
-\`\`\`delete: path/to/file.ext
-\`\`\`
-
-### MULTIPLE FILES (use separate blocks)
-\`\`\`file: src/a.ts
-content of a.ts
-\`\`\`
-
-\`\`\`file: src/b.ts
-content of b.ts
-\`\`\`
-
-### CRITICAL RULES
-1. ONE file per \`\`\`file:\`\`\` or \`\`\`diff:\`\`\` block
-2. Use COMPLETE file content (never truncate with "..." or "// rest of file")
-3. Do NOT mix explanations inside file blocks
-4. Do NOT describe file operations in plain text — use the block formats above
-5. Paths are relative to workspace (e.g., "src/app.tsx", not "/src/app.tsx")
-`;
       if (streamOptions.system) {
         streamOptions.system = streamOptions.system + '\n\n' + TEXT_MODE_TOOL_INSTRUCTIONS;
       } else {
@@ -1296,31 +1301,6 @@ content of b.ts
             delete fallbackStreamOptions.tools;
 
             // Inject same text-mode instructions as main path
-            const TEXT_MODE_TOOL_INSTRUCTIONS = `
-FILE OPERATIONS — You do NOT have tool calls. Use EXACTLY these text formats:
-
-CREATE OR OVERWRITE A FILE:
-\`\`\`file: path/to/file.ext
-your full file content here
-\`\`\`
-
-EDIT EXISTING FILE (preferred — use unified diff):
-\`\`\`diff: path/to/file.ext
---- a/path/to/file.ext
-+++ b/path/to/file.ext
-@@ existing @@
--line to remove
-+line to add
-\`\`\`
-
-CREATE DIRECTORY:
-\`\`\`mkdir: path/to/directory
-\`\`\`
-
-DELETE FILE:
-\`\`\`delete: path/to/file.ext
-\`\`\`
-`;
             if (fallbackStreamOptions.system) {
               fallbackStreamOptions.system = fallbackStreamOptions.system + '\n\n' + TEXT_MODE_TOOL_INSTRUCTIONS;
             } else {

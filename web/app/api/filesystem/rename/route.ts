@@ -5,7 +5,8 @@
  * - Conflict detection
  * - Overwrite protection
  * - Event emission for UI updates
- * - Atomic operations (read → write → delete)
+ * - File rename: read → write → delete
+ * - Directory rename: NOT ATOMIC - rejected until transactional support exists
  * 
  * POST /api/filesystem/rename
  * {
@@ -25,32 +26,6 @@ import type { FilesystemOwnerResolution } from '@/lib/virtual-filesystem/resolve
 const logger = createLogger('API:Filesystem:Rename');
 
 export const runtime = 'nodejs';
-
-/**
- * Recursively get all files under a directory path
- */
-async function getAllFilesUnder(
-  ownerId: string,
-  dirPath: string,
-): Promise<Array<{ path: string; content: string; language: string }>> {
-  const files: Array<{ path: string; content: string; language: string }> = [];
-  
-  async function traverse(path: string) {
-    const listing = await virtualFilesystem.listDirectory(ownerId, path);
-    for (const node of listing.nodes) {
-      if (node.type === 'file') {
-        const file = await virtualFilesystem.readFile(ownerId, node.path);
-        files.push({ path: node.path, content: file.content, language: file.language });
-      } else {
-        // Recurse into subdirectory
-        await traverse(node.path);
-      }
-    }
-  }
-  
-  await traverse(dirPath);
-  return files;
-}
 
 const renameRequestSchema = z.object({
   oldPath: z.string().min(1, 'Source path is required'),
@@ -156,52 +131,42 @@ export async function POST(req: NextRequest) {
       content = file.content;
       language = file.language;
     } catch {
-      // It's a directory - need to rename the directory and all children
-      isDirectory = true;
-      const listing = await virtualFilesystem.listDirectory(ownerId, oldPath);
-      if (listing.nodes.length === 0) {
-        // Empty directory - just create the new directory marker
-        await virtualFilesystem.createDirectory(ownerId, newPath);
-        await virtualFilesystem.deletePath(ownerId, oldPath);
-        return NextResponse.json({
-          success: true,
-          data: { oldPath, newPath, overwritten: destinationExists, isDirectory: true },
-        });
-      }
-      
-      // For non-empty directories, we need to rename the directory itself
-      // Then update all child paths. Since VFS uses flat storage with paths,
-      // we need to read all files under oldPath and rewrite them under newPath
-      const allFiles = await getAllFilesUnder(ownerId, oldPath);
-      
-      // Write all files to new paths
-      for (const file of allFiles) {
-        const relativePath = file.path.substring(oldPath.length + 1);
-        const newFilePath = `${newPath}/${relativePath}`;
-        await virtualFilesystem.writeFile(ownerId, newFilePath, file.content, file.language);
-      }
-      
-      // Delete all old files
-      for (const file of allFiles) {
-        await virtualFilesystem.deletePath(ownerId, file.path);
-      }
-      
-      // Create directory marker at new path if needed
-      try {
-        await virtualFilesystem.readFile(ownerId, newPath);
-      } catch {
-        await virtualFilesystem.createDirectory(ownerId, newPath);
-      }
-      
-      return NextResponse.json({
-        success: true,
-        data: { oldPath, newPath, overwritten: destinationExists, isDirectory: true, filesRenamed: allFiles.length },
-      });
+      // Directory rename is not atomic - reject until transactional support exists
+      return NextResponse.json(
+        {
+          error: 'Directory rename is not supported',
+          details: 'Directory rename requires atomic operations which are not currently supported. Only file renames are allowed.',
+        },
+        { status: 501 }
+      );
     }
 
-    // Perform file rename: read → write → delete
+    // Perform file rename: read → write → delete → verify
     await virtualFilesystem.writeFile(ownerId, newPath, content, language);
     await virtualFilesystem.deletePath(ownerId, oldPath);
+
+    // Verify the old path was actually deleted to prevent duplicates
+    try {
+      await virtualFilesystem.readFile(ownerId, oldPath);
+      // If we can still read the old file, the deletion failed - clean up
+      await virtualFilesystem.deletePath(ownerId, newPath);
+      return NextResponse.json(
+        { error: 'Rename failed: could not delete source file' },
+        { status: 500 }
+      );
+    } catch {
+      // Expected - old path no longer exists
+    }
+
+    // Verify the new path exists
+    try {
+      await virtualFilesystem.readFile(ownerId, newPath);
+    } catch {
+      return NextResponse.json(
+        { error: 'Rename failed: destination file not found after operation' },
+        { status: 500 }
+      );
+    }
 
     logger.info('Rename operation completed:', { oldPath, newPath, isDirectory });
 

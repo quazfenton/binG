@@ -89,9 +89,7 @@ class AgentFSBridge {
       for (const file of sessionFiles) {
         try {
           const relativePath = file.path.replace('project/', '');
-          // sanitizeSandboxPath expects a relative path and joins it with the sandbox basePath
-          const sanitizedRelative = sanitizeSandboxPath(relativePath);
-          const sandboxFilePath = `${sandboxPath}/${sanitizedRelative}`;
+          const sandboxFilePath = sanitizeSandboxPath(relativePath);
 
           await session.sandboxHandle.writeFile(sandboxFilePath, file.content);
           syncedFiles.push(file.path);

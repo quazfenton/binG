@@ -321,7 +321,7 @@ export class PlanActVerifyOrchestrator {
             throw error;
           }
         },
-      }) as any;
+      } as any);
     }
   }
 

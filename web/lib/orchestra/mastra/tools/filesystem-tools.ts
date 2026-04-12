@@ -14,7 +14,7 @@ import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events
 
 export interface ToolCallResult {
   success: boolean;
-  error?: string;
+  error?: string | Record<string, any>;
   [key: string]: any;
 }
 
@@ -110,8 +110,8 @@ export function createFilesystemTools(
             // Try to list siblings for suggestions
             let suggestedPaths: string[] = [];
             try {
-              const siblings = await virtualFilesystem.listDirectory(userId, resolveWorkspacePath(workspacePath, parentPath));
-              suggestedPaths = (siblings as any[]).slice(0, 10).map((f: any) => f.name || f.path || String(f));
+              const listing = await virtualFilesystem.listDirectory(userId, resolveWorkspacePath(workspacePath, parentPath));
+              suggestedPaths = (listing.nodes as any[]).slice(0, 10).map((f: any) => f.name || f.path || String(f));
             } catch { /* parent may not exist either */ }
 
             return {
