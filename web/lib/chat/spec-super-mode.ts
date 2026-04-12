@@ -191,7 +191,7 @@ function emitTraceEvent(
     elapsedMs,
     completedChains,
     failedPhases,
-    isComplete: false,
+    isComplete: eventType === 'complete' || eventType === 'budget_warning',
   };
 
   // Log to console in development
@@ -1189,7 +1189,7 @@ This plan will guide the remaining implementation phases.
     '',
     'implement',
     totalDurationMs,
-    Array.from(state.completedPhases.filter(p => p.success).map(p => p.phase.chain)),
+    Array.from(new Set(state.completedPhases.filter(p => p.success).map(p => p.phase.chain))),
     state.failedPhases
   );
   

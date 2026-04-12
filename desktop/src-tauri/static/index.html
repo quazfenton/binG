@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Quaz Desktop — Setup Required</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      display: flex; align-items: center; justify-content: center;
+      min-height: 100vh; background: #09090b; color: #e4e4e7;
+    }
+    .container {
+      max-width: 520px; padding: 2.5rem;
+      background: #18181b; border: 1px solid #27272a;
+      border-radius: 12px; text-align: center;
+    }
+    .logo { font-size: 2rem; margin-bottom: 0.25rem; }
+    h1 { font-size: 1.35rem; font-weight: 600; margin-bottom: 0.5rem; }
+    p { color: #a1a1aa; font-size: 0.875rem; line-height: 1.6; margin-bottom: 1rem; }
+    .steps { text-align: left; background: #09090b; padding: 1rem 1.25rem; border-radius: 8px; margin: 1rem 0; }
+    .steps code { background: #27272a; padding: 0.15em 0.4em; border-radius: 4px; font-size: 0.8em; color: #e4e4e7; }
+    .steps li { margin-bottom: 0.5rem; color: #d4d4d8; font-size: 0.85rem; }
+    .steps ol { padding-left: 1.25rem; }
+    .status {
+      display: inline-block; padding: 0.3rem 0.8rem; border-radius: 9999px;
+      font-size: 0.75rem; font-weight: 500; margin-bottom: 1rem;
+    }
+    .pending { background: #713f12; color: #fde047; }
+    .check-btn {
+      display: inline-block; padding: 0.6rem 1.5rem; background: #3b82f6;
+      color: #fff; border: none; border-radius: 6px; font-size: 0.85rem;
+      cursor: pointer; font-weight: 500; margin-top: 0.5rem;
+    }
+    .check-btn:hover { background: #2563eb; }
+    .check-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    #nodeStatus { margin-top: 1rem; font-size: 0.8rem; }
+    .ok { color: #4ade80; }
+    .err { color: #f87171; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="logo">🚀</div>
+    <h1>Quaz Desktop</h1>
+    <div class="status pending">Setup Required</div>
+    <p>The Next.js web app requires <strong>Node.js</strong> to run. The sidecar server powers AI chat, agents, sandboxes, and LLM features. Local file operations work without it.</p>
+
+    <ol class="steps">
+      <li>Install <a href="https://nodejs.org/" target="_blank" style="color:#60a5fa">Node.js 20+</a> if not already installed</li>
+      <li>Open a terminal in the project <code>web/</code> folder</li>
+      <li>Run <code>pnpm build</code> to build the Next.js app</li>
+      <li>Relaunch Quaz Desktop</li>
+    </ol>
+
+    <button class="check-btn" id="checkBtn" onclick="checkNode()">Check Node.js</button>
+    <div id="nodeStatus"></div>
+  </div>
+
+  <script>
+    async function checkNode() {
+      const status = document.getElementById('nodeStatus');
+      const btn = document.getElementById('checkBtn');
+      btn.disabled = true;
+      btn.textContent = 'Checking...';
+      status.innerHTML = '';
+
+      try {
+        // Tauri v2 uses window.__TAURI__.core.invoke()
+        const tauri = window.__TAURI__;
+        if (!tauri || !tauri.core) {
+          status.innerHTML = '<span class="err">✗ Tauri API not available — are you running inside the desktop app?</span>';
+          btn.textContent = 'Check Again';
+          btn.disabled = false;
+          return;
+        }
+
+        const invoke = tauri.core.invoke;
+        const result = await invoke('execute_command', {
+          command: 'node --version',
+          cwd: undefined
+        });
+
+        if (result.success && result.output && result.output.trim().startsWith('v')) {
+          const version = result.output.trim();
+          status.innerHTML = `<span class="ok">✓ Node.js ${version} detected</span>`;
+          btn.textContent = 'Check Again';
+        } else {
+          const msg = result.error || result.output || 'unknown error';
+          status.innerHTML = `<span class="err">✗ Node.js not found in PATH: ${msg}</span>`;
+          btn.textContent = 'Check Again';
+        }
+      } catch (e) {
+        const msg = e?.message || String(e);
+        status.innerHTML = `<span class="err">✗ Check failed: ${msg}</span>`;
+        btn.textContent = 'Check Again';
+      }
+      btn.disabled = false;
+    }
+  </script>
+</body>
+</html>

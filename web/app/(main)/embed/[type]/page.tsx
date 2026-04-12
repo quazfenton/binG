@@ -7,6 +7,30 @@ interface EmbedPageProps {
 }
 
 /**
+ * Generate static params for all known embed types at build time.
+ * Required for `output: 'export'` to pre-render each embed route.
+ */
+export function generateStaticParams() {
+  return [
+    { type: 'api-pro' },
+    { type: 'cloud' },
+    { type: 'devops' },
+    { type: 'data-workbench' },
+    { type: 'creative' },
+    { type: 'github' },
+    { type: 'github-advanced' },
+    { type: 'hf-spaces' },
+    { type: 'hf-spaces-pro' },
+    { type: 'network' },
+    { type: 'notes' },
+    { type: 'prompts' },
+    { type: 'sandbox' },
+    { type: 'wiki' },
+    { type: 'default' },
+  ];
+}
+
+/**
  * Generate metadata for embed page
  */
 export async function generateMetadata({ params }: EmbedPageProps): Promise<Metadata> {

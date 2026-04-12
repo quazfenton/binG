@@ -6,7 +6,7 @@ const raw = Buffer.alloc(h * (w * 4 + 1));
 for (let y = 0; y < h; y++) {
   raw[y * (w * 4 + 1)] = 0;
   for (let x = 0; x < w; x++) {
-    const o = y * (w * 4 + 1) + 1 + (y * w + x) * 4;
+    const o = y * (w * 4 + 1) + 1 + x * 4;
     raw[o] = 80; raw[o+1] = 130; raw[o+2] = 186; raw[o+3] = 255;
     if (x > 32 && x < 224 && y > 32 && y < 224) { raw[o] = 255; raw[o+1] = 255; raw[o+2] = 255; }
   }
