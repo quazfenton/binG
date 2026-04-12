@@ -1042,14 +1042,14 @@ async function runProgressiveBuildMode(
     let fullResponse = '';
     try {
       const result = streamText({
-        model: vercelModel,
-        messages: nonSystemMsgs,
+        model: vercelModel as any,
+        messages: nonSystemMsgs as any,
         system: systemMsg?.content,
         maxTokens: config.maxTokens || 8000,
         temperature: config.temperature ?? 0.7,
         tools: Object.keys(vercelTools).length > 0 ? vercelTools : undefined,
         maxSteps: config.maxSteps || 10, // Allow multi-step tool calling
-      });
+      } as any);
 
       for await (const chunk of result.fullStream) {
         if (chunk.type === 'text-delta') {
@@ -1312,7 +1312,7 @@ async function runV1ApiWithTools(
   const uniqueProviders = [...new Set(providersToTry)];
 
   log.info('[V1-API-WITH-TOOLS] ┌─ PROVIDER FALLBACK CHAIN ────────');
-  log.info('[V1-API-WITH-TOOLS] │ primary:', primaryProvider, '/', primaryModel);
+  log.info(`[V1-API-WITH-TOOLS] │ primary: ${primaryProvider}/${primaryModel}`);
   log.info('[V1-API-WITH-TOOLS] │ configured fallbacks:', fallbackChain);
   log.info('[V1-API-WITH-TOOLS] │ will try (deduped):', uniqueProviders);
   log.info('[V1-API-WITH-TOOLS] └────────────────────────────────────');
@@ -1459,10 +1459,10 @@ async function runV1ApiWithTools(
       log.info('[V1-API-WITH-TOOLS] ┌─ STREAM COMPLETE ────────────');
       log.info('[V1-API-WITH-TOOLS] │ provider:', providerName);
       log.info('[V1-API-WITH-TOOLS] │ model:', modelForProvider);
-      log.info('[V1-API-WITH-TOOLS] │ duration:', duration, 'ms');
-      log.info('[V1-API-WITH-TOOLS] │ responseLength:', response.length);
-      log.info('[V1-API-WITH-TOOLS] │ toolInvocations:', toolInvocations.length);
-      log.info('[V1-API-WITH-TOOLS] │ tools:', toolInvocations.map(t => t.toolName).join(', ') || 'none');
+      log.info(`[V1-API-WITH-TOOLS] │ duration: ${duration} ms`);
+      log.info(`[V1-API-WITH-TOOLS] │ responseLength: ${response.length}`);
+      log.info(`[V1-API-WITH-TOOLS] │ toolInvocations: ${toolInvocations.length}`);
+      log.info(`[V1-API-WITH-TOOLS] │ tools: ${toolInvocations.map(t => t.toolName).join(', ') || 'none'}`);
       log.info('[V1-API-WITH-TOOLS] └────────────────────────────────');
 
       if (providerName !== primaryProvider) {
@@ -1769,7 +1769,7 @@ async function runV1ApiCompletion(
   const uniqueProviders = [...new Set(providersToTry)];
 
   log.info('[V1-API-COMPLETION] ┌─ PROVIDER FALLBACK CHAIN ────────');
-  log.info('[V1-API-COMPLETION] │ primary:', primaryProvider, '/', primaryModel);
+  log.info(`[V1-API-COMPLETION] │ primary: ${primaryProvider}/${primaryModel}`);
   log.info('[V1-API-COMPLETION] │ configured fallbacks:', fallbackChain);
   log.info('[V1-API-COMPLETION] │ will try (deduped):', uniqueProviders);
   log.info('[V1-API-COMPLETION] └────────────────────────────────────');
@@ -1804,31 +1804,31 @@ async function runV1ApiCompletion(
 
       if (config.onStreamChunk) {
         console.log('[ORCHESTRATOR] Passing tools to streamWithVercelAI:', config.tools?.map(t => t.name));
-        for await (const chunk of streamWithVercelAI(streamOpts)) {
+        for await (const chunk of streamWithVercelAI(streamOpts as any)) {
           if (chunk.content) {
             content += chunk.content;
             config.onStreamChunk(chunk.content);
           }
           // CRITICAL FIX: Collect file edits from streaming chunks
-          if (chunk.fileEdits && chunk.fileEdits.length > 0) {
-            fileEdits.push(...chunk.fileEdits);
+          if ((chunk as any).fileEdits && (chunk as any).fileEdits.length > 0) {
+            fileEdits.push(...(chunk as any).fileEdits);
           }
           // Collect tool call records
-          if (chunk.toolCall) {
-            toolCalls.push(chunk.toolCall);
+          if ((chunk as any).toolCall) {
+            toolCalls.push((chunk as any).toolCall);
           }
         }
       } else {
-        for await (const chunk of streamWithVercelAI(streamOpts)) {
+        for await (const chunk of streamWithVercelAI(streamOpts as any)) {
           if (chunk.content) {
             content += chunk.content;
           }
           // CRITICAL FIX: Collect file edits from streaming chunks (non-streaming path too)
-          if (chunk.fileEdits && chunk.fileEdits.length > 0) {
-            fileEdits.push(...chunk.fileEdits);
+          if ((chunk as any).fileEdits && (chunk as any).fileEdits.length > 0) {
+            fileEdits.push(...(chunk as any).fileEdits);
           }
-          if (chunk.toolCall) {
-            toolCalls.push(chunk.toolCall);
+          if ((chunk as any).toolCall) {
+            toolCalls.push((chunk as any).toolCall);
           }
         }
       }

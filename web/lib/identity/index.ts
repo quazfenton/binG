@@ -11,11 +11,9 @@
  * ```
  */
 
-export {
-  // Core types
-  CompositeSessionId,
-  ToolContextIdentity,
+export type { CompositeSessionId, ToolContextIdentity } from './composite-session-id';
 
+export {
   // Parsing & construction
   parseCompositeSessionId,
   buildCompositeSessionId,

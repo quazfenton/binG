@@ -2292,9 +2292,16 @@ export class ResponseRouter {
       // Chunk spec
       let chunks = chunkSpec(parsed)
       logger.debug('Spec: Chunked', { chunkCount: chunks.length, mode: request.mode })
-      
+
+      // Extract provider/model early to avoid TDZ errors in mode-specific blocks
+      const primaryProvider = primaryData.data?.provider || fastModel?.provider || 'openrouter'
+      const primaryModel = primaryData.data?.model || fastModel?.model || request.model
+
+      // Initialize refinedOutput early for mode-specific blocks
+      let refinedOutput: string
+
       // SUPER MODE: Use the hyper-detailed multi-chain spec enhancer
-      if (request.mode === 'super') {
+      if (String(request.mode) === 'super') {
         logger.info('Spec: Using super mode spec enhancer for super mode', {
           requestId: request.requestId,
           primaryContentLength: primaryData?.content?.length,
@@ -2415,8 +2422,6 @@ export class ResponseRouter {
         // Enhanced mode uses standard chunking
       }
 
-      const primaryProvider = primaryData.data?.provider || fastModel?.provider || 'openrouter'
-      const primaryModel = primaryData.data?.model || fastModel?.model || request.model
       logger.debug('Spec: Refinement config', { 
         provider: primaryProvider, 
         model: primaryModel,
@@ -2444,8 +2449,7 @@ export class ResponseRouter {
         mode: request.mode,
         emitPresent: !!request.emit,
       })
-      
-      let refinedOutput: string
+
       try {
         logger.debug('About to call executeRefinementWithDAG')
         refinedOutput = await executeRefinementWithDAG({

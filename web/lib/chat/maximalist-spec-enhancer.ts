@@ -581,7 +581,7 @@ export async function enhanceWithSpec(
         endTime: Date.now(),
         success: true,
         note: 'Mid-point plan regeneration'
-      });
+      } as any);
       state.midPointRegenOccurred = true;
       
       // Continue with new spec for next rounds

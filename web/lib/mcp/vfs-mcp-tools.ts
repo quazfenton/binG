@@ -207,6 +207,8 @@ export interface NormalizedToolCall {
   args: Record<string, unknown>;
   /** Whether normalization detected and corrected field-name aliases */
   hadAliasCorrections?: boolean;
+  /** Required fields that were missing (set when returning partial result) */
+  _missingRequired?: string[];
 }
 
 /**
@@ -551,8 +553,8 @@ export const writeFileTool = (tool as any)({
       path: z.string().describe('Relative path like "src/app.tsx" (no URL, no query string, no leading slash)'),
       content: z.string().describe('Complete file contents — do not abbreviate or truncate'),
       commitMessage: z.string().optional().describe('Optional description of the change'),
-    })
-  ).passthrough(),
+    }).passthrough()
+  ),
   execute: async ({ path, content, commitMessage = 'Write file via MCP tool' }) => {
     try {
   if (!path || typeof path !== 'string') {
@@ -690,8 +692,8 @@ export const applyDiffTool = (tool as any)({
       path: z.string().describe('Relative path like "src/app.tsx" (the file to patch)'),
       diff: z.string().describe('Unified diff with --- +++ @@ format — include full context lines'),
       commitMessage: z.string().optional().describe('Optional description of the change'),
-    })
-  ).passthrough(),
+    }).passthrough()
+  ),
   execute: async ({ path, diff, commitMessage = 'Applied diff via MCP tool' }) => {
     try {
   if (!path || typeof path !== 'string') {
@@ -819,8 +821,8 @@ export const readFileTool = (tool as any)({
     (raw) => normalizeToolArgs('read_file', raw),
     z.object({
       path: z.string().describe('Relative path like "src/app.tsx" (the file to read)'),
-    })
-  ).passthrough(),
+    }).passthrough()
+  ),
   execute: async ({ path }) => {
     try {
   if (!path || typeof path !== 'string') {
@@ -878,8 +880,8 @@ export const readFilesTool = (tool as any)({
     (raw) => normalizeToolArgs('read_files', raw),
     z.object({
       paths: z.array(z.string()).min(1).max(20, 'Cannot read more than 20 files at once').describe('Array of file paths like ["src/a.ts", "src/b.ts"]'),
-    })
-  ).passthrough(),
+    }).passthrough()
+  ),
   execute: async ({ paths }) => {
     try {
       const context = getToolContext();
@@ -950,8 +952,8 @@ export const listFilesTool = (tool as any)({
     z.object({
       path: z.string().default('/').describe('Directory path to list (default: root, like "/")'),
       recursive: z.boolean().optional().default(false).describe('Whether to list recursively (default: false)'),
-    })
-  ).passthrough(),
+    }).passthrough()
+  ),
   execute: async ({ path, recursive = false }) => {
     try {
   const context = getToolContext();
@@ -1013,8 +1015,8 @@ export const searchFilesTool = (tool as any)({
       query: z.string().describe('Search term or natural language description'),
       path: z.string().optional().describe('Optional path to search within (e.g. "src/")'),
       limit: z.number().optional().default(10).describe('Maximum number of results (default: 10)'),
-    })
-  ).passthrough(),
+    }).passthrough()
+  ),
   execute: async ({ query, path, limit = 10 }) => {
     try {
   if (!query || typeof query !== 'string') {
@@ -1104,8 +1106,8 @@ export const batchWriteTool = (tool as any)({
         content: z.string().describe('Complete file contents — do not abbreviate'),
       })).max(50, 'Cannot write more than 50 files').describe('Array of {path, content} objects — e.g. [{"path":"src/a.ts","content":"..."}]'),
       commitMessage: z.string().optional().describe('Optional description of the batch change'),
-    })
-  ).passthrough(),
+    }).passthrough()
+  ),
   execute: async ({ files, commitMessage = 'Batch write via MCP tool' }) => {
     try {
       const context = getToolContext();
@@ -1318,8 +1320,8 @@ export const deleteFileTool = (tool as any)({
     z.object({
       path: z.string().describe('Relative path like "src/old.ts" (the file or directory to delete)'),
       reason: z.string().optional().describe('Optional reason for deletion'),
-    })
-  ).passthrough(),
+    }).passthrough()
+  ),
   execute: async ({ path, reason }) => {
     try {
   if (!path || typeof path !== 'string') {
@@ -1380,8 +1382,8 @@ export const createDirectoryTool = (tool as any)({
     (raw) => normalizeToolArgs('create_directory', raw),
     z.object({
       path: z.string().describe('Directory path to create, like "src/components/utils"'),
-    })
-  ).passthrough(),
+    }).passthrough()
+  ),
   execute: async ({ path }) => {
     try {
   if (!path || typeof path !== 'string') {
@@ -1492,7 +1494,7 @@ const TOOL_META: Record<string, { description: string; parameters: z.ZodType }> 
   path: z.string().describe('Relative path like "src/app.tsx" (no URL, no query string, no leading slash)'),
   content: z.string().describe('Complete file contents — do not abbreviate or truncate'),
   commitMessage: z.string().optional().describe('Optional description of the change'),
-    }).passthrough(),
+    }),
   },
   apply_diff: {
     description: applyDiffTool.description,
@@ -1500,26 +1502,26 @@ const TOOL_META: Record<string, { description: string; parameters: z.ZodType }> 
   path: z.string().describe('Relative path like "src/app.tsx" (the file to patch)'),
   diff: z.string().describe('Unified diff with --- +++ @@ format — include full context lines'),
   commitMessage: z.string().optional().describe('Optional description of the change'),
-    }).passthrough(),
+    }),
   },
   read_file: {
     description: readFileTool.description,
     parameters: z.object({
   path: z.string().describe('Relative path like "src/app.tsx" (the file to read)'),
-    }).passthrough(),
+    }),
   },
   read_files: {
     description: readFilesTool.description,
     parameters: z.object({
   paths: z.array(z.string()).min(1).max(20).describe('Array of file paths like ["src/a.ts", "src/b.ts"]'),
-    }).passthrough(),
+    }),
   },
   list_files: {
     description: listFilesTool.description,
     parameters: z.object({
   path: z.string().default('/').describe('Directory path to list (default: root, like "/")'),
   recursive: z.boolean().optional().default(false).describe('Whether to list recursively (default: false)'),
-    }).passthrough(),
+    }),
   },
   search_files: {
     description: searchFilesTool.description,
@@ -1527,7 +1529,7 @@ const TOOL_META: Record<string, { description: string; parameters: z.ZodType }> 
   query: z.string().describe('Search term or natural language description'),
   path: z.string().optional().describe('Optional path to search within (e.g. "src/")'),
   limit: z.number().optional().default(10).describe('Maximum number of results (default: 10)'),
-    }).passthrough(),
+    }),
   },
   batch_write: {
     description: batchWriteTool.description,
@@ -1537,20 +1539,20 @@ const TOOL_META: Record<string, { description: string; parameters: z.ZodType }> 
     content: z.string().describe('Complete file contents — do not abbreviate'),
   })).max(50).describe('Array of {path, content} objects — e.g. [{"path":"src/a.ts","content":"..."}]'),
   commitMessage: z.string().optional().describe('Optional description of the batch change'),
-    }).passthrough(),
+    }),
   },
   delete_file: {
     description: deleteFileTool.description,
     parameters: z.object({
   path: z.string().describe('Relative path like "src/old.ts" (the file or directory to delete)'),
   reason: z.string().optional().describe('Optional reason for deletion'),
-    }).passthrough(),
+    }),
   },
   create_directory: {
     description: createDirectoryTool.description,
     parameters: z.object({
   path: z.string().describe('Directory path to create, like "src/components/utils"'),
-    }).passthrough(),
+    }),
   },
   get_workspace_stats: {
     description: getWorkspaceStatsTool.description,

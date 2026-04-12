@@ -98,8 +98,11 @@ const nextConfig = {
         }
       : false,
   },
-  // Tauri desktop mode: use static export when DESKTOP_MODE is set
-  ...(process.env.DESKTOP_MODE === 'true' ? { output: 'export' } : {}),
+  // Tauri desktop mode: use standalone server output
+  ...(process.env.DESKTOP_MODE === 'true' ? {
+    output: 'standalone',
+    outputFileTracingRoot: process.env.NODE_ENV === 'production' ? undefined : undefined,
+  } : {}),
   env: {
     DEFAULT_LLM_PROVIDER: process.env.DEFAULT_LLM_PROVIDER,
     DEFAULT_MODEL: process.env.DEFAULT_MODEL,

@@ -2295,5 +2295,5 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
     // Input queue state for prompt cueing
     isInputOrIsLoading,
     inputQueue,
-  };
+  } as unknown as UseChatReturn;
 }

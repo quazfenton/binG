@@ -1,16 +1,20 @@
 /**
  * app/api/embed/route.ts — Embedding API route for Next.js App Router
  *
- * Proxies embedding requests to OpenAI (or swap for local model).
+ * Supports Mistral codestral-embed (default) and OpenAI text-embedding-3-small.
  * Called by lib/memory/embeddings.ts → embed()
  *
- * Supports: text-embedding-3-small (1536-dim, fast, cheap)
+ * Default: Mistral codestral-embed (512-dim for quality/performance tradeoff)
+ * Override: Set EMBED_PROVIDER=openai and OPENAI_API_KEY
  */
 
 import { NextRequest, NextResponse } from "next/server";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const EMBED_MODEL = process.env.EMBED_MODEL ?? "text-embedding-3-small";
+const MISTRAL_API_KEY = process.env.MISTRAL_API_KEY;
+const EMBED_PROVIDER = process.env.EMBED_PROVIDER ?? "mistral";
+const EMBED_MODEL = process.env.EMBED_MODEL ?? "codestral-embed";
+const EMBED_DIMENSION = parseInt(process.env.EMBED_DIMENSION ?? "512", 10);
 
 // Rate limiting: track requests per IP in memory (reset on server restart)
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
@@ -69,46 +73,86 @@ export async function POST(req: NextRequest) {
       textLength: text.length,
       textPreview: text.slice(0, 100),
       ip,
+      provider: EMBED_PROVIDER,
       model: EMBED_MODEL,
     });
 
-    if (!OPENAI_API_KEY) {
-      return NextResponse.json(
-        { error: "OPENAI_API_KEY not set" },
-        { status: 500 }
-      );
-    }
+    let embedding: number[];
 
-    const response = await fetch("https://api.openai.com/v1/embeddings", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${OPENAI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        input: text.slice(0, 8000), // safety trim
-        model: EMBED_MODEL,
-      }),
-    });
+    if (EMBED_PROVIDER === 'mistral') {
+      if (!MISTRAL_API_KEY) {
+        return NextResponse.json(
+          { error: "MISTRAL_API_KEY not set" },
+          { status: 500 }
+        );
+      }
 
-    if (!response.ok) {
-      const errText = await response.text();
-      console.error('[Embed API] ❌ OpenAI API error', {
-        status: response.status,
-        statusText: response.statusText,
-        errorBody: errText.slice(0, 500),
-        model: EMBED_MODEL,
-        inputLength: text.length,
-        inputPreview: text.slice(0, 100),
+      const response = await fetch("https://api.mistral.ai/v1/embeddings", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${MISTRAL_API_KEY}`,
+        },
+        body: JSON.stringify({
+          model: EMBED_MODEL,
+          inputs: [text.slice(0, 32000)],
+          output_dimension: EMBED_DIMENSION,
+        }),
       });
-      return NextResponse.json(
-        { error: "OpenAI API error", details: errText.slice(0, 200) },
-        { status: 502 }
-      );
-    }
 
-    const data = await response.json();
-    const embedding: number[] = data.data[0].embedding;
+      if (!response.ok) {
+        const errText = await response.text();
+        console.error('[Embed API] ❌ Mistral API error', {
+          status: response.status,
+          statusText: response.statusText,
+          errorBody: errText.slice(0, 500),
+          model: EMBED_MODEL,
+        });
+        return NextResponse.json(
+          { error: "Mistral API error", details: errText.slice(0, 200) },
+          { status: 502 }
+        );
+      }
+
+      const data = await response.json();
+      embedding = data.data[0].embedding;
+    } else {
+      if (!OPENAI_API_KEY) {
+        return NextResponse.json(
+          { error: "OPENAI_API_KEY not set" },
+          { status: 500 }
+        );
+      }
+
+      const response = await fetch("https://api.openai.com/v1/embeddings", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${OPENAI_API_KEY}`,
+        },
+        body: JSON.stringify({
+          input: text.slice(0, 8000),
+          model: EMBED_MODEL,
+        }),
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        console.error('[Embed API] ❌ OpenAI API error', {
+          status: response.status,
+          statusText: response.statusText,
+          errorBody: errText.slice(0, 500),
+          model: EMBED_MODEL,
+        });
+        return NextResponse.json(
+          { error: "OpenAI API error", details: errText.slice(0, 200) },
+          { status: 502 }
+        );
+      }
+
+      const data = await response.json();
+      embedding = data.data[0].embedding;
+    }
 
     return NextResponse.json(embedding);
   } catch (err) {
@@ -163,33 +207,60 @@ export async function PUT(req: NextRequest) {
       if (typeof t !== "string") {
         return NextResponse.json({ error: `Item ${i} is not a string` }, { status: 400 });
       }
-      sanitizedTexts.push(t.length > 8000 ? t.slice(0, 8000) : t);
+      sanitizedTexts.push(t.length > 32000 ? t.slice(0, 32000) : t);
     }
 
-    if (!OPENAI_API_KEY) {
-      return NextResponse.json({ error: "OPENAI_API_KEY not set" }, { status: 500 });
+    let embeddings: number[][];
+
+    if (EMBED_PROVIDER === 'mistral') {
+      if (!MISTRAL_API_KEY) {
+        return NextResponse.json({ error: "MISTRAL_API_KEY not set" }, { status: 500 });
+      }
+
+      const response = await fetch("https://api.mistral.ai/v1/embeddings", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${MISTRAL_API_KEY}`,
+        },
+        body: JSON.stringify({
+          model: EMBED_MODEL,
+          inputs: sanitizedTexts,
+          output_dimension: EMBED_DIMENSION,
+        }),
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        return NextResponse.json({ error: "Mistral API error", details: errText.slice(0, 200) }, { status: 502 });
+      }
+
+      const data = await response.json();
+      embeddings = data.data.sort((a: any, b: any) => a.index - b.index).map((d: any) => d.embedding);
+    } else {
+      if (!OPENAI_API_KEY) {
+        return NextResponse.json({ error: "OPENAI_API_KEY not set" }, { status: 500 });
+      }
+
+      const response = await fetch("https://api.openai.com/v1/embeddings", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${OPENAI_API_KEY}`,
+        },
+        body: JSON.stringify({
+          input: sanitizedTexts,
+          model: EMBED_MODEL,
+        }),
+      });
+
+      if (!response.ok) {
+        return NextResponse.json({ error: "OpenAI API error" }, { status: 502 });
+      }
+
+      const data = await response.json();
+      embeddings = data.data.sort((a: any, b: any) => a.index - b.index).map((d: any) => d.embedding);
     }
-
-    const response = await fetch("https://api.openai.com/v1/embeddings", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${OPENAI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        input: sanitizedTexts,
-        model: EMBED_MODEL,
-      }),
-    });
-
-    if (!response.ok) {
-      return NextResponse.json({ error: "OpenAI API error" }, { status: 502 });
-    }
-
-    const data = await response.json();
-    const embeddings: number[][] = data.data
-      .sort((a: any, b: any) => a.index - b.index)
-      .map((d: any) => d.embedding);
 
     return NextResponse.json(embeddings);
   } catch (err) {

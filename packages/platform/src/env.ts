@@ -75,7 +75,7 @@ export function getDefaultWorkspaceRoot(): string | null {
   const platform = typeof process !== 'undefined' ? process.platform : 'linux';
 
   if (platform === 'win32') {
-    const userProfile = typeof process !== 'undefined' ? process.env.USERPROFILE : undefined;
+    const userProfile = typeof process !== 'undefined' && process.env ? process.env.USERPROFILE : undefined;
     if (!userProfile) {
       return null;
     }

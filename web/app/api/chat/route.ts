@@ -1347,6 +1347,13 @@ const config: UnifiedAgentConfig = {
                 // If so, rename the session folder to match the project folder
                 const responseContent = streamingContentBuffer + (typeof result.response === 'string' ? result.response : '') || '';
 
+                const { detectSingleFolderFromResponse } = await import('@/lib/session-naming');
+                const detectedFolder = detectSingleFolderFromResponse(responseContent);
+
+                // Check if we should rename: new session (sequential ID) with single detected folder
+                const isSequentialSession = /^\d{3}$/.test(resolvedConversationId);
+                const isNewSession = isSequentialSession && !result.metadata?.isExistingSession;
+
                 // DEBUG LOGGING: Session naming detection
                 console.debug('[SessionNaming] Session folder detection', {
                   detectedFolder,
@@ -1357,13 +1364,6 @@ const config: UnifiedAgentConfig = {
                   responsePreview: responseContent.slice(0, 200),
                   metadata: result.metadata,
                 });
-
-                const { detectSingleFolderFromResponse } = await import('@/lib/session-naming');
-                const detectedFolder = detectSingleFolderFromResponse(responseContent);
-                
-                // Check if we should rename: new session (sequential ID) with single detected folder
-                const isSequentialSession = /^\d{3}$/.test(resolvedConversationId);
-                const isNewSession = isSequentialSession && !result.metadata?.isExistingSession;
                 
                 if (detectedFolder && isNewSession && detectedFolder !== resolvedConversationId) {
                   // Check if detected folder name is available
@@ -2125,7 +2125,7 @@ const config: UnifiedAgentConfig = {
         // Only trigger spec amplification when there are ACTUAL filesystem edits,
         // not just because the response contains code snippets (const, function, etc.)
         // Spec amplification runs in 'enhanced' or 'max' mode
-        const isSpecAmplificationMode = routerRequest.mode === 'enhanced' || routerRequest.mode === 'max' || routerRequest.mode === 'super';
+        const isSpecAmplificationMode = ['enhanced', 'max', 'super'].includes(String(routerRequest.mode));
         const shouldRunSpecAmplification = (hasFileEdits || hasMcpFileEdits) && isSpecAmplificationMode;
 
         chatLogger.info('Spec amplification check (non-streaming)', {
@@ -2936,7 +2936,7 @@ const config: UnifiedAgentConfig = {
                 const hasFileEdits = (effectiveEdits?.applied?.length || 0) > 0;
                 const mcpFileEdits = getRecentMcpFileEdits(resolvedConversationId);
                 const hasMcpFileEdits = mcpFileEdits.length > 0;
-                const isSpecAmplificationMode = routerRequest.mode === 'enhanced' || routerRequest.mode === 'max' || routerRequest.mode === 'super';
+                const isSpecAmplificationMode = ['enhanced', 'max', 'super'].includes(String(routerRequest.mode));
                 // Only trigger spec amplification when there are ACTUAL filesystem edits,
                 // not just because the response contains code snippets (const, function, etc.)
                 const shouldRunSpecAmplification = (hasFileEdits || hasMcpFileEdits) &&
@@ -3414,7 +3414,7 @@ const config: UnifiedAgentConfig = {
                 const hasFileEdits = (effectiveEdits?.applied?.length || 0) > 0;
                 const mcpFileEdits = getRecentMcpFileEdits(resolvedConversationId);
                 const hasMcpFileEdits = mcpFileEdits.length > 0;
-                const isSpecAmplificationMode = routerRequest.mode === 'enhanced' || routerRequest.mode === 'max' || routerRequest.mode === 'super';
+                const isSpecAmplificationMode = ['enhanced', 'max', 'super'].includes(String(routerRequest.mode));
                 // Only trigger spec amplification when there are ACTUAL filesystem edits,
                 // not just because the response contains code snippets (const, function, etc.)
                 const shouldRunSpecAmplification = (hasFileEdits || hasMcpFileEdits) &&

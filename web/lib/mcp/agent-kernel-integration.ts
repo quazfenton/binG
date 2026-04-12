@@ -201,14 +201,14 @@ export async function executeDAG(config: {
  * Topological sort for DAG node ordering.
  * Throws on circular dependencies.
  */
-function topologicalSort(
-  nodes: Array<{ id: string; dependsOn?: string[] }>
-): Array<{ id: string; dependsOn?: string[] }> {
-  const sorted: Array<{ id: string; dependsOn?: string[] }> = [];
+function topologicalSort<T extends { id: string; dependsOn?: string[] }>(
+  nodes: T[]
+): T[] {
+  const sorted: T[] = [];
   const visited = new Set<string>();
   const temp = new Set<string>();
 
-  const visit = (node: { id: string; dependsOn?: string[] }) => {
+  const visit = (node: T) => {
     if (temp.has(node.id)) throw new Error(`Circular dependency detected: ${node.id}`);
     if (visited.has(node.id)) return;
 
