@@ -122,7 +122,7 @@ export async function handleTextEditorCommand(
     intercepted: true,
     editor,
     filePath,
-  };
+  } as any;
 }
 
 // ============================================================================
@@ -174,7 +174,7 @@ export function clearBashHooks(): void {
 async function triggerHooks(type: keyof typeof hooks, ctx: BashHookContext): Promise<BashHookResult | null> {
   for (const handler of hooks[type]) {
     try {
-      const result = await handler(ctx);
+      const result = await handler(ctx) as BashHookResult | undefined;
       if (result?.skipExecution) return result;
     } catch (e: any) {
       logger.warn(`Hook error (${type})`, { error: e.message });
@@ -419,7 +419,7 @@ export function createBashTool(config: Partial<BashToolConfig> = {}) {
         }
 
         // PATCH 1: Intercept text editor commands (vim/nano/emacs) — they'd hang the PTY
-        const editorResult = await handleTextEditorCommand(command, wd);
+        const editorResult = await handleTextEditorCommand(command, wd) as any;
         if (editorResult) {
           logger.info('Text editor command intercepted', { editor: editorResult.editor, filePath: editorResult.filePath });
           return {

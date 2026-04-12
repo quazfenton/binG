@@ -85,7 +85,7 @@ pub struct SystemInfo {
 }
 
 // Shadow commit and checkpoint types
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CheckpointInfo {
     pub id: String,
     pub name: String,
@@ -117,7 +117,7 @@ pub struct CheckpointListResult {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FileChangeEvent {
     pub path: String,
     pub change_type: String, // "create" | "update" | "delete"
@@ -493,7 +493,7 @@ fn create_git_commit(dir: &str, message: &str) -> Result<String, String> {
         .output()
         .map_err(|e| format!("Failed to get commit hash: {}", e))?;
 
-    String::from_utf8_lossy(&output.stdout).trim().to_string().into()
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 fn restore_git_commit(dir: &str, commit_id: &str) -> Result<usize, String> {
@@ -542,6 +542,7 @@ fn list_git_checkpoints(dir: &str) -> Result<Vec<CheckpointInfo>, String> {
                 created_at: parts[2].to_string(),
                 file_count: 0, // Would need to parse the commit to get this
                 workspace_path: dir.to_string(),
+                commit_hash: Some(parts[0].to_string()),
             });
         }
     }
@@ -550,16 +551,16 @@ fn list_git_checkpoints(dir: &str) -> Result<Vec<CheckpointInfo>, String> {
 }
 
 // PTY session state
-pub struct PtySessions(Mutex<HashMap<String, PtySession>>);
+pub struct PtySessions(std::sync::Arc<Mutex<HashMap<String, PtySession>>>);
 
 pub struct PtySession {
     master: Box<dyn MasterPty + Send>,
-    child: Box<dyn Send + std::process::Child>,
+    child: Box<dyn portable_pty::Child + Send>,
 }
 
 impl Default for PtySessions {
     fn default() -> Self {
-        Self(Mutex::new(HashMap::new()))
+        Self(std::sync::Arc::new(Mutex::new(HashMap::new())))
     }
 }
 
@@ -576,7 +577,7 @@ pub struct PtyInputResult {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PtyOutputEvent {
     pub session_id: String,
     pub data: String,
@@ -626,8 +627,7 @@ pub async fn create_pty_session(
     // Set environment for interactive shell
     cmd.env("TERM", "xterm-256color");
 
-    let child = cmd
-        .spawn(&pair.slave)
+    let child = pair.slave.spawn_command(cmd)
         .map_err(|e| format!("Failed to spawn shell: {}", e))?;
 
     let session_id = format!("pty-{}", uuid::Uuid::new_v4().to_string().split('-').next().unwrap());
@@ -654,12 +654,11 @@ pub async fn create_pty_session(
         loop {
             // Get master from sessions
             let master = {
-                let sessions_guard = match sessions_clone.lock() {
+                let sessions_guard: std::sync::MutexGuard<'_, HashMap<String, PtySession>> = match sessions_clone.lock() {
                     Ok(s) => s,
                     Err(poisoned) => {
                         eprintln!("[PTY] Session map lock poisoned for '{}', cleaning up", session_id_clone);
-                        // Attempt recovery: try to kill the child if we can get the session
-                        let _ = poisoned.into_inner();
+                        let _: &HashMap<String, PtySession> = poisoned.get_ref();
                         break;
                     }
                 };
@@ -672,7 +671,7 @@ pub async fn create_pty_session(
                 }
             };
 
-            let mut reader = match master {
+            let mut reader: Box<dyn std::io::Read + Send> = match master {
                 Ok(r) => r,
                 Err(e) => {
                     eprintln!("[PTY] Failed to clone master reader for '{}': {}", session_id_clone, e);
@@ -715,7 +714,7 @@ pub async fn create_pty_session(
 
         // Attempt to remove session and kill child process if still present
         if let Ok(mut sessions) = sessions_clone.lock() {
-            if let Some(session) = sessions.remove(&session_id_clone) {
+            if let Some(mut session) = sessions.remove(&session_id_clone) {
                 let _ = session.child.kill();
             }
         }
@@ -788,7 +787,7 @@ pub async fn close_pty_session(
 ) -> Result<PtyInputResult, String> {
     let mut sessions = sessions.0.lock().map_err(|e| e.to_string())?;
     
-    if let Some(session) = sessions.remove(&session_id) {
+    if let Some(mut session) = sessions.remove(&session_id) {
         // Kill the child process
         let _ = session.child.kill();
     }

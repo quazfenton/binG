@@ -81,6 +81,8 @@ export interface AgentIterationResult {
   tool?: string;
   arguments?: Record<string, any>;
   result: any;
+  /** Whether this invocation came from a fallback path */
+  isFallback?: boolean;
 }
 
 export interface LLMResponse {
@@ -151,7 +153,8 @@ export class AgentLoop {
             execute: async (args: any) => {
               const result = await tool.execute(args);
               if (!result.success) {
-                throw new Error(result.error || 'Tool execution failed');
+                const errMsg = typeof result.error === 'string' ? result.error : JSON.stringify(result.error);
+                throw new Error(errMsg || 'Tool execution failed');
               }
               return result;
             },
@@ -519,7 +522,8 @@ export class AgentLoop {
         execute: async (args: any) => {
           const result = await tool.execute(args);
           if (!result.success) {
-            throw new Error(result.error || 'Tool execution failed');
+            const errMsg = typeof result.error === 'string' ? result.error : JSON.stringify(result.error);
+            throw new Error(errMsg || 'Tool execution failed');
           }
           return result;
         },
@@ -832,7 +836,8 @@ export class AgentLoop {
             });
             
             if (!result.success) {
-              throw new Error(result.error || 'Tool execution failed');
+              const errMsg = typeof result.error === 'string' ? result.error : JSON.stringify(result.error);
+              throw new Error(errMsg || 'Tool execution failed');
             }
             return result;
           },
@@ -1132,7 +1137,8 @@ export class AgentLoop {
           execute: async (args: any) => {
             const result = await tool.execute(args);
             if (!result.success) {
-              throw new Error(result.error || 'Tool execution failed');
+              const errMsg = typeof result.error === 'string' ? result.error : JSON.stringify(result.error);
+              throw new Error(errMsg || 'Tool execution failed');
             }
             return result;
           },

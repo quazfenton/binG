@@ -23,8 +23,9 @@ export interface VoiceSettings {
   language: string;
   microphoneEnabled: boolean;
   transcriptionEnabled: boolean;
-  useLivekitTTS: boolean; // New: Use Livekit TTS when available
-  ttsProvider: 'cartesia' | 'elevenlabs' | 'web'; // New: TTS provider selection
+  useLivekitTTS: boolean;
+  ttsProvider: 'cartesia' | 'elevenlabs' | 'web';
+  sttProvider: 'browser' | 'mistral'; // NEW: STT provider selection
 }
 
 export interface VoiceEvent {
@@ -61,6 +62,7 @@ class VoiceService {
     transcriptionEnabled: false,
     useLivekitTTS: false,
     ttsProvider: 'web',
+    sttProvider: 'browser',
   };
 
   constructor() {
@@ -571,6 +573,36 @@ class VoiceService {
     this.stopListening();
     this.disconnectFromLivekit();
     this.eventHandlers = [];
+  }
+
+  // Transcribe audio using Mistral API (when sttProvider is 'mistral')
+  async transcribeWithMistral(audioBlob: Blob): Promise<string> {
+    try {
+      const arrayBuffer = await audioBlob.arrayBuffer();
+      const base64 = Buffer.from(arrayBuffer).toString('base64');
+
+      const response = await fetch('/api/speech-to-text', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ audioData: base64, provider: 'mistral' }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Transcription failed');
+      }
+
+      const result = await response.json();
+      return result.text || '';
+    } catch (error: any) {
+      console.error('Mistral transcription error:', error);
+      this.emitEvent({
+        type: 'error',
+        data: { error: error.message, message: 'Mistral transcription failed' },
+        timestamp: Date.now(),
+      });
+      throw error;
+    }
   }
 }
 

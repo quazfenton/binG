@@ -652,7 +652,7 @@ export async function getMCPToolsForAI_SDK(userId?: string) {
     // Register VFS sync hook once (on first bash tool load) — syncs bash-created files to VFS
     registerVFSSyncHook();
 
-    const sessionId = userId ? normalizeSessionId(userId, '000') : undefined;
+    const sessionId = userId ? normalizeSessionId(userId) : undefined;
     const scopePath = sessionId ? `project/sessions/${sessionId}` : 'project';
 
     const bashToolMap = createBashTool({
@@ -1115,9 +1115,9 @@ export async function callMCPToolFromAI_SDK(
       );
 
       return {
-        success: result?.success !== false,
-        output: typeof result?.output === 'string' ? result.output : JSON.stringify(result),
-        error: result?.error,
+        success: (result as any)?.success !== false,
+        output: typeof (result as any)?.output === 'string' ? (result as any).output : JSON.stringify(result),
+        error: (result as any)?.error,
       };
     }
 
@@ -1149,9 +1149,9 @@ export async function callMCPToolFromAI_SDK(
         } as any);
 
         return {
-          success: result?.success !== false,
-          output: result?.output || JSON.stringify(result),
-          error: result?.error,
+          success: (result as any)?.success !== false,
+          output: (result as any)?.output || JSON.stringify(result),
+          error: (result as any)?.error,
         };
       }
     }
