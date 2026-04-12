@@ -4,7 +4,7 @@
  * Combines:
  * - Multi-factor task classifier (keyword + semantic + context + historical)
  * - Provider health checks
- * - Mode selection (V2 native, StatefulAgent, AgentOrchestrator, V1 API)
+ * - Mode selection (V2 native, StatefulAgent, PlanActVerify, V1 API)
  * - Fallback chain on failure
  *
  * This replaces the scattered routing logic in:
