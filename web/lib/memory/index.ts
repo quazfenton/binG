@@ -6,9 +6,9 @@
  */
 
 // ─── Core Retrieval ────────────────────────────────────────────────────────────
-export { Retrieval } from "../agent/orchestrator";
-export { Orchestrator } from "../agent/orchestrator"; // backward compat alias
-export type { RetrievalConfig, OrchestratorConfig } from "../agent/orchestrator";
+export { Retrieval } from "../agent/code-retrieval";
+export { Orchestrator } from "../agent/code-retrieval"; // backward compat alias
+export type { RetrievalConfig, OrchestratorConfig } from "../agent/code-retrieval";
 
 // ─── Indexing ─────────────────────────────────────────────────────────────────
 export { ProjectIndexer, projectIdFromPath } from "./indexer";
