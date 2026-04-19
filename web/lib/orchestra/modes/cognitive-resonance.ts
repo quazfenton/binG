@@ -21,7 +21,7 @@
  */
 
 import { createLogger } from '@/lib/utils/logger';
-import { embed } from '@/lib/memory/embeddings';
+import { embed, embedBatch } from '@/lib/memory/embeddings';
 import { cosineSimilarity } from '@/lib/retrieval/similarity';
 import {
   processUnifiedAgentRequest,
@@ -313,7 +313,7 @@ export async function runCognitiveResonanceMode(
   for (const ar of agentResults) {
     if (ar.result.success && ar.result.response.length > 0) {
       try {
-        const embeddings = await embed([ar.result.response]);
+        const embeddings = await embedBatch([ar.result.response]);
         validOutputs.push({
           index: ar.index,
           embedding: embeddings[0],

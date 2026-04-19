@@ -11,12 +11,6 @@ import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('Providers:Init');
 
-/**
- * Initialize MCP services on app startup via server-side API route.
- * MCP code uses Node.js APIs (fs, child_process, database) that cannot
- * be bundled into the client — even dynamic imports get traced by Next.js.
- * The API route handles both desktop (Tauri) and web modes server-side.
- */
 async function initializeMCPServices() {
   try {
     const res = await fetch('/api/mcp/init', { method: 'POST' });
@@ -34,12 +28,23 @@ export function Providers({ children }: { children: React.ReactNode }) {
   const [mcpInitialized, setMcpInitialized] = useState(false);
 
   useEffect(() => {
-    initializeMCPServices().then(() => {
+    // Ensure this runs only on the client side and only once on mount
+    // Also, conditionally initialize MCP services only if in desktop mode.
+    if (typeof window !== 'undefined' && process.env.DESKTOP_MODE === 'true') {
+      initializeMCPServices().then(() => {
+        setMcpInitialized(true);
+      }).catch((error) => {
+        logger.error('Failed to initialize MCP services', { error: error.message });
+        setMcpInitialized(true); // Continue anyway
+      });
+    } else {
+      // If not in desktop mode or window is not defined, we can still set initialized to true
+      // to prevent potential UI blocking if initialization is a prerequisite for something.
+      // Or, if MCP services are truly only for desktop, this component might need to be structured differently.
+      // For now, we assume initialization is a client-side task but might not be needed for web.
       setMcpInitialized(true);
-    }).catch(() => {
-      setMcpInitialized(true); // Continue anyway
-    });
-  }, []);
+    }
+  }, []); // Empty dependency array ensures this runs only once on mount
 
   return (
     <ThemeProvider

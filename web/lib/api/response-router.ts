@@ -2488,7 +2488,7 @@ export class ResponseRouter {
       })
       const fileWriteEdits = extractFsActionWrites(refinedOutput);
       logger.debug('File writes extracted', { count: fileWriteEdits.length, edits: fileWriteEdits.map(e => e.path) })
-      let filesystemEdits: Awaited<ReturnType<typeof import('@/app/api/chat/route').applyFilesystemEditsFromResponse>> | null = null;
+      let filesystemEdits: Awaited<ReturnType<typeof import('@/app/api/chat/filesystem-edits').applyFilesystemEditsFromResponse>> | null = null;
       
       // SECURITY: Only apply filesystem edits when we have a concrete owner and conversation context
       // Use filesystemOwnerId if available (handles anonymous users correctly), otherwise fall back to userId
@@ -2515,7 +2515,7 @@ export class ResponseRouter {
         })
 
         try {
-          const { applyFilesystemEditsFromResponse } = await import('@/app/api/chat/route')
+          const { applyFilesystemEditsFromResponse } = await import('@/app/api/chat/filesystem-edits')
 
           filesystemEdits = await applyFilesystemEditsFromResponse({
             ownerId: ownerIdForEdits.toString(),

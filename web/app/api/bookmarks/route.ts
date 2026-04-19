@@ -14,7 +14,7 @@ export const dynamic = 'force-dynamic';
 const DATA_DIR = join(process.cwd(), 'data');
 const BOOKMARKS_FILE = join(DATA_DIR, 'bookmarks.json');
 
-export interface Bookmark {
+interface Bookmark {
   id: string;
   url: string;
   title?: string;

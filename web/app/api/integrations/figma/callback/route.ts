@@ -16,7 +16,7 @@ import { auth0 } from '@/lib/auth0';
 import { getDatabase } from '@/lib/database/connection';
 import { exchangeCodeForToken, calculateExpiryDate } from '@/lib/figma/oauth';
 import { getFigmaRedirectUri } from '@/lib/figma/config';
-import { oauthStateStore } from '../route';
+import { oauthStateStore } from '../oauth-state-store';
 
 export const runtime = 'nodejs';
 

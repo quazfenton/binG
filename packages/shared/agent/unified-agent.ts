@@ -60,6 +60,9 @@ export interface UnifiedAgentConfig {
 
   /** User ID for session ownership */
   userId?: string
+
+  /** Current task being executed (used for tool filtering) */
+  task?: string
   
   /** Capabilities to enable */
   capabilities?: AgentCapability[]

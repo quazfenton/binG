@@ -94,19 +94,21 @@ fn find_web_dir(resource_dir: Option<&PathBuf>) -> Option<PathBuf> {
     
     // 1. Check bundled resources
     if let Some(ref res_dir) = resource_dir {
-        let bundled = res_dir.join("web");
-        let has_next = bundled.join(".next").exists();
-        let has_pkg = bundled.join("package.json").exists();
-        log_msg(&format!("[find_web_dir] Checking bundled: {:?} (.next={}, pkg.json={})", bundled, has_next, has_pkg));
-        if has_next && has_pkg {
-            log_msg(&format!("[find_web_dir] ✓ Found bundled web dir"));
-            return Some(bundled);
-        }
-        if !has_next {
-            log_msg(&format!("[find_web_dir] ✗ No .next in {:?}", bundled));
-        }
-        if !has_pkg {
-            log_msg(&format!("[find_web_dir] ✗ No package.json in {:?}", bundled));
+        for bundled in [res_dir.join("web"), res_dir.join("web-assets")] {
+            let has_next = bundled.join(".next").exists();
+            let has_pkg = bundled.join("package.json").exists();
+            let has_standalone = bundled.join("server.js").exists();
+            log_msg(&format!("[find_web_dir] Checking bundled: {:?} (.next={}, pkg.json={}, server.js={})", bundled, has_next, has_pkg, has_standalone));
+            if has_standalone || (has_next && has_pkg) {
+                log_msg("[find_web_dir] ✓ Found bundled web dir");
+                return Some(bundled);
+            }
+            if !has_next {
+                log_msg(&format!("[find_web_dir] ✗ No .next in {:?}", bundled));
+            }
+            if !has_pkg && !has_standalone {
+                log_msg(&format!("[find_web_dir] ✗ No package.json in {:?}", bundled));
+            }
         }
     } else {
         log_msg("[find_web_dir] No resource_dir provided");
@@ -136,8 +138,9 @@ fn find_web_dir(resource_dir: Option<&PathBuf>) -> Option<PathBuf> {
     for candidate in &candidates {
         let has_next = candidate.join(".next").exists();
         let has_pkg = candidate.join("package.json").exists();
-        log_msg(&format!("[find_web_dir] Checking {:?} (.next={}, pkg.json={})", candidate, has_next, has_pkg));
-        if has_next && has_pkg {
+        let has_standalone = candidate.join("server.js").exists();
+        log_msg(&format!("[find_web_dir] Checking {:?} (.next={}, pkg.json={}, server.js={})", candidate, has_next, has_pkg, has_standalone));
+        if has_standalone || (has_next && has_pkg) {
             log_msg(&format!("[find_web_dir] ✓ Found project web dir"));
             return Some(candidate.clone());
         }
@@ -149,8 +152,9 @@ fn find_web_dir(resource_dir: Option<&PathBuf>) -> Option<PathBuf> {
         .join("web");
     let has_next = dev_dir.join(".next").exists();
     let has_pkg = dev_dir.join("package.json").exists();
-    log_msg(&format!("[find_web_dir] Checking dev dir: {:?} (.next={}, pkg.json={})", dev_dir, has_next, has_pkg));
-    if has_next && has_pkg {
+    let has_standalone = dev_dir.join("server.js").exists();
+    log_msg(&format!("[find_web_dir] Checking dev dir: {:?} (.next={}, pkg.json={}, server.js={})", dev_dir, has_next, has_pkg, has_standalone));
+    if has_standalone || (has_next && has_pkg) {
         log_msg(&format!("[find_web_dir] ✓ Found dev web dir"));
         return Some(dev_dir);
     }
@@ -179,6 +183,44 @@ fn spawn_next_server(port: u16, token: &str, resource_dir: Option<PathBuf>) -> R
         .ok_or("Could not find Next.js web directory with .next build. Run `pnpm build` in the web/ folder.")?;
 
     log_msg(&format!("[spawn_next] Web dir: {:?}", web_dir.display()));
+
+    let standalone_server_path = web_dir.join("server.js");
+    if standalone_server_path.exists() {
+        log_msg(&format!("[spawn_next] Found standalone server at {:?}", standalone_server_path));
+        let mut standalone_cmd: Command = if cfg!(windows) {
+            let mut c = Command::new("cmd");
+            c.args(["/C", "node", "server.js"]);
+            c
+        } else {
+            let mut c = Command::new("node");
+            c.arg("server.js");
+            c
+        };
+
+        standalone_cmd
+            .env("NODE_ENV", "production")
+            .env("PORT", port.to_string())
+            .env("HOSTNAME", "127.0.0.1")
+            .env("DESKTOP_MODE", "true")
+            .env("DESKTOP_LOCAL_EXECUTION", "true")
+            .env("OPENCODE_SIDECAR_TOKEN", token)
+            .current_dir(&web_dir)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+
+        log_msg(&format!("[spawn_next] Spawning standalone Next server on port {} in {:?}", port, web_dir));
+        return standalone_cmd
+            .spawn()
+            .map(|child| {
+                log_msg(&format!("[spawn_next] ✓ Standalone process spawned, PID: {}", child.id()));
+                child
+            })
+            .map_err(|e| {
+                let err_msg = format!("Failed to spawn standalone Next.js server: {}", e);
+                log_msg(&format!("[spawn_next] ✗ {}", err_msg));
+                err_msg
+            });
+    }
 
     // Verify .next exists
     if !web_dir.join(".next").exists() {

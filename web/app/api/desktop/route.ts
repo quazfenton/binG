@@ -22,15 +22,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { e2bDesktopProvider } from '@/lib/computer/e2b-desktop-provider-enhanced';
 import { verifyToken } from '@/lib/security/jwt-auth';
+import { activeDesktops } from './active-desktops';
 
 // Store active desktop sessions with user ownership (in production, use Redis)
-export const activeDesktops = new Map<string, {
-  desktop: any;
-  userId: string;
-  createdAt: number;
-  lastUsed: number;
-}>();
-
 /**
  * Extract userId from request authorization header
  */

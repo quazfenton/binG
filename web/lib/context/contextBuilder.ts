@@ -48,7 +48,7 @@ export interface ContextBuilderOptions {
   groupByFile?: boolean;
   /** Include score breakdown (default: false) */
   includeScores?: boolean;
-  /** Output format (default: 'json') */
+  /** Output format (default: 'markdown') */
   format?: ContextFormat;
 }
 
@@ -82,7 +82,7 @@ export function buildContext(
     maxPerFile = 3,
     groupByFile = true,
     includeScores = false,
-    format = 'json',
+    format = 'markdown',
   } = opts;
 
   // Guard against invalid options

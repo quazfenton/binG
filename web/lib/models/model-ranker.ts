@@ -15,6 +15,7 @@
 import { resourceTelemetry } from '@/lib/management/resource-telemetry'
 import { chatRequestLogger } from '@/lib/chat/chat-request-logger'
 import { toolCallTracker } from '@/lib/chat/tool-call-tracker'
+import { getToolCallTelemetrySummary } from '@/lib/chat/tool-call-telemetry'
 import { createLogger } from '@/lib/utils/logger'
 
 const logger = createLogger('Model:Ranker')
@@ -244,7 +245,24 @@ export async function getModelStatsFromTelemetry(): Promise<ModelStats[]> {
     const key = `${stat.provider}:${stat.model}`
     modelMap.set(key, stat)
   })
-  
+
+  // Enrich with in-memory tool call telemetry (supplements DB-backed tracker)
+  try {
+    const inMemoryTelemetry = getToolCallTelemetrySummary()
+    for (const [key, summary] of Object.entries(inMemoryTelemetry)) {
+      const existing = modelMap.get(key)
+      if (existing && summary.totalCalls > 0) {
+        // Only override tool stats if in-memory has more recent data
+        if (!existing.toolSuccessRate || summary.totalCalls > (existing.toolCallTotalCalls || 0)) {
+          const successRate = summary.successCount / summary.totalCalls
+          existing.toolSuccessRate = successRate
+          existing.toolCallTotalCalls = summary.totalCalls
+          existing.avgToolScore = successRate * 2 - 1 // Map 0-1 to -1..+1
+        }
+      }
+    }
+  } catch { /* in-memory telemetry is best-effort */ }
+
   const allStats = Array.from(modelMap.values())
   
   logger.debug('Model stats retrieved', {

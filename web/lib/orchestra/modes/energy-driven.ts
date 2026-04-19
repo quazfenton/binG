@@ -114,7 +114,7 @@ function computeEnergy(
   // This is a proxy for "does the output address the requirements?"
   const taskTerms = extractKeyTerms(task);
   const outputTerms = extractKeyTerms(output);
-  const matchedTerms = taskTerms.filter(t => outputTerms.has(t));
+  const matchedTerms = taskTerms.filter(t => outputTerms.includes(t));
   const specMisalignment = taskTerms.length > 0
     ? 1 - (matchedTerms.length / taskTerms.length)
     : 0.5;

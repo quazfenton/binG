@@ -120,7 +120,7 @@ export class PowersRegistry {
   /**
    * Register a power from a parsed SKILL.md manifest
    */
-  register(manifest: PowerManifest): void {
+  async register(manifest: PowerManifest): Promise<void> {
     // User/marketplace skills override existing ones
     const existing = this.powers.get(manifest.id);
     if (existing && existing.source === 'local' && manifest.source !== 'local') {
@@ -146,6 +146,24 @@ export class PowersRegistry {
         skills.push(manifest.id);
         this.skillsByCapability.set(action.name.toLowerCase(), skills);
       }
+    }
+
+    // Register as a tool in the unified ToolRegistry
+    const { ToolRegistry } = await import('@/lib/tools/registry');
+    const toolRegistry = ToolRegistry.getInstance();
+    for (const action of manifest.actions) {
+      await toolRegistry.registerTool({
+        name: `power_${manifest.id}_${action.name}`,
+        capability: `powers.${action.name}`,
+        provider: 'wasm-runner',
+        handler: async (params: any, context: any) => {
+          return executePower(manifest.id, action.name, params, context);
+        },
+        inputSchema: action.paramsSchema ? jsonSchemaToZod(action.paramsSchema) : z.object({}),
+        metadata: {
+          tags: manifest.triggers || [],
+        },
+      });
     }
 
     log.info('Power registered', { id: manifest.id, actions: manifest.actions.length });

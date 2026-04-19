@@ -31,6 +31,7 @@ import { chatLogger } from './chat-logger';
 import { getProviderForModel } from './openai-compat-wrapper';
 import { tokenTracker } from './ai-caching';
 import { createReasoningMiddleware, withRetry, createSmoothStream, isTokenLimitError, handleTokenLimitError } from './ai-middleware';
+import { recordToolCall, shouldForceTextMode } from './tool-call-telemetry';
 
 /**
  * Tool execution context for Vercel AI SDK tools
@@ -777,18 +778,35 @@ export async function* streamWithVercelAI(
         }
       } else if (supportsFC === undefined) {
         // Model doesn't report this capability — could be unknown provider.
-        // TWO-PHASE STRATEGY:
-        //   Phase 1: Use tools only (no text-mode instructions).
-        //   Phase 2: After streaming, if zero tool calls produced, check if
-        //            the response text contains tool-call patterns. If so,
-        //            issue a second completion with text-mode instructions.
-        chatLogger.info('[FC-GATE] Function calling ability UNKNOWN — using two-phase strategy', {
-          provider,
-          model: modelName,
-          toolCount,
-          strategy: 'Phase 1: tools only; Phase 2: text-mode fallback if no tool calls',
-        });
-        // Do NOT inject text-mode instructions yet — let the model try native tool calls first.
+        // Auto text-mode: if telemetry shows this model fails >70% of tool calls,
+        // strip tools and switch to text-mode proactively.
+        if (shouldForceTextMode(modelName)) {
+          chatLogger.warn('[FC-GATE] Auto text-mode: model has >70% tool failure rate', {
+            provider,
+            model: modelName,
+            toolCount,
+            action: 'Stripping tools and using text-mode fallback based on telemetry',
+          });
+          delete streamOptions.tools;
+          if (streamOptions.system) {
+            streamOptions.system = streamOptions.system + '\n\n' + TEXT_MODE_TOOL_INSTRUCTIONS;
+          } else {
+            streamOptions.system = TEXT_MODE_TOOL_INSTRUCTIONS;
+          }
+        } else {
+          // TWO-PHASE STRATEGY:
+          //   Phase 1: Use tools only (no text-mode instructions).
+          //   Phase 2: After streaming, if zero tool calls produced, check if
+          //            the response text contains tool-call patterns. If so,
+          //            issue a second completion with text-mode instructions.
+          chatLogger.info('[FC-GATE] Function calling ability UNKNOWN — using two-phase strategy', {
+            provider,
+            model: modelName,
+            toolCount,
+            strategy: 'Phase 1: tools only; Phase 2: text-mode fallback if no tool calls',
+          });
+          // Do NOT inject text-mode instructions yet — let the model try native tool calls first.
+        }
       }
     } else {
       chatLogger.info('[FC-GATE] No tools provided, skipping function calling check', { provider, model: modelName });
@@ -915,6 +933,11 @@ export async function* streamWithVercelAI(
                 severity: 'HIGH',
               });
 
+              // Record empty-args as a failure in telemetry
+              if (toolName && modelName) {
+                recordToolCall(modelName, toolName, false, 'EMPTY_ARGS');
+              }
+
               // Yield a synthetic tool-result failure so the model sees the error
               // and can retry with correct args
               yield {
@@ -963,6 +986,27 @@ export async function* streamWithVercelAI(
           const toolResult = (chunk as any).result;
           const toolName = (chunk as any).toolName;
           const resultSuccess = toolResult?.success ?? (toolResult?.error === undefined);
+
+          // Inject _recoveryHint into all failed tool results so the model sees actionable guidance
+          if (!resultSuccess && toolResult && typeof toolResult === 'object') {
+            const errObj = toolResult.error;
+            const errMsg = typeof errObj === 'string' ? errObj : errObj?.message || '';
+            if (!toolResult._recoveryHint) {
+              toolResult._recoveryHint = errObj?.suggestedNextAction
+                || (errObj?.code === 'PATH_NOT_FOUND' ? `Check the path and call list_files on the parent directory.` : undefined)
+                || (errObj?.code === 'INVALID_ARGS' ? `Re-read the tool description and provide all required fields.` : undefined)
+                || `Read the error carefully. Do NOT retry the exact same call — try a different approach.`;
+            }
+            // Wrap plain-string errors into structured format for consistency
+            if (typeof errObj === 'string') {
+              toolResult.error = {
+                code: 'TOOL_ERROR',
+                message: errObj,
+                retryable: true,
+                _recoveryHint: toolResult._recoveryHint,
+              };
+            }
+          }
 
           // SELF-HEALING: Enhanced error result for validation-like errors.
           // Declared here so it's in scope for the yield below.
@@ -1016,6 +1060,13 @@ export async function* streamWithVercelAI(
               };
             }
           }
+
+          // Record telemetry for tool success/failure tracking
+          if (toolName && modelName) {
+            const errCode = typeof toolResult?.error === 'object' ? toolResult.error.code : undefined;
+            recordToolCall(modelName, toolName, resultSuccess, errCode);
+          }
+
           yield {
             content: '',
             isComplete: false,
@@ -1318,13 +1369,43 @@ export async function* streamWithVercelAI(
           if (chunk.type === 'text-delta') {
             yield { content: (chunk as any).text, isComplete: false, timestamp: new Date() };
           } else if (chunk.type === 'tool-call') {
+            const fbToolName = (chunk as any).toolName;
+            let fbCallArgs = (chunk as any).args || (chunk as any).arguments || {};
+            // Normalize args in fallback path (same as main path)
+            try {
+              const { normalizeToolArgs: fbNormalize } = await import('@/lib/orchestra/shared-agent-context');
+              fbCallArgs = fbNormalize(fbToolName, fbCallArgs) ?? fbCallArgs;
+            } catch { /* best effort */ }
+            // Record telemetry for empty args
+            if (!fbCallArgs || Object.keys(fbCallArgs).length === 0) {
+              recordToolCall(fallbackModelName, fbToolName, false, 'EMPTY_ARGS');
+            }
             yield {
               content: '',
               isComplete: false,
               toolCalls: [{
                 id: (chunk as any).toolCallId,
-                name: (chunk as any).toolName,
-                arguments: (chunk as any).args || (chunk as any).arguments || {},
+                name: fbToolName,
+                arguments: fbCallArgs,
+              }],
+              timestamp: new Date(),
+            };
+          } else if (chunk.type === 'tool-result') {
+            // Record telemetry for fallback tool results
+            const fbResultToolName = (chunk as any).toolName;
+            const fbToolResult = (chunk as any).result;
+            const fbSuccess = fbToolResult?.success ?? (fbToolResult?.error === undefined);
+            const fbErrCode = typeof fbToolResult?.error === 'object' ? fbToolResult.error.code : undefined;
+            recordToolCall(fallbackModelName, fbResultToolName, fbSuccess, fbErrCode);
+            yield {
+              content: '',
+              isComplete: false,
+              toolInvocations: [{
+                toolCallId: (chunk as any).toolCallId,
+                toolName: fbResultToolName,
+                state: 'result' as const,
+                args: (chunk as any).args || {},
+                result: fbToolResult,
               }],
               timestamp: new Date(),
             };

@@ -9,7 +9,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { readdir, readFile } from 'fs/promises';
 import { join } from 'path';
 
-export interface PluginMetadata {
+interface PluginMetadata {
   id: string;
   name: string;
   description: string;

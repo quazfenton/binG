@@ -163,7 +163,7 @@ export async function GET(request: NextRequest) {
 /**
  * Broadcast event to all SSE connections
  */
-export function broadcastEvent(userId: string, event: any): void {
+function broadcastEvent(userId: string, event: any): void {
   const userConnections = sseConnections.get(userId) || [];
   const encoder = new TextEncoder();
   const deadConnections: typeof userConnections = [];

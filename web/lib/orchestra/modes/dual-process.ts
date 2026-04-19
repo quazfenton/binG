@@ -153,7 +153,7 @@ export async function runDualProcessMode(
       error: fastResult.error,
     });
     // Fast path completely failed — go straight to slow
-    return runSlowPath(baseConfig, slowProvider, slowModel, options, 'Fast path execution failed', startTime);
+    return runSlowPath(baseConfig, slowProvider, slowModel, options, 'Fast path execution failed', startTime, fastProvider, fastModel);
   }
 
   // ── Instability Detection ───────────────────────────────────────────────
@@ -186,7 +186,7 @@ export async function runDualProcessMode(
 
   // ── Slow Path ───────────────────────────────────────────────────────────
   log.info('[DualProcess] → Slow path triggered (instability detected)');
-  return runSlowPath(baseConfig, slowProvider, slowModel, options, instability.signals.join('; '), startTime, fastResult);
+  return runSlowPath(baseConfig, slowProvider, slowModel, options, instability.signals.join('; '), startTime, fastProvider, fastModel, fastResult);
 }
 
 /**
@@ -200,6 +200,8 @@ async function runSlowPath(
   options: DualProcessConfig,
   instabilitySignals: string,
   startTime: number,
+  fastProvider: string,
+  fastModel: string,
   fastResult?: UnifiedAgentResult
 ): Promise<UnifiedAgentResult> {
   const slowSystemPrompt = [

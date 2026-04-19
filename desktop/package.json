@@ -31,8 +31,8 @@
     "export-telemetry": "tsx scripts/export-model-telemetry.ts",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
-    "desktop:dev": "DESKTOP_MODE=true DESKTOP_LOCAL_EXECUTION=true tauri dev",
-    "desktop:build": "DESKTOP_MODE=true DESKTOP_LOCAL_EXECUTION=true tauri build"
+    "desktop:dev": "node scripts/run-tauri.cjs dev",
+    "desktop:build": "node scripts/run-tauri.cjs build"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.64",

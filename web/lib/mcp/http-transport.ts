@@ -12,6 +12,7 @@
  */
 
 import { createLogger } from '../utils/logger';
+import { flattenToolResultContent } from './result-format';
 
 const logger = createLogger('MCP-HTTP-Transport');
 
@@ -162,8 +163,13 @@ export async function callRemoteMCPTool(
     // Handle MCP tool result format
     const content = result?.content;
     if (content && Array.isArray(content) && content[0]) {
-      const text = typeof content[0].text === 'string' ? content[0].text : JSON.stringify(content[0]);
-      const isError = content[0].isError === true;
+      const formatted = flattenToolResultContent({
+        toolCallId: remoteToolName,
+        content,
+        isError: result?.isError === true,
+      });
+      const text = formatted.displayText;
+      const isError = result?.isError === true;
       
       return {
         success: !isError,

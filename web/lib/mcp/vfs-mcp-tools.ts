@@ -574,6 +574,33 @@ export const writeFileTool = (tool as any)({
   error: `Content too large (${(content.length / 1024 / 1024).toFixed(1)}MB). Maximum is ${(MAX_CONTENT_SIZE / 1024 / 1024).toFixed(0)}MB.`,
 };
   }
+
+  // Detect truncated content — LLMs sometimes output "..." or "// rest of file" placeholders
+  const TRUNCATION_PATTERNS = [
+    /\.\.\.\s*$/,
+    /\/\/\s*rest of file/i,
+    /\/\/\s*\.\.\./,
+    /\/\*\s*\.\.\.\s*\*\//,
+    /#\s*\.\.\./,
+    /\/\/\s*remaining/i,
+    /\/\/\s*etc\.?/i,
+    /\/\/\s*\.\.\.?\s*$/m,
+  ];
+  const lastLines = content.slice(-200);
+  if (TRUNCATION_PATTERNS.some(p => p.test(lastLines))) {
+    return {
+      success: false,
+      path,
+      error: {
+        code: 'TRUNCATED_CONTENT',
+        message: 'Content appears to be truncated (ends with "...", "// rest of file", or similar placeholder). Please provide the COMPLETE file contents without abbreviation.',
+        retryable: true,
+        attemptedPath: path,
+        suggestedNextAction: 'Call write_file again with the full, untruncated file content.',
+      },
+    };
+  }
+
   const context = getToolContext();
 
   // ENHANCED: Log VFS tool invocation with full context
@@ -635,11 +662,21 @@ export const writeFileTool = (tool as any)({
     version: (result as any).version ?? 1,
   };
     } catch (error: any) {
-  logger.error('writeFile failed', { path, error: error.message });
+  const msg = error.message || 'Failed to write file';
+  logger.error('writeFile failed', { path, error: msg });
+  const isParentMissing = /not found|enoent|does not exist|no such/i.test(msg);
   return {
     success: false,
     path,
-    error: error.message,
+    error: isParentMissing
+      ? {
+          code: 'PARENT_NOT_FOUND',
+          message: `Cannot write "${path}" — parent directory may not exist.`,
+          retryable: true,
+          attemptedPath: path,
+          suggestedNextAction: `Call create_directory for the parent path first, then retry write_file.`,
+        }
+      : { code: 'WRITE_ERROR', message: msg, retryable: false },
   };
     }
   },
@@ -715,6 +752,147 @@ export const applyDiffTool = (tool as any)({
     }
   }
 
+  // === Diff auto-repair pipeline (steps 1-4) ===
+
+  // Step 1: Strip `diff --git` preambles that some models prepend
+  if (diff.startsWith('diff --git')) {
+    const firstHunk = diff.indexOf('@@');
+    if (firstHunk !== -1) {
+      // Find the line before @@ to keep --- and +++ headers
+      const beforeHunk = diff.substring(0, firstHunk);
+      const dashLine = beforeHunk.lastIndexOf('--- ');
+      if (dashLine !== -1) {
+        diff = diff.substring(dashLine);
+      }
+    }
+  }
+
+  // Step 2: Fix unclosed @@ headers (e.g. "@@ -1,5 +1,5" without trailing " @@")
+  diff = diff.replace(/@@ -(\d+),?(\d*) \+(\d+),?(\d*)(?!\s*@@)/g, '@@ -$1,$2 +$3,$4 @@');
+
+  // Step 3: Remove spurious indentation (some models indent every diff line)
+  const diffLines = diff.split('\n');
+  const allIndented = diffLines.length > 3 && diffLines.slice(2).every(l => l === '' || l.startsWith('  ') || l.startsWith('\t'));
+  if (allIndented) {
+    diff = diffLines.map(l => {
+      if (l.startsWith('  ')) return l.slice(2);
+      if (l.startsWith('\t')) return l.slice(1);
+      return l;
+    }).join('\n');
+  }
+
+  // Step 4: Reject non-diff content (model sent prose instead of a diff)
+  if (!diff.includes('@@') && !diff.includes('--- ') && !diff.includes('+++ ')) {
+    // Check for search-and-replace format before rejecting
+    if (!(/<<<+\s*SEARCH/i.test(diff))) {
+      return {
+        success: false,
+        path,
+        error: {
+          code: 'INVALID_DIFF_FORMAT',
+          message: 'The provided content is not a valid unified diff. It must contain @@ hunk headers and ---/+++ file headers.',
+          retryable: true,
+          attemptedPath: path,
+          suggestedNextAction: `Call read_file("${path}") first, then generate a proper unified diff with --- a/${path} and +++ b/${path} headers.`,
+        },
+      };
+    }
+  }
+
+  // Step 5: Search-and-replace format fallback
+  // Many LLMs send <<<<<<< SEARCH / ======= / >>>>>>> REPLACE instead of unified diff
+  const sarPattern = /<<<+\s*SEARCH\s*\n([\s\S]*?)\n={3,}\n([\s\S]*?)\n>>>+\s*REPLACE/g;
+  if (sarPattern.test(diff)) {
+    logger.info('[VFS-TOOL] applyDiff: detected search-and-replace format, converting', {
+      path,
+      diffPreview: diff.slice(0, 200),
+    });
+
+    const context = getToolContext();
+    const scopedPath = resolveScopedPath(path);
+
+    // Read the current file
+    const currentFile = await virtualFilesystem.readFile(context.userId, scopedPath);
+    let newContent = currentFile.content;
+
+    // Reset lastIndex after .test()
+    sarPattern.lastIndex = 0;
+    let match;
+    let appliedCount = 0;
+    let failedSearches: string[] = [];
+
+    while ((match = sarPattern.exec(diff)) !== null) {
+      const searchStr = match[1];
+      const replaceStr = match[2];
+      if (newContent.includes(searchStr)) {
+        newContent = newContent.replace(searchStr, replaceStr);
+        appliedCount++;
+      } else {
+        // Try trimmed match (whitespace differences)
+        const trimmedSearch = searchStr.split('\n').map((l: string) => l.trimEnd()).join('\n');
+        const trimmedContent = newContent.split('\n').map((l: string) => l.trimEnd()).join('\n');
+        const idx = trimmedContent.indexOf(trimmedSearch);
+        if (idx !== -1) {
+          // Find the original-content boundaries that correspond to this trimmed match
+          const lines = newContent.split('\n');
+          const searchLines = searchStr.split('\n');
+          const trimmedLines = trimmedContent.split('\n');
+          let startLine = trimmedContent.substring(0, idx).split('\n').length - 1;
+          let endLine = startLine + searchLines.length;
+          const originalSlice = lines.slice(startLine, endLine).join('\n');
+          newContent = newContent.replace(originalSlice, replaceStr);
+          appliedCount++;
+        } else {
+          failedSearches.push(searchStr.slice(0, 80));
+        }
+      }
+    }
+
+    if (appliedCount === 0) {
+      return {
+        success: false,
+        path,
+        error: {
+          code: 'DIFF_MISMATCH',
+          message: `Search-and-replace: none of the ${failedSearches.length} SEARCH blocks matched the current file content.`,
+          retryable: true,
+          attemptedPath: path,
+          failedSearches,
+          suggestedNextAction: `Call read_file("${path}") to see current content, then regenerate the diff.`,
+        },
+      };
+    }
+
+    // Write back
+    const result = await virtualFilesystem.writeFile(
+      context.userId,
+      scopedPath,
+      newContent,
+      currentFile.language,
+      { failIfExists: false }
+    );
+
+    await emitFileEvent({
+      userId: context.userId,
+      sessionId: context.sessionId,
+      path: scopedPath,
+      type: 'update',
+      content: newContent,
+      previousContent: currentFile.content,
+      source: 'mcp-tool-diff-sar',
+      metadata: { diff, appliedCount, failedSearches },
+    });
+
+    return {
+      success: true,
+      path: result.path,
+      message: `Search-and-replace applied: ${appliedCount} replacement(s)${failedSearches.length > 0 ? `, ${failedSearches.length} unmatched` : ''}`,
+      version: result.version,
+      appliedCount,
+      failedSearches: failedSearches.length > 0 ? failedSearches : undefined,
+    };
+  }
+
   const context = getToolContext();
   const scopedPath = resolveScopedPath(path);
   
@@ -767,11 +945,30 @@ export const applyDiffTool = (tool as any)({
     version: result.version,
   };
     } catch (error: any) {
-  logger.error('applyDiff failed', { path, error: error.message });
+  const msg = error.message || 'Failed to apply diff';
+  logger.error('applyDiff failed', { path, error: msg });
+  const isNotFound = /not found|enoent|does not exist/i.test(msg);
+  const isDiffMismatch = /failed to apply|does not match|no match/i.test(msg);
   return {
     success: false,
     path,
-    error: error.message,
+    error: isNotFound
+      ? {
+          code: 'PATH_NOT_FOUND',
+          message: `File "${path}" does not exist — cannot apply diff to a non-existent file.`,
+          retryable: true,
+          attemptedPath: path,
+          suggestedNextAction: `Use write_file to create the file first, or check the path with list_files.`,
+        }
+      : isDiffMismatch
+        ? {
+            code: 'DIFF_MISMATCH',
+            message: msg,
+            retryable: true,
+            attemptedPath: path,
+            suggestedNextAction: `Call read_file("${path}") to see current content, then regenerate the diff.`,
+          }
+        : { code: 'DIFF_ERROR', message: msg, retryable: false },
   };
     }
   },
@@ -853,16 +1050,50 @@ export const readFileTool = (tool as any)({
     exists: true,
   };
     } catch (error: any) {
+  const msg = error.message || 'Failed to read file';
   logger.error('readFile failed', { 
     path, 
-    error: error.message,
+    error: msg,
     stack: error.stack,
     userId: getToolContext().userId 
   });
+  const isNotFound = /not found|enoent|does not exist|no such/i.test(msg);
+  if (isNotFound) {
+    const parentPath = path.includes('/') ? path.substring(0, path.lastIndexOf('/')) || '/' : '/';
+    // Try to list siblings for suggestions
+    let suggestedPaths: string[] = [];
+    try {
+      const ctx = getToolContext();
+      const parentScoped = resolveScopedPath(parentPath);
+      const listing = await virtualFilesystem.listDirectory(ctx.userId, parentScoped);
+      suggestedPaths = (listing.nodes as any[]).slice(0, 10).map((f: any) => f.name || f.path || String(f));
+    } catch { /* parent may not exist either */ }
+    return {
+      success: false,
+      path,
+      exists: false,
+      error: {
+        code: 'PATH_NOT_FOUND',
+        message: `File "${path}" does not exist.`,
+        retryable: true,
+        attemptedPath: path,
+        parentPath,
+        suggestedPaths,
+        suggestedNextAction: suggestedPaths.length > 0
+          ? `Try one of these paths: ${suggestedPaths.join(', ')}`
+          : `Call list_files("${parentPath}") to see what exists.`,
+      },
+    };
+  }
   return {
     success: false,
     path,
-    error: error.message,
+    error: {
+      code: 'READ_ERROR',
+      message: msg,
+      retryable: false,
+      attemptedPath: path,
+    },
     exists: false,
   };
     }
@@ -976,11 +1207,21 @@ export const listFilesTool = (tool as any)({
     count: listing.nodes.length,
   };
     } catch (error: any) {
-  logger.error('listFiles failed', { path, error: error.message });
+  const msg = error.message || 'Failed to list directory';
+  logger.error('listFiles failed', { path, error: msg });
+  const isNotFound = /not found|enoent|does not exist/i.test(msg);
   return {
     success: false,
     path,
-    error: error.message,
+    error: isNotFound
+      ? {
+          code: 'PATH_NOT_FOUND',
+          message: `Directory "${path}" does not exist.`,
+          retryable: true,
+          attemptedPath: path,
+          suggestedNextAction: `Try list_files("/") or list_files("src") to discover available directories.`,
+        }
+      : { code: 'LIST_ERROR', message: msg, retryable: false },
     nodes: [],
   };
     }
@@ -1349,11 +1590,21 @@ export const deleteFileTool = (tool as any)({
     message: `Deleted: ${reason || 'MCP tool request'}`,
   };
     } catch (error: any) {
-  logger.error('deleteFile failed', { path, error: error.message });
+  const msg = error.message || 'Failed to delete';
+  logger.error('deleteFile failed', { path, error: msg });
+  const isNotFound = /not found|enoent|does not exist|no such/i.test(msg);
   return {
     success: false,
     path,
-    error: error.message,
+    error: isNotFound
+      ? {
+          code: 'PATH_NOT_FOUND',
+          message: `File "${path}" does not exist — nothing to delete.`,
+          retryable: false,
+          attemptedPath: path,
+          suggestedNextAction: `Call list_files to find the correct path.`,
+        }
+      : { code: 'DELETE_ERROR', message: msg, retryable: false },
   };
     }
   },

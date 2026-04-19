@@ -166,6 +166,30 @@ export function createFilesystemTools(
       },
       execute: async ({ path, content, language }: { path: string; content: string; language?: string }): Promise<ToolCallResult> => {
         try {
+          if (!path || typeof path !== 'string' || !path.trim()) {
+            return {
+              success: false,
+              error: {
+                code: 'INVALID_ARGS',
+                message: 'Missing required argument: path',
+                retryable: true,
+                expectedFields: ['path', 'content'],
+                suggestedNextAction: 'Call write_file with a valid file path and content.',
+              },
+            };
+          }
+          if (content === undefined || content === null) {
+            return {
+              success: false,
+              error: {
+                code: 'INVALID_ARGS',
+                message: 'Missing required argument: content',
+                retryable: true,
+                expectedFields: ['path', 'content'],
+                suggestedNextAction: 'Call write_file with both path and content arguments.',
+              },
+            };
+          }
           const scopedPath = resolveWorkspacePath(workspacePath, path);
           const file = await virtualFilesystem.writeFile(userId, scopedPath, content, language);
 
@@ -186,9 +210,30 @@ export function createFilesystemTools(
             message: `File written: ${file.path} (${file.size} bytes)`,
           };
         } catch (error: any) {
+          const msg = error.message || 'Failed to write file';
+          const isNotFound = /not found|enoent|does not exist|no such/i.test(msg);
+          if (isNotFound) {
+            const parentPath = path.includes('/') ? path.substring(0, path.lastIndexOf('/')) || '/' : '/';
+            return {
+              success: false,
+              error: {
+                code: 'PARENT_NOT_FOUND',
+                message: `Cannot write "${path}" — parent directory may not exist.`,
+                retryable: true,
+                attemptedPath: path,
+                parentPath,
+                suggestedNextAction: `Call create_directory("${parentPath}") first, then retry write_file.`,
+              },
+            };
+          }
           return {
             success: false,
-            error: error.message || 'Failed to write file',
+            error: {
+              code: 'WRITE_ERROR',
+              message: msg,
+              retryable: false,
+              attemptedPath: path,
+            },
           };
         }
       },
@@ -209,6 +254,18 @@ export function createFilesystemTools(
       },
       execute: async ({ path }: { path: string }): Promise<ToolCallResult> => {
         try {
+          if (!path || typeof path !== 'string') {
+            return {
+              success: false,
+              error: {
+                code: 'INVALID_ARGS',
+                message: 'Missing required argument: path',
+                retryable: true,
+                expectedFields: ['path'],
+                suggestedNextAction: 'Call list_directory with a valid directory path string.',
+              },
+            };
+          }
           const scopedPath = resolveWorkspacePath(workspacePath, path);
           const listing = await virtualFilesystem.listDirectory(userId, scopedPath);
           return {
@@ -221,9 +278,28 @@ export function createFilesystemTools(
             count: listing.nodes.length,
           };
         } catch (error: any) {
+          const msg = error.message || 'Failed to list directory';
+          const isNotFound = /not found|enoent|does not exist|no such/i.test(msg);
+          if (isNotFound) {
+            return {
+              success: false,
+              error: {
+                code: 'PATH_NOT_FOUND',
+                message: `Directory "${path}" does not exist.`,
+                retryable: true,
+                attemptedPath: path,
+                suggestedNextAction: `Try list_directory("/") or list_directory("src") to see what directories exist.`,
+              },
+            };
+          }
           return {
             success: false,
-            error: error.message || 'Failed to list directory',
+            error: {
+              code: 'LIST_ERROR',
+              message: msg,
+              retryable: false,
+              attemptedPath: path,
+            },
           };
         }
       },
@@ -278,6 +354,18 @@ export function createFilesystemTools(
       },
       execute: async ({ path }: { path: string }): Promise<ToolCallResult> => {
         try {
+          if (!path || typeof path !== 'string' || !path.trim()) {
+            return {
+              success: false,
+              error: {
+                code: 'INVALID_ARGS',
+                message: 'Missing required argument: path',
+                retryable: true,
+                expectedFields: ['path'],
+                suggestedNextAction: 'Call delete_file with a valid file path string.',
+              },
+            };
+          }
           const scopedPath = resolveWorkspacePath(workspacePath, path);
           const result = await virtualFilesystem.deletePath(userId, scopedPath);
           return {
@@ -287,9 +375,28 @@ export function createFilesystemTools(
             message: `Deleted: ${scopedPath}`,
           };
         } catch (error: any) {
+          const msg = error.message || 'Failed to delete';
+          const isNotFound = /not found|enoent|does not exist|no such/i.test(msg);
+          if (isNotFound) {
+            return {
+              success: false,
+              error: {
+                code: 'PATH_NOT_FOUND',
+                message: `File "${path}" does not exist.`,
+                retryable: true,
+                attemptedPath: path,
+                suggestedNextAction: `Call list_directory to find the correct path, then retry delete_file.`,
+              },
+            };
+          }
           return {
             success: false,
-            error: error.message || 'Failed to delete',
+            error: {
+              code: 'DELETE_ERROR',
+              message: msg,
+              retryable: false,
+              attemptedPath: path,
+            },
           };
         }
       },
@@ -365,6 +472,18 @@ export function createFilesystemTools(
       },
       execute: async ({ path }: { path: string }): Promise<ToolCallResult> => {
         try {
+          if (!path || typeof path !== 'string' || !path.trim()) {
+            return {
+              success: false,
+              error: {
+                code: 'INVALID_ARGS',
+                message: 'Missing required argument: path',
+                retryable: true,
+                expectedFields: ['path'],
+                suggestedNextAction: 'Call file_exists with a valid file path string.',
+              },
+            };
+          }
           const scopedPath = resolveWorkspacePath(workspacePath, path);
           // Try to read as file first
           try {
@@ -393,9 +512,15 @@ export function createFilesystemTools(
             throw error;
           }
         } catch (error: any) {
+          const msg = error.message || 'Failed to check existence';
           return {
             success: false,
-            error: error.message || 'Failed to check existence',
+            error: {
+              code: 'CHECK_ERROR',
+              message: msg,
+              retryable: false,
+              attemptedPath: path,
+            },
           };
         }
       },
@@ -537,9 +662,10 @@ export function createFilesystemTools(
             fixesApplied: result.fixesApplied,
           };
         } catch (error: any) {
+          const { formatToolError } = await import('@/lib/orchestra/shared-agent-context');
           return {
             success: false,
-            error: error.message || 'Failed to execute bash command',
+            error: formatToolError('execute_bash', error, { command }),
           };
         }
       },

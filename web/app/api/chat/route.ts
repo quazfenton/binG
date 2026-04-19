@@ -1092,7 +1092,7 @@ const config: UnifiedAgentConfig = {
       model: normalizedModel,
     };
 
-    const tools = await getMCPToolsForAI_SDK(authenticatedUserId, lastUserMsgContent);
+    const tools = await getMCPToolsForAI_SDK(authenticatedUserId, task);
     config.tools = tools.map(t => ({
       name: t.function.name,
       description: t.function.description,
@@ -1423,7 +1423,6 @@ const config: UnifiedAgentConfig = {
                 // Apply filesystem edits if any were detected
                 if (finalEdits.length > 0 && filesystemOwnerId) {
                   try {
-                    const { applyFilesystemEditsFromResponse } = await import('./route');
                     const appliedEdits = await applyFilesystemEditsFromResponse({
                       ownerId: filesystemOwnerId,
                       conversationId: `${filesystemOwnerId}$${resolvedConversationId}`,
@@ -4879,7 +4878,7 @@ function resolveScopedPath(input: {
   return resolvedPath;
 }
 
-export async function applyFilesystemEditsFromResponse(input: {
+async function applyFilesystemEditsFromResponse(input: {
   ownerId: string;
   conversationId: string;
   requestId: string;

@@ -15,7 +15,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getNangoService } from '@/lib/integrations/nango-service';
 
-export interface NangoWebhookPayload {
+interface NangoWebhookPayload {
   type: string;
   connection: {
     connectionId: string;

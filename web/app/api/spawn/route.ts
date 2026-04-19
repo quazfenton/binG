@@ -198,7 +198,7 @@ export async function POST(request: NextRequest) {
 // GET /api/agents/:id - Get agent details
 // ============================================================================
 
-export async function GETAgent(
+async function GETAgent(
   request: NextRequest,
   { params }: { params: { id: string } }
 ) {
@@ -230,7 +230,7 @@ export async function GETAgent(
 // POST /api/agents/:id/prompt - Send prompt to agent
 // ============================================================================
 
-export async function POSTPrompt(
+async function POSTPrompt(
   request: NextRequest,
   { params }: { params: { id: string } }
 ) {

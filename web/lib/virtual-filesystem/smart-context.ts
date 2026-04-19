@@ -873,7 +873,7 @@ export async function generateSmartContext(options: SmartContextOptions): Promis
     recentSessionFiles: recentSessionFileList = [],
     currentProjectPath,
     maxTotalSize = 500000,
-    format = 'json',
+    format = 'markdown',
     maxLinesPerFile = 500,
     contextMode = 'read',
     snapshotBefore,
