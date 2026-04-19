@@ -20,6 +20,7 @@ import { stripWorkspacePrefixes } from './scope-utils';
 import { VFSBatchOperations } from './vfs-batch-operations';
 import { createGitBackedVFS, getGitBackedVFSForOwner, type GitBackedVFS, type GitVFSOptions } from './git-backed-vfs';
 import { getDatabase } from '@/lib/database/connection';
+import { compress, decompress, isCompressed } from '@/lib/utils/compression';
 // import { emitFilesystemUpdated } from './sync/sync-events'; // Imported but not used - central emit deferred for now
 
 // Default configuration
@@ -1025,9 +1026,12 @@ export class VirtualFilesystemService {
             // FIX: Normalize backslashes to forward slashes when loading from DB.
             // Stale entries from Windows may contain backslashes that break path matching.
             const normalizedPath = row.path.replace(/\\/g, '/');
+            // Decompress content if stored compressed
+            const contentBuffer = Buffer.isBuffer(row.content) ? row.content : Buffer.from(row.content, 'utf-8')
+            const decompressedContent = isCompressed(contentBuffer) ? decompress(contentBuffer).toString('utf-8') : row.content
             return [normalizedPath, {
               path: normalizedPath,
-              content: row.content,
+              content: decompressedContent,
               language: row.language,
               size: row.size,
               version: row.version,
@@ -1127,7 +1131,10 @@ export class VirtualFilesystemService {
         // 3. Upsert all current files
         for (const [filePath, file] of workspace.files) {
           const id = `${normalizedOwnerId}:${filePath}`;
-          upsertFile.run(id, normalizedOwnerId, filePath, file.content, file.language, file.size, file.version, file.createdAt || now, now);
+          // Compress content before storing
+          const compressedContent = compress(file.content)
+          const contentToStore = compressedContent.length < file.content.length ? compressedContent : file.content
+          upsertFile.run(id, normalizedOwnerId, filePath, contentToStore, file.language, file.size, file.version, file.createdAt || now, now);
         }
       });
 

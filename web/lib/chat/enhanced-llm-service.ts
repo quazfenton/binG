@@ -469,6 +469,19 @@ export class EnhancedLLMService {
       }
     }
 
+    // Auto-inject core powers as a separate USER message (preserves prompt caching)
+    // Only ubiquitous, always-beneficial powers (e.g. URL scraping) are injected proactively.
+    // All other powers are discovered on-demand via power_list/power_read tools.
+    try {
+      const { appendAutoInjectPowers } = await import('@/lib/powers');
+      const src = llmRequest.messages || processedMessages;
+      const lastUserMsg = [...src].reverse().find(m => m.role === 'user');
+      const lastUserText = typeof lastUserMsg?.content === 'string' ? lastUserMsg.content : '';
+      appendAutoInjectPowers(processedMessages, lastUserText);
+    } catch (powersErr: any) {
+      chatLogger.debug('Auto-inject powers skipped (generateResponse)', { error: powersErr?.message });
+    }
+
     chatLogger.debug('Enhanced LLM service processing request', { requestId, provider: actualProvider, model: actualModel, userId }, {
       task,
       enableTools,
@@ -811,6 +824,17 @@ export class EnhancedLLMService {
       }
     }
 
+    // Auto-inject core powers as a separate USER message (preserves prompt caching)
+    try {
+      const { appendAutoInjectPowers } = await import('@/lib/powers');
+      const src = llmRequest.messages || processedMessages;
+      const lastUserMsg = [...src].reverse().find(m => m.role === 'user');
+      const lastUserText = typeof lastUserMsg?.content === 'string' ? lastUserMsg.content : '';
+      appendAutoInjectPowers(processedMessages, lastUserText);
+    } catch (powersErr: any) {
+      chatLogger.debug('Auto-inject powers skipped (streaming)', { error: powersErr?.message });
+    }
+
     try {
       // NEW: Use Vercel AI SDK for unified streaming across all providers
       const { streamWithVercelAI } = await import('./vercel-ai-streaming');
@@ -864,12 +888,19 @@ export class EnhancedLLMService {
             const computedScopePath = (request as any).scopePath
               || (sessionIdFromConv ? `project/sessions/${sessionIdFromConv}` : 'project/sessions/000');
 
+            // Extract last user message for trigger-matching powers (lazy tool loading)
+            const lastUserMsgForPowers = [...(llmRequest.messages || [])].reverse().find(m => m.role === 'user');
+            const lastUserMessageForPowers = typeof lastUserMsgForPowers?.content === 'string'
+              ? lastUserMsgForPowers.content
+              : '';
+
             vercelTools = await getAllTools({
               userId: effectiveUserId,
               conversationId: request.conversationId,
               sessionId: sessionIdFromConv,
               requestId,
               scopePath: computedScopePath,  // Session-aware path for VFS tools
+              lastUserMessage: lastUserMessageForPowers,  // For power trigger-matching
             });
 
             chatLogger.info('[TOOLS] ✅ Tools built successfully', {

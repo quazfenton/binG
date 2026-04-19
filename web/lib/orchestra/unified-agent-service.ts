@@ -411,6 +411,25 @@ export async function processUnifiedAgentRequest(
 ): Promise<UnifiedAgentResult> {
   const startTime = Date.now();
 
+  // Auto-inject core powers as a separate USER message (preserves prompt caching)
+  // Only ubiquitous, always-beneficial powers (e.g. URL scraping) are injected proactively.
+  // All other powers are discovered on-demand via power_list/power_read tools.
+  // Applied at entry point so ALL execution modes benefit.
+  try {
+    const { appendAutoInjectPowers } = await import('@/lib/powers');
+    const userMsg = config.userMessage || '';
+    // Only inject into existing conversation history — mode handlers will
+    // handle auto-inject themselves when building messages from config.userMessage
+    // (e.g. enhanced-llm-service has its own appendAutoInjectPowers call).
+    // Avoid creating conversationHistory for first-message case, as mode handlers
+    // would then see a duplicate user message.
+    if (config.conversationHistory && config.conversationHistory.length > 0) {
+      appendAutoInjectPowers(config.conversationHistory, userMsg);
+    }
+  } catch (err: any) {
+    log.debug('Auto-inject powers skipped at entry point', { error: err?.message });
+  }
+
   log.info('═══════════════════════════════════════════════');
   log.info('[UnifiedAgent] ┌─ REQUEST ENTRY ──────────────────────────');
   log.info('[UnifiedAgent] │ provider:', config.provider || process.env.LLM_PROVIDER || 'mistral');
@@ -1485,10 +1504,19 @@ async function runV1ApiWithTools(
       const systemContent = config.systemPrompt + ragContext + workspaceSnippet;
       llmMessages.push({ role: 'system', content: systemContent });
     } else if (ragContext) {
-      // No custom system prompt but we have RAG context — add a minimal system message
       llmMessages.push({ role: 'system', content: `You are an AI coding assistant.${ragContext}${workspaceSnippet}` });
     }
     llmMessages.push(...messages);
+
+    // Auto-inject core powers for first-message case (when conversationHistory was empty)
+    // The entry point only injects into existing conversationHistory; mode handlers
+    // that build their own llmMessages need this separate call.
+    try {
+      const { appendAutoInjectPowers } = await import('@/lib/powers');
+      appendAutoInjectPowers(llmMessages, config.userMessage || '');
+    } catch (err: any) {
+      log.debug('Auto-inject powers skipped (V1-API-WITH-TOOLS)', { error: err?.message });
+    }
 
     let response = '';
 

@@ -5,7 +5,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 describe('Nango Sync Management', () => {
-  const { NangoService, createNangoService } = require('@/lib/api/nango-service');
+  const { NangoService, createNangoService } = require('@/lib/integrations/nango-service');
 
   beforeEach(() => {
     vi.clearAllMocks();

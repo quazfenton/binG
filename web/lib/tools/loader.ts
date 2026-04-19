@@ -204,6 +204,11 @@ function normalizeFrontmatter(fm: Record<string, any>): Record<string, any> {
     normalized.triggers = [normalized.triggers];
   }
 
+  // Ensure coversCapabilityIds is an array
+  if (normalized.coversCapabilityIds && !Array.isArray(normalized.coversCapabilityIds)) {
+    normalized.coversCapabilityIds = [normalized.coversCapabilityIds];
+  }
+
   // Ensure tags is an array
   if (!normalized.tags) {
     normalized.tags = normalized.triggers || [];
@@ -285,8 +290,9 @@ export async function loadCoreCapabilities(options?: { forceReload?: boolean }):
       // Validate against PowerDefinition Zod schema
       const validation = safeValidatePowerDefinition(normalized);
       if (!validation.success) {
-        log.warn(`Skipping ${file}: validation failed`, { errors: validation.errors });
-        errors.push(`${file}: ${validation.errors.join('; ')}`);
+        const validationError = validation as { success: false; errors: string[] };
+        log.warn(`Skipping ${file}: validation failed`, { errors: validationError.errors });
+        errors.push(`${file}: ${validationError.errors.join('; ')}`);
         skipped++;
         continue;
       }
@@ -355,11 +361,30 @@ export async function loadCapabilitiesAsPowers(): Promise<{
   let loaded = 0;
   const errors: string[] = [];
 
+  // Build the set of capability IDs covered by auto-inject powers once,
+  // reusing the already-imported powersRegistry.
+  const coveredCapabilityIds = new Set<string>();
+  for (const p of powersRegistry.getActive()) {
+    if (p.autoInject && p.coversCapabilityIds) {
+      for (const cid of p.coversCapabilityIds) coveredCapabilityIds.add(cid);
+    }
+  }
+
   for (const cap of ALL_CAPABILITIES) {
     try {
-      // Skip if already loaded (e.g., from a SKILL.md override)
+      // Skip if already loaded (e.g., from a SKILL.md override or auto-inject power)
       if (loadedPowerIds.has(cap.id)) {
         log.debug(`Capability ${cap.id} already loaded from SKILL.md — skipping TS fallback`);
+        continue;
+      }
+
+      // Skip capabilities that are covered by auto-inject powers to avoid duplicates.
+      // Derives the overlap list dynamically from registered auto-inject powers'
+      // `coversCapabilityIds` field, so adding a new auto-inject power automatically
+      // prevents its duplicate capability entries — no hardcoded list to maintain.
+      if (coveredCapabilityIds.has(cap.id)) {
+        log.debug(`Capability ${cap.id} skipped — covered by auto-inject power`);
+        loadedPowerIds.add(cap.id); // Mark as loaded so auto-inject power doesn't get overridden
         continue;
       }
 
@@ -376,6 +401,77 @@ export async function loadCapabilitiesAsPowers(): Promise<{
 
   log.info(`Loaded ${loaded} capabilities as core powers (${errors.length} errors)`);
   return { loaded, errors };
+}
+
+/**
+ * Register built-in auto-inject powers (powers with autoInject: true).
+ *
+ * These are ubiquitous, always-beneficial powers that are proactively
+ * injected as USER messages when their triggers match — e.g., web search
+ * when a URL appears. They are NOT discovered on-demand via power_list/power_read.
+ *
+ * Called during bootstrap after loadCoreCapabilities() and loadCapabilitiesAsPowers().
+ */
+export async function loadAutoInjectPowers(): Promise<{
+  loaded: number;
+  errors: string[];
+}> {
+  const { powersRegistry } = await import('@/lib/powers');
+  const errors: string[] = [];
+  let loaded = 0;
+
+  // Web Search & URL Fetch — the canonical auto-inject power
+  // TODO: Add future auto-inject powers here (e.g., code-search, doc-lookup)
+  try {
+    const { webSearchPowerManifest } = await import('@/lib/powers/web-search-power');
+    if (!loadedPowerIds.has(webSearchPowerManifest.id)) {
+      await powersRegistry.register(webSearchPowerManifest);
+      loadedPowerIds.add(webSearchPowerManifest.id);
+      loaded++;
+      log.info(`Auto-inject power registered: ${webSearchPowerManifest.id}`);
+    } else {
+      log.debug(`Auto-inject power ${webSearchPowerManifest.id} already loaded — skipping`);
+    }
+  } catch (error: any) {
+    errors.push(`web-search: ${error.message}`);
+  }
+
+  log.info(`Loaded ${loaded} auto-inject powers (${errors.length} errors)`);
+  return { loaded, errors };
+}
+
+/**
+ * Convenience function that calls all three loader stages in sequence:
+ *   1. loadCoreCapabilities() — SKILL.md files from web/lib/tools/base/
+ *   2. loadCapabilitiesAsPowers() — existing CapabilityDefinitions
+ *   3. loadAutoInjectPowers() — built-in auto-inject powers (web-search, etc.)
+ *
+ * Safe to call multiple times (idempotent).
+ */
+export async function loadAllPowers(options?: { forceReload?: boolean }): Promise<{
+  loaded: number;
+  errors: string[];
+}> {
+  const allErrors: string[] = [];
+  let totalLoaded = 0;
+
+  // Load auto-inject powers FIRST so their coversCapabilityIds are registered
+  // before loadCapabilitiesAsPowers() runs — this lets the capability loader
+  // skip duplicate entries dynamically.
+  const autoInject = await loadAutoInjectPowers();
+  totalLoaded += autoInject.loaded;
+  allErrors.push(...autoInject.errors);
+
+  const core = await loadCoreCapabilities(options);
+  totalLoaded += core.loaded;
+  allErrors.push(...core.errors);
+
+  const caps = await loadCapabilitiesAsPowers();
+  totalLoaded += caps.loaded;
+  allErrors.push(...caps.errors);
+
+  log.info(`All powers loaded: ${totalLoaded} total (${allErrors.length} errors)`);
+  return { loaded: totalLoaded, errors: allErrors };
 }
 
 /**

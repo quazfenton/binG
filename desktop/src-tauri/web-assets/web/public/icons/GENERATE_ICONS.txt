@@ -1,1 +1,0 @@
-﻿Icon generation requires sharp package. Run: npm install sharp, then: node scripts/generate-pwa-icons.js
