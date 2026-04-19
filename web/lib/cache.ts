@@ -96,31 +96,50 @@ export const templateCache = new Cache(100); // For code templates
 export const fileCache = new Cache(200); // For file contents
 export const projectCache = new Cache(50); // For project structures
 
+// Tool-specific caches
+export const toolResultCache = new Cache(500); // For tool execution results
+export const toolMetadataCache = new Cache(200); // For tool metadata
+
 // Utility functions for common caching patterns
 export const cacheKey = {
   // API response keys
-  llmResponse: (provider: string, model: string, prompt: string) => 
+  llmResponse: (provider: string, model: string, prompt: string) =>
     `llm:${provider}:${model}:${btoa(prompt).slice(0, 50)}`,
-  
+
   // Template keys
-  codeTemplate: (language: string, type: string) => 
+  codeTemplate: (language: string, type: string) =>
     `template:${language}:${type}`,
-  
+
   // File keys
-  fileContent: (path: string) => 
+  fileContent: (path: string) =>
     `file:${path}`,
-  
+
   // Project keys
-  projectStructure: (files: string[]) => 
+  projectStructure: (files: string[]) =>
     `project:${files.sort().join(',')}`,
-  
+
   // GitHub keys
-  githubRepo: (owner: string, repo: string) => 
+  githubRepo: (owner: string, repo: string) =>
     `github:${owner}:${repo}`,
-  
+
   // HuggingFace keys
-  hfModel: (modelId: string) => 
+  hfModel: (modelId: string) =>
     `hf:${modelId}`,
+};
+
+// Tool cache key generators
+export const toolCacheKey = {
+  fileRead: (path: string, hash?: string) =>
+    `tool:file:read:${path}${hash ? `:${hash}` : ''}`,
+
+  fileList: (path: string) =>
+    `tool:file:list:${path}`,
+
+  fileSearch: (query: string, path?: string) =>
+    `tool:file:search:${query}:${path || 'root'}`,
+
+  sandboxInfo: (sandboxId: string) =>
+    `tool:sandbox:info:${sandboxId}`,
 };
 
 // Cache decorators for functions

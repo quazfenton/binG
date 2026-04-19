@@ -21,14 +21,17 @@ import {
   validateFilesystemOperation as validateFsOp,
   validateFileExtension,
   validateFileSize,
+  sanitizePathForLogging,
   FilesystemOperationSchema,
 } from '@/lib/middleware/filesystem-security';
 import {
   validateCommand,
+  validateCommandArgs,
   validateCommandExecution,
   getCommandRiskLevel,
   sanitizeCommandForLogging,
   SAFE_COMMANDS,
+  createCommandValidator,
 } from '@/lib/middleware/command-security';
 
 // Mock NextRequest

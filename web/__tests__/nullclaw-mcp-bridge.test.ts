@@ -5,12 +5,27 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // Mock dependencies
+// NOTE: Keep this mock in sync with the real NullclawIntegration surface used
+// by lib/mcp/nullclaw-mcp-bridge.ts — missing methods cause TypeErrors at
+// runtime since the bridge calls them directly on the mocked instance.
 vi.mock('@bing/shared/agent/nullclaw-integration', () => ({
   nullclawIntegration: {
-    startContainer: vi.fn(),
-    stopContainer: vi.fn(),
-    executeTask: vi.fn(),
-    getStatus: vi.fn(),
+    isAvailable: vi.fn(() => true),
+    initialize: vi.fn(() => Promise.resolve()),
+    initializeForSession: vi.fn(() => Promise.resolve('container-mock')),
+    startContainer: vi.fn(() => Promise.resolve({ id: 'container-mock', endpoint: 'http://localhost:0', status: 'ready' })),
+    stopContainer: vi.fn(() => Promise.resolve()),
+    executeTask: vi.fn(() => Promise.resolve({ status: 'completed', result: { success: true } })),
+    sendDiscordMessage: vi.fn(() => Promise.resolve({ success: true })),
+    sendTelegramMessage: vi.fn(() => Promise.resolve({ success: true })),
+    browseUrl: vi.fn(() => Promise.resolve({ success: true, content: '' })),
+    automateTask: vi.fn(() => Promise.resolve({ success: true })),
+    searchWeb: vi.fn(() => Promise.resolve({ success: true, results: [] })),
+    getStatus: vi.fn(() => Promise.resolve({
+      available: true,
+      health: 'healthy',
+      tasks: { pending: 0, running: 0, completed: 0, failed: 0 },
+    })),
   }
 }))
 

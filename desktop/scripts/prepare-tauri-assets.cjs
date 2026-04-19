@@ -44,10 +44,11 @@ console.log('Preparing desktop web assets...');
 run('pnpm', ['exec', 'next', 'build', '--webpack'], webRoot);
 
 const standaloneRoot = path.join(webRoot, '.next', 'standalone');
-const standaloneServer = path.join(standaloneRoot, 'server.js');
+const standaloneAppRoot = path.join(standaloneRoot, 'web');
+const standaloneServer = path.join(standaloneAppRoot, 'server.js');
 
 if (!fs.existsSync(standaloneServer)) {
-  throw new Error('Expected web/.next/standalone/server.js after desktop web build, but it was not found.');
+  throw new Error('Expected web/.next/standalone/web/server.js after desktop web build, but it was not found.');
 }
 
 fs.rmSync(destDir, {
@@ -58,8 +59,14 @@ fs.mkdirSync(destDir, {
   recursive: true,
 });
 
-copyIfExists(standaloneRoot, destDir);
-copyIfExists(path.join(webRoot, '.next', 'static'), path.join(destDir, '.next', 'static'));
-copyIfExists(path.join(webRoot, 'public'), path.join(destDir, 'public'));
+copyIfExists(standaloneAppRoot, path.join(destDir, 'web'));
+copyIfExists(path.join(standaloneRoot, 'node_modules'), path.join(destDir, 'node_modules'));
+copyIfExists(path.join(standaloneRoot, 'packages'), path.join(destDir, 'packages'));
+copyIfExists(path.join(webRoot, '.next', 'static'), path.join(destDir, 'web', '.next', 'static'));
+copyIfExists(path.join(webRoot, 'public'), path.join(destDir, 'web', 'public'));
+
+if (process.platform === 'win32' && process.execPath.toLowerCase().endsWith('node.exe')) {
+  copyIfExists(process.execPath, path.join(destDir, 'node.exe'));
+}
 
 console.log(`Desktop web assets prepared at ${destDir}`);

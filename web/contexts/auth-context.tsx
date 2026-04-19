@@ -2,6 +2,7 @@
 
 import { createContext, useState, useContext, useEffect, ReactNode } from 'react';
 import { FEATURE_FLAGS } from '../../infra/config/config/features';
+import { isDesktopMode } from '@bing/platform/env';
 
 interface User {
   id: number;
@@ -141,6 +142,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const initializeAuth = async () => {
+      if (isDesktopMode()) {
+        setUser({
+          id: 1,
+          email: 'local-desktop-user@example.com',
+          createdAt: new Date(),
+          isActive: true,
+          subscriptionTier: 'premium',
+          emailVerified: true,
+        });
+        setIsLoading(false);
+        return;
+      }
+
       if (skipAuth) {
         // Explicit opt-in bypass for development only.
         setUser({

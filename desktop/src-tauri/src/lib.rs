@@ -94,7 +94,7 @@ fn find_web_dir(resource_dir: Option<&PathBuf>) -> Option<PathBuf> {
     
     // 1. Check bundled resources
     if let Some(ref res_dir) = resource_dir {
-        for bundled in [res_dir.join("web"), res_dir.join("web-assets")] {
+        for bundled in [res_dir.join("web"), res_dir.join("web-assets"), res_dir.join("web-assets").join("web")] {
             let has_next = bundled.join(".next").exists();
             let has_pkg = bundled.join("package.json").exists();
             let has_standalone = bundled.join("server.js").exists();
@@ -188,9 +188,18 @@ fn spawn_next_server(port: u16, token: &str, resource_dir: Option<PathBuf>) -> R
     if standalone_server_path.exists() {
         log_msg(&format!("[spawn_next] Found standalone server at {:?}", standalone_server_path));
         let mut standalone_cmd: Command = if cfg!(windows) {
-            let mut c = Command::new("cmd");
-            c.args(["/C", "node", "server.js"]);
-            c
+            let bundled_node = web_dir.parent().map(|parent| parent.join("node.exe"));
+            if let Some(node_path) = bundled_node.filter(|path| path.exists()) {
+                log_msg(&format!("[spawn_next] Using bundled Node runtime at {:?}", node_path));
+                let mut c = Command::new(node_path);
+                c.arg("server.js");
+                c
+            } else {
+                log_msg("[spawn_next] Bundled Node runtime not found, falling back to system node");
+                let mut c = Command::new("node");
+                c.arg("server.js");
+                c
+            }
         } else {
             let mut c = Command::new("node");
             c.arg("server.js");
@@ -467,16 +476,7 @@ pub fn run() {
             );
 
             // Create the main window
-            let url = if sidecar_ok {
-                // Sidecar is running — point to it for full API support
-                log_msg(&format!("Pointing webview to sidecar at http://127.0.0.1:{}", port));
-                format!("http://127.0.0.1:{}", port)
-            } else {
-                // Sidecar failed — serve static assets from Tauri
-                // TAURI_ROUTES will work, SIDECAR_ROUTES will fail gracefully
-                log_msg("Sidecar unavailable — serving static setup page");
-                "index.html".to_string()
-            };
+            let url = "index.html".to_string();
 
             let builder = tauri::WebviewWindowBuilder::new(
                 app,
@@ -560,57 +560,36 @@ fn spawn_sidecar_with_fallback(
         }
     });
 
-    // Wait for the server to be ready (up to 90 seconds — Next.js cold start is slow)
-    log_msg(&format!("[spawn_sidecar] Waiting for server on port {} (timeout: 90s)...", port));
-    let ready = wait_for_server(port, Duration::from_secs(90));
+    let _ready_thread = thread::spawn(move || {
+        log_msg(&format!("[spawn_sidecar] Background wait started for port {}", port));
+        if !wait_for_server(port, Duration::from_secs(90)) {
+            log_msg("[spawn_sidecar] Server not ready before timeout; leaving loader page in fallback mode");
+            return;
+        }
 
-    if !ready {
-        log_msg("[spawn_sidecar] Server not ready after 90s — checking if process is still alive");
-        // Don't kill the process yet — it might still be compiling.
-        // The setup page will poll and find it when it's ready.
-        let mut child_guard = sidecar_child.lock().unwrap();
-        if let Some(ref mut c) = *child_guard {
-            match c.try_wait() {
-                Ok(Some(status)) => {
-                    log_msg(&format!("[spawn_sidecar] Process already exited with status: {}", status));
-                    return false;
-                }
-                Ok(None) => {
-                    // Process is still running! Keep it alive.
-                    log_msg("[spawn_sidecar] Process is still running — keeping it alive for setup page to poll");
-                    return false; // Return false so setup page shows, but process stays alive
-                }
-                Err(e) => {
-                    log_msg(&format!("[spawn_sidecar] Error checking process status: {}", e));
-                    return false;
+        log_msg(&format!("[spawn_sidecar] ✓ Server ready at http://127.0.0.1:{}", port));
+
+        // Pre-warm: hit the main page so the first user visit are fast
+        log_msg("[spawn_sidecar] Pre-warming Next.js routes...");
+        let warmup_urls = [
+            format!("http://127.0.0.1:{}/", port),
+            format!("http://127.0.0.1:{}/settings", port),
+            format!("http://127.0.0.1:{}/api/health", port),
+        ];
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .ok();
+        if let Some(ref c) = client {
+            for url in &warmup_urls {
+                match c.get(url).send() {
+                    Ok(resp) => log_msg(&format!("[spawn_sidecar] Warmed {}: HTTP {}", url, resp.status())),
+                    Err(e) => log_msg(&format!("[spawn_sidecar] Warm-up failed for {}: {}", url, e)),
                 }
             }
         }
-        return false;
-    }
+        log_msg("[spawn_sidecar] Pre-warming complete");
+    });
 
-    log_msg(&format!("[spawn_sidecar] ✓ Server ready at http://127.0.0.1:{}", port));
-    
-    // Pre-warm: hit the main page so the first user visit are fast
-    log_msg("[spawn_sidecar] Pre-warming Next.js routes...");
-    let warmup_urls = [
-        format!("http://127.0.0.1:{}/", port),
-        format!("http://127.0.0.1:{}/settings", port),
-        format!("http://127.0.0.1:{}/api/health", port),
-    ];
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .ok();
-    if let Some(ref c) = client {
-        for url in &warmup_urls {
-            match c.get(url).send() {
-                Ok(resp) => log_msg(&format!("[spawn_sidecar] Warmed {}: HTTP {}", url, resp.status())),
-                Err(e) => log_msg(&format!("[spawn_sidecar] Warm-up failed for {}: {}", url, e)),
-            }
-        }
-    }
-    log_msg("[spawn_sidecar] Pre-warming complete");
-    
     true
 }

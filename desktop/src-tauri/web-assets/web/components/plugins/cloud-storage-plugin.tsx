@@ -1,0 +1,275 @@
+import { useState, useRef, useEffect } from 'react';
+import { Button } from '../ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
+import { Input } from '../ui/input';
+import { Cloud, X, Lock } from 'lucide-react';
+import { toast } from 'sonner';
+import { useAuth } from '@/contexts/auth-context';
+import { FEATURE_FLAGS } from '../../../infra/config/config/features';
+import { cloudStorage } from '@/lib/storage/cloud-storage';
+
+const CloudStoragePlugin: React.FC<{ onClose: () => void }> = ({ onClose }) => {
+  const { isAuthenticated, user } = useAuth();
+  const [selectedFile, setSelectedFile] = useState('');
+  const [fileContent, setFileContent] = useState('');
+  const [diffContent, setDiffContent] = useState('');
+  const [files, setFiles] = useState<string[]>([]);
+  const [quotaUsedBytes, setQuotaUsedBytes] = useState<number>(0);
+  const diffRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (!isAuthenticated || !FEATURE_FLAGS.ENABLE_CLOUD_STORAGE) return;
+    fetchFiles();
+    fetchUsage();
+  }, [isAuthenticated, user?.email]);
+
+  const fetchFiles = async () => {
+    try {
+      const token = (await import('@bing/platform/secrets')).secrets.get('auth-token');
+      if (!token || !user?.email) {
+        setFiles([]);
+        return;
+      }
+
+      const response = await fetch('/api/storage/list?prefix=users/' + encodeURIComponent(user.email), {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      if (!response.ok) throw new Error('Failed to fetch files');
+
+      const data = await response.json();
+      setFiles(data.data.files || []);
+    } catch (error) {
+      console.error('Failed to fetch files:', error);
+      setFiles([]);
+    }
+  };
+
+  const fetchUsage = async () => {
+    try {
+      const token = (await import('@bing/platform/secrets')).secrets.get('auth-token');
+      if (!token) {
+        setQuotaUsedBytes(0);
+        return;
+      }
+
+      const response = await fetch('/api/storage/usage', {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      if (!response.ok) throw new Error('Failed to fetch usage');
+
+      const data = await response.json();
+      setQuotaUsedBytes(data.data.used || 0);
+    } catch (error) {
+      console.error('Failed to fetch usage:', error);
+      setQuotaUsedBytes(0);
+    }
+  };
+
+  // removed helper in favor of context value
+
+  const handleFileSelect = async (file: string) => {
+    setSelectedFile(file);
+    try {
+      const token = (await import('@bing/platform/secrets')).secrets.get('auth-token');
+      if (!token || !user?.email) {
+        toast.error('Authentication required');
+        setFileContent(`Content of ${file}\n\nThis is a sample file content.`);
+        setDiffContent('');
+        return;
+      }
+
+      const response = await fetch(`/api/storage/download?path=users/${encodeURIComponent(user.email)}/${file}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      if (!response.ok) throw new Error('Failed to download file');
+
+      const content = await response.text();
+      setFileContent(content);
+      setDiffContent('');
+    } catch (error) {
+      console.error('Failed to download file:', error);
+      toast.error('Failed to download file', { description: (error as Error).message });
+      // Fallback to mock content
+      setFileContent(`Content of ${file}\n\nThis is a sample file content.`);
+      setDiffContent('');
+    }
+  };
+
+  const handleGenerateDiff = () => {
+    if (!diffRef.current || !fileContent) return;
+    
+    const newContent = diffRef.current.value;
+    if (newContent === fileContent) {
+      toast('No Changes', {
+        description: 'The file content has not changed',
+      });
+      return;
+    }
+    
+    // Generate line-by-line diff
+    const oldLines = fileContent.split('\n');
+    const newLines = newContent.split('\n');
+    const diffLines: string[] = [];
+    
+    for (let i = 0; i < Math.max(oldLines.length, newLines.length); i++) {
+      if (i >= oldLines.length) {
+        diffLines.push(`+ ${newLines[i]}`);
+      } else if (i >= newLines.length) {
+        diffLines.push(`- ${oldLines[i]}`);
+      } else if (oldLines[i] !== newLines[i]) {
+        diffLines.push(`- ${oldLines[i]}`);
+        diffLines.push(`+ ${newLines[i]}`);
+      } else {
+        diffLines.push(`  ${oldLines[i]}`);
+      }
+    }
+    
+    setDiffContent(diffLines.join('\n'));
+  };
+
+  const handleApplyDiff = async () => {
+    if (!diffContent || !selectedFile) return;
+    
+    try {
+      // Apply diff locally
+      const newContent = diffRef.current?.value || '';
+      
+      // Update file content and increment version
+      setFileContent(newContent);
+      setDiffContent('');
+      
+      toast.success('Changes Applied', {
+        description: 'File updated successfully',
+      });
+      
+      // Save to cloud via API
+      const token = (await import('@bing/platform/secrets')).secrets.get('auth-token');
+      if (!token) throw new Error('No authentication token');
+      
+      const formData = new FormData();
+      const blob = new Blob([newContent], { type: 'text/plain' });
+      const file = new File([blob], selectedFile, { type: 'text/plain' });
+      formData.append('file', file);
+      formData.append('path', `users/${user?.email}/${selectedFile}`);
+      
+      const response = await fetch('/api/storage/upload', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        },
+        body: formData
+      });
+      
+      if (!response.ok) throw new Error('Failed to upload file');
+      
+      const data = await response.json();
+      console.log('Saved file to:', data.data.url);
+      
+      // Refresh usage after upload
+      fetchUsage();
+    } catch (error) {
+      console.error('Error applying diff:', error);
+      toast.error('Apply Error', {
+        description: 'Failed to apply changes',
+      });
+    }
+  };
+
+  return (
+    <div className="h-full flex flex-col">
+      {!FEATURE_FLAGS.ENABLE_CLOUD_STORAGE && (
+        <div className="p-3 text-xs bg-yellow-500/10 text-yellow-300 border border-yellow-500/20">
+          Cloud storage is disabled by configuration. Set ENABLE_CLOUD_STORAGE=true to enable.
+        </div>
+      )}
+      <CardHeader className="p-4 border-b border-white/10">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Cloud className="w-5 h-5 text-blue-400" />
+            <CardTitle className="text-lg">
+              Cloud Storage {!isAuthenticated && <Lock className="w-4 h-4 text-red-400" />}
+            </CardTitle>
+          </div>
+          <Button variant="ghost" size="icon" onClick={onClose}>
+            <X className="w-4 h-4" />
+          </Button>
+        </div>
+      </CardHeader>
+      
+      {!isAuthenticated ? (
+        <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
+          <Lock className="w-12 h-12 text-red-400 mb-4" />
+          <h3 className="text-xl font-medium mb-2">Cloud Storage Locked</h3>
+          <p className="text-white/70 mb-4">
+            Please log in to access cloud storage features
+          </p>
+        </div>
+      ) : (
+        <CardContent className="flex-1 overflow-y-auto p-4">
+          <div className="mb-4">
+            <div className="flex items-center justify-between mb-2 text-xs text-white/70">
+              <span>Per-account quota: 5GB</span>
+              <span>Used: {(quotaUsedBytes / (1024*1024)).toFixed(2)} MB / {Math.round(FEATURE_FLAGS.CLOUD_STORAGE_PER_USER_LIMIT_BYTES / (1024*1024*1024))} GB</span>
+            </div>
+            <h3 className="text-sm font-medium mb-2">Select a File</h3>
+            <div className="grid grid-cols-2 gap-2">
+              {files.map((file) => (
+                <Button
+                  key={file}
+                  variant={selectedFile === file ? "default" : "secondary"}
+                  className="text-left justify-start truncate"
+                  onClick={() => handleFileSelect(file)}
+                >
+                  {file}
+                </Button>
+              ))}
+            </div>
+          </div>
+          
+          {selectedFile && (
+            <div className="space-y-4">
+              <div>
+                <h3 className="text-sm font-medium mb-2">File Content</h3>
+                <textarea
+                  ref={diffRef}
+                  value={fileContent}
+                  onChange={(e) => setFileContent(e.target.value)}
+                  className="w-full h-40 bg-black/20 border border-white/20 rounded p-2 text-sm font-mono"
+                />
+              </div>
+              
+              <div className="flex gap-2">
+                <Button onClick={handleGenerateDiff} variant="outline">
+                  Generate
+                </Button>
+                <Button onClick={handleApplyDiff} disabled={!diffContent}>
+                  Apply Changes
+                </Button>
+              </div>
+              
+              {diffContent && (
+                <div>
+                  <h3 className="text-sm font-medium mb-2">Changes</h3>
+                  <pre className="text-xs bg-black/30 p-2 rounded max-h-40 overflow-y-auto">
+                    {diffContent}
+                  </pre>
+                </div>
+              )}
+            </div>
+          )}
+        </CardContent>
+      )}
+    </div>
+  );
+};
+
+export default CloudStoragePlugin;

@@ -893,6 +893,7 @@ export async function generateSmartContext(options: SmartContextOptions): Promis
       estimatedTokens: 0,
       vfsIsEmpty: true,
       contextMode,
+      diffCount: 0,
       warnings: ['Missing userId'],
     };
   }
@@ -936,6 +937,7 @@ export async function generateSmartContext(options: SmartContextOptions): Promis
       treeMode: 'minimal',
       budgetTier: 'compact',
       contextMode,
+      diffCount: 0,
       warnings,
     };
   }
