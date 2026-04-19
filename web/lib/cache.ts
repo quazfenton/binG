@@ -5,7 +5,7 @@ interface CacheItem<T> {
   ttl: number; // Time to live in milliseconds
 }
 
-class Cache {
+export class Cache {
   private cache = new Map<string, CacheItem<any>>();
   private maxSize: number;
 

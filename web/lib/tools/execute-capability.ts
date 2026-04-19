@@ -5,13 +5,16 @@
  * This enables v1 API, streaming, and non-Mastra workflows to use the centralized tool system.
  *
  * Usage:
- * import { executeToolCapability, initToolSystem } from '@/lib/tools';
+ * import { executeToolCapability, initToolSystem, invalidateToolCache } from '@/lib/tools';
  *
  * // Initialize once at startup
  * await initToolSystem('user123');
  *
  * // Execute capabilities from any agent
  * const result = await executeToolCapability('file.read', { path: 'src/index.ts' }, { userId: 'user123' });
+ *
+ * // Invalidate cache when files change
+ * invalidateToolCache('file.read', '/workspace/src/index.ts')
  */
 
 import {
@@ -22,6 +25,9 @@ import {
 import { type CapabilityRouter } from './router';
 import { createLogger } from '../utils/logger';
 import { toolResultCache, toolCacheKey, Cache } from '../cache';
+
+// Export Cache for external use
+export { Cache };
 
 const log = createLogger('execute-capability');
 
@@ -187,4 +193,49 @@ export function getToolRouter(): CapabilityRouter | null {
  */
 export function isToolSystemReady(): boolean {
   return initialized && routerInstance !== null;
+}
+
+/**
+ * Invalidate tool cache entries
+ * Call this when the underlying data changes (e.g., file write, delete)
+ *
+ * @param capabilityId - Specific capability to invalidate, or '*' for all
+ * @param path - Optional path prefix to match
+ */
+export function invalidateToolCache(capabilityId: string, path?: string): void {
+  if (capabilityId === '*') {
+    toolResultCache.clear()
+    log.info('Tool cache cleared entirely')
+    return
+  }
+
+  if (path) {
+    // Invalidate specific path
+    const key = generateToolCacheKey(capabilityId, { path } as Record<string, unknown>)
+    toolResultCache.delete(key)
+
+    // Also invalidate file.list for directory containing path
+    const dir = path.substring(0, path.lastIndexOf('/'))
+    if (dir) {
+      const listKey = toolCacheKey.fileList(dir)
+      toolResultCache.delete(listKey)
+    }
+    log.debug(`Invalidated cache for ${capabilityId}:${path}`)
+  } else {
+    // Invalidate all entries for this capability type
+    const prefix = `${capabilityId}:`
+    for (const key of toolResultCache.getKeys()) {
+      if (key.startsWith(prefix)) {
+        toolResultCache.delete(key)
+      }
+    }
+    log.debug(`Invalidated all cache for ${capabilityId}`)
+  }
+}
+
+/**
+ * Get tool cache statistics
+ */
+export function getToolCacheStats(): { size: number; maxSize: number } {
+  return toolResultCache.getStats()
 }

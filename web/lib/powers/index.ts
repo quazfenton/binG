@@ -58,6 +58,16 @@ export interface PowerManifest {
   tags?: string[];
   /** Tool metadata for intelligent routing */
   metadata?: { latency?: string; cost?: string; reliability?: number; tags?: string[] };
+  /**
+   * Auto-inject this power as a user message when its triggers match.
+   * Only set for ubiquitous, always-beneficial powers (e.g. URL scraping when a link appears).
+   * Most powers should NOT auto-inject — they're discovered on-demand via power_list/power_read.
+   */
+  autoInject?: boolean;
+  /** Capability IDs that this auto-inject power subsumes.
+   *  Prevents duplicate registration in loadCapabilitiesAsPowers().
+   *  Only relevant when autoInject is true. */
+  coversCapabilityIds?: string[];
 }
 
 export interface PowerArtifact {
@@ -186,25 +196,57 @@ export class PowersRegistry {
       }
     }
 
-    // Register as a tool in the unified ToolRegistry
-    const { ToolRegistry } = await import('@/lib/tools/registry');
-    const toolRegistry = ToolRegistry.getInstance();
-    for (const action of manifest.actions) {
-      await toolRegistry.registerTool({
-        name: `power_${manifest.id}_${action.name}`,
-        capability: `powers.${action.name}`,
-        provider: 'wasm-runner',
-        handler: async (params: any, context: any) => {
-          return executePower(manifest.id, action.name, params, context);
-        },
-        inputSchema: action.paramsSchema ? jsonSchemaToZod(action.paramsSchema) : z.object({}),
-        metadata: {
-          tags: manifest.triggers || [],
-        },
-      });
-    }
+    // NOTE: We do NOT eagerly register every power action into the unified
+    // ToolRegistry here. Action-tools are registered lazily by
+    // buildPowerTools() only for trigger-matched powers, keeping the LLM's
+    // tool list small. The power_read tool provides on-demand access to
+    // any power's full content.
+    //
+    // However, we register a single generic `power_execute` catch-all tool
+    // so the legacy TOOL_REGISTRY dispatch path (used by
+    // executeModelToolCallsFromResponse) can still route power calls.
+    await this.ensurePowerExecuteRegistered();
 
     log.info('Power registered', { id: manifest.id, actions: manifest.actions.length, source: manifest.source });
+  }
+
+  /**
+   * Ensure the generic `power_execute` catch-all tool is registered in the
+   * ToolRegistry. This enables the legacy TOOL_REGISTRY dispatch path
+   * (used by executeModelToolCallsFromResponse) to route any power call
+   * without needing each action registered individually.
+   */
+  private powerExecuteRegistered = false;
+  private async ensurePowerExecuteRegistered(): Promise<void> {
+    if (this.powerExecuteRegistered) return;
+    this.powerExecuteRegistered = true;
+
+    try {
+      const { ToolRegistry } = await import('@/lib/tools/registry');
+      const toolRegistry = ToolRegistry.getInstance();
+      await toolRegistry.registerTool({
+        name: 'power_execute',
+        capability: 'powers.execute',
+        provider: 'wasm-runner',
+        handler: async (params: any, context: any) => {
+          const { powerId, action, args } = params || {};
+          if (!powerId || !action) {
+            return { ok: false, error: 'powerId and action are required' };
+          }
+          return executePower(powerId, action, args || {}, context);
+        },
+        inputSchema: z.object({
+          powerId: z.string().describe('The power to execute'),
+          action: z.string().describe('The action within that power'),
+          args: z.record(z.unknown()).optional().describe('Action parameters'),
+        }),
+        metadata: {
+          tags: ['power', 'catch-all'],
+        },
+      });
+    } catch {
+      // Non-fatal — if ToolRegistry isn't available, the Vercel AI path still works
+    }
   }
 
   /**
@@ -264,6 +306,7 @@ export class PowersRegistry {
     this.wasmHandlers.clear();
     this.skillsByTag.clear();
     this.skillsByCapability.clear();
+    this.powerExecuteRegistered = false;
   }
 
   /**
@@ -294,6 +337,22 @@ export class PowersRegistry {
     const lower = userMessage.toLowerCase();
     return this.getActive().filter(power =>
       power.triggers?.some(t => lower.includes(t.toLowerCase()))
+    );
+  }
+
+  /**
+   * Get powers that should be auto-injected as user messages.
+   * These are ubiquitous, always-beneficial powers (e.g. URL scraping) that
+   * are auto-guaranteed to be useful when their triggers match.
+   *
+   * Unlike general powers (discovered on-demand via power_list/power_read),
+   * auto-inject powers are proactively surfaced to preserve prompt caching
+   * (injected as USER messages, not system prompt).
+   */
+  getAutoInjectPowers(userMessage: string): PowerManifest[] {
+    const lower = userMessage.toLowerCase();
+    return this.getActive().filter(power =>
+      power.autoInject && power.triggers?.some(t => lower.includes(t.toLowerCase()))
     );
   }
 
@@ -452,14 +511,35 @@ export async function executePower(
 }
 
 /**
- * Build Vercel AI tools from all registered powers.
- * Each action becomes a typed tool via jsonSchemaToZod.
+ * Build Vercel AI tools from registered powers.
+ *
+ * STRATEGY: Only register action-tools for trigger-matched powers to avoid
+ * bloating the LLM's tool list with every action of every installed power.
+ * All powers remain discoverable via the `power_list` utility tool, and their
+ * full content is available on-demand via `power_read`.
+ *
+ * When no userMessage is provided (e.g. initial prompt construction), only
+ * utility tools are registered — action-tools are added lazily on subsequent
+ * turns when the user message matches a power's triggers.
+ *
+ * @param context - Execution context (userId, conversationId, etc.)
+ * @param userMessage - Optional current user message for trigger matching
  */
-export async function buildPowerTools(context: { userId?: string; conversationId?: string; sessionId?: string }): Promise<Record<string, any>> {
+export async function buildPowerTools(
+  context: { userId?: string; conversationId?: string; sessionId?: string },
+  userMessage?: string,
+): Promise<Record<string, any>> {
   const tools: Record<string, any> = {};
   const { tool } = await import('ai');
 
-  for (const power of powersRegistry.getActive()) {
+  // Only register action-tools for trigger-matched powers to keep the tool
+  // list small. The LLM can discover all powers via power_list and read
+  // full content via power_read — no need to preload every action.
+  const matchedPowers = userMessage
+    ? powersRegistry.matchByTriggers(userMessage)
+    : [];
+
+  for (const power of matchedPowers) {
     for (const action of power.actions) {
       const toolName = `power_${power.id}_${action.name}`;
       const paramsZod = action.paramsSchema
@@ -476,15 +556,15 @@ export async function buildPowerTools(context: { userId?: string; conversationId
     }
   }
 
-  // Utility tools
+  // Utility tools — always available
   tools['power_list'] = tool({
-    description: 'List all installed powers',
+    description: 'List all installed powers (id, name, description, triggers)',
     parameters: z.object({}).optional(),
     execute: async () => ({ powers: powersRegistry.getSummary() }),
   } as any);
 
   tools['power_read'] = tool({
-    description: 'Read SKILL.md for a given power id',
+    description: 'Read the full SKILL.md content for a given power id. Use this to get detailed instructions, actions, and parameters before calling a power action.',
     parameters: z.object({ powerId: z.string() }),
     execute: async ({ powerId }: { powerId: string }) => {
       const p = powersRegistry.getById(powerId);
@@ -492,60 +572,95 @@ export async function buildPowerTools(context: { userId?: string; conversationId
     },
   } as any);
 
+  tools['power_execute'] = tool({
+    description: 'Execute any power action by powerId and action name. Use this to invoke powers that were not trigger-matched (discovered via power_read). For trigger-matched powers, prefer the dedicated power_<id>_<action> tools.',
+    parameters: z.object({
+      powerId: z.string().describe('The power to execute'),
+      action: z.string().describe('The action within that power'),
+      args: z.record(z.unknown()).optional().describe('Action parameters'),
+    }),
+    execute: async ({ powerId, action, args }: { powerId: string; action: string; args?: Record<string, unknown> }) => {
+      return executePower(powerId, action, args || {}, context);
+    },
+  } as any);
+
   return tools;
 }
 
 /**
- * Build a system prompt block listing active powers for the LLM.
- * This is injected into the agent's system prompt alongside the
- * standard TOOL_CAPABILITIES block from system-prompts.ts.
+ * Build a USER message injecting auto-inject powers that match the user message.
+ *
+ * DESIGN: Powers are NOT injected into the system prompt — they're injected as
+ * USER messages to preserve prompt caching. Only powers with `autoInject: true`
+ * are proactively injected (e.g. URL scraping when a link appears). All other
+ * powers are discovered on-demand via power_list/power_read tools.
+ *
+ * To enable auto-inject for a power, set `autoInject: true` in its manifest:
+ * ```ts
+ * const urlScraperPower: PowerManifest = {
+ *   id: 'url-scraper',
+ *   name: 'URL Scraper',
+ *   // ... other fields ...
+ *   triggers: ['http://', 'https://', 'www.'],
+ *   autoInject: true,  // ← auto-inject when triggers match
+ * };
+ * ```
+ *
+ * @param userMessage - The current user message, used for trigger matching
+ * @returns A user message string for auto-inject powers, or empty string if none match
  */
-export function buildPowersSystemPrompt(
-  basePrompt: string,
-  userMessage?: string
-): string {
-  const activePowers = powersRegistry.getActive();
-  if (activePowers.length === 0) return basePrompt;
+export function buildAutoInjectUserMessage(userMessage: string): string {
+  const autoInjectPowers = powersRegistry.getAutoInjectPowers(userMessage);
+  if (autoInjectPowers.length === 0) return '';
 
-  // Match powers to user message
-  const matchedPowers = userMessage
-    ? powersRegistry.matchByTriggers(userMessage)
-    : [];
-
-  const sections: string[] = [basePrompt];
-
-  sections.push(`
-============================================
-# AVAILABLE POWERS (User-Installed Skills)
-============================================
-
-You have access to the following user-installed powers.
-These are specialized skills that provide additional capabilities.
-
-${activePowers.map(power => {
-    const isActive = matchedPowers.some(m => m.id === power.id);
-    const status = isActive ? '⚡ ACTIVE (matches current task)' : '📦 AVAILABLE';
-    return `## Power: ${power.name} ${status}
-**ID**: ${power.id}
-**Version**: ${power.version}
+  const sections = autoInjectPowers.map(power => {
+    const actionsList = power.actions.map(a => `  - **${a.name}**: ${a.description}`).join('\n');
+    return `### ⚡ ${power.name} (id: ${power.id})
 **Description**: ${power.description}
-**Actions**: ${power.actions.map(a => a.name).join(', ')}
-**Triggers**: ${power.triggers?.join(', ') || 'none'}
+**Actions**:
+${actionsList}
+**Trigger matched** — this power is auto-loaded because it's always beneficial when its triggers match.`;
+  });
 
-${power.actions.map(a => `- **${a.name}**: ${a.description}`).join('\n')}
-`;
-  }).join('\n---\n')}
+  return `[Auto-loaded power(s) — these are always available when their triggers match]
 
-## Rules
-1. Use powers when the task matches their description or triggers
-2. Prefer built-in capabilities over powers when both apply
-3. Powers marked ⚡ ACTIVE are most relevant to the current task
-4. Each power action is a tool call with typed parameters
-5. Power execution is sandboxed (WASM) with restricted permissions
-`);
+${sections.join('\n\n')}
 
-  return sections.join('\n');
+You can use the dedicated power tools (power_<id>_<action>) or power_execute to invoke these.`;
+}
+
+/**
+ * Shared helper to auto-inject core powers into a messages array.
+ *
+ * Appends auto-inject content as a separate USER message (does NOT mutate
+ * existing messages). LLM APIs support consecutive user messages — only
+ * synthetic *assistant* turns break ordering.
+ *
+ * Use this in all LLM call paths to keep the logic consistent.
+ *
+ * @param messages - The message array to modify
+ * @param userMessage - The current user message text, used for trigger matching
+ * @returns The modified messages array (same reference, possibly with new message appended)
+ */
+export function appendAutoInjectPowers(
+  messages: Array<{ role: string; content: string | unknown[] }>,
+  userMessage: string
+): Array<{ role: string; content: string | unknown[] }> {
+  // Dedup guard: if auto-inject was already applied, skip
+  const alreadyInjected = messages.some(m =>
+    typeof m.content === 'string' && m.content.startsWith('[Auto-loaded power(s)')
+  );
+  if (alreadyInjected) return messages;
+
+  const autoInjectMsg = buildAutoInjectUserMessage(userMessage);
+  if (autoInjectMsg) {
+    messages.push({ role: 'user', content: autoInjectMsg });
+  }
+  return messages;
 }
 
 // Re-exports from mem0-power
 export { mem0PowerManifest, buildMem0Tools, buildMem0SystemPrompt, getMem0Client, isMem0Configured, mem0Search } from './mem0-power';
+
+// Re-exports from web-search-power
+export { webSearchPowerManifest } from './web-search-power';

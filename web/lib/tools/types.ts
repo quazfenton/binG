@@ -116,6 +116,12 @@ export const PowerDefinitionSchema = z.object({
   verified: z.boolean().optional(),
   /** Whether auth is required (carried over from CapabilityDefinition) */
   requiresAuth: z.boolean().optional().default(false),
+  /** Auto-inject this power as a user message when its triggers match.
+   *  Only for ubiquitous, always-beneficial powers (e.g. web search when a URL appears). */
+  autoInject: z.boolean().optional().default(false),
+  /** Capability IDs that this auto-inject power subsumes.
+   *  Prevents duplicate registration in loadCapabilitiesAsPowers(). */
+  coversCapabilityIds: z.array(z.string()).optional(),
 });
 
 export type PowerDefinition = z.infer<typeof PowerDefinitionSchema>;
@@ -195,6 +201,8 @@ export function powerToManifest(
     rawMarkdown: power.rawMarkdown,
     installedAt: power.installedAt,
     verified: power.verified,
+    autoInject: power.autoInject,
+    coversCapabilityIds: power.coversCapabilityIds,
   };
 }
 

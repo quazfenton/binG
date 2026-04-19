@@ -190,9 +190,10 @@
       // 2. Wait for sidecar (the Rust code is already trying to start it)
       addLog(`Waiting for Next.js server on port ${sidecarPort}...`, 'info');
       
-      // Poll the sidecar every 1s for up to 90s
+      // Poll the sidecar every 1s for a short grace period, then fall back
+      // to the lightweight desktop shell so startup is usable immediately.
       let attempts = 0;
-      const maxAttempts = 90;
+      const maxAttempts = 5;
       const pollInterval = setInterval(async () => {
         attempts++;
         progressFill.style.width = `${Math.min((attempts / maxAttempts) * 100, 100)}%`;
@@ -229,8 +230,8 @@
           // Server not ready yet
           if (attempts >= maxAttempts) {
             clearInterval(pollInterval);
-            addLog('Sidecar failed to start within 90s', 'err');
-            setCheck('checkSidecar', '✗', 'Sidecar timed out (90s)', 'check-fail');
+            addLog('Sidecar not ready yet; continuing in basic mode', 'err');
+            setCheck('checkSidecar', '✗', 'Sidecar not ready', 'check-fail');
             showFallback();
           }
         }
@@ -256,7 +257,14 @@
     function continueAnyway() {
       addLog('User chose to continue with basic features', 'info');
       statusText.textContent = 'Basic mode: filesystem, PTY, and checkpoints available';
-      // The static page stays — invoke commands work for TAURI_ROUTES
+      const url = `http://127.0.0.1:${sidecarPort}/`;
+      fetch(url, { method: 'HEAD', mode: 'no-cors', signal: AbortSignal.timeout(2000) })
+        .then(() => {
+          window.location.href = url;
+        })
+        .catch(() => {
+          addLog('Full app is still starting; staying in basic mode for now', 'info');
+        });
     }
 
     // Start initialization

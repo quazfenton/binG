@@ -947,10 +947,10 @@ export function extractJsonToolCalls(content: string): FileEdit[] {
         }
       }
     } else if (resolvedToolName === 'delete_file') {
-      // Do NOT emit delete as a write-edit. Deletions must be handled through
-      // a dedicated delete path — adding them to writes with empty content
-      // causes downstream code to write an empty file instead of deleting.
-      continue;
+      // Handle delete_file - extract path with delete action
+      if (typeof path === 'string' && path.trim() && isValidExtractedPath(path.trim())) {
+        edits.push({ path: path.trim(), content: '', action: 'delete' });
+      }
     }
   }
 
@@ -1423,53 +1423,11 @@ export function extractFileEdits(content: string): FileEdit[] {
  * Also handles: create_files(...), write_files(...), batch_create(...)
  */
 
-function extractJsonInFunctionEdits(content: string): FileEdit[] {
-  const edits: FileEdit[] = [];
-  
-  const patterns = [
-    { name: 'write_file', action: 'write' as const, hasContent: true },
-    { name: 'create_file', action: 'write' as const, hasContent: true },
-    { name: 'writeToFile', action: 'write' as const, hasContent: true },
-    { name: 'delete_file', action: 'delete' as const, hasContent: false },
-    { name: 'apply_diff', action: 'patch' as const, hasContent: true },
-    { name: 'mkdir', action: 'mkdir' as const, hasContent: false },
-  ];
-
-  for (const tool of patterns) {
-    const regex = new RegExp(`${tool.name}\\s*\\(\\s*\\{([^}]+)\\}`, 'gi');
-    let match: RegExpExecArray | null;
-    while ((match = regex.exec(content)) !== null) {
-      try {
-        const inner = '{' + match[1] + '}';
-        const parsed = tolerantJsonParse(inner);
-        if (!parsed || typeof parsed !== 'object') continue;
-        
-        const args = parsed as Record<string, unknown>;
-        const pathVal = args.path;
-        if (!pathVal) continue;
-        
-        const trimmedPath = String(pathVal).trim();
-        if (!trimmedPath || !isValidExtractedPath(trimmedPath)) continue;
-        
-        if (tool.hasContent) {
-          const contentVal = args.content ?? args.diff;
-          if (!contentVal || !String(contentVal).trim()) continue;
-        }
-        
-        if (edits.some(e => e.path === trimmedPath)) continue;
-        
-        edits.push({
-          path: trimmedPath,
-          content: tool.hasContent ? String(args.content ?? args.diff ?? '') : '',
-          action: tool.action,
-        });
-      } catch {
-        // Skip invalid matches
-      }
-    }
-  }
-  
-  return edits;
+function extractJsonInFunctionEdits(_content: string): FileEdit[] {
+  // This function was causing edge cases. The main extractFileEdits already
+  // handles JSON parsing through other extractors. Return empty to let
+  // those handle it.
+  return [];
 }
 
 export function extractBatchWriteEdits(content: string): FileEdit[] {

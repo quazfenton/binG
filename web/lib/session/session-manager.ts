@@ -538,6 +538,7 @@ export class SessionManager {
       userId: session.userId,
       label,
       timestamp,
+      version: '1.0',
       state: {
         conversationState: null,
         sandboxState: {
@@ -555,7 +556,7 @@ export class SessionManager {
       },
     };
 
-    storageSaveCheckpoint(checkpoint);
+    await storageSaveCheckpoint(checkpoint);
 
     session.lastCheckpoint = timestamp;
     session.checkpointCount++;
@@ -580,9 +581,14 @@ export class SessionManager {
     }
 
     if (checkpoint.state.sandboxState) {
-      session.sandboxId = checkpoint.state.sandboxState.sandboxId;
-      session.sandboxProvider = checkpoint.state.sandboxState.sandboxProvider;
-      session.workspaceDir = checkpoint.state.sandboxState.workspaceDir;
+      const sandboxState = checkpoint.state.sandboxState as {
+        sandboxId?: string;
+        sandboxProvider?: string;
+        workspaceDir?: string;
+      };
+      if (sandboxState.sandboxId) session.sandboxId = sandboxState.sandboxId;
+      if (sandboxState.sandboxProvider) session.sandboxProvider = sandboxState.sandboxProvider;
+      if (sandboxState.workspaceDir) session.workspaceDir = sandboxState.workspaceDir;
     }
 
     if (checkpoint.state.quotaUsage) {
@@ -604,7 +610,7 @@ export class SessionManager {
   /**
    * Get latest checkpoint for session
    */
-  getLatestCheckpoint(sessionId: string): SessionCheckpoint | undefined {
+  async getLatestCheckpoint(sessionId: string): Promise<SessionCheckpoint | undefined> {
     return storageGetLatestCheckpoint(sessionId);
   }
 

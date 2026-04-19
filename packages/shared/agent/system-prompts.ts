@@ -3507,6 +3507,13 @@ export interface PowersContext {
  * Generate the powers block for system prompt injection.
  * Returns empty string if no active powers.
  */
+/**
+ * @deprecated The web chat now uses on-demand power discovery (power_list/power_read tools)
+ * with only core ubiquitous powers (autoInject: true) proactively injected as USER messages.
+ * This function builds a full compact-index system-prompt block, which bloats context.
+ * Use buildAutoInjectUserMessage() from @/lib/powers for the new on-demand approach,
+ * or keep this for legacy desktop/CLI contexts that still use role-template prompt composition.
+ */
 export function generatePowersBlock(context: PowersContext): string {
   if (!context.activePowers.length) return '';
 
@@ -3514,37 +3521,60 @@ export function generatePowersBlock(context: PowersContext): string {
     ? context.activePowers.filter(p =>
         p.triggers.some(t => context.currentTask!.toLowerCase().includes(t.toLowerCase()))
       )
-    : context.activePowers;
+    : [];
 
-  if (!matchedPowers.length) return '';
+  // Compact index of ALL powers — includes one-line description so the LLM
+  // knows what each power does without needing power_read for every one.
+  // Descriptions are truncated to ~120 chars to save context tokens.
+  // Full action details are reserved for trigger-matched powers only.
+  const truncate = (s: string, max = 120) => s.length > max ? s.slice(0, max - 3) + '...' : s;
+  const indexLines = context.activePowers.map(p =>
+    `- **${p.name}** (id: ${p.id}): ${truncate(p.description)} [triggers: ${p.triggers.join(', ') || 'none'}]`
+  );
 
-  const blocks = matchedPowers.map(power => {
-    const isMatched = context.matchByTask ? '⚡ ACTIVE (matches task)' : '📦 AVAILABLE';
-    return `## Power: ${power.name} ${isMatched}
-**ID**: ${power.id} | **v${power.version}**
+  // Full details ONLY for task-matched powers
+  const matchedDetails = matchedPowers.length > 0
+    ? matchedPowers.map(power =>
+        `### \u26A1 ${power.name} (id: ${power.id}, v${power.version})
 ${power.description}
-Actions: ${power.actions.join(', ')}`;
-  });
+Actions: ${power.actions.join(', ')}
+Triggers: ${power.triggers.join(', ') || 'none'}`
+      ).join('\n\n')
+    : '';
 
   return `
 ============================================
 # USER-INSTALLED POWERS
 ============================================
 
-You have access to these user-installed powers — specialized, sandboxed capabilities:
-
-${blocks.join('\n\n---\n')}
+Installed powers (use power_list for summary, power_read(id) for full SKILL.md content):
+${indexLines.join('\n')}
+${matchedDetails ? `\nTrigger-matched powers for this turn (full details):\n${matchedDetails}` : ''}
 
 ## Rules
-1. Powers are sandboxed (WASM) with restricted permissions
-2. Use a power when its description or triggers match the task
-3. Powers marked ⚡ ACTIVE are most relevant to the current task
+1. If a power seems relevant, use power_read(id) to get its full instructions before calling actions
+2. Powers marked \u26A1 are trigger-matched for this turn \u2014 their actions are available as tools
+3. Use powers when the task matches their description or triggers
 4. Prefer built-in capabilities over powers when both apply
+5. Power execution is sandboxed (WASM) with restricted permissions
 `;
 }
 
 /**
  * Compose a role prompt with powers block injected.
+ */
+/**
+ * Compose a role prompt with powers block injected.
+ *
+ * NOTE: This function is currently NOT wired into the main web chat flow.
+ * The web chat uses on-demand power discovery via power_list/power_read tools,
+ * with only core ubiquitous powers (autoInject: true) proactively injected
+ * as USER messages (not system prompts) to preserve prompt caching.
+ *
+ * This function is useful for:
+ * - Desktop app or CLI contexts that use the shared agent system prompts
+ * - Any consumer that builds prompts via role templates + powers context
+ * - Future wiring into the main chat flow if desired
  */
 export function composePromptWithPowers(
   role: AgentRole,

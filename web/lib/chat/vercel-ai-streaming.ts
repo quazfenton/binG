@@ -42,6 +42,9 @@ export interface ToolExecutionContext {
   sessionId?: string;
   requestId?: string;
   scopePath?: string;  // VFS scope path for session-scoped file operations (e.g., "project/sessions/001")
+  /** The last user message — used for trigger-matching powers so only relevant
+   *  action-tools are registered (avoids bloating the LLM tool list). */
+  lastUserMessage?: string;
   [key: string]: any;
 }
 
