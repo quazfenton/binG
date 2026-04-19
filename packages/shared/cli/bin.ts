@@ -70,6 +70,103 @@ function loadConfig(): any {
   };
 }
 
+// ============================================================================
+// Command Preview System
+// ============================================================================
+
+interface CommandImpact {
+  command: string;
+  estimatedImpact: 'low' | 'medium' | 'high';
+  filesAffected: string[];
+  sideEffects: string[];
+  warnings: string[];
+  confirmationRequired: boolean;
+}
+
+const DESTRUCTIVE_PATTERNS = [
+  /rm\s+-rf/i,
+  /del\s+\/f/i,
+  /format/i,
+  /drop\s+table/i,
+  /truncate/i,
+  /reset\s+--hard/i,
+  /push\s+--force/i,
+  /push\s+-f/i,
+];
+
+const FILESYSTEM_PATTERNS = [
+  { pattern: /delete\s+(.+)/i, type: 'delete', targetGroup: 1 },
+  { pattern: /rm\s+(-[rf]+\s+)?(.+)/i, type: 'delete', targetGroup: 2 },
+  { pattern: /del\s+(.+)/i, type: 'delete', targetGroup: 1 },
+  { pattern: /write\s+(.+)/i, type: 'write', targetGroup: 1 },
+  { pattern: /mv\s+(.+)\s+(.+)/i, type: 'move', targetGroup: [1, 2] },
+  { pattern: /cp\s+(.+)\s+(.+)/i, type: 'copy', targetGroup: [1, 2] },
+];
+
+function analyzeCommandImpact(command: string): CommandImpact {
+  // Sanitize input - limit length and strip control chars
+  const sanitized = command
+    .slice(0, 1000)
+    .replace(/[\x00-\x1F\x7F]/g, '')
+    .trim()
+
+  if (!sanitized) {
+    return {
+      command: '',
+      estimatedImpact: 'low',
+      filesAffected: [],
+      sideEffects: [],
+      warnings: ['Empty command'],
+      confirmationRequired: false,
+    }
+  }
+
+  const impact: CommandImpact = {
+    command: sanitized,
+    estimatedImpact: 'low',
+    filesAffected: [],
+    sideEffects: [],
+    warnings: [],
+    confirmationRequired: false,
+  };
+
+  // Check for destructive commands
+  for (const pattern of DESTRUCTIVE_PATTERNS) {
+    if (pattern.test(command)) {
+      impact.estimatedImpact = 'high';
+      impact.confirmationRequired = true;
+      impact.warnings.push('This action is destructive and cannot be undone');
+      break;
+    }
+  }
+
+  // Extract filesystem targets
+  for (const fp of FILESYSTEM_PATTERNS) {
+    const match = command.match(fp.pattern);
+    if (match) {
+      if (Array.isArray(fp.targetGroup)) {
+        impact.filesAffected = fp.targetGroup.map(g => match[g]);
+      } else {
+        impact.filesAffected.push(match[fp.targetGroup]);
+      }
+    }
+  }
+
+  // Set warnings for certain files
+  if (impact.filesAffected.some(f => f.includes('node_modules'))) {
+    impact.warnings.push('This will affect node_modules directory');
+  }
+  if (impact.filesAffected.some(f => f.includes('.git'))) {
+    impact.warnings.push('This will affect git repository');
+  }
+
+  if (impact.estimatedImpact === 'low' && impact.filesAffected.length > 0) {
+    impact.estimatedImpact = 'medium';
+  }
+
+  return impact;
+}
+
 /**
  * Save configuration
  */
@@ -1177,6 +1274,170 @@ program
 // ============================================================================
 // HELP COMMAND
 // ============================================================================
+
+program
+  .command('help [topic]')
+  .description('Show help for a specific topic or command')
+  .action(async (topic) => {
+    if (!topic) {
+      console.log(chalk.cyanBright(`
+╔═══════════════════════════════════════════════════════════════════╗
+║                        binG Help                                ║
+╚═══════════════════════════════════════════════════════════════════╝
+
+${COLORS.primary('Main Commands:')}
+  chat (c)          - Start interactive chat with AI
+  ask <message>      - Ask a single question
+  sandbox:create     - Create a new sandbox
+  sandbox:exec       - Execute command in sandbox
+  file:read         - Read file content
+  file:write        - Write file content
+  file:list         - List directory
+
+${COLORS.primary('Tools:')}
+  image:generate    - Generate images
+  voice:speak      - Text-to-speech
+  providers:list   - List providers
+  quota            - Show quotas
+
+${COLORS.primary('Configuration:')}
+  config            - View/set config
+  auth             - Authentication
+  status           - System status
+
+${COLORS.primary('Getting Help:')}
+  help <command>    - Help for specific command
+  examples         - Usage examples
+
+For more info: https://github.com/quazfenton/binG
+`));
+      return;
+    }
+
+    const helpTopics: Record<string, string> = {
+      chat: `chat [options]
+
+Start an interactive chat session with AI agents.
+
+Options:
+  -a, --agent <mode>   Agent mode: v1, v2, auto (default: auto)
+  -s, --stream        Enable streaming (default: true)
+  -p, --provider      LLM provider (default: from config)
+  -m, --model        Model name (default: from config)
+
+Examples:
+  bing chat
+  bing chat --provider anthropic
+  bing chat -a v2 --stream`,
+
+      sandbox: `sandbox <subcommand>
+
+Manage sandbox workspaces.
+
+Subcommands:
+  sandbox:create     Create a new sandbox
+  sandbox:exec      Execute a command
+  sandbox:list       List sandboxes
+  sandbox:delete    Delete sandbox
+
+Examples:
+  bing sandbox:create --gpu H100
+  bing sandbox:exec "python train.py"
+  bing sandbox:exec "npm install" --cwd /workspace/myapp`,
+
+      preview: `preview <command>
+
+Preview the impact of a command before executing it.
+
+This helps you understand what a command will do before running it.
+
+Examples:
+  bing preview "rm -rf node_modules"
+  bing preview "delete .env"
+  bing preview "write /workspace/test.txt" -c "hello"`,
+    };
+
+    if (helpTopics[topic]) {
+      console.log(helpTopics[topic]);
+    } else {
+      console.log(COLORS.warning(`No help available for: ${topic}`));
+      console.log(COLORS.info('Try running: bing help'));
+    }
+  });
+
+program
+  .command('examples')
+  .description('Show usage examples')
+  .action(() => {
+    console.log(chalk.cyanBright(`
+╔═══════════════════════════════════════════════════════════════════╗
+║                     binG Examples                            ║
+╚═══════════════════════════════════════════════════════════════════╝
+
+${COLORS.primary('Chat with AI:')}
+  bing chat
+  bing ask "How do I center a div in CSS?"
+
+${COLORS.primary('Sandbox:')}
+  bing sandbox:create -p daytona
+  bing sandbox:exec "pip install numpy"
+  bing sandbox:exec "python main.py" --cwd /workspace/myproject
+
+${COLORS.primary('Files:')}
+  bing file:read /workspace/app.py
+  bing file:write /workspace/test.py -c "print('hello')"
+  bing file:list /workspace
+
+${COLORS.primary('Images:')}
+  bing image:generate "A sunset over mountains"
+  bing image:generate "A cute robot" -o robot.png -q high
+
+${COLORS.primary('Voice:')}
+  bing voice:speak "Hello world" -o hello.mp3
+
+${COLORS.primary('Preview (Destructive Commands):')}
+  bing preview "rm -rf node_modules"
+  bing preview "delete .env"
+`));
+  });
+
+program
+  .command('preview <command...>')
+  .description('Preview command impact before executing')
+  .option('-y, --yes', 'Skip confirmation')
+  .action(async (command, options) => {
+    const impact = analyzeCommandImpact(command.join(' '));
+
+    console.log(chalk.cyanBright('\n=== Command Preview ===\n'));
+    console.log(`${COLORS.primary('Command:')} ${impact.command}`);
+    console.log(`${COLORS.primary('Impact:')} ${
+      impact.estimatedImpact === 'high'
+        ? COLORS.error('HIGH')
+        : impact.estimatedImpact === 'medium'
+          ? COLORS.warning('MEDIUM')
+          : COLORS.success('LOW')
+    }`);
+
+    if (impact.filesAffected.length > 0) {
+      console.log(`\n${COLORS.primary('Files affected:')}`);
+      impact.filesAffected.forEach(f => console.log(`  - ${f}`));
+    }
+
+    if (impact.warnings.length > 0) {
+      console.log(`\n${COLORS.warning('Warnings:')}`);
+      impact.warnings.forEach(w => console.log(`  ⚠ ${w}`));
+    }
+
+    if (!options.yes && impact.confirmationRequired) {
+      const answer = await prompt(COLORS.warning('\nContinue? (y/N) '));
+      if (answer.toLowerCase() !== 'y' && answer.toLowerCase() !== 'yes') {
+        console.log(COLORS.info('Cancelled'));
+        return;
+      }
+    }
+
+    console.log(COLORS.info('\nExecuting...'));
+  });
 
 program.addHelpText('after', `
 ${COLORS.primary('Examples:')}
