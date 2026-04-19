@@ -25,7 +25,7 @@
  */
 
 import { createLogger } from '@/lib/utils/logger';
-import { embed } from '@/lib/memory/embeddings';
+import { embed, embedBatch } from '@/lib/memory/embeddings';
 import { cosineSimilarity } from '@/lib/retrieval/similarity';
 import {
   processUnifiedAgentRequest,
@@ -99,7 +99,7 @@ const DEFAULT_ATTRACTORS: Array<{ id: string; description: string; weight: numbe
 async function embedAttractors(attractors: Attractor[]): Promise<void> {
   const descriptions = attractors.map(a => a.description);
   try {
-    const embeddings = await embed(descriptions);
+    const embeddings = await embedBatch(descriptions);
     for (let i = 0; i < attractors.length; i++) {
       attractors[i].embedding = embeddings[i];
     }
@@ -126,7 +126,7 @@ async function scoreOutputAgainstAttractors(
 ): Promise<AttractorAlignment[]> {
   let outputEmbedding: number[];
   try {
-    const embeddings = await embed([output]);
+    const embeddings = await embedBatch([output]);
     outputEmbedding = embeddings[0];
   } catch {
     // If embedding fails, return neutral scores
@@ -277,7 +277,7 @@ export async function runAttractorDrivenMode(
     log.info(`[AttractorDriven] ┌─ Scores (iteration ${iter}) ─────────────`);
     for (const a of alignment) {
       const bar = '█'.repeat(Math.round(a.score * 10)) + '░'.repeat(10 - Math.round(a.score * 10));
-      log.info(`[AttractorDriven] │ ${a.id.padEnd(14)} ${bar} ${a.score.toFixed(2)} (w: ${a.weight})`);
+      log.info(`[AttractorDriven] │ ${a.attractorId.padEnd(14)} ${bar} ${a.score.toFixed(2)} (w: ${a.weight})`);
     }
     log.info(`[AttractorDriven] │ weighted_total: ${totalWeightedScore.toFixed(3)}`);
     log.info(`[AttractorDriven] └──────────────────────────────────────────`);

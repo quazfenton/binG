@@ -22,6 +22,7 @@ import type {
   MCPConnectionInfo,
   MCPEvent,
 } from './types'
+import { flattenToolResultContent } from './result-format'
 
 /**
  * Tool wrapper with server reference
@@ -41,8 +42,14 @@ export interface MCPToolCallResult {
   toolName: string
   serverId: string
   content: string
+  displayText: string
+  rawText: string
+  rawContent: MCPToolResult['content']
   isError?: boolean
   duration?: number
+  truncated?: boolean
+  originalLength?: number
+  returnedLength?: number
 }
 
 /**
@@ -267,6 +274,9 @@ export class MCPToolRegistry {
           toolName: qualifiedName,
           serverId,
           content: `Tool not found: ${qualifiedName}`,
+          displayText: `Tool not found: ${qualifiedName}`,
+          rawText: `Tool not found: ${qualifiedName}`,
+          rawContent: [],
           isError: true,
         }
       }
@@ -278,6 +288,9 @@ export class MCPToolRegistry {
           toolName: qualifiedName,
           serverId,
           content: `Server not found: ${serverId}`,
+          displayText: `Server not found: ${serverId}`,
+          rawText: `Server not found: ${serverId}`,
+          rawContent: [],
           isError: true,
         }
       }
@@ -288,41 +301,39 @@ export class MCPToolRegistry {
       }, timeout)
 
       const duration = Date.now() - startTime
-
-      // Convert result content to string
-      const content = result.content
-        .map(c => {
-          // Handle text content
-          if ('text' in c && typeof c.text === 'string') return c.text
-          // Handle image content
-          if ('mimeType' in c && 'data' in c) return `[Image: ${c.mimeType}]`
-          // Handle resource content
-          if ('resource' in c && c.resource && typeof c.resource === 'object' && 'uri' in c.resource) {
-            return `[Resource: ${(c.resource as any).uri}]`
-          }
-          // Fallback: stringify unknown content types
-          return JSON.stringify(c)
-        })
-        .join('\n')
+      const formatted = flattenToolResultContent(result)
 
       return {
         success: !result.isError,
         toolName: qualifiedName,
         serverId,
-        content,
+        content: formatted.displayText,
+        displayText: formatted.displayText,
+        rawText: formatted.rawText,
+        rawContent: result.content,
         isError: result.isError,
         duration,
+        truncated: formatted.truncated,
+        originalLength: formatted.originalLength,
+        returnedLength: formatted.returnedLength,
       }
     } catch (error: any) {
       const duration = Date.now() - startTime
+      const content = error.message || 'Tool call failed'
       
       return {
         success: false,
         toolName: qualifiedName,
         serverId,
-        content: error.message || 'Tool call failed',
+        content,
+        displayText: content,
+        rawText: content,
+        rawContent: [],
         isError: true,
         duration,
+        truncated: false,
+        originalLength: content.length,
+        returnedLength: content.length,
       }
     }
   }

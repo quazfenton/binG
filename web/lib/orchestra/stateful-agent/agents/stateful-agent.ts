@@ -1525,13 +1525,25 @@ export async function* runStatefulAgentStreaming(
     Object.entries(tools).map(([name, tool]) => [name, tool as unknown as CoreTool<any, any>])
   );
 
+  // Build workspace snapshot so the model sees real file paths
+  let workspaceSnapshot = '';
+  try {
+    const { buildWorkspaceSnapshot } = await import('@/lib/orchestra/shared-agent-context');
+    workspaceSnapshot = await buildWorkspaceSnapshot(agent['userId']);
+  } catch { /* best effort */ }
+
   // Build initial messages
-  const messages = [
-    {
-      role: 'user' as const,
-      content: userMessage,
-    },
-  ];
+  const messages: Array<{ role: 'system' | 'user'; content: string }> = [];
+  if (workspaceSnapshot && !workspaceSnapshot.includes('unavailable') && !workspaceSnapshot.includes('empty')) {
+    messages.push({
+      role: 'system',
+      content: `### Existing Files in Workspace\n${workspaceSnapshot}\n\nUse ONLY these paths (or new paths you create). Do NOT guess file paths.`,
+    });
+  }
+  messages.push({
+    role: 'user',
+    content: userMessage,
+  });
 
   // Run streaming using Vercel AI SDK
   const result = streamText({

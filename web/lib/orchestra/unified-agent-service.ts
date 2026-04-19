@@ -1456,6 +1456,16 @@ async function runV1ApiWithTools(
       });
     }
 
+    // Pre-build workspace snapshot to give the model real file paths
+    let workspaceSnippet = '';
+    try {
+      const userId = config.userId || config.filesystemOwnerId || 'default';
+      const snapshot = await buildWorkspaceSnapshot(userId);
+      if (snapshot && !snapshot.includes('unavailable') && !snapshot.includes('empty')) {
+        workspaceSnippet = `\n\n### Existing Files in Workspace\n${snapshot}\n\nUse ONLY these paths (or new paths you create). Do NOT guess file paths.\n`;
+      }
+    } catch { /* best effort */ }
+
     // Build system prompt: role-based composition OR raw string + RAG context
     if (config.role) {
       // Use the prompt-composer to build from a role template with dynamic tools
@@ -1464,7 +1474,7 @@ async function runV1ApiWithTools(
         availableTools: toolIds,
         extras: ragContext ? [{ id: 'rag.knowledge', template: ragContext }] : undefined,
       });
-      llmMessages.push({ role: 'system', content: composedPrompt });
+      llmMessages.push({ role: 'system', content: composedPrompt + workspaceSnippet });
       log.info('[V1-API-WITH-TOOLS] Composed role prompt', {
         role: config.role,
         toolCount: toolIds.length,
@@ -1472,11 +1482,11 @@ async function runV1ApiWithTools(
         hasRag: !!ragContext,
       });
     } else if (config.systemPrompt) {
-      const systemContent = config.systemPrompt + ragContext;
+      const systemContent = config.systemPrompt + ragContext + workspaceSnippet;
       llmMessages.push({ role: 'system', content: systemContent });
     } else if (ragContext) {
       // No custom system prompt but we have RAG context — add a minimal system message
-      llmMessages.push({ role: 'system', content: `You are an AI coding assistant.${ragContext}` });
+      llmMessages.push({ role: 'system', content: `You are an AI coding assistant.${ragContext}${workspaceSnippet}` });
     }
     llmMessages.push(...messages);
 
@@ -1512,6 +1522,11 @@ async function runV1ApiWithTools(
             });
           }
         }
+      }
+
+      // Empty-completion guard: if no response and no tool invocations, throw to trigger fallback
+      if (!response.trim() && toolInvocations.length === 0) {
+        throw new Error(`Empty completion from ${providerName}/${modelForProvider} — no text and no tool calls`);
       }
 
       const duration = Date.now() - startTime;
@@ -1862,7 +1877,7 @@ async function runV1ApiCompletion(
       const { streamWithVercelAI } = await import('../chat/vercel-ai-streaming');
 
       let content = '';
-      const fileEdits: Array<{ path: string; content: string; operation?: string }> = [];
+      const fileEdits: Array<{ path: string; content: string; action?: string }> = [];
       const toolCalls: Array<{ tool: string; args: any; result: any }> = [];
       const streamOpts = {
         provider: providerName,
@@ -1934,6 +1949,40 @@ async function runV1ApiCompletion(
           } catch (err: any) {
             log.warn(`[V1-API-COMPLETION] Failed to write extracted file ${write.path}:`, err.message);
           }
+        }
+      }
+
+      // Extract file edits from text content (fenced code blocks, inline writes, etc.)
+      // This catches edits that models produce in text-mode (no tool calls)
+      if (content && fileEdits.length === 0) {
+        try {
+          const { extractFileEdits } = await import('@/lib/chat/file-edit-parser');
+          const { virtualFilesystem } = await import('@/lib/virtual-filesystem/index.server');
+          const textEdits = extractFileEdits(content);
+          const ownerId = config.userId || config.filesystemOwnerId || '1';
+          for (const edit of textEdits) {
+            if (edit.path && edit.content) {
+              try {
+                const editPath = config.scopePath ? `${config.scopePath}/${edit.path}` : edit.path;
+                if (edit.action === 'delete') {
+                  await virtualFilesystem.deletePath(ownerId, editPath);
+                } else {
+                  await virtualFilesystem.writeFile(ownerId, editPath, edit.content);
+                }
+                fileEdits.push({ path: edit.path, content: edit.content, action: edit.action || 'write' });
+              } catch (editErr: any) {
+                log.warn(`[V1-API-COMPLETION] Failed to apply text-extracted edit ${edit.path}:`, editErr.message);
+              }
+            }
+          }
+          if (textEdits.length > 0) {
+            log.info(`[V1-API-COMPLETION] Extracted ${textEdits.length} file edits from text content`, {
+              applied: fileEdits.length,
+              paths: fileEdits.map(e => e.path),
+            });
+          }
+        } catch (parseErr: any) {
+          log.debug('[V1-API-COMPLETION] Text file-edit extraction skipped:', parseErr.message);
         }
       }
 

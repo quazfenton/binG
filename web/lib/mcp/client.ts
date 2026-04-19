@@ -82,6 +82,10 @@ export class MCPClient extends EventEmitter {
     timeout?: NodeJS.Timeout
   }> = new Map()
 
+  private autoReconnect: boolean = true
+  private reconnectAttempts: number = 0
+  private maxReconnectAttempts: number = 3
+  private reconnectDelay: number = 1000
   private process?: ChildProcess
   private messageBuffer: string = ''
   private ndjsonParser?: NDJSONParser
@@ -138,6 +142,29 @@ export class MCPClient extends EventEmitter {
    */
   isConnected(): boolean {
     return this.connectionInfo.state === 'connected'
+  }
+
+  /**
+   * Health check for MCP connection
+   */
+  async healthCheck(): Promise<{ healthy: boolean; latency?: number; details?: string }> {
+    const start = Date.now()
+
+    if (!this.isConnected()) {
+      return { healthy: false, latency: Date.now() - start, details: 'Not connected' }
+    }
+
+    // Check stdio process health
+    if (this.config.type === 'stdio' && this.process) {
+      try {
+        this.process.kill(0) // Signal 0 checks if process exists
+        return { healthy: true, latency: Date.now() - start, details: 'Process running' }
+      } catch {
+        return { healthy: false, latency: Date.now() - start, details: 'Process not responding' }
+      }
+    }
+
+    return { healthy: true, latency: Date.now() - start, details: 'Connected' }
   }
 
   /**
@@ -478,19 +505,47 @@ export class MCPClient extends EventEmitter {
             data: { code },
             timestamp: new Date()
           })
+          // Auto-reconnect for stdio transport
+          if (this.autoReconnect && this.config.type === 'stdio' && this.reconnectAttempts < this.maxReconnectAttempts) {
+            this.scheduleReconnect()
+          }
         }
       })
 
       const spawnTimeout = setTimeout(() => {
         this.process?.removeAllListeners('spawn')
-        resolve()
-      }, 100)
+        reject(new MCPTimeoutError(`Process spawn timeout after ${this.config.timeout || 5000}ms`))
+      }, this.config.timeout || 5000)
 
       this.process.on('spawn', () => {
         clearTimeout(spawnTimeout)
         resolve()
       })
     })
+  }
+
+  /**
+   * Schedule reconnection after process death
+   */
+  private scheduleReconnect(): void {
+    this.reconnectAttempts++
+    const delay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1)
+    console.log(`[MCPClient] Scheduling reconnect attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${delay}ms`)
+
+    setTimeout(async () => {
+      try {
+        await this.connect(this.config.timeout || 10000)
+        console.log(`[MCPClient] Reconnected successfully after ${this.reconnectAttempts} attempt(s)`)
+        this.reconnectAttempts = 0
+      } catch (error) {
+        console.error(`[MCPClient] Reconnect attempt failed:`, error)
+        if (this.reconnectAttempts < this.maxReconnectAttempts) {
+          this.scheduleReconnect()
+        } else {
+          console.error(`[MCPClient] Max reconnection attempts reached`)
+        }
+      }
+    }, delay)
   }
 
   private async connectSSE(timeout: number): Promise<void> {
@@ -661,6 +716,13 @@ export class MCPClient extends EventEmitter {
   }
 
   private handleMessage(data: string): void {
+    // Buffer incomplete lines for partial NDJSON messages
+    this.messageBuffer += data
+
+    // Check for complete lines (newline-terminated)
+    const lines = this.messageBuffer.split('\n')
+    this.messageBuffer = lines.pop() || '' // Keep incomplete line in buffer
+
     // Initialize parser on first use
     if (!this.ndjsonParser) {
       this.ndjsonParser = createNDJSONParser({
@@ -670,20 +732,26 @@ export class MCPClient extends EventEmitter {
       })
     }
 
-    // Parse NDJSON with robust error handling for partial chunks
-    const messages = this.ndjsonParser.parse(data)
+    // Process each complete line
+    for (const line of lines) {
+      const trimmedLine = line.trim()
+      if (!trimmedLine) continue
 
-    for (const message of messages) {
-      try {
-        const typedMessage: MCPResponse | MCPNotification = message
+      // Parse NDJSON with robust error handling for partial chunks
+      const messages = this.ndjsonParser.parse(trimmedLine + '\n')
 
-        if ('id' in typedMessage) {
-          this.handleResponse(typedMessage as MCPResponse)
-        } else if ('method' in typedMessage) {
-          this.handleNotification(typedMessage as MCPNotification)
+      for (const message of messages) {
+        try {
+          const typedMessage: MCPResponse | MCPNotification = message
+
+          if ('id' in typedMessage) {
+            this.handleResponse(typedMessage as MCPResponse)
+          } else if ('method' in typedMessage) {
+            this.handleNotification(typedMessage as MCPNotification)
+          }
+        } catch (error) {
+          console.error('[MCPClient] Failed to process message:', error)
         }
-      } catch (error) {
-        console.error('[MCPClient] Failed to process message:', error)
       }
     }
   }

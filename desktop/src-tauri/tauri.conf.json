@@ -4,10 +4,10 @@
   "version": "0.1.0",
   "identifier": "com.quaz.desktop",
   "build": {
-    "beforeDevCommand": "pnpm --dir web dev",
+    "beforeDevCommand": "pnpm --dir ../web dev",
     "devUrl": "http://localhost:3000",
-    "beforeBuildCommand": "",
-    "frontendDist": "./static"
+    "beforeBuildCommand": "node scripts/prepare-tauri-assets.cjs",
+    "frontendDist": "static"
   },
   "app": {
     "withGlobalTauri": true,
@@ -25,7 +25,9 @@
     "icon": [
       "icons/favicon.ico"
     ],
-    "resources": {},
+    "resources": [
+      "web-assets"
+    ],
     "windows": {
       "webviewInstallMode": {
         "type": "downloadBootstrapper"
