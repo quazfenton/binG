@@ -354,7 +354,7 @@ export async function retrieveHybrid(
       currentProjectPath: opts.currentProjectPath,
       scopePath: opts.scopePath,
       maxTotalSize: opts.maxTotalSize ?? 500_000,
-      format: opts.format ?? 'json',
+      format: opts.format ?? 'markdown',
       maxLinesPerFile: opts.maxLinesPerFile ?? 500,
     };
 
@@ -433,6 +433,6 @@ export async function buildPromptWithContext(
     filesIncluded: [],
     symbolsIncluded: [],
     truncated: false,
-    format: opts.format ?? 'json',
+    format: opts.format ?? 'markdown',
   });
 }

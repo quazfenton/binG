@@ -10,7 +10,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
-export interface CSPReport {
+interface CSPReport {
   'csp-report': {
     'blocked-uri': string;
     'document-uri': string;
@@ -156,7 +156,7 @@ function analyzeViolation(report: CSPReport['csp-report']): {
   };
 }
 
-export interface CSPViolationRecord {
+interface CSPViolationRecord {
   id?: string;
   timestamp: string;
   blockedUri: string;

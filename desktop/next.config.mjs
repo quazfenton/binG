@@ -98,10 +98,10 @@ const nextConfig = {
         }
       : false,
   },
-  // Tauri desktop mode: use standalone server output
+  // Tauri desktop mode: use static export for frontend assets
   ...(process.env.DESKTOP_MODE === 'true' ? {
-    output: 'standalone',
-    outputFileTracingRoot: process.env.NODE_ENV === 'production' ? undefined : undefined,
+    output: 'export',
+    distDir: 'out', // Explicitly set distDir to 'out' for static export
   } : {}),
   env: {
     DEFAULT_LLM_PROVIDER: process.env.DEFAULT_LLM_PROVIDER,

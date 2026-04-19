@@ -23,7 +23,7 @@
  */
 
 import { createLogger } from '@/lib/utils/logger';
-import { embed } from '@/lib/memory/embeddings';
+import { embed, embedBatch } from '@/lib/memory/embeddings';
 import { cosineSimilarity } from '@/lib/retrieval/similarity';
 import {
   processUnifiedAgentRequest,
@@ -76,7 +76,7 @@ class IntentField {
     const descriptions = intents.map(i => i.description);
     let embeddings: number[][];
     try {
-      embeddings = await embed(descriptions);
+      embeddings = await embedBatch(descriptions);
     } catch {
       log.warn('Failed to embed intent descriptions, using zero vectors');
       embeddings = descriptions.map(() => new Array(1536).fill(0));
@@ -117,7 +117,7 @@ class IntentField {
   async updateFromOutput(output: string, resolutionThreshold: number = 0.75): Promise<void> {
     let outputEmbedding: number[];
     try {
-      const embeddings = await embed([output]);
+      const embeddings = await embedBatch([output]);
       outputEmbedding = embeddings[0];
     } catch {
       log.warn('Failed to embed output for intent update');
@@ -222,13 +222,13 @@ async function extractIntentsFromTask(
   try {
     const vercelModel = getVercelModel(provider, model);
     const result = await generateText({
-      model: vercelModel,
+      model: vercelModel as any,
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: task },
       ],
       temperature: 0.2,
-      maxTokens: 1024,
+      maxOutputTokens: 1024,
     });
 
     // Parse JSON from response

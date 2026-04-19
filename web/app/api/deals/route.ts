@@ -7,7 +7,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
-export interface Deal {
+interface Deal {
   id: string;
   title: string;
   description: string;

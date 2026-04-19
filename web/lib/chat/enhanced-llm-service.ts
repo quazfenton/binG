@@ -425,7 +425,7 @@ export class EnhancedLLMService {
           explicitFiles: contextPack.includePatterns || [],
           recentSessionFiles: recentFiles,
           maxTotalSize: contextPack.maxTotalSize || 500000,
-          format: contextPack.format || 'json',
+          format: contextPack.format || 'markdown',
           maxLinesPerFile: contextPack.maxLinesPerFile || 500,
         });
         
@@ -775,7 +775,7 @@ export class EnhancedLLMService {
           explicitFiles: contextPack.includePatterns || [],
           recentSessionFiles: recentFiles,
           maxTotalSize: contextPack.maxTotalSize || 500000,
-          format: contextPack.format || 'json',
+          format: contextPack.format || 'markdown',
           maxLinesPerFile: contextPack.maxLinesPerFile || 500,
         });
         
