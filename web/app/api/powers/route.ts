@@ -1,10 +1,10 @@
 /**
- * Skills API
+ * Powers API
  *
  * Endpoints:
- * - GET /api/skills - List all skills
- * - GET /api/skills/:name - Get skill details
- * - POST /api/skills - Add new skill
+ * - GET /api/powers - List all powers
+ * - GET /api/powers/:name - Get power details
+ * - POST /api/powers - Add new power
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -12,10 +12,10 @@ import { createLogger } from '@/lib/utils/logger';
 import { ToolRegistry } from '@/lib/tools/registry';
 import { powersRegistry } from '@/lib/powers';
 
-const logger = createLogger('API:Skills');
+const logger = createLogger('API:Powers');
 
 // ============================================================================
-// GET /api/skills - List all skills
+// GET /api/powers - List all powers
 // ============================================================================
 
 export async function GET(request: NextRequest) {
@@ -23,13 +23,13 @@ export async function GET(request: NextRequest) {
     const searchParams = request.nextUrl.searchParams;
     const query = searchParams.get('q');
 
-    // Get skills/powers from unified registry
+    // Get powers from unified registry
     const registry = ToolRegistry.getInstance();
     const tools = registry.getAllTools();
     const powers = powersRegistry.getSummary();
 
     // Map tools/powers to a common format
-    const skillList = [
+    const powerList = [
       ...tools.map(t => ({
         id: t.name,
         name: t.name,
@@ -45,48 +45,48 @@ export async function GET(request: NextRequest) {
     ];
 
     // Filter by query
-    let filteredSkills = skillList;
+    let filteredPowers = powerList;
     if (query) {
       const lowerQuery = query.toLowerCase();
-      filteredSkills = skillList.filter(s =>
-        s.name.toLowerCase().includes(lowerQuery) ||
-        s.description.toLowerCase().includes(lowerQuery)
+      filteredPowers = powerList.filter(p =>
+        p.name.toLowerCase().includes(lowerQuery) ||
+        p.description.toLowerCase().includes(lowerQuery)
       );
     }
 
     return NextResponse.json({
       success: true,
-      skills: filteredSkills,
-      count: filteredSkills.length,
+      powers: filteredPowers,
+      count: filteredPowers.length,
     });
   } catch (error: any) {
-    logger.error('Failed to list skills:', error);
+    logger.error('Failed to list powers:', error);
     return NextResponse.json(
-      { error: 'Failed to list skills' },
+      { error: 'Failed to list powers' },
       { status: 500 }
     );
   }
 }
 
 // ============================================================================
-// GET /api/skills/:name - Get skill details (handled via slug in Next.js 13+ app router)
-// Note: This requires a dynamic route /api/skills/[name]/route.ts instead of a simple export.
+// GET /api/powers/:name - Get power details (handled via slug in Next.js 13+ app router)
+// Note: This requires a dynamic route /api/powers/[name]/route.ts instead of a simple export.
 // For now, keeping it simple as a function that could be called if refactored.
 // ============================================================================
 
-export async function GET_skill(name: string) {
+async function GET_power(name: string) {
   try {
     const registry = ToolRegistry.getInstance();
     const tool = registry.getTool(name);
     const power = powersRegistry.getById(name);
 
     if (!tool && !power) {
-      return { error: 'Skill not found', status: 404 };
+      return { error: 'Power not found', status: 404 };
     }
 
     return {
       success: true,
-      skill: tool ? {
+      power: tool ? {
         id: tool.name,
         name: tool.name,
         description: tool.metadata?.tags?.join(', ') || 'Capability tool',
@@ -100,13 +100,13 @@ export async function GET_skill(name: string) {
       },
     };
   } catch (error: any) {
-    logger.error('Failed to get skill:', error);
-    return { error: 'Failed to get skill', status: 500 };
+    logger.error('Failed to get power:', error);
+    return { error: 'Failed to get power', status: 500 };
   }
 }
 
 // ============================================================================
-// POST /api/skills - Add new skill
+// POST /api/powers - Add new power
 // ============================================================================
 
 export async function POST(request: NextRequest) {
@@ -135,12 +135,12 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      message: 'Skill/Power added successfully',
+      message: 'Power added successfully',
     });
   } catch (error: any) {
-    logger.error('Failed to add skill:', error);
+    logger.error('Failed to add power:', error);
     return NextResponse.json(
-      { error: error.message || 'Failed to add skill' },
+      { error: error.message || 'Failed to add power' },
       { status: 500 }
     );
   }

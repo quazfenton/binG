@@ -75,6 +75,14 @@ export class PluginMigrationService {
       // Filter out plugins that are already in the target tab (idempotent)
       const newPlugins = pluginIds.filter(id => !targetConfig.plugins.includes(id));
       
+      // Record migration for ALL move attempts (even no-ops)
+      this.migrationHistory.push({
+        sourceTab: 'multiple', // Could be from multiple tabs
+        targetTab,
+        pluginIds: pluginIds, // Record all requested plugins, not just new ones
+        preserveOrder: true
+      });
+      
       if (newPlugins.length === 0) {
         // All plugins already in target tab, no-op
         return true;
@@ -89,14 +97,6 @@ export class PluginMigrationService {
 
       // Add only the new plugins to target tab
       targetConfig.plugins.push(...newPlugins);
-
-      // Record migration
-      this.migrationHistory.push({
-        sourceTab: 'multiple', // Could be from multiple tabs
-        targetTab,
-        pluginIds: newPlugins,
-        preserveOrder: true
-      });
 
       return true;
     } catch (error) {

@@ -118,6 +118,8 @@
   </div>
 
   <script>
+    const sidecarConfig = window.__OPENCODE_SIDECAR__ || null;
+    const sidecarPort = sidecarConfig?.port || 3000;
     const statusText = document.getElementById('statusText');
     const progressFill = document.getElementById('progressFill');
     const detailLog = document.getElementById('detailLog');
@@ -162,45 +164,31 @@
       }
     }
 
-    async function checkNode() {
-      try {
-        const tauri = window.__TAURI__;
-        if (!tauri || !tauri.core) return false;
-        const result = await tauri.core.invoke('execute_command', {
-          command: cfg => 'node --version',
-          cwd: undefined
-        });
-        // Handle both {success, output} and direct string returns
-        const output = result.output || result.stdout || '';
-        if (output.trim().startsWith('v')) {
-          addLog(`Node.js ${output.trim()} found`, 'ok');
-          setCheck('checkNode', '✓', `Node.js ${output.trim()}`, 'check-ok');
-          return true;
-        }
-        addLog(`Node.js check output: ${output}`, 'err');
-        setCheck('checkNode', '✗', 'Node.js not found', 'check-fail');
-        return false;
-      } catch (e) {
-        addLog(`Node.js check failed: ${e.message || e}`, 'err');
-        setCheck('checkNode', '✗', 'Node.js not available', 'check-fail');
-        return false;
-      }
-    }
-
     async function init() {
       addLog('App initialized', 'info');
 
-      // 1. Check Node.js
-      const hasNode = await checkNode();
-      if (!hasNode) {
-        addLog('Node.js not found — sidecar will be unavailable', 'err');
-        setCheck('checkSidecar', '✗', 'Sidecar requires Node.js', 'check-fail');
-        showFallback();
-        return;
+      if (!sidecarConfig) {
+        // Non-desktop fallback: keep the legacy Node check for manual runs.
+        try {
+          const tauri = window.__TAURI__;
+          if (!tauri || !tauri.core) {
+            addLog('Tauri API not available', 'err');
+            showFallback();
+            return;
+          }
+          setCheck('checkNode', '✓', 'Tauri bridge available', 'check-ok');
+        } catch {
+          addLog('Tauri bridge unavailable', 'err');
+          showFallback();
+          return;
+        }
+      } else {
+        addLog(`Detected injected sidecar config on port ${sidecarPort}`, 'info');
+        setCheck('checkNode', '✓', 'Desktop bootstrap ready', 'check-ok');
       }
 
       // 2. Wait for sidecar (the Rust code is already trying to start it)
-      addLog('Waiting for Next.js server on port 3000...', 'info');
+      addLog(`Waiting for Next.js server on port ${sidecarPort}...`, 'info');
       
       // Poll the sidecar every 1s for up to 90s
       let attempts = 0;
@@ -215,7 +203,7 @@
         }
 
         try {
-          const resp = await fetch('http://127.0.0.1:3000/', { 
+          const resp = await fetch(`http://127.0.0.1:${sidecarPort}/`, { 
             method: 'HEAD', 
             mode: 'no-cors',
             signal: AbortSignal.timeout(2000)
@@ -235,7 +223,7 @@
 
           // Give it 1s then redirect
           setTimeout(() => {
-            window.location.href = `http://127.0.0.1:3000/`;
+            window.location.href = `http://127.0.0.1:${sidecarPort}/`;
           }, 1000);
         } catch (e) {
           // Server not ready yet

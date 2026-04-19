@@ -44,12 +44,20 @@ export interface PowerManifest {
   description: string;
   triggers?: string[];
   actions: PowerAction[];
-  permissions?: { allowedHosts?: string[]; requiredScopes?: string[] };
-  source: 'local' | 'marketplace' | 'user';
+  permissions?: { allowedHosts?: string[]; requiredScopes?: string[]; allowedPaths?: string[] };
+  source: 'core' | 'local' | 'marketplace' | 'user';
   enabled: boolean;
   rawMarkdown?: string;
   installedAt?: number;
   verified?: boolean;
+  /** Runtime type — populated when converting from PowerDefinition */
+  runtime?: 'native' | 'wasm' | 'api' | 'llm';
+  /** Provider priority list — populated when converting from PowerDefinition */
+  providerPriority?: string[];
+  /** Tags for discovery — populated when converting from PowerDefinition */
+  tags?: string[];
+  /** Tool metadata for intelligent routing */
+  metadata?: { latency?: string; cost?: string; reliability?: number; tags?: string[] };
 }
 
 export interface PowerArtifact {
@@ -65,6 +73,24 @@ export interface PowerRunResult {
   error?: string;
   logs?: Array<{ level: string; message: string; ts: number }>;
   durationMs: number;
+}
+
+// ============================================================================
+// Source Priority Helper
+// ============================================================================
+
+/**
+ * Priority ranking for power sources.
+ * Higher number = higher priority (won't be overridden by lower).
+ */
+function sourcePriority(source: string): number {
+  switch (source) {
+    case 'core': return 3;
+    case 'local': return 2;
+    case 'marketplace': return 1;
+    case 'user': return 1;
+    default: return 0;
+  }
 }
 
 // ============================================================================
@@ -118,14 +144,26 @@ export class PowersRegistry {
   private skillsByCapability = new Map<string, string[]>();
 
   /**
-   * Register a power from a parsed SKILL.md manifest
+   * Register a power from a parsed SKILL.md manifest or PowerDefinition.
+   *
+   * Priority rules:
+   *   - 'core' powers are never overridden by non-core powers
+   *   - 'local' powers override 'marketplace' and 'user' powers
+   *   - Same-source re-registration is allowed (idempotent update)
+   *
+   * Accepts both PowerManifest and PowerDefinition (converted via powerToManifest).
    */
   async register(manifest: PowerManifest): Promise<void> {
-    // User/marketplace skills override existing ones
     const existing = this.powers.get(manifest.id);
-    if (existing && existing.source === 'local' && manifest.source !== 'local') {
-      log.debug(`Skipping ${manifest.id} - local version exists`);
-      return;
+
+    // Priority: core > local > marketplace/user
+    if (existing) {
+      const existingPriority = sourcePriority(existing.source);
+      const incomingPriority = sourcePriority(manifest.source);
+      if (existingPriority > incomingPriority) {
+        log.debug(`Skipping ${manifest.id} — ${existing.source} version has higher priority than ${manifest.source}`);
+        return;
+      }
     }
 
     this.powers.set(manifest.id, manifest);
@@ -166,7 +204,17 @@ export class PowersRegistry {
       });
     }
 
-    log.info('Power registered', { id: manifest.id, actions: manifest.actions.length });
+    log.info('Power registered', { id: manifest.id, actions: manifest.actions.length, source: manifest.source });
+  }
+
+  /**
+   * Register a PowerDefinition directly (converts to PowerManifest internally).
+   * This is the preferred entry point when working with the unified PowerDefinition schema.
+   */
+  async registerPowerDefinition(powerDef: import('@/lib/tools/types').PowerDefinition): Promise<void> {
+    const { powerToManifest } = await import('@/lib/tools/types');
+    const manifest = powerToManifest(powerDef);
+    return this.register(manifest);
   }
 
   /**
@@ -266,7 +314,7 @@ export class PowersRegistry {
   }
 
   /**
-   * Get summary for UI
+   * Get summary for UI (ghost-registry friendly — no markdown body)
    */
   getSummary(): Array<{
     id: string;
@@ -277,6 +325,8 @@ export class PowersRegistry {
     enabled: boolean;
     source: string;
     triggers: string[];
+    runtime?: string;
+    tags?: string[];
   }> {
     return this.getActive().map(p => ({
       id: p.id,
@@ -287,6 +337,8 @@ export class PowersRegistry {
       enabled: p.enabled,
       source: p.source,
       triggers: p.triggers || [],
+      runtime: p.runtime,
+      tags: p.tags,
     }));
   }
 

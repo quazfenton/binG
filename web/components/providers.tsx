@@ -8,12 +8,13 @@ import { OrchestrationModeProvider } from '@/contexts/orchestration-mode-context
 import { SpecEnhancementModeProvider } from '@/contexts/spec-enhancement-mode-context';
 import { ThemeProvider } from './theme-provider';
 import { createLogger } from '@/lib/utils/logger';
+import { tauriFetch } from '@/lib/tauri-api-adapter';
 
 const logger = createLogger('Providers:Init');
 
 async function initializeMCPServices() {
   try {
-    const res = await fetch('/api/mcp/init', { method: 'POST' });
+    const res = await tauriFetch('/api/mcp/init', { method: 'POST' });
     if (!res.ok) {
       logger.error('MCP init API failed', { status: res.status });
     } else {
@@ -34,7 +35,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
       initializeMCPServices().then(() => {
         setMcpInitialized(true);
       }).catch((error) => {
-        logger.error('Failed to initialize MCP services', { error: error.message });
+        logger.warn('Failed to initialize MCP services', { error: error?.message || String(error) });
         setMcpInitialized(true); // Continue anyway
       });
     } else {

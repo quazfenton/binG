@@ -60,6 +60,32 @@ export interface SymbolContext {
 export type DiffRepairLLM = (prompt: string) => Promise<string>;
 
 /**
+ * Parse and apply diff result to content
+ * Takes current content and diff body, returns applied result
+ */
+export function parseDiffResult(currentContent: string, diffBody: string): string | null {
+  // Handle empty diff body
+  if (!diffBody || diffBody.trim().length === 0) {
+    return currentContent;
+  }
+  
+  // Check if diffBody contains unified diff markers
+  const lines = diffBody.split('\n');
+  const hasDiffMarkers = lines.some(line => 
+    line.startsWith('+') || line.startsWith('-') || line.startsWith('@@')
+  );
+  
+  if (!hasDiffMarkers) {
+    // No diff markers - might be full content, return as-is
+    return diffBody;
+  }
+  
+  // Use applyDiffToContent without path (pass empty path)
+  const result = applyDiffToContent(currentContent, '', diffBody);
+  return result;
+}
+
+/**
  * Apply unified diff to content with robust error handling
  */
 export function applyUnifiedDiffToContent(currentContent: string, path: string, diffBody: string): string | null {
