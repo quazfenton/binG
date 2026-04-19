@@ -4,6 +4,26 @@ import { createLogger } from '@/lib/utils/logger'
 
 const log = createLogger('SessionStore')
 
+// ============================================================================
+// Checkpoint Types
+// ============================================================================
+
+export interface SessionCheckpoint {
+  checkpointId: string
+  sessionId: string
+  userId: string
+  label?: string
+  timestamp: number
+  state: {
+    conversationState: unknown
+    sandboxState: unknown
+    toolState: unknown
+    quotaUsage: unknown
+    metadata: unknown
+  }
+  version: string
+}
+
 // ---------------------------------------------------------------------------
 // Fallback: in-memory Map (used when better-sqlite3 is unavailable)
 // ---------------------------------------------------------------------------
@@ -82,6 +102,62 @@ try {
   useSqlite = false
   console.warn('[session-store] better-sqlite3 unavailable – falling back to in-memory store')
 }
+
+// ============================================================================
+// Checkpoint Storage Setup
+// ============================================================================
+
+let stmtInsertCheckpoint: BetterSqlite3.Statement | null = null
+let stmtGetCheckpoint: BetterSqlite3.Statement | null = null
+let stmtGetCheckpointsBySession: BetterSqlite3.Statement | null = null
+let stmtDeleteCheckpoint: BetterSqlite3.Statement | null = null
+
+const memCheckpoints = new Map<string, SessionCheckpoint>()
+
+function initCheckpointStorage() {
+  if (!useSqlite || !db) return
+
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS session_checkpoints (
+        checkpointId TEXT PRIMARY KEY,
+        sessionId TEXT NOT NULL,
+        userId TEXT NOT NULL,
+        label TEXT,
+        timestamp INTEGER NOT NULL,
+        state TEXT NOT NULL,
+        version TEXT NOT NULL DEFAULT '1.0'
+      )
+    `)
+
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_checkpoints_sessionId ON session_checkpoints(sessionId)`)
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_checkpoints_timestamp ON session_checkpoints(timestamp)`)
+
+    stmtInsertCheckpoint = db.prepare(`
+      INSERT OR REPLACE INTO session_checkpoints
+        (checkpointId, sessionId, userId, label, timestamp, state, version)
+      VALUES
+        (@checkpointId, @sessionId, @userId, @label, @timestamp, @state, @version)
+    `)
+
+    stmtGetCheckpoint = db.prepare(`SELECT * FROM session_checkpoints WHERE checkpointId = ?`)
+
+    stmtGetCheckpointsBySession = db.prepare(`
+      SELECT * FROM session_checkpoints
+      WHERE sessionId = ?
+      ORDER BY timestamp DESC
+      LIMIT ?
+    `)
+
+    stmtDeleteCheckpoint = db.prepare(`DELETE FROM session_checkpoints WHERE checkpointId = ?`)
+
+    log.info('[session-store] Checkpoint storage initialized')
+  } catch (err) {
+    log.warn('[session-store] Failed to init checkpoint storage:', err)
+  }
+}
+
+initCheckpointStorage()
 
 // ---------------------------------------------------------------------------
 // Periodic cleanup (every 30 minutes)
@@ -342,4 +418,97 @@ export function getAllActiveSessions(): WorkspaceSession[] {
     }
   }
   return active
+}
+
+// ============================================================================
+// Checkpoint Storage API
+// ============================================================================
+
+const CHECKPOINT_VERSION = '1.0'
+const MAX_CHECKPOINTS_PER_SESSION = 10
+
+export function saveCheckpoint(checkpoint: SessionCheckpoint): void {
+  checkpoint.version = CHECKPOINT_VERSION
+
+  if (useSqlite && stmtInsertCheckpoint) {
+    stmtInsertCheckpoint.run({
+      checkpointId: checkpoint.checkpointId,
+      sessionId: checkpoint.sessionId,
+      userId: checkpoint.userId,
+      label: checkpoint.label ?? null,
+      timestamp: checkpoint.timestamp,
+      state: JSON.stringify(checkpoint.state),
+      version: checkpoint.version,
+    })
+    log.debug(`Checkpoint ${checkpoint.checkpointId} saved to SQLite`)
+
+    cleanupOldCheckpoints(checkpoint.sessionId)
+  } else {
+    memCheckpoints.set(checkpoint.checkpointId, checkpoint)
+    log.debug(`Checkpoint ${checkpoint.checkpointId} saved to memory`)
+  }
+}
+
+export function getCheckpoint(checkpointId: string): SessionCheckpoint | undefined {
+  if (useSqlite && stmtGetCheckpoint) {
+    const row = stmtGetCheckpoint.get(checkpointId) as any
+    if (row) {
+      return {
+        ...row,
+        state: JSON.parse(row.state),
+      }
+    }
+    return undefined
+  }
+
+  const checkpoint = memCheckpoints.get(checkpointId)
+  return checkpoint
+}
+
+export function getCheckpointsBySession(sessionId: string, limit = 10): SessionCheckpoint[] {
+  if (useSqlite && stmtGetCheckpointsBySession) {
+    const rows = stmtGetCheckpointsBySession.all(sessionId, limit) as any[]
+    return rows.map(row => ({
+      ...row,
+      state: JSON.parse(row.state),
+    }))
+  }
+
+  const checkpoints: SessionCheckpoint[] = []
+  for (const cp of memCheckpoints.values()) {
+    if (cp.sessionId === sessionId) {
+      checkpoints.push(cp)
+    }
+  }
+  return checkpoints
+    .sort((a, b) => b.timestamp - a.timestamp)
+    .slice(0, limit)
+}
+
+export function deleteCheckpoint(checkpointId: string): void {
+  if (useSqlite && stmtDeleteCheckpoint) {
+    stmtDeleteCheckpoint.run(checkpointId)
+    log.debug(`Checkpoint ${checkpointId} deleted from SQLite`)
+  } else {
+    memCheckpoints.delete(checkpointId)
+    log.debug(`Checkpoint ${checkpointId} deleted from memory`)
+  }
+}
+
+function cleanupOldCheckpoints(sessionId: string): void {
+  if (!useSqlite || !db) return
+
+  const checkpoints = getCheckpointsBySession(sessionId, MAX_CHECKPOINTS_PER_SESSION + 1)
+  if (checkpoints.length <= MAX_CHECKPOINTS_PER_SESSION) return
+
+  const toDelete = checkpoints.slice(MAX_CHECKPOINTS_PER_SESSION)
+  for (const cp of toDelete) {
+    deleteCheckpoint(cp.checkpointId)
+  }
+  log.debug(`Cleaned up ${toDelete.length} old checkpoints for session ${sessionId}`)
+}
+
+export function getLatestCheckpoint(sessionId: string): SessionCheckpoint | undefined {
+  const checkpoints = getCheckpointsBySession(sessionId, 1)
+  return checkpoints[0]
 }

@@ -31,6 +31,14 @@ import { createOpencodeSessionManager, type OpencodeSessionManager } from '@/lib
 import { normalizeSessionId } from '@/lib/virtual-filesystem/scope-utils';
 import { enhancedBackgroundJobsManager, type EnhancedJobConfig, type EnhancedJob } from '@bing/shared/agent/enhanced-background-jobs';
 import { executionGraphEngine } from '@bing/shared/agent/execution-graph';
+import {
+  saveCheckpoint as storageSaveCheckpoint,
+  getCheckpoint as storageGetCheckpoint,
+  getLatestCheckpoint as storageGetLatestCheckpoint,
+  getCheckpointsBySession as storageGetCheckpointsBySession,
+  deleteCheckpoint as storageDeleteCheckpoint,
+  type SessionCheckpoint,
+} from '../storage/session-store';
 
 const logger = createLogger('Session:Manager');
 
@@ -146,7 +154,8 @@ export class SessionManager {
   private sessions = new Map<string, Session>();
   private sessionsById = new Map<string, Session>();
   private userSessions = new Map<string, Set<string>>();
-  private sessionMetrics = new Map<string, SessionMetrics>();
+  // Public so compat wrappers / tests can inspect per-session metrics
+  public sessionMetrics = new Map<string, SessionMetrics>();
   private globalQuota: SessionQuota = { ...DEFAULT_QUOTA };
   private cleanupTimer?: NodeJS.Timeout;
 
@@ -405,6 +414,18 @@ export class SessionManager {
   }
 
   /**
+   * Update session Nullclaw endpoint URL
+   */
+  setNullclawEndpoint(sessionId: string, endpoint: string): void {
+    const session = this.sessionsById.get(sessionId);
+    if (session) {
+      session.nullclawEndpoint = endpoint;
+      session.nullclawEnabled = true;
+      this.updateActivity(sessionId);
+    }
+  }
+
+  /**
    * Update session MCP server URL
    */
   setMcpServerUrl(sessionId: string, url: string): void {
@@ -511,12 +532,88 @@ export class SessionManager {
     const checkpointId = `cp-${uuidv4()}`;
     const timestamp = Date.now();
 
+    const checkpoint: SessionCheckpoint = {
+      checkpointId,
+      sessionId,
+      userId: session.userId,
+      label,
+      timestamp,
+      state: {
+        conversationState: null,
+        sandboxState: {
+          sandboxId: session.sandboxId,
+          sandboxProvider: session.sandboxProvider,
+          workspaceDir: session.workspaceDir,
+        },
+        toolState: null,
+        quotaUsage: session.quota,
+        metadata: {
+          mode: session.metadata?.mode,
+          cloudOffloadEnabled: session.metadata?.cloudOffloadEnabled,
+          mcpEnabled: session.metadata?.mcpEnabled,
+        },
+      },
+    };
+
+    storageSaveCheckpoint(checkpoint);
+
     session.lastCheckpoint = timestamp;
     session.checkpointCount++;
 
     logger.info(`Created checkpoint ${checkpointId} for session ${sessionId}`);
 
     return { checkpointId, timestamp };
+  }
+
+  /**
+   * Restore session from checkpoint
+   */
+  async restoreFromCheckpoint(checkpointId: string): Promise<Session> {
+    const checkpoint = storageGetCheckpoint(checkpointId);
+    if (!checkpoint) {
+      throw new Error(`Checkpoint not found: ${checkpointId}`);
+    }
+
+    const session = this.sessionsById.get(checkpoint.sessionId);
+    if (!session) {
+      throw new Error(`Session not found: ${checkpoint.sessionId}`);
+    }
+
+    if (checkpoint.state.sandboxState) {
+      session.sandboxId = checkpoint.state.sandboxState.sandboxId;
+      session.sandboxProvider = checkpoint.state.sandboxState.sandboxProvider;
+      session.workspaceDir = checkpoint.state.sandboxState.workspaceDir;
+    }
+
+    if (checkpoint.state.quotaUsage) {
+      session.quota = checkpoint.state.quotaUsage as SessionQuota;
+    }
+
+    logger.info(`Restored session ${checkpoint.sessionId} from checkpoint ${checkpointId}`);
+
+    return session;
+  }
+
+  /**
+   * Get checkpoints for session
+   */
+  getCheckpoints(sessionId: string, limit?: number): SessionCheckpoint[] {
+    return storageGetCheckpointsBySession(sessionId, limit);
+  }
+
+  /**
+   * Get latest checkpoint for session
+   */
+  getLatestCheckpoint(sessionId: string): SessionCheckpoint | undefined {
+    return storageGetLatestCheckpoint(sessionId);
+  }
+
+  /**
+   * Delete checkpoint
+   */
+  deleteCheckpoint(checkpointId: string): void {
+    storageDeleteCheckpoint(checkpointId);
+    logger.info(`Deleted checkpoint ${checkpointId}`);
   }
 
   // ============================================================================
@@ -1021,6 +1118,7 @@ export const openCodeV2SessionManager = {
   updateState: sessionManager.updateState.bind(sessionManager),
   setSandbox: sessionManager.setSandbox.bind(sessionManager),
   setNullclawAvailable: sessionManager.setNullclawAvailable.bind(sessionManager),
+  setNullclawEndpoint: sessionManager.setNullclawEndpoint.bind(sessionManager),
   setMcpServerUrl: sessionManager.setMcpServerUrl.bind(sessionManager),
   recordMetrics: sessionManager.recordMetrics.bind(sessionManager),
   checkQuota: sessionManager.checkQuota.bind(sessionManager),
@@ -1032,6 +1130,10 @@ export const openCodeV2SessionManager = {
     }
   },
   getStats: () => sessionManager.getStats(),
+  // Expose sessionMetrics map so tests can inspect per-session metrics directly
+  get sessionMetrics() {
+    return sessionManager.sessionMetrics;
+  },
 };
 
 // Type exports for backward compatibility

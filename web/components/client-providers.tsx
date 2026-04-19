@@ -1,6 +1,11 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import { Buffer } from 'buffer';
+
+if (typeof globalThis.Buffer === 'undefined') {
+  (globalThis as typeof globalThis & { Buffer?: typeof Buffer }).Buffer = Buffer;
+}
 
 const Providers = dynamic(
   () => import("./providers").then((mod) => mod.Providers),

@@ -1086,6 +1086,11 @@ export function extractFileEdits(content: string): FileEdit[] {
     content.includes('```mkdir:') ||
     content.includes('```delete:') ||
     (content.includes('"tool"') && content.includes('"arguments"')) ||
+    /write_file\s*\(\s*\{/.test(content) ||
+    /delete_file\s*\(\s*\{/.test(content) ||
+    /create_directory\s*\(\s*\{/.test(content) ||
+    /apply_diff\s*\(\s*\{/.test(content) ||
+    /\[Tool:/.test(content) ||
     content.includes('<|tool_call_begin|>') ||
     (content.includes('```') && /\bbatch_write|write_files|create_files/i.test(content)) ||
     content.includes('```tool_call') ||
@@ -1310,6 +1315,10 @@ export function extractFileEdits(content: string): FileEdit[] {
     // Also handles: create_file({ ... }), writeToFile({ ... }), delete_file({ ... }), apply_diff({ ... })
     allEdits.push(...extractTextToolCallEdits(content));
 
+    // Fallback: direct regex for JSON-in-function format: write_file({ "path": "...", "content": "..." })
+    // This is a simpler fallback that doesn't require balanced scan
+    allEdits.push(...extractJsonInFunctionEdits(content));
+
     // Handle batch_write([{ path: "...", content: "..." }, ...]) format
     // Common when LLM outputs multiple files in a single batch call
     allEdits.push(...extractBatchWriteEdits(content));
@@ -1413,6 +1422,56 @@ export function extractFileEdits(content: string): FileEdit[] {
  *
  * Also handles: create_files(...), write_files(...), batch_create(...)
  */
+
+function extractJsonInFunctionEdits(content: string): FileEdit[] {
+  const edits: FileEdit[] = [];
+  
+  const patterns = [
+    { name: 'write_file', action: 'write' as const, hasContent: true },
+    { name: 'create_file', action: 'write' as const, hasContent: true },
+    { name: 'writeToFile', action: 'write' as const, hasContent: true },
+    { name: 'delete_file', action: 'delete' as const, hasContent: false },
+    { name: 'apply_diff', action: 'patch' as const, hasContent: true },
+    { name: 'mkdir', action: 'mkdir' as const, hasContent: false },
+  ];
+
+  for (const tool of patterns) {
+    const regex = new RegExp(`${tool.name}\\s*\\(\\s*\\{([^}]+)\\}`, 'gi');
+    let match: RegExpExecArray | null;
+    while ((match = regex.exec(content)) !== null) {
+      try {
+        const inner = '{' + match[1] + '}';
+        const parsed = tolerantJsonParse(inner);
+        if (!parsed || typeof parsed !== 'object') continue;
+        
+        const args = parsed as Record<string, unknown>;
+        const pathVal = args.path;
+        if (!pathVal) continue;
+        
+        const trimmedPath = String(pathVal).trim();
+        if (!trimmedPath || !isValidExtractedPath(trimmedPath)) continue;
+        
+        if (tool.hasContent) {
+          const contentVal = args.content ?? args.diff;
+          if (!contentVal || !String(contentVal).trim()) continue;
+        }
+        
+        if (edits.some(e => e.path === trimmedPath)) continue;
+        
+        edits.push({
+          path: trimmedPath,
+          content: tool.hasContent ? String(args.content ?? args.diff ?? '') : '',
+          action: tool.action,
+        });
+      } catch {
+        // Skip invalid matches
+      }
+    }
+  }
+  
+  return edits;
+}
+
 export function extractBatchWriteEdits(content: string): FileEdit[] {
   const edits: FileEdit[] = [];
 
