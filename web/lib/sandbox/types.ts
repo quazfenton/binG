@@ -45,6 +45,28 @@ export interface PreviewInfo {
   authHeaders?: Record<string, string>;
   /** When preview was opened */
   openedAt?: number;
+  /** Preview status */
+  status?: 'ready' | 'pending' | 'error';
+  /** Error message if status is 'error' */
+  error?: string;
+}
+
+/**
+ * Validate PreviewInfo object
+ */
+export function validatePreviewInfo(info: PreviewInfo): boolean {
+  if (!info || typeof info !== 'object') return false;
+  if (typeof info.port !== 'number' || info.port <= 0 || info.port > 65535) return false;
+  if (typeof info.url !== 'string' || !info.url.startsWith('http')) return false;
+
+  // Validate URL format
+  try {
+    new URL(info.url);
+  } catch {
+    return false;
+  }
+
+  return true;
 }
 
 /**

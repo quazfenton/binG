@@ -39,6 +39,7 @@ import {
   type CodexEvent,
 } from '../spawn/e2b-codex-service'
 import type { ToolResult, PreviewInfo } from '../types'
+import { validatePreviewInfo } from '../types'
 import type {
   SandboxProvider,
   SandboxHandle,
@@ -855,15 +856,34 @@ class E2BSandboxHandle implements SandboxHandle {
     try {
       const host = this.sandbox.getHost(port)
 
-      return {
+      if (!host || typeof host !== 'string') {
+        throw new Error('Invalid host returned from E2B sandbox');
+      }
+
+      const previewInfo: PreviewInfo = {
         port,
         url: host,
         authHeaders: {}, // E2B typically doesn't require additional auth headers
         openedAt: Date.now(),
+        status: 'ready'
+      };
+
+      // Validate the preview info
+      if (!validatePreviewInfo(previewInfo)) {
+        throw new Error('Generated preview info is invalid');
       }
+
+      return previewInfo;
     } catch (error: any) {
       console.error('[E2B] Get preview link error:', error)
-      throw error
+
+      return {
+        port,
+        url: '',
+        status: 'error',
+        error: error.message,
+        openedAt: Date.now()
+      };
     }
   }
 
