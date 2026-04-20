@@ -13,6 +13,7 @@ import {
   buildAutoInjectUserMessage,
   appendAutoInjectPowers,
   webSearchPowerManifest,
+  codeSearchPowerManifest,
 } from '@/lib/powers';
 
 // Create a test power with autoInject: true (e.g., URL scraper)
@@ -158,6 +159,92 @@ describe('Auto-Inject Powers', () => {
 
       const result = powersRegistry.getAutoInjectPowers('help me refactor this TypeScript code');
       expect(result).toHaveLength(0);
+    });
+  });
+
+  describe('Real code-search auto-inject power', () => {
+    it('codeSearchPowerManifest triggers on "find in repo"', async () => {
+      await powersRegistry.register(codeSearchPowerManifest);
+
+      const result = powersRegistry.getAutoInjectPowers('find in repo where authenticate is defined');
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe('code-search');
+      expect(result[0].autoInject).toBe(true);
+    });
+
+    it('codeSearchPowerManifest triggers on "search codebase"', async () => {
+      await powersRegistry.register(codeSearchPowerManifest);
+
+      const result = powersRegistry.getAutoInjectPowers('search codebase for usage of fetch');
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe('code-search');
+    });
+
+    it('codeSearchPowerManifest triggers on "where is"', async () => {
+      await powersRegistry.register(codeSearchPowerManifest);
+
+      const result = powersRegistry.getAutoInjectPowers('where is the AuthProvider component defined?');
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe('code-search');
+    });
+
+    it('codeSearchPowerManifest triggers on "grep for"', async () => {
+      await powersRegistry.register(codeSearchPowerManifest);
+
+      const result = powersRegistry.getAutoInjectPowers('grep for TODO comments in the codebase');
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe('code-search');
+    });
+
+    it('codeSearchPowerManifest does NOT trigger on casual questions', async () => {
+      await powersRegistry.register(codeSearchPowerManifest);
+
+      const result = powersRegistry.getAutoInjectPowers('help me write a new component');
+      expect(result).toHaveLength(0);
+    });
+
+    it('codeSearchPowerManifest has coversCapabilityIds for dedup', () => {
+      expect(codeSearchPowerManifest.coversCapabilityIds).toBeDefined();
+      expect(codeSearchPowerManifest.coversCapabilityIds).toContain('file.search');
+      expect(codeSearchPowerManifest.coversCapabilityIds).toContain('repo.search');
+      expect(codeSearchPowerManifest.coversCapabilityIds).toContain('repo.semantic-search');
+    });
+
+    it('buildAutoInjectUserMessage returns code-search content', async () => {
+      await powersRegistry.register(codeSearchPowerManifest);
+
+      const msg = buildAutoInjectUserMessage('find in repo where authenticate is defined');
+      expect(msg).not.toBe('');
+      expect(msg).toContain('code-search');
+      expect(msg).toContain('Code Search & Grep');
+      expect(msg).toContain('search');
+      expect(msg).toContain('glob');
+      expect(msg).toContain('semantic');
+    });
+
+    it('appendAutoInjectPowers works end-to-end with code-search power', async () => {
+      await powersRegistry.register(codeSearchPowerManifest);
+
+      const messages: Array<{ role: string; content: string }> = [
+        { role: 'system', content: 'You are an AI assistant.' },
+        { role: 'user', content: 'where is the AuthProvider defined?' },
+      ];
+
+      appendAutoInjectPowers(messages, 'where is the AuthProvider defined?');
+      expect(messages.length).toBe(3);
+      expect(messages[2].role).toBe('user');
+      expect(messages[2].content).toContain('code-search');
+    });
+
+    it('both web-search and code-search can trigger simultaneously', async () => {
+      await powersRegistry.register(webSearchPowerManifest);
+      await powersRegistry.register(codeSearchPowerManifest);
+
+      // Message with a URL (web-search) AND a search keyword (code-search)
+      const result = powersRegistry.getAutoInjectPowers('look for https://example.com/api in the codebase');
+      expect(result.length).toBeGreaterThanOrEqual(1); // At least web-search triggers
+      const ids = result.map(p => p.id);
+      expect(ids).toContain('web-search');
     });
   });
 

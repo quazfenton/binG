@@ -421,19 +421,35 @@ export async function loadAutoInjectPowers(): Promise<{
   let loaded = 0;
 
   // Web Search & URL Fetch — the canonical auto-inject power
-  // TODO: Add future auto-inject powers here (e.g., code-search, doc-lookup)
   try {
     const { webSearchPowerManifest } = await import('@/lib/powers/web-search-power');
     if (!loadedPowerIds.has(webSearchPowerManifest.id)) {
       await powersRegistry.register(webSearchPowerManifest);
       loadedPowerIds.add(webSearchPowerManifest.id);
       loaded++;
+
       log.info(`Auto-inject power registered: ${webSearchPowerManifest.id}`);
     } else {
       log.debug(`Auto-inject power ${webSearchPowerManifest.id} already loaded — skipping`);
     }
   } catch (error: any) {
     errors.push(`web-search: ${error.message}`);
+  }
+
+  // Code Search & Grep — auto-inject for codebase search queries
+  try {
+    const { codeSearchPowerManifest } = await import('@/lib/powers/code-search-power');
+    if (!loadedPowerIds.has(codeSearchPowerManifest.id)) {
+      await powersRegistry.register(codeSearchPowerManifest);
+      loadedPowerIds.add(codeSearchPowerManifest.id);
+      loaded++;
+
+      log.info(`Auto-inject power registered: ${codeSearchPowerManifest.id}`);
+    } else {
+      log.debug(`Auto-inject power ${codeSearchPowerManifest.id} already loaded — skipping`);
+    }
+  } catch (error: any) {
+    errors.push(`code-search: ${error.message}`);
   }
 
   log.info(`Loaded ${loaded} auto-inject powers (${errors.length} errors)`);

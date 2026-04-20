@@ -355,22 +355,8 @@ export class OpenCodeEngineService {
    * Find opencode binary in PATH
    */
   private async findOpencodeBinary(): Promise<string | null> {
-    // Check explicit path first
-    if (process.env.OPENCODE_BIN) {
-      return process.env.OPENCODE_BIN;
-    }
-
-    // Try `which` / `where` to locate the binary
-    const { execSync } = await import('child_process');
-    try {
-      const cmd = process.platform === 'win32' ? 'where opencode' : 'which opencode';
-      const result = execSync(cmd, { encoding: 'utf-8', timeout: 5000 }).trim();
-      if (result) return result.split('\n')[0].trim();
-    } catch {
-      // Not found in PATH
-    }
-
-    return null;
+    const { findOpencodeBinary: findBinary } = await import('@/lib/opencode/find-opencode-binary');
+    return findBinary();
   }
 
   /**

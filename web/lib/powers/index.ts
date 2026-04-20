@@ -664,3 +664,6 @@ export { mem0PowerManifest, buildMem0Tools, buildMem0SystemPrompt, getMem0Client
 
 // Re-exports from web-search-power
 export { webSearchPowerManifest } from './web-search-power';
+
+// Re-exports from code-search-power
+export { codeSearchPowerManifest } from './code-search-power';
