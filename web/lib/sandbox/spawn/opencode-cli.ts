@@ -47,7 +47,8 @@
 
 import { spawn, type ChildProcess } from 'child_process';
 import { createLogger } from '../../utils/logger';
-import { findOpencodeBinarySync } from '@/lib/opencode/find-opencode-binary';
+import { findOpencodeBinarySync } from '@/lib/agent-bins/find-opencode-binary';
+import { createAgentFilesystem, type AgentFilesystem } from '@/lib/agent-bins/agent-filesystem';
 import type { ToolResult } from '../types';
 import type {
   LLMProvider,
@@ -104,9 +105,15 @@ export class OpencodeV2Provider implements LLMProvider {
   private currentSession?: OpenCodeV2Session;
   private sandboxHandle?: SandboxHandle;
   private mcpServerProcess?: ChildProcess;
+  /** Centralized filesystem — auto-detects desktop/web mode */
+  private agentFs: AgentFilesystem;
 
   constructor(config: OpenCodeV2ProviderConfig = {}) {
     this.config = config;
+    // Initialize centralized filesystem — auto-detects desktop (local) vs web (vfs) mode
+    this.agentFs = createAgentFilesystem({
+      cwd: config.session?.workspaceDir,
+    });
   }
 
   /**
@@ -245,11 +252,14 @@ export class OpencodeV2Provider implements LLMProvider {
         : `mkdir -p ${this.escapeShellArg(localWorkspaceDir, false)}`;
       await this.execLocalCommand(mkdirCmd);
 
-      // Resolve opencode binary via robust detection (OPENCODE_BIN → which/where → default paths)
-      // On Windows, fall back to 'npx opencode' (npm .cmd wrappers may not be in PATH);
-      // on Unix, fall back to bare 'opencode' (relies on shell PATH lookup).
-      const opencodeBin = findOpencodeBinarySync() ?? (isWindows ? 'npx opencode' : 'opencode');
-      const escapedBin = this.escapeShellArg(opencodeBin, isWindows);
+      // Resolve opencode binary via robust detection (OPENCODE_BIN → which/where → default paths).
+      // When a resolved path is found, escape it as a single shell token (may contain spaces).
+      // When falling back to a multi-token command like 'npx opencode', DON'T escape —
+      // the shell must parse 'npx' and 'opencode' as separate tokens.
+      const resolvedBin = findOpencodeBinarySync();
+      const commandBin = resolvedBin
+        ? this.escapeShellArg(resolvedBin, isWindows)
+        : (isWindows ? 'npx opencode' : 'opencode');
 
       // Build command - pass prompt file via stdin differently based on OS
       let command: string;
@@ -258,12 +268,12 @@ export class OpencodeV2Provider implements LLMProvider {
         // On Windows, use cmd /c with type to pipe file content
         // SECURITY: Escape prompt file path
         const escapedPromptFile = this.escapeShellArg(promptFile, true);
-        command = `cmd /c type ${escapedPromptFile} | ${escapedBin} chat --json ${modelFlag}`;
+        command = `cmd /c type ${escapedPromptFile} | ${commandBin} chat --json ${modelFlag}`;
       } else {
         // On Linux, use stdin redirect
         // SECURITY: Escape prompt file path
         const escapedPromptFile = this.escapeShellArg(promptFile, false);
-        command = `OPENCODE_SYSTEM_PROMPT=${escapedSystemPrompt} ${escapedBin} chat --json ${modelFlag} < ${escapedPromptFile}`;
+        command = `OPENCODE_SYSTEM_PROMPT=${escapedSystemPrompt} ${commandBin} chat --json ${modelFlag} < ${escapedPromptFile}`;
       }
       
       console.log('[OpencodeV2Provider] Executing command:', command.substring(0, 300) + '...');
@@ -583,11 +593,27 @@ export class OpencodeV2Provider implements LLMProvider {
   }
 
   /**
-   * Write file locally (no sandbox)
+   * Write file using centralized AgentFilesystem (auto-detects desktop/web mode).
+   * Temp files outside the workspace use direct fs/promises.
+   * Workspace-scoped files go through agentFs for proper VFS/local routing.
    */
   private async writeLocalFile(filePath: string, content: string): Promise<void> {
-    const fs = await import('fs/promises');
-    await fs.writeFile(filePath, content, 'utf-8');
+    // Check if the file is within the agentFs workspace scope.
+    // Resolve the path relative to workspace root to catch traversal attempts
+    // (e.g. ../../etc/passwd would resolve outside the workspace).
+    const path = await import('path');
+    const workspaceRoot = this.agentFs.cwd.replace(/\\/g, '/');
+    const resolved = path.resolve(this.agentFs.cwd, filePath).replace(/\\/g, '/');
+    const isInsideWorkspace = resolved === workspaceRoot || resolved.startsWith(workspaceRoot + '/');
+
+    if (isInsideWorkspace) {
+      // Workspace files go through the centralized filesystem
+      await this.agentFs.writeFile(filePath, content);
+    } else {
+      // Temp files outside workspace (prompt payloads, etc.) use direct fs
+      const fs = await import('fs/promises');
+      await fs.writeFile(filePath, content, 'utf-8');
+    }
   }
 
   /**
