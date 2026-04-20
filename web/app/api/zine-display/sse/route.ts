@@ -59,7 +59,7 @@ function formatSSEMessage(event: string, data: unknown): string {
 // Public API - Add to SSE stream from external code
 // ---------------------------------------------------------------------
 
-export function pushToChannel(channel: string, event: string, data: unknown): void {
+function pushToChannel(channel: string, event: string, data: unknown): void {
   const message = formatSSEMessage(event, data);
   const encoder = new TextEncoder();
   const encoded = encoder.encode(message);
@@ -81,7 +81,7 @@ export function pushToChannel(channel: string, event: string, data: unknown): vo
 }
 
 // Helper to broadcast to all channels
-export function broadcastToAll(event: string, data: unknown): void {
+function broadcastToAll(event: string, data: unknown): void {
   const message = formatSSEMessage(event, data);
   const encoder = new TextEncoder();
   const encoded = encoder.encode(message);

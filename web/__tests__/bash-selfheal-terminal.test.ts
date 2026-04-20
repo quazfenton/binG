@@ -296,15 +296,15 @@ describe('Self-Heal Error Pattern Matching', () => {
 
 describe('cwd Resolution: VFS scopedPath → Real Path', () => {
   const resolveCwd = (requestedCwd: string, isWindows: boolean): string => {
-    if (!requestedCwd) return isWindows ? 'C:\\temp\\opencode-workspace' : '/tmp/opencode-workspace';
+    if (!requestedCwd) return isWindows ? 'C:\\temp\\workspace' : '/tmp/workspace';
 
     const sanitized = requestedCwd.replace(/\0/g, '');
-    if (!sanitized) return isWindows ? 'C:\\temp\\opencode-workspace' : '/tmp/opencode-workspace';
+    if (!sanitized) return isWindows ? 'C:\\temp\\workspace' : '/tmp/workspace';
 
     if (sanitized.startsWith('project/')) {
       const relativePart = sanitized.replace(/^project\//, '');
       // Use forward slashes for VFS paths — normalize for comparison
-      const normalized = ('/tmp/opencode-workspace/' + relativePart).replace(/\/+/g, '/');
+      const normalized = ('/tmp/workspace/' + relativePart).replace(/\/+/g, '/');
       return isWindows ? normalized.replace(/\//g, '\\') : normalized;
     }
     if (sanitized.startsWith('/workspace/')) {
@@ -316,12 +316,12 @@ describe('cwd Resolution: VFS scopedPath → Real Path', () => {
 
   it('resolves VFS scoped path "project/sessions/002" to real path', () => {
     const resolved = resolveCwd('project/sessions/002', false);
-    expect(resolved).toBe('/tmp/opencode-workspace/sessions/002');
+    expect(resolved).toBe('/tmp/workspace/sessions/002');
   });
 
   it('resolves nested VFS paths', () => {
     const resolved = resolveCwd('project/sessions/002/src', false);
-    expect(resolved).toBe('/tmp/opencode-workspace/sessions/002/src');
+    expect(resolved).toBe('/tmp/workspace/sessions/002/src');
   });
 
   it('resolves /workspace/ paths on Linux', () => {
@@ -341,10 +341,10 @@ describe('cwd Resolution: VFS scopedPath → Real Path', () => {
   });
 
   it('handles empty/invalid cwd', () => {
-    expect(resolveCwd('', false)).toBe('/tmp/opencode-workspace');
+    expect(resolveCwd('', false)).toBe('/tmp/workspace');
     // project/ with nothing after — still gets the base path (trailing slash stripped by normalization)
     const result = resolveCwd('project/', false);
-    expect(result.startsWith('/tmp/opencode-workspace')).toBe(true);
+    expect(result.startsWith('/tmp/workspace')).toBe(true);
   });
 });
 

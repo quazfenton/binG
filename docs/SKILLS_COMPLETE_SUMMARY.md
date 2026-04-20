@@ -17,7 +17,7 @@
 ### API Routes (1 file)
 | File | Lines | Purpose |
 |------|-------|---------|
-| `app/api/skills/route.ts` | ~350 | REST API endpoints |
+| `app/api/powers/route.ts` | ~350 | REST API endpoints |
 
 ### Documentation (3 files)
 | File | Lines | Purpose |
@@ -71,13 +71,13 @@
 
 #### 6. CLI Commands
 ```bash
-# Add skill
+# Add power
 npx skills add <name> -d "Description" -p "System prompt" -t "tags"
 
-# List skills
+# List powers
 npx skills list [--json]
 
-# Show skill details
+# Show power details
 npx skills show <name>
 
 # Update weights
@@ -96,13 +96,13 @@ npx skills analytics <name> [--json]
 
 #### 7. REST API
 ```typescript
-GET    /api/skills              // List skills
-GET    /api/skills/:name        // Get skill details
-POST   /api/skills              // Add new skill
-PUT    /api/skills/:name/weight // Update weights
-POST   /api/skills/:name/feedback // Record feedback
-GET    /api/skills/:name/analytics // Get analytics
-GET    /api/skills/recommend    // Get recommendations
+GET    /api/powers              // List powers
+GET    /api/powers/:name        // Get power details
+POST   /api/powers              // Add new power
+PUT    /api/powers/:name/weight // Update weights
+POST   /api/powers/:name/feedback // Record feedback
+GET    /api/powers/:name/analytics // Get analytics
+GET    /api/powers/recommend    // Get recommendations
 ```
 
 #### 8. Workflow Tracking
@@ -137,14 +137,14 @@ GET    /api/skills/recommend    // Get recommendations
                               ▼
 ┌──────────────────────────────────────────────────────────────┐
 │                      REST API                                │
-│  (app/api/skills/route.ts)                                   │
+│  (app/api/powers/route.ts)                                   │
 │  - CRUD operations, feedback, analytics, recommendations     │
 └──────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌──────────────────────────────────────────────────────────────┐
-│                   Skills Manager                             │
-│  (lib/skills/skills-manager.ts)                              │
+│                      Powers Manager                             │
+│  (lib/powers/powers-manager.ts)                              │
 │  - Load skills from .agents/skills/                          │
 │  - Parse SKILL.md + workflows                                │
 │  - Track reinforcement                                       │
@@ -154,7 +154,7 @@ GET    /api/skills/recommend    // Get recommendations
                               ▼
 ┌──────────────────────────────────────────────────────────────┐
 │              Prompt Engineering Service                      │
-│  (lib/skills/prompt-engineering.ts)                          │
+│  (lib/powers/prompt-engineering.ts)                          │
 │  - Generate system prompts                                   │
 │  - Inject skill contexts                                     │
 │  - Generate EJSON data                                       │
@@ -163,8 +163,8 @@ GET    /api/skills/recommend    // Get recommendations
                               │
                               ▼
 ┌──────────────────┐              ┌──────────────────┐
-│  Skill Files     │              │  Reinforcement   │
-│  - SKILL.md      │              │  - Weights       │
+│  Power Files     │              │  Reinforcement   │
+│  - POWER.md      │              │  - Weights       │
 │  - workflows/    │              │  - Feedback      │
 │  - reinforcement │              │  - Trends        │
 └──────────────────┘              └──────────────────┘
@@ -245,13 +245,13 @@ npx skills analytics terminaluse --json
 
 ```typescript
 // List skills
-const skills = await fetch('/api/skills?agentType=cli');
+const powers = await fetch('/api/powers?agentType=cli');
 
 // Get skill details
-const skill = await fetch('/api/skills/terminaluse');
+const power = await fetch('/api/powers/terminaluse');
 
 // Add new skill
-await fetch('/api/skills', {
+await fetch('/api/powers', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({
@@ -263,7 +263,7 @@ await fetch('/api/skills', {
 });
 
 // Record feedback
-await fetch('/api/skills/terminaluse/feedback', {
+await fetch('/api/powers/terminaluse/feedback', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({
@@ -275,7 +275,7 @@ await fetch('/api/skills/terminaluse/feedback', {
 });
 
 // Get recommendations
-const recs = await fetch('/api/skills/recommend?task=deploy+agent&agentType=cloud');
+const recs = await fetch('/api/powers/recommend?task=deploy+agent&agentType=cloud');
 ```
 
 ---
@@ -290,7 +290,7 @@ You are an AI agent of type: TERMINALUSE
 
 # Available Skills
 
-## Skill: terminaluse
+## Power: terminaluse
 [HIGHLY RECOMMENDED - Success Rate: 85%]
 
 TerminalUse skill for agent creation, deployment, and management.
@@ -300,7 +300,7 @@ Use when user mentions "tu", "terminaluse", "deploy agent", etc.
 **Sub-Capabilities**: agent-creation, deployment-workflows, task-orchestration
 **Weight**: 1.40
 
-## Skill: cloud-deployment
+## Power: cloud-deployment
 [RECOMMENDED - Success Rate: 78%]
 
 Cloud deployment strategies and best practices...
@@ -323,9 +323,9 @@ Cloud deployment strategies and best practices...
 
 # Execution Guidelines
 
-1. **Skill Selection**: Choose skills based on weight indicators
+1. **Power Selection**: Choose powers based on weight indicators
 2. **Workflow Adherence**: Follow workflow steps precisely
-3. **Error Handling**: If a skill fails, check recent feedback
+3. **Error Handling**: If a power fails, check recent feedback
 4. **Reinforcement**: Your results improve future recommendations
 5. **Agent Type Awareness**: Leverage TerminalUse strengths
 ```
@@ -335,7 +335,7 @@ Cloud deployment strategies and best practices...
 ## 📈 Reinforcement Learning Flow
 
 ```
-1. LLM uses skill for task
+1. LLM uses power for task
    ↓
 2. Task completes (success/failure)
    ↓
@@ -348,7 +348,7 @@ Cloud deployment strategies and best practices...
    ↓
 5. Next prompt uses updated weights
    ↓
-6. Skill recommendations improve over time
+6. Power recommendations improve over time
 ```
 
 ---
@@ -430,23 +430,23 @@ await promptEngineeringService.recordFeedback(
 
 ## 🚀 Next Steps (Optional Enhancements)
 
-1. **Skill Sharing** - Community skill marketplace
-2. **Skill Versioning** - Semantic versioning for skills
-3. **Skill Composition** - Chain multiple skills
+1. **Power Sharing** - Community power marketplace
+2. **Power Versioning** - Semantic versioning for powers
+3. **Power Composition** - Chain multiple powers
 4. **Advanced Analytics** - Dashboard for skill performance
 5. **A/B Testing** - Test different skill variations
 6. **Auto-Tuning** - Automatic weight optimization
-7. **Skill Templates** - Pre-built skill templates
+7. **Power Templates** - Pre-built power templates
 8. **Multi-Language** - Skills in multiple languages
 
 ---
 
 ## 🎉 Summary
 
-**The Skills System is COMPLETE and PRODUCTION-READY.**
+**The Powers System is COMPLETE and PRODUCTION-READY.**
 
 ### What Was Built:
-- ✅ Skill.md parsing and context injection
+- ✅ Power.md parsing and context injection
 - ✅ EJSON object passing
 - ✅ Sub-capabilities tracking
 - ✅ Reinforcement learning (success/failure tracking)
@@ -456,13 +456,13 @@ await promptEngineeringService.recordFeedback(
 - ✅ REST API (7 endpoints)
 - ✅ Workflow tracking
 - ✅ Failure path analysis
-- ✅ Skill discovery and recommendations
+- ✅ Power discovery and recommendations
 
 ### Statistics:
 - **~3,900 lines** of production code + documentation
 - **8 CLI commands**
 - **7 API endpoints**
 - **4 agent type profiles**
-- **Unlimited skills** supported
+- **Unlimited powers** supported
 
 **Ready for immediate production deployment!** 🚀

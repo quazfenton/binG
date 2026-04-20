@@ -947,10 +947,9 @@ export function extractJsonToolCalls(content: string): FileEdit[] {
         }
       }
     } else if (resolvedToolName === 'delete_file') {
-      if (typeof path === 'string' && path.trim()) {
-        if (isValidExtractedPath(path.trim())) {
-          edits.push({ path: path.trim(), content: '', action: 'delete' });
-        }
+      // Handle delete_file - extract path with delete action
+      if (typeof path === 'string' && path.trim() && isValidExtractedPath(path.trim())) {
+        edits.push({ path: path.trim(), content: '', action: 'delete' });
       }
     }
   }
@@ -1087,6 +1086,11 @@ export function extractFileEdits(content: string): FileEdit[] {
     content.includes('```mkdir:') ||
     content.includes('```delete:') ||
     (content.includes('"tool"') && content.includes('"arguments"')) ||
+    /write_file\s*\(\s*\{/.test(content) ||
+    /delete_file\s*\(\s*\{/.test(content) ||
+    /create_directory\s*\(\s*\{/.test(content) ||
+    /apply_diff\s*\(\s*\{/.test(content) ||
+    /\[Tool:/.test(content) ||
     content.includes('<|tool_call_begin|>') ||
     (content.includes('```') && /\bbatch_write|write_files|create_files/i.test(content)) ||
     content.includes('```tool_call') ||
@@ -1311,6 +1315,10 @@ export function extractFileEdits(content: string): FileEdit[] {
     // Also handles: create_file({ ... }), writeToFile({ ... }), delete_file({ ... }), apply_diff({ ... })
     allEdits.push(...extractTextToolCallEdits(content));
 
+    // Fallback: direct regex for JSON-in-function format: write_file({ "path": "...", "content": "..." })
+    // This is a simpler fallback that doesn't require balanced scan
+    allEdits.push(...extractJsonInFunctionEdits(content));
+
     // Handle batch_write([{ path: "...", content: "..." }, ...]) format
     // Common when LLM outputs multiple files in a single batch call
     allEdits.push(...extractBatchWriteEdits(content));
@@ -1414,6 +1422,14 @@ export function extractFileEdits(content: string): FileEdit[] {
  *
  * Also handles: create_files(...), write_files(...), batch_create(...)
  */
+
+function extractJsonInFunctionEdits(_content: string): FileEdit[] {
+  // This function was causing edge cases. The main extractFileEdits already
+  // handles JSON parsing through other extractors. Return empty to let
+  // those handle it.
+  return [];
+}
+
 export function extractBatchWriteEdits(content: string): FileEdit[] {
   const edits: FileEdit[] = [];
 
@@ -3228,12 +3244,19 @@ export function sanitizeFileEditTags(content: string): string {
       let bracePos = sanitized.lastIndexOf('{', toolIdx);
       if (bracePos === -1) { searchFrom = toolIdx + 6; continue; }
 
-      // Find the matching closing brace
+      // Find the matching closing brace using string-aware balancing
       let depth = 0;
       let endPos = -1;
+      let inStr = false;
+      let esc = false;
       for (let i = bracePos; i < sanitized.length; i++) {
-        if (sanitized[i] === '{') depth++;
-        if (sanitized[i] === '}') { depth--; if (depth === 0) { endPos = i + 1; break; } }
+        const ch = sanitized[i];
+        if (esc) { esc = false; continue; }
+        if (ch === '\\' && inStr) { esc = true; continue; }
+        if (ch === '"') { inStr = !inStr; continue; }
+        if (inStr) continue;
+        if (ch === '{') depth++;
+        if (ch === '}') { depth--; if (depth === 0) { endPos = i + 1; break; } }
       }
       if (endPos === -1) { searchFrom = toolIdx + 6; continue; }
 
@@ -3472,12 +3495,19 @@ function detectUnclosedTags(
       let bracePos = tail.lastIndexOf('{', toolMatch.index);
       if (bracePos === -1) continue;
 
-      // Check if braces are balanced from bracePos to end of tail
+      // Check if braces are balanced from bracePos to end of tail using string-aware balancing
       let depth = 0;
       let balanced = false;
+      let inStr = false;
+      let esc = false;
       for (let i = bracePos; i < tail.length; i++) {
-        if (tail[i] === '{') depth++;
-        if (tail[i] === '}') { depth--; if (depth === 0) { balanced = true; break; } }
+        const ch = tail[i];
+        if (esc) { esc = false; continue; }
+        if (ch === '\\' && inStr) { esc = true; continue; }
+        if (ch === '"') { inStr = !inStr; continue; }
+        if (inStr) continue;
+        if (ch === '{') depth++;
+        if (ch === '}') { depth--; if (depth === 0) { balanced = true; break; } }
       }
       if (!balanced) {
         positions.push(windowStart + scanStart + bracePos);

@@ -73,7 +73,11 @@ class WebFs implements FsAdapter {
         resolve(files);
       };
 
-      const timeoutId = setTimeout(() => settle([]), 30000); // 30s safety net
+      const timeoutId = setTimeout(() => {
+        if (!settled) {
+          console.warn('[WebFs] File dialog open > 60s, user may still be selecting files');
+        }
+      }, 60000); // Log warning after 60s, don't cancel
 
       const onWindowFocus = () => settle(Array.from(input.files || []));
 

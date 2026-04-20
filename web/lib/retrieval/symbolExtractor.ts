@@ -48,12 +48,11 @@ export async function initParser(): Promise<void> {
   _parserReady = true;
 }
 
-// Cache a separate Parser instance per language to avoid concurrent mutation
+// Cache a separate parser instance per language to avoid concurrent mutation
 // of the shared parser's language setting.
-// @ts-ignore - Parser type from web-tree-sitter
-const _parserCache = new Map<Language, Parser>();
+const _parserCache = new Map<Language, any>();
 
-async function getParser(lang: Language): Promise<Parser> {
+async function getParser(lang: Language): Promise<any> {
   if (_parserCache.has(lang)) return _parserCache.get(lang)!;
 
   if (!_parserReady) await initParser();

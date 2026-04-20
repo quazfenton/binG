@@ -47,7 +47,7 @@ describe('Super Mode Execution', () => {
 
   describe('generateSuperModePhases', () => {
     it('should generate correct number of phases', () => {
-      const config = { ...DEFAULT_SUPER_MODE_CONFIG, roundsPerChain: 2, planningRoundsPerChain: 1, chains: ['frontend', 'backend'] };
+      const config = { ...DEFAULT_SUPER_MODE_CONFIG, roundsPerChain: 2, planningRoundsPerChain: 1, chains: ['frontend' as const, 'backend' as const] };
       const phases = generateSuperModePhases(config);
       
       // 2 chains × (2 implement + 1 planning) = 6 phases

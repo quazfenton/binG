@@ -275,13 +275,17 @@ export interface PresetDerivation {
 /**
  * Create a derived preset from a parent with overrides.
  * Useful for "forking" a preset and customizing selectively.
+ * 
+ * @returns Object containing the derived PromptParameters and the preset name
  */
 export function derivePreset(
   parent: Partial<PromptParameters>,
   overrides: Partial<PromptParameters>,
   name?: string,
-): PromptParameters {
-  return { ...parent, ...overrides, ...(name ? { name: name } : {}) } as PromptParameters;
+): { params: PromptParameters; name: string } {
+  const params: PromptParameters = { ...parent, ...overrides };
+  const presetName = name || `derived_${Date.now()}`;
+  return { params, name: presetName };
 }
 
 // ============================================================================

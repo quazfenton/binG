@@ -46,6 +46,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { createLogger } from '@/lib/utils/logger';
+import { formatValueForMCPText } from '@/lib/mcp/result-format';
 
 // Override log level from env
 if (process.env.MCP_STDIO_LOG_LEVEL) {
@@ -128,16 +129,11 @@ async function executeCapability(call: CapabilityCall): Promise<{
 
     logger.debug('Capability executed successfully', { tool: toolName });
 
-    // Format result as text for MCP
     const data = (result as any).data || result;
-    const text = typeof data === 'string'
-      ? data
-      : typeof data === 'object'
-        ? JSON.stringify(data, null, 2)
-        : String(data);
+    const formatted = formatValueForMCPText(data);
 
     return {
-      content: [{ type: 'text' as const, text }],
+      content: [{ type: 'text' as const, text: formatted.displayText }],
     };
   } catch (error: any) {
     logger.error('Capability router error', {
@@ -157,9 +153,7 @@ async function executeCapability(call: CapabilityCall): Promise<{
 // ============================================================================
 
 function formatResult(data: unknown): string {
-  if (typeof data === 'string') return data;
-  if (data === null || data === undefined) return '(no data)';
-  return JSON.stringify(data, null, 2);
+  return formatValueForMCPText(data).displayText;
 }
 
 function formatSuccess(data: unknown): {

@@ -7,7 +7,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
-export interface Artwork {
+interface Artwork {
   id: string;
   title: string;
   artist: string;

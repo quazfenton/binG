@@ -12,7 +12,7 @@ describe('Blaxel Enhanced Features', () => {
   });
 
   describe('Blaxel Traffic Manager', () => {
-    const { BlaxelTrafficManager, createTrafficManager, quickCanaryDeploy, ScalingPresets } = require('@/lib/blaxel/traffic-manager');
+    const { BlaxelTrafficManager, createTrafficManager, quickCanaryDeploy, ScalingPresets } = require('@/lib/blaxel');
 
     let trafficManager: typeof BlaxelTrafficManager;
 

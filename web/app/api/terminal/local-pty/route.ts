@@ -31,7 +31,7 @@ import {
   watchWorkspaceForChanges,
 } from '@/lib/virtual-filesystem/vfs-workspace-materializer';
 import { syncFileToVfs } from '@/lib/virtual-filesystem/vfs-workspace-materializer';
-import { getDb } from '@/lib/database/connection';
+import { getDatabase } from '@/lib/database/connection';
 
 const logger = createLogger('LocalPTY');
 
@@ -251,10 +251,10 @@ const MAX_SESSIONS_PER_USER = 5;
 
 // Use globalThis to prevent HMR leaks
 declare global {
-  var __localPtySessions: Map<string, LocalPtySession> | undefined;
+  var __localPtySessions: Map<string, any> | undefined;
 }
 
-const sessions = globalThis.__localPtySessions ??= new Map<string, LocalPtySession>();
+const sessions = globalThis.__localPtySessions ??= new Map<string, LocalPtySession>() as Map<string, any>;
 
 // ============================================================
 // Configuration
@@ -793,9 +793,8 @@ async function createDirectPtySession(
     );
   }
 
-  registerSession(sessionId, userId, pty, {
+  registerSession(sessionId, userId, pty, workspaceDir, {
     vfsWatcher,
-    workspaceDir,
   });
 
   return NextResponse.json({
@@ -868,7 +867,7 @@ async function createUnsharePtySession(
     // Get the PID of the unshare process for cleanup
     const unsharePid = (pty as any).pid || (pty as any)._pid;
 
-    registerSession(sessionId, userId, pty, { unsharePid, workspaceDir });
+    registerSession(sessionId, userId, pty, workspaceDir, { unsharePid });
 
     console.log(`[Local PTY] Unshare session created: ${sessionId}`);
 
@@ -1096,10 +1095,9 @@ cd "$WORKSPACE_ROOT" 2>/dev/null || true
         },
       });
 
-      registerSession(sessionId, userId, pty, {
+      registerSession(sessionId, userId, pty, workspaceDir, {
         dockerContainerId: containerId,
         vfsWatcher,
-        workspaceDir,
       });
 
       resolve(NextResponse.json({ sessionId, mode: 'docker', workspaceDir }));
@@ -1312,7 +1310,7 @@ async function syncRemoteFileToVfsDirect(
   const normalizedId = userId.replace(/^anon:/, '').replace(/\.\./g, '').replace(/[\\/ \0]/g, '_').substring(0, 255) || '_default';
 
   try {
-    const db = getDb();
+    const db = getDatabase();
     const ext = require('path').extname(filePath).toLowerCase();
     const languageMap: Record<string, string> = {
       '.js': 'javascript', '.jsx': 'javascript', '.ts': 'typescript', '.tsx': 'typescript',
@@ -1522,10 +1520,9 @@ chmod +x '${remoteInitPath}'`, (err: any, setupStream: any) => {
                 sessionId
               );
 
-              registerSession(sessionId, userId, sshPty, {
+              registerSession(sessionId, userId, sshPty, workspace, {
                 sshClient: client,
                 vfsWatcher: remoteVfsSync,
-                workspaceDir: workspace,
               });
 
               logger.info('[Local PTY] Oracle VM SSH session created', {
@@ -1576,7 +1573,8 @@ function registerSession(
   sessionId: string,
   userId: string,
   pty: IPty,
-  extras: Partial<Omit<LocalPtySession, 'sessionId' | 'userId' | 'pty' | 'createdAt' | 'exited' | 'exitCode' | 'outputQueue' | 'workspaceDir'>> & { workspaceDir: string } = {}
+  workspaceDir: string,
+  extras: Partial<Omit<LocalPtySession, 'sessionId' | 'userId' | 'pty' | 'createdAt' | 'exited' | 'exitCode' | 'outputQueue' | 'workspaceDir'>> = {}
 ): void {
   const session: LocalPtySession = {
     sessionId,
@@ -1586,6 +1584,7 @@ function registerSession(
     exited: false,
     exitCode: undefined,
     outputQueue: [],
+    workspaceDir,
     ...extras,
   };
 

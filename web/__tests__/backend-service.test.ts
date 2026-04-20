@@ -37,6 +37,21 @@ vi.mock('@/lib/backend/snapshot-manager', () => ({
   },
 }));
 
+// Mock auth manager to avoid JWT secret validation
+vi.mock('@/lib/backend/auth', () => ({
+  authManager: {
+    getUserId: vi.fn(),
+    createToken: vi.fn(),
+    validateToken: vi.fn(),
+    getCurrentUser: vi.fn(),
+  },
+}));
+
+// Mock MCP initialization to avoid auth issues
+vi.mock('@/lib/mcp/architecture-integration', () => ({
+  initializeMCPForArchitecture2: vi.fn().mockResolvedValue(undefined),
+}));
+
 describe('BackendService', () => {
   let service: BackendService;
 

@@ -295,6 +295,7 @@ export const desktopMCPManager = new DesktopMCPManager();
 
 /**
  * Initialize desktop MCP with configuration
+ * Does NOT auto-add any servers — only starts what you pass.
  */
 export async function initializeDesktopMCP(
   configs: MCPServerConfig[]
@@ -315,6 +316,31 @@ export async function initializeDesktopMCP(
   log.info('Desktop MCP initialized', { serverCount: configs.length });
 
   return desktopMCPManager;
+}
+
+/**
+ * Build the default desktop MCP config.
+ * Only includes servers the caller explicitly asks for — no auto-starts.
+ */
+export function buildDefaultDesktopMCPConfig(options?: {
+  /** Local filesystem root to expose. Omit to skip filesystem MCP. */
+  filesystemRoot?: string;
+  /** GitHub PAT. Omit to skip GitHub MCP. */
+  githubToken?: string;
+}): MCPServerConfig[] {
+  const configs: MCPServerConfig[] = [];
+
+  if (options?.filesystemRoot) {
+    configs.push(desktopMCPPresets.filesystem(options.filesystemRoot));
+  }
+
+  if (options?.githubToken) {
+    configs.push(desktopMCPPresets.github(options.githubToken));
+  }
+
+  configs.push(desktopMCPPresets.memory());
+
+  return configs;
 }
 
 /**
@@ -388,15 +414,101 @@ export const desktopMCPPresets = {
   }),
 
   /**
-   * SQLite server for local database
+   * Tauri MCP Bridge — connects to the embedded WebSocket bridge
+   * in the Tauri desktop app for full UI automation
    */
-  sqlite: (databasePath: string): MCPServerConfig => ({
-    id: 'sqlite',
-    name: 'SQLite',
-    transport: createDesktopStdioTransport(
-      'npx',
-      ['-y', '@modelcontextprotocol/server-sqlite', databasePath]
-    ),
+  tauriBridge: (bridgeUrl?: string): MCPServerConfig => ({
+    id: 'tauri-bridge',
+    name: 'Tauri MCP Bridge',
+    transport: {
+      type: 'websocket',
+      url: bridgeUrl || 'ws://127.0.0.1:3718',
+    },
     enabled: true,
   }),
+
+  /**
+   * Tauri MCP Desktop Server — standalone Node.js MCP server
+   * that bridges to the Tauri plugin for desktop automation
+   */
+  tauriMCPServer: (resourceDir?: string): MCPServerConfig => {
+    const mcpServerPath = resourceDir
+      ? `${resourceDir}/mcp-server/index.js`
+      : 'index.js';
+    return {
+      id: 'tauri-mcp-server',
+      name: 'Tauri MCP Desktop',
+      transport: createDesktopStdioTransport(
+        'node',
+        [mcpServerPath],
+        {
+          TAURI_MCP_BRIDGE_URL: process.env.TAURI_MCP_BRIDGE_URL || 'ws://127.0.0.1:3718',
+          TAURI_MCP_MODE: 'desktop',
+        }
+      ),
+      enabled: true,
+    };
+  },
 };
+
+// ---------------------------------------------------------------------------
+// Tauri-Specific Desktop MCP Methods
+// ---------------------------------------------------------------------------
+
+/**
+ * Check if the Tauri MCP bridge is reachable
+ */
+export async function isTauriBridgeConnected(bridgeUrl?: string): Promise<boolean> {
+  const url = bridgeUrl || 'ws://127.0.0.1:3718';
+  try {
+    const WebSocket = await import('ws').then(m => m.default || m.WebSocket);
+    const ws = new WebSocket(url);
+    return new Promise((resolve) => {
+      ws.on('open', () => { ws.close(); resolve(true); });
+      ws.on('error', () => resolve(false));
+      setTimeout(() => { ws.close(); resolve(false); }, 3000);
+    });
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Get the list of available Tauri MCP tools
+ */
+export const TAURI_MCP_TOOLS = [
+  'ping',
+  'screenshot',
+  'get_dom',
+  'execute_js',
+  'mouse_click',
+  'mouse_move',
+  'mouse_scroll',
+  'mouse_drag',
+  'keyboard_input',
+  'window_list',
+  'window_focus',
+  'window_resize',
+  'window_position',
+  'local_storage_get',
+  'local_storage_set',
+  'local_storage_clear',
+  'ipc_list_handlers',
+  'ipc_invoke',
+] as const;
+
+export type TauriMCPTool = typeof TAURI_MCP_TOOLS[number];
+
+/**
+ * Get the count of available Tauri MCP tools
+ */
+export function getTauriMCPToolCount(): number {
+  return TAURI_MCP_TOOLS.length;
+}
+
+/**
+ * Check if a specific Tauri MCP tool is available
+ */
+export function isTauriToolAvailable(tool: TauriMCPTool): boolean {
+  return (TAURI_MCP_TOOLS as readonly string[]).includes(tool);
+}

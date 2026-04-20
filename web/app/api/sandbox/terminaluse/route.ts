@@ -246,7 +246,7 @@ export async function GET(req: NextRequest) {
  * POST /api/sandbox/terminaluse/tasks/:id/events
  * Send an event to a task
  */
-export async function POST_EVENT(req: NextRequest) {
+async function POST_EVENT(req: NextRequest) {
   const requestId = Math.random().toString(36).slice(2, 8)
   const url = new URL(req.url)
   const taskId = url.pathname.split('/').pop()?.replace('/events', '')
@@ -314,7 +314,7 @@ export async function POST_EVENT(req: NextRequest) {
  * GET /api/sandbox/terminaluse/filesystems
  * List filesystems
  */
-export async function GET_FILESYSTEMS(req: NextRequest) {
+async function GET_FILESYSTEMS(req: NextRequest) {
   const requestId = Math.random().toString(36).slice(2, 8)
 
   try {
@@ -372,7 +372,7 @@ export async function GET_FILESYSTEMS(req: NextRequest) {
  * POST /api/sandbox/terminaluse/filesystems
  * Create a new filesystem
  */
-export async function POST_FILESYSTEM(req: NextRequest) {
+async function POST_FILESYSTEM(req: NextRequest) {
   const requestId = Math.random().toString(36).slice(2, 8)
 
   try {

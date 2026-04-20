@@ -289,7 +289,7 @@ describe('Provider Integration E2E Tests', () => {
    */
   describe('MCP Client Integration', () => {
     it('should handle connection errors gracefully', async () => {
-      const { MCPClient } = await import('@/lib/mcp/client');
+      const { MCPClient } = await import('@/lib/mcp');
       
       const client = new MCPClient({
         type: 'sse',
@@ -307,7 +307,7 @@ describe('Provider Integration E2E Tests', () => {
     });
 
     it('should track connection state', async () => {
-      const { MCPClient } = await import('@/lib/mcp/client');
+      const { MCPClient } = await import('@/lib/mcp');
       
       const client = new MCPClient({
         type: 'stdio',

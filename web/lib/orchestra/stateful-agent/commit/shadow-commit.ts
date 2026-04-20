@@ -501,17 +501,28 @@ export class ShadowCommitManager {
       );
 
       // Build the list of files to restore with their content
-      const filesToRestore = commit.transactions.map(t => ({
-        path: t.path,
-        content: t.originalContent,
-        action: t.type === 'DELETE' ? 'restore' as const : 'restore' as const,
-      }));
+        const filesToRestore = commit.transactions.map(t => ({
+          path: t.path,
+          content: t.originalContent,
+          action: t.type === 'DELETE' ? 'restore' as const : 'restore' as const,
+        }));
 
-      console.log('[ShadowCommit] Rollback prepared:', filesToRestore.length, 'files');
-      return {
-        success: true,
-        restoredFiles: filesToRestore,
-      };
+        // If desktop/CLI mode, write restored content directly to the filesystem
+        if (isDesktopMode()) {
+          const { promises: fsp } = await import('fs');
+          await Promise.all(filesToRestore.map(async f => {
+            if (f.content !== undefined) {
+              const fullPath = f.path.startsWith('/') ? f.path : `./${f.path}`;
+              await fsp.writeFile(fullPath, f.content, 'utf8');
+            }
+          }));
+        }
+
+        console.log('[ShadowCommit] Rollback prepared:', filesToRestore.length, 'files');
+        return {
+          success: true,
+          restoredFiles: filesToRestore,
+        };
     } catch (error: any) {
       console.error('[ShadowCommit] Rollback failed:', error.message);
       return {
