@@ -19,6 +19,8 @@ import { ArcadeService, getArcadeService } from '../integrations/arcade-service'
 import { nullclawMCPBridge } from './nullclaw-mcp-bridge'
 import { initializeNullclaw, isNullclawAvailable, getNullclawMode } from '@bing/shared/agent/nullclaw-integration'
 import { normalizeSessionId } from '../virtual-filesystem/scope-utils';
+// Tool caching for repeated operations
+import { toolResultCache, toolCacheKey, contentHash } from '../cache';
 // Dynamically imported to avoid pulling Node.js-only deps (fs, database) into client bundle
 // import { standaloneGitTools } from '../tools/git-tools'
 
@@ -549,8 +551,12 @@ export async function getComposioMCPTools(
  * NOTE: This is called lazily on each chat request, NOT on web startup.
  * Tool sources are initialized/configured at startup, but the actual
  * tool list is assembled per-request to reflect current state.
+ *
+ * @param userId - User ID for session-scoped tools
+ * @param taskFilter - Optional task type to filter tools (e.g., 'code_edit', 'integration', 'computer_use')
+ *                     When provided, only tools relevant to the task type are included
  */
-export async function getMCPToolsForAI_SDK(userId?: string) {
+export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string) {
   const callStart = Date.now();
 
   if (mcporterIntegration.isEnabled()) {
@@ -560,48 +566,146 @@ export async function getMCPToolsForAI_SDK(userId?: string) {
   const nativeTools = isMCPAvailable() ? mcpToolRegistry.getToolDefinitions() : []
 
   // Conditionally include Blaxel codegen tools when API key is available
-  const blaxelTools: Array<{
+  // TASK-AWARE: Only include for code generation/search tasks
+  let blaxelTools: Array<{
     type: 'function'
     function: {
       name: string
       description?: string
       parameters: any
     }
-  }> = process.env.BLAXEL_API_KEY ? getBlaxelCodegenToolDefinitions() : []
+  }> = [];
+  if (process.env.BLAXEL_API_KEY) {
+    const allBlaxelTools = getBlaxelCodegenToolDefinitions();
+    if (taskFilter) {
+      const taskLower = taskFilter.toLowerCase();
+      const needsCodeSearch = taskLower.includes('search') || taskLower.includes('find') || taskLower.includes('codebase');
+      const needsCodegen = taskLower.includes('generate') || taskLower.includes('create') || taskLower.includes('implement');
+      blaxelTools = allBlaxelTools.filter(tool => {
+        const name = tool.function.name.toLowerCase();
+        if (name.includes('search') || name.includes('grep')) return needsCodeSearch;
+        if (name.includes('codegen') || name.includes('apply') || name.includes('reapply')) return needsCodegen;
+        return true;
+      });
+    } else {
+      blaxelTools = allBlaxelTools;
+    }
+  }
 
   // Conditionally include Arcade tools when API key is available
-  const arcadeTools: Array<{
+  // TASK-AWARE: Only include for web automation/tasks
+  let arcadeTools: Array<{
     type: 'function'
     function: {
       name: string
       description?: string
       parameters: any
     }
-  }> = process.env.ARCADE_API_KEY ? await getArcadeToolDefinitions() : []
+  }> = [];
+  if (process.env.ARCADE_API_KEY) {
+    const allArcadeTools = await getArcadeToolDefinitions();
+    if (taskFilter) {
+      const taskLower = taskFilter.toLowerCase();
+      const needsWebAutomation = taskLower.includes('browse') || taskLower.includes('web') || taskLower.includes('automation');
+      arcadeTools = allArcadeTools.filter(tool => {
+        // Keep tools relevant to web automation
+        const name = tool.function.name.toLowerCase();
+        return needsWebAutomation || name.includes('browse') || name.includes('web');
+      });
+    } else {
+      arcadeTools = allArcadeTools;
+    }
+  }
 
   // NEW: Include provider-specific advanced tools (E2B, Daytona, CodeSandbox, Sprites)
+  // TASK-AWARE: Only include these heavy tools when taskFilter indicates they're needed
   const { getAllProviderAdvancedTools } = await import('./provider-advanced-tools')
-  const providerTools = getAllProviderAdvancedTools()
+  let providerTools = getAllProviderAdvancedTools()
+
+  // Filter provider tools based on task type to reduce token bloat
+  if (taskFilter) {
+    const taskLower = taskFilter.toLowerCase()
+    const needsComputerUse = taskLower.includes('screenshot') || taskLower.includes('computer_use') || taskLower.includes('desktop_automation')
+    const needsAgentOffload = taskLower.includes('agent') || taskLower.includes('complex_task') || taskLower.includes('e2b')
+    const needsSandbox = taskLower.includes('sandbox') || taskLower.includes('isolated')
+    const needsCheckpoint = taskLower.includes('checkpoint') || taskLower.includes('sprite')
+
+    // Filter out tools not relevant to the task
+    providerTools = providerTools.filter(tool => {
+      const name = tool.function.name.toLowerCase()
+      // Daytona screenshot/recording tools - only include for computer use tasks
+      if (name.startsWith('daytona_')) return needsComputerUse
+      // E2B agent offload tools - only include for agent/complex tasks
+      if (name.startsWith('e2b_')) return needsAgentOffload
+      // CodeSandbox batch tools - only include for sandbox tasks
+      if (name.startsWith('codesandbox_')) return needsSandbox
+      // Sprites checkpoint tools - only include for checkpoint tasks
+      if (name.startsWith('sprites_')) return needsCheckpoint
+      return true // Keep other tools
+    })
+  }
 
   // NEW: Include Nullclaw tools when enabled
-  const nullclawTools: Array<{
+  // TASK-AWARE: Only include for messaging/automation tasks
+  let nullclawTools: Array<{
     type: 'function'
     function: {
       name: string
       description?: string
       parameters: any
     }
-  }> = process.env.NULLCLAW_ENABLED === 'true' ? nullclawMCPBridge.getToolDefinitions() : []
+  }> = [];
+  if (process.env.NULLCLAW_ENABLED === 'true') {
+    const allNullclawTools = nullclawMCPBridge.getToolDefinitions();
+    if (taskFilter) {
+      const taskLower = taskFilter.toLowerCase();
+      const needsMessaging = taskLower.includes('send') || taskLower.includes('message') || taskLower.includes('discord') || taskLower.includes('telegram');
+      const needsBrowse = taskLower.includes('browse') || taskLower.includes('web_automation');
+      nullclawTools = allNullclawTools.filter(tool => {
+        const name = tool.function.name.toLowerCase();
+        if (name.includes('discord') || name.includes('telegram') || name.includes('send')) return needsMessaging;
+        if (name.includes('browse') || name.includes('automate')) return needsBrowse;
+        return true;
+      });
+    } else {
+      nullclawTools = allNullclawTools;
+    }
+  }
 
   // NEW: Include Composio tools when API key is available and userId provided
-  const composioTools: Array<{
+  // TASK-AWARE: Only include for integration tasks (Gmail, Slack, etc.)
+  let composioTools: Array<{
     type: 'function'
     function: {
       name: string
       description?: string
       parameters: any
     }
-  }> = process.env.COMPOSIO_API_KEY && userId ? await getComposioMCPTools(userId) : []
+  }> = [];
+  if (process.env.COMPOSIO_API_KEY && userId) {
+    const allComposioTools = await getComposioMCPTools(userId);
+    if (taskFilter) {
+      const taskLower = taskFilter.toLowerCase();
+      // Detect integration needs from task description
+      const needsGmail = taskLower.includes('gmail') || taskLower.includes('email') || taskLower.includes('send mail');
+      const needsSlack = taskLower.includes('slack') || taskLower.includes('message') || taskLower.includes('channel');
+      const needsGoogleDrive = taskLower.includes('drive') || taskLower.includes('google drive') || taskLower.includes('upload file');
+      const needsGithub = taskLower.includes('github') || taskLower.includes('git') || taskLower.includes('pull request') || taskLower.includes('issue');
+      const needsNotion = taskLower.includes('notion') || taskLower.includes('page') || taskLower.includes('workspace');
+
+      composioTools = allComposioTools.filter(tool => {
+        const name = tool.function.name.toLowerCase();
+        if (name.includes('gmail') || name.includes('email')) return needsGmail;
+        if (name.includes('slack') || name.includes('message')) return needsSlack;
+        if (name.includes('drive') || name.includes('google')) return needsGoogleDrive;
+        if (name.includes('github') || name.includes('git')) return needsGithub;
+        if (name.includes('notion')) return needsNotion;
+        return true; // Keep other Composio tools
+      });
+    } else {
+      composioTools = allComposioTools;
+    }
+  }
 
   // NEW: Include Git tools (shadow commits, VFS sync)
   const { standaloneGitTools } = await import('../tools/git-tools')
@@ -652,7 +756,7 @@ export async function getMCPToolsForAI_SDK(userId?: string) {
     // Register VFS sync hook once (on first bash tool load) — syncs bash-created files to VFS
     registerVFSSyncHook();
 
-    const sessionId = userId ? normalizeSessionId(userId, '000') : undefined;
+    const sessionId = userId ? normalizeSessionId(userId) : undefined;
     const scopePath = sessionId ? `project/sessions/${sessionId}` : 'project';
 
     const bashToolMap = createBashTool({
@@ -1036,6 +1140,12 @@ async function executeArcadeTool(
  * Call MCP tool from Architecture 1 (AI SDK)
  *
  * Use this when the LLM requests a tool call
+ * 
+ * Caching strategy:
+ * - list_files: fully cached (TTL 30s)
+ * - search_files: fully cached (TTL 30s)  
+ * - read_file: cached with content-hash validation (skip cache if file changed)
+ * - write/modify operations: never cached
  */
 export async function callMCPToolFromAI_SDK(
   toolName: string,
@@ -1046,14 +1156,77 @@ export async function callMCPToolFromAI_SDK(
   try {
     logger.debug(`Calling MCP tool: ${toolName}`, { args })
 
+    // Tools that should never be cached but trigger invalidation
+    const writeTools = ['write_file', 'batch_write', 'apply_diff', 'create_directory', 'delete_file', 'move_file'];
+    const cacheEnabled = !writeTools.includes(toolName);
+    
+    // Helper: invalidate caches when files change
+    const invalidateFileCache = (path?: string) => {
+      if (path) {
+        const pathKey = toolCacheKey.fileRead(path);
+        toolResultCache.delete(pathKey);
+        // Also invalidate parent directory listings
+        const segments = path.split('/');
+        for (let i = 1; i < segments.length; i++) {
+          const parentPath = segments.slice(0, i).join('/') || '.';
+          toolResultCache.delete(toolCacheKey.fileList(parentPath));
+        }
+      }
+      // Invalidate root list cache on any write
+      toolResultCache.delete(toolCacheKey.fileList('.'));
+      toolResultCache.delete(toolCacheKey.fileList('/'));
+    };
+
+    // Build cache key at function scope for read-only operations
+    let cacheKey: string | null = null;
+    if (cacheEnabled) {
+      if (toolName === 'list_files') {
+        cacheKey = toolCacheKey.fileList(args.path || '.');
+      } else if (toolName === 'search_files' || toolName === 'glob') {
+        cacheKey = toolCacheKey.fileSearch(args.pattern || args.query || '', args.path);
+      } else if (toolName === 'read_file' && args.path) {
+        cacheKey = toolCacheKey.fileRead(args.path, args.hash);
+      }
+
+      // Check cache hit for read-only operations
+      if (cacheKey) {
+        const cached = toolResultCache.get(cacheKey);
+        if (cached !== null) {
+          // For read_file: validate content hash if provided
+          if (toolName === 'read_file' && args.hash) {
+            const cachedData = typeof cached === 'string' ? cached : JSON.stringify(cached);
+            const cachedHash = contentHash(cachedData);
+            if (cachedHash !== args.hash) {
+              // Content changed - skip cache
+              toolResultCache.delete(cacheKey);
+            } else {
+              logger.debug(`Cache hit for ${toolName}: ${cacheKey}`);
+              return { success: true, output: cachedData };
+            }
+          } else {
+            // Fully cacheable: list_files, search_files
+            logger.debug(`Cache hit for ${toolName}: ${cacheKey}`);
+            return {
+              success: true,
+              output: typeof cached === 'string' ? cached : JSON.stringify(cached),
+            };
+          }
+        }
+      }
+    }
+
     // Check if it's a Blaxel codegen tool
     if (toolName.startsWith('blaxel_') && process.env.BLAXEL_API_KEY) {
-      return executeBlaxelCodegenTool(toolName, args)
+      const result = await executeBlaxelCodegenTool(toolName, args)
+      if (cacheEnabled && cacheKey) toolResultCache.set(cacheKey, result.output, 60000);
+      return result;
     }
 
     // Check if it's an Arcade tool
     if (toolName.startsWith('arcade_') && process.env.ARCADE_API_KEY) {
-      return executeArcadeTool(toolName, args, userId)
+      const result = await executeArcadeTool(toolName, args, userId);
+      if (cacheEnabled && cacheKey) toolResultCache.set(cacheKey, result.output, 60000);
+      return result;
     }
 
     // NEW: Check if it's a provider-specific advanced tool
@@ -1114,10 +1287,22 @@ export async function callMCPToolFromAI_SDK(
         })
       );
 
+      const resultOutput = typeof (result as any)?.output === 'string' ? (result as any).output : JSON.stringify(result);
+      
+      // Invalidate caches after write operations
+      if (!cacheEnabled && (result as any)?.success !== false) {
+        const affectedPath = args?.path || args?.files?.[0]?.path;
+        invalidateFileCache(affectedPath);
+      } else if (cacheEnabled && cacheKey) {
+        // Cache read-only operations
+        const ttl = (toolName === 'read_file') ? 10000 : 60000;
+        toolResultCache.set(cacheKey, resultOutput, ttl);
+      }
+
       return {
-        success: result?.success !== false,
-        output: typeof result?.output === 'string' ? result.output : JSON.stringify(result),
-        error: result?.error,
+        success: (result as any)?.success !== false,
+        output: resultOutput,
+        error: (result as any)?.error,
       };
     }
 
@@ -1127,10 +1312,30 @@ export async function callMCPToolFromAI_SDK(
       const sessionId = normalizeSessionId(args.conversationId || userId || '000');
       const scopePath = `project/sessions/${sessionId}`;
 
+      // Get filesystem state for command routing
+      let filesystemState: Record<string, { content?: string; isDirectory?: boolean }> = {};
+      // Note: This fetches state once per tool call - in production, cache this at session level
+      try {
+        const { virtualFilesystem: vfs } = await import('../virtual-filesystem');
+        const listing = await vfs.listDirectory(userId, '/');
+        for (const node of listing.nodes || []) {
+          const nodePath = `/${node.name}`;
+          const file = await vfs.readFile(userId, nodePath).catch(() => null);
+          filesystemState[nodePath] = {
+            content: file?.content || '',
+            isDirectory: node.type === 'directory',
+          };
+        }
+      } catch {
+        // VFS unavailable - continue without routing
+      }
+
       const bashToolMap = createBashTool({
         workingDir: scopePath,
         enableSelfHealing: true,
         persistToVFS: true,
+        getFilesystemState: () => filesystemState,
+        // onTerminalOutput would be wired from TerminalPanel context
       });
 
       const bashToolName = toolName.replace('bash_', '');
@@ -1149,9 +1354,9 @@ export async function callMCPToolFromAI_SDK(
         } as any);
 
         return {
-          success: result?.success !== false,
-          output: result?.output || JSON.stringify(result),
-          error: result?.error,
+          success: (result as any)?.success !== false,
+          output: (result as any)?.output || JSON.stringify(result),
+          error: (result as any)?.error,
         };
       }
     }
@@ -1163,6 +1368,11 @@ export async function callMCPToolFromAI_SDK(
         duration: nativeResult.duration,
       })
 
+      // Invalidate caches after native tool writes
+      if (!cacheEnabled && nativeResult.success) {
+        invalidateFileCache(args?.path);
+      }
+
       return {
         success: nativeResult.success,
         output: nativeResult.content,
@@ -1170,7 +1380,12 @@ export async function callMCPToolFromAI_SDK(
       }
     }
 
-    const mcporterResult = await callMCPorterTool(toolName, args)
+    const mcporterResult = await callMCPorterTool(toolName, args);
+    
+    // Invalidate caches after mcporter tool writes  
+    if (!cacheEnabled && mcporterResult.success) {
+      invalidateFileCache(args?.path);
+    }
     logger.debug(`mcporter tool result: ${toolName}`, { success: mcporterResult.success })
     return mcporterResult
   } catch (error: any) {

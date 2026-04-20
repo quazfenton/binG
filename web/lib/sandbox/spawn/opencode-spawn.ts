@@ -70,6 +70,10 @@ export class OpencodeProvider implements LLMProvider {
     const steps: LLMAgentStep[] = []
     let finalResponse = ''
 
+    // Resolve binary via robust detection (OPENCODE_BIN → which/where → default paths)
+    const { findOpencodeBinarySync } = await import('@/lib/agent-bins/find-opencode-binary');
+    const binaryPath = findOpencodeBinarySync() ?? 'opencode';
+
     return new Promise<LLMAgentResult>((resolve, reject) => {
       const args = ['chat', '--json']
       const model = process.env.OPENCODE_MODEL
@@ -77,7 +81,7 @@ export class OpencodeProvider implements LLMProvider {
         args.push('--model', model)
       }
 
-      const proc = spawn(process.env.OPENCODE_BIN ?? 'opencode', args, {
+      const proc = spawn(binaryPath, args, {
         env: {
           ...process.env,
           OPENCODE_SYSTEM_PROMPT: systemPrompt,

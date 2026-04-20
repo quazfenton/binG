@@ -541,8 +541,12 @@ async function main() {
     if (error.code === 'ENOENT') {
       console.error(`[binG MCP Server] Error: Workspace directory does not exist: ${config.workspaceRoot}`);
       console.error(`[binG MCP Server] Create it or set BING_WORKSPACE_ROOT to an existing directory.`);
-      process.exit(1);
+    } else {
+      // Handle other filesystem errors (EACCES, etc.)
+      console.error(`[binG MCP Server] Error: Cannot access workspace directory: ${error.message || error}`);
+      console.error(`[binG MCP Server] Check permissions and ensure the path is accessible.`);
     }
+    process.exit(1);
   }
 
   const transport = new StdioServerTransport();

@@ -61,6 +61,12 @@ export {
 
 // Desktop MCP Manager - server-only, import directly from './desktop-mcp-manager'
 // Do NOT re-export here to avoid pulling Node.js deps into client bundles.
+// Available exports from desktop-mcp-manager:
+//   desktopMCPManager, initializeDesktopMCP, shutdownDesktopMCP,
+//   desktopMCPPresets (includes tauriBridge, tauriMCPServer),
+//   buildDefaultDesktopMCPConfig (opt-in only, no auto-starts),
+//   isTauriBridgeConnected, getTauriMCPToolCount, isTauriToolAvailable,
+//   TAURI_MCP_TOOLS, TauriMCPTool
 
 // HTTP Server (NEW)
 export {

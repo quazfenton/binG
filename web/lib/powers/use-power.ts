@@ -128,15 +128,17 @@ export function usePowers(): UsePowersResult {
 
   const chatBody = { activePowerIds: [...active] };
 
-  // Build system prompt block for active powers
+  // Build system prompt block for active powers — compact index only.
+  // Full content is available on-demand via the power_read tool, so we
+  // don't bloat every prompt with every power's full description.
   const systemPrompt = (() => {
     const activePowers = powers.filter(p => active.has(p.id));
     if (activePowers.length === 0) return '';
 
     return `
 ## Available Powers (Active)
-You have the following user-installed powers available:
-${activePowers.map(p => `- **${p.name}** (v${p.version}): ${p.description}`).join('\n')}
+${activePowers.length} power(s) installed. Use power_list for summaries, power_read(id) for full details.
+${activePowers.map(p => `- **${p.name}** (id: ${p.id}): ${p.description}`).join('\n')}
 `;
   })();
 

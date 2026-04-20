@@ -24,17 +24,27 @@ vi.mock('../lib/utils/logger', () => ({
   })
 }))
 
+// NOTE: Mock must match the full NullclawIntegration surface used by the bridge.
 vi.mock('@bing/shared/agent/nullclaw-integration', () => ({
   nullclawIntegration: {
+    isAvailable: vi.fn(() => true),
+    initialize: vi.fn(() => Promise.resolve()),
+    initializeForSession: vi.fn(() => Promise.resolve('nullclaw-123')),
     startContainer: vi.fn(() => Promise.resolve({
       id: 'nullclaw-123',
       endpoint: 'http://localhost:3001',
       status: 'ready',
     })),
     stopContainer: vi.fn(() => Promise.resolve()),
-    executeTask: vi.fn((userId, convId, task) => 
-      Promise.resolve({ ...task, status: 'completed', result: { success: true } })
-    ),
+    executeTask: vi.fn((...args: any[]) => {
+      const task = args[args.length - 1];
+      return Promise.resolve({ ...(task || {}), status: 'completed', result: { success: true } });
+    }),
+    sendDiscordMessage: vi.fn(() => Promise.resolve({ success: true })),
+    sendTelegramMessage: vi.fn(() => Promise.resolve({ success: true })),
+    browseUrl: vi.fn(() => Promise.resolve({ success: true, content: '' })),
+    automateTask: vi.fn(() => Promise.resolve({ success: true })),
+    searchWeb: vi.fn(() => Promise.resolve({ success: true, results: [] })),
     getStatus: vi.fn(() => Promise.resolve({
       available: true,
       health: 'healthy',

@@ -752,6 +752,88 @@ class NullclawProvider implements CapabilityProvider {
 }
 
 /**
+ * Native Web Fetch Provider - fetches URL content using native fetch()
+ * Provides web.fetch capability without requiring external services
+ */
+class NativeWebFetchProvider implements CapabilityProvider {
+  readonly id = 'native';
+  readonly name = 'Native Web Fetch';
+  readonly capabilities = ['web.fetch'];
+
+  isAvailable(): boolean {
+    // Native fetch is always available in modern environments
+    return typeof fetch !== 'undefined';
+  }
+
+  async execute(
+    capabilityId: string,
+    input: any,
+    context: ToolExecutionContext
+  ): Promise<ToolExecutionResult> {
+    if (capabilityId !== 'web.fetch') {
+      return { success: false, error: `Unknown capability: ${capabilityId}` };
+    }
+
+    if (!input.url) {
+      return { success: false, error: 'Missing required field: url' };
+    }
+
+    const maxChars = input.maxChars || 8000;
+
+    try {
+      const response = await fetch(input.url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (compatible; BingAgent/1.0)',
+        },
+        signal: AbortSignal.timeout(30000), // 30 second timeout
+      });
+
+      if (!response.ok) {
+        return {
+          success: false,
+          error: `HTTP ${response.status}: ${response.statusText}`,
+          output: {
+            success: false,
+            url: input.url,
+            statusCode: response.status,
+            contentType: response.headers.get('content-type') || 'unknown',
+          },
+        };
+      }
+
+      const contentType = response.headers.get('content-type') || 'text/plain';
+      const text = await response.text();
+
+      // Truncate if exceeds maxChars
+      const truncated = text.length > maxChars;
+      const content = truncated ? text.substring(0, maxChars) + '\n... [truncated]' : text;
+
+      return {
+        success: true,
+        output: {
+          success: true,
+          content,
+          url: input.url,
+          statusCode: response.status,
+          contentType,
+          truncated,
+          originalLength: text.length,
+        },
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        error: error.message || 'Failed to fetch URL',
+        output: {
+          success: false,
+          url: input.url,
+        },
+      };
+    }
+  }
+}
+
+/**
  * Blaxel Provider - handles repo search and analysis
  */
 class BlaxelProvider implements CapabilityProvider {
@@ -1681,6 +1763,7 @@ export class CapabilityRouter {
     this.registerProvider(new MCPFilesystemProvider());
     this.registerProvider(new OpenCodeV2Provider());
     this.registerProvider(new NullclawProvider());
+    this.registerProvider(new NativeWebFetchProvider());
     this.registerProvider(new BlaxelProvider());
     this.registerProvider(new MemoryServiceProvider());
     this.registerProvider(new RipgrepProvider());

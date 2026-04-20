@@ -9,6 +9,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { isDesktopMode, isTauriRuntime } from '@bing/platform/env';
 import { createLogger } from '@/lib/utils/logger';
+import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 
 const log = createLogger('TauriInvoke');
 
@@ -222,6 +223,15 @@ export async function writeFile(
       filePath,
       content,
     });
+    
+    // Emit filesystem event for consistency with VFS flow
+    emitFilesystemUpdated({
+      path: filePath,
+      type: 'update',
+      source: 'tauri:write_file',
+      sessionId: sandboxId,
+    });
+    
     return {
       success: true,
       output: `File written: ${filePath}`,

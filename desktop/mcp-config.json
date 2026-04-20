@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "tauri-mcp-bridge": {
+      "command": "node",
+      "args": ["__RESOURCE_DIR__/mcp-server/index.js"],
+      "env": {
+        "TAURI_MCP_BRIDGE_URL": "ws://127.0.0.1:3718",
+        "TAURI_MCP_MODE": "desktop"
+      },
+      "disabled": false
+    }
+  }
+}

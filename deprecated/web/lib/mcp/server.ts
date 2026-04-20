@@ -237,8 +237,11 @@ export async function createMCPToolServer(options: MCPServerOptions = {}) {
         return {
           content: [{
             type: 'text',
-            text: `Successfully created ${params.path}`,
+            text: result.success
+              ? `Successfully created ${params.path}`
+              : `Failed to create ${params.path}: ${result.error}`,
           }],
+          isError: result.success ? undefined : true,
         };
       } catch (error) {
         return {

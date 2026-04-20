@@ -20,7 +20,7 @@ export class APIEmbeddingProvider implements EmbeddingProvider {
 
   constructor(options?: { endpoint?: string; dimensions?: number }) {
     this.endpoint = options?.endpoint ?? '/api/embed';
-    this.dimensions = options?.dimensions ?? 1536;
+    this.dimensions = options?.dimensions ?? 512; // Default: Mistral codestral-embed
   }
 
   async embed(text: string): Promise<number[]> {

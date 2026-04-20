@@ -394,6 +394,7 @@ Install: `pip install autogen mem0ai`
 Multi-agent conversational systems with memory persistence.
 
 ```python
+import os
 from autogen import ConversableAgent
 from mem0 import MemoryClient
 

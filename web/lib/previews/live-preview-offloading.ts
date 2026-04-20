@@ -1317,6 +1317,20 @@ export class LivePreviewOffloading {
     hasAPIKeys: boolean,
     heuristics?: OffloadHeuristics
   ): PreviewMode {
+    
+    // 1. Static/Frontend Only: Use Iframe
+    const isBackend = hasNodeServer || hasPython || framework === 'node' || framework === 'flask' || framework === 'fastapi';
+    const isStatic = !isBackend && (filePaths.some(p => p.endsWith('.html')) && !hasNodeServer);
+    
+    if (isStatic) {
+        return 'iframe';
+    }
+
+    // 2. Full-Stack/Backend: Force Cloud (never OpenSandbox/Microsandbox)
+    if (isBackend) {
+        return hasPython ? 'modal' : 'devbox';
+    }
+
     const hasPackageJson = filePaths.some(p => p.endsWith('package.json'));
     const hasHtml = filePaths.some(p => p.endsWith('.html'));
     const hasJsx = filePaths.some(p => p.endsWith('.jsx') || p.endsWith('.tsx'));

@@ -266,6 +266,7 @@ export interface MCPTransportConfig {
   args?: string[]
   env?: Record<string, string>
   cwd?: string
+  timeout?: number  // Connection timeout in ms (default: 5000)
 
   // For SSE / HTTP transport
   url?: string

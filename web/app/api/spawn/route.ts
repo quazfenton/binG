@@ -32,7 +32,7 @@ const logger = createLogger('API:Agents');
 // ============================================================================
 
 const startAgentSchema = z.object({
-  type: z.enum(['claude-code', 'amp', 'opencode']),
+  type: z.enum(['claude-code', 'amp', 'opencode', 'codex']),
   workspaceDir: z.string().min(1, 'Workspace directory is required'),
   apiKey: z.string().optional(),
   port: z.number()
@@ -40,6 +40,12 @@ const startAgentSchema = z.object({
     .max(65535, 'Port must be <= 65535')
     .optional(),
   agentId: z.string().optional(),
+  /**
+   * Remote address of an already-running agent server (e.g. "https://codex.example.com:8080").
+   * When provided, the agent skips local binary spawn and containerized fallback,
+   * and connects directly to the remote endpoint. Supports web-hosted / cloud deployments.
+   */
+  remoteAddress: z.string().url('Remote address must be a valid URL').optional(),
   env: z.record(z.string()).optional(),
   resources: z.object({
     cpu: z.number()
@@ -135,6 +141,7 @@ export async function POST(request: NextRequest) {
             workspaceDir: parsed.workspaceDir,
             apiKey: parsed.apiKey,
             port: parsed.port,
+            remoteAddress: parsed.remoteAddress,
             env: parsed.env,
           },
           ...parsed.poolConfig,
@@ -170,6 +177,7 @@ export async function POST(request: NextRequest) {
       apiKey: parsed.apiKey,
       port: parsed.port,
       agentId: parsed.agentId,
+      remoteAddress: parsed.remoteAddress,
       env: parsed.env,
       resources: parsed.resources,
     });
@@ -198,7 +206,7 @@ export async function POST(request: NextRequest) {
 // GET /api/agents/:id - Get agent details
 // ============================================================================
 
-export async function GETAgent(
+async function GETAgent(
   request: NextRequest,
   { params }: { params: { id: string } }
 ) {
@@ -230,7 +238,7 @@ export async function GETAgent(
 // POST /api/agents/:id/prompt - Send prompt to agent
 // ============================================================================
 
-export async function POSTPrompt(
+async function POSTPrompt(
   request: NextRequest,
   { params }: { params: { id: string } }
 ) {
