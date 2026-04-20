@@ -66,6 +66,10 @@ export class Cache {
     this.cache.clear();
   }
 
+  keys(): string[] {
+    return Array.from(this.cache.keys());
+  }
+
   // Clean up expired items
   cleanup(): void {
     const now = Date.now();

@@ -21,6 +21,8 @@ import { VFSBatchOperations } from './vfs-batch-operations';
 import { createGitBackedVFS, getGitBackedVFSForOwner, type GitBackedVFS, type GitVFSOptions } from './git-backed-vfs';
 import { getDatabase } from '@/lib/database/connection';
 import { compress, decompress, isCompressed } from '@/lib/utils/compression';
+// Caching for repeated directory listings (used by smart-context)
+import { toolResultCache, toolCacheKey } from '@/lib/cache';
 // import { emitFilesystemUpdated } from './sync/sync-events'; // Imported but not used - central emit deferred for now
 
 // Default configuration
@@ -380,6 +382,26 @@ export class VirtualFilesystemService {
     workspace.version += 1;
     workspace.updatedAt = now;
 
+    // Invalidate directory listing cache and ALL parent paths up the hierarchy
+    let currentPath = path.dirname(normalizedPath) || '.';
+    while (currentPath !== '.' && currentPath !== '/') {
+      toolResultCache.delete(`${ownerId}:${currentPath}`);
+      currentPath = path.dirname(currentPath) || '.';
+    }
+    // Also invalidate root
+    toolResultCache.delete(`${ownerId}:.`);
+    toolResultCache.delete(`${ownerId}:/`);
+
+    // Invalidate ALL search results when any file changes (search results may contain this file)
+    // For more granular invalidation, we'd need to track which files are in each search result
+    const searchPrefix = `search:${ownerId}:`;
+    const allKeys = toolResultCache.keys ? toolResultCache.keys() : [];
+    for (const key of allKeys) {
+      if (key.startsWith(searchPrefix)) {
+        toolResultCache.delete(key);
+      }
+    }
+
     const changeType: FilesystemChangeType = previous ? 'update' : 'create';
     diffTracker.trackChange(file, ownerId, previous?.content);
 
@@ -605,6 +627,13 @@ export class VirtualFilesystemService {
   }
 
   async listDirectory(ownerId: string, directoryPath: string = this.workspaceRoot): Promise<VirtualFilesystemDirectoryListing> {
+    // Try cache first for read-only operations
+    const cacheKey = `${ownerId}:${directoryPath}`;
+    const cached = toolResultCache.get(cacheKey);
+    if (cached !== null) {
+      return cached as VirtualFilesystemDirectoryListing;
+    }
+
     // Desktop mode: Use local filesystem instead of VFS
     if (isDesktopMode() && isUsingLocalFS()) {
       try {
@@ -693,10 +722,14 @@ export class VirtualFilesystemService {
       ...fileNodes.sort((a, b) => a.name.localeCompare(b.name)),
     ];
 
-    return {
+    const listing = {
       path: normalizedDirectoryPath,
       nodes,
     };
+
+    // Cache for 30s - invalidated on writes
+    toolResultCache.set(cacheKey, listing, 60000);
+    return listing;
   }
 
   async search(
@@ -709,6 +742,13 @@ export class VirtualFilesystemService {
       language?: string;
     } = {},
   ): Promise<{ files: VirtualFilesystemSearchResult[] }> {
+    // Try cache first
+    const searchCacheKey = `search:${ownerId}:${query}:${options.path || 'root'}`;
+    const cachedSearch = toolResultCache.get(searchCacheKey);
+    if (cachedSearch !== null) {
+      return cachedSearch as { files: VirtualFilesystemSearchResult[] };
+    }
+
     // Desktop mode: Use local filesystem instead of VFS
     if (isDesktopMode() && isUsingLocalFS()) {
       try {
@@ -785,11 +825,15 @@ export class VirtualFilesystemService {
       });
     }
 
-    return {
+    const result = {
       files: matches
         .sort((a, b) => (b.score - a.score) || a.path.localeCompare(b.path))
         .slice(0, limit)
     };
+
+    // Cache search results for 60s - invalidated on file changes
+    toolResultCache.set(searchCacheKey, result, 60000);
+    return result;
   }
 
   async getWorkspaceVersion(ownerId: string): Promise<number> {
@@ -1233,12 +1277,11 @@ export class VirtualFilesystemService {
       ).all(normalizedTo) as Array<{ path: string }>;
       const existingPaths = new Set(existingTargetPaths.map(r => r.path));
 
-      // 2. Transfer files that don't conflict
+      // 2. Transfer files that don't conflict - use INSERT with processed content
       const transferFile = db.prepare(
         `INSERT OR IGNORE INTO vfs_workspace_files
          (id, owner_id, path, content, language, size, version, created_at, updated_at)
-         SELECT ?, ?, path, content, language, size, version, created_at, updated_at
-         FROM vfs_workspace_files WHERE owner_id = ? AND path = ?`
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
       );
 
       // 3. Transfer meta if target has none
@@ -1258,7 +1301,10 @@ export class VirtualFilesystemService {
       for (const file of sourceFiles) {
         if (!existingPaths.has(file.path)) {
           const id = `${normalizedTo}:${file.path}`;
-          transferFile.run(id, normalizedTo, normalizedFrom, file.path);
+          // Compress content during transfer if beneficial
+          const compressedContent = compress(file.content)
+          const contentToStore = compressedContent.length < file.content.length ? compressedContent : file.content
+          transferFile.run(id, normalizedTo, file.path, contentToStore, file.language, file.size, file.version, file.created_at, now);
           transferredCount++;
         }
       }

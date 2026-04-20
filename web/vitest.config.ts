@@ -54,6 +54,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './'),
+      '@/app': path.resolve(__dirname, './app'),
       '@bing/platform/env': path.resolve(__dirname, '../packages/platform/src/env.ts'),
       '@bing/platform': path.resolve(__dirname, '../packages/platform/src'),
       '@bing/shared': path.resolve(__dirname, '../packages/shared'),

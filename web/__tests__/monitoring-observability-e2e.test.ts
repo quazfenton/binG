@@ -336,7 +336,7 @@ describe('Monitoring & Observability E2E Tests', () => {
    */
   describe('Audit Logging', () => {
     it('should log HITL approval requests', async () => {
-      const { hitlAuditLogger } = await import('@/lib/stateful-agent/hitl-audit-logger')
+      const { hitlAuditLogger } = await import('@/lib/orchestra/stateful-agent/hitl-audit-logger')
 
       const testInterruptId = 'test_interrupt_' + Date.now()
 
@@ -363,7 +363,7 @@ describe('Monitoring & Observability E2E Tests', () => {
     });
 
     it('should log approval decisions with response time', async () => {
-      const { hitlAuditLogger } = await import('@/lib/stateful-agent/hitl-audit-logger');
+      const { hitlAuditLogger } = await import('@/lib/orchestra/stateful-agent/hitl-audit-logger');
 
       const testInterruptId = 'test_decision_' + Date.now();
 
@@ -395,7 +395,7 @@ describe('Monitoring & Observability E2E Tests', () => {
     });
 
     it('should generate audit statistics', async () => {
-      const { hitlAuditLogger } = await import('@/lib/stateful-agent/hitl-audit-logger');
+      const { hitlAuditLogger } = await import('@/lib/orchestra/stateful-agent/hitl-audit-logger');
 
       const stats = await hitlAuditLogger.getStats();
 
@@ -406,7 +406,7 @@ describe('Monitoring & Observability E2E Tests', () => {
     });
 
     it('should export audit logs', async () => {
-      const { hitlAuditLogger } = await import('@/lib/stateful-agent/hitl-audit-logger');
+      const { hitlAuditLogger } = await import('@/lib/orchestra/stateful-agent/hitl-audit-logger');
 
       const logs = await hitlAuditLogger.exportLogs({
         userId: testUserId,
@@ -422,7 +422,7 @@ describe('Monitoring & Observability E2E Tests', () => {
    */
   describe('Provider Health Monitoring', () => {
     it('should track provider health metrics', async () => {
-      const { providerHealthMonitor } = await import('@/lib/stateful-agent/agents/provider-fallback')
+      const { providerHealthMonitor } = await import('@/lib/orchestra/stateful-agent/agents/provider-fallback')
 
       // Record some requests
       providerHealthMonitor.recordRequest('openai', true, 100)
@@ -436,7 +436,7 @@ describe('Monitoring & Observability E2E Tests', () => {
     })
 
     it('should calculate health scores', async () => {
-      const { providerHealthMonitor } = await import('@/lib/stateful-agent/agents/provider-fallback')
+      const { providerHealthMonitor } = await import('@/lib/orchestra/stateful-agent/agents/provider-fallback')
 
       // Record mixed success/failure for a real provider
       providerHealthMonitor.recordRequest('openai', true, 100)
@@ -451,7 +451,7 @@ describe('Monitoring & Observability E2E Tests', () => {
     })
 
     it('should find healthiest provider', async () => {
-      const { providerHealthMonitor } = await import('@/lib/stateful-agent/agents/provider-fallback')
+      const { providerHealthMonitor } = await import('@/lib/orchestra/stateful-agent/agents/provider-fallback')
 
       const healthiest = providerHealthMonitor.getHealthiestProvider()
       // May be null if no providers tracked
@@ -459,7 +459,7 @@ describe('Monitoring & Observability E2E Tests', () => {
     })
 
     it('should generate health dashboard', async () => {
-      const { getProviderHealthDashboard } = await import('@/lib/stateful-agent/agents/provider-fallback')
+      const { getProviderHealthDashboard } = await import('@/lib/orchestra/stateful-agent/agents/provider-fallback')
 
       const dashboard = getProviderHealthDashboard()
 
@@ -537,7 +537,7 @@ describe('Monitoring & Observability E2E Tests', () => {
    */
   describe('Circuit Breaker', () => {
     it('should track circuit breaker states', async () => {
-      const { circuitBreaker } = await import('@/lib/stateful-agent/agents/provider-fallback');
+      const { circuitBreaker } = await import('@/lib/orchestra/stateful-agent/agents/provider-fallback');
 
       // Record failures
       circuitBreaker.recordFailure('test_provider');
@@ -551,7 +551,7 @@ describe('Monitoring & Observability E2E Tests', () => {
     });
 
     it('should open circuit after threshold', async () => {
-      const { circuitBreaker } = await import('@/lib/stateful-agent/agents/provider-fallback');
+      const { circuitBreaker } = await import('@/lib/orchestra/stateful-agent/agents/provider-fallback');
 
       // Record enough failures to open circuit
       for (let i = 0; i < 5; i++) {
@@ -565,7 +565,7 @@ describe('Monitoring & Observability E2E Tests', () => {
     });
 
     it('should recover after success', async () => {
-      const { circuitBreaker } = await import('@/lib/stateful-agent/agents/provider-fallback');
+      const { circuitBreaker } = await import('@/lib/orchestra/stateful-agent/agents/provider-fallback');
 
       // Record failure then success
       circuitBreaker.recordFailure('test_provider_3');
@@ -576,7 +576,7 @@ describe('Monitoring & Observability E2E Tests', () => {
     });
 
     it('should provide circuit breaker states for all providers', async () => {
-      const { getCircuitBreakerStates } = await import('@/lib/stateful-agent/agents/provider-fallback');
+      const { getCircuitBreakerStates } = await import('@/lib/orchestra/stateful-agent/agents/provider-fallback');
 
       const states = getCircuitBreakerStates();
       expect(typeof states).toBe('object');

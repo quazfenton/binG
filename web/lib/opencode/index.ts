@@ -74,3 +74,11 @@ export {
   createOpencodeCapabilityProvider,
   type OpencodeCapabilityProviderConfig,
 } from './opencode-capability-provider'
+
+// Binary Detection
+export {
+  findOpencodeBinary,
+  findOpencodeBinarySync,
+  resetBinaryCacheForTesting,
+  type FindBinaryOptions,
+} from './find-opencode-binary'
