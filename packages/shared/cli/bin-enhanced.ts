@@ -1011,12 +1011,56 @@ program
 import { LocalVFSManager } from './lib/local-vfs-manager';
 import { LocalHistoryProvider } from './lib/local-history-manager';
 import { PreviewManager } from './lib/preview-manager';
-import { recordFailure, isBlacklisted } from '../../web/lib/sandbox/preview-circuit-breaker';
+// CLI: removed web/ import — { recordFailure, isBlacklisted } from '../../web/lib/sandbox/preview-circuit-breaker';
 
 // ... (existing helper setup)
 
-import { recordFailure, isBlacklisted } from '../../web/lib/sandbox/preview-circuit-breaker';
-import { getModalComProvider } from '../../web/lib/sandbox/providers/modal-com-provider';
+// CLI: duplicate import removed — // CLI: removed web/ import — { recordFailure, isBlacklisted } from '../../web/lib/sandbox/preview-circuit-breaker';
+// CLI: removed web/ import — { getModalComProvider } from '../../web/lib/sandbox/providers/modal-com-provider';
+
+// Stub: circuit breaker not available in CLI-only mode (web-only module)
+function recordFailure(provider: string): void { /* no-op in CLI */ }
+
+// Stub: preview manager for CLI mode (web version uses full preview offloader)
+function getPreview(): any { return null; }
+
+/**
+ * Validate that a required value is present
+ */
+function validateRequired(value: any, name: string, description?: string): boolean {
+  if (!value || (typeof value === "string" && !value.trim())) {
+    console.log(COLORS.error(`${name} is required${description ? ": " + description : ""}`));
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Handle an error with formatted output
+ */
+function handleError(error: any, context?: string): void {
+
+// OAuth handler — may not exist in CLI-only installs
+const oauthHandler: any = {
+  performOauthLogin: async (provider: string) => {
+    console.log(`OAuth login for ${provider} not available in CLI-only mode`);
+    return null;
+  },
+};
+  const message = error instanceof Error ? error.message : String(error);
+  if (context) {
+    console.error(COLORS.error(`${context}: ${message}`));
+  } else {
+    console.error(COLORS.error(message));
+  }
+}
+
+// Stub: circuit breaker not available in CLI-only mode (web-only module)
+function isBlacklisted(provider: string): boolean { return false; }
+
+// Stub: Modal.com provider not available in CLI-only mode (web-only module)
+function getModalComProvider(): any { return null; }
+
 
 async function checkProviderHealth(provider: string): Promise<boolean> {
     // Basic health check simulation
@@ -1145,8 +1189,8 @@ const history = getHistory();
 
 // ... (inside chatLoop while loop, after assistant response)
 await history.saveInteraction({
-    user: userMessage,
-    assistant: response.response || response.content,
+    user: messages.filter((m: any) => m.role === 'user').pop()?.content || '',
+    assistant: messages.filter((m: any) => m.role === 'assistant').pop()?.content || '',
     timestamp: Date.now()
 });
 

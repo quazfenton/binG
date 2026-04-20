@@ -1448,7 +1448,7 @@ async function runProgressiveBuildMode(
         maxTokens: config.maxTokens || 8000,
         temperature: config.temperature ?? 0.7,
         tools: Object.keys(vercelTools).length > 0 ? vercelTools : undefined,
-        maxSteps: config.maxSteps || 10, // Allow multi-step tool calling
+        maxSteps: config.maxSteps || 15, // Allow multi-step tool calling
       } as any);
 
       for await (const chunk of result.fullStream) {
@@ -1907,6 +1907,30 @@ async function runV1ApiWithTools(
         });
       }
 
+      // Text-mode file extraction: if response has text but no tool calls,
+      // parse for ```file: / ```diff: blocks and apply to VFS
+      if (response && toolInvocations.length === 0) {
+        try {
+          const { extractFileEdits } = await import('../chat/file-edit-parser');
+          const { virtualFilesystem } = await import('../virtual-filesystem/index.server');
+          const textEdits = extractFileEdits(response);
+          if (textEdits.length > 0) {
+            const ownerId = config.userId || config.filesystemOwnerId || '1';
+            for (const edit of textEdits) {
+              if (edit.path && edit.content) {
+                try {
+                  const editPath = config.scopePath ? `${config.scopePath}/${edit.path}` : edit.path;
+                  await virtualFilesystem.writeFile(ownerId, editPath, edit.content);
+                } catch { /* best effort */ }
+              }
+            }
+            log.info(`[V1-API-WITH-TOOLS] Text-mode fallback: extracted ${textEdits.length} file edits from response text`, {
+              paths: textEdits.map(e => e.path),
+            });
+          }
+        } catch { /* text extraction is best-effort */ }
+      }
+
       // FIX: Record comprehensive telemetry with tool execution data
       const toolCallTelemetry = toolInvocations.map(inv => ({
         toolCallId: inv.toolCallId,
@@ -2235,12 +2259,12 @@ async function runV1ApiCompletion(
         temperature: config.temperature || 0.7,
         maxTokens: config.maxTokens || 4096,
         maxRetries: 0,
-        maxSteps: 10,  // Allow tool execution
+        maxSteps: 12,  // Allow tool execution
         tools: config.tools?.length ? config.tools : undefined,
       };
 
       if (config.onStreamChunk) {
-        console.log('[ORCHESTRATOR] Passing tools to streamWithVercelAI:', config.tools?.map(t => t.name));
+        log.debug('[ORCHESTRATOR] Passing tools to streamWithVercelAI:', config.tools?.map((t: any) => t.name));
         for await (const chunk of streamWithVercelAI(streamOpts as any)) {
           if (chunk.content) {
             content += chunk.content;

@@ -1,6 +1,7 @@
 import { Daytona } from '@daytonaio/sdk'
 import { resolve, relative } from 'node:path'
 import type { ToolResult, PreviewInfo } from '../types'
+import { validatePreviewInfo } from '../types'
 import type {
   SandboxProvider,
   SandboxHandle,
@@ -426,13 +427,38 @@ class DaytonaSandboxHandle implements SandboxHandle {
   }
 
   async getPreviewLink(port: number): Promise<PreviewInfo> {
-    const preview = await this.sandbox.getPreviewLink(port)
-    return {
-      port,
-      url: preview.url,
-      token: preview.token,
-      authHeaders: preview.token ? { 'Authorization': `Bearer ${preview.token}` } : {},
-      openedAt: Date.now(),
+    try {
+      const preview = await this.sandbox.getPreviewLink(port);
+
+      if (!preview?.url) {
+        throw new Error('No preview URL returned from Daytona');
+      }
+
+      const previewInfo: PreviewInfo = {
+        port,
+        url: preview.url,
+        token: preview.token,
+        authHeaders: preview.token ? { 'Authorization': `Bearer ${preview.token}` } : {},
+        openedAt: Date.now(),
+        status: 'ready'
+      };
+
+      // Validate the preview info
+      if (!validatePreviewInfo(previewInfo)) {
+        throw new Error('Generated preview info is invalid');
+      }
+
+      return previewInfo;
+    } catch (error: any) {
+      console.error('[Daytona] Get preview link error:', error);
+
+      return {
+        port,
+        url: '',
+        status: 'error',
+        error: error.message,
+        openedAt: Date.now()
+      };
     }
   }
 

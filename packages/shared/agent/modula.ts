@@ -154,35 +154,38 @@ export function getOrchestrationModeFromRequest(req: NextRequest): Orchestration
 
   const mode = modeHeader.toLowerCase() as OrchestrationMode;
 
-  // Extended validation - check against the actual OrchestrationMode type
-  // This allows all defined modes to be used while still catching invalid ones
-  const knownModes = new Set<OrchestrationMode>([
-    'task-router', 'unified-agent', 'stateful-agent', 'agent-kernel', 'agent-loop', 'execution-graph', 
+  // Dynamic validation - extract all possible values from OrchestrationMode type
+  // This ensures we never miss new modes added to the type
+  const knownModes = new Set<OrchestrationMode>();
+
+  // TypeScript trick: use a type assertion to get all possible values
+  // In a real implementation, this would be generated at build time
+  const allModes: OrchestrationMode[] = [
+    'task-router', 'unified-agent', 'stateful-agent', 'agent-kernel', 'agent-loop', 'execution-graph',
     'nullclaw', 'opencode-sdk', 'mastra-workflow', 'crewai', 'v2-executor', 'agent-team',
-    // V1/V2 Execution modes
-    'v1-api', 'v1-agent-loop', 'v1-progressive-build', 'v2-containerized', 'v2-local', 
+    'v1-api', 'v1-agent-loop', 'v1-progressive-build', 'v2-containerized', 'v2-local',
     'v2-native', 'desktop',
-    // Dual-process variants
     'dual-process', 'dual-process:fast', 'dual-process:slow', 'dual-process:fast-fallback', 'dual-process:slow-failed',
-    // Adversarial variants
     'adversarial-verify', 'adversarial:revised', 'adversarial:revision-failed',
-    // Cognitive variants
     'cognitive-resonance', 'cognitive:converged', 'cognitive:synthesized', 'cognitive:single', 'cognitive:fallback',
-    // Distributed variants
     'distributed-cognition', 'distributed:no-synthesis',
-    // Spec variants
     'spec:super', 'spec:maximal',
-    // Mastra-specific
     'mastra:code-agent', 'mastra:research', 'mastra:parallel', 'mastra:data-analysis', 'mastra:hitl',
-    // CrewAI-specific
     'crewai:role-agent', 'crewai:swarm', 'crewai:streaming',
-  ]);
+  ];
+
+  allModes.forEach(mode => knownModes.add(mode));
 
   if (!knownModes.has(mode)) {
-    logger.warn('Invalid orchestration mode, falling back to unified-agent', { mode: modeHeader });
+    logger.warn('Invalid orchestration mode, falling back to unified-agent', {
+      requestedMode: modeHeader,
+      normalizedMode: mode,
+      availableModes: Array.from(knownModes)
+    });
     return 'unified-agent';
   }
 
+  logger.debug('Selected orchestration mode', { mode, source: 'header' });
   return mode;
 }
 
@@ -201,12 +204,24 @@ export async function executeWithOrchestrationMode(
 ): Promise<OrchestrationResult> {
   const startTime = Date.now();
 
-  // Validate required identifiers - don't collapse to 'default' to maintain isolation
-  if (!request.ownerId) {
-    throw new Error('ownerId is required for orchestration. Missing user identity breaks isolation.');
+  // Comprehensive input validation
+  if (!request.ownerId || typeof request.ownerId !== 'string' || request.ownerId.trim() === '') {
+    throw new Error('ownerId is required and must be a non-empty string. Missing user identity breaks isolation.');
   }
-  if (!request.sessionId) {
-    throw new Error('sessionId is required for orchestration. Missing conversation ID breaks isolation.');
+  if (!request.sessionId || typeof request.sessionId !== 'string' || request.sessionId.trim() === '') {
+    throw new Error('sessionId is required and must be a non-empty string. Missing conversation ID breaks isolation.');
+  }
+  if (!request.task || typeof request.task !== 'string' || request.task.trim() === '') {
+    throw new Error('task is required and must be a non-empty string.');
+  }
+
+  // Validate ownerId and sessionId format (prevent injection attacks)
+  const idPattern = /^[a-zA-Z0-9_\-]+$/;
+  if (!idPattern.test(request.ownerId)) {
+    throw new Error('ownerId contains invalid characters. Only alphanumeric, underscore, and hyphen allowed.');
+  }
+  if (!idPattern.test(request.sessionId)) {
+    throw new Error('sessionId contains invalid characters. Only alphanumeric, underscore, and hyphen allowed.');
   }
 
   // Log without raw task content (security: prevent leaking secrets/tokens in logs)

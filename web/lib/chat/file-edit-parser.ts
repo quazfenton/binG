@@ -1081,10 +1081,10 @@ export function extractFileEdits(content: string): FileEdit[] {
     content.includes('\nwrite_files') ||
     content.includes('\ndelete_file') ||
     content.includes('\napply_diff') ||
-    content.includes('```file:') ||
-    content.includes('```diff') ||
-    content.includes('```mkdir:') ||
-    content.includes('```delete:') ||
+    /```\s*file\s*:/i.test(content) ||
+    /```\s*diff/i.test(content) ||
+    /```\s*mkdir\s*:/i.test(content) ||
+    /```\s*delete\s*:/i.test(content) ||
     (content.includes('"tool"') && content.includes('"arguments"')) ||
     /write_file\s*\(\s*\{/.test(content) ||
     /delete_file\s*\(\s*\{/.test(content) ||
@@ -1189,17 +1189,18 @@ export function extractFileEdits(content: string): FileEdit[] {
   // FALLBACK: Parse text-mode fenced file edits: ```file: path\ncontent\n```
   // Used when model doesn't support function calling — text-mode tool instructions
   // tell it to use this format for file creation/overwrite.
-  if (content.includes('```file:')) {
+  // Case-insensitive gate: handles ```FILE:, ```File:, ```file :, etc.
+  if (/```\s*file\s*:/i.test(content)) {
     allEdits.push(...extractFencedFileEdits(content));
   }
 
   // FALLBACK: Parse text-mode fenced mkdir: ```mkdir: path\n```
-  if (content.includes('```mkdir:')) {
+  if (/```\s*mkdir\s*:/i.test(content)) {
     allEdits.push(...extractFencedMkdirEdits(content) as FileEdit[]);
   }
 
   // FALLBACK: Parse text-mode fenced delete: ```delete: path\n```
-  if (content.includes('```delete:')) {
+  if (/```\s*delete\s*:/i.test(content)) {
     allEdits.push(...extractFencedDeleteBlocks(content) as FileEdit[]);
   }
 

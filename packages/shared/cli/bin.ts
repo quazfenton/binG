@@ -34,6 +34,20 @@ import { Readable } from 'stream';
 // Load environment variables
 dotenv.config();
 
+// ============================================================================
+// Local Mode Detection (hoisted — used throughout the file)
+// ============================================================================
+
+const localMode = detectLocalMode();
+
+function detectLocalMode(): { isLocal: boolean; isDesktop: boolean; workspace: string } {
+  const isLocal = !process.env.VERCEL && !process.env.VERCEL_ENV && process.env.NODE_ENV !== "production";
+  const isDesktop = !!process.env.DESKTOP_MODE || !!process.env.DESKTOP_LOCAL_EXECUTION;
+  const workspace = process.env.DESKTOP_WORKSPACE_ROOT || process.env.WORKSPACE_ROOT ||
+    path.join(process.env.HOME || process.env.USERPROFILE || cwd(), "workspace");
+  return { isLocal, isDesktop, workspace };
+}
+
 // CLI Configuration
 const CLI_VERSION = '1.2.2';
 const DEFAULT_API_BASE = process.env.BING_API_URL || 'http://localhost:3000/api';
@@ -179,6 +193,12 @@ const SSE_EVENT_TYPES = {
   DONE: 'done',
   ERROR: 'error',
   STEP: 'step',
+  FILESYSTEM: 'filesystem',
+  DIFFS: 'diffs',
+  TOOL_INVOCATION: 'tool_invocation',
+  REASONING: 'reasoning',
+  PRIMARY_DONE: 'primary_done',
+  HEARTBEAT: 'heartbeat',
 };
 
 interface FileEditEvent {
@@ -226,6 +246,20 @@ async function emitFilesystemEvent(eventData: {
   content?: string;
   source: string;
 }): Promise<void> {
+  // In desktop/CLI local modes, only commit to local git history in ~/.quaz/
+  // Do NOT save user files to the server database — privacy, storage, and load concerns.
+  if (localMode.isLocal || localMode.isDesktop) {
+    try {
+      const vfs = await getLocalVFS();
+      if (vfs && eventData.content !== undefined) {
+        await vfs.commitToHistory(eventData.path, eventData.content);
+      }
+    } catch {
+      // Local history commit failed — non-critical
+    }
+    return; // Do NOT push to server DB in local modes
+  }
+  // Web mode: push to server for cross-session sync
   try {
     const config = loadConfig();
     await apiRequest('/filesystem/events/push', {
@@ -272,9 +306,12 @@ interface PendingFileEdit {
   originalContent?: string;
   newContent: string;
   timestamp: number;
+  committed: boolean | string;
 }
 
 const pendingFileEdits: PendingFileEdit[] = [];
+// Also tracked under alias pendingEdits for backward-compat
+const pendingEdits: PendingFileEdit[] = pendingFileEdits;
 
 function parseSSELine(line: string): { type: string; data: any } | null {
   if (!line.startsWith('event:') && !line.startsWith('data:')) return null;
@@ -304,6 +341,7 @@ function processFileEditEvent(data: FileEditEvent): void {
       path: data.path,
       newContent: data.content || '',
       timestamp: Date.now(),
+      committed: false, // Pending server confirmation
     });
   }
   
@@ -346,6 +384,7 @@ function openFileInEditor(filePath: string): void {
 async function processSSEStream(response: AsyncIterable<any>): Promise<string> {
   let fullResponse = '';
   let streamDone = false;
+  let collectedDiffs: Array<{ path: string; diff: string; changeType: string }> = [];
   
   try {
     for await (const chunk of response) {
@@ -365,6 +404,7 @@ async function processSSEStream(response: AsyncIterable<any>): Promise<string> {
           break;
         case 'done':
         case 'primary_done':
+        case SSE_EVENT_TYPES.PRIMARY_DONE:
           streamDone = true;
           break;
         case 'token':
@@ -376,7 +416,42 @@ async function processSSEStream(response: AsyncIterable<any>): Promise<string> {
           console.log(`\n${COLORS.error('Error:')} ${event.data.message || event.data}`);
           break;
         case 'step':
-          process.stdout.write(`${COLORS.info('→')} ${event.data.message || ''}\r`);
+        case SSE_EVENT_TYPES.STEP:
+          process.stdout.write(`${COLORS.info('→')} ${event.data?.step || event.data?.message || ''}\r`);
+          break;
+        case 'filesystem':
+        case SSE_EVENT_TYPES.FILESYSTEM:
+          // Filesystem mutation notification — track for post-stream diff display
+          if (event.data?.path) {
+            displayFileDiffIncoming(event.data.path, event.data?.applied?.content || '');
+          }
+          break;
+        case 'diffs':
+        case SSE_EVENT_TYPES.DIFFS:
+          // Git-style diffs — collect for post-stream display
+          if (event.data?.files) {
+            for (const f of event.data.files) {
+              collectedDiffs.push({ path: f.path, diff: f.diff, changeType: f.changeType });
+            }
+          }
+          break;
+        case 'tool_invocation':
+        case SSE_EVENT_TYPES.TOOL_INVOCATION:
+          // Tool invocation lifecycle — show tool name briefly
+          if (event.data?.toolName && event.data?.state === 'call') {
+            process.stdout.write(`${COLORS.accent('🔧')} ${event.data.toolName}\r`);
+          }
+          break;
+        case 'reasoning':
+        case SSE_EVENT_TYPES.REASONING:
+          // Chain-of-thought — show in muted color
+          if (event.data?.reasoning) {
+            process.stdout.write(`${COLORS.muted('💭 ' + event.data.reasoning.slice(0, 80))}\r`);
+          }
+          break;
+        case 'heartbeat':
+        case SSE_EVENT_TYPES.HEARTBEAT:
+          // Keep-alive — no action needed
           break;
         default:
           break;
@@ -390,13 +465,45 @@ async function processSSEStream(response: AsyncIterable<any>): Promise<string> {
     console.log(`\n\n${COLORS.success('═'.repeat(55))}`);
     console.log(`${COLORS.accent('📁 File Edits:')} ${pendingFileEdits.length} file(s) modified`);
     
+    // Show collected diffs (from diffs event) if any
+    if (collectedDiffs.length > 0) {
+      console.log(`\n${COLORS.accent('━'.repeat(55))}`);
+      console.log(`${COLORS.accent('📊 Diffs:')}${collectedDiffs.length} file(s) changed`);
+      collectedDiffs.forEach((d, i) => {
+        const fileName = d.path.split(/[/\\]/).pop() || d.path;
+        console.log(`  ${COLORS.primary(fileName)} [${d.changeType}] [r] revert`);
+        const diffLines = (d.diff || '').split('\n').slice(0, 5);
+        diffLines.forEach(line => {
+          if (line.startsWith('+') && !line.startsWith('+++')) {
+            console.log(`    ${COLORS.success(line)}`);
+          } else if (line.startsWith('-') && !line.startsWith('---')) {
+            console.log(`    ${COLORS.error(line)}`);
+          } else if (line.startsWith('@@')) {
+            console.log(`    ${COLORS.info(line)}`);
+          }
+        });
+      });
+      console.log(COLORS.accent('━'.repeat(55)));
+    }
+
     pendingFileEdits.forEach((edit, i) => {
       const fileName = edit.path.split(/[/\\]/).pop() || edit.path;
       const shortPath = edit.path.length > 40 ? '...' + edit.path.slice(-37) : edit.path;
-      console.log(`  ${i}: ${COLORS.primary(fileName)} ${COLORS.muted(shortPath)}`);
+      console.log(`  ${i}: ${COLORS.primary(fileName)} ${COLORS.muted(shortPath)} [r] revert`);
     });
-    
+
+    console.log(`${COLORS.info('  Press [r] then edit number to revert, e.g. "r 0"')}`);
     console.log(COLORS.success('═'.repeat(55)));
+
+    // Prompt for revert if in interactive mode
+    if (pendingFileEdits.length > 0) {
+      const revertInput = await prompt(COLORS.muted('Revert? (r <num> / Enter to skip): '));
+      const revertMatch = revertInput.trim().match(/^r\s*(\d+)/i);
+      if (revertMatch) {
+        const editIndex = parseInt(revertMatch[1]);
+        await handleRevertEdit(editIndex);
+      }
+    }
   }
   
   return fullResponse;
@@ -436,18 +543,6 @@ function renderDiffColor(filePath: string, content: string): string {
   });
   
   return output;
-}
-
-// ============================================================================
-// Local Execution Detection
-// ============================================================================
-
-function detectLocalMode(): { isLocal: boolean; isDesktop: boolean; workspace: string } {
-  const isLocal = !process.env.VERCEL && !process.env.VERCEL_ENV && process.env.NODE_ENV !== 'production';
-  const isDesktop = !!process.env.DESKTOP_MODE || !!process.env.DESKTOP_LOCAL_EXECUTION;
-  const workspace = process.env.DESKTOP_WORKSPACE_ROOT || process.env.WORKSPACE_ROOT ||
-    path.join(process.env.HOME || process.env.USERPROFILE || cwd(), 'workspace');
-  return { isLocal, isDesktop, workspace };
 }
 
 async function runLocalCommand(cmd: string, cwd?: string): Promise<{ stdout: string; stderr: string; code: number }> {
@@ -685,7 +780,7 @@ const COLORS = {
   error: chalk.red,
   info: chalk.blue,
   accent: chalk.magenta,
-  secondary: chalk.purple,
+  secondary: chalk.magenta,
   muted: chalk.gray,
 };
 
@@ -759,21 +854,30 @@ function analyzeCommandImpact(command: string): CommandImpact {
     }
   }
 
+  // In desktop/CLI local modes, adjust severity thresholds:
+  // LOW = most known commands (cat, ls, echo, mkdir, npm, git status, etc.)
+  // MEDIUM = unknown/unpredictable new commands (requires Enter approval)
+  // HIGH = explicitly destructive (rm -rf, format, etc.) — extra warning in red
+  const isLocalMode = localMode.isLocal || localMode.isDesktop;
+  const LOCAL_SAFE_COMMANDS = /^\s*(cat|ls|dir|echo|pwd|mkdir|touch|head|tail|grep|find|wc|sort|uniq|npm|pnpm|yarn|bun|npx|node|python|pip|git status|git log|git diff|git branch)\b/i;
+
   const impact: CommandImpact = {
     command: sanitized,
-    estimatedImpact: 'low',
+    estimatedImpact: isLocalMode ? (LOCAL_SAFE_COMMANDS.test(sanitized) ? 'low' : 'medium') : 'low',
     filesAffected: [],
     sideEffects: [],
     warnings: [],
-    confirmationRequired: false,
+    confirmationRequired: isLocalMode ? !LOCAL_SAFE_COMMANDS.test(sanitized) : false,
   };
 
-  // Check for destructive commands
+  // Check for destructive commands — always HIGH regardless of mode
   for (const pattern of DESTRUCTIVE_PATTERNS) {
     if (pattern.test(command)) {
       impact.estimatedImpact = 'high';
       impact.confirmationRequired = true;
-      impact.warnings.push('This action is destructive and cannot be undone');
+      impact.warnings.push(isLocalMode
+        ? '⚠️  HIGH SEVERITY: This action is destructive and cannot be undone'
+        : 'This action is destructive and cannot be undone');
       break;
     }
   }
@@ -908,6 +1012,20 @@ function prompt(question: string): Promise<string> {
   });
 }
 
+async function promptAsync(question: string): Promise<string> {
+  return new Promise((resolve) => {
+    rl.question(question, (answer) => resolve(answer));
+  });
+}
+
+/**
+ * Confirm a yes/no question
+ */
+async function confirm(question: string): Promise<boolean> {
+  const answer = await prompt(question + " (y/N): ");
+  return answer.toLowerCase() === "y";
+}
+
 /**
  * Interactive chat loop
  */
@@ -919,6 +1037,16 @@ async function chatLoop(options: { agent?: string; stream?: boolean }): Promise<
 
   // Initialize VFS MCP tools
   await initializeVFSMCP(userId, sessionId);
+
+  // Initialize local history provider for decentralized chat history persistence
+  // In desktop/CLI modes, chat history is saved to ~/.quaz/chat-history/ NOT to server DB
+  let localHistory: any = null;
+  try {
+    const { LocalHistoryProvider } = await import('./lib/local-history-manager');
+    localHistory = new LocalHistoryProvider(process.cwd());
+  } catch {
+    // Local history not available — continue without persistence
+  }
 
   console.log(chalk.cyanBright(`
 ╔═══════════════════════════════════════════════════════════╗
@@ -1005,7 +1133,7 @@ ${COLORS.primary('Available Commands:')}
       
       // Use SSE streaming for real-time file edit display
       if (options.stream !== false) {
-        const axios = await import('axios');
+        const axiosMod = await import('axios'); const axios = axiosMod.default || axiosMod;
         const auth = loadAuth();
         
         const resp = await axios({
@@ -1054,6 +1182,19 @@ ${COLORS.primary('Available Commands:')}
 
       // Add assistant response to history
       messages.push({ role: 'assistant', content });
+
+      // Save interaction to local history (desktop/CLI decentralized storage)
+      if (localHistory) {
+        try {
+          await localHistory.saveInteraction({
+            user: userMessage,
+            assistant: content,
+            timestamp: Date.now(),
+          });
+        } catch {
+          // History save failed — non-critical
+        }
+      }
       
     } catch (error: any) {
       spinner.stop();
@@ -1446,8 +1587,8 @@ program
   });
 
 program
-  .command('file:write <path> <content>')
-  .description('Write file locally with VFS tracking')
+  .command('file:write-local <path> <content>')
+  .description('Write file locally with VFS tracking and commit history')
   .action(async (filePath, content) => {
     const vfs = await getLocalVFS();
     if (!vfs) {
@@ -1472,8 +1613,7 @@ program
         path: filePath,
         newContent: content,
         timestamp: Date.now(),
-        committed: true,
-        commitId: `local-${Date.now()}`,
+        committed: `local-${Date.now()}`,
       });
     } catch (error: any) {
       console.log(COLORS.error(`Error writing file: ${error.message}`));
@@ -1521,9 +1661,18 @@ program
     }
 
     edits.forEach((edit, i) => {
-      const status = edit.committed ? COLORS.success('[committed]') : COLORS.warning('[pending]');
+      const status = edit.committed ? COLORS.success('[]') : COLORS.warning('[pending]');
       console.log(`  ${i}: ${new Date(edit.timestamp).toISOString()} ${status}`);
     });
+  });
+
+program
+  .command('rollback')
+  .description('Interactive commit rollback selector with arrow key navigation')
+  .option('-l, --limit <number>', 'Maximum number of commits to show (default: 20)')
+  .action(async (options) => {
+    const { handleRollbackCommand } = await import('./commit-tui');
+    await handleRollbackCommand([]);
   });
 
 // ============================================================================
@@ -2728,7 +2877,23 @@ program
     }
   });
 
-import * as oauthHandler from './src/oauth-handler';
+// OAuth handler — lazy-loaded because the module may not exist in CLI-only installs
+let oauthHandler: any = null;
+// Lazy-loaded: dynamic import() fails gracefully if module doesn't exist
+// Cannot use top-level await in CommonJS — init lazily on first access
+async function getOauthHandler(): Promise<any> {
+  if (!oauthHandler) {
+    try {
+      // @ts-expect-error — module may not exist in CLI-only install
+      const mod = await import('./src/oauth-handler');
+      oauthHandler = mod.default || mod;
+    } catch {
+      // oauth-handler not available; login will use email/password only
+      oauthHandler = null;
+    }
+  }
+  return oauthHandler;
+}
 
 program
   .command('login')
@@ -2778,7 +2943,7 @@ program
     try {
         let authResult;
         if (provider) {
-            authResult = await oauthHandler.performOauthLogin(provider);
+            authResult = await (await getOauthHandler()).performOauthLogin(provider);
             saveAuth({
                 token: authResult.token,
                 userId: authResult.userId,
@@ -3458,20 +3623,30 @@ program
         if (result) {
           binaryPath = 'OpenCode server running';
         } else {
-          const { findOpencodeBinary } = await import('../../web/lib/agent-bins/find-opencode-binary');
+          let findOpencodeBinary: any = null;
+// @ts-expect-error — module may not exist in CLI-only install
+try { const mod = await import('../../web/lib/agent-bins/find-opencode-binary'); findOpencodeBinary = mod.findOpencodeBinary; } catch { findOpencodeBinary = null; };
           binaryPath = await findOpencodeBinary();
         }
       } else if (normalized === 'pi') {
-        const { findPiBinary } = await import('../../web/lib/agent-bins/find-pi-binary');
+        let findPiBinary: any = null;
+// @ts-expect-error — module may not exist in CLI-only install
+try { const mod = await import('../../web/lib/agent-bins/find-pi-binary'); findPiBinary = mod.findPiBinary; } catch { findPiBinary = null; };
         binaryPath = await findPiBinary();
       } else if (normalized === 'codex') {
-        const { findCodexBinary } = await import('../../web/lib/agent-bins/find-codex-binary');
+        let findCodexBinary: any = null;
+// @ts-expect-error — module may not exist in CLI-only install
+try { const mod = await import('../../web/lib/agent-bins/find-codex-binary'); findCodexBinary = mod.findCodexBinary; } catch { findCodexBinary = null; };
         binaryPath = await findCodexBinary();
       } else if (normalized === 'amp') {
-        const { findAmpBinary } = await import('../../web/lib/agent-bins/find-amp-binary');
+        let findAmpBinary: any = null;
+// @ts-expect-error — module may not exist in CLI-only install
+try { const mod = await import('../../web/lib/agent-bins/find-amp-binary'); findAmpBinary = mod.findAmpBinary; } catch { findAmpBinary = null; };
         binaryPath = await findAmpBinary();
       } else if (normalized === 'claude-code') {
-        const { findClaudeCodeBinary } = await import('../../web/lib/agent-bins/find-claude-code-binary');
+        let findClaudeCodeBinary: any = null;
+// @ts-expect-error — module may not exist in CLI-only install
+try { const mod = await import('../../web/lib/agent-bins/find-claude-code-binary'); findClaudeCodeBinary = mod.findClaudeCodeBinary; } catch { findClaudeCodeBinary = null; };
         binaryPath = await findClaudeCodeBinary();
       }
 
@@ -3510,7 +3685,9 @@ program
 
     try {
       if (normalized === 'opencode') {
-        const { findOpencodeBinary } = await import('../../web/lib/agent-bins/find-opencode-binary');
+        let findOpencodeBinary: any = null;
+// @ts-expect-error — module may not exist in CLI-only install
+try { const mod = await import('../../web/lib/agent-bins/find-opencode-binary'); findOpencodeBinary = mod.findOpencodeBinary; } catch { findOpencodeBinary = null; };
         const binaryPath = await findOpencodeBinary();
 
         if (!binaryPath) {
@@ -3573,7 +3750,9 @@ program
         });
         result = response.response || response.content;
       } else if (normalized === 'codex') {
-        const { findCodexBinary } = await import('../../web/lib/agent-bins/find-codex-binary');
+        let findCodexBinary: any = null;
+// @ts-expect-error — module may not exist in CLI-only install
+try { const mod = await import('../../web/lib/agent-bins/find-codex-binary'); findCodexBinary = mod.findCodexBinary; } catch { findCodexBinary = null; };
         const binaryPath = await findCodexBinary();
 
         if (!binaryPath) {
@@ -4149,7 +4328,7 @@ ${COLORS.primary('Support:')} https://github.com/quazfenton/binG/issues
 // ADVANCED TUI - Interactive Visual Interface
 // ============================================================================
 
-import { clearScreen, cursorHide, cursorShow, moveCursor } from 'ansi-escapes';
+import { clearScreen, cursorHide, cursorShow, cursorTo } from 'ansi-escapes';
 
 interface TUITheme {
   primary: string;
@@ -4200,7 +4379,7 @@ interface TUIDesign {
   name: string;
   useEmojis: boolean;
   theme: TUITheme;
-  particles: string[];
+  particles: string | string[];
   logo: string[];
   accent: string;
 }
@@ -4374,14 +4553,6 @@ const MENU_ITEMS_EMOJI: TUIMenuItem[] = [
   { id: 'config', label: 'Config', icon: '⚙️', action: 'config', description: 'Configure settings' },
   { id: 'modes', label: 'Modes', icon: '🔄', action: 'orchestration:modes', description: 'Orchestration modes' },
 ];
-  { id: 'ask', label: 'Ask', icon: '❓', action: 'ask', description: 'Ask a quick question' },
-  { id: 'sandbox', label: 'Sandbox', icon: '📦', action: 'sandbox:create', description: 'Create a development environment' },
-  { id: 'file', label: 'Files', icon: '📁', action: 'file:list', description: 'Browse workspace files' },
-  { id: 'image', label: 'Images', icon: '🖼️', action: 'image:generate', description: 'Generate AI images' },
-  { id: 'agents', label: 'Agents', icon: '🤖', action: 'agents:list', description: 'Manage running agents' },
-  { id: 'status', label: 'Status', icon: '📊', action: 'status', description: 'View system status' },
-  { id: 'config', label: 'Config', icon: '⚙️', action: 'config', description: 'Configure settings' },
-];
 
 async function runTUI(designName: string = 'avantgarde'): Promise<void> {
   const design = DESIGNS[designName] || DESIGNS.avantgarde;
@@ -4399,12 +4570,6 @@ async function runTUI(designName: string = 'avantgarde'): Promise<void> {
     if (enable) {
       process.stdin.setRawMode?.(true);
     }
-  }
-
-  async function promptAsync(question: string): Promise<string> {
-    return new Promise((resolve) => {
-      rl.question(question, (answer) => resolve(answer));
-    });
   }
 
   function renderDesign(): string {
@@ -4512,10 +4677,10 @@ async function runTUI(designName: string = 'avantgarde'): Promise<void> {
         selectedIndex = Math.min(designItems.length - 1, selectedIndex + 1);
       } else if (key === '\r' || key === '\n') {
         running = false;
-        process.stdout.write(cursorShow + clearScreen + moveCursor(0, 0));
+        process.stdout.write(cursorShow + clearScreen + cursorTo(0, 0));
         console.log('\n');
       } else if (key === '\u001b') {
-        process.stdout.write(cursorShow + clearScreen + moveCursor(0, 0));
+        process.stdout.write(cursorShow + clearScreen + cursorTo(0, 0));
         running = false;
       } else if (key === '\\') {
         designName = designName === 'avantgarde' ? 'classic' : designName === 'classic' ? 'holochat' : 'avantgarde';
@@ -4578,7 +4743,7 @@ async function runTUI(designName: string = 'avantgarde'): Promise<void> {
 
 const args = process.argv.slice(2);
 
-const localMode = detectLocalMode();
+// (localMode is hoisted to the top of the file)
 
 if (args.length === 0) {
   if (localMode.isLocal || localMode.isDesktop) {
