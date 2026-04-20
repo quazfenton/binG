@@ -36,6 +36,10 @@ export interface BashToolConfig {
   workingDir: string;
   /** Default timeout in ms */
   defaultTimeout: number;
+  /** Optional: Callback for streaming output to terminal */
+  onTerminalOutput?: (text: string) => void;
+  /** Optional: Get filesystem state for routing decisions */
+  getFilesystemState?: () => Record<string, { content?: string; isDirectory?: boolean }>;
 }
 
 const DEFAULT_CONFIG: BashToolConfig = {
@@ -122,7 +126,7 @@ export async function handleTextEditorCommand(
     intercepted: true,
     editor,
     filePath,
-  };
+  } as any;
 }
 
 // ============================================================================
@@ -174,7 +178,7 @@ export function clearBashHooks(): void {
 async function triggerHooks(type: keyof typeof hooks, ctx: BashHookContext): Promise<BashHookResult | null> {
   for (const handler of hooks[type]) {
     try {
-      const result = await handler(ctx);
+      const result = await handler(ctx) as BashHookResult | undefined;
       if (result?.skipExecution) return result;
     } catch (e: any) {
       logger.warn(`Hook error (${type})`, { error: e.message });
@@ -418,8 +422,65 @@ export function createBashTool(config: Partial<BashToolConfig> = {}) {
           throw new Error(`Command blocked by safety filter: ${command.slice(0, 100)}`);
         }
 
+        // ROUTING: Check if command should be simulated vs sandbox via terminal router
+        let routeDecision: { mode: string; reason?: string } | null = null;
+        if (cfg.getFilesystemState) {
+          try {
+            const { routeLLMCommand, executeRoutedCommand } = await import('@/lib/terminal/commands/llm-bash-router');
+            routeDecision = routeLLMCommand(command, {
+              getFilesystem: cfg.getFilesystemState,
+              onOutput: cfg.onTerminalOutput,
+            });
+            logger.debug('Command routed', routeDecision);
+            
+            // Execute based on routing decision
+            if (routeDecision.mode === 'simulate') {
+              const simOutput = await executeRoutedCommand(routeDecision as any, {
+                getFilesystem: cfg.getFilesystemState,
+                onOutput: cfg.onTerminalOutput,
+              });
+              // Stream to terminal if callback provided
+              if (cfg.onTerminalOutput) {
+                cfg.onTerminalOutput(simOutput);
+              }
+              return {
+                success: true,
+                output: simOutput,
+                error: undefined,
+                exitCode: 0,
+                duration: 0,
+                _routed: 'simulate',
+              };
+            } else if (routeDecision.mode === 'blocked') {
+              return {
+                success: false,
+                output: '',
+                error: routeDecision.reason || 'Command blocked',
+                exitCode: 1,
+                duration: 0,
+                _routed: 'blocked',
+              };
+            } else if (routeDecision.mode === 'confirm') {
+              // For now, require confirmation through the tool result
+              // In full integration, this would prompt the user
+              return {
+                success: false,
+                output: '',
+                error: `[CONFIRM REQUIRED] ${routeDecision.reason || 'This command requires confirmation. Please re-run with confirmation.'}`,
+                exitCode: 1,
+                duration: 0,
+                _routed: 'confirm',
+              };
+            }
+            // 'sandbox' mode falls through to normal execution
+          } catch (e) {
+            // Router unavailable - fall through to normal execution
+            logger.debug('Command router unavailable', { error: (e as Error).message });
+          }
+        }
+
         // PATCH 1: Intercept text editor commands (vim/nano/emacs) — they'd hang the PTY
-        const editorResult = await handleTextEditorCommand(command, wd);
+        const editorResult = await handleTextEditorCommand(command, wd) as any;
         if (editorResult) {
           logger.info('Text editor command intercepted', { editor: editorResult.editor, filePath: editorResult.filePath });
           return {
@@ -481,14 +542,19 @@ export function createBashTool(config: Partial<BashToolConfig> = {}) {
           // PATCH 2: Trigger postExecution hooks (allows file sync, logging, etc.)
           await triggerHooks('postExecution', { ...hookCtx, result });
 
-          return {
-            success: result.success,
-            output: result.stdout,
-            error: result.stderr,
-            exitCode: result.exitCode,
-            duration: result.duration,
-            outputPath: result.outputPath,
-          };
+          // Stream output to terminal callback if provided (for TerminalPanel integration)
+        if (cfg.onTerminalOutput && result.stdout) {
+          cfg.onTerminalOutput(result.stdout);
+        }
+
+        return {
+          success: result.success,
+          output: result.stdout,
+          error: result.stderr,
+          exitCode: result.exitCode,
+          duration: result.duration,
+          outputPath: result.outputPath,
+        };
         } catch (error: any) {
           logger.error('Bash execution failed', {
             command,

@@ -1,5 +1,5 @@
 [package]
-name = "opencode-desktop"
+name = "compute-desktop"
 version = "0.1.0"
 edition = "2021"
 description = "OpenCode Desktop - AI-powered code assistant"
@@ -22,9 +22,14 @@ tauri-plugin-dialog = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-process = "2"
 tauri-plugin-os = "2"
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-mcp-bridge = { git = "https://github.com/hypothesi/mcp-server-tauri.git", branch = "main", subdirectory = "packages/tauri-plugin-mcp-bridge" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 hostname = "0.3"
 chrono = { version = "0.4", features = ["serde"] }
 walkdir = "2"
+reqwest = { version = "0.12", features = ["blocking"] }
+portpicker = "0.1"
+dirs = "6"

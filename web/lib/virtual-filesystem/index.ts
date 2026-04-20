@@ -73,3 +73,6 @@ export const __VFS_SERVER_EXPORTS = [
   'createFileWatcher',
   'watchFiles',
 ];
+
+// Re-export virtualFilesystem for backward compatibility
+export { virtualFilesystem } from './virtual-filesystem-service';

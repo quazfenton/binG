@@ -14,6 +14,7 @@ import { isMCPAvailable, vfsTools as mcpVFSTools, toolContextStore, getMCPToolsF
 import { ALL_CAPABILITIES, type CapabilityDefinition } from '@/lib/tools/capabilities';
 import { normalizeSessionId } from '@/lib/virtual-filesystem/scope-utils';
 import { getCapabilityRouter } from '@/lib/tools/router';
+import { createWebFetchTool } from '@/lib/tools/web-fetch-tool';
 
 // ============================================================================
 // Types
@@ -340,6 +341,36 @@ export async function getAllTools(
         result[name] = t;
       }
     }
+  }
+
+  // Add web_fetch tool - always available for URL content extraction
+  try {
+    const webFetchTools = await createWebFetchTool({
+      userId: context.userId,
+      conversationId: context.conversationId,
+    });
+    if (!result['web_fetch']) {
+      result['web_fetch'] = webFetchTools.web_fetch;
+    }
+  } catch (err: any) {
+    chatLogger.warn('Failed to create web_fetch tool', { error: err.message });
+  }
+
+  // Add power tools (lazy-loaded — only action-tools for trigger-matched powers)
+  try {
+    const { buildPowerTools } = await import('@/lib/powers');
+    const userMessage = context.lastUserMessage || '';
+    const powerTools = await buildPowerTools(
+      { userId: context.userId, conversationId: context.conversationId, sessionId: context.sessionId },
+      userMessage,
+    );
+    for (const [name, t] of Object.entries(powerTools)) {
+      if (!result[name]) {
+        result[name] = t as Tool;
+      }
+    }
+  } catch (err: any) {
+    chatLogger.warn('Failed to create power tools', { error: err.message });
   }
 
   chatLogger.info('Tool set created', { total: Object.keys(result).length, priority, stats: syncSet.stats });

@@ -101,7 +101,7 @@ function getCacheKey(url: string): string {
 /**
  * Get cache statistics for monitoring
  */
-export function getCacheStats(): {
+function getCacheStats(): {
   size: number;
   totalBytes: number;
   maxBytes: number;

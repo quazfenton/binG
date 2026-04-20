@@ -703,8 +703,16 @@ export function createCloudStorageService(): CloudStorageService {
   }
 }
 
-// Default instance - lazy initialized  
-export const cloudStorage = createCloudStorageService();
+// Default instance - lazy initialized to avoid throwing at import time during SSG builds
+let _cloudStorageInstance: CloudStorageService | null = null;
+export const cloudStorage = new Proxy({} as CloudStorageService, {
+  get(_target, prop) {
+    if (!_cloudStorageInstance) {
+      _cloudStorageInstance = createCloudStorageService();
+    }
+    return (_cloudStorageInstance as any)[prop];
+  },
+});
 
 // Export individual services for testing
 export { NextcloudStorageService, S3StorageService, MinIOStorageService, GCPStorageService };

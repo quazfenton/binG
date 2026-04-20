@@ -15,6 +15,7 @@
  */
 
 import { z } from 'zod';
+import { validatePath } from './filesystem-security';
 
 /**
  * Command validation result
@@ -306,8 +307,6 @@ export async function validateCommandExecution(
 
   // Validate working directory if provided
   if (cwd) {
-    // Use static import to keep function synchronous
-    const { validatePath } = require('./filesystem-security');
     const cwdValidation = validatePath(cwd);
     if (!cwdValidation.valid) {
       return {

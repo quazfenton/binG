@@ -20,6 +20,9 @@ import { stripWorkspacePrefixes } from './scope-utils';
 import { VFSBatchOperations } from './vfs-batch-operations';
 import { createGitBackedVFS, getGitBackedVFSForOwner, type GitBackedVFS, type GitVFSOptions } from './git-backed-vfs';
 import { getDatabase } from '@/lib/database/connection';
+import { compress, decompress, isCompressed } from '@/lib/utils/compression';
+// Caching for repeated directory listings (used by smart-context)
+import { toolResultCache, toolCacheKey } from '@/lib/cache';
 // import { emitFilesystemUpdated } from './sync/sync-events'; // Imported but not used - central emit deferred for now
 
 // Default configuration
@@ -296,8 +299,15 @@ export class VirtualFilesystemService {
       normalizedContent = (previous.content || '') + normalizedContent;
     }
 
+    // Check failIfExists before checking content changes
     if (previous && options?.failIfExists && !options?.append) {
       throw new Error(`File already exists: ${normalizedPath}`);
+    }
+
+    // FIX: Skip write if content hasn't changed — prevents unnecessary version inflation
+    // This happens when spec amplification or other processes re-write the same file
+    if (previous && previous.content === normalizedContent) {
+      return previous; // Return existing file without incrementing version
     }
 
     // Check for concurrent modification (conflict detection)
@@ -373,6 +383,26 @@ export class VirtualFilesystemService {
     workspace.version += 1;
     workspace.updatedAt = now;
 
+    // Invalidate directory listing cache and ALL parent paths up the hierarchy
+    let currentPath = path.dirname(normalizedPath) || '.';
+    while (currentPath !== '.' && currentPath !== '/') {
+      toolResultCache.delete(`${ownerId}:${currentPath}`);
+      currentPath = path.dirname(currentPath) || '.';
+    }
+    // Also invalidate root
+    toolResultCache.delete(`${ownerId}:.`);
+    toolResultCache.delete(`${ownerId}:/`);
+
+    // Invalidate ALL search results when any file changes (search results may contain this file)
+    // For more granular invalidation, we'd need to track which files are in each search result
+    const searchPrefix = `search:${ownerId}:`;
+    const allKeys = toolResultCache.keys ? toolResultCache.keys() : [];
+    for (const key of allKeys) {
+      if (key.startsWith(searchPrefix)) {
+        toolResultCache.delete(key);
+      }
+    }
+
     const changeType: FilesystemChangeType = previous ? 'update' : 'create';
     diffTracker.trackChange(file, ownerId, previous?.content);
 
@@ -428,6 +458,12 @@ export class VirtualFilesystemService {
     // Create a marker file to represent the directory
     // Directories are implicit in VFS, but we create a .gitkeep-like marker for empty dirs
     const dirMarkerPath = `${normalizedPath}/.directory`;
+
+    // FIX: Skip if directory marker already exists — prevent duplicate version increments
+    if (workspace.files.has(dirMarkerPath)) {
+      return { path: normalizedPath, createdAt: workspace.files.get(dirMarkerPath)!.createdAt || now };
+    }
+
     const dirMarker: VirtualFile = {
       path: dirMarkerPath,
       content: '',
@@ -440,7 +476,7 @@ export class VirtualFilesystemService {
     };
 
     workspace.files.set(dirMarkerPath, dirMarker);
-    workspace.version += 1;
+    // FIX: Don't increment version for directory marker — it's internal bookkeeping, not user content
     workspace.updatedAt = now;
 
     // Persist FIRST before emitting events
@@ -592,6 +628,13 @@ export class VirtualFilesystemService {
   }
 
   async listDirectory(ownerId: string, directoryPath: string = this.workspaceRoot): Promise<VirtualFilesystemDirectoryListing> {
+    // Try cache first for read-only operations
+    const cacheKey = `${ownerId}:${directoryPath}`;
+    const cached = toolResultCache.get(cacheKey);
+    if (cached !== null) {
+      return cached as VirtualFilesystemDirectoryListing;
+    }
+
     // Desktop mode: Use local filesystem instead of VFS
     if (isDesktopMode() && isUsingLocalFS()) {
       try {
@@ -680,10 +723,14 @@ export class VirtualFilesystemService {
       ...fileNodes.sort((a, b) => a.name.localeCompare(b.name)),
     ];
 
-    return {
+    const listing = {
       path: normalizedDirectoryPath,
       nodes,
     };
+
+    // Cache for 30s - invalidated on writes
+    toolResultCache.set(cacheKey, listing, 60000);
+    return listing;
   }
 
   async search(
@@ -696,6 +743,13 @@ export class VirtualFilesystemService {
       language?: string;
     } = {},
   ): Promise<{ files: VirtualFilesystemSearchResult[] }> {
+    // Try cache first
+    const searchCacheKey = `search:${ownerId}:${query}:${options.path || 'root'}`;
+    const cachedSearch = toolResultCache.get(searchCacheKey);
+    if (cachedSearch !== null) {
+      return cachedSearch as { files: VirtualFilesystemSearchResult[] };
+    }
+
     // Desktop mode: Use local filesystem instead of VFS
     if (isDesktopMode() && isUsingLocalFS()) {
       try {
@@ -772,11 +826,15 @@ export class VirtualFilesystemService {
       });
     }
 
-    return {
+    const result = {
       files: matches
         .sort((a, b) => (b.score - a.score) || a.path.localeCompare(b.path))
         .slice(0, limit)
     };
+
+    // Cache search results for 60s - invalidated on file changes
+    toolResultCache.set(searchCacheKey, result, 60000);
+    return result;
   }
 
   async getWorkspaceVersion(ownerId: string): Promise<number> {
@@ -1013,9 +1071,12 @@ export class VirtualFilesystemService {
             // FIX: Normalize backslashes to forward slashes when loading from DB.
             // Stale entries from Windows may contain backslashes that break path matching.
             const normalizedPath = row.path.replace(/\\/g, '/');
+            // Decompress content if stored compressed
+            const contentBuffer = Buffer.isBuffer(row.content) ? row.content : Buffer.from(row.content, 'utf-8')
+            const decompressedContent = isCompressed(contentBuffer) ? decompress(contentBuffer).toString('utf-8') : row.content
             return [normalizedPath, {
               path: normalizedPath,
-              content: row.content,
+              content: decompressedContent,
               language: row.language,
               size: row.size,
               version: row.version,
@@ -1115,7 +1176,10 @@ export class VirtualFilesystemService {
         // 3. Upsert all current files
         for (const [filePath, file] of workspace.files) {
           const id = `${normalizedOwnerId}:${filePath}`;
-          upsertFile.run(id, normalizedOwnerId, filePath, file.content, file.language, file.size, file.version, file.createdAt || now, now);
+          // Compress content before storing
+          const compressedContent = compress(file.content)
+          const contentToStore = compressedContent.length < file.content.length ? compressedContent : file.content
+          upsertFile.run(id, normalizedOwnerId, filePath, contentToStore, file.language, file.size, file.version, file.createdAt || now, now);
         }
       });
 
@@ -1214,12 +1278,11 @@ export class VirtualFilesystemService {
       ).all(normalizedTo) as Array<{ path: string }>;
       const existingPaths = new Set(existingTargetPaths.map(r => r.path));
 
-      // 2. Transfer files that don't conflict
+      // 2. Transfer files that don't conflict - use INSERT with processed content
       const transferFile = db.prepare(
         `INSERT OR IGNORE INTO vfs_workspace_files
          (id, owner_id, path, content, language, size, version, created_at, updated_at)
-         SELECT ?, ?, path, content, language, size, version, created_at, updated_at
-         FROM vfs_workspace_files WHERE owner_id = ? AND path = ?`
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
       );
 
       // 3. Transfer meta if target has none
@@ -1239,7 +1302,10 @@ export class VirtualFilesystemService {
       for (const file of sourceFiles) {
         if (!existingPaths.has(file.path)) {
           const id = `${normalizedTo}:${file.path}`;
-          transferFile.run(id, normalizedTo, normalizedFrom, file.path);
+          // Compress content during transfer if beneficial
+          const compressedContent = compress(file.content)
+          const contentToStore = compressedContent.length < file.content.length ? compressedContent : file.content
+          transferFile.run(id, normalizedTo, file.path, contentToStore, file.language, file.size, file.version, file.created_at, now);
           transferredCount++;
         }
       }

@@ -1,0 +1,77 @@
+name: 🧪 Spawn Test Suite
+
+on:
+  push:
+    branches: [main, master, deeesktoP]
+    paths:
+      - 'web/lib/spawn/**'
+      - 'web/app/api/spawn/**'
+      - 'web/__tests__/spawn/**'
+      - 'web/__tests__/api/spawn/**'
+      - 'web/lib/middleware/command-security.ts'
+      - 'web/lib/middleware/filesystem-security.ts'
+      - 'web/vitest.config.ts'
+      - 'web/package.json'
+      - 'pnpm-lock.yaml'
+  pull_request:
+    branches: [main, master, deeesktoP]
+    paths:
+      - 'web/lib/spawn/**'
+      - 'web/app/api/spawn/**'
+      - 'web/__tests__/spawn/**'
+      - 'web/__tests__/api/spawn/**'
+      - 'web/lib/middleware/command-security.ts'
+      - 'web/lib/middleware/filesystem-security.ts'
+      - 'web/vitest.config.ts'
+      - 'web/package.json'
+      - 'pnpm-lock.yaml'
+
+jobs:
+  spawn-tests:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node-version: [22]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts || pnpm install --legacy-peer-deps
+
+      - name: Typecheck spawn modules
+        working-directory: web
+        run: npx tsc --noEmit
+
+      - name: Run full spawn suite
+        working-directory: web
+        shell: bash
+        run: |
+          npx vitest run \
+            __tests__/api/spawn/route.test.ts \
+            '__tests__/api/spawn/[id]/route.test.ts' \
+            '__tests__/api/spawn/[id]/events/route.test.ts' \
+            __tests__/api/spawn/lifecycle.integration.test.ts \
+            __tests__/spawn/local-server-utils.test.ts \
+            __tests__/spawn/agent-local-spawn.test.ts \
+            __tests__/spawn/openai-agent-base.test.ts \
+            __tests__/spawn/agent-pool.test.ts
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: spawn-test-results-${{ matrix.os }}
+          path: web/test-results/
+          retention-days: 7
+          if-no-files-found: ignore

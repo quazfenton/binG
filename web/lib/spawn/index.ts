@@ -55,6 +55,7 @@ export {
 import { createClaudeCodeAgent } from './claude-code-agent';
 import { createAmpAgent } from './amp-agent';
 import { createOpenCodeAgent } from './opencode-agent';
+import { createCodexAgent } from './codex-agent';
 
 // Agent Pool
 export {
@@ -124,6 +125,25 @@ export {
   type OpenCodeTool,
 } from './opencode-agent';
 
+// Codex Agent
+export {
+  CodexAgent,
+  createCodexAgent,
+  CODEX_TOOLS,
+  type CodexConfig,
+  type CodexMessage,
+  type CodexTool,
+} from './codex-agent';
+
+// OpenAI Agent Base (shared by Amp & Codex)
+export {
+  OpenAIAgentBase,
+  type OpenAIAgentDescriptor,
+  type OpenAIAgentConfig,
+  type OpenAIAgentMessage,
+  type OpenAIAgentTool,
+} from './openai-agent-base';
+
 // ============================================================================
 // Factory Function
 // ============================================================================
@@ -132,8 +152,9 @@ import type { AgentConfig } from './agent-service-manager';
 import { ClaudeCodeAgent, type ClaudeCodeConfig } from './claude-code-agent';
 import { AmpAgent, type AmpConfig } from './amp-agent';
 import { OpenCodeAgent, type OpenCodeConfig } from './opencode-agent';
+import { CodexAgent, type CodexConfig } from './codex-agent';
 
-export type AgentTypeUnion = 'claude-code' | 'amp' | 'opencode';
+export type AgentTypeUnion = 'claude-code' | 'amp' | 'opencode' | 'codex';
 
 /**
  * Create an AI coding agent
@@ -154,6 +175,11 @@ export async function createAgent(
 ): Promise<OpenCodeAgent>;
 
 export async function createAgent(
+  type: 'codex',
+  config: Omit<CodexConfig, keyof AgentConfig> & Pick<AgentConfig, 'workspaceDir' | 'agentId'>
+): Promise<CodexAgent>;
+
+export async function createAgent(
   type: AgentTypeUnion,
   config: any
 ): Promise<any> {
@@ -164,6 +190,8 @@ export async function createAgent(
       return createAmpAgent(config as AmpConfig);
     case 'opencode':
       return createOpenCodeAgent(config as OpenCodeConfig);
+    case 'codex':
+      return createCodexAgent(config as CodexConfig);
     default:
       throw new Error(`Unknown agent type: ${type}`);
   }
@@ -212,6 +240,15 @@ export const AGENT_CAPABILITIES: Record<string, {
     testGeneration: true,
     maxContextTokens: 100000,
   },
+  'codex': {
+    fileOperations: true,
+    terminalAccess: true,
+    gitIntegration: false,
+    webSearch: false,
+    codeReview: true,
+    testGeneration: true,
+    maxContextTokens: 128000,
+  },
 };
 
 /**
@@ -225,14 +262,24 @@ export function getRecommendedAgent(task: string): AgentTypeUnion {
     return 'claude-code';
   }
   
-  // Code generation → Amp
-  if (taskLower.includes('generate') || taskLower.includes('create') || taskLower.includes('write')) {
+  // Code generation / scaffolding → Amp
+  if (taskLower.includes('generate') || taskLower.includes('create') || taskLower.includes('scaffold')) {
     return 'amp';
   }
   
-  // Code review → Claude Code
+  // Code review / audit → Claude Code
   if (taskLower.includes('review') || taskLower.includes('audit')) {
     return 'claude-code';
+  }
+  
+  // Test generation → Codex (specialises in test/code tasks)
+  if (taskLower.includes('test') || taskLower.includes('spec')) {
+    return 'codex';
+  }
+  
+  // Write / documentation → Codex
+  if (taskLower.includes('write') || taskLower.includes('document')) {
+    return 'codex';
   }
   
   // Default → Amp (fastest for general tasks)

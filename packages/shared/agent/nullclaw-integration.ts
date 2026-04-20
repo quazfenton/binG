@@ -681,6 +681,21 @@ class NullclawIntegration {
   }
 
   /**
+   * Search the web via Nullclaw
+   * Uses DuckDuckGo HTML search as the default search engine
+   */
+  async searchWeb(query: string, engine: string = 'ddg', limit: number = 10, userId?: string, conversationId?: string): Promise<NullclawTask> {
+    const searchUrls: Record<string, string> = {
+      ddg: `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`,
+      google: `https://www.google.com/search?q=${encodeURIComponent(query)}`,
+      bing: `https://www.bing.com/search?q=${encodeURIComponent(query)}`,
+    };
+    
+    const searchUrl = searchUrls[engine] || searchUrls.ddg;
+    return this.executeTask('browse', `Search web for: ${query}`, { url: searchUrl, action: 'extract', query, engine, limit }, userId, conversationId);
+  }
+
+  /**
    * Execute automation task via Nullclaw
    */
   async automateTask(commands: string[], serverId?: string, userId?: string, conversationId?: string): Promise<NullclawTask> {

@@ -55,7 +55,7 @@ export {
   type OrchestrationMode,
   type OrchestrationRequest,
   type OrchestrationResult,
-} from './orchestration-mode-handler';
+} from './modula';
 
 // Task Router (LEGACY — keyword-based detection, superseded by unified router)
 export {

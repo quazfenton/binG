@@ -191,6 +191,7 @@ function emitTraceEvent(
     elapsedMs,
     completedChains,
     failedPhases,
+    isComplete: eventType === 'complete' || eventType === 'budget_warning',
   };
 
   // Log to console in development
@@ -696,7 +697,7 @@ export function getEffectiveSuperModeConfig(
   return {
     ...baseConfig,
     ...userConfig,
-  };
+  } as SuperModeConfig;
 }
 
 // ============================================================================
@@ -1188,7 +1189,7 @@ This plan will guide the remaining implementation phases.
     '',
     'implement',
     totalDurationMs,
-    Array.from(uniqueChainsCompleted),
+    Array.from(new Set(state.completedPhases.filter(p => p.success).map(p => p.phase.chain))),
     state.failedPhases
   );
   
@@ -1243,7 +1244,7 @@ async function executeImplementationPhase(
   // Build layered context
   const context = buildLayeredContext(phase, {
     originalRequest: state.originalRequest,
-    chainPlans: state.chainPlans,
+    chainPlans: state.chainPlans as Record<MetaPromptChain, string>,
     accumulatedOutput: state.accumulatedOutput,
     config: state.config,
   });

@@ -7,8 +7,8 @@
 
 import type { ChunkOptions } from './types';
 
-const DEFAULT_CHUNK_SIZE = 500;
-const DEFAULT_OVERLAP = 50;
+const DEFAULT_CHUNK_SIZE = 3000;
+const DEFAULT_OVERLAP = 1000;
 
 export function chunkText(
   text: string,

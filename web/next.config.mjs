@@ -3,13 +3,13 @@ import { dirname, resolve } from 'path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(__dirname);
+const isDesktopBuild = process.env.DESKTOP_MODE === 'true' || process.env.DESKTOP_LOCAL_EXECUTION === 'true';
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   // Turbopack config - required when using webpack
   turbopack: {},
   images: {
-    unoptimized: false,
     // SECURITY: Use custom loader for dynamic image validation instead of wildcard
     // This allows custom images while blocking SSRF-prone domains at runtime
     loader: 'custom',
@@ -97,6 +97,9 @@ const nextConfig = {
         }
       : false,
   },
+  ...(isDesktopBuild ? {
+    output: 'standalone',
+  } : {}),
   env: {
     DEFAULT_LLM_PROVIDER: process.env.DEFAULT_LLM_PROVIDER,
     DEFAULT_MODEL: process.env.DEFAULT_MODEL,
@@ -109,6 +112,8 @@ const nextConfig = {
     PORTKEY_API_KEY: process.env.PORTKEY_API_KEY,
     PORTKEY_VIRTUAL_KEY: process.env.PORTKEY_VIRTUAL_KEY,
     REPLICATE_API_TOKEN: process.env.REPLICATE_API_TOKEN,
+    DESKTOP_MODE: process.env.DESKTOP_MODE,
+    DESKTOP_LOCAL_EXECUTION: process.env.DESKTOP_LOCAL_EXECUTION,
   },
   serverExternalPackages: [
     'livekit-server-sdk',

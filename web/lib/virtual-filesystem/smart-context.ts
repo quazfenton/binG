@@ -873,7 +873,7 @@ export async function generateSmartContext(options: SmartContextOptions): Promis
     recentSessionFiles: recentSessionFileList = [],
     currentProjectPath,
     maxTotalSize = 500000,
-    format = 'json',
+    format = 'markdown',
     maxLinesPerFile = 500,
     contextMode = 'read',
     snapshotBefore,
@@ -893,6 +893,7 @@ export async function generateSmartContext(options: SmartContextOptions): Promis
       estimatedTokens: 0,
       vfsIsEmpty: true,
       contextMode,
+      diffCount: 0,
       warnings: ['Missing userId'],
     };
   }
@@ -936,6 +937,7 @@ export async function generateSmartContext(options: SmartContextOptions): Promis
       treeMode: 'minimal',
       budgetTier: 'compact',
       contextMode,
+      diffCount: 0,
       warnings,
     };
   }
@@ -2037,6 +2039,43 @@ export async function* streamWithAutoContinue(
         };
         return;
       }
+
+      // Auto-continue for read_file: LLM called read_file but stopped before processing result.
+      // Some models (especially free-tier) don't support multi-step tool calling via maxSteps.
+      // Detect when read_file was the last tool called and no continuation marker was emitted.
+      const isReadFileLast = lastToolCall
+        && (lastToolCall.name === 'read_file' || lastToolCall.name === 'readFile')
+        && allToolCalls.filter(tc => tc.name === 'read_file' || tc.name === 'readFile').length === allToolCalls.length;
+
+      if (isReadFileLast && !fullResponse.includes('[NEXT]') && !fullResponse.includes('[CONTINUE]') && !fullResponse.includes('[AUTO-CONTINUE]')) {
+        const readArgs = lastToolCall.arguments || {};
+        const readPath = readArgs.path || readArgs.file || 'unknown file';
+
+        logger.info('Auto-continuing: LLM stopped after read_file, prompting to process result', {
+          path: readPath,
+          continuationCount: continuationCount + 1,
+          maxContinuations,
+          conversationId,
+        });
+
+        if (conversationId) {
+          trackConversation(conversationId, continuationCount + 1);
+        }
+
+        yield {
+          content: `\n\n[NEXT] The file \`${readPath}\` has been read. Please analyze its contents and continue with the task based on what you found.`,
+          isComplete: false,
+          timestamp: new Date(),
+          metadata: {
+            autoContinue: true,
+            reason: 'read_file_completed',
+            readPath,
+            continuationCount: continuationCount + 1,
+            maxContinuations,
+          },
+        };
+        return;
+      }
     } catch (error: any) {
       logger.warn('Auto-continue check failed', { error: error.message });
       // Don't fail the stream if auto-continue fails
@@ -2047,6 +2086,151 @@ export async function* streamWithAutoContinue(
   // This ensures fresh requests start from 0 again
   if (conversationId && continuationCount > 0) {
     conversationContinuationCount.delete(conversationId);
+  }
+}
+
+/**
+ * Server-side auto-re-prompt: When the LLM calls tools but stops without a final response,
+ * this wrapper detects it and automatically re-calls the LLM with tool results.
+ *
+ * This solves the issue where models (especially free-tier OpenRouter ones) don't
+ * properly support multi-step tool calling via Vercel AI SDK's maxSteps.
+ *
+ * Usage:
+ * ```ts
+ * for await (const chunk of streamWithServerAutoRePrompt(baseStream, {
+ *   userId, messages, tools, provider, model,
+ * })) {
+ *   yield chunk;
+ * }
+ * ```
+ */
+export async function* streamWithServerAutoRePrompt(
+  generator: AsyncGenerator<any>,
+  options: {
+    userId: string;
+    conversationId?: string;
+    /** Original messages to re-prompt with */
+    messages: any[];
+    /** Tools available for execution */
+    tools?: Record<string, any>;
+    /** Provider/model for re-prompting */
+    provider: string;
+    model: string;
+    temperature?: number;
+    maxTokens?: number;
+    /** Max re-prompt attempts (default: 3) */
+    maxRePrompts?: number;
+    /** Abort signal */
+    signal?: AbortSignal;
+  }
+): AsyncGenerator<any> {
+  const {
+    userId,
+    conversationId,
+    messages,
+    tools,
+    provider,
+    model,
+    temperature = 0.7,
+    maxTokens = 65536,
+    maxRePrompts = 3,
+    signal,
+  } = options;
+
+  let rePromptCount = 0;
+  const collectedToolResults: Array<{ toolCallId: string; toolName: string; result: any }> = [];
+
+  // First pass: consume the original stream
+  for await (const chunk of generator) {
+    yield chunk;
+
+    // Collect tool invocations for potential re-prompt
+    if (chunk.toolInvocations && Array.isArray(chunk.toolInvocations)) {
+      for (const inv of chunk.toolInvocations) {
+        if (inv.state === 'result' && inv.toolCallId && inv.toolName) {
+          collectedToolResults.push({
+            toolCallId: inv.toolCallId,
+            toolName: inv.toolName,
+            result: inv.result,
+          });
+        }
+      }
+    }
+
+    // Track auto-continue events that indicate the LLM stopped prematurely
+    if (chunk.type === 'auto-continue' || chunk.type === 'next') {
+      logger.info('Auto-continue event detected, may need server-side re-prompt', {
+        reason: chunk.metadata?.reason,
+        toolResultCount: collectedToolResults.length,
+      });
+    }
+  }
+
+  // After stream completes: check if we need to re-prompt
+  // This happens when tools were executed but the LLM didn't produce a final response
+  if (collectedToolResults.length > 0 && rePromptCount < maxRePrompts) {
+    // Check if there's a continuation marker that indicates incomplete task
+    const needsRePrompt = collectedToolResults.some(tr =>
+      tr.toolName === 'read_file' ||
+      tr.toolName === 'readFile' ||
+      tr.toolName === 'list_files' ||
+      tr.toolName === 'listFiles' ||
+      tr.toolName === 'list_directory'
+    );
+
+    if (needsRePrompt) {
+      logger.info('Server-side re-prompt needed: tools executed without final LLM response', {
+        toolResults: collectedToolResults.map(t => t.toolName),
+        rePromptCount: rePromptCount + 1,
+      });
+
+      rePromptCount++;
+
+      // Build messages with tool results appended
+      const messagesWithToolResults = [
+        ...messages,
+        {
+          role: 'system' as const,
+          content: `\n\n[SYSTEM] You previously executed these tools and got results. Please analyze the results and continue with your task:\n${
+            collectedToolResults.map(tr =>
+              `- ${tr.toolName}: ${tr.result?.success ? 'success' : 'failed'}${tr.result?.output ? ` (${tr.result.output.slice(0, 200)})` : ''}`
+            ).join('\n')
+          }\n\nPlease continue with the task based on the tool results above.`,
+        },
+      ];
+
+      // Re-call the LLM with tool results
+      try {
+        const { streamWithVercelAI } = await import('../chat/vercel-ai-streaming');
+
+        for await (const chunk of streamWithVercelAI({
+          provider,
+          model,
+          messages: messagesWithToolResults,
+          temperature,
+          maxTokens,
+          maxSteps: 1, // Just one more response, no more tool auto-execution
+          tools: tools ? {} : undefined, // Don't re-execute tools in re-prompt
+          toolCallStreaming: false,
+          smoothStreaming: true,
+          signal,
+        })) {
+          yield {
+            ...chunk,
+            metadata: {
+              ...chunk.metadata,
+              isRePrompt: true,
+              rePromptCount,
+            },
+          };
+        }
+      } catch (error: any) {
+        logger.warn('Server-side re-prompt failed, continuing', {
+          error: error.message,
+        });
+      }
+    }
   }
 }
 

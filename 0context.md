@@ -14,6 +14,30 @@ Also exported from hybrid-retrieval.ts which re-exports smart-context.
 
 ---
 
+INTEGRATED: Progressive Build Mode in Unified Agent Service
+File: /root/bing/web/lib/orchestra/unified-agent-service.ts
+
+Mode: 'v1-progressive-build' — added to UnifiedAgentConfig.mode union and UnifiedAgentResult.mode union.
+
+New config field: progressiveBuild?: { maxIterations, contextMode, enableReflection, timeBudgetMS, completionIndicator }
+
+How to activate:
+1. Explicit: Set mode: 'v1-progressive-build' in UnifiedAgentConfig
+2. Via env: Set AGENT_EXECUTION_ENGINE=progressive-build (add to determineMode routing)
+3. From chat route: Pass mode: 'v1-progressive-build' with progressiveBuild options
+
+The mode integrates with:
+- Vercel AI SDK streamText for LLM calls (same as v1-api mode)
+- Capability-based tool executor (createCapabilityToolExecutor)
+- ReflectionEngine for optional gap analysis
+- SSE events via onStreamChunk for frontend progress
+- VFS scoping via userId + conversationId
+- Fallback: throws on error to trigger unified agent's fallback chain
+
+NOT in auto rotation — must be explicitly requested.
+
+---
+
 IMPLEMENTED: Progressive Build Engine
 File: /root/bing/web/lib/chat/progressive-build-engine.ts
 

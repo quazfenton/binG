@@ -1,6 +1,6 @@
 {
   "_comment": "Custom intent extensions — add your own intents here without modifying code.",
-  "_usage": "Merge this into INTENT_SCHEMA at runtime: import { INTENT_SCHEMA } from './intent-schema'; INTENT_SCHEMA.push(...customIntents);",
+  "_usage": "Load JSON, compile pattern strings to RegExp, then merge: const compiled = customIntents.map(i => ({ ...i, patterns: i.patterns.map(p => ({ ...p, regex: new RegExp(p.regex, 'i') })) })); INTENT_SCHEMA.push(...compiled);",
   "customIntents": [
     {
       "id": "docker-deploy",
@@ -26,6 +26,7 @@
       "description": "Database queries, migrations, and schema management.",
       "patterns": [
         { "regex": "\\b(SELECT|INSERT|UPDATE|DELETE|CREATE TABLE)\\b", "weight": 3 },
+        { "regex": "\\b(select|insert|update|delete|create table)\\b", "weight": 3 },
         { "regex": "\\b(migration|schema|prisma|sequelize)\\b", "weight": 2 }
       ],
       "keywords": [

@@ -9,7 +9,7 @@
  */
 
 import { search, type SearchOptions, type SearchResult } from "../retrieval/search";
-import { buildContext, injectContextIntoPrompt, buildSystemPrompt } from "../context/contextBuilder";
+import { buildContext, injectContextIntoPrompt, buildContextSystemPrompt } from "../context/contextBuilder";
 import {
   generateSmartContext,
   type SmartContextOptions,
@@ -354,7 +354,7 @@ export async function retrieveHybrid(
       currentProjectPath: opts.currentProjectPath,
       scopePath: opts.scopePath,
       maxTotalSize: opts.maxTotalSize ?? 500_000,
-      format: opts.format ?? 'json',
+      format: opts.format ?? 'markdown',
       maxLinesPerFile: opts.maxLinesPerFile ?? 500,
     };
 
@@ -433,6 +433,6 @@ export async function buildPromptWithContext(
     filesIncluded: [],
     symbolsIncluded: [],
     truncated: false,
-    format: opts.format ?? 'json',
+    format: opts.format ?? 'markdown',
   });
 }

@@ -74,3 +74,14 @@ export {
   createOpencodeCapabilityProvider,
   type OpencodeCapabilityProviderConfig,
 } from './opencode-capability-provider'
+
+// Binary Detection (re-exported from shared agent-bins module for backward compatibility)
+export {
+  findOpencodeBinary,
+  findOpencodeBinarySync,
+  resetBinaryCacheForTesting,
+} from '@/lib/agent-bins/find-opencode-binary'
+
+export {
+  type FindBinaryOptions,
+} from '@/lib/agent-bins/find-agent-binary-base'

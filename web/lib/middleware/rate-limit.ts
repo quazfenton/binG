@@ -283,9 +283,9 @@ export const ipRateLimiter = createRateLimiter({
 });
 
 /**
- * Check rate limit without middleware (for programmatic use)
+ * Internal programmatic rate-limit check by identifier.
  */
-export function checkRateLimit(
+function checkRateLimitByKey(
   identifier: string,
   maxRequests: number,
   windowMs: number
@@ -324,6 +324,52 @@ export function checkRateLimit(
     remaining: entry.remaining,
     resetAt: entry.resetAt,
   };
+}
+
+// Also export under the legacy name for programmatic callers
+export { checkRateLimitByKey };
+
+/**
+ * Polymorphic rate-limit check.
+ *
+ *  - `checkRateLimit(request)` — NEW: returns `Promise<NextResponse | null>` where
+ *    `null` means the request is allowed and a `NextResponse` (HTTP 429) means it
+ *    was blocked. Uses the module-level `rateLimiter` singleton (with any routes
+ *    configured via `configureRateLimits()`).
+ *
+ *  - `checkRateLimit(identifier, maxRequests, windowMs)` — LEGACY: synchronous,
+ *    returns `{ allowed, remaining, resetAt, retryAfter? }`. Preserved for any
+ *    existing programmatic callers.
+ */
+export function checkRateLimit(request: NextRequest): Promise<NextResponse | null>;
+export function checkRateLimit(
+  identifier: string,
+  maxRequests: number,
+  windowMs: number
+): { allowed: boolean; remaining: number; resetAt: number; retryAfter?: number };
+export function checkRateLimit(
+  arg1: NextRequest | string,
+  maxRequests?: number,
+  windowMs?: number
+): any {
+  if (typeof arg1 === 'string') {
+    return checkRateLimitByKey(arg1, maxRequests as number, windowMs as number);
+  }
+  // NextRequest path — use singleton rate limiter, return NextResponse|null
+  return rateLimiter.check(arg1).then((result) => {
+    if (result.success) return null;
+    const retryAfter = result.retryAfter ?? 1;
+    return NextResponse.json(
+      { error: 'Rate limit exceeded', retryAfter },
+      {
+        status: 429,
+        headers: {
+          'Retry-After': String(retryAfter),
+          'X-RateLimit-Remaining': '0',
+        },
+      }
+    );
+  });
 }
 
 /**
@@ -396,6 +442,151 @@ export function checkRateLimitMiddleware(
 export function resetRateLimit(identifier: string): void {
   const key = `ratelimit:${identifier}`;
   defaultStore.delete(key);
+}
+
+// ============================================================================
+// Class-based API (used by security-middleware tests and anyone that wants a
+// self-contained rate-limiter with per-route configuration).
+// ============================================================================
+
+/**
+ * Constructor config for `RateLimiter`.
+ */
+export interface RateLimiterConstructorConfig {
+  /** Default requests allowed per window. Defaults to 100. */
+  defaultLimit?: number;
+  /** Default window size, in SECONDS. Defaults to 60. */
+  defaultWindow?: number;
+  /** Whether exponential backoff is enabled for repeated offenders. */
+  backoff?: boolean;
+}
+
+/**
+ * Per-route override for `RateLimiter.configure()`.
+ */
+export interface RateLimiterRouteConfig {
+  limit: number;
+  /** Window size, in SECONDS. */
+  window: number;
+  backoff?: boolean;
+}
+
+/**
+ * Class-based rate limiter with per-route configuration and its own internal
+ * store (independent of the module-level `defaultStore`).
+ */
+export class RateLimiter {
+  private store = new Map<string, RateLimitEntry>();
+  private backoffAttempts = new Map<string, number>();
+  private defaultLimit: number;
+  private defaultWindowMs: number;
+  private defaultBackoff: boolean;
+  private routeConfigs = new Map<string, { limit: number; windowMs: number; backoff: boolean }>();
+
+  constructor(config: RateLimiterConstructorConfig = {}) {
+    this.defaultLimit = config.defaultLimit ?? 100;
+    this.defaultWindowMs = (config.defaultWindow ?? 60) * 1000;
+    this.defaultBackoff = config.backoff ?? false;
+  }
+
+  /**
+   * Configure rate-limit overrides for a specific route path.
+   */
+  configure(path: string, config: RateLimiterRouteConfig): void {
+    this.routeConfigs.set(path, {
+      limit: config.limit,
+      windowMs: config.window * 1000,
+      backoff: config.backoff ?? false,
+    });
+  }
+
+  /**
+   * Check a request against the rate limit. Increments the counter on success.
+   */
+  async check(request: NextRequest): Promise<{
+    success: boolean;
+    remaining: number;
+    retryAfter?: number;
+  }> {
+    let pathname = '';
+    try {
+      pathname = new URL(request.url).pathname;
+    } catch {
+      pathname = '';
+    }
+    const routeOverride = this.routeConfigs.get(pathname);
+    const limit = routeOverride?.limit ?? this.defaultLimit;
+    const windowMs = routeOverride?.windowMs ?? this.defaultWindowMs;
+    const backoff = routeOverride?.backoff ?? this.defaultBackoff;
+
+    const identifier = this.getIdentifier(request);
+    const key = `${pathname}:${identifier}`;
+    const now = Date.now();
+
+    let entry = this.store.get(key);
+    if (!entry || now > entry.resetAt) {
+      entry = { count: 0, resetAt: now + windowMs, remaining: limit };
+    }
+
+    if (entry.count >= limit) {
+      let retryAfter = Math.ceil((entry.resetAt - now) / 1000);
+      if (backoff) {
+        const attempts = (this.backoffAttempts.get(key) ?? 1) + 1;
+        this.backoffAttempts.set(key, attempts);
+        // Exponential backoff on top of the natural window wait
+        const backoffSeconds = Math.pow(2, attempts);
+        retryAfter = Math.max(retryAfter, backoffSeconds);
+      }
+      return { success: false, remaining: 0, retryAfter };
+    }
+
+    entry.count++;
+    entry.remaining = Math.max(0, limit - entry.count);
+    this.store.set(key, entry);
+    // Successful request — reset any backoff attempts
+    this.backoffAttempts.delete(key);
+
+    return { success: true, remaining: entry.remaining };
+  }
+
+  /**
+   * Reset rate-limit state for a given key prefix (e.g. all state for an IP).
+   */
+  reset(): void {
+    this.store.clear();
+    this.backoffAttempts.clear();
+  }
+
+  private getIdentifier(request: NextRequest): string {
+    const forwardedFor = request.headers.get('x-forwarded-for');
+    if (forwardedFor) {
+      const first = forwardedFor.split(',')[0].trim();
+      if (first) return `ip:${first}`;
+    }
+    const realIp = request.headers.get('x-real-ip');
+    if (realIp) return `ip:${realIp}`;
+    const ip = (request as any).ip;
+    if (ip) return `ip:${ip}`;
+    const ua = request.headers.get('user-agent') ?? 'unknown';
+    return `ua:${ua}`;
+  }
+}
+
+/**
+ * Singleton `RateLimiter` used by the module-level `checkRateLimit(request)`
+ * API and by anything that wants shared rate-limit state across routes.
+ */
+export const rateLimiter = new RateLimiter();
+
+/**
+ * Apply common route-specific rate-limit overrides to the singleton
+ * `rateLimiter`.
+ */
+export function configureRateLimits(): void {
+  rateLimiter.configure('/api/chat', { limit: 60, window: 60, backoff: true });
+  rateLimiter.configure('/api/auth/login', { limit: 5, window: 60, backoff: true });
+  rateLimiter.configure('/api/auth/register', { limit: 3, window: 3600, backoff: true });
+  rateLimiter.configure('/api/auth/password-reset', { limit: 3, window: 3600, backoff: true });
 }
 
 /**

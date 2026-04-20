@@ -13,12 +13,11 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { VirtualFilesystemService } from '@/lib/virtual-filesystem/virtual-filesystem-service';
-import { ShadowCommitManager } from '@/lib/stateful-agent/commit/shadow-commit';
+import { ShadowCommitManager } from '@/lib/orchestra/stateful-agent/commit/shadow-commit';
 import { ToolIntegrationManager } from '@/lib/tools/tool-integration-system';
-import { MCPClient } from '@/lib/mcp/client';
+import { MCPClient } from '@/lib/mcp';
 import { Crew } from '@/lib/crewai/crew/crew';
 import { Task } from '@/lib/crewai/tasks/task';
-import { mastra } from '@/lib/mastra/mastra-instance';
 
 describe('Cross-Module E2E Integration Tests', () => {
   // Shared test fixtures
@@ -384,7 +383,7 @@ describe('Cross-Module E2E Integration Tests', () => {
       // This tests the fallback mechanism
       // Actual provider calls may fail due to API limits
       
-      const { createModelWithFallback } = await import('@/lib/stateful-agent/agents/provider-fallback');
+      const { createModelWithFallback } = await import('@/lib/orchestra/stateful-agent/agents/provider-fallback');
       
       try {
         // Try to get model with fallback
@@ -401,7 +400,7 @@ describe('Cross-Module E2E Integration Tests', () => {
     });
 
     it('should track provider health', async () => {
-      const { getProviderHealthDashboard } = await import('@/lib/stateful-agent/agents/provider-fallback');
+      const { getProviderHealthDashboard } = await import('@/lib/orchestra/stateful-agent/agents/provider-fallback');
       
       const dashboard = getProviderHealthDashboard();
       
@@ -422,7 +421,7 @@ describe('Cross-Module E2E Integration Tests', () => {
    */
   describe('Audit Logging Integration', () => {
     it('should log HITL approvals', async () => {
-      const { hitlAuditLogger } = await import('@/lib/stateful-agent/hitl-audit-logger');
+      const { hitlAuditLogger } = await import('@/lib/orchestra/stateful-agent/hitl-audit-logger');
       
       const testInterruptId = 'e2e_interrupt_' + Date.now();
       

@@ -17,40 +17,57 @@ export interface SecretsAdapter {
 
 const SERVICE_NAME = 'binG';
 
+async function getWebSecrets() {
+  return import('./web');
+}
+
 class DesktopSecrets implements SecretsAdapter {
   async get(key: string): Promise<string | null> {
     try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      return await invoke<string>('get_secret', { service: SERVICE_NAME, key });
+      const mod = await import('@tauri-apps/api/core');
+      if (typeof mod?.invoke !== 'function') {
+        throw new Error('Tauri invoke is unavailable');
+      }
+      return await mod.invoke<string>('get_secret', { service: SERVICE_NAME, key });
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
       // Missing secrets are expected — return null for not-found
       if (errorMsg.includes('not found') || errorMsg.includes('NotFound')) {
         return null;
       }
-      // Rethrow all other errors so callers can handle real backend problems
-      console.warn('[DesktopSecrets] Failed to get secret:', errorMsg);
-      throw error;
+      // If Tauri isn't ready yet, fall back to the web adapter instead of failing boot.
+      console.warn('[DesktopSecrets] Falling back to web secrets for get():', errorMsg);
+      return getWebSecrets().then(({ secrets }) => secrets.get(key));
     }
   }
 
   async set(key: string, value: string): Promise<void> {
     try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      await invoke('set_secret', { service: SERVICE_NAME, key, value });
+      const mod = await import('@tauri-apps/api/core');
+      if (typeof mod?.invoke !== 'function') {
+        throw new Error('Tauri invoke is unavailable');
+      }
+      await mod.invoke('set_secret', { service: SERVICE_NAME, key, value });
     } catch (error) {
-      console.error('[DesktopSecrets] Failed to set secret:', error);
-      throw error;
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      console.warn('[DesktopSecrets] Falling back to web secrets for set():', errorMsg);
+      const { secrets } = await getWebSecrets();
+      await secrets.set(key, value);
     }
   }
 
   async remove(key: string): Promise<void> {
     try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      await invoke('delete_secret', { service: SERVICE_NAME, key });
+      const mod = await import('@tauri-apps/api/core');
+      if (typeof mod?.invoke !== 'function') {
+        throw new Error('Tauri invoke is unavailable');
+      }
+      await mod.invoke('delete_secret', { service: SERVICE_NAME, key });
     } catch (error) {
-      console.error('[DesktopSecrets] Failed to remove secret:', error);
-      throw error;
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      console.warn('[DesktopSecrets] Falling back to web secrets for remove():', errorMsg);
+      const { secrets } = await getWebSecrets();
+      await secrets.remove(key);
     }
   }
 }

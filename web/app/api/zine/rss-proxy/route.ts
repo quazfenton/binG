@@ -160,7 +160,7 @@ export async function GET(request: NextRequest) {
 // GET /api/zine/rss-proxy - Documentation
 // ============================================================================
 
-export async function GET_DOC() {
+async function GET_DOC() {
   return NextResponse.json({
     endpoint: "/api/zine/rss-proxy",
     description: "CORS proxy for fetching RSS feeds",

@@ -48,7 +48,7 @@ export interface ContextBuilderOptions {
   groupByFile?: boolean;
   /** Include score breakdown (default: false) */
   includeScores?: boolean;
-  /** Output format (default: 'json') */
+  /** Output format (default: 'markdown') */
   format?: ContextFormat;
 }
 
@@ -82,7 +82,7 @@ export function buildContext(
     maxPerFile = 3,
     groupByFile = true,
     includeScores = false,
-    format = 'json',
+    format = 'markdown',
   } = opts;
 
   // Guard against invalid options
@@ -314,7 +314,7 @@ ${userMessage}`;
  * Builds a system prompt that tells the model how to use the injected context.
  * Adapts instructions based on the context format.
  */
-export function buildSystemPrompt(projectName?: string, format?: ContextFormat): string {
+export function buildContextSystemPrompt(projectName?: string, format?: ContextFormat): string {
   const project = projectName ? ` for the "${projectName}" project` : '';
 
   const contextInstructions: Record<ContextFormat, string> = {

@@ -78,6 +78,16 @@ function parseBody(req: IncomingMessage): Promise<any> {
   })
 }
 
+function parseBooleanFlag(value: unknown, fallback: boolean): boolean {
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase()
+    if (normalized === 'true') return true
+    if (normalized === 'false') return false
+  }
+  return fallback
+}
+
 // ============================================================================
 // Memory (Mem0) Endpoints
 // ============================================================================
@@ -349,7 +359,17 @@ async function handleCallTool(req: any, res: any): Promise<void> {
 
   req.on('end', async () => {
     try {
-      const { toolName, args } = JSON.parse(body)
+      const payload = JSON.parse(body)
+      const { toolName, args } = payload
+      const url = new URL(req.url || '/call', 'http://127.0.0.1')
+      const compact = parseBooleanFlag(
+        payload.compact ?? url.searchParams.get('compact'),
+        true
+      )
+      const includeRaw = parseBooleanFlag(
+        payload.includeRaw ?? url.searchParams.get('includeRaw'),
+        false
+      )
 
       if (!toolName) {
         res.writeHead(400)
@@ -360,12 +380,22 @@ async function handleCallTool(req: any, res: any): Promise<void> {
       logger.info(`CLI calling tool: ${toolName}`, { args })
 
       const result = await mcpToolRegistry.callTool(toolName, args || {})
+      const content = compact ? result.displayText : result.rawText
 
       res.writeHead(result.success ? 200 : 400)
       res.end(JSON.stringify({
         success: result.success,
-        content: result.content,
+        content,
+        displayText: result.displayText,
+        isError: result.isError,
+        truncated: result.truncated,
+        originalLength: result.originalLength,
+        returnedLength: compact ? result.returnedLength : result.originalLength,
         duration: result.duration,
+        ...(includeRaw || !compact ? {
+          rawText: result.rawText,
+          rawContent: result.rawContent,
+        } : {}),
       }))
     } catch (error: any) {
       logger.error('Tool call error', error)

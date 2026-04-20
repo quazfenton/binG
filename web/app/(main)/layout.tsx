@@ -1,7 +1,9 @@
+import { ClientProviders } from '@/components/client-providers'
+
 export default function MainLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  return <>{children}</>;
+  return <ClientProviders>{children}</ClientProviders>;
 }

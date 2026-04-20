@@ -152,7 +152,7 @@ describe('Secure Logger', () => {
     it('should log info messages', () => {
       const log = new SecureLogger({ level: 'info' });
       log.info('Test message');
-      expect(console.info).toHaveBeenCalled();
+      expect(console.log).toHaveBeenCalled();
     });
 
     it('should log warning messages', () => {
@@ -170,13 +170,13 @@ describe('Secure Logger', () => {
     it('should not log debug when level is info', () => {
       const log = new SecureLogger({ level: 'info' });
       log.debug('Test debug');
-      expect(console.debug).not.toHaveBeenCalled();
+      expect(console.log).not.toHaveBeenCalled();
     });
 
     it('should log debug when level is debug', () => {
       const log = new SecureLogger({ level: 'debug' });
       log.debug('Test debug');
-      expect(console.debug).toHaveBeenCalled();
+      expect(console.log).toHaveBeenCalled();
     });
 
     it('should not log anything when level is silent', () => {
@@ -184,7 +184,7 @@ describe('Secure Logger', () => {
       log.info('Test');
       log.warn('Test');
       log.error('Test');
-      expect(console.info).not.toHaveBeenCalled();
+      expect(console.log).not.toHaveBeenCalled();
       expect(console.warn).not.toHaveBeenCalled();
       expect(console.error).not.toHaveBeenCalled();
     });
@@ -192,7 +192,7 @@ describe('Secure Logger', () => {
     it('should add prefix to messages', () => {
       const log = new SecureLogger({ prefix: '[Test]' });
       log.info('Message');
-      expect(console.info).toHaveBeenCalledWith(
+      expect(console.log).toHaveBeenCalledWith(
         expect.stringContaining('[Test]')
       );
     });
@@ -200,7 +200,7 @@ describe('Secure Logger', () => {
     it('should add timestamps', () => {
       const log = new SecureLogger({ enableTimestamps: true });
       log.info('Message');
-      expect(console.info).toHaveBeenCalledWith(
+      expect(console.log).toHaveBeenCalledWith(
         expect.stringMatching(/\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/)
       );
     });
@@ -212,7 +212,7 @@ describe('Secure Logger', () => {
       const child = parent.child('[Child]');
 
       child.info('Message');
-      expect(console.info).toHaveBeenCalledWith(
+      expect(console.log).toHaveBeenCalledWith(
         expect.stringContaining('[Parent] [Child]')
       );
     });
@@ -224,7 +224,7 @@ describe('Secure Logger', () => {
       log.configure({ level: 'debug' });
 
       log.debug('Test');
-      expect(console.debug).toHaveBeenCalled();
+      expect(console.log).toHaveBeenCalled();
     });
 
     it('should enable redaction', () => {
@@ -241,6 +241,7 @@ describe('Secure Logger', () => {
 
       const redacted = log.redact('sk-123');
       expect(redacted).toBe('sk-123');
+      expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('Redaction disabled'));
     });
   });
 });
@@ -267,7 +268,7 @@ describe('helper functions', () => {
     it('should create logger with module prefix', () => {
       const log = createModuleLogger('TestModule');
       log.info('Message');
-      expect(console.info).toHaveBeenCalledWith(
+      expect(console.log).toHaveBeenCalledWith(
         expect.stringContaining('[TestModule]')
       );
     });

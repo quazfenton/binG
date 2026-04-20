@@ -47,5 +47,20 @@ export async function initializeServer(): Promise<void> {
     });
   }
 
+  // Load all powers into the singleton registry (auto-inject, core SKILL.md, capabilities)
+  // This must run before any request that calls appendAutoInjectPowers() or powersRegistry.get().
+  try {
+    const { loadAllPowers } = require('./tools/loader');
+    const { loaded, errors: loadErrors } = await loadAllPowers();
+    if (loadErrors.length > 0) {
+      logger.warn('Power loading completed with errors', { errors: loadErrors });
+    }
+    logger.info(`✓ Powers loaded: ${loaded} registered`);
+  } catch (error) {
+    logger.warn('⏳ Power loading failed — powers will be unavailable', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
   logger.info('Server initialization complete');
 }
