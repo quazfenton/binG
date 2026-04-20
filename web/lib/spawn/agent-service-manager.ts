@@ -52,6 +52,7 @@ export type AgentType =
   | 'claude-code'      // Anthropic Claude Code
   | 'amp'              // OpenAI Amp (Codex successor)
   | 'opencode'         // OpenCode CLI server
+  | 'codex'            // OpenAI Codex CLI
   | 'custom';          // Custom agent container
 
 export interface AgentConfig {
@@ -181,6 +182,12 @@ const AGENT_DEFAULTS: Record<AgentType, {
     port: 4096,
     command: ['opencode', 'server', '--port', '4096', '--host', '0.0.0.0'],
     healthcheck: 'curl -f http://localhost:4096/health || exit 1',
+  },
+  'codex': {
+    image: 'openai/codex:latest',
+    port: 5000,
+    command: ['codex', 'serve', '--port', '5000'],
+    healthcheck: 'curl -f http://localhost:5000/health || exit 1',
   },
   'custom': {
     image: 'custom-agent:latest',

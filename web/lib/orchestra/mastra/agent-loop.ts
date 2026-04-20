@@ -997,6 +997,77 @@ export class AgentLoop {
     // extractFileEdits is the master dispatcher — handles every known format
     const fileEdits = extractFileEdits(text);
 
+    // Direct pattern fallback for common LLM output formats not caught by extractFileEdits
+    // These patterns are commonly used in tests and edge cases
+    const directToolCalls: Array<{ name: string; arguments: Record<string, any> }> = [];
+    
+    // Pattern 1: write_file({ "path": "...", "content": "..." }) - handle nested quotes
+    // More lenient regex - capture everything inside the content value
+    const writeFileMatches = text.matchAll(/write_file\(\s*\{\s*"path"\s*:\s*"([^"]+)"\s*,\s*"content"\s*:\s*"(.+?)"\s*\}(\s*\))?/g);
+    for (const match of writeFileMatches) {
+      // Unescape any escaped characters in content (\" -> ")
+      const content = match[2].replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+      directToolCalls.push({ name: 'write_file', arguments: { path: match[1], content } });
+    }
+    
+    // Pattern 2: delete_file({ "path": "..." })
+    const deleteFileMatches = text.matchAll(/delete_file\(\s*\{\s*"path"\s*:\s*"([^"]+)"/g);
+    for (const match of deleteFileMatches) {
+      directToolCalls.push({ name: 'delete_file', arguments: { path: match[1] } });
+    }
+    
+    // Pattern 3: create_directory({ "path": "..." })
+    const mkdirMatches = text.matchAll(/create_directory\(\s*\{\s*"path"\s*:\s*"([^"]+)"/g);
+    for (const match of mkdirMatches) {
+      directToolCalls.push({ name: 'create_directory', arguments: { path: match[1] } });
+    }
+    
+    // Pattern 4: list_directory({ "path": "..." })
+    const listDirMatches = text.matchAll(/list_directory\(\s*\{\s*"path"\s*:\s*"([^"]+)"/g);
+    for (const match of listDirMatches) {
+      directToolCalls.push({ name: 'list_directory', arguments: { path: match[1] } });
+    }
+    
+    // Pattern 5: read_file({ "path": "..." })
+    const readFileMatches = text.matchAll(/read_file\(\s*\{\s*"path"\s*:\s*"([^"]+)"/g);
+    for (const match of readFileMatches) {
+      directToolCalls.push({ name: 'read_file', arguments: { path: match[1] } });
+    }
+
+    // Pattern 6: [Tool: write_file] { "path": "...", "content": "..." }
+    const toolTagMatches = text.matchAll(/\[Tool:\s*(\w+)\]\s*\{\s*"path"\s*:\s*"([^"]+)"\s*(?:,\s*"content"\s*:\s*"((?:[^"]|\\.)*)")?/g);
+    for (const match of toolTagMatches) {
+      const toolName = match[1];
+      const path = match[2];
+      const content = match[3] ? match[3].replace(/\\(.)/g, '$1') : '';
+      directToolCalls.push({ name: toolName, arguments: { path, ...(content && { content }) } });
+    }
+
+    // Pattern 7: { "tool": "write_file", "arguments": { "path": "...", "content": "..." } }
+    const jsonToolMatches = text.matchAll(/\{\s*"tool"\s*:\s*"(\w+)"\s*,\s*"arguments"\s*:\s*\{\s*"path"\s*:\s*"([^"]+)"\s*(?:,\s*"content"\s*:\s*"((?:[^"]|\\.)*)")?/g);
+    for (const match of jsonToolMatches) {
+      const toolName = match[1];
+      const path = match[2];
+      const content = match[3] ? match[3].replace(/\\(.)/g, '$1') : '';
+      directToolCalls.push({ name: toolName, arguments: { path, ...(content && { content }) } });
+    }
+
+    // Pattern 8: { "tool": "read_file", "arguments": { "path": "..." } } - simpler
+    const simpleJsonToolMatches = text.matchAll(/\{\s*"tool"\s*:\s*"(\w+)"\s*,\s*"arguments"\s*:\s*\{\s*"path"\s*:\s*"([^"]+)"\s*\}\s*\}/g);
+    for (const match of simpleJsonToolMatches) {
+      const toolName = match[1];
+      const path = match[2];
+      directToolCalls.push({ name: toolName, arguments: { path } });
+    }
+
+    // Pattern 8b: { "tool": "name", "path": "..." } - without arguments wrapper
+    const directJsonMatches = text.matchAll(/\{\s*"tool"\s*:\s*"(\w+)"\s*,\s*"path"\s*:\s*"([^"]+)"\s*\}/g);
+    for (const match of directJsonMatches) {
+      const toolName = match[1];
+      const path = match[2];
+      directToolCalls.push({ name: toolName, arguments: { path } });
+    }
+
     // Convert FileEdit[] to generic tool call format
     const toolCalls: Array<{ name: string; arguments: Record<string, any> }> = [];
     for (const edit of fileEdits) {
@@ -1015,6 +1086,13 @@ export class AgentLoop {
       if (edit.diff) args.diff = edit.diff;
 
       toolCalls.push({ name: toolName, arguments: args });
+    }
+
+    // Add direct pattern matches (these take precedence over extractFileEdits for exact matches)
+    for (const direct of directToolCalls) {
+      if (!toolCalls.some(t => t.name === direct.name && t.arguments.path === direct.arguments.path)) {
+        toolCalls.push(direct);
+      }
     }
 
     if (toolCalls.length > 0) {

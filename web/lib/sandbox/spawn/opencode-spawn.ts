@@ -71,7 +71,7 @@ export class OpencodeProvider implements LLMProvider {
     let finalResponse = ''
 
     // Resolve binary via robust detection (OPENCODE_BIN → which/where → default paths)
-    const { findOpencodeBinarySync } = await import('@/lib/opencode/find-opencode-binary');
+    const { findOpencodeBinarySync } = await import('@/lib/agent-bins/find-opencode-binary');
     const binaryPath = findOpencodeBinarySync() ?? 'opencode';
 
     return new Promise<LLMAgentResult>((resolve, reject) => {

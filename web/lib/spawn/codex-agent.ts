@@ -1,35 +1,35 @@
 /**
- * Amp Agent Service (OpenAI Codex Successor)
- * 
- * Containerized OpenAI Amp implementation for advanced coding tasks.
+ * Codex Agent Service (OpenAI Codex CLI)
+ *
+ * Containerized OpenAI Codex implementation for coding tasks.
  * Provides:
  * - Code generation and completion
  * - Code review and refactoring
  * - Test generation
  * - Documentation writing
- * 
- * @see https://platform.openai.com/docs/amp
+ *
+ * @see https://github.com/openai/codex
  */
 
 import { EventEmitter } from 'node:events';
 import type { ChildProcess } from 'node:child_process';
 import { createLogger } from '../utils/logger';
-import { findAmpBinarySync } from '@/lib/agent-bins/find-amp-binary';
+import { findCodexBinarySync } from '@/lib/agent-bins/find-codex-binary';
 import { waitForLocalServer, spawnLocalAgent } from './local-server-utils';
 import type { AgentInstance, PromptRequest, PromptResponse, AgentEvent } from './agent-service-manager';
 
-const logger = createLogger('Agents:Amp');
+const logger = createLogger('Agents:Codex');
 
 // ============================================================================
 // Types
 // ============================================================================
 
-export interface AmpConfig {
+export interface CodexConfig {
   /** OpenAI API key */
   apiKey: string;
   /** Workspace directory */
   workspaceDir: string;
-  /** Model to use (default: amp-coder-1) */
+  /** Model to use (default: codex-1) */
   model?: string;
   /** Container port */
   port?: number;
@@ -43,18 +43,20 @@ export interface AmpConfig {
   systemPrompt?: string;
 }
 
-export interface AmpMessage {
-  role: 'system' | 'user' | 'assistant' | 'developer';
+export interface CodexMessage {
+  role: 'system' | 'user' | 'assistant';
   content: string | Array<{
-    type: 'text' | 'image_url' | 'input_audio' | 'output_audio';
+    type: 'text' | 'image_url' | 'tool_use' | 'tool_result';
     text?: string;
     image_url?: { url: string; detail?: string };
-    input_audio?: { data: string; format: 'wav' | 'mp3' };
-    output_audio?: { format: 'pcm16' };
+    tool_use_id?: string;
+    name?: string;
+    input?: any;
+    content?: any;
   }>;
 }
 
-export interface AmpTool {
+export interface CodexTool {
   type: 'function';
   function: {
     name: string;
@@ -67,8 +69,8 @@ export interface AmpTool {
   };
 }
 
-// Built-in Amp tools
-export const AMP_TOOLS: Record<string, AmpTool> = {
+// Built-in Codex tools
+export const CODEX_TOOLS: Record<string, CodexTool> = {
   'read_file': {
     type: 'function',
     function: {
@@ -146,20 +148,20 @@ export const AMP_TOOLS: Record<string, AmpTool> = {
 };
 
 // ============================================================================
-// Amp Agent Service
+// Codex Agent Service
 // ============================================================================
 
-export class AmpAgent extends EventEmitter {
-  private config: AmpConfig;
+export class CodexAgent extends EventEmitter {
+  private config: CodexConfig;
   private agent?: AgentInstance;
   private localProcess?: ChildProcess;
   private localPort?: number;
-  private sessionMessages: AmpMessage[] = [];
+  private sessionMessages: CodexMessage[] = [];
 
-  constructor(config: AmpConfig) {
+  constructor(config: CodexConfig) {
     super();
     this.config = {
-      model: config.model || 'amp-coder-1',
+      model: config.model || 'codex-1',
       maxTokens: config.maxTokens || 4096,
       temperature: config.temperature || 0.7,
       ...config,
@@ -167,31 +169,31 @@ export class AmpAgent extends EventEmitter {
   }
 
   /**
-   * Start the Amp agent.
-   * Prefers a local binary (found via findAmpBinarySync) and spawns it as a
-   * subprocess with `amp serve`. Falls back to containerized mode via the
+   * Start the Codex agent.
+   * Prefers a local `codex` binary (found via findCodexBinarySync) and
+   * spawns it as a subprocess. Falls back to containerized mode via the
    * agent-service-manager when no local binary is available.
    */
   async start(): Promise<void> {
-    logger.info('Starting Amp agent', {
+    logger.info('Starting Codex agent', {
       model: this.config.model,
       workspace: this.config.workspaceDir,
     });
 
-    // 1. Try to find and spawn a local amp binary
-    const ampBin = findAmpBinarySync();
-    if (ampBin) {
+    // 1. Try to find and spawn a local codex binary
+    const codexBin = findCodexBinarySync();
+    if (codexBin) {
       try {
-        this.localPort = this.config.port || 3000;
+        this.localPort = this.config.port || 5000;
 
-        logger.info('Spawning local amp binary', { binary: ampBin, port: this.localPort });
+        logger.info('Spawning local codex binary', { binary: codexBin, port: this.localPort });
 
         this.localProcess = spawnLocalAgent(
-          ampBin,
+          codexBin,
           ['serve', '--port', String(this.localPort)],
           {
             cwd: this.config.workspaceDir,
-            label: 'amp',
+            label: 'codex',
             env: {
               OPENAI_API_KEY: this.config.apiKey,
               OPENAI_MODEL: this.config.model,
@@ -206,8 +208,8 @@ export class AmpAgent extends EventEmitter {
 
         // Create a synthetic AgentInstance pointing to the local subprocess
         this.agent = {
-          agentId: this.config.agentId || `amp-local-${Date.now()}`,
-          type: 'amp',
+          agentId: this.config.agentId || `codex-local-${Date.now()}`,
+          type: 'codex',
           containerId: '',
           port: this.localPort,
           apiUrl: `http://127.0.0.1:${this.localPort}`,
@@ -223,13 +225,13 @@ export class AmpAgent extends EventEmitter {
         this.agent.status = 'ready';
         this.agent.health = 'healthy';
 
-        logger.info('Amp agent started (local binary)', {
+        logger.info('Codex agent started (local binary)', {
           agentId: this.agent.agentId,
           apiUrl: this.agent.apiUrl,
         });
         return;
       } catch (err: any) {
-        logger.warn('Local amp binary spawn failed, falling back to containerized mode', {
+        logger.warn('Local codex binary spawn failed, falling back to containerized mode', {
           error: err.message,
         });
         // Clean up failed local process
@@ -241,12 +243,12 @@ export class AmpAgent extends EventEmitter {
     }
 
     // 2. Fall back to containerized mode
-    logger.info('No local amp binary found, using containerized mode');
+    logger.info('No local codex binary found, using containerized mode');
     const { getAgentServiceManager } = await import('./agent-service-manager');
     const manager = getAgentServiceManager();
 
     this.agent = await manager.startAgent({
-      type: 'amp',
+      type: 'codex',
       agentId: this.config.agentId,
       workspaceDir: this.config.workspaceDir,
       apiKey: this.config.apiKey,
@@ -259,7 +261,7 @@ export class AmpAgent extends EventEmitter {
       },
     });
 
-    logger.info('Amp agent started (containerized)', {
+    logger.info('Codex agent started (containerized)', {
       agentId: this.agent.agentId,
       apiUrl: this.agent.apiUrl,
     });
@@ -271,7 +273,7 @@ export class AmpAgent extends EventEmitter {
   async stop(): Promise<void> {
     // Stop local subprocess first
     if (this.localProcess) {
-      logger.info('Stopping local amp subprocess', { pid: this.localProcess.pid });
+      logger.info('Stopping local codex subprocess', { pid: this.localProcess.pid });
       this.localProcess.kill();
       this.localProcess = undefined;
       this.localPort = undefined;
@@ -281,7 +283,7 @@ export class AmpAgent extends EventEmitter {
       return;
     }
 
-    logger.info('Stopping Amp agent', { agentId: this.agent.agentId });
+    logger.info('Stopping Codex agent', { agentId: this.agent.agentId });
 
     // Only stop via service manager for containerized agents
     if (this.agent.containerId) {
@@ -299,16 +301,16 @@ export class AmpAgent extends EventEmitter {
    */
   async prompt(request: PromptRequest): Promise<PromptResponse> {
     if (!this.agent) {
-      throw new Error('Amp agent not started');
+      throw new Error('Codex agent not started');
     }
 
-    logger.debug('Sending prompt to Amp', {
+    logger.debug('Sending prompt to Codex', {
       messageLength: request.message.length,
     });
 
-    // Add developer message (Amp-specific role for instructions)
+    // Add user message to session
     this.sessionMessages.push({
-      role: 'developer',
+      role: 'user',
       content: request.message,
     });
 
@@ -326,7 +328,7 @@ export class AmpAgent extends EventEmitter {
           max_tokens: this.config.maxTokens,
           temperature: this.config.temperature,
           messages: this.sessionMessages,
-          tools: Object.values(AMP_TOOLS),
+          tools: Object.values(CODEX_TOOLS),
           stream: request.stream,
         }),
         signal: AbortSignal.timeout(request.timeout || 300000),
@@ -334,7 +336,7 @@ export class AmpAgent extends EventEmitter {
 
       if (!response.ok) {
         const errorText = await response.text();
-        throw new Error(`Amp API error: ${response.status} ${errorText}`);
+        throw new Error(`Codex API error: ${response.status} ${errorText}`);
       }
 
       const data = await response.json();
@@ -367,14 +369,14 @@ export class AmpAgent extends EventEmitter {
         } : undefined,
       };
 
-      logger.info('Amp completed prompt', {
+      logger.info('Codex completed prompt', {
         duration: result.duration,
         tokens: result.usage?.totalTokens,
       });
 
       return result;
     } catch (error: any) {
-      logger.error('Amp prompt failed', { error: error.message });
+      logger.error('Codex prompt failed', { error: error.message });
       throw error;
     }
   }
@@ -445,7 +447,7 @@ export class AmpAgent extends EventEmitter {
   /**
    * Get session messages
    */
-  getSessionMessages(): AmpMessage[] {
+  getSessionMessages(): CodexMessage[] {
     return [...this.sessionMessages];
   }
 
@@ -454,7 +456,7 @@ export class AmpAgent extends EventEmitter {
    */
   clearSession(): void {
     this.sessionMessages = [];
-    logger.debug('Amp session cleared');
+    logger.debug('Codex session cleared');
   }
 
   /**
@@ -475,10 +477,10 @@ export class AmpAgent extends EventEmitter {
 // Factory Function
 // ============================================================================
 
-export async function createAmpAgent(config: AmpConfig): Promise<AmpAgent> {
-  const agent = new AmpAgent(config);
+export async function createCodexAgent(config: CodexConfig): Promise<CodexAgent> {
+  const agent = new CodexAgent(config);
   await agent.start();
   return agent;
 }
 
-export default AmpAgent;
+export default CodexAgent;
