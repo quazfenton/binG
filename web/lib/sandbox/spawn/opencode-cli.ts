@@ -47,6 +47,7 @@
 
 import { spawn, type ChildProcess } from 'child_process';
 import { createLogger } from '../../utils/logger';
+import { findOpencodeBinarySync } from '@/lib/opencode/find-opencode-binary';
 import type { ToolResult } from '../types';
 import type {
   LLMProvider,
@@ -244,6 +245,12 @@ export class OpencodeV2Provider implements LLMProvider {
         : `mkdir -p ${this.escapeShellArg(localWorkspaceDir, false)}`;
       await this.execLocalCommand(mkdirCmd);
 
+      // Resolve opencode binary via robust detection (OPENCODE_BIN → which/where → default paths)
+      // On Windows, fall back to 'npx opencode' (npm .cmd wrappers may not be in PATH);
+      // on Unix, fall back to bare 'opencode' (relies on shell PATH lookup).
+      const opencodeBin = findOpencodeBinarySync() ?? (isWindows ? 'npx opencode' : 'opencode');
+      const escapedBin = this.escapeShellArg(opencodeBin, isWindows);
+
       // Build command - pass prompt file via stdin differently based on OS
       let command: string;
 
@@ -251,12 +258,12 @@ export class OpencodeV2Provider implements LLMProvider {
         // On Windows, use cmd /c with type to pipe file content
         // SECURITY: Escape prompt file path
         const escapedPromptFile = this.escapeShellArg(promptFile, true);
-        command = `cmd /c type ${escapedPromptFile} | npx opencode chat --json ${modelFlag}`;
+        command = `cmd /c type ${escapedPromptFile} | ${escapedBin} chat --json ${modelFlag}`;
       } else {
         // On Linux, use stdin redirect
         // SECURITY: Escape prompt file path
         const escapedPromptFile = this.escapeShellArg(promptFile, false);
-        command = `OPENCODE_SYSTEM_PROMPT=${escapedSystemPrompt} opencode chat --json ${modelFlag} < ${escapedPromptFile}`;
+        command = `OPENCODE_SYSTEM_PROMPT=${escapedSystemPrompt} ${escapedBin} chat --json ${modelFlag} < ${escapedPromptFile}`;
       }
       
       console.log('[OpencodeV2Provider] Executing command:', command.substring(0, 300) + '...');

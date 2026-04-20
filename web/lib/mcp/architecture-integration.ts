@@ -19,6 +19,8 @@ import { ArcadeService, getArcadeService } from '../integrations/arcade-service'
 import { nullclawMCPBridge } from './nullclaw-mcp-bridge'
 import { initializeNullclaw, isNullclawAvailable, getNullclawMode } from '@bing/shared/agent/nullclaw-integration'
 import { normalizeSessionId } from '../virtual-filesystem/scope-utils';
+// Tool caching for repeated operations
+import { toolResultCache, toolCacheKey, contentHash } from '../cache';
 // Dynamically imported to avoid pulling Node.js-only deps (fs, database) into client bundle
 // import { standaloneGitTools } from '../tools/git-tools'
 
@@ -1138,6 +1140,12 @@ async function executeArcadeTool(
  * Call MCP tool from Architecture 1 (AI SDK)
  *
  * Use this when the LLM requests a tool call
+ * 
+ * Caching strategy:
+ * - list_files: fully cached (TTL 30s)
+ * - search_files: fully cached (TTL 30s)  
+ * - read_file: cached with content-hash validation (skip cache if file changed)
+ * - write/modify operations: never cached
  */
 export async function callMCPToolFromAI_SDK(
   toolName: string,
@@ -1148,14 +1156,77 @@ export async function callMCPToolFromAI_SDK(
   try {
     logger.debug(`Calling MCP tool: ${toolName}`, { args })
 
+    // Tools that should never be cached but trigger invalidation
+    const writeTools = ['write_file', 'batch_write', 'apply_diff', 'create_directory', 'delete_file', 'move_file'];
+    const cacheEnabled = !writeTools.includes(toolName);
+    
+    // Helper: invalidate caches when files change
+    const invalidateFileCache = (path?: string) => {
+      if (path) {
+        const pathKey = toolCacheKey.fileRead(path);
+        toolResultCache.delete(pathKey);
+        // Also invalidate parent directory listings
+        const segments = path.split('/');
+        for (let i = 1; i < segments.length; i++) {
+          const parentPath = segments.slice(0, i).join('/') || '.';
+          toolResultCache.delete(toolCacheKey.fileList(parentPath));
+        }
+      }
+      // Invalidate root list cache on any write
+      toolResultCache.delete(toolCacheKey.fileList('.'));
+      toolResultCache.delete(toolCacheKey.fileList('/'));
+    };
+
+    // Build cache key at function scope for read-only operations
+    let cacheKey: string | null = null;
+    if (cacheEnabled) {
+      if (toolName === 'list_files') {
+        cacheKey = toolCacheKey.fileList(args.path || '.');
+      } else if (toolName === 'search_files' || toolName === 'glob') {
+        cacheKey = toolCacheKey.fileSearch(args.pattern || args.query || '', args.path);
+      } else if (toolName === 'read_file' && args.path) {
+        cacheKey = toolCacheKey.fileRead(args.path, args.hash);
+      }
+
+      // Check cache hit for read-only operations
+      if (cacheKey) {
+        const cached = toolResultCache.get(cacheKey);
+        if (cached !== null) {
+          // For read_file: validate content hash if provided
+          if (toolName === 'read_file' && args.hash) {
+            const cachedData = typeof cached === 'string' ? cached : JSON.stringify(cached);
+            const cachedHash = contentHash(cachedData);
+            if (cachedHash !== args.hash) {
+              // Content changed - skip cache
+              toolResultCache.delete(cacheKey);
+            } else {
+              logger.debug(`Cache hit for ${toolName}: ${cacheKey}`);
+              return { success: true, output: cachedData };
+            }
+          } else {
+            // Fully cacheable: list_files, search_files
+            logger.debug(`Cache hit for ${toolName}: ${cacheKey}`);
+            return {
+              success: true,
+              output: typeof cached === 'string' ? cached : JSON.stringify(cached),
+            };
+          }
+        }
+      }
+    }
+
     // Check if it's a Blaxel codegen tool
     if (toolName.startsWith('blaxel_') && process.env.BLAXEL_API_KEY) {
-      return executeBlaxelCodegenTool(toolName, args)
+      const result = await executeBlaxelCodegenTool(toolName, args)
+      if (cacheEnabled && cacheKey) toolResultCache.set(cacheKey, result.output, 60000);
+      return result;
     }
 
     // Check if it's an Arcade tool
     if (toolName.startsWith('arcade_') && process.env.ARCADE_API_KEY) {
-      return executeArcadeTool(toolName, args, userId)
+      const result = await executeArcadeTool(toolName, args, userId);
+      if (cacheEnabled && cacheKey) toolResultCache.set(cacheKey, result.output, 60000);
+      return result;
     }
 
     // NEW: Check if it's a provider-specific advanced tool
@@ -1216,9 +1287,21 @@ export async function callMCPToolFromAI_SDK(
         })
       );
 
+      const resultOutput = typeof (result as any)?.output === 'string' ? (result as any).output : JSON.stringify(result);
+      
+      // Invalidate caches after write operations
+      if (!cacheEnabled && (result as any)?.success !== false) {
+        const affectedPath = args?.path || args?.files?.[0]?.path;
+        invalidateFileCache(affectedPath);
+      } else if (cacheEnabled && cacheKey) {
+        // Cache read-only operations
+        const ttl = (toolName === 'read_file') ? 10000 : 60000;
+        toolResultCache.set(cacheKey, resultOutput, ttl);
+      }
+
       return {
         success: (result as any)?.success !== false,
-        output: typeof (result as any)?.output === 'string' ? (result as any).output : JSON.stringify(result),
+        output: resultOutput,
         error: (result as any)?.error,
       };
     }
@@ -1229,10 +1312,30 @@ export async function callMCPToolFromAI_SDK(
       const sessionId = normalizeSessionId(args.conversationId || userId || '000');
       const scopePath = `project/sessions/${sessionId}`;
 
+      // Get filesystem state for command routing
+      let filesystemState: Record<string, { content?: string; isDirectory?: boolean }> = {};
+      // Note: This fetches state once per tool call - in production, cache this at session level
+      try {
+        const { virtualFilesystem: vfs } = await import('../virtual-filesystem');
+        const listing = await vfs.listDirectory(userId, '/');
+        for (const node of listing.nodes || []) {
+          const nodePath = `/${node.name}`;
+          const file = await vfs.readFile(userId, nodePath).catch(() => null);
+          filesystemState[nodePath] = {
+            content: file?.content || '',
+            isDirectory: node.type === 'directory',
+          };
+        }
+      } catch {
+        // VFS unavailable - continue without routing
+      }
+
       const bashToolMap = createBashTool({
         workingDir: scopePath,
         enableSelfHealing: true,
         persistToVFS: true,
+        getFilesystemState: () => filesystemState,
+        // onTerminalOutput would be wired from TerminalPanel context
       });
 
       const bashToolName = toolName.replace('bash_', '');
@@ -1265,6 +1368,11 @@ export async function callMCPToolFromAI_SDK(
         duration: nativeResult.duration,
       })
 
+      // Invalidate caches after native tool writes
+      if (!cacheEnabled && nativeResult.success) {
+        invalidateFileCache(args?.path);
+      }
+
       return {
         success: nativeResult.success,
         output: nativeResult.content,
@@ -1272,7 +1380,12 @@ export async function callMCPToolFromAI_SDK(
       }
     }
 
-    const mcporterResult = await callMCPorterTool(toolName, args)
+    const mcporterResult = await callMCPorterTool(toolName, args);
+    
+    // Invalidate caches after mcporter tool writes  
+    if (!cacheEnabled && mcporterResult.success) {
+      invalidateFileCache(args?.path);
+    }
     logger.debug(`mcporter tool result: ${toolName}`, { success: mcporterResult.success })
     return mcporterResult
   } catch (error: any) {

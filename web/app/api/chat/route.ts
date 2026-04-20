@@ -31,7 +31,7 @@ import { createSSEEmitter, SSE_RESPONSE_HEADERS, SSE_EVENT_TYPES } from '@/lib/s
 // import { notifyNeedMoreTurns, notifyStreamComplete } from '@/lib/streaming/stream-control-handler';
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import { getRecentMcpFileEdits, clearRecentMcpFileEdits } from '@/lib/virtual-filesystem/file-events';
-import { getOrchestrationModeFromRequest, executeWithOrchestrationMode } from '@bing/shared/agent/orchestration-mode-handler';
+import { getOrchestrationModeFromRequest, executeWithOrchestrationMode } from '@bing/shared/agent/modular';
 import {
   parseFilesystemResponse,
   extractAndSanitize,

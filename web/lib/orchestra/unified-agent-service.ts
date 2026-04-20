@@ -29,6 +29,10 @@ import {
   type OpenCodeEngineResult,
   type OpenCodeEngineConfig,
 } from '../session/agent/opencode-engine-service';
+import { isDesktopMode } from "@bing/platform/env";
+import { findOpencodeBinarySync } from "@/lib/opencode/find-opencode-binary";
+
+
 import {
   StatefulAgent,
   type StatefulAgentOptions,
@@ -81,6 +85,28 @@ import {
   ingestRule,
   ingestAntiPattern,
 } from '@/lib/rag/retrieval';
+
+
+// Does the @opencode-ai/sdk package exist in node_modules?
+// Cached at module load so checkStartupCapabilities() can use it cheaply.
+// Uses fs.existsSync on node_modules/@opencode-ai/sdk — simpler and more
+// reliable than parsing package.json, works in all deployment contexts.
+let _hasOpenCodeSDKPackageCache: boolean | undefined;
+function _hasOpenCodeSDKPackageCheck(): boolean {
+  if (_hasOpenCodeSDKPackageCache !== undefined) return _hasOpenCodeSDKPackageCache;
+  try {
+    const fs = require("fs");
+    const nodePath = require("path");
+    const dir = typeof __dirname !== "undefined" ? __dirname : process.cwd();
+    // web/lib/orchestra -> web/ -> node_modules/@opencode-ai/sdk
+    const sdkPath = nodePath.join(dir, "..", "..", "node_modules", "@opencode-ai", "sdk");
+    _hasOpenCodeSDKPackageCache = fs.existsSync(sdkPath);
+  } catch {
+    _hasOpenCodeSDKPackageCache = false;
+  }
+  return _hasOpenCodeSDKPackageCache;
+}
+const _hasOpenCodeSDKPackage = _hasOpenCodeSDKPackageCheck();
 
 const log = createLogger('UnifiedAgentService');
 
@@ -135,7 +161,7 @@ export interface UnifiedAgentConfig {
   model?: string;
 
   // Mode override (optional - auto-detected from env if not specified)
-  mode?: 'v1-api' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'mastra-workflow' | 'desktop' | 'v1-progressive-build' | 'dual-process' | 'adversarial-verify' | 'attractor-driven' | 'intent-driven' | 'energy-driven' | 'distributed-cognition' | 'cognitive-resonance' | 'auto';
+  mode?: 'v1-api' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'opencode-sdk' | 'mastra-workflow' | 'desktop' | 'v1-progressive-build' | 'dual-process' | 'adversarial-verify' | 'attractor-driven' | 'intent-driven' | 'energy-driven' | 'distributed-cognition' | 'cognitive-resonance' | 'auto';
 
   // Harness mode options
   dualProcessConfig?: DualProcessConfig;
@@ -163,6 +189,11 @@ export interface UnifiedAgentConfig {
     /** Custom completion indicator. Default: '[BUILD_COMPLETE]' */
     completionIndicator?: string;
   };
+
+  /** Auto-inject context text populated by the entry point for mode handlers.
+   *  Contains the raw auto-inject power description text (e.g., web-search, code-search)
+   *  for modes that don't use conversationHistory (OpenCodeEngine, StatefulAgent, Mastra). */
+  _autoInjectContext?: string;
 }
 
 export interface UnifiedAgentResult {
@@ -174,7 +205,7 @@ export interface UnifiedAgentResult {
     result: ToolResult;
   }>;
   totalSteps?: number;
-  mode: 'v1-api' | 'v1-agent-loop' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'mastra-workflow' | 'desktop' | 'v1-progressive-build' | 'dual-process' | 'dual-process-fast' | 'dual-process-slow' | 'dual-process-fast-fallback' | 'dual-process-slow-failed' | 'adversarial-verify' | 'adversarial-verify-revised' | 'adversarial-verify-revision-failed' | 'attractor-driven' | 'intent-driven' | 'energy-driven' | 'distributed-cognition' | 'distributed-cognition-no-synthesis' | 'cognitive-resonance' | 'cognitive-resonance-converged' | 'cognitive-resonance-synthesized' | 'cognitive-resonance-single' | 'cognitive-resonance-fallback';
+  mode: 'v1-api' | 'v1-agent-loop' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'opencode-sdk' | 'mastra-workflow' | 'desktop' | 'v1-progressive-build' | 'dual-process' | 'dual-process-fast' | 'dual-process-slow' | 'dual-process-fast-fallback' | 'dual-process-slow-failed' | 'adversarial-verify' | 'adversarial-verify-revised' | 'adversarial-verify-revision-failed' | 'attractor-driven' | 'intent-driven' | 'energy-driven' | 'distributed-cognition' | 'distributed-cognition-no-synthesis' | 'cognitive-resonance' | 'cognitive-resonance-converged' | 'cognitive-resonance-synthesized' | 'cognitive-resonance-single' | 'cognitive-resonance-fallback';
   error?: string;
   fileEdits?: Array<{
     path: string;
@@ -194,9 +225,10 @@ export interface UnifiedAgentResult {
 
 
 export interface StartupCapabilities {
-  v2Native: boolean;       // OpenCode CLI available and enabled
-  v2Containerized: boolean; // Container sandbox configured
-  v2Local: boolean;         // Local OpenCode with LLM_PROVIDER=opencode
+  v2Native: boolean;       // OpenCode CLI available and enabled (desktop-only)
+  v2Containerized: boolean; // Container sandbox configured (desktop-only)
+  v2Local: boolean;         // Local OpenCode with LLM_PROVIDER=opencode (desktop-only)
+  opencodeSdk: boolean;     // OpenCode SDK HTTP API available (web + desktop)
   statefulAgent: boolean;   // StatefulAgent enabled
   mastraWorkflows: boolean; // Mastra workflow engine configured
   desktop: boolean;         // Tauri desktop mode enabled
@@ -218,15 +250,35 @@ export function checkStartupCapabilities(): StartupCapabilities {
   const opencodeEnabled = llmProvider === 'opencode';
 
   // V2 Native: only if explicitly enabled (LLM_PROVIDER=opencode)
-  const v2Native = opencodeEnabled;
+  // RESTRICTED to desktop-only — CLI binary required on the host
+  const isDesktop = isDesktopMode();
+  const _hasOpencodeBinary = !!findOpencodeBinarySync();
+  const v2Native = opencodeEnabled && isDesktop && _hasOpencodeBinary;
 
   // V2 Containerized: requires containerized flag + sandbox provider + API key
+  // RESTRICTED to desktop-only — sandbox runs locally
   const v2Containerized = containerized
     && !!sandboxProvider
-    && !!process.env[`${sandboxProvider.toUpperCase()}_API_KEY`];
+    && !!process.env[`${sandboxProvider.toUpperCase()}_API_KEY`]
+    && isDesktop;
 
   // V2 Local: only if LLM_PROVIDER=opencode and not containerized
-  const v2Local = opencodeEnabled && !containerized;
+  // RESTRICTED to desktop-only — CLI binary required on the host
+  const v2Local = opencodeEnabled && !containerized && isDesktop && _hasOpencodeBinary;
+
+  // OpenCode SDK: HTTP API to an OpenCode server — works on both web and desktop.
+  // Available if OPENCODE_HOSTNAME or OPENCODE_PORT is set (server already running)
+  // OR if @opencode-ai/sdk can be loaded (will try to start server as fallback).
+  const opencodeSdk = !!(
+    process.env.OPENCODE_HOSTNAME
+    || process.env.OPENCODE_PORT
+    || process.env.OPENCODE_SDK_URL
+    // Also detect @opencode-ai/sdk package: if installed, runOpencodeSDKMode
+    // can attempt to start a server even without explicit env vars.
+    // We check package.json deps rather than require.resolve() because
+    // require.resolve is unreliable in Next.js bundled/ESM contexts.
+    || _hasOpenCodeSDKPackage
+  );
 
   // StatefulAgent: enabled unless explicitly disabled
   const statefulAgent = process.env.ENABLE_STATEFUL_AGENT !== 'false'
@@ -237,8 +289,7 @@ export function checkStartupCapabilities(): StartupCapabilities {
     || !!process.env.DEFAULT_WORKFLOW_ID;
 
   // Desktop mode
-  const desktop = process.env.DESKTOP_MODE === 'true'
-    || process.env.DESKTOP_LOCAL_EXECUTION === 'true';
+  const desktop = isDesktop;
 
   // V1 API: at least one provider has an API key
   const providerKey = llmProvider ? process.env[`${llmProvider.toUpperCase()}_API_KEY`] : undefined;
@@ -249,6 +300,7 @@ export function checkStartupCapabilities(): StartupCapabilities {
     v2Native,
     v2Containerized,
     v2Local,
+    opencodeSdk,
     statefulAgent,
     mastraWorkflows,
     desktop,
@@ -262,6 +314,7 @@ export function checkStartupCapabilities(): StartupCapabilities {
     v2Native,
     v2Containerized,
     v2Local,
+    opencodeSdk,
     statefulAgent,
     mastraWorkflows,
     desktop,
@@ -280,7 +333,7 @@ const startupCaps = checkStartupCapabilities();
  * Returns both mode and classification for logging/metrics.
  */
 async function determineMode(config: UnifiedAgentConfig): Promise<{
-  mode: 'v1-api' | 'v1-agent-loop' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'mastra-workflow' | 'desktop' | 'v1-progressive-build' | 'dual-process' | 'dual-process-fast' | 'dual-process-slow' | 'dual-process-fast-fallback' | 'dual-process-slow-failed' | 'adversarial-verify' | 'adversarial-verify-revised' | 'adversarial-verify-revision-failed' | 'attractor-driven' | 'intent-driven' | 'energy-driven' | 'distributed-cognition' | 'distributed-cognition-no-synthesis' | 'cognitive-resonance' | 'cognitive-resonance-converged' | 'cognitive-resonance-synthesized' | 'cognitive-resonance-single' | 'cognitive-resonance-fallback';
+  mode: 'v1-api' | 'v1-agent-loop' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'opencode-sdk' | 'mastra-workflow' | 'desktop' | 'v1-progressive-build' | 'dual-process' | 'dual-process-fast' | 'dual-process-slow' | 'dual-process-fast-fallback' | 'dual-process-slow-failed' | 'adversarial-verify' | 'adversarial-verify-revised' | 'adversarial-verify-revision-failed' | 'attractor-driven' | 'intent-driven' | 'energy-driven' | 'distributed-cognition' | 'distributed-cognition-no-synthesis' | 'cognitive-resonance' | 'cognitive-resonance-converged' | 'cognitive-resonance-synthesized' | 'cognitive-resonance-single' | 'cognitive-resonance-fallback';
   classification?: TaskClassification;
 }> {
   // Explicit mode override
@@ -317,6 +370,15 @@ async function determineMode(config: UnifiedAgentConfig): Promise<{
   // (moved after AGENT_EXECUTION_ENGINE check to respect explicit engine configuration)
   if (startupCaps.desktop) {
     return { mode: 'desktop' };
+  }
+
+  // OpenCode SDK mode: web-first mode using HTTP API to an OpenCode server.
+  // Takes priority over v1-api when the SDK is available — it provides full
+  // agentic capabilities (bash, file ops, tool calling) without needing
+  // a local CLI binary. Works on both web and desktop deployments.
+  if (startupCaps.opencodeSdk) {
+    log.info('[AutoMode] → opencode-sdk (OpenCode server available)');
+    return { mode: 'opencode-sdk' };
   }
 
   // AUTO mode: Rotate between v1-api and v1-agent-loop based on task complexity
@@ -412,23 +474,34 @@ export async function processUnifiedAgentRequest(
   const startTime = Date.now();
 
   // Auto-inject core powers as a separate USER message (preserves prompt caching)
-  // Only ubiquitous, always-beneficial powers (e.g. URL scraping) are injected proactively.
+  // Only ubiquitous, always-beneficial powers (e.g. web search) are injected proactively.
   // All other powers are discovered on-demand via power_list/power_read tools.
   // Applied at entry point so ALL execution modes benefit.
+  //
+  // For modes that use config.conversationHistory (V1-API paths), we inject into it.
+  // For modes that don't (OpenCodeEngine, StatefulAgent, Mastra), we attach the
+  // auto-inject text to config._autoInjectContext so mode handlers can use it.
+  let autoInjectContext = '';
   try {
-    const { appendAutoInjectPowers } = await import('@/lib/powers');
+    const { appendAutoInjectPowers, buildAutoInjectUserMessage } = await import('@/lib/powers');
     const userMsg = config.userMessage || '';
-    // Only inject into existing conversation history — mode handlers will
-    // handle auto-inject themselves when building messages from config.userMessage
-    // (e.g. enhanced-llm-service has its own appendAutoInjectPowers call).
-    // Avoid creating conversationHistory for first-message case, as mode handlers
-    // would then see a duplicate user message.
-    if (config.conversationHistory && config.conversationHistory.length > 0) {
-      appendAutoInjectPowers(config.conversationHistory, userMsg);
+
+    // Always ensure conversationHistory exists so V1-API paths get injection
+    if (!config.conversationHistory) {
+      config.conversationHistory = [];
     }
+    appendAutoInjectPowers(config.conversationHistory, userMsg);
+
+    // Also build the raw text for modes that don't use conversationHistory
+    autoInjectContext = buildAutoInjectUserMessage(userMsg) || '';
   } catch (err: any) {
     log.debug('Auto-inject powers skipped at entry point', { error: err?.message });
   }
+
+  // Stash auto-inject context for mode handlers that don't use conversationHistory
+  // (OpenCodeEngine, StatefulAgent, Mastra). They can append this to their
+  // system prompt or user message as appropriate.
+  config._autoInjectContext = autoInjectContext;
 
   log.info('═══════════════════════════════════════════════');
   log.info('[UnifiedAgent] ┌─ REQUEST ENTRY ──────────────────────────');
@@ -489,6 +562,10 @@ export async function processUnifiedAgentRequest(
       case 'v2-local':
         log.warn('[UnifiedAgent] → v2-local mode (LOCAL OPENCODE)');
         return await runV2Local(config);
+
+      case 'opencode-sdk':
+        log.info('[UnifiedAgent] → opencode-sdk mode (OpenCode HTTP API)');
+        return await runOpencodeSDKMode(config, classification);
 
       case 'mastra-workflow':
         log.info('[UnifiedAgent] → mastra-workflow mode');
@@ -643,9 +720,12 @@ async function runV2Native(
   });
 
   // Use OpenCode Engine for simpler tasks
+  // Prepend auto-inject context to system prompt so the engine knows about
+  // proactive powers (web-search, code-search) when triggers match.
+  const autoInjectSuffix = config._autoInjectContext ? `\n\n${config._autoInjectContext}` : '';
   const engineConfig: OpenCodeEngineConfig = {
     model: process.env.OPENCODE_MODEL,
-    systemPrompt: config.systemPrompt || 'You are an expert software engineer with full bash and file system access. Use tools to complete tasks efficiently.',
+    systemPrompt: (config.systemPrompt || 'You are an expert software engineer with full bash and file system access. Use tools to complete tasks efficiently.') + autoInjectSuffix,
     maxSteps: config.maxSteps || 20,
     timeout: 300000,
     enableBash: true,
@@ -732,7 +812,7 @@ async function runDesktopMode(
   try {
     const engineConfig: OpenCodeEngineConfig = {
       model: process.env.OPENCODE_MODEL,
-      systemPrompt: config.systemPrompt || 'You are an expert software engineer running on the user\'s desktop. You have direct access to the local filesystem and shell. Execute commands freely to complete tasks.',
+      systemPrompt: (config.systemPrompt || 'You are an expert software engineer running on the user\'s desktop. You have direct access to the local filesystem and shell. Execute commands freely to complete tasks.') + (config._autoInjectContext ? `\n\n${config._autoInjectContext}` : ''),
       maxSteps: config.maxSteps || 25,
       timeout: 300000,
       enableBash: true,
@@ -825,7 +905,12 @@ async function runStatefulAgentMode(config: UnifiedAgentConfig): Promise<Unified
     };
 
     const agent = new StatefulAgent(agentOptions);
-    const result: StatefulAgentResult = await agent.run(config.userMessage);
+    // Prepend auto-inject context to user message so StatefulAgent knows about
+    // proactive powers (web-search, code-search) when triggers match.
+    const userMsgWithAutoInject = config._autoInjectContext
+      ? `${config._autoInjectContext}\n\n${config.userMessage}`
+      : config.userMessage;
+    const result: StatefulAgentResult = await agent.run(userMsgWithAutoInject);
 
     // Convert StatefulAgent result to unified format
     const steps = result.vfs ? Object.entries(result.vfs).map(([path, content]) => ({
@@ -868,8 +953,9 @@ async function runV2Containerized(config: UnifiedAgentConfig): Promise<UnifiedAg
   const startTime = Date.now();
   
   // Use OpenCode Engine as primary agentic engine
+  const autoInjectSuffix = config._autoInjectContext ? `\n\n${config._autoInjectContext}` : '';
   const engineConfig: OpenCodeEngineConfig = {
-    systemPrompt: config.systemPrompt,
+    systemPrompt: (config.systemPrompt || '') + autoInjectSuffix,
     model: process.env.OPENCODE_MODEL,
 
     maxSteps: config.maxSteps,
@@ -914,8 +1000,9 @@ async function runV2Local(config: UnifiedAgentConfig): Promise<UnifiedAgentResul
   const startTime = Date.now();
   
   // Use OpenCode Engine as primary agentic engine
+  const autoInjectSuffix = config._autoInjectContext ? `\n\n${config._autoInjectContext}` : '';
   const engineConfig: OpenCodeEngineConfig = {
-    systemPrompt: config.systemPrompt,
+    systemPrompt: (config.systemPrompt || '') + autoInjectSuffix,
     model: process.env.OPENCODE_MODEL,
     maxSteps: config.maxSteps,
     timeout: 300000,
@@ -949,6 +1036,233 @@ async function runV2Local(config: UnifiedAgentConfig): Promise<UnifiedAgentResul
   };
 }
 
+
+/**
+ * Run OpenCode SDK mode — web-first agentic execution via HTTP API.
+ *
+ * Uses the OpencodeSessionManager HTTP API to talk to an OpenCode server.
+ * This is the ONLY OpenCode mode that works on web deployments — it doesn't
+ * require a local `opencode` CLI binary, just an accessible server endpoint.
+ *
+ * Strategy (with fallback):
+ *   1. Try connecting to an already-running OpenCode server via HTTP
+ *      (OPENCODE_HOSTNAME / OPENCODE_PORT / OPENCODE_SDK_URL).
+ *   2. If no server is reachable, try to start one using the @opencode-ai/sdk
+ *      package (which spawns `opencode serve` under the hood).
+ *   3. If both fail, throw so the fallback chain can route to v1-api.
+ */
+async function runOpencodeSDKMode(
+  config: UnifiedAgentConfig,
+  classification?: TaskClassification,
+): Promise<UnifiedAgentResult> {
+  const startTime = Date.now();
+  log.info('Running OpenCode SDK mode', {
+    userMessageLength: config.userMessage.length,
+    classification: classification?.complexity,
+  });
+
+  // Attempt 1: Connect to existing server via HTTP API
+  try {
+    const { createOpencodeSessionManager } = await import('@/lib/opencode');
+    const sdkUrl = process.env.OPENCODE_SDK_URL;
+    const hostname = process.env.OPENCODE_HOSTNAME || '127.0.0.1';
+    const port = parseInt(process.env.OPENCODE_PORT || '4096');
+
+    const sessionManager = createOpencodeSessionManager({
+      baseUrl: sdkUrl || undefined,
+      hostname,
+      port,
+      timeout: 120000, // Longer timeout for agentic tasks
+    });
+
+    // Verify server is reachable
+    const statusList = await sessionManager.getStatus();
+    const serverAvailable = Array.isArray(statusList);
+    if (!serverAvailable) {
+      throw new Error('OpenCode server status check returned non-array — server likely not running');
+    }
+
+    log.info('OpenCode SDK server reachable', {
+      hostname,
+      port,
+      activeSessions: statusList.length,
+    });
+
+    // Create a session for this request
+    const title = config.conversationId
+      ? `conv-${config.conversationId}`
+      : `sdk-${Date.now()}`;
+    const session = await sessionManager.createSession(title);
+    log.info('OpenCode SDK session created', { sessionId: session.id });
+
+    // Inject auto-inject context + system prompt via noReply message
+    const autoInjectContext = config._autoInjectContext || '';
+    const systemPrompt = config.systemPrompt || 'You are an expert software engineer with full bash and file system access. Use tools to complete tasks efficiently.';
+    if (autoInjectContext || systemPrompt) {
+      await sessionManager.injectContext(
+        session.id,
+        [autoInjectContext, systemPrompt].filter(Boolean).join('\n\n'),
+      );
+    }
+
+    // Inject conversation history as context (noReply messages)
+    if (config.conversationHistory && config.conversationHistory.length > 0) {
+      for (const msg of config.conversationHistory) {
+        if (msg.role === 'system') continue; // already injected above
+        await sessionManager.injectContext(
+          session.id,
+          `[${msg.role}]: ${msg.content}`,
+        );
+      }
+    }
+
+    // Send the user prompt
+    const modelStr = config.model || process.env.OPENCODE_MODEL;
+    const promptOpts: Record<string, any> = {};
+    if (modelStr && modelStr.includes('/')) {
+      const [providerID, modelID] = modelStr.split('/');
+      promptOpts.model = { providerID, modelID };
+    } else if (modelStr) {
+      promptOpts.model = { providerID: 'anthropic', modelID: modelStr };
+    }
+    if (config.systemPrompt) {
+      promptOpts.system = config.systemPrompt;
+    }
+
+    const result = await sessionManager.sendPrompt(
+      session.id,
+      config.userMessage,
+      promptOpts,
+    );
+
+    // Extract text content from the response message
+    const responseText = result.parts
+      ?.filter((p: any) => p.type === 'text')
+      .map((p: any) => p.text || '')
+      .join('') || '';
+
+    // Extract tool call steps for the unified result format
+    const toolSteps = (result.parts || [])
+      .filter((p: any) => p.type === 'tool')
+      .map((p: any) => ({
+        toolName: p.tool?.name || 'unknown',
+        args: p.tool?.args || {},
+        result: {
+          success: p.tool?.result?.success !== false,
+          output: p.tool?.result?.output || JSON.stringify(p.tool?.result || {}),
+          exitCode: p.tool?.result?.exitCode ?? (p.tool?.result?.success === false ? 1 : 0),
+        },
+      }));
+
+    // Try to get file changes from the session diff
+    let fileEdits: Array<{ path: string; content?: string; diff?: string; action?: string }> = [];
+    try {
+      const diffResult = await sessionManager.getDiff(session.id);
+      if (diffResult.diff) {
+        fileEdits = [{ path: '(session diff)', diff: diffResult.diff, action: 'diff' }];
+      }
+    } catch { /* best effort */ }
+
+    log.info('OpenCode SDK mode completed', {
+      sessionId: session.id,
+      responseLength: responseText.length,
+      toolSteps: toolSteps.length,
+      duration: Date.now() - startTime,
+    });
+
+    return {
+      success: true,
+      response: responseText || 'No response generated',
+      steps: toolSteps,
+      totalSteps: toolSteps.length,
+      mode: 'opencode-sdk',
+      fileEdits: fileEdits.length > 0 ? fileEdits : undefined,
+      metadata: {
+        provider: 'opencode-sdk',
+        model: modelStr,
+        duration: Date.now() - startTime,
+        sessionId: session.id,
+      },
+    };
+  } catch (httpError: any) {
+    log.warn('OpenCode SDK HTTP API failed, trying @opencode-ai/sdk fallback', {
+      error: httpError.message,
+    });
+
+    // Attempt 2: Try to start server via @opencode-ai/sdk
+    try {
+      const { createOpenCodeSDKProvider } = await import('@/lib/chat/opencode-sdk-provider');
+      const sdkProvider = createOpenCodeSDKProvider({
+        hostname: process.env.OPENCODE_HOSTNAME || '127.0.0.1',
+        port: parseInt(process.env.OPENCODE_PORT || '4096'),
+        model: config.model || process.env.OPENCODE_MODEL || 'anthropic/claude-3-5-sonnet-20241022',
+        timeout: 30000,
+      });
+
+      await sdkProvider.initialize();
+
+      // Build messages for the SDK provider
+      const messages: Array<{ role: string; content: string }> = [
+        ...(config.conversationHistory || []),
+        { role: 'user', content: config.userMessage },
+      ];
+
+      // Add auto-inject context as a preceding user message
+      if (config._autoInjectContext) {
+        messages.unshift({ role: 'user', content: config._autoInjectContext });
+      }
+
+      // Stream the response
+      let fullResponse = '';
+      const toolSteps: Array<{ toolName: string; args: Record<string, any>; result: ToolResult }> = [];
+
+      for await (const chunk of sdkProvider.generateStreamingResponse({
+        messages,
+        model: config.model || process.env.OPENCODE_MODEL || 'opencode/local',
+        temperature: config.temperature || 0.7,
+        maxTokens: config.maxTokens || 32000,
+      } as any)) {
+        if (chunk.content) {
+          fullResponse += chunk.content;
+          config.onStreamChunk?.(chunk.content);
+        }
+        if (chunk.isComplete) {
+          break;
+        }
+      }
+
+      log.info('OpenCode SDK fallback (@opencode-ai/sdk) completed', {
+        responseLength: fullResponse.length,
+        duration: Date.now() - startTime,
+      });
+
+      // Clean up
+      await sdkProvider.close().catch(() => {});
+
+      return {
+        success: true,
+        response: fullResponse || 'No response generated',
+        steps: toolSteps,
+        totalSteps: toolSteps.length,
+        mode: 'opencode-sdk',
+        metadata: {
+          provider: 'opencode-sdk-fallback',
+          duration: Date.now() - startTime,
+          fallbackMethod: '@opencode-ai/sdk',
+        },
+      };
+    } catch (sdkError: any) {
+      log.error('OpenCode SDK fallback also failed', {
+        httpError: httpError.message,
+        sdkError: sdkError.message,
+      });
+      // Throw so the fallback chain can route to v1-api
+      throw new Error(
+        `OpenCode SDK mode failed: HTTP API error (${httpError.message}), SDK fallback error (${sdkError.message})`,
+      );
+    }
+  }
+}
 
 /**
  * Run V1 API mode (LLM provider API)
@@ -1004,8 +1318,12 @@ async function runMastraWorkflow(config: UnifiedAgentConfig): Promise<UnifiedAge
 
     // Execute workflow via Mastra integration
     // FIX: Use conversationId for VFS session scoping
+    // Prepend auto-inject context to task so Mastra knows about proactive powers.
+    const taskWithAutoInject = config._autoInjectContext
+      ? `${config._autoInjectContext}\n\n${config.userMessage}`
+      : config.userMessage;
     const workflowResult = await mastraWorkflowIntegration.executeWorkflow(workflowId, {
-      task: config.userMessage,
+      task: taskWithAutoInject,
       ownerId: config.conversationId
         ? `${config.userId || 'system'}$${config.conversationId}`
         : (config.userId || config.sandboxId || 'default'),
@@ -1093,8 +1411,16 @@ async function runProgressiveBuildMode(
     const { streamText } = await import('ai');
     const { getVercelModel } = await import('../chat/vercel-ai-streaming');
 
+    // Inject auto-inject context as a user message if not already present
+    // (progressive build builds its own messages independently)
     const systemMsg = messages.find(m => m.role === 'system');
     const nonSystemMsgs = messages.filter(m => m.role !== 'system');
+    if (config._autoInjectContext) {
+      const hasAutoInject = messages.some(m => m.content?.includes('[Auto-loaded power(s)'));
+      if (!hasAutoInject) {
+        nonSystemMsgs.unshift({ role: 'user', content: config._autoInjectContext });
+      }
+    }
 
     const vercelModel = getVercelModel(primaryProvider, normalizedModel);
 
@@ -1508,15 +1834,10 @@ async function runV1ApiWithTools(
     }
     llmMessages.push(...messages);
 
-    // Auto-inject core powers for first-message case (when conversationHistory was empty)
-    // The entry point only injects into existing conversationHistory; mode handlers
-    // that build their own llmMessages need this separate call.
-    try {
-      const { appendAutoInjectPowers } = await import('@/lib/powers');
-      appendAutoInjectPowers(llmMessages, config.userMessage || '');
-    } catch (err: any) {
-      log.debug('Auto-inject powers skipped (V1-API-WITH-TOOLS)', { error: err?.message });
-    }
+    // Auto-inject powers are already applied at the entry point via
+    // appendAutoInjectPowers(config.conversationHistory, ...).
+    // The `messages` array already contains the injected user message.
+    // Dedup guard in appendAutoInjectPowers prevents double injection.
 
     let response = '';
 
@@ -2142,9 +2463,12 @@ async function attemptFallback(
 
   // Try fallback chain based on what failed, excluding already tried modes
   // Only include modes that were available at startup
-  // Priority: V2 Native (with StatefulAgent for complex) → V2 Containerized → V2 Local → V1 API
-  const fallbackOrder: Array<'v2-native' | 'v2-containerized' | 'v2-local' | 'v1-api'> = [];
+  // Priority: OpenCode SDK (web-friendly) → V2 Native (desktop-only, with StatefulAgent) → V2 Containerized → V2 Local → V1 API
+  const fallbackOrder: Array<'opencode-sdk' | 'v2-native' | 'v2-containerized' | 'v2-local' | 'v1-api'> = [];
 
+  if (!forceV1Auto && !forceAgentLoop && !visitedModes.has('opencode-sdk') && failedMode !== 'opencode-sdk' && caps.opencodeSdk) {
+    fallbackOrder.push('opencode-sdk');
+  }
   if (!forceV1Auto && !forceAgentLoop && !visitedModes.has('v2-native') && failedMode !== 'v2-native' && caps.v2Native) {
     fallbackOrder.push('v2-native');
   }
@@ -2191,6 +2515,9 @@ async function attemptFallback(
       // Execute the fallback mode directly instead of recursively calling attemptFallback
       let result: UnifiedAgentResult;
       switch (fallbackMode) {
+        case 'opencode-sdk':
+          result = await runOpencodeSDKMode(config);
+          break;
         case 'v2-native':
           result = await runV2Native(config);
           break;
@@ -2242,29 +2569,38 @@ async function attemptFallback(
  * Get available modes based on startup capabilities
  */
 export function getAvailableModes(): Array<{
-  mode: 'v1-api' | 'v2-containerized' | 'v2-local' | 'v2-native';
+  mode: 'v1-api' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'opencode-sdk';
   name: string;
   description: string;
   available: boolean;
   recommended?: boolean;
+  webReady?: boolean;
 }> {
   return [
     {
+      mode: 'opencode-sdk',
+      name: 'OpenCode SDK (Web + Desktop)',
+      description: 'Agentic execution via HTTP API - works on web and desktop, no CLI binary needed',
+      available: startupCaps.opencodeSdk,
+      recommended: startupCaps.opencodeSdk,
+      webReady: true,
+    },
+    {
       mode: 'v2-native',
-      name: 'OpenCode Engine (Recommended)',
+      name: 'OpenCode Engine (Desktop Only)',
       description: 'Full agentic capabilities with native bash, file ops, and tool execution',
       available: startupCaps.v2Native,
-      recommended: true,
+      recommended: !startupCaps.opencodeSdk && startupCaps.v2Native,
     },
     {
       mode: 'v2-containerized',
-      name: 'OpenCode Containerized',
+      name: 'OpenCode Containerized (Desktop Only)',
       description: 'OpenCode CLI in isolated sandbox (production-ready)',
       available: startupCaps.v2Containerized,
     },
     {
       mode: 'v2-local',
-      name: 'OpenCode Local',
+      name: 'OpenCode Local (Desktop Only)',
       description: 'OpenCode CLI on your local machine',
       available: startupCaps.v2Local,
     },
@@ -2273,6 +2609,7 @@ export function getAvailableModes(): Array<{
       name: 'LLM API (Fallback)',
       description: 'Cloud LLM APIs - simple chat only, no agentic capabilities',
       available: startupCaps.v1Api,
+      webReady: true,
     },
   ];
 }

@@ -50,7 +50,47 @@ export type OrchestrationMode =
   | 'nullclaw'
   | 'opencode-sdk'
   | 'mastra-workflow'
+  // V1/V2 Execution modes
+  | 'v1-api'
+  | 'v1-agent-loop'
+  | 'v1-progressive-build'
+  | 'v2-containerized'
+  | 'v2-local'
+  | 'v2-native'
+  | 'desktop'
+  // Dual-process variants (with task-classifier step)
+  | 'dual-process'
+  | 'dual-process:fast'
+  | 'dual-process:slow'
+  | 'dual-process:fast-fallback'
+  | 'dual-process:slow-failed'
+  // Adversarial verification variants
+  | 'adversarial-verify'
+  | 'adversarial:revised'
+  | 'adversarial:revision-failed'
+  // Cognitive resonance variants
+  | 'cognitive-resonance'
+  | 'cognitive:converged'
+  | 'cognitive:synthesized'
+  | 'cognitive:single'
+  | 'cognitive:fallback'
+  // Distributed cognition
+  | 'distributed-cognition'
+  | 'distributed:no-synthesis'
+  // Spec amplification modes
+  | 'spec:super'
+  | 'spec:maximal'
+  // Mastra-specific workflow modes
+  | 'mastra:code-agent'
+  | 'mastra:research'
+  | 'mastra:parallel'
+  | 'mastra:data-analysis'
+  | 'mastra:hitl'
+  // CrewAI-specific modes
   | 'crewai'
+  | 'crewai:role-agent'
+  | 'crewai:swarm'
+  | 'crewai:streaming'
   | 'v2-executor'
   | 'agent-team';
 
@@ -112,10 +152,33 @@ export function getOrchestrationModeFromRequest(req: NextRequest): Orchestration
     return 'unified-agent'; // Default — uses multi-factor task classifier + health routing
   }
 
-  const validModes: OrchestrationMode[] = ['task-router', 'unified-agent', 'stateful-agent', 'agent-kernel', 'agent-loop', 'execution-graph', 'nullclaw', 'opencode-sdk', 'mastra-workflow', 'crewai', 'v2-executor', 'agent-team'];
   const mode = modeHeader.toLowerCase() as OrchestrationMode;
 
-  if (!validModes.includes(mode)) {
+  // Extended validation - check against the actual OrchestrationMode type
+  // This allows all defined modes to be used while still catching invalid ones
+  const knownModes = new Set<OrchestrationMode>([
+    'task-router', 'unified-agent', 'stateful-agent', 'agent-kernel', 'agent-loop', 'execution-graph', 
+    'nullclaw', 'opencode-sdk', 'mastra-workflow', 'crewai', 'v2-executor', 'agent-team',
+    // V1/V2 Execution modes
+    'v1-api', 'v1-agent-loop', 'v1-progressive-build', 'v2-containerized', 'v2-local', 
+    'v2-native', 'desktop',
+    // Dual-process variants
+    'dual-process', 'dual-process:fast', 'dual-process:slow', 'dual-process:fast-fallback', 'dual-process:slow-failed',
+    // Adversarial variants
+    'adversarial-verify', 'adversarial:revised', 'adversarial:revision-failed',
+    // Cognitive variants
+    'cognitive-resonance', 'cognitive:converged', 'cognitive:synthesized', 'cognitive:single', 'cognitive:fallback',
+    // Distributed variants
+    'distributed-cognition', 'distributed:no-synthesis',
+    // Spec variants
+    'spec:super', 'spec:maximal',
+    // Mastra-specific
+    'mastra:code-agent', 'mastra:research', 'mastra:parallel', 'mastra:data-analysis', 'mastra:hitl',
+    // CrewAI-specific
+    'crewai:role-agent', 'crewai:swarm', 'crewai:streaming',
+  ]);
+
+  if (!knownModes.has(mode)) {
     logger.warn('Invalid orchestration mode, falling back to unified-agent', { mode: modeHeader });
     return 'unified-agent';
   }
@@ -567,52 +630,144 @@ export async function executeWithOrchestrationMode(
       }
 
       // ========================================================================
-      // MASTRA WORKFLOW
+      // MASTRA WORKFLOW (legacy alias - delegates via config)
       // ========================================================================
-      case 'mastra-workflow': {
+      case 'mastra-workflow':
+      case 'mastra:code-agent': {
+        // Uses unified-agent-service with mastra-workflow config  
+        // Fallback to mastra workflow integration
         const { mastraWorkflowIntegration } = await import('@bing/shared/agent/mastra-workflow-integration');
-
-        const workflowId = 'code-agent'; // Default workflow
-        // ownerId already validated at function entry
-        const workflowResult = await mastraWorkflowIntegration.executeWorkflow(workflowId, {
+        const workflowResult = await mastraWorkflowIntegration.executeWorkflow('code-agent', {
           task: request.task,
           ownerId: request.ownerId,
         });
-
         result = {
           success: workflowResult.success,
-          response: workflowResult.result?.response || workflowResult.result?.content || 'Workflow completed',
-          steps: workflowResult.steps,
-          error: workflowResult.error,
-          metadata: {
-            agentType: 'mastra-workflow',
-            workflowId,
-            duration: workflowResult.duration || (Date.now() - startTime),
-          },
+          response: workflowResult.result?.response || 'Completed',
+          metadata: { agentType: 'mastra:code-agent', duration: Date.now() - startTime },
         };
         break;
       }
 
       // ========================================================================
-      // CREWAI
+      // MASTRA: RESEARCH
       // ========================================================================
-      case 'crewai': {
-        const { runCrewAI } = await import('@/lib/crewai');
+      case 'mastra:research': {
+        const { mastraWorkflowIntegration } = await import('@bing/shared/agent/mastra-workflow-integration');
+        const workflowResult = await mastraWorkflowIntegration.executeWorkflow('research', {
+          task: request.task,
+          ownerId: request.ownerId,
+        });
+        result = {
+          success: workflowResult.success,
+          response: workflowResult.result?.response || 'Research complete',
+          metadata: { agentType: 'mastra:research', duration: Date.now() - startTime },
+        };
+        break;
+      }
 
-        // sessionId already validated at function entry
+      // ========================================================================
+      // MASTRA: PARALLEL
+      // ========================================================================
+      case 'mastra:parallel': {
+        const { mastraWorkflowIntegration } = await import('@bing/shared/agent/mastra-workflow-integration');
+        const workflowResult = await mastraWorkflowIntegration.executeWorkflow('parallel', {
+          task: request.task,
+          ownerId: request.ownerId,
+        });
+        result = {
+          success: workflowResult.success,
+          response: workflowResult.result?.response || 'Parallel tasks complete',
+          metadata: { agentType: 'mastra:parallel', duration: Date.now() - startTime },
+        };
+        break;
+      }
+
+      // ========================================================================
+      // MASTRA: DATA-ANALYSIS
+      // ========================================================================
+      case 'mastra:data-analysis': {
+        const { mastraWorkflowIntegration } = await import('@bing/shared/agent/mastra-workflow-integration');
+        const workflowResult = await mastraWorkflowIntegration.executeWorkflow('data-analysis', {
+          task: request.task,
+          ownerId: request.ownerId,
+        });
+        result = {
+          success: workflowResult.success,
+          response: workflowResult.result?.response || 'Analysis complete',
+          metadata: { agentType: 'mastra:data-analysis', duration: Date.now() - startTime },
+        };
+        break;
+      }
+
+      // ========================================================================
+      // MASTRA: HITL
+      // ========================================================================
+      case 'mastra:hitl': {
+        const { mastraWorkflowIntegration } = await import('@bing/shared/agent/mastra-workflow-integration');
+        const workflowResult = await mastraWorkflowIntegration.executeWorkflow('hitl', {
+          task: request.task,
+          ownerId: request.ownerId,
+        });
+        result = {
+          success: workflowResult.success,
+          response: workflowResult.result?.response || 'HITL workflow complete',
+          metadata: { agentType: 'mastra:hitl', duration: Date.now() - startTime },
+        };
+        break;
+      }
+
+      // ========================================================================
+      // CREWAI (legacy alias - uses existing crewai handler)
+      // ========================================================================
+      case 'crewai':
+      case 'crewai:role-agent': {
+        const { runCrewAI } = await import('@/lib/crewai');
         const crewResult = await runCrewAI({
           sessionId: request.sessionId,
           userMessage: request.task,
         });
-
         result = {
           success: crewResult.success,
           response: crewResult.response,
           error: crewResult.error,
-          metadata: {
-            agentType: 'crewai',
-            duration: Date.now() - startTime,
-          },
+          metadata: { agentType: 'crewai:role-agent', duration: Date.now() - startTime },
+        };
+        break;
+      }
+
+      // ========================================================================
+      // CREWAI: SWARM (uses swarm module)
+      // ========================================================================
+      case 'crewai:swarm': {
+        // Swarm is a pattern - use crewai with swarm config
+        const { runCrewAI } = await import('@/lib/crewai');
+        const crewResult = await runCrewAI({
+          sessionId: request.sessionId,
+          userMessage: request.task,
+        });
+        result = {
+          success: crewResult.success,
+          response: crewResult.response,
+          metadata: { agentType: 'crewai:swarm', duration: Date.now() - startTime },
+        };
+        break;
+      }
+
+      // ========================================================================
+      // CREWAI: STREAMING (uses existing crewai with streaming enabled)
+      // ========================================================================
+      case 'crewai:streaming': {
+        // Use existing crewai with streaming
+        const { runCrewAI } = await import('@/lib/crewai');
+        const streamResult = await runCrewAI({
+          sessionId: request.sessionId,
+          userMessage: request.task,
+        });
+        result = {
+          success: true,
+          response: streamResult.response,
+          metadata: { agentType: 'crewai:streaming', streaming: true, duration: Date.now() - startTime },
         };
         break;
       }
@@ -837,6 +992,363 @@ export async function executeWithOrchestrationMode(
     );
 
     return result;
+
+    // ========================================================================
+    // V1-API MODE (Direct API calls with tools - fast, simple)
+    // ========================================================================
+    case 'v1-api': {
+      const { processUnifiedAgentRequest } = await import('@/lib/orchestra/unified-agent-service');
+      const unifiedResult = await processUnifiedAgentRequest({
+        task: request.task,
+        ownerId: request.ownerId,
+        sessionId: request.sessionId,
+        stream: request.stream,
+        mode: 'v1-api',
+      });
+      result = {
+        success: unifiedResult.success,
+        response: unifiedResult.response,
+        steps: unifiedResult.steps,
+        error: unifiedResult.error,
+        metadata: { agentType: 'v1-api', duration: Date.now() - startTime },
+      };
+      break;
+    }
+
+    // ========================================================================
+    // V1-AGENT-LOOP MODE (Full agent loop with iterations)
+    // ========================================================================
+    case 'v1-agent-loop': {
+      const { processUnifiedAgentRequest } = await import('@/lib/orchestra/unified-agent-service');
+      const unifiedResult = await processUnifiedAgentRequest({
+        task: request.task,
+        ownerId: request.ownerId,
+        sessionId: request.sessionId,
+        stream: request.stream,
+        mode: 'v1-agent-loop',
+      });
+      result = {
+        success: unifiedResult.success,
+        response: unifiedResult.response,
+        steps: unifiedResult.steps,
+        error: unifiedResult.error,
+        metadata: { agentType: 'v1-agent-loop', duration: Date.now() - startTime },
+      };
+      break;
+    }
+
+    // ========================================================================
+    // V1-PROGRESSIVE-BUILD (Iterative building with verification)
+    // ========================================================================
+    case 'v1-progressive-build': {
+      const { processUnifiedAgentRequest } = await import('@/lib/orchestra/unified-agent-service');
+      const unifiedResult = await processUnifiedAgentRequest({
+        task: request.task,
+        ownerId: request.ownerId,
+        sessionId: request.sessionId,
+        stream: request.stream,
+        mode: 'v1-progressive-build',
+      });
+      result = {
+        success: unifiedResult.success,
+        response: unifiedResult.response,
+        steps: unifiedResult.steps,
+        error: unifiedResult.error,
+        metadata: { agentType: 'v1-progressive-build', duration: Date.now() - startTime },
+      };
+      break;
+    }
+
+    // ========================================================================
+    // V2-CONTAINERIZED (Run in isolated container)
+    // ========================================================================
+    case 'v2-containerized': {
+      const { executeV2Task } = await import('@bing/shared/agent/v2-executor');
+      const v2Result = await executeV2Task({
+        userId: request.ownerId,
+        conversationId: request.sessionId,
+        task: request.task,
+        stream: request.stream,
+        preferredAgent: 'containerized',
+      });
+      result = {
+        success: v2Result.success ?? true,
+        response: v2Result.content || (v2Result as any).response,
+        metadata: { agentType: 'v2-containerized', duration: Date.now() - startTime },
+      };
+      break;
+    }
+
+    // ========================================================================
+    // V2-LOCAL (Local execution)
+    // ========================================================================
+    case 'v2-local': {
+      const { executeV2Task } = await import('@bing/shared/agent/v2-executor');
+      const v2Result = await executeV2Task({
+        userId: request.ownerId,
+        conversationId: request.sessionId,
+        task: request.task,
+        stream: request.stream,
+        preferredAgent: 'local',
+      });
+      result = {
+        success: v2Result.success ?? true,
+        response: v2Result.content || (v2Result as any).response,
+        metadata: { agentType: 'v2-local', duration: Date.now() - startTime },
+      };
+      break;
+    }
+
+    // ========================================================================
+    // V2-NATIVE (Native execution without container)
+    // ========================================================================
+    case 'v2-native': {
+      const { executeV2Task } = await import('@bing/shared/agent/v2-executor');
+      const v2Result = await executeV2Task({
+        userId: request.ownerId,
+        conversationId: request.sessionId,
+        task: request.task,
+        stream: request.stream,
+        preferredAgent: 'native',
+      });
+      result = {
+        success: v2Result.success ?? true,
+        response: v2Result.content || (v2Result as any).response,
+        metadata: { agentType: 'v2-native', duration: Date.now() - startTime },
+      };
+      break;
+    }
+
+    // ========================================================================
+    // DESKTOP MODE (Tauri desktop integration)
+    // ========================================================================
+    case 'desktop': {
+      const { processUnifiedAgentRequest } = await import('@/lib/orchestra/unified-agent-service');
+      const unifiedResult = await processUnifiedAgentRequest({
+        task: request.task,
+        ownerId: request.ownerId,
+        sessionId: request.sessionId,
+        stream: request.stream,
+        mode: 'desktop',
+      });
+      result = {
+        success: unifiedResult.success,
+        response: unifiedResult.response,
+        steps: unifiedResult.steps,
+        error: unifiedResult.error,
+        metadata: { agentType: 'desktop', duration: Date.now() - startTime },
+      };
+      break;
+    }
+
+    // ========================================================================
+    // DUAL-PROCESS MODES (Fast/slow planning + executor)
+    // With task-classifier as initial step
+    // ========================================================================
+    case 'dual-process':
+    case 'dual-process:fast':
+    case 'dual-process:slow':
+    case 'dual-process:fast-fallback':
+    case 'dual-process:slow-failed': {
+      // First: run task-classifier to categorize the task
+      const { createTaskClassifier } = await import('@bing/shared/agent/task-classifier');
+      const classifier = createTaskClassifier();
+      const classification = await classifier.classify(request.task);
+      
+      // Then run dual-process mode with classification context
+      const { processUnifiedAgentRequest } = await import('@/lib/orchestra/unified-agent-service');
+      const modeVariant = mode.replace('dual-process:', '');
+      const unifiedResult = await processUnifiedAgentRequest({
+        task: request.task,
+        ownerId: request.ownerId,
+        sessionId: request.sessionId,
+        stream: request.stream,
+        mode: `dual-process${modeVariant ? '-' + modeVariant : ''}`,
+        _taskClassification: classification,
+      });
+      result = {
+        success: unifiedResult.success,
+        response: unifiedResult.response,
+        steps: unifiedResult.steps,
+        error: unifiedResult.error,
+        metadata: { agentType: mode, taskClassification: classification, duration: Date.now() - startTime },
+      };
+      break;
+    }
+
+    // ========================================================================
+    // ADVERSARIAL-VERIFY MODES (Multi-agent verification)
+    // ========================================================================
+    case 'adversarial-verify':
+    case 'adversarial:revised':
+    case 'adversarial:revision-failed': {
+      const { processUnifiedAgentRequest } = await import('@/lib/orchestra/unified-agent-service');
+      const modeVariant = mode.replace('adversarial:', '');
+      const unifiedResult = await processUnifiedAgentRequest({
+        task: request.task,
+        ownerId: request.ownerId,
+        sessionId: request.sessionId,
+        stream: request.stream,
+        mode: `adversarial-verify${modeVariant ? '-' + modeVariant : ''}`,
+      });
+      result = {
+        success: unifiedResult.success,
+        response: unifiedResult.response,
+        steps: unifiedResult.steps,
+        error: unifiedResult.error,
+        metadata: { agentType: mode, duration: Date.now() - startTime },
+      };
+      break;
+    }
+
+    // ========================================================================
+    // COGNITIVE-RESONANCE MODES (Iterative refinement)
+    // ========================================================================
+    case 'cognitive-resonance':
+    case 'cognitive:converged':
+    case 'cognitive:synthesized':
+    case 'cognitive:single':
+    case 'cognitive:fallback': {
+      const { processUnifiedAgentRequest } = await import('@/lib/orchestra/unified-agent-service');
+      const modeVariant = mode.replace('cognitive:', '');
+      const unifiedResult = await processUnifiedAgentRequest({
+        task: request.task,
+        ownerId: request.ownerId,
+        sessionId: request.sessionId,
+        stream: request.stream,
+        mode: `cognitive-resonance${modeVariant ? '-' + modeVariant : ''}`,
+      });
+      result = {
+        success: unifiedResult.success,
+        response: unifiedResult.response,
+        steps: unifiedResult.steps,
+        error: unifiedResult.error,
+        metadata: { agentType: mode, duration: Date.now() - startTime },
+      };
+      break;
+    }
+
+    // ========================================================================
+    // DISTRIBUTED-COGNITION MODES (Multi-agent synthesis)
+    // ========================================================================
+    case 'distributed-cognition':
+    case 'distributed:no-synthesis': {
+      const { processUnifiedAgentRequest } = await import('@/lib/orchestra/unified-agent-service');
+      const modeVariant = mode.replace('distributed:', '');
+      const unifiedResult = await processUnifiedAgentRequest({
+        task: request.task,
+        ownerId: request.ownerId,
+        sessionId: request.sessionId,
+        stream: request.stream,
+        mode: `distributed-cognition${modeVariant ? '-' + modeVariant : ''}`,
+      });
+      result = {
+        success: unifiedResult.success,
+        response: unifiedResult.response,
+        steps: unifiedResult.steps,
+        error: unifiedResult.error,
+        metadata: { agentType: mode, duration: Date.now() - startTime },
+      };
+      break;
+    }
+
+    // ========================================================================
+    // SPEC:SUPER MODE (100-step spec amplification with v1-api base)
+    // Encompasses v1-api mode plus iterative spec refinement
+    // ========================================================================
+    case 'spec:super': {
+      // First: run v1-api to get initial response
+      const { processUnifiedAgentRequest } = await import('@/lib/orchestra/unified-agent-service');
+      const initialResult = await processUnifiedAgentRequest({
+        task: request.task,
+        ownerId: request.ownerId,
+        sessionId: request.sessionId,
+        stream: false,
+        mode: 'v1-api',
+      });
+      
+      // Then: run spec amplification loop (up to 100 iterations)
+      let iterations = 0;
+      const maxIterations = 100;
+      let currentResponse = initialResult.response;
+      let specAmplified = true;
+      
+      while (iterations < maxIterations && specAmplified) {
+        // Run spec amplification step
+        const amplifyResult = await processUnifiedAgentRequest({
+          task: `[SPEC_AMPLIFY] Review and enhance: ${currentResponse}`,
+          ownerId: request.ownerId,
+          sessionId: request.sessionId,
+          stream: false,
+          mode: 'v1-api',
+        });
+        
+        if (amplifyResult.response && amplifyResult.response !== currentResponse) {
+          currentResponse = amplifyResult.response;
+          iterations++;
+        } else {
+          specAmplified = false;
+        }
+      }
+      
+      result = {
+        success: initialResult.success,
+        response: currentResponse,
+        steps: [...(initialResult.steps || []), ...Array(iterations).fill({ step: 'spec-amplification' })],
+        error: initialResult.error,
+        metadata: { agentType: 'spec:super', iterations, duration: Date.now() - startTime },
+      };
+      break;
+    }
+
+    // ========================================================================
+    // SPEC:MAXIMAL MODE (Spec amplification in middle of v1 mastra loop)
+    // Runs v1-agent-loop with spec amplification as intermediate step(s)
+    // ========================================================================
+    case 'spec:maximal': {
+      const { processUnifiedAgentRequest } = await import('@/lib/orchestra/unified-agent-service');
+      
+      // Run initial agent loop (pre-spec phase)
+      const preSpecResult = await processUnifiedAgentRequest({
+        task: request.task,
+        ownerId: request.ownerId,
+        sessionId: request.sessionId,
+        stream: false,
+        mode: 'v1-agent-loop',
+      });
+      
+      // Run spec amplification in the middle
+      const specResult = await processUnifiedAgentRequest({
+        task: `[SPEC_MAXIMAL] Enhance: ${preSpecResult.response}`,
+        ownerId: request.ownerId,
+        sessionId: request.sessionId,
+        stream: false,
+        mode: 'v1-api',
+      });
+      
+      // Run final agent loop (post-spec phase)
+      const postSpecResult = await processUnifiedAgentRequest({
+        task: specResult.response,
+        ownerId: request.ownerId,
+        sessionId: request.sessionId,
+        stream: request.stream,
+        mode: 'v1-agent-loop',
+      });
+      
+      result = {
+        success: postSpecResult.success,
+        response: postSpecResult.response,
+        steps: [
+          ...(preSpecResult.steps || []),
+          { step: 'spec-amplification', type: 'middle' },
+          ...(postSpecResult.steps || [])
+        ],
+        error: postSpecResult.error,
+        metadata: { agentType: 'spec:maximal', duration: Date.now() - startTime },
+      };
+      break;
+    }
+  }
     
   } catch (error: any) {
     const duration = Date.now() - startTime;

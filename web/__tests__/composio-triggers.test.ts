@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { createComposioTriggersService } from '../lib/tools/composio-triggers';
+import { createComposioTriggersService } from '../lib/integrations/composio/composio-triggers';
 
 describe('Composio Triggers Service', () => {
   let triggersService: ReturnType<typeof createComposioTriggersService>;
