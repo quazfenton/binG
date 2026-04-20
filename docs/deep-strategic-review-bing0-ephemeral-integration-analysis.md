@@ -56,6 +56,47 @@ anchors:
   - Medium-term (Month 2)
   - Long-term (Quarter 2)
   - Conclusion
+relations:
+  - type: related
+    id: centralized-todo-list-md-comprehensive-review-and-status-update
+    title: CENTRALIZED_TODO_LIST.md - Comprehensive Review & Status Update
+    path: centralized-todo-list-md-comprehensive-review-and-status-update.md
+    confidence: 0.314
+    classified_score: 0.254
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: implementation-review-bing-backend-vs-ephemeral-reference
+    title: 'Implementation Review: binG Backend vs ephemeral/ Reference'
+    path: implementation-review-bing-backend-vs-ephemeral-reference.md
+    confidence: 0.307
+    classified_score: 0.314
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: related
+    id: sdk-deep-codebase-review-comprehensive-technical-findings
+    title: Deep Codebase Review - Comprehensive Technical Findings
+    path: sdk/deep-codebase-review-comprehensive-technical-findings.md
+    confidence: 0.307
+    classified_score: 0.252
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: related
+    id: comprehensive-codebase-review-and-technical-findings
+    title: Comprehensive Codebase Review & Technical Findings
+    path: comprehensive-codebase-review-and-technical-findings.md
+    confidence: 0.306
+    classified_score: 0.249
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: related
+    id: deep-project-review-bing-2026-02-13
+    title: Deep Project Review — binG (2026-02-13)
+    path: deep-project-review-bing-2026-02-13.md
+    confidence: 0.306
+    classified_score: 0.251
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Deep Strategic Review: binG0 + ephemeral Integration Analysis
 

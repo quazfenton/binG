@@ -56,6 +56,47 @@ anchors:
   - Common Issues
   - Debug Commands
   - Credits
+relations:
+  - type: implements
+    id: zod-validation-implementation-summary
+    title: Zod Validation Implementation Summary
+    path: zod-validation-implementation-summary.md
+    confidence: 0.395
+    classified_score: 0.413
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: todo-implementation-summary
+    title: TODO Implementation Summary
+    path: todo-implementation-summary.md
+    confidence: 0.386
+    classified_score: 0.407
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: oauth-integration-implementation-summary
+    title: ✅ OAuth Integration Implementation Summary
+    path: oauth-integration-implementation-summary.md
+    confidence: 0.364
+    classified_score: 0.382
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: next-steps-implementation-summary
+    title: Next Steps Implementation Summary
+    path: next-steps-implementation-summary.md
+    confidence: 0.351
+    classified_score: 0.372
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: placeholder-todo-implementation-summary
+    title: Placeholder TODO Implementation Summary
+    path: placeholder-todo-implementation-summary.md
+    confidence: 0.34
+    classified_score: 0.361
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Production Implementation Summary
 

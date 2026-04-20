@@ -47,6 +47,15 @@ anchors:
   - Post-Migration Checklist
   - Support
   - 'Appendix: Environment Variable Mapping'
+relations:
+  - type: example-of
+    id: v2-agent-system-integration-guide
+    title: "\U0001F50C V2 Agent System Integration Guide"
+    path: v2-agent-system-integration-guide.md
+    confidence: 0.368
+    classified_score: 0.48
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # V2 Agent System Migration Guide
 

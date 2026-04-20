@@ -41,6 +41,31 @@ anchors:
   - '"Tool not found"'
   - "\U0001F4DA Best Enhancement Stack"
   - "\U0001F517 Resources"
+relations:
+  - type: example-of
+    id: zo-ai-integration-guide
+    title: Zo AI Integration Guide
+    path: zo-ai-integration-guide.md
+    confidence: 0.308
+    classified_score: 0.421
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: example-of
+    id: figma-integration-guide
+    title: Figma Integration Guide
+    path: figma-integration-guide.md
+    confidence: 0.307
+    classified_score: 0.42
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: example-of
+    id: v2-agent-system-integration-guide
+    title: "\U0001F50C V2 Agent System Integration Guide"
+    path: v2-agent-system-integration-guide.md
+    confidence: 0.307
+    classified_score: 0.392
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # MCP Integration Guide
 

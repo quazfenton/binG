@@ -56,6 +56,15 @@ anchors:
   - Phase 1 (Immediate - Critical)
   - Phase 2 (This Week - Major)
   - Phase 3 (This Month - Moderate)
+relations:
+  - type: depends-on
+    id: comprehensive-sandbox-terminal-and-mcp-architecture-review
+    title: 'Comprehensive Sandbox, Terminal & MCP Architecture Review'
+    path: comprehensive-sandbox-terminal-and-mcp-architecture-review.md
+    confidence: 0.309
+    classified_score: 0.286
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Technical Review: TerminalPanel & Sandbox Integration
 

@@ -27,6 +27,15 @@ anchors:
   - OPFS Adapter
   - Files Modified
   - 'Status: ✅ PRODUCTION READY'
+relations:
+  - type: related
+    id: n8n-workflows-tab-code-review-fixes
+    title: n8n Workflows Tab - Code Review Fixes
+    path: n8n-workflows-tab-code-review-fixes.md
+    confidence: 0.308
+    classified_score: 0.249
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # OPFS Fix - Review & Edge Case Handling ✅
 

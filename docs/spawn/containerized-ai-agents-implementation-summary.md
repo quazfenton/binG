@@ -46,6 +46,23 @@ anchors:
   - Planned Enhancements
   - Integration Points
   - Conclusion
+relations:
+  - type: related
+    id: spawn-advanced-ai-agent-system-complete-summary
+    title: Advanced AI Agent System - Complete Summary
+    path: spawn/advanced-ai-agent-system-complete-summary.md
+    confidence: 0.328
+    classified_score: 0.272
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: v2-multi-agent-architecture-implementation-summary
+    title: V2 Multi-Agent Architecture - Implementation Summary
+    path: v2-multi-agent-architecture-implementation-summary.md
+    confidence: 0.31
+    classified_score: 0.308
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Containerized AI Agents - Implementation Summary
 

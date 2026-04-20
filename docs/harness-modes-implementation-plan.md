@@ -23,6 +23,47 @@ anchors:
   - Architecture Diagram
   - Files to Create
   - Success Metrics
+relations:
+  - type: implements
+    id: enhanced-panels-implementation
+    title: Enhanced Panels Implementation
+    path: enhanced-panels-implementation.md
+    confidence: 0.331
+    classified_score: 0.345
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: next-steps-implementation-summary
+    title: Next Steps Implementation Summary
+    path: next-steps-implementation-summary.md
+    confidence: 0.328
+    classified_score: 0.342
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: event-store-implementation-summary
+    title: Event Store Implementation Summary
+    path: event-store-implementation-summary.md
+    confidence: 0.328
+    classified_score: 0.343
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: changelog-phase-1-3-implementation-review
+    title: Phase 1-3 Implementation Review
+    path: changelog/phase-1-3-implementation-review.md
+    confidence: 0.328
+    classified_score: 0.321
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: placeholder-todo-implementation-summary
+    title: Placeholder TODO Implementation Summary
+    path: placeholder-todo-implementation-summary.md
+    confidence: 0.327
+    classified_score: 0.34
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Harness Modes Implementation Plan
 

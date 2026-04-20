@@ -32,6 +32,15 @@ anchors:
   - Error Handling
   - Best Practices
   - References
+relations:
+  - type: example-of
+    id: agentic-ui-implementation-guide
+    title: Agentic UI Implementation Guide
+    path: agentic-ui-implementation-guide.md
+    confidence: 0.312
+    classified_score: 0.319
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Computer Use Agent - E2B Desktop Integration
 

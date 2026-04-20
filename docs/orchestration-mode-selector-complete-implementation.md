@@ -35,6 +35,39 @@ anchors:
   - Performance Impact
   - Browser Compatibility
   - Summary
+relations:
+  - type: implements
+    id: orchestration-mode-selector-implementation-summary
+    title: Orchestration Mode Selector - Implementation Summary
+    path: orchestration-mode-selector-implementation-summary.md
+    confidence: 0.384
+    classified_score: 0.4
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: example-of
+    id: vercel-ai-sdk-migration-complete-implementation-guide
+    title: Vercel AI SDK Migration - Complete Implementation Guide
+    path: vercel-ai-sdk-migration-complete-implementation-guide.md
+    confidence: 0.355
+    classified_score: 0.442
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: live-preview-system-complete-implementation
+    title: Live Preview System - Complete Implementation
+    path: live-preview-system-complete-implementation.md
+    confidence: 0.323
+    classified_score: 0.341
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: opfs-integration-complete-implementation-report
+    title: OPFS Integration - Complete Implementation Report
+    path: opfs-integration-complete-implementation-report.md
+    confidence: 0.321
+    classified_score: 0.332
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Orchestration Mode Selector - Complete Implementation
 

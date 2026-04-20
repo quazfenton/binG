@@ -33,6 +33,39 @@ anchors:
   - Environment Variables
   - Storage
   - Security
+relations:
+  - type: implements
+    id: orchestration-mode-selector-complete-implementation
+    title: Orchestration Mode Selector - Complete Implementation
+    path: orchestration-mode-selector-complete-implementation.md
+    confidence: 0.388
+    classified_score: 0.403
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: v2-multi-agent-architecture-implementation-summary
+    title: V2 Multi-Agent Architecture - Implementation Summary
+    path: v2-multi-agent-architecture-implementation-summary.md
+    confidence: 0.362
+    classified_score: 0.375
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: spawn-containerized-ai-agents-implementation-summary
+    title: Containerized AI Agents - Implementation Summary
+    path: spawn/containerized-ai-agents-implementation-summary.md
+    confidence: 0.36
+    classified_score: 0.354
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: ui-streaming-enhancements-implementation-summary
+    title: UI Streaming Enhancements - Implementation Summary
+    path: ui-streaming-enhancements-implementation-summary.md
+    confidence: 0.325
+    classified_score: 0.344
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Orchestration Mode Selector - Implementation Summary
 

@@ -49,6 +49,15 @@ anchors:
   - 'Phase 6: Testing & Optimization (Week 11-12)'
   - Benefits Summary
   - Conclusion
+relations:
+  - type: implements
+    id: opensandbox-v2-agent-mode-integration-architecture
+    title: OpenSandbox V2 Agent Mode Integration Architecture
+    path: opensandbox-v2-agent-mode-integration-architecture.md
+    confidence: 0.383
+    classified_score: 0.396
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # OpenCode V2 Engine + Nullclaw Integration Architecture
 

@@ -49,6 +49,39 @@ anchors:
   - Phase 4 (P3) - Advanced Features
   - Security Considerations
   - Conclusion
+relations:
+  - type: example-of
+    id: vercel-ai-sdk-migration-complete-implementation-guide
+    title: Vercel AI SDK Migration - Complete Implementation Guide
+    path: vercel-ai-sdk-migration-complete-implementation-guide.md
+    confidence: 0.319
+    classified_score: 0.417
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: nullclaw-integration-implementation-complete
+    title: Nullclaw Integration - Implementation Complete
+    path: nullclaw-integration-implementation-complete.md
+    confidence: 0.316
+    classified_score: 0.331
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: modal-com-integration-implementation-summary
+    title: Modal.com Integration - Implementation Summary
+    path: modal-com-integration-implementation-summary.md
+    confidence: 0.316
+    classified_score: 0.331
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: oauth-integration-implementation-summary
+    title: ✅ OAuth Integration Implementation Summary
+    path: oauth-integration-implementation-summary.md
+    confidence: 0.315
+    classified_score: 0.33
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # OPFS Integration - Complete Implementation Report
 

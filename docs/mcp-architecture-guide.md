@@ -28,6 +28,15 @@ anchors:
   - Mem0 Tool Names (for LLM function calling)
   - Architecture Diagram
   - Quick Reference
+relations:
+  - type: example-of
+    id: deployment-architecture-guide
+    title: Deployment Architecture Guide
+    path: deployment-architecture-guide.md
+    confidence: 0.309
+    classified_score: 0.413
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # MCP Architecture Guide
 

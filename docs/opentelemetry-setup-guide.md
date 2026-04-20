@@ -42,6 +42,23 @@ anchors:
   - LangChain
   - Custom Instruments
   - Resources
+relations:
+  - type: example-of
+    id: port-configuration-guide
+    title: Port Configuration Guide
+    path: port-configuration-guide.md
+    confidence: 0.308
+    classified_score: 0.375
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: example-of
+    id: zo-ai-integration-guide
+    title: Zo AI Integration Guide
+    path: zo-ai-integration-guide.md
+    confidence: 0.306
+    classified_score: 0.373
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # OpenTelemetry Setup Guide
 

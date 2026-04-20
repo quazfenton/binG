@@ -62,6 +62,15 @@ anchors:
   - "\U0001F4C4 License"
   - "\U0001F64F Acknowledgments"
   - "\U0001F4EC Support"
+relations:
+  - type: related
+    id: spawn-containerized-ai-coding-agents
+    title: Containerized AI Coding Agents
+    path: spawn/containerized-ai-coding-agents.md
+    confidence: 0.307
+    classified_score: 0.249
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 ![CodeRabbit Pull Request Reviews](https://img.shields.io/coderabbit/prs/github/quazfenton/binG?utm_source=oss&utm_medium=github&utm_campaign=quazfenton%2FbinG&labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit+Reviews)
 

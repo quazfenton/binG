@@ -42,6 +42,15 @@ anchors:
   - 5.8 Add Local Shell Indicator Banner
   - 6. FILES TO MODIFY
   - 7. TESTING CHECKLIST
+relations:
+  - type: implements
+    id: technical-review-terminalpanel-and-sandbox-integration
+    title: 'Technical Review: TerminalPanel & Sandbox Integration'
+    path: technical-review-terminalpanel-and-sandbox-integration.md
+    confidence: 0.319
+    classified_score: 0.297
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Terminal & Sandbox Integration Review - Technical Plan
 

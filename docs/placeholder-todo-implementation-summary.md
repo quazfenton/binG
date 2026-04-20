@@ -39,6 +39,47 @@ anchors:
   - 'Key Achievements:'
   - 'Benefits:'
   - 'Remaining Placeholders (Intentional):'
+relations:
+  - type: implements
+    id: todo-implementation-summary
+    title: TODO Implementation Summary
+    path: todo-implementation-summary.md
+    confidence: 0.335
+    classified_score: 0.356
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: production-implementation-summary
+    title: Production Implementation Summary
+    path: production-implementation-summary.md
+    confidence: 0.325
+    classified_score: 0.347
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: integration-and-consolidation-summary
+    title: Integration & Consolidation Summary
+    path: integration-and-consolidation-summary.md
+    confidence: 0.318
+    classified_score: 0.327
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: terminaluse-integration-summary
+    title: TerminalUse Integration Summary
+    path: terminaluse-integration-summary.md
+    confidence: 0.318
+    classified_score: 0.328
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: next-steps-implementation-summary
+    title: Next Steps Implementation Summary
+    path: next-steps-implementation-summary.md
+    confidence: 0.317
+    classified_score: 0.337
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Placeholder TODO Implementation Summary
 

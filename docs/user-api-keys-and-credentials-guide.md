@@ -50,6 +50,15 @@ anchors:
   - '"Keys not syncing across devices"'
   - "\U0001F4CA Database Schema"
   - "\U0001F4DD Migration History"
+relations:
+  - type: example-of
+    id: global-package-cache-and-pyodide-optimization-guide
+    title: Global Package Cache & Pyodide Optimization Guide
+    path: global-package-cache-and-pyodide-optimization-guide.md
+    confidence: 0.308
+    classified_score: 0.377
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # User API Keys & Credentials Guide
 

@@ -18,6 +18,17 @@ anchors:
   - Running the project locally
   - Features
   - Relevant files
+relations:
+  - type: implements
+    id: >-
+      sdk-trigger-llms.md-changelog-generator-changelog-generator-using-the-claude-agent-sdk-and-trigger-dev
+    title: Changelog generator using the Claude Agent SDK and Trigger.dev
+    path: >-
+      sdk/trigger-llms.md/changelog-generator/changelog-generator-using-the-claude-agent-sdk-and-trigger-dev.md
+    confidence: 0.326
+    classified_score: 0.313
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # GitHub repository analyzer agent using Claude and Trigger.dev
 

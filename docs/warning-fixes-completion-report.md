@@ -32,6 +32,15 @@ anchors:
   - Files Modified
   - Security Improvements
   - Performance Impact
+relations:
+  - type: related
+    id: code-review-fixes-summary
+    title: Code Review Fixes Summary
+    path: code-review-fixes-summary.md
+    confidence: 0.314
+    classified_score: 0.255
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Warning Fixes - COMPLETION REPORT
 

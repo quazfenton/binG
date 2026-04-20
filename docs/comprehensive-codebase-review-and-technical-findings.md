@@ -84,6 +84,39 @@ anchors:
   - Issues by Category
   - Production Readiness Score
   - Conclusion
+relations:
+  - type: duplicate
+    id: sdk-comprehensive-codebase-review-technical-findings
+    title: Comprehensive Codebase Review - Technical Findings
+    path: sdk/comprehensive-codebase-review-technical-findings.md
+    confidence: 0.401
+    classified_score: 0.508
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: related
+    id: sdk-comprehensive-codebase-review-phase-3-findings
+    title: Comprehensive Codebase Review - Phase 3 Findings
+    path: sdk/comprehensive-codebase-review-phase-3-findings.md
+    confidence: 0.377
+    classified_score: 0.318
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: related
+    id: sdk-deep-codebase-review-comprehensive-technical-findings
+    title: Deep Codebase Review - Comprehensive Technical Findings
+    path: sdk/deep-codebase-review-comprehensive-technical-findings.md
+    confidence: 0.322
+    classified_score: 0.268
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: related
+    id: centralized-todo-list-md-comprehensive-review-and-status-update
+    title: CENTRALIZED_TODO_LIST.md - Comprehensive Review & Status Update
+    path: centralized-todo-list-md-comprehensive-review-and-status-update.md
+    confidence: 0.318
+    classified_score: 0.26
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Comprehensive Codebase Review & Technical Findings
 

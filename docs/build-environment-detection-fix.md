@@ -28,6 +28,15 @@ anchors:
   - TypeScript Compilation
   - Deployment Checklist
   - Summary
+relations:
+  - type: related
+    id: session-and-tambo-fixes-summary
+    title: Session & Tambo Fixes Summary
+    path: session-and-tambo-fixes-summary.md
+    confidence: 0.31
+    classified_score: 0.251
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Build Environment Detection Fix
 
