@@ -2484,7 +2484,18 @@ export const detectPreviewMode = (
   hasAPIKeys: boolean,
   heuristics?: OffloadHeuristics
 ) => livePreviewOffloading.detectPreviewMode(
-  filePaths, framework, bundler, hasPython, hasNodeServer, hasNextJS, packageJson, hasHeavyComputation, hasAPIKeys, heuristics
+  filePaths,
+  framework,
+  bundler,
+  {
+    hasPython,
+    hasNodeServer,
+    hasNextJS,
+    hasHeavyComputation,
+    hasAPIKeys,
+  },
+  packageJson,
+  heuristics
 );
 
 export const detectFramework = (

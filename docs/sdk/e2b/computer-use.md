@@ -1,3 +1,21 @@
+---
+id: sdk-e2b-computer-use
+title: Computer use
+aliases:
+  - computer-use
+  - computer-use.md
+tags: []
+layer: core
+summary: "> ## Documentation Index\r\n> Fetch the complete documentation index at: https://e2b.mintlify.app/llms.txt\r\n> Use this file to discover all available pages before exploring further.\r\n\r\n# Computer use\r\n\r\n> Build AI agents that see, understand, and control virtual Linux desktops using E2B Desktop sandbo"
+anchors:
+  - How it works
+  - Install the E2B Desktop SDK
+  - Core implementation
+  - Setting up the sandbox
+  - Executing desktop actions
+  - Agent loop
+  - Related guides
+---
 > ## Documentation Index
 > Fetch the complete documentation index at: https://e2b.mintlify.app/llms.txt
 > Use this file to discover all available pages before exploring further.

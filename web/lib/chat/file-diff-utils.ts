@@ -63,6 +63,14 @@ export type DiffRepairLLM = (prompt: string) => Promise<string>;
  * Parse and apply diff result to content
  * Takes current content and diff body, returns applied result
  */
+/**
+ * Parse and apply diff result to content.
+ *
+ * CRITICAL: When diffBody contains unified diff markers (+/-/@@) but no
+ * ---/+++ headers, `applyDiffToContent` will generate `--- path` / `+++ path`
+ * headers. An empty path produces `--- \n+++ \n` which breaks `parsePatch`.
+ * We use a sentinel path so the generated headers are valid.
+ */
 export function parseDiffResult(currentContent: string, diffBody: string): string | null {
   // Handle empty diff body
   if (!diffBody || diffBody.trim().length === 0) {
@@ -80,8 +88,9 @@ export function parseDiffResult(currentContent: string, diffBody: string): strin
     return diffBody;
   }
   
-  // Use applyDiffToContent without path (pass empty path)
-  const result = applyDiffToContent(currentContent, '', diffBody);
+  // Use a sentinel path so generated ---/+++ headers are well-formed
+  // (applyDiffToContent prepends headers when they're missing)
+  const result = applyDiffToContent(currentContent, '__parsed_diff__', diffBody);
   return result;
 }
 

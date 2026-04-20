@@ -917,9 +917,75 @@ export async function* streamWithVercelAI(
               // Normalization is best-effort
             }
 
+            // VALIDATE REQUIRED FIELDS: Check for missing/invalid args and trigger self-healing
+            let validationError = null;
+            try {
+              const { validateToolArgs } = await import('../orchestra/shared-agent-context');
+
+              // Define required fields for common tools
+              const requiredFields: Record<string, string[]> = {
+                'write_file': ['path', 'content'],
+                'read_file': ['path'],
+                'list_files': ['path'],
+                'delete_file': ['path'],
+                'create_directory': ['path'],
+                'batch_write': ['files'],
+                'apply_diff': ['path', 'diff'],
+                'execute_bash': ['command'],
+                'search_files': ['query'],
+              };
+
+              const required = requiredFields[toolName];
+              if (required) {
+                validationError = validateToolArgs(toolName, callArgs, required);
+              }
+            } catch {
+              // Validation is best-effort
+            }
+
             const hasArgs = !!callArgs && Object.keys(callArgs).length > 0;
             const argsCount = Object.keys(callArgs).length;
-            
+
+            // Check for validation errors (missing required fields)
+            if (validationError) {
+              chatLogger.error('[TOOL-CALL] ✗ VALIDATION failed — blocking execution', {
+                toolCallId,
+                toolName,
+                validationError,
+                severity: 'HIGH',
+              });
+
+              // Record validation failure in telemetry
+              if (toolName && modelName) {
+                recordToolCall(modelName, toolName, false, 'INVALID_ARGS');
+              }
+
+              // Yield a synthetic tool-result failure so the model sees the error
+              yield {
+                content: '',
+                isComplete: false,
+                toolInvocations: [{
+                  toolCallId,
+                  toolName,
+                  state: 'result',
+                  args: callArgs,
+                  result: {
+                    success: false,
+                    error: {
+                      code: 'INVALID_ARGS',
+                      message: validationError.message,
+                      retryable: true,
+                      missing: validationError.missing,
+                      expectedSchema: validationError.expectedSchema,
+                      suggestedNextAction: validationError.suggestedNextAction,
+                    },
+                  },
+                }],
+                timestamp: new Date(),
+              };
+              break;
+            }
+
             if (hasArgs) {
               chatLogger.info('[TOOL-CALL] ✓ Tool invoked', {
                 toolCallId,
@@ -949,21 +1015,21 @@ export async function* streamWithVercelAI(
                 toolInvocations: [{
                   toolCallId,
                   toolName,
-                  state: 'result' as const,
-                  args: {},
+                  state: 'result',
+                  args: callArgs,
                   result: {
                     success: false,
                     error: {
-                      code: 'EMPTY_ARGS',
-                      message: `Tool "${toolName}" was called with no arguments. This usually means the model response was truncated.`,
+                      code: 'INVALID_ARGS',
+                      message: `Tool "${toolName}" called with empty arguments. Please provide all required fields.`,
                       retryable: true,
-                      suggestedNextAction: `Call ${toolName} again with all required arguments.`,
+                      suggestedNextAction: `Call ${toolName} again with proper arguments.`,
                     },
                   },
                 }],
                 timestamp: new Date(),
               };
-              break; // Skip normal tool-call yield
+              break;
             }
 
             // Cache args so tool-result can include them (AI SDK doesn't repeat args in result)
@@ -1481,7 +1547,7 @@ export async function* streamWithTools(
   apiKey?: string,
   baseURL?: string,
   signal?: AbortSignal,
-  maxSteps: number = 5,
+   maxSteps: number = 12,
 ): AsyncGenerator<StreamingResponse> {
   yield* streamWithVercelAI({
     provider,

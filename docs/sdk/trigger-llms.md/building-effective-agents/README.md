@@ -1,3 +1,29 @@
+---
+id: sdk-trigger-llms.md-building-effective-agents-readme
+title: README
+aliases:
+  - README
+  - README.md
+tags: []
+layer: core
+summary: "## Building Effective Agents with Trigger.dev\r\n\r\nThis Node.js project shows 5 different patterns for building effective agents with Trigger.dev.\r\n\r\n- Prompt chaining\r\n- Routing\r\n- Parallelization\r\n- Orchestrator-workers\r\n- Evaluator-optimizer\r\n\r\nAll of these examples focus on performing specific tas"
+anchors:
+  - Building Effective Agents with Trigger.dev
+  - About the project
+  - AI agent patterns in this project
+  - Prompt chaining
+  - Prompt chaining task
+  - Routing
+  - Routing task
+  - Parallelization
+  - Parallelization task
+  - Orchestrator-workers
+  - Orchestrator-workers task
+  - Evaluator-optimizer
+  - Evaluator-optimizer task
+  - Blog post
+  - Learn more about Trigger.dev
+---
 ## Building Effective Agents with Trigger.dev
 
 This Node.js project shows 5 different patterns for building effective agents with Trigger.dev.

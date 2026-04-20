@@ -30,7 +30,7 @@ function run(command, args, cwd) {
 }
 
 console.log('Preparing desktop web assets...');
-run('pnpm', ['exec', 'next', 'build', '--webpack'], webRoot);
+run('npx', ['next', 'build', '--webpack'], webRoot);
 
 fs.rmSync(destDir, {
   recursive: true,

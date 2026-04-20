@@ -23,7 +23,7 @@ export interface PerformanceMetrics {
  */
 export class PerformanceMonitor {
   private metrics: PerformanceMetrics[] = [];
-  private activeOperations = new Map<string, { startTime: number; metadata?: any }>();
+  private activeOperations = new Map<string, { startTime: number; operation: string; metadata?: any }>();
 
   /**
    * Start timing an operation
@@ -32,7 +32,7 @@ export class PerformanceMonitor {
     const id = `${operation}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const startTime = Date.now();
 
-    this.activeOperations.set(id, { startTime, metadata });
+    this.activeOperations.set(id, { startTime, operation, metadata });
 
     logger.debug(`Started operation: ${operation}`, { id, metadata });
 
@@ -43,21 +43,21 @@ export class PerformanceMonitor {
    * End timing an operation
    */
   end(id: string): PerformanceMetrics | null {
-    const operation = this.activeOperations.get(id);
-    if (!operation) {
+    const operationData = this.activeOperations.get(id);
+    if (!operationData) {
       logger.warn(`No active operation found for id: ${id}`);
       return null;
     }
 
     const endTime = Date.now();
-    const duration = endTime - operation.startTime;
+    const duration = endTime - operationData.startTime;
 
     const metrics: PerformanceMetrics = {
-      operation: id.split('_')[0], // Extract operation name from id
+      operation: operationData.operation,
       duration,
-      startTime: operation.startTime,
+      startTime: operationData.startTime,
       endTime,
-      metadata: operation.metadata,
+      metadata: operationData.metadata,
       memoryUsage: process.memoryUsage()
     };
 
@@ -189,9 +189,23 @@ export function timed(operation?: string) {
     const operationName = operation || `${target.constructor.name}.${propertyKey}`;
 
     descriptor.value = function(...args: any[]) {
-      return performanceMonitor.timeAsync(operationName, () => {
-        return originalMethod.apply(this, args);
-      });
+      // Check if the original method returns a Promise (async)
+      const result = originalMethod.apply(this, args);
+      if (result instanceof Promise) {
+        // Async method: use timeAsync
+        return performanceMonitor.timeAsync(operationName, () => result);
+      } else {
+        // Sync method: use start/end directly
+        const id = performanceMonitor.start(operationName);
+        try {
+          const syncResult = result;
+          performanceMonitor.end(id);
+          return syncResult;
+        } catch (error) {
+          performanceMonitor.end(id);
+          throw error;
+        }
+      }
     };
   };
 }

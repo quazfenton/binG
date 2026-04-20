@@ -156,14 +156,19 @@ export async function tauriFetch(
     || typeof (window as any).__TAURI__ !== 'undefined';
 
   if (!isTauri) {
-    // Not running inside Tauri — use native fetch
-    return fetch(input, init);
+    // Not running inside Tauri — use the original (un-patched) fetch.
+    // __ORIGINAL_FETCH__ is set by installTauriFetchInterceptor(); if the
+    // interceptor hasn't been installed, native fetch is fine.
+    const nativeFetch = (window as any).__ORIGINAL_FETCH__ ?? fetch;
+    return nativeFetch(input, init);
   }
 
-  // Handle Request objects — fall through to native fetch since we can't
-  // easily clone the body
+  // Handle Request objects — fall through to the original (un-patched)
+  // fetch since we can't easily clone the body.
+  // Use __ORIGINAL_FETCH__ if available to avoid recursive interception.
   if (input instanceof Request) {
-    return fetch(input, init);
+    const nativeFetch = (window as any).__ORIGINAL_FETCH__ ?? fetch;
+    return nativeFetch(input, init);
   }
 
   const url = typeof input === 'string'
@@ -220,8 +225,10 @@ export async function tauriFetch(
       }
     }
     // Last resort: native fetch (will fail in production Tauri)
+    // Use __ORIGINAL_FETCH__ to avoid recursive interception.
     console.warn('[tauriFetch] Falling back to native fetch for', pathname);
-    return fetch(input, init);
+    const nativeFetch = (window as any).__ORIGINAL_FETCH__ ?? fetch;
+    return nativeFetch(input, init);
   }
 }
 
@@ -334,7 +341,12 @@ export function installTauriFetchInterceptor() {
 
   if (!isTauri) return;
 
+  // Preserve the original fetch so tauriFetch can delegate to it for
+  // non-intercepted routes (e.g. absolute URLs, Request objects).
+  // Without this, tauriFetch's `return fetch(input, init)` fallback
+  // would recursively call the patched version.
   const originalFetch = window.fetch;
+  (window as any).__ORIGINAL_FETCH__ = originalFetch;
   window.fetch = function (input: RequestInfo | URL, init?: RequestInit) {
     return tauriFetch(input, init);
   };

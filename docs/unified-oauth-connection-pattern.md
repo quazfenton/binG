@@ -1,3 +1,46 @@
+---
+id: unified-oauth-connection-pattern
+title: ✅ Unified OAuth Connection Pattern
+aliases:
+  - unified-oauth-connection-pattern
+  - unified-oauth-connection-pattern.md
+tags:
+  - auth
+layer: core
+summary: "# ✅ Unified OAuth Connection Pattern\r\n\r\n## Simple Connection URLs\r\n\r\nAll OAuth connections now use the **same simple pattern** for modularity:\r\n\r\n```\r\n/auth/login?connection={provider}\r\n```\r\n\r\n---\r\n\r\n## Supported Providers\r\n\r\n| Provider | Connection URL | Auth0 Connection Name |\r\n|----------|-------"
+anchors:
+  - Simple Connection URLs
+  - Supported Providers
+  - Usage Examples
+  - Component Button (Google)
+  - Component Button (GitHub)
+  - Programmatic (with scopes)
+  - How It Works
+  - 1. User Clicks Connection Link
+  - 2. Middleware Intercepts
+  - 3. Auth0 Handles OAuth Flow
+  - 4. Post-Callback (Optional)
+  - Benefits of Unified Pattern
+  - ✅ Modularity
+  - ✅ Simplicity
+  - ✅ Maintainability
+  - ✅ Flexibility
+  - Migration from Custom OAuth Endpoints
+  - Old Pattern (DEPRECATED)
+  - New Pattern (RECOMMENDED)
+  - Custom Scopes
+  - GitHub (Default Scopes)
+  - Google (Default Scopes)
+  - Error Handling
+  - Connection Already Exists
+  - User Cancels
+  - Invalid Connection
+  - Testing
+  - Test All Providers
+  - Auth0 Dashboard Configuration
+  - Required Settings
+  - Summary
+---
 # ✅ Unified OAuth Connection Pattern
 
 ## Simple Connection URLs

@@ -144,37 +144,56 @@ export async function runOpenCodeDirect(options: OpenCodeDirectOptions): Promise
         }
       }
       
-      // Track file changes
+      // Track file changes (validate filePath to avoid recording empty/invalid operations)
       if (toolName === 'write_file' || toolName === 'WriteFile' || toolName === 'write') {
         const filePath = String(args.path ?? args.file ?? args.target ?? '');
-        const content = typeof args.content === 'string'
-          ? args.content
-          : args.content == null
-            ? undefined
-            : JSON.stringify(args.content);
-        fileChanges.push({
-          path: filePath,
-          operation: 'write',
-          content,
-        });
+        if (!filePath) {
+          logger.warn('Attempted to record file write with empty filePath', { toolName, args });
+        } else {
+          const content = typeof args.content === 'string'
+            ? args.content
+            : args.content == null
+              ? undefined
+              : JSON.stringify(args.content);
+          // Deduplicate: remove any prior entry for the same path
+          const existing = fileChanges.findIndex(fc => fc.path === filePath);
+          if (existing !== -1) fileChanges.splice(existing, 1);
+          fileChanges.push({
+            path: filePath,
+            operation: 'write',
+            content,
+          });
+        }
       } else if (toolName === 'edit_file' || toolName === 'EditFile' || toolName === 'patch' || toolName === 'edit') {
         const filePath = String(args.path ?? args.file ?? args.target ?? '');
-        const content = typeof args.content === 'string'
-          ? args.content
-          : args.content == null
-            ? undefined
-            : JSON.stringify(args.content);
-        fileChanges.push({
-          path: filePath,
-          operation: 'patch',
-          content,
-        });
+        if (!filePath) {
+          logger.warn('Attempted to record file edit with empty filePath', { toolName, args });
+        } else {
+          const content = typeof args.content === 'string'
+            ? args.content
+            : args.content == null
+              ? undefined
+              : JSON.stringify(args.content);
+          const existing = fileChanges.findIndex(fc => fc.path === filePath);
+          if (existing !== -1) fileChanges.splice(existing, 1);
+          fileChanges.push({
+            path: filePath,
+            operation: 'patch',
+            content,
+          });
+        }
       } else if (toolName === 'delete_file' || toolName === 'DeleteFile' || toolName === 'delete') {
         const filePath = String(args.path ?? args.file ?? args.target ?? '');
-        fileChanges.push({
-          path: filePath,
-          operation: 'delete',
-        });
+        if (!filePath) {
+          logger.warn('Attempted to record file delete with empty filePath', { toolName, args });
+        } else {
+          const existing = fileChanges.findIndex(fc => fc.path === filePath);
+          if (existing !== -1) fileChanges.splice(existing, 1);
+          fileChanges.push({
+            path: filePath,
+            operation: 'delete',
+          });
+        }
       }
 
       onTool?.(toolName, args, toolResult);

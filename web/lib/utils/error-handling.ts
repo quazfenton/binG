@@ -79,7 +79,8 @@ export class RateLimitError extends BinGError {
  */
 export class ServiceError extends BinGError {
   constructor(service: string, originalError: Error) {
-    super(`${service} service error: ${originalError.message}`, 'SERVICE_ERROR', 502, { service, originalError });
+    // Use sanitized user-facing message, keep original error in details for logging
+    super(`${service} service is currently unavailable. Please try again later.`, 'SERVICE_ERROR', 502, { service, originalError });
     this.name = 'ServiceError';
   }
 }

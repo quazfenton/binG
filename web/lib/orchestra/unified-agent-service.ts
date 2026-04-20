@@ -770,7 +770,7 @@ async function runV2Native(
     success: true,
     response: result.response,
     steps,
-    totalSteps: result.steps,
+    totalSteps: Array.isArray(result.steps) ? result.steps.length : (result.steps || 0),
     mode: 'v2-native',
     metadata: {
       provider: 'opencode-engine',
@@ -855,7 +855,7 @@ async function runDesktopMode(
       success: true,
       response: result.response,
       steps,
-      totalSteps: result.steps,
+      totalSteps: Array.isArray(result.steps) ? result.steps.length : (result.steps || 0),
       mode: 'desktop',
       metadata: {
         provider: 'desktop',
@@ -929,7 +929,7 @@ async function runStatefulAgentMode(config: UnifiedAgentConfig): Promise<Unified
       success: result.success,
       response: result.response,
       steps,
-      totalSteps: result.steps,
+      totalSteps: Array.isArray(result.steps) ? result.steps.length : (result.steps || 0),
       mode: 'v2-native',  // StatefulAgent runs as V2 native
       metadata: {
         provider: 'stateful-agent',
@@ -982,7 +982,7 @@ async function runV2Containerized(config: UnifiedAgentConfig): Promise<UnifiedAg
         exitCode: cmd.exitCode,
       },
     })),
-    totalSteps: result.steps,
+    totalSteps: Array.isArray(result.steps) ? result.steps.length : (result.steps || 0),
     mode: 'v2-containerized',
     metadata: {
       provider: 'opencode-engine',
@@ -1027,7 +1027,7 @@ async function runV2Local(config: UnifiedAgentConfig): Promise<UnifiedAgentResul
         exitCode: cmd.exitCode,
       },
     })),
-    totalSteps: result.steps,
+    totalSteps: Array.isArray(result.steps) ? result.steps.length : (result.steps || 0),
     mode: 'v2-local',
     metadata: {
       provider: 'opencode-engine',
