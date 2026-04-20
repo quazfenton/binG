@@ -310,6 +310,49 @@ class OpenCodeEngine extends EventEmitter {
   }
 
   /**
+   * Backward-compatible wrapper for legacy callers.
+   * Returns the final response plus the captured step list.
+   */
+  async execute(prompt: string): Promise<{
+    success: boolean;
+    response: string;
+    steps: OpenCodeEvent[];
+    totalSteps: number;
+    sessionId: string;
+    reasoning: string;
+    bashCommands: never[];
+    fileChanges: never[];
+    nullclawTasks: never[];
+  }> {
+    const sessionId = 'default';
+    const steps: OpenCodeEvent[] = [];
+    for await (const event of this.runStream({ sessionId, prompt })) {
+      steps.push(event);
+    }
+
+    const doneEvent = [...steps].reverse().find(event => event.type === 'done');
+
+    return {
+      success: true,
+      response: doneEvent?.data?.response || '',
+      steps,
+      totalSteps: steps.length,
+      sessionId,
+      reasoning: '',
+      bashCommands: [],
+      fileChanges: [],
+      nullclawTasks: [],
+    };
+  }
+
+  /**
+   * Backward-compatible stream wrapper for legacy callers.
+   */
+  async *executeStream(prompt: string): AsyncGenerator<OpenCodeEvent> {
+    yield* this.runStream({ sessionId: 'default', prompt });
+  }
+
+  /**
    * Check if engine is running
    */
   isHealthy(): boolean {

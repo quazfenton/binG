@@ -44,6 +44,12 @@ export {
   findClaudeCodeBinarySync,
 } from './find-claude-code-binary';
 
+// Kilocode
+export {
+  findKilocodeBinary,
+  findKilocodeBinarySync,
+} from './find-kilocode-binary';
+
 // Agent Filesystem (centralized desktop/web/remote FS handling)
 export {
   createAgentFilesystem,

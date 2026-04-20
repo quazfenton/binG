@@ -40,6 +40,16 @@ const CONFIG_DIR = path.join(process.env.HOME || process.env.USERPROFILE || '', 
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 const AUTH_FILE = path.join(CONFIG_DIR, 'auth.json');
 
+// OAuth handler stub — always returns null in bin-enhanced.ts.
+// Unlike bin.ts which lazily imports the real handler via getOauthHandler(),
+// this stub is used because bin-enhanced.ts doesn't support dynamic OAuth loading.
+const oauthHandler: any = {
+  performOauthLogin: async (provider: string) => {
+    console.log(`OAuth login for ${provider} not available in CLI-only mode`);
+    return null;
+  },
+};
+
 // Ensure config directory exists
 fs.ensureDirSync(CONFIG_DIR);
 
@@ -222,6 +232,7 @@ async function chatLoop(options: {
   `));
   
   const messages: any[] = [];
+  const localHistory = new LocalHistoryProvider(process.cwd());
   
   while (true) {
     const userMessage = await prompt(COLORS.primary('\nYou: '));
@@ -317,6 +328,17 @@ ${COLORS.primary('Tips:')}
         role: 'assistant', 
         content: response.response || response.content 
       });
+      
+      // Save interaction to local history (non-critical — errors are silently ignored)
+      try {
+        await localHistory.saveInteraction({
+          user: userMessage,
+          assistant: response.response || response.content,
+          timestamp: Date.now(),
+        });
+      } catch {
+        // History save failure is non-critical
+      }
       
     } catch (error: any) {
       spinner.stop();
@@ -1040,13 +1062,7 @@ function validateRequired(value: any, name: string, description?: string): boole
  */
 function handleError(error: any, context?: string): void {
 
-// OAuth handler — may not exist in CLI-only installs
-const oauthHandler: any = {
-  performOauthLogin: async (provider: string) => {
-    console.log(`OAuth login for ${provider} not available in CLI-only mode`);
-    return null;
-  },
-};
+// oauthHandler is defined at module level (above) for shared access
   const message = error instanceof Error ? error.message : String(error);
   if (context) {
     console.error(COLORS.error(`${context}: ${message}`));
@@ -1183,16 +1199,6 @@ program
     await history.pruneHistory(parseInt(options.days));
     console.log(COLORS.success('History pruned.'));
   });
-
-// ... (in chatLoop function)
-const history = getHistory();
-
-// ... (inside chatLoop while loop, after assistant response)
-await history.saveInteraction({
-    user: messages.filter((m: any) => m.role === 'user').pop()?.content || '',
-    assistant: messages.filter((m: any) => m.role === 'assistant').pop()?.content || '',
-    timestamp: Date.now()
-});
 
 
 // ============================================================================

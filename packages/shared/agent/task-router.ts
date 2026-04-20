@@ -725,10 +725,7 @@ class TaskRouter {
       const engine = createOpenCodeEngine({
         model: process.env.OPENCODE_MODEL,
         // CRITICAL FIX: Normalize conversationId to prevent composite IDs in paths
-        workingDir: `/workspace/users/${request.userId}/sessions/${normalizeSessionId(request.conversationId) || request.conversationId}`,
-        enableBash: true,
-        enableFileOps: true,
-        enableCodegen: true,
+        workspaceDir: `/workspace/users/${request.userId}/sessions/${normalizeSessionId(request.conversationId) || request.conversationId}`,
       });
 
       if (request.stream) {
@@ -789,9 +786,11 @@ class TaskRouter {
     const fileChanges: Array<{ path: string; action: string; operation: 'write' | 'patch' | 'delete'; content?: string }> = [];
     if (result.steps) {
       for (const step of result.steps) {
-        if (step.toolName && ['write_file', 'read_file', 'delete_file', 'edit_file', 'Bash'].includes(step.toolName)) {
-          const args = step.args || {};
-          if (step.toolName === 'Bash' && args.command) {
+        const stepAny = step as any;
+        const toolName = stepAny.toolName || stepAny.tool || stepAny.data?.tool || stepAny.data?.name;
+        const args = stepAny.args || stepAny.data?.args || {};
+        if (toolName && ['write_file', 'read_file', 'delete_file', 'edit_file', 'Bash'].includes(toolName)) {
+          if (toolName === 'Bash' && args.command) {
             const match = args.command.match(/(?:>\s*|tee\s+|cat\s*>\s*)([^\s|]+)/);
             if (match) {
               fileChanges.push({ path: match[1], action: 'modify', operation: 'patch' });
@@ -802,8 +801,8 @@ class TaskRouter {
           if (!filePath) continue;
           fileChanges.push({
             path: filePath,
-            action: step.toolName === 'delete_file' ? 'delete' : 'modify',
-            operation: step.toolName === 'delete_file' ? 'delete' : step.toolName === 'edit_file' ? 'patch' : 'write',
+            action: toolName === 'delete_file' ? 'delete' : 'modify',
+            operation: toolName === 'delete_file' ? 'delete' : toolName === 'edit_file' ? 'patch' : 'write',
           });
         }
       }

@@ -146,20 +146,33 @@ export async function runOpenCodeDirect(options: OpenCodeDirectOptions): Promise
       
       // Track file changes
       if (toolName === 'write_file' || toolName === 'WriteFile' || toolName === 'write') {
+        const filePath = String(args.path ?? args.file ?? args.target ?? '');
+        const content = typeof args.content === 'string'
+          ? args.content
+          : args.content == null
+            ? undefined
+            : JSON.stringify(args.content);
         fileChanges.push({
-          path: args.path || args.file || args.target || '',
+          path: filePath,
           operation: 'write',
-          content: args.content,
+          content,
         });
       } else if (toolName === 'edit_file' || toolName === 'EditFile' || toolName === 'patch' || toolName === 'edit') {
+        const filePath = String(args.path ?? args.file ?? args.target ?? '');
+        const content = typeof args.content === 'string'
+          ? args.content
+          : args.content == null
+            ? undefined
+            : JSON.stringify(args.content);
         fileChanges.push({
-          path: args.path || args.file || args.target || '',
+          path: filePath,
           operation: 'patch',
-          content: args.content,
+          content,
         });
       } else if (toolName === 'delete_file' || toolName === 'DeleteFile' || toolName === 'delete') {
+        const filePath = String(args.path ?? args.file ?? args.target ?? '');
         fileChanges.push({
-          path: args.path || args.file || args.target || '',
+          path: filePath,
           operation: 'delete',
         });
       }

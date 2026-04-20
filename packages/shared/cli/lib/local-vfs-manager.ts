@@ -1,8 +1,8 @@
 // packages/shared/cli/lib/local-vfs-manager.ts
 import { SimpleGit, simpleGit } from 'simple-git';
-import path from 'path';
-import fs from 'fs-extra';
-import os from 'os';
+import * as path from 'path';
+import * as fs from 'fs-extra';
+import * as os from 'os';
 
 export interface FileVersion {
   hash: string;

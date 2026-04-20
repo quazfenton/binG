@@ -122,7 +122,7 @@ export function createValidatedConfig<T>(
   const result = validateConfig(merged, schema);
 
   if (!result.success) {
-    throw new Error(`Configuration validation failed:\n${result.errors.join('\n')}`);
+    throw new Error(`Configuration validation failed:\n${(result as any).errors.join('\n')}`);
   }
 
   return result.data;
