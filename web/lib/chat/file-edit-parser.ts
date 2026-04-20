@@ -1316,9 +1316,9 @@ export function extractFileEdits(content: string): FileEdit[] {
     // Also handles: create_file({ ... }), writeToFile({ ... }), delete_file({ ... }), apply_diff({ ... })
     allEdits.push(...extractTextToolCallEdits(content));
 
-    // Fallback: direct regex for JSON-in-function format: write_file({ "path": "...", "content": "..." })
-    // This is a simpler fallback that doesn't require balanced scan
-    allEdits.push(...extractJsonInFunctionEdits(content));
+    // NOTE: extractJsonInFunctionEdits was removed — extractTextToolCallEdits
+    // already covers the write_file({ "path": "...", "content": "..." }) format
+    // via balanced-paren scanning with tolerantJsonParse, which is more robust.
 
     // Handle batch_write([{ path: "...", content: "..." }, ...]) format
     // Common when LLM outputs multiple files in a single batch call
@@ -1424,12 +1424,9 @@ export function extractFileEdits(content: string): FileEdit[] {
  * Also handles: create_files(...), write_files(...), batch_create(...)
  */
 
-function extractJsonInFunctionEdits(_content: string): FileEdit[] {
-  // This function was causing edge cases. The main extractFileEdits already
-  // handles JSON parsing through other extractors. Return empty to let
-  // those handle it.
-  return [];
-}
+// extractJsonInFunctionEdits was removed — its functionality is already
+// covered by extractTextToolCallEdits (balanced-paren scan + tolerantJsonParse)
+// which handles write_file({ "path": "...", "content": "..." }) more robustly.
 
 export function extractBatchWriteEdits(content: string): FileEdit[] {
   const edits: FileEdit[] = [];

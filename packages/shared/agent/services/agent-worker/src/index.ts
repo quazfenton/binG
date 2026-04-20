@@ -73,7 +73,7 @@ async function publishEvent(event: AgentEvent): Promise<void> {
 async function runOpenCode(job: AgentJob): Promise<void> {
   const { id: jobId, sessionId, userId, conversationId, prompt, context } = job;
   const startTime = Date.now();
-  const routing = taskRouter.analyzeTask(prompt);
+  const routing = await taskRouter.analyzeTask(prompt);
 
   logger.info('Starting job with task routing', { jobId, sessionId, userId, routingTarget: routing.target });
 
@@ -140,11 +140,12 @@ async function runOpenCode(job: AgentJob): Promise<void> {
       conversationId,
       task: prompt,
       context,
-      preferredAgent: routing.target === 'cli' ? undefined : routing.target,
+      preferredAgent: routing.target === 'chat' ? undefined : routing.target,
       executionPolicy: executionPolicy as any,
     });
 
-    const resultData = result?.data ?? result;
+    // result?.data is dynamic execution output — cast for property access
+    const resultData = (result?.data ?? result) as Record<string, unknown> | undefined;
     const responseContent = result?.content || resultData?.response || resultData?.content || '';
     const latency = Date.now() - startTime;
 

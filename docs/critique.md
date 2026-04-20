@@ -1,3 +1,14 @@
+---
+id: critique
+title: critique
+aliases:
+  - critique
+  - critique.md
+tags: []
+layer: core
+summary: "Here’s a focused critique beyond “security” and beyond the issues you already listed. These are implementation/architecture flaws, missing wiring, and improvement opportunities that stood out from the codebase:\r\n\r\n\r\n\r\n\r\n\r\n13. Hard‑coded heuristics drive critical routing\r\n\r\n\r\n“Code vs non‑code” detec"
+anchors: []
+---
 Here’s a focused critique beyond “security” and beyond the issues you already listed. These are implementation/architecture flaws, missing wiring, and improvement opportunities that stood out from the codebase:
 
 

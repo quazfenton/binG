@@ -56,8 +56,8 @@ export interface PreviewInfo {
  */
 export function validatePreviewInfo(info: PreviewInfo): boolean {
   if (!info || typeof info !== 'object') return false;
-  if (typeof info.port !== 'number' || info.port <= 0 || info.port > 65535) return false;
-  if (typeof info.url !== 'string' || !info.url.startsWith('http')) return false;
+  if (!Number.isInteger(info.port) || info.port <= 0 || info.port > 65535) return false;
+  if (typeof info.url !== 'string' || !/^https?:\/\//.test(info.url)) return false;
 
   // Validate URL format
   try {

@@ -21,15 +21,24 @@ import * as os from 'os';
 import { LocalVFSManager } from './lib/local-vfs-manager';
 
 // Security: Validate and sanitize paths to prevent directory traversal
-function sanitizePath(inputPath: string): string | null {
+function sanitizePath(inputPath: string, allowedRoot?: string): string | null {
   if (!inputPath || typeof inputPath !== 'string') return null;
 
-  // Resolve to absolute path and normalize
+  // Resolve to absolute path and normalize (eliminates .. segments automatically)
   const resolved = path.resolve(inputPath);
 
-  // Check for directory traversal attempts
-  if (resolved.includes('..') || !resolved.startsWith(path.resolve(process.cwd()))) {
+  // Block access to sensitive system directories
+  const blocked = ['/etc', '/proc', '/sys', '/dev', '/root', '/boot'];
+  if (blocked.some(dir => resolved === dir || resolved.startsWith(dir + path.sep))) {
     return null;
+  }
+
+  // If an allowedRoot is provided, restrict to that subtree
+  if (allowedRoot) {
+    const root = path.resolve(allowedRoot);
+    if (!resolved.startsWith(root + path.sep) && resolved !== root) {
+      return null;
+    }
   }
 
   return resolved;
@@ -60,7 +69,7 @@ function getHistoryRepoPath(workspacePath?: string): string {
   let targetPath: string;
 
   if (workspacePath) {
-    const sanitized = sanitizePath(workspacePath);
+    const sanitized = sanitizePath(workspacePath, process.cwd());
     if (!sanitized) {
       throw new Error('Invalid workspace path provided');
     }

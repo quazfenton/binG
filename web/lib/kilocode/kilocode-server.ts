@@ -14,9 +14,9 @@
  * - Authentication and rate limiting
  */
 
-import * as express from 'express';
-import * as cors from 'cors';
-import * as compression from 'compression';
+import express from 'express';
+import cors from 'cors';
+import compression from 'compression';
 import rateLimit from 'express-rate-limit';
 
 // Optional security middleware - gracefully handle if not available

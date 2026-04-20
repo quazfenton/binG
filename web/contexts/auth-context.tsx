@@ -143,13 +143,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const initializeAuth = async () => {
       if (isDesktopMode()) {
+        // Desktop mode: create a local-only user identity.
+        // Uses 'desktop' tier — distinct from 'premium' (paid cloud) and
+        // 'free' (restricted cloud). Downstream feature gates should
+        // treat 'desktop' as having local-only privileges; cloud-only
+        // premium features (e.g. hosted sandboxes) remain unavailable.
         setUser({
-          id: 1,
-          email: 'local-desktop-user@example.com',
+          id: -1, // Sentinel: distinguishes desktop pseudo-user from DB users
+          email: 'desktop-local@localhost',
           createdAt: new Date(),
           isActive: true,
-          subscriptionTier: 'premium',
-          emailVerified: true,
+          subscriptionTier: 'desktop',
+          emailVerified: false,
         });
         setIsLoading(false);
         return;

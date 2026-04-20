@@ -3,6 +3,18 @@ class LivePreviewOffloading {
   offload() { return Promise.resolve(null); }
   restore() { return Promise.resolve(null); }
   getStatus() { return { available: false, reason: 'CLI-only mode' }; }
+  detectProject({ files }: { files: Record<string, string> }) {
+    const hasBackend = Object.keys(files).some((p) => p.includes('/api/') || p.endsWith('server.js') || p.endsWith('server.ts'));
+    const hasNodeServer = Object.keys(files).some((p) => p.endsWith('package.json'));
+    return {
+      hasBackend,
+      hasNodeServer,
+      framework: 'unknown',
+      entryPoint: 'index.js',
+      heuristics: { dependencies: {} },
+    };
+  }
+  detectPort(_files: Record<string, string>) { return 3000; }
 }
 import { loadSandpackClient } from "@codesandbox/sandpack-client";
 import { bundleLocalLibrary, scanLocalDependencies } from './local-bundle-manager';

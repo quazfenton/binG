@@ -17,9 +17,14 @@ def fetch_simple(url: str, timeout: int = 30) -> tuple[str, str]:
     headers = {
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
     }
-    r = httpx.get(url, headers=headers, timeout=timeout, follow_redirects=True)
-    r.raise_for_status()
-    return r.text, r.headers.get("content-type", "")
+    try:
+        r = httpx.get(url, headers=headers, timeout=timeout, follow_redirects=True)
+        r.raise_for_status()
+        return r.text, r.headers.get("content-type", "")
+    except httpx.HTTPStatusError as e:
+        raise RuntimeError(f"HTTP {e.response.status_code} for {url}") from e
+    except httpx.RequestError as e:
+        raise RuntimeError(f"HTTP request failed: {e}") from e
 
 
 def html_to_markdown(html: str, url: str = "") -> str:
@@ -211,8 +216,12 @@ def output_result(data, fmt: str, output_path: str = None):
         text = str(data)
 
     if output_path:
-        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        Path(output_path).write_text(text)
+        resolved = Path(output_path).resolve()
+        # Block directory traversal: reject paths containing '..' components
+        if ".." in resolved.parts:
+            raise ValueError(f"Invalid output path: directory traversal detected in {output_path}")
+        resolved.parent.mkdir(parents=True, exist_ok=True)
+        resolved.write_text(text)
         print(f"Saved to {output_path}", file=sys.stderr)
     else:
         print(text)

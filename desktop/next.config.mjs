@@ -146,7 +146,7 @@ const nextConfig = {
     '@tursodatabase/database',
     '@tursodatabase/sync',
   ],
-  webpack: (config, { isServer, dev }) => {
+  webpack: (config, { isServer, dev, webpack }) => {
     if (!isServer) {
       config.externals = [
         ...(config.externals || []),
@@ -164,7 +164,6 @@ const nextConfig = {
         'os',
         'path',
         'assert',
-        'buffer',
         'util',
         'events',
         'module',
@@ -242,10 +241,16 @@ const nextConfig = {
         assert: false,
         os: false,
         path: false,
-        buffer: false,
         util: false,
         events: false,
       };
+
+      config.plugins.push(
+        new webpack.ProvidePlugin({
+          Buffer: ['buffer', 'Buffer'],
+          buffer: ['buffer', 'Buffer'],
+        })
+      );
 
       config.resolve.alias = {
         ...config.resolve.alias,

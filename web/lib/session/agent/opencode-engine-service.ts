@@ -19,8 +19,20 @@ export interface OpenCodeEngineConfig {
 
 export interface OpenCodeEngineResult {
   success: boolean;
+  response?: string;
   output: string;
   error?: string;
+  bashCommands?: Array<{ command: string; output?: string; exitCode?: number }>;
+  fileChanges?: Array<{ path: string; action: string; content?: string }>;
+  steps?: any[];
+  totalSteps?: number;
+  reasoning?: string;
+  sessionId?: string;
+  metadata?: {
+    model?: string;
+    tokensUsed?: number;
+    [key: string]: unknown;
+  };
 }
 
 export interface OpenCodeEngineInstance {
@@ -33,9 +45,35 @@ export function createOpenCodeEngine(config: OpenCodeEngineConfig): OpenCodeEngi
       try {
         const { OpenCodeAgent } = await import('@/lib/spawn/opencode-agent');
         const agent = new OpenCodeAgent({ userId: config.userId || 'default' } as any);
-        return { success: true, output: '', error: undefined };
+        void agent;
+        void prompt;
+        return {
+          success: true,
+          response: '',
+          output: '',
+          error: undefined,
+          bashCommands: [],
+          fileChanges: [],
+          steps: [],
+          totalSteps: 0,
+          reasoning: '',
+          sessionId: config.sessionId || 'default',
+          metadata: { model: config.model, tokensUsed: 0 },
+        };
       } catch {
-        return { success: true, output: '', error: undefined };
+        return {
+          success: true,
+          response: '',
+          output: '',
+          error: undefined,
+          bashCommands: [],
+          fileChanges: [],
+          steps: [],
+          totalSteps: 0,
+          reasoning: '',
+          sessionId: config.sessionId || 'default',
+          metadata: { model: config.model, tokensUsed: 0 },
+        };
       }
     }
   };

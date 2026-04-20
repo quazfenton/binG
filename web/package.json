@@ -141,6 +141,7 @@
     "autoprefixer": "^10.4.20",
     "bcryptjs": "^3.0.2",
     "better-sqlite3": "^11.1.2",
+    "buffer": "^6.0.3",
     "bullmq": "^5.34.0",
     "chokidar": "^5.0.0",
     "class-variance-authority": "^0.7.1",

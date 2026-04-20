@@ -1,3 +1,51 @@
+---
+id: terminaluse-integration
+title: TerminalUse Integration
+aliases:
+  - terminaluse-integration
+  - terminaluse-integration.md
+tags:
+  - terminal
+layer: core
+summary: "# TerminalUse Integration\r\n\r\nTerminalUse provides cloud agents with persistent filesystems and sandboxed compute for binG.\r\n\r\n## Overview\r\n\r\nTerminalUse integration adds:\r\n- **Persistent Filesystems**: Storage mounted at `/workspace` across task executions\r\n- **Task/Event Streaming**: Real-time inte"
+anchors:
+  - Overview
+  - Architecture
+  - Core Model
+  - Primitives
+  - Workflows
+  - Deploy Loop (Versioning & Deployment)
+  - Run Loop (Execution & Interaction)
+  - Runtime Mounts
+  - Task Lifecycle
+  - Lifecycle Hooks
+  - Typical Flow
+  - Event Flow & Data Scope
+  - Filesystem Sync Behavior
+  - Configuration
+  - Environment Variables
+  - Provider Configuration
+  - Usage
+  - Basic Sandbox Operations
+  - Agent Execution
+  - Streaming Events
+  - Filesystem Operations
+  - Batch Jobs
+  - API Routes
+  - Create Task
+  - Stream Task Events
+  - Send Event
+  - List Filesystems
+  - Comparison with Other Providers
+  - Quotas and Limits
+  - Error Handling
+  - Testing
+  - Troubleshooting
+  - Task Creation Fails
+  - Filesystem Operations Fail
+  - Streaming Disconnects
+  - Resources
+---
 # TerminalUse Integration
 
 TerminalUse provides cloud agents with persistent filesystems and sandboxed compute for binG.

@@ -1,3 +1,61 @@
+---
+id: model-specialization-plan
+title: Model Specialization Plan
+aliases:
+  - model-specialization-plan
+  - model-specialization-plan.md
+tags: []
+layer: core
+summary: "# Model Specialization Plan\r\n\r\n> Specializing external API models **without weight updates** — using prompt engineering, RAG, verification, iterative feedback, tool orchestration, and self-learning.\r\n\r\n---\r\n\r\n## Executive Summary\r\n\r\nThis codebase already has strong infrastructure for **task classifi"
+anchors:
+  - Executive Summary
+  - 'Current State: What Exists vs. What''s Missing'
+  - ✅ Already Built (use these)
+  - ❌ Missing Gaps (this plan fills them)
+  - 'Layer 1: Dynamic Prompt Engine'
+  - 1.1 Model-Specific Prompt Variants
+  - 1.2 Few-Shot Example Injection
+  - 1.3 Progressive Context Building
+  - 'Layer 2: RAG Knowledge Pipeline'
+  - 2.1 Server-Side Knowledge Vector Store
+  - 2.2 Corpus Preparation (RAG Step 2)
+  - 2.3 Retrieval Pipeline (RAG Steps 3–5)
+  - 2.4 Prompt Integration (RAG Step 6)
+  - Relevant Examples (from similar past tasks)
+  - 2.5 Verification & Post-Processing (RAG Step 6 continued)
+  - 2.6 Evaluation & Iteration (RAG Step 7)
+  - 'Layer 3: Verification & Self-Healing'
+  - 3.1 Pre-Execution Tool Validator
+  - 3.2 Post-Execution Self-Check
+  - 3.3 Schema Validation for All Outputs
+  - 'Layer 4: Practice → Production Loop'
+  - 4.1 Auto-Apply Practice Results
+  - '4.2 Shared Database: Python Practice ↔ TypeScript Agent'
+  - 4.3 Continuous Practice on Real Trajectories
+  - 4.4 Synthetic Example Generation
+  - 'Layer 5: Model-Aware Routing'
+  - 5.1 Task Type + Model Recommendation
+  - 5.2 Per-Model Circuit Breaker
+  - 5.3 Per-Model Tool Success Tracking
+  - Implementation Phases
+  - 'Phase 1: Quick Wins (1–2 weeks) — Highest ROI, Lowest Effort'
+  - 'Phase 2: Prompt Engine + Model Routing (2–3 weeks)'
+  - 'Phase 3: RAG Knowledge Pipeline (3–4 weeks)'
+  - 'Phase 4: Practice → Production Loop (2–3 weeks)'
+  - 'Phase 5: Synthetic Data + Dashboard (ongoing)'
+  - Architecture Diagram
+  - Cost Estimates
+  - Savings from Improvement
+  - Success Metrics
+  - Risks & Mitigations
+  - 'Appendix: File Inventory'
+  - New Files to Create
+  - Existing Files to Leverage
+  - 'Quick Start: What to Build First'
+  - 'Day 1: Add few-shot examples to VFS tool descriptions'
+  - 'Day 2: Pre-execution validator'
+  - 'Day 3: Task type detection'
+---
 # Model Specialization Plan
 
 > Specializing external API models **without weight updates** — using prompt engineering, RAG, verification, iterative feedback, tool orchestration, and self-learning.

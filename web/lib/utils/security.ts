@@ -22,8 +22,11 @@ export function sanitizePath(inputPath: string, baseDir: string = process.cwd())
   // Resolve to absolute path
   const resolved = path.resolve(baseDir, inputPath);
 
+  // Normalize baseDir to include trailing separator to prevent prefix collision
+  const normalizedBaseDir = path.resolve(baseDir) + path.sep;
+
   // Check for directory traversal attempts
-  if (!resolved.startsWith(baseDir)) {
+  if (!resolved.startsWith(normalizedBaseDir)) {
     return null;
   }
 
@@ -58,7 +61,7 @@ export function isDangerousCommand(command: string): boolean {
     /dd\s+if=/,
     /mkfs/,
     /fdisk/,
-    /format/,
+    /\bformat\b/,
     /del\s+.*\*/,
     /rd\s+.*\/s/
   ];
@@ -112,5 +115,5 @@ export function isAllowedFileExtension(filename: string, allowedExtensions: stri
  */
 export function isPathAllowed(filePath: string, allowedDirs: string[]): boolean {
   const resolved = path.resolve(filePath);
-  return allowedDirs.some(dir => resolved.startsWith(path.resolve(dir)));
+  return allowedDirs.some(dir => resolved.startsWith(path.resolve(dir) + path.sep));
 }

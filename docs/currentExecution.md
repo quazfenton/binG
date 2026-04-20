@@ -1,3 +1,14 @@
+---
+id: currentexecution
+title: currentExecution
+aliases:
+  - currentExecution
+  - currentExecution.md
+tags: []
+layer: core
+summary: "const localWorkspaceDir = `${tempDir}\\\\workspace\\\\users\\\\${userId}\\\\sessions\\\\${convId}`;\r\n      3 const promptFile = `${tempDir}\\\\opencode-v2-prompt-${Date.now()}.json`;\r\n      4\r\n      5 // Write prompt\r\n      6 await this.writeLocalFile(promptFile, JSON.stringify({\r\n      7   prompt: userMessage,"
+anchors: []
+---
 const localWorkspaceDir = `${tempDir}\\workspace\\users\\${userId}\\sessions\\${convId}`;
       3 const promptFile = `${tempDir}\\opencode-v2-prompt-${Date.now()}.json`;
       4

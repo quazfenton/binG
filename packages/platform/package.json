@@ -9,6 +9,7 @@
     "./storage": "./src/storage/index.ts",
     "./fs": "./src/fs/index.ts",
     "./secrets": "./src/secrets/index.ts",
+    "./secrets/desktop": "./src/secrets/desktop.ts",
     "./window": "./src/window.ts",
     "./clipboard": "./src/clipboard.ts",
     "./notifications": "./src/notifications.ts",

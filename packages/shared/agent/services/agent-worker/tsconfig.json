@@ -5,6 +5,11 @@
     "lib": ["ES2020"],
     "outDir": "./dist",
     "rootDir": "./src",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/external-types/*"],
+      "@bing/shared/agent/*": ["src/external-types/shared/agent/*"]
+    },
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,

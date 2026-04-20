@@ -76,6 +76,12 @@ export class LocalVFSManager {
     await this.ensureInit();
     const targetPath = path.join(this.workspacePath, filePath);
 
+    // Path traversal protection: ensure the resolved path stays within workspace
+    const resolvedPath = path.resolve(targetPath);
+    if (!resolvedPath.startsWith(this.workspacePath + path.sep) && resolvedPath !== this.workspacePath) {
+      return null;
+    }
+
     // Write to user's actual workspace
     await fs.ensureDir(path.dirname(targetPath));
     await fs.writeFile(targetPath, content);
@@ -175,6 +181,13 @@ export class LocalVFSManager {
 
       // Write reverted content to user's workspace
       const targetPath = path.join(this.workspacePath, filePath);
+
+      // Path traversal protection: ensure the resolved path stays within workspace
+      const resolvedPath = path.resolve(targetPath);
+      if (!resolvedPath.startsWith(this.workspacePath + path.sep) && resolvedPath !== this.workspacePath) {
+        return false;
+      }
+
       await fs.ensureDir(path.dirname(targetPath));
       await fs.writeFile(targetPath, content);
 
@@ -201,6 +214,13 @@ export class LocalVFSManager {
 
       // Write to user's workspace
       const targetPath = path.join(this.workspacePath, filePath);
+
+      // Path traversal protection: ensure the resolved path stays within workspace
+      const resolvedPath = path.resolve(targetPath);
+      if (!resolvedPath.startsWith(this.workspacePath + path.sep) && resolvedPath !== this.workspacePath) {
+        return false;
+      }
+
       await fs.ensureDir(path.dirname(targetPath));
       await fs.writeFile(targetPath, content);
 
@@ -273,6 +293,13 @@ export class LocalVFSManager {
    */
   async readWorkspaceFile(filePath: string): Promise<string | null> {
     const targetPath = path.join(this.workspacePath, filePath);
+
+    // Path traversal protection: ensure the resolved path stays within workspace
+    const resolvedPath = path.resolve(targetPath);
+    if (!resolvedPath.startsWith(this.workspacePath + path.sep) && resolvedPath !== this.workspacePath) {
+      return null;
+    }
+
     try {
       return await fs.readFile(targetPath, 'utf-8');
     } catch {
@@ -285,24 +312,36 @@ export class LocalVFSManager {
    */
   async deleteFile(filePath: string): Promise<boolean> {
     await this.ensureInit();
+
+    // Path traversal protection for workspace path
     const targetPath = path.join(this.workspacePath, filePath);
+    const resolvedPath = path.resolve(targetPath);
+    if (!resolvedPath.startsWith(this.workspacePath + path.sep) && resolvedPath !== this.workspacePath) {
+      return false;
+    }
+
     const historyFile = path.join(this.historyPath, filePath);
+
+    let workspaceDeleted = false;
+    let historyDeleted = false;
 
     try {
       await fs.unlink(targetPath);
+      workspaceDeleted = true;
     } catch {
       // File may not exist in workspace
     }
 
     try {
       await fs.unlink(historyFile);
+      historyDeleted = true;
       await this.git.add(filePath);
       await this.git.commit(`Delete ${filePath}`);
     } catch {
       // History file may not exist
     }
 
-    return true;
+    return workspaceDeleted || historyDeleted;
   }
 
   /**

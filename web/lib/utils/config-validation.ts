@@ -14,7 +14,7 @@ export const urlSchema = z.string().url();
 
 export const emailSchema = z.string().email();
 
-export const nonEmptyStringSchema = z.string().min(1).trim();
+export const nonEmptyStringSchema = z.string().trim().min(1);
 
 // Database configuration schema
 export const databaseConfigSchema = z.object({
@@ -94,11 +94,14 @@ export function validateEnvironment(requiredVars: string[], optionalVars: string
     const value = process.env[varName];
     if (value) {
       // Add specific validations as needed
-      if (varName.includes('PORT') && isNaN(Number(value))) {
-        invalid.push({ var: varName, reason: 'must be a valid port number' });
+      if (varName.includes('PORT')) {
+        const portNum = Number(value);
+        if (isNaN(portNum) || !Number.isInteger(portNum) || portNum <= 0 || portNum > 65535) {
+          invalid.push({ var: varName, reason: 'must be a valid port number (1-65535)' });
+        }
       }
-      if (varName.includes('URL') && !value.startsWith('http')) {
-        invalid.push({ var: varName, reason: 'must be a valid URL' });
+      if (varName.includes('URL') && !/^https?:\/\//.test(value)) {
+        invalid.push({ var: varName, reason: 'must be a valid HTTP/HTTPS URL' });
       }
     }
   }

@@ -1,3 +1,22 @@
+---
+id: sdk-e2b-defining-template
+title: Defining template
+aliases:
+  - defining-template
+  - defining-template.md
+tags: []
+layer: core
+summary: "> ## Documentation Index\r\n> Fetch the complete documentation index at: https://e2b.mintlify.app/llms.txt\r\n> Use this file to discover all available pages before exploring further.\r\n\r\n# Defining template\r\n\r\n> How to create your own template\r\n\r\n### Method chaining\r\n\r\nAll template methods return the te"
+anchors:
+  - Method chaining
+  - User and workdir
+  - Copying files
+  - File operations
+  - Installing packages
+  - Git operations
+  - Environment variables
+  - Running commands
+---
 > ## Documentation Index
 > Fetch the complete documentation index at: https://e2b.mintlify.app/llms.txt
 > Use this file to discover all available pages before exploring further.

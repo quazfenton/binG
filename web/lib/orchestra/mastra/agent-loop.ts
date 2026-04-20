@@ -523,7 +523,7 @@ export class AgentLoop {
           const result = await tool.execute(args);
           if (!result.success) {
             const errMsg = typeof result.error === 'string' ? result.error : JSON.stringify(result.error);
-            throw new Error(errMsg || 'Tool execution failed');
+            throw new Error(errMsg);
           }
           return result;
         },
@@ -543,78 +543,94 @@ export class AgentLoop {
           allText.push(chunk.content);
         }
         
-        // Handle tool calls
+        // Handle tool calls (AI SDK has already executed them)
         if (chunk.toolCalls) {
           for (const tc of chunk.toolCalls) {
-            log.debug(`Executing tool: ${tc.name}`);
-            const tool = this.tools.find(t => t.name === tc.name);
-            if (tool) {
-              try {
-                const result = await tool.execute(tc.arguments);
-                const isSuccess = result?.success !== false;
+            log.debug(`Tool called: ${tc.name}`, { args: tc.arguments });
+            // Record the tool call but don't execute - AI SDK handles execution
+            allToolCalls.push({
+              toolName: tc.name,
+              toolCallId: tc.id,
+              args: tc.arguments,
+              result: null, // Will be filled by tool-result event
+            });
+          }
+        }
 
-                // Track with shared loop detector
-                const loopMsg = recordStepAndCheckLoop(this.loopState, tc.name, tc.arguments, isSuccess);
+        // Handle tool results from AI SDK execution
+        if (chunk.toolInvocations) {
+          for (const invocation of chunk.toolInvocations) {
+            if (invocation.state === 'result') {
+              const isSuccess = invocation.result?.success !== false;
 
+              // Track with shared loop detector
+              const loopMsg = recordStepAndCheckLoop(this.loopState, invocation.toolName, invocation.args, isSuccess);
+
+              // Update the tool call record with result
+              const existingCall = allToolCalls.find(tc => tc.toolCallId === invocation.toolCallId);
+              if (existingCall) {
+                existingCall.result = invocation.result;
+              } else {
+                // Fallback: create new record if tool-call wasn't captured
                 allToolCalls.push({
-                  toolName: tc.name,
-                  toolCallId: tc.id,
-                  args: tc.arguments,
-                  result,
+                  toolName: invocation.toolName,
+                  toolCallId: invocation.toolCallId,
+                  args: invocation.args,
+                  result: invocation.result,
                 });
-                results.push({
-                  iteration: this.loopState.totalSteps,
-                  tool: tc.name,
-                  arguments: tc.arguments,
-                  result,
-                });
-                
-                // Add tool response to conversation
-                this.context.conversationHistory.push({
-                  role: 'tool',
-                  content: JSON.stringify(result),
-                  toolCallId: tc.id,
-                  toolName: tc.name,
-                });
+              }
 
-                // Check no-progress guard after each tool execution
-                if (loopMsg) {
-                  log.warn(`No-progress loop detected: ${loopMsg}`);
-                  return {
-                    success: false,
-                    results,
-                    iterations: allToolCalls.length,
-                    message: allText.join(''),
-                    error: loopMsg,
-                    toolInvocations: allToolCalls.map(tc => normalizeToolInvocation({
-                      toolCallId: tc.toolCallId,
-                      toolName: tc.toolName,
-                      state: 'completed',
-                      args: tc.args,
-                      result: tc.result,
-                      sourceSystem: 'mastra',
-                      sourceAgent: 'vercel-ai-sdk',
-                    })),
-                  };
-                }
-              } catch (toolError: any) {
-                recordStepAndCheckLoop(this.loopState, tc.name, tc.arguments, false);
-                log.error(`Tool execution failed: ${tc.name}`, toolError.message);
-                
-                // Track failed tool calls to detect loops
-                const toolKey = `${tc.name}:${JSON.stringify(tc.arguments)}`;
+              results.push({
+                iteration: this.loopState.totalSteps,
+                tool: invocation.toolName,
+                arguments: invocation.args,
+                result: invocation.result,
+              });
+
+              // Add tool response to conversation
+              this.context.conversationHistory.push({
+                role: 'tool',
+                content: JSON.stringify(invocation.result),
+                toolCallId: invocation.toolCallId,
+                toolName: invocation.toolName,
+              });
+
+              // Check no-progress guard after each tool result
+              if (loopMsg) {
+                log.warn(`No-progress loop detected: ${loopMsg}`);
+                return {
+                  success: false,
+                  results,
+                  iterations: allToolCalls.length,
+                  message: allText.join(''),
+                  error: loopMsg,
+                  toolInvocations: allToolCalls.map(tc => normalizeToolInvocation({
+                    toolCallId: tc.toolCallId,
+                    toolName: tc.toolName,
+                    state: 'completed',
+                    args: tc.args,
+                    result: tc.result,
+                    sourceSystem: 'mastra',
+                    sourceAgent: 'vercel-ai-sdk',
+                  })),
+                };
+              }
+
+              // Track failed tool calls to detect loops
+              if (!isSuccess) {
+                const toolKey = `${invocation.toolName}:${JSON.stringify(invocation.args)}`;
                 const failedCount = (this.failedToolCalls.get(toolKey) || 0) + 1;
                 this.failedToolCalls.set(toolKey, failedCount);
-                
+
                 // If same tool call failed 2+ times, we're in a loop - prevent further attempts
                 if (failedCount >= 2) {
-                  log.warn(`Detected possible infinite loop: ${tc.name} failed ${failedCount} times with same args`);
-                  allToolCalls.push({
-                    toolName: tc.name,
-                    toolCallId: tc.id,
-                    args: tc.arguments,
-                    result: { success: false, error: toolError.message, loopDetected: true, message: `STOPPED: ${tc.name} failed repeatedly. Do NOT retry.` },
-                  });
+                  log.warn(`Detected possible infinite loop: ${invocation.toolName} failed ${failedCount} times with same args`);
+                  // Update the result to indicate loop detection
+                  invocation.result = {
+                    ...invocation.result,
+                    loopDetected: true,
+                    message: `STOPPED: ${invocation.toolName} failed repeatedly. Do NOT retry.`
+                  };
                   // Return early to stop the loop - no more tool calls
                   log.info('Stopping agent loop due to repeated tool failures');
                   return {
@@ -622,7 +638,7 @@ export class AgentLoop {
                     results,
                     iterations: allToolCalls.length,
                     message: allText.join(''),
-                    error: `Agent stopped: ${tc.name} failed repeatedly (${failedCount} times). The file may not exist or path may be incorrect.`,
+                    error: `Agent stopped: ${invocation.toolName} failed repeatedly (${failedCount} times). The file may not exist or path may be incorrect.`,
                     toolInvocations: allToolCalls.map(tc => normalizeToolInvocation({
                       toolCallId: tc.toolCallId,
                       toolName: tc.toolName,
@@ -634,13 +650,6 @@ export class AgentLoop {
                     })),
                   };
                 }
-                
-                allToolCalls.push({
-                  toolName: tc.name,
-                  toolCallId: tc.id,
-                  args: tc.arguments,
-                  result: { success: false, error: toolError.message },
-                });
               }
             }
           }
@@ -648,8 +657,92 @@ export class AgentLoop {
         
         // Check if complete
         if (chunk.isComplete) {
-          const fullText = allText.join('');
-          
+          const fullText = allText.join('').trim();
+
+          // EMPTY COMPLETION GUARD: If no meaningful output and no successful tools, trigger recovery
+          const hasSuccessfulTool = allToolCalls.some(tc => tc.result?.success !== false);
+          if (fullText.length === 0 && !hasSuccessfulTool) {
+            log.warn('Empty completion detected - no text output and no successful tool results');
+
+            // Try one automatic recovery turn with diagnostic instruction
+            try {
+              const recoveryMessages = [
+                ...this.context.conversationHistory,
+                {
+                  role: 'assistant' as const,
+                  content: 'You produced no usable output. Either provide a final answer or call one valid tool with non-empty args.',
+                }
+              ];
+
+              const recoveryResult = await this.executeLLMStreaming(recoveryMessages, vercelTools);
+              let recoveryText = '';
+              let recoveryToolCalls: any[] = [];
+
+              for await (const recoveryChunk of recoveryResult) {
+                if (recoveryChunk.content) {
+                  recoveryText += recoveryChunk.content;
+                }
+                if (recoveryChunk.toolInvocations) {
+                  recoveryToolCalls.push(...recoveryChunk.toolInvocations);
+                }
+                if (recoveryChunk.isComplete) break;
+              }
+
+              // If recovery produced output or tools, use it
+              if (recoveryText.trim().length > 0 || recoveryToolCalls.length > 0) {
+                log.info('Recovery attempt succeeded');
+                allText.push(recoveryText);
+                // Add any recovery tool calls to the main results
+                recoveryToolCalls.forEach(invocation => {
+                  if (invocation.state === 'result') {
+                    allToolCalls.push({
+                      toolName: invocation.toolName,
+                      toolCallId: invocation.toolCallId,
+                      args: invocation.args,
+                      result: invocation.result,
+                    });
+                  }
+                });
+              } else {
+                // Recovery also failed - return structured failure
+                return {
+                  success: false,
+                  results,
+                  iterations: allToolCalls.length,
+                  message: '',
+                  error: 'Agent produced no usable output after recovery attempt',
+                  toolInvocations: allToolCalls.map(tc => normalizeToolInvocation({
+                    toolCallId: tc.toolCallId,
+                    toolName: tc.toolName,
+                    state: 'completed',
+                    args: tc.args,
+                    result: tc.result,
+                    sourceSystem: 'mastra',
+                    sourceAgent: 'vercel-ai-sdk',
+                  })),
+                };
+              }
+            } catch (recoveryError) {
+              log.error('Recovery attempt failed:', recoveryError);
+              return {
+                success: false,
+                results,
+                iterations: allToolCalls.length,
+                message: '',
+                error: 'Agent produced no usable output and recovery failed',
+                toolInvocations: allToolCalls.map(tc => normalizeToolInvocation({
+                  toolCallId: tc.toolCallId,
+                  toolName: tc.toolName,
+                  state: 'completed',
+                  args: tc.args,
+                  result: tc.result,
+                  sourceSystem: 'mastra',
+                  sourceAgent: 'vercel-ai-sdk',
+                })),
+              };
+            }
+          }
+
           // FALLBACK: If no function calls were made, try parsing text-based tool calls
           // This handles models that don't support function calling
           if (allToolCalls.length === 0 && fullText.length > 0) {

@@ -1,4 +1,17 @@
-﻿
+---
+id: 0edge
+title: 0edge
+aliases:
+  - 0edge
+  - 0edge.md
+tags: []
+layer: core
+summary: "my CSP is defined in `proxy.ts` (applies globally via Next.js middleware):\r\n\r\n    Development:\r\n\r\n      1 default-src 'self';\r\n      2 script-src 'self' 'unsafe-inline' 'unsafe-eval' https:;\r\n      3 style-src 'self' 'unsafe-inline';\r\n      4 img-src 'self' data: https: blob:;\r\n      5 connect-sr"
+anchors:
+  - Better Approach for General External Sites
+  - Why This Is Better Than Keeping Both Flags
+---
+
  my CSP is defined in `proxy.ts` (applies globally via Next.js middleware):
 
     Development:
