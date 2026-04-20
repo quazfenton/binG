@@ -392,6 +392,7 @@ export class ModalComSandboxHandle implements SandboxHandle {
     return {
       port,
       url: tunnel.url,
+      authHeaders: {}, // Modal typically handles auth internally
       openedAt: tunnel.createdAt,
     };
   }

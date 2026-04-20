@@ -41,6 +41,8 @@ export interface PreviewInfo {
   url: string;
   /** Access token (if required) */
   token?: string;
+  /** Authentication headers for gated access */
+  authHeaders?: Record<string, string>;
   /** When preview was opened */
   openedAt?: number;
 }

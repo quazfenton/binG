@@ -75,7 +75,7 @@ const logger = createLogger('Previews:LivePreview');
  * Cloud providers: devbox, codesandbox, opensandbox
  * Hybrid: local, cloud (auto-detect based on project requirements)
  */
-export type PreviewMode = 
+export type PreviewMode =
   | 'sandpack'     // Local: In-browser bundling (React, Vue, Svelte, etc.)
   | 'iframe'       // Local: Raw HTML preview
   | 'raw'          // Local: Raw code view
@@ -89,8 +89,11 @@ export type PreviewMode =
   | 'codesandbox'  // Cloud: CodeSandbox cloud environment
   | 'opensandbox'  // Cloud: OpenSandbox container (self-hosted)
   | 'node'         // Local: Node.js execution (via WebContainer)
+  | 'modal'        // Cloud: Modal Labs serverless platform
   | 'local'        // Auto: Prefer local execution
-  | 'cloud';       // Auto: Require cloud execution
+  | 'cloud'        // Auto: Require cloud execution
+  | 'fastly'       // Cloud: Fastly edge deployment
+  | 'valtown';     // Cloud: Val Town serverless functions
 
 /**
  * Supported frameworks
@@ -1365,26 +1368,31 @@ export class LivePreviewOffloading {
     // ========================================
     // AUTO-OFFLOAD BASED ON HEURISTICS
     // ========================================
-    
-    // If heuristics indicate cloud offload, prioritize cloud providers
-    if (shouldOffload) {
-      logger.info(`[detectPreviewMode] Auto-offload triggered: ${offloadReason}`);
-      
+
+    // STRICTLY AVOID opensandbox/microsandbox for ANY complex projects
+    // Route to devbox or modal for anything that needs real execution
+    const needsRealExecution = hasDocker || hasComplexDeps || hasHeavyComputation ||
+                               hasAPIKeys || hasNodeServer || shouldOffload;
+
+    if (needsRealExecution) {
+      logger.info(`[detectPreviewMode] Complex project detected, routing to cloud: ${offloadReason || 'complex requirements'}`);
+
       // Determine best cloud provider based on project type
-      if (hasPython || framework === 'flask' || framework === 'fastapi' || framework === 'django') {
-        return 'devbox';  // Python needs full VM
+      if (hasPython || (framework as string) === 'flask' || (framework as string) === 'fastapi' || framework === 'django') {
+        return 'modal';  // Python/ML needs modal
       }
-      
-      if (hasNodeServer || framework === 'next' || framework === 'nuxt') {
-        return 'devbox';  // Backend needs cloud
+
+      // Serverless/API functions -> Val Town
+      if (hasAPIKeys || packageJson?.main?.includes('api') || packageJson?.scripts?.start?.includes('server')) {
+        return 'valtown';
       }
-      
-      if (hasDocker || hasComplexDeps) {
-        return 'devbox';  // Docker/complex needs cloud
+
+      // Edge deployment -> Fastly
+      if (hasHeavyComputation || packageJson?.deploy?.target === 'fastly') {
+        return 'fastly';
       }
-      
-      // Default to CodeSandbox for heavy frontend projects
-      return 'codesandbox';
+
+      return 'devbox';  // Default to devbox for complex JS/TS projects
     }
 
     // ========================================
@@ -1392,7 +1400,7 @@ export class LivePreviewOffloading {
     // ========================================
 
     // Python frameworks -> Pyodide (local)
-    if (framework === 'gradio' || framework === 'streamlit' || framework === 'flask') {
+    if (framework === 'gradio' || framework === 'streamlit' || (framework as string) === 'flask') {
       if (hasDocker || hasComplexDeps || hasHeavyComputation || hasAPIKeys) {
         return 'devbox';  // Cloud fallback for complex Python
       }
@@ -1400,7 +1408,7 @@ export class LivePreviewOffloading {
     }
 
     // FastAPI/Django -> DevBox (usually need server)
-    if (framework === 'fastapi' || framework === 'django') {
+    if ((framework as string) === 'fastapi' || framework === 'django') {
       return 'devbox';   // Cloud - these need running server
     }
 
@@ -1411,7 +1419,7 @@ export class LivePreviewOffloading {
     }
 
     // Node.js/Express backend -> WebContainer
-    if (framework === 'node') {
+    if ((framework as string) === 'node') {
       if (hasDocker || hasComplexDeps) return 'devbox';  // Cloud for Docker/complex
       return 'webcontainer';  // Local Node.js
     }
@@ -1678,6 +1686,28 @@ export class LivePreviewOffloading {
    * - Transforms Vue code to remove SSR imports
    */
   getSandpackConfig(detection: ProjectDetection): SandpackConfig {
+    // --- NATIVE CLOUD BYPASS ---
+    // If we have a backend, node server, or cloud-destined project, do NOT attempt to strip code for the browser.
+    // Bypass ALL code transformations (SSR stripping, Node module removal) to preserve original code for native execution.
+    const isCloudDestined = detection.hasBackend || detection.hasNodeServer || detection.hasPython ||
+                           detection.framework === 'node' || detection.framework === 'flask' ||
+                           detection.framework === 'fastapi' || detection.framework === 'django' ||
+                           detection.hasHeavyComputation || detection.hasAPIKeys;
+
+    if (isCloudDestined) {
+      // For cloud-destined projects, bypass transformations but format files correctly
+      const files = detection.normalizedFiles || {};
+      const formattedFiles: Record<string, { code: string }> = {};
+      for (const [path, content] of Object.entries(files)) {
+        formattedFiles[path] = { code: content };
+      }
+      return {
+        template: 'node',
+        files: formattedFiles,
+        customSetup: { dependencies: {} }
+      };
+    }
+
     const template = FRAMEWORK_TO_TEMPLATE[detection.framework] || 'vanilla';
 
     // Filter out build outputs and node_modules
@@ -2259,6 +2289,159 @@ export const getSandpackConfig = (filesOrDetection: Array<{name: string; content
   // New API: detection object
   return livePreviewOffloading.getSandpackConfig(filesOrDetection as ProjectDetection);
 };
+
+export interface LocalDependencyInjectionResult {
+  files: Record<string, { code: string }>;
+  dependencies: string[];
+}
+
+function normalizeVirtualPath(input: string): string {
+  const segments: string[] = [];
+  for (const segment of input.replace(/\\/g, '/').split('/')) {
+    if (!segment || segment === '.') continue;
+    if (segment === '..') {
+      segments.pop();
+      continue;
+    }
+    segments.push(segment);
+  }
+  return segments.join('/');
+}
+
+function dirnameVirtualPath(filePath: string): string {
+  const normalized = normalizeVirtualPath(filePath);
+  const index = normalized.lastIndexOf('/');
+  return index >= 0 ? normalized.slice(0, index) : '';
+}
+
+function joinVirtualPath(baseDir: string, relativePath: string): string {
+  if (!relativePath) return normalizeVirtualPath(baseDir);
+  return normalizeVirtualPath([baseDir, relativePath].filter(Boolean).join('/'));
+}
+
+function parseJsonSafely(value: string): Record<string, any> | null {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+function inferLocalPackageEntry(files: Record<string, string>, packageRoot: string, localPkg: Record<string, any>): string {
+  const entryCandidates: string[] = [];
+  const pushCandidate = (candidate?: unknown) => {
+    if (typeof candidate !== 'string' || !candidate.trim()) return;
+    const cleaned = candidate.replace(/^\.?\//, '');
+    entryCandidates.push(cleaned);
+  };
+
+  pushCandidate(localPkg.module);
+  pushCandidate(localPkg.main);
+  pushCandidate(localPkg.source);
+
+  const exportsField = localPkg.exports;
+  if (typeof exportsField === 'string') {
+    pushCandidate(exportsField);
+  } else if (exportsField && typeof exportsField === 'object') {
+    const rootExport = exportsField['.'];
+    if (typeof rootExport === 'string') {
+      pushCandidate(rootExport);
+    } else if (rootExport && typeof rootExport === 'object') {
+      pushCandidate(rootExport.import);
+      pushCandidate(rootExport.default);
+      pushCandidate(rootExport.require);
+    }
+  }
+
+  entryCandidates.push(
+    'index.ts',
+    'index.tsx',
+    'index.js',
+    'index.jsx',
+    'src/index.ts',
+    'src/index.tsx',
+    'src/index.js',
+    'src/index.jsx',
+    'main.ts',
+    'main.tsx',
+    'main.js',
+    'main.jsx',
+  );
+
+  for (const candidate of entryCandidates) {
+    const resolved = joinVirtualPath(packageRoot, candidate);
+    if (files[resolved] !== undefined) {
+      return candidate;
+    }
+  }
+
+  return entryCandidates[0] || 'index.js';
+}
+
+export function injectLocalDependencySources(files: Record<string, string>): LocalDependencyInjectionResult {
+  const injectedFiles: Record<string, { code: string }> = {};
+  const injectedPackages = new Set<string>();
+
+  for (const [packageJsonPath, packageJsonContent] of Object.entries(files)) {
+    if (!packageJsonPath.endsWith('package.json') || packageJsonPath.includes('node_modules/')) continue;
+
+    const pkg = parseJsonSafely(packageJsonContent);
+    if (!pkg) continue;
+
+    const deps = {
+      ...(pkg.dependencies || {}),
+      ...(pkg.devDependencies || {}),
+      ...(pkg.peerDependencies || {}),
+    } as Record<string, unknown>;
+
+    const packageRoot = dirnameVirtualPath(packageJsonPath);
+
+    for (const [depName, depVersion] of Object.entries(deps)) {
+      if (typeof depVersion !== 'string') continue;
+      if (!/^(file:|link:)/.test(depVersion)) continue;
+
+      const depRoot = joinVirtualPath(packageRoot, depVersion.replace(/^(file:|link:)/, ''));
+      const matchingFiles = Object.entries(files).filter(([filePath]) =>
+        filePath === depRoot || filePath.startsWith(`${depRoot}/`)
+      );
+
+      if (matchingFiles.length === 0) continue;
+      if (injectedPackages.has(depName)) continue;
+
+      const localPackageJsonPath = `${depRoot}/package.json`;
+      const localPkg = parseJsonSafely(files[localPackageJsonPath] || '') || {};
+      const entryFile = inferLocalPackageEntry(files, depRoot, localPkg);
+
+      injectedFiles[`node_modules/${depName}/package.json`] = {
+        code: JSON.stringify(
+          {
+            name: depName,
+            version: localPkg.version || '0.0.0',
+            main: entryFile,
+            module: entryFile,
+            type: localPkg.type,
+          },
+          null,
+          2,
+        ),
+      };
+
+      for (const [sourcePath, sourceContent] of matchingFiles) {
+        if (sourcePath === localPackageJsonPath) continue;
+        const relativePath = sourcePath.slice(depRoot.length).replace(/^\/+/, '');
+        if (!relativePath) continue;
+        injectedFiles[`node_modules/${depName}/${relativePath}`] = { code: sourceContent };
+      }
+
+      injectedPackages.add(depName);
+    }
+  }
+
+  return {
+    files: injectedFiles,
+    dependencies: Array.from(injectedPackages),
+  };
+}
 
 export const detectPreviewMode = (
   filePaths: string[],

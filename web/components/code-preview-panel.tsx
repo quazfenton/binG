@@ -59,6 +59,7 @@ import { clipboard } from "@bing/platform/clipboard";
 import {
   detectProject,
   getSandpackConfig,
+  injectLocalDependencySources,
   livePreviewOffloading,
   isBackendOnlyProject,
   type ProjectDetection,
@@ -1456,9 +1457,30 @@ export default function CodePreviewPanel({
         const updatedFiles = (updatedFilesRaw && typeof updatedFilesRaw === 'object'
           ? updatedFilesRaw
           : {}) as Record<string, string>;
-        
+
         log(`[VFS_SAVE via window message] received, scope="${savedScopePath}", files=[${Object.keys(updatedFiles).join(', ')}]`);
         await processVfsSave(savedScopePath, updatedFiles);
+      }
+
+      // Handle cloud-preview-tunnel event for automatic visual output display
+      if (e.data?.type === "cloud-preview-tunnel") {
+        const { url, port, authHeaders, previewId } = e.data;
+        log(`[CLOUD_PREVIEW] Tunnel ready: ${url} (port ${port})`);
+
+        // Automatically display the visual output (#vizion) when tunnel is ready
+        if (url && port) {
+          // Set preview URL and switch to visual tab
+          setPreviewUrl(url);
+          setSelectedTab('preview');
+
+          // Add authentication headers if provided
+          if (authHeaders) {
+            // Store auth headers for the preview iframe
+            setPreviewAuthHeaders(authHeaders);
+          }
+
+          toast.success(`Cloud preview ready on port ${port}`);
+        }
       }
     };
 
@@ -2590,6 +2612,32 @@ Generated on: ${new Date().toLocaleString()}
       return config.template;
     };
 
+    const sandpackDependencySourceFiles = useMemo(() => {
+      if (useStructure?.files && Object.keys(useStructure.files).length > 0) {
+        return useStructure.files;
+      }
+      if (isManualPreviewActive && projectDetection?.normalizedFiles) {
+        return projectDetection.normalizedFiles;
+      }
+      if (isManualPreviewActive && manualPreviewFiles) {
+        return manualPreviewFiles;
+      }
+      return {};
+    }, [manualPreviewFiles, isManualPreviewActive, projectDetection?.normalizedFiles, useStructure?.files]);
+
+    const localDependencyInjection = useMemo(
+      () => injectLocalDependencySources(sandpackDependencySourceFiles),
+      [sandpackDependencySourceFiles],
+    );
+
+    const augmentSandpackFiles = useCallback(
+      (files: Record<string, { code: string }>) => ({
+        ...files,
+        ...localDependencyInjection.files,
+      }),
+      [localDependencyInjection.files],
+    );
+    
     // ============================================================================
     // Improved Dependency Detection - Parse package.json properly
     // ============================================================================
@@ -2609,14 +2657,16 @@ Generated on: ${new Date().toLocaleString()}
             // Add all dependencies with 'latest' version
             if (pkg.dependencies && typeof pkg.dependencies === 'object') {
               Object.keys(pkg.dependencies).forEach(dep => {
-                if (dep && typeof dep === 'string') {
+                const depVersion = pkg.dependencies[dep];
+                if (dep && typeof dep === 'string' && !(typeof depVersion === 'string' && /^(file:|link:)/.test(depVersion))) {
                   deps[dep] = 'latest';
                 }
               });
             }
             if (pkg.devDependencies && typeof pkg.devDependencies === 'object') {
               Object.keys(pkg.devDependencies).forEach(dep => {
-                if (dep && typeof dep === 'string' && !deps[dep]) {
+                const depVersion = pkg.devDependencies[dep];
+                if (dep && typeof dep === 'string' && !deps[dep] && !(typeof depVersion === 'string' && /^(file:|link:)/.test(depVersion))) {
                   deps[dep] = 'latest';
                 }
               });
@@ -3383,7 +3433,7 @@ root.render(<App />);` };
                           // Can be overridden via NEXT_PUBLIC_SANDBPACK_BUNDLER_URL env variable
                           bundlerURL: process.env.NEXT_PUBLIC_SANDBPACK_BUNDLER_URL || 'https://sandpack-bundler.codeSandbox.io',
                         }}
-                        files={sandpackFiles}
+                        files={augmentSandpackFiles(sandpackFiles)}
                         customSetup={{
                           dependencies: (projectDetection as any)?.dependencies?.reduce(
                             (acc: Record<string, string>, dep: string) => { acc[dep] = "latest"; return acc; },
@@ -3477,7 +3527,7 @@ root.render(<App />);` };
                         recompileMode: "delayed",
                         recompileDelay: 300,
                       }}
-                files={sandpackFiles}
+                files={augmentSandpackFiles(sandpackFiles)}
                       customSetup={{ dependencies: {} }}
                     />
                   </div>
@@ -5252,7 +5302,7 @@ root.render(<App />);` };
                   recompileDelay: 300,
                   externalResources: [],
                 }}
-                files={finalSandpackFiles}
+                files={augmentSandpackFiles(finalSandpackFiles)}
                 customSetup={{
                   dependencies: getDependencies(),
                   devDependencies: (useStructure as any).devDependencies?.reduce(
@@ -5494,7 +5544,7 @@ root.render(<App />);` };
                   recompileMode: "delayed",
                   recompileDelay: 300,
                 }}
-                files={sandpackFiles}
+                files={augmentSandpackFiles(sandpackFiles)}
                 customSetup={{
                   dependencies: {},
                 }}
