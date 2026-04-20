@@ -15,9 +15,9 @@
 
 import * as readline from 'readline';
 import { simpleGit, SimpleGit } from 'simple-git';
-import path from 'path';
-import fs from 'fs-extra';
-import os from 'os';
+import * as path from 'path';
+import * as fs from 'fs-extra';
+import * as os from 'os';
 import { LocalVFSManager } from './lib/local-vfs-manager';
 
 // Security: Validate and sanitize paths to prevent directory traversal
@@ -220,13 +220,14 @@ export async function renderCommitSelector(commits: CommitInfo[]): Promise<Commi
 
         case '\u001b': // Escape — 50ms timeout to distinguish from arrow key sequences
           // Arrow keys send \u001b[A/B/C/D, so we wait 50ms for follow-up bytes
+          let escTimer: NodeJS.Timeout;
           const escCallback = (nextChunk: Buffer) => {
             // Follow-up byte arrived within 50ms — it's an escape sequence (arrow key), not a real ESC
             clearTimeout(escTimer);
             process.stdin.removeListener('data', escCallback);
           };
           
-          const escTimer = setTimeout(() => {
+          escTimer = setTimeout(() => {
             // No follow-up byte within 50ms → real ESC key press
             process.stdin.removeListener('data', escCallback);
             running = false;

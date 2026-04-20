@@ -8,8 +8,8 @@
  * - Secret detection and masking
  */
 
-import path from 'path';
-import crypto from 'crypto';
+import * as path from 'path';
+import * as crypto from 'crypto';
 
 /**
  * Sanitize file paths to prevent directory traversal attacks

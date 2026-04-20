@@ -5,7 +5,8 @@
   "type": "module",
   "main": "dist/bin.js",
   "bin": {
-    "bing": "./dist/bin.js"
+    "bing": "./dist/bin.js",
+    "kilocode": "./dist/kilocode-cli.js"
   },
   "scripts": {
     "start": "node dist/bin.js",
@@ -50,6 +51,7 @@
     "fs-extra": "^11.2.0",
     "gradient-string": "^2.0.2",
     "ora": "^8.0.1",
+    "simple-git": "^3.25.0",
     "ws": "^8.14.2"
   },
   "devDependencies": {
