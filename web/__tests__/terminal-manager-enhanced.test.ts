@@ -13,11 +13,11 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { terminalManager } from '@/lib/sandbox/terminal-manager'
-import { getSandboxProvider } from '@/lib/sandbox/providers'
-import { getAllTerminalSessions, getSessionsByUserId, clearAllSessions } from '@/lib/sandbox/terminal-session-store'
+import { terminalManager } from '@/lib/terminal/terminal-manager'
+// import { getSandboxProvider } from '@/lib/sandbox/providers' // Moved after mock
+import { getAllTerminalSessions, getSessionsByUserId, clearAllSessions } from '@/lib/terminal/session/terminal-session-store'
 import { enhancedSandboxEvents, getEventHistory } from '@/lib/sandbox/sandbox-events-enhanced'
-import { clearDetectedPorts } from '@/lib/sandbox/enhanced-port-detector'
+import { clearDetectedPorts } from '@/lib/previews/enhanced-port-detector'
 
 const { mockProvider, createMockProvider } = vi.hoisted(() => {
   const createMockProvider = () => ({
@@ -66,6 +66,8 @@ vi.mock('@/lib/sandbox/providers', async (importActual) => {
     getSandboxProvider: vi.fn().mockReturnValue(mockProvider),
   }
 })
+
+import { getSandboxProvider } from '@/lib/sandbox/providers'
 
 describe('Terminal Manager - Enhanced Integration', () => {
   beforeEach(() => {

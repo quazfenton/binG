@@ -299,14 +299,15 @@ export class VirtualFilesystemService {
       normalizedContent = (previous.content || '') + normalizedContent;
     }
 
+    // Check failIfExists before checking content changes
+    if (previous && options?.failIfExists && !options?.append) {
+      throw new Error(`File already exists: ${normalizedPath}`);
+    }
+
     // FIX: Skip write if content hasn't changed — prevents unnecessary version inflation
     // This happens when spec amplification or other processes re-write the same file
     if (previous && previous.content === normalizedContent) {
       return previous; // Return existing file without incrementing version
-    }
-
-    if (previous && options?.failIfExists && !options?.append) {
-      throw new Error(`File already exists: ${normalizedPath}`);
     }
 
     // Check for concurrent modification (conflict detection)

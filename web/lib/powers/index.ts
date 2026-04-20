@@ -667,3 +667,6 @@ export { webSearchPowerManifest } from './web-search-power';
 
 // Re-exports from code-search-power
 export { codeSearchPowerManifest } from './code-search-power';
+
+// Re-exports from doc-lookup-power
+export { docLookupPowerManifest } from './doc-lookup-power';

@@ -1,14 +1,16 @@
 /**
  * Local Server Utilities
  *
- * Shared helpers for spawning local agent binaries as subprocesses
- * and waiting for them to become ready via health-check polling.
+ * Shared helpers for spawning local agent binaries as subprocesses,
+ * waiting for them to become ready via health-check polling, and
+ * connecting to remote agent servers.
  *
- * Used by amp-agent.ts and claude-code-agent.ts.
+ * Used by openai-agent-base.ts, claude-code-agent.ts, and opencode-agent.ts.
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createLogger } from '../utils/logger';
+import type { AgentInstance, AgentType } from './agent-service-manager';
 
 const logger = createLogger('LocalServerUtils');
 
@@ -61,6 +63,13 @@ export interface SpawnLocalAgentOptions {
   onExit?: (code: number | null) => void;
   /** Called when the subprocess errors (for caller to clear its reference) */
   onError?: (err: Error) => void;
+  /**
+   * When false, stdout is NOT drained to the logger and remains available
+   * for the caller to read via `proc.stdout.on('data', ...)`. This is needed
+   * for agents that communicate over stdout (e.g., JSON-RPC protocols like Pi).
+   * Default: true (drain stdout to logger to prevent buffer-full hangs).
+   */
+  drainStdout?: boolean;
 }
 
 export function spawnLocalAgent(
@@ -74,10 +83,12 @@ export function spawnLocalAgent(
     env: { ...process.env, ...options.env },
   });
 
-  // Drain stdout to prevent buffer-full hangs
-  proc.stdout?.on('data', (chunk: Buffer) => {
-    logger.debug(`[${options.label} stdout]`, { output: chunk.toString().trim() });
-  });
+  // Drain stdout to prevent buffer-full hangs (unless caller needs raw stdout)
+  if (options.drainStdout !== false) {
+    proc.stdout?.on('data', (chunk: Buffer) => {
+      logger.debug(`[${options.label} stdout]`, { output: chunk.toString().trim() });
+    });
+  }
 
   // Log stderr for debugging
   proc.stderr?.on('data', (chunk: Buffer) => {
@@ -95,4 +106,82 @@ export function spawnLocalAgent(
   });
 
   return proc;
+}
+
+// ============================================================================
+// Remote Agent Connection
+// ============================================================================
+
+/**
+ * Options for connecting to a remote agent server.
+ */
+export interface ConnectToRemoteAgentOptions {
+  /** Remote URL (e.g. "https://codex.example.com:8080") */
+  remoteAddress: string;
+  /** Agent type string (for AgentInstance and logs) */
+  agentType: AgentType | string;
+  /** Agent ID (auto-generated if not provided) */
+  agentId?: string;
+  /** Workspace directory */
+  workspaceDir: string;
+  /** Health check endpoint path (default: "/health") */
+  healthCheckPath?: string;
+  /** Health check timeout in ms (default: 5000) */
+  healthCheckTimeoutMs?: number;
+}
+
+/**
+ * Connect to a remote agent server.
+ *
+ * When a `remoteAddress` is configured, the agent skips local binary spawn
+ * AND containerized fallback, and connects directly to the remote endpoint.
+ * This supports web-hosted / cloud deployments where the CLI agent runs on
+ * a remote server.
+ *
+ * Performs an optional health check (5s timeout) — proceeds even if the
+ * health check fails, since the remote server may not expose /health.
+ *
+ * @returns An AgentInstance pointing to the remote server
+ */
+export async function connectToRemoteAgent(
+  options: ConnectToRemoteAgentOptions,
+): Promise<AgentInstance> {
+  const remoteUrl = options.remoteAddress.replace(/\/+$/, '');
+  const healthPath = options.healthCheckPath || '/health';
+  const healthTimeout = options.healthCheckTimeoutMs ?? 5000;
+
+  logger.info(`Connecting to remote ${options.agentType} server`, { remoteUrl });
+
+  const agent: AgentInstance = {
+    agentId: options.agentId || `${options.agentType}-remote-${Date.now()}`,
+    type: options.agentType as AgentType,
+    containerId: '',
+    port: 0,
+    apiUrl: remoteUrl,
+    workspaceDir: options.workspaceDir,
+    startedAt: Date.now(),
+    lastActivity: Date.now(),
+    status: 'ready',
+    health: 'unknown',
+  };
+
+  // Verify the remote server is reachable
+  try {
+    const healthResp = await fetch(`${remoteUrl}${healthPath}`, {
+      method: 'GET',
+      signal: AbortSignal.timeout(healthTimeout),
+    });
+    if (healthResp.ok) {
+      agent.health = 'healthy';
+    }
+  } catch {
+    logger.warn(`Remote ${options.agentType} server health check failed — proceeding anyway`, { remoteUrl });
+  }
+
+  logger.info(`${options.agentType} agent connected (remote)`, {
+    agentId: agent.agentId,
+    apiUrl: agent.apiUrl,
+  });
+
+  return agent;
 }

@@ -435,7 +435,7 @@ export function createBashTool(config: Partial<BashToolConfig> = {}) {
             
             // Execute based on routing decision
             if (routeDecision.mode === 'simulate') {
-              const simOutput = await executeRoutedCommand(routeDecision, {
+              const simOutput = await executeRoutedCommand(routeDecision as any, {
                 getFilesystem: cfg.getFilesystemState,
                 onOutput: cfg.onTerminalOutput,
               });
