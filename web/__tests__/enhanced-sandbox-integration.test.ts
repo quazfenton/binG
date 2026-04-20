@@ -17,7 +17,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
 // Import all modules
-import { enhancedPortDetector, detectPorts, clearDetectedPorts } from '@/lib/sandbox/enhanced-port-detector'
+import { enhancedPortDetector, detectPorts, clearDetectedPorts } from '@/lib/previews/enhanced-port-detector'
 import {
   saveTerminalSession,
   getTerminalSession,
@@ -28,7 +28,7 @@ import {
   importSessions,
   clearAllSessions,
   type TerminalSessionState,
-} from '@/lib/sandbox/terminal-session-store'
+} from '@/lib/terminal/session/terminal-session-store'
 import {
   enhancedSandboxEvents,
   emitEvent,
@@ -36,8 +36,8 @@ import {
   getEventHistory,
   type EnhancedSandboxEventType,
 } from '@/lib/sandbox/sandbox-events-enhanced'
-import { createAmpService, type AmpExecutionResult } from '@/lib/sandbox/providers/e2b-amp-service'
-import { createCodexService, CodexSchemas } from '@/lib/sandbox/providers/e2b-codex-service'
+import { createAmpService, type AmpExecutionResult } from '@/lib/sandbox/spawn/e2b-amp-service'
+import { createCodexService, CodexSchemas } from '@/lib/sandbox/spawn/e2b-codex-service'
 
 // Mock sandbox for agent services
 const createMockSandbox = () => ({

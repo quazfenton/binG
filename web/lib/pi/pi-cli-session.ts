@@ -10,12 +10,13 @@
  * - Session Manager for persistence
  */
 
-import { spawn, type ChildProcess } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import type { PiSession, PiConfig, PiEvent, PiPromptOptions, PiState } from './pi-types';
 import type { AgentMessage } from '@/lib/agent/types';
 import type { ToolResult } from '@/lib/agent/types';
 import { findPiBinarySync } from '@/lib/agent-bins/find-pi-binary';
+import { spawnLocalAgent, type SpawnLocalAgentOptions } from '@/lib/spawn/local-server-utils';
 
 interface RpcRequest {
   id?: string;
@@ -75,9 +76,10 @@ async function executeBashLocally(command: string, cwd: string): Promise<ToolRes
     }
 
     const result = await bashTool.execute({ command }, {} as any);
+    const res = result as any;
     return {
-      content: [{ type: 'text', text: result.output || '' }],
-      details: { exitCode: result.exitCode },
+      content: [{ type: 'text', text: res.output || '' }],
+      details: { exitCode: res.exitCode },
     };
   } catch (err) {
     return {
@@ -118,14 +120,23 @@ export async function createCliPiSession(config: PiConfig): Promise<PiSession> {
   const command = process.platform === 'win32' && piBin === 'pi' ? 'npx' : piBin;
   const commandArgs = command === 'npx' ? ['pi', ...args] : args;
 
-  const proc = spawn(command, commandArgs, {
+  const spawnOpts: SpawnLocalAgentOptions = {
     cwd,
-    stdio: ['pipe', 'pipe', 'pipe'],
+    label: 'pi',
     env: {
-      ...process.env,
       ...(apiKey ? { ANTHROPIC_API_KEY: apiKey } : {}),
     },
-  });
+    // Pi uses JSON-RPC over stdout — do NOT drain stdout to logger
+    drainStdout: false,
+    onExit: (code) => {
+      console.log('[Pi CLI] exited with code:', code);
+    },
+    onError: (err) => {
+      console.error('[Pi CLI] error:', err);
+    },
+  };
+
+  const proc = spawnLocalAgent(command, commandArgs, spawnOpts);
 
   const sessionId = `cli-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   let buffer = '';
@@ -170,19 +181,11 @@ export async function createCliPiSession(config: PiConfig): Promise<PiSession> {
     });
   });
 
-  // Handle stderr for errors
+  // spawnLocalAgent logs stderr at debug level; elevate to warn for Pi CLI diagnostics
   proc.stderr?.on('data', (chunk: Buffer) => {
-    console.error('[Pi CLI] stderr:', chunk.toString());
+    console.warn('[Pi CLI] stderr:', chunk.toString());
   });
-
-  // Handle process exit
-  proc.on('exit', (code) => {
-    console.log('[Pi CLI] exited with code:', code);
-  });
-
-  proc.on('error', (err) => {
-    console.error('[Pi CLI] error:', err);
-  });
+  // exit/error are handled via spawnOpts.onExit / spawnOpts.onError
 
   // Send command helper
   function sendCommand(cmd: RpcRequest): Promise<RpcResponse> {

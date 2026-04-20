@@ -15,7 +15,7 @@ import { EventEmitter } from 'node:events';
 import type { ChildProcess } from 'node:child_process';
 import { createLogger } from '../utils/logger';
 import { findOpencodeBinarySync } from '@/lib/agent-bins/find-opencode-binary';
-import { waitForLocalServer, spawnLocalAgent } from './local-server-utils';
+import { waitForLocalServer, spawnLocalAgent, connectToRemoteAgent } from './local-server-utils';
 import type { AgentInstance, PromptRequest, PromptResponse, AgentEvent } from './agent-service-manager';
 
 const logger = createLogger('Agents:OpenCode');
@@ -45,6 +45,12 @@ export interface OpenCodeConfig {
   hostname?: string;
   /** Provider ID for model */
   providerId?: string;
+  /**
+   * Remote address of an already-running OpenCode server.
+   * When set, skips local binary spawn and containerized fallback, and
+   * connects directly to the remote endpoint.
+   */
+  remoteAddress?: string;
 }
 
 export interface OpenCodeMessage {
@@ -185,7 +191,22 @@ export class OpenCodeAgent extends EventEmitter {
       model: this.config.model,
       workspace: this.config.workspaceDir,
       port: this.config.port,
+      remoteAddress: this.config.remoteAddress || undefined,
     });
+
+    // 0. If a remote address is configured, connect directly
+    if (this.config.remoteAddress) {
+      this.agent = await connectToRemoteAgent({
+        remoteAddress: this.config.remoteAddress,
+        agentType: 'opencode',
+        agentId: this.config.agentId,
+        workspaceDir: this.config.workspaceDir,
+      });
+
+      // Create a new session on the remote server
+      await this.createSession();
+      return;
+    }
 
     // 1. Try to find and spawn a local opencode binary
     const opencodeBin = findOpencodeBinarySync();

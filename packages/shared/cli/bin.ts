@@ -150,6 +150,295 @@ function formatDuration(ms: number): string {
 }
 
 // ============================================================================
+// Local VFS Manager Integration (reuses existing lib/local-vfs-manager.ts)
+// ============================================================================
+
+const LOCAL_VFS_LIB = path.join(__dirname, 'lib', 'local-vfs-manager.ts');
+
+let localVFSManager: any = null;
+
+async function getLocalVFS() {
+  if (!localVFSManager) {
+    try {
+      const { LocalVFSManager } = await import(LOCAL_VFS_LIB);
+      localVFSManager = new LocalVFSManager(process.cwd());
+    } catch {
+      return null;
+    }
+  }
+  return localVFSManager;
+}
+
+// ============================================================================
+// SSE Event Parsing for CLI (matches file-edit-parser.ts and sse-event-schema.ts)
+// ============================================================================
+
+const SSE_EVENT_TYPES = {
+  TOKEN: 'token',
+  FILE_EDIT: 'file_edit',
+  DONE: 'done',
+  ERROR: 'error',
+  STEP: 'step',
+};
+
+interface FileEditEvent {
+  path: string;
+  content?: string;
+  search?: string;
+  replace?: string;
+  type?: 'create' | 'update' | 'delete';
+}
+
+// ============================================================================
+// VFS MCP Tools Initialization (reuses web/lib/mcp/vfs-mcp-tools.ts)
+// ============================================================================
+
+const MCP_TOOLS_PATH = path.join(__dirname, '..', '..', '..', 'web', 'lib', 'mcp', 'vfs-mcp-tools.ts');
+
+let vfsToolsInitialized = false;
+let vfsToolDefs: any[] = [];
+
+async function initializeVFSMCP(userId: string, sessionId: string): Promise<void> {
+  if (vfsToolsInitialized) return;
+  
+  try {
+    const { getVFSToolDefinitions, initializeVFSTools } = await import(MCP_TOOLS_PATH);
+    initializeVFSTools(userId, sessionId, process.cwd());
+    vfsToolDefs = getVFSToolDefinitions();
+    vfsToolsInitialized = true;
+    console.log(COLORS.success('VFS MCP tools initialized'));
+  } catch (err) {
+    console.log(COLORS.warning('VFS MCP tools not available:', (err as Error).message));
+  }
+}
+
+function getVFSTools(): any[] {
+  return vfsToolDefs;
+}
+
+// ============================================================================
+// Emit filesystem events to server (for unified frontend handling)
+// ============================================================================
+
+async function emitFilesystemEvent(eventData: {
+  path: string;
+  type: 'create' | 'update' | 'delete';
+  content?: string;
+  source: string;
+}): Promise<void> {
+  try {
+    const config = loadConfig();
+    await apiRequest('/filesystem/events/push', {
+      method: 'POST',
+      data: {
+        path: eventData.path,
+        type: eventData.type,
+        source: eventData.source,
+        applied: { content: eventData.content },
+        emittedAt: Date.now(),
+        sessionId: 'cli-session',
+      },
+    });
+  } catch {
+    // Non-critical - continue even if event emission fails
+  }
+}
+
+// ============================================================================
+// Text-Mode Fallback Prompt for non-MCP-capable models
+// ============================================================================
+
+const TEXT_MODE_FALLBACK_PROMPT = `
+IMPORTANT - If MCP tools fail, use these BASH commands instead:
+
+FILE OPERATIONS:
+- Write file: \`echo "content" > /path/to/file\`
+- Read file: \`cat /path/to/file\`
+- Create dir: \`mkdir -p /path/to/dir\`
+- Delete file: \`rm /path/to/file\`
+- Delete dir: \`rm -rf /path/to/dir\`
+- List dir: \`ls -la /path/to/dir\`
+- Search: \`grep -r "pattern" /path\`
+
+DIFF/PATCH:
+- Apply diff: \`patch -p1 < /path/to/diff\`
+- Diff files: \`diff -u oldfile newfile\`
+
+Use ABSOLUTE paths from workspace root. Write then verify with \`cat\`.
+`;
+
+interface PendingFileEdit {
+  path: string;
+  originalContent?: string;
+  newContent: string;
+  timestamp: number;
+}
+
+const pendingFileEdits: PendingFileEdit[] = [];
+
+function parseSSELine(line: string): { type: string; data: any } | null {
+  if (!line.startsWith('event:') && !line.startsWith('data:')) return null;
+  
+  const typeMatch = line.match(/^event:\s*(\w+)/);
+  const dataMatch = line.match(/^data:\s*(.+)/);
+  
+  if (!dataMatch) return null;
+  
+  try {
+    const data = JSON.parse(dataMatch[1]);
+    return { type: typeMatch ? typeMatch[1] : 'message', data };
+  } catch {
+    return { type: typeMatch ? typeMatch[1] : 'message', data: dataMatch[1] };
+  }
+}
+
+function processFileEditEvent(data: FileEditEvent): void {
+  if (!data.path) return;
+  
+  const editIndex = pendingFileEdits.findIndex(e => e.path === data.path);
+  
+  if (editIndex >= 0) {
+    pendingFileEdits[editIndex].newContent = data.content || '';
+  } else {
+    pendingFileEdits.push({
+      path: data.path,
+      newContent: data.content || '',
+      timestamp: Date.now(),
+    });
+  }
+  
+  displayFileDiffIncoming(data.path, data.content || '');
+}
+
+function displayFileDiffIncoming(path: string, content: string): void {
+  const fileName = path.split(/[/\\]/).pop() || path;
+  const lines = content.split('\n').slice(0, 12);
+  
+  console.log(`\n${COLORS.primary('═'.repeat(55))}`);
+  console.log(`${COLORS.primary('📝')} ${COLORS.secondary(fileName)} ${COLORS.muted(`(${content.length} bytes)`)}`);
+  console.log(`${COLORS.info(`[o] ${path}`)} ${COLORS.warning('[r] revert')}`);
+  
+  const maxLines = 8;
+  lines.slice(0, maxLines).forEach((line, i) => {
+    const prefix = line.startsWith('+') ? COLORS.success('+ ') : 
+                 line.startsWith('-') ? COLORS.error('- ') : 
+                 COLORS.info('  ');
+    console.log(`${prefix}${line}`);
+  });
+  
+  if (lines.length > maxLines) {
+    console.log(`${COLORS.muted(`  ... ${lines.length - maxLines} more lines`)}`);
+  }
+  console.log(COLORS.primary('═'.repeat(55)));
+}
+
+function openFileInEditor(filePath: string): void {
+  const isWindows = process.platform === 'win32';
+  const cmd = isWindows ? 'start' : 'xdg-open';
+  
+  spawn(cmd, [filePath], { stdio: 'inherit', shell: true })
+    .on('error', () => {
+      console.log(COLORS.warning(`Could not open ${filePath}`));
+      console.log(COLORS.info(`Open manually: ${filePath}`));
+    });
+}
+
+async function processSSEStream(response: AsyncIterable<any>): Promise<string> {
+  let fullResponse = '';
+  let streamDone = false;
+  
+  try {
+    for await (const chunk of response) {
+      const line = chunk.trim();
+      if (!line) continue;
+      
+      const event = parseSSELine(line);
+      if (!event) {
+        fullResponse += line.replace(/^data:\s*/, '');
+        continue;
+      }
+      
+      switch (event.type) {
+        case 'file_edit':
+        case SSE_EVENT_TYPES.FILE_EDIT:
+          processFileEditEvent(event.data);
+          break;
+        case 'done':
+        case 'primary_done':
+          streamDone = true;
+          break;
+        case 'token':
+          process.stdout.write(event.data);
+          fullResponse += event.data;
+          break;
+        case 'error':
+        case SSE_EVENT_TYPES.ERROR:
+          console.log(`\n${COLORS.error('Error:')} ${event.data.message || event.data}`);
+          break;
+        case 'step':
+          process.stdout.write(`${COLORS.info('→')} ${event.data.message || ''}\r`);
+          break;
+        default:
+          break;
+      }
+    }
+  } catch {
+    streamDone = true;
+  }
+  
+  if (pendingFileEdits.length > 0 || streamDone) {
+    console.log(`\n\n${COLORS.success('═'.repeat(55))}`);
+    console.log(`${COLORS.accent('📁 File Edits:')} ${pendingFileEdits.length} file(s) modified`);
+    
+    pendingFileEdits.forEach((edit, i) => {
+      const fileName = edit.path.split(/[/\\]/).pop() || edit.path;
+      const shortPath = edit.path.length > 40 ? '...' + edit.path.slice(-37) : edit.path;
+      console.log(`  ${i}: ${COLORS.primary(fileName)} ${COLORS.muted(shortPath)}`);
+    });
+    
+    console.log(COLORS.success('═'.repeat(55)));
+  }
+  
+  return fullResponse;
+}
+
+async function handleRevertEdit(editIndex: number): Promise<void> {
+  const edit = pendingFileEdits[editIndex];
+  if (!edit) {
+    console.log(COLORS.error('Edit not found'));
+    return;
+  }
+  
+  const vfs = await getLocalVFS();
+  if (vfs) {
+    const success = await vfs.revertFile(edit.path);
+    if (success) {
+      console.log(COLORS.success(`Reverted: ${edit.path}`));
+      return;
+    }
+  }
+  
+  console.log(COLORS.warning(`Note: Could not auto-revert ${edit.path}`));
+  console.log(COLORS.info(`Restore from: VFS history or git`));
+}
+
+function renderDiffColor(filePath: string, content: string): string {
+  const lines = content.split('\n').slice(0, 10);
+  let output = `\n${COLORS.primary('╔─')} ${filePath} ${COLORS.primary('─╗')}\n`;
+  
+  lines.forEach((line, i) => {
+    if (line.startsWith('+') || line.startsWith('-')) {
+      const color = line.startsWith('+') ? COLORS.success : COLORS.error;
+      output += `  ${color(line)}\n`;
+    } else {
+      output += `  ${COLORS.info(line)}\n`;
+    }
+  });
+  
+  return output;
+}
+
+// ============================================================================
 // Local Execution Detection
 // ============================================================================
 
@@ -395,6 +684,9 @@ const COLORS = {
   warning: chalk.yellow,
   error: chalk.red,
   info: chalk.blue,
+  accent: chalk.magenta,
+  secondary: chalk.purple,
+  muted: chalk.gray,
 };
 
 /**
@@ -621,6 +913,12 @@ function prompt(question: string): Promise<string> {
  */
 async function chatLoop(options: { agent?: string; stream?: boolean }): Promise<void> {
   const config = loadConfig();
+  const auth = loadAuth();
+  const userId = auth.userId || 'cli-user';
+  const sessionId = `cli-${Date.now()}`;
+
+  // Initialize VFS MCP tools
+  await initializeVFSMCP(userId, sessionId);
 
   console.log(chalk.cyanBright(`
 ╔═══════════════════════════════════════════════════════════╗
@@ -629,14 +927,22 @@ async function chatLoop(options: { agent?: string; stream?: boolean }): Promise<
 ║  Mode: ${options.agent || 'auto'}                                    ║
 ║  Provider: ${config.provider}                                      ║
 ║  Model: ${config.model}                                          ║
+║  VFS Tools: ${vfsToolsInitialized ? COLORS.success('enabled') : COLORS.warning('disabled')}                                   ║
 ║                                                           ║
 ║  Type 'exit' or 'quit' to end the conversation            ║
 ║  Type 'clear' to clear conversation history               ║
 ║  Type 'help' for available commands                       ║
+║  Type 'diff' for pending file edits                   ║
 ╚═══════════════════════════════════════════════════════════╝
   `));
   
   const messages: any[] = [];
+  
+  // Add system message with fallback prompt instructions
+  messages.push({
+    role: 'system',
+    content: `You are running in CLI mode. ${vfsToolsInitialized ? 'VFS MCP tools are available.' : 'MCP tools are not available.'} ${TEXT_MODE_FALLBACK_PROMPT}`,
+  });
   
   while (true) {
     const userMessage = await prompt(COLORS.primary('\nYou: '));
@@ -694,37 +1000,60 @@ ${COLORS.primary('Available Commands:')}
     const spinner = ora('Thinking...').start();
     
     try {
-      const response = await apiRequest('/chat', {
-        method: 'POST',
-        data: {
-          messages,
-          provider: config.provider,
-          model: config.model,
-          stream: options.stream !== false,
-          agentMode: options.agent === 'auto' ? 'auto' : options.agent,
-        },
-      });
+      let response: any;
+      let content: string;
       
-      spinner.stop();
-
-      const content = response.response || response.content;
-
-      // Handle streaming response with markdown rendering
+      // Use SSE streaming for real-time file edit display
       if (options.stream !== false) {
-        process.stdout.write(COLORS.success('\nAssistant:\n'));
+        const axios = await import('axios');
+        const auth = loadAuth();
+        
+        const resp = await axios({
+          url: `${config.apiBase}/chat`,
+          method: 'POST',
+          data: {
+            messages,
+            provider: config.provider,
+            model: config.model,
+            stream: true,
+            agentMode: options.agent === 'auto' ? 'auto' : options.agent,
+            tools: getVFSTools(),
+          },
+          responseType: 'stream',
+          headers: auth.token ? { Authorization: `Bearer ${auth.token}` } : {},
+        });
+        
+        spinner.stop();
+        
+        // Process SSE stream
+        content = await processSSEStream(resp.data);
+        
+        // Also add final markdown rendering
         if (content) {
           const rendered = renderMarkdown(content);
           console.log(rendered);
         }
+        
+        response = { content };
       } else {
-        console.log(COLORS.success('\nAssistant:'), content || response.content);
+        response = await apiRequest('/chat', {
+          method: 'POST',
+          data: {
+            messages,
+            provider: config.provider,
+            model: config.model,
+            stream: false,
+            agentMode: options.agent === 'auto' ? 'auto' : options.agent,
+          },
+        });
+        
+        spinner.stop();
+        content = response.response || response.content;
+        console.log(COLORS.success('\nAssistant:'), content);
       }
 
       // Add assistant response to history
-      messages.push({ 
-        role: 'assistant', 
-        content: response.response || response.content 
-      });
+      messages.push({ role: 'assistant', content });
       
     } catch (error: any) {
       spinner.stop();
@@ -1114,6 +1443,87 @@ program
       console.log(COLORS.error(`Error: ${error.message}`));
       process.exit(1);
     }
+  });
+
+program
+  .command('file:write <path> <content>')
+  .description('Write file locally with VFS tracking')
+  .action(async (filePath, content) => {
+    const vfs = await getLocalVFS();
+    if (!vfs) {
+      console.log(COLORS.error('Local VFS not available'));
+      return;
+    }
+
+    try {
+      await vfs.commitFile(filePath, content);
+      console.log(COLORS.success(`File written and committed: ${filePath}`));
+      
+      // Emit event to server for unified frontend handling
+      await emitFilesystemEvent({
+        path: filePath,
+        type: 'update',
+        content,
+        source: 'cli:local-vfs',
+      });
+      
+      const editIndex = pendingEdits.length;
+      pendingEdits.push({
+        path: filePath,
+        newContent: content,
+        timestamp: Date.now(),
+        committed: true,
+        commitId: `local-${Date.now()}`,
+      });
+    } catch (error: any) {
+      console.log(COLORS.error(`Error writing file: ${error.message}`));
+    }
+  });
+
+program
+  .command('file:revert <path>')
+  .description('Revert file using local VFS history')
+  .action(async (filePath) => {
+    const vfs = await getLocalVFS();
+    if (!vfs) {
+      console.log(COLORS.error('Local VFS not available'));
+      return;
+    }
+
+    try {
+      const success = await vfs.revertFile(filePath);
+      if (success) {
+        console.log(COLORS.success(`File reverted: ${filePath}`));
+      } else {
+        console.log(COLORS.warning(`No history found for: ${filePath}`));
+      }
+    } catch (error: any) {
+      console.log(COLORS.error(`Error reverting file: ${error.message}`));
+    }
+  });
+
+program
+  .command('file:history <path>')
+  .description('Show file edit history')
+  .action(async (filePath) => {
+    const vfs = await getLocalVFS();
+    if (!vfs) {
+      console.log(COLORS.error('Local VFS not available'));
+      return;
+    }
+
+    console.log(COLORS.primary(`\nEdit history for: ${filePath}`));
+    const edits = pendingEdits.filter(e => e.path === filePath);
+    
+    if (edits.length === 0) {
+      console.log(COLORS.warning('No edits found in session'));
+      return;
+    }
+
+    edits.forEach((edit, i) => {
+      const status = edit.committed ? COLORS.success('[committed]') : COLORS.warning('[pending]');
+      console.log(`  ${i}: ${new Date(edit.timestamp).toISOString()} ${status}`);
+    });
   });
 
 // ============================================================================
@@ -2318,53 +2728,91 @@ program
     }
   });
 
+import * as oauthHandler from './src/oauth-handler';
+
 program
   .command('login')
   .description('Log in to binG')
   .option('-e, --email <email>', 'Email address')
   .option('-p, --password <password>', 'Password')
+  .option('--provider <provider>', 'OAuth provider (e.g., github)')
   .action(async (options) => {
+    console.log(chalk.cyanBright('\n=== binG Authentication ===\n'));
+    
     let email = options.email;
     let password = options.password;
+    let provider = options.provider;
 
-    if (!email) {
-      email = await prompt(COLORS.primary('Email: '));
+    const auth = loadAuth();
+
+    // Check if already logged in and prompt for re-login
+    if (auth.token && auth.expiresAt && new Date(auth.expiresAt) > new Date()) {
+        const shouldRelogin = await confirm(`Already logged in as ${auth.email}. Relogin?`);
+        if (!shouldRelogin) {
+            console.log(COLORS.info('Skipping login.'));
+            return;
+        }
+        console.log(COLORS.info('Clearing existing session...'));
+        saveAuth({ token: null, userId: null, email: null });
     }
-    if (!validateRequired(email, 'Email')) return;
 
-    if (!password) {
-      password = await prompt(COLORS.primary('Password: '));
+    // Prompt for auth method if not fully provided via options
+    if (!provider && !options.email && !options.password) {
+        const authMethodChoice = await prompt(
+            COLORS.primary('Enter email/password manually, or press Enter to use OAuth: ')
+        );
+
+        if (authMethodChoice.trim()) {
+            email = authMethodChoice;
+            password = await prompt(COLORS.primary('Password: '));
+        } else {
+            provider = 'github'; 
+            console.log(COLORS.info(`Initiating OAuth flow via ${provider}...`));
+        }
+    } else if (options.provider) {
+        provider = options.provider;
     }
-    if (!validateRequired(password, 'Password')) return;
 
-    const spinner = ora('Logging in...').start();
+    const spinner = ora('Authenticating...').start();
 
     try {
-      const response = await apiRequest('/auth/login', {
-        method: 'POST',
-        data: { email, password },
-      });
+        let authResult;
+        if (provider) {
+            authResult = await oauthHandler.performOauthLogin(provider);
+            saveAuth({
+                token: authResult.token,
+                userId: authResult.userId,
+                email: authResult.email,
+                expiresAt: authResult.expiresAt,
+            });
+            console.log(COLORS.success('\n✓ Authentication successful via OAuth!'));
+            console.log(`  User: ${COLORS.info(authResult.email)}`);
+        } else {
+            if (!email) email = await prompt(COLORS.primary('Email: '));
+            if (!password) password = await prompt(COLORS.primary('Password: '));
+            if (!validateRequired(email, 'Email')) return;
+            if (!validateRequired(password, 'Password')) return;
 
-      spinner.stop();
+            authResult = await apiRequest('/auth/login', {
+                method: 'POST',
+                data: { email, password },
+            });
+            
+            saveAuth({
+                token: authResult.token,
+                userId: authResult.userId,
+                email: email,
+                expiresAt: authResult.expiresAt,
+            });
 
-      if (response.token) {
-        saveAuth({
-          token: response.token,
-          userId: response.userId,
-          email,
-          expiresAt: response.expiresAt,
-        });
-
-        console.log(COLORS.success('\nLogged in!'));
-        console.log(COLORS.info(`Session expires: ${response.expiresAt ? new Date(response.expiresAt).toLocaleString() : 'N/A'}`));
-      } else {
-        console.log(COLORS.error(`\nLogin failed: ${response.error || 'Invalid credentials'}`));
-        process.exit(1);
-      }
+            console.log(COLORS.success('\n✓ Authentication successful!'));
+            console.log(`  User: ${COLORS.info(email)}`);
+        }
+        spinner.stop();
     } catch (error: any) {
-      spinner.stop();
-      handleError(error, 'Login failed');
-      process.exit(1);
+        spinner.stop();
+        handleError(error, 'Login failed');
+        process.exit(1);
     }
   });
 
