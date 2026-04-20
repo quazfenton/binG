@@ -40,6 +40,23 @@ anchors:
   - Security Considerations
   - Future Enhancements
   - Support
+relations:
+  - type: example-of
+    id: websocket-terminal-integration-guide
+    title: WebSocket Terminal Integration Guide
+    path: websocket-terminal-integration-guide.md
+    confidence: 0.311
+    classified_score: 0.394
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: example-of
+    id: orchestration-visualizer-guide
+    title: Orchestration Visualizer Guide
+    path: orchestration-visualizer-guide.md
+    confidence: 0.311
+    classified_score: 0.375
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Music Hub - n8n Webhook Integration Guide
 

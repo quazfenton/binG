@@ -45,6 +45,47 @@ anchors:
   - High (P1)
   - Medium (P2)
   - Conclusion
+relations:
+  - type: implements
+    id: terminaluse-integration
+    title: TerminalUse Integration
+    path: terminaluse-integration.md
+    confidence: 0.369
+    classified_score: 0.374
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: terminaluse-integration-summary
+    title: TerminalUse Integration Summary
+    path: terminaluse-integration-summary.md
+    confidence: 0.366
+    classified_score: 0.374
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: sdk-terminal-and-sandbox-integration-review-technical-plan
+    title: Terminal & Sandbox Integration Review - Technical Plan
+    path: sdk/terminal-and-sandbox-integration-review-technical-plan.md
+    confidence: 0.321
+    classified_score: 0.312
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: example-of
+    id: websocket-terminal-integration-guide
+    title: WebSocket Terminal Integration Guide
+    path: websocket-terminal-integration-guide.md
+    confidence: 0.317
+    classified_score: 0.386
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: related
+    id: terminal-architecture-complete-system-design
+    title: Terminal Architecture - Complete System Design
+    path: terminal-architecture-complete-system-design.md
+    confidence: 0.309
+    classified_score: 0.254
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Terminal Provider Integration - Advanced Features
 

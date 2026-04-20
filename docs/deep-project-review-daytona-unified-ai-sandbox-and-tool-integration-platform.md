@@ -55,6 +55,31 @@ anchors:
   - "\U0001F3D7️ Scale Phase (Month 3+)"
   - Research Sources
   - 'Appendix: Technical Debt Items'
+relations:
+  - type: related
+    id: deep-project-review-bing-2026-02-13
+    title: Deep Project Review — binG (2026-02-13)
+    path: deep-project-review-bing-2026-02-13.md
+    confidence: 0.322
+    classified_score: 0.264
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: deep-strategic-review-bing0-ephemeral-integration-analysis
+    title: 'Deep Strategic Review: binG0 + ephemeral Integration Analysis'
+    path: deep-strategic-review-bing0-ephemeral-integration-analysis.md
+    confidence: 0.31
+    classified_score: 0.32
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: related
+    id: bing-strategic-deep-review
+    title: binG - Strategic Deep Review
+    path: bing-strategic-deep-review.md
+    confidence: 0.306
+    classified_score: 0.248
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Deep Project Review: dayTona - Unified AI Sandbox & Tool Integration Platform
 

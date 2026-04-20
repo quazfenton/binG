@@ -24,6 +24,23 @@ anchors:
   - Medium priority
   - Suggested Wiring Direction
   - Files Changed In This Pass
+relations:
+  - type: implements
+    id: architecture-improvements-implementation-status
+    title: Architecture Improvements - Implementation Status
+    path: architecture-improvements-implementation-status.md
+    confidence: 0.366
+    classified_score: 0.379
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: sandbox-architecture-improvements-implementation-complete
+    title: "\U0001F3D7️ Sandbox Architecture Improvements - Implementation Complete"
+    path: sandbox-architecture-improvements-implementation-complete.md
+    confidence: 0.361
+    classified_score: 0.368
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Architecture Improvement Plan
 

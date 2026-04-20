@@ -36,6 +36,23 @@ anchors:
   - Future Enhancements
   - Related Files
   - Support
+relations:
+  - type: example-of
+    id: orchestration-visualizer-guide
+    title: Orchestration Visualizer Guide
+    path: orchestration-visualizer-guide.md
+    confidence: 0.318
+    classified_score: 0.422
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: example-of
+    id: opentelemetry-setup-guide
+    title: OpenTelemetry Setup Guide
+    path: opentelemetry-setup-guide.md
+    confidence: 0.308
+    classified_score: 0.379
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Orchestration Modes Guide
 

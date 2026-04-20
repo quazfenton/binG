@@ -45,6 +45,23 @@ anchors:
   - Planned Enhancements
   - Integration Points
   - Conclusion
+relations:
+  - type: implements
+    id: spawn-containerized-ai-agents-implementation-summary
+    title: Containerized AI Agents - Implementation Summary
+    path: spawn/containerized-ai-agents-implementation-summary.md
+    confidence: 0.323
+    classified_score: 0.335
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: enhanced-agent-integration-summary
+    title: Enhanced Agent Integration Summary
+    path: enhanced-agent-integration-summary.md
+    confidence: 0.309
+    classified_score: 0.305
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Advanced AI Agent System - Complete Summary
 

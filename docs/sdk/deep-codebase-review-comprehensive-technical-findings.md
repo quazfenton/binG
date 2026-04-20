@@ -86,6 +86,47 @@ anchors:
   - Week 1 (Critical)
   - Week 2-3 (High)
   - Week 4 (Medium)
+relations:
+  - type: related
+    id: sdk-deep-codebase-review-phase-4-findings
+    title: Deep Codebase Review - Phase 4 Findings
+    path: sdk/deep-codebase-review-phase-4-findings.md
+    confidence: 0.368
+    classified_score: 0.308
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: related
+    id: sdk-comprehensive-codebase-review-phase-3-findings
+    title: Comprehensive Codebase Review - Phase 3 Findings
+    path: sdk/comprehensive-codebase-review-phase-3-findings.md
+    confidence: 0.326
+    classified_score: 0.27
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: related
+    id: sdk-comprehensive-codebase-review-technical-findings
+    title: Comprehensive Codebase Review - Technical Findings
+    path: sdk/comprehensive-codebase-review-technical-findings.md
+    confidence: 0.322
+    classified_score: 0.269
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: related
+    id: comprehensive-codebase-review-and-technical-findings
+    title: Comprehensive Codebase Review & Technical Findings
+    path: comprehensive-codebase-review-and-technical-findings.md
+    confidence: 0.321
+    classified_score: 0.267
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: depends-on
+    id: comprehensive-sandbox-terminal-and-mcp-architecture-review
+    title: 'Comprehensive Sandbox, Terminal & MCP Architecture Review'
+    path: comprehensive-sandbox-terminal-and-mcp-architecture-review.md
+    confidence: 0.314
+    classified_score: 0.287
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Deep Codebase Review - Comprehensive Technical Findings
 

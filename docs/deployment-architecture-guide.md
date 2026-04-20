@@ -46,6 +46,15 @@ anchors:
   - V2 Agent Mode
   - Multi-Agent Mode
   - Related Documentation
+relations:
+  - type: example-of
+    id: mcp-architecture-guide
+    title: MCP Architecture Guide
+    path: mcp-architecture-guide.md
+    confidence: 0.337
+    classified_score: 0.439
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Deployment Architecture Guide
 

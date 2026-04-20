@@ -58,6 +58,39 @@ anchors:
   - Unit Tests
   - Integration Tests
   - E2E Tests
+relations:
+  - type: implements
+    id: tauri-desktop-implementation-plan
+    title: Tauri Desktop Implementation Plan
+    path: tauri-desktop-implementation-plan.md
+    confidence: 0.383
+    classified_score: 0.392
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: next-steps-implementation-summary
+    title: Next Steps Implementation Summary
+    path: next-steps-implementation-summary.md
+    confidence: 0.325
+    classified_score: 0.332
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: zod-validation-implementation-summary
+    title: Zod Validation Implementation Summary
+    path: zod-validation-implementation-summary.md
+    confidence: 0.325
+    classified_score: 0.33
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: event-store-implementation-summary
+    title: Event Store Implementation Summary
+    path: event-store-implementation-summary.md
+    confidence: 0.324
+    classified_score: 0.331
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Tauri Desktop Implementation - Comprehensive Module Analysis
 

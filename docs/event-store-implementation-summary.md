@@ -46,6 +46,47 @@ anchors:
   - Week 2 (Next)
   - Week 3 (Future)
   - Summary
+relations:
+  - type: implements
+    id: next-steps-implementation-summary
+    title: Next Steps Implementation Summary
+    path: next-steps-implementation-summary.md
+    confidence: 0.373
+    classified_score: 0.397
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: event-system-complete-implementation-summary
+    title: Event System - Complete Implementation Summary
+    path: event-system-complete-implementation-summary.md
+    confidence: 0.366
+    classified_score: 0.385
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: skills-system-implementation-summary
+    title: Skills System Implementation Summary
+    path: skills-system-implementation-summary.md
+    confidence: 0.348
+    classified_score: 0.369
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: todo-implementation-summary
+    title: TODO Implementation Summary
+    path: todo-implementation-summary.md
+    confidence: 0.333
+    classified_score: 0.356
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: production-implementation-summary
+    title: Production Implementation Summary
+    path: production-implementation-summary.md
+    confidence: 0.332
+    classified_score: 0.354
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Event Store Implementation Summary
 

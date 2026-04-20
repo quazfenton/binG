@@ -41,6 +41,47 @@ anchors:
   - Summary
   - Shared Components to Reuse
   - Test Strategy
+relations:
+  - type: implements
+    id: sandbox-architecture-improvements-implementation-complete
+    title: "\U0001F3D7️ Sandbox Architecture Improvements - Implementation Complete"
+    path: sandbox-architecture-improvements-implementation-complete.md
+    confidence: 0.579
+    classified_score: 0.555
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: autonomous-agent-enhancements-implementation-complete
+    title: "\U0001F9E0 Autonomous Agent Enhancements - Implementation Complete"
+    path: autonomous-agent-enhancements-implementation-complete.md
+    confidence: 0.441
+    classified_score: 0.432
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: technical-implementation-plan-critical-fixes-and-enhancements
+    title: Technical Implementation Plan - Critical Fixes & Enhancements
+    path: technical-implementation-plan-critical-fixes-and-enhancements.md
+    confidence: 0.378
+    classified_score: 0.377
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: sdk-implementation-fixes-summary
+    title: Implementation Fixes Summary
+    path: sdk/implementation-fixes-summary.md
+    confidence: 0.346
+    classified_score: 0.34
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: ui-streaming-enhancements-implementation-summary
+    title: UI Streaming Enhancements - Implementation Summary
+    path: ui-streaming-enhancements-implementation-summary.md
+    confidence: 0.34
+    classified_score: 0.342
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Implementation Plans
 

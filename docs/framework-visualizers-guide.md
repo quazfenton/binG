@@ -50,6 +50,15 @@ anchors:
   - Future Enhancements
   - Related Files
   - Support
+relations:
+  - type: example-of
+    id: orchestration-visualizer-guide
+    title: Orchestration Visualizer Guide
+    path: orchestration-visualizer-guide.md
+    confidence: 0.319
+    classified_score: 0.416
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Framework Visualizers Guide
 

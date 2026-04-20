@@ -20,6 +20,23 @@ anchors:
   - Implementation Steps
   - Files to Modify
   - Testing
+relations:
+  - type: reference
+    id: sdk-spec-amplification-fix-duplicate-request-id
+    title: Spec Amplification Fix - Duplicate Request ID
+    path: sdk/spec-amplification-fix-duplicate-request-id.md
+    confidence: 0.364
+    classified_score: 0.337
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: depends-on
+    id: spawn-cloud-sandbox-preview-improvements
+    title: Cloud Sandbox Preview Improvements
+    path: spawn/cloud-sandbox-preview-improvements.md
+    confidence: 0.308
+    classified_score: 0.28
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Spec Amplification Timing Fix Plan
 

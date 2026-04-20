@@ -44,6 +44,31 @@ anchors:
   - Manual Testing
   - Future Enhancements
   - Related Files
+relations:
+  - type: example-of
+    id: figma-integration-guide
+    title: Figma Integration Guide
+    path: figma-integration-guide.md
+    confidence: 0.33
+    classified_score: 0.432
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: example-of
+    id: zo-ai-integration-guide
+    title: Zo AI Integration Guide
+    path: zo-ai-integration-guide.md
+    confidence: 0.327
+    classified_score: 0.423
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: example-of
+    id: websocket-terminal-integration-guide
+    title: WebSocket Terminal Integration Guide
+    path: websocket-terminal-integration-guide.md
+    confidence: 0.313
+    classified_score: 0.403
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Trigger.dev Integration Guide
 

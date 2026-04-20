@@ -48,6 +48,15 @@ anchors:
   - Task Routed to Wrong Agent
   - Nullclaw Not Available
   - Task Timeout
+relations:
+  - type: example-of
+    id: v2-agent-system-complete-wiring-guide
+    title: V2 Agent System - Complete Wiring Guide
+    path: v2-agent-system-complete-wiring-guide.md
+    confidence: 0.327
+    classified_score: 0.409
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # V2 Agent Task Flow Guide
 

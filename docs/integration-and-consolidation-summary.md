@@ -41,6 +41,39 @@ anchors:
   - Short-Term
   - Medium-Term
   - Conclusion
+relations:
+  - type: implements
+    id: next-steps-implementation-summary
+    title: Next Steps Implementation Summary
+    path: next-steps-implementation-summary.md
+    confidence: 0.33
+    classified_score: 0.34
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: production-implementation-summary
+    title: Production Implementation Summary
+    path: production-implementation-summary.md
+    confidence: 0.324
+    classified_score: 0.337
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: zod-validation-implementation-summary
+    title: Zod Validation Implementation Summary
+    path: zod-validation-implementation-summary.md
+    confidence: 0.323
+    classified_score: 0.335
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: terminaluse-integration-summary
+    title: TerminalUse Integration Summary
+    path: terminaluse-integration-summary.md
+    confidence: 0.322
+    classified_score: 0.334
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Integration & Consolidation Summary
 

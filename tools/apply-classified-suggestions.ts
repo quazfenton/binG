@@ -13,7 +13,7 @@ dotenv.config();
 const DOCS_ROOT = process.argv[2] || "docs";
 const SUGGESTED = path.join(DOCS_ROOT, "suggested-links.json");
 const MANIFEST = path.join(DOCS_ROOT, "manifest.jsonl");
-const THRESHOLD = Number(process.env.LINK_CONF_THRESHOLD || 0.7);
+const THRESHOLD = Number(process.env.LINK_CONF_THRESHOLD || 0.02);
 const DRY = process.env.DRY_RUN === "1" || process.argv.includes("--dry");
 const BRANCH_PREFIX = process.env.BRANCH_PREFIX || "docs-suggested-links";
 const COMMIT_MSG = process.env.COMMIT_MSG || "chore(docs): apply classified suggested links";

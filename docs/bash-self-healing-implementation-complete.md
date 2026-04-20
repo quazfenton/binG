@@ -36,6 +36,23 @@ anchors:
   - 'Phase 3: Diff-Based Repair'
   - 'Phase 4: Reinforcement Learning'
   - Summary
+relations:
+  - type: implements
+    id: skills-system-implementation-summary
+    title: Skills System Implementation Summary
+    path: skills-system-implementation-summary.md
+    confidence: 0.318
+    classified_score: 0.329
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: oauth-integration-implementation-summary
+    title: ✅ OAuth Integration Implementation Summary
+    path: oauth-integration-implementation-summary.md
+    confidence: 0.316
+    classified_score: 0.328
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Bash Self-Healing Implementation Complete
 

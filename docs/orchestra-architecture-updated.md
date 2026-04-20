@@ -16,6 +16,15 @@ anchors:
   - Metrics & Alerting Flow
   - Component Dependencies
   - Data Flow Example
+relations:
+  - type: related
+    id: docker-compose-architecture-update
+    title: Docker Compose Architecture Update
+    path: docker-compose-architecture-update.md
+    confidence: 0.322
+    classified_score: 0.269
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Orchestra Architecture - Updated
 

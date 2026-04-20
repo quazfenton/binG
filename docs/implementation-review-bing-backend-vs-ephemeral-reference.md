@@ -37,6 +37,15 @@ anchors:
   - Integration Plan
   - Long-term Strategy
   - Conclusion
+relations:
+  - type: implements
+    id: changelog-phase-1-3-implementation-review
+    title: Phase 1-3 Implementation Review
+    path: changelog/phase-1-3-implementation-review.md
+    confidence: 0.322
+    classified_score: 0.299
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Implementation Review: binG Backend vs ephemeral/ Reference
 

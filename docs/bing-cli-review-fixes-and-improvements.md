@@ -77,6 +77,23 @@ anchors:
   - What Was Added
   - Statistics
   - Status
+relations:
+  - type: implements
+    id: modal-com-integration-review-and-improvements
+    title: Modal.com Integration - Review & Improvements
+    path: modal-com-integration-review-and-improvements.md
+    confidence: 0.327
+    classified_score: 0.338
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: depends-on
+    id: comprehensive-sandbox-terminal-and-mcp-architecture-review
+    title: 'Comprehensive Sandbox, Terminal & MCP Architecture Review'
+    path: comprehensive-sandbox-terminal-and-mcp-architecture-review.md
+    confidence: 0.309
+    classified_score: 0.284
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # binG CLI - Review, Fixes & Improvements
 

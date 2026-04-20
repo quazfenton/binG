@@ -44,6 +44,31 @@ anchors:
   - Success Criteria
   - Support Contacts
   - Sign-Off
+relations:
+  - type: example-of
+    id: v2-agent-system-integration-guide
+    title: "\U0001F50C V2 Agent System Integration Guide"
+    path: v2-agent-system-integration-guide.md
+    confidence: 0.316
+    classified_score: 0.392
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: example-of
+    id: v2-agent-system-complete-wiring-guide
+    title: V2 Agent System - Complete Wiring Guide
+    path: v2-agent-system-complete-wiring-guide.md
+    confidence: 0.308
+    classified_score: 0.391
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: example-of
+    id: v2-agent-system-migration-guide
+    title: V2 Agent System Migration Guide
+    path: v2-agent-system-migration-guide.md
+    confidence: 0.306
+    classified_score: 0.393
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # V2 Agent System Deployment Checklist
 

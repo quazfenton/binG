@@ -32,6 +32,15 @@ anchors:
   - Skill not loading
   - Skill not being used
   - Weight not updating
+relations:
+  - type: implements
+    id: skills-system-implementation-summary
+    title: Skills System Implementation Summary
+    path: skills-system-implementation-summary.md
+    confidence: 0.369
+    classified_score: 0.364
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Skills System Documentation
 

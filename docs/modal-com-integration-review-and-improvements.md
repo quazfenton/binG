@@ -41,6 +41,23 @@ anchors:
   - Error Messages
   - Next Steps for Production
   - Conclusion
+relations:
+  - type: related
+    id: bing-cli-review-fixes-and-improvements
+    title: 'binG CLI - Review, Fixes & Improvements'
+    path: bing-cli-review-fixes-and-improvements.md
+    confidence: 0.322
+    classified_score: 0.267
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: sdk-terminal-and-sandbox-integration-review-technical-plan
+    title: Terminal & Sandbox Integration Review - Technical Plan
+    path: sdk/terminal-and-sandbox-integration-review-technical-plan.md
+    confidence: 0.312
+    classified_score: 0.302
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Modal.com Integration - Review & Improvements
 

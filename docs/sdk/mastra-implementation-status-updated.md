@@ -21,6 +21,23 @@ anchors:
   - Required (None - Already Complete)
   - Optional (Recommended)
   - Quick Start
+relations:
+  - type: implements
+    id: event-store-implementation-summary
+    title: Event Store Implementation Summary
+    path: event-store-implementation-summary.md
+    confidence: 0.33
+    classified_score: 0.318
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: skills-system-implementation-summary
+    title: Skills System Implementation Summary
+    path: skills-system-implementation-summary.md
+    confidence: 0.33
+    classified_score: 0.315
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Mastra Implementation Status - UPDATED ✅
 

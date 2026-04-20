@@ -50,6 +50,63 @@ anchors:
   - Week 2
   - Month 1
   - Conclusion
+relations:
+  - type: related
+    id: sdk-deep-codebase-review-comprehensive-technical-findings
+    title: Deep Codebase Review - Comprehensive Technical Findings
+    path: sdk/deep-codebase-review-comprehensive-technical-findings.md
+    confidence: 0.315
+    classified_score: 0.256
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: depends-on
+    id: comprehensive-sandbox-terminal-and-mcp-architecture-review
+    title: 'Comprehensive Sandbox, Terminal & MCP Architecture Review'
+    path: comprehensive-sandbox-terminal-and-mcp-architecture-review.md
+    confidence: 0.315
+    classified_score: 0.292
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: technical-review-terminalpanel-and-sandbox-integration
+    title: 'Technical Review: TerminalPanel & Sandbox Integration'
+    path: technical-review-terminalpanel-and-sandbox-integration.md
+    confidence: 0.311
+    classified_score: 0.31
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: implementation-review-bing-backend-vs-ephemeral-reference
+    title: 'Implementation Review: binG Backend vs ephemeral/ Reference'
+    path: implementation-review-bing-backend-vs-ephemeral-reference.md
+    confidence: 0.311
+    classified_score: 0.31
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: related
+    id: sdk-deep-codebase-review-phase-4-findings
+    title: Deep Codebase Review - Phase 4 Findings
+    path: sdk/deep-codebase-review-phase-4-findings.md
+    confidence: 0.311
+    classified_score: 0.253
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: related
+    id: code-review-fixes-summary
+    title: Code Review Fixes Summary
+    path: code-review-fixes-summary.md
+    confidence: 0.309
+    classified_score: 0.25
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: related
+    id: warning-fixes-completion-report
+    title: Warning Fixes - COMPLETION REPORT
+    path: warning-fixes-completion-report.md
+    confidence: 0.309
+    classified_score: 0.252
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # binG - Strategic Deep Review
 **Date:** March 27, 2026

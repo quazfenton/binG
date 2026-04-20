@@ -27,6 +27,23 @@ anchors:
   - Files Modified
   - Usage Example
   - References
+relations:
+  - type: implements
+    id: enhanced-panels-implementation
+    title: Enhanced Panels Implementation
+    path: enhanced-panels-implementation.md
+    confidence: 0.321
+    classified_score: 0.317
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: enhanced-agent-integration-summary
+    title: Enhanced Agent Integration Summary
+    path: enhanced-agent-integration-summary.md
+    confidence: 0.318
+    classified_score: 0.292
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # E2B Sandbox Provider Implementation
 

@@ -61,6 +61,47 @@ anchors:
   - Additional Resources
   - Key Documents Created
   - 'Quick Reference: File Counts'
+relations:
+  - type: implements
+    id: tauri-desktop-implementation-comprehensive-module-analysis
+    title: Tauri Desktop Implementation - Comprehensive Module Analysis
+    path: tauri-desktop-implementation-comprehensive-module-analysis.md
+    confidence: 0.382
+    classified_score: 0.391
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: next-steps-implementation-summary
+    title: Next Steps Implementation Summary
+    path: next-steps-implementation-summary.md
+    confidence: 0.334
+    classified_score: 0.346
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: zod-validation-implementation-summary
+    title: Zod Validation Implementation Summary
+    path: zod-validation-implementation-summary.md
+    confidence: 0.327
+    classified_score: 0.34
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: event-store-implementation-summary
+    title: Event Store Implementation Summary
+    path: event-store-implementation-summary.md
+    confidence: 0.327
+    classified_score: 0.341
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: harness-modes-implementation-plan
+    title: Harness Modes Implementation Plan
+    path: harness-modes-implementation-plan.md
+    confidence: 0.326
+    classified_score: 0.347
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Tauri Desktop Implementation Plan
 

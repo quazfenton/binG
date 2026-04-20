@@ -40,6 +40,15 @@ anchors:
   - Performance Impact
   - Security Considerations
   - Conclusion
+relations:
+  - type: related
+    id: streaming-diff-viewer-fix-comprehensive-review
+    title: Streaming Diff Viewer Fix - Comprehensive Review
+    path: streaming-diff-viewer-fix-comprehensive-review.md
+    confidence: 0.373
+    classified_score: 0.313
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Streaming Diff Viewer Fix - Final Review
 

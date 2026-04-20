@@ -33,6 +33,39 @@ anchors:
   - Nginx Reverse Proxy
   - Architecture Diagram
   - Quick Reference
+relations:
+  - type: example-of
+    id: zo-ai-integration-guide
+    title: Zo AI Integration Guide
+    path: zo-ai-integration-guide.md
+    confidence: 0.315
+    classified_score: 0.412
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: example-of
+    id: opentelemetry-setup-guide
+    title: OpenTelemetry Setup Guide
+    path: opentelemetry-setup-guide.md
+    confidence: 0.31
+    classified_score: 0.376
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: example-of
+    id: zeroboot-integration-guide
+    title: Zeroboot Integration Guide
+    path: zeroboot-integration-guide.md
+    confidence: 0.307
+    classified_score: 0.399
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: example-of
+    id: mcp-integration-guide
+    title: MCP Integration Guide
+    path: mcp-integration-guide.md
+    confidence: 0.307
+    classified_score: 0.404
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Port Configuration Guide
 

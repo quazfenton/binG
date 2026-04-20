@@ -37,6 +37,31 @@ anchors:
   - Related Files
   - Future Enhancements
   - Conclusion
+relations:
+  - type: related
+    id: code-review-fixes-summary
+    title: Code Review Fixes Summary
+    path: code-review-fixes-summary.md
+    confidence: 0.325
+    classified_score: 0.268
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: related
+    id: n8n-workflows-tab-code-review-fixes
+    title: n8n Workflows Tab - Code Review Fixes
+    path: n8n-workflows-tab-code-review-fixes.md
+    confidence: 0.308
+    classified_score: 0.25
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: reference
+    id: sdk-spec-amplification-fix-duplicate-request-id
+    title: Spec Amplification Fix - Duplicate Request ID
+    path: sdk/spec-amplification-fix-duplicate-request-id.md
+    confidence: 0.307
+    classified_score: 0.279
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Code Review Fix: Data Race in DAG Conversion
 

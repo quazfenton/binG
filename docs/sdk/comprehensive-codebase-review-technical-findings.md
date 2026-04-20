@@ -58,6 +58,39 @@ anchors:
   - Immediate (This Week)
   - Short Term (Next Week)
   - Medium Term (This Month)
+relations:
+  - type: related
+    id: sdk-comprehensive-codebase-review-phase-3-findings
+    title: Comprehensive Codebase Review - Phase 3 Findings
+    path: sdk/comprehensive-codebase-review-phase-3-findings.md
+    confidence: 0.438
+    classified_score: 0.367
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: duplicate
+    id: comprehensive-codebase-review-and-technical-findings
+    title: Comprehensive Codebase Review & Technical Findings
+    path: comprehensive-codebase-review-and-technical-findings.md
+    confidence: 0.402
+    classified_score: 0.509
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: related
+    id: sdk-deep-codebase-review-phase-4-findings
+    title: Deep Codebase Review - Phase 4 Findings
+    path: sdk/deep-codebase-review-phase-4-findings.md
+    confidence: 0.343
+    classified_score: 0.287
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: related
+    id: sdk-deep-codebase-review-comprehensive-technical-findings
+    title: Deep Codebase Review - Comprehensive Technical Findings
+    path: sdk/deep-codebase-review-comprehensive-technical-findings.md
+    confidence: 0.323
+    classified_score: 0.269
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Comprehensive Codebase Review - Technical Findings
 

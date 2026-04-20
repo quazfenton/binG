@@ -24,6 +24,15 @@ anchors:
   - Corrected docker-compose.yml
   - Key Points
   - References
+relations:
+  - type: example-of
+    id: deployment-architecture-guide
+    title: Deployment Architecture Guide
+    path: deployment-architecture-guide.md
+    confidence: 0.331
+    classified_score: 0.416
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Corrected Deployment Architecture
 

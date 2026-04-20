@@ -27,6 +27,47 @@ anchors:
   - Streaming Not Working
   - Performance
   - Resources
+relations:
+  - type: example-of
+    id: zeroboot-integration-guide
+    title: Zeroboot Integration Guide
+    path: zeroboot-integration-guide.md
+    confidence: 0.309
+    classified_score: 0.42
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: example-of
+    id: opentelemetry-setup-guide
+    title: OpenTelemetry Setup Guide
+    path: opentelemetry-setup-guide.md
+    confidence: 0.308
+    classified_score: 0.375
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: example-of
+    id: mcp-integration-guide
+    title: MCP Integration Guide
+    path: mcp-integration-guide.md
+    confidence: 0.308
+    classified_score: 0.421
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: example-of
+    id: figma-integration-guide
+    title: Figma Integration Guide
+    path: figma-integration-guide.md
+    confidence: 0.308
+    classified_score: 0.421
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: example-of
+    id: port-configuration-guide
+    title: Port Configuration Guide
+    path: port-configuration-guide.md
+    confidence: 0.308
+    classified_score: 0.405
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Zo AI Integration Guide
 

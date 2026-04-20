@@ -41,6 +41,39 @@ anchors:
   - 'Example 3: Rollback Using Git'
   - Future Enhancements
   - Related Files
+relations:
+  - type: implements
+    id: tool-metadata-implementation-complete
+    title: ✅ Tool Metadata Implementation Complete
+    path: tool-metadata-implementation-complete.md
+    confidence: 0.324
+    classified_score: 0.344
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: tauri-desktop-implementation-comprehensive-module-analysis
+    title: Tauri Desktop Implementation - Comprehensive Module Analysis
+    path: tauri-desktop-implementation-comprehensive-module-analysis.md
+    confidence: 0.323
+    classified_score: 0.332
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: nullclaw-integration-implementation-complete
+    title: Nullclaw Integration - Implementation Complete
+    path: nullclaw-integration-implementation-complete.md
+    confidence: 0.311
+    classified_score: 0.327
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: todo-implementation-summary
+    title: TODO Implementation Summary
+    path: todo-implementation-summary.md
+    confidence: 0.307
+    classified_score: 0.323
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Rollback Implementation - Complete
 

@@ -39,6 +39,23 @@ anchors:
   - Future Enhancements
   - Related Files
   - Support
+relations:
+  - type: example-of
+    id: orchestration-modes-guide
+    title: Orchestration Modes Guide
+    path: orchestration-modes-guide.md
+    confidence: 0.339
+    classified_score: 0.442
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: example-of
+    id: framework-visualizers-guide
+    title: Framework Visualizers Guide
+    path: framework-visualizers-guide.md
+    confidence: 0.337
+    classified_score: 0.433
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Orchestration Visualizer Guide
 

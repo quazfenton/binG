@@ -47,6 +47,47 @@ anchors:
   - Medium-Term (Month 2)
   - Long-Term (Month 3+)
   - Conclusion
+relations:
+  - type: implements
+    id: event-store-implementation-summary
+    title: Event Store Implementation Summary
+    path: event-store-implementation-summary.md
+    confidence: 0.376
+    classified_score: 0.4
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: skills-system-implementation-summary
+    title: Skills System Implementation Summary
+    path: skills-system-implementation-summary.md
+    confidence: 0.369
+    classified_score: 0.388
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: production-implementation-summary
+    title: Production Implementation Summary
+    path: production-implementation-summary.md
+    confidence: 0.354
+    classified_score: 0.375
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: zod-validation-implementation-summary
+    title: Zod Validation Implementation Summary
+    path: zod-validation-implementation-summary.md
+    confidence: 0.348
+    classified_score: 0.366
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: placeholder-todo-implementation-summary
+    title: Placeholder TODO Implementation Summary
+    path: placeholder-todo-implementation-summary.md
+    confidence: 0.348
+    classified_score: 0.365
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Next Steps Implementation Summary
 

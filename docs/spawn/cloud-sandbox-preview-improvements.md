@@ -27,6 +27,15 @@ anchors:
   - 'Priority 5: Preview URL Caching'
   - Testing Strategy
   - Migration Path
+relations:
+  - type: reference
+    id: spec-amplification-timing-fix-plan
+    title: Spec Amplification Timing Fix Plan
+    path: spec-amplification-timing-fix-plan.md
+    confidence: 0.307
+    classified_score: 0.278
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Cloud Sandbox Preview Improvements
 

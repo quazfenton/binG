@@ -21,6 +21,39 @@ anchors:
   - 'Phase 3: Medium Priority (Week 4)'
   - 3.1 Add Sprites Checkpoint Manager
   - Summary
+relations:
+  - type: implements
+    id: oauth-integration-implementation-summary
+    title: ✅ OAuth Integration Implementation Summary
+    path: oauth-integration-implementation-summary.md
+    confidence: 0.377
+    classified_score: 0.374
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: modal-com-integration-implementation-summary
+    title: Modal.com Integration - Implementation Summary
+    path: modal-com-integration-implementation-summary.md
+    confidence: 0.364
+    classified_score: 0.361
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: complete-git-integration-implementation
+    title: Complete Git Integration Implementation
+    path: complete-git-integration-implementation.md
+    confidence: 0.36
+    classified_score: 0.354
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: nullclaw-integration-implementation-complete
+    title: Nullclaw Integration - Implementation Complete
+    path: nullclaw-integration-implementation-complete.md
+    confidence: 0.36
+    classified_score: 0.357
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Advanced Integration Implementation Plan
 
