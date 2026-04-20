@@ -31,6 +31,47 @@ anchors:
   - Keyboard shortcuts not working
   - Contributing
   - Related Documentation
+relations:
+  - type: implements
+    id: ui-streaming-enhancements-implementation-summary
+    title: UI Streaming Enhancements - Implementation Summary
+    path: ui-streaming-enhancements-implementation-summary.md
+    confidence: 0.348
+    classified_score: 0.354
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: harness-modes-implementation-plan
+    title: Harness Modes Implementation Plan
+    path: harness-modes-implementation-plan.md
+    confidence: 0.327
+    classified_score: 0.342
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: technical-implementation-plan-critical-fixes-and-enhancements
+    title: Technical Implementation Plan - Critical Fixes & Enhancements
+    path: technical-implementation-plan-critical-fixes-and-enhancements.md
+    confidence: 0.321
+    classified_score: 0.322
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: next-steps-implementation-summary
+    title: Next Steps Implementation Summary
+    path: next-steps-implementation-summary.md
+    confidence: 0.32
+    classified_score: 0.329
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: enhanced-agent-integration-summary
+    title: Enhanced Agent Integration Summary
+    path: enhanced-agent-integration-summary.md
+    confidence: 0.319
+    classified_score: 0.329
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Enhanced Panels Implementation
 

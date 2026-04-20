@@ -37,6 +37,15 @@ anchors:
   - Environment Variables
   - Edge Cases
   - Status
+relations:
+  - type: related
+    id: changelog-terminal-websocket-migration-summary
+    title: Terminal WebSocket Migration Summary
+    path: changelog/terminal-websocket-migration-summary.md
+    confidence: 0.307
+    classified_score: 0.253
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Terminal Pipe Support & Enhancements - COMPLETE
 

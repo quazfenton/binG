@@ -1,3 +1,4 @@
+import schema from './schema.sql';
 // Database configuration - lazy initialized to avoid Edge Runtime issues
 // All Node.js modules are lazy-loaded inside functions, not at module load time
 // This file is server-only - do not import in Client Components
@@ -289,23 +290,7 @@ async function initializeSchemaSync(): Promise<void> {
   if (typeof process === 'undefined' || process.env.NEXT_RUNTIME !== 'nodejs') return;
 
   try {
-    // Guard with runtime check so webpack doesn't bundle for client
-    if (typeof require === 'undefined') {
-      throw new Error('Schema initialization requires Node.js runtime');
-    }
-    const fsModule = require('fs');
-    const pathModule = require('path');
-    const readFileSync = fsModule.readFileSync;
-    const join = pathModule.join;
-
-    // Get schema path at runtime
-    const cwd = process.cwd?.();
-    const schemaPath = cwd
-      ? join(cwd, 'lib', 'database', 'schema.sql')
-      : './lib/database/schema.sql';
-
     // Execute base schema to ensure required tables exist
-    const schema = readFileSync(schemaPath, 'utf-8');
     db.exec(schema);
 
     console.log('Database base schema initialized');

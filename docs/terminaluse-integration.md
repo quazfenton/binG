@@ -45,6 +45,31 @@ anchors:
   - Filesystem Operations Fail
   - Streaming Disconnects
   - Resources
+relations:
+  - type: implements
+    id: terminaluse-integration-summary
+    title: TerminalUse Integration Summary
+    path: terminaluse-integration-summary.md
+    confidence: 0.381
+    classified_score: 0.4
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: related
+    id: terminal-use
+    title: Terminal Use
+    path: terminal-use.md
+    confidence: 0.32
+    classified_score: 0.265
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: example-of
+    id: websocket-terminal-integration-guide
+    title: WebSocket Terminal Integration Guide
+    path: websocket-terminal-integration-guide.md
+    confidence: 0.318
+    classified_score: 0.399
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # TerminalUse Integration
 

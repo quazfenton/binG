@@ -33,6 +33,39 @@ anchors:
   - Immediate (This Week)
   - Short Term (Next Week)
   - Medium Term (This Month)
+relations:
+  - type: related
+    id: sdk-deep-codebase-review-comprehensive-technical-findings
+    title: Deep Codebase Review - Comprehensive Technical Findings
+    path: sdk/deep-codebase-review-comprehensive-technical-findings.md
+    confidence: 0.379
+    classified_score: 0.317
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: related
+    id: sdk-comprehensive-codebase-review-phase-3-findings
+    title: Comprehensive Codebase Review - Phase 3 Findings
+    path: sdk/comprehensive-codebase-review-phase-3-findings.md
+    confidence: 0.367
+    classified_score: 0.309
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: related
+    id: sdk-comprehensive-codebase-review-technical-findings
+    title: Comprehensive Codebase Review - Technical Findings
+    path: sdk/comprehensive-codebase-review-technical-findings.md
+    confidence: 0.334
+    classified_score: 0.28
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: technical-review-terminalpanel-and-sandbox-integration
+    title: 'Technical Review: TerminalPanel & Sandbox Integration'
+    path: technical-review-terminalpanel-and-sandbox-integration.md
+    confidence: 0.319
+    classified_score: 0.302
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Deep Codebase Review - Phase 4 Findings
 

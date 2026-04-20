@@ -57,6 +57,15 @@ anchors:
   - 2. Redis Pipeline
   - 3. Connection Pooling
   - 'Complete Example: End-to-End Flow'
+relations:
+  - type: example-of
+    id: v2-agent-task-flow-guide
+    title: V2 Agent Task Flow Guide
+    path: v2-agent-task-flow-guide.md
+    confidence: 0.335
+    classified_score: 0.417
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # V2 Agent System - Complete Wiring Guide
 

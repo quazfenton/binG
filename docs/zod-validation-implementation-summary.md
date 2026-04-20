@@ -52,6 +52,47 @@ anchors:
   - Integration Tests for Routes
   - Related Files
   - Performance Impact
+relations:
+  - type: implements
+    id: production-implementation-summary
+    title: Production Implementation Summary
+    path: production-implementation-summary.md
+    confidence: 0.386
+    classified_score: 0.405
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: placeholder-todo-implementation-summary
+    title: Placeholder TODO Implementation Summary
+    path: placeholder-todo-implementation-summary.md
+    confidence: 0.326
+    classified_score: 0.345
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: sdk-advanced-integration-implementation-plan
+    title: Advanced Integration Implementation Plan
+    path: sdk/advanced-integration-implementation-plan.md
+    confidence: 0.326
+    classified_score: 0.32
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: tool-metadata-implementation-complete
+    title: ✅ Tool Metadata Implementation Complete
+    path: tool-metadata-implementation-complete.md
+    confidence: 0.324
+    classified_score: 0.337
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: oauth-integration-implementation-summary
+    title: ✅ OAuth Integration Implementation Summary
+    path: oauth-integration-implementation-summary.md
+    confidence: 0.323
+    classified_score: 0.346
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Zod Validation Implementation Summary
 

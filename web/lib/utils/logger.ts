@@ -122,7 +122,7 @@ const DEFAULT_CONFIG: LoggerConfig = {
 if (typeof window === 'undefined' && typeof process !== 'undefined') {
   try {
     const pathModule = require('path');
-    DEFAULT_CONFIG.logFilePath = process.env.LOG_FILE_PATH || pathModule.join(process.cwd(), 'logs', 'app.log');
+    DEFAULT_CONFIG.logFilePath = process.env.LOG_FILE_PATH || pathModule.join(process.cwd(), 'logs', 'run.log');
     DEFAULT_CONFIG.maxFileSize = parseInt(process.env.LOG_MAX_FILE_SIZE || '10', 10);
     DEFAULT_CONFIG.maxFiles = parseInt(process.env.LOG_MAX_FILES || '5', 10);
   } catch (error) {
@@ -150,7 +150,7 @@ function initializeFileLogging(config: LoggerConfig) {
     }
 
     writeStream = fs.createWriteStream(config.logFilePath, {
-      flags: 'a',
+      flags: 'w',
       encoding: 'utf8',
       autoClose: true,
     });

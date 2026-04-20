@@ -34,6 +34,47 @@ anchors:
   - "\U0001F680 Deployment Checklist"
   - "\U0001F4D6 Related Documentation"
   - ✨ Summary
+relations:
+  - type: implements
+    id: placeholder-todo-implementation-summary
+    title: Placeholder TODO Implementation Summary
+    path: placeholder-todo-implementation-summary.md
+    confidence: 0.396
+    classified_score: 0.411
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: production-implementation-summary
+    title: Production Implementation Summary
+    path: production-implementation-summary.md
+    confidence: 0.382
+    classified_score: 0.403
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: next-steps-implementation-summary
+    title: Next Steps Implementation Summary
+    path: next-steps-implementation-summary.md
+    confidence: 0.38
+    classified_score: 0.398
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: zod-validation-implementation-summary
+    title: Zod Validation Implementation Summary
+    path: zod-validation-implementation-summary.md
+    confidence: 0.371
+    classified_score: 0.389
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: event-store-implementation-summary
+    title: Event Store Implementation Summary
+    path: event-store-implementation-summary.md
+    confidence: 0.371
+    classified_score: 0.391
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # TODO Implementation Summary
 

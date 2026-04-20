@@ -58,6 +58,15 @@ anchors:
   - ✅ PRODUCTION READY
   - Recommended Next Steps
   - Known Limitations
+relations:
+  - type: implements
+    id: implementation-review-bing-backend-vs-ephemeral-reference
+    title: 'Implementation Review: binG Backend vs ephemeral/ Reference'
+    path: implementation-review-bing-backend-vs-ephemeral-reference.md
+    confidence: 0.322
+    classified_score: 0.299
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Phase 1-3 Implementation Review
 

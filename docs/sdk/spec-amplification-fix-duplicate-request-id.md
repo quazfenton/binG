@@ -21,6 +21,23 @@ anchors:
   - Check Database
   - Check Logs
   - Status
+relations:
+  - type: reference
+    id: spec-amplification-timing-fix-plan
+    title: Spec Amplification Timing Fix Plan
+    path: spec-amplification-timing-fix-plan.md
+    confidence: 0.324
+    classified_score: 0.301
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: related
+    id: code-review-fix-data-race-in-dag-conversion
+    title: 'Code Review Fix: Data Race in DAG Conversion'
+    path: code-review-fix-data-race-in-dag-conversion.md
+    confidence: 0.307
+    classified_score: 0.248
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Spec Amplification Fix - Duplicate Request ID
 

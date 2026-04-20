@@ -33,6 +33,15 @@ anchors:
   - Team Metrics
   - Memory Metrics
   - Best Practices
+relations:
+  - type: related
+    id: spawn-advanced-ai-agent-system-complete-summary
+    title: Advanced AI Agent System - Complete Summary
+    path: spawn/advanced-ai-agent-system-complete-summary.md
+    confidence: 0.327
+    classified_score: 0.271
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Advanced AI Agent Features
 

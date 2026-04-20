@@ -32,6 +32,31 @@ anchors:
   - Non-Breaking
   - Architecture Diagram
   - Documentation
+relations:
+  - type: implements
+    id: modal-com-integration-implementation-summary
+    title: Modal.com Integration - Implementation Summary
+    path: modal-com-integration-implementation-summary.md
+    confidence: 0.364
+    classified_score: 0.381
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: oauth-integration-implementation-summary
+    title: ✅ OAuth Integration Implementation Summary
+    path: oauth-integration-implementation-summary.md
+    confidence: 0.36
+    classified_score: 0.376
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: sdk-advanced-integration-implementation-plan
+    title: Advanced Integration Implementation Plan
+    path: sdk/advanced-integration-implementation-plan.md
+    confidence: 0.327
+    classified_score: 0.327
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Nullclaw Integration - Implementation Complete
 

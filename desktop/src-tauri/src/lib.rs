@@ -26,14 +26,15 @@ fn init_logging() -> Option<PathBuf> {
 
     if let Ok(mut file) = OpenOptions::new()
         .create(true)
-        .append(true)
+        .write(true)
+        .truncate(true)
         .open(&log_path)
     {
         let ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        let _ = writeln!(file, "\n=== Quaz Desktop starting (timestamp: {}) ===", ts);
+        let _ = writeln!(file, "=== Quaz Desktop starting (timestamp: {}) ===", ts);
         Some(log_path)
     } else {
         None
@@ -213,7 +214,17 @@ fn spawn_next_server(port: u16, token: &str, resource_dir: Option<PathBuf>) -> R
             .env("DESKTOP_MODE", "true")
             .env("DESKTOP_LOCAL_EXECUTION", "true")
             .env("OPENCODE_SIDECAR_TOKEN", token)
-            .current_dir(&web_dir)
+            .env("LOG_TO_FILE", "true")
+            .env("LOG_FILE_PATH", "logs/run.log")
+            .current_dir(&web_dir);
+
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            standalone_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+
+        standalone_cmd
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
 

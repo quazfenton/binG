@@ -49,6 +49,47 @@ anchors:
   - From Existing Sandbox Providers
   - Resources
   - Summary
+relations:
+  - type: example-of
+    id: trigger-dev-integration-guide
+    title: Trigger.dev Integration Guide
+    path: trigger-dev-integration-guide.md
+    confidence: 0.33
+    classified_score: 0.429
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: example-of
+    id: zo-ai-integration-guide
+    title: Zo AI Integration Guide
+    path: zo-ai-integration-guide.md
+    confidence: 0.329
+    classified_score: 0.439
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: example-of
+    id: mcp-integration-guide
+    title: MCP Integration Guide
+    path: mcp-integration-guide.md
+    confidence: 0.308
+    classified_score: 0.412
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: example-of
+    id: figma-integration-guide
+    title: Figma Integration Guide
+    path: figma-integration-guide.md
+    confidence: 0.308
+    classified_score: 0.412
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: example-of
+    id: websocket-terminal-integration-guide
+    title: WebSocket Terminal Integration Guide
+    path: websocket-terminal-integration-guide.md
+    confidence: 0.307
+    classified_score: 0.4
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Zeroboot Integration Guide
 

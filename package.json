@@ -12,7 +12,8 @@
     "start:web": "pnpm --filter web start",
     "type-check": "pnpm --filter web type-check",
     "lint": "pnpm --filter web lint",
-    "test": "pnpm --filter web test"
+    "test": "pnpm --filter web test",
+    "logs": "node tail-logs.js"
   },
   "devDependencies": {
     "@octokit/rest": "^22.0.1",

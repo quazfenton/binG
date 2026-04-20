@@ -43,6 +43,23 @@ anchors:
   - 'Example 1: Small Production Setup (< 100 users)'
   - 'Example 2: Large Production Setup (> 100 users)'
   - 'Example 3: Development Setup'
+relations:
+  - type: example-of
+    id: zeroboot-integration-guide
+    title: Zeroboot Integration Guide
+    path: zeroboot-integration-guide.md
+    confidence: 0.307
+    classified_score: 0.372
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: example-of
+    id: antigravity-oauth-setup-guide
+    title: Antigravity OAuth Setup Guide
+    path: antigravity-oauth-setup-guide.md
+    confidence: 0.306
+    classified_score: 0.372
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Nullclaw Deployment Guide
 

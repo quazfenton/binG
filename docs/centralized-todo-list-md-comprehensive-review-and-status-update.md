@@ -58,6 +58,39 @@ anchors:
   - 5. Security Hardening
   - "\U0001F4DD Notes"
   - "\U0001F517 Related Documentation"
+relations:
+  - type: implements
+    id: implementation-review-bing-backend-vs-ephemeral-reference
+    title: 'Implementation Review: binG Backend vs ephemeral/ Reference'
+    path: implementation-review-bing-backend-vs-ephemeral-reference.md
+    confidence: 0.324
+    classified_score: 0.32
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: depends-on
+    id: comprehensive-sandbox-terminal-and-mcp-architecture-review
+    title: 'Comprehensive Sandbox, Terminal & MCP Architecture Review'
+    path: comprehensive-sandbox-terminal-and-mcp-architecture-review.md
+    confidence: 0.316
+    classified_score: 0.29
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: related
+    id: comprehensive-codebase-review-and-technical-findings
+    title: Comprehensive Codebase Review & Technical Findings
+    path: comprehensive-codebase-review-and-technical-findings.md
+    confidence: 0.315
+    classified_score: 0.257
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: related
+    id: bing-strategic-deep-review
+    title: binG - Strategic Deep Review
+    path: bing-strategic-deep-review.md
+    confidence: 0.308
+    classified_score: 0.251
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # CENTRALIZED_TODO_LIST.md - Comprehensive Review & Status Update
 

@@ -46,6 +46,39 @@ anchors:
   - Future Enhancements
   - Related Documentation
   - Implementation Status
+relations:
+  - type: implements
+    id: oauth-integration-implementation-summary
+    title: ✅ OAuth Integration Implementation Summary
+    path: oauth-integration-implementation-summary.md
+    confidence: 0.367
+    classified_score: 0.389
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: sdk-advanced-integration-implementation-plan
+    title: Advanced Integration Implementation Plan
+    path: sdk/advanced-integration-implementation-plan.md
+    confidence: 0.361
+    classified_score: 0.359
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: nullclaw-integration-implementation-complete
+    title: Nullclaw Integration - Implementation Complete
+    path: nullclaw-integration-implementation-complete.md
+    confidence: 0.325
+    classified_score: 0.346
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: placeholder-todo-implementation-summary
+    title: Placeholder TODO Implementation Summary
+    path: placeholder-todo-implementation-summary.md
+    confidence: 0.311
+    classified_score: 0.331
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Modal.com Integration - Implementation Summary
 

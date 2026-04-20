@@ -38,6 +38,15 @@ anchors:
   - Gateway Integration
   - Redis Queue Integration
   - "\U0001F680 Next Steps"
+relations:
+  - type: example-of
+    id: v2-agent-system-migration-guide
+    title: V2 Agent System Migration Guide
+    path: v2-agent-system-migration-guide.md
+    confidence: 0.367
+    classified_score: 0.479
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # 🔌 V2 Agent System Integration Guide
 

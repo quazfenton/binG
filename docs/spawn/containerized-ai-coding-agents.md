@@ -43,6 +43,15 @@ anchors:
   - Performance Tips
   - Migration Guide
   - From CLI-based to Containerized
+relations:
+  - type: implements
+    id: spawn-containerized-ai-agents-implementation-summary
+    title: Containerized AI Agents - Implementation Summary
+    path: spawn/containerized-ai-agents-implementation-summary.md
+    confidence: 0.375
+    classified_score: 0.38
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Containerized AI Coding Agents
 

@@ -28,6 +28,23 @@ anchors:
   - Migration
   - Security
   - Future Enhancements
+relations:
+  - type: implements
+    id: enhanced-panels-implementation
+    title: Enhanced Panels Implementation
+    path: enhanced-panels-implementation.md
+    confidence: 0.31
+    classified_score: 0.325
+    auto_generated: true
+    generator: apply-classified-suggestions
+  - type: implements
+    id: sdk-e2b-sandbox-provider-implementation
+    title: E2B Sandbox Provider Implementation
+    path: sdk/e2b-sandbox-provider-implementation.md
+    confidence: 0.308
+    classified_score: 0.304
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # User Feature Overrides Implementation
 

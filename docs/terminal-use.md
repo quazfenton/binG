@@ -37,6 +37,15 @@ anchors:
   - How do I stream responses to a frontend?
   - What model providers are supported?
   - Optional
+relations:
+  - type: implements
+    id: terminaluse-integration
+    title: TerminalUse Integration
+    path: terminaluse-integration.md
+    confidence: 0.32
+    classified_score: 0.33
+    auto_generated: true
+    generator: apply-classified-suggestions
 ---
 # Terminal Use
 

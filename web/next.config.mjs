@@ -145,34 +145,6 @@ const nextConfig = {
   ],
   webpack: (config, { isServer, dev, webpack }) => {
     if (!isServer) {
-      config.externals = [
-        ...(config.externals || []),
-        'fs',
-        'fs/promises',
-        'child_process',
-        'crypto',
-        'stream',
-        'stream/promises',
-        'net',
-        'node:net',
-        'tls',
-        'node:tls',
-        'http',
-        'https',
-        'url',
-        'zlib',
-        'os',
-        'path',
-        'assert',
-        'util',
-        'events',
-        'module',
-        'node:module',
-        'vm',
-        'timers/promises',
-        'dns',
-      ];
-
       config.resolve.fallback = {
         ...config.resolve.fallback,
         fs: false,
@@ -237,6 +209,9 @@ const nextConfig = {
     config.resolve.alias = {
       ...config.resolve.alias,
       '@bing/platform': resolve(packagesRoot, 'platform/src/env.ts'),
+      '@bing/shared/FS/fs-bridge': resolve(packagesRoot, 'shared/FS/fs-bridge.ts'),
+      '@bing/shared/FS/workspace-manager': resolve(packagesRoot, 'shared/FS/workspace-manager.ts'),
+      '@bing/shared/FS/index': resolve(packagesRoot, 'shared/FS/index.ts'),
       '@bing/shared/agent/v2-executor': resolve(packagesRoot, 'shared/agent/v2-executor.ts'),
       '@bing/shared/agent/workforce-manager': resolve(packagesRoot, 'shared/agent/workforce-manager.ts'),
       '@bing/shared/agent/workforce-state': resolve(packagesRoot, 'shared/agent/workforce-state.ts'),
@@ -366,9 +341,15 @@ const nextConfig = {
         new webpack.ProvidePlugin({
           Buffer: ['buffer', 'Buffer'],
           buffer: ['buffer', 'Buffer'],
+          process: 'process/browser',
         })
       );
     }
+
+    config.module.rules.push({
+      test: /\.sql$/,
+      use: 'raw-loader',
+    });
 
     return config;
   },
