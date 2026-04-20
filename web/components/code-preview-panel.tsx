@@ -1247,7 +1247,7 @@ export default function CodePreviewPanel({
       // Store files with root-relative paths for Sandpack runners
       setManualPreviewFiles(previewFiles);
       setIsManualPreviewActive(true);
-      setPreviewMode(selectedMode === 'fastly' || selectedMode === 'valtown' ? 'cloud' : selectedMode);
+      setPreviewMode(selectedMode === 'fastly' || selectedMode === 'valtown' || selectedMode === 'modal' ? 'cloud' : selectedMode);
       if (!preserveTab) {
         setSelectedTab('preview');  // Always switch to preview tab
       }

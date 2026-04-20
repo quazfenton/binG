@@ -1,3 +1,49 @@
+---
+id: sdk-pi-sdk
+title: SDK
+aliases:
+  - sdk
+  - sdk.md
+tags:
+  - sdk
+layer: core
+summary: >-
+  > pi can help you use the SDK. Ask it to build an integration for your use
+  case.
+anchors:
+  - Quick Start
+  - Installation
+  - Core Concepts
+  - createAgentSession()
+  - AgentSession
+  - createAgentSessionRuntime() and AgentSessionRuntime
+  - Prompting and Message Queueing
+  - Agent and AgentState
+  - Events
+  - Options Reference
+  - Directories
+  - Model
+  - API Keys and OAuth
+  - System Prompt
+  - Tools
+  - Tools with Custom cwd
+  - Custom Tools
+  - Extensions
+  - Skills
+  - Context Files
+  - Slash Commands
+  - Session Management
+  - Settings Management
+  - ResourceLoader
+  - Return Value
+  - Complete Example
+  - Run Modes
+  - InteractiveMode
+  - runPrintMode
+  - runRpcMode
+  - RPC Mode Alternative
+  - Exports
+---
 > pi can help you use the SDK. Ask it to build an integration for your use case.
 
 # SDK

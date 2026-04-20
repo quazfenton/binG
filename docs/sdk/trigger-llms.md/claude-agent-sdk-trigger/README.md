@@ -1,3 +1,19 @@
+---
+id: sdk-trigger-llms.md-claude-agent-sdk-trigger-readme
+title: README
+aliases:
+  - README
+  - README.md
+tags: []
+layer: core
+summary: "## Using Claude Agent SDK with Trigger.dev\r\n\r\nThis is a secure example of how to use the [Claude Agent SDK](https://docs.claude.com/en/docs/agent-sdk/overview) with [Trigger.dev](https://trigger.dev).\r\n\r\n**Two example implementations:**\r\n\r\n- `code.ts` - Basic safe code generation (recommended starti"
+anchors:
+  - Using Claude Agent SDK with Trigger.dev
+  - Setup
+  - Run
+  - View code
+  - Test
+---
 ## Using Claude Agent SDK with Trigger.dev
 
 This is a secure example of how to use the [Claude Agent SDK](https://docs.claude.com/en/docs/agent-sdk/overview) with [Trigger.dev](https://trigger.dev).

@@ -1,0 +1,60 @@
+name: Docs automation pipeline
+
+on:
+  push:
+    paths:
+      - 'docs/**'
+  pull_request:
+    paths:
+      - 'docs/**'
+  schedule:
+    - cron: '0 3 * * 0'   # weekly run (UTC)
+  workflow_dispatch: {}
+
+jobs:
+  docs-pipeline:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Install tools
+        run: |
+          npm ci || npm i fs-extra gray-matter slugify remark dotenv fuse.js openai axios simple-git @octokit/rest fast-levenshtein
+          npm i --save-dev typescript @types/node
+
+      - name: Normalize docs
+        run: |
+          npx tsx tools/docs-normalize.ts docs
+
+      - name: Run link-suggester
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          node tools/link-suggester.ts docs
+
+      - name: Classify & apply suggested links
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GIT_USER_NAME: "docs-bot"
+          GIT_USER_EMAIL: "docs-bot@users.noreply.github.com"
+          LINK_CONF_THRESHOLD: "0.75"
+          BRANCH_PREFIX: "docs-suggested-links"
+        run: |
+          node tools/apply-classified-suggestions.ts docs
+
+      - name: Upload report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs-apply-report
+          path: docs/apply-suggestions-report.json

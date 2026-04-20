@@ -1170,8 +1170,13 @@ program
   .description('Write file locally using local VFS')
   .action(async (path, content) => {
     const vfs = getVFS();
-    await vfs.commitFile(path, content);
-    console.log(COLORS.success(`File written and committed locally: ${path}`));
+    try {
+      await vfs.commitFile(path, content);
+      console.log(COLORS.success(`File written and committed locally: ${path}`));
+    } catch (error: any) {
+      console.log(COLORS.error(`Failed to write file: ${error.message}`));
+      process.exit(1);
+    }
   });
 
 program
@@ -1288,6 +1293,11 @@ program
 
     if (!sandboxId) {
       console.log(COLORS.error('No sandbox specified. Use -s or set currentSandbox in config.'));
+      process.exit(1);
+    }
+
+    if (!options.reverse && !fs.existsSync(localPath)) {
+      console.log(COLORS.error(`Local path not found: ${localPath}`));
       process.exit(1);
     }
 

@@ -1,3 +1,15 @@
+---
+id: sdk-codesandboxsdk
+title: codesandboxsdk
+aliases:
+  - codesandboxsdk
+  - codesandboxsdk.md
+tags:
+  - sdk
+layer: core
+summary: "Below is a production-grade CodeSandbox (SDK) integration pattern for a Next.js LLM chat app with:\r\n\r\n/api/chat → LLM with schema-enforced tool calls (WRITE_FILE, READ_FILE, RUN, etc.)\r\n\r\n/api/sandbox → sandbox execution layer\r\n\r\n/api/filesystem → your existing virtual FS\r\n\r\nOptional CSB Terminal fr"
+anchors: []
+---
 Below is a production-grade CodeSandbox (SDK) integration pattern for a Next.js LLM chat app with:
 
 /api/chat → LLM with schema-enforced tool calls (WRITE_FILE, READ_FILE, RUN, etc.)

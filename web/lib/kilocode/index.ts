@@ -82,4 +82,4 @@ export type {
 } from './kilo-gateway';
 
 // Re-export for convenience
-export default KilocodeServer;
+export { default } from './kilocode-server';
