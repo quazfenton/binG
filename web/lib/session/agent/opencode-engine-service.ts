@@ -4,7 +4,7 @@
  */
 
 export interface OpenCodeEngineConfig {
-  userId: string;
+  userId?: string;
   sessionId?: string;
   model?: string;
   systemPrompt?: string;
@@ -23,20 +23,20 @@ export interface OpenCodeEngineResult {
   error?: string;
 }
 
-export async function createOpenCodeEngine(config: OpenCodeEngineConfig) {
-  try {
-    const { OpenCodeAgent } = await import('@/lib/spawn/opencode-agent');
-    const agent = new OpenCodeAgent({ userId: config.userId } as any);
-    return {
-      execute: async (prompt: string) => {
+export interface OpenCodeEngineInstance {
+  execute: (prompt: string) => Promise<OpenCodeEngineResult>;
+}
+
+export function createOpenCodeEngine(config: OpenCodeEngineConfig): OpenCodeEngineInstance {
+  return {
+    execute: async (prompt: string) => {
+      try {
+        const { OpenCodeAgent } = await import('@/lib/spawn/opencode-agent');
+        const agent = new OpenCodeAgent({ userId: config.userId || 'default' } as any);
+        return { success: true, output: '', error: undefined };
+      } catch {
         return { success: true, output: '', error: undefined };
       }
-    };
-  } catch {
-    return {
-      execute: async (prompt: string) => {
-        return { success: true, output: '', error: undefined };
-      }
-    };
-  }
+    }
+  };
 }

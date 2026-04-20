@@ -427,7 +427,13 @@ class DaytonaSandboxHandle implements SandboxHandle {
 
   async getPreviewLink(port: number): Promise<PreviewInfo> {
     const preview = await this.sandbox.getPreviewLink(port)
-    return { port, url: preview.url, token: preview.token }
+    return {
+      port,
+      url: preview.url,
+      token: preview.token,
+      authHeaders: preview.token ? { 'Authorization': `Bearer ${preview.token}` } : {},
+      openedAt: Date.now(),
+    }
   }
 
   async createPty(options: PtyOptions): Promise<PtyHandle> {
