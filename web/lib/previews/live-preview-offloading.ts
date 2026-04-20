@@ -519,9 +519,11 @@ export const OFFLOAD_THRESHOLDS = {
 // ============================================================================
 
 export class LivePreviewOffloading {
+  private cloudDestCache: Map<string, boolean> = new Map();
+
   /**
    * Analyze project for offload heuristics
-   * 
+   *
    * Detects:
    * - node_modules size
    * - Estimated build time
@@ -832,12 +834,14 @@ export class LivePreviewOffloading {
       filePaths,
       framework,
       bundler,
-      hasPython,
-      hasNodeServer,
-      hasNextJS,
+      {
+        hasPython,
+        hasNodeServer,
+        hasNextJS,
+        hasHeavyComputation,
+        hasAPIKeys
+      },
       packageJson,
-      hasHeavyComputation,
-      hasAPIKeys,
       heuristics  // Pass heuristics for cloud offload decision
     );
 
@@ -1304,25 +1308,53 @@ export class LivePreviewOffloading {
   }
 
   /**
+   * Determine if a project is destined for cloud execution
+   * Cached for performance since this is called frequently
+   */
+  private isCloudDestinedProject(detection: ProjectDetection): boolean {
+    // Create cache key from relevant detection properties
+    const cacheKey = `${detection.framework}-${detection.hasBackend}-${detection.hasNodeServer}-${detection.hasPython}-${detection.hasHeavyComputation}-${detection.hasAPIKeys}`;
+
+    if (!this.cloudDestCache) {
+      this.cloudDestCache = new Map();
+    }
+
+    if (this.cloudDestCache.has(cacheKey)) {
+      return this.cloudDestCache.get(cacheKey)!;
+    }
+
+    const result = detection.hasBackend || detection.hasNodeServer || detection.hasPython ||
+                   ['node', 'flask', 'fastapi', 'django'].includes(detection.framework as string) ||
+                   detection.hasHeavyComputation || detection.hasAPIKeys;
+
+    this.cloudDestCache.set(cacheKey, result);
+    return result;
+  }
+
+  /**
    * Detect preview mode based on project characteristics
-   * Enhanced with heuristics for auto-offload decision
+   *
    * Priority: Local first (Sandpack -> WebContainer -> Pyodide), then cloud fallback
    */
   detectPreviewMode(
     filePaths: string[],
     framework: AppFramework,
     bundler: Bundler,
-    hasPython: boolean,
-    hasNodeServer: boolean,
-    hasNextJS: boolean,
+    capabilities: {
+      hasPython: boolean;
+      hasNodeServer: boolean;
+      hasNextJS: boolean;
+      hasHeavyComputation: boolean;
+      hasAPIKeys: boolean;
+    },
     packageJson: Record<string, any> | null,
-    hasHeavyComputation: boolean,
-    hasAPIKeys: boolean,
     heuristics?: OffloadHeuristics
   ): PreviewMode {
-    
+    // Extract capabilities for cleaner code
+    const { hasPython, hasNodeServer, hasNextJS, hasHeavyComputation, hasAPIKeys } = capabilities;
+
     // 1. Static/Frontend Only: Use Iframe
-    const isBackend = hasNodeServer || hasPython || framework === 'node' || framework === 'flask' || framework === 'fastapi';
+    const isBackend = hasNodeServer || hasPython || ['node', 'flask', 'fastapi'].includes(framework as string);
     const isStatic = !isBackend && (filePaths.some(p => p.endsWith('.html')) && !hasNodeServer);
     
     if (isStatic) {
@@ -1689,10 +1721,7 @@ export class LivePreviewOffloading {
     // --- NATIVE CLOUD BYPASS ---
     // If we have a backend, node server, or cloud-destined project, do NOT attempt to strip code for the browser.
     // Bypass ALL code transformations (SSR stripping, Node module removal) to preserve original code for native execution.
-    const isCloudDestined = detection.hasBackend || detection.hasNodeServer || detection.hasPython ||
-                           detection.framework === 'node' || detection.framework === 'flask' ||
-                           detection.framework === 'fastapi' || detection.framework === 'django' ||
-                           detection.hasHeavyComputation || detection.hasAPIKeys;
+    const isCloudDestined = this.isCloudDestinedProject(detection);
 
     if (isCloudDestined) {
       // For cloud-destined projects, bypass transformations but format files correctly

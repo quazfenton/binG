@@ -1,4 +1,9 @@
-import { LivePreviewOffloading } from '../../../web/lib/previews/live-preview-offloading';
+// CLI: LivePreviewOffloading is a web-only module; provide a no-op class stub
+class LivePreviewOffloading {
+  offload() { return Promise.resolve(null); }
+  restore() { return Promise.resolve(null); }
+  getStatus() { return { available: false, reason: 'CLI-only mode' }; }
+}
 import { loadSandpackClient } from "@codesandbox/sandpack-client";
 import { bundleLocalLibrary, scanLocalDependencies } from './local-bundle-manager';
 import chalk from 'chalk';
@@ -20,7 +25,7 @@ export interface PreviewResult {
 }
 
 export class PreviewManager {
-  private offloader: LivePreviewOffloading;
+  private offloader: any;
 
   constructor() {
     this.offloader = new LivePreviewOffloading();
@@ -89,7 +94,7 @@ export class PreviewManager {
         "#preview-container", // Target container ID
         {
           files: Object.entries(files).reduce((acc, [k, v]) => ({ ...acc, [k]: { code: v } }), {}),
-          environment
+          // environment property removed — not valid in Sandpack client config
         },
         clientOptions
       );

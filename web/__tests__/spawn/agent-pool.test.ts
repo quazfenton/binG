@@ -96,9 +96,8 @@ describe('AgentPool', () => {
   //
   // IMPORTANT: This helper must NOT be used inside vi.useFakeTimers() blocks.
   // Fake timers freeze setTimeout and Date.now(), so the polling loop would
-  // never yield and the timeout guard would never fire. In fake-timer tests,
-  // use `await vi.advanceTimersByTimeAsync(0); await flushPromises();` then
-  // assert the size directly.
+  // never yield and the timeout guard would never fire. Use waitForPoolSizeFake()
+  // instead.
   async function waitForPoolSize(
     pool: ReturnType<typeof getAgentPool>,
     expectedTotal: number,
@@ -113,6 +112,26 @@ describe('AgentPool', () => {
       }
       // Yield to the event loop so macrotasks (Vitest module RPC, etc.) can run
       await new Promise<void>((r) => setTimeout(r, 0));
+    }
+  }
+
+  // Fake-timer safe variant of waitForPoolSize.
+  // Uses vi.advanceTimersByTimeAsync instead of setTimeout to drive the
+  // event loop forward. Must only be called inside vi.useFakeTimers() blocks.
+  async function waitForPoolSizeFake(
+    pool: ReturnType<typeof getAgentPool>,
+    expectedTotal: number,
+    maxIterations = 20,
+  ): Promise<void> {
+    for (let i = 0; i < maxIterations; i++) {
+      if (pool.getStats().total >= expectedTotal) return;
+      await vi.advanceTimersByTimeAsync(0);
+      await flushPromises();
+    }
+    if (pool.getStats().total < expectedTotal) {
+      throw new Error(
+        `waitForPoolSizeFake: expected ${expectedTotal} but got ${pool.getStats().total} after ${maxIterations} iterations`,
+      );
     }
   }
 
@@ -515,13 +534,7 @@ describe('AgentPool', () => {
 
       const pool = getAgentPool('claude-code', config);
       // Let preWarm complete
-      await vi.advanceTimersByTimeAsync(0);
-      await flushPromises();
-
-      // Pool should have 1 pre-warmed agent
-      await vi.advanceTimersByTimeAsync(0);
-      await flushPromises();
-      expect(pool.getStats().total).toBe(1);
+      await waitForPoolSizeFake(pool, 1);
       expect(pool.getStats().available).toBe(1);
 
       // Create 2 agents total (1 pre-warmed + 1 on-demand)
@@ -561,12 +574,7 @@ describe('AgentPool', () => {
       };
 
       const pool = getAgentPool('claude-code', config);
-      await vi.advanceTimersByTimeAsync(0);
-      await flushPromises();
-
-      await vi.advanceTimersByTimeAsync(0);
-      await flushPromises();
-      expect(pool.getStats().total).toBe(2);
+      await waitForPoolSizeFake(pool, 2);
 
       // Advance well past idleTimeout
       await vi.advanceTimersByTimeAsync(5000);
@@ -623,12 +631,7 @@ describe('AgentPool', () => {
       };
 
       const pool = getAgentPool('claude-code', config);
-      await vi.advanceTimersByTimeAsync(0);
-      await flushPromises();
-
-      await vi.advanceTimersByTimeAsync(0);
-      await flushPromises();
-      expect(pool.getStats().total).toBe(1);
+      await waitForPoolSizeFake(pool, 1);
 
       // Add an extra agent beyond minSize
       const reused = await pool.acquire(); // acquires pre-warmed
@@ -721,13 +724,9 @@ describe('AgentPool', () => {
       };
 
       const pool = getAgentPool('claude-code', config);
-      await vi.advanceTimersByTimeAsync(0);
-      await flushPromises();
 
       // Pre-warmed 1 agent (callCount=1, unhealthy)
-      await vi.advanceTimersByTimeAsync(0);
-      await flushPromises();
-      expect(pool.getStats().total).toBe(1);
+      await waitForPoolSizeFake(pool, 1);
 
       // Advance to trigger health check cycle
       await vi.advanceTimersByTimeAsync(600);

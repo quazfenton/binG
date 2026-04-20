@@ -331,9 +331,10 @@ export function createFilesystemTools(
             message: `Directory created: ${scopedPath}`,
           };
         } catch (error: any) {
+          const { formatToolError } = await import('@/lib/orchestra/shared-agent-context');
           return {
             success: false,
-            error: error.message || 'Failed to create directory',
+            error: formatToolError('create_directory', error, { path }),
           };
         }
       },
@@ -449,9 +450,10 @@ export function createFilesystemTools(
             total: results.length,
           };
         } catch (error: any) {
+          const { formatToolError } = await import('@/lib/orchestra/shared-agent-context');
           return {
             success: false,
-            error: error.message || 'Failed to search files',
+            error: formatToolError('search_files', error, { query, path }),
           };
         }
       },

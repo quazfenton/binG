@@ -286,7 +286,7 @@ export default function CodePreviewPanel({
   const [projectDetection, setProjectDetection] = useState<ReturnType<typeof detectProject> | null>(null);
   const [isManualPreviewActive, setIsManualPreviewActive] = useState(false);
   const [manualPreviewMayBeStale, setManualPreviewMayBeStale] = useState(false); // Track if VFS changed while in manual preview
-  const [previewMode, setPreviewMode] = useState<'sandpack' | 'iframe' | 'raw' | 'parcel' | 'devbox' | 'pyodide' | 'vite' | 'webpack' | 'webcontainer' | 'nextjs' | 'codesandbox' | 'opensandbox' | 'node' | 'local' | 'cloud'>('sandpack');
+  const [previewMode, setPreviewMode] = useState<'sandpack' | 'iframe' | 'raw' | 'parcel' | 'devbox' | 'pyodide' | 'vite' | 'webpack' | 'webcontainer' | 'nextjs' | 'codesandbox' | 'opensandbox' | 'node' | 'local' | 'cloud' | 'modal'>('sandpack');
   const [devBoxOutput, setDevBoxOutput] = useState<string[]>([]);
   const [isDevBoxRunning, setIsDevBoxRunning] = useState(false);
   const [pyodideOutput, setPyodideOutput] = useState<string>('');
@@ -301,6 +301,8 @@ export default function CodePreviewPanel({
   const [isWebcontainerBooting, setIsWebcontainerBooting] = useState(false);
   const [nextjsUrl, setNextjsUrl] = useState<string | null>(null);
   const [isNextjsBuilding, setIsNextjsBuilding] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewAuthHeaders, setPreviewAuthHeaders] = useState<Record<string, string> | null>(null);
   const [codesandboxUrl, setCodesandboxUrl] = useState<string | null>(null);
   const [isCodesandboxLoading, setIsCodesandboxLoading] = useState(false);
   const [opensandboxUrl, setOpensandboxUrl] = useState<string | null>(null);
@@ -1245,7 +1247,7 @@ export default function CodePreviewPanel({
       // Store files with root-relative paths for Sandpack runners
       setManualPreviewFiles(previewFiles);
       setIsManualPreviewActive(true);
-      setPreviewMode(selectedMode);
+      setPreviewMode(selectedMode === 'fastly' || selectedMode === 'valtown' ? 'cloud' : selectedMode);
       if (!preserveTab) {
         setSelectedTab('preview');  // Always switch to preview tab
       }
