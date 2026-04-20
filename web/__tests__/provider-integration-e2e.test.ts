@@ -10,7 +10,21 @@
  * - Sandbox providers
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+
+// Mock image generation providers to prevent API calls
+vi.mock('@/lib/image-generation/provider-registry', () => ({
+  getDefaultRegistry: vi.fn().mockReturnValue({
+    initializeAll: vi.fn(),
+    getAllProviders: vi.fn().mockReturnValue([]),
+    generateWithFallback: vi.fn().mockRejectedValue(new Error('Mocked generation error')),
+  }),
+}));
+
+// Mock sandbox providers
+vi.mock('@/lib/sandbox/providers', () => ({
+  getSandboxProvider: vi.fn().mockRejectedValue(new Error('Mocked sandbox provider error')),
+}));
 
 describe('Provider Integration E2E Tests', () => {
   const testUserId = 'provider_test_' + Date.now();

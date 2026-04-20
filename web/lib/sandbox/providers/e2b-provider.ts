@@ -854,10 +854,12 @@ class E2BSandboxHandle implements SandboxHandle {
   async getPreviewLink(port: number): Promise<PreviewInfo> {
     try {
       const host = this.sandbox.getHost(port)
-      
+
       return {
         port,
         url: host,
+        authHeaders: {}, // E2B typically doesn't require additional auth headers
+        openedAt: Date.now(),
       }
     } catch (error: any) {
       console.error('[E2B] Get preview link error:', error)
