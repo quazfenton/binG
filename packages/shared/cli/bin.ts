@@ -267,6 +267,7 @@ interface Provider {
   models: string[];
   supportsOAuth: boolean;
   oauthUrl?: string;
+  isAgent?: boolean;
 }
 
 const AVAILABLE_PROVIDERS: Provider[] = [
@@ -278,6 +279,11 @@ const AVAILABLE_PROVIDERS: Provider[] = [
   { id: 'cohere', name: 'Cohere', models: ['command-r-plus', 'command-r'], supportsOAuth: false },
   { id: 'huggingface', name: 'Hugging Face', models: ['llama-3.1-70b', 'llama-3.1-8b', 'mixtral-8x7b'], supportsOAuth: true, oauthUrl: 'https://huggingface.co/settings' },
   { id: 'replicate', name: 'Replicate', models: ['llama-3.1-70b', 'flux-pro', 'flux-schnell'], supportsOAuth: true, oauthUrl: 'https://replicate.com/account' },
+  { id: 'opencode', name: 'OpenCode Agent', models: ['claude-3-5-sonnet', 'claude-3-opus', 'gpt-4o', 'gpt-4o-mini'], supportsOAuth: false, isAgent: true },
+  { id: 'pi', name: 'Pi Agent', models: [], supportsOAuth: false, isAgent: true },
+  { id: 'codex', name: 'Codex CLI', models: ['claude-3.5-sonnet-20241022', 'gpt-4o'], supportsOAuth: false, isAgent: true },
+  { id: 'amp', name: 'Amp Agent', models: ['claude-3-5-sonnet', 'gpt-4o'], supportsOAuth: false, isAgent: true },
+  { id: 'claude-code', name: 'Claude Code', models: ['claude-3-5-sonnet', 'claude-3-opus'], supportsOAuth: false, isAgent: true },
 ];
 
 function getProvider(id: string): Provider | undefined {
@@ -2879,6 +2885,431 @@ program
   });
 
 program
+  // ============================================================================
+// BYOK KEY COMMANDS
+// ============================================================================
+
+program
+  .command('keys:list')
+  .description('List configured API keys')
+  .action(() => {
+    const keys = listKeys();
+    console.log(chalk.cyanBright('\n=== Configured API Keys ===\n'));
+    for (const { provider, hasKey } of keys) {
+      const status = hasKey ? COLORS.success('✓ Configured') : COLORS.warning('✗ Not set');
+      console.log(`${COLORS.primary(`${provider}:`)} ${status}`);
+    }
+  });
+
+program
+  .command('keys:set <provider> <apiKey>')
+  .description('Set API key for a provider')
+  .option('-e, --echo', 'Echo key for confirmation')
+  .action(async (provider, apiKey, options) => {
+    if (!validateRequired(provider, 'Provider name')) return;
+    if (!validateRequired(apiKey, 'API key')) return;
+
+    const normalized = provider.toLowerCase();
+    const isValid = AVAILABLE_PROVIDERS.some(p => p.id === normalized);
+
+    if (!isValid) {
+      console.log(COLORS.error(`\nUnknown provider. Available: ${AVAILABLE_PROVIDERS.map(p => p.id).join(', ')}`));
+      return;
+    }
+
+    setKey(normalized, apiKey);
+    console.log(COLORS.success(`\nAPI key set for ${normalized}`));
+
+    if (options.echo) {
+      console.log(COLORS.info(`Key: ${apiKey.slice(0, 4)}...${apiKey.slice(-4)}`));
+    }
+  });
+
+program
+  .command('keys:delete <provider>')
+  .description('Delete API key for a provider')
+  .action(async (provider) => {
+    if (!validateRequired(provider, 'Provider name')) return;
+
+    deleteKey(provider.toLowerCase());
+    console.log(COLORS.success(`\nAPI key removed for ${provider}`));
+  });
+
+program
+  .command('keys:oauth <provider>')
+  .description('Open OAuth URL for provider in browser')
+  .action(async (provider) => {
+    const p = getProvider(provider.toLowerCase());
+
+    if (!p) {
+      console.log(COLORS.error(`\nUnknown provider: ${provider}`));
+      return;
+    }
+
+    if (!p.supportsOAuth) {
+      console.log(COLORS.warning(`\n${p.name} does not support OAuth`));
+      console.log(COLORS.info('Use: bing keys:set anthropic sk-... to set your key manually'));
+      return;
+    }
+
+    console.log(chalk.cyanBright('\n=== OAuth Setup ===\n'));
+    console.log(COLORS.info(`Opening: ${p.oauthUrl}`));
+    console.log(COLORS.warning('After authorizing, paste the API key here:'));
+
+    const newKey = await promptAsync('API Key: ');
+    if (newKey.trim()) {
+      setKey(provider.toLowerCase(), newKey.trim());
+      console.log(COLORS.success('\nKey saved!'));
+    }
+  });
+
+// ============================================================================
+// AGENT BINARY COMMANDS (OpenCode, Pi, Codex, Amp, Claude Code)
+// ============================================================================
+
+const AGENT_BINARIES = [
+  { id: 'opencode', name: 'OpenCode', desc: 'AI coding agent with SDK server', supportsModels: true },
+  { id: 'pi', name: 'Pi', desc: 'Personal AI agent', supportsModels: false },
+  { id: 'codex', name: 'Codex', desc: 'OpenAI Codex CLI', supportsModels: true },
+  { id: 'amp', name: 'Amp', desc: 'Amp coding agent', supportsModels: true },
+  { id: 'claude-code', name: 'Claude Code', desc: 'Anthropic Claude Code', supportsModels: true },
+];
+
+program
+  .command('agents:list')
+  .description('List available agent binaries')
+  .action(() => {
+    console.log(chalk.cyanBright('\n=== Available Agent Binaries ===\n'));
+    for (const agent of AGENT_BINARIES) {
+      const status = agent.supportsModels ? COLORS.success('✓ Models') : COLORS.warning('○');
+      console.log(`${COLORS.primary(`${agent.id}:`)} ${agent.desc} ${status}`);
+    }
+  });
+
+program
+  .command('agents:detect <agent>')
+  .description('Detect agent binary location')
+  .action(async (agent) => {
+    const normalized = agent.toLowerCase();
+    const validAgents = AGENT_BINARIES.map(a => a.id);
+
+    if (!validAgents.includes(normalized)) {
+      console.log(COLORS.error(`\nUnknown agent: ${agent}`));
+      console.log(COLORS.info(`Available: ${validAgents.join(', ')}`));
+      return;
+    }
+
+    const spinner = ora(`Detecting ${normalized} binary...`).start();
+
+    try {
+      const axios = await import('axios');
+      let binaryPath: string | null = null;
+
+      if (normalized === 'opencode') {
+        const result = await axios.default.get('http://localhost:11434/api/version').catch(() => null);
+        if (result) {
+          binaryPath = 'OpenCode server running';
+        } else {
+          const { findOpencodeBinary } = await import('../../web/lib/agent-bins/find-opencode-binary');
+          binaryPath = await findOpencodeBinary();
+        }
+      } else if (normalized === 'pi') {
+        const { findPiBinary } = await import('../../web/lib/agent-bins/find-pi-binary');
+        binaryPath = await findPiBinary();
+      } else if (normalized === 'codex') {
+        const { findCodexBinary } = await import('../../web/lib/agent-bins/find-codex-binary');
+        binaryPath = await findCodexBinary();
+      } else if (normalized === 'amp') {
+        const { findAmpBinary } = await import('../../web/lib/agent-bins/find-amp-binary');
+        binaryPath = await findAmpBinary();
+      } else if (normalized === 'claude-code') {
+        const { findClaudeCodeBinary } = await import('../../web/lib/agent-bins/find-claude-code-binary');
+        binaryPath = await findClaudeCodeBinary();
+      }
+
+      spinner.stop();
+
+      if (binaryPath) {
+        console.log(COLORS.success(`\n${normalized} found at:`));
+        console.log(COLORS.info(binaryPath));
+      } else {
+        console.log(COLORS.warning(`\n${normalized} not found`));
+        console.log(COLORS.info('Install: npm install -g @' + normalized + '/cli'));
+      }
+    } catch (error: any) {
+      spinner.stop();
+      console.log(COLORS.error(`Error detecting agent: ${error.message}`));
+    }
+  });
+
+program
+  .command('agents:start <agent>')
+  .description('Start agent in server mode')
+  .option('-p, --port <port>', 'Server port', '11434')
+  .option('-m, --model <model>', 'Model to use')
+  .action(async (agent, options) => {
+    const normalized = agent.toLowerCase();
+    const validAgents = AGENT_BINARIES.map(a => a.id);
+
+    if (!validAgents.includes(normalized)) {
+      console.log(COLORS.error(`\nUnknown agent: ${agent}`));
+      return;
+    }
+
+    const config = loadConfig();
+
+    const spinner = ora(`Starting ${normalized}...`).start();
+
+    try {
+      if (normalized === 'opencode') {
+        const { findOpencodeBinary } = await import('../../web/lib/agent-bins/find-opencode-binary');
+        const binaryPath = await findOpencodeBinary();
+
+        if (!binaryPath) {
+          spinner.stop();
+          console.log(COLORS.error('\nOpenCode not found. Install: npm install -g opencode'));
+          return;
+        }
+
+        const args = ['serve', '--port', options.port];
+        if (options.model) args.push('--model', options.model);
+
+        const proc = spawn(binaryPath, args, { stdio: 'inherit', shell: true });
+        proc.on('close', (code) => process.exit(code || 0));
+        proc.on('error', (err) => {
+          spinner.stop();
+          console.log(COLORS.error(`Error: ${err.message}`));
+        });
+
+        spinner.stop();
+        console.log(COLORS.success(`\nOpenCode server started on port ${options.port}`));
+        console.log(COLORS.info(`API: http://localhost:${options.port}/api`));
+      } else {
+        spinner.stop();
+        console.log(COLORS.warning(`\n${normalized} does not support server mode`));
+        console.log(COLORS.info('Use: bing agents:run ' + normalized + ' <prompt>'));
+      }
+    } catch (error: any) {
+      spinner.stop();
+      console.log(COLORS.error(`Error: ${error.message}`));
+    }
+  });
+
+program
+  .command('agents:run <agent> <prompt>')
+  .description('Run agent with a prompt')
+  .option('-m, --model <model>', 'Model to use')
+  .option('-s, --stream', 'Enable streaming')
+  .action(async (agent, prompt, options) => {
+    const normalized = agent.toLowerCase();
+    const validAgents = AGENT_BINARIES.map(a => a.id);
+
+    if (!validAgents.includes(normalized)) {
+      console.log(COLORS.error(`\nUnknown agent: ${agent}`));
+      return;
+    }
+
+    const spinner = ora(`Running ${normalized}...`).start();
+
+    try {
+      let result: any;
+
+      if (normalized === 'opencode') {
+        const response = await apiRequest('/chat', {
+          method: 'POST',
+          data: {
+            messages: [{ role: 'user', content: prompt }],
+            model: options.model || 'claude-3-5-sonnet',
+            stream: options.stream !== false,
+          },
+        });
+        result = response.response || response.content;
+      } else if (normalized === 'codex') {
+        const { findCodexBinary } = await import('../../web/lib/agent-bins/find-codex-binary');
+        const binaryPath = await findCodexBinary();
+
+        if (!binaryPath) {
+          spinner.stop();
+          console.log(COLORS.error('\nCodex not found'));
+          return;
+        }
+
+        const args = ['exec', '--prompt', prompt];
+        if (options.model) args.push('--model', options.model);
+
+        const { promisify } = await import('util');
+        const execAsync = promisify(require('child_process').exec);
+
+        result = (await execAsync(`"${binaryPath}" ${args.join(' ')}`)).stdout;
+      } else {
+        const { findAgentBinary } = await import('../../web/lib/agent-bins/find-' + normalized + '-binary');
+        const binaryPath = await findAgentBinary();
+
+        if (!binaryPath) {
+          spinner.stop();
+          console.log(COLORS.error(`\n${normalized} not found`));
+          return;
+        }
+
+        const { promisify } = await import('util');
+        const execAsync = promisify(require('child_process').exec);
+        const args = [prompt];
+        if (options.model) args.unshift('--model', options.model);
+
+        result = (await execAsync(`"${binaryPath}" ${args.join(' ')}`)).stdout;
+      }
+
+      spinner.stop();
+
+      if (options.stream) {
+        console.log(COLORS.success('\n'));
+        process.stdout.write(result);
+      } else {
+        console.log(COLORS.success('\n') + result);
+      }
+    } catch (error: any) {
+      spinner.stop();
+      console.log(COLORS.error(`Error: ${error.message}`));
+    }
+  });
+
+program
+  .command('agents:stop <agent>')
+  .description('Stop agent server')
+  .action(async (agent) => {
+    const normalized = agent.toLowerCase();
+
+    if (normalized === 'opencode') {
+      try {
+        await axios.post('http://localhost:11434/api/shutdown');
+        console.log(COLORS.success('\nOpenCode server stopped'));
+      } catch {
+        console.log(COLORS.warning('\nOpenCode server not running'));
+      }
+    } else {
+      console.log(COLORS.warning(`\n${normalized} does not run as server`));
+    }
+  });
+
+program
+  .command('agents:models <agent>')
+  .description('List models for agent')
+  .action(async (agent) => {
+    const normalized = agent.toLowerCase();
+    const agentInfo = AGENT_BINARIES.find(a => a.id === normalized);
+
+    if (!agentInfo) {
+      console.log(COLORS.error(`\nUnknown agent: ${agent}`));
+      return;
+    }
+
+    if (!agentInfo.supportsModels) {
+      console.log(COLORS.warning(`\n${normalized} does not support model selection`));
+      return;
+    }
+
+    const MODELS: Record<string, string[]> = {
+      opencode: ['claude-3-5-sonnet', 'claude-3-opus', 'gpt-4o', 'gpt-4o-mini'],
+      codex: ['claude-3.5-sonnet-20241022', 'gpt-4o'],
+      'claude-code': ['claude-3-5-sonnet', 'claude-3-opus'],
+      amp: ['claude-3-5-sonnet', 'gpt-4o'],
+    };
+
+    const models = MODELS[normalized] || [];
+    console.log(chalk.cyanBright(`\n=== ${agentInfo.name} Models ===\n`));
+    for (const model of models) {
+      console.log(`  ${COLORS.primary(model)}`);
+    }
+  });
+
+// ============================================================================
+// PROVIDER/MODEL COMMANDS
+// ============================================================================
+
+program
+  .command('providers:models <provider>')
+  .description('List available models for a provider')
+  .action(async (provider) => {
+    if (!validateRequired(provider, 'Provider name')) return;
+
+    const p = getProvider(provider.toLowerCase());
+    if (!p) {
+      console.log(COLORS.error(`\nUnknown provider: ${provider}`));
+      console.log(COLORS.info(`Available: ${AVAILABLE_PROVIDERS.map(x => x.id).join(', ')}`));
+      return;
+    }
+
+    console.log(chalk.cyanBright(`\n=== ${p.name} Models ===\n`));
+    for (const model of p.models) {
+      console.log(`  ${COLORS.primary(model)}`);
+    }
+  });
+
+program
+  .command('model:select <provider> <model>')
+  .description('Set default model for a provider')
+  .action(async (provider, model) => {
+    const p = getProvider(provider.toLowerCase());
+    if (!p) {
+      console.log(COLORS.error(`\nUnknown provider: ${provider}`));
+      return;
+    }
+
+    if (!p.models.includes(model)) {
+      console.log(COLORS.error(`\nInvalid model: ${model}`));
+      console.log(COLORS.info(`Available: ${p.models.join(', ')}`));
+      return;
+    }
+
+    const config = loadConfig();
+    config.model = model;
+    saveConfig(config);
+    console.log(COLORS.success(`\nDefault model set: ${provider}/${model}`));
+  });
+
+program
+  .command('orchestration:modes')
+  .description('List available orchestration modes')
+  .action(() => {
+    const MODES = [
+      { id: 'unified-agent', desc: 'Default unified agent' },
+      { id: 'task-router', desc: 'Task-based routing' },
+      { id: 'stateful-agent', desc: 'Stateful conversation' },
+      { id: 'agent-kernel', desc: 'Kernel-based execution' },
+      { id: 'execution-graph', desc: 'Graph-based workflows' },
+      { id: 'dual-process', desc: 'Dual process with classifier' },
+      { id: 'dual-process:fast', desc: 'Fast dual process' },
+      { id: 'cognitive-resonance', desc: 'Cognitive resonance' },
+      { id: 'desktop', desc: 'Desktop-only mode' },
+    ];
+
+    console.log(chalk.cyanBright('\n=== Orchestration Modes ===\n'));
+    for (const mode of MODES) {
+      console.log(`${COLORS.primary(`${mode.id}:`)} ${mode.desc}`);
+    }
+    console.log(COLORS.info('\nUse header: X-Orchestration-Mode: <mode>'));
+  });
+
+program
+  .command('session:mode <mode>')
+  .description('Set default orchestration mode')
+  .action(async (mode) => {
+    if (!validateRequired(mode, 'Mode')) return;
+
+    const validModes = ['unified-agent', 'task-router', 'stateful-agent', 'agent-kernel', 'execution-graph', 'dual-process', 'cognitive-resonance', 'desktop'];
+    if (!validModes.includes(mode)) {
+      console.log(COLORS.error(`\nInvalid mode: ${mode}`));
+      console.log(COLORS.info(`Valid: ${validModes.join(', ')}`));
+      return;
+    }
+
+    const config = loadConfig();
+    config.orchestrationMode = mode;
+    saveConfig(config);
+    console.log(COLORS.success(`\nOrchestration mode set to: ${mode}`));
+  });
+
+program
   .command('local:mcp')
   .description('Start local MCP server')
   .option('-p, --port <port>', 'Port', '3001')
@@ -3471,16 +3902,30 @@ function drawBox(lines: string[], x: number, y: number, theme: TUITheme, selecte
 const MENU_ITEMS_NOEMOJI: TUIMenuItem[] = [
   { id: 'chat', label: 'Chat', icon: '', action: 'chat', description: 'Start an AI conversation' },
   { id: 'ask', label: 'Ask', icon: '', action: 'ask', description: 'Ask a quick question' },
+  { id: 'provider', label: 'Provider', icon: '', action: 'providers:list', description: 'Select provider/model' },
+  { id: 'keys', label: 'Keys', icon: '', action: 'keys:list', description: 'Manage API keys (BYOK)' },
   { id: 'sandbox', label: 'Sandbox', icon: '', action: 'sandbox:create', description: 'Create a development environment' },
   { id: 'file', label: 'Files', icon: '', action: 'file:list', description: 'Browse workspace files' },
   { id: 'image', label: 'Images', icon: '', action: 'image:generate', description: 'Generate AI images' },
   { id: 'agents', label: 'Agents', icon: '', action: 'agents:list', description: 'Manage running agents' },
   { id: 'status', label: 'Status', icon: '', action: 'status', description: 'View system status' },
   { id: 'config', label: 'Config', icon: '', action: 'config', description: 'Configure settings' },
+  { id: 'modes', label: 'Modes', icon: '', action: 'orchestration:modes', description: 'Orchestration modes' },
 ];
 
 const MENU_ITEMS_EMOJI: TUIMenuItem[] = [
   { id: 'chat', label: 'Chat', icon: '💬', action: 'chat', description: 'Start an AI conversation' },
+  { id: 'ask', label: 'Ask', icon: '❓', action: 'ask', description: 'Ask a quick question' },
+  { id: 'provider', label: 'Provider', icon: '🔑', action: 'providers:list', description: 'Select provider/model' },
+  { id: 'keys', label: 'Keys', icon: '🔐', action: 'keys:list', description: 'Manage API keys (BYOK)' },
+  { id: 'sandbox', label: 'Sandbox', icon: '📦', action: 'sandbox:create', description: 'Create a development environment' },
+  { id: 'file', label: 'Files', icon: '📁', action: 'file:list', description: 'Browse workspace files' },
+  { id: 'image', label: 'Images', icon: '🖼️', action: 'image:generate', description: 'Generate AI images' },
+  { id: 'agents', label: 'Agents', icon: '🤖', action: 'agents:list', description: 'Manage running agents' },
+  { id: 'status', label: 'Status', icon: '📊', action: 'status', description: 'View system status' },
+  { id: 'config', label: 'Config', icon: '⚙️', action: 'config', description: 'Configure settings' },
+  { id: 'modes', label: 'Modes', icon: '🔄', action: 'orchestration:modes', description: 'Orchestration modes' },
+];
   { id: 'ask', label: 'Ask', icon: '❓', action: 'ask', description: 'Ask a quick question' },
   { id: 'sandbox', label: 'Sandbox', icon: '📦', action: 'sandbox:create', description: 'Create a development environment' },
   { id: 'file', label: 'Files', icon: '📁', action: 'file:list', description: 'Browse workspace files' },
@@ -3593,9 +4038,9 @@ async function runTUI(designName: string = 'avantgarde'): Promise<void> {
       }
     }
 
-    const designHint = designName === 'avantgarde' ? 'Emoji' : 'Avant-Garde';
+    const designHint = designName === 'avantgarde' ? 'Emoji' : designName === 'classic' ? 'Holo' : 'Avant';
     const footerY = menuStartY + designItems.length * 2 + 3;
-    const hints = ['↑↓ Navigate', 'Enter Select', 'Esc Exit', `\\ ${designHint}`];
+    const hints = ['↑↓ Navigate', 'Enter Select', 'Esc Exit', `\\ ${designHint}`, '/ Provider'];
     const hintWidth = Math.floor(width / hints.length);
     for (let i = 0; i < hints.length; i++) {
       output += `\x1b[${footerY};${i * hintWidth + 5}f\x1b[38;2;80;80;100m${hints[i]}\x1b[0m`;
@@ -3625,8 +4070,17 @@ async function runTUI(designName: string = 'avantgarde'): Promise<void> {
         process.stdout.write(cursorShow + clearScreen + moveCursor(0, 0));
         running = false;
       } else if (key === '\\') {
-        designName = designName === 'avantgarde' ? 'classic' : 'avantgarde';
+        designName = designName === 'avantgarde' ? 'classic' : designName === 'classic' ? 'holochat' : 'avantgarde';
         selectedIndex = 0;
+      } else if (key === '/') {
+        const config = loadConfig();
+        console.log(COLORS.info('\nAvailable providers:'));
+        for (const p of AVAILABLE_PROVIDERS) {
+          console.log(`  ${COLORS.primary(p.id)}: ${p.name}`);
+        }
+        console.log(COLORS.info('\nUse: bing providers:models <provider>'));
+        console.log(COLORS.info('Use: bing model:select <provider> <model>'));
+        running = false;
       } else if (key === '\t') {
         tick += 10;
       }

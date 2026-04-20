@@ -30,7 +30,7 @@ import {
   type OpenCodeEngineConfig,
 } from '../session/agent/opencode-engine-service';
 import { isDesktopMode } from "@bing/platform/env";
-import { findOpencodeBinarySync } from "@/lib/opencode/find-opencode-binary";
+import { findOpencodeBinarySync } from "@/lib/agent-bins/find-opencode-binary";
 
 
 import {

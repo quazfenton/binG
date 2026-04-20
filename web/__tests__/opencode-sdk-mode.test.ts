@@ -34,7 +34,15 @@ vi.mock('@bing/platform/env', () => ({
 }));
 
 // Mock find-opencode-binary so v2Native/v2Local can be controlled deterministically
+// NOTE: The unified-agent-service imports from @/lib/agent-bins/find-opencode-binary,
+// so we must mock BOTH paths — the old one (for backward-compat re-exports) and the
+// new one (the actual import used by the service).
 vi.mock('@/lib/opencode/find-opencode-binary', () => ({
+  findOpencodeBinary: vi.fn(() => Promise.resolve('/usr/local/bin/opencode')),
+  findOpencodeBinarySync: vi.fn(() => '/usr/local/bin/opencode'),
+}));
+
+vi.mock('@/lib/agent-bins/find-opencode-binary', () => ({
   findOpencodeBinary: vi.fn(() => Promise.resolve('/usr/local/bin/opencode')),
   findOpencodeBinarySync: vi.fn(() => '/usr/local/bin/opencode'),
 }));
@@ -676,7 +684,8 @@ describe('OpenCode SDK Mode', () => {
       delete process.env.OPENCODE_CONTAINERIZED;
 
       // Mock findOpencodeBinarySync to return null (binary not installed)
-      const { findOpencodeBinarySync } = await import('@/lib/opencode/find-opencode-binary');
+      // Must import from the same path the unified-agent-service uses
+      const { findOpencodeBinarySync } = await import('@/lib/agent-bins/find-opencode-binary');
       vi.mocked(findOpencodeBinarySync).mockReturnValueOnce(null);
 
       const caps = checkStartupCapabilities();

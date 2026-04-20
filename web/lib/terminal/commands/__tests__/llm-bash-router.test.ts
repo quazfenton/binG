@@ -72,8 +72,8 @@ describe('llm-bash-router', () => {
     });
 
     it('should require confirmation for mv with conflict', () => {
-      // Pass a FUNCTION, not an object directly
-      const fsWithConflict = () => ({ '/new.txt': { content: 'existing', isDirectory: false } });
+      // Test with exact path argument matching filesystem key
+      const fsWithConflict = () => ({ 'new.txt': { content: 'existing', isDirectory: false } });
       const result = routeLLMCommand('mv old.txt new.txt', { 
         getFilesystem: fsWithConflict
       });
@@ -81,7 +81,7 @@ describe('llm-bash-router', () => {
     });
 
     it('should allow mv without conflict', () => {
-      const fsNoConflict = () => ({ '/other.txt': { content: 'other', isDirectory: false } });
+      const fsNoConflict = () => ({ 'other.txt': { content: 'other', isDirectory: false } });
       const result = routeLLMCommand('mv old.txt new.txt', { 
         getFilesystem: fsNoConflict
       });
@@ -168,9 +168,10 @@ describe('llm-bash-router', () => {
     });
 
     it('should simulate grep', async () => {
+      // Parsing removes quotes from args, so this becomes pattern='App' filePath='src/App.tsx'
       const result = await executeRoutedCommand({
         mode: 'simulate',
-        originalCommand: 'grep "App" src/App.tsx',
+        originalCommand: 'grep App src/App.tsx',
       }, { getFilesystem: fs });
       expect(result).toContain('export function App()');
     });

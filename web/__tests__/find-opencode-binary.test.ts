@@ -52,7 +52,7 @@ import {
   findOpencodeBinarySync,
   resetBinaryCacheForTesting,
   type FindBinaryOptions,
-} from '@/lib/opencode/find-opencode-binary';
+} from '@/lib/agent-bins/find-opencode-binary';
 
 // ---------- Helpers ----------
 

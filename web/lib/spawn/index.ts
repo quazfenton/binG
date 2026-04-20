@@ -55,6 +55,7 @@ export {
 import { createClaudeCodeAgent } from './claude-code-agent';
 import { createAmpAgent } from './amp-agent';
 import { createOpenCodeAgent } from './opencode-agent';
+import { createCodexAgent } from './codex-agent';
 
 // Agent Pool
 export {
@@ -124,6 +125,16 @@ export {
   type OpenCodeTool,
 } from './opencode-agent';
 
+// Codex Agent
+export {
+  CodexAgent,
+  createCodexAgent,
+  CODEX_TOOLS,
+  type CodexConfig,
+  type CodexMessage,
+  type CodexTool,
+} from './codex-agent';
+
 // ============================================================================
 // Factory Function
 // ============================================================================
@@ -132,8 +143,9 @@ import type { AgentConfig } from './agent-service-manager';
 import { ClaudeCodeAgent, type ClaudeCodeConfig } from './claude-code-agent';
 import { AmpAgent, type AmpConfig } from './amp-agent';
 import { OpenCodeAgent, type OpenCodeConfig } from './opencode-agent';
+import { CodexAgent, type CodexConfig } from './codex-agent';
 
-export type AgentTypeUnion = 'claude-code' | 'amp' | 'opencode';
+export type AgentTypeUnion = 'claude-code' | 'amp' | 'opencode' | 'codex';
 
 /**
  * Create an AI coding agent
@@ -154,6 +166,11 @@ export async function createAgent(
 ): Promise<OpenCodeAgent>;
 
 export async function createAgent(
+  type: 'codex',
+  config: Omit<CodexConfig, keyof AgentConfig> & Pick<AgentConfig, 'workspaceDir' | 'agentId'>
+): Promise<CodexAgent>;
+
+export async function createAgent(
   type: AgentTypeUnion,
   config: any
 ): Promise<any> {
@@ -164,6 +181,8 @@ export async function createAgent(
       return createAmpAgent(config as AmpConfig);
     case 'opencode':
       return createOpenCodeAgent(config as OpenCodeConfig);
+    case 'codex':
+      return createCodexAgent(config as CodexConfig);
     default:
       throw new Error(`Unknown agent type: ${type}`);
   }
@@ -211,6 +230,15 @@ export const AGENT_CAPABILITIES: Record<string, {
     codeReview: true,
     testGeneration: true,
     maxContextTokens: 100000,
+  },
+  'codex': {
+    fileOperations: true,
+    terminalAccess: true,
+    gitIntegration: false,
+    webSearch: false,
+    codeReview: true,
+    testGeneration: true,
+    maxContextTokens: 128000,
   },
 };
 

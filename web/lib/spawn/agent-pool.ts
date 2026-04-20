@@ -41,6 +41,7 @@ import type { AgentInstance } from './agent-service-manager';
 import type { ClaudeCodeAgent } from './claude-code-agent';
 import type { AmpAgent } from './amp-agent';
 import type { OpenCodeAgent } from './opencode-agent';
+import type { CodexAgent } from './codex-agent';
 
 const logger = createLogger('Agents:Pool');
 
@@ -48,9 +49,9 @@ const logger = createLogger('Agents:Pool');
 // Types
 // ============================================================================
 
-export type PoolAgentType = 'claude-code' | 'amp' | 'opencode';
+export type PoolAgentType = 'claude-code' | 'amp' | 'opencode' | 'codex';
 
-export type PoolAgent = ClaudeCodeAgent | AmpAgent | OpenCodeAgent;
+export type PoolAgent = ClaudeCodeAgent | AmpAgent | OpenCodeAgent | CodexAgent;
 
 export interface AgentPoolConfig {
   /** Minimum number of pre-warmed agents */
@@ -210,6 +211,14 @@ export class AgentPool extends EventEmitter {
       case 'opencode': {
         const { createOpenCodeAgent } = await import('./opencode-agent');
         agent = await createOpenCodeAgent({
+          ...this.config.agentConfig,
+          agentId: id,
+        } as any);
+        break;
+      }
+      case 'codex': {
+        const { createCodexAgent } = await import('./codex-agent');
+        agent = await createCodexAgent({
           ...this.config.agentConfig,
           agentId: id,
         } as any);

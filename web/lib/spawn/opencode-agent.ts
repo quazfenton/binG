@@ -12,7 +12,10 @@
  */
 
 import { EventEmitter } from 'node:events';
+import type { ChildProcess } from 'node:child_process';
 import { createLogger } from '../utils/logger';
+import { findOpencodeBinarySync } from '@/lib/agent-bins/find-opencode-binary';
+import { waitForLocalServer, spawnLocalAgent } from './local-server-utils';
 import type { AgentInstance, PromptRequest, PromptResponse, AgentEvent } from './agent-service-manager';
 
 const logger = createLogger('Agents:OpenCode');
@@ -150,6 +153,8 @@ export const OPENCODE_TOOLS: Record<string, OpenCodeTool> = {
 export class OpenCodeAgent extends EventEmitter {
   private config: Required<Omit<OpenCodeConfig, 'apiKey'>> & { apiKey?: string };
   private agent?: AgentInstance;
+  private localProcess?: ChildProcess;
+  private localPort?: number;
   private sessionId?: string;
   private sessionMessages: OpenCodeMessage[] = [];
 
@@ -170,7 +175,10 @@ export class OpenCodeAgent extends EventEmitter {
   }
 
   /**
-   * Start the OpenCode agent
+   * Start the OpenCode agent.
+   * Prefers a local `opencode` binary (found via findOpencodeBinarySync) and
+   * spawns it as a subprocess. Falls back to containerized mode via the
+   * agent-service-manager when no local binary is available.
    */
   async start(): Promise<void> {
     logger.info('Starting OpenCode agent', {
@@ -179,6 +187,75 @@ export class OpenCodeAgent extends EventEmitter {
       port: this.config.port,
     });
 
+    // 1. Try to find and spawn a local opencode binary
+    const opencodeBin = findOpencodeBinarySync();
+    if (opencodeBin) {
+      try {
+        this.localPort = this.config.port || 4096;
+
+        logger.info('Spawning local opencode binary', { binary: opencodeBin, port: this.localPort });
+
+        this.localProcess = spawnLocalAgent(
+          opencodeBin,
+          ['serve', '--port', String(this.localPort), '--host', '0.0.0.0'],
+          {
+            cwd: this.config.workspaceDir,
+            label: 'opencode',
+            env: {
+              OPENCODE_MODEL: this.config.model,
+              OPENCODE_MAX_TOKENS: String(this.config.maxTokens),
+              OPENCODE_TEMPERATURE: String(this.config.temperature),
+              OPENCODE_PROVIDER: this.config.providerId,
+              ...(this.config.systemPrompt ? { OPENCODE_SYSTEM_PROMPT: this.config.systemPrompt } : {}),
+              ...(this.config.apiKey ? { OPENCODE_API_KEY: this.config.apiKey } : {}),
+            },
+            onExit: () => { this.localProcess = undefined; },
+            onError: () => { this.localProcess = undefined; },
+          },
+        );
+
+        // Create a synthetic AgentInstance pointing to the local subprocess
+        this.agent = {
+          agentId: this.config.agentId || `opencode-local-${Date.now()}`,
+          type: 'opencode',
+          containerId: '',
+          port: this.localPort,
+          apiUrl: `http://127.0.0.1:${this.localPort}`,
+          workspaceDir: this.config.workspaceDir,
+          startedAt: Date.now(),
+          lastActivity: Date.now(),
+          status: 'starting',
+          health: 'unknown',
+        };
+
+        // Wait for local server to be ready (up to 30s)
+        await waitForLocalServer(this.localPort);
+        this.agent.status = 'ready';
+        this.agent.health = 'healthy';
+
+        // Create a new session
+        await this.createSession();
+
+        logger.info('OpenCode agent started (local binary)', {
+          agentId: this.agent.agentId,
+          apiUrl: this.agent.apiUrl,
+          sessionId: this.sessionId,
+        });
+        return;
+      } catch (err: any) {
+        logger.warn('Local opencode binary spawn failed, falling back to containerized mode', {
+          error: err.message,
+        });
+        // Clean up failed local process
+        this.localProcess?.kill();
+        this.localProcess = undefined;
+        this.localPort = undefined;
+        this.agent = undefined;
+      }
+    }
+
+    // 2. Fall back to containerized mode
+    logger.info('No local opencode binary found, using containerized mode');
     const { getAgentServiceManager } = await import('./agent-service-manager');
     const manager = getAgentServiceManager();
 
@@ -201,7 +278,7 @@ export class OpenCodeAgent extends EventEmitter {
     // Create a new session
     await this.createSession();
 
-    logger.info('OpenCode agent started', {
+    logger.info('OpenCode agent started (containerized)', {
       agentId: this.agent.agentId,
       apiUrl: this.agent.apiUrl,
       sessionId: this.sessionId,
@@ -209,18 +286,29 @@ export class OpenCodeAgent extends EventEmitter {
   }
 
   /**
-   * Stop the agent
+   * Stop the agent (kills local subprocess or stops containerized agent)
    */
   async stop(): Promise<void> {
+    // Stop local subprocess first
+    if (this.localProcess) {
+      logger.info('Stopping local opencode subprocess', { pid: this.localProcess.pid });
+      this.localProcess.kill();
+      this.localProcess = undefined;
+      this.localPort = undefined;
+    }
+
     if (!this.agent) {
       return;
     }
 
     logger.info('Stopping OpenCode agent', { agentId: this.agent.agentId });
 
-    const { getAgentServiceManager } = await import('./agent-service-manager');
-    const manager = getAgentServiceManager();
-    await manager.stopAgent(this.agent.agentId);
+    // Only stop via service manager for containerized agents
+    if (this.agent.containerId) {
+      const { getAgentServiceManager } = await import('./agent-service-manager');
+      const manager = getAgentServiceManager();
+      await manager.stopAgent(this.agent.agentId);
+    }
 
     this.agent = undefined;
     this.sessionId = undefined;
