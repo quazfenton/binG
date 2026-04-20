@@ -14,6 +14,7 @@ import {
   appendAutoInjectPowers,
   webSearchPowerManifest,
   codeSearchPowerManifest,
+  docLookupPowerManifest,
 } from '@/lib/powers';
 
 // Create a test power with autoInject: true (e.g., URL scraper)
@@ -244,6 +245,116 @@ describe('Auto-Inject Powers', () => {
       const result = powersRegistry.getAutoInjectPowers('look for https://example.com/api in the codebase');
       expect(result.length).toBeGreaterThanOrEqual(1); // At least web-search triggers
       const ids = result.map(p => p.id);
+      expect(ids).toContain('web-search');
+    });
+  });
+
+  describe('Real doc-lookup auto-inject power', () => {
+    it('docLookupPowerManifest triggers on "read the docs"', async () => {
+      await powersRegistry.register(docLookupPowerManifest);
+
+      const result = powersRegistry.getAutoInjectPowers('read the docs for React hooks');
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe('doc-lookup');
+      expect(result[0].autoInject).toBe(true);
+    });
+
+    it('docLookupPowerManifest triggers on "documentation for"', async () => {
+      await powersRegistry.register(docLookupPowerManifest);
+
+      const result = powersRegistry.getAutoInjectPowers('documentation for Express.js middleware');
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe('doc-lookup');
+    });
+
+    it('docLookupPowerManifest triggers on "how to use"', async () => {
+      await powersRegistry.register(docLookupPowerManifest);
+
+      const result = powersRegistry.getAutoInjectPowers('how to use the useState hook');
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe('doc-lookup');
+    });
+
+    it('docLookupPowerManifest triggers on "api reference"', async () => {
+      await powersRegistry.register(docLookupPowerManifest);
+
+      const result = powersRegistry.getAutoInjectPowers('check the api reference for fetch');
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe('doc-lookup');
+    });
+
+    it('docLookupPowerManifest triggers on "official documentation"', async () => {
+      await powersRegistry.register(docLookupPowerManifest);
+
+      const result = powersRegistry.getAutoInjectPowers('official documentation for Node.js streams');
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe('doc-lookup');
+    });
+
+    it('docLookupPowerManifest triggers on "man page"', async () => {
+      await powersRegistry.register(docLookupPowerManifest);
+
+      const result = powersRegistry.getAutoInjectPowers('man page for grep');
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe('doc-lookup');
+    });
+
+    it('docLookupPowerManifest does NOT trigger on casual questions', async () => {
+      await powersRegistry.register(docLookupPowerManifest);
+
+      const result = powersRegistry.getAutoInjectPowers('help me refactor this TypeScript code');
+      expect(result).toHaveLength(0);
+    });
+
+    it('docLookupPowerManifest has coversCapabilityIds for dedup', () => {
+      expect(docLookupPowerManifest.coversCapabilityIds).toBeDefined();
+      expect(docLookupPowerManifest.coversCapabilityIds).toContain('doc.lookup');
+      expect(docLookupPowerManifest.coversCapabilityIds).toContain('doc.search');
+      expect(docLookupPowerManifest.coversCapabilityIds).toContain('doc.api_ref');
+    });
+
+    it('docLookupPowerManifest has three actions', () => {
+      expect(docLookupPowerManifest.actions).toHaveLength(3);
+      const actionNames = docLookupPowerManifest.actions.map(a => a.name);
+      expect(actionNames).toContain('search');
+      expect(actionNames).toContain('lookup');
+      expect(actionNames).toContain('api_ref');
+    });
+
+    it('buildAutoInjectUserMessage returns doc-lookup content', async () => {
+      await powersRegistry.register(docLookupPowerManifest);
+
+      const msg = buildAutoInjectUserMessage('read the docs for React hooks');
+      expect(msg).not.toBe('');
+      expect(msg).toContain('doc-lookup');
+      expect(msg).toContain('Documentation Lookup');
+      expect(msg).toContain('search');
+      expect(msg).toContain('lookup');
+      expect(msg).toContain('api_ref');
+    });
+
+    it('appendAutoInjectPowers works end-to-end with doc-lookup power', async () => {
+      await powersRegistry.register(docLookupPowerManifest);
+
+      const messages: Array<{ role: string; content: string }> = [
+        { role: 'system', content: 'You are an AI assistant.' },
+        { role: 'user', content: 'how to use the useState hook?' },
+      ];
+
+      appendAutoInjectPowers(messages, 'how to use the useState hook?');
+      expect(messages.length).toBe(3);
+      expect(messages[2].role).toBe('user');
+      expect(messages[2].content).toContain('doc-lookup');
+    });
+
+    it('doc-lookup and web-search can both trigger for docs + URL', async () => {
+      await powersRegistry.register(docLookupPowerManifest);
+      await powersRegistry.register(webSearchPowerManifest);
+
+      const result = powersRegistry.getAutoInjectPowers('read the docs at https://react.dev/reference/react');
+      expect(result.length).toBeGreaterThanOrEqual(2);
+      const ids = result.map(p => p.id);
+      expect(ids).toContain('doc-lookup');
       expect(ids).toContain('web-search');
     });
   });

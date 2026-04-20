@@ -135,6 +135,15 @@ export {
   type CodexTool,
 } from './codex-agent';
 
+// OpenAI Agent Base (shared by Amp & Codex)
+export {
+  OpenAIAgentBase,
+  type OpenAIAgentDescriptor,
+  type OpenAIAgentConfig,
+  type OpenAIAgentMessage,
+  type OpenAIAgentTool,
+} from './openai-agent-base';
+
 // ============================================================================
 // Factory Function
 // ============================================================================
@@ -253,14 +262,24 @@ export function getRecommendedAgent(task: string): AgentTypeUnion {
     return 'claude-code';
   }
   
-  // Code generation → Amp
-  if (taskLower.includes('generate') || taskLower.includes('create') || taskLower.includes('write')) {
+  // Code generation / scaffolding → Amp
+  if (taskLower.includes('generate') || taskLower.includes('create') || taskLower.includes('scaffold')) {
     return 'amp';
   }
   
-  // Code review → Claude Code
+  // Code review / audit → Claude Code
   if (taskLower.includes('review') || taskLower.includes('audit')) {
     return 'claude-code';
+  }
+  
+  // Test generation → Codex (specialises in test/code tasks)
+  if (taskLower.includes('test') || taskLower.includes('spec')) {
+    return 'codex';
+  }
+  
+  // Write / documentation → Codex
+  if (taskLower.includes('write') || taskLower.includes('document')) {
+    return 'codex';
   }
   
   // Default → Amp (fastest for general tasks)

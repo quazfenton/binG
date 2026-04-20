@@ -169,7 +169,7 @@ export async function startRemoteServer(configParam: RemoteConfig = {}) {
         }
 
         const message = body.message as string;
-        const streamingBehavior = body.streamingBehavior as string | undefined;
+        const streamingBehavior = body.streamingBehavior as 'steer' | 'followUp' | undefined;
 
         await state.session.prompt(message, { streamingBehavior });
         json(res, 200, { success: true });

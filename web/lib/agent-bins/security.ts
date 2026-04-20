@@ -250,7 +250,10 @@ export async function getGitBackedVFS(userId: string): Promise<{
 } | null> {
   try {
     const { virtualFilesystem } = await import('@/lib/virtual-filesystem');
-    const vfs = virtualFilesystem.getGitBackedVFS?.(userId);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vfsModule = virtualFilesystem as any;
+    if (typeof vfsModule.getGitBackedVFS !== 'function') return null;
+    const vfs = vfsModule.getGitBackedVFS?.(userId);
     if (!vfs) return null;
     
     return {
@@ -362,12 +365,13 @@ export async function getFileHistory(
 ): Promise<Array<{ version: number; date: string; message: string }>> {
   try {
     const { virtualFilesystem } = await import('@/lib/virtual-filesystem');
-    const gitVFS = virtualFilesystem.getGitBackedVFS?.(userId);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vfsModule = virtualFilesystem as any;
+    if (typeof vfsModule.getGitBackedVFS !== 'function') return [];
+    const gitVFS = vfsModule.getGitBackedVFS?.(userId);
     
     if (!gitVFS) return [];
     
-    // This would call git log for the file
-    // Implementation depends on git-backed-vfs.ts
     return [];
   } catch {
     return [];

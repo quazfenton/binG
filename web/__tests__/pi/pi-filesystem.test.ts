@@ -371,10 +371,8 @@ describe('pi-filesystem', () => {
 
     it('defaults cwd to /workspace when not specified', async () => {
       const defaultAdapter = new RemoteFilesystemAdapter('http://host:80');
-      // The inner AgentFilesystem should have cwd = '/workspace' (the default)
-      // Access the protected field via cast to verify the default
-      const innerCwd = (defaultAdapter as any).fs.cwd;
-      expect(innerCwd).toBe('/workspace');
+      // The public cwd getter should return the default
+      expect(defaultAdapter.cwd).toBe('/workspace');
       // Also verify it works functionally
       mockFetch.mockResolvedValueOnce({
         ok: true,

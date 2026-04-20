@@ -452,6 +452,22 @@ export async function loadAutoInjectPowers(): Promise<{
     errors.push(`code-search: ${error.message}`);
   }
 
+  // Doc Lookup — auto-inject for documentation/API reference queries
+  try {
+    const { docLookupPowerManifest } = await import('@/lib/powers/doc-lookup-power');
+    if (!loadedPowerIds.has(docLookupPowerManifest.id)) {
+      await powersRegistry.register(docLookupPowerManifest);
+      loadedPowerIds.add(docLookupPowerManifest.id);
+      loaded++;
+
+      log.info(`Auto-inject power registered: ${docLookupPowerManifest.id}`);
+    } else {
+      log.debug(`Auto-inject power ${docLookupPowerManifest.id} already loaded — skipping`);
+    }
+  } catch (error: any) {
+    errors.push(`doc-lookup: ${error.message}`);
+  }
+
   log.info(`Loaded ${loaded} auto-inject powers (${errors.length} errors)`);
   return { loaded, errors };
 }

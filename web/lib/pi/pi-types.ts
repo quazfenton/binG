@@ -216,7 +216,11 @@ export async function createPiSession(config: PiFactoryConfig): Promise<PiSessio
   
   if (runMode === 'remote') {
     const { createRemotePiSession } = await import('./pi-remote-session');
-    return createRemotePiSession(config);
+    const remoteConfig = config as PiFactoryConfig;
+    return createRemotePiSession({
+      ...remoteConfig,
+      remoteUrl: remoteConfig.remoteUrl || 'http://localhost:3000',
+    });
   }
   
   const { createCliPiSession } = await import('./pi-cli-session');

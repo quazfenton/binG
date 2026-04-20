@@ -36,6 +36,11 @@ class AgentFsAdapter implements PiFilesystemAdapter {
     this.fs = fs;
   }
 
+  /** Current working directory used by the underlying filesystem */
+  get cwd(): string {
+    return this.fs.cwd;
+  }
+
   async readFile(path: string): Promise<string> {
     return this.fs.readFile(path);
   }

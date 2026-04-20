@@ -79,6 +79,13 @@ export interface AgentConfig {
     cpu?: number;
     memory?: string;
   };
+  /**
+   * Remote address of an already-running agent server (e.g. "https://codex.example.com:8080").
+   * When set, the manager skips Docker container creation and sets the apiUrl
+   * to this remote endpoint. Supports web-hosted / cloud deployments where
+   * the agent runs on a remote server.
+   */
+  remoteAddress?: string;
 }
 
 export interface AgentInstance {
@@ -256,18 +263,40 @@ export class AgentServiceManager extends EventEmitter {
     this.agents.set(agentId, agent);
 
     try {
-      if (this.dockerAvailable && !config.image?.includes('://')) {
+      if (config.remoteAddress) {
+        // Remote address provided — skip container, connect directly
+        const remoteUrl = config.remoteAddress.replace(/\/+$/, '');
+        agent.apiUrl = remoteUrl;
+        agent.port = 0;
+        agent.containerId = '';
+        agent.status = 'ready';
+        agent.health = 'unknown';
+        logger.info(`Agent ${agentId} using remote address`, { remoteUrl });
+
+        // Best-effort health check — don't block on it (remote may not expose /health)
+        try {
+          const healthResp = await fetch(`${remoteUrl}/health`, {
+            method: 'GET',
+            signal: AbortSignal.timeout(5000),
+          });
+          if (healthResp.ok) {
+            agent.health = 'healthy';
+          }
+        } catch {
+          logger.info(`Agent ${agentId} remote health check failed — proceeding anyway`, { remoteUrl });
+        }
+      } else if (this.dockerAvailable && !config.image?.includes('://')) {
         // Start Docker container
         await this.startDockerContainer(agent, config, defaults);
+
+        // Wait for containerized agent to be ready
+        await this.waitForAgent(agent);
       } else {
         // Use remote API mode (agent already running elsewhere)
         agent.status = 'ready';
         agent.health = 'healthy';
         logger.info(`Agent ${agentId} using remote API mode`);
       }
-
-      // Wait for agent to be ready
-      await this.waitForAgent(agent);
 
       logger.info(`Agent ${agentId} is ready`, { apiUrl: agent.apiUrl });
       return agent;

@@ -15,7 +15,7 @@ import { EventEmitter } from 'node:events';
 import type { ChildProcess } from 'node:child_process';
 import { createLogger } from '../utils/logger';
 import { findClaudeCodeBinarySync } from '@/lib/agent-bins/find-claude-code-binary';
-import { waitForLocalServer, spawnLocalAgent } from './local-server-utils';
+import { waitForLocalServer, spawnLocalAgent, connectToRemoteAgent } from './local-server-utils';
 import type { AgentInstance, PromptRequest, PromptResponse, AgentEvent } from './agent-service-manager';
 
 const logger = createLogger('Agents:ClaudeCode');
@@ -39,6 +39,12 @@ export interface ClaudeCodeConfig {
   maxTokens?: number;
   /** System prompt override */
   systemPrompt?: string;
+  /**
+   * Remote address of an already-running Claude Code server.
+   * When set, skips local binary spawn and containerized fallback, and
+   * connects directly to the remote endpoint.
+   */
+  remoteAddress?: string;
 }
 
 export interface ClaudeCodeMessage {
@@ -150,7 +156,19 @@ export class ClaudeCodeAgent extends EventEmitter {
     logger.info('Starting Claude Code agent', {
       model: this.config.model,
       workspace: this.config.workspaceDir,
+      remoteAddress: this.config.remoteAddress || undefined,
     });
+
+    // 0. If a remote address is configured, connect directly
+    if (this.config.remoteAddress) {
+      this.agent = await connectToRemoteAgent({
+        remoteAddress: this.config.remoteAddress,
+        agentType: 'claude-code',
+        agentId: this.config.agentId,
+        workspaceDir: this.config.workspaceDir,
+      });
+      return;
+    }
 
     // 1. Try to find and spawn a local claude binary
     const claudeBin = findClaudeCodeBinarySync();

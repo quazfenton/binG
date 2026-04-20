@@ -7,14 +7,14 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { 
-  EnhancedPortDetector, 
+import {
+  EnhancedPortDetector,
   enhancedPortDetector,
   detectPorts,
   getDetectedPorts,
   clearDetectedPorts,
   type PortDetectionResult,
-} from '@/lib/sandbox/enhanced-port-detector'
+} from '@/lib/previews/enhanced-port-detector'
 
 describe('Enhanced Port Detector', () => {
   let detector: EnhancedPortDetector

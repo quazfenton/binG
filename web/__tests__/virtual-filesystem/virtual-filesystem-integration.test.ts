@@ -20,6 +20,28 @@ import { FilesystemDiffTracker, type FileDiff, type DiffHunk } from '@/lib/virtu
 import { VFSBatchOperations } from '@/lib/virtual-filesystem/vfs-batch-operations';
 import type { VirtualFile } from '@/lib/virtual-filesystem/filesystem-types';
 
+// Mock smart context to prevent userId requirement during tests
+vi.mock('@/lib/virtual-filesystem/smart-context', () => ({
+  generateSmartContext: vi.fn().mockResolvedValue({
+    bundle: '',
+    tree: '',
+    rankedFiles: [],
+    totalFilesInVfs: 0,
+    filesIncluded: 0,
+    estimatedTokens: 0,
+    vfsIsEmpty: true,
+    contextMode: 'read',
+    diffCount: 0,
+  }),
+}));
+
+// Mock enhanced LLM service to prevent smart context calls
+vi.mock('@/lib/chat/enhanced-llm-service', () => ({
+  EnhancedLLMService: vi.fn().mockImplementation(() => ({
+    callLLM: vi.fn().mockResolvedValue({ response: 'mocked' }),
+  })),
+}));
+
 describe('Virtual Filesystem Integration', () => {
   let vfs: VirtualFilesystemService;
   let diffTracker: FilesystemDiffTracker;
@@ -558,7 +580,7 @@ line 7 modified`;
 
       expect(results).toHaveLength(2);
       expect(results[0].success).toBe(true);
-      expect(results[0].file?.path).toBe('src/batch1.ts');
+      expect(results[0].file?.path).toBe('test-workspace/src/batch1.ts');
       expect(results[1].success).toBe(true);
       expect(results[1].file?.path).toBe('src/batch2.ts');
     });

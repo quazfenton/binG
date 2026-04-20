@@ -233,7 +233,7 @@ class VfsAgentFs implements AgentFilesystem {
       lastModified: node.lastModified,
     }));
     // Filter out sensitive directories (.git, node_modules, etc.)
-    return filterSensitiveDirs(entries);
+    return filterSensitiveDirs(entries) as DirEntry[];
   }
 
   async exists(path: string): Promise<boolean> {
@@ -251,11 +251,11 @@ class VfsAgentFs implements AgentFilesystem {
     const results = await virtualFilesystem.search(this.userId, query, {
       path: options?.path,
       limit: options?.limit,
-    });
-    return results.files.map(f => ({
+    }) as any;
+    return (results.files || results).map((f: any) => ({
       name: f.name,
       path: f.path,
-      type: 'file' as const,
+      type: f.type === 'directory' ? 'directory' : 'file',
     }));
   }
 }

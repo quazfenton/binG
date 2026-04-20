@@ -124,6 +124,12 @@ export interface AgentTeamConfig {
     type: PoolAgentType;
     model?: string;
     apiKey?: string;
+    /**
+     * Remote address of an already-running agent server.
+     * When set, pooled agents for this role connect directly to
+     * the remote endpoint instead of spawning locally.
+     */
+    remoteAddress?: string;
     weight?: number; // For consensus voting (default: 1)
   }>;
   /** Workspace directory */
@@ -307,6 +313,7 @@ export class AgentTeam extends EventEmitter {
           workspaceDir: this.config.workspaceDir,
           apiKey: this.config.agents.find(a => a.type === type)?.apiKey,
           model: this.config.agents.find(a => a.type === type)?.model,
+          remoteAddress: this.config.agents.find(a => a.type === type)?.remoteAddress,
         },
       });
 
