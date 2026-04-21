@@ -1,8 +1,174 @@
-import schema from './schema.sql';
 // Database configuration - lazy initialized to avoid Edge Runtime issues
 // All Node.js modules are lazy-loaded inside functions, not at module load time
 // This file is server-only - do not import in Client Components
 export const runtime = 'nodejs';
+
+const SCHEMA_SQL = `
+-- Users table
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email TEXT UNIQUE NOT NULL,
+    username TEXT UNIQUE,
+    password_hash TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    is_active BOOLEAN DEFAULT TRUE,
+    subscription_tier TEXT DEFAULT 'free',
+    last_login DATETIME,
+    reset_token TEXT,
+    reset_token_expires DATETIME,
+    email_verified BOOLEAN DEFAULT FALSE,
+    email_verification_token TEXT,
+    email_verification_expires DATETIME
+);
+
+-- Index for email verification token lookups
+CREATE INDEX IF NOT EXISTS idx_users_email_verification_token ON users(email_verification_token);
+
+-- API credentials table (encrypted)
+CREATE TABLE IF NOT EXISTS api_credentials (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    provider TEXT NOT NULL,
+    api_key_encrypted TEXT NOT NULL,
+    api_key_hash TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    is_active BOOLEAN DEFAULT TRUE,
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+    UNIQUE(user_id, provider)
+);
+
+-- Chat conversations
+CREATE TABLE IF NOT EXISTS conversations (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER,
+    title TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    is_archived BOOLEAN DEFAULT FALSE,
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+);
+
+-- Chat messages
+CREATE TABLE IF NOT EXISTS messages (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    provider TEXT,
+    model TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    token_count INTEGER,
+    FOREIGN KEY (conversation_id) REFERENCES conversations (id) ON DELETE CASCADE
+);
+
+-- Usage tracking
+CREATE TABLE IF NOT EXISTS usage_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    tokens_used INTEGER DEFAULT 0,
+    cost_usd DECIMAL(10, 6) DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+);
+
+-- User preferences
+CREATE TABLE IF NOT EXISTS user_preferences (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    preference_key TEXT NOT NULL,
+    preference_value TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+    UNIQUE(user_id, preference_key)
+);
+
+-- Email provider quotas
+CREATE TABLE IF NOT EXISTS email_provider_quotas (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  provider TEXT NOT NULL UNIQUE,
+  monthly_limit INTEGER NOT NULL DEFAULT 0,
+  current_usage INTEGER NOT NULL DEFAULT 0,
+  reset_date DATETIME NOT NULL,
+  is_disabled BOOLEAN NOT NULL DEFAULT FALSE,
+  priority INTEGER NOT NULL DEFAULT 0,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_email_quotas_provider ON email_provider_quotas(provider);
+
+-- OAuth and external connections
+CREATE TABLE IF NOT EXISTS external_connections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    provider TEXT NOT NULL,
+    provider_account_id TEXT NOT NULL,
+    provider_display_name TEXT,
+    access_token_encrypted TEXT,
+    refresh_token_encrypted TEXT,
+    token_expires_at DATETIME,
+    scopes TEXT,
+    metadata TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    is_active BOOLEAN DEFAULT TRUE,
+    last_accessed_at DATETIME,
+    refresh_attempts INTEGER DEFAULT 0,
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+    UNIQUE(user_id, provider, provider_account_id)
+);
+
+-- Shadow commits table
+CREATE TABLE IF NOT EXISTS shadow_commits (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    message TEXT NOT NULL,
+    author TEXT,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+    source TEXT,
+    integration TEXT,
+    workspace_version INTEGER,
+    diff TEXT,
+    transactions TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_shadow_commits_session_id ON shadow_commits(session_id);
+
+-- Skills table
+CREATE TABLE IF NOT EXISTS skills (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT,
+    version TEXT DEFAULT '1.0.0',
+    system_prompt TEXT,
+    tags TEXT,
+    workflows TEXT,
+    sub_capabilities TEXT,
+    reinforcement TEXT,
+    location TEXT,
+    enabled BOOLEAN DEFAULT TRUE,
+    source TEXT DEFAULT 'manual',
+    extracted_from_event TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, name)
+);
+
+-- Seed default email provider quotas
+INSERT OR IGNORE INTO email_provider_quotas (provider, monthly_limit, current_usage, reset_date, is_disabled, priority)
+VALUES
+  ('brevo', 300, 0, date('now', 'start of month', '+1 month'), FALSE, 1),
+  ('resend', 3000, 0, date('now', 'start of month', '+1 month'), FALSE, 2),
+  ('smtp', 10000, 0, date('now', 'start of month', '+1 month'), FALSE, 4),
+  ('e2b', 1000, 0, date('now', 'start of month', '+1 month'), FALSE, 5);
+`;
 
 // Check if we're in a build/Edge environment where database initialization should be skipped
 function shouldSkipDbInit(): boolean {
@@ -50,6 +216,7 @@ function getDBPath(): string {
   // Only call process.cwd() in Node.js runtime (not Edge)
   let cwd: string | undefined;
   if (typeof process !== 'undefined' && process.env.NEXT_RUNTIME === 'nodejs') {
+    if (process.env.DATABASE_PATH) return process.env.DATABASE_PATH;
     cwd = process.cwd?.();
   }
 
@@ -95,12 +262,17 @@ function getEncryptionKey(): Buffer {
   }
 
   // Validate key strength
+  if (!ENCRYPTION_KEY || typeof ENCRYPTION_KEY !== 'string') {
+    console.warn('[DB] ENCRYPTION_KEY is missing or invalid, using fallback');
+    return crypto.randomBytes(32);
+  }
+
   if (ENCRYPTION_KEY.length < 16) {
     throw new Error('ENCRYPTION_KEY must be at least 16 characters for secure encryption');
   }
 
   // Pad or truncate to exactly 32 bytes for AES-256
-  encryptionKey = Buffer.from(ENCRYPTION_KEY.padEnd(32, '0').slice(0, 32));
+  encryptionKey = Buffer.from(String(ENCRYPTION_KEY).padEnd(32, '0').slice(0, 32));
   return encryptionKey;
 }
 
@@ -291,7 +463,7 @@ async function initializeSchemaSync(): Promise<void> {
 
   try {
     // Execute base schema to ensure required tables exist
-    db.exec(schema);
+    db.exec(SCHEMA_SQL);
 
     console.log('Database base schema initialized');
   } catch (error) {
@@ -410,6 +582,8 @@ export async function migrateLegacyEncryptedKeys(): Promise<{ migrated: number; 
 
     for (const cred of credentials) {
       try {
+        if (!cred || !cred.api_key_encrypted) continue;
+        
         // Check if it's legacy format (legacy format has a shorter IV - 32 hex chars vs proper 32 hex chars)
         const parts = cred.api_key_encrypted.split(':');
         if (parts.length !== 2 || parts[0].length !== 32) {

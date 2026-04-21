@@ -84,7 +84,7 @@ function extractFrontmatter(content: string): { frontmatter: string; body: strin
   if (!match) return null;
   return {
     frontmatter: match[1],
-    body: content.slice(match[0].length).trim(),
+    body: content.slice(match?.[0]?.length || 0).trim(),
   };
 }
 
@@ -325,7 +325,7 @@ export async function loadCoreCapabilities(options?: { forceReload?: boolean }):
         loadedPowerIds.add(powerDef.id);
         loaded++;
 
-        log.info(`Core capability registered: ${powerDef.id} (runtime: ${powerDef.runtime.type}, actions: ${powerDef.actions.length})`);
+        log.info(`Core capability registered: ${powerDef.id} (runtime: ${powerDef.runtime.type}, actions: ${powerDef.actions?.length || 0})`);
       } catch (regError: any) {
         log.error(`Failed to register ${powerDef.id}`, { error: regError.message });
         errors.push(`${file}: registration failed — ${regError.message}`);

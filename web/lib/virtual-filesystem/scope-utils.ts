@@ -48,6 +48,27 @@ export function stripWorkspacePrefixes(rawPath: string): string {
   // NOTE: Removed the sessions/ strip regex — sessions/ is a real directory
   // and must never be stripped. /sessions/001 → sessions/001 (preserved).
 
+  // Desktop/CLI: Strip absolute real-filesystem prefixes set by INITIAL_CWD / process.cwd()
+  // LLMs in desktop mode may echo back paths like "C:\Users\user\project\src\app.ts"
+  // or "/home/user/project/src/app.ts" which should become just "src/app.ts"
+  if (typeof process !== 'undefined' && process.env) {
+    const desktopRoot = process.env.INITIAL_CWD || process.env.DESKTOP_WORKSPACE_ROOT;
+    if (desktopRoot) {
+      const rootNorm = desktopRoot.replace(/\\/g, '/').replace(/\/+$/, '');
+      if (rootNorm && path.startsWith(rootNorm + '/')) {
+        path = path.slice(rootNorm.length + 1);
+      }
+      // Case-insensitive for Windows drive letters
+      if (rootNorm && /^[A-Za-z]:/.test(path)) {
+        const pathUpper = path.replace(/^([a-z]):/, (_, d) => d.toUpperCase() + ':');
+        const rootUpper = rootNorm.replace(/^([a-z]):/, (_, d) => d.toUpperCase() + ':');
+        if (pathUpper.startsWith(rootUpper + '/')) {
+          path = pathUpper.slice(rootUpper.length + 1);
+        }
+      }
+    }
+  }
+
   // Remove any remaining leading slashes
   path = path.replace(/^\/+/, '');
 

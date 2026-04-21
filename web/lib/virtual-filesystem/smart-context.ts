@@ -28,6 +28,21 @@ import { estimateTokens } from '@/lib/context/contextBuilder';
 
 const logger = createLogger('SmartContext');
 
+/**
+ * Strip VFS scope prefix from a path so the LLM sees session-relative paths.
+ * "project/sessions/001/src/App.tsx" → "src/App.tsx"
+ * "project/sessions/my-app/package.json" → "package.json"
+ * Paths not matching the prefix are returned as-is.
+ */
+function stripScopePrefix(filePath: string): string {
+  // Strip "project/sessions/{sessionId}/" prefix
+  const match = filePath.match(/^project\/sessions\/[^/]+\/(.+)$/);
+  if (match) return match[1];
+  // Strip "project/" prefix as fallback
+  if (filePath.startsWith('project/')) return filePath.slice('project/'.length);
+  return filePath;
+}
+
 export interface SmartContextOptions {
   /** User ID for VFS access */
   userId: string;
@@ -1565,7 +1580,7 @@ function formatBundle(
     return JSON.stringify({
       tree,
       files: selected.map(s => ({
-        path: s.file.path,
+        path: stripScopePrefix(s.file.path),
         content: s.file.content,
         score: s.score.score,
         reasons: s.score.reasons,
@@ -1577,7 +1592,7 @@ function formatBundle(
     let xml = '<workspace>\n';
     xml += `<tree>\n${escapeXml(tree)}</tree>\n`;
     for (const s of selected) {
-      const escapedPath = escapeXml(s.file.path);
+      const escapedPath = escapeXml(stripScopePrefix(s.file.path));
       const escapedReasons = escapeXml(s.score.reasons.join(', '));
       xml += `<file path="${escapedPath}" score="${s.score.score}" reasons="${escapedReasons}">\n`;
       xml += `<![CDATA[\n${s.file.content}\n]]>\n`;
@@ -1598,7 +1613,7 @@ function formatBundle(
     md += '## 📎 Attached Files\n\n';
     for (const s of explicitSelected) {
       const ext = s.file.path.split('.').pop() || '';
-      md += `### \`${s.file.path}\` (attached)\n\n`;
+      md += `### \`${stripScopePrefix(s.file.path)}\` (attached)\n\n`;
       md += `\`\`\`${ext}\n${s.file.content}\n\`\`\`\n\n`;
     }
   }
@@ -1609,7 +1624,7 @@ function formatBundle(
     for (const s of otherSelected) {
       const ext = s.file.path.split('.').pop() || '';
       const reasons = s.score.reasons.length > 0 ? ` (${s.score.reasons.join(', ')})` : '';
-      md += `### \`${s.file.path}\`${reasons}\n\n`;
+      md += `### \`${stripScopePrefix(s.file.path)}\`${reasons}\n\n`;
       md += `\`\`\`${ext}\n${s.file.content}\n\`\`\`\n\n`;
     }
   }
@@ -1638,7 +1653,7 @@ function formatBundlePlain(
 
   for (const s of selected) {
     const reasons = s.score.reasons.length > 0 ? ` (${s.score.reasons.join(', ')})` : '';
-    plain += `--- ${s.file.path}${reasons} ---\n\n`;
+    plain += `--- ${stripScopePrefix(s.file.path)}${reasons} ---\n\n`;
     plain += `${s.file.content}\n\n`;
   }
 

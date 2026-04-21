@@ -28,7 +28,12 @@ export async function buildWorkspaceSnapshot(userId: string): Promise<string> {
   try {
     const { virtualFilesystem } = await import('@/lib/virtual-filesystem/virtual-filesystem-service');
     const workspace = await virtualFilesystem.exportWorkspace(userId);
-    const paths = workspace.files.map((f: any) => f.path).sort();
+    const paths = workspace.files.map((f: any) => {
+      // Strip VFS scope prefix so LLM sees session-relative paths
+      const p = f.path as string;
+      const m = p.match(/^project\/sessions\/[^/]+\/(.+)$/);
+      return m ? m[1] : p;
+    }).sort();
 
     if (paths.length === 0) return '(empty workspace — no files yet)';
 

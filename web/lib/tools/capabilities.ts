@@ -1973,6 +1973,6 @@ export function searchCapabilities(query: string): CapabilityDefinition[] {
   return ALL_CAPABILITIES.filter(cap =>
     cap.name.toLowerCase().includes(lowerQuery) ||
     cap.description.toLowerCase().includes(lowerQuery) ||
-    cap.tags.some(tag => tag.toLowerCase().includes(lowerQuery))
+    (cap.tags && Array.isArray(cap.tags) && cap.tags.some(tag => tag.toLowerCase().includes(lowerQuery)))
   );
 }

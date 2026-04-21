@@ -480,6 +480,30 @@ function resolveScopedPath(inputPath: string): string {
     return cleanPath;
   }
 
+  // FIX: Strip redundant "sessions/" prefix the LLM may prepend
+  // "sessions/my-folder/1.py" → "my-folder/1.py" (then scoped normally)
+  if (cleanPath.startsWith('sessions/')) {
+    cleanPath = cleanPath.slice('sessions/'.length);
+  }
+
+  // FIX: Strip "workspace/sessions/" prefix (LLM guessing workspace root)
+  if (cleanPath.startsWith('workspace/sessions/')) {
+    cleanPath = cleanPath.slice('workspace/sessions/'.length);
+    // Also strip the session ID segment if present
+    // "workspace/sessions/001/src/app.ts" → "src/app.ts"
+    const slashIdx = cleanPath.indexOf('/');
+    if (slashIdx !== -1) {
+      cleanPath = cleanPath.slice(slashIdx + 1);
+    }
+  }
+
+  // FIX: Strip "project/sessions/{anyId}/" prefix when it doesn't match our scope
+  // LLM may echo back paths from context with a different session ID
+  const otherSessionMatch = cleanPath.match(/^project\/sessions\/[^/]+\/(.+)$/);
+  if (otherSessionMatch) {
+    cleanPath = otherSessionMatch[1];
+  }
+
   // SECURITY: If path starts with "project/" but NOT our scopePath, log warning
   // This catches attempts to escape session scope (e.g., writing to project/shared when scoped to project/sessions/001)
   if (cleanPath.startsWith('project/')) {

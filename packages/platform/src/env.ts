@@ -72,6 +72,32 @@ export function isLocalExecution(): boolean {
  * Returns null if no suitable home directory can be determined
  */
 export function getDefaultWorkspaceRoot(): string | null {
+  // Priority 1: INITIAL_CWD — set by Tauri sidecar on desktop, or CLI wrapper
+  // on CLI/standalone (passed via LAUNCH_CWD env from parent process).
+  if (typeof process !== 'undefined' && process.env.INITIAL_CWD) {
+    return process.env.INITIAL_CWD;
+  }
+
+  // Priority 2: CLI/standalone mode — use the process's actual working directory.
+  // The parent process's cwd is the directory from which the CLI was invoked,
+  // which is the correct workspace root (not the bundled binary's location).
+  if (typeof process !== 'undefined' && process.cwd) {
+    try {
+      const cwd = process.cwd();
+      // Only use CWD if it looks reasonable (not a temp dir or system path)
+      const isReasonableCwd = cwd &&
+        !cwd.includes('\AppData\Local\Temp') &&
+        !cwd.startsWith('/tmp') &&
+        !cwd.includes('node_modules') &&
+        cwd.length > 2;
+      if (isReasonableCwd) {
+        return cwd;
+      }
+    } catch {
+      // process.cwd() may throw in some environments — fall through
+    }
+  }
+  
   const platform = typeof process !== 'undefined' ? process.platform : 'linux';
 
   if (platform === 'win32') {
