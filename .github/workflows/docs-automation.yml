@@ -40,7 +40,7 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
-          node tools/link-suggester.ts docs
+          npx tsx tools/link-suggester.ts docs
 
       - name: Classify & apply suggested links
         env:
@@ -51,7 +51,7 @@ jobs:
           LINK_CONF_THRESHOLD: "0.75"
           BRANCH_PREFIX: "docs-suggested-links"
         run: |
-          node tools/apply-classified-suggestions.ts docs
+          npx tsx tools/apply-classified-suggestions.ts docs
 
       - name: Upload report artifact
         uses: actions/upload-artifact@v4

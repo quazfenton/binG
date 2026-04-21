@@ -7,6 +7,10 @@ import { SecureLogger, logger, sanitizeForLogging, redactSensitiveData, createMo
 
 describe('Secure Logger', () => {
   beforeEach(() => {
+    // Clear any leftover spy state from previous tests before re-spying.
+    // Without this, vi.spyOn on an already-spied method returns the
+    // existing spy with stale call counts, causing false failures.
+    vi.restoreAllMocks();
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'info').mockImplementation(() => {});
     vi.spyOn(console, 'warn').mockImplementation(() => {});

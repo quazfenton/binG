@@ -340,17 +340,8 @@ export class UnifiedErrorHandler {
   private categorizeError(message: string, error: any): ErrorCategory {
     const messageLower = message.toLowerCase();
 
-    if (
-      messageLower.includes('required') ||
-      messageLower.includes('invalid') ||
-      messageLower.includes('validation') ||
-      messageLower.includes('schema') ||
-      messageLower.includes('parse') ||
-      messageLower.includes('zod')
-    ) {
-      return 'validation';
-    }
-
+    // Auth checks MUST run before validation — messages like "Invalid token"
+    // or "token expired" should categorize as authentication, not validation.
     if (
       messageLower.includes('auth') ||
       messageLower.includes('unauthorized') ||
@@ -361,6 +352,17 @@ export class UnifiedErrorHandler {
       messageLower.includes('apikey')
     ) {
       return 'authentication';
+    }
+
+    if (
+      messageLower.includes('required') ||
+      messageLower.includes('invalid') ||
+      messageLower.includes('validation') ||
+      messageLower.includes('schema') ||
+      messageLower.includes('parse') ||
+      messageLower.includes('zod')
+    ) {
+      return 'validation';
     }
 
     if (

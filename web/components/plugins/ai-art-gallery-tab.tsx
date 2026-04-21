@@ -302,10 +302,20 @@ export default function ArtGalleryTab() {
     toast.success("Image generated!");
   };
 
-  const handleLike = (imageId: string) => {
+  const handleLike = async (imageId: string) => {
+    // Optimistically update UI, then persist to API
     setImages(prev => prev.map(img => 
       img.id === imageId ? { ...img, likes: img.likes + 1 } : img
     ));
+    const ok = await likeImage(imageId);
+    if (!ok) {
+      // Revert on failure
+      setImages(prev => prev.map(img => 
+        img.id === imageId ? { ...img, likes: img.likes - 1 } : img
+      ));
+      toast.error("Failed to like image");
+      return;
+    }
     toast.success("Added to favorites");
   };
 

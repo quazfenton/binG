@@ -23,10 +23,12 @@ pub fn init_logging() -> Option<PathBuf> {
         .truncate(true)
         .open(&log_path)
     {
+        // Handle duration_since errors gracefully instead of panicking via unwrap().
+        // The only realistic failure is a system clock set before the Unix Epoch.
         let ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
         let _ = writeln!(file, "=== binG Desktop starting (ts={}) ===", ts);
         Some(log_path)
     } else {

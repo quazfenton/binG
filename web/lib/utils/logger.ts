@@ -233,8 +233,9 @@ export class Logger {
 
     const sanitized: any = {};
     for (const [key, value] of Object.entries(obj)) {
-      // Redact sensitive keys
-      if (['password', 'secret', 'apiKey', 'api_key', 'token', 'authorization', 'auth'].includes(key.toLowerCase())) {
+      // Redact sensitive keys (case-insensitive comparison)
+      const keyLower = key.toLowerCase();
+      if (['password', 'secret', 'apikey', 'api_key', 'token', 'authorization', 'auth', 'accesstoken', 'access_token', 'refreshtoken', 'refresh_token'].includes(keyLower)) {
         sanitized[key] = REDACTED;
       } else if (typeof value === 'string') {
         sanitized[key] = this.redact(value);
@@ -252,6 +253,8 @@ export class Logger {
   // ============================================================================
 
   private shouldLog(level: LogLevel): boolean {
+    // When minLevel is 'silent', suppress all output
+    if (this.config.minLevel === 'silent') return false;
     if (level === 'silent') return false;
     return LOG_LEVELS[level] >= LOG_LEVELS[this.config.minLevel];
   }

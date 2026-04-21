@@ -36,7 +36,10 @@ REPO_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null)" || {
 
 if [ "${1:-}" = "--uninstall" ]; then
     if [ -d "$TARGET_DIR" ]; then
-        rm -rf "$TARGET_DIR"
+        rm -rf "$TARGET_DIR" || {
+            echo "Error: Failed to remove $TARGET_DIR"
+            exit 1
+        }
         echo "✓ CLI-Anything extension uninstalled from $TARGET_DIR"
     else
         echo "Extension not found at $TARGET_DIR (already uninstalled)"
@@ -71,7 +74,10 @@ mkdir -p "$TARGET_DIR/scripts"
 mkdir -p "$TARGET_DIR/templates"
 
 # Copy extension entry point
-cp "$SCRIPT_DIR/index.ts" "$TARGET_DIR/"
+cp "$SCRIPT_DIR/index.ts" "$TARGET_DIR/" || {
+    echo "Error: Failed to copy index.ts"
+    exit 1
+}
 
 # Copy command specifications from the canonical location
 COMMANDS_SRC="$REPO_ROOT/cli-anything-plugin/commands"

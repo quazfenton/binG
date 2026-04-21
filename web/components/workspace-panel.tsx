@@ -325,6 +325,8 @@ import { getOrCreateAnonymousSessionId } from "@/lib/utils";
 import { useAuth } from "@/contexts/auth-context";
 import type { Message } from "@/types";
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog";
+import { ApprovalDialog, type ApprovalRequest } from "@/components/state/ApprovalDialog";
+import { requiresWorkspaceBoundaryConfirmation } from "@/lib/agent-bins/workspace-boundary";
 import MultiModelComparison from "@/components/multi-model-comparison";
 import type { LLMProviderConfig } from "@/lib/chat/llm-providers-types";
 import { resolveScopedPath } from "@/lib/virtual-filesystem/scope-utils";
@@ -1252,6 +1254,49 @@ export function WorkspacePanel() {
     message: string;
     onConfirm: () => void;
   } | null>(null);
+  const [workspaceApprovalRequest, setWorkspaceApprovalRequest] = useState<ApprovalRequest | null>(null);
+  const workspaceApprovalResolveRef = useRef<((approved: boolean) => void) | null>(null);
+
+  /**
+   * Check if a destructive file operation needs workspace-boundary confirmation.
+   * If so, show the ApprovalDialog and wait for user decision.
+   * Returns true if the operation should proceed, false if cancelled.
+   */
+  const confirmWorkspaceBoundaryInPanel = useCallback(
+    async (operation: string, targetPath: string): Promise<boolean> => {
+      const check = requiresWorkspaceBoundaryConfirmation(operation, targetPath);
+      if (!check.needsConfirmation) return true;
+      return new Promise<boolean>((resolve) => {
+        let settled = false;
+        const safeResolve = (value: boolean) => {
+          if (settled) return;
+          settled = true;
+          resolve(value);
+        };
+        const request: ApprovalRequest = {
+          id: crypto.randomUUID(),
+          action: 'outside_workspace',
+          target: targetPath,
+          reason: check.reason || 'Path is outside the workspace root',
+          requested_at: new Date().toISOString(),
+        };
+        setWorkspaceApprovalRequest(request);
+        workspaceApprovalResolveRef.current = safeResolve;
+        // Safety timeout: auto-deny after 60s
+        setTimeout(() => {
+          setWorkspaceApprovalRequest((prev) => {
+            if (prev?.id === request.id) {
+              safeResolve(false);
+              return null;
+            }
+            return prev;
+          });
+          if (workspaceApprovalResolveRef.current === safeResolve) workspaceApprovalResolveRef.current = null;
+        }, 60_000);
+      });
+    },
+    [],
+  );
 
   // VFS snapshot state
   const [vfsSnapshot, setVfsSnapshot] = useState<{ files: Array<{ path: string; content: string; language: string }> } | null>(null);
@@ -2030,6 +2075,11 @@ export function WorkspacePanel() {
     const newPath = `${normalizedParentPath}/${newItemName.trim()}`;
 
     try {
+      // Workspace boundary check for write
+      if (!(await confirmWorkspaceBoundaryInPanel('write', newPath))) {
+        setIsCreatingFile(false);
+        return;
+      }
       await writeFile(newPath, '');
       await listDirectory(normalizedParentPath);
       toast.success(`File created: ${newItemName.trim()}`);
@@ -2054,6 +2104,11 @@ export function WorkspacePanel() {
     const gitkeepPath = `${folderPath}/.gitkeep`;
 
     try {
+      // Workspace boundary check for mkdir
+      if (!(await confirmWorkspaceBoundaryInPanel('mkdir', folderPath))) {
+        setIsCreatingFolder(false);
+        return;
+      }
       await writeFile(gitkeepPath, '');
       await listDirectory(normalizedParentPath);
       toast.success(`Folder created: ${newItemName.trim()}`);
@@ -2115,6 +2170,11 @@ export function WorkspacePanel() {
   const performPaste = useCallback(async (targetPath: string, currentClipboard?: typeof fileClipboard) => {
     const activeClipboard = currentClipboard || fileClipboard;
     if (!activeClipboard) return;
+
+    // Workspace boundary check for paste operation
+    if (!(await confirmWorkspaceBoundaryInPanel('write', targetPath))) {
+      return;
+    }
 
     try {
       // Read source file
@@ -2181,6 +2241,12 @@ export function WorkspacePanel() {
       scopedOldPath: resolveScopedPath(renamingFile, vfs?.currentPath || '/'),
       scopedNewPath: resolveScopedPath(newPath, vfs?.currentPath || '/'),
     });
+
+    // Workspace boundary check for destructive rename
+    if (!(await confirmWorkspaceBoundaryInPanel('rename', newPath))) {
+      setRenamingFile(null);
+      return;
+    }
 
     try {
       // Use new rename API with conflict detection
@@ -2281,7 +2347,7 @@ export function WorkspacePanel() {
       // Write to new path
       await writeFile(newPath, content);
 
-      // Delete old
+      // Delete old file after rename
       await fetch('/api/filesystem/delete', {
         method: 'POST',
         headers: buildApiHeaders(),
@@ -2383,6 +2449,11 @@ export function WorkspacePanel() {
 
     // Bail out when the target path equals the source path
     if (targetPath === sourcePath) {
+      return;
+    }
+
+    // Workspace boundary check for destructive move
+    if (!(await confirmWorkspaceBoundaryInPanel('move', targetPath))) {
       return;
     }
 
@@ -4675,6 +4746,22 @@ export function WorkspacePanel() {
           }}
         />
       )}
+      {/* Workspace Boundary Approval Dialog */}
+      {workspaceApprovalRequest && (
+        <ApprovalDialog
+          request={workspaceApprovalRequest}
+          onApprove={() => {
+            workspaceApprovalResolveRef.current?.(true);
+            setWorkspaceApprovalRequest(null);
+            workspaceApprovalResolveRef.current = null;
+          }}
+          onReject={() => {
+            workspaceApprovalResolveRef.current?.(false);
+            setWorkspaceApprovalRequest(null);
+            workspaceApprovalResolveRef.current = null;
+          }}
+        />
+      )}
 
       {/* Context Menu */}
       {contextMenu && (
@@ -4736,7 +4823,7 @@ export function WorkspacePanel() {
                 <button
                   onClick={() => {
                     if (confirm(`Delete ${contextMenu.path.split('/').pop()}?`)) {
-                      fetch('/api/filesystem/delete', {
+                      fetch('/api/filesystem/delete?confirmed=true', {
                         method: 'POST',
                         headers: buildApiHeaders(),
                         body: JSON.stringify({ path: resolveScopedPath(contextMenu.path, vfs?.currentPath || '/') }),

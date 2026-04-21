@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Button } from '../ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
 import { Input } from '../ui/input';
@@ -96,26 +96,24 @@ const providerColors: Record<string, string> = {
 };
 
 const GenericEmbedPlugin: React.FC<{ onClose: () => void, initialUrl?: string }> = ({ onClose, initialUrl }) => {
-  const [inputUrl, setInputUrl] = useState(() => {
-    // Try to get URL from sessionStorage first (from message link click)
-    if (typeof window !== 'undefined') {
-      const storedUrl = sessionStorage.getItem('embed-plugin-initial-url');
-      if (storedUrl) {
-        sessionStorage.removeItem('embed-plugin-initial-url'); // Clean up
-        return storedUrl;
-      }
+  // Read stored URL once via useMemo so sessionStorage is only accessed
+  // on mount, not every render. useMemo is correct here since this value
+  // never changes and doesn't need re-renders.
+  const initialState = useMemo(() => {
+    if (typeof window === 'undefined') {
+      return { inputUrl: initialUrl || '', currentUrl: initialUrl || 'https://duckduckgo.com/html' };
     }
-    return initialUrl || '';
-  });
-  const [currentUrl, setCurrentUrl] = useState(() => {
-    if (typeof window !== 'undefined') {
-      const storedUrl = sessionStorage.getItem('embed-plugin-initial-url');
-      if (storedUrl) {
-        return transformToEmbed(storedUrl).embedUrl;
-      }
-    }
-    return initialUrl || 'https://duckduckgo.com/html';
-  });
+    const storedUrl = sessionStorage.getItem('embed-plugin-initial-url');
+    if (storedUrl) sessionStorage.removeItem('embed-plugin-initial-url');
+    return {
+      inputUrl: storedUrl || initialUrl || '',
+      currentUrl: storedUrl ? transformToEmbed(storedUrl).embedUrl : (initialUrl || 'https://duckduckgo.com/html'),
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const [inputUrl, setInputUrl] = useState(initialState.inputUrl);
+  const [currentUrl, setCurrentUrl] = useState(initialState.currentUrl);
   const [embedInfo, setEmbedInfo] = useState<EmbedInfo | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [bookmarks, setBookmarks] = useState<BookmarkEntry[]>([]);

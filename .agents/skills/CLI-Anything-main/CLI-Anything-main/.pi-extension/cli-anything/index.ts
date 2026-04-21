@@ -54,6 +54,8 @@ function buildCommandMessage(
 	const scriptsDir = join(__dirname, "scripts");
 	const templatesDir = join(__dirname, "templates");
 
+	const sanitizedArgs = userArgs.replace(/[`$]/g, "\\$&");
+
 	return `[CLI-Anything Command: ${commandName}]
 
 ## CRITICAL: HARNESS.md — Read First
@@ -63,7 +65,7 @@ ${harnessMd}
 ${commandMd}
 
 ## User Arguments
-\`${userArgs}\`
+\`${sanitizedArgs}\`
 
 ## Extension Asset Paths
 The following resources are available on this system. Use the \`read\` tool to access them when needed:

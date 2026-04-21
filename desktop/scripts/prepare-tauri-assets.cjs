@@ -63,12 +63,10 @@ if (fs.existsSync(staticDir)) {
   console.log('✓ Copied static assets');
 }
 
-// Copy .env file to standalone folder
-const envFile = path.join(webRoot, '.env');
-if (fs.existsSync(envFile)) {
-  fs.copyFileSync(envFile, path.join(destDir, 'web', '.env'));
-  console.log('✓ Copied .env file');
-}
+// NOTE: Do NOT copy the .env file into the desktop bundle.
+// This would leak secrets into the packaged app.
+// Instead, rely on runtime-provided environment variables or a sanitized config.
+// See: https://12factor.net/config
 
 // CRITICAL: Remove the 'data' folder and any .db files from the bundled output
 // These should be created fresh at runtime to avoid file locks during installation

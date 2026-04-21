@@ -10,7 +10,8 @@ import {
   GitBranch, Search, Star, GitFork, Eye, Code, FileText, 
   Download, ExternalLink, GitCommit, Users, TrendingUp,
   Activity, Package, AlertCircle, CheckCircle, XCircle,
-  Play, RefreshCw, Loader2, GitPullRequest, MessageSquare
+  Play, RefreshCw, Loader2, GitPullRequest, MessageSquare,
+  ChevronDown, ChevronRight
 } from 'lucide-react';
 import type { PluginProps } from './plugin-manager';
 import { toast } from 'sonner';
@@ -256,6 +257,16 @@ export default function GitHubExplorerAdvancedPlugin({ onClose }: PluginProps) {
     }
   };
 
+  const toggleDir = (path: string) => {
+    const toggle = (nodes: FileNode[]): FileNode[] =>
+      nodes.map(n => {
+        if (n.path === path) return { ...n, expanded: !n.expanded };
+        if (n.children) return { ...n, children: toggle(n.children) };
+        return n;
+      });
+    setFileTree(prev => toggle(prev));
+  };
+
   const renderFileTree = (nodes: FileNode[], depth = 0) => {
     return nodes.map(node => (
       <div key={node.path} style={{ marginLeft: depth * 16 }}>
@@ -263,9 +274,14 @@ export default function GitHubExplorerAdvancedPlugin({ onClose }: PluginProps) {
           className={`flex items-center gap-2 p-1 hover:bg-white/10 rounded cursor-pointer text-sm ${
             selectedFile === node.path ? 'bg-white/20' : ''
           }`}
-          onClick={() => node.type === 'file' && loadFileContent(node.path)}
+          onClick={() => {
+            if (node.type === 'dir') toggleDir(node.path);
+            else loadFileContent(node.path);
+          }}
         >
-          {node.type === 'dir' ? <Code className="w-4 h-4" /> : <FileText className="w-4 h-4" />}
+          {node.type === 'dir'
+            ? (node.expanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />)
+            : <FileText className="w-4 h-4" />}
           <span className="truncate">{node.name}</span>
         </div>
         {node.children && node.expanded && renderFileTree(node.children, depth + 1)}

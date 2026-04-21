@@ -19,6 +19,7 @@ export {
   handleError,
   createValidationError,
   createAuthError,
+  createNotFoundError,
 } from '../utils/error-handler';
 
 // Re-export types separately for isolatedModules compatibility
@@ -55,6 +56,14 @@ export class ToolErrorHandler {
 
   createAuthError(message: string, authUrl?: string) {
     return this.handler.createAuthError(message, authUrl);
+  }
+
+  createNotFoundError(resource: string) {
+    return createNotFoundError(resource);
+  }
+
+  toExecutionResult(error: any) {
+    return this.handler.toExecutionResult(error);
   }
 }
 

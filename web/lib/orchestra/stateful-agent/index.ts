@@ -23,6 +23,8 @@ export {
   createSensitiveFilesRule,
   createReadOnlyRule,
   createHighRiskFileRule,
+  createOutsideWorkspaceRule,
+  outsideWorkspaceMatcher,
   defaultWorkflow,
   strictWorkflow,
   permissiveWorkflow,

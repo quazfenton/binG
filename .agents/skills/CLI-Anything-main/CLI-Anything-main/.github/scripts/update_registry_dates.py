@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
 import json
 import re
 import shlex
@@ -265,8 +266,9 @@ def _load_registry(path: Path) -> list[dict]:
 def main() -> None:
     dates_path = REPO_ROOT / "docs" / "hub" / "registry-dates.json"
     all_clis = _load_registry(REPO_ROOT / "registry.json") + _load_registry(REPO_ROOT / "public_registry.json")
+    unique_clis = OrderedDict((cli["name"], cli) for cli in all_clis).values()
 
-    dates = {cli["name"]: get_cli_date(cli, REPO_ROOT) for cli in all_clis}
+    dates = {cli["name"]: get_cli_date(cli, REPO_ROOT) for cli in unique_clis}
 
     with dates_path.open("w", encoding="utf-8") as f:
         json.dump(dates, f, indent=2)

@@ -23,6 +23,7 @@ import {
   validateFileSize,
   sanitizePathForLogging,
   FilesystemOperationSchema,
+  DEFAULT_FILESYSTEM_CONFIG,
 } from '@/lib/middleware/filesystem-security';
 import {
   validateCommand,
@@ -414,7 +415,9 @@ describe('Filesystem Security Middleware', () => {
     it('should reject paths escaping base directory', () => {
       const result = validatePath('..');
       expect(result.valid).toBe(false);
-      expect(result.error?.code).toBe('PATH_ESCAPE_DETECTED');
+      // '..' is caught by the path traversal check (contains '..')
+      // before the base-directory escape check runs
+      expect(result.error?.code).toBe('PATH_TRAVERSAL_DETECTED');
     });
   });
 
@@ -425,7 +428,13 @@ describe('Filesystem Security Middleware', () => {
     });
 
     it('should reject disallowed extensions', () => {
-      const result = validateFileExtension('src/index.exe');
+      // The default config includes '*' wildcard which allows all extensions.
+      // Test with a custom config that has a restrictive allowlist.
+      const result = validateFileExtension('src/index.exe', {
+        ...DEFAULT_FILESYSTEM_CONFIG,
+        allowedExtensions: ['.ts', '.js', '.json'],
+        enableFileTypeValidation: true,
+      });
       expect(result.valid).toBe(false);
       expect(result.error?.code).toBe('FILE_EXTENSION_NOT_ALLOWED');
     });
@@ -438,7 +447,12 @@ describe('Filesystem Security Middleware', () => {
     });
 
     it('should reject files over size limit', () => {
-      const result = validateFileSize(20 * 1024 * 1024); // 20MB
+      // Default maxFileSize is 100MB; test with a custom config with a lower limit.
+      const result = validateFileSize(20 * 1024 * 1024, {
+        ...DEFAULT_FILESYSTEM_CONFIG,
+        maxFileSize: 10 * 1024 * 1024, // 10MB limit
+        enableSizeLimits: true,
+      });
       expect(result.valid).toBe(false);
       expect(result.error?.code).toBe('FILE_SIZE_EXCEEDED');
     });
@@ -446,17 +460,17 @@ describe('Filesystem Security Middleware', () => {
 
   describe('validateFilesystemOperation', () => {
     it('should validate read operation', () => {
-      const result = validateFilesystemOperation('read', 'src/index.ts');
+      const result = validateFsOp('read', 'src/index.ts');
       expect(result.valid).toBe(true);
     });
 
     it('should validate write operation with content', () => {
-      const result = validateFilesystemOperation('write', 'src/index.ts', 'console.log("hello")');
+      const result = validateFsOp('write', 'src/index.ts', 'console.log("hello")');
       expect(result.valid).toBe(true);
     });
 
     it('should reject delete root directory', () => {
-      const result = validateFilesystemOperation('delete', '/');
+      const result = validateFsOp('delete', '/');
       expect(result.valid).toBe(false);
       expect(result.error?.code).toBe('CANNOT_DELETE_ROOT');
     });
@@ -540,18 +554,18 @@ describe('Command Security Middleware', () => {
   });
 
   describe('validateCommandExecution', () => {
-    it('should validate complete command execution request', () => {
-      const result = validateCommandExecution('echo', ['hello'], '/workspace', { NODE_ENV: 'test' });
+    it('should validate complete command execution request', async () => {
+      const result = await validateCommandExecution('echo', ['hello'], '/workspace', { NODE_ENV: 'test' });
       expect(result.valid).toBe(true);
     });
 
-    it('should reject invalid working directory', () => {
-      const result = validateCommandExecution('echo', ['hello'], '../etc');
+    it('should reject invalid working directory', async () => {
+      const result = await validateCommandExecution('echo', ['hello'], '../etc');
       expect(result.valid).toBe(false);
     });
 
-    it('should reject shell injection in environment', () => {
-      const result = validateCommandExecution('echo', ['hello'], '/workspace', {
+    it('should reject shell injection in environment', async () => {
+      const result = await validateCommandExecution('echo', ['hello'], '/workspace', {
         MALICIOUS: '$(rm -rf /)',
       });
       expect(result.valid).toBe(false);
@@ -608,23 +622,23 @@ describe('Command Security Middleware', () => {
   });
 
   describe('createCommandValidator', () => {
-    it('should create validator with custom config', () => {
+    it('should create validator with custom config', async () => {
       const validate = createCommandValidator({
         enableWhitelist: true,
         allowedCommands: ['ls', 'cat'],
       });
 
-      const result = validate('ls -la');
+      const result = await validate('ls -la');
       expect(result.valid).toBe(true);
     });
 
-    it('should reject commands not in whitelist', () => {
+    it('should reject commands not in whitelist', async () => {
       const validate = createCommandValidator({
         enableWhitelist: true,
         allowedCommands: ['ls'],
       });
 
-      const result = validate('cat file.txt');
+      const result = await validate('cat file.txt');
       expect(result.valid).toBe(false);
     });
   });

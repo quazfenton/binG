@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import sys
 from pathlib import Path
 
@@ -11,10 +12,17 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _load_sync_helpers():
-    namespace: dict[str, object] = {"__file__": str(REPO_ROOT / ".github" / "scripts" / "sync_root_skills.py")}
     sync_script = REPO_ROOT / ".github" / "scripts" / "sync_root_skills.py"
-    exec(sync_script.read_text(encoding="utf-8"), namespace)
-    return namespace
+    spec = importlib.util.spec_from_file_location("sync_helpers", sync_script)
+    sync_module = importlib.util.module_from_spec(spec)
+    if spec.loader:
+        spec.loader.exec_module(sync_module)
+    return {
+        "_discover_sources": sync_module._discover_sources,
+        "_canonical_skill_id": sync_module._canonical_skill_id,
+        "_rewrite_name_frontmatter": sync_module._rewrite_name_frontmatter,
+        "ROOT_SKILLS_DIR": sync_module.ROOT_SKILLS_DIR,
+    }
 
 
 def main() -> int:

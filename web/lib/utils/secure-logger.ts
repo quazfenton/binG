@@ -101,9 +101,19 @@ export class SecureLogger extends Logger {
     if (Array.isArray(obj)) return obj.map(item => this.redactObject(item, maxDepth - 1));
     if (maxDepth <= 0) return '[Maximum depth exceeded]';
 
+    // Sensitive key names — values under these keys are always redacted
+    const SENSITIVE_KEYS = new Set([
+      'password', 'secret', 'apikey', 'api_key', 'token',
+      'authorization', 'auth', 'accesstoken', 'access_token',
+      'refreshtoken', 'refresh_token',
+    ]);
+
     const redacted: any = {};
     for (const [key, value] of Object.entries(obj)) {
-      if (typeof value === 'string') {
+      // Redact values under sensitive key names regardless of string length
+      if (SENSITIVE_KEYS.has(key.toLowerCase()) && value != null) {
+        redacted[key] = '[REDACTED]';
+      } else if (typeof value === 'string') {
         redacted[key] = this.redact(value);
       } else if (typeof value === 'object' && value !== null) {
         redacted[key] = this.redactObject(value, maxDepth - 1);

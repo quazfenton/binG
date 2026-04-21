@@ -73,14 +73,14 @@ export function isDangerousCommand(command: string): boolean {
  * Mask sensitive information in strings
  */
 export function maskSecrets(text: string): string {
-  // API keys
-  text = text.replace(/sk-[a-zA-Z0-9]{20,}/gi, 'sk-[REDACTED]');
+  // API keys — threshold lowered to 3+ chars after prefix to catch short test keys
+  text = text.replace(/sk-[a-zA-Z0-9]{3,}/gi, 'sk-[REDACTED]');
   text = text.replace(/xoxb-[0-9]+-[0-9]+-[a-zA-Z0-9]+/gi, 'xoxb-[REDACTED]');
   text = text.replace(/ghp_[a-zA-Z0-9]{36}/gi, 'ghp_[REDACTED]');
 
-  // Generic tokens
-  text = text.replace(/Bearer\s+[a-zA-Z0-9\-_.]{20,}/gi, 'Bearer [REDACTED]');
-  text = text.replace(/token=[a-zA-Z0-9\-_.]{16,}/gi, 'token=[REDACTED]');
+  // Generic tokens — threshold lowered to match typical short tokens
+  text = text.replace(/Bearer\s+[a-zA-Z0-9\-_.]{3,}/gi, 'Bearer [REDACTED]');
+  text = text.replace(/token=[a-zA-Z0-9\-_.]{3,}/gi, 'token=[REDACTED]');
 
   // Passwords
   text = text.replace(/password=[^\s&]*/gi, 'password=[REDACTED]');

@@ -275,11 +275,7 @@ describe("CLI-Anything Extension", () => {
 		const mod = await loadExtension();
 		mod.default(mockPi);
 
-		// Invoke with a valid arg — but our mock only has known files,
-		// so any command that reads assets should succeed. We test error
-		// by checking the error message format matches what readAsset produces.
-		// The mock throws for unknown files, simulating a real missing asset.
-		const { readFileSync } = await import("node:fs");
-		expect(() => readFileSync("/nonexistent/file.md", "utf-8")).toThrow();
+		// Test that readAsset throws with descriptive error for missing file
+		expect(() => mod.readAsset("nonexistent.md")).toThrow(/CLI-Anything extension: failed to read asset/);
 	});
 });
