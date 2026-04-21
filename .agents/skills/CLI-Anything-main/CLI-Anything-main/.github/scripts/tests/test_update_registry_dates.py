@@ -8,7 +8,10 @@ SCRIPT_PATH = Path(__file__).resolve().parents[1] / "update_registry_dates.py"
 SPEC = importlib.util.spec_from_file_location("update_registry_dates", SCRIPT_PATH)
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC and SPEC.loader
-SPEC.loader.exec_module(MODULE)
+try:
+    SPEC.loader.exec_module(MODULE)
+except Exception as e:
+    raise RuntimeError(f"Failed to load update_registry_dates.py: {e}") from e
 
 
 def test_resolve_harness_path_prefers_install_subdirectory_for_qgis():

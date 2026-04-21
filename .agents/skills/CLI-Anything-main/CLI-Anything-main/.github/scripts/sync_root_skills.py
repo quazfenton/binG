@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 
@@ -70,8 +71,11 @@ def main() -> int:
         skill_id = _canonical_skill_id(source)
         target = ROOT_SKILLS_DIR / skill_id / "SKILL.md"
         target.parent.mkdir(parents=True, exist_ok=True)
-        content = source.read_text(encoding="utf-8")
-        target.write_text(_rewrite_name_frontmatter(content, skill_id), encoding="utf-8")
+        try:
+            content = source.read_text(encoding="utf-8")
+            target.write_text(_rewrite_name_frontmatter(content, skill_id), encoding="utf-8")
+        except Exception as e:
+            print(f"Failed to sync {source}: {e}", file=sys.stderr)
     return 0
 
 

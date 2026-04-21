@@ -246,7 +246,7 @@ describe('Stateful Agent Schemas', () => {
     });
 
     it('should allow all action types', () => {
-      const actions: ApprovalRequest['action'][] = ['delete', 'overwrite', 'execute_destructive', 'create_secret'];
+      const actions: ApprovalRequest['action'][] = ['delete', 'overwrite', 'execute_destructive', 'create_secret', 'outside_workspace'];
       actions.forEach(action => {
         const request: ApprovalRequest = {
           id: 'req-1',

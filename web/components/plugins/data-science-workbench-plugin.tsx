@@ -63,15 +63,40 @@ export default function DataScienceWorkbenchPlugin({ onClose }: PluginProps) {
     const lines = text.split('\n').filter(l => l.trim());
     if (lines.length < 2) return;
 
-    const headers = lines[0].split(',').map(h => h.trim());
+    // Basic CSV parsing that handles quoted fields (avoids splitting on commas inside quotes)
+    const parseCsvLine = (line: string): string[] => {
+      const result: string[] = [];
+      let current = '';
+      let inQuotes = false;
+      for (let i = 0; i < line.length; i++) {
+        const ch = line[i];
+        if (ch === '"') {
+          if (inQuotes && line[i + 1] === '"') {
+            current += '"';
+            i++; // skip escaped quote
+          } else {
+            inQuotes = !inQuotes;
+          }
+        } else if (ch === ',' && !inQuotes) {
+          result.push(current.trim());
+          current = '';
+        } else {
+          current += ch;
+        }
+      }
+      result.push(current.trim());
+      return result;
+    };
+
+    const headers = parseCsvLine(lines[0]);
     setColumns(headers);
 
     const rows: DataRow[] = lines.slice(1).map(line => {
-      const values = line.split(',');
+      const values = parseCsvLine(line);
       const row: DataRow = {};
       headers.forEach((header, i) => {
-        const value = values[i]?.trim();
-        row[header] = isNaN(Number(value)) ? value : Number(value);
+        const value = values[i] ?? '';
+        row[header] = isNaN(Number(value)) || value === '' ? value : Number(value);
       });
       return row;
     });
@@ -91,7 +116,11 @@ export default function DataScienceWorkbenchPlugin({ onClose }: PluginProps) {
       const sorted = [...values].sort((a, b) => a - b);
       const sum = values.reduce((a, b) => a + b, 0);
       const mean = sum / values.length;
-      const median = sorted[Math.floor(sorted.length / 2)];
+      // Correct median for even-sized datasets: average the two middle values
+      const mid = Math.floor(sorted.length / 2);
+      const median = sorted.length % 2 !== 0
+        ? sorted[mid]
+        : (sorted[mid - 1] + sorted[mid]) / 2;
       const variance = values.reduce((acc, v) => acc + Math.pow(v - mean, 2), 0) / values.length;
       const stdDev = Math.sqrt(variance);
 

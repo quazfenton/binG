@@ -4,6 +4,7 @@ import { virtualFilesystem, withAnonSessionCookie } from '@/lib/virtual-filesyst
 import { resolveFilesystemOwnerWithFallback } from '../utils';
 import type { FilesystemOwnerResolution } from '@/lib/virtual-filesystem/resolve-filesystem-owner';
 import { absolutePathSchema } from '@/lib/validation/schemas';
+import { isOutsideWorkspace } from '@/lib/agent-bins/workspace-boundary';
 
 export const runtime = 'nodejs';
 
@@ -44,6 +45,22 @@ export async function POST(req: NextRequest) {
     }
 
     const { path: targetPath } = validation.data;
+
+    // WORKSPACE BOUNDARY (defense-in-depth):
+    // If the schema is ever relaxed to allow real filesystem paths (outside /project/,
+    // /workspace/, /home/), this check prevents unauthorised out-of-workspace deletes.
+    // Currently the schema already constrains paths to VFS prefixes, so this code
+    // path is unreachable — but it guards against future schema changes.
+    // Pass `?confirmed=true` to proceed after client-side user approval.
+    const confirmed = new URL(req.url).searchParams.get('confirmed') === 'true';
+    if (isOutsideWorkspace(targetPath) && !confirmed) {
+      return NextResponse.json({
+        success: false,
+        error: 'Path is outside the workspace root',
+        needsWorkspaceConfirmation: true,
+        workspaceBoundary: 'outside',
+      }, { status: 403 });
+    }
 
     // SECURITY: Always derive ownerId from authenticated request context
     // Never trust user-supplied ownerId for delete operations

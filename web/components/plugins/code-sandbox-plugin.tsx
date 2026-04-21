@@ -196,7 +196,7 @@ export default function CodeSandboxPlugin({ onClose }: PluginProps) {
         textareaRef.current?.setSelectionRange(start + 2, start + 2);
       }, 0);
     } else if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-      runCode();
+      if (!isRunning) runCode();
     }
   };
 

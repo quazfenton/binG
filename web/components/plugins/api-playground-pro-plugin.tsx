@@ -144,6 +144,20 @@ export default function APIPlaygroundProPlugin({ onClose }: PluginProps) {
     }
   };
 
+  // Sensitive header keys that should be redacted before persisting to localStorage
+  const SENSITIVE_HEADER_KEYS = new Set([
+    'authorization', 'cookie', 'set-cookie', 'x-api-key', 'x-auth-token',
+    'proxy-authorization', 'www-authenticate', 'x-csrf-token',
+    'x-access-token', 'x-refresh-token',
+  ]);
+
+  const redactHeaders = (hdrs: Header[]): Header[] =>
+    hdrs.map(h =>
+      SENSITIVE_HEADER_KEYS.has(h.key.toLowerCase()) && h.value
+        ? { ...h, value: '••••••••' }
+        : h
+    );
+
   const saveToCollection = () => {
     const name = collectionNameInput.trim() || `${method} ${url}`;
     const request: Request = {
@@ -151,8 +165,8 @@ export default function APIPlaygroundProPlugin({ onClose }: PluginProps) {
       name: `${method} ${url}`,
       method,
       url,
-      headers,
-      body
+      headers: redactHeaders(headers),
+      body,
     };
     const newCollection: Collection = {
       id: Date.now().toString(),

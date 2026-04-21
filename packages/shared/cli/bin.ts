@@ -828,6 +828,75 @@ const DESTRUCTIVE_PATTERNS = [
   /push\s+-f/i,
 ];
 
+/**
+ * Filesystem operations considered destructive for workspace boundary checks.
+ * These modify or remove data and should require confirmation when
+ * targeting paths outside the workspace root.
+ */
+const WORKSPACE_DESTRUCTIVE_OPS = new Set([
+  'delete', 'write', 'move', 'overwrite', 'apply_diff', 'rename', 'mkdir',
+]);
+
+/**
+ * Resolve the workspace root from environment variables.
+ * Uses the same priority chain as the web/agent bins:
+ * INITIAL_CWD > DESKTOP_WORKSPACE_ROOT > WORKSPACE_ROOT > process.cwd()
+ */
+function getWorkspaceRoot(): string {
+  return process.env.INITIAL_CWD ||
+    process.env.DESKTOP_WORKSPACE_ROOT ||
+    process.env.WORKSPACE_ROOT ||
+    process.cwd();
+}
+
+/**
+ * Check if a target path is outside the workspace root.
+ * Normalizes both paths and checks if the target starts with the root prefix.
+ */
+function isOutsideWorkspace(targetPath: string): boolean {
+  const root = getWorkspaceRoot();
+  const normRoot = root.replace(/\/g, '/').replace(/\/+$/, '');
+  const normTarget = targetPath.replace(/\/g, '/').replace(/\/+$/, '');
+  if (!normTarget) return false;
+  return !(normTarget.startsWith(normRoot + '/') || normTarget === normRoot);
+}
+
+/**
+ * Check if a destructive file operation requires workspace-boundary confirmation.
+ * Returns a reason string if confirmation is needed, or null if it's safe.
+ */
+function requiresWorkspaceBoundaryConfirmation(
+  operation: string,
+  targetPath: string,
+): string | null {
+  if (!WORKSPACE_DESTRUCTIVE_OPS.has(operation)) return null;
+  if (!isOutsideWorkspace(targetPath)) return null;
+  const root = getWorkspaceRoot();
+  return  +
+    ;
+}
+
+/**
+ * Prompt the user for confirmation when a destructive operation targets
+ * a path outside the workspace root. Returns true if the user approves.
+ * Resolves automatically if --force flag is set or if the operation is safe.
+ */
+async function confirmWorkspaceBoundary(
+  operation: string,
+  targetPath: string,
+  forceFlag?: boolean,
+): Promise<boolean> {
+  const reason = requiresWorkspaceBoundaryConfirmation(operation, targetPath);
+  if (!reason) return true;  // Safe — inside workspace
+  if (forceFlag) {
+    console.warn(COLORS.warn('⚠ Workspace boundary bypassed with --force: ' + reason));
+    return true;
+  }
+  console.warn(COLORS.warn('⚠ Workspace Boundary Warning'));
+  console.warn(COLORS.warn('  ' + reason));
+  return confirm();
+}
+
 const FILESYSTEM_PATTERNS = [
   { pattern: /delete\s+(.+)/i, type: 'delete', targetGroup: 1 },
   { pattern: /rm\s+(-[rf]+\s+)?(.+)/i, type: 'delete', targetGroup: 2 },
@@ -1385,6 +1454,13 @@ program
       process.exit(1);
     }
     
+    // Workspace boundary check before destructive destroy
+    const boundaryOk = await confirmWorkspaceBoundary('delete', sandboxId, options.force);
+    if (!boundaryOk) {
+      console.log(COLORS.muted('Destroy cancelled — path is outside workspace.'));
+      return;
+    }
+
     if (!options.force) {
       const answer = await prompt(COLORS.warning(`Are you sure you want to destroy sandbox ${sandboxId}? (y/N): `));
       if (answer.toLowerCase() !== 'y') {
@@ -1711,6 +1787,13 @@ program
         console.log(`  URL: ${COLORS.info(result.imageUrl)}`);
         
         if (options.output) {
+          // Workspace boundary check before writing to output path
+          const outputBoundaryOk = await confirmWorkspaceBoundary('write', options.output, false);
+          if (!outputBoundaryOk) {
+            console.log(COLORS.muted('Write cancelled — output path is outside workspace.'));
+            return;
+          }
+
           // Download and save image
           const imageBuffer = await axios.get(result.imageUrl, { responseType: 'arraybuffer' });
           fs.writeFileSync(options.output, imageBuffer.data);
@@ -1759,6 +1842,12 @@ program
         console.log(`  Model: ${COLORS.info(result.model)}`);
         
         if (options.output) {
+          // Workspace boundary check before writing audio output
+          const audioBoundaryOk = await confirmWorkspaceBoundary('write', options.output, false);
+          if (!audioBoundaryOk) {
+            console.log(COLORS.muted('Write cancelled - output path is outside workspace.'));
+            return;
+          }
           // Save audio data
           const audioBuffer = Buffer.from(result.audioData, 'base64');
           fs.writeFileSync(options.output, audioBuffer);

@@ -6,6 +6,7 @@ import { Input } from '../ui/input';
 import { Calculator, Copy, Check, History } from 'lucide-react';
 import type { PluginProps } from './plugin-manager';
 import { clipboard } from '@bing/platform/clipboard';
+import { calculate, isValidResult } from '@/lib/utils/calculator';
 
 export const CalculatorPlugin: React.FC<PluginProps> = ({ 
   onClose, 
@@ -44,6 +45,15 @@ export const CalculatorPlugin: React.FC<PluginProps> = ({
       const currentValue = previousValue || 0;
       const newValue = calculate(currentValue, inputValue, operation);
 
+      // Guard against NaN/Infinity propagation from divide-by-zero etc.
+      if (!isValidResult(newValue)) {
+        setDisplay('Error');
+        setPreviousValue(null);
+        setOperation(null);
+        setWaitingForOperand(true);
+        return;
+      }
+
       setDisplay(String(newValue));
       setPreviousValue(newValue);
 
@@ -64,30 +74,9 @@ export const CalculatorPlugin: React.FC<PluginProps> = ({
     setOperation(nextOperation);
   };
 
-  const calculate = (firstValue: number, secondValue: number, operation: string): number => {
-    try {
-      switch (operation) {
-        case '+':
-          return firstValue + secondValue;
-        case '-':
-          return firstValue - secondValue;
-        case '×':
-          return firstValue * secondValue;
-        case '÷':
-          if (secondValue === 0) {
-            throw new Error('Division by zero is not allowed');
-          }
-          return firstValue / secondValue;
-        case '=':
-          return secondValue;
-        default:
-          return secondValue;
-      }
-    } catch (error) {
-      console.error('Calculator error:', error);
-      return NaN;
-    }
-  };
+  // calculate() is now imported from @/lib/utils/calculator
+  // It returns NaN for divide-by-zero; the isFinite guard below
+  // catches that and surfaces 'Error' to the user.
 
   const performCalculation = () => {
     try {
@@ -100,7 +89,7 @@ export const CalculatorPlugin: React.FC<PluginProps> = ({
       if (previousValue !== null && operation) {
         const newValue = calculate(previousValue, inputValue, operation);
 
-        if (!isFinite(newValue)) {
+        if (!isValidResult(newValue)) {
           throw new Error('Result is not a finite number');
         }
 

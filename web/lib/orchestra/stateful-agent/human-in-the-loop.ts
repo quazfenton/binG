@@ -1,6 +1,7 @@
 import type { ApprovalRequest } from './schemas';
 import { hitlAuditLogger } from './hitl-audit-logger';
 import { minimatch } from 'minimatch';
+import { isOutsideWorkspace, resolveWorkspaceRoot, DESTRUCTIVE_OPERATIONS } from '@/lib/agent-bins/workspace-boundary';
 
 export interface InterruptRequest {
   type: 'approval_required';
@@ -290,6 +291,23 @@ export function riskLevelMatcher(levels: ('low' | 'medium' | 'high')[]): Approva
 }
 
 /**
+ * Condition: Check if a destructive file operation targets a path outside the workspace root.
+ * Uses the shared workspace-boundary utility for consistent root resolution.
+ */
+export function outsideWorkspaceMatcher(): ApprovalCondition {
+  return (_toolName: string, params: any, context?: ApprovalContext) => {
+    const targetPath = params?.path || params?.filePath || params?.targetPath || context?.filePath;
+    if (!targetPath) return false;
+
+    // Only flag destructive operations
+    const operation = params?.operation || _toolName;
+    if (!DESTRUCTIVE_OPERATIONS.has(operation)) return false;
+
+    return isOutsideWorkspace(targetPath, context?.workspaceRoot);
+  };
+}
+
+/**
  * Condition: Combined matcher (all conditions must match)
  */
 export function allConditions(...conditions: ApprovalCondition[]): ApprovalCondition {
@@ -351,6 +369,20 @@ export function createReadOnlyRule(): ApprovalRule {
 }
 
 /**
+ * Create a rule for operations outside the workspace boundary
+ */
+export function createOutsideWorkspaceRule(): ApprovalRule {
+  return {
+    id: 'outside-workspace',
+    name: 'Outside Workspace Boundary',
+    condition: outsideWorkspaceMatcher(),
+    action: 'require_approval',
+    timeout: 60000, // 1 minute — shorter since user needs to act quickly
+    description: 'Require approval for destructive file operations outside the workspace root',
+  };
+}
+
+/**
  * Create a rule for high-risk file operations
  */
 export function createHighRiskFileRule(): ApprovalRule {
@@ -377,6 +409,7 @@ export const defaultWorkflow: ApprovalWorkflow = {
   name: 'Default Hybrid Workflow',
   type: 'hybrid',
   rules: [
+    createOutsideWorkspaceRule(),
     createShellCommandRule(),
     createSensitiveFilesRule(),
     createReadOnlyRule(),
@@ -441,6 +474,8 @@ export const desktopWorkflow: ApprovalWorkflow = {
   name: 'Desktop Workflow',
   type: 'auto',
   rules: [
+    // Workspace boundary — always require confirmation for destructive ops outside workspace
+    createOutsideWorkspaceRule(),
     // FIX: Comprehensive destructive command matching - covers all dangerous shell patterns
     {
       id: 'system-destructive',

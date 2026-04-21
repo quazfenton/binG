@@ -123,6 +123,11 @@ export default function AIPromptLibraryPlugin({ onClose }: PluginProps) {
         processedContent = processedContent.replace(new RegExp(`{{${variable}}}`, 'g'), value);
       });
 
+      // Derive provider from selected model to avoid invalid provider-model combos
+      const providerForModel = selectedModel.startsWith('claude') ? 'anthropic'
+        : selectedModel.startsWith('llama') || selectedModel.startsWith('mistral') ? 'open_router'
+        : 'openai';
+
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -130,7 +135,7 @@ export default function AIPromptLibraryPlugin({ onClose }: PluginProps) {
           messages: [
             { role: 'user', content: processedContent }
           ],
-          provider: 'openai',
+          provider: providerForModel,
           model: selectedModel,
           stream: false,
         }),

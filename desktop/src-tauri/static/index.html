@@ -33,12 +33,13 @@
     
     async function checkServer() {
       try {
-        const resp = await fetch(`http://127.0.0.1:${sidecarPort}/`, { 
-          method: 'HEAD', 
-          mode: 'no-cors',
+        const resp = await fetch(`http://127.0.0.1:${sidecarPort}/api/health`, {
+          method: 'GET',
           signal: AbortSignal.timeout(2000)
         });
-        // Pass the token to the sidecar so it can set a cookie
+        if (!resp.ok) throw new Error(`Health check failed: ${resp.status}`);
+        const health = await resp.json();
+        if (!health || !health.version) throw new Error('Invalid health response');
         window.location.href = `http://127.0.0.1:${sidecarPort}/?sid_tkn=${sidecarConfig.token}`;
       } catch (e) {
         setTimeout(checkServer, 1000);
