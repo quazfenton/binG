@@ -496,7 +496,7 @@ const ContentItemComponent: React.FC<ContentItemProps> = ({
       animate={controls}
       exit={{ opacity: 0, scale: 0.8 }}
       transition={{ duration: 0.5 }}
-      className={`absolute p-4 rounded-xl cursor-pointer transition-all duration-300 ${templateStyles[style.template]}`}
+      className={`group absolute p-4 rounded-xl cursor-pointer transition-all duration-300 ${templateStyles[style.template]}`}
       style={{
         left: style.floating ? position.x : undefined,
         top: style.floating ? position.y : undefined,
@@ -525,7 +525,7 @@ const ContentItemComponent: React.FC<ContentItemProps> = ({
       </button>
 
       {/* Content */}
-      <div className="group max-w-sm">
+      <div className="max-w-sm">
         {renderContent()}
         
         {/* Metadata */}

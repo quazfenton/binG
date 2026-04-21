@@ -33,11 +33,13 @@ const MODE = process.env.TAURI_MCP_MODE || "desktop";
 // ---------------------------------------------------------------------------
 
 class TauriBridgeClient {
-  private ws: WebSocket | null = null;
-  private pendingRequests: Map<string, { resolve: (v: any) => void; reject: (e: Error) => void }> = new Map();
-  private messageId = 0;
+  constructor() {
+    this.ws = null;
+    this.pendingRequests = new Map();
+    this.messageId = 0;
+  }
 
-  connect(): Promise<void> {
+  connect() {
     return new Promise((resolve, reject) => {
       this.ws = new WebSocket(BRIDGE_URL);
       this.ws.on("open", () => resolve());
@@ -46,7 +48,7 @@ class TauriBridgeClient {
     });
   }
 
-  private handleMessage(raw: string) {
+  handleMessage(raw) {
     try {
       const msg = JSON.parse(raw);
       const { id, result, error } = msg;
@@ -61,14 +63,14 @@ class TauriBridgeClient {
     }
   }
 
-  async call(method: string, params: Record<string, any> = {}): Promise<any> {
+  async call(method, params = {}) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       throw new Error("Bridge not connected");
     }
     const id = `req-${++this.messageId}`;
     return new Promise((resolve, reject) => {
       this.pendingRequests.set(id, { resolve, reject });
-      this.ws!.send(JSON.stringify({ jsonrpc: "2.0", id, method, params }));
+      this.ws.send(JSON.stringify({ jsonrpc: "2.0", id, method, params }));
     });
   }
 

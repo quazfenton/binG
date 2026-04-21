@@ -492,7 +492,7 @@ export default function CommandDeckPlugin() {
        if (res.ok) {
          const data = await res.json();
          result.success = data.success !== false;
-         result.message = data.message || data.output ? "Executed successfully" : "Action triggered";
+         result.message = (data.message || data.output) ? "Executed successfully" : "Action triggered";
          result.data = data.output || data;
        } else {
          const err = await res.json().catch(() => ({}));

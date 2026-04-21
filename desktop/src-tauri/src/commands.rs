@@ -981,11 +981,28 @@ fn escape_for_shell(s: &str) -> String {
 
 /// Registry of stop channels for file watchers.
 /// Each watcher gets a Sender<()> that, when sent to, signals the watcher thread to stop.
-pub struct WatcherRegistry(pub std::sync::Mutex<HashMap<String, std::sync::mpsc::Sender<()>>>);
+/// Inner is wrapped in Arc so watcher threads can clone it for self-cleanup on exit.
+pub struct WatcherRegistry(pub std::sync::Arc<std::sync::Mutex<HashMap<String, std::sync::mpsc::Sender<()>>>>);
 
 impl Default for WatcherRegistry {
     fn default() -> Self {
-        Self(std::sync::Mutex::new(HashMap::new()))
+        Self(std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())))
+    }
+}
+
+/// RAII guard that removes a watcher's stop-sender from the registry when dropped.
+/// This guarantees cleanup on ALL thread exit paths — early returns, breaks, and panics.
+struct WatcherCleanup {
+    registry: std::sync::Arc<std::sync::Mutex<HashMap<String, std::sync::mpsc::Sender<()>>>>,
+    id: String,
+}
+
+impl Drop for WatcherCleanup {
+    fn drop(&mut self) {
+        if let Ok(mut reg) = self.registry.lock() {
+            reg.remove(&self.id);
+        }
+        crate::log::log_msg(&format!("[file-watcher] Cleaned up registry entry for {}", self.id));
     }
 }
 
@@ -1040,14 +1057,23 @@ pub async fn start_file_watcher(
     // Create stop channel for graceful shutdown
     let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
 
+    // Clone the Arc<Mutex> so the watcher thread can clean up its own entry on exit
+    let registry_arc = registry.0.clone();
     // Store stop sender in registry
     {
-        let mut reg = registry.0.lock().map_err(|e| e.to_string())?;
+        let mut reg = registry_arc.lock().map_err(|e| e.to_string())?;
         reg.insert(watch_id.clone(), stop_tx);
         crate::log::log_msg(&format!("[file-watcher] Registered stop channel for {}", watch_id));
     }
 
     std::thread::spawn(move || {
+        // RAII guard: when this goes out of scope (any exit path), the registry
+        // entry is removed automatically — covers early returns, breaks, and panics.
+        let _cleanup = WatcherCleanup {
+            registry: registry_arc,
+            id: watch_id_clone.clone(),
+        };
+
         let (tx, rx) = channel::<notify::Result<notify::Event>>();
 
         let mut watcher: RecommendedWatcher = match notify::Watcher::new(
@@ -1110,6 +1136,7 @@ pub async fn start_file_watcher(
         }
 
         crate::log::log_msg(&format!("[file-watcher] Stopped watching {:?} with id {}", watch_path, watch_id_clone));
+        // _cleanup guard is dropped here, removing the registry entry
     });
 
     Ok(true)
@@ -1280,6 +1307,16 @@ pub async fn handle_api_route(req: ApiRouteRequest) -> Result<ApiRouteResponse, 
             let path = req.body.as_ref()
                 .and_then(|b| b["path"].as_str()).or_else(|| query.and_then(|q| q.get("path")).map(|s| s.as_str()))
                 .unwrap_or("");
+
+            if path.trim().is_empty() || path == "." {
+                return Ok(ApiRouteResponse {
+                    success: false,
+                    data: None,
+                    error: Some("Refusing to delete empty or current directory path".to_string()),
+                    status: 400,
+                });
+            }
+
             match validate_workspace_path(path) {
                 Ok(canonical) => {
                     let result = if canonical.is_dir() {

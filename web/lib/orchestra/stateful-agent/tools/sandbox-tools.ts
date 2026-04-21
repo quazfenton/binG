@@ -212,7 +212,7 @@ USE CASES:
 
 This tool creates an approval request that must be resolved before proceeding.`,
   parameters: z.object({
-    action: z.enum(['delete', 'overwrite', 'execute_destructive', 'create_secret']).describe('Type of action requiring approval'),
+    action: z.enum(['delete', 'overwrite', 'execute_destructive', 'create_secret', 'outside_workspace']).describe('Type of action requiring approval'),
     target: z.string().describe('Target of the action (file path, command, etc.)'),
     reason: z.string().describe('Why this action is needed'),
     diff: z.string().optional().describe('Preview of changes (for edit operations)'),

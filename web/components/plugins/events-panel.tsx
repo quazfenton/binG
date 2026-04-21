@@ -121,6 +121,7 @@ export default function EventsPanel() {
   const [searchQuery, setSearchQuery] = useState('');
   const [useSSE, setUseSSE] = useState(true);
   const eventSourceRef = useRef<EventSource | null>(null);
+  const statsDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // SSE connection for real-time updates
   useEffect(() => {
@@ -148,8 +149,14 @@ export default function EventsPanel() {
               return [data.event, ...prev].slice(0, 100);
             });
             
-            // Update stats
-            fetchStats();
+            // Debounce stats updates — avoid a request-per-event pattern
+            // that can overload the stats endpoint under active streams.
+            if (!statsDebounceRef.current) {
+              statsDebounceRef.current = setTimeout(() => {
+                statsDebounceRef.current = null;
+                fetchStats();
+              }, 2000);
+            }
           }
         } catch (error) {
           console.error('SSE message error:', error);
@@ -167,6 +174,11 @@ export default function EventsPanel() {
       return () => {
         if (eventSourceRef.current) {
           eventSourceRef.current.close();
+        }
+        // Clean up pending stats debounce timer
+        if (statsDebounceRef.current) {
+          clearTimeout(statsDebounceRef.current);
+          statsDebounceRef.current = null;
         }
       };
     } catch (error) {

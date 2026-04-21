@@ -19,6 +19,37 @@ import { applyPromptModifiers, type PromptParameters } from './prompt-parameters
 
 const logger = createLogger('Agent:OpencodeDirect');
 
+/**
+ * Track a file change in the fileChanges array, deduplicating by path.
+ * Shared between ToolIntegrationManager and direct tool execution paths.
+ * Exported for unit testing.
+ */
+export function trackFileChange(toolName: string, args: Record<string, any>, fileChanges: FileChange[]): void {
+  let operation: FileChange['operation'] | null = null;
+  if (toolName === 'write_file' || toolName === 'WriteFile' || toolName === 'write') {
+    operation = 'write';
+  } else if (toolName === 'edit_file' || toolName === 'EditFile' || toolName === 'patch' || toolName === 'edit') {
+    operation = 'patch';
+  } else if (toolName === 'delete_file' || toolName === 'DeleteFile' || toolName === 'delete') {
+    operation = 'delete';
+  }
+  if (!operation) return;
+
+  const filePath = String(args.path ?? args.file ?? args.target ?? '');
+  if (!filePath) {
+    logger.warn('Attempted to record file change with empty filePath', { toolName, args });
+    return;
+  }
+
+  const content = operation !== 'delete'
+    ? (typeof args.content === 'string' ? args.content : args.content == null ? undefined : JSON.stringify(args.content))
+    : undefined;
+
+  const existing = fileChanges.findIndex(fc => fc.path === filePath);
+  if (existing !== -1) fileChanges.splice(existing, 1);
+  fileChanges.push({ path: filePath, operation, content });
+}
+
 interface OpenCodeDirectOptions {
   userId: string;
   conversationId: string;
@@ -42,7 +73,7 @@ interface OpenCodeDirectOptions {
   promptParams?: PromptParameters;
 }
 
-interface FileChange {
+export interface FileChange {
   path: string;
   operation: 'write' | 'patch' | 'delete';
   content?: string;
@@ -131,7 +162,11 @@ export async function runOpenCodeDirect(options: OpenCodeDirectOptions): Promise
               }
             }
           );
-          
+
+          // Track file changes from ToolIntegrationManager results before
+          // returning, so fileChanges array stays in sync with actual operations.
+          trackFileChange(toolName, args, fileChanges);
+
           // Call original onTool callback if provided
           if (onTool) {
             onTool(toolName, args, integratedResult);
@@ -145,56 +180,7 @@ export async function runOpenCodeDirect(options: OpenCodeDirectOptions): Promise
       }
       
       // Track file changes (validate filePath to avoid recording empty/invalid operations)
-      if (toolName === 'write_file' || toolName === 'WriteFile' || toolName === 'write') {
-        const filePath = String(args.path ?? args.file ?? args.target ?? '');
-        if (!filePath) {
-          logger.warn('Attempted to record file write with empty filePath', { toolName, args });
-        } else {
-          const content = typeof args.content === 'string'
-            ? args.content
-            : args.content == null
-              ? undefined
-              : JSON.stringify(args.content);
-          // Deduplicate: remove any prior entry for the same path
-          const existing = fileChanges.findIndex(fc => fc.path === filePath);
-          if (existing !== -1) fileChanges.splice(existing, 1);
-          fileChanges.push({
-            path: filePath,
-            operation: 'write',
-            content,
-          });
-        }
-      } else if (toolName === 'edit_file' || toolName === 'EditFile' || toolName === 'patch' || toolName === 'edit') {
-        const filePath = String(args.path ?? args.file ?? args.target ?? '');
-        if (!filePath) {
-          logger.warn('Attempted to record file edit with empty filePath', { toolName, args });
-        } else {
-          const content = typeof args.content === 'string'
-            ? args.content
-            : args.content == null
-              ? undefined
-              : JSON.stringify(args.content);
-          const existing = fileChanges.findIndex(fc => fc.path === filePath);
-          if (existing !== -1) fileChanges.splice(existing, 1);
-          fileChanges.push({
-            path: filePath,
-            operation: 'patch',
-            content,
-          });
-        }
-      } else if (toolName === 'delete_file' || toolName === 'DeleteFile' || toolName === 'delete') {
-        const filePath = String(args.path ?? args.file ?? args.target ?? '');
-        if (!filePath) {
-          logger.warn('Attempted to record file delete with empty filePath', { toolName, args });
-        } else {
-          const existing = fileChanges.findIndex(fc => fc.path === filePath);
-          if (existing !== -1) fileChanges.splice(existing, 1);
-          fileChanges.push({
-            path: filePath,
-            operation: 'delete',
-          });
-        }
-      }
+      trackFileChange(toolName, args, fileChanges);
 
       onTool?.(toolName, args, toolResult);
     },

@@ -52,7 +52,7 @@ export interface VerificationResult {
 
 export interface ApprovalRequest {
   id: string;
-  action: 'delete' | 'overwrite' | 'execute_destructive' | 'create_secret';
+  action: 'delete' | 'overwrite' | 'execute_destructive' | 'create_secret' | 'outside_workspace';
   target: string;
   reason: string;
   diff?: string;
