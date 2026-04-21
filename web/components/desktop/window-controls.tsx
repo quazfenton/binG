@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { X, Minus, Square, Copy } from "lucide-react";
 
 export default function WindowControls() {
   const [isMaximized, setIsMaximized] = useState(false);
@@ -44,41 +43,37 @@ export default function WindowControls() {
   return (
     <div 
       data-tauri-drag-region
-      className="h-8 bg-black/80 backdrop-blur-md flex justify-between items-center px-3 select-none border-b border-white/5 z-[9999]"
+      className="h-8 bg-black flex justify-between items-center px-3 select-none border-b border-white/5 z-[9999] pointer-events-auto"
     >
       <div className="flex items-center gap-2 pointer-events-none">
-        <span className="text-[10px] font-medium text-zinc-500 uppercase tracking-widest">
+        <span className="text-[10px] font-medium text-zinc-500 uppercase tracking-widest pointer-events-none">
           Quaz Desktop
         </span>
       </div>
 
-      <div className="flex items-center">
+      <div className="flex items-center pointer-events-auto">
         <button
           onClick={() => appWindow.minimize()}
-          className="h-8 w-10 flex items-center justify-center hover:bg-white/10 transition-colors"
+          className="h-8 w-10 flex items-center justify-center hover:bg-white/10 transition-colors text-zinc-400 z-[10001]"
           title="Minimize"
         >
-          <Minus size={14} className="text-zinc-400" />
+          —
         </button>
         
         <button
           onClick={() => appWindow.toggleMaximize()}
-          className="h-8 w-10 flex items-center justify-center hover:bg-white/10 transition-colors"
+          className="h-8 w-10 flex items-center justify-center hover:bg-white/10 transition-colors text-zinc-400 text-xs z-[10001]"
           title={isMaximized ? "Restore" : "Maximize"}
         >
-          {isMaximized ? (
-            <Copy size={12} className="text-zinc-400" />
-          ) : (
-            <Square size={12} className="text-zinc-400" />
-          )}
+          {isMaximized ? "❐" : "□"}
         </button>
 
         <button
           onClick={() => appWindow.close()}
-          className="h-8 w-12 flex items-center justify-center hover:bg-red-500 transition-colors group"
+          className="h-8 w-12 flex items-center justify-center hover:bg-red-500 transition-colors group text-zinc-400 z-[10001]"
           title="Close"
         >
-          <X size={14} className="text-zinc-400 group-hover:text-white" />
+          ✕
         </button>
       </div>
     </div>

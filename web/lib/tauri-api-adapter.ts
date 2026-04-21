@@ -95,8 +95,23 @@ interface SidecarConfig {
   token: string;
 }
 
-function getSidecarConfig(): SidecarConfig | null {
-  return (window as any).__OPENCODE_SIDECAR__ ?? null;
+/**
+ * Get sidecar configuration
+ * Tries window global first (injected by Tauri), then falls back to Tauri invoke
+ */
+async function getSidecarConfig(): Promise<SidecarConfig | null> {
+  const globalConfig = (window as any).__SIDECAR_CONFIG__;
+  if (globalConfig) return globalConfig;
+
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    const config = await invoke('get_sidecar_config') as SidecarConfig;
+    (window as any).__SIDECAR_CONFIG__ = config;
+    return config;
+  } catch (error) {
+    console.error('[tauriFetch] Failed to get sidecar config via invoke', error);
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -152,20 +167,16 @@ export async function tauriFetch(
   input: RequestInfo | URL,
   init?: RequestInit,
 ): Promise<Response> {
-  const isTauri = typeof (window as any).__TAURI_INTERNALS__ !== 'undefined'
-    || typeof (window as any).__TAURI__ !== 'undefined';
+  const isTauri = typeof window !== 'undefined' && ((window as any).__TAURI_INTERNALS__ || (window as any).__TAURI__);
+  const isDesktop = process.env.DESKTOP_MODE === 'true' || process.env.DESKTOP_LOCAL_EXECUTION === 'true';
 
-  if (!isTauri) {
-    // Not running inside Tauri — use the original (un-patched) fetch.
-    // __ORIGINAL_FETCH__ is set by installTauriFetchInterceptor(); if the
-    // interceptor hasn't been installed, native fetch is fine.
+  if (!isTauri && !isDesktop) {
+    // Not running inside Tauri or desktop mode — use the original (un-patched) fetch.
     const nativeFetch = (window as any).__ORIGINAL_FETCH__ ?? fetch;
     return nativeFetch(input, init);
   }
 
-  // Handle Request objects — fall through to the original (un-patched)
-  // fetch since we can't easily clone the body.
-  // Use __ORIGINAL_FETCH__ if available to avoid recursive interception.
+  // Handle Request objects
   if (input instanceof Request) {
     const nativeFetch = (window as any).__ORIGINAL_FETCH__ ?? fetch;
     return nativeFetch(input, init);
@@ -189,47 +200,49 @@ export async function tauriFetch(
     }
   }
 
-  // -----------------------------------------------------------------------
-  // Route 1: Tauri command (filesystem, settings, etc.)
-  // -----------------------------------------------------------------------
-  if (TAURI_ROUTES.has(pathname) && TAURI_COMMAND_MAP[pathname]) {
-    return await handleTauriRoute(pathname, url, init?.body, headers, TAURI_COMMAND_MAP[pathname]);
+  // If in Tauri, try direct commands first
+  if (isTauri) {
+    if (TAURI_ROUTES.has(pathname) && TAURI_COMMAND_MAP[pathname]) {
+      return await handleTauriRoute(pathname, url, init?.body, headers, TAURI_COMMAND_MAP[pathname]);
+    }
+
+    try {
+      const { invoke } = await importTauri();
+      const result = await invoke('handle_api_route', {
+        route: pathname,
+        method,
+        body: init?.body,
+        query: Object.fromEntries(url.searchParams),
+        headers,
+      });
+      return jsonResponse(result);
+    } catch {
+      // Fall through to sidecar
+    }
   }
 
-  // -----------------------------------------------------------------------
-  // Route 2: Try Tauri generic handler, then sidecar, then native fetch
-  // -----------------------------------------------------------------------
-  // Try generic Tauri handler first (works without sidecar)
-  try {
-    const { invoke } = await importTauri();
-    const result = await invoke('handle_api_route', {
-      route: pathname,
-      method,
-      body: init?.body,
-      query: Object.fromEntries(url.searchParams),
-      headers,
-    });
-    return jsonResponse(result);
-  } catch {
-    // Tauri handler not available for this route — try sidecar
-    if (SIDECAR_ROUTES.has(pathname) || pathname.startsWith('/api/chat') || pathname.startsWith('/api/agent') || pathname.startsWith('/api/sandbox') || pathname.startsWith('/api/mcp') || pathname.startsWith('/api/terminal')) {
-      try {
-        return await handleSidecarRoute(pathname, url, init, headers);
-      } catch {
-        console.warn('[tauriFetch] Sidecar unavailable for', pathname, '— returning stub response');
-        return jsonResponse({
-          success: false,
-          error: 'Sidecar not available — this route requires the Node.js server',
-          hint: 'Ensure Node.js is installed and the app was built with `pnpm build`',
-        }, 503);
-      }
+  // Sidecar HTTP fallback
+  if (SIDECAR_ROUTES.has(pathname) || 
+      pathname.startsWith('/api/chat') || 
+      pathname.startsWith('/api/agent') || 
+      pathname.startsWith('/api/sandbox') ||
+      pathname.startsWith('/api/mcp') ||
+      pathname.startsWith('/api/terminal')) {
+    try {
+      return await handleSidecarRoute(pathname, url, init, headers);
+    } catch {
+      console.warn('[tauriFetch] Sidecar unavailable for', pathname, '— returning stub response');
+      return jsonResponse({
+        success: false,
+        error: 'Sidecar not available — this route requires the Node.js server',
+        hint: 'Ensure Node.js is installed and the app was built with `pnpm build`',
+      }, 503);
     }
-    // Last resort: native fetch (will fail in production Tauri)
-    // Use __ORIGINAL_FETCH__ to avoid recursive interception.
-    console.warn('[tauriFetch] Falling back to native fetch for', pathname);
-    const nativeFetch = (window as any).__ORIGINAL_FETCH__ ?? fetch;
-    return nativeFetch(input, init);
   }
+
+  // Last resort
+  const nativeFetch = (window as any).__ORIGINAL_FETCH__ ?? fetch;
+  return nativeFetch(input, init);
 }
 
 // ---------------------------------------------------------------------------
@@ -285,7 +298,7 @@ async function handleSidecarRoute(
   init: RequestInit | undefined,
   headers: Record<string, string>,
 ): Promise<Response> {
-  const config = getSidecarConfig();
+  const config = await getSidecarConfig();
   if (!config) {
     throw new Error('Sidecar not configured');
   }

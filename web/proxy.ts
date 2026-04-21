@@ -18,6 +18,19 @@ import { rateLimitMiddleware as authRateLimit, RATE_LIMIT_CONFIGS } from './lib/
  */
 
 export async function proxy(request: NextRequest) {
+  // Check for sidecar token in query params (passed from loader)
+  const queryToken = request.nextUrl.searchParams.get('sid_tkn');
+  if (queryToken) {
+    const response = NextResponse.redirect(new URL(request.nextUrl.pathname, request.url));
+    response.cookies.set('sid_tkn', queryToken, { 
+      httpOnly: true, 
+      secure: false, // Localhost
+      sameSite: 'strict',
+      path: '/' 
+    });
+    return response;
+  }
+
   // Block access to sensitive files
   const blockedResponse = blockSensitiveFiles(request);
   if (blockedResponse) {
@@ -26,7 +39,7 @@ export async function proxy(request: NextRequest) {
 
   // Desktop mode: validate sidecar token on API routes
   const isDesktop = process.env.DESKTOP_MODE === 'true';
-  const sidecarToken = process.env.OPENCODE_SIDECAR_TOKEN;
+  const sidecarToken = process.env.SIDECAR_TOKEN;
   if (isDesktop && request.nextUrl.pathname.startsWith('/api/')) {
     if (!sidecarToken) {
       return NextResponse.json(
@@ -38,7 +51,10 @@ export async function proxy(request: NextRequest) {
     // Skip token check for routes handled directly by Tauri invoke()
     const tauriRoutes = new Set(['/api/health', '/api/providers']);
     if (!tauriRoutes.has(request.nextUrl.pathname)) {
-      const token = request.headers.get('x-sidecar-token');
+      const headerToken = request.headers.get('x-sidecar-token');
+      const cookieToken = request.cookies.get('sid_tkn')?.value;
+      const token = headerToken || cookieToken;
+      
       if (!token || token !== sidecarToken) {
         return NextResponse.json(
           { error: 'Unauthorized — invalid or missing sidecar token' },
