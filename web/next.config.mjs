@@ -346,11 +346,6 @@ const nextConfig = {
       );
     }
 
-    config.module.rules.push({
-      test: /\.sql$/,
-      use: 'raw-loader',
-    });
-
     return config;
   },
   async headers() {

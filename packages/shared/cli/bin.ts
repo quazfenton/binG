@@ -43,8 +43,9 @@ const localMode = detectLocalMode();
 function detectLocalMode(): { isLocal: boolean; isDesktop: boolean; workspace: string } {
   const isLocal = !process.env.VERCEL && !process.env.VERCEL_ENV && process.env.NODE_ENV !== "production";
   const isDesktop = !!process.env.DESKTOP_MODE || !!process.env.DESKTOP_LOCAL_EXECUTION;
-  const workspace = process.env.DESKTOP_WORKSPACE_ROOT || process.env.WORKSPACE_ROOT ||
-    path.join(process.env.HOME || process.env.USERPROFILE || cwd(), "workspace");
+  // Priority: INITIAL_CWD (set by Tauri sidecar) > DESKTOP_WORKSPACE_ROOT > WORKSPACE_ROOT > CWD fallback
+  const workspace = process.env.INITIAL_CWD || process.env.DESKTOP_WORKSPACE_ROOT || process.env.WORKSPACE_ROOT ||
+    process.cwd();
   return { isLocal, isDesktop, workspace };
 }
 

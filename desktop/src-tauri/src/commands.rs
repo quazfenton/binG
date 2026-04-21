@@ -5,13 +5,17 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, State};
+
 
 /// Validates and canonicalizes a workspace-relative path.
 /// Returns the canonical path or an error if it escapes the workspace.
 fn validate_workspace_path(file_path: &str) -> Result<PathBuf, String> {
     let base_dir = std::env::current_dir()
         .map_err(|e| format!("Failed to resolve base directory: {}", e))?;
+    // Canonicalize base_dir once and reuse throughout
+    let canonical_base = std::fs::canonicalize(&base_dir)
+        .map_err(|e| format!("Failed to canonicalize base directory: {}", e))?;
     let requested = Path::new(file_path);
 
     if requested.is_absolute() || requested.components().any(|c| c == std::path::Component::ParentDir) {
@@ -20,40 +24,26 @@ fn validate_workspace_path(file_path: &str) -> Result<PathBuf, String> {
 
     let full_path = base_dir.join(requested);
 
-    // Ensure parent exists for operations that need it
-    // For read-only operations, we canonicalize after confirming existence
     let canonical = if full_path.exists() {
+        // Path exists — canonicalize it directly
         std::fs::canonicalize(&full_path)
             .map_err(|e| format!("Failed to canonicalize path: {}", e))?
     } else {
-        // For paths that don't exist yet (e.g., write targets), canonicalize the base
-        // and verify the resolved path would stay within workspace
-        let canonical_base = std::fs::canonicalize(&base_dir)
-            .map_err(|e| format!("Failed to canonicalize base directory: {}", e))?;
-        
-        // Check if resolved path would escape workspace (before creation)
-        let resolved = base_dir.join(requested);
-        let canonical_resolved = if resolved.exists() {
-            std::fs::canonicalize(&resolved)
-                .map_err(|e| format!("Failed to canonicalize resolved path: {}", e))?
-        } else {
-            // Path doesn't exist yet - verify parent is within workspace
-            if let Some(parent) = resolved.parent() {
-                if parent.exists() {
-                    let canonical_parent = std::fs::canonicalize(parent)
-                        .map_err(|e| format!("Failed to canonicalize parent: {}", e))?;
-                    if !canonical_parent.starts_with(&canonical_base) {
-                        return Err("Access denied: resolved path escapes workspace".to_string());
-                    }
+        // Path doesn't exist yet (e.g., write target).
+        // Verify the parent directory is within workspace to prevent symlink escape.
+        if let Some(parent) = full_path.parent() {
+            if parent.exists() {
+                let canonical_parent = std::fs::canonicalize(parent)
+                    .map_err(|e| format!("Failed to canonicalize parent directory: {}", e))?;
+                if !canonical_parent.starts_with(&canonical_base) {
+                    return Err("Access denied: resolved path escapes workspace".to_string());
                 }
             }
-            resolved
-        };
-        canonical_resolved
+        }
+        // Return canonical_base + relative path. This produces a normalized path
+        // guaranteed to stay within the workspace boundary.
+        canonical_base.join(requested)
     };
-
-    let canonical_base = std::fs::canonicalize(&base_dir)
-        .map_err(|e| format!("Failed to canonicalize base directory: {}", e))?;
 
     if !canonical.starts_with(&canonical_base) {
         return Err("Access denied: resolved path escapes workspace".to_string());
@@ -987,6 +977,168 @@ fn escape_for_shell(s: &str) -> String {
     }
     s.replace('\'', "'\\''")
 }
+
+
+/// Registry of stop channels for file watchers.
+/// Each watcher gets a Sender<()> that, when sent to, signals the watcher thread to stop.
+pub struct WatcherRegistry(pub std::sync::Mutex<HashMap<String, std::sync::mpsc::Sender<()>>>);
+
+impl Default for WatcherRegistry {
+    fn default() -> Self {
+        Self(std::sync::Mutex::new(HashMap::new()))
+    }
+}
+
+/// Start a file system watcher for the workspace directory.
+/// Returns a watcher ID that can be used to stop watching.
+#[tauri::command]
+pub async fn start_file_watcher(
+    app: AppHandle,
+    watch_id: String,
+    watch_path: String,
+    registry: tauri::State<'_, WatcherRegistry>,
+) -> Result<bool, String> {
+    use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
+    use std::sync::mpsc::channel;
+    use std::time::Duration;
+
+    // Validate the watch path
+    let watch_path = if watch_path.is_empty() || watch_path == "." {
+        std::env::current_dir()
+            .map_err(|e| format!("Failed to get current dir: {}", e))?
+    } else {
+        let base_dir = std::env::current_dir()
+            .map_err(|e| format!("Failed to resolve current dir: {}", e))?;
+        let requested = std::path::Path::new(&watch_path);
+        
+        // Reject absolute paths and traversal attempts
+        if requested.is_absolute() || requested.components().any(|c| c == std::path::Component::ParentDir) {
+            return Err("Access denied: watch path must stay within workspace".to_string());
+        }
+        
+        let full_path = base_dir.join(requested);
+        let canonical_base = std::fs::canonicalize(&base_dir)
+            .map_err(|e| format!("Failed to canonicalize base dir: {}", e))?;
+        
+        if !full_path.exists() {
+            return Err(format!("Watch path does not exist: {}", watch_path));
+        }
+        
+        let canonical = std::fs::canonicalize(&full_path)
+            .map_err(|e| format!("Failed to canonicalize watch path: {}", e))?;
+        
+        if !canonical.starts_with(&canonical_base) {
+            return Err("Access denied: watch path escapes workspace".to_string());
+        }
+        
+        canonical
+    };
+
+    let app_clone = app.clone();
+    let watch_id_clone = watch_id.clone();
+
+    // Create stop channel for graceful shutdown
+    let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
+
+    // Store stop sender in registry
+    {
+        let mut reg = registry.0.lock().map_err(|e| e.to_string())?;
+        reg.insert(watch_id.clone(), stop_tx);
+        crate::log::log_msg(&format!("[file-watcher] Registered stop channel for {}", watch_id));
+    }
+
+    std::thread::spawn(move || {
+        let (tx, rx) = channel::<notify::Result<notify::Event>>();
+
+        let mut watcher: RecommendedWatcher = match notify::Watcher::new(
+            tx,
+            Config::default().with_poll_interval(Duration::from_secs(2)),
+        ) {
+            Ok(w) => w,
+            Err(e) => {
+                eprintln!("[file-watcher] Failed to create watcher: {}", e);
+                return;
+            }
+        };
+
+        if let Err(e) = watcher.watch(&watch_path, RecursiveMode::Recursive) {
+            eprintln!("[file-watcher] Failed to watch {:?}: {}", watch_path, e);
+            return;
+        }
+
+        crate::log::log_msg(&format!("[file-watcher] Started watching {:?} with id {}", watch_path, watch_id_clone));
+
+        loop {
+            // Check if we should stop
+            match stop_rx.recv_timeout(Duration::from_secs(0)) {
+                Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    crate::log::log_msg(&format!("[file-watcher] Stopping watcher {} (user request)", watch_id_clone));
+                    break;
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            }
+
+            match rx.recv_timeout(Duration::from_secs(5)) {
+                Ok(Ok(event)) => {
+                    for path in event.paths {
+                        let change_type = match event.kind {
+                            notify::EventKind::Create(_) => "create",
+                            notify::EventKind::Modify(_) => "update",
+                            notify::EventKind::Remove(_) => "delete",
+                            _ => continue,
+                        };
+
+                        let _ = app_clone.emit("fs-watch-event", serde_json::json!({
+                            "watchId": watch_id_clone,
+                            "path": path.to_string_lossy(),
+                            "changeType": change_type,
+                            "timestamp": chrono::Utc::now().to_rfc3339(),
+                        }));
+                    }
+                }
+                Ok(Err(e)) => {
+                    eprintln!("[file-watcher] Watch error: {}", e);
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    // Normal timeout - continue watching
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    crate::log::log_msg(&format!("[file-watcher] Watcher disconnected for id {}", watch_id_clone));
+                    break;
+                }
+            }
+        }
+
+        crate::log::log_msg(&format!("[file-watcher] Stopped watching {:?} with id {}", watch_path, watch_id_clone));
+    });
+
+    Ok(true)
+}
+
+/// Stop a file system watcher by ID
+#[tauri::command]
+pub async fn stop_file_watcher(
+    watch_id: String,
+    registry: tauri::State<'_, WatcherRegistry>,
+) -> Result<bool, String> {
+    // Remove the sender from the registry and send stop signal
+    // This prevents stale entries from accumulating (memory leak fix)
+    let sender = registry.0.lock()
+        .map_err(|e| e.to_string())?
+        .remove(&watch_id);
+
+    if let Some(tx) = sender {
+        let _ = tx.send(());
+        crate::log::log_msg(&format!("[file-watcher] Stop signal sent and registry entry removed for {}", watch_id));
+        Ok(true)
+    } else {
+        crate::log::log_msg(&format!("[file-watcher] No active watcher found for id {}", watch_id));
+        Ok(false)
+    }
+}
+
+
+
 
 #[tauri::command]
 pub async fn get_system_info() -> Result<SystemInfo, String> {

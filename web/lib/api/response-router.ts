@@ -120,7 +120,7 @@ export interface RouterRequest {
   /** When true, the Vercel AI SDK handles tool calling natively — skip regex intent parsing */
   nativeToolCalling?: boolean
   /** Spec amplification mode: 'normal' (disabled), 'enhanced', 'max', or 'super' */
-  mode?: 'normal' | 'enhanced' | 'max' | 'super'
+  mode?: 'normal' | 'enhanced' | 'max' | 'super' | 'super'
   /** Request a bundled context pack (file tree + contents) for LLM */
   contextPack?: {
     format?: 'markdown' | 'xml' | 'json' | 'plain'
@@ -1963,7 +1963,7 @@ export class ResponseRouter {
    */
   async routeWithSpecAmplification(
     request: RouterRequest & {
-      mode?: 'normal' | 'enhanced' | 'max'
+      mode?: 'normal' | 'enhanced' | 'max' | 'super'
       agentMode?: 'v1' | 'v2' | 'auto'
       emit?: (event: string, data: any) => void
     }
@@ -2181,7 +2181,7 @@ export class ResponseRouter {
   private async runBackgroundRefinement(params: {
     primaryData: UnifiedResponse
     specGenerationPromise: Promise<{ success: boolean; data?: any; error?: any }>
-    request: RouterRequest & { mode?: 'normal' | 'enhanced' | 'max'; emit?: (event: string, data: any) => void }
+    request: RouterRequest & { mode?: 'normal' | 'enhanced' | 'max' | 'super' | 'super'; emit?: (event: string, data: any) => void }
     fastModel: any
     startTime: number
   }): Promise<void> {
@@ -2830,7 +2830,7 @@ export async function routeAndFormatRequest(request: RouterRequest): Promise<Uni
  * @deprecated Use responseRouter.routeWithSpecAmplification()
  */
 export async function routeWithSpecAmplification(
-  request: RouterRequest & { mode?: 'normal' | 'enhanced' | 'max' }
+  request: RouterRequest & { mode?: 'normal' | 'enhanced' | 'max' | 'super' }
 ): Promise<UnifiedResponse> {
   return responseRouter.routeWithSpecAmplification(request)
 }

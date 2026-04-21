@@ -11,18 +11,7 @@
   },
   "app": {
     "withGlobalTauri": true,
-    "windows": [
-      {
-        "title": "Quaz Desktop",
-        "width": 1200,
-        "height": 800,
-        "resizable": true,
-        "fullscreen": false,
-        "transparent": true,
-        "decorations": false,
-        "theme": "Dark"
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": null
     }

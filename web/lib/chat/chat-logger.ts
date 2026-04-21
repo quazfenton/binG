@@ -78,7 +78,7 @@ class ChatLogger {
       if (context.conversationId) contextParts.push(`conv:${context.conversationId}`);
     }
 
-    const contextStr = contextParts.length > 0 ? ` [${contextParts.join(' ')}]` : '';
+    const contextStr = (contextParts && contextParts.length > 0) ? ` [${contextParts.join(' ')}]` : '';
     return `${timestamp} [${level.toUpperCase()}] ${this.component}${contextStr}: ${message}`;
   }
 

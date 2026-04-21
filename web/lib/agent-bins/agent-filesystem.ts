@@ -186,12 +186,29 @@ class LocalAgentFs implements AgentFilesystem {
   }
 
   private resolvePath(filePath: string): string {
-    // Absolute paths start with '/' or drive letter (Windows)
-    if (filePath.startsWith('/') || /^[A-Za-z]:/.test(filePath)) {
-      return filePath;
+    let p = filePath.replace(/\\/g, '/');
+
+    // Strip redundant CWD prefix if the LLM echoed back the full absolute path
+    // e.g. cwd="/home/user/project", LLM writes "/home/user/project/src/app.ts"
+    //   → resolve to just "src/app.ts" relative to CWD (avoids double-nesting)
+    const cwdNorm = this.cwd.replace(/\\/g, '/').replace(/\/+$/, '');
+    if (cwdNorm && p.startsWith(cwdNorm + '/')) {
+      p = p.slice(cwdNorm.length + 1);
     }
-    const cwdTrimmed = this.cwd.replace(/\/+$/, '');
-    return `${cwdTrimmed}/${filePath}`;
+    // Also handle Windows drive letter case (C:\Users\... echoed as C:/Users/...)
+    if (cwdNorm && /^[A-Za-z]:/.test(p)) {
+      const pNorm = p.replace(/^([A-Za-z]):/, (_, d) => d.toUpperCase() + ':');
+      const cwdDrive = cwdNorm.replace(/^([A-Za-z]):/, (_, d) => d.toUpperCase() + ':');
+      if (pNorm.startsWith(cwdDrive + '/')) {
+        p = pNorm.slice(cwdDrive.length + 1);
+      }
+    }
+
+    // Absolute paths start with '/' or drive letter (Windows) — use as-is
+    if (p.startsWith('/') || /^[A-Za-z]:/.test(p)) {
+      return p;
+    }
+    return `${cwdNorm}/${p}`;
   }
 }
 
