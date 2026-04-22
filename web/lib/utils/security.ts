@@ -12,20 +12,26 @@ import * as path from 'path';
 import * as crypto from 'crypto';
 
 /**
- * Sanitize file paths to prevent directory traversal attacks
+ * Sanitize file paths to prevent directory traversal attacks.
+ *
+ * Returns the normalized **relative** path (using forward slashes) if it is
+ * safe, or `null` if the path escapes `baseDir` or targets a sensitive directory.
+ *
+ * The relative form is preferred so callers don't leak absolute filesystem
+ * paths into logs, diffs, or network responses.
  */
 export function sanitizePath(inputPath: string, baseDir: string = process.cwd()): string | null {
   if (!inputPath || typeof inputPath !== 'string') {
     return null;
   }
 
-  // Resolve to absolute path
+  // Resolve to absolute path first
   const resolved = path.resolve(baseDir, inputPath);
 
-  // Normalize baseDir to include trailing separator to prevent prefix collision
+  // Normalize baseDir with trailing separator to prevent prefix collision
   const normalizedBaseDir = path.resolve(baseDir) + path.sep;
 
-  // Check for directory traversal attempts
+  // Check for directory traversal attempts (resolved path must be under baseDir)
   if (!resolved.startsWith(normalizedBaseDir)) {
     return null;
   }
@@ -40,7 +46,9 @@ export function sanitizePath(inputPath: string, baseDir: string = process.cwd())
     }
   }
 
-  return resolved;
+  // Return relative path with forward slashes for cross-platform consistency
+  const relativePath = path.relative(baseDir, resolved).replace(/\\/g, '/');
+  return relativePath || '.';
 }
 
 /**

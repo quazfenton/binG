@@ -29,7 +29,7 @@ export type {
 } from '../utils/error-handler';
 
 // Create default instance for backwards compatibility
-import { UnifiedErrorHandler } from '../utils/error-handler';
+import { UnifiedErrorHandler, createNotFoundError as _createNotFoundError } from '../utils/error-handler';
 
 export class ToolErrorHandler {
   private static instance: ToolErrorHandler;
@@ -59,7 +59,7 @@ export class ToolErrorHandler {
   }
 
   createNotFoundError(resource: string) {
-    return createNotFoundError(resource);
+    return _createNotFoundError(resource);
   }
 
   toExecutionResult(error: any) {

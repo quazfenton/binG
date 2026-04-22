@@ -153,9 +153,81 @@ export function applyDiff(command: string, diff: CommandRepair['diff']): string 
 /**
  * Check if change is minimal (safe)
  */
-export function isMinimalChange(original: string, updated: string): boolean {
-  const ratio = Math.abs(updated.length - original.length) / original.length;
-  return ratio < 0.5; // Less than 50% change
+/**
+ * Simple edit-distance ratio between two strings (0–1, lower = more similar)
+ */
+function editDistanceRatio(a: string, b: string): number {
+  const len = Math.max(a.length, b.length);
+  if (len === 0) return 0;
+  // Quick check: if one is a prefix/substring of the other, ratio is small
+  if (a.includes(b) || b.includes(a)) {
+    return Math.abs(a.length - b.length) / len;
+  }
+  // Levenshtein distance (bounded to length to avoid O(n²) for very long strings)
+  const maxLen = Math.min(len, 100); // Only compare first 100 chars for performance
+  const sa = a.slice(0, maxLen);
+  const sb = b.slice(0, maxLen);
+  const m = sa.length;
+  const n = sb.length;
+  let prev = Array.from({ length: n + 1 }, (_, j) => j);
+  let curr = new Array(n + 1);
+  for (let i = 1; i <= m; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= n; j++) {
+      curr[j] = sa[i - 1] === sb[j - 1]
+        ? prev[j - 1]
+        : 1 + Math.min(prev[j - 1], prev[j], curr[j - 1]);
+    }
+    [prev, curr] = [curr, prev];
+  }
+  return prev[n] / len;
+}
+
+/**
+ * Check if change is minimal (safe)
+ * Uses token-level comparison: same base command + sufficient token overlap
+ * Also allows small typo corrections (e.g., jqq → jq) via edit distance
+ */
+export function isMinimalChange(original: string, updated: string, threshold: number = 0.5): boolean {
+  const origTokens = original.trim().split(/\s+/);
+  const updTokens = updated.trim().split(/\s+/);
+
+  const maxTokens = Math.max(origTokens.length, updTokens.length);
+  if (maxTokens === 0) return true;
+
+  // Check if base command (first token) is similar enough
+  const baseOrig = origTokens[0] || '';
+  const baseUpd = updTokens[0] || '';
+  if (baseOrig !== baseUpd) {
+    // Allow typo corrections: if edit distance ratio is small, it's a minimal change
+    const dist = editDistanceRatio(baseOrig, baseUpd);
+    if (dist > threshold) return false;
+  }
+
+  // Compute token overlap: how many original tokens appear in updated (or are close matches)
+  let commonTokens = 0;
+  const usedIndices = new Set<number>();
+  for (const token of origTokens) {
+    // First try exact match
+    const exactIdx = updTokens.findIndex((t, i) => t === token && !usedIndices.has(i));
+    if (exactIdx !== -1) {
+      commonTokens++;
+      usedIndices.add(exactIdx);
+      continue;
+    }
+    // Then try fuzzy match (for typo corrections like jqq→jq)
+    const fuzzyIdx = updTokens.findIndex((t, i) => {
+      if (usedIndices.has(i)) return false;
+      return editDistanceRatio(token, t) <= threshold;
+    });
+    if (fuzzyIdx !== -1) {
+      commonTokens++;
+      usedIndices.add(fuzzyIdx);
+    }
+  }
+
+  // Require at least (1 - threshold) fraction of tokens to overlap
+  return commonTokens / maxTokens >= (1 - threshold);
 }
 
 // ============================================================================
@@ -290,12 +362,12 @@ export function applyTargetedFix(
  */
 export function normalizeCommand(cmd: string): string {
   return cmd
+    .toLowerCase()
     .replace(/\d+/g, 'N') // Replace numbers
     .replace(/https?:\/\/\S+/g, 'URL') // Replace URLs
     .replace(/"[^"]*"/g, '"STR"') // Replace strings
     .replace(/'[^']*'/g, "'STR'")
-    .trim()
-    .toLowerCase();
+    .trim();
 }
 
 /**
