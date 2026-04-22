@@ -396,8 +396,8 @@ export class UnifiedErrorHandler {
       messageLower.includes('503') ||
       messageLower.includes('502') ||
       messageLower.includes('500') ||
-      messageLower.includes('ECONNREFUSED') ||
-      messageLower.includes('ENOTFOUND')
+      messageLower.includes('econnrefused') ||
+      messageLower.includes('enotfound')
     ) {
       return 'network';
     }
@@ -849,7 +849,7 @@ export function handleError(
 }
 
 export function createValidationError(message: string, parameters?: any): ToolErrorClass {
-  return new ToolErrorClass('validation', message, {
+  return new ToolErrorClass('validation', `Invalid input: ${message}`, {
     category: 'validation',
     retryable: false,
     parameters,
@@ -858,7 +858,7 @@ export function createValidationError(message: string, parameters?: any): ToolEr
 }
 
 export function createAuthError(message: string, authUrl?: string): ToolErrorClass {
-  return new ToolErrorClass('auth', message, {
+  return new ToolErrorClass('auth', `Authentication required: ${message}`, {
     category: 'authentication',
     retryable: false,
     authRequired: true,

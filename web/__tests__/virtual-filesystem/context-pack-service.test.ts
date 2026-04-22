@@ -169,8 +169,10 @@ describe('ContextPackService', () => {
       );
       
       expect(result.estimatedTokens).toBeGreaterThan(0);
-      // Rough estimate: 1 token ≈ 4 characters
-      const expectedTokens = Math.floor(result.totalSize / 4);
+      // Token estimation now uses JS string length (code points) / 4,
+      // not UTF-8 byte length / 4. For ASCII content these are the same,
+      // but for Unicode content the estimate will be lower than totalSize/4.
+      const expectedTokens = Math.ceil(result.bundle.length / 4);
       expect(result.estimatedTokens).toBeCloseTo(expectedTokens, -1);
     });
   });

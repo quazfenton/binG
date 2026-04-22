@@ -17,7 +17,14 @@ import {
   createBashExecutionEvent,
   createBashFailureContext,
 } from './bash-event-schema';
-import { executeWithHealing, isCommandSafe } from './self-healing';
+import { executeWithHealing, isCommandSafe as _isCommandSafe } from './self-healing';
+
+/**
+ * Re-export isCommandSafe for external consumers
+ */
+export function isCommandSafe(command: string): boolean {
+  return _isCommandSafe(command);
+}
 
 const logger = createLogger('Bash:Tool');
 

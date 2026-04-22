@@ -276,7 +276,7 @@ function fixMissingCommand(missingCmd: string, command: string): string | null {
  */
 function fixFileNotFound(failure: BashFailure): string | null {
   // Extract missing file path from error message
-  const match = failure.stderr.match(/(?:no such file|does not exist|cannot access):\s*['"]?([^\s\n'"]+)['"]?/i);
+  const match = failure.stderr.match(/(?:no such file or directory|no such file|does not exist|cannot access|file not found):\s*['"]?([^\s\n'"]+)['"]?/i);
   if (!match) return null;
   
   const missingFile = match[1];
@@ -611,9 +611,84 @@ export function isSafe(command: string): boolean {
  * @param threshold - Maximum allowed change ratio (default 0.5 = 50%)
  * @returns true if change is minimal
  */
+/**
+ * Simple edit-distance ratio between two strings (0–1, lower = more similar)
+ */
+function editDistanceRatio(a: string, b: string): number {
+  const len = Math.max(a.length, b.length);
+  if (len === 0) return 0;
+  if (a.includes(b) || b.includes(a)) {
+    return Math.abs(a.length - b.length) / len;
+  }
+  const maxLen = Math.min(len, 100);
+  const sa = a.slice(0, maxLen);
+  const sb = b.slice(0, maxLen);
+  const m = sa.length;
+  const n = sb.length;
+  let prev = Array.from({ length: n + 1 }, (_, j) => j);
+  let curr = new Array(n + 1);
+  for (let i = 1; i <= m; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= n; j++) {
+      curr[j] = sa[i - 1] === sb[j - 1]
+        ? prev[j - 1]
+        : 1 + Math.min(prev[j - 1], prev[j], curr[j - 1]);
+    }
+    [prev, curr] = [curr, prev];
+  }
+  return prev[n] / len;
+}
+
+/**
+ * Validate that a fix is minimal (doesn't change command intent)
+ * Uses token-level comparison: same base command + sufficient token overlap
+ * Also allows small typo corrections (e.g., jqq → jq) via edit distance
+ *
+ * @param original - Original command
+ * @param fixed - Fixed command
+ * @param threshold - Maximum allowed change ratio (default 0.5 = 50%)
+ * @returns true if change is minimal
+ */
 export function isMinimalChange(original: string, fixed: string, threshold: number = 0.5): boolean {
-  const lengthRatio = Math.abs(fixed.length - original.length) / original.length;
-  return lengthRatio < threshold;
+  const origTokens = original.trim().split(/\s+/);
+  const fixTokens = fixed.trim().split(/\s+/);
+
+  const maxTokens = Math.max(origTokens.length, fixTokens.length);
+  if (maxTokens === 0) return true;
+
+  // Check if base command (first token) is similar enough
+  const baseOrig = origTokens[0] || '';
+  const baseFix = fixTokens[0] || '';
+  if (baseOrig !== baseFix) {
+    // Allow typo corrections: if edit distance ratio is small, it's a minimal change
+    const dist = editDistanceRatio(baseOrig, baseFix);
+    if (dist > threshold) return false;
+  }
+
+  // Compute token overlap (with fuzzy matching for typo corrections)
+  let commonTokens = 0;
+  const usedIndices = new Set<number>();
+  for (const token of origTokens) {
+    // First try exact match
+    const exactIdx = fixTokens.findIndex((t, i) => t === token && !usedIndices.has(i));
+    if (exactIdx !== -1) {
+      commonTokens++;
+      usedIndices.add(exactIdx);
+      continue;
+    }
+    // Then try fuzzy match
+    const fuzzyIdx = fixTokens.findIndex((t, i) => {
+      if (usedIndices.has(i)) return false;
+      return editDistanceRatio(token, t) <= threshold;
+    });
+    if (fuzzyIdx !== -1) {
+      commonTokens++;
+      usedIndices.add(fuzzyIdx);
+    }
+  }
+
+  // Require at least (1 - threshold) fraction of tokens to overlap
+  return commonTokens / maxTokens >= (1 - threshold);
 }
 
 // ============================================================================
@@ -742,7 +817,8 @@ export async function executeWithHealing(
             original: currentCommand.substring(0, 50),
             fix: fix.substring(0, 50),
           });
-          break;  // Stop retrying
+          // Don't break — skip this fix and try the next attempt
+          continue;
         }
         
         // Minimal change check
@@ -751,7 +827,8 @@ export async function executeWithHealing(
             original: currentCommand.substring(0, 50),
             fix: fix.substring(0, 50),
           });
-          break;  // Stop retrying
+          // Don't break — skip this fix and try the next attempt
+          continue;
         }
         
         logger.info('Applying fix', {
@@ -770,11 +847,13 @@ export async function executeWithHealing(
         
         currentCommand = fix;
       } else {
-        logger.warn('No fix available, stopping retry', {
+        logger.warn('No fix available for error type', {
           attempt,
           errorType,
         });
-        break;  // No fix available, stop retrying
+        // Continue to next attempt — the next iteration will call executeFn again
+        // with the same (unfixed) command. This ensures we always reach maxAttempts
+        // even when no rule-based or LLM fix is available.
       }
     } catch (error: any) {
       lastError = error.message;

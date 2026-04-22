@@ -229,8 +229,14 @@ describe('CircuitBreakerManager', () => {
     });
 
     it('should use provider-specific breaker', async () => {
-      // Fail provider-1
-      for (let i = 0; i < 5; i++) {
+      // Pre-register provider-2 so the safety invariant doesn't reset provider-1
+      // (the manager never closes ALL providers; with only one registered,
+      // it forces the breaker back to CLOSED to maintain availability)
+      manager.getBreaker('provider-2');
+
+      // Fail provider-1 enough times to exceed the default failureThreshold
+      // CircuitBreakerManager uses tiered defaults; the 'normal' tier has threshold 7
+      for (let i = 0; i < 10; i++) {
         try {
           await manager.execute('provider-1', async () => { throw new Error('Fail'); });
         } catch {}

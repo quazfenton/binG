@@ -696,6 +696,13 @@ describe('Preview Offloading Heuristics', () => {
   });
 
   describe('Port Detection', () => {
+    let detectPort: any;
+
+    beforeAll(async () => {
+      const mod = await import('@/lib/previews/live-preview-offloading');
+      detectPort = mod.detectPort;
+    });
+
     it('should detect port from Vite config', () => {
       const files = [
         {
@@ -704,7 +711,6 @@ describe('Preview Offloading Heuristics', () => {
         },
       ];
 
-      const { detectPort } = await import('@/lib/previews/live-preview-offloading');
       const port = detectPort(files);
 
       expect(port).toBe(3000);
@@ -722,7 +728,6 @@ describe('Preview Offloading Heuristics', () => {
         },
       ];
 
-      const { detectPort } = await import('@/lib/previews/live-preview-offloading');
       const port = detectPort(files);
 
       expect(port).toBe(5173);
@@ -740,7 +745,6 @@ describe('Preview Offloading Heuristics', () => {
         },
       ];
 
-      const { detectPort } = await import('@/lib/previews/live-preview-offloading');
       const port = detectPort(files);
 
       expect(port).toBe(3001);
@@ -754,7 +758,6 @@ describe('Preview Offloading Heuristics', () => {
         },
       ];
 
-      const { detectPort } = await import('@/lib/previews/live-preview-offloading');
       const port = detectPort(files);
 
       expect(port).toBe(8080);
@@ -768,7 +771,6 @@ describe('Preview Offloading Heuristics', () => {
         },
       ];
 
-      const { detectPort } = await import('@/lib/previews/live-preview-offloading');
       const port = detectPort(files);
 
       expect(port).toBe(5000);
@@ -782,7 +784,6 @@ describe('Preview Offloading Heuristics', () => {
         },
       ];
 
-      const { detectPort } = await import('@/lib/previews/live-preview-offloading');
       const port = detectPort(files);
 
       expect(port).toBe(8000);
@@ -800,7 +801,6 @@ describe('Preview Offloading Heuristics', () => {
         },
       ];
 
-      const { detectPort } = await import('@/lib/previews/live-preview-offloading');
       const port = detectPort(files);
 
       expect(port).toBe(5173); // Vite default
@@ -818,7 +818,6 @@ describe('Preview Offloading Heuristics', () => {
         },
       ];
 
-      const { detectPort } = await import('@/lib/previews/live-preview-offloading');
       const port = detectPort(files);
 
       expect(port).toBe(3000); // Next.js default
@@ -832,7 +831,6 @@ describe('Preview Offloading Heuristics', () => {
         },
       ];
 
-      const { detectPort } = await import('@/lib/previews/live-preview-offloading');
       const port = detectPort(files);
 
       expect(port).toBe(5000); // Flask default
