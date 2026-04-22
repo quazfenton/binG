@@ -827,7 +827,9 @@ export class LivePreviewOffloading {
     const hasAPIKeys = this.detectAPIKeys(Object.values(filesObj));
 
     // Analyze heuristics for offload decision
-    const heuristics = this.analyzeHeuristics(request);
+    // Pass the already-converted filesObj so analyzeHeuristics doesn't need
+    // to handle the array format itself.
+    const heuristics = this.analyzeHeuristics({ files: filesObj, scopePath } as PreviewRequest);
 
     // Detect preview mode (with heuristics influence)
     const previewMode = this.detectPreviewMode(
@@ -1353,19 +1355,7 @@ export class LivePreviewOffloading {
     // Extract capabilities for cleaner code
     const { hasPython, hasNodeServer, hasNextJS, hasHeavyComputation, hasAPIKeys } = capabilities;
 
-    // 1. Static/Frontend Only: Use Iframe
-    const isBackend = hasNodeServer || hasPython || ['node', 'flask', 'fastapi'].includes(framework as string);
-    const isStatic = !isBackend && (filePaths.some(p => p.endsWith('.html')) && !hasNodeServer);
-    
-    if (isStatic) {
-        return 'iframe';
-    }
-
-    // 2. Full-Stack/Backend: Force Cloud (never OpenSandbox/Microsandbox)
-    if (isBackend) {
-        return hasPython ? 'modal' : 'devbox';
-    }
-
+    // Pre-compute flags needed by multiple decision paths below
     const hasPackageJson = filePaths.some(p => p.endsWith('package.json'));
     const hasHtml = filePaths.some(p => p.endsWith('.html'));
     const hasJsx = filePaths.some(p => p.endsWith('.jsx') || p.endsWith('.tsx'));
@@ -1393,6 +1383,39 @@ export class LivePreviewOffloading {
       packageJson.dependencies?.dockerode
     );
 
+    // ========================================
+    // PYTHON FRAMEWORK-SPECIFIC CHECKS (before generic isBackend)
+    // These must run before the generic backend check so that
+    // lightweight Python frameworks (flask, gradio, streamlit)
+    // can use local Pyodide when no complex deps are present.
+    // ========================================
+
+    // Flask/Gradio/Streamlit -> Pyodide (local) unless complex deps
+    if (framework === 'gradio' || framework === 'streamlit' || framework === 'flask') {
+      if (hasDocker || hasComplexDeps || hasHeavyComputation || hasAPIKeys) {
+        return 'devbox';  // Cloud fallback for complex Python
+      }
+      return 'pyodide';  // Local Python execution
+    }
+
+    // FastAPI/Django -> DevBox (usually need running server)
+    if (framework === 'fastapi' || framework === 'django') {
+      return 'devbox';   // Cloud - these need running server
+    }
+
+    // 1. Static/Frontend Only: Use Iframe
+    const isBackend = hasNodeServer || hasPython || framework === 'node';
+    const isStatic = !isBackend && (hasHtml && !hasNodeServer);
+    
+    if (isStatic) {
+        return 'iframe';
+    }
+
+    // 2. Full-Stack/Backend: Force Cloud (never OpenSandbox/Microsandbox)
+    if (isBackend) {
+        return hasPython ? 'modal' : 'devbox';
+    }
+
     // Check heuristics for auto-offload
     const shouldOffload = heuristics?.shouldOffload || false;
     const offloadReason = heuristics?.offloadReason;
@@ -1410,7 +1433,7 @@ export class LivePreviewOffloading {
       logger.info(`[detectPreviewMode] Complex project detected, routing to cloud: ${offloadReason || 'complex requirements'}`);
 
       // Determine best cloud provider based on project type
-      if (hasPython || (framework as string) === 'flask' || (framework as string) === 'fastapi' || framework === 'django') {
+      if (hasPython) {
         return 'modal';  // Python/ML needs modal
       }
 
@@ -1431,18 +1454,7 @@ export class LivePreviewOffloading {
     // LOCAL PREVIEW MODES (Preferred)
     // ========================================
 
-    // Python frameworks -> Pyodide (local)
-    if (framework === 'gradio' || framework === 'streamlit' || (framework as string) === 'flask') {
-      if (hasDocker || hasComplexDeps || hasHeavyComputation || hasAPIKeys) {
-        return 'devbox';  // Cloud fallback for complex Python
-      }
-      return 'pyodide';  // Local Python execution
-    }
-
-    // FastAPI/Django -> DevBox (usually need server)
-    if ((framework as string) === 'fastapi' || framework === 'django') {
-      return 'devbox';   // Cloud - these need running server
-    }
+    // (Python framework-specific checks moved above isBackend gate)
 
     // Next.js -> Next.js mode (local via WebContainer)
     if (framework === 'next' || hasNextJS) {

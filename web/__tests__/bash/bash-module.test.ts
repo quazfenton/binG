@@ -9,6 +9,70 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 // Mock server-only to prevent RSC import errors in test environment
 vi.mock('server-only', () => ({}));
 
+// Mock child_process to avoid spawning actual bash (ENOENT on Windows)
+vi.mock('child_process', () => ({
+  spawn: vi.fn((_cmd: string, args: string[]) => {
+    const command = args?.[1] || '';
+    const isSuccess = command.startsWith('echo') || command.startsWith('ls');
+
+    const closeCallbacks: Array<(code: number | null) => void> = [];
+    const stdoutDataCallbacks: Array<(data: Buffer) => void> = [];
+    const stderrDataCallbacks: Array<(data: Buffer) => void> = [];
+
+    const proc = {
+      stdout: {
+        on: vi.fn((event: string, cb: any) => {
+          if (event === 'data') stdoutDataCallbacks.push(cb);
+        }),
+      },
+      stderr: {
+        on: vi.fn((event: string, cb: any) => {
+          if (event === 'data') stderrDataCallbacks.push(cb);
+        }),
+      },
+      on: vi.fn((event: string, cb: any) => {
+        if (event === 'close') closeCallbacks.push(cb);
+      }),
+      stdin: { write: vi.fn(), end: vi.fn() },
+      kill: vi.fn(),
+    };
+
+    // Defer event emission until after callbacks are registered
+    queueMicrotask(() => {
+      if (isSuccess) {
+        const output = command.replace(/^echo\s+/, '').replace(/"/g, '') + '\n';
+        stdoutDataCallbacks.forEach(cb => cb(Buffer.from(output)));
+      } else {
+        stderrDataCallbacks.forEach(cb =>
+          cb(Buffer.from(`command not found: ${command.split(' ')[0]}\n`))
+        );
+      }
+      closeCallbacks.forEach(cb => cb(isSuccess ? 0 : 127));
+    });
+
+    return proc;
+  }),
+}));
+
+// Mock logger
+vi.mock('@/lib/utils/logger', () => ({
+  createLogger: () => ({
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  }),
+}));
+
+// Mock virtual-filesystem/index.server (imported by bash-tool and dag-executor)
+vi.mock('@/lib/virtual-filesystem/index.server', () => ({
+  virtualFilesystem: {
+    writeFile: vi.fn().mockResolvedValue({ path: '/test/output.txt' }),
+    readFile: vi.fn().mockResolvedValue({ content: 'test content' }),
+    listDirectory: vi.fn().mockResolvedValue({ nodes: [] }),
+  },
+}));
+
 // Mock virtual filesystem
 vi.mock('@/lib/virtual-filesystem', () => ({
   virtualFilesystem: {
