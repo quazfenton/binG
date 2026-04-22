@@ -6,6 +6,9 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
+// Mock server-only to prevent RSC import errors in test environment
+vi.mock('server-only', () => ({}));
+
 // Mock virtual filesystem
 vi.mock('@/lib/virtual-filesystem', () => ({
   virtualFilesystem: {

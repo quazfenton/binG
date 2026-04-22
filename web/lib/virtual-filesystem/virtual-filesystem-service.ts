@@ -983,7 +983,17 @@ export class VirtualFilesystemService {
         continue;
       }
       if (trimmed === '..') {
-        throw new Error(`Path traversal is not allowed: ${inputPath}`);
+        // Resolve legitimate parent-directory references (e.g. "./src/../src/./")
+        // instead of throwing. Only reject if the result would escape the
+        // workspace root.
+        if (safeParts.length > 0 && safeParts[safeParts.length - 1] !== this.workspaceRoot) {
+          safeParts.pop();
+        }
+        // If popping would remove the workspace root, it's a real traversal
+        else if (safeParts.length === 0 || safeParts[safeParts.length - 1] === this.workspaceRoot) {
+          throw new Error(`Path traversal is not allowed: ${inputPath}`);
+        }
+        continue;
       }
       if (trimmed.includes('\0')) {
         throw new Error(`Invalid path segment: ${inputPath}`);
