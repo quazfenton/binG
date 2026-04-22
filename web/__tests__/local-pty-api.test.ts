@@ -21,6 +21,24 @@ vi.mock('@/lib/auth/request-auth', () => ({
   }),
 }));
 
+// Mock VFS workspace materializer — avoids real filesystem and DB access
+vi.mock('@/lib/virtual-filesystem/vfs-workspace-materializer', () => ({
+  materializeWorkspace: vi.fn().mockResolvedValue('/tmp/test-workspace'),
+  watchWorkspaceForChanges: vi.fn().mockReturnValue({ stop: vi.fn() }),
+  syncFileToVfs: vi.fn().mockResolvedValue(undefined),
+}));
+
+// Mock database — avoids real SQLite dependency
+vi.mock('@/lib/database/connection', () => ({
+  getDatabase: vi.fn().mockReturnValue({
+    prepare: vi.fn().mockReturnValue({
+      run: vi.fn(),
+      get: vi.fn().mockReturnValue(undefined),
+      all: vi.fn().mockReturnValue([]),
+    }),
+  }),
+}));
+
 // Mock node-pty
 const mockPtyOnData = vi.fn();
 const mockPtyOnExit = vi.fn();

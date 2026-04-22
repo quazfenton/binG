@@ -262,9 +262,14 @@ const sessions = globalThis.__localPtySessions ??= new Map<string, LocalPtySessi
 
 type IsolationMode = 'off' | 'localhost' | 'unshare' | 'docker' | 'oracle-vm' | 'on';
 
-const ENABLE_LOCAL_PTY: IsolationMode =
-  (process.env.ENABLE_LOCAL_PTY as IsolationMode) ||
-  (process.env.ORACLE_VM_HOST ? 'oracle-vm' : process.env.NODE_ENV === 'production' ? 'off' : 'on');
+/**
+ * Read the current isolation mode from the environment.
+ * Evaluated per-request so that vi.stubEnv() works in tests.
+ */
+function getIsolationMode(): IsolationMode {
+  return (process.env.ENABLE_LOCAL_PTY as IsolationMode) ||
+    (process.env.ORACLE_VM_HOST ? 'oracle-vm' : process.env.NODE_ENV === 'production' ? 'off' : 'on');
+}
 
 // Docker isolation config
 const DOCKER_IMAGE = process.env.LOCAL_PTY_DOCKER_IMAGE || 'node:20-slim';
@@ -393,11 +398,14 @@ async function resolveWorkspaceDir(userId: string): Promise<string> {
 // ============================================================
 
 function validateDimensions(cols: number, rows: number): { cols: number; rows: number } | null {
-  const c = Math.max(MIN_COLS, Math.min(MAX_COLS, Math.floor(cols)));
-  const r = Math.max(MIN_ROWS, Math.min(MAX_ROWS, Math.floor(rows)));
-  if (isNaN(c) || isNaN(r) || c < MIN_COLS || r < MIN_ROWS) {
+  // Reject raw values outside allowed range BEFORE clamping.
+  // Without this, cols=0 / rows=0 gets clamped to MIN and passes validation.
+  if (isNaN(cols) || isNaN(rows) || cols < MIN_COLS || rows < MIN_ROWS ||
+      cols > MAX_COLS || rows > MAX_ROWS) {
     return null;
   }
+  const c = Math.max(MIN_COLS, Math.min(MAX_COLS, Math.floor(cols)));
+  const r = Math.max(MIN_ROWS, Math.min(MAX_ROWS, Math.floor(rows)));
   return { cols: c, rows: r };
 }
 
@@ -545,6 +553,7 @@ export async function POST(req: NextRequest) {
 
   try {
     // === Security gate ===
+    const ENABLE_LOCAL_PTY = getIsolationMode();
     if (ENABLE_LOCAL_PTY === 'off') {
       return addAnonSessionCookie(NextResponse.json(
         {
@@ -598,9 +607,9 @@ export async function POST(req: NextRequest) {
     if (checkOnly) {
       try {
         await import('node-pty');
-        return addAnonSessionCookie(NextResponse.json({ available: true, mode: ENABLE_LOCAL_PTY }));
+        return addAnonSessionCookie(NextResponse.json({ available: true, mode: getIsolationMode() }));
       } catch {
-        return addAnonSessionCookie(NextResponse.json({ available: false, mode: ENABLE_LOCAL_PTY }, { status: 503 }));
+        return addAnonSessionCookie(NextResponse.json({ available: false, mode: getIsolationMode() }, { status: 503 }));
       }
     }
 

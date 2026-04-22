@@ -76,11 +76,13 @@ describe('NullclawMCPBridge', () => {
 
   describe('executeTool', () => {
     it('should return error when container not available', async () => {
-      // Mock nullclawIntegration to return no container
+      // Mock nullclawIntegration to return no container and not be available
       const nullclaw = await import('@bing/shared/agent/nullclaw-integration');
       vi.mocked(nullclaw.nullclawIntegration.startContainer).mockRejectedValue(
         new Error('Container not available')
       );
+      // Also mark as unavailable so URL-mode fallback is skipped
+      vi.mocked(nullclaw.nullclawIntegration.isAvailable).mockReturnValue(false);
 
       const result = await bridge.executeTool(
         'nullclaw_sendDiscord',

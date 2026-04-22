@@ -150,9 +150,9 @@ const TAURI_COMMAND_MAP: Record<string, TauriRouteMapping> = {
     transformResponse: () => ({ body: { success: true, providers: [] } }),
   },
   '/api/health': {
-    command: 'execute_command',
-    args: () => ({ command: 'echo ok', cwd: undefined }),
-    transformResponse: () => ({ body: { status: 'ok' } }),
+    command: 'handle_api_route',
+    args: () => ({ req: { route: '/api/health', method: 'GET', body: null, query: null, headers: null } }),
+    transformResponse: (result: any) => ({ body: result?.data ?? { status: 'ok', mode: 'desktop' } }),
   },
 };
 

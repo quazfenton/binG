@@ -1265,7 +1265,7 @@ pub async fn handle_api_route(req: ApiRouteRequest) -> Result<ApiRouteResponse, 
         "/api/health" => {
             Ok(ApiRouteResponse {
                 success: true,
-                data: Some(serde_json::json!({ "status": "ok", "mode": "desktop" })),
+                data: Some(serde_json::json!({ "status": "ok", "mode": "desktop", "version": env!("CARGO_PKG_VERSION") })),
                 error: None,
                 status: 200,
             })
@@ -1960,4 +1960,41 @@ fn write_file_content(path: &str, content: &str) -> Result<(), String> {
     }
     std::fs::write(&canonical, content)
         .map_err(|e| format!("Failed to write file: {}", e))
+}
+
+// ============================================================================
+// Settings persistence — stored as JSON in the OS app-data directory
+// ============================================================================
+
+fn settings_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    let dir = app.path().app_data_dir()
+        .map_err(|e| format!("Failed to resolve app data dir: {}", e))?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("Failed to create app data dir: {}", e))?;
+    Ok(dir.join("settings.json"))
+}
+
+#[tauri::command]
+pub async fn save_settings(
+    app: AppHandle,
+    settings: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let path = settings_path(&app)?;
+    let json = serde_json::to_string_pretty(&settings)
+        .map_err(|e| format!("Failed to serialize settings: {}", e))?;
+    std::fs::write(&path, json)
+        .map_err(|e| format!("Failed to write settings: {}", e))?;
+    Ok(serde_json::json!({ "success": true }))
+}
+
+#[tauri::command]
+pub async fn load_settings(app: AppHandle) -> Result<serde_json::Value, String> {
+    let path = settings_path(&app)?;
+    if !path.exists() {
+        return Ok(serde_json::json!({}));
+    }
+    let raw = std::fs::read_to_string(&path)
+        .map_err(|e| format!("Failed to read settings: {}", e))?;
+    serde_json::from_str(&raw)
+        .map_err(|e| format!("Failed to parse settings: {}", e))
 }
