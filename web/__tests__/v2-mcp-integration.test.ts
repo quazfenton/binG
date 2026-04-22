@@ -224,7 +224,9 @@ describe('V2 + MCP Architecture Integration', () => {
   describe('Error Handling', () => {
     it('should handle tool execution failure gracefully', async () => {
       const nullclaw = await import('@bing/shared/agent/nullclaw-integration');
-      vi.mocked(nullclaw.nullclawIntegration.executeTask).mockRejectedValueOnce(
+      // Mock sendDiscordMessage to reject — that's the method the bridge
+      // actually calls for nullclaw_sendDiscord (not executeTask).
+      vi.mocked(nullclaw.nullclawIntegration.sendDiscordMessage).mockRejectedValueOnce(
         new Error('Connection refused')
       );
 

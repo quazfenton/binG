@@ -214,7 +214,16 @@ interface FileEditEvent {
 // VFS MCP Tools Initialization (reuses web/lib/mcp/vfs-mcp-tools.ts)
 // ============================================================================
 
-const MCP_TOOLS_PATH = path.join(__dirname, '..', '..', '..', 'web', 'lib', 'mcp', 'vfs-mcp-tools.ts');
+// Resolve vfs-mcp-tools.ts from multiple candidate locations to handle both
+// source (packages/shared/cli/) and compiled (packages/shared/cli/dist/) layouts.
+const MCP_TOOLS_PATH = (() => {
+  const candidates = [
+    path.join(__dirname, '..', '..', '..', 'web', 'lib', 'mcp', 'vfs-mcp-tools.ts'),   // source layout
+    path.join(__dirname, '..', '..', '..', '..', 'web', 'lib', 'mcp', 'vfs-mcp-tools.ts'), // dist layout
+    path.join(__dirname, '..', '..', '..', '..', 'web', 'lib', 'mcp', 'vfs-mcp-tools.js'), // compiled js
+  ];
+  return candidates.find((p) => { try { return require('fs').existsSync(p); } catch { return false; } }) ?? candidates[0];
+})();
 
 let vfsToolsInitialized = false;
 let vfsToolDefs: any[] = [];

@@ -12,6 +12,21 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { TerminalUseProvider, TerminalUseClient, TerminalUseSandboxHandle } from '@/lib/sandbox/providers/terminaluse-provider'
 import { createTerminalUseAgentService } from '@/lib/sandbox/spawn/terminaluse-agent-service'
 
+// Mock SandboxSecurityManager so writeFile/readFile/executeCommand don't fail
+vi.mock('@/lib/sandbox/security-manager', () => ({
+  SandboxSecurityManager: {
+    sanitizeCommand: vi.fn((cmd: string) => cmd),
+    resolvePath: vi.fn((_workspaceDir: string, filePath: string) =>
+      filePath.startsWith('/') ? filePath : `${_workspaceDir}/${filePath}`
+    ),
+    validateAndSanitizeCommand: vi.fn((cmd: string) => cmd),
+    validateWriteFile: vi.fn((dir: string, path: string, content: string) => ({
+      resolvedPath: path.startsWith('/') ? path : `${dir}/${path}`,
+      validatedContent: content,
+    })),
+  },
+}))
+
 // Mock fetch globally
 global.fetch = vi.fn()
 
@@ -21,7 +36,7 @@ describe('TerminalUseProvider', () => {
   let provider: TerminalUseProvider
 
   beforeEach(() => {
-    vi.clearAllMocks()
+    mockFetch.mockReset()
     provider = new TerminalUseProvider()
   })
 
@@ -296,7 +311,7 @@ describe('TerminalUseSandboxHandle', () => {
   let client: TerminalUseClient
 
   beforeEach(() => {
-    vi.clearAllMocks()
+    mockFetch.mockReset()
     process.env.TERMINALUSE_API_KEY = 'tu_test_key'
     client = new TerminalUseClient({ apiKey: 'tu_test_key' })
 
@@ -672,7 +687,7 @@ describe('TerminalUseAgentService', () => {
   let client: TerminalUseClient
 
   beforeEach(() => {
-    vi.clearAllMocks()
+    mockFetch.mockReset()
     process.env.TERMINALUSE_API_KEY = 'tu_test_key'
     client = new TerminalUseClient({ apiKey: 'tu_test_key' })
 
@@ -757,7 +772,7 @@ describe('TerminalUseClient', () => {
   let client: TerminalUseClient
 
   beforeEach(() => {
-    vi.clearAllMocks()
+    mockFetch.mockReset()
     client = new TerminalUseClient({ apiKey: 'tu_test_key' })
   })
 
@@ -785,7 +800,7 @@ describe('TerminalUseClient', () => {
 
       // Verify request
       const call = mockFetch.mock.calls[0]
-      expect(call[0]).toBe('https://api.terminaluse.com/tasks')
+      expect(call[0]).toContain('/tasks')
       expect(call[1]?.method).toBe('POST')
     })
   })

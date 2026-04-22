@@ -293,6 +293,35 @@ export class DesktopMCPManager extends EventEmitter {
 // Singleton instance
 export const desktopMCPManager = new DesktopMCPManager();
 
+
+
+/**
+ * Read the Tauri sidecar config (port + token) injected by Rust at startup.
+ * Returns env vars for spawned MCP processes to reach the Next.js sidecar.
+ */
+function getSidecarEnv(): Record<string, string> {
+  const config = (typeof window !== 'undefined' && (window as any).__SIDECAR_CONFIG__) as { port: number; token: string } | undefined;
+  if (!config) return {};
+  return { SIDECAR_PORT: String(config.port), SIDECAR_TOKEN: config.token, SIDECAR_URL: `http://127.0.0.1:${config.port}` };
+}
+
+/**
+ * Read the Tauri sidecar config (port + token) injected by Rust at startup.
+ * Returns env vars suitable for passing to spawned MCP child processes so they
+ * can reach the Next.js sidecar for API calls.
+ */
+function getSidecarEnv(): Record<string, string> {
+  const config = (typeof window !== 'undefined' && (window as any).__SIDECAR_CONFIG__) as
+    | { port: number; token: string }
+    | undefined;
+  if (!config) return {};
+  return {
+    SIDECAR_PORT: String(config.port),
+    SIDECAR_TOKEN: config.token,
+    SIDECAR_URL: `http://127.0.0.1:${config.port}`,
+  };
+}
+
 /**
  * Initialize desktop MCP with configuration
  * Does NOT auto-add any servers — only starts what you pass.
@@ -305,8 +334,16 @@ export async function initializeDesktopMCP(
     return desktopMCPManager;
   }
 
+  // Inject sidecar port/token so MCP processes can reach the Next.js sidecar
+  const sidecarEnv = getSidecarEnv();
+  const enrichedConfigs = configs.map((c) => ({
+    ...c,
+    transport: { ...c.transport, env: { ...sidecarEnv, ...c.transport.env } },
+  }));
+
+
   // Register all servers
-  for (const config of configs) {
+  for (const config of enrichedConfigs) {
     desktopMCPManager.registerServer(config);
   }
 

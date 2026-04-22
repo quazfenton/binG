@@ -8,7 +8,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextRequest, NextResponse } from 'next/server';
 import { RateLimiter, rateLimiter, configureRateLimits } from '@/lib/middleware/rate-limit';
-import { createCORS, cors, addCORSHeaders, withCORS } from '@/lib/middleware/cors';
+import { createCORS, cors, addCORSHeaders, withCORS, isValidOrigin } from '@/lib/middleware/cors';
 import {
   validateChatRequest,
   validateToolExecutionRequest,
@@ -256,10 +256,9 @@ describe('CORS Middleware', () => {
 
   describe('isValidOrigin', () => {
     it('should validate origins', () => {
-      const { isValidOrigin } = require('@/lib/middleware/cors');
-
-      expect(isValidOrigin('https://example.com')).toBe(true);
-      expect(isValidOrigin('https://evil.com')).toBe(false);
+      // Pass custom config with example.com in the allowlist
+      expect(isValidOrigin('https://example.com', { origins: ['https://example.com'] })).toBe(true);
+      expect(isValidOrigin('https://evil.com', { origins: ['https://example.com'] })).toBe(false);
     });
   });
 });
