@@ -306,23 +306,6 @@ function getSidecarEnv(): Record<string, string> {
 }
 
 /**
- * Read the Tauri sidecar config (port + token) injected by Rust at startup.
- * Returns env vars suitable for passing to spawned MCP child processes so they
- * can reach the Next.js sidecar for API calls.
- */
-function getSidecarEnv(): Record<string, string> {
-  const config = (typeof window !== 'undefined' && (window as any).__SIDECAR_CONFIG__) as
-    | { port: number; token: string }
-    | undefined;
-  if (!config) return {};
-  return {
-    SIDECAR_PORT: String(config.port),
-    SIDECAR_TOKEN: config.token,
-    SIDECAR_URL: `http://127.0.0.1:${config.port}`,
-  };
-}
-
-/**
  * Initialize desktop MCP with configuration
  * Does NOT auto-add any servers — only starts what you pass.
  */

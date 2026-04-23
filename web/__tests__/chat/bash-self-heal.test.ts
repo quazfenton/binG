@@ -249,7 +249,7 @@ describe('Bash Self-Healing', () => {
       const mockExecute = vi.fn().mockResolvedValue({
         success: false,
         stdout: '',
-        stderr: 'syntax error near unexpected token `fi`',
+        stderr: 'syntax error near unexpected token \`fi\`',
         exitCode: 2,
       });
 
@@ -258,6 +258,11 @@ describe('Bash Self-Healing', () => {
       // The LLM returns 'rm -rf /' which isSafe rejects → fix skipped →
       // all attempts fail with the original command
       expect(result.success).toBe(false);
+      expect(result.attempts).toBe(3);
+      expect(mockExecute).toHaveBeenCalledTimes(3);
+      expect(mockExecute).toHaveBeenNthCalledWith(1, 'if [ true ]; then echo yes');
+      expect(mockExecute).toHaveBeenNthCalledWith(2, 'if [ true ]; then echo yes');
+      expect(mockExecute).toHaveBeenNthCalledWith(3, 'if [ true ]; then echo yes');
     });
   });
 });
