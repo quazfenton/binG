@@ -563,6 +563,24 @@ export default function HuggingFaceSpacesProPlugin({ onClose }: PluginProps) {
               />
             </div>
 
+            <div>
+              <label className="text-sm font-medium mb-2 block">Audio File (for Transcription/Separation)</label>
+              <Input
+                type="file"
+                accept="audio/*"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) {
+                    setAudioParams(prev => ({ ...prev, audioFile: file }));
+                  }
+                }}
+                className="bg-white/5"
+              />
+              {audioParams.audioFile && (
+                <p className="text-xs text-gray-400 mt-1">Selected: {audioParams.audioFile.name}</p>
+              )}
+            </div>
+
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="text-sm mb-2 block">Speaker/Voice</label>
@@ -585,7 +603,7 @@ export default function HuggingFaceSpacesProPlugin({ onClose }: PluginProps) {
               </div>
             </div>
 
-            <Button onClick={generateAudio} disabled={!audioParams.text || audioGenerating} className="w-full">
+            <Button onClick={generateAudio} disabled={(!audioParams.text && !audioParams.audioFile) || audioGenerating} className="w-full">
               {audioGenerating ? <Loader2 className="w-4 h-4 mr-2 thinking-spinner" /> : <Music className="w-4 h-4 mr-2" />}
               Generate Audio
             </Button>

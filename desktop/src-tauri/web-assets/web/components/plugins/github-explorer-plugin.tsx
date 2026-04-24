@@ -273,8 +273,9 @@ const GitHubExplorerPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =>
     }
 
     try {
-      // Client clone writes directly to vfsPath, so include owner+repo for collision prevention
-      const vfsPath = `project/sessions/${parsed.owner}/${parsed.repo}`;
+      // Client clone writes directly to vfsPath — use user-provided clonePath if given,
+      // otherwise derive from owner/repo for collision prevention.
+      const vfsPath = clonePath.trim() || `project/sessions/${parsed.owner}/${parsed.repo}`;
 
       // Primary: client-side clone via GitHub API zipball
       const { cloneRepoToVFS } = await import('@/lib/github/client-clone');
@@ -308,7 +309,7 @@ const GitHubExplorerPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =>
             action: 'clone',
             repoUrl: source.trim(),
             // Use same destination as client clone to maintain consistency
-            destinationPath: `project/sessions/${parsed.owner}`,
+            destinationPath: clonePath.trim() || `project/sessions/${parsed.owner}/${parsed.repo}`,
           }),
         });
 

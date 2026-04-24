@@ -82,6 +82,7 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
   // Refs
   const screenshotCanvasRef = useRef<HTMLCanvasElement>(null)
   const terminalEndRef = useRef<HTMLDivElement>(null)
+  const statsIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   // Use iframe loader hook with fallback for stream URL
   const {
@@ -145,8 +146,8 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
       setStreamUrl(data.data?.streamUrl)
       setIsConnected(true)
 
-      // Start stats polling
-      const statsInterval = setInterval(async () => {
+      // Start stats polling — store interval ref for cleanup
+      statsIntervalRef.current = setInterval(async () => {
         try {
           const statsResponse = await fetch(`/api/desktop/${data.data?.sandboxId}`)
           const statsData: ApiResponse<{ stats: DesktopStats; screenshot: string }> = await statsResponse.json()
@@ -155,10 +156,12 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
             setStats(statsData.data?.stats)
             setCurrentScreenshot(statsData.data?.screenshot)
           } else {
-            clearInterval(statsInterval)
+            if (statsIntervalRef.current) clearInterval(statsIntervalRef.current)
+            statsIntervalRef.current = null
           }
         } catch {
-          clearInterval(statsInterval)
+          if (statsIntervalRef.current) clearInterval(statsIntervalRef.current)
+          statsIntervalRef.current = null
         }
       }, 5000)
 
@@ -187,6 +190,11 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
       setIsConnected(false)
       setActionHistory([])
       setStats(null)
+      // Clean up stats polling interval
+      if (statsIntervalRef.current) {
+        clearInterval(statsIntervalRef.current)
+        statsIntervalRef.current = null
+      }
       console.log('[DesktopPlugin] Disconnected from desktop')
     } catch (err: any) {
       console.error('[DesktopPlugin] Disconnect error:', err)

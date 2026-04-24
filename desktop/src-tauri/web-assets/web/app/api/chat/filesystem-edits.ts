@@ -410,15 +410,15 @@ export async function applyFilesystemEditsFromResponse(input: {
           existedBefore,
         });
 
-        if (existedBefore) {
-          emitFilesystemUpdated({
-            path: file.path,
-            paths: [file.path],
-            scopePath: extractScopePath(file.path),
-            type: 'update',
-            sessionId: input.conversationId,
-          });
-        }
+        // Always emit — new files created via diff also need a UI update,
+        // not just updates to existing files.
+        emitFilesystemUpdated({
+          path: file.path,
+          paths: [file.path],
+          scopePath: extractScopePath(file.path),
+          type: existedBefore ? 'update' : 'create',
+          sessionId: input.conversationId,
+        });
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : 'unknown error';
         const err = `Failed to apply diff for ${targetPath}: ${message}`;
@@ -558,6 +558,15 @@ export async function applyFilesystemEditsFromResponse(input: {
           previousVersion: existingVersion,
           previousContent: existingContent,
           existedBefore: true,
+        });
+        // Notify UI that a file was deleted (was missing before — all other
+        // operations emit, but deletes didn't).
+        emitFilesystemUpdated({
+          path: normalizedPath,
+          paths: [normalizedPath],
+          scopePath: extractScopePath(normalizedPath),
+          type: 'delete',
+          sessionId: input.conversationId,
         });
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : 'unknown error';

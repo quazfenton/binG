@@ -3,6 +3,7 @@ export const runtime = 'nodejs';
 
 import { virtualFilesystem } from './virtual-filesystem-service';
 import { getDatabase } from '@/lib/database/connection';
+import { execSchemaFile } from '@/lib/database/schema';
 import { filesystemEditDatabase } from './filesystem-edit-database';
 import { createLogger } from '@/lib/utils/logger';
 
@@ -72,49 +73,9 @@ class FilesystemEditSessionService {
         return;
       }
       
-      // Create table for persisting transactions
-      this.db.exec(`
-        CREATE TABLE IF NOT EXISTS fs_edit_transactions (
-          id TEXT PRIMARY KEY,
-          owner_id TEXT NOT NULL,
-          conversation_id TEXT NOT NULL,
-          request_id TEXT NOT NULL,
-          created_at TEXT NOT NULL,
-          status TEXT NOT NULL,
-          operations_json TEXT NOT NULL,
-          errors_json TEXT NOT NULL,
-          denied_reason TEXT,
-          updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-        )
-      `);
-      
-      this.db.exec(`
-        CREATE INDEX IF NOT EXISTS idx_fs_transactions_owner 
-        ON fs_edit_transactions(owner_id)
-      `);
-      
-      this.db.exec(`
-        CREATE INDEX IF NOT EXISTS idx_fs_transactions_conversation 
-        ON fs_edit_transactions(conversation_id)
-      `);
-      
-      // Create table for denial history
-      this.db.exec(`
-        CREATE TABLE IF NOT EXISTS fs_edit_denials (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          transaction_id TEXT NOT NULL,
-          conversation_id TEXT NOT NULL,
-          timestamp TEXT NOT NULL,
-          reason TEXT NOT NULL,
-          paths_json TEXT NOT NULL
-        )
-      `);
-      
-      this.db.exec(`
-        CREATE INDEX IF NOT EXISTS idx_fs_denials_conversation 
-        ON fs_edit_denials(conversation_id)
-      `);
-      
+      // filesystem-edit-schema.sql defines fs_edit_transactions + fs_edit_denials
+      execSchemaFile(this.db, 'filesystem-edit-schema');
+
       // Load existing transactions from database
       this.loadTransactionsFromDb();
       

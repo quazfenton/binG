@@ -8,6 +8,7 @@
  */
 
 import { getDatabase } from '@/lib/database/connection';
+import { execSchemaFile } from '@/lib/database/schema';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('Events:HumanInLoop');
@@ -259,30 +260,8 @@ export async function getApprovalStats(): Promise<{
 export async function initializeApprovalRequests(): Promise<void> {
   const db = getDatabase();
 
-  db.prepare(`
-    CREATE TABLE IF NOT EXISTS approval_requests (
-      id TEXT PRIMARY KEY,
-      event_id TEXT NOT NULL,
-      action TEXT NOT NULL,
-      details TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'pending',
-      response TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      responded_at DATETIME,
-      expires_at DATETIME,
-      user_id TEXT,
-      updated_at DATETIME,
-      FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
-      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
-    )
-  `).run();
-
-  // Create indexes
-  db.prepare('CREATE INDEX IF NOT EXISTS idx_approval_requests_event_id ON approval_requests(event_id)').run();
-  db.prepare('CREATE INDEX IF NOT EXISTS idx_approval_requests_status ON approval_requests(status)').run();
-  db.prepare('CREATE INDEX IF NOT EXISTS idx_approval_requests_user_id ON approval_requests(user_id)').run();
-  db.prepare('CREATE INDEX IF NOT EXISTS idx_approval_requests_created_at ON approval_requests(created_at)').run();
-  db.prepare('CREATE INDEX IF NOT EXISTS idx_approval_requests_expires_at ON approval_requests(expires_at)').run();
+  // approval-requests.sql defines approval_requests (human-in-loop variant with details/response columns)
+  execSchemaFile(db, 'approval-requests');
 
   logger.info('Approval requests table initialized');
 }

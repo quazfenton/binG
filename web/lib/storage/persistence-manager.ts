@@ -136,9 +136,19 @@ export class SandboxPersistenceManager {
   }
 
   private computeHash(content: string): string {
-    const hash = require('node:crypto').createHash('sha256');
-    hash.update(content);
-    return hash.digest('hex');
+    // FNV-1a 64-bit hash for incremental sync dedup.
+    // NOTE: Returns 16-char hex (previously 64-char SHA-256). The hash map is
+    // in-memory only and clears on restart, so no migration is needed. If hashes
+    // are ever persisted externally, update the comparison logic accordingly.
+    // Avoids require('node:crypto') which breaks client-side webpack builds.
+    // 64-bit keeps collision probability negligible even at 10K-file workspace scale.
+    // For security-sensitive hashing, use the async hashContent() above (Web Crypto).
+    let h = 0xcbf29ce484222325n; // FNV offset basis
+    for (let i = 0; i < content.length; i++) {
+      h ^= BigInt(content.charCodeAt(i));
+      h = (h * 0x100000001b3n) & 0xffffffffffffffffn; // FNV prime
+    }
+    return h.toString(16).padStart(16, '0');
   }
 }
 

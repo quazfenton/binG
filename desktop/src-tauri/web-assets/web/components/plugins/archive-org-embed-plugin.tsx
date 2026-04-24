@@ -391,6 +391,9 @@ const ArchiveOrgEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
                   <Button type="submit" className="bg-indigo-600 hover:bg-indigo-500">
                     <Search className="w-4 h-4" />
                   </Button>
+                  <Button type="button" onClick={saveUrl} className="bg-purple-600 hover:bg-purple-500">
+                    <Save className="w-4 h-4" />
+                  </Button>
                 </div>
                 <p className="text-xs text-indigo-200/40">
                   Explore the history of any website using the Wayback Machine
@@ -404,7 +407,10 @@ const ArchiveOrgEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
                   src={iframeUrl}
                   className="w-full h-full border-0"
                   title="Wayback Machine"
-                  onLoad={() => setIsLoading(false)}
+                  onLoad={() => {
+                    setIsLoading(false);
+                    handleLoadSuccess();
+                  }}
                   sandbox="allow-same-origin allow-scripts allow-popups allow-forms allow-top-navigation allow-top-navigation-by-user-activation"
                   allow="fullscreen"
                   referrerPolicy="no-referrer"

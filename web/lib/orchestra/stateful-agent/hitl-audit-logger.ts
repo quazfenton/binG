@@ -12,6 +12,7 @@
  */
 
 import { getDatabase } from '@/lib/database/connection';
+import { execSchemaFile } from '@/lib/database/schema';
 
 export interface AuditLogEntry {
   id: string;
@@ -59,43 +60,8 @@ class HITLAuditLogger {
     try {
       this.db = getDatabase();
       
-      // Create audit log table
-      this.db.exec(`
-        CREATE TABLE IF NOT EXISTS hitl_audit_logs (
-          id TEXT PRIMARY KEY,
-          user_id TEXT NOT NULL,
-          action TEXT NOT NULL,
-          target TEXT NOT NULL,
-          reason TEXT NOT NULL,
-          approved BOOLEAN NOT NULL,
-          feedback TEXT,
-          modified_value TEXT,
-          response_time_ms INTEGER,
-          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-          metadata TEXT
-        )
-      `);
-
-      // Create indexes for common queries
-      this.db.exec(`
-        CREATE INDEX IF NOT EXISTS idx_hitl_audit_user_id
-        ON hitl_audit_logs(user_id)
-      `);
-
-      this.db.exec(`
-        CREATE INDEX IF NOT EXISTS idx_hitl_audit_action
-        ON hitl_audit_logs(action)
-      `);
-
-      this.db.exec(`
-        CREATE INDEX IF NOT EXISTS idx_hitl_audit_created_at
-        ON hitl_audit_logs(created_at)
-      `);
-
-      this.db.exec(`
-        CREATE INDEX IF NOT EXISTS idx_hitl_audit_approved
-        ON hitl_audit_logs(approved)
-      `);
+      // logging-schema.sql defines hitl_audit_logs + chat_request_logs + tool_calls
+      execSchemaFile(this.db, 'logging-schema');
 
       this.initialized = true;
       console.log('[HITLAuditLogger] Database initialized');

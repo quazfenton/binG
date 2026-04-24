@@ -27,7 +27,10 @@ vi.mock('../lib/utils/logger', () => ({
 
 vi.mock('@bing/shared/agent/nullclaw-integration', () => ({
   nullclawIntegration: {
-    startContainer: vi.fn(() => Promise.resolve({
+    isAvailable: vi.fn(() => true),
+    initialize: vi.fn(() => Promise.resolve()),
+    initializeForSession: vi.fn(() => Promise.resolve('http://localhost:3001')),
+    getContainerForSession: vi.fn(() => ({
       id: 'nullclaw-123',
       endpoint: 'http://localhost:3001',
       status: 'ready',
@@ -36,6 +39,11 @@ vi.mock('@bing/shared/agent/nullclaw-integration', () => ({
     executeTask: vi.fn((userId: string, convId: string, task: any) => 
       Promise.resolve({ ...task, status: 'completed', result: { success: true } })
     ),
+    sendDiscordMessage: vi.fn(() => Promise.resolve({ id: 't1', status: 'completed', result: {} })),
+    sendTelegramMessage: vi.fn(() => Promise.resolve({ id: 't2', status: 'completed', result: {} })),
+    browseUrl: vi.fn(() => Promise.resolve({ id: 't3', status: 'completed', result: {} })),
+    automateTask: vi.fn(() => Promise.resolve({ id: 't4', status: 'completed', result: {} })),
+    searchWeb: vi.fn(() => Promise.resolve({ id: 't5', status: 'completed', result: {} })),
     getStatus: vi.fn(() => Promise.resolve({
       available: true,
       health: 'healthy',

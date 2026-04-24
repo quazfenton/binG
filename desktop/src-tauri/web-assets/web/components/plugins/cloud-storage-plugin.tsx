@@ -12,6 +12,7 @@ const CloudStoragePlugin: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const { isAuthenticated, user } = useAuth();
   const [selectedFile, setSelectedFile] = useState('');
   const [fileContent, setFileContent] = useState('');
+  const [originalContent, setOriginalContent] = useState('');
   const [diffContent, setDiffContent] = useState('');
   const [files, setFiles] = useState<string[]>([]);
   const [quotaUsedBytes, setQuotaUsedBytes] = useState<number>(0);
@@ -78,11 +79,11 @@ const CloudStoragePlugin: React.FC<{ onClose: () => void }> = ({ onClose }) => {
     try {
       const token = (await import('@bing/platform/secrets')).secrets.get('auth-token');
       if (!token || !user?.email) {
-        toast.error('Authentication required');
-        setFileContent(`Content of ${file}\n\nThis is a sample file content.`);
-        setDiffContent('');
-        return;
-      }
+        toast.error('Authentication required');      setFileContent(`Content of ${file}\n\nThis is a sample file content.`);
+      setOriginalContent(`Content of ${file}\n\nThis is a sample file content.`);
+      setDiffContent('');
+      return;
+    }
 
       const response = await fetch(`/api/storage/download?path=users/${encodeURIComponent(user.email)}/${file}`, {
         headers: {
@@ -94,21 +95,26 @@ const CloudStoragePlugin: React.FC<{ onClose: () => void }> = ({ onClose }) => {
 
       const content = await response.text();
       setFileContent(content);
+      setOriginalContent(content);
       setDiffContent('');
     } catch (error) {
       console.error('Failed to download file:', error);
       toast.error('Failed to download file', { description: (error as Error).message });
       // Fallback to mock content
       setFileContent(`Content of ${file}\n\nThis is a sample file content.`);
+      setOriginalContent(`Content of ${file}\n\nThis is a sample file content.`);
       setDiffContent('');
     }
   };
 
   const handleGenerateDiff = () => {
-    if (!diffRef.current || !fileContent) return;
+    if (!originalContent) return;
     
-    const newContent = diffRef.current.value;
-    if (newContent === fileContent) {
+    // Since the textarea is controlled (value={fileContent}),
+    // diffRef.current.value === fileContent always. Compare
+    // the current fileContent against originalContent instead.
+    const newContent = fileContent;
+    if (newContent === originalContent) {
       toast('No Changes', {
         description: 'The file content has not changed',
       });
@@ -116,7 +122,7 @@ const CloudStoragePlugin: React.FC<{ onClose: () => void }> = ({ onClose }) => {
     }
     
     // Generate line-by-line diff
-    const oldLines = fileContent.split('\n');
+    const oldLines = originalContent.split('\n');
     const newLines = newContent.split('\n');
     const diffLines: string[] = [];
     

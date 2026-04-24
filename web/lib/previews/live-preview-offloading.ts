@@ -469,6 +469,38 @@ export function isBackendOnlyProject(files: Record<string, string>, deps: string
  */
 const HEAVY_COMPUTATION_PATTERNS = ['tensorflow', 'pytorch', 'cuda', 'gpu', 'torch', 'keras'];
 
+// ============================================================================
+// Cost Estimation Model
+// ============================================================================
+
+/**
+ * Per-minute cost in USD by preview mode.
+ * Local modes are free; cloud modes vary by provider tier.
+ */
+const COST_PER_MINUTE: Record<PreviewMode, number> = {
+  // Local / client-side — always free
+  sandpack: 0,
+  iframe: 0,
+  raw: 0,
+  parcel: 0,
+  pyodide: 0,
+  vite: 0,
+  webpack: 0,
+  webcontainer: 0,
+  nextjs: 0,
+  node: 0,
+  // Cloud providers
+  devbox: 0.05,       // Full cloud VM (equivalent to Daytona)
+  codesandbox: 0.02,  // CodeSandbox cloud
+  opensandbox: 0.03,  // Self-hosted containers
+  modal: 0.04,        // GPU / serverless (Modal Labs)
+  fastly: 0.02,       // Edge deployment
+  valtown: 0.01,      // Serverless functions
+  // Auto-detect modes — cost depends on resolved mode
+  local: 0,
+  cloud: 0.05,        // Worst-case: cloud VM
+};
+
 /**
  * API key patterns
  */
@@ -2203,6 +2235,46 @@ root.render(<App />);`,
     return this.transformForBrowser(code, framework);
   }
 
+  // ==========================================================================
+  // Cost Estimation
+  // ==========================================================================
+
+  /**
+   * Estimate the cost of running a preview in a given mode for a duration.
+   *
+   * @param mode - The preview mode (e.g. 'devbox', 'sandpack', 'modal')
+   * @param durationMinutes - Expected session duration in minutes
+   * @returns Estimated cost in USD
+   *
+   * @example
+   * ```typescript
+   * const cost = livePreviewOffloading.getCostEstimate('devbox', 30);
+   * // => 1.5 (30 min × $0.05/min)
+   * ```
+   */
+  getCostEstimate(mode: PreviewMode | string, durationMinutes: number): number {
+    const rate = (COST_PER_MINUTE as Record<string, number>)[mode];
+    if (rate === undefined) return 0;
+    return rate * durationMinutes;
+  }
+
+  /**
+   * List all preview modes and their per-minute cost rates.
+   *
+   * @returns Array of { mode, costPerMinute } objects
+   *
+   * @example
+   * ```typescript
+   * const providers = livePreviewOffloading.getProviders();
+   * // => [{ mode: 'sandpack', costPerMinute: 0 }, { mode: 'devbox', costPerMinute: 0.05 }, ...]
+   * ```
+   */
+  getProviders(): Array<{ mode: PreviewMode; costPerMinute: number }> {
+    return (Object.entries(COST_PER_MINUTE) as [PreviewMode, number][]).map(
+      ([mode, costPerMinute]) => ({ mode, costPerMinute })
+    );
+  }
+
   /**
    * Get preview mode priority (local first, then cloud fallback)
    */
@@ -2543,6 +2615,24 @@ export const shouldUseLocalPreview = (detection: ProjectDetection) =>
 
 export const getCloudFallback = (localMode: PreviewMode) =>
   livePreviewOffloading.getCloudFallback(localMode);
+
+/**
+ * Estimate the cost of running a preview in a given mode for a duration.
+ * Convenience export for LivePreviewOffloading.getCostEstimate().
+ *
+ * @param mode - The preview mode (e.g. 'devbox', 'sandpack', 'modal')
+ * @param durationMinutes - Expected session duration in minutes
+ * @returns Estimated cost in USD
+ */
+export const getCostEstimate = (mode: PreviewMode | string, durationMinutes: number): number =>
+  livePreviewOffloading.getCostEstimate(mode, durationMinutes);
+
+/**
+ * List all preview modes and their per-minute cost rates.
+ * Convenience export for LivePreviewOffloading.getProviders().
+ */
+export const getPreviewProviders = () =>
+  livePreviewOffloading.getProviders();
 
 export const detectPort = (files: Record<string, string>) =>
   livePreviewOffloading.detectPort(files);

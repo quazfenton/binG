@@ -15,6 +15,7 @@ export const runtime = 'nodejs';
  */
 
 import { getDatabase } from '../database/connection';
+import { execSchemaFile } from '../database/schema';
 import type {
   FilesystemEditTransaction,
   FilesystemEditOperationRecord,
@@ -52,34 +53,8 @@ class FilesystemEditDatabaseService {
     if (!this.db) return;
 
     try {
-      this.db.exec(`
-        CREATE TABLE IF NOT EXISTS filesystem_edit_transactions (
-          id TEXT PRIMARY KEY,
-          owner_id TEXT NOT NULL,
-          conversation_id TEXT NOT NULL,
-          request_id TEXT NOT NULL,
-          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-          status TEXT NOT NULL,
-          operations TEXT NOT NULL,
-          errors TEXT NOT NULL,
-          denied_reason TEXT,
-          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        );
-        CREATE INDEX IF NOT EXISTS idx_transactions_owner ON filesystem_edit_transactions(owner_id);
-        CREATE INDEX IF NOT EXISTS idx_transactions_conversation ON filesystem_edit_transactions(conversation_id);
-        CREATE INDEX IF NOT EXISTS idx_transactions_status ON filesystem_edit_transactions(status);
-
-        CREATE TABLE IF NOT EXISTS filesystem_edit_denials (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          transaction_id TEXT NOT NULL,
-          conversation_id TEXT NOT NULL,
-          timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-          reason TEXT NOT NULL,
-          paths TEXT NOT NULL,
-          FOREIGN KEY (transaction_id) REFERENCES filesystem_edit_transactions(id)
-        );
-        CREATE INDEX IF NOT EXISTS idx_denials_conversation ON filesystem_edit_denials(conversation_id);
-      `);
+      // filesystem-edit-schema.sql defines fs_edit_transactions + fs_edit_denials
+      execSchemaFile(this.db, 'filesystem-edit-schema');
     } catch (error: any) {
       console.error('[FilesystemEditDB] Failed to ensure schema:', error);
     }
