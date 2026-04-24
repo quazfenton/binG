@@ -6,9 +6,8 @@
  * to prevent the kind of drift that caused the user_sessions / performance-indexes bug.
  *
  * Usage:
- *   import { getSqlFromFile } from './schema/loader';
- *   const schema = getSqlFromFile('events-schema');
- *   db.exec(schema);
+ *   import { execSchemaFile } from '@/lib/database/schema';
+ *   execSchemaFile(db, 'events-schema');
  *
  * Returns empty string during build/Edge where fs access is unavailable.
  */
@@ -37,6 +36,46 @@ function isEdgeRuntime(): boolean {
 }
 
 /**
+ * Resolve a SQL file path using multiple strategies.
+ *
+ * Strategy 1: process.cwd()/subpath — works in dev and in the Tauri desktop
+ *   where Rust sets CWD to the web-assets/web/ dir.
+ * Strategy 2: __dirname walk-up — for Next.js standalone builds where __dirname
+ *   is deep inside .next/server/ and the .sql files are alongside the project root.
+ *
+ * @param subpath  Path segments under the project root (e.g. ['lib','database','schema','events-schema.sql'])
+ * @returns Absolute path if found, or null.
+ */
+export function resolveSqlPath(subpath: string[]): string | null {
+  if (typeof require === 'undefined' || typeof process === 'undefined') {
+    return null;
+  }
+  const { existsSync } = require('fs');
+  const { join, dirname } = require('path');
+
+  // Strategy 1: process.cwd()
+  const cwd = typeof process !== 'undefined' && process.cwd ? process.cwd() : '.';
+  const cwdCandidate = join(cwd, ...subpath);
+  if (existsSync(cwdCandidate)) {
+    return cwdCandidate;
+  }
+
+  // Strategy 2: __dirname walk-up (max 10 levels)
+  if (typeof __dirname !== 'undefined') {
+    let dir: string | undefined = __dirname;
+    for (let i = 0; i < 10 && dir; i++) {
+      const candidate = join(dir, ...subpath);
+      if (existsSync(candidate)) {
+        return candidate;
+      }
+      dir = dirname(dir);
+    }
+  }
+
+  return null;
+}
+
+/**
  * Load SQL content from a schema file, with module-level caching.
  *
  * @param name  Filename without .sql extension (e.g. 'events-schema', 'approval-requests')
@@ -61,10 +100,15 @@ export function getSqlFromFile(name: string): string {
 
   try {
     const { readFileSync } = require('fs');
-    const { join } = require('path');
-    const cwd = process.cwd?.() ?? '.';
-    const sqlPath = join(cwd, 'lib', 'database', 'schema', `${name}.sql`);
-    _cache[name] = readFileSync(sqlPath, 'utf8');
+    const sqlPath = resolveSqlPath(['lib', 'database', 'schema', `${name}.sql`]);
+
+    if (sqlPath) {
+      _cache[name] = readFileSync(sqlPath, 'utf8');
+      return _cache[name];
+    }
+
+    console.warn(`[DB Schema] ${name}.sql not found (tried cwd + __dirname walk-up)`);
+    _cache[name] = '';
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[DB Schema] Could not read ${name}.sql: ${msg}`);

@@ -41,16 +41,19 @@ export class MigrationRunner {
     const connectionModule = await import('./connection');
     this.db = await connectionModule.getDatabase();
 
-    // Use process.cwd() only at runtime in Node.js environment
-    // Not available in Edge Runtime - use a fallback path
+    // Resolve migrations directory using the shared multi-strategy path resolver.
+    // existsSync works on directories, so resolveSqlPath can find the migrations folder.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const hasProcessCwd = typeof process !== 'undefined' && (process as any).cwd;
-    if (hasProcessCwd && process.env.NEXT_RUNTIME === 'nodejs') {
-      // Use require instead of dynamic import to avoid Edge Runtime analysis
+    if (typeof process !== 'undefined' && (process as any).cwd && process.env.NEXT_RUNTIME === 'nodejs') {
+      const { resolveSqlPath } = require('./schema/loader');
       const pathModule = require('path');
-      const join = pathModule.join;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      this.migrationsPath = join((process as any).cwd(), 'lib', 'database', 'migrations');
+      const resolved = resolveSqlPath(['lib', 'database', 'migrations']);
+      if (resolved) {
+        this.migrationsPath = resolved;
+      } else {
+        // Fallback: construct the cwd-based path even if it doesn't exist yet
+        this.migrationsPath = pathModule.join((process as any).cwd(), 'lib', 'database', 'migrations');
+      }
     } else {
       // Fallback for Edge Runtime - this won't actually run migrations in Edge
       this.migrationsPath = './lib/database/migrations';

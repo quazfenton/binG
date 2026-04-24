@@ -11,6 +11,7 @@
 
 import { createLogger } from '@/lib/utils/logger';
 import { normalizeToolArgs, tolerantJsonParse } from '@/lib/mcp/vfs-mcp-tools';
+import { stripScopePrefixForDisplay } from '@/lib/virtual-filesystem/path-normalizer';
 
 export { normalizeToolArgs, tolerantJsonParse };
 
@@ -28,12 +29,9 @@ export async function buildWorkspaceSnapshot(userId: string): Promise<string> {
   try {
     const { virtualFilesystem } = await import('@/lib/virtual-filesystem/virtual-filesystem-service');
     const workspace = await virtualFilesystem.exportWorkspace(userId);
-    const paths = workspace.files.map((f: any) => {
-      // Strip VFS scope prefix so LLM sees session-relative paths
-      const p = f.path as string;
-      const m = p.match(/^project\/sessions\/[^/]+\/(.+)$/);
-      return m ? m[1] : p;
-    }).sort();
+    const paths = workspace.files
+      .map((f: any) => stripScopePrefixForDisplay(f.path as string))
+      .sort();
 
     if (paths.length === 0) return '(empty workspace — no files yet)';
 
