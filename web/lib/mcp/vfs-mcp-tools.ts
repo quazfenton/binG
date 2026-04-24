@@ -27,6 +27,7 @@ import { virtualFilesystem } from '../virtual-filesystem/virtual-filesystem-serv
 import { emitFileEvent, emitBatchFileEvents } from '../virtual-filesystem/file-events';
 import { createLogger } from '../utils/logger';
 import { tolerantJsonParse, sanitizeJsonString, findBalancedJsonObject } from '../utils/json-tolerant';
+import { resolveToScopedPath } from '../virtual-filesystem/path-normalizer';
 
 // Re-export for backwards compatibility (other modules may import from here)
 export { tolerantJsonParse, sanitizeJsonString, findBalancedJsonObject };
@@ -443,97 +444,9 @@ function getToolContext(): ToolContext {
  * - scopePath="project", path="src/app.ts" → "project/src/app.ts"
  */
 function resolveScopedPath(inputPath: string): string {
-  if (!inputPath || typeof inputPath !== 'string') {
-    throw new Error('Path is required');
-  }
-
-  // Strip leading slash if present and normalize backslashes
-  let cleanPath = inputPath.startsWith('/') ? inputPath.substring(1) : inputPath;
-  cleanPath = cleanPath.replace(/\\/g, '/');  // Handle Windows paths
-  cleanPath = cleanPath.replace(/\/+/g, '/'); // Collapse double slashes
-  cleanPath = cleanPath.replace(/\/+$/, '');  // Strip trailing slashes
-
-  // FIX: Strip absolute desktop/CLI workspace root prefix
-  // LLM may echo back paths like "C:/Users/user/workspace/src/app.ts"
-  // or "/home/user/project/src/app.ts" from context
-  if (typeof process !== 'undefined' && process.env) {
-    const desktopRoot = process.env.INITIAL_CWD || process.env.DESKTOP_WORKSPACE_ROOT;
-    if (desktopRoot) {
-      const rootNorm = desktopRoot.replace(/\\/g, '/').replace(/\/+$/, '').replace(/^\//, '');
-      if (rootNorm && cleanPath.startsWith(rootNorm + '/')) {
-        cleanPath = cleanPath.slice(rootNorm.length + 1);
-      }
-    }
-  }
-
-  // FIX: Strip Windows drive letter prefix (C:/ or c:/) for relative resolution
-  cleanPath = cleanPath.replace(/^[A-Za-z]:\//, '');
-
-  // Reject path traversal attempts in the path itself
-  const segments = cleanPath.split('/');
-  if (segments.some(seg => seg === '..')) {
-    logger.warn('Path traversal attempt detected in file path', { originalPath: inputPath, cleanPath });
-    throw new Error('Path cannot contain directory traversal (..)');
-  }
-
-  // Reject empty paths
-  if (!cleanPath || cleanPath.trim() === '') {
-    throw new Error('Path cannot be empty');
-  }
-
   const context = getToolContext();
-  const scopePath = context.scopePath || 'project/sessions/000';  // Ensure scopePath defaults to session scope
-
-  // SECURITY: Validate scopePath itself doesn't contain traversal attempts
-  if (scopePath.includes('..')) {
-    logger.error('Invalid scopePath contains traversal', { scopePath });
-    throw new Error('Invalid scope path configuration');
-  }
-
-  // If path already starts with the scope + "/" or equals the scope exactly, use as-is
-  // This prevents "project/sessions/001" from matching "project/sessions/001-extended"
-  if (cleanPath === scopePath || cleanPath.startsWith(`${scopePath}/`)) {
-    return cleanPath;
-  }
-
-  // FIX: Strip redundant "sessions/" prefix the LLM may prepend
-  // "sessions/my-folder/1.py" → "my-folder/1.py" (then scoped normally)
-  if (cleanPath.startsWith('sessions/')) {
-    cleanPath = cleanPath.slice('sessions/'.length);
-  }
-
-  // FIX: Strip "workspace/sessions/" prefix (LLM guessing workspace root)
-  if (cleanPath.startsWith('workspace/sessions/')) {
-    cleanPath = cleanPath.slice('workspace/sessions/'.length);
-    // Also strip the session ID segment if present
-    // "workspace/sessions/001/src/app.ts" → "src/app.ts"
-    const slashIdx = cleanPath.indexOf('/');
-    if (slashIdx !== -1) {
-      cleanPath = cleanPath.slice(slashIdx + 1);
-    }
-  }
-
-  // FIX: Strip "project/sessions/{anyId}/" prefix when it doesn't match our scope
-  // LLM may echo back paths from context with a different session ID
-  const otherSessionMatch = cleanPath.match(/^project\/sessions\/[^/]+\/(.+)$/);
-  if (otherSessionMatch) {
-    cleanPath = otherSessionMatch[1];
-  }
-
-  // SECURITY: If path starts with "project/" but NOT our scopePath, log warning
-  // This catches attempts to escape session scope (e.g., writing to project/shared when scoped to project/sessions/001)
-  if (cleanPath.startsWith('project/')) {
-    logger.warn('Path outside session scope - will be written to workspace root instead of session', {
-  originalPath: inputPath,
-  cleanPath,
-  scopePath,
-    });
-    // Still allow it for now (could be intentional for shared files), but log for visibility
-    return cleanPath;
-  }
-
-  // Prepend scope path to make it session-scoped
-  return `${scopePath}/${cleanPath}`;
+  const scopePath = context.scopePath || 'project/sessions/000';
+  return resolveToScopedPath(inputPath, scopePath);
 }
 
 /**

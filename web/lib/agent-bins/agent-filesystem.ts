@@ -25,6 +25,7 @@
 
 import { isDesktopMode, isLocalExecution, getDefaultWorkspaceRoot } from '@bing/platform/env';
 import { normalizeAndSecurePath, filterSensitiveDirs } from './security';
+import { normalizeLLMPath } from '@/lib/virtual-filesystem/path-normalizer';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Types
@@ -186,29 +187,19 @@ class LocalAgentFs implements AgentFilesystem {
   }
 
   private resolvePath(filePath: string): string {
-    let p = filePath.replace(/\\/g, '/');
+    // Use centralized normalizer to strip redundant CWD/workspace prefixes
+    const relative = normalizeLLMPath(filePath, {
+      stripDriveLetters: false, // Desktop mode: preserve drive letters for absolute paths
+      rejectTraversal: true,
+    });
 
-    // Strip redundant CWD prefix if the LLM echoed back the full absolute path
-    // e.g. cwd="/home/user/project", LLM writes "/home/user/project/src/app.ts"
-    //   → resolve to just "src/app.ts" relative to CWD (avoids double-nesting)
+    // If still absolute after normalization, use as-is
+    if (relative.startsWith('/') || /^[A-Za-z]:/.test(relative)) {
+      return relative;
+    }
+
     const cwdNorm = this.cwd.replace(/\\/g, '/').replace(/\/+$/, '');
-    if (cwdNorm && p.startsWith(cwdNorm + '/')) {
-      p = p.slice(cwdNorm.length + 1);
-    }
-    // Also handle Windows drive letter case (C:\Users\... echoed as C:/Users/...)
-    if (cwdNorm && /^[A-Za-z]:/.test(p)) {
-      const pNorm = p.replace(/^([A-Za-z]):/, (_, d) => d.toUpperCase() + ':');
-      const cwdDrive = cwdNorm.replace(/^([A-Za-z]):/, (_, d) => d.toUpperCase() + ':');
-      if (pNorm.startsWith(cwdDrive + '/')) {
-        p = pNorm.slice(cwdDrive.length + 1);
-      }
-    }
-
-    // Absolute paths start with '/' or drive letter (Windows) — use as-is
-    if (p.startsWith('/') || /^[A-Za-z]:/.test(p)) {
-      return p;
-    }
-    return `${cwdNorm}/${p}`;
+    return `${cwdNorm}/${relative}`;
   }
 }
 

@@ -25,6 +25,7 @@ import { virtualFilesystem } from './virtual-filesystem-service';
 import type { VirtualFile, VirtualFilesystemNode } from './filesystem-types';
 import { createLogger } from '@/lib/utils/logger';
 import { estimateTokens } from '@/lib/context/contextBuilder';
+import { stripScopePrefixForDisplay } from './path-normalizer';
 
 const logger = createLogger('SmartContext');
 
@@ -35,12 +36,7 @@ const logger = createLogger('SmartContext');
  * Paths not matching the prefix are returned as-is.
  */
 function stripScopePrefix(filePath: string): string {
-  // Strip "project/sessions/{sessionId}/" prefix
-  const match = filePath.match(/^project\/sessions\/[^/]+\/(.+)$/);
-  if (match) return match[1];
-  // Strip "project/" prefix as fallback
-  if (filePath.startsWith('project/')) return filePath.slice('project/'.length);
-  return filePath;
+  return stripScopePrefixForDisplay(filePath);
 }
 
 export interface SmartContextOptions {

@@ -651,7 +651,18 @@ export class VirtualFilesystemService {
           })),
         };
       } catch (error: any) {
-        throw new Error(`Failed to list directory from local filesystem: ${error.message}`);
+        // Virtual VFS paths like "project/sessions" don't exist on the real
+        // filesystem in desktop mode. Return an empty listing instead of
+        // propagating the ENOENT error — the UI handles empty workspaces
+        // gracefully, but an unhandled exception breaks the sidebar.
+        const msg = error?.message || String(error);
+        if (msg.includes('ENOENT') || msg.includes('no such file') || msg.includes('not found')) {
+          return {
+            path: directoryPath || this.workspaceRoot,
+            nodes: [],
+          };
+        }
+        throw new Error(`Failed to list directory from local filesystem: ${msg}`);
       }
     }
 
