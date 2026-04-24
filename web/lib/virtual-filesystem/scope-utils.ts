@@ -1,3 +1,5 @@
+import { normalizeLLMPath } from './path-normalizer';
+
 /**
  * Strip common sandbox/workspace prefixes from a path.
  *
@@ -95,21 +97,17 @@ export function normalizeScopePath(scopePath?: string): string {
 
 export function resolveScopedPath(requestedPath: string, scopePath?: string): string {
   const scope = normalizeScopePath(scopePath);
-  let raw = (requestedPath || '').replace(/\\/g, '/').trim();
-  if (!raw) return scope;
+  if (!requestedPath || !requestedPath.trim()) return scope;
 
-  raw = raw.replace(/^\/+/, '');
+  const relative = normalizeLLMPath(requestedPath, { scopePath: scope, rejectTraversal: true });
 
-  if (raw === scope || raw.startsWith(`${scope}/`)) {
-    // Always normalize multiple slashes even for scope-matching paths
-    return raw.replace(/\/+/g, '/');
-  }
+  // '.' means "root of scope" after all stripping
+  if (relative === '.') return scope;
 
-  if (raw.startsWith('project/')) {
-    return raw.replace(/\/{2,}/g, '/');
-  }
+  // Already fully-qualified project path
+  if (relative.startsWith('project/')) return relative;
 
-  return `${scope}/${raw}`.replace(/\/{2,}/g, '/');
+  return `${scope}/${relative}`;
 }
 
 export function extractSessionIdFromPath(scopePath?: string): string | null {

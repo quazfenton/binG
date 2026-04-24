@@ -86,8 +86,7 @@ export async function hoistSessionFolder(
 
     // Hoist: read all files from the subfolder and rewrite them one level up
     const subPath = `${basePath}/${folderName}`;
-    const { virtualFilesystem: vfs } = await import('@/lib/virtual-filesystem/virtual-filesystem-service');
-    const workspace = await vfs.exportWorkspace(userId);
+    const workspace = await virtualFilesystem.exportWorkspace(userId);
     const filesToMove = workspace.files.filter((f: any) =>
       f.path.startsWith(`${subPath}/`)
     );
@@ -102,7 +101,7 @@ export async function hoistSessionFolder(
       const relativePath = file.path.slice(subPath.length + 1); // Strip subPath/
       const newPath = `${newBasePath}/${relativePath}`;
       try {
-        await vfs.writeFile(userId, newPath, file.content, file.language);
+        await virtualFilesystem.writeFile(userId, newPath, file.content, file.language);
       } catch (err: any) {
         logger.warn(`Hoist: failed to move ${file.path} → ${newPath}: ${err.message}`);
       }
@@ -111,7 +110,7 @@ export async function hoistSessionFolder(
     // Clean up old session folder (delete all files)
     for (const file of filesToMove) {
       try {
-        await vfs.deletePath(userId, file.path);
+        await virtualFilesystem.deletePath(userId, file.path);
       } catch { /* best effort cleanup */ }
     }
 

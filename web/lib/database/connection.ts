@@ -34,22 +34,28 @@ function getSchemaSql(): string {
     return _cachedSchemaSql;
   }
 
-  let schemaPath: string;
+  let schemaPath: string | null = null;
   try {
-    // Use dynamic require so webpack doesn't try to bundle these for the client.
-    // Resolve schema.sql relative to the process working directory so this works
-    // in both CommonJS and ESM contexts (process.cwd() is universally available).
+    // Use the shared multi-strategy path resolver from the schema loader.
+    // Delegates to resolveSqlPath() which tries cwd + __dirname walk-up.
+    const { resolveSqlPath } = require('./schema/loader');
     const { readFileSync } = require('fs');
-    const { join } = require('path');
-    const cwd = typeof process !== 'undefined' && process.cwd ? process.cwd() : '.';
-    schemaPath = join(cwd, 'lib', 'database', 'schema.sql');
-    _cachedSchemaSql = readFileSync(schemaPath, 'utf8');
+
+    schemaPath = resolveSqlPath(['lib', 'database', 'schema.sql']);
+
+    if (schemaPath) {
+      _cachedSchemaSql = readFileSync(schemaPath, 'utf8');
+      return _cachedSchemaSql;
+    }
+
+    console.warn(`[DB] schema.sql not found (tried cwd + __dirname walk-up)`);
+    _cachedSchemaSql = '';
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     // During build, missing schema.sql is non-fatal (db init is mocked anyway).
     // At runtime this is a real error — warn but don't throw so the caller can
     // decide how to handle a missing schema.
-    console.error(`[DB] Could not read schema.sql (path: ${schemaPath}): ${msg}`);
+    console.error(`[DB] Could not read schema.sql (path: ${schemaPath ?? 'unresolved'}): ${msg}`);
     _cachedSchemaSql = '';
   }
 

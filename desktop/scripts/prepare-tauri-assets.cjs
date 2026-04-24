@@ -68,6 +68,47 @@ if (fs.existsSync(staticDir)) {
 // Instead, rely on runtime-provided environment variables or a sanitized config.
 // See: https://12factor.net/config
 
+// Copy SQL schema files — Next.js standalone does NOT include files read via
+// readFileSync (webpack only tracks import/require). Without this, the
+// database initialization fails with ENOENT at runtime.
+const dbSchemaDir = path.join(webRoot, 'lib', 'database');
+const destDbDir = path.join(destDir, 'web', 'lib', 'database');
+if (fs.existsSync(dbSchemaDir)) {
+  // Copy schema.sql (core tables)
+  const coreSchema = path.join(dbSchemaDir, 'schema.sql');
+  if (fs.existsSync(coreSchema)) {
+    fs.mkdirSync(path.join(destDbDir), { recursive: true });
+    fs.copyFileSync(coreSchema, path.join(destDbDir, 'schema.sql'));
+    console.log('✓ Copied schema.sql');
+  }
+
+  // Copy schema/*.sql (per-module schemas)
+  const schemaSubdir = path.join(dbSchemaDir, 'schema');
+  if (fs.existsSync(schemaSubdir)) {
+    const destSchemaSubdir = path.join(destDbDir, 'schema');
+    fs.mkdirSync(destSchemaSubdir, { recursive: true });
+    for (const file of fs.readdirSync(schemaSubdir)) {
+      if (file.endsWith('.sql')) {
+        fs.copyFileSync(path.join(schemaSubdir, file), path.join(destSchemaSubdir, file));
+      }
+    }
+    console.log('✓ Copied schema/*.sql files');
+  }
+
+  // Copy migrations/*.sql
+  const migrationsDir = path.join(dbSchemaDir, 'migrations');
+  if (fs.existsSync(migrationsDir)) {
+    const destMigrationsDir = path.join(destDbDir, 'migrations');
+    fs.mkdirSync(destMigrationsDir, { recursive: true });
+    for (const file of fs.readdirSync(migrationsDir)) {
+      if (file.endsWith('.sql')) {
+        fs.copyFileSync(path.join(migrationsDir, file), path.join(destMigrationsDir, file));
+      }
+    }
+    console.log('✓ Copied migrations/*.sql files');
+  }
+}
+
 // CRITICAL: Remove the 'data' folder and any .db files from the bundled output
 // These should be created fresh at runtime to avoid file locks during installation
 const bundledDataDir = path.join(destDir, 'web', 'data');
