@@ -129,10 +129,12 @@ const DataVisualizationBuilderPlugin: React.FC<DataVisualizationBuilderPluginPro
       toast.error('Please fix the errors before inserting the visualization.');
       return;
     }
+    // Use the already-parsed and validated data instead of re-parsing raw chartData,
+    // which can throw before async validation state catches up.
     const vizData = {
       type: chartType,
       title: chartTitle,
-      data: JSON.parse(chartData),
+      data: parsedChartData,
       description: `${chartTitle}: A ${chartType} visualization.`,
     };
     onResult?.({

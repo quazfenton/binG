@@ -14,6 +14,7 @@
  */
 
 import { getDatabase } from '@/lib/database/connection';
+import { execSchemaFile } from '@/lib/database/schema';
 import { emitEvent } from './bus';
 import { createLogger } from '@/lib/utils/logger';
 import { EventTypes } from './schema';
@@ -404,29 +405,8 @@ export async function getScheduledTasks(userId: string): Promise<ScheduledTaskRe
 export async function initializeScheduledTasks(): Promise<void> {
   const db = getDatabase();
 
-  db.prepare(`
-    CREATE TABLE IF NOT EXISTS scheduled_tasks (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      task_type TEXT NOT NULL,
-      cron_expression TEXT NOT NULL,
-      payload TEXT NOT NULL,
-      active BOOLEAN NOT NULL DEFAULT TRUE,
-      last_run DATETIME,
-      next_run DATETIME,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME,
-      timezone TEXT DEFAULT 'UTC',
-      catch_up BOOLEAN DEFAULT FALSE,
-      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-    )
-  `).run();
-
-  // Create indexes
-  db.prepare('CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_next_run ON scheduled_tasks(next_run)').run();
-  db.prepare('CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_active ON scheduled_tasks(active)').run();
-  db.prepare('CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_user_id ON scheduled_tasks(user_id)').run();
-  db.prepare('CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_type ON scheduled_tasks(task_type)').run();
+  // events-schema.sql already defines scheduled_tasks (consolidated with events/approval_requests/event_healing_log)
+  execSchemaFile(db, 'events-schema');
 
   logger.info('Scheduled tasks table initialized');
 }

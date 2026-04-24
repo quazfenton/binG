@@ -27,7 +27,7 @@ vi.mock('../lib/utils/logger', () => ({
 
 vi.mock('../lib/agent/nullclaw-integration', () => ({
   nullclawIntegration: {
-    startContainer: vi.fn(() => Promise.resolve({
+    getContainerForSession: vi.fn(() => ({
       id: 'nullclaw-container-123',
       endpoint: 'http://localhost:3001',
       status: 'ready',

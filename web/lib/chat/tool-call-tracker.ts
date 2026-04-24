@@ -15,6 +15,7 @@
  *   - enhanced-llm-service.ts → tool execution feedback
  */
 
+import { execSchemaFile } from '@/lib/database/schema';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('ToolCallTracker');
@@ -95,26 +96,8 @@ class ToolCallTracker {
         // Enable WAL mode for concurrent reads
         this.db.pragma('journal_mode = WAL');
 
-        this.db.exec(`
-          CREATE TABLE IF NOT EXISTS tool_calls (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            model TEXT NOT NULL,
-            provider TEXT NOT NULL,
-            tool_name TEXT NOT NULL,
-            success INTEGER NOT NULL,
-            error TEXT,
-            timestamp INTEGER NOT NULL,
-            conversation_id TEXT,
-            tool_call_id TEXT
-          );
-
-          CREATE INDEX IF NOT EXISTS idx_tool_calls_model
-            ON tool_calls(provider, model, timestamp);
-          CREATE INDEX IF NOT EXISTS idx_tool_calls_timestamp
-            ON tool_calls(timestamp);
-          CREATE UNIQUE INDEX IF NOT EXISTS idx_tool_calls_dedup
-            ON tool_calls(tool_call_id) WHERE tool_call_id IS NOT NULL;
-        `);
+        // logging-schema.sql defines tool_calls + chat_request_logs + hitl_audit_logs
+        execSchemaFile(this.db, 'logging-schema');
 
         this.initialized = true;
         logger.info('Tool call tracker initialized (SQLite)');

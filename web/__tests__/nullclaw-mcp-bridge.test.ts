@@ -13,14 +13,14 @@ vi.mock('@bing/shared/agent/nullclaw-integration', () => ({
     isAvailable: vi.fn(() => true),
     initialize: vi.fn(() => Promise.resolve()),
     initializeForSession: vi.fn(() => Promise.resolve('container-mock')),
-    startContainer: vi.fn(() => Promise.resolve({ id: 'container-mock', endpoint: 'http://localhost:0', status: 'ready' })),
+    getContainerForSession: vi.fn(() => ({ id: 'container-mock', endpoint: 'http://localhost:0', status: 'ready' })),
     stopContainer: vi.fn(() => Promise.resolve()),
     executeTask: vi.fn(() => Promise.resolve({ status: 'completed', result: { success: true } })),
-    sendDiscordMessage: vi.fn(() => Promise.resolve({ success: true })),
-    sendTelegramMessage: vi.fn(() => Promise.resolve({ success: true })),
-    browseUrl: vi.fn(() => Promise.resolve({ success: true, content: '' })),
-    automateTask: vi.fn(() => Promise.resolve({ success: true })),
-    searchWeb: vi.fn(() => Promise.resolve({ success: true, results: [] })),
+    sendDiscordMessage: vi.fn(() => Promise.resolve({ id: 'task-1', status: 'completed', result: {} })),
+    sendTelegramMessage: vi.fn(() => Promise.resolve({ id: 'task-2', status: 'completed', result: {} })),
+    browseUrl: vi.fn(() => Promise.resolve({ id: 'task-3', status: 'completed', result: {} })),
+    automateTask: vi.fn(() => Promise.resolve({ id: 'task-4', status: 'completed', result: {} })),
+    searchWeb: vi.fn(() => Promise.resolve({ id: 'task-5', status: 'completed', result: {} })),
     getStatus: vi.fn(() => Promise.resolve({
       available: true,
       health: 'healthy',
@@ -78,9 +78,8 @@ describe('NullclawMCPBridge', () => {
     it('should return error when container not available', async () => {
       // Mock nullclawIntegration to return no container and not be available
       const nullclaw = await import('@bing/shared/agent/nullclaw-integration');
-      vi.mocked(nullclaw.nullclawIntegration.startContainer).mockRejectedValue(
-        new Error('Container not available')
-      );
+      vi.mocked(nullclaw.nullclawIntegration.initializeForSession).mockResolvedValue(undefined);
+      vi.mocked(nullclaw.nullclawIntegration.getContainerForSession).mockReturnValue(undefined);
       // Also mark as unavailable so URL-mode fallback is skipped
       vi.mocked(nullclaw.nullclawIntegration.isAvailable).mockReturnValue(false);
 
