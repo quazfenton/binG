@@ -275,7 +275,7 @@ function FeedCard({ item, index, onRemove, onTogglePin, isPinned }: FeedCardProp
                 <Zap className="h-2.5 w-2.5" />{expiresIn}
               </span>
             )}
-            {item.link && <a href={item.link} target="_blank" rel="noopener noreferrer" className="hover:text-white/80 transition-colors"><LinkIcon className="h-2.5 w-2.5" /></a>}
+            {item.link && /^https?:\/\//i.test(item.link) && <a href={item.link} target="_blank" rel="noopener noreferrer" className="hover:text-white/80 transition-colors"><LinkIcon className="h-2.5 w-2.5" /></a>}
           </div>
         </div>
       </div>

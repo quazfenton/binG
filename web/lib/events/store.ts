@@ -11,6 +11,7 @@
  */
 
 import { getDatabase } from '@/lib/database/connection';
+import { execSchemaFile } from '@/lib/database/schema';
 import { AnyEvent, EventType } from './schema';
 import { createLogger } from '@/lib/utils/logger';
 
@@ -406,32 +407,8 @@ export async function initializeEventStore(): Promise<void> {
   const db = getDatabase();
 
   try {
-    // Create events table
-    db.prepare(`
-      CREATE TABLE IF NOT EXISTS events (
-        id TEXT PRIMARY KEY,
-        type TEXT NOT NULL,
-        payload TEXT NOT NULL,
-        status TEXT NOT NULL DEFAULT 'pending',
-        retry_count INTEGER NOT NULL DEFAULT 0,
-        error TEXT,
-        user_id TEXT NOT NULL,
-        session_id TEXT,
-        metadata TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        updated_at DATETIME,
-        completed_at DATETIME,
-        FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE SET NULL
-      )
-    `).run();
-
-    // Create indexes
-    db.prepare('CREATE INDEX IF NOT EXISTS idx_events_status ON events(status)').run();
-    db.prepare('CREATE INDEX IF NOT EXISTS idx_events_type ON events(type)').run();
-    db.prepare('CREATE INDEX IF NOT EXISTS idx_events_user_id ON events(user_id)').run();
-    db.prepare('CREATE INDEX IF NOT EXISTS idx_events_session_id ON events(session_id)').run();
-    db.prepare('CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at)').run();
-    db.prepare('CREATE INDEX IF NOT EXISTS idx_events_status_type ON events(status, type)').run();
+    // Single source of truth — events-schema.sql defines events + all related tables
+    execSchemaFile(db, 'events-schema');
 
     logger.info('Event store initialized');
   } catch (error: any) {

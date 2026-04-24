@@ -138,10 +138,13 @@ const DuckDuckGoEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
       kl: region,
     });
 
+    // Use DuckDuckGo's 'kp' parameter for safe-search (not 'ch')
     if (safeSearch === 'strict') {
-      params.append('ch', '1');
+      params.set('kp', '1');
     } else if (safeSearch === 'off') {
-      params.append('ch', '-1');
+      params.set('kp', '-1');
+    } else {
+      params.set('kp', '-2'); // moderate
     }
 
     const searchUrl = `https://duckduckgo.com/html/?${params.toString()}`;
@@ -219,8 +222,9 @@ const DuckDuckGoEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
   const loadHistoryItem = (query: string) => {
     setSearchQuery(query);
     const params = new URLSearchParams({ q: query, kl: region });
-    if (safeSearch === 'strict') params.append('ch', '1');
-    else if (safeSearch === 'off') params.append('ch', '-1');
+    if (safeSearch === 'strict') params.set('kp', '1');
+    else if (safeSearch === 'off') params.set('kp', '-1');
+    else params.set('kp', '-2');
     
     const searchUrl = `https://duckduckgo.com/html/?${params.toString()}`;
     setIframeUrl(searchUrl);

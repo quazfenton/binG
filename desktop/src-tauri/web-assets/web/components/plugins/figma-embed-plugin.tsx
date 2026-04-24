@@ -169,16 +169,12 @@ const FigmaEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) => {
     );
 
     // Listen for OAuth completion
-    const checkPopupClosed = setInterval(() => {
-      if (popup?.closed) {
-        clearInterval(checkPopupClosed);
-        setIsConnecting(false);
-        checkConnection();
-      }
-    }, 500);
+    // Declare both timers as let before assignment so each callback
+    // can reference the other without TDZ/lint issues.
+    let oauthTimeout: ReturnType<typeof setTimeout>;
+    let checkPopupClosed: ReturnType<typeof setInterval>;
 
-    // Timeout after 5 minutes
-    setTimeout(() => {
+    oauthTimeout = setTimeout(() => {
       if (popup && !popup.closed) {
         popup.close();
       }
@@ -186,6 +182,15 @@ const FigmaEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) => {
       setIsConnecting(false);
       setConnectionError('Authorization timed out. Please try again.');
     }, 5 * 60 * 1000);
+
+    checkPopupClosed = setInterval(() => {
+      if (popup?.closed) {
+        clearInterval(checkPopupClosed);
+        clearTimeout(oauthTimeout);
+        setIsConnecting(false);
+        checkConnection();
+      }
+    }, 500);
   }, []);
 
   const handleDisconnect = async () => {
@@ -233,6 +238,9 @@ const FigmaEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) => {
       if (data.success) {
         setFileNodes(data.file?.root || null);
         setSelectedFile(files.find(f => f.key === fileKey) || null);
+        // Clear stale node selection when loading a new file
+        setSelectedNodes([]);
+        setExportedImages({});
       } else {
         toast.error('Failed to load file structure');
       }

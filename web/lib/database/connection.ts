@@ -3,172 +3,58 @@
 // This file is server-only - do not import in Client Components
 export const runtime = 'nodejs';
 
-const SCHEMA_SQL = `
--- Users table
-CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    email TEXT UNIQUE NOT NULL,
-    username TEXT UNIQUE,
-    password_hash TEXT NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    is_active BOOLEAN DEFAULT TRUE,
-    subscription_tier TEXT DEFAULT 'free',
-    last_login DATETIME,
-    reset_token TEXT,
-    reset_token_expires DATETIME,
-    email_verified BOOLEAN DEFAULT FALSE,
-    email_verification_token TEXT,
-    email_verification_expires DATETIME
-);
+// Cached schema SQL — read once from schema.sql at runtime to prevent drift between
+// the .sql file and any inline constant. Returns empty string during build/Edge.
+let _cachedSchemaSql: string | null = null;
 
--- Index for email verification token lookups
-CREATE INDEX IF NOT EXISTS idx_users_email_verification_token ON users(email_verification_token);
+/**
+ * Load the database schema from schema.sql at runtime.
+ *
+ * Single source of truth — the schema lives in web/lib/database/schema.sql.
+ * This function reads it once and caches the result, so both the init path
+ * and the migration path get the exact same SQL without duplication.
+ *
+ * Returns empty string during build/Edge where fs access is unavailable,
+ * allowing the database to initialize via mock fallbacks.
+ */
+function getSchemaSql(): string {
+  if (_cachedSchemaSql !== null) {
+    return _cachedSchemaSql;
+  }
 
--- API credentials table (encrypted)
-CREATE TABLE IF NOT EXISTS api_credentials (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    provider TEXT NOT NULL,
-    api_key_encrypted TEXT NOT NULL,
-    api_key_hash TEXT NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    is_active BOOLEAN DEFAULT TRUE,
-    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
-    UNIQUE(user_id, provider)
-);
+  // Guard: skip fs access during build or in Edge Runtime
+  if (shouldSkipDbInit() || isEdgeRuntime()) {
+    _cachedSchemaSql = '';
+    return _cachedSchemaSql;
+  }
 
--- Chat conversations
-CREATE TABLE IF NOT EXISTS conversations (
-    id TEXT PRIMARY KEY,
-    user_id INTEGER,
-    title TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    is_archived BOOLEAN DEFAULT FALSE,
-    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
-);
+  // Guard: skip if require/fs are unavailable (shouldn't happen in Node.js, but be safe)
+  if (typeof require === 'undefined' || typeof process === 'undefined') {
+    _cachedSchemaSql = '';
+    return _cachedSchemaSql;
+  }
 
--- Chat messages
-CREATE TABLE IF NOT EXISTS messages (
-    id TEXT PRIMARY KEY,
-    conversation_id TEXT NOT NULL,
-    role TEXT NOT NULL,
-    content TEXT NOT NULL,
-    provider TEXT,
-    model TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    token_count INTEGER,
-    FOREIGN KEY (conversation_id) REFERENCES conversations (id) ON DELETE CASCADE
-);
+  let schemaPath: string;
+  try {
+    // Use dynamic require so webpack doesn't try to bundle these for the client.
+    // Resolve schema.sql relative to the process working directory so this works
+    // in both CommonJS and ESM contexts (process.cwd() is universally available).
+    const { readFileSync } = require('fs');
+    const { join } = require('path');
+    const cwd = typeof process !== 'undefined' && process.cwd ? process.cwd() : '.';
+    schemaPath = join(cwd, 'lib', 'database', 'schema.sql');
+    _cachedSchemaSql = readFileSync(schemaPath, 'utf8');
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    // During build, missing schema.sql is non-fatal (db init is mocked anyway).
+    // At runtime this is a real error — warn but don't throw so the caller can
+    // decide how to handle a missing schema.
+    console.error(`[DB] Could not read schema.sql (path: ${schemaPath}): ${msg}`);
+    _cachedSchemaSql = '';
+  }
 
--- Usage tracking
-CREATE TABLE IF NOT EXISTS usage_logs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
-    provider TEXT NOT NULL,
-    model TEXT NOT NULL,
-    tokens_used INTEGER DEFAULT 0,
-    cost_usd DECIMAL(10, 6) DEFAULT 0,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
-);
-
--- User preferences
-CREATE TABLE IF NOT EXISTS user_preferences (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    preference_key TEXT NOT NULL,
-    preference_value TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
-    UNIQUE(user_id, preference_key)
-);
-
--- Email provider quotas
-CREATE TABLE IF NOT EXISTS email_provider_quotas (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  provider TEXT NOT NULL UNIQUE,
-  monthly_limit INTEGER NOT NULL DEFAULT 0,
-  current_usage INTEGER NOT NULL DEFAULT 0,
-  reset_date DATETIME NOT NULL,
-  is_disabled BOOLEAN NOT NULL DEFAULT FALSE,
-  priority INTEGER NOT NULL DEFAULT 0,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_email_quotas_provider ON email_provider_quotas(provider);
-
--- OAuth and external connections
-CREATE TABLE IF NOT EXISTS external_connections (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    provider TEXT NOT NULL,
-    provider_account_id TEXT NOT NULL,
-    provider_display_name TEXT,
-    access_token_encrypted TEXT,
-    refresh_token_encrypted TEXT,
-    token_expires_at DATETIME,
-    scopes TEXT,
-    metadata TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    is_active BOOLEAN DEFAULT TRUE,
-    last_accessed_at DATETIME,
-    refresh_attempts INTEGER DEFAULT 0,
-    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
-    UNIQUE(user_id, provider, provider_account_id)
-);
-
--- Shadow commits table
-CREATE TABLE IF NOT EXISTS shadow_commits (
-    id TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL,
-    owner_id TEXT NOT NULL,
-    message TEXT NOT NULL,
-    author TEXT,
-    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-    source TEXT,
-    integration TEXT,
-    workspace_version INTEGER,
-    diff TEXT,
-    transactions TEXT NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_shadow_commits_session_id ON shadow_commits(session_id);
-
--- Skills table
-CREATE TABLE IF NOT EXISTS skills (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    name TEXT NOT NULL,
-    description TEXT,
-    version TEXT DEFAULT '1.0.0',
-    system_prompt TEXT,
-    tags TEXT,
-    workflows TEXT,
-    sub_capabilities TEXT,
-    reinforcement TEXT,
-    location TEXT,
-    enabled BOOLEAN DEFAULT TRUE,
-    source TEXT DEFAULT 'manual',
-    extracted_from_event TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(user_id, name)
-);
-
--- Seed default email provider quotas
-INSERT OR IGNORE INTO email_provider_quotas (provider, monthly_limit, current_usage, reset_date, is_disabled, priority)
-VALUES
-  ('brevo', 300, 0, date('now', 'start of month', '+1 month'), FALSE, 1),
-  ('resend', 3000, 0, date('now', 'start of month', '+1 month'), FALSE, 2),
-  ('smtp', 10000, 0, date('now', 'start of month', '+1 month'), FALSE, 4),
-  ('e2b', 1000, 0, date('now', 'start of month', '+1 month'), FALSE, 5);
-`;
+  return _cachedSchemaSql;
+}
 
 // Check if we're in a build/Edge environment where database initialization should be skipped
 function shouldSkipDbInit(): boolean {
@@ -463,7 +349,10 @@ async function initializeSchemaSync(): Promise<void> {
 
   try {
     // Execute base schema to ensure required tables exist
-    db.exec(SCHEMA_SQL);
+    const schemaSql = getSchemaSql();
+    if (schemaSql) {
+      db.exec(schemaSql);
+    }
 
     console.log('Database base schema initialized');
   } catch (error) {

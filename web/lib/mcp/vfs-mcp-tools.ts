@@ -453,6 +453,22 @@ function resolveScopedPath(inputPath: string): string {
   cleanPath = cleanPath.replace(/\/+/g, '/'); // Collapse double slashes
   cleanPath = cleanPath.replace(/\/+$/, '');  // Strip trailing slashes
 
+  // FIX: Strip absolute desktop/CLI workspace root prefix
+  // LLM may echo back paths like "C:/Users/user/workspace/src/app.ts"
+  // or "/home/user/project/src/app.ts" from context
+  if (typeof process !== 'undefined' && process.env) {
+    const desktopRoot = process.env.INITIAL_CWD || process.env.DESKTOP_WORKSPACE_ROOT;
+    if (desktopRoot) {
+      const rootNorm = desktopRoot.replace(/\\/g, '/').replace(/\/+$/, '').replace(/^\//, '');
+      if (rootNorm && cleanPath.startsWith(rootNorm + '/')) {
+        cleanPath = cleanPath.slice(rootNorm.length + 1);
+      }
+    }
+  }
+
+  // FIX: Strip Windows drive letter prefix (C:/ or c:/) for relative resolution
+  cleanPath = cleanPath.replace(/^[A-Za-z]:\//, '');
+
   // Reject path traversal attempts in the path itself
   const segments = cleanPath.split('/');
   if (segments.some(seg => seg === '..')) {

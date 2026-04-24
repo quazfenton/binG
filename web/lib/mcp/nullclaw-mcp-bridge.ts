@@ -276,18 +276,21 @@ class NullclawMCPBridge {
       }
     }
 
-    // No available container - initialize session-specific container
-    // For per-session mode, this spawns a dedicated container
-    // For shared mode, this ensures the global pool is initialized
+    // No available container — initialize via Nullclaw integration.
+    // startContainer() was removed; initializeForSession() handles URL mode
+    // and container spawning automatically.
     try {
-      const container = await nullclawIntegration.startContainer(sessionId);
-      if (container && container.id) {
-        this.containerPool.set(container.id, container);
-        this.sessionToContainer.set(sessionId, container.id);
-        return container;
+      const endpoint = await nullclawIntegration.initializeForSession(sessionId, sessionId);
+      if (endpoint) {
+        const container = nullclawIntegration.getContainerForSession(sessionId, sessionId);
+        if (container) {
+          this.containerPool.set(container.id, container);
+          this.sessionToContainer.set(sessionId, container.id);
+          return container;
+        }
       }
     } catch (e: any) {
-      logger.warn('Failed to start container for session', { sessionId, error: e.message });
+      logger.warn('Failed to initialize container for session', { sessionId, error: e.message });
     }
 
     // Try to find a ready container again after initialization
@@ -336,7 +339,7 @@ class NullclawMCPBridge {
     );
 
     return {
-      success: result.success ?? (result.status === 'completed'),
+      success: result.status === 'completed',
       output: JSON.stringify(result.result || {}),
       error: result.error,
       metadata: {
@@ -364,7 +367,7 @@ class NullclawMCPBridge {
     );
 
     return {
-      success: result.success ?? (result.status === 'completed'),
+      success: result.status === 'completed',
       output: JSON.stringify(result.result || {}),
       error: result.error,
       metadata: {
@@ -394,7 +397,7 @@ class NullclawMCPBridge {
     );
 
     return {
-      success: result.success ?? (result.status === 'completed'),
+      success: result.status === 'completed',
       output: JSON.stringify(result.result || {}),
       error: result.error,
       metadata: {
@@ -422,7 +425,7 @@ class NullclawMCPBridge {
     );
 
     return {
-      success: result.success ?? (result.status === 'completed'),
+      success: result.status === 'completed',
       output: JSON.stringify(result.result || {}),
       error: result.error,
       metadata: {
