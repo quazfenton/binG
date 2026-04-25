@@ -606,6 +606,21 @@ export const tauriInvoke = {
       return { success: false, error: error.message };
     }
   },
+
+  /**
+   * Set the workspace root directory for the desktop app.
+   * Updates DESKTOP_WORKSPACE_ROOT env var and persists to settings.json.
+   */
+  setWorkspaceRoot: async (workspacePath: string): Promise<{ success: boolean; path?: string; error?: string }> => {
+    if (!isTauriAvailable()) {
+      return { success: false, error: 'Tauri not available' };
+    }
+    try {
+      return await invoke<{ success: boolean; path?: string; error?: string }>('set_workspace_root', { workspacePath });
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  },
 };
 
 export default tauriInvoke;

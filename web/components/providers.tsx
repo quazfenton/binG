@@ -29,8 +29,6 @@ export function Providers({ children }: { children: React.ReactNode }) {
   const [mcpInitialized, setMcpInitialized] = useState(false);
 
   useEffect(() => {
-    // Ensure this runs only on the client side and only once on mount
-    // Also, conditionally initialize MCP services only if in desktop mode.
     if (typeof window !== 'undefined' && process.env.DESKTOP_MODE === 'true') {
       initializeMCPServices().then(() => {
         setMcpInitialized(true);
@@ -39,13 +37,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
         setMcpInitialized(true); // Continue anyway
       });
     } else {
-      // If not in desktop mode or window is not defined, we can still set initialized to true
-      // to prevent potential UI blocking if initialization is a prerequisite for something.
-      // Or, if MCP services are truly only for desktop, this component might need to be structured differently.
-      // For now, we assume initialization is a client-side task but might not be needed for web.
       setMcpInitialized(true);
     }
-  }, []); // Empty dependency array ensures this runs only once on mount
+  }, []);
 
   return (
     <ThemeProvider

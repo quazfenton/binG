@@ -1966,6 +1966,61 @@ fn write_file_content(path: &str, content: &str) -> Result<(), String> {
 // Settings persistence — stored as JSON in the OS app-data directory
 // ============================================================================
 
+/// Set the workspace root directory for the desktop app.
+/// Updates the DESKTOP_WORKSPACE_ROOT env var and persists to settings.json.
+/// Returns the canonical path on success.
+#[tauri::command]
+pub async fn set_workspace_root(
+    app: AppHandle,
+    workspace_path: String,
+) -> Result<serde_json::Value, String> {
+    // Validate the path exists and is a directory
+    let path = PathBuf::from(&workspace_path);
+    if !path.exists() {
+        return Err(format!("Path does not exist: {}", workspace_path));
+    }
+    if !path.is_dir() {
+        return Err(format!("Path is not a directory: {}", workspace_path));
+    }
+
+    // Canonicalize to resolve symlinks and normalize
+    let canonical = std::fs::canonicalize(&path)
+        .map_err(|e| format!("Failed to canonicalize path: {}", e))?;
+
+    let canonical_str = canonical.to_string_lossy().to_string();
+
+    // Update the process environment variable so all child processes
+    // (including the Next.js sidecar) can pick it up
+    std::env::set_var("DESKTOP_WORKSPACE_ROOT", &canonical_str);
+    crate::log::log_msg(&format!("[set_workspace_root] Set DESKTOP_WORKSPACE_ROOT={}", canonical_str));
+
+    // Persist to settings.json so it survives restarts
+    let settings_path_res = settings_path(&app);
+    if let Ok(spath) = settings_path_res {
+        let mut existing = if spath.exists() {
+            std::fs::read_to_string(&spath)
+                .ok()
+                .and_then(|raw| serde_json::from_str(&raw).ok())
+                .unwrap_or(serde_json::json!({}))
+        } else {
+            serde_json::json!({})
+        };
+        // Merge workspaceRoot into the existing settings object
+        if let Some(obj) = existing.as_object_mut() {
+            obj.insert("workspaceRoot".to_string(), serde_json::Value::String(canonical_str.clone()));
+        }
+        let json = serde_json::to_string_pretty(&existing)
+            .map_err(|e| format!("Failed to serialize settings: {}", e))?;
+        std::fs::write(&spath, json)
+            .map_err(|e| format!("Failed to write settings: {}", e))?;
+    }
+
+    Ok(serde_json::json!({
+        "success": true,
+        "path": canonical_str,
+    }))
+}
+
 fn settings_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
     let dir = app.path().app_data_dir()
         .map_err(|e| format!("Failed to resolve app data dir: {}", e))?;
