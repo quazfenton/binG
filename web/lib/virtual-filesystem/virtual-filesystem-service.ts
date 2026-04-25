@@ -655,14 +655,13 @@ export class VirtualFilesystemService {
         // filesystem in desktop mode. Return an empty listing instead of
         // propagating the ENOENT error — the UI handles empty workspaces
         // gracefully, but an unhandled exception breaks the sidebar.
-        const msg = error?.message || String(error);
-        if (msg.includes('ENOENT') || msg.includes('no such file') || msg.includes('not found')) {
+        if (error?.code === 'ENOENT' || /ENOENT|no such file|not found/i.test(error?.message || '')) {
           return {
             path: directoryPath || this.workspaceRoot,
             nodes: [],
           };
         }
-        throw new Error(`Failed to list directory from local filesystem: ${msg}`);
+        throw new Error(`Failed to list directory from local filesystem: ${error?.message || error}`);
       }
     }
 
@@ -776,7 +775,12 @@ export class VirtualFilesystemService {
           })),
         };
       } catch (error: any) {
-        throw new Error(`Failed to search local filesystem: ${error.message}`);
+        // Virtual VFS paths don't exist on the real filesystem in desktop mode.
+        // Return empty results instead of propagating ENOENT.
+        if (error?.code === 'ENOENT' || /ENOENT|no such file|not found/i.test(error?.message || '')) {
+          return { files: [] };
+        }
+        throw new Error(`Failed to search local filesystem: ${error?.message || error}`);
       }
     }
 
