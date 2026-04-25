@@ -45,10 +45,13 @@ fn register_invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Syn
         commands::delete_checkpoint,
         // File system watcher
         commands::start_file_watcher,
-        commands::stop_file_watcher,
-        // Settings persistence
+        commands::stop_file_watcher,        // Settings persistence
         commands::save_settings,
+
         commands::load_settings,
+
+        // Workspace management
+        commands::set_workspace_root,
     ]
 }
 
