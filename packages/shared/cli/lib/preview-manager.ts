@@ -17,7 +17,7 @@ class LivePreviewOffloading {
   detectPort(_files: Record<string, string>) { return 3000; }
 }
 import { loadSandpackClient } from "@codesandbox/sandpack-client";
-import { bundleLocalLibrary, scanLocalDependencies } from './local-bundle-manager';
+import { bundleLocalLibrary, scanLocalDependencies } from './local-bundle-manager.js';
 import chalk from 'chalk';
 import ora from 'ora';
 import path from 'path';

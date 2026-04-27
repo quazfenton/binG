@@ -18,7 +18,7 @@ import { simpleGit, SimpleGit } from 'simple-git';
 import * as path from 'path';
 import * as fs from 'fs-extra';
 import * as os from 'os';
-import { LocalVFSManager } from './lib/local-vfs-manager';
+import { LocalVFSManager } from './lib/local-vfs-manager.js';
 
 // Security: Validate and sanitize paths to prevent directory traversal
 function sanitizePath(inputPath: string, allowedRoot?: string): string | null {

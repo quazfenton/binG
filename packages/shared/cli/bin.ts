@@ -29,16 +29,29 @@ import axios from 'axios';
 import * as dotenv from 'dotenv';
 import * as path from 'path';
 
-import { fileURLToPath } from 'url';
-import { dirname } from 'path';
+// __dirname and __filename - works in both development and bundled (pkg) modes
+// In bundled mode, process.execPath points to the executable, so we use that
+// In development mode, __dirname is available from tsx/ts-node
+function getDirname(): string {
+  // Check if we're in a bundled environment (pkg sets PKG_EXECPATH)
+  if (process.env.PKG_EXECPATH) {
+    return path.dirname(process.execPath);
+  }
+  // Check for Windows executable path in the execPath
+  if (process.platform === 'win32' && process.execPath.includes('.exe')) {
+    return path.dirname(process.execPath);
+  }
+  // Standard __dirname from CommonJS or tsx
+  return __dirname;
+}
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+const __dirname = getDirname();
+const __filename = process.argv[1] || '';
 import { spawn, ChildProcess } from 'child_process';
 import { Readable } from 'stream';
 
 // RTK CLI Commands - Token-optimized command execution for LLM consumption
-import { registerRTKCommands } from "./lib/rtk-cli-commands";
+import { registerRTKCommands } from "./lib/rtk-cli-commands.js";
 
 // Load environment variables
 dotenv.config();
@@ -1163,7 +1176,7 @@ async function chatLoop(options: { agent?: string; stream?: boolean }): Promise<
   // In desktop/CLI modes, chat history is saved to ~/.quaz/chat-history/ NOT to server DB
   let localHistory: any = null;
   try {
-    const { LocalHistoryProvider } = await import('./lib/local-history-manager');
+    const { LocalHistoryProvider } = await import('./lib/local-history-manager.js');
     localHistory = new LocalHistoryProvider(process.cwd());
   } catch {
     // Local history not available — continue without persistence
@@ -1257,7 +1270,7 @@ ${COLORS.primary('Available Commands:')}
         const axiosMod = await import('axios'); const axios = axiosMod.default || axiosMod;
         const auth = loadAuth();
         
-        const resp = await axios({
+        const resp = await (axios as any)({
           url: `${config.apiBase}/chat`,
           method: 'POST',
           data: {
@@ -1667,17 +1680,6 @@ program
       process.exit(1);
     }
   });
-        console.log(COLORS.info(`Time: ${formatDuration(result.data.writeTime || 0)}`));
-      } else {
-        handleError(new Error(result.error), 'Write failed');
-        process.exit(1);
-      }
-    } catch (error: any) {
-      spinner.stop();
-      handleError(error, 'Write failed');
-      process.exit(1);
-    }
-  });
 
 program
   .command('file:revert <path>')
@@ -1734,7 +1736,7 @@ program
   .description('Interactive commit rollback selector with arrow key navigation')
   .option('-l, --limit <number>', 'Maximum number of commits to show (default: 20)')
   .action(async (options) => {
-    const { handleRollbackCommand } = await import('./commit-tui');
+    const { handleRollbackCommand } = await import('./commit-tui.js');
     await handleRollbackCommand([]);
   });
 
