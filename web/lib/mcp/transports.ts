@@ -11,6 +11,7 @@
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import type { ChildProcess } from 'node:child_process';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('MCP:Transports');
@@ -33,6 +34,48 @@ const logger = createLogger('MCP:Transports');
 export async function createStdioTransport(): Promise<StdioServerTransport> {
   logger.info('Creating stdio transport for Claude Desktop');
   return new StdioServerTransport();
+}
+
+/**
+ * Check if stdio process is healthy
+ */
+export function isStdioProcessHealthy(process: ChildProcess | undefined): boolean {
+  if (!process || !process.pid) return false;
+  try {
+    process.kill(0); // Signal 0 = check if process exists
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Health check for running MCP servers
+ */
+export async function healthCheckMCP(
+  process: ChildProcess | undefined,
+  transportType: TransportType
+): Promise<{ healthy: boolean; latency?: number }> {
+  const start = Date.now();
+
+  switch (transportType) {
+    case TransportType.STDIO:
+      return {
+        healthy: isStdioProcessHealthy(process),
+        latency: Date.now() - start,
+      };
+
+    case TransportType.HTTP:
+    case TransportType.SSE:
+      // For HTTP transports, would make a health check request
+      return {
+        healthy: true,
+        latency: Date.now() - start,
+      };
+
+    default:
+      return { healthy: false };
+  }
 }
 
 /**

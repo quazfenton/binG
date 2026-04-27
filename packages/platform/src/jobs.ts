@@ -61,8 +61,9 @@ export async function runJob(name: string, payload: any): Promise<JobRunResult> 
       return { jobId, result: { success: result.success, data: result.data, error: result.error } };
     } catch (error: any) {
       const errorMsg = error?.message || String(error);
+      const jobId = `${name}-${Date.now()}`;
       return {
-        jobId: '',
+        jobId,
         result: {
           success: false,
           error: errorMsg,

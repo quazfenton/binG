@@ -1,3 +1,18 @@
+---
+id: sdk-trigger-llms.md-batch-llm-evaluator-readme
+title: README
+aliases:
+  - README
+  - README.md
+tags: []
+layer: core
+summary: "## Trigger.dev full-stack batch trigger demo\r\n\r\nhttps://github.com/user-attachments/assets/daaf620b-a18b-4de1-bc37-766fa00854e2\r\n\r\nThis demo is a full stack example that uses the following:\r\n\r\n- A [Next.js](https://nextjs.org/) app with [Prisma](https://www.prisma.io/) for the database.\r\n- Trigger.d"
+anchors:
+  - Trigger.dev full-stack batch trigger demo
+  - Getting started
+  - Relevant code
+  - Learn More
+---
 ## Trigger.dev full-stack batch trigger demo
 
 https://github.com/user-attachments/assets/daaf620b-a18b-4de1-bc37-766fa00854e2

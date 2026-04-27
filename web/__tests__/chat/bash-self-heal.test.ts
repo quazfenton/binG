@@ -15,6 +15,23 @@ import {
   type BashFailure,
 } from '@/lib/chat/bash-self-heal';
 
+// Mock LLM service so repairWithLLM doesn't make real API calls
+vi.mock('@/lib/chat/llm-providers', () => ({
+  llmService: {
+    generateResponse: vi.fn().mockResolvedValue({ content: '' }),
+  },
+}));
+
+// Mock logger to prevent console noise
+vi.mock('@/lib/utils/logger', () => ({
+  createLogger: () => ({
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  }),
+}));
+
 describe('Bash Self-Healing', () => {
   describe('classifyError', () => {
     it('should classify command not found', () => {
@@ -220,38 +237,32 @@ describe('Bash Self-Healing', () => {
     });
 
     it('should reject unsafe fixes', async () => {
-      let callCount = 0;
-      const mockExecute = vi.fn().mockImplementation(async (command: string) => {
-        callCount++;
-        if (callCount === 1) {
-          return {
-            success: false,
-            stdout: '',
-            stderr: 'error',
-            exitCode: 1,
-          };
-        }
-        // LLM would suggest dangerous fix
-        return {
-          success: true,
-          stdout: 'done',
-          stderr: '',
-          exitCode: 0,
-        };
+      // Configure the LLM mock to return a dangerous command.
+      // We mock llmService (different module) so that repairWithLLM receives
+      // it through its own import, unlike same-module vi.mock which can't
+      // intercept internal calls in ESM.
+      const { llmService } = await import('@/lib/chat/llm-providers');
+      vi.mocked(llmService.generateResponse).mockResolvedValueOnce({
+        content: 'rm -rf /',
       });
 
-      // Mock repairWithLLM to return dangerous command
-      vi.mock('@/lib/chat/bash-self-heal', async (importOriginal) => {
-        const original = await importOriginal() as any;
-        return {
-          ...original,
-          repairWithLLM: vi.fn().mockResolvedValue('rm -rf /'),
-        };
+      const mockExecute = vi.fn().mockResolvedValue({
+        success: false,
+        stdout: '',
+        stderr: 'syntax error near unexpected token \`fi\`',
+        exitCode: 2,
       });
 
-      const result = await executeWithHealing(mockExecute, 'test', 3);
+      const result = await executeWithHealing(mockExecute, 'if [ true ]; then echo yes', 3);
 
-      expect(result.success).toBe(false);  // Should fail because fix was unsafe
+      // The LLM returns 'rm -rf /' which isSafe rejects → fix skipped →
+      // all attempts fail with the original command
+      expect(result.success).toBe(false);
+      expect(result.attempts).toBe(3);
+      expect(mockExecute).toHaveBeenCalledTimes(3);
+      expect(mockExecute).toHaveBeenNthCalledWith(1, 'if [ true ]; then echo yes');
+      expect(mockExecute).toHaveBeenNthCalledWith(2, 'if [ true ]; then echo yes');
+      expect(mockExecute).toHaveBeenNthCalledWith(3, 'if [ true ]; then echo yes');
     });
   });
 });

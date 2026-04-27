@@ -82,6 +82,10 @@ function getSecretKey(): string {
   }
 
   if (!secretKey) {
+    // During Next.js SSG builds, env vars may not be set — return a dummy key
+    if (env.NEXT_PHASE === 'phase-production-build') {
+      return 'dummy-key-for-next-build';
+    }
     if (env.NODE_ENV === 'production') {
       throw new Error(
         'CRITICAL: JWT_SECRET environment variable is required in production. ' +

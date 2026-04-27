@@ -69,11 +69,68 @@ export interface LLMEndpointConfig {
 export class EnhancedLLMService {
   private endpointConfigs: Map<string, LLMEndpointConfig> = new Map();
   private fallbackChains: Map<string, string[]> = new Map();
+  private persistedKeysLoaded = false;
 
   constructor() {
     this.initializeEndpointConfigs();
     this.setupFallbackChains();
     this.startHealthMonitoring();
+    // Lazy-load persisted API keys on first use (avoids async in constructor)
+  }
+
+  /**
+   * Load persisted provider API keys from client-side secure storage.
+   * Keys are stored in request-scoped configs so they're isolated per-request.
+   */
+  private async loadPersistedApiKeys(requestId?: string): Promise<void> {
+    if (this.persistedKeysLoaded) return;
+    this.persistedKeysLoaded = true;
+
+    try {
+      const { getStoredProviderApiKeys } = await import('./provider-keys');
+      const storedKeys = await getStoredProviderApiKeys();
+
+      for (const [provider, apiKey] of Object.entries(storedKeys)) {
+        if (apiKey && !this.endpointConfigs.has(provider)) {
+          // Register as request-scoped config (tied to this "session" via requestId or a session key)
+          this.registerUserProviderConfig(provider, apiKey, requestId || 'session-init');
+        }
+      }
+
+      if (Object.keys(storedKeys).length > 0) {
+        chatLogger.debug('Loaded persisted provider API keys', { requestId }, {
+          providers: Object.keys(storedKeys),
+        });
+      }
+    } catch (error) {
+      // Non-fatal — if loading fails, fall back to server-side env vars only
+      chatLogger.warn('Failed to load persisted provider keys, using server defaults', { requestId });
+    }
+  }
+
+  /**
+   * Public API: Get all stored provider API keys (without values for security).
+   * Useful for UI to show which providers have user-configured keys.
+   */
+  async getStoredProviderKeyProviders(): Promise<string[]> {
+    const { getStoredProviderApiKeys } = await import('./provider-keys');
+    const keys = await getStoredProviderApiKeys();
+    return Object.keys(keys);
+  }
+
+  /**
+   * Public API: Remove a stored provider API key.
+   */
+  async removeStoredProviderKey(provider: string): Promise<void> {
+    const { removeProviderApiKey } = await import('./provider-keys');
+    await removeProviderApiKey(provider);
+    // Also remove from request-scoped configs
+    for (const key of this.requestScopedConfigs.keys()) {
+      if (key.startsWith(`${provider}:`)) {
+        this.requestScopedConfigs.delete(key);
+        this.requestConfigTimestamps.delete(key);
+      }
+    }
   }
 
   private initializeEndpointConfigs(): void {
@@ -179,11 +236,21 @@ export class EnhancedLLMService {
   }
 
   /**
-   * Dynamically register a provider config using a user-provided API key.
-   * This allows users to use any provider defined in PROVIDERS without
-   * requiring server-side env vars for each one.
+   * Register a provider config for a user-provided API key.
+   * 
+   * SECURITY: Instead of storing in shared singleton state (which causes cross-request
+   * credential leakage), this stores in a request-scoped Map keyed by request context.
+   * The config is only used for the current request chain and never persists across requests.
+   * 
+   * For client-side persistence, API keys should be stored in the user's browser localStorage
+   * or indexedDB, and passed with each request via the apiKeys parameter.
    */
-  private registerUserProviderConfig(provider: string, userApiKey: string): void {
+  private requestScopedConfigs: Map<string, LLMEndpointConfig> = new Map();
+  private requestConfigTimestamps: Map<string, number> = new Map();
+  private static readonly REQUEST_CONFIG_TTL_MS = 5 * 60 * 1000; // 5 minutes
+  private static readonly REQUEST_CONFIG_MAX_ENTRIES = 1000; // Prevent memory abuse
+  
+  private registerUserProviderConfig(provider: string, userApiKey: string, requestId?: string): void {
     const providerDef = PROVIDERS[provider];
     if (!providerDef) {
       chatLogger.warn('Unknown provider, cannot register config', { provider });
@@ -193,6 +260,10 @@ export class EnhancedLLMService {
     // Get base URL from env var or use default based on provider
     const baseUrl = this.getDefaultBaseUrlForProvider(provider);
 
+    // SECURITY: Use request-scoped key to avoid cross-request credential leakage
+    // The key includes requestId to ensure isolation
+    const configKey = requestId ? `${provider}:${requestId}` : `${provider}:anon_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    
     const config: LLMEndpointConfig = {
       provider,
       baseUrl,
@@ -201,8 +272,50 @@ export class EnhancedLLMService {
       priority: 99 // Low priority for user-provided configs
     };
 
-    this.endpointConfigs.set(provider, config);
-    chatLogger.debug('Registered user provider config', { provider, baseUrl });
+    // Enforce max entries to prevent memory abuse
+    if (this.requestScopedConfigs.size >= EnhancedLLMService.REQUEST_CONFIG_MAX_ENTRIES) {
+      this.cleanupExpiredConfigs();
+    }
+
+    this.requestScopedConfigs.set(configKey, config);
+    this.requestConfigTimestamps.set(configKey, Date.now());
+    chatLogger.debug('Registered request-scoped provider config', { provider, requestId });
+  }
+
+  /**
+   * Clean up expired request-scoped configs to prevent memory leaks.
+   */
+  private cleanupExpiredConfigs(): void {
+    const now = Date.now();
+    for (const [key, timestamp] of this.requestConfigTimestamps) {
+      if (now - timestamp > EnhancedLLMService.REQUEST_CONFIG_TTL_MS) {
+        this.requestScopedConfigs.delete(key);
+        this.requestConfigTimestamps.delete(key);
+      }
+    }
+  }
+
+  /**
+   * Get request-scoped provider config if available and not expired, otherwise fall back to shared config.
+   */
+  private getProviderConfigForRequest(provider: string, requestId?: string): LLMEndpointConfig | undefined {
+    // First try request-scoped config
+    if (requestId) {
+      const requestKey = `${provider}:${requestId}`;
+      const requestConfig = this.requestScopedConfigs.get(requestKey);
+      if (requestConfig) {
+        // Check if expired
+        const timestamp = this.requestConfigTimestamps.get(requestKey);
+        if (timestamp && Date.now() - timestamp <= EnhancedLLMService.REQUEST_CONFIG_TTL_MS) {
+          return requestConfig;
+        }
+        // Expired - clean up
+        this.requestScopedConfigs.delete(requestKey);
+        this.requestConfigTimestamps.delete(requestKey);
+      }
+    }
+    // Fall back to shared config (server-side env vars only)
+    return this.endpointConfigs.get(provider);
   }
 
   /**
@@ -257,20 +370,27 @@ export class EnhancedLLMService {
     const { enableTools, enableSandbox, userId, conversationId, requestId, provider, fallbackProviders, retryOptions, enableCircuitBreaker = true, task, apiKeys, contextPack, autoAttachFiles, ...llmRequest } = request;
     const requestStartTime = Date.now();
 
+    // Load persisted API keys on first use (lazy, async-safe)
+    await this.loadPersistedApiKeys(requestId);
+
     // Use explicitly passed provider first, then task-specific provider, then default
     const actualProvider = provider || (task ? getProviderForTask(task) : getProviderForTask('chat'));
     const actualModel = task
       ? getModelForTask(task, llmRequest.model)
       : llmRequest.model || 'default';  // Default model if none specified
 
-    // CRITICAL FIX: Dynamically register provider if user provided API key but provider isn't in endpointConfigs.
-    // This allows user-provided keys to work for any provider defined in PROVIDERS,
-    // without requiring server-side env vars for every provider.
-    if (!this.endpointConfigs.has(actualProvider)) {
+    // CRITICAL FIX: Dynamically register provider if user provided API key but provider isn't configured.
+    // Uses request-scoped storage to prevent cross-request credential leakage.
+    // Also persist the key for future requests if it's new.
+    if (!this.getProviderConfigForRequest(actualProvider, requestId)) {
       const userApiKey = apiKeys?.[actualProvider];
       if (userApiKey && PROVIDERS[actualProvider]) {
-        this.registerUserProviderConfig(actualProvider, userApiKey);
-        chatLogger.debug('Dynamically registered user-provided provider config', { requestId, provider: actualProvider });
+        this.registerUserProviderConfig(actualProvider, userApiKey, requestId);
+        chatLogger.debug('Dynamically registered request-scoped provider config', { requestId, provider: actualProvider });
+
+        // Persist for future use (encrypted, client-side)
+        const { saveProviderApiKey } = await import('./provider-keys');
+        await saveProviderApiKey(actualProvider, userApiKey);
       }
     }
 
@@ -305,7 +425,7 @@ export class EnhancedLLMService {
           explicitFiles: contextPack.includePatterns || [],
           recentSessionFiles: recentFiles,
           maxTotalSize: contextPack.maxTotalSize || 500000,
-          format: contextPack.format || 'json',
+          format: contextPack.format || 'markdown',
           maxLinesPerFile: contextPack.maxLinesPerFile || 500,
         });
         
@@ -347,6 +467,19 @@ export class EnhancedLLMService {
           ...processedMessages,
         ];
       }
+    }
+
+    // Auto-inject core powers as a separate USER message (preserves prompt caching)
+    // Only ubiquitous, always-beneficial powers (e.g. URL scraping) are injected proactively.
+    // All other powers are discovered on-demand via power_list/power_read tools.
+    try {
+      const { appendAutoInjectPowers } = await import('@/lib/powers');
+      const src = llmRequest.messages || processedMessages;
+      const lastUserMsg = [...src].reverse().find(m => m.role === 'user');
+      const lastUserText = typeof lastUserMsg?.content === 'string' ? lastUserMsg.content : '';
+      appendAutoInjectPowers(processedMessages, lastUserText);
+    } catch (powersErr: any) {
+      chatLogger.debug('Auto-inject powers skipped (generateResponse)', { error: powersErr?.message });
     }
 
     chatLogger.debug('Enhanced LLM service processing request', { requestId, provider: actualProvider, model: actualModel, userId }, {
@@ -488,7 +621,7 @@ export class EnhancedLLMService {
 
       const fallbacks = fallbackProviders || this.fallbackChains.get(actualProvider) || [];
       const availableFallbacks = fallbacks.filter(fallbackProvider =>
-        this.endpointConfigs.has(fallbackProvider) &&
+        this.getProviderConfigForRequest(fallbackProvider, requestId) &&
         this.isProviderHealthy(fallbackProvider)
       );
 
@@ -518,7 +651,7 @@ export class EnhancedLLMService {
             totalFallbacks: availableFallbacks.length,
           });
 
-          const fallbackConfig = this.endpointConfigs.get(fallbackProvider)!;
+          const fallbackConfig = this.getProviderConfigForRequest(fallbackProvider, requestId)!;
           const supportedModel = this.findCompatibleModel(actualModel, fallbackConfig.models);
 
           if (!supportedModel) {
@@ -606,12 +739,21 @@ export class EnhancedLLMService {
     const primaryProvider = provider || getProviderForTask('chat');
     const streamStartTime = Date.now();
 
-    // CRITICAL FIX: Dynamically register provider if user provided API key but provider isn't in endpointConfigs.
-    if (!this.endpointConfigs.has(primaryProvider)) {
+    // Load persisted API keys on first use (lazy, async-safe)
+    await this.loadPersistedApiKeys(requestId);
+
+    // CRITICAL FIX: Dynamically register provider if user provided API key but provider isn't configured.
+    // Uses request-scoped storage to prevent cross-request credential leakage.
+    // Also persist the key for future requests if it's new.
+    if (!this.getProviderConfigForRequest(primaryProvider, requestId)) {
       const userApiKey = apiKeys?.[primaryProvider];
       if (userApiKey && PROVIDERS[primaryProvider]) {
-        this.registerUserProviderConfig(primaryProvider, userApiKey);
-        chatLogger.debug('Dynamically registered user-provided provider config (streaming)', { requestId, provider: primaryProvider });
+        this.registerUserProviderConfig(primaryProvider, userApiKey, requestId);
+        chatLogger.debug('Dynamically registered request-scoped provider config (streaming)', { requestId, provider: primaryProvider });
+
+        // Persist for future use (encrypted, client-side)
+        const { saveProviderApiKey } = await import('./provider-keys');
+        await saveProviderApiKey(primaryProvider, userApiKey);
       }
     }
 
@@ -646,7 +788,7 @@ export class EnhancedLLMService {
           explicitFiles: contextPack.includePatterns || [],
           recentSessionFiles: recentFiles,
           maxTotalSize: contextPack.maxTotalSize || 500000,
-          format: contextPack.format || 'json',
+          format: contextPack.format || 'markdown',
           maxLinesPerFile: contextPack.maxLinesPerFile || 500,
         });
         
@@ -680,6 +822,17 @@ export class EnhancedLLMService {
       } else {
         processedMessages = [{ role: 'system' as const, content: contextPrefix }, ...processedMessages];
       }
+    }
+
+    // Auto-inject core powers as a separate USER message (preserves prompt caching)
+    try {
+      const { appendAutoInjectPowers } = await import('@/lib/powers');
+      const src = llmRequest.messages || processedMessages;
+      const lastUserMsg = [...src].reverse().find(m => m.role === 'user');
+      const lastUserText = typeof lastUserMsg?.content === 'string' ? lastUserMsg.content : '';
+      appendAutoInjectPowers(processedMessages, lastUserText);
+    } catch (powersErr: any) {
+      chatLogger.debug('Auto-inject powers skipped (streaming)', { error: powersErr?.message });
     }
 
     try {
@@ -735,12 +888,19 @@ export class EnhancedLLMService {
             const computedScopePath = (request as any).scopePath
               || (sessionIdFromConv ? `project/sessions/${sessionIdFromConv}` : 'project/sessions/000');
 
+            // Extract last user message for trigger-matching powers (lazy tool loading)
+            const lastUserMsgForPowers = [...(llmRequest.messages || [])].reverse().find(m => m.role === 'user');
+            const lastUserMessageForPowers = typeof lastUserMsgForPowers?.content === 'string'
+              ? lastUserMsgForPowers.content
+              : '';
+
             vercelTools = await getAllTools({
               userId: effectiveUserId,
               conversationId: request.conversationId,
               sessionId: sessionIdFromConv,
               requestId,
               scopePath: computedScopePath,  // Session-aware path for VFS tools
+              lastUserMessage: lastUserMessageForPowers,  // For power trigger-matching
             });
 
             chatLogger.info('[TOOLS] ✅ Tools built successfully', {
@@ -829,7 +989,7 @@ export class EnhancedLLMService {
               chatLogger.warn('Failed to merge VFS tools into Vercel AI SDK', { requestId, error: vfsErr.message });
             }
 
-            // Pre-detect URLs in the last user message and inject a hint
+            // Pre-detect URLs in the last user message and inject enhanced hint with context
             const lastUserMsg = [...llmRequest.messages].reverse().find(m => m.role === 'user');
             const lastText = typeof lastUserMsg?.content === 'string'
               ? lastUserMsg.content
@@ -838,14 +998,25 @@ export class EnhancedLLMService {
             const urlRegex = /https?:\/\/[^\s]+/g;
             const detectedUrls = lastText.match(urlRegex) || [];
             if (detectedUrls.length > 0 && vercelTools?.['web_fetch']) {
+              // Extract the question/context (everything except the URLs)
+              const textWithoutUrls = lastText.replace(urlRegex, '').trim();
+              const questionContext = textWithoutUrls.length > 500 
+                ? textWithoutUrls.substring(0, 500) 
+                : textWithoutUrls;
+              
               llmRequest.messages = [
                 ...llmRequest.messages,
                 {
                   role: 'system' as const,
-                  content: `[Tool hint: URLs detected in user message. Use the web_fetch tool to read: ${detectedUrls.join(', ')}]`,
+                  content: `[Tool hint: URLs detected: ${detectedUrls.join(', ')}| Use the web_fetch tool to read these pages and answer the question. Context: ${questionContext || 'Extract all meaningful content from these URLs'}]`,
                 },
               ];
-              chatLogger.info('URL detected in prompt, injected web_fetch hint', { requestId, urls: detectedUrls });
+              chatLogger.info('URL detected in prompt, injected web_fetch hint with context', { 
+                requestId, 
+                urls: detectedUrls,
+                hasContext: !!questionContext,
+                contextLength: questionContext.length,
+              });
             }
           } catch (toolErr: any) {
             chatLogger.warn('Failed to build Vercel AI tools, proceeding without', { requestId, error: toolErr.message });
@@ -876,7 +1047,7 @@ export class EnhancedLLMService {
         }
 
         // Wrap with auto-continue support
-        const { streamWithAutoContinue } = await import('@/lib/virtual-filesystem/smart-context');
+        const { streamWithAutoContinue, streamWithServerAutoRePrompt } = await import('@/lib/virtual-filesystem/smart-context');
         const baseStream = streamWithVercelAI({
           provider: vercelProvider,
           model: llmRequest.model || 'default',
@@ -895,10 +1066,25 @@ export class EnhancedLLMService {
           timeoutMs: request.timeoutMs || 90000,
         });
 
-        yield* streamWithAutoContinue(baseStream, {
+        // Chain: streamWithAutoContinue detects continuation needs,
+        // streamWithServerAutoRePrompt actually re-calls LLM with tool results
+        const autoContinueStream = streamWithAutoContinue(baseStream, {
           userId: request.userId || 'anonymous',
           conversationId: request.conversationId,
           enableAutoContinue: true,
+        });
+
+        yield* streamWithServerAutoRePrompt(autoContinueStream, {
+          userId: request.userId || 'anonymous',
+          conversationId: request.conversationId,
+          messages: processedMessages,
+          tools: vercelTools,
+          provider: primaryProvider,
+          model: llmRequest.model || 'default',
+          temperature: llmRequest.temperature || 0.7,
+          maxTokens: llmRequest.maxTokens || 4096,
+          maxRePrompts: 3,
+          signal: request.signal,
         });
 
         const streamLatency = Date.now() - streamStartTime;
@@ -914,12 +1100,24 @@ export class EnhancedLLMService {
       const fullRequest = { ...llmRequest, messages: processedMessages, provider: primaryProvider, apiKey: userApiKey || llmRequest.apiKey };
 
       // Wrap with auto-continue support
-      const { streamWithAutoContinue } = await import('@/lib/virtual-filesystem/smart-context');
+      const { streamWithAutoContinue, streamWithServerAutoRePrompt } = await import('@/lib/virtual-filesystem/smart-context');
       const baseStream = llmService.generateStreamingResponse(fullRequest);
-      yield* streamWithAutoContinue(baseStream, {
+      const autoContinueStream = streamWithAutoContinue(baseStream, {
         userId: request.userId || 'anonymous',
         conversationId: request.conversationId,
         enableAutoContinue: true,
+      });
+
+      yield* streamWithServerAutoRePrompt(autoContinueStream, {
+        userId: request.userId || 'anonymous',
+        conversationId: request.conversationId,
+        messages: processedMessages,
+        provider: primaryProvider,
+        model: llmRequest.model || 'default',
+        temperature: llmRequest.temperature || 0.7,
+        maxTokens: llmRequest.maxTokens || 4096,
+        maxRePrompts: 3,
+        signal: request.signal,
       });
 
       const streamLatency = Date.now() - streamStartTime;
@@ -939,7 +1137,7 @@ export class EnhancedLLMService {
       
       // First pass: try healthy providers
       let availableFallbacks = fallbacks.filter(fallbackProvider => {
-        const hasConfig = this.endpointConfigs.has(fallbackProvider);
+        const hasConfig = !!this.getProviderConfigForRequest(fallbackProvider, requestId);
         const isHealthy = this.isProviderHealthy(fallbackProvider);
         const supportsStream = !!PROVIDERS[fallbackProvider]?.supportsStreaming;
         if (!hasConfig || !isHealthy || !supportsStream) {
@@ -962,7 +1160,7 @@ export class EnhancedLLMService {
           fallbacks,
         });
         availableFallbacks = fallbacks.filter(fallbackProvider => {
-          const hasConfig = this.endpointConfigs.has(fallbackProvider);
+          const hasConfig = !!this.getProviderConfigForRequest(fallbackProvider, requestId);
           const supportsStream = !!PROVIDERS[fallbackProvider]?.supportsStreaming;
           return hasConfig && supportsStream;
         });
@@ -993,7 +1191,7 @@ export class EnhancedLLMService {
 
       for (let attemptIndex = 0; attemptIndex < availableFallbacks.length; attemptIndex++) {
         const fallbackProvider = availableFallbacks[attemptIndex];
-        const fallbackConfig = this.endpointConfigs.get(fallbackProvider)!;
+        const fallbackConfig = this.getProviderConfigForRequest(fallbackProvider, requestId)!;
         const supportedModel = this.findCompatibleModel(llmRequest.model, fallbackConfig.models);
 
         if (!supportedModel) {
@@ -1098,12 +1296,14 @@ export class EnhancedLLMService {
     enableCircuitBreaker: boolean = true,
     requestId?: string
   ): Promise<LLMResponse> {
-    const config = this.endpointConfigs.get(provider);
+    // Use request-scoped config if available, otherwise fall back to shared server config
+    const config = this.getProviderConfigForRequest(provider, requestId);
     if (!config) {
       throw new Error(`Provider ${provider} not configured`);
     }
 
-    // Use request's API key if provided (user override), otherwise fall back to server config
+    // Use request's API key if provided (user override), otherwise fall back to the config's key
+    // (which could be request-scoped user key OR server env var)
     const effectiveApiKey = (request.apiKey && request.apiKey.trim() !== '')
       ? request.apiKey
       : config.apiKey;

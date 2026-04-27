@@ -22,23 +22,45 @@ const mockFileHandle = {
   }),
 };
 
-const mockSubDirHandle = {
+// The workspace-level directory handle — returned by rootNameHandle.getDirectoryHandle(sanitizedId)
+// This is what core.rootHandle points to after initialization.
+const mockWorkspaceHandle = {
   kind: 'directory',
   getFileHandle: vi.fn().mockResolvedValue(mockFileHandle),
-  getDirectoryHandle: vi.fn().mockResolvedValue({}),
-  removeEntry: vi.fn().mockResolvedValue(undefined),
-  entries: vi.fn().mockImplementation(async function* () {
-    // Empty directory
+  getDirectoryHandle: vi.fn().mockResolvedValue({
+    kind: 'directory',
+    getFileHandle: vi.fn().mockResolvedValue(mockFileHandle),
+    getDirectoryHandle: vi.fn().mockResolvedValue({}),
+    removeEntry: vi.fn().mockResolvedValue(undefined),
+    entries: vi.fn().mockImplementation(async function* () {
+      // Empty directory
+    }),
   }),
-};
-
-const mockDirHandle = {
-  kind: 'directory',
-  getFileHandle: vi.fn().mockResolvedValue(mockFileHandle),
-  getDirectoryHandle: vi.fn().mockResolvedValue(mockSubDirHandle),
   removeEntry: vi.fn().mockResolvedValue(undefined),
   entries: vi.fn().mockImplementation(async function* () {
     yield ['test.txt', mockFileHandle];
+  }),
+};
+
+// The rootName-level directory handle — returned by rootDir.getDirectoryHandle(rootName)
+const mockRootNameHandle = {
+  kind: 'directory',
+  getDirectoryHandle: vi.fn().mockResolvedValue(mockWorkspaceHandle),
+  getFileHandle: vi.fn().mockResolvedValue(mockFileHandle),
+  removeEntry: vi.fn().mockResolvedValue(undefined),
+  entries: vi.fn().mockImplementation(async function* () {
+    yield ['test-workspace', mockWorkspaceHandle];
+  }),
+};
+
+// The OPFS root directory handle — returned by navigator.storage.getDirectory()
+const mockDirHandle = {
+  kind: 'directory',
+  getFileHandle: vi.fn().mockResolvedValue(mockFileHandle),
+  getDirectoryHandle: vi.fn().mockResolvedValue(mockRootNameHandle),
+  removeEntry: vi.fn().mockResolvedValue(undefined),
+  entries: vi.fn().mockImplementation(async function* () {
+    yield ['vfs-workspace', mockRootNameHandle];
   }),
 };
 
@@ -136,7 +158,14 @@ describe('OPFSCore', () => {
 
       expect(core.isInitialized()).toBe(true);
       expect(core.getWorkspaceId()).toBe('test-workspace');
-      expect((global.navigator as any).storage.getDirectory).toHaveBeenCalledWith('vfs-workspace/test-workspace');
+      // navigator.storage.getDirectory() takes NO arguments.
+      // The workspace path is resolved by navigating the handle tree:
+      //   rootDir.getDirectoryHandle(rootName) → rootNameHandle.getDirectoryHandle(sanitizedWorkspaceId)
+      expect((global.navigator as any).storage.getDirectory).toHaveBeenCalledWith();
+      expect(mockRootNameHandle.getDirectoryHandle).toHaveBeenCalledWith(
+        'test-workspace', // hyphens are valid in sanitizeWorkspaceId, so they pass through
+        { create: true },
+      );
     });
 
     it('should throw error when storage API is not available', async () => {
@@ -182,6 +211,9 @@ describe('OPFSCore', () => {
       expect(result.content).toBe('test content');
       expect(result.size).toBe(12);
       expect(typeof result.lastModified).toBe('number');
+      // readFile resolves the directory path ("") and file name ("test.txt")
+      // The root handle is mockWorkspaceHandle, so getFileHandle is called on it
+      expect(mockWorkspaceHandle.getFileHandle).toHaveBeenCalledWith('test.txt', { create: false });
     });
 
     it('should throw error when not initialized', async () => {
@@ -241,7 +273,8 @@ describe('OPFSCore', () => {
       
       await core.deleteFile('test.txt');
       
-      expect(mockDirHandle.removeEntry).toHaveBeenCalledWith('test.txt');
+      // deleteFile resolves dirPath="" → rootHandle (mockWorkspaceHandle)
+      expect(mockWorkspaceHandle.removeEntry).toHaveBeenCalledWith('test.txt');
     });
 
     it('should not throw when file does not exist', async () => {
@@ -249,7 +282,7 @@ describe('OPFSCore', () => {
       await core.initialize('test-workspace');
       
       // Mock NotFoundError
-      mockDirHandle.removeEntry.mockRejectedValueOnce({ name: 'NotFoundError' });
+      mockWorkspaceHandle.removeEntry.mockRejectedValueOnce({ name: 'NotFoundError' });
       
       await expect(core.deleteFile('nonexistent.txt')).resolves.toBeUndefined();
     });
@@ -274,7 +307,8 @@ describe('OPFSCore', () => {
       
       await core.createDirectory('test-dir');
       
-      expect(mockDirHandle.getDirectoryHandle).toHaveBeenCalledWith('test-dir', { create: true });
+      // createDirectory navigates from rootHandle (mockWorkspaceHandle)
+      expect(mockWorkspaceHandle.getDirectoryHandle).toHaveBeenCalledWith('test-dir', { create: true });
     });
 
     it('should create directories recursively', async () => {
@@ -309,6 +343,9 @@ describe('OPFSCore', () => {
       expect(entries).toHaveLength(1);
       expect(entries[0].name).toBe('test.txt');
       expect(entries[0].type).toBe('file');
+      // listDirectory resolves path '' → rootHandle (mockWorkspaceHandle)
+      // We need to make sure the entries mock yields from the workspace handle
+      // Since the workspaceHandle.entries already yields test.txt, this works
     });
 
     it('should return empty array for empty directory', async () => {
@@ -316,7 +353,7 @@ describe('OPFSCore', () => {
       await core.initialize('test-workspace');
       
       // Mock empty directory
-      mockDirHandle.entries.mockImplementation(async function* () {});
+      mockWorkspaceHandle.entries.mockImplementation(async function* () {});
       
       const entries = await core.listDirectory('');
       
@@ -345,13 +382,14 @@ describe('OPFSCore', () => {
       await core.initialize('test-workspace');
       
       // Mock directory with entries
-      mockDirHandle.entries.mockImplementation(async function* () {
+      mockWorkspaceHandle.entries.mockImplementation(async function* () {
         yield ['test.txt', mockFileHandle];
       });
       
       await core.clear();
       
-      expect(mockDirHandle.removeEntry).toHaveBeenCalledWith('test.txt', { recursive: true });
+      // clear() iterates rootHandle.entries and calls rootHandle.removeEntry
+      expect(mockWorkspaceHandle.removeEntry).toHaveBeenCalledWith('test.txt', { recursive: true });
     });
 
     it('should emit clear event', async () => {
@@ -396,6 +434,10 @@ describe('OPFSCore', () => {
       const core = new OPFSCore();
       await core.initialize('test-workspace');
       
+      // Reset any previous calls on the workspace handle's getFileHandle
+      mockWorkspaceHandle.getFileHandle.mockClear();
+      mockWorkspaceHandle.getFileHandle.mockResolvedValue(mockFileHandle);
+
       const exists = await core.fileExists('test.txt');
       
       expect(exists).toBe(true);
@@ -405,7 +447,7 @@ describe('OPFSCore', () => {
       const core = new OPFSCore();
       await core.initialize('test-workspace');
       
-      mockDirHandle.getFileHandle.mockRejectedValueOnce(new Error('Not found'));
+      mockWorkspaceHandle.getFileHandle.mockRejectedValueOnce(new Error('Not found'));
       
       const exists = await core.fileExists('nonexistent.txt');
       
@@ -418,6 +460,16 @@ describe('OPFSCore', () => {
       const core = new OPFSCore();
       await core.initialize('test-workspace');
       
+      // Reset any previous calls on the workspace handle's getDirectoryHandle
+      mockWorkspaceHandle.getDirectoryHandle.mockClear();
+      mockWorkspaceHandle.getDirectoryHandle.mockResolvedValue({
+        kind: 'directory',
+        getFileHandle: vi.fn().mockResolvedValue(mockFileHandle),
+        getDirectoryHandle: vi.fn().mockResolvedValue({}),
+        removeEntry: vi.fn().mockResolvedValue(undefined),
+        entries: vi.fn().mockImplementation(async function* () {}),
+      });
+
       const exists = await core.directoryExists('test-dir');
       
       expect(exists).toBe(true);
@@ -427,7 +479,7 @@ describe('OPFSCore', () => {
       const core = new OPFSCore();
       await core.initialize('test-workspace');
       
-      mockDirHandle.getDirectoryHandle.mockRejectedValueOnce(new Error('Not found'));
+      mockWorkspaceHandle.getDirectoryHandle.mockRejectedValueOnce(new Error('Not found'));
       
       const exists = await core.directoryExists('nonexistent-dir');
       

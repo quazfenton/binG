@@ -27,7 +27,7 @@ export const chatRequestSchema = z.object({
   requestId: z.string().optional(),
   conversationId: z.string().optional(),
   agentMode: z.enum(['v1', 'v2', 'auto']).optional().default('auto'),
-  mode: z.enum(['normal', 'enhanced', 'max']).optional().default('max'),
+  mode: z.enum(['normal', 'enhanced', 'max', 'super']).optional().default('max'),
   // Prompt Parameters — optional response style modifiers (backwards compatible)
   responseDepth: z.enum(['minimal', 'brief', 'standard', 'detailed', 'comprehensive', 'exhaustive']).optional(),
   expertiseLevel: z.enum(['layperson', 'informed', 'practitioner', 'expert', 'world-class']).optional(),

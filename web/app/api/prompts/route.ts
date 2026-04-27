@@ -106,7 +106,7 @@ function isValidPrompt(obj: any): obj is Prompt {
     typeof obj.updatedAt === 'number';
 }
 
-export interface Prompt {
+interface Prompt {
   id: string;
   title: string;
   content: string;

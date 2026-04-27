@@ -7,7 +7,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
-export interface Track {
+interface Track {
   id: string;
   title: string;
   artist: string;
@@ -18,7 +18,7 @@ export interface Track {
   source: 'spotify' | 'apple-music' | 'youtube';
 }
 
-export interface Playlist {
+interface Playlist {
   id: string;
   name: string;
   description: string;

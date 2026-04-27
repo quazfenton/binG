@@ -1,0 +1,63 @@
+# @package _global_
+#
+# Practice config for improving VFS MCP tool usage.
+# Run this to help less capable models learn correct tool calling patterns.
+#
+
+exp_id: "vfs_tool_use_practice"
+
+# Evaluation configuration
+evaluation:
+  exp_id: "vfs_tool_eval"
+  agent:
+    name: "vfs-practice-agent"
+    instructions: |
+      You are an expert software engineer with access to a Virtual File System (VFS).
+      You can create, read, and modify files using these tools:
+      - write_file(path, content): Create or overwrite a single file
+      - batch_write(files, commitMessage): Create multiple files at once
+      - apply_diff(path, diff): Apply a unified diff patch
+      - read_file(path): Read file content
+      - list_files(path): List directory contents
+    model:
+      model_provider:
+        type: chat.completions
+        model: gpt-4o-mini  # Use your target model here
+        # base_url: https://api.openai.com/v1
+        # api_key: your-key
+      model_settings:
+        temperature: 0.7
+  data:
+    dataset: "VFS_Tool_Use"
+    type: "single"
+  concurrency: 8
+  pass_k: 3            # 3 rollouts per task for GRPO grouping
+  verify_filename: "vfs_tool_use.py"
+  verify_func_name: "verify_func"
+
+# Practice arguments
+practice:
+  epochs: 3
+  batch_size: 8
+  grpo_n: 3            # 3 rollouts per GRPO group (for advantage calc)
+  rollout_concurrency: 8
+  rollout_temperature: 0.7
+  task_timeout: 300    # 5 min per task
+  do_eval: false
+  eval_strategy: "epoch"
+  agent_objective: |
+    input: A task describing what files to create or modify
+    output: Correct use of VFS MCP tools (write_file, batch_write, apply_diff)
+      with proper argument structure (path=, content=, files=[...])
+  learning_objective: |
+    Help the agent learn correct VFS tool calling patterns:
+    - Use write_file(path='...', content='...') for single files
+    - Use batch_write(files=[{path:'...', content:'...'}, ...]) for multiple files
+    - Use apply_diff(path='...', diff='...') for patches
+    - Always provide required arguments with correct field names
+    - Use valid unified diff format for apply_diff
+  num_experiences_per_query: 2
+
+# Data arguments
+data:
+  practice_dataset_name: "VFS_Tool_Use"

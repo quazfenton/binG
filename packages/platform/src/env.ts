@@ -72,10 +72,35 @@ export function isLocalExecution(): boolean {
  * Returns null if no suitable home directory can be determined
  */
 export function getDefaultWorkspaceRoot(): string | null {
+  // Priority 1: explicit desktop/workspace launch env vars.
+  if (typeof process !== 'undefined' && process.env) {
+    const explicitRoot =
+      process.env.INITIAL_CWD ||
+      process.env.LAUNCH_CWD ||
+      process.env.DESKTOP_WORKSPACE_ROOT;
+    if (explicitRoot) {
+      return explicitRoot;
+    }
+  }
+
+  // Priority 2: CLI/standalone mode — use the process's actual working directory.
+  // The parent process's cwd is the directory from which the CLI was invoked,
+  // which is the correct workspace root (not the bundled binary's location).
+  if (typeof process !== 'undefined' && process.cwd) {
+    try {
+      const cwd = process.cwd();
+      if (cwd) {
+        return cwd;
+      }
+    } catch {
+      // process.cwd() may throw in some environments — fall through
+    }
+  }
+  
   const platform = typeof process !== 'undefined' ? process.platform : 'linux';
 
   if (platform === 'win32') {
-    const userProfile = typeof process !== 'undefined' ? process.env.USERPROFILE : undefined;
+    const userProfile = typeof process !== 'undefined' && process.env ? process.env.USERPROFILE : undefined;
     if (!userProfile) {
       return null;
     }

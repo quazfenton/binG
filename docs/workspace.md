@@ -1,3 +1,14 @@
+---
+id: workspace
+title: workspace
+aliases:
+  - workspace
+  - workspace.md
+tags: []
+layer: core
+summary: "Workspace Architecture\r\n\r\nCurrent:\r\n\r\n/workspace/users/{userId}/sessions/{conversationId}\r\n\r\nImprove with workspace lifecycle manager.\r\n\r\nworkspace-manager\r\n\r\nHandles:\r\n\r\ncreate workspace\r\nsnapshot workspace\r\ncleanup old sessions\r\ngit commit checkpoints\r\n\r\nAdd automatic Git layer.\r\n\r\nExample:\r\n\r\nwor"
+anchors: []
+---
 Workspace Architecture
 
 Current:

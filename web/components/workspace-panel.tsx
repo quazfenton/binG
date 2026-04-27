@@ -325,6 +325,8 @@ import { getOrCreateAnonymousSessionId } from "@/lib/utils";
 import { useAuth } from "@/contexts/auth-context";
 import type { Message } from "@/types";
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog";
+import { ApprovalDialog, type ApprovalRequest } from "@/components/state/ApprovalDialog";
+import { requiresWorkspaceBoundaryConfirmation } from "@/lib/agent-bins/workspace-boundary";
 import MultiModelComparison from "@/components/multi-model-comparison";
 import type { LLMProviderConfig } from "@/lib/chat/llm-providers-types";
 import { resolveScopedPath } from "@/lib/virtual-filesystem/scope-utils";
@@ -1240,8 +1242,8 @@ export function WorkspacePanel() {
   const [newItemName, setNewItemName] = useState("");
   const [creatingParentPath, setCreatingParentPath] = useState("/");
 
-  // File operations state (cut/copy/paste, rename, drag-drop)
-  const [fileClipboard, setFileClipboard] = useState<{ sourcePath: string; operation: 'cut' | 'copy' } | null>(null);
+  // File operations state (copy/paste, rename, drag-drop)
+  const [fileClipboard, setFileClipboard] = useState<{ sourcePath: string; operation: 'copy' } | null>(null);
   const [renamingFile, setRenamingFile] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [draggedFile, setDraggedFile] = useState<string | null>(null);
@@ -1252,6 +1254,49 @@ export function WorkspacePanel() {
     message: string;
     onConfirm: () => void;
   } | null>(null);
+  const [workspaceApprovalRequest, setWorkspaceApprovalRequest] = useState<ApprovalRequest | null>(null);
+  const workspaceApprovalResolveRef = useRef<((approved: boolean) => void) | null>(null);
+
+  /**
+   * Check if a destructive file operation needs workspace-boundary confirmation.
+   * If so, show the ApprovalDialog and wait for user decision.
+   * Returns true if the operation should proceed, false if cancelled.
+   */
+  const confirmWorkspaceBoundaryInPanel = useCallback(
+    async (operation: string, targetPath: string): Promise<boolean> => {
+      const check = requiresWorkspaceBoundaryConfirmation(operation, targetPath);
+      if (!check.needsConfirmation) return true;
+      return new Promise<boolean>((resolve) => {
+        let settled = false;
+        const safeResolve = (value: boolean) => {
+          if (settled) return;
+          settled = true;
+          resolve(value);
+        };
+        const request: ApprovalRequest = {
+          id: crypto.randomUUID(),
+          action: 'outside_workspace',
+          target: targetPath,
+          reason: check.reason || 'Path is outside the workspace root',
+          requested_at: new Date().toISOString(),
+        };
+        setWorkspaceApprovalRequest(request);
+        workspaceApprovalResolveRef.current = safeResolve;
+        // Safety timeout: auto-deny after 60s
+        setTimeout(() => {
+          setWorkspaceApprovalRequest((prev) => {
+            if (prev?.id === request.id) {
+              safeResolve(false);
+              return null;
+            }
+            return prev;
+          });
+          if (workspaceApprovalResolveRef.current === safeResolve) workspaceApprovalResolveRef.current = null;
+        }, 60_000);
+      });
+    },
+    [],
+  );
 
   // VFS snapshot state
   const [vfsSnapshot, setVfsSnapshot] = useState<{ files: Array<{ path: string; content: string; language: string }> } | null>(null);
@@ -2030,6 +2075,11 @@ export function WorkspacePanel() {
     const newPath = `${normalizedParentPath}/${newItemName.trim()}`;
 
     try {
+      // Workspace boundary check for write
+      if (!(await confirmWorkspaceBoundaryInPanel('write', newPath))) {
+        setIsCreatingFile(false);
+        return;
+      }
       await writeFile(newPath, '');
       await listDirectory(normalizedParentPath);
       toast.success(`File created: ${newItemName.trim()}`);
@@ -2054,6 +2104,11 @@ export function WorkspacePanel() {
     const gitkeepPath = `${folderPath}/.gitkeep`;
 
     try {
+      // Workspace boundary check for mkdir
+      if (!(await confirmWorkspaceBoundaryInPanel('mkdir', folderPath))) {
+        setIsCreatingFolder(false);
+        return;
+      }
       await writeFile(gitkeepPath, '');
       await listDirectory(normalizedParentPath);
       toast.success(`Folder created: ${newItemName.trim()}`);
@@ -2072,11 +2127,6 @@ export function WorkspacePanel() {
   }, []);
 
   // File operation handlers
-  const handleCutFile = useCallback((path: string) => {
-    setFileClipboard({ sourcePath: path, operation: 'cut' });
-    toast.info('File cut - click paste in a folder');
-  }, []);
-
   const handleCopyFile = useCallback((path: string) => {
     setFileClipboard({ sourcePath: path, operation: 'copy' });
     toast.info('File copied - click paste in a folder');
@@ -2121,6 +2171,11 @@ export function WorkspacePanel() {
     const activeClipboard = currentClipboard || fileClipboard;
     if (!activeClipboard) return;
 
+    // Workspace boundary check for paste operation
+    if (!(await confirmWorkspaceBoundaryInPanel('write', targetPath))) {
+      return;
+    }
+
     try {
       // Read source file
       const readResponse = await fetch('/api/filesystem/read', {
@@ -2139,20 +2194,8 @@ export function WorkspacePanel() {
       // Write to target
       await writeFile(targetPath, content);
 
-      // If cut, delete source
-      if (activeClipboard.operation === 'cut') {
-        const deleteResponse = await fetch('/api/filesystem/delete', {
-          method: 'POST',
-          headers: buildApiHeaders(),
-          body: JSON.stringify({ path: resolveScopedPath(activeClipboard.sourcePath, vfs?.currentPath || '/') }),
-        });
-        if (!deleteResponse.ok) {
-          throw new Error('Failed to delete source file');
-        }
-      }
-
       await listDirectory(vfs?.currentPath || '/');
-      toast.success(`File ${activeClipboard.operation === 'cut' ? 'moved' : 'copied'} successfully`);
+      toast.success('File copied successfully');
 
       // Emit filesystem SSE event for paste operation
       emitFilesystemUpdated({
@@ -2198,6 +2241,12 @@ export function WorkspacePanel() {
       scopedOldPath: resolveScopedPath(renamingFile, vfs?.currentPath || '/'),
       scopedNewPath: resolveScopedPath(newPath, vfs?.currentPath || '/'),
     });
+
+    // Workspace boundary check for destructive rename
+    if (!(await confirmWorkspaceBoundaryInPanel('rename', newPath))) {
+      setRenamingFile(null);
+      return;
+    }
 
     try {
       // Use new rename API with conflict detection
@@ -2298,7 +2347,7 @@ export function WorkspacePanel() {
       // Write to new path
       await writeFile(newPath, content);
 
-      // Delete old
+      // Delete old file after rename
       await fetch('/api/filesystem/delete', {
         method: 'POST',
         headers: buildApiHeaders(),
@@ -2400,6 +2449,11 @@ export function WorkspacePanel() {
 
     // Bail out when the target path equals the source path
     if (targetPath === sourcePath) {
+      return;
+    }
+
+    // Workspace boundary check for destructive move
+    if (!(await confirmWorkspaceBoundaryInPanel('move', targetPath))) {
       return;
     }
 
@@ -2528,19 +2582,6 @@ export function WorkspacePanel() {
                 <span className="text-white/80 truncate flex-1 min-w-0">{node.name}</span>
               )}
             </button>
-            {/* Paste button when file clipboard has content */}
-            {fileClipboard && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handlePasteToFolder(node.path);
-                }}
-                className="p-1 hover:bg-white/10 rounded opacity-0 group-hover:opacity-100 transition-opacity text-green-400"
-                title="Paste file here"
-              >
-                <Plus className="h-3 w-3" />
-              </button>
-            )}
             {/* Add file button for folders */}
             <button
               onClick={(e) => {
@@ -2632,16 +2673,6 @@ export function WorkspacePanel() {
           <button
             onClick={(e) => {
               e.stopPropagation();
-              handleCutFile(node.path);
-            }}
-            className="p-0.5 hover:bg-white/10 rounded"
-            title="Cut"
-          >
-            <Edit className="h-3 w-3 text-blue-400" />
-          </button>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
               handleCopyFile(node.path);
             }}
             className="p-0.5 hover:bg-white/10 rounded"
@@ -2652,7 +2683,7 @@ export function WorkspacePanel() {
         </div>
       </div>
     );
-  }, [expandedFolders, selectedFile, toggleFolder, handleFileSelect, handleCreateFile, handleRenameFile, renamingFile, renameValue, confirmRename, cancelRename, fileClipboard, handlePasteToFolder, dragOverFolder, handleDragOver, handleDragLeave, handleDrop, handleDragStart, handleCutFile, handleCopyFile, openMonacoEditor]);
+  }, [expandedFolders, selectedFile, toggleFolder, handleFileSelect, handleCreateFile, handleRenameFile, renamingFile, renameValue, confirmRename, cancelRename, fileClipboard, handlePasteToFolder, dragOverFolder, handleDragOver, handleDragLeave, handleDrop, handleDragStart, handleCopyFile, openMonacoEditor]);
 
   // Check GitHub auth status and fetch repos when modal opens
   useEffect(() => {
@@ -2966,7 +2997,7 @@ export function WorkspacePanel() {
                       role="region"
                       aria-label="File Explorer"
                       onKeyDown={(e) => {
-                        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                        if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && e.target === e.currentTarget) {
                           e.preventDefault();
                           const scrollAmount = 40;
                           const container = e.currentTarget;
@@ -3135,7 +3166,7 @@ export function WorkspacePanel() {
                       {fileClipboard && (
                         <div className="mb-2 p-2 bg-yellow-500/10 border border-yellow-500/30 rounded flex items-center justify-between">
                           <span className="text-xs text-yellow-300">
-                            {fileClipboard.operation === 'cut' ? '✂️ Cut' : '📋 Copied'}: {fileClipboard.sourcePath.split('/').pop()}
+                            📋 Copied: {fileClipboard.sourcePath.split('/').pop()}
                           </span>
                           <button
                             onClick={() => setFileClipboard(null)}
@@ -4660,6 +4691,7 @@ export function WorkspacePanel() {
                     aria-label="MCP Servers"
                     onWheel={(e) => {
                       const container = e.currentTarget;
+                      e.preventDefault();
                       e.stopPropagation();
                       container.scrollTop += e.deltaY;
                     }}
@@ -4714,6 +4746,22 @@ export function WorkspacePanel() {
           }}
         />
       )}
+      {/* Workspace Boundary Approval Dialog */}
+      {workspaceApprovalRequest && (
+        <ApprovalDialog
+          request={workspaceApprovalRequest}
+          onApprove={() => {
+            workspaceApprovalResolveRef.current?.(true);
+            setWorkspaceApprovalRequest(null);
+            workspaceApprovalResolveRef.current = null;
+          }}
+          onReject={() => {
+            workspaceApprovalResolveRef.current?.(false);
+            setWorkspaceApprovalRequest(null);
+            workspaceApprovalResolveRef.current = null;
+          }}
+        />
+      )}
 
       {/* Context Menu */}
       {contextMenu && (
@@ -4740,15 +4788,6 @@ export function WorkspacePanel() {
           >
             {!contextMenu.isDirectory && (
               <>
-                <button
-                  onClick={() => {
-                    handleCutFile(contextMenu.path);
-                    setContextMenu(null);
-                  }}
-                  className="w-full px-3 py-1.5 text-left text-xs text-white/80 hover:bg-white/10 flex items-center gap-2"
-                >
-                  <Edit className="h-3 w-3 text-yellow-400" /> Cut
-                </button>
                 <button
                   onClick={() => {
                     handleCopyFile(contextMenu.path);

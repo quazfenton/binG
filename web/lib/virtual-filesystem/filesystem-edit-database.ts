@@ -15,6 +15,7 @@ export const runtime = 'nodejs';
  */
 
 import { getDatabase } from '../database/connection';
+import { execSchemaFile } from '../database/schema';
 import type {
   FilesystemEditTransaction,
   FilesystemEditOperationRecord,
@@ -28,8 +29,8 @@ export interface PersistedTransaction {
   request_id: string;
   created_at: string;
   status: string;
-  operations: string; // JSON string
-  errors: string; // JSON string
+  operations_json: string; // JSON string
+  errors_json: string; // JSON string
   denied_reason?: string;
 }
 
@@ -38,7 +39,7 @@ export interface PersistedDenial {
   conversation_id: string;
   timestamp: string;
   reason: string;
-  paths: string; // JSON string
+  paths_json: string; // JSON string
 }
 
 class FilesystemEditDatabaseService {
@@ -52,34 +53,8 @@ class FilesystemEditDatabaseService {
     if (!this.db) return;
 
     try {
-      this.db.exec(`
-        CREATE TABLE IF NOT EXISTS filesystem_edit_transactions (
-          id TEXT PRIMARY KEY,
-          owner_id TEXT NOT NULL,
-          conversation_id TEXT NOT NULL,
-          request_id TEXT NOT NULL,
-          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-          status TEXT NOT NULL,
-          operations TEXT NOT NULL,
-          errors TEXT NOT NULL,
-          denied_reason TEXT,
-          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        );
-        CREATE INDEX IF NOT EXISTS idx_transactions_owner ON filesystem_edit_transactions(owner_id);
-        CREATE INDEX IF NOT EXISTS idx_transactions_conversation ON filesystem_edit_transactions(conversation_id);
-        CREATE INDEX IF NOT EXISTS idx_transactions_status ON filesystem_edit_transactions(status);
-
-        CREATE TABLE IF NOT EXISTS filesystem_edit_denials (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          transaction_id TEXT NOT NULL,
-          conversation_id TEXT NOT NULL,
-          timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-          reason TEXT NOT NULL,
-          paths TEXT NOT NULL,
-          FOREIGN KEY (transaction_id) REFERENCES filesystem_edit_transactions(id)
-        );
-        CREATE INDEX IF NOT EXISTS idx_denials_conversation ON filesystem_edit_denials(conversation_id);
-      `);
+      // filesystem-edit-schema.sql defines fs_edit_transactions + fs_edit_denials
+      execSchemaFile(this.db, 'filesystem-edit-schema');
     } catch (error: any) {
       console.error('[FilesystemEditDB] Failed to ensure schema:', error);
     }
@@ -118,8 +93,8 @@ class FilesystemEditDatabaseService {
 
     try {
       const stmt = this.db.prepare(`
-        INSERT OR REPLACE INTO filesystem_edit_transactions 
-        (id, owner_id, conversation_id, request_id, created_at, status, operations, errors, denied_reason)
+        INSERT OR REPLACE INTO fs_edit_transactions 
+        (id, owner_id, conversation_id, request_id, created_at, status, operations_json, errors_json, denied_reason)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
@@ -147,7 +122,7 @@ class FilesystemEditDatabaseService {
     if (!this.db) return null;
 
     try {
-      const stmt = this.db.prepare('SELECT * FROM filesystem_edit_transactions WHERE id = ?');
+      const stmt = this.db.prepare('SELECT * FROM fs_edit_transactions WHERE id = ?');
       const row = stmt.get(transactionId) as PersistedTransaction | undefined;
 
       if (!row) return null;
@@ -159,8 +134,8 @@ class FilesystemEditDatabaseService {
         requestId: row.request_id,
         createdAt: row.created_at,
         status: row.status as any,
-        operations: JSON.parse(row.operations) as FilesystemEditOperationRecord[],
-        errors: JSON.parse(row.errors) as string[],
+        operations: JSON.parse(row.operations_json) as FilesystemEditOperationRecord[],
+        errors: JSON.parse(row.errors_json) as string[],
         deniedReason: row.denied_reason || undefined,
       };
     } catch (error: any) {
@@ -178,7 +153,7 @@ class FilesystemEditDatabaseService {
 
     try {
       const stmt = this.db.prepare(
-        'SELECT * FROM filesystem_edit_transactions WHERE conversation_id = ? ORDER BY created_at DESC'
+        'SELECT * FROM fs_edit_transactions WHERE conversation_id = ? ORDER BY created_at DESC'
       );
       const rows = stmt.all(conversationId) as PersistedTransaction[];
 
@@ -189,8 +164,8 @@ class FilesystemEditDatabaseService {
         requestId: row.request_id,
         createdAt: row.created_at,
         status: row.status as any,
-        operations: JSON.parse(row.operations) as FilesystemEditOperationRecord[],
-        errors: JSON.parse(row.errors) as string[],
+        operations: JSON.parse(row.operations_json) as FilesystemEditOperationRecord[],
+        errors: JSON.parse(row.errors_json) as string[],
         deniedReason: row.denied_reason || undefined,
       }));
     } catch (error: any) {
@@ -208,13 +183,14 @@ class FilesystemEditDatabaseService {
 
     try {
       const stmt = this.db.prepare(`
-        INSERT INTO filesystem_edit_denials (transaction_id, conversation_id, reason, paths)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO fs_edit_denials (transaction_id, conversation_id, timestamp, reason, paths_json)
+        VALUES (?, ?, ?, ?, ?)
       `);
 
       stmt.run(
         denial.transactionId,
         denial.conversationId,
+        denial.timestamp,
         denial.reason,
         JSON.stringify(denial.paths)
       );
@@ -232,7 +208,7 @@ class FilesystemEditDatabaseService {
 
     try {
       const stmt = this.db.prepare(
-        'SELECT * FROM filesystem_edit_denials WHERE conversation_id = ? ORDER BY timestamp DESC LIMIT 20'
+        'SELECT * FROM fs_edit_denials WHERE conversation_id = ? ORDER BY timestamp DESC LIMIT 20'
       );
       const rows = stmt.all(conversationId) as PersistedDenial[];
 
@@ -241,7 +217,7 @@ class FilesystemEditDatabaseService {
         conversationId: row.conversation_id,
         timestamp: row.timestamp,
         reason: row.reason,
-        paths: JSON.parse(row.paths) as string[],
+        paths: JSON.parse(row.paths_json) as string[],
       }));
     } catch (error: any) {
       console.error('[FilesystemEditDB] Failed to get denials:', error);
@@ -258,7 +234,7 @@ class FilesystemEditDatabaseService {
 
     try {
       const stmt = this.db.prepare(`
-        UPDATE filesystem_edit_transactions 
+        UPDATE fs_edit_transactions 
         SET status = ?, updated_at = CURRENT_TIMESTAMP 
         WHERE id = ?
       `);
@@ -278,7 +254,7 @@ class FilesystemEditDatabaseService {
 
     try {
       const stmt = this.db.prepare(
-        'SELECT * FROM filesystem_edit_transactions WHERE owner_id = ? ORDER BY created_at DESC LIMIT ?'
+        'SELECT * FROM fs_edit_transactions WHERE owner_id = ? ORDER BY created_at DESC LIMIT ?'
       );
       const rows = stmt.all(ownerId, limit) as PersistedTransaction[];
 
@@ -289,8 +265,8 @@ class FilesystemEditDatabaseService {
         requestId: row.request_id,
         createdAt: row.created_at,
         status: row.status as any,
-        operations: JSON.parse(row.operations) as FilesystemEditOperationRecord[],
-        errors: JSON.parse(row.errors) as string[],
+        operations: JSON.parse(row.operations_json) as FilesystemEditOperationRecord[],
+        errors: JSON.parse(row.errors_json) as string[],
         deniedReason: row.denied_reason || undefined,
       }));
     } catch (error: any) {
@@ -308,7 +284,7 @@ class FilesystemEditDatabaseService {
 
     try {
       const stmt = this.db.prepare(`
-        DELETE FROM filesystem_edit_transactions 
+        DELETE FROM fs_edit_transactions 
         WHERE created_at < datetime('now', '-' || ? || ' days')
       `);
 

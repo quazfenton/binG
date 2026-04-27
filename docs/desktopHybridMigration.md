@@ -1,3 +1,14 @@
+---
+id: desktophybridmigration
+title: desktopHybridMigration
+aliases:
+  - desktopHybridMigration
+  - desktopHybridMigration.md
+tags: []
+layer: core
+summary: "review the existing code to find:\r\n     - Direct localStorage usage (should use storage)\r\n     - Direct navigator.clipboard usage (should use clipboard)\r\n     - Direct fetch calls (should use apiFetch)\r\n     - Direct window API usage that differs between platforms\r\n     - Direct fs operations"
+anchors: []
+---
  review the existing code to find:
      - Direct localStorage usage (should use storage)
      - Direct navigator.clipboard usage (should use clipboard)

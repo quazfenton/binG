@@ -425,6 +425,7 @@ export async function logHealingAttempt(
  */
 export async function initializeHealingLog(): Promise<void> {
   const { getDatabase } = await import('@/lib/database/connection');
+  const { execSchemaFile } = await import('@/lib/database/schema');
   const db = getDatabase();
 
   if (!db) {
@@ -432,19 +433,8 @@ export async function initializeHealingLog(): Promise<void> {
     return;
   }
 
-  db.prepare(`
-    CREATE TABLE IF NOT EXISTS event_healing_log (
-      id TEXT PRIMARY KEY,
-      event_id TEXT NOT NULL,
-      strategy TEXT NOT NULL,
-      success BOOLEAN NOT NULL,
-      explanation TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
-    )
-  `).run();
-
-  db.prepare('CREATE INDEX IF NOT EXISTS idx_healing_log_event_id ON event_healing_log(event_id)').run();
+  // healing-log.sql defines event_healing_log (self-healing variant with explanation column)
+  execSchemaFile(db, 'healing-log');
 
   logger.info('Healing log initialized');
 }

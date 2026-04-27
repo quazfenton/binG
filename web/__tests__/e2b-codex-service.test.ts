@@ -3,11 +3,49 @@
  * 
  * Tests OpenAI Codex integration with E2B sandboxes
  * 
- * @see lib/sandbox/providers/e2b-codex-service.ts
+ * @see lib/sandbox/spawn/e2b-codex-service.ts
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type { Sandbox } from '@e2b/code-interpreter'
+
+// ────────────────────────────────────────────────────────────────────────────
+// Hoisted mocks — must come before imports that reference the mocked modules
+// ────────────────────────────────────────────────────────────────────────────
+
+// Mock findCodexBinarySync so tests don't accidentally find a real binary
+vi.mock('@/lib/agent-bins/find-codex-binary', () => ({
+  findCodexBinarySync: vi.fn(() => null),
+}));
+
+// Mock spawnLocalAgent so local execution path doesn't spawn real processes
+vi.mock('@/lib/spawn/local-server-utils', () => ({
+  spawnLocalAgent: vi.fn(() => ({
+    pid: 42,
+    kill: vi.fn(),
+    stdout: { on: vi.fn() },
+    stderr: { on: vi.fn() },
+    on: vi.fn(),
+  })),
+  waitForLocalServer: vi.fn(async () => {}),
+  connectToRemoteAgent: vi.fn(async (opts: any) => ({
+    agentId: `${opts.agentType}-remote-test`,
+    type: opts.agentType,
+    containerId: '',
+    port: 0,
+    apiUrl: opts.remoteAddress.replace(/\/+$/, ''),
+    workspaceDir: opts.workspaceDir,
+    startedAt: Date.now(),
+    lastActivity: Date.now(),
+    status: 'ready',
+    health: 'healthy',
+  })),
+}));
+
+// ────────────────────────────────────────────────────────────────────────────
+// Imports (after mocks)
+// ────────────────────────────────────────────────────────────────────────────
+
 import { 
   createCodexService, 
   getCodexService,
@@ -16,7 +54,7 @@ import {
   type CodexExecutionConfig,
   type CodexExecutionResult,
   type CodexEvent,
-} from '@/lib/sandbox/providers/e2b-codex-service'
+} from '@/lib/sandbox/spawn/e2b-codex-service'
 
 // Mock sandbox
 const createMockSandbox = (): Sandbox => ({
@@ -41,6 +79,7 @@ describe('E2B Codex Service', () => {
 
   afterEach(() => {
     vi.unstubAllEnvs()
+    vi.unstubAllGlobals()
     vi.clearAllMocks()
   })
 
@@ -162,7 +201,7 @@ describe('E2B Codex Service', () => {
       expect(mockSandbox.commands.run).toHaveBeenCalledWith(
         expect.any(String),
         expect.objectContaining({
-          timeout: 600000,
+          timeoutMs: 600000,
         })
       )
     })
@@ -557,6 +596,126 @@ describe('E2B Codex Service', () => {
     })
   })
 
+  describe('run — remote address path', () => {
+    it('should send prompt to remote server when remoteAddress is set', async () => {
+      const mockFetch = vi.fn().mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          choices: [{ message: { content: 'Remote codex response', role: 'assistant' } }],
+        }),
+      });
+      vi.stubGlobal('fetch', mockFetch);
+
+      const codexService = createCodexService(mockSandbox, 'test-key')
+      const result = await codexService.run({
+        prompt: 'Create a hello world function',
+        fullAuto: true,
+        remoteAddress: 'https://codex.example.com:8080',
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe('Remote codex response');
+      expect(result.success).toBe(true);
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://codex.example.com:8080/v1/chat/completions',
+        expect.objectContaining({
+          method: 'POST',
+          headers: expect.objectContaining({
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer test-key',
+          }),
+        }),
+      );
+      // Should NOT use the sandbox for remote execution
+      expect(mockSandbox.commands.run).not.toHaveBeenCalled();
+
+    });
+
+    it('should strip trailing slashes from remoteAddress', async () => {
+      const mockFetch = vi.fn().mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          choices: [{ message: { content: 'Done', role: 'assistant' } }],
+        }),
+      });
+      vi.stubGlobal('fetch', mockFetch);
+
+      const codexService = createCodexService(mockSandbox, 'test-key')
+      await codexService.run({
+        prompt: 'Task',
+        fullAuto: true,
+        remoteAddress: 'https://codex.example.com:8080///',
+      });
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://codex.example.com:8080/v1/chat/completions',
+        expect.any(Object),
+      );
+
+    });
+
+    it('should handle remote server errors', async () => {
+      const mockFetch = vi.fn().mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+        text: async () => 'Internal Server Error',
+      });
+      vi.stubGlobal('fetch', mockFetch);
+
+      const codexService = createCodexService(mockSandbox, 'test-key')
+      const result = await codexService.run({
+        prompt: 'Task',
+        fullAuto: true,
+        remoteAddress: 'https://codex.example.com:8080',
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.exitCode).toBe(500);
+      expect(result.stderr).toBe('Internal Server Error');
+      expect(result.error).toContain('Remote Codex error');
+
+    });
+
+    it('should handle network errors for remote execution', async () => {
+      const mockFetch = vi.fn().mockRejectedValueOnce(new Error('ECONNREFUSED'));
+      vi.stubGlobal('fetch', mockFetch);
+
+      const codexService = createCodexService(mockSandbox, 'test-key')
+      const result = await codexService.run({
+        prompt: 'Task',
+        fullAuto: true,
+        remoteAddress: 'https://codex.example.com:8080',
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('ECONNREFUSED');
+    });
+
+    it('should NOT use sandbox when remoteAddress is set', async () => {
+      const mockFetch = vi.fn().mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          choices: [{ message: { content: 'Remote result', role: 'assistant' } }],
+        }),
+      });
+      vi.stubGlobal('fetch', mockFetch);
+
+      const codexService = createCodexService(mockSandbox, 'test-key')
+      await codexService.run({
+        prompt: 'Task',
+        fullAuto: true,
+        remoteAddress: 'https://codex.example.com:8080',
+      });
+
+      // Sandbox commands should NOT be called when using remote
+      expect(mockSandbox.commands.run).not.toHaveBeenCalled();
+
+    });
+  });
+
   describe('Configuration Options', () => {
     it('should respect all configuration options', async () => {
       mockSandbox.commands.run.mockResolvedValue({
@@ -580,7 +739,7 @@ describe('E2B Codex Service', () => {
       expect(callArgs[0]).toContain('--skip-git-repo-check')
       expect(callArgs[0]).toContain('--output-schema')
       expect(callArgs[0]).toContain('-C /workspace')
-      expect(callArgs[1]?.timeout).toBe(300000)
+      expect(callArgs[1]?.timeoutMs).toBe(300000)
     })
   })
 })

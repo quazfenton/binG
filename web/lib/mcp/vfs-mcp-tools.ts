@@ -27,6 +27,7 @@ import { virtualFilesystem } from '../virtual-filesystem/virtual-filesystem-serv
 import { emitFileEvent, emitBatchFileEvents } from '../virtual-filesystem/file-events';
 import { createLogger } from '../utils/logger';
 import { tolerantJsonParse, sanitizeJsonString, findBalancedJsonObject } from '../utils/json-tolerant';
+import { resolveToScopedPath } from '../virtual-filesystem/path-normalizer';
 
 // Re-export for backwards compatibility (other modules may import from here)
 export { tolerantJsonParse, sanitizeJsonString, findBalancedJsonObject };
@@ -36,6 +37,40 @@ const logger = createLogger('VFS-MCP-Tools');
 // ============================================================================
 // Tool Argument Normalization (Self-Healing for LLM Mistakes)
 // ============================================================================
+
+/**
+ * Unwrap markdown code fences from content strings.
+ * Some models wrap file content in ```lang ... ``` blocks.
+ */
+function unwrapCodeBlock(s: string): string {
+  // Match fenced blocks: ```lang\ncontent\n```
+  const match = s.match(/^```[\w.+-]*\n([\s\S]*?)```$/);
+  if (match) return match[1].trim();
+  // Also match without language: ```\ncontent\n```
+  const match2 = s.match(/^```\n([\s\S]*?)```$/);
+  if (match2) return match2[1].trim();
+  // Match fenced with language and no trailing newline before close
+  const match3 = s.match(/^```[\w.+-]*\n([\s\S]*?)\n?```$/);
+  if (match3) return match3[1].trim();
+  return s;
+}
+
+/**
+ * Normalize a file path: strip leading `./`, reject `../`, handle absolute paths.
+ */
+function normalizeFilePath(inputPath: string): string {
+  let p = inputPath;
+  // Strip leading `./` (repeated)
+  while (p.startsWith('./')) p = p.slice(2);
+  // Reject directory traversal
+  if (p.includes('..')) {
+    // Best-effort: remove the traversal segments
+    p = p.split('/').filter(s => s !== '..' && s !== '.').join('/');
+  }
+  // Strip leading `/` (absolute path → make relative)
+  if (p.startsWith('/')) p = p.slice(1);
+  return p;
+}
 
 /**
  * Normalize tool arguments before Zod validation.
@@ -58,28 +93,39 @@ export function normalizeToolArgs(toolName: string, raw: unknown): any {
     case 'create_file':
     case 'writetofile': {
       const path = alias(['path', 'file', 'filename', 'filepath', 'file_path', 'filePath', 'target']);
-      const content = alias(['content', 'contents', 'code', 'text', 'body', 'data', 'source']);
+      let content = alias(['content', 'contents', 'code', 'text', 'body', 'data', 'source']);
       const commitMessage = alias(['commitMessage', 'commit_message', 'message', 'description']);
-      return { path, content, commitMessage };
+      // Unwrap code fences if LLM wrapped content in ``` blocks
+      if (typeof content === 'string') content = unwrapCodeBlock(content);
+      // Normalize path (strip ./, leading /, reject ../)
+      const normalizedPath = typeof path === 'string' ? normalizeFilePath(path) : path;
+      return { path: normalizedPath, content, commitMessage };
     }
     case 'apply_diff':
     case 'applydiff':
     case 'patch': {
       const path = alias(['path', 'file', 'filename', 'filepath', 'file_path', 'target']);
-      const diff = alias(['diff', 'patch', 'content', 'changes', 'delta']);
+      let diff = alias(['diff', 'patch', 'content', 'changes', 'delta']);
+      // Unwrap code fences if LLM wrapped diff in ``` blocks
+      if (typeof diff === 'string') diff = unwrapCodeBlock(diff);
       const commitMessage = alias(['commitMessage', 'commit_message', 'message']);
-      return { path, diff, commitMessage };
+      // Normalize path
+      const normalizedPath = typeof path === 'string' ? normalizeFilePath(path) : path;
+      return { path: normalizedPath, diff, commitMessage };
     }
     case 'read_file':
     case 'readfile': {
       const path = alias(['path', 'file', 'filename', 'filepath', 'file_path']);
-      return { path };
+      const normalizedPath = typeof path === 'string' ? normalizeFilePath(path) : path;
+      return { path: normalizedPath };
     }
     case 'read_files':
     case 'readfiles': {
       let paths = alias(['paths', 'files', 'filenames', 'file_paths']);
       // Handle single path string
-      if (typeof paths === 'string') paths = [paths];
+      if (typeof paths === 'string') paths = [normalizeFilePath(paths)];
+      // Normalize each path
+      if (Array.isArray(paths)) paths = paths.map(normalizeFilePath);
       return { paths };
     }
     case 'delete_file':
@@ -87,14 +133,16 @@ export function normalizeToolArgs(toolName: string, raw: unknown): any {
     case 'remove_file': {
       const path = alias(['path', 'file', 'filename', 'filepath', 'target']);
       const reason = alias(['reason', 'message', 'description']);
-      return { path, reason };
+      const normalizedPath = typeof path === 'string' ? normalizeFilePath(path) : path;
+      return { path: normalizedPath, reason };
     }
     case 'list_files':
     case 'listfiles':
     case 'ls': {
       const path = alias(['path', 'directory', 'dir', 'folder']);
       const recursive = alias(['recursive', 'recurse', 'deep']);
-      return { path: path ?? '/', recursive };
+      const normalizedPath = typeof path === 'string' ? normalizeFilePath(path) : path;
+      return { path: normalizedPath ?? '/', recursive };
     }
     case 'batch_write':
     case 'batchwrite':
@@ -110,9 +158,13 @@ export function normalizeToolArgs(toolName: string, raw: unknown): any {
       // Normalize each file's fields
       if (Array.isArray(files)) {
         files = files.filter(f => f && typeof f === 'object').map((f: any) => {
-          const path = f.path ?? f.file ?? f.filename ?? f.filepath ?? f.file_path;
-          const content = f.content ?? f.contents ?? f.code ?? f.text ?? f.body ?? f.data;
-          return { path, content };
+          const path = f.path ?? f.file ?? f.filename ?? f.filepath ?? f.file_path ?? f.target ?? f.name;
+          let content = f.content ?? f.contents ?? f.code ?? f.text ?? f.body ?? f.data ?? f.source ?? f.value ?? f.body_content ?? f.file_content;
+          // Unwrap markdown code fences if LLM wrapped content in ``` blocks
+          if (typeof content === 'string') content = unwrapCodeBlock(content);
+          // Normalize path
+          const normalizedPath = typeof path === 'string' ? normalizeFilePath(path) : path;
+          return { path: normalizedPath, content };
         });
       }
       const commitMessage = alias(['commitMessage', 'commit_message', 'message']);
@@ -122,7 +174,8 @@ export function normalizeToolArgs(toolName: string, raw: unknown): any {
     case 'createdirectory':
     case 'mkdir': {
       const path = alias(['path', 'directory', 'dir', 'folder', 'name']);
-      return { path };
+      const normalizedPath = typeof path === 'string' ? normalizeFilePath(path) : path;
+      return { path: normalizedPath };
     }
     case 'search_files':
     case 'searchfiles':
@@ -130,7 +183,8 @@ export function normalizeToolArgs(toolName: string, raw: unknown): any {
       const query = alias(['query', 'search', 'term', 'pattern', 'text']);
       const path = alias(['path', 'directory', 'dir', 'folder', 'scope']);
       const limit = alias(['limit', 'max', 'count', 'maxResults']);
-      return { query, path, limit };
+      const normalizedPath = typeof path === 'string' ? normalizeFilePath(path) : path;
+      return { query, path: normalizedPath, limit };
     }
     default:
       return obj;
@@ -154,6 +208,8 @@ export interface NormalizedToolCall {
   args: Record<string, unknown>;
   /** Whether normalization detected and corrected field-name aliases */
   hadAliasCorrections?: boolean;
+  /** Required fields that were missing (set when returning partial result) */
+  _missingRequired?: string[];
 }
 
 /**
@@ -388,57 +444,9 @@ function getToolContext(): ToolContext {
  * - scopePath="project", path="src/app.ts" → "project/src/app.ts"
  */
 function resolveScopedPath(inputPath: string): string {
-  if (!inputPath || typeof inputPath !== 'string') {
-    throw new Error('Path is required');
-  }
-
-  // Strip leading slash if present and normalize backslashes
-  let cleanPath = inputPath.startsWith('/') ? inputPath.substring(1) : inputPath;
-  cleanPath = cleanPath.replace(/\\/g, '/');  // Handle Windows paths
-  cleanPath = cleanPath.replace(/\/+/g, '/'); // Collapse double slashes
-  cleanPath = cleanPath.replace(/\/+$/, '');  // Strip trailing slashes
-
-  // Reject path traversal attempts in the path itself
-  const segments = cleanPath.split('/');
-  if (segments.some(seg => seg === '..')) {
-    logger.warn('Path traversal attempt detected in file path', { originalPath: inputPath, cleanPath });
-    throw new Error('Path cannot contain directory traversal (..)');
-  }
-
-  // Reject empty paths
-  if (!cleanPath || cleanPath.trim() === '') {
-    throw new Error('Path cannot be empty');
-  }
-
   const context = getToolContext();
-  const scopePath = context.scopePath || 'project/sessions/000';  // Ensure scopePath defaults to session scope
-
-  // SECURITY: Validate scopePath itself doesn't contain traversal attempts
-  if (scopePath.includes('..')) {
-    logger.error('Invalid scopePath contains traversal', { scopePath });
-    throw new Error('Invalid scope path configuration');
-  }
-
-  // If path already starts with the scope + "/" or equals the scope exactly, use as-is
-  // This prevents "project/sessions/001" from matching "project/sessions/001-extended"
-  if (cleanPath === scopePath || cleanPath.startsWith(`${scopePath}/`)) {
-    return cleanPath;
-  }
-
-  // SECURITY: If path starts with "project/" but NOT our scopePath, log warning
-  // This catches attempts to escape session scope (e.g., writing to project/shared when scoped to project/sessions/001)
-  if (cleanPath.startsWith('project/')) {
-    logger.warn('Path outside session scope - will be written to workspace root instead of session', {
-  originalPath: inputPath,
-  cleanPath,
-  scopePath,
-    });
-    // Still allow it for now (could be intentional for shared files), but log for visibility
-    return cleanPath;
-  }
-
-  // Prepend scope path to make it session-scoped
-  return `${scopePath}/${cleanPath}`;
+  const scopePath = context.scopePath || 'project/sessions/000';
+  return resolveToScopedPath(inputPath, scopePath);
 }
 
 /**
@@ -467,15 +475,39 @@ export function initializeVFSTools(userId: string, sessionId?: string, scopePath
  * Use for new files or complete rewrites
  */
 export const writeFileTool = (tool as any)({
-  description: 'Create or overwrite a file in the VFS. Required: path (e.g. "src/app.tsx"), content (complete file contents — do not abbreviate).',
+  description: [
+    'Create or overwrite a file in the VFS.',
+    '',
+    'Required arguments:',
+    '  • path (string) — relative file path like "src/app.tsx" (no leading slash, no URL, no query string)',
+    '  • content (string) — complete file contents, do not abbreviate or truncate',
+    '',
+    'Examples of correct usage:',
+    '  write_file(path="hello.py", content="print(\'Hello, World!\')")',
+    '  write_file(path="src/App.tsx", content="export default function App() { return <div>Hello</div>; }")',
+    '  write_file(path="README.md", content="# My Project\\n\\nThis is a sample project.")',
+    '',
+    'Common mistakes to avoid:',
+    '  ✗ create_file(...)          → Use write_file instead (wrong tool name)',
+    '  ✗ writeFile(path=...)       → Use write_file (underscore, not camelCase)',
+    '  ✗ write_file(file=...)      → Use path, not file or filename or filepath',
+    '  ✗ write_file(path=..., code=...)  → Use content, not code or text or body',
+    '  ✗ write_file(path="/src/app.tsx", ...)  → No leading slash, use "src/app.tsx"',
+    '  ✗ write_file(path="https://example.com/src/app.tsx", ...)  → No URLs, use relative paths',
+    '',
+    'Workflow:',
+    '  • For creating new files: use write_file for single file, batch_write for multiple files',
+    '  • For modifying existing files: use apply_diff (surgical patch), NOT write_file (full rewrite)',
+    '  • Always read existing files with read_file before editing them',
+  ].join('\n'),
   parameters: z.preprocess(
     (raw) => normalizeToolArgs('write_file', raw),
     z.object({
       path: z.string().describe('Relative path like "src/app.tsx" (no URL, no query string, no leading slash)'),
       content: z.string().describe('Complete file contents — do not abbreviate or truncate'),
       commitMessage: z.string().optional().describe('Optional description of the change'),
-    })
-  ).passthrough(),
+    }).passthrough()
+  ),
   execute: async ({ path, content, commitMessage = 'Write file via MCP tool' }) => {
     try {
   if (!path || typeof path !== 'string') {
@@ -484,6 +516,8 @@ export const writeFileTool = (tool as any)({
   if (content === undefined || content === null) {
     return { success: false, path, error: 'Content is required' };
   }
+  // Unwrap code fences if LLM wrapped content in ``` blocks (safety net)
+  if (typeof content === 'string') content = unwrapCodeBlock(content);
   // Guard against extremely large content that could cause memory issues
   const MAX_CONTENT_SIZE = 5 * 1024 * 1024; // 5MB
   if (content.length > MAX_CONTENT_SIZE) {
@@ -493,6 +527,33 @@ export const writeFileTool = (tool as any)({
   error: `Content too large (${(content.length / 1024 / 1024).toFixed(1)}MB). Maximum is ${(MAX_CONTENT_SIZE / 1024 / 1024).toFixed(0)}MB.`,
 };
   }
+
+  // Detect truncated content — LLMs sometimes output "..." or "// rest of file" placeholders
+  const TRUNCATION_PATTERNS = [
+    /\.\.\.\s*$/,
+    /\/\/\s*rest of file/i,
+    /\/\/\s*\.\.\./,
+    /\/\*\s*\.\.\.\s*\*\//,
+    /#\s*\.\.\./,
+    /\/\/\s*remaining/i,
+    /\/\/\s*etc\.?/i,
+    /\/\/\s*\.\.\.?\s*$/m,
+  ];
+  const lastLines = content.slice(-200);
+  if (TRUNCATION_PATTERNS.some(p => p.test(lastLines))) {
+    return {
+      success: false,
+      path,
+      error: {
+        code: 'TRUNCATED_CONTENT',
+        message: 'Content appears to be truncated (ends with "...", "// rest of file", or similar placeholder). Please provide the COMPLETE file contents without abbreviation.',
+        retryable: true,
+        attemptedPath: path,
+        suggestedNextAction: 'Call write_file again with the full, untruncated file content.',
+      },
+    };
+  }
+
   const context = getToolContext();
 
   // ENHANCED: Log VFS tool invocation with full context
@@ -554,11 +615,21 @@ export const writeFileTool = (tool as any)({
     version: (result as any).version ?? 1,
   };
     } catch (error: any) {
-  logger.error('writeFile failed', { path, error: error.message });
+  const msg = error.message || 'Failed to write file';
+  logger.error('writeFile failed', { path, error: msg });
+  const isParentMissing = /not found|enoent|does not exist|no such/i.test(msg);
   return {
     success: false,
     path,
-    error: error.message,
+    error: isParentMissing
+      ? {
+          code: 'PARENT_NOT_FOUND',
+          message: `Cannot write "${path}" — parent directory may not exist.`,
+          retryable: true,
+          attemptedPath: path,
+          suggestedNextAction: `Call create_directory for the parent path first, then retry write_file.`,
+        }
+      : { code: 'WRITE_ERROR', message: msg, retryable: false },
   };
     }
   },
@@ -569,15 +640,50 @@ export const writeFileTool = (tool as any)({
  * Preferred for targeted edits - much more reliable than full rewrite
  */
 export const applyDiffTool = (tool as any)({
-  description: 'Apply a diff patch to modify an existing file. Required: path, diff (unified format with --- +++ @@ lines).',
+  description: [
+    'Apply a diff patch to modify an existing file.',
+    '',
+    'Required arguments:',
+    '  • path (string) — relative file path like "src/app.tsx"',
+    '  • diff (string) — unified diff format with --- and +++ headers',
+    '',
+    'Unified diff format:',
+    '  --- a/src/file.ts',
+    '  +++ b/src/file.ts',
+    '  @@ -line,count +line,count @@',
+    '   unchanged context line',
+    '  -removed line',
+    '  +added line',
+    '   unchanged context line',
+    '',
+    'Examples of correct usage:',
+    '  apply_diff(path="src/App.tsx", diff="--- a/src/App.tsx\\n+++ b/src/App.tsx\\n@@ -1,5 +1,5 @@\\n import React\\n-function OldName() {\\n+function NewName() {\\n   return <div>hello</div>',
+    '',
+    'Common mistakes to avoid:',
+    '  ✗ apply_diff(path=..., patch=...)  → Use diff, not patch (wrong field name)',
+    '  ✗ apply_diff(path=..., changes=...)  → Use diff, not changes',
+    '  ✗ apply_diff(file=..., diff=...)  → Use path, not file',
+    '  ✗ Diff missing --- or +++ headers  → Must include both --- a/path and +++ b/path',
+    '  ✗ Diff with no context lines  → Include at least 2-3 unchanged lines around your changes',
+    '',
+    'When to use apply_diff vs write_file:',
+    '  • apply_diff — modifying part of an existing file (PREFERRED)',
+    '  • write_file — creating a brand new file, or completely rewriting an entire file',
+    '  • Never use write_file to change just a few lines in an existing file — use apply_diff instead',
+    '',
+    'Workflow for editing existing files:',
+    '  1. read_file(path) → review current content',
+    '  2. apply_diff(path, diff) → apply surgical patch',
+    '  3. Use multiple small apply_diff calls rather than one large rewrite',
+  ].join('\n'),
   parameters: z.preprocess(
     (raw) => normalizeToolArgs('apply_diff', raw),
     z.object({
       path: z.string().describe('Relative path like "src/app.tsx" (the file to patch)'),
       diff: z.string().describe('Unified diff with --- +++ @@ format — include full context lines'),
       commitMessage: z.string().optional().describe('Optional description of the change'),
-    })
-  ).passthrough(),
+    }).passthrough()
+  ),
   execute: async ({ path, diff, commitMessage = 'Applied diff via MCP tool' }) => {
     try {
   if (!path || typeof path !== 'string') {
@@ -586,6 +692,160 @@ export const applyDiffTool = (tool as any)({
   if (!diff || typeof diff !== 'string') {
     return { success: false, path, error: 'Diff content is required' };
   }
+
+  // Unwrap code fences if LLM wrapped diff in ``` blocks
+  diff = unwrapCodeBlock(diff);
+
+  // Auto-generate ---/+++ headers if LLM sent diff without them
+  // Common failure: models send just @@ hunk lines without the file headers
+  if (!diff.includes('--- ') && !diff.includes('+++ ')) {
+    // Check if it looks like a diff (has @@ hunk headers)
+    if (diff.includes('@@')) {
+      diff = `--- a/${path}\n+++ b/${path}\n${diff}`;
+    }
+  }
+
+  // === Diff auto-repair pipeline (steps 1-4) ===
+
+  // Step 1: Strip `diff --git` preambles that some models prepend
+  if (diff.startsWith('diff --git')) {
+    const firstHunk = diff.indexOf('@@');
+    if (firstHunk !== -1) {
+      // Find the line before @@ to keep --- and +++ headers
+      const beforeHunk = diff.substring(0, firstHunk);
+      const dashLine = beforeHunk.lastIndexOf('--- ');
+      if (dashLine !== -1) {
+        diff = diff.substring(dashLine);
+      }
+    }
+  }
+
+  // Step 2: Fix unclosed @@ headers (e.g. "@@ -1,5 +1,5" without trailing " @@")
+  diff = diff.replace(/@@ -(\d+),?(\d*) \+(\d+),?(\d*)(?!\s*@@)/g, '@@ -$1,$2 +$3,$4 @@');
+
+  // Step 3: Remove spurious indentation (some models indent every diff line)
+  const diffLines = diff.split('\n');
+  const allIndented = diffLines.length > 3 && diffLines.slice(2).every(l => l === '' || l.startsWith('  ') || l.startsWith('\t'));
+  if (allIndented) {
+    diff = diffLines.map(l => {
+      if (l.startsWith('  ')) return l.slice(2);
+      if (l.startsWith('\t')) return l.slice(1);
+      return l;
+    }).join('\n');
+  }
+
+  // Step 4: Reject non-diff content (model sent prose instead of a diff)
+  if (!diff.includes('@@') && !diff.includes('--- ') && !diff.includes('+++ ')) {
+    // Check for search-and-replace format before rejecting
+    if (!(/<<<+\s*SEARCH/i.test(diff))) {
+      return {
+        success: false,
+        path,
+        error: {
+          code: 'INVALID_DIFF_FORMAT',
+          message: 'The provided content is not a valid unified diff. It must contain @@ hunk headers and ---/+++ file headers.',
+          retryable: true,
+          attemptedPath: path,
+          suggestedNextAction: `Call read_file("${path}") first, then generate a proper unified diff with --- a/${path} and +++ b/${path} headers.`,
+        },
+      };
+    }
+  }
+
+  // Step 5: Search-and-replace format fallback
+  // Many LLMs send <<<<<<< SEARCH / ======= / >>>>>>> REPLACE instead of unified diff
+  const sarPattern = /<<<+\s*SEARCH\s*\n([\s\S]*?)\n={3,}\n([\s\S]*?)\n>>>+\s*REPLACE/g;
+  if (sarPattern.test(diff)) {
+    logger.info('[VFS-TOOL] applyDiff: detected search-and-replace format, converting', {
+      path,
+      diffPreview: diff.slice(0, 200),
+    });
+
+    const context = getToolContext();
+    const scopedPath = resolveScopedPath(path);
+
+    // Read the current file
+    const currentFile = await virtualFilesystem.readFile(context.userId, scopedPath);
+    let newContent = currentFile.content;
+
+    // Reset lastIndex after .test()
+    sarPattern.lastIndex = 0;
+    let match;
+    let appliedCount = 0;
+    let failedSearches: string[] = [];
+
+    while ((match = sarPattern.exec(diff)) !== null) {
+      const searchStr = match[1];
+      const replaceStr = match[2];
+      if (newContent.includes(searchStr)) {
+        newContent = newContent.replace(searchStr, replaceStr);
+        appliedCount++;
+      } else {
+        // Try trimmed match (whitespace differences)
+        const trimmedSearch = searchStr.split('\n').map((l: string) => l.trimEnd()).join('\n');
+        const trimmedContent = newContent.split('\n').map((l: string) => l.trimEnd()).join('\n');
+        const idx = trimmedContent.indexOf(trimmedSearch);
+        if (idx !== -1) {
+          // Find the original-content boundaries that correspond to this trimmed match
+          const lines = newContent.split('\n');
+          const searchLines = searchStr.split('\n');
+          const trimmedLines = trimmedContent.split('\n');
+          let startLine = trimmedContent.substring(0, idx).split('\n').length - 1;
+          let endLine = startLine + searchLines.length;
+          const originalSlice = lines.slice(startLine, endLine).join('\n');
+          newContent = newContent.replace(originalSlice, replaceStr);
+          appliedCount++;
+        } else {
+          failedSearches.push(searchStr.slice(0, 80));
+        }
+      }
+    }
+
+    if (appliedCount === 0) {
+      return {
+        success: false,
+        path,
+        error: {
+          code: 'DIFF_MISMATCH',
+          message: `Search-and-replace: none of the ${failedSearches.length} SEARCH blocks matched the current file content.`,
+          retryable: true,
+          attemptedPath: path,
+          failedSearches,
+          suggestedNextAction: `Call read_file("${path}") to see current content, then regenerate the diff.`,
+        },
+      };
+    }
+
+    // Write back
+    const result = await virtualFilesystem.writeFile(
+      context.userId,
+      scopedPath,
+      newContent,
+      currentFile.language,
+      { failIfExists: false }
+    );
+
+    await emitFileEvent({
+      userId: context.userId,
+      sessionId: context.sessionId,
+      path: scopedPath,
+      type: 'update',
+      content: newContent,
+      previousContent: currentFile.content,
+      source: 'mcp-tool-diff-sar',
+      metadata: { diff, appliedCount, failedSearches },
+    });
+
+    return {
+      success: true,
+      path: result.path,
+      message: `Search-and-replace applied: ${appliedCount} replacement(s)${failedSearches.length > 0 ? `, ${failedSearches.length} unmatched` : ''}`,
+      version: result.version,
+      appliedCount,
+      failedSearches: failedSearches.length > 0 ? failedSearches : undefined,
+    };
+  }
+
   const context = getToolContext();
   const scopedPath = resolveScopedPath(path);
   
@@ -638,11 +898,30 @@ export const applyDiffTool = (tool as any)({
     version: result.version,
   };
     } catch (error: any) {
-  logger.error('applyDiff failed', { path, error: error.message });
+  const msg = error.message || 'Failed to apply diff';
+  logger.error('applyDiff failed', { path, error: msg });
+  const isNotFound = /not found|enoent|does not exist/i.test(msg);
+  const isDiffMismatch = /failed to apply|does not match|no match/i.test(msg);
   return {
     success: false,
     path,
-    error: error.message,
+    error: isNotFound
+      ? {
+          code: 'PATH_NOT_FOUND',
+          message: `File "${path}" does not exist — cannot apply diff to a non-existent file.`,
+          retryable: true,
+          attemptedPath: path,
+          suggestedNextAction: `Use write_file to create the file first, or check the path with list_files.`,
+        }
+      : isDiffMismatch
+        ? {
+            code: 'DIFF_MISMATCH',
+            message: msg,
+            retryable: true,
+            attemptedPath: path,
+            suggestedNextAction: `Call read_file("${path}") to see current content, then regenerate the diff.`,
+          }
+        : { code: 'DIFF_ERROR', message: msg, retryable: false },
   };
     }
   },
@@ -672,13 +951,28 @@ function reverseNormalizePath(originalPath: string, scopedPath: string): string 
  * Critical for the agent to see what exists before editing
  */
 export const readFileTool = (tool as any)({
-  description: 'Read a file. Required: path (e.g. "src/app.tsx"). Returns file content.',
+  description: [
+    'Read the content of a file. ALWAYS call this before editing an existing file.',
+    '',
+    'Required arguments:',
+    '  • path (string) — relative file path like "src/app.tsx"',
+    '',
+    'Examples of correct usage:',
+    '  read_file(path="src/App.tsx")',
+    '  read_file(path="package.json")',
+    '',
+    'Common mistakes to avoid:',
+    '  ✗ readFile(path=...)  → Use read_file (underscore, not camelCase)',
+    '  ✗ read_file(file=...)  → Use path, not file or filename',
+    '',
+    'Workflow: Always read_file before applying a diff to an existing file.',
+  ].join('\n'),
   parameters: z.preprocess(
     (raw) => normalizeToolArgs('read_file', raw),
     z.object({
       path: z.string().describe('Relative path like "src/app.tsx" (the file to read)'),
-    })
-  ).passthrough(),
+    }).passthrough()
+  ),
   execute: async ({ path }) => {
     try {
   if (!path || typeof path !== 'string') {
@@ -709,16 +1003,50 @@ export const readFileTool = (tool as any)({
     exists: true,
   };
     } catch (error: any) {
+  const msg = error.message || 'Failed to read file';
   logger.error('readFile failed', { 
     path, 
-    error: error.message,
+    error: msg,
     stack: error.stack,
     userId: getToolContext().userId 
   });
+  const isNotFound = /not found|enoent|does not exist|no such/i.test(msg);
+  if (isNotFound) {
+    const parentPath = path.includes('/') ? path.substring(0, path.lastIndexOf('/')) || '/' : '/';
+    // Try to list siblings for suggestions
+    let suggestedPaths: string[] = [];
+    try {
+      const ctx = getToolContext();
+      const parentScoped = resolveScopedPath(parentPath);
+      const listing = await virtualFilesystem.listDirectory(ctx.userId, parentScoped);
+      suggestedPaths = (listing.nodes as any[]).slice(0, 10).map((f: any) => f.name || f.path || String(f));
+    } catch { /* parent may not exist either */ }
+    return {
+      success: false,
+      path,
+      exists: false,
+      error: {
+        code: 'PATH_NOT_FOUND',
+        message: `File "${path}" does not exist.`,
+        retryable: true,
+        attemptedPath: path,
+        parentPath,
+        suggestedPaths,
+        suggestedNextAction: suggestedPaths.length > 0
+          ? `Try one of these paths: ${suggestedPaths.join(', ')}`
+          : `Call list_files("${parentPath}") to see what exists.`,
+      },
+    };
+  }
   return {
     success: false,
     path,
-    error: error.message,
+    error: {
+      code: 'READ_ERROR',
+      message: msg,
+      retryable: false,
+      attemptedPath: path,
+    },
     exists: false,
   };
     }
@@ -736,8 +1064,8 @@ export const readFilesTool = (tool as any)({
     (raw) => normalizeToolArgs('read_files', raw),
     z.object({
       paths: z.array(z.string()).min(1).max(20, 'Cannot read more than 20 files at once').describe('Array of file paths like ["src/a.ts", "src/b.ts"]'),
-    })
-  ).passthrough(),
+    }).passthrough()
+  ),
   execute: async ({ paths }) => {
     try {
       const context = getToolContext();
@@ -787,14 +1115,29 @@ export const readFilesTool = (tool as any)({
  * Use for navigation and exploration
  */
 export const listFilesTool = (tool as any)({
-  description: 'List files and directories in the Virtual File System. Use to explore project structure and find files.',
+  description: [
+    'List files and directories in the Virtual File System.',
+    '',
+    'Arguments:',
+    '  • path (string, default: "/") — directory to list',
+    '  • recursive (boolean, default: false) — whether to list recursively',
+    '',
+    'Examples of correct usage:',
+    '  list_files(path="/")',
+    '  list_files(path="src/", recursive=true)',
+    '',
+    'Common mistakes to avoid:',
+    '  ✗ listFiles(path=...)  → Use list_files (underscore, not camelCase)',
+    '  ✗ ls(path=...)  → Use list_files, not ls',
+    '  ✗ list_files(directory=...)  → Use path, not directory or dir or folder',
+  ].join('\n'),
   parameters: z.preprocess(
     (raw) => normalizeToolArgs('list_files', raw),
     z.object({
       path: z.string().default('/').describe('Directory path to list (default: root, like "/")'),
       recursive: z.boolean().optional().default(false).describe('Whether to list recursively (default: false)'),
-    })
-  ).passthrough(),
+    }).passthrough()
+  ),
   execute: async ({ path, recursive = false }) => {
     try {
   const context = getToolContext();
@@ -817,11 +1160,21 @@ export const listFilesTool = (tool as any)({
     count: listing.nodes.length,
   };
     } catch (error: any) {
-  logger.error('listFiles failed', { path, error: error.message });
+  const msg = error.message || 'Failed to list directory';
+  logger.error('listFiles failed', { path, error: msg });
+  const isNotFound = /not found|enoent|does not exist/i.test(msg);
   return {
     success: false,
     path,
-    error: error.message,
+    error: isNotFound
+      ? {
+          code: 'PATH_NOT_FOUND',
+          message: `Directory "${path}" does not exist.`,
+          retryable: true,
+          attemptedPath: path,
+          suggestedNextAction: `Try list_files("/") or list_files("src") to discover available directories.`,
+        }
+      : { code: 'LIST_ERROR', message: msg, retryable: false },
     nodes: [],
   };
     }
@@ -833,15 +1186,31 @@ export const listFilesTool = (tool as any)({
  * Helps the agent find where to make changes
  */
 export const searchFilesTool = (tool as any)({
-  description: 'Search across the Virtual File System for files containing specific text. Returns matching files and code snippets.',
+  description: [
+    'Search across the Virtual File System for files containing specific text.',
+    '',
+    'Arguments:',
+    '  • query (string) — search term or text pattern',
+    '  • path (string, optional) — limit search to a directory like "src/"',
+    '  • limit (number, default: 10) — maximum results',
+    '',
+    'Examples of correct usage:',
+    '  search_files(query="TODO")',
+    '  search_files(query="useState", path="src/", limit=20)',
+    '',
+    'Common mistakes to avoid:',
+    '  ✗ searchFiles(query=...)  → Use search_files (underscore, not camelCase)',
+    '  ✗ search_files(term=...)  → Use query, not term or pattern or text',
+    '  ✗ search_files(search=...)  → Use query, not search',
+  ].join('\n'),
   parameters: z.preprocess(
     (raw) => normalizeToolArgs('search_files', raw),
     z.object({
       query: z.string().describe('Search term or natural language description'),
       path: z.string().optional().describe('Optional path to search within (e.g. "src/")'),
       limit: z.number().optional().default(10).describe('Maximum number of results (default: 10)'),
-    })
-  ).passthrough(),
+    }).passthrough()
+  ),
   execute: async ({ query, path, limit = 10 }) => {
     try {
   if (!query || typeof query !== 'string') {
@@ -891,7 +1260,38 @@ export const searchFilesTool = (tool as any)({
  * Efficient for creating several related files at once
  */
 export const batchWriteTool = (tool as any)({
-  description: 'Write multiple files at once. Required: files — array of {path, content} objects. Example: {"files": [{"path": "src/a.ts", "content": "full content here"}]}',
+  description: [
+    'Write multiple files at once in a single tool call.',
+    '',
+    'Required arguments:',
+    '  • files (array) — array of {path, content} objects',
+    '',
+    'Optional arguments:',
+    '  • commitMessage (string) — description of the batch change',
+    '',
+    'Examples of correct usage:',
+    '  batch_write(files=[{path:"src/app.py", content:"from flask import Flask\\napp = Flask(__name__)"},{path:"requirements.txt", content:"flask\\ngunicorn"}])',
+    '  batch_write(files=[{path:"src/App.tsx", content:"export default function App() {}"},{path:"src/App.css", content:".app { margin: 0 }"}])',
+    '  batch_write(files=[{path:"README.md", content:"# Project"},{path:"LICENSE", content:"MIT"},{path:".gitignore", content:"node_modules/"}])',
+    '',
+    'Common mistakes to avoid:',
+    '  ✗ batch_write(files="[{\\"path\\":...}]")  → Do NOT stringify the files array — pass as a proper JSON/array',
+    '  ✗ batch_write(files={path:"a.py", content:"..."})  → files must be an ARRAY [...], not a single object {...}',
+    '  ✗ batch_write(items=[...])  → Use files, not items or operations or data',
+    '  ✗ write_file(path="a.py", ...) + write_file(path="b.py", ...)  → Use batch_write for 2+ files instead',
+    '  ✗ batch_write with file= instead of path=  → Each entry needs path and content keys',
+    '',
+    'When to use batch_write vs write_file:',
+    '  • batch_write — creating 2 or more files in one go',
+    '  • write_file — creating a single new file',
+    '',
+    'Important rules:',
+    '  • Maximum 50 files per batch',
+    '  • Total content size limit: 50MB across all files',
+    '  • Each file entry must have both "path" and "content" keys',
+    '  • Parent directories are created automatically',
+    '  • Use batch_write for NEW files only — for editing existing files, use apply_diff',
+  ].join('\n'),
   parameters: z.preprocess(
     (raw) => normalizeToolArgs('batch_write', raw),
     z.object({
@@ -900,8 +1300,8 @@ export const batchWriteTool = (tool as any)({
         content: z.string().describe('Complete file contents — do not abbreviate'),
       })).max(50, 'Cannot write more than 50 files').describe('Array of {path, content} objects — e.g. [{"path":"src/a.ts","content":"..."}]'),
       commitMessage: z.string().optional().describe('Optional description of the batch change'),
-    })
-  ).passthrough(),
+    }).passthrough()
+  ),
   execute: async ({ files, commitMessage = 'Batch write via MCP tool' }) => {
     try {
       const context = getToolContext();
@@ -1093,14 +1493,29 @@ export const batchWriteTool = (tool as any)({
  * delete_file - Delete a file or directory from the VFS
  */
 export const deleteFileTool = (tool as any)({
-  description: 'Delete a file or directory from the Virtual File System. Use with caution — this operation cannot be undone.',
+  description: [
+    'Delete a file or directory from the Virtual File System. Use with caution.',
+    '',
+    'Arguments:',
+    '  • path (string) — relative file path like "src/old.ts"',
+    '  • reason (string, optional) — why this file is being deleted',
+    '',
+    'Examples of correct usage:',
+    '  delete_file(path="src/old.ts")',
+    '  delete_file(path="temp/", reason="Temporary files no longer needed")',
+    '',
+    'Common mistakes to avoid:',
+    '  ✗ deleteFile(path=...)  → Use delete_file (underscore, not camelCase)',
+    '  ✗ delete_file(file=...)  → Use path, not file or filename',
+    '  ✗ remove_file(path=...)  → Use delete_file, not remove_file',
+  ].join('\n'),
   parameters: z.preprocess(
     (raw) => normalizeToolArgs('delete_file', raw),
     z.object({
       path: z.string().describe('Relative path like "src/old.ts" (the file or directory to delete)'),
       reason: z.string().optional().describe('Optional reason for deletion'),
-    })
-  ).passthrough(),
+    }).passthrough()
+  ),
   execute: async ({ path, reason }) => {
     try {
   if (!path || typeof path !== 'string') {
@@ -1128,11 +1543,21 @@ export const deleteFileTool = (tool as any)({
     message: `Deleted: ${reason || 'MCP tool request'}`,
   };
     } catch (error: any) {
-  logger.error('deleteFile failed', { path, error: error.message });
+  const msg = error.message || 'Failed to delete';
+  logger.error('deleteFile failed', { path, error: msg });
+  const isNotFound = /not found|enoent|does not exist|no such/i.test(msg);
   return {
     success: false,
     path,
-    error: error.message,
+    error: isNotFound
+      ? {
+          code: 'PATH_NOT_FOUND',
+          message: `File "${path}" does not exist — nothing to delete.`,
+          retryable: false,
+          attemptedPath: path,
+          suggestedNextAction: `Call list_files to find the correct path.`,
+        }
+      : { code: 'DELETE_ERROR', message: msg, retryable: false },
   };
     }
   },
@@ -1142,13 +1567,27 @@ export const deleteFileTool = (tool as any)({
  * create_directory - Create a directory in the VFS
  */
 export const createDirectoryTool = (tool as any)({
-  description: 'Create a directory in the Virtual File System. Creates parent directories as needed.',
+  description: [
+    'Create a directory in the Virtual File System. Parent directories are created automatically.',
+    '',
+    'Arguments:',
+    '  • path (string) — directory path to create like "src/components/utils"',
+    '',
+    'Examples of correct usage:',
+    '  create_directory(path="src/components")',
+    '  create_directory(path="tests/unit")',
+    '',
+    'Common mistakes to avoid:',
+    '  ✗ createDirectory(path=...)  → Use create_directory (underscore, not camelCase)',
+    '  ✗ mkdir(path=...)  → Use create_directory, not mkdir',
+    '  ✗ create_directory(directory=...)  → Use path, not directory or dir or folder or name',
+  ].join('\n'),
   parameters: z.preprocess(
     (raw) => normalizeToolArgs('create_directory', raw),
     z.object({
       path: z.string().describe('Directory path to create, like "src/components/utils"'),
-    })
-  ).passthrough(),
+    }).passthrough()
+  ),
   execute: async ({ path }) => {
     try {
   if (!path || typeof path !== 'string') {
@@ -1259,7 +1698,7 @@ const TOOL_META: Record<string, { description: string; parameters: z.ZodType }> 
   path: z.string().describe('Relative path like "src/app.tsx" (no URL, no query string, no leading slash)'),
   content: z.string().describe('Complete file contents — do not abbreviate or truncate'),
   commitMessage: z.string().optional().describe('Optional description of the change'),
-    }).passthrough(),
+    }),
   },
   apply_diff: {
     description: applyDiffTool.description,
@@ -1267,26 +1706,26 @@ const TOOL_META: Record<string, { description: string; parameters: z.ZodType }> 
   path: z.string().describe('Relative path like "src/app.tsx" (the file to patch)'),
   diff: z.string().describe('Unified diff with --- +++ @@ format — include full context lines'),
   commitMessage: z.string().optional().describe('Optional description of the change'),
-    }).passthrough(),
+    }),
   },
   read_file: {
     description: readFileTool.description,
     parameters: z.object({
   path: z.string().describe('Relative path like "src/app.tsx" (the file to read)'),
-    }).passthrough(),
+    }),
   },
   read_files: {
     description: readFilesTool.description,
     parameters: z.object({
   paths: z.array(z.string()).min(1).max(20).describe('Array of file paths like ["src/a.ts", "src/b.ts"]'),
-    }).passthrough(),
+    }),
   },
   list_files: {
     description: listFilesTool.description,
     parameters: z.object({
   path: z.string().default('/').describe('Directory path to list (default: root, like "/")'),
   recursive: z.boolean().optional().default(false).describe('Whether to list recursively (default: false)'),
-    }).passthrough(),
+    }),
   },
   search_files: {
     description: searchFilesTool.description,
@@ -1294,7 +1733,7 @@ const TOOL_META: Record<string, { description: string; parameters: z.ZodType }> 
   query: z.string().describe('Search term or natural language description'),
   path: z.string().optional().describe('Optional path to search within (e.g. "src/")'),
   limit: z.number().optional().default(10).describe('Maximum number of results (default: 10)'),
-    }).passthrough(),
+    }),
   },
   batch_write: {
     description: batchWriteTool.description,
@@ -1304,20 +1743,20 @@ const TOOL_META: Record<string, { description: string; parameters: z.ZodType }> 
     content: z.string().describe('Complete file contents — do not abbreviate'),
   })).max(50).describe('Array of {path, content} objects — e.g. [{"path":"src/a.ts","content":"..."}]'),
   commitMessage: z.string().optional().describe('Optional description of the batch change'),
-    }).passthrough(),
+    }),
   },
   delete_file: {
     description: deleteFileTool.description,
     parameters: z.object({
   path: z.string().describe('Relative path like "src/old.ts" (the file or directory to delete)'),
   reason: z.string().optional().describe('Optional reason for deletion'),
-    }).passthrough(),
+    }),
   },
   create_directory: {
     description: createDirectoryTool.description,
     parameters: z.object({
   path: z.string().describe('Directory path to create, like "src/components/utils"'),
-    }).passthrough(),
+    }),
   },
   get_workspace_stats: {
     description: getWorkspaceStatsTool.description,

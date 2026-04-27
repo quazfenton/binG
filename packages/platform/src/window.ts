@@ -208,8 +208,8 @@ class WindowControl {
       // Built-in Tauri fallback: open via <a> tag click simulation
       const a = document.createElement('a');
       a.href = url;
-      a.target = '_blank';
-      a.rel = 'noopener noreferrer';
+      a.target = target;
+      a.rel = target === '_blank' ? 'noopener noreferrer' : undefined;
       a.click();
     } else {
       const openedWindow = window.open(url, target, 'noopener,noreferrer');

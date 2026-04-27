@@ -31,6 +31,7 @@ import { chatLogger } from './chat-logger';
 import { getProviderForModel } from './openai-compat-wrapper';
 import { tokenTracker } from './ai-caching';
 import { createReasoningMiddleware, withRetry, createSmoothStream, isTokenLimitError, handleTokenLimitError } from './ai-middleware';
+import { recordToolCall, shouldForceTextMode } from './tool-call-telemetry';
 
 /**
  * Tool execution context for Vercel AI SDK tools
@@ -41,6 +42,9 @@ export interface ToolExecutionContext {
   sessionId?: string;
   requestId?: string;
   scopePath?: string;  // VFS scope path for session-scoped file operations (e.g., "project/sessions/001")
+  /** The last user message — used for trigger-matching powers so only relevant
+   *  action-tools are registered (avoids bloating the LLM tool list). */
+  lastUserMessage?: string;
   [key: string]: any;
 }
 
@@ -48,6 +52,56 @@ export interface ToolExecutionContext {
  * Provider types supported by Vercel AI SDK
  */
 export type VercelProvider = 'openai' | 'anthropic' | 'google' | 'mistral' | 'openrouter';
+
+/**
+ * Instructions for models that don't support function calling.
+ * Tells the model to use text-based formats for file operations.
+ */
+const TEXT_MODE_TOOL_INSTRUCTIONS = `
+## FILE OPERATIONS (REQUIRED FORMAT)
+
+You do NOT have function calling. Use ONLY these exact formats for file operations:
+
+### CREATE/OVERWRITE FILE
+\`\`\`file: path/to/file.ext
+complete file content here (no truncation)
+\`\`\`
+
+### EDIT FILE (unified diff format)
+\`\`\`diff: path/to/file.ext
+--- a/path/to/file.ext
++++ b/path/to/file.ext
+@@ -1,3 +1,4 @@
+ context line
+-line to remove
++line to add
++new line
+\`\`\`
+
+### CREATE DIRECTORY
+\`\`\`mkdir: path/to/directory
+\`\`\`
+
+### DELETE FILE
+\`\`\`delete: path/to/file.ext
+\`\`\`
+
+### MULTIPLE FILES (use separate blocks)
+\`\`\`file: src/a.ts
+content of a.ts
+\`\`\`
+
+\`\`\`file: src/b.ts
+content of b.ts
+\`\`\`
+
+### CRITICAL RULES
+1. ONE file per \`\`\`file:\`\`\` or \`\`\`diff:\`\`\` block
+2. Use COMPLETE file content (never truncate with "..." or "// rest of file")
+3. Do NOT mix explanations inside file blocks
+4. Do NOT describe file operations in plain text — use the block formats above
+5. Paths are relative to workspace (e.g., "src/app.tsx", not "/src/app.tsx")
+`;
 
 /**
  * Options for Vercel AI SDK streaming
@@ -667,51 +721,6 @@ export async function* streamWithVercelAI(
         reason: 'provider API returns 400 for tool calls on this model',
       });
       // Inject text-mode tool instructions since tools were stripped
-      const TEXT_MODE_TOOL_INSTRUCTIONS = `
-## FILE OPERATIONS (REQUIRED FORMAT)
-
-You do NOT have function calling. Use ONLY these exact formats for file operations:
-
-### CREATE/OVERWRITE FILE
-\`\`\`file: path/to/file.ext
-complete file content here (no truncation)
-\`\`\`
-
-### EDIT FILE (unified diff format)
-\`\`\`diff: path/to/file.ext
---- a/path/to/file.ext
-+++ b/path/to/file.ext
-@@ -1,3 +1,4 @@
- context line
--line to remove
-+line to add
-+new line
-\`\`\`
-
-### CREATE DIRECTORY
-\`\`\`mkdir: path/to/directory
-\`\`\`
-
-### DELETE FILE
-\`\`\`delete: path/to/file.ext
-\`\`\`
-
-### MULTIPLE FILES (use separate blocks)
-\`\`\`file: src/a.ts
-content of a.ts
-\`\`\`
-
-\`\`\`file: src/b.ts
-content of b.ts
-\`\`\`
-
-### CRITICAL RULES
-1. ONE file per \`\`\`file:\`\`\` or \`\`\`diff:\`\`\` block
-2. Use COMPLETE file content (never truncate with "..." or "// rest of file")
-3. Do NOT mix explanations inside file blocks
-4. Do NOT describe file operations in plain text — use the block formats above
-5. Paths are relative to workspace (e.g., "src/app.tsx", not "/src/app.tsx")
-`;
       if (streamOptions.system) {
         streamOptions.system = streamOptions.system + '\n\n' + TEXT_MODE_TOOL_INSTRUCTIONS;
       } else {
@@ -772,18 +781,35 @@ content of b.ts
         }
       } else if (supportsFC === undefined) {
         // Model doesn't report this capability — could be unknown provider.
-        // TWO-PHASE STRATEGY:
-        //   Phase 1: Use tools only (no text-mode instructions).
-        //   Phase 2: After streaming, if zero tool calls produced, check if
-        //            the response text contains tool-call patterns. If so,
-        //            issue a second completion with text-mode instructions.
-        chatLogger.info('[FC-GATE] Function calling ability UNKNOWN — using two-phase strategy', {
-          provider,
-          model: modelName,
-          toolCount,
-          strategy: 'Phase 1: tools only; Phase 2: text-mode fallback if no tool calls',
-        });
-        // Do NOT inject text-mode instructions yet — let the model try native tool calls first.
+        // Auto text-mode: if telemetry shows this model fails >70% of tool calls,
+        // strip tools and switch to text-mode proactively.
+        if (shouldForceTextMode(modelName)) {
+          chatLogger.warn('[FC-GATE] Auto text-mode: model has >70% tool failure rate', {
+            provider,
+            model: modelName,
+            toolCount,
+            action: 'Stripping tools and using text-mode fallback based on telemetry',
+          });
+          delete streamOptions.tools;
+          if (streamOptions.system) {
+            streamOptions.system = streamOptions.system + '\n\n' + TEXT_MODE_TOOL_INSTRUCTIONS;
+          } else {
+            streamOptions.system = TEXT_MODE_TOOL_INSTRUCTIONS;
+          }
+        } else {
+          // TWO-PHASE STRATEGY:
+          //   Phase 1: Use tools only (no text-mode instructions).
+          //   Phase 2: After streaming, if zero tool calls produced, check if
+          //            the response text contains tool-call patterns. If so,
+          //            issue a second completion with text-mode instructions.
+          chatLogger.info('[FC-GATE] Function calling ability UNKNOWN — using two-phase strategy', {
+            provider,
+            model: modelName,
+            toolCount,
+            strategy: 'Phase 1: tools only; Phase 2: text-mode fallback if no tool calls',
+          });
+          // Do NOT inject text-mode instructions yet — let the model try native tool calls first.
+        }
       }
     } else {
       chatLogger.info('[FC-GATE] No tools provided, skipping function calling check', { provider, model: modelName });
@@ -891,9 +917,75 @@ content of b.ts
               // Normalization is best-effort
             }
 
+            // VALIDATE REQUIRED FIELDS: Check for missing/invalid args and trigger self-healing
+            let validationError = null;
+            try {
+              const { validateToolArgs } = await import('../orchestra/shared-agent-context');
+
+              // Define required fields for common tools
+              const requiredFields: Record<string, string[]> = {
+                'write_file': ['path', 'content'],
+                'read_file': ['path'],
+                'list_files': ['path'],
+                'delete_file': ['path'],
+                'create_directory': ['path'],
+                'batch_write': ['files'],
+                'apply_diff': ['path', 'diff'],
+                'execute_bash': ['command'],
+                'search_files': ['query'],
+              };
+
+              const required = requiredFields[toolName];
+              if (required) {
+                validationError = validateToolArgs(toolName, callArgs, required);
+              }
+            } catch {
+              // Validation is best-effort
+            }
+
             const hasArgs = !!callArgs && Object.keys(callArgs).length > 0;
             const argsCount = Object.keys(callArgs).length;
-            
+
+            // Check for validation errors (missing required fields)
+            if (validationError) {
+              chatLogger.error('[TOOL-CALL] ✗ VALIDATION failed — blocking execution', {
+                toolCallId,
+                toolName,
+                validationError,
+                severity: 'HIGH',
+              });
+
+              // Record validation failure in telemetry
+              if (toolName && modelName) {
+                recordToolCall(modelName, toolName, false, 'INVALID_ARGS');
+              }
+
+              // Yield a synthetic tool-result failure so the model sees the error
+              yield {
+                content: '',
+                isComplete: false,
+                toolInvocations: [{
+                  toolCallId,
+                  toolName,
+                  state: 'result',
+                  args: callArgs,
+                  result: {
+                    success: false,
+                    error: {
+                      code: 'INVALID_ARGS',
+                      message: validationError.message,
+                      retryable: true,
+                      missing: validationError.missing,
+                      expectedSchema: validationError.expectedSchema,
+                      suggestedNextAction: validationError.suggestedNextAction,
+                    },
+                  },
+                }],
+                timestamp: new Date(),
+              };
+              break;
+            }
+
             if (hasArgs) {
               chatLogger.info('[TOOL-CALL] ✓ Tool invoked', {
                 toolCallId,
@@ -910,6 +1002,11 @@ content of b.ts
                 severity: 'HIGH',
               });
 
+              // Record empty-args as a failure in telemetry
+              if (toolName && modelName) {
+                recordToolCall(modelName, toolName, false, 'EMPTY_ARGS');
+              }
+
               // Yield a synthetic tool-result failure so the model sees the error
               // and can retry with correct args
               yield {
@@ -918,21 +1015,21 @@ content of b.ts
                 toolInvocations: [{
                   toolCallId,
                   toolName,
-                  state: 'result' as const,
-                  args: {},
+                  state: 'result',
+                  args: callArgs,
                   result: {
                     success: false,
                     error: {
-                      code: 'EMPTY_ARGS',
-                      message: `Tool "${toolName}" was called with no arguments. This usually means the model response was truncated.`,
+                      code: 'INVALID_ARGS',
+                      message: `Tool "${toolName}" called with empty arguments. Please provide all required fields.`,
                       retryable: true,
-                      suggestedNextAction: `Call ${toolName} again with all required arguments.`,
+                      suggestedNextAction: `Call ${toolName} again with proper arguments.`,
                     },
                   },
                 }],
                 timestamp: new Date(),
               };
-              break; // Skip normal tool-call yield
+              break;
             }
 
             // Cache args so tool-result can include them (AI SDK doesn't repeat args in result)
@@ -958,6 +1055,27 @@ content of b.ts
           const toolResult = (chunk as any).result;
           const toolName = (chunk as any).toolName;
           const resultSuccess = toolResult?.success ?? (toolResult?.error === undefined);
+
+          // Inject _recoveryHint into all failed tool results so the model sees actionable guidance
+          if (!resultSuccess && toolResult && typeof toolResult === 'object') {
+            const errObj = toolResult.error;
+            const errMsg = typeof errObj === 'string' ? errObj : errObj?.message || '';
+            if (!toolResult._recoveryHint) {
+              toolResult._recoveryHint = errObj?.suggestedNextAction
+                || (errObj?.code === 'PATH_NOT_FOUND' ? `Check the path and call list_files on the parent directory.` : undefined)
+                || (errObj?.code === 'INVALID_ARGS' ? `Re-read the tool description and provide all required fields.` : undefined)
+                || `Read the error carefully. Do NOT retry the exact same call — try a different approach.`;
+            }
+            // Wrap plain-string errors into structured format for consistency
+            if (typeof errObj === 'string') {
+              toolResult.error = {
+                code: 'TOOL_ERROR',
+                message: errObj,
+                retryable: true,
+                _recoveryHint: toolResult._recoveryHint,
+              };
+            }
+          }
 
           // SELF-HEALING: Enhanced error result for validation-like errors.
           // Declared here so it's in scope for the yield below.
@@ -1011,6 +1129,13 @@ content of b.ts
               };
             }
           }
+
+          // Record telemetry for tool success/failure tracking
+          if (toolName && modelName) {
+            const errCode = typeof toolResult?.error === 'object' ? toolResult.error.code : undefined;
+            recordToolCall(modelName, toolName, resultSuccess, errCode);
+          }
+
           yield {
             content: '',
             isComplete: false,
@@ -1296,31 +1421,6 @@ content of b.ts
             delete fallbackStreamOptions.tools;
 
             // Inject same text-mode instructions as main path
-            const TEXT_MODE_TOOL_INSTRUCTIONS = `
-FILE OPERATIONS — You do NOT have tool calls. Use EXACTLY these text formats:
-
-CREATE OR OVERWRITE A FILE:
-\`\`\`file: path/to/file.ext
-your full file content here
-\`\`\`
-
-EDIT EXISTING FILE (preferred — use unified diff):
-\`\`\`diff: path/to/file.ext
---- a/path/to/file.ext
-+++ b/path/to/file.ext
-@@ existing @@
--line to remove
-+line to add
-\`\`\`
-
-CREATE DIRECTORY:
-\`\`\`mkdir: path/to/directory
-\`\`\`
-
-DELETE FILE:
-\`\`\`delete: path/to/file.ext
-\`\`\`
-`;
             if (fallbackStreamOptions.system) {
               fallbackStreamOptions.system = fallbackStreamOptions.system + '\n\n' + TEXT_MODE_TOOL_INSTRUCTIONS;
             } else {
@@ -1338,13 +1438,43 @@ DELETE FILE:
           if (chunk.type === 'text-delta') {
             yield { content: (chunk as any).text, isComplete: false, timestamp: new Date() };
           } else if (chunk.type === 'tool-call') {
+            const fbToolName = (chunk as any).toolName;
+            let fbCallArgs = (chunk as any).args || (chunk as any).arguments || {};
+            // Normalize args in fallback path (same as main path)
+            try {
+              const { normalizeToolArgs: fbNormalize } = await import('@/lib/orchestra/shared-agent-context');
+              fbCallArgs = fbNormalize(fbToolName, fbCallArgs) ?? fbCallArgs;
+            } catch { /* best effort */ }
+            // Record telemetry for empty args
+            if (!fbCallArgs || Object.keys(fbCallArgs).length === 0) {
+              recordToolCall(fallbackModelName, fbToolName, false, 'EMPTY_ARGS');
+            }
             yield {
               content: '',
               isComplete: false,
               toolCalls: [{
                 id: (chunk as any).toolCallId,
-                name: (chunk as any).toolName,
-                arguments: (chunk as any).args || (chunk as any).arguments || {},
+                name: fbToolName,
+                arguments: fbCallArgs,
+              }],
+              timestamp: new Date(),
+            };
+          } else if (chunk.type === 'tool-result') {
+            // Record telemetry for fallback tool results
+            const fbResultToolName = (chunk as any).toolName;
+            const fbToolResult = (chunk as any).result;
+            const fbSuccess = fbToolResult?.success ?? (fbToolResult?.error === undefined);
+            const fbErrCode = typeof fbToolResult?.error === 'object' ? fbToolResult.error.code : undefined;
+            recordToolCall(fallbackModelName, fbResultToolName, fbSuccess, fbErrCode);
+            yield {
+              content: '',
+              isComplete: false,
+              toolInvocations: [{
+                toolCallId: (chunk as any).toolCallId,
+                toolName: fbResultToolName,
+                state: 'result' as const,
+                args: (chunk as any).args || {},
+                result: fbToolResult,
               }],
               timestamp: new Date(),
             };
@@ -1417,7 +1547,7 @@ export async function* streamWithTools(
   apiKey?: string,
   baseURL?: string,
   signal?: AbortSignal,
-  maxSteps: number = 5,
+   maxSteps: number = 12,
 ): AsyncGenerator<StreamingResponse> {
   yield* streamWithVercelAI({
     provider,

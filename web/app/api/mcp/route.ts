@@ -20,6 +20,7 @@ import { buildMem0MCPTools } from '@/lib/mcp/vfs-mcp-tools';
 import { isMem0Configured } from '@/lib/powers/mem0-power';
 import { createHTTPTransport, isValidMCPURL } from '@/lib/mcp/http-transport';
 import { handleMCPHealthCheck } from '@/lib/mcp/health-check';
+import { formatValueForMCPText } from '@/lib/mcp/result-format';
 import { createLogger } from '@/lib/utils/logger';
 import { buildCompositeSessionId, buildScopePath, extractSimpleSessionId } from '@/lib/identity';
 
@@ -27,6 +28,14 @@ const logger = createLogger('MCP-Server');
 
 // Mem0 tools cache (initialized lazily)
 let mem0MCPTools: Record<string, any> | null = null;
+
+function parseBooleanFlag(value: string | null | undefined, fallback: boolean): boolean {
+  if (value === null || value === undefined) return fallback;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'true') return true;
+  if (normalized === 'false') return false;
+  return fallback;
+}
 
 async function getMem0Tools(): Promise<Record<string, any>> {
   if (mem0MCPTools !== null) return mem0MCPTools;
@@ -99,7 +108,7 @@ function createMCPServer(): Server {
           content: [
             {
               type: 'text',
-              text: JSON.stringify({ error: `Unknown mem0 tool: ${mem0ToolName}` }),
+              text: `Unknown mem0 tool: ${mem0ToolName}`,
             },
           ],
           isError: true,
@@ -108,11 +117,12 @@ function createMCPServer(): Server {
 
       try {
         const result = await mem0Tool.execute(args || {});
+        const formatted = formatValueForMCPText(result);
         return {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(result),
+              text: formatted.displayText,
             },
           ],
           isError: !(result as any).success,
@@ -123,7 +133,7 @@ function createMCPServer(): Server {
           content: [
             {
               type: 'text',
-              text: JSON.stringify({ error: error.message }),
+              text: `Mem0 tool error: ${error.message}`,
             },
           ],
           isError: true,
@@ -139,7 +149,7 @@ function createMCPServer(): Server {
         content: [
           {
             type: 'text',
-            text: JSON.stringify({ error: `Unknown tool: ${name}` }),
+            text: `Unknown tool: ${name}`,
           },
         ],
         isError: true,
@@ -151,12 +161,13 @@ function createMCPServer(): Server {
       // This server request handler is only used for non-HTTP tool calls.
       // @ts-ignore - AI SDK tool execute signature
       const result = await tool.execute(args || {});
+      const formatted = formatValueForMCPText(result);
 
       return {
         content: [
           {
             type: 'text',
-            text: JSON.stringify(result),
+            text: formatted.displayText,
           },
         ],
         isError: !(result as any).success,
@@ -168,7 +179,7 @@ function createMCPServer(): Server {
         content: [
           {
             type: 'text',
-            text: JSON.stringify({ error: error.message }),
+            text: `Tool execution error: ${error.message}`,
           },
         ],
         isError: true,
@@ -242,6 +253,8 @@ export async function GET(request: NextRequest) {
  */
 export async function POST(request: NextRequest) {
   try {
+    const url = new URL(request.url);
+    const compact = parseBooleanFlag(url.searchParams.get('compact'), true);
     const body = await request.json();
     const { jsonrpc, method, params, id } = body;
 
@@ -310,17 +323,18 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({
           jsonrpc: '2.0',
           result: {
-            content: [{ type: 'text', text: JSON.stringify({ error: error.message }) }],
+            content: [{ type: 'text', text: `Tool execution error: ${error.message}` }],
             isError: true,
           },
           id,
         });
       }
+      const formatted = formatValueForMCPText(result);
 
       return NextResponse.json({
         jsonrpc: '2.0',
         result: {
-          content: [{ type: 'text', text: JSON.stringify(result) }],
+          content: [{ type: 'text', text: compact ? formatted.displayText : formatted.rawText }],
           isError: !(result as any).success,
         },
         id,

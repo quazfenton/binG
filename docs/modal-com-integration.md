@@ -1,3 +1,42 @@
+---
+id: modal-com-integration
+title: Modal.com Integration
+aliases:
+  - modal-com-integration
+  - modal-com-integration.md
+tags: []
+layer: core
+summary: "# Modal.com Integration\r\n\r\n## Overview\r\n\r\n[Modal.com](https://modal.com) is a serverless container platform that provides:\r\n- **Sub-second cold starts** for Python workloads\r\n- **GPU support** (H100, A100, A10G, T4, L4, A10)\r\n- **Live tunnels** with automatic TLS for port forwarding\r\n- **Custom imag"
+anchors:
+  - Overview
+  - Configuration
+  - Environment Variables
+  - Getting Your Modal API Token
+  - Usage
+  - Basic Usage
+  - With Python Packages
+  - Port Forwarding with Tunnels
+  - Interactive Terminal (PTY)
+  - With Volumes (Persistent Storage)
+  - With Secrets
+  - GPU Workloads
+  - Provider Selection
+  - Advanced Features
+  - Image Building
+  - Unencrypted TCP Tunnels
+  - Sandbox Lifecycle
+  - Pricing
+  - Comparison with Other Providers
+  - Troubleshooting
+  - API Token Errors
+  - Sandbox Creation Fails
+  - Tunnel Not Accessible
+  - Best Practices
+  - API Reference
+  - ModalComProvider
+  - ModalComSandboxHandle
+  - Related Documentation
+---
 # Modal.com Integration
 
 ## Overview

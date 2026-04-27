@@ -425,12 +425,14 @@ async function executeVFSSnapshotRollback(
       }
     }
 
-    // Update current version reference
-    db.prepare(`
-      UPDATE user_sessions
-      SET current_version = ?
-      WHERE session_id = ? AND user_id = ?
-    `).run(version, sessionId, userId);
+     // Update current version reference (session_id is stored as hash)
+     const crypto = require('crypto');
+     const sessionHash = crypto.createHash('sha256').update(sessionId).digest('hex');
+     db.prepare(`
+       UPDATE user_sessions
+       SET current_version = ?
+       WHERE session_id = ? AND user_id = ?
+     `).run(version, sessionHash, userId);
 
     return {
       success: errors.length === 0,

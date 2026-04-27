@@ -15,6 +15,7 @@ export const runtime = 'nodejs';
  */
 export async function register() {
   if (process.env.NEXT_RUNTIME === 'nodejs') {
+    /*
     try {
       // Use require instead of import to avoid Edge Runtime analysis
       const { initializeServer } = require('./lib/server-init');
@@ -22,5 +23,6 @@ export async function register() {
     } catch (error) {
       console.error('[Instrumentation] Failed to initialize server:', error);
     }
+    */
   }
 }

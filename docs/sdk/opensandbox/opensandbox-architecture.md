@@ -1,3 +1,70 @@
+---
+id: sdk-opensandbox-opensandbox-architecture
+title: OpenSandbox Architecture
+aliases:
+  - opensandbox-architecture
+  - opensandbox-architecture.md
+tags:
+  - architecture
+layer: core
+summary: "# OpenSandbox Architecture\r\n\r\nOpenSandbox is a universal sandbox platform designed for AI application scenarios, providing a complete solution with multi-language SDKs, standardized sandbox protocols, and flexible runtime implementations. This document describes the overall architecture and design p"
+anchors:
+  - Architecture Overview
+  - 1. OpenSandbox SDKs
+  - Core SDK Components
+  - 1.1 Sandbox
+  - 1.2 Filesystem
+  - 1.3 Commands
+  - 1.4 CodeInterpreter
+  - SDK Language Support
+  - 2. OpenSandbox Specs
+  - 2.1 Sandbox Lifecycle Spec
+  - Core Operations
+  - 2.2 Sandbox Execution Spec
+  - API Categories
+  - 3. OpenSandbox Runtime
+  - 3.1 Server Architecture
+  - 3.2 Runtime Implementations
+  - Docker Runtime (Ready)
+  - Kubernetes Runtime (Roadmap)
+  - Custom Runtime
+  - 3.3 Networking and Routing
+  - Sandbox Router
+  - 4. Sandbox Instances
+  - 4.1 Container Structure
+  - 4.2 execd - Execution Daemon
+  - Core Responsibilities
+  - Architecture
+  - Jupyter Integration
+  - 4.3 Injection Mechanism
+  - 5. Communication Flow
+  - 5.1 Sandbox Creation Flow
+  - 5.2 Code Execution Flow
+  - 5.3 File Operations Flow
+  - 6. Design Principles
+  - 6.1 Protocol-First Design
+  - 6.2 Separation of Concerns
+  - 6.3 Extensibility
+  - 6.4 Security
+  - 6.5 Observability
+  - 7. Use Cases
+  - 7.1 AI Code Generation and Execution
+  - 7.2 Interactive Coding Environments
+  - 7.3 Browser Automation and Testing
+  - 7.4 Remote Development Environments
+  - 7.5 Continuous Integration and Testing
+  - 8. Conclusion
+  - 9. References
+relations:
+  - type: implements
+    id: sandbox-architecture-improvements-implementation-complete
+    title: "\U0001F3D7️ Sandbox Architecture Improvements - Implementation Complete"
+    path: sandbox-architecture-improvements-implementation-complete.md
+    confidence: 0.363
+    classified_score: 0.343
+    auto_generated: true
+    generator: apply-classified-suggestions
+---
 # OpenSandbox Architecture
 
 OpenSandbox is a universal sandbox platform designed for AI application scenarios, providing a complete solution with multi-language SDKs, standardized sandbox protocols, and flexible runtime implementations. This document describes the overall architecture and design philosophy of OpenSandbox.

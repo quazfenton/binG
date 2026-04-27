@@ -4,13 +4,13 @@
  * Combines:
  * - Multi-factor task classifier (keyword + semantic + context + historical)
  * - Provider health checks
- * - Mode selection (V2 native, StatefulAgent, AgentOrchestrator, V1 API)
+ * - Mode selection (V2 native, StatefulAgent, PlanActVerify, V1 API)
  * - Fallback chain on failure
  *
  * This replaces the scattered routing logic in:
  * - api/chat/route.ts (was doing its own regex-based detection)
  * - task-router.ts (dead code keyword matching)
- * - orchestration-mode-handler.ts (header-gated, now uses this as default)
+ * - modular.ts (header-gated, now uses this as default)
  *
  * @example
  * ```typescript

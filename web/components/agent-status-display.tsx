@@ -150,17 +150,41 @@ export function AgentStatusDisplay({
   const agentTypeConfig = getAgentTypeConfig();
 
   if (compact) {
+    const completedTools = toolInvocations?.filter(t => t.state === 'result').length ?? 0;
+    const totalTools = toolInvocations?.length ?? 0;
+    const completedSteps = processingSteps?.filter(s => s.status === 'completed').length ?? 0;
+    const totalSteps = processingSteps?.length ?? 0;
     return (
-      <div className={`flex items-center gap-2 px-3 py-2 rounded-lg border ${statusConfig.bg} ${statusConfig.border}`}>
-        <span className={statusConfig.color}>{statusConfig.icon}</span>
-        <span className={`text-xs font-medium ${statusConfig.color}`}>
-          {statusConfig.label}
+      <div className="flex items-center gap-2 text-[11px] text-gray-500 dark:text-gray-400 select-none">
+        <span className={`inline-flex items-center gap-1 ${statusConfig.color}`}>
+          <span className={`h-1.5 w-1.5 rounded-full ${
+            displayStatus === 'completed'
+              ? 'bg-emerald-500'
+              : displayStatus === 'error'
+              ? 'bg-red-500'
+              : displayStatus === 'idle'
+              ? 'bg-gray-400'
+              : 'bg-blue-500 animate-pulse'
+          }`} />
+          <span className="lowercase tracking-wide">{statusConfig.label}</span>
         </span>
-        {elapsedTime > 0 && (
-          <span className="text-[10px] text-gray-500 dark:text-gray-400 flex items-center gap-1">
-            <Clock className="h-3 w-3" />
-            {formatElapsed(elapsedTime)}
-          </span>
+        {totalTools > 0 && (
+          <>
+            <span className="text-gray-300 dark:text-gray-700">·</span>
+            <span>{completedTools}/{totalTools} tools</span>
+          </>
+        )}
+        {totalSteps > 0 && (
+          <>
+            <span className="text-gray-300 dark:text-gray-700">·</span>
+            <span>{completedSteps}/{totalSteps} steps</span>
+          </>
+        )}
+        {elapsedTime > 0 && (displayStatus === 'thinking' || displayStatus === 'executing' || displayStatus === 'planning') && (
+          <>
+            <span className="text-gray-300 dark:text-gray-700">·</span>
+            <span className="tabular-nums">{formatElapsed(elapsedTime)}</span>
+          </>
         )}
       </div>
     );

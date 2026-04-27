@@ -42,9 +42,9 @@ export const dagTask = task({
 
     let result: any;
     if (payload.maxRetries && payload.maxRetries > 0) {
-      result = await executeDAGWithRetry(payload.dag, ctx, payload.maxRetries);
+      result = await executeDAGWithRetry(payload.dag as any, ctx as any, payload.maxRetries);
     } else {
-      result = await executeDAGSmart(payload.dag, ctx);
+      result = await executeDAGSmart(payload.dag as any, ctx as any);
     }
 
     return {

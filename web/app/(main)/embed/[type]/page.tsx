@@ -2,6 +2,9 @@ import { notFound } from 'next/navigation';
 import { getEmbedConfig, isValidEmbedType } from './embed-config';
 import type { Metadata } from 'next';
 
+// Disable static prerendering - embed pages require client-side rendering
+export const dynamic = 'force-dynamic';
+
 interface EmbedPageProps {
   params: Promise<{ type: string }>;
 }
