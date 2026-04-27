@@ -28,8 +28,17 @@ import fs from 'fs-extra';
 import axios from 'axios';
 import * as dotenv from 'dotenv';
 import * as path from 'path';
+
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 import { spawn, ChildProcess } from 'child_process';
 import { Readable } from 'stream';
+
+// RTK CLI Commands - Token-optimized command execution for LLM consumption
+import { registerRTKCommands } from "./lib/rtk-cli-commands";
 
 // Load environment variables
 dotenv.config();
@@ -864,8 +873,8 @@ function getWorkspaceRoot(): string {
  */
 function isOutsideWorkspace(targetPath: string): boolean {
   const root = getWorkspaceRoot();
-  const normRoot = root.replace(/\/g, '/').replace(/\/+$/, '');
-  const normTarget = targetPath.replace(/\/g, '/').replace(/\/+$/, '');
+  const normRoot = root.replace(/\\/g, '/').replace(/\/+$/, '');
+  const normTarget = targetPath.replace(/\\/g, '/').replace(/\/+$/, '');
   if (!normTarget) return false;
   return !(normTarget.startsWith(normRoot + '/') || normTarget === normRoot);
 }
@@ -881,8 +890,7 @@ function requiresWorkspaceBoundaryConfirmation(
   if (!WORKSPACE_DESTRUCTIVE_OPS.has(operation)) return null;
   if (!isOutsideWorkspace(targetPath)) return null;
   const root = getWorkspaceRoot();
-  return  +
-    ;
+  return null;
 }
 
 /**
@@ -2446,21 +2454,6 @@ program
   });
 
 program
-  .command('agents:stop <agentId>')
-  .description('Stop an agent')
-  .action(async (agentId) => {
-    if (!validateRequired(agentId, 'Agent ID')) return;
-
-    const spinner = ora(`Stopping agent ${agentId}...`).start();
-    try {
-      await apiRequest(`/kernel/agents/${encodeURIComponent(agentId)}`, { method: 'DELETE' });
-      spinner.stop();
-      console.log(COLORS.success('\nAgent stopped'));
-    } catch (error: any) {
-      spinner.stop();
-      handleError(error, 'Stop agent failed');
-    }
-  });
 
 // ============================================================================
 // EVENTS / CRON COMMANDS
@@ -3205,55 +3198,6 @@ program
   });
 
 program
-  .command('login')
-  .description('Authenticate with binG')
-  .option('--email <email>', 'Email address')
-  .option('--password <password>', 'Password')
-  .action(async (options) => {
-    console.log(chalk.cyanBright('\n=== binG Authentication ===\n'));
-    
-    let email = options.email;
-    let password = options.password;
-    
-    if (!email) {
-      email = await prompt(COLORS.primary('Email: '));
-    }
-    
-    if (!password) {
-      password = await prompt(COLORS.primary('Password: '));
-    }
-    
-    const spinner = ora('Authenticating...').start();
-    
-    try {
-      const result = await apiRequest('/auth/login', {
-        method: 'POST',
-        data: { email, password },
-      });
-      
-      spinner.stop();
-      
-      if (result.token) {
-        saveAuth({
-          token: result.token,
-          userId: result.userId,
-          email: result.email,
-        });
-        
-        console.log(COLORS.success('\n✓ Authentication successful!'));
-        console.log(`  User: ${COLORS.info(result.email)}`);
-        console.log(`  ID: ${COLORS.info(result.userId)}`);
-      } else {
-        console.log(COLORS.error('Authentication failed: No token received'));
-        process.exit(1);
-      }
-      
-    } catch (error: any) {
-      spinner.stop();
-      console.log(COLORS.error(`\nAuthentication failed: ${error.message}`));
-      process.exit(1);
-    }
-  });
 
 program
   .command('logout')
@@ -3343,6 +3287,197 @@ program
   });
 
 // ============================================================================
+
+// ============================================================================
+// CONFIG COMMANDS
+
+// Helper function to validate config file is valid JSON
+function validateConfigFile() {
+  try {
+    if (!fs.existsSync(CONFIG_FILE)) {
+      return { valid: true };
+    }
+    const content = fs.readFileSync(CONFIG_FILE, 'utf-8');
+    const config = JSON.parse(content);
+    return { valid: true, config };
+  } catch (error) {
+    return { 
+      valid: false, 
+      error: error instanceof SyntaxError 
+        ? 'Invalid JSON syntax in config file' 
+        : error.message 
+    };
+  }
+}
+
+
+// ============================================================================
+
+program
+  .command('config:show')
+  .description('Show detailed configuration')
+  .option('-j, --json', 'Output as JSON')
+  .option('-a, --all', 'Show all including defaults and environment variables')
+  .action(async (options) => {
+    try {
+      const config = loadConfig();
+      const auth = loadAuth();
+
+      // Get environment variables that affect the CLI
+      const envConfig = {
+        DEFAULT_LLM_PROVIDER: process.env.DEFAULT_LLM_PROVIDER || null,
+        DEFAULT_MODEL: process.env.DEFAULT_MODEL || null,
+        DEFAULT_TEMPERATURE: process.env.DEFAULT_TEMPERATURE || null,
+        DEFAULT_MAX_TOKENS: process.env.DEFAULT_MAX_TOKENS || null,
+        SANDBOX_PROVIDER: process.env.SANDBOX_PROVIDER || null,
+        DESKTOP_MODE: process.env.DESKTOP_MODE || null,
+        DESKTOP_LOCAL_EXECUTION: process.env.DESKTOP_LOCAL_EXECUTION || null,
+        ENABLE_VOICE_FEATURES: process.env.ENABLE_VOICE_FEATURES || null,
+        ENABLE_IMAGE_GENERATION: process.env.ENABLE_IMAGE_GENERATION || null,
+        ENABLE_CHAT_HISTORY: process.env.ENABLE_CHAT_HISTORY || null,
+        ENABLE_CODE_EXECUTION: process.env.ENABLE_CODE_EXECUTION || null,
+      };
+
+      if (options.json) {
+        // JSON output
+        const output = options.all ? {
+          configFile: CONFIG_FILE,
+          configFileExists: fs.existsSync(CONFIG_FILE),
+          config: config,
+          auth: {
+            email: auth?.email || null,
+            provider: auth?.provider || null,
+            expiresAt: auth?.expiresAt || null,
+          },
+          environmentVariables: envConfig,
+          configDir: CONFIG_DIR,
+        } : config;
+        console.log(JSON.stringify(output, null, 2));
+        return;
+      }
+
+      // Formatted output
+      const nl = '\n';
+      console.log(nl + COLORS.primary('============================================================'));
+      console.log(COLORS.primary('  binG CLI Configuration'));
+      console.log(COLORS.primary('============================================================'));
+
+      // Configuration file info
+      console.log(nl + COLORS.info('Configuration Files:'));
+      console.log('   Config Directory: ' + COLORS.success(CONFIG_DIR));
+      console.log('   Config File: ' + CONFIG_FILE);
+      console.log('   Config Exists: ' + (fs.existsSync(CONFIG_FILE) ? COLORS.success('Yes') : COLORS.warning('No (using defaults)')));
+      if (auth?.email) {
+        console.log('   Auth File: ' + COLORS.success(CONFIG_DIR.replace('~', process.env.HOME || '~') + '/auth.json'));
+      }
+
+      // Config values
+      console.log(nl + COLORS.info('Current Configuration:'));
+      console.log('   API Base:     ' + COLORS.success(config.apiBase));
+      console.log('   LLM Provider: ' + COLORS.success(config.provider));
+      console.log('   Model:        ' + COLORS.success(config.model));
+      console.log('   Sandbox:      ' + COLORS.success(config.sandboxProvider));
+
+      if (auth?.email) {
+        console.log(nl + COLORS.info('Authentication:'));
+        console.log('   Email:    ' + COLORS.success(auth.email));
+        console.log('   Provider: ' + COLORS.success(auth.provider || 'email/password'));
+        if (auth.expiresAt) {
+          const expires = new Date(auth.expiresAt);
+          const now = new Date();
+          const isValid = expires > now;
+          console.log('   Expires:  ' + (isValid ? COLORS.success(expires.toLocaleString()) : COLORS.error(expires.toLocaleString() + ' (expired)')));
+        }
+      }
+
+      if (options.all) {
+        // Show environment variables
+        console.log(nl + COLORS.info('Environment Variables:'));
+        const envKeys = Object.keys(envConfig).filter(k => envConfig[k] !== null);
+        if (envKeys.length === 0) {
+          console.log('   ' + COLORS.warning('None set'));
+        } else {
+          for (const key of envKeys) {
+            console.log('   ' + key + ': ' + COLORS.success(String(envConfig[key])));
+          }
+        }
+
+        // Show config structure
+        console.log(nl + COLORS.info('Full Config Object:'));
+        const configLines = JSON.stringify(config, null, 2).split('\n');
+        for (const line of configLines) {
+          console.log('   ' + line);
+        }
+
+        // Show defaults that would be used
+        console.log(nl + COLORS.info('Defaults (when config not set):'));
+        console.log('   API Base:     ' + COLORS.success(process.env.DEFAULT_API_BASE || 'https://api.bing.com'));
+        console.log('   LLM Provider: ' + COLORS.success(process.env.DEFAULT_LLM_PROVIDER || 'anthropic'));
+        console.log('   Model:        ' + COLORS.success(process.env.DEFAULT_MODEL || 'claude-3-5-sonnet-latest'));
+        console.log('   Sandbox:      ' + COLORS.success(process.env.SANDBOX_PROVIDER || 'daytona'));
+      }
+
+      console.log(nl + COLORS.primary('============================================================\n'));
+
+    } catch (error) {
+      handleError(error, 'Failed to show configuration');
+    }
+  });
+
+program
+  .command('config:edit')
+  .description('Open config file in editor')
+  .option('-e, --editor <editor>', 'Specify editor to use (e.g., vim, code, nano)')
+  .action(async (options) => {
+    try {
+      const config = loadConfig();
+      
+      // Ensure config file exists
+      if (!fs.existsSync(CONFIG_FILE)) {
+        console.log(COLORS.info('Config file does not exist, creating with defaults...'));
+        saveConfig(config);
+      }
+
+      const configPath = CONFIG_FILE;
+      const editor = options.editor || process.env.EDITOR || process.env.VISUAL;
+
+      if (editor) {
+        console.log(COLORS.info('Opening config in editor: ' + editor));
+        spawn(editor, [configPath], { stdio: 'inherit', shell: true });
+      } else {
+        console.log(COLORS.info('Opening config file: ' + configPath));
+        openFileInEditor(configPath);
+      }
+
+      console.log(COLORS.success('Config file opened successfully'));
+      console.log(COLORS.muted('Note: Edit the file and save to apply changes'));
+    } catch (error) {
+      handleError(error, 'Failed to open config file');
+    }
+  });
+
+
+
+
+program
+  .command('config:validate')
+  .description('Validate config file JSON syntax')
+  .action(async () => {
+    const validation = validateConfigFile();
+    if (validation.valid) {
+      console.log(COLORS.success('Config file is valid!'));
+      console.log(COLORS.info('Current configuration:'));
+      console.log(JSON.stringify(validation.config || loadConfig(), null, 2));
+    } else {
+      console.log(COLORS.error('Config file is INVALID!'));
+      console.log(COLORS.error('Error: ' + validation.error));
+      console.log(COLORS.warning("The config file contains invalid JSON. You can:"));
+      console.log(COLORS.info('  1. Run "bing config:edit" to fix it manually'));
+      console.log(COLORS.info('  2. Delete the config file to reset to defaults'));
+      console.log(COLORS.info('Config location: ' + CONFIG_FILE));
+    }
+  });
+
 // PROVIDERS COMMANDS
 // ============================================================================
 
@@ -3688,15 +3823,6 @@ const AGENT_BINARIES = [
 ];
 
 program
-  .command('agents:list')
-  .description('List available agent binaries')
-  .action(() => {
-    console.log(chalk.cyanBright('\n=== Available Agent Binaries ===\n'));
-    for (const agent of AGENT_BINARIES) {
-      const status = agent.supportsModels ? COLORS.success('✓ Models') : COLORS.warning('○');
-      console.log(`${COLORS.primary(`${agent.id}:`)} ${agent.desc} ${status}`);
-    }
-  });
 
 program
   .command('agents:detect <agent>')
@@ -4855,5 +4981,11 @@ if (args.length === 0) {
     });
   }
 } else {
-  program.parse();
+      try {
+      registerRTKCommands(program);
+    } catch (err) {
+      console.warn('RTK commands not available:', err.message);
+    }
+
+program.parse();
 }

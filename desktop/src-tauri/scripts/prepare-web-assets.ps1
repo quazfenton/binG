@@ -47,20 +47,12 @@ if (Test-Path $frontendDir) {
     Remove-Item $frontendDir -Recurse -Force
 }
 New-Item -ItemType Directory -Path $frontendDir -Force | Out-Null
-@"
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Quaz Desktop</title>
-  </head>
-  <body>
-    <noscript>Quaz Desktop requires JavaScript.</noscript>
-  </body>
-</html>
-"@ | Set-Content -Encoding utf8 (Join-Path $frontendDir "index.html")
-Write-Host "  Prepared frontend placeholder assets..." -ForegroundColor Gray
+$shellIndex = Join-Path $tauriRoot "static\index.html"
+if (-not (Test-Path $shellIndex)) {
+    throw "Missing desktop startup shell: $shellIndex"
+}
+Copy-Item $shellIndex (Join-Path $frontendDir "index.html") -Force
+Write-Host "  Prepared frontend startup shell..." -ForegroundColor Gray
 
 # Get total size
 $totalSize = (Get-ChildItem $destDir -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB
