@@ -167,7 +167,7 @@ function hashSessionToken(token: string): string {
 }
 
 export interface User {
-  id: number;
+  id: string;
   email: string;
   username?: string;
   createdAt: Date;
@@ -202,7 +202,7 @@ export interface RegisterCredentials {
 
 export interface SessionInfo {
   sessionId: string;
-  userId: number;
+  userId: string;
   expiresAt: Date;
   ipAddress?: string;
   userAgent?: string;
@@ -335,13 +335,17 @@ export class AuthService {
         return { success: false, error: 'Failed to create user' };
       }
 
-      const userId = result.lastInsertRowid as number;
-
-      // Get created user
-      const user = this.dbOps.getUserById(userId);
-      if (!user) {
+      // Note: With TEXT primary key, we can't get lastInsertRowid easily
+      // Get the user by email instead (user was just created)
+      const newUser = this.dbOps.getUserByEmail(credentials.email) as any;
+      if (!newUser) {
         return { success: false, error: 'Failed to retrieve created user' };
       }
+
+      const userId = newUser.id as string;
+
+      // Use the newUser we already fetched
+      const user = this.mapDbUserToUser(newUser);
 
       // Send verification email ONLY for non-OAuth users
       // OAuth users already have verified emails from their provider
@@ -460,7 +464,7 @@ export class AuthService {
   /**
    * Create a session for an existing user (used for OAuth/SSO logins)
    */
-  async createSessionForUser(userId: number, sessionInfo?: { ipAddress: string; userAgent: string }): Promise<{
+  async createSessionForUser(userId: string, sessionInfo?: { ipAddress: string; userAgent: string }): Promise<{
     success: boolean;
     sessionId?: string;
     error?: string;
@@ -619,7 +623,7 @@ export class AuthService {
   /**
    * Get user by ID
    */
-  async getUserById(userId: number): Promise<User | null> {
+  async getUserById(userId: string): Promise<User | null> {
     try {
       // Ensure database is ready
       await this.ensureDatabase();
@@ -635,7 +639,7 @@ export class AuthService {
   /**
    * Update user last login
    */
-  private updateLastLogin(userId: number): void {
+  private updateLastLogin(userId: string): void {
     try {
       const stmt = this.db.prepare('UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?');
       stmt.run(userId);
@@ -723,7 +727,7 @@ export class AuthService {
   /**
    * Get user sessions
    */
-  async getUserSessions(userId: number): Promise<any[]> {
+  async getUserSessions(userId: string): Promise<any[]> {
     try {
       // Ensure database is ready
       await this.ensureDatabase();
@@ -744,7 +748,7 @@ export class AuthService {
   /**
    * Revoke session
    */
-   async revokeSession(sessionId: string, userId: number): Promise<{ success: boolean; error?: string }> {
+   async revokeSession(sessionId: string, userId: string): Promise<{ success: boolean; error?: string }> {
      try {
        // Ensure database is ready
        await this.ensureDatabase();

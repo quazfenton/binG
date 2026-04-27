@@ -67,7 +67,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Get user details for JWT validation
-    const userId = Number.parseInt(authResult.userId || '0');
+    const userId = authResult.userId || '';
     const user = await authService.getUserById(userId);
 
     if (!user) {

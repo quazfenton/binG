@@ -55,22 +55,11 @@ class DatabaseSessionStore {
       // Enable WAL mode for better concurrency
       this.db.pragma('journal_mode = WAL');
 
-      // Create sessions table
-      this.db.exec(`
-        CREATE TABLE IF NOT EXISTS sessions (
-          id TEXT PRIMARY KEY,
-          user_id TEXT NOT NULL,
-          sandbox_id TEXT NOT NULL,
-          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-          last_active TEXT DEFAULT CURRENT_TIMESTAMP,
-          config TEXT,
-          status TEXT DEFAULT 'active',
-          terminal_output TEXT,
-          FOREIGN KEY (user_id) REFERENCES users(id)
-        )
-      `);
-
-      // Create indexes for performance
+      // NOTE: The sessions table is now created via schema.sql
+      // This block intentionally left empty to avoid duplicate table creation
+      // The schema.sql already defines the sessions table with proper FK constraints
+      
+      // Just ensure indexes exist (in case schema.sql didn't run)
       this.db.exec(`
         CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
         CREATE INDEX IF NOT EXISTS idx_sessions_sandbox ON sessions(sandbox_id);

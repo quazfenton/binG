@@ -345,6 +345,42 @@ export class LocalVFSManager {
   }
 
   /**
+   * List files in the workspace.
+   */
+  async listWorkspaceFiles(dirPath: string = ''): Promise<Array<{ path: string; isDirectory: boolean; size: number }>> {
+    const targetDir = path.join(this.workspacePath, dirPath);
+    const resolvedPath = path.resolve(targetDir);
+    
+    if (!resolvedPath.startsWith(this.workspacePath + path.sep) && resolvedPath !== this.workspacePath) {
+      return [];
+    }
+
+    if (!await fs.pathExists(targetDir)) {
+      return [];
+    }
+
+    const entries = await fs.readdir(targetDir, { withFileTypes: true });
+    const result: Array<{ path: string; isDirectory: boolean; size: number }> = [];
+    
+    for (const entry of entries) {
+      if (entry.name === '.git' || entry.name === 'node_modules' || entry.name === '.next') continue;
+      const fullPath = path.join(targetDir, entry.name);
+      let size = 0;
+      if (entry.isFile()) {
+        const stats = await fs.stat(fullPath);
+        size = stats.size;
+      }
+      result.push({
+        path: dirPath ? `${dirPath}/${entry.name}` : entry.name,
+        isDirectory: entry.isDirectory(),
+        size,
+      });
+    }
+    
+    return result.sort((a, b) => a.path.localeCompare(b.path));
+  }
+
+  /**
    * Get the workspace root path.
    */
   getWorkspacePath(): string {

@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
+import { isDesktopMode } from '@bing/platform/env';
+import { fsBridge, isUsingLocalFS } from '@bing/shared/FS/fs-bridge';
 import { resolveFilesystemOwner, virtualFilesystem, withAnonSessionCookie } from '@/lib/virtual-filesystem/index.server';
 import type { FilesystemOwnerResolution } from '@/lib/virtual-filesystem/resolve-filesystem-owner';
 
@@ -230,9 +232,9 @@ export async function GET(req: NextRequest) {
   try {
     owner = await resolveFilesystemOwner(req);
     const url = new URL(req.url);
-    // Query project/sessions/* when path is project to catch session-scoped files
     let pathFilter = url.searchParams.get('path') || 'project';
-    if (pathFilter === 'project') {
+    const useDesktopSnapshot = isDesktopMode() && isUsingLocalFS();
+    if (!useDesktopSnapshot && pathFilter === 'project') {
       pathFilter = 'project/sessions';
     }
     pathFilter = pathFilter.replace(/\/+$/, '');
@@ -302,17 +304,30 @@ export async function GET(req: NextRequest) {
     // Generate new snapshot
     let snapshot;
     try {
-      snapshot = await virtualFilesystem.exportWorkspace(owner.ownerId);
+      if (useDesktopSnapshot) {
+        const localSnapshot = await fsBridge.exportWorkspace(owner.ownerId);
+        snapshot = {
+          root: localSnapshot.root,
+          version: localSnapshot.version,
+          updatedAt: new Date().toISOString(),
+          exportedAt: new Date().toISOString(),
+          files: localSnapshot.files,
+        };
+      } else {
+        snapshot = await virtualFilesystem.exportWorkspace(owner.ownerId);
+      }
     } catch (error: unknown) {
       const duration = Date.now() - startTime;
       logError(`[${requestId}] exportWorkspace failed:`, error instanceof Error ? error.message : error);
       throw error;
     }
 
-    const prefix = `${pathFilter}/`;
-    const files = snapshot.files.filter(
-      (file) => file.path === pathFilter || file.path.startsWith(prefix),
-    );
+    const files = useDesktopSnapshot
+      ? snapshot.files
+      : snapshot.files.filter((file) => {
+          const prefix = `${pathFilter}/`;
+          return file.path === pathFilter || file.path.startsWith(prefix);
+        });
 
     const duration = Date.now() - startTime;
 

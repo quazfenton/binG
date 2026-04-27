@@ -40,14 +40,20 @@ async function resolveArcadeUserId(appUserId: string): Promise<string> {
   const strategy = (process.env.ARCADE_USER_ID_STRATEGY || 'email').toLowerCase();
 
   if (strategy === 'email') {
-    const numeric = Number(appUserId);
-    if (Number.isFinite(numeric) && numeric > 0) {
-      try {
-        const user = await authService.getUserById(numeric);
+    try {
+      // userId is now a string (UUID), try directly first
+      let user = await authService.getUserById(appUserId);
+      if (user?.email) return user.email;
+      
+      // Legacy: try parsing as numeric for backwards compatibility
+      const numeric = Number(appUserId);
+      if (Number.isFinite(numeric) && numeric > 0) {
+        // Try to find user by treating the string as a numeric id
+        user = await authService.getUserById(String(numeric));
         if (user?.email) return user.email;
-      } catch {
-        // Fall through to using appUserId directly
       }
+    } catch {
+      // Fall through to using appUserId directly
     }
   }
 
@@ -506,21 +512,20 @@ async function checkDirectOAuthStatus(
 
   if (normalizedProvider === 'github') {
     try {
-      const numericId = Number(appUserId);
-      if (Number.isFinite(numericId) && numericId > 0) {
-        const { isGitHubConnected, getGitHubUser, getGitHubToken } = await import('@/lib/github/github-oauth');
-        const connected = isGitHubConnected(numericId);
+      const userId = appUserId; // userId is now string (UUID)
+      // Check if connected using string userId
+      const { isGitHubConnected, getGitHubUser, getGitHubToken } = await import('@/lib/github/github-oauth');
+      const connected = isGitHubConnected(userId);
 
-        if (connected) {
-          const token = await getGitHubToken(numericId);
-          if (token) {
-            const user = await getGitHubUser(token);
-            return {
-              connected: true,
-              login: user.login,
-              avatarUrl: user.avatar_url,
-            };
-          }
+      if (connected) {
+        const token = await getGitHubToken(userId);
+        if (token) {
+          const user = await getGitHubUser(token);
+          return {
+            connected: true,
+            login: user.login,
+            avatarUrl: user.avatar_url,
+          };
         }
       }
     } catch {
