@@ -97,7 +97,6 @@ export class BootstrappedAgency {
 
   constructor(config: AgencyConfig) {
     this.config = {
-      sessionId: config.sessionId,
       enableLearning: true,
       maxHistorySize: 1000,
       enablePatternRecognition: true,
@@ -165,8 +164,9 @@ export class BootstrappedAgency {
       this.recordExecution(record);
 
       // Learn from execution
-      const learned = this.config.enableLearning && 
-        this.learnFromExecution(record);
+      const learned = Boolean(
+        this.config.enableLearning && this.learnFromExecution(record)
+      );
 
       log.info('Agency execution completed', {
         taskId,
@@ -329,7 +329,10 @@ export class BootstrappedAgency {
           // packages/shared/agent → web/lib/tools/router
           const { getCapabilityRouter } = await import('../../../web/lib/tools/router');
           const router = getCapabilityRouter();
-          const context = { userId: this.config.userId || this.config.sessionId, sessionId: this.config.sessionId };
+          const context = { 
+            userId: this.config.userId || this.config.sessionId,
+            sessionId: this.config.sessionId,
+          };
 
           const results = new Map<string, any>();
           let allSuccess = true;

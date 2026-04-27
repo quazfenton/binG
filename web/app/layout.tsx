@@ -2,6 +2,10 @@ import type { Metadata } from 'next'
 import type { Viewport } from 'next'
 import './globals.css'
 
+// Disable static generation - use SSR for all pages to prevent
+// prerender errors with client-side components in desktop builds
+export const dynamic = 'force-dynamic';
+
 export const metadata: Metadata = {
   title: 'binG0 - AI Assistant',
   description: 'AI Assistant',
