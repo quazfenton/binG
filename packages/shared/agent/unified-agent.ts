@@ -60,6 +60,9 @@ export interface UnifiedAgentConfig {
 
   /** User ID for session ownership */
   userId?: string
+
+  /** Current task being executed (used for tool filtering) */
+  task?: string
   
   /** Capabilities to enable */
   capabilities?: AgentCapability[]
@@ -670,7 +673,7 @@ export class UnifiedAgent {
     }
 
     log.debug('Listing MCP tools...')
-    const tools = await getMCPToolsForAI_SDK(this.config.userId)
+    const tools = await getMCPToolsForAI_SDK(this.config.userId, this.config.task)
     log.debug(`Found ${tools.length} MCP tools`)
     return tools.map(t => ({ name: t.function.name, description: t.function.description }))
   }
@@ -680,7 +683,7 @@ export class UnifiedAgent {
 
     try {
       log.debug('Initializing MCP...')
-      const tools = await getMCPToolsForAI_SDK(this.config.userId)
+      const tools = await getMCPToolsForAI_SDK(this.config.userId, this.config.task)
       this.mcpInitialized = true
       log.info(`MCP initialized with ${tools.length} tools`)
     } catch (error: any) {

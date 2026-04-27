@@ -31,7 +31,7 @@ import { createSSEEmitter, SSE_RESPONSE_HEADERS, SSE_EVENT_TYPES } from '@/lib/s
 // import { notifyNeedMoreTurns, notifyStreamComplete } from '@/lib/streaming/stream-control-handler';
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import { getRecentMcpFileEdits, clearRecentMcpFileEdits } from '@/lib/virtual-filesystem/file-events';
-import { getOrchestrationModeFromRequest, executeWithOrchestrationMode } from '@bing/shared/agent/orchestration-mode-handler';
+import { getOrchestrationModeFromRequest, executeWithOrchestrationMode } from '@bing/shared/agent/modular';
 import {
   parseFilesystemResponse,
   extractAndSanitize,
@@ -1092,7 +1092,7 @@ const config: UnifiedAgentConfig = {
       model: normalizedModel,
     };
 
-    const tools = await getMCPToolsForAI_SDK(authenticatedUserId);
+    const tools = await getMCPToolsForAI_SDK(authenticatedUserId, task);
     config.tools = tools.map(t => ({
       name: t.function.name,
       description: t.function.description,
@@ -1347,6 +1347,13 @@ const config: UnifiedAgentConfig = {
                 // If so, rename the session folder to match the project folder
                 const responseContent = streamingContentBuffer + (typeof result.response === 'string' ? result.response : '') || '';
 
+                const { detectSingleFolderFromResponse } = await import('@/lib/session-naming');
+                const detectedFolder = detectSingleFolderFromResponse(responseContent);
+
+                // Check if we should rename: new session (sequential ID) with single detected folder
+                const isSequentialSession = /^\d{3}$/.test(resolvedConversationId);
+                const isNewSession = isSequentialSession && !result.metadata?.isExistingSession;
+
                 // DEBUG LOGGING: Session naming detection
                 console.debug('[SessionNaming] Session folder detection', {
                   detectedFolder,
@@ -1357,13 +1364,6 @@ const config: UnifiedAgentConfig = {
                   responsePreview: responseContent.slice(0, 200),
                   metadata: result.metadata,
                 });
-
-                const { detectSingleFolderFromResponse } = await import('@/lib/session-naming');
-                const detectedFolder = detectSingleFolderFromResponse(responseContent);
-                
-                // Check if we should rename: new session (sequential ID) with single detected folder
-                const isSequentialSession = /^\d{3}$/.test(resolvedConversationId);
-                const isNewSession = isSequentialSession && !result.metadata?.isExistingSession;
                 
                 if (detectedFolder && isNewSession && detectedFolder !== resolvedConversationId) {
                   // Check if detected folder name is available
@@ -1423,7 +1423,6 @@ const config: UnifiedAgentConfig = {
                 // Apply filesystem edits if any were detected
                 if (finalEdits.length > 0 && filesystemOwnerId) {
                   try {
-                    const { applyFilesystemEditsFromResponse } = await import('./route');
                     const appliedEdits = await applyFilesystemEditsFromResponse({
                       ownerId: filesystemOwnerId,
                       conversationId: `${filesystemOwnerId}$${resolvedConversationId}`,
@@ -2125,7 +2124,7 @@ const config: UnifiedAgentConfig = {
         // Only trigger spec amplification when there are ACTUAL filesystem edits,
         // not just because the response contains code snippets (const, function, etc.)
         // Spec amplification runs in 'enhanced' or 'max' mode
-        const isSpecAmplificationMode = routerRequest.mode === 'enhanced' || routerRequest.mode === 'max' || routerRequest.mode === 'super';
+        const isSpecAmplificationMode = ['enhanced', 'max', 'super'].includes(String(routerRequest.mode));
         const shouldRunSpecAmplification = (hasFileEdits || hasMcpFileEdits) && isSpecAmplificationMode;
 
         chatLogger.info('Spec amplification check (non-streaming)', {
@@ -2936,7 +2935,7 @@ const config: UnifiedAgentConfig = {
                 const hasFileEdits = (effectiveEdits?.applied?.length || 0) > 0;
                 const mcpFileEdits = getRecentMcpFileEdits(resolvedConversationId);
                 const hasMcpFileEdits = mcpFileEdits.length > 0;
-                const isSpecAmplificationMode = routerRequest.mode === 'enhanced' || routerRequest.mode === 'max' || routerRequest.mode === 'super';
+                const isSpecAmplificationMode = ['enhanced', 'max', 'super'].includes(String(routerRequest.mode));
                 // Only trigger spec amplification when there are ACTUAL filesystem edits,
                 // not just because the response contains code snippets (const, function, etc.)
                 const shouldRunSpecAmplification = (hasFileEdits || hasMcpFileEdits) &&
@@ -3414,7 +3413,7 @@ const config: UnifiedAgentConfig = {
                 const hasFileEdits = (effectiveEdits?.applied?.length || 0) > 0;
                 const mcpFileEdits = getRecentMcpFileEdits(resolvedConversationId);
                 const hasMcpFileEdits = mcpFileEdits.length > 0;
-                const isSpecAmplificationMode = routerRequest.mode === 'enhanced' || routerRequest.mode === 'max' || routerRequest.mode === 'super';
+                const isSpecAmplificationMode = ['enhanced', 'max', 'super'].includes(String(routerRequest.mode));
                 // Only trigger spec amplification when there are ACTUAL filesystem edits,
                 // not just because the response contains code snippets (const, function, etc.)
                 const shouldRunSpecAmplification = (hasFileEdits || hasMcpFileEdits) &&
@@ -4879,7 +4878,7 @@ function resolveScopedPath(input: {
   return resolvedPath;
 }
 
-export async function applyFilesystemEditsFromResponse(input: {
+async function applyFilesystemEditsFromResponse(input: {
   ownerId: string;
   conversationId: string;
   requestId: string;

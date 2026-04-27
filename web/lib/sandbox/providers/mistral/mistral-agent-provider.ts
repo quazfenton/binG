@@ -113,7 +113,7 @@ export class MistralAgentProvider implements SandboxProvider {
       enableQuotaTracking: process.env.MISTRAL_ENABLE_QUOTA_TRACKING !== 'false',
       enableWebSearch: process.env.MISTRAL_ENABLE_WEB_SEARCH === 'true',
       ...config,
-    }
+    } as any
 
     this.client = new Mistral({
       apiKey: this.config.apiKey,
@@ -124,13 +124,13 @@ export class MistralAgentProvider implements SandboxProvider {
   async createSandbox(config: SandboxCreateConfig): Promise<SandboxHandle> {
     const sandboxId = `mistral-agent-${randomUUID()}`
     
-    const session: MistralSession = {
+    const session = {
       sandboxId,
       createdAt: Date.now(),
       lastActive: Date.now(),
-      config,
+      config: config as any,
       workspaceDir: WORKSPACE_DIR,
-    }
+    } as MistralSession
 
     // Initialize persistent workspace state
     ;(this.workspacePersistence as any).set(sandboxId, {
@@ -218,7 +218,7 @@ export class MistralAgentProvider implements SandboxProvider {
         lastActive: Date.now(),
         workspaceDir: WORKSPACE_DIR,
         config: {},
-      }
+      } as MistralSession
       mistralSessions.set(sandboxId, session)
     }
 
@@ -354,7 +354,7 @@ export class MistralAgentProvider implements SandboxProvider {
    * Enable tools on an agent
    */
   async enableTools(agentId: string, tools: Array<'code_interpreter' | 'web_search' | 'image_generation' | 'document_library'>) {
-    return this.updateAgent(agentId, { tools })
+    return this.updateAgent(agentId, { sessionId: agentId, tools } as AgentUpdate)
   }
 }
 

@@ -122,7 +122,7 @@ const DEFAULT_CONFIG: LoggerConfig = {
 if (typeof window === 'undefined' && typeof process !== 'undefined') {
   try {
     const pathModule = require('path');
-    DEFAULT_CONFIG.logFilePath = process.env.LOG_FILE_PATH || pathModule.join(process.cwd(), 'logs', 'app.log');
+    DEFAULT_CONFIG.logFilePath = process.env.LOG_FILE_PATH || pathModule.join(process.cwd(), 'logs', 'run.log');
     DEFAULT_CONFIG.maxFileSize = parseInt(process.env.LOG_MAX_FILE_SIZE || '10', 10);
     DEFAULT_CONFIG.maxFiles = parseInt(process.env.LOG_MAX_FILES || '5', 10);
   } catch (error) {
@@ -150,7 +150,7 @@ function initializeFileLogging(config: LoggerConfig) {
     }
 
     writeStream = fs.createWriteStream(config.logFilePath, {
-      flags: 'a',
+      flags: 'w',
       encoding: 'utf8',
       autoClose: true,
     });
@@ -233,8 +233,9 @@ export class Logger {
 
     const sanitized: any = {};
     for (const [key, value] of Object.entries(obj)) {
-      // Redact sensitive keys
-      if (['password', 'secret', 'apiKey', 'api_key', 'token', 'authorization', 'auth'].includes(key.toLowerCase())) {
+      // Redact sensitive keys (case-insensitive comparison)
+      const keyLower = key.toLowerCase();
+      if (['password', 'secret', 'apikey', 'api_key', 'token', 'authorization', 'auth', 'accesstoken', 'access_token', 'refreshtoken', 'refresh_token'].includes(keyLower)) {
         sanitized[key] = REDACTED;
       } else if (typeof value === 'string') {
         sanitized[key] = this.redact(value);
@@ -252,6 +253,8 @@ export class Logger {
   // ============================================================================
 
   private shouldLog(level: LogLevel): boolean {
+    // When minLevel is 'silent', suppress all output
+    if (this.config.minLevel === 'silent') return false;
     if (level === 'silent') return false;
     return LOG_LEVELS[level] >= LOG_LEVELS[this.config.minLevel];
   }

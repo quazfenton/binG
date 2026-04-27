@@ -3,6 +3,65 @@
 // This file is server-only - do not import in Client Components
 export const runtime = 'nodejs';
 
+// Cached schema SQL — read once from schema.sql at runtime to prevent drift between
+// the .sql file and any inline constant. Returns empty string during build/Edge.
+let _cachedSchemaSql: string | null = null;
+
+/**
+ * Load the database schema from schema.sql at runtime.
+ *
+ * Single source of truth — the schema lives in web/lib/database/schema.sql.
+ * This function reads it once and caches the result, so both the init path
+ * and the migration path get the exact same SQL without duplication.
+ *
+ * Returns empty string during build/Edge where fs access is unavailable,
+ * allowing the database to initialize via mock fallbacks.
+ */
+function getSchemaSql(): string {
+  if (_cachedSchemaSql !== null) {
+    return _cachedSchemaSql;
+  }
+
+  // Guard: skip fs access during build or in Edge Runtime
+  if (shouldSkipDbInit() || isEdgeRuntime()) {
+    _cachedSchemaSql = '';
+    return _cachedSchemaSql;
+  }
+
+  // Guard: skip if require/fs are unavailable (shouldn't happen in Node.js, but be safe)
+  if (typeof require === 'undefined' || typeof process === 'undefined') {
+    _cachedSchemaSql = '';
+    return _cachedSchemaSql;
+  }
+
+  let schemaPath: string | null = null;
+  try {
+    // Use the shared multi-strategy path resolver from the schema loader.
+    // Delegates to resolveSqlPath() which tries cwd + __dirname walk-up.
+    const { resolveSqlPath } = require('./schema/loader');
+    const { readFileSync } = require('fs');
+
+    schemaPath = resolveSqlPath(['lib', 'database', 'schema.sql']);
+
+    if (schemaPath) {
+      _cachedSchemaSql = readFileSync(schemaPath, 'utf8');
+      return _cachedSchemaSql;
+    }
+
+    console.warn(`[DB] schema.sql not found (tried cwd + __dirname walk-up)`);
+    _cachedSchemaSql = '';
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    // During build, missing schema.sql is non-fatal (db init is mocked anyway).
+    // At runtime this is a real error — warn but don't throw so the caller can
+    // decide how to handle a missing schema.
+    console.error(`[DB] Could not read schema.sql (path: ${schemaPath ?? 'unresolved'}): ${msg}`);
+    _cachedSchemaSql = '';
+  }
+
+  return _cachedSchemaSql;
+}
+
 // Check if we're in a build/Edge environment where database initialization should be skipped
 function shouldSkipDbInit(): boolean {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -49,6 +108,7 @@ function getDBPath(): string {
   // Only call process.cwd() in Node.js runtime (not Edge)
   let cwd: string | undefined;
   if (typeof process !== 'undefined' && process.env.NEXT_RUNTIME === 'nodejs') {
+    if (process.env.DATABASE_PATH) return process.env.DATABASE_PATH;
     cwd = process.cwd?.();
   }
 
@@ -94,12 +154,17 @@ function getEncryptionKey(): Buffer {
   }
 
   // Validate key strength
+  if (!ENCRYPTION_KEY || typeof ENCRYPTION_KEY !== 'string') {
+    console.warn('[DB] ENCRYPTION_KEY is missing or invalid, using fallback');
+    return crypto.randomBytes(32);
+  }
+
   if (ENCRYPTION_KEY.length < 16) {
     throw new Error('ENCRYPTION_KEY must be at least 16 characters for secure encryption');
   }
 
   // Pad or truncate to exactly 32 bytes for AES-256
-  encryptionKey = Buffer.from(ENCRYPTION_KEY.padEnd(32, '0').slice(0, 32));
+  encryptionKey = Buffer.from(String(ENCRYPTION_KEY).padEnd(32, '0').slice(0, 32));
   return encryptionKey;
 }
 
@@ -289,24 +354,11 @@ async function initializeSchemaSync(): Promise<void> {
   if (typeof process === 'undefined' || process.env.NEXT_RUNTIME !== 'nodejs') return;
 
   try {
-    // Guard with runtime check so webpack doesn't bundle for client
-    if (typeof require === 'undefined') {
-      throw new Error('Schema initialization requires Node.js runtime');
-    }
-    const fsModule = require('fs');
-    const pathModule = require('path');
-    const readFileSync = fsModule.readFileSync;
-    const join = pathModule.join;
-
-    // Get schema path at runtime
-    const cwd = process.cwd?.();
-    const schemaPath = cwd
-      ? join(cwd, 'lib', 'database', 'schema.sql')
-      : './lib/database/schema.sql';
-
     // Execute base schema to ensure required tables exist
-    const schema = readFileSync(schemaPath, 'utf-8');
-    db.exec(schema);
+    const schemaSql = getSchemaSql();
+    if (schemaSql) {
+      db.exec(schemaSql);
+    }
 
     console.log('Database base schema initialized');
   } catch (error) {
@@ -425,6 +477,8 @@ export async function migrateLegacyEncryptedKeys(): Promise<{ migrated: number; 
 
     for (const cred of credentials) {
       try {
+        if (!cred || !cred.api_key_encrypted) continue;
+        
         // Check if it's legacy format (legacy format has a shorter IV - 32 hex chars vs proper 32 hex chars)
         const parts = cred.api_key_encrypted.split(':');
         if (parts.length !== 2 || parts[0].length !== 32) {
@@ -618,12 +672,15 @@ export class DatabaseOperations {
   createUserWithVerification(email: string, username: string, passwordHash: string, verificationToken: string, verificationExpires: Date, emailVerified: boolean = false) {
     // Handle empty username - set to NULL to avoid unique constraint conflicts
     const finalUsername = username.trim() || null;
+    // Hash the verification token for secure storage
+    const crypto = require('crypto');
+    const tokenHash = crypto.createHash('sha256').update(verificationToken).digest('hex');
     const stmt = this.db.prepare(`
-      INSERT INTO users (email, username, password_hash, email_verification_token, email_verification_expires, email_verified)
+      INSERT INTO users (email, username, password_hash, email_verification_token_hash, email_verification_expires, email_verified)
       VALUES (?, ?, ?, ?, ?, ?)
     `);
     // Convert boolean to number for SQLite (0 or 1)
-    return stmt.run(email, finalUsername, passwordHash, verificationToken, verificationExpires.toISOString(), emailVerified ? 1 : 0);
+    return stmt.run(email, finalUsername, passwordHash, tokenHash, verificationExpires.toISOString(), emailVerified ? 1 : 0);
   }
 
   getUserByEmail(email: string) {
@@ -784,15 +841,19 @@ export class DatabaseOperations {
   
   // Session management
   createSession(sessionId: string, userId: number, expiresAt: Date, ipAddress?: string, userAgent?: string) {
+    const crypto = require('crypto');
+    const sessionHash = crypto.createHash('sha256').update(sessionId).digest('hex');
     const stmt = this.getPrepared('createSession', `
       INSERT INTO user_sessions (session_id, user_id, expires_at, ip_address, user_agent)
       VALUES (?, ?, ?, ?, ?)
     `);
 
-    return stmt.run(sessionId, userId, expiresAt.toISOString(), ipAddress, userAgent);
+    return stmt.run(sessionHash, userId, expiresAt.toISOString(), ipAddress, userAgent);
   }
 
   getSession(sessionId: string) {
+    const crypto = require('crypto');
+    const sessionHash = crypto.createHash('sha256').update(sessionId).digest('hex');
     const stmt = this.getPrepared('getSession', `
       SELECT s.*, u.email, u.username, u.subscription_tier
       FROM user_sessions s
@@ -800,15 +861,17 @@ export class DatabaseOperations {
       WHERE s.session_id = ? AND s.expires_at > CURRENT_TIMESTAMP AND u.is_active = TRUE
     `);
 
-    return stmt.get(sessionId);
+    return stmt.get(sessionHash);
   }
 
   deleteSession(sessionId: string) {
+    const crypto = require('crypto');
+    const sessionHash = crypto.createHash('sha256').update(sessionId).digest('hex');
     const stmt = this.db.prepare(`
       DELETE FROM user_sessions WHERE session_id = ?
     `);
 
-    return stmt.run(sessionId);
+    return stmt.run(sessionHash);
   }
 
   // Cleanup expired sessions

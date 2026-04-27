@@ -34,8 +34,9 @@ export default async function AntigravitySetupPage() {
   }
 
   // Require admin access
+  let admin: Awaited<ReturnType<typeof requireAdminPage>> | null = null;
   try {
-    const admin = await requireAdminPage();
+    admin = await requireAdminPage();
     const isAdmin = !!admin;
 
     if (!isAdmin) {

@@ -1,0 +1,274 @@
+/**
+ * @module code-parser
+ * @compatibility-boundary
+ *
+ * LEGACY: Parse assistant text outputs into edits / ProjectStructure updates.
+ * Minimal heuristics: JSON with file array, unified diff detection, or fallback
+ * to assistant-output.txt.
+ *
+ * Canonical tool invocations and file-effect events are now emitted directly by
+ * agent producers (priority-router, V2 executor, Mastra, OpenCode engine).
+ * This module is retained as a fallback for agents that cannot provide
+ * structured events. Prefer consuming `ToolInvocation[]` from message metadata
+ * before falling back to text parsing here.
+ */
+
+import { StreamPart } from './streaming'
+import type { Message } from '../types/index'
+
+export type CodeEdit = {
+  filePath: string
+  patch?: string
+  content?: string
+  action?: 'replace' | 'append' | 'patch' | 'create' | 'delete'
+}
+
+export type ProjectStructure = {
+  files: Record<string, { content: string }>
+}
+
+export type CodeBlock = {
+  language: string
+  code: string
+  filename: string
+  index: number
+  isError?: boolean
+}
+
+export type ParsedCodeData = {
+  codeBlocks: CodeBlock[]
+  projectStructure?: any
+  nonCodeText?: string
+  shellCommands?: string
+}
+
+export function parseTextToEdits(text: string): CodeEdit[] {
+  const edits: CodeEdit[] = []
+  const trimmed = text.trim()
+  if (!trimmed) return edits
+
+  try {
+    const j = JSON.parse(trimmed)
+    if (Array.isArray(j.files)) {
+      for (const f of j.files) {
+        if (f.path && f.content) {
+          edits.push({ filePath: f.path, content: f.content, action: 'replace' })
+        }
+      }
+      return edits
+    }
+    if (j.file && j.content) {
+      edits.push({ filePath: j.file, content: j.content, action: 'replace' })
+      return edits
+    }
+  } catch {
+    // not JSON
+  }
+
+  if (trimmed.startsWith('diff ') || trimmed.startsWith('@@') || trimmed.includes('+++') || trimmed.includes('---')) {
+    edits.push({ filePath: 'unknown.patch', patch: trimmed, action: 'patch' })
+    return edits
+  }
+
+  edits.push({ filePath: 'assistant-output.txt', content: text, action: 'create' })
+  return edits
+}
+
+export function applyEditsToProject(proj: ProjectStructure, edits: CodeEdit[]) {
+  for (const e of edits) {
+    if (e.action === 'replace' || e.action === 'create') {
+      proj.files[e.filePath] = { content: e.content ?? '' }
+    } else if (e.action === 'append') {
+      const prev = proj.files[e.filePath]?.content ?? ''
+      proj.files[e.filePath] = { content: prev + (e.content ?? '') }
+    } else if (e.action === 'patch') {
+      proj.files[e.filePath] = { content: e.patch ?? '' }
+    } else if (e.action === 'delete') {
+      delete proj.files[e.filePath]
+    }
+  }
+  return proj
+}
+
+export async function* streamPartsToEdits(parts: AsyncIterable<StreamPart>, currentProject: ProjectStructure) {
+  let buffer = ''
+  for await (const p of parts) {
+    if (p.text) buffer += p.text
+    if (buffer.includes('```') || buffer.includes('{') || buffer.includes('diff ') || buffer.length > 4096) {
+      const edits = parseTextToEdits(buffer)
+      if (edits.length) {
+        currentProject = applyEditsToProject(currentProject, edits)
+        yield { project: currentProject, edits }
+        buffer = ''
+      }
+    }
+  }
+  if (buffer.trim()) {
+    const edits = parseTextToEdits(buffer)
+    if (edits.length) {
+      currentProject = applyEditsToProject(currentProject, edits)
+      yield { project: currentProject, edits }
+    }
+  }
+}
+
+/**
+ * Parse code blocks from chat messages
+ */
+export function parseCodeBlocksFromMessages(messages: Message[]): ParsedCodeData {
+  const codeBlocks: CodeBlock[] = []
+  let nonCodeText = ''
+  let shellCommands = ''
+  let blockIndex = 0
+
+  for (const message of messages) {
+    if (message.role !== 'assistant') continue
+
+    const content = typeof message.content === 'string' ? message.content : ''
+
+    // Enhanced regex to capture filenames from multiple formats:
+    // ```javascript:src/App.js
+    // ```javascript src/App.js
+    // ```javascript filename="src/App.js"
+    // ```javascript // src/App.js
+    // <content>...</content> format (alternative to markdown code blocks)
+    const codeBlockRegex = /```(\w+)?(?:\s*[:\s]\s*(?:filename\s*=\s*)?["']?([^"'\s\n]+)["']?)?\s*(?:\/\/\s*(.+?))?\n([\s\S]*?)```/g
+    const contentTagRegex = /<content(?:\s+name=["']([^"']+)["'])?[^>]*>([\s\S]*?)<\/content>/gi
+    let match
+
+    while ((match = codeBlockRegex.exec(content)) !== null) {
+      const [, language, filenameFromColon, filenameFromComment, code] = match
+
+      // Priority for filename: colon format > comment format > generate default
+      let filename = ''
+      
+      if (filenameFromColon && filenameFromColon.trim()) {
+        // From ```javascript:src/App.js or ```javascript src/App.js
+        filename = filenameFromColon.trim()
+      } else if (filenameFromComment && filenameFromComment.trim()) {
+        // From ```javascript // src/App.js
+        filename = filenameFromComment.trim()
+      } else {
+        // Generate default filename with better naming for shell scripts
+        const ext = getExtensionForLanguage(language)
+        // For shell scripts, use more descriptive names based on index
+        if (ext === 'sh' && language?.toLowerCase() === 'bash') {
+          const shNames = ['start', 'setup', 'deploy', 'build', 'test', 'run', 'install', 'clean', 'init', 'script'];
+          filename = `${shNames[Math.min(blockIndex, shNames.length - 1)]}.sh`;
+        } else {
+          filename = `file-${blockIndex}.${ext}`
+        }
+      }
+
+      codeBlocks.push({
+        language: language?.toLowerCase() || 'text',
+        code: code.trim(),
+        filename: cleanFilename(filename),
+        index: blockIndex++,
+        isError: false
+      })
+
+      // Collect shell commands
+      if (language?.toLowerCase() === 'bash' || language?.toLowerCase() === 'sh' || language?.toLowerCase() === 'shell') {
+        shellCommands += code.trim() + '\n\n'
+      }
+    }
+
+    // Also parse <content>...</content> tags (alternative format from some LLMs)
+    while ((match = contentTagRegex.exec(content)) !== null) {
+      const [, filenameFromTag, code] = match
+      
+      let filename = filenameFromTag?.trim() || ''
+      if (!filename) {
+        const ext = getExtensionForLanguage('text')
+        filename = `file-${blockIndex}.${ext}`
+      }
+
+      codeBlocks.push({
+        language: 'text',
+        code: code.trim(),
+        filename: cleanFilename(filename),
+        index: blockIndex++,
+        isError: false
+      })
+    }
+
+    // Extract non-code text
+    const textWithoutCode = content
+      .replace(/```[\s\S]*?```/g, '')
+      .replace(/<content[^>]*>[\s\S]*?<\/content>/gi, '')
+      .trim()
+    if (textWithoutCode) {
+      nonCodeText += textWithoutCode + '\n\n'
+    }
+  }
+
+  return {
+    codeBlocks,
+    nonCodeText: nonCodeText.trim(),
+    shellCommands: shellCommands.trim()
+  }
+}
+
+/**
+ * Get file extension for a language
+ */
+function getExtensionForLanguage(language: string | undefined): string {
+  if (!language) return 'txt';
+  
+  const extensions: Record<string, string> = {
+    javascript: 'js',
+    typescript: 'ts',
+    python: 'py',
+    java: 'java',
+    cpp: 'cpp',
+    c: 'c',
+    html: 'html',
+    css: 'css',
+    json: 'json',
+    xml: 'xml',
+    sql: 'sql',
+    jsx: 'jsx',
+    tsx: 'tsx',
+    php: 'php',
+    vue: 'vue',
+    svelte: 'svelte',
+    astro: 'astro',
+    ruby: 'rb',
+    go: 'go',
+    rust: 'rs',
+    swift: 'swift',
+    kotlin: 'kt',
+    scala: 'scala',
+    r: 'r',
+    shell: 'sh',
+    bash: 'sh',
+    yaml: 'yml',
+    yml: 'yml',
+    markdown: 'md',
+    md: 'md',
+  }
+  return extensions[language.toLowerCase()] || 'txt'
+}
+
+/**
+ * Clean and normalize filename
+ */
+function cleanFilename(filename: string): string {
+  // Remove leading/trailing whitespace
+  let cleaned = filename.trim()
+  
+  // Remove common prefixes
+  cleaned = cleaned.replace(/^(file:|path:|filename:)\s*/i, '')
+  
+  // Remove quotes
+  cleaned = cleaned.replace(/^["']|["']$/g, '')
+  
+  // Ensure no leading slash (for sandpack compatibility)
+  cleaned = cleaned.replace(/^\/+/, '')
+  
+  // Replace backslashes with forward slashes
+  cleaned = cleaned.replace(/\\/g, '/')
+  
+  return cleaned || 'untitled.txt'
+}

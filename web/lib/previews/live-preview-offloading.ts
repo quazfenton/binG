@@ -75,7 +75,7 @@ const logger = createLogger('Previews:LivePreview');
  * Cloud providers: devbox, codesandbox, opensandbox
  * Hybrid: local, cloud (auto-detect based on project requirements)
  */
-export type PreviewMode = 
+export type PreviewMode =
   | 'sandpack'     // Local: In-browser bundling (React, Vue, Svelte, etc.)
   | 'iframe'       // Local: Raw HTML preview
   | 'raw'          // Local: Raw code view
@@ -89,8 +89,11 @@ export type PreviewMode =
   | 'codesandbox'  // Cloud: CodeSandbox cloud environment
   | 'opensandbox'  // Cloud: OpenSandbox container (self-hosted)
   | 'node'         // Local: Node.js execution (via WebContainer)
+  | 'modal'        // Cloud: Modal Labs serverless platform
   | 'local'        // Auto: Prefer local execution
-  | 'cloud';       // Auto: Require cloud execution
+  | 'cloud'        // Auto: Require cloud execution
+  | 'fastly'       // Cloud: Fastly edge deployment
+  | 'valtown';     // Cloud: Val Town serverless functions
 
 /**
  * Supported frameworks
@@ -466,6 +469,38 @@ export function isBackendOnlyProject(files: Record<string, string>, deps: string
  */
 const HEAVY_COMPUTATION_PATTERNS = ['tensorflow', 'pytorch', 'cuda', 'gpu', 'torch', 'keras'];
 
+// ============================================================================
+// Cost Estimation Model
+// ============================================================================
+
+/**
+ * Per-minute cost in USD by preview mode.
+ * Local modes are free; cloud modes vary by provider tier.
+ */
+const COST_PER_MINUTE: Record<PreviewMode, number> = {
+  // Local / client-side — always free
+  sandpack: 0,
+  iframe: 0,
+  raw: 0,
+  parcel: 0,
+  pyodide: 0,
+  vite: 0,
+  webpack: 0,
+  webcontainer: 0,
+  nextjs: 0,
+  node: 0,
+  // Cloud providers
+  devbox: 0.05,       // Full cloud VM (equivalent to Daytona)
+  codesandbox: 0.02,  // CodeSandbox cloud
+  opensandbox: 0.03,  // Self-hosted containers
+  modal: 0.04,        // GPU / serverless (Modal Labs)
+  fastly: 0.02,       // Edge deployment
+  valtown: 0.01,      // Serverless functions
+  // Auto-detect modes — cost depends on resolved mode
+  local: 0,
+  cloud: 0.05,        // Worst-case: cloud VM
+};
+
 /**
  * API key patterns
  */
@@ -516,9 +551,11 @@ export const OFFLOAD_THRESHOLDS = {
 // ============================================================================
 
 export class LivePreviewOffloading {
+  private cloudDestCache: Map<string, boolean> = new Map();
+
   /**
    * Analyze project for offload heuristics
-   * 
+   *
    * Detects:
    * - node_modules size
    * - Estimated build time
@@ -822,19 +859,23 @@ export class LivePreviewOffloading {
     const hasAPIKeys = this.detectAPIKeys(Object.values(filesObj));
 
     // Analyze heuristics for offload decision
-    const heuristics = this.analyzeHeuristics(request);
+    // Pass the already-converted filesObj so analyzeHeuristics doesn't need
+    // to handle the array format itself.
+    const heuristics = this.analyzeHeuristics({ files: filesObj, scopePath } as PreviewRequest);
 
     // Detect preview mode (with heuristics influence)
     const previewMode = this.detectPreviewMode(
       filePaths,
       framework,
       bundler,
-      hasPython,
-      hasNodeServer,
-      hasNextJS,
+      {
+        hasPython,
+        hasNodeServer,
+        hasNextJS,
+        hasHeavyComputation,
+        hasAPIKeys
+      },
       packageJson,
-      hasHeavyComputation,
-      hasAPIKeys,
       heuristics  // Pass heuristics for cloud offload decision
     );
 
@@ -1301,22 +1342,52 @@ export class LivePreviewOffloading {
   }
 
   /**
+   * Determine if a project is destined for cloud execution
+   * Cached for performance since this is called frequently
+   */
+  private isCloudDestinedProject(detection: ProjectDetection): boolean {
+    // Create cache key from relevant detection properties
+    const cacheKey = `${detection.framework}-${detection.hasBackend}-${detection.hasNodeServer}-${detection.hasPython}-${detection.hasHeavyComputation}-${detection.hasAPIKeys}`;
+
+    if (!this.cloudDestCache) {
+      this.cloudDestCache = new Map();
+    }
+
+    if (this.cloudDestCache.has(cacheKey)) {
+      return this.cloudDestCache.get(cacheKey)!;
+    }
+
+    const result = detection.hasBackend || detection.hasNodeServer || detection.hasPython ||
+                   ['node', 'flask', 'fastapi', 'django'].includes(detection.framework as string) ||
+                   detection.hasHeavyComputation || detection.hasAPIKeys;
+
+    this.cloudDestCache.set(cacheKey, result);
+    return result;
+  }
+
+  /**
    * Detect preview mode based on project characteristics
-   * Enhanced with heuristics for auto-offload decision
+   *
    * Priority: Local first (Sandpack -> WebContainer -> Pyodide), then cloud fallback
    */
   detectPreviewMode(
     filePaths: string[],
     framework: AppFramework,
     bundler: Bundler,
-    hasPython: boolean,
-    hasNodeServer: boolean,
-    hasNextJS: boolean,
+    capabilities: {
+      hasPython: boolean;
+      hasNodeServer: boolean;
+      hasNextJS: boolean;
+      hasHeavyComputation: boolean;
+      hasAPIKeys: boolean;
+    },
     packageJson: Record<string, any> | null,
-    hasHeavyComputation: boolean,
-    hasAPIKeys: boolean,
     heuristics?: OffloadHeuristics
   ): PreviewMode {
+    // Extract capabilities for cleaner code
+    const { hasPython, hasNodeServer, hasNextJS, hasHeavyComputation, hasAPIKeys } = capabilities;
+
+    // Pre-compute flags needed by multiple decision paths below
     const hasPackageJson = filePaths.some(p => p.endsWith('package.json'));
     const hasHtml = filePaths.some(p => p.endsWith('.html'));
     const hasJsx = filePaths.some(p => p.endsWith('.jsx') || p.endsWith('.tsx'));
@@ -1344,40 +1415,14 @@ export class LivePreviewOffloading {
       packageJson.dependencies?.dockerode
     );
 
-    // Check heuristics for auto-offload
-    const shouldOffload = heuristics?.shouldOffload || false;
-    const offloadReason = heuristics?.offloadReason;
-
     // ========================================
-    // AUTO-OFFLOAD BASED ON HEURISTICS
-    // ========================================
-    
-    // If heuristics indicate cloud offload, prioritize cloud providers
-    if (shouldOffload) {
-      logger.info(`[detectPreviewMode] Auto-offload triggered: ${offloadReason}`);
-      
-      // Determine best cloud provider based on project type
-      if (hasPython || framework === 'flask' || framework === 'fastapi' || framework === 'django') {
-        return 'devbox';  // Python needs full VM
-      }
-      
-      if (hasNodeServer || framework === 'next' || framework === 'nuxt') {
-        return 'devbox';  // Backend needs cloud
-      }
-      
-      if (hasDocker || hasComplexDeps) {
-        return 'devbox';  // Docker/complex needs cloud
-      }
-      
-      // Default to CodeSandbox for heavy frontend projects
-      return 'codesandbox';
-    }
-
-    // ========================================
-    // LOCAL PREVIEW MODES (Preferred)
+    // PYTHON FRAMEWORK-SPECIFIC CHECKS (before generic isBackend)
+    // These must run before the generic backend check so that
+    // lightweight Python frameworks (flask, gradio, streamlit)
+    // can use local Pyodide when no complex deps are present.
     // ========================================
 
-    // Python frameworks -> Pyodide (local)
+    // Flask/Gradio/Streamlit -> Pyodide (local) unless complex deps
     if (framework === 'gradio' || framework === 'streamlit' || framework === 'flask') {
       if (hasDocker || hasComplexDeps || hasHeavyComputation || hasAPIKeys) {
         return 'devbox';  // Cloud fallback for complex Python
@@ -1385,10 +1430,63 @@ export class LivePreviewOffloading {
       return 'pyodide';  // Local Python execution
     }
 
-    // FastAPI/Django -> DevBox (usually need server)
+    // FastAPI/Django -> DevBox (usually need running server)
     if (framework === 'fastapi' || framework === 'django') {
       return 'devbox';   // Cloud - these need running server
     }
+
+    // 1. Static/Frontend Only: Use Iframe
+    const isBackend = hasNodeServer || hasPython || framework === 'node';
+    const isStatic = !isBackend && (hasHtml && !hasNodeServer);
+    
+    if (isStatic) {
+        return 'iframe';
+    }
+
+    // 2. Full-Stack/Backend: Force Cloud (never OpenSandbox/Microsandbox)
+    if (isBackend) {
+        return hasPython ? 'modal' : 'devbox';
+    }
+
+    // Check heuristics for auto-offload
+    const shouldOffload = heuristics?.shouldOffload || false;
+    const offloadReason = heuristics?.offloadReason;
+
+    // ========================================
+    // AUTO-OFFLOAD BASED ON HEURISTICS
+    // ========================================
+
+    // STRICTLY AVOID opensandbox/microsandbox for ANY complex projects
+    // Route to devbox or modal for anything that needs real execution
+    const needsRealExecution = hasDocker || hasComplexDeps || hasHeavyComputation ||
+                               hasAPIKeys || hasNodeServer || shouldOffload;
+
+    if (needsRealExecution) {
+      logger.info(`[detectPreviewMode] Complex project detected, routing to cloud: ${offloadReason || 'complex requirements'}`);
+
+      // Determine best cloud provider based on project type
+      if (hasPython) {
+        return 'modal';  // Python/ML needs modal
+      }
+
+      // Serverless/API functions -> Val Town
+      if (hasAPIKeys || packageJson?.main?.includes('api') || packageJson?.scripts?.start?.includes('server')) {
+        return 'valtown';
+      }
+
+      // Edge deployment -> Fastly
+      if (hasHeavyComputation || packageJson?.deploy?.target === 'fastly') {
+        return 'fastly';
+      }
+
+      return 'devbox';  // Default to devbox for complex JS/TS projects
+    }
+
+    // ========================================
+    // LOCAL PREVIEW MODES (Preferred)
+    // ========================================
+
+    // (Python framework-specific checks moved above isBackend gate)
 
     // Next.js -> Next.js mode (local via WebContainer)
     if (framework === 'next' || hasNextJS) {
@@ -1397,7 +1495,7 @@ export class LivePreviewOffloading {
     }
 
     // Node.js/Express backend -> WebContainer
-    if (framework === 'node') {
+    if ((framework as string) === 'node') {
       if (hasDocker || hasComplexDeps) return 'devbox';  // Cloud for Docker/complex
       return 'webcontainer';  // Local Node.js
     }
@@ -1664,6 +1762,25 @@ export class LivePreviewOffloading {
    * - Transforms Vue code to remove SSR imports
    */
   getSandpackConfig(detection: ProjectDetection): SandpackConfig {
+    // --- NATIVE CLOUD BYPASS ---
+    // If we have a backend, node server, or cloud-destined project, do NOT attempt to strip code for the browser.
+    // Bypass ALL code transformations (SSR stripping, Node module removal) to preserve original code for native execution.
+    const isCloudDestined = this.isCloudDestinedProject(detection);
+
+    if (isCloudDestined) {
+      // For cloud-destined projects, bypass transformations but format files correctly
+      const files = detection.normalizedFiles || {};
+      const formattedFiles: Record<string, { code: string }> = {};
+      for (const [path, content] of Object.entries(files)) {
+        formattedFiles[path] = { code: content };
+      }
+      return {
+        template: 'node',
+        files: formattedFiles,
+        customSetup: { dependencies: {} }
+      };
+    }
+
     const template = FRAMEWORK_TO_TEMPLATE[detection.framework] || 'vanilla';
 
     // Filter out build outputs and node_modules
@@ -2118,6 +2235,46 @@ root.render(<App />);`,
     return this.transformForBrowser(code, framework);
   }
 
+  // ==========================================================================
+  // Cost Estimation
+  // ==========================================================================
+
+  /**
+   * Estimate the cost of running a preview in a given mode for a duration.
+   *
+   * @param mode - The preview mode (e.g. 'devbox', 'sandpack', 'modal')
+   * @param durationMinutes - Expected session duration in minutes
+   * @returns Estimated cost in USD
+   *
+   * @example
+   * ```typescript
+   * const cost = livePreviewOffloading.getCostEstimate('devbox', 30);
+   * // => 1.5 (30 min × $0.05/min)
+   * ```
+   */
+  getCostEstimate(mode: PreviewMode | string, durationMinutes: number): number {
+    const rate = (COST_PER_MINUTE as Record<string, number>)[mode];
+    if (rate === undefined) return 0;
+    return rate * durationMinutes;
+  }
+
+  /**
+   * List all preview modes and their per-minute cost rates.
+   *
+   * @returns Array of { mode, costPerMinute } objects
+   *
+   * @example
+   * ```typescript
+   * const providers = livePreviewOffloading.getProviders();
+   * // => [{ mode: 'sandpack', costPerMinute: 0 }, { mode: 'devbox', costPerMinute: 0.05 }, ...]
+   * ```
+   */
+  getProviders(): Array<{ mode: PreviewMode; costPerMinute: number }> {
+    return (Object.entries(COST_PER_MINUTE) as [PreviewMode, number][]).map(
+      ([mode, costPerMinute]) => ({ mode, costPerMinute })
+    );
+  }
+
   /**
    * Get preview mode priority (local first, then cloud fallback)
    */
@@ -2246,6 +2403,159 @@ export const getSandpackConfig = (filesOrDetection: Array<{name: string; content
   return livePreviewOffloading.getSandpackConfig(filesOrDetection as ProjectDetection);
 };
 
+export interface LocalDependencyInjectionResult {
+  files: Record<string, { code: string }>;
+  dependencies: string[];
+}
+
+function normalizeVirtualPath(input: string): string {
+  const segments: string[] = [];
+  for (const segment of input.replace(/\\/g, '/').split('/')) {
+    if (!segment || segment === '.') continue;
+    if (segment === '..') {
+      segments.pop();
+      continue;
+    }
+    segments.push(segment);
+  }
+  return segments.join('/');
+}
+
+function dirnameVirtualPath(filePath: string): string {
+  const normalized = normalizeVirtualPath(filePath);
+  const index = normalized.lastIndexOf('/');
+  return index >= 0 ? normalized.slice(0, index) : '';
+}
+
+function joinVirtualPath(baseDir: string, relativePath: string): string {
+  if (!relativePath) return normalizeVirtualPath(baseDir);
+  return normalizeVirtualPath([baseDir, relativePath].filter(Boolean).join('/'));
+}
+
+function parseJsonSafely(value: string): Record<string, any> | null {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+function inferLocalPackageEntry(files: Record<string, string>, packageRoot: string, localPkg: Record<string, any>): string {
+  const entryCandidates: string[] = [];
+  const pushCandidate = (candidate?: unknown) => {
+    if (typeof candidate !== 'string' || !candidate.trim()) return;
+    const cleaned = candidate.replace(/^\.?\//, '');
+    entryCandidates.push(cleaned);
+  };
+
+  pushCandidate(localPkg.module);
+  pushCandidate(localPkg.main);
+  pushCandidate(localPkg.source);
+
+  const exportsField = localPkg.exports;
+  if (typeof exportsField === 'string') {
+    pushCandidate(exportsField);
+  } else if (exportsField && typeof exportsField === 'object') {
+    const rootExport = exportsField['.'];
+    if (typeof rootExport === 'string') {
+      pushCandidate(rootExport);
+    } else if (rootExport && typeof rootExport === 'object') {
+      pushCandidate(rootExport.import);
+      pushCandidate(rootExport.default);
+      pushCandidate(rootExport.require);
+    }
+  }
+
+  entryCandidates.push(
+    'index.ts',
+    'index.tsx',
+    'index.js',
+    'index.jsx',
+    'src/index.ts',
+    'src/index.tsx',
+    'src/index.js',
+    'src/index.jsx',
+    'main.ts',
+    'main.tsx',
+    'main.js',
+    'main.jsx',
+  );
+
+  for (const candidate of entryCandidates) {
+    const resolved = joinVirtualPath(packageRoot, candidate);
+    if (files[resolved] !== undefined) {
+      return candidate;
+    }
+  }
+
+  return entryCandidates[0] || 'index.js';
+}
+
+export function injectLocalDependencySources(files: Record<string, string>): LocalDependencyInjectionResult {
+  const injectedFiles: Record<string, { code: string }> = {};
+  const injectedPackages = new Set<string>();
+
+  for (const [packageJsonPath, packageJsonContent] of Object.entries(files)) {
+    if (!packageJsonPath.endsWith('package.json') || packageJsonPath.includes('node_modules/')) continue;
+
+    const pkg = parseJsonSafely(packageJsonContent);
+    if (!pkg) continue;
+
+    const deps = {
+      ...(pkg.dependencies || {}),
+      ...(pkg.devDependencies || {}),
+      ...(pkg.peerDependencies || {}),
+    } as Record<string, unknown>;
+
+    const packageRoot = dirnameVirtualPath(packageJsonPath);
+
+    for (const [depName, depVersion] of Object.entries(deps)) {
+      if (typeof depVersion !== 'string') continue;
+      if (!/^(file:|link:)/.test(depVersion)) continue;
+
+      const depRoot = joinVirtualPath(packageRoot, depVersion.replace(/^(file:|link:)/, ''));
+      const matchingFiles = Object.entries(files).filter(([filePath]) =>
+        filePath === depRoot || filePath.startsWith(`${depRoot}/`)
+      );
+
+      if (matchingFiles.length === 0) continue;
+      if (injectedPackages.has(depName)) continue;
+
+      const localPackageJsonPath = `${depRoot}/package.json`;
+      const localPkg = parseJsonSafely(files[localPackageJsonPath] || '') || {};
+      const entryFile = inferLocalPackageEntry(files, depRoot, localPkg);
+
+      injectedFiles[`node_modules/${depName}/package.json`] = {
+        code: JSON.stringify(
+          {
+            name: depName,
+            version: localPkg.version || '0.0.0',
+            main: entryFile,
+            module: entryFile,
+            type: localPkg.type,
+          },
+          null,
+          2,
+        ),
+      };
+
+      for (const [sourcePath, sourceContent] of matchingFiles) {
+        if (sourcePath === localPackageJsonPath) continue;
+        const relativePath = sourcePath.slice(depRoot.length).replace(/^\/+/, '');
+        if (!relativePath) continue;
+        injectedFiles[`node_modules/${depName}/${relativePath}`] = { code: sourceContent };
+      }
+
+      injectedPackages.add(depName);
+    }
+  }
+
+  return {
+    files: injectedFiles,
+    dependencies: Array.from(injectedPackages),
+  };
+}
+
 export const detectPreviewMode = (
   filePaths: string[],
   framework: AppFramework,
@@ -2258,7 +2568,18 @@ export const detectPreviewMode = (
   hasAPIKeys: boolean,
   heuristics?: OffloadHeuristics
 ) => livePreviewOffloading.detectPreviewMode(
-  filePaths, framework, bundler, hasPython, hasNodeServer, hasNextJS, packageJson, hasHeavyComputation, hasAPIKeys, heuristics
+  filePaths,
+  framework,
+  bundler,
+  {
+    hasPython,
+    hasNodeServer,
+    hasNextJS,
+    hasHeavyComputation,
+    hasAPIKeys,
+  },
+  packageJson,
+  heuristics
 );
 
 export const detectFramework = (
@@ -2294,6 +2615,24 @@ export const shouldUseLocalPreview = (detection: ProjectDetection) =>
 
 export const getCloudFallback = (localMode: PreviewMode) =>
   livePreviewOffloading.getCloudFallback(localMode);
+
+/**
+ * Estimate the cost of running a preview in a given mode for a duration.
+ * Convenience export for LivePreviewOffloading.getCostEstimate().
+ *
+ * @param mode - The preview mode (e.g. 'devbox', 'sandpack', 'modal')
+ * @param durationMinutes - Expected session duration in minutes
+ * @returns Estimated cost in USD
+ */
+export const getCostEstimate = (mode: PreviewMode | string, durationMinutes: number): number =>
+  livePreviewOffloading.getCostEstimate(mode, durationMinutes);
+
+/**
+ * List all preview modes and their per-minute cost rates.
+ * Convenience export for LivePreviewOffloading.getProviders().
+ */
+export const getPreviewProviders = () =>
+  livePreviewOffloading.getProviders();
 
 export const detectPort = (files: Record<string, string>) =>
   livePreviewOffloading.detectPort(files);

@@ -16,6 +16,7 @@ import { decryptApiKey, encryptApiKey } from '@/lib/database/connection';
 import { createFigmaApi, FigmaApiError } from '@/lib/figma/api';
 import { isFigmaConfigured, getFigmaRedirectUri } from '@/lib/figma/config';
 import { generateCodeVerifier, generateCodeChallenge, generateState, generateAuthUrl } from '@/lib/figma/oauth';
+import { oauthStateStore } from './oauth-state-store';
 
 export const runtime = 'nodejs';
 
@@ -120,13 +121,6 @@ async function isFigmaConnected(userId: number): Promise<boolean> {
 // ============================================================================
 // OAuth State Storage (in-memory for now, should use database)
 // ============================================================================
-
-export const oauthStateStore = new Map<string, {
-  userId: number;
-  codeVerifier: string;
-  state: string;
-  expiresAt: Date;
-}>();
 
 // Clean up expired states every 10 minutes
 setInterval(() => {

@@ -24,17 +24,27 @@ vi.mock('../lib/utils/logger', () => ({
   })
 }))
 
+// NOTE: Mock must match the full NullclawIntegration surface used by the bridge.
 vi.mock('@bing/shared/agent/nullclaw-integration', () => ({
   nullclawIntegration: {
-    startContainer: vi.fn(() => Promise.resolve({
+    isAvailable: vi.fn(() => true),
+    initialize: vi.fn(() => Promise.resolve()),
+    initializeForSession: vi.fn(() => Promise.resolve('nullclaw-123')),
+    getContainerForSession: vi.fn(() => ({
       id: 'nullclaw-123',
       endpoint: 'http://localhost:3001',
       status: 'ready',
     })),
     stopContainer: vi.fn(() => Promise.resolve()),
-    executeTask: vi.fn((userId, convId, task) => 
-      Promise.resolve({ ...task, status: 'completed', result: { success: true } })
-    ),
+    executeTask: vi.fn((...args: any[]) => {
+      const task = args[args.length - 1];
+      return Promise.resolve({ ...(task || {}), status: 'completed', result: { success: true } });
+    }),
+    sendDiscordMessage: vi.fn(() => Promise.resolve({ id: 't1', status: 'completed', result: {} })),
+    sendTelegramMessage: vi.fn(() => Promise.resolve({ id: 't2', status: 'completed', result: {} })),
+    browseUrl: vi.fn(() => Promise.resolve({ id: 't3', status: 'completed', result: {} })),
+    automateTask: vi.fn(() => Promise.resolve({ id: 't4', status: 'completed', result: {} })),
+    searchWeb: vi.fn(() => Promise.resolve({ id: 't5', status: 'completed', result: {} })),
     getStatus: vi.fn(() => Promise.resolve({
       available: true,
       health: 'healthy',
@@ -214,7 +224,9 @@ describe('V2 + MCP Architecture Integration', () => {
   describe('Error Handling', () => {
     it('should handle tool execution failure gracefully', async () => {
       const nullclaw = await import('@bing/shared/agent/nullclaw-integration');
-      vi.mocked(nullclaw.nullclawIntegration.executeTask).mockRejectedValueOnce(
+      // Mock sendDiscordMessage to reject — that's the method the bridge
+      // actually calls for nullclaw_sendDiscord (not executeTask).
+      vi.mocked(nullclaw.nullclawIntegration.sendDiscordMessage).mockRejectedValueOnce(
         new Error('Connection refused')
       );
 

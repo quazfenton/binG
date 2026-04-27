@@ -1,0 +1,10 @@
+{
+  "sdk\\trigger-llms.md\\claude-thinking-chatbot\\lib\\constants.ts": [
+    {
+      "name": "ERROR_MESSAGES",
+      "type": "const",
+      "file": "sdk\\trigger-llms.md\\claude-thinking-chatbot\\lib\\constants.ts",
+      "exported": true
+    }
+  ]
+}

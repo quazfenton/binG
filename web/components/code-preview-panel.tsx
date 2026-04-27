@@ -59,6 +59,7 @@ import { clipboard } from "@bing/platform/clipboard";
 import {
   detectProject,
   getSandpackConfig,
+  injectLocalDependencySources,
   livePreviewOffloading,
   isBackendOnlyProject,
   type ProjectDetection,
@@ -285,7 +286,7 @@ export default function CodePreviewPanel({
   const [projectDetection, setProjectDetection] = useState<ReturnType<typeof detectProject> | null>(null);
   const [isManualPreviewActive, setIsManualPreviewActive] = useState(false);
   const [manualPreviewMayBeStale, setManualPreviewMayBeStale] = useState(false); // Track if VFS changed while in manual preview
-  const [previewMode, setPreviewMode] = useState<'sandpack' | 'iframe' | 'raw' | 'parcel' | 'devbox' | 'pyodide' | 'vite' | 'webpack' | 'webcontainer' | 'nextjs' | 'codesandbox' | 'opensandbox' | 'node' | 'local' | 'cloud'>('sandpack');
+  const [previewMode, setPreviewMode] = useState<'sandpack' | 'iframe' | 'raw' | 'parcel' | 'devbox' | 'pyodide' | 'vite' | 'webpack' | 'webcontainer' | 'nextjs' | 'codesandbox' | 'opensandbox' | 'node' | 'local' | 'cloud' | 'modal'>('sandpack');
   const [devBoxOutput, setDevBoxOutput] = useState<string[]>([]);
   const [isDevBoxRunning, setIsDevBoxRunning] = useState(false);
   const [pyodideOutput, setPyodideOutput] = useState<string>('');
@@ -300,6 +301,8 @@ export default function CodePreviewPanel({
   const [isWebcontainerBooting, setIsWebcontainerBooting] = useState(false);
   const [nextjsUrl, setNextjsUrl] = useState<string | null>(null);
   const [isNextjsBuilding, setIsNextjsBuilding] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewAuthHeaders, setPreviewAuthHeaders] = useState<Record<string, string> | null>(null);
   const [codesandboxUrl, setCodesandboxUrl] = useState<string | null>(null);
   const [isCodesandboxLoading, setIsCodesandboxLoading] = useState(false);
   const [opensandboxUrl, setOpensandboxUrl] = useState<string | null>(null);
@@ -1244,7 +1247,7 @@ export default function CodePreviewPanel({
       // Store files with root-relative paths for Sandpack runners
       setManualPreviewFiles(previewFiles);
       setIsManualPreviewActive(true);
-      setPreviewMode(selectedMode);
+      setPreviewMode(selectedMode === 'fastly' || selectedMode === 'valtown' || selectedMode === 'modal' ? 'cloud' : selectedMode);
       if (!preserveTab) {
         setSelectedTab('preview');  // Always switch to preview tab
       }
@@ -1456,9 +1459,30 @@ export default function CodePreviewPanel({
         const updatedFiles = (updatedFilesRaw && typeof updatedFilesRaw === 'object'
           ? updatedFilesRaw
           : {}) as Record<string, string>;
-        
+
         log(`[VFS_SAVE via window message] received, scope="${savedScopePath}", files=[${Object.keys(updatedFiles).join(', ')}]`);
         await processVfsSave(savedScopePath, updatedFiles);
+      }
+
+      // Handle cloud-preview-tunnel event for automatic visual output display
+      if (e.data?.type === "cloud-preview-tunnel") {
+        const { url, port, authHeaders, previewId } = e.data;
+        log(`[CLOUD_PREVIEW] Tunnel ready: ${url} (port ${port})`);
+
+        // Automatically display the visual output (#vizion) when tunnel is ready
+        if (url && port) {
+          // Set preview URL and switch to visual tab
+          setPreviewUrl(url);
+          setSelectedTab('preview');
+
+          // Add authentication headers if provided
+          if (authHeaders) {
+            // Store auth headers for the preview iframe
+            setPreviewAuthHeaders(authHeaders);
+          }
+
+          toast.success(`Cloud preview ready on port ${port}`);
+        }
       }
     };
 
@@ -2590,6 +2614,32 @@ Generated on: ${new Date().toLocaleString()}
       return config.template;
     };
 
+    const sandpackDependencySourceFiles = useMemo(() => {
+      if (useStructure?.files && Object.keys(useStructure.files).length > 0) {
+        return useStructure.files;
+      }
+      if (isManualPreviewActive && projectDetection?.normalizedFiles) {
+        return projectDetection.normalizedFiles;
+      }
+      if (isManualPreviewActive && manualPreviewFiles) {
+        return manualPreviewFiles;
+      }
+      return {};
+    }, [manualPreviewFiles, isManualPreviewActive, projectDetection?.normalizedFiles, useStructure?.files]);
+
+    const localDependencyInjection = useMemo(
+      () => injectLocalDependencySources(sandpackDependencySourceFiles),
+      [sandpackDependencySourceFiles],
+    );
+
+    const augmentSandpackFiles = useCallback(
+      (files: Record<string, { code: string }>) => ({
+        ...files,
+        ...localDependencyInjection.files,
+      }),
+      [localDependencyInjection.files],
+    );
+    
     // ============================================================================
     // Improved Dependency Detection - Parse package.json properly
     // ============================================================================
@@ -2609,14 +2659,16 @@ Generated on: ${new Date().toLocaleString()}
             // Add all dependencies with 'latest' version
             if (pkg.dependencies && typeof pkg.dependencies === 'object') {
               Object.keys(pkg.dependencies).forEach(dep => {
-                if (dep && typeof dep === 'string') {
+                const depVersion = pkg.dependencies[dep];
+                if (dep && typeof dep === 'string' && !(typeof depVersion === 'string' && /^(file:|link:)/.test(depVersion))) {
                   deps[dep] = 'latest';
                 }
               });
             }
             if (pkg.devDependencies && typeof pkg.devDependencies === 'object') {
               Object.keys(pkg.devDependencies).forEach(dep => {
-                if (dep && typeof dep === 'string' && !deps[dep]) {
+                const depVersion = pkg.devDependencies[dep];
+                if (dep && typeof dep === 'string' && !deps[dep] && !(typeof depVersion === 'string' && /^(file:|link:)/.test(depVersion))) {
                   deps[dep] = 'latest';
                 }
               });
@@ -3082,7 +3134,7 @@ export default app;`,
           // Create a copy of baseSandpackFiles to work with
           const filesCopy = { ...baseSandpackFiles };
 
-          // Add entry file stub if missing (using same logic as addEntryFileIfMissing but as pure function)
+          // Check if entry files exist
           const existingEntryFile = Object.keys(filesCopy).some(path => {
             const fileName = path.split('/').pop() || '';
             return /^index\.(js|jsx|ts|tsx|mjs|cjs|vue)$/.test(fileName) ||
@@ -3091,6 +3143,16 @@ export default app;`,
                    /^page\.(js|jsx|ts|tsx)$/.test(fileName);
           });
 
+          // CRITICAL FIX: Always ensure index.html exists for React projects,
+          // even when entry JS files are present. Sandpack's React template needs
+          // <div id="root"></div> in index.html for ReactDOM.createRoot to work.
+          const hasIndexHtml = Object.keys(filesCopy).some(path =>
+            path.endsWith('index.html') || path === 'index.html'
+          );
+
+          const isReactProject = ['react', 'next', 'vite-react'].includes(effectiveFramework);
+
+          // If no entry file at all, add full stub
           if (!existingEntryFile) {
             // Add framework-specific stub files
             const framework = effectiveFramework;
@@ -3166,6 +3228,23 @@ root.render(<App />);` };
 </html>` };
                 break;
             }
+          }
+
+          // CRITICAL FIX: For React projects that have entry JS files but no index.html,
+          // inject index.html so ReactDOM.createRoot(document.getElementById("root")) works.
+          // This fixes the "Target container is not a DOM element" error in Sandpack.
+          if (isReactProject && !hasIndexHtml) {
+            filesCopy["index.html"] = { code: `<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Preview</title>
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>` };
           }
 
           // For auto-detected projects (not manual preview), strip scope prefix and project subfolders
@@ -3356,7 +3435,7 @@ root.render(<App />);` };
                           // Can be overridden via NEXT_PUBLIC_SANDBPACK_BUNDLER_URL env variable
                           bundlerURL: process.env.NEXT_PUBLIC_SANDBPACK_BUNDLER_URL || 'https://sandpack-bundler.codeSandbox.io',
                         }}
-                        files={sandpackFiles}
+                        files={augmentSandpackFiles(sandpackFiles)}
                         customSetup={{
                           dependencies: (projectDetection as any)?.dependencies?.reduce(
                             (acc: Record<string, string>, dep: string) => { acc[dep] = "latest"; return acc; },
@@ -3450,7 +3529,7 @@ root.render(<App />);` };
                         recompileMode: "delayed",
                         recompileDelay: 300,
                       }}
-                files={sandpackFiles}
+                files={augmentSandpackFiles(sandpackFiles)}
                       customSetup={{ dependencies: {} }}
                     />
                   </div>
@@ -5225,7 +5304,7 @@ root.render(<App />);` };
                   recompileDelay: 300,
                   externalResources: [],
                 }}
-                files={finalSandpackFiles}
+                files={augmentSandpackFiles(finalSandpackFiles)}
                 customSetup={{
                   dependencies: getDependencies(),
                   devDependencies: (useStructure as any).devDependencies?.reduce(
@@ -5467,7 +5546,7 @@ root.render(<App />);` };
                   recompileMode: "delayed",
                   recompileDelay: 300,
                 }}
-                files={sandpackFiles}
+                files={augmentSandpackFiles(sandpackFiles)}
                 customSetup={{
                   dependencies: {},
                 }}

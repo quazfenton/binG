@@ -331,88 +331,76 @@ switch (fastModelProvider) {
         }
     }
 
-      const result = await generateObject({
-        model,
-        prompt: `Estimate task scope. Respond with JSON only. No extra text:
-{
-  "estimatedFiles": <number of files likely to be modified>,
-  "estimatedSteps": <number of discrete steps>,
-  "requiresResearch": <boolean>,
-  "requiresTesting": <boolean>,
-  "riskLevel": <low|medium|high>
-}
+    const result = await generateObject({
+      model,
+      prompt: `Estimate task scope. Respond with JSON only. No extra text. Do not include any text before or after the JSON object.
+
+{"estimatedFiles": <number>, "estimatedSteps": <number>, "requiresResearch": <true|false>, "requiresTesting": <true|false>, "riskLevel": "low"|"medium"|"high"}
 
 Task: ${message.substring(0, 500)}`,
-        schema: z.object({
-          estimatedFiles: z.number(),
-          estimatedSteps: z.number(),
-          requiresResearch: z.boolean(),
-          requiresTesting: z.boolean(),
-          riskLevel: z.enum(['low', 'medium', 'high']), Notes: z.string()
-        }),
-        maxOutputTokens: 200,
-      });
-      
-const analysis = result.object;
-       let score = 0.5;
-       const factors: string[] = [];
+      schema: z.object({
+        estimatedFiles: z.number(),
+        estimatedSteps: z.number(),
+        requiresResearch: z.boolean(),
+        requiresTesting: z.boolean(),
+        riskLevel: z.enum(['low', 'medium', 'high']),
+      }),
+      maxOutputTokens: 200,
+    });
 
-       // Log or use any extra notes (optional)
-       if (analysis.Notes && analysis.Notes.trim().length > 0) {
-         // Optionally log or factor in notes for debugging
-         console.log(`[TaskClassifier] Semantic analysis notes: ${analysis.Notes}`);
-         // For now, just log; could adjust score based on notes content if needed
-       }
+    const analysis = result.object;
+    let score = 0.5;
+    const factors: string[] = [];
 
-       // File count factor
-       if (analysis.estimatedFiles > 5) {
-         score += 0.2;
-         factors.push(`${analysis.estimatedFiles} files`);
-       } else if (analysis.estimatedFiles <= 1) {
-         score -= 0.2;
-       }
-      
-      // Step count factor
-      if (analysis.estimatedSteps > 5) {
-        score += 0.15;
-        factors.push(`${analysis.estimatedSteps} steps`);
-      }
-      
-      // Research requirement
-      if (analysis.requiresResearch) {
-        score += 0.1;
-        factors.push('requires research');
-      }
-      
-      // Testing requirement
-      if (analysis.requiresTesting) {
-        score += 0.1;
-        factors.push('requires testing');
-      }
-      
-      // Risk level
-      if (analysis.riskLevel === 'high') {
-        score += 0.15;
-        factors.push('high risk');
-      } else if (analysis.riskLevel === 'low') {
-        score -= 0.1;
-      }
-      
-      // Clamp to 0-1
-      score = Math.max(0, Math.min(1, score));
-      
-      reasoning.push(`Semantic: ${factors.join(', ') || 'neutral'}`);
-      
-      return score;
-    } catch (error) {
-      log.warn('Semantic analysis failed, using fallback estimation', error);
-      
-      // Enhanced fallback: use message characteristics as complexity proxies
-      const fallbackScore = this.semanticFallback(message, reasoning);
-      reasoning.push(`Semantic: fallback analysis (score=${fallbackScore.toFixed(2)})`);
-      return fallbackScore;
+    // File count factor
+    if (analysis.estimatedFiles > 5) {
+      score += 0.2;
+      factors.push(`${analysis.estimatedFiles} files`);
+    } else if (analysis.estimatedFiles <= 1) {
+      score -= 0.2;
     }
+
+    // Step count factor
+    if (analysis.estimatedSteps > 5) {
+      score += 0.15;
+      factors.push(`${analysis.estimatedSteps} steps`);
+    }
+
+    // Research requirement
+    if (analysis.requiresResearch) {
+      score += 0.1;
+      factors.push('requires research');
+    }
+
+    // Testing requirement
+    if (analysis.requiresTesting) {
+      score += 0.1;
+      factors.push('requires testing');
+    }
+
+    // Risk level
+    if (analysis.riskLevel === 'high') {
+      score += 0.15;
+      factors.push('high risk');
+    } else if (analysis.riskLevel === 'low') {
+      score -= 0.1;
+    }
+
+    // Clamp to 0-1
+    score = Math.max(0, Math.min(1, score));
+
+    reasoning.push(`Semantic: ${factors.join(', ') || 'neutral'}`);
+
+    return score;
+  } catch (error) {
+    log.warn('Semantic analysis failed, using fallback estimation', error);
+
+    // Enhanced fallback: use message characteristics as complexity proxies
+    const fallbackScore = this.semanticFallback(message, reasoning);
+    reasoning.push(`Semantic: fallback analysis (score=${fallbackScore.toFixed(2)})`);
+    return fallbackScore;
   }
+}
 
   /**
    * Fallback semantic analysis when LLM is unavailable

@@ -340,17 +340,8 @@ export class UnifiedErrorHandler {
   private categorizeError(message: string, error: any): ErrorCategory {
     const messageLower = message.toLowerCase();
 
-    if (
-      messageLower.includes('required') ||
-      messageLower.includes('invalid') ||
-      messageLower.includes('validation') ||
-      messageLower.includes('schema') ||
-      messageLower.includes('parse') ||
-      messageLower.includes('zod')
-    ) {
-      return 'validation';
-    }
-
+    // Auth checks MUST run before validation — messages like "Invalid token"
+    // or "token expired" should categorize as authentication, not validation.
     if (
       messageLower.includes('auth') ||
       messageLower.includes('unauthorized') ||
@@ -361,6 +352,17 @@ export class UnifiedErrorHandler {
       messageLower.includes('apikey')
     ) {
       return 'authentication';
+    }
+
+    if (
+      messageLower.includes('required') ||
+      messageLower.includes('invalid') ||
+      messageLower.includes('validation') ||
+      messageLower.includes('schema') ||
+      messageLower.includes('parse') ||
+      messageLower.includes('zod')
+    ) {
+      return 'validation';
     }
 
     if (
@@ -394,8 +396,8 @@ export class UnifiedErrorHandler {
       messageLower.includes('503') ||
       messageLower.includes('502') ||
       messageLower.includes('500') ||
-      messageLower.includes('ECONNREFUSED') ||
-      messageLower.includes('ENOTFOUND')
+      messageLower.includes('econnrefused') ||
+      messageLower.includes('enotfound')
     ) {
       return 'network';
     }
@@ -572,51 +574,113 @@ export class UnifiedErrorHandler {
 
   private generateHints(category: ErrorCategory, context: string, parameters?: any): string[] {
     const hints: string[] = [];
+    const seen = new Set<string>();
+
+    const addHint = (hint: string) => {
+      if (!seen.has(hint)) {
+        seen.add(hint);
+        hints.push(hint);
+      }
+    };
+
+    // Add specific solutions based on error context
+    const errorMessage = context.toLowerCase();
 
     switch (category) {
       case 'validation':
-        hints.push('Check that all required parameters are provided');
-        hints.push('Verify parameter types match the schema');
+        addHint('Check that all required parameters are provided');
+        addHint('Verify parameter types match the schema');
         if (parameters) {
-          hints.push(`Provided parameters: ${JSON.stringify(sanitizeForLogging(parameters), null, 2)}`);
+          const paramStr = JSON.stringify(sanitizeForLogging(parameters), null, 2);
+          if (paramStr.length < 500) {
+            addHint(`Provided parameters: ${paramStr}`);
+          } else {
+            addHint('Provided parameters: (too large to display)');
+          }
         }
         break;
       case 'authentication':
-        hints.push('Ensure the user has connected their account');
-        hints.push('Check if the OAuth token has expired');
-        hints.push('Verify API keys are configured correctly');
+        addHint('Ensure the user has connected their account');
+        addHint('Check if the OAuth token has expired');
+        addHint('Verify API keys are configured correctly');
+        // Solution for common auth errors
+        if (errorMessage.includes('invalid api key') || errorMessage.includes('api key')) {
+          addHint('Solution: Check your API key in the configuration or .env file');
+        }
+        if (errorMessage.includes('token') && errorMessage.includes('expired')) {
+          addHint('Solution: Re-authenticate or refresh your token');
+        }
         break;
       case 'authorization':
-        hints.push('The user may not have permission for this action');
-        hints.push('Check if the connected account has required scopes');
+        addHint('The user may not have permission for this action');
+        addHint('Check if the connected account has required scopes');
+        if (errorMessage.includes('permission') || errorMessage.includes('eacces')) {
+          addHint('Solution: Run chmod 644 on the file or fix directory permissions');
+        }
+        if (errorMessage.includes('scope')) {
+          addHint('Solution: Re-authorize with required OAuth scopes');
+        }
         break;
       case 'rate_limit':
-        hints.push('Wait before retrying');
-        hints.push('Consider implementing exponential backoff');
-        hints.push('Check your quota usage');
+        addHint('Wait before retrying');
+        addHint('Consider implementing exponential backoff');
+        addHint('Check your quota usage');
+        if (errorMessage.includes('429')) {
+          addHint('Solution: Wait 60 seconds before retrying');
+        }
         break;
       case 'timeout':
-        hints.push('The operation took too long to complete');
-        hints.push('Try again with a smaller dataset');
-        hints.push('Check if the external service is experiencing issues');
+        addHint('The operation took too long to complete');
+        addHint('Try again with a smaller dataset');
+        addHint('Check if the external service is experiencing issues');
+        if (errorMessage.includes('connect') || errorMessage.includes('connection')) {
+          addHint('Solution: Check if the service endpoint is reachable');
+        }
         break;
       case 'network':
-        hints.push('Check your internet connection');
-        hints.push('The external service may be temporarily unavailable');
-        hints.push('Retry after a short delay');
+        addHint('Check your internet connection');
+        addHint('The external service may be temporarily unavailable');
+        addHint('Retry after a short delay');
+        if (errorMessage.includes('econnrefused')) {
+          addHint('Solution: Ensure the service is running and the port is open');
+        }
+        if (errorMessage.includes('enotfound') || errorMessage.includes('dns')) {
+          addHint('Solution: Check the hostname or DNS configuration');
+        }
         break;
       case 'not_found':
-        hints.push('Verify the resource exists');
-        hints.push('Check if the ID or path is correct');
-        hints.push(`Context: ${context}`);
+        addHint('Verify the resource exists');
+        addHint('Check if the ID or path is correct');
+        addHint(`Context: ${context.slice(0, 100)}`);
+        if (errorMessage.includes('file') || errorMessage.includes('enoent')) {
+          addHint('Solution: Create the file or check the path');
+        }
+        if (errorMessage.includes('module') || errorMessage.includes('cannot find')) {
+          addHint('Solution: Install the required package: npm install <package>');
+        }
         break;
       case 'security':
-        hints.push('The requested operation was blocked for security reasons');
-        hints.push('Review security policies and restrictions');
+        addHint('The requested operation was blocked for security reasons');
+        addHint('Review security policies and restrictions');
+        if (errorMessage.includes('traversal') || errorMessage.includes('..')) {
+          addHint('Solution: Path traversal detected - verify the path is within allowed directories');
+        }
+        if (errorMessage.includes('injection')) {
+          addHint('Solution: Sanitize input to prevent injection attacks');
+        }
         break;
       case 'provider':
-        hints.push('The provider SDK may have encountered an error');
-        hints.push('Check provider status pages for outages');
+        addHint('The provider SDK may have encountered an error');
+        addHint('Check provider status pages for outages');
+        if (errorMessage.includes('openai')) {
+          addHint('Solution: Check OpenAI status at status.openai.com');
+        }
+        if (errorMessage.includes('anthropic')) {
+          addHint('Solution: Check Anthropic status or try a different model');
+        }
+        if (errorMessage.includes('rate') && errorMessage.includes('limit')) {
+          addHint('Solution: Upgrade your provider plan or wait');
+        }
         break;
     }
 
@@ -785,7 +849,7 @@ export function handleError(
 }
 
 export function createValidationError(message: string, parameters?: any): ToolErrorClass {
-  return new ToolErrorClass('validation', message, {
+  return new ToolErrorClass('validation', `Invalid input: ${message}`, {
     category: 'validation',
     retryable: false,
     parameters,
@@ -794,7 +858,7 @@ export function createValidationError(message: string, parameters?: any): ToolEr
 }
 
 export function createAuthError(message: string, authUrl?: string): ToolErrorClass {
-  return new ToolErrorClass('auth', message, {
+  return new ToolErrorClass('auth', `Authentication required: ${message}`, {
     category: 'authentication',
     retryable: false,
     authRequired: true,

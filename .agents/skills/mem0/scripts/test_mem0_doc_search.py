@@ -13,6 +13,7 @@ import unittest
 import urllib.error
 import urllib.request
 from unittest.mock import MagicMock, call, patch
+from urllib.parse import urlparse
 
 import pytest
 
@@ -78,6 +79,32 @@ class TestFetchUrl:
             result = m.fetch_url("https://example.com/unicode")
         assert result == body
 
+    def test_binary_content_type_rejected(self):
+        """Binary content types like image/png should be rejected."""
+        mock_resp = _make_response("binary data")
+        mock_resp.headers.get = MagicMock(return_value="image/png")
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            result = m.fetch_url("https://example.com/image.png")
+        assert "unsupported content type" in result.lower()
+
+    def test_text_content_type_allowed(self):
+        """Text content types like text/html should be allowed."""
+        body = "<html>hello</html>"
+        mock_resp = _make_response(body)
+        mock_resp.headers.get = MagicMock(return_value="text/html; charset=utf-8")
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            result = m.fetch_url("https://example.com/page.html")
+        assert result == body
+
+    def test_json_content_type_allowed(self):
+        """Application/json content type should be allowed."""
+        body = '{"key": "value"}'
+        mock_resp = _make_response(body)
+        mock_resp.headers.get = MagicMock(return_value="application/json")
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            result = m.fetch_url("https://example.com/api/data")
+        assert result == body
+
 
 # ---------------------------------------------------------------------------
 # search_docs
@@ -132,16 +159,32 @@ class TestSearchDocs:
         assert result["results"] == []
 
     def test_section_filter_keeps_matching_mintlify_results(self):
-        with patch.object(m, "fetch_url", return_value=FAKE_SEARCH_RESULTS):
+        # Update test to use exact path match instead of startswith
+        exact_match_results = json.dumps({
+            "results": [
+                {"title": "Graph Memory", "url": "/platform/features/graph-memory", "description": "Graph mem docs"},
+                {"title": "Platform Overview", "url": "/platform/overview", "description": "Overview"},
+            ]
+        })
+        with patch.object(m, "fetch_url", return_value=exact_match_results):
             result = m.search_docs("memory", section="platform")
-        assert len(result["results"]) == 2  # both are /platform/…
+        assert len(result["results"]) == 2  # both are /platform/… exact matches
 
     def test_section_filter_on_llms_txt_fallback(self):
-        responses = iter(["bad-json", FAKE_LLMS_TXT])
+        # Use URLs that match exact section paths
+        sdks_llms = "\n".join([
+            "# SDKs section",
+            "https://docs.mem0.ai/sdks/python",
+            "https://docs.mem0.ai/sdks/js",
+            "https://docs.mem0.ai/platform/overview",
+        ])
+        responses = iter(["bad-json", sdks_llms])
         with patch.object(m, "fetch_url", side_effect=lambda u: next(responses)):
-            result = m.search_docs("memory", section="sdks")
+            result = m.search_docs("sdk", section="sdks")
         assert result["source"] == "llms_txt_index"
-        assert all("/sdks/" in u for u in result["matching_urls"])
+        # Only exact matches to /sdks/python or /sdks/js
+        assert all(urlparse(u).path in ["/sdks/python", "/sdks/js"] for u in result["matching_urls"])
+        assert len(result["matching_urls"]) == 2  # Both SDK pages
 
     def test_llms_txt_skips_blank_and_comment_lines(self):
         llms_content = "\n".join([
@@ -505,6 +548,17 @@ class TestFetchPageSecurity:
     def test_disallowed_host_message_mentions_allowed_host(self):
         result = m.fetch_page("https://attacker.example.com/data")
         assert m.ALLOWED_HOST in result["error"]
+
+    def test_path_traversal_rejected(self):
+        """Paths containing '..' must be rejected to prevent directory traversal."""
+        result = m.fetch_page("/platform/../admin/secrets")
+        assert "error" in result
+        assert "traversal" in result["error"].lower()
+
+    def test_path_traversal_double_dot_only(self):
+        """Simple '..' path must be rejected."""
+        result = m.fetch_page("/..")
+        assert "error" in result
 
 
 # ---------------------------------------------------------------------------

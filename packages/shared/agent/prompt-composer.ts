@@ -584,7 +584,7 @@ initializeSectionRegistry();
 // Exports
 // ============================================================================
 
-export {
+export type {
   // Re-export existing types for backwards compatibility
   AgentRole,
 } from './system-prompts';

@@ -1,3 +1,19 @@
+---
+id: sdk-trigger-llms.md-claude-thinking-chatbot-readme
+title: README
+aliases:
+  - README
+  - README.md
+tags: []
+layer: core
+summary: "## Claude Chatbot with Trigger.dev Realtime Streaming\r\n\r\nhttps://github.com/user-attachments/assets/053739a5-9736-4cb5-ab1c-81c35b69f4c4\r\n\r\nThis project is a full-stack chat application that uses the following:\r\n\r\n- A [Next.js](https://nextjs.org/) app for the chat interface\r\n- [Trigger.dev](https:/"
+anchors:
+  - Claude Chatbot with Trigger.dev Realtime Streaming
+  - Getting started
+  - Relevant code
+  - Key Technical Features
+  - Learn More
+---
 ## Claude Chatbot with Trigger.dev Realtime Streaming
 
 https://github.com/user-attachments/assets/053739a5-9736-4cb5-ab1c-81c35b69f4c4

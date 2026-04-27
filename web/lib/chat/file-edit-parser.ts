@@ -947,10 +947,9 @@ export function extractJsonToolCalls(content: string): FileEdit[] {
         }
       }
     } else if (resolvedToolName === 'delete_file') {
-      if (typeof path === 'string' && path.trim()) {
-        if (isValidExtractedPath(path.trim())) {
-          edits.push({ path: path.trim(), content: '', action: 'delete' });
-        }
+      // Handle delete_file - extract path with delete action
+      if (typeof path === 'string' && path.trim() && isValidExtractedPath(path.trim())) {
+        edits.push({ path: path.trim(), content: '', action: 'delete' });
       }
     }
   }
@@ -1082,11 +1081,16 @@ export function extractFileEdits(content: string): FileEdit[] {
     content.includes('\nwrite_files') ||
     content.includes('\ndelete_file') ||
     content.includes('\napply_diff') ||
-    content.includes('```file:') ||
-    content.includes('```diff') ||
-    content.includes('```mkdir:') ||
-    content.includes('```delete:') ||
+    /```\s*file\s*:/i.test(content) ||
+    /```\s*diff/i.test(content) ||
+    /```\s*mkdir\s*:/i.test(content) ||
+    /```\s*delete\s*:/i.test(content) ||
     (content.includes('"tool"') && content.includes('"arguments"')) ||
+    /write_file\s*\(\s*\{/.test(content) ||
+    /delete_file\s*\(\s*\{/.test(content) ||
+    /create_directory\s*\(\s*\{/.test(content) ||
+    /apply_diff\s*\(\s*\{/.test(content) ||
+    /\[Tool:/.test(content) ||
     content.includes('<|tool_call_begin|>') ||
     (content.includes('```') && /\bbatch_write|write_files|create_files/i.test(content)) ||
     content.includes('```tool_call') ||
@@ -1185,17 +1189,18 @@ export function extractFileEdits(content: string): FileEdit[] {
   // FALLBACK: Parse text-mode fenced file edits: ```file: path\ncontent\n```
   // Used when model doesn't support function calling — text-mode tool instructions
   // tell it to use this format for file creation/overwrite.
-  if (content.includes('```file:')) {
+  // Case-insensitive gate: handles ```FILE:, ```File:, ```file :, etc.
+  if (/```\s*file\s*:/i.test(content)) {
     allEdits.push(...extractFencedFileEdits(content));
   }
 
   // FALLBACK: Parse text-mode fenced mkdir: ```mkdir: path\n```
-  if (content.includes('```mkdir:')) {
+  if (/```\s*mkdir\s*:/i.test(content)) {
     allEdits.push(...extractFencedMkdirEdits(content) as FileEdit[]);
   }
 
   // FALLBACK: Parse text-mode fenced delete: ```delete: path\n```
-  if (content.includes('```delete:')) {
+  if (/```\s*delete\s*:/i.test(content)) {
     allEdits.push(...extractFencedDeleteBlocks(content) as FileEdit[]);
   }
 
@@ -1311,6 +1316,10 @@ export function extractFileEdits(content: string): FileEdit[] {
     // Also handles: create_file({ ... }), writeToFile({ ... }), delete_file({ ... }), apply_diff({ ... })
     allEdits.push(...extractTextToolCallEdits(content));
 
+    // NOTE: extractJsonInFunctionEdits was removed — extractTextToolCallEdits
+    // already covers the write_file({ "path": "...", "content": "..." }) format
+    // via balanced-paren scanning with tolerantJsonParse, which is more robust.
+
     // Handle batch_write([{ path: "...", content: "..." }, ...]) format
     // Common when LLM outputs multiple files in a single batch call
     allEdits.push(...extractBatchWriteEdits(content));
@@ -1414,6 +1423,11 @@ export function extractFileEdits(content: string): FileEdit[] {
  *
  * Also handles: create_files(...), write_files(...), batch_create(...)
  */
+
+// extractJsonInFunctionEdits was removed — its functionality is already
+// covered by extractTextToolCallEdits (balanced-paren scan + tolerantJsonParse)
+// which handles write_file({ "path": "...", "content": "..." }) more robustly.
+
 export function extractBatchWriteEdits(content: string): FileEdit[] {
   const edits: FileEdit[] = [];
 
@@ -3228,12 +3242,19 @@ export function sanitizeFileEditTags(content: string): string {
       let bracePos = sanitized.lastIndexOf('{', toolIdx);
       if (bracePos === -1) { searchFrom = toolIdx + 6; continue; }
 
-      // Find the matching closing brace
+      // Find the matching closing brace using string-aware balancing
       let depth = 0;
       let endPos = -1;
+      let inStr = false;
+      let esc = false;
       for (let i = bracePos; i < sanitized.length; i++) {
-        if (sanitized[i] === '{') depth++;
-        if (sanitized[i] === '}') { depth--; if (depth === 0) { endPos = i + 1; break; } }
+        const ch = sanitized[i];
+        if (esc) { esc = false; continue; }
+        if (ch === '\\' && inStr) { esc = true; continue; }
+        if (ch === '"') { inStr = !inStr; continue; }
+        if (inStr) continue;
+        if (ch === '{') depth++;
+        if (ch === '}') { depth--; if (depth === 0) { endPos = i + 1; break; } }
       }
       if (endPos === -1) { searchFrom = toolIdx + 6; continue; }
 
@@ -3472,12 +3493,19 @@ function detectUnclosedTags(
       let bracePos = tail.lastIndexOf('{', toolMatch.index);
       if (bracePos === -1) continue;
 
-      // Check if braces are balanced from bracePos to end of tail
+      // Check if braces are balanced from bracePos to end of tail using string-aware balancing
       let depth = 0;
       let balanced = false;
+      let inStr = false;
+      let esc = false;
       for (let i = bracePos; i < tail.length; i++) {
-        if (tail[i] === '{') depth++;
-        if (tail[i] === '}') { depth--; if (depth === 0) { balanced = true; break; } }
+        const ch = tail[i];
+        if (esc) { esc = false; continue; }
+        if (ch === '\\' && inStr) { esc = true; continue; }
+        if (ch === '"') { inStr = !inStr; continue; }
+        if (inStr) continue;
+        if (ch === '{') depth++;
+        if (ch === '}') { depth--; if (depth === 0) { balanced = true; break; } }
       }
       if (!balanced) {
         positions.push(windowStart + scanStart + bracePos);

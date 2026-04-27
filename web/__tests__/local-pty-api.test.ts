@@ -6,6 +6,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { NextRequest } from 'next/server';
 
 // ============================================================
 // Mock dependencies BEFORE importing the route
@@ -17,6 +18,24 @@ vi.mock('@/lib/auth/request-auth', () => ({
     success: true,
     userId: 'user-123',
     source: 'jwt',
+  }),
+}));
+
+// Mock VFS workspace materializer — avoids real filesystem and DB access
+vi.mock('@/lib/virtual-filesystem/vfs-workspace-materializer', () => ({
+  materializeWorkspace: vi.fn().mockResolvedValue('/tmp/test-workspace'),
+  watchWorkspaceForChanges: vi.fn().mockReturnValue({ stop: vi.fn() }),
+  syncFileToVfs: vi.fn().mockResolvedValue(undefined),
+}));
+
+// Mock database — avoids real SQLite dependency
+vi.mock('@/lib/database/connection', () => ({
+  getDatabase: vi.fn().mockReturnValue({
+    prepare: vi.fn().mockReturnValue({
+      run: vi.fn(),
+      get: vi.fn().mockReturnValue(undefined),
+      all: vi.fn().mockReturnValue([]),
+    }),
   }),
 }));
 
@@ -69,13 +88,13 @@ describe('POST /api/terminal/local-pty', () => {
     vi.stubEnv('NODE_ENV', 'development');
 
     const { POST } = await import('@/app/api/terminal/local-pty/route');
-    const req = new Request('http://localhost/api/terminal/local-pty', {
+    const req = new NextRequest('http://localhost/api/terminal/local-pty', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ cols: 80, rows: 24 }),
     });
 
-    const res = await POST(req as any);
+    const res = await POST(req);
     expect(res.status).toBe(503);
     const body = await res.json();
     expect(body.error).toContain('disabled');
@@ -87,17 +106,15 @@ describe('POST /api/terminal/local-pty', () => {
   it('returns 503 when not localhost in localhost mode', async () => {
     vi.stubEnv('ENABLE_LOCAL_PTY', 'localhost');
 
-    const { POST } = await import('@/app/api/terminal/local-pty/route');
-    const req = new Request('http://example.com/api/terminal/local-pty', {
+    const { POST } = await import('@/app/api/terminal/local-pty/route');    const req = new NextRequest('http://example.com/api/terminal/local-pty', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        host: 'example.com',
+      headers: { 'Content-Type': 'application/json',
+      host: 'example.com',
       },
       body: JSON.stringify({ cols: 80, rows: 24 }),
     });
 
-    const res = await POST(req as any);
+    const res = await POST(req);
     expect(res.status).toBe(503);
     const body = await res.json();
     expect(body.error).toContain('localhost');
@@ -110,13 +127,13 @@ describe('POST /api/terminal/local-pty', () => {
     vi.stubEnv('NODE_ENV', 'development');
 
     const { POST } = await import('@/app/api/terminal/local-pty/route');
-    const req = new Request('http://localhost:3000/api/terminal/local-pty', {
+    const req = new NextRequest('http://localhost:3000/api/terminal/local-pty', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', host: 'localhost:3000' },
       body: JSON.stringify({ cols: 80, rows: 24 }),
     });
 
-    const res = await POST(req as any);
+    const res = await POST(req);
     // Should NOT be rejected for localhost check (503).
     // May succeed (200) if dependencies are available, or fail later (4xx/5xx).
     expect(res.status).not.toBe(503);
@@ -129,13 +146,13 @@ describe('POST /api/terminal/local-pty', () => {
     vi.stubEnv('NODE_ENV', 'development');
 
     const { POST } = await import('@/app/api/terminal/local-pty/route');
-    const req = new Request('http://localhost/api/terminal/local-pty', {
+    const req = new NextRequest('http://localhost/api/terminal/local-pty', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ cols: 0, rows: 0 }),
     });
 
-    const res = await POST(req as any);
+    const res = await POST(req);
     expect(res.status).toBe(400);
     const body = await res.json();
     expect(body.error).toContain('Invalid dimensions');
@@ -148,13 +165,13 @@ describe('POST /api/terminal/local-pty', () => {
     vi.stubEnv('NODE_ENV', 'development');
 
     const { POST } = await import('@/app/api/terminal/local-pty/route');
-    const req = new Request('http://localhost/api/terminal/local-pty', {
+    const req = new NextRequest('http://localhost/api/terminal/local-pty', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ checkOnly: true }),
     });
 
-    const res = await POST(req as any);
+    const res = await POST(req);
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.available).toBe(true);
@@ -168,13 +185,13 @@ describe('POST /api/terminal/local-pty', () => {
     vi.stubEnv('NODE_ENV', 'development');
 
     const { POST } = await import('@/app/api/terminal/local-pty/route');
-    const req = new Request('http://localhost/api/terminal/local-pty', {
+    const req = new NextRequest('http://localhost/api/terminal/local-pty', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ cols: 80, rows: 24 }),
     });
 
-    const res = await POST(req as any);
+    const res = await POST(req);
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.sessionId).toBeDefined();
@@ -192,21 +209,21 @@ describe('POST /api/terminal/local-pty', () => {
 
     // Create 5 sessions (MAX_SESSIONS_PER_USER)
     for (let i = 0; i < 5; i++) {
-      const req = new Request('http://localhost/api/terminal/local-pty', {
+      const req = new NextRequest('http://localhost/api/terminal/local-pty', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ cols: 80, rows: 24 }),
       });
-      await POST(req as any);
+      await POST(req);
     }
 
     // 6th should fail
-    const req = new Request('http://localhost/api/terminal/local-pty', {
+    const req = new NextRequest('http://localhost/api/terminal/local-pty', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ cols: 80, rows: 24 }),
     });
-    const res = await POST(req as any);
+    const res = await POST(req);
     expect(res.status).toBe(429);
     const body = await res.json();
     expect(body.error).toContain('Too many PTY sessions');
@@ -222,9 +239,9 @@ describe('POST /api/terminal/local-pty', () => {
 describe('GET /api/terminal/local-pty', () => {
   it('returns 400 without sessionId', async () => {
     const { GET } = await import('@/app/api/terminal/local-pty/route');
-    const req = new Request('http://localhost/api/terminal/local-pty');
+    const req = new NextRequest('http://localhost/api/terminal/local-pty');
 
-    const res = await GET(req as any);
+    const res = await GET(req);
     expect(res.status).toBe(400);
     const body = await res.json();
     expect(body.error).toContain('sessionId is required');
@@ -232,9 +249,9 @@ describe('GET /api/terminal/local-pty', () => {
 
   it('returns 404 for unknown session', async () => {
     const { GET } = await import('@/app/api/terminal/local-pty/route');
-    const req = new Request('http://localhost/api/terminal/local-pty?sessionId=unknown');
+    const req = new NextRequest('http://localhost/api/terminal/local-pty?sessionId=unknown');
 
-    const res = await GET(req as any);
+    const res = await GET(req);
     expect(res.status).toBe(404);
   });
 
@@ -243,19 +260,19 @@ describe('GET /api/terminal/local-pty', () => {
     vi.stubEnv('NODE_ENV', 'development');
 
     // First create a session
-    const { POST } = await import('@/app/api/terminal/local-pty/route');
-    const postReq = new Request('http://localhost/api/terminal/local-pty', {
+    const { POST } = await import('@/app/api/terminal/local-pty/route');    const postReq = new NextRequest('http://localhost/api/terminal/local-pty', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ cols: 80, rows: 24 }),
     });
-    const postRes = await POST(postReq as any);
+
+    const postRes = await POST(postReq);
     const { sessionId } = await postRes.json();
 
     // Now GET the SSE stream
     const { GET } = await import('@/app/api/terminal/local-pty/route');
-    const req = new Request(`http://localhost/api/terminal/local-pty?sessionId=${sessionId}`);
-    const res = await GET(req as any);
+    const req = new NextRequest(`http://localhost/api/terminal/local-pty?sessionId=${sessionId}`);
+    const res = await GET(req);
 
     expect(res.status).toBe(200);
     expect(res.headers.get('Content-Type')).toBe('text/event-stream');
@@ -272,13 +289,13 @@ describe('GET /api/terminal/local-pty', () => {
 describe('POST /api/terminal/local-pty/input', () => {
   it('returns 415 for non-JSON Content-Type', async () => {
     const { POST } = await import('@/app/api/terminal/local-pty/input/route');
-    const req = new Request('http://localhost/api/terminal/local-pty/input', {
+    const req = new NextRequest('http://localhost/api/terminal/local-pty/input', {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain' },
       body: 'hello',
     });
 
-    const res = await POST(req as any);
+    const res = await POST(req);
     expect(res.status).toBe(415);
     const body = await res.json();
     expect(body.error).toContain('Content-Type');
@@ -286,37 +303,37 @@ describe('POST /api/terminal/local-pty/input', () => {
 
   it('returns 400 for missing sessionId', async () => {
     const { POST } = await import('@/app/api/terminal/local-pty/input/route');
-    const req = new Request('http://localhost/api/terminal/local-pty/input', {
+    const req = new NextRequest('http://localhost/api/terminal/local-pty/input', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ data: 'test' }),
     });
 
-    const res = await POST(req as any);
+    const res = await POST(req);
     expect(res.status).toBe(400);
   });
 
   it('returns 400 for missing data', async () => {
     const { POST } = await import('@/app/api/terminal/local-pty/input/route');
-    const req = new Request('http://localhost/api/terminal/local-pty/input', {
+    const req = new NextRequest('http://localhost/api/terminal/local-pty/input', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessionId: 'test' }),
     });
 
-    const res = await POST(req as any);
+    const res = await POST(req);
     expect(res.status).toBe(400);
   });
 
   it('returns 404 for unknown session', async () => {
     const { POST } = await import('@/app/api/terminal/local-pty/input/route');
-    const req = new Request('http://localhost/api/terminal/local-pty/input', {
+    const req = new NextRequest('http://localhost/api/terminal/local-pty/input', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessionId: 'unknown', data: 'test' }),
     });
 
-    const res = await POST(req as any);
+    const res = await POST(req);
     expect(res.status).toBe(404);
   });
 
@@ -325,17 +342,17 @@ describe('POST /api/terminal/local-pty/input', () => {
     vi.stubEnv('ENABLE_LOCAL_PTY', 'on');
     vi.stubEnv('NODE_ENV', 'development');
     const { POST: createPost } = await import('@/app/api/terminal/local-pty/route');
-    const createReq = new Request('http://localhost/api/terminal/local-pty', {
+    const createReq = new NextRequest('http://localhost/api/terminal/local-pty', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ cols: 80, rows: 24 }),
     });
-    const createRes = await createPost(createReq as any);
+    const createRes = await createPost(createReq);
     const { sessionId } = await createRes.json();
 
     // Now try to write too much data
     const { POST: inputPost } = await import('@/app/api/terminal/local-pty/input/route');
-    const req = new Request('http://localhost/api/terminal/local-pty/input', {
+    const req = new NextRequest('http://localhost/api/terminal/local-pty/input', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -344,7 +361,7 @@ describe('POST /api/terminal/local-pty/input', () => {
       }),
     });
 
-    const res = await inputPost(req as any);
+    const res = await inputPost(req);
     expect(res.status).toBe(413);
     const body = await res.json();
     expect(body.error).toContain('too large');
@@ -360,37 +377,37 @@ describe('POST /api/terminal/local-pty/input', () => {
 describe('POST /api/terminal/local-pty/resize', () => {
   it('returns 415 for non-JSON Content-Type', async () => {
     const { POST } = await import('@/app/api/terminal/local-pty/resize/route');
-    const req = new Request('http://localhost/api/terminal/local-pty/resize', {
+    const req = new NextRequest('http://localhost/api/terminal/local-pty/resize', {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain' },
       body: 'test',
     });
 
-    const res = await POST(req as any);
+    const res = await POST(req);
     expect(res.status).toBe(415);
   });
 
   it('returns 400 for missing cols', async () => {
     const { POST } = await import('@/app/api/terminal/local-pty/resize/route');
-    const req = new Request('http://localhost/api/terminal/local-pty/resize', {
+    const req = new NextRequest('http://localhost/api/terminal/local-pty/resize', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessionId: 'test', rows: 24 }),
     });
 
-    const res = await POST(req as any);
+    const res = await POST(req);
     expect(res.status).toBe(400);
   });
 
   it('returns 400 for out-of-range dimensions', async () => {
     const { POST } = await import('@/app/api/terminal/local-pty/resize/route');
-    const req = new Request('http://localhost/api/terminal/local-pty/resize', {
+    const req = new NextRequest('http://localhost/api/terminal/local-pty/resize', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessionId: 'test', cols: 999, rows: 24 }),
     });
 
-    const res = await POST(req as any);
+    const res = await POST(req);
     expect(res.status).toBe(400);
   });
 });

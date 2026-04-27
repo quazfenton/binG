@@ -37,12 +37,32 @@ export async function initializeServer(): Promise<void> {
 
   // Pre-compile /api/chat route at startup to eliminate cold start latency
   // Dynamic import triggers module initialization without executing handlers
+  /*
   try {
     logger.info('Pre-compiling /api/chat route...');
     await import('@/app/api/chat/route');
     logger.info('✓ /api/chat route compiled successfully');
   } catch (error) {
     logger.warn('⏳ /api/chat will compile on first request', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  */
+
+  // Load all powers into the singleton registry (auto-inject, core SKILL.md, capabilities)
+  // This must run before any request that calls appendAutoInjectPowers() or powersRegistry.get().
+  try {
+    const { loadAllPowers } = require('./tools/loader');
+    const result = await loadAllPowers();
+    const loaded = result?.loaded || 0;
+    const loadErrors = result?.errors || [];
+    
+    if (loadErrors.length > 0) {
+      logger.warn('Power loading completed with errors', { errors: loadErrors });
+    }
+    logger.info(`✓ Powers loaded: ${loaded} registered`);
+  } catch (error) {
+    logger.warn('⏳ Power loading failed — powers will be unavailable', {
       error: error instanceof Error ? error.message : String(error),
     });
   }

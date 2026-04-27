@@ -87,6 +87,8 @@
 
 import type { Sandbox } from '@e2b/code-interpreter'
 import type { Readable } from 'node:stream'
+import { findCodexBinarySync } from '@/lib/agent-bins/find-codex-binary'
+import { spawnLocalAgent } from '@/lib/spawn/local-server-utils'
 
 /**
  * Codex execution configuration
@@ -112,6 +114,13 @@ export interface CodexExecutionConfig {
   
   /** Timeout in milliseconds */
   timeout?: number
+  
+  /**
+   * Remote address of an already-running Codex server (e.g. "https://codex.example.com:8080").
+   * When set, the run() method skips local binary spawn AND E2B sandbox, and sends
+   * the prompt directly to the remote endpoint. Supports web-hosted / cloud deployments.
+   */
+  remoteAddress?: string
   
   /** Callback for stdout (streaming) */
   onStdout?: (data: string) => void
@@ -198,8 +207,14 @@ export interface E2BCodexService {
 }
 
 /**
- * Create Codex service instance
- * 
+ * Create Codex service instance.
+ *
+ * When a local `codex` binary is available (found via findCodexBinarySync),
+ * the `run()` and `streamEvents()` methods will execute locally instead of
+ * inside the E2B sandbox. This avoids sandbox overhead for users who have
+ * codex installed. The sandbox is still required as a fallback and for
+ * `runWithImage()`.
+ *
  * @param sandbox - E2B sandbox instance
  * @param apiKey - OpenAI API key for Codex
  * @returns Codex service instance
@@ -209,6 +224,9 @@ export function createCodexService(
   apiKey: string
 ): E2BCodexService {
   const CODEX_CMD = 'codex exec'
+
+  // Detect local codex binary once at service creation time
+  const localCodexBin = findCodexBinarySync()
 
   /**
    * Build Codex command arguments
@@ -227,9 +245,166 @@ export function createCodexService(
   }
 
   /**
+   * Run Codex locally via the detected binary (no E2B sandbox needed).
+   * Falls back to returning null if the binary is unavailable or the
+   * execution fails.
+   */
+  async function runLocal(config: CodexExecutionConfig): Promise<CodexExecutionResult | null> {
+    if (!localCodexBin) return null
+
+    // Schema/image paths refer to the local filesystem when running locally
+    const spawnArgs = [
+      'exec',
+      config.fullAuto ? '--full-auto' : '',
+      config.skipGitRepoCheck ? '--skip-git-repo-check' : '',
+      config.outputSchemaPath ? `--output-schema=${config.outputSchemaPath}` : '',
+      config.imagePath ? `--image=${config.imagePath}` : '',
+      config.workingDir ? `-C` : '',
+      config.workingDir || '',
+      config.prompt,
+    ].filter(Boolean)
+
+    const proc = spawnLocalAgent(localCodexBin, spawnArgs, {
+      cwd: config.workingDir || process.cwd(),
+      label: 'codex',
+      env: {
+        OPENAI_API_KEY: apiKey,
+      },
+      // We accumulate stdout ourselves for result parsing — don't drain to logger
+      drainStdout: false,
+    })
+
+    let stdout = ''
+    let stderr = ''
+
+    proc.stdout?.on('data', (chunk: Buffer) => {
+      const text = chunk.toString()
+      stdout += text
+      config.onStdout?.(text)
+    })
+
+    proc.stderr?.on('data', (chunk: Buffer) => {
+      const text = chunk.toString()
+      stderr += text
+      config.onStderr?.(text)
+    })
+
+    const exitCode = await new Promise<number | null>((resolve) => {
+      proc.on('exit', (code) => resolve(code))
+      proc.on('error', () => resolve(1))
+    })
+
+    const code = exitCode ?? 1
+
+    // Parse events if JSON output
+    let events: CodexEvent[] | undefined
+    if (config.onEvent || config.onStdout) {
+      events = []
+      for (const line of stdout.split('\n').filter(Boolean)) {
+        try {
+          const event: CodexEvent = JSON.parse(line)
+          events.push(event)
+          config.onEvent?.(event)
+        } catch {
+          // Not JSON — skip
+        }
+      }
+    }
+
+    // Parse output if schema was used
+    let parsedOutput: any
+    if (config.outputSchemaPath) {
+      try {
+        parsedOutput = JSON.parse(stdout)
+      } catch {
+        // Output doesn't match schema or isn't JSON
+      }
+    }
+
+    return {
+      stdout,
+      stderr,
+      exitCode: code,
+      events,
+      parsedOutput,
+      success: code === 0,
+      output: stdout.trim() || (code === 0 ? 'Task completed' : ''),
+      error: code !== 0 ? stderr : undefined,
+    }
+  }
+
+  /**
    * Run Codex with configuration
    */
   async function run(config: CodexExecutionConfig): Promise<CodexExecutionResult> {
+    // 0. If a remote address is provided, send prompt directly
+    if (config.remoteAddress) {
+      const remoteUrl = config.remoteAddress.replace(/\/+$/, '');
+      console.log(`[Codex] Sending prompt to remote server: ${remoteUrl}`);
+      if (config.outputSchemaPath) {
+        console.warn(`[Codex] outputSchemaPath is ignored in remote mode (no sandbox filesystem)`);
+      }
+
+      try {
+        const response = await fetch(`${remoteUrl}/v1/chat/completions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({
+            model: 'codex',
+            messages: [{ role: 'user', content: config.prompt }],
+            stream: false,
+          }),
+          signal: AbortSignal.timeout(config.timeout || 600000),
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          return {
+            stdout: '',
+            stderr: errorText,
+            exitCode: response.status,
+            success: false,
+            output: '',
+            error: `Remote Codex error: ${response.status} ${errorText}`,
+          };
+        }
+
+        const data = await response.json();
+        const content = data.choices?.[0]?.message?.content || '';
+
+        return {
+          stdout: content,
+          stderr: '',
+          exitCode: 0,
+          success: true,
+          output: content.trim() || 'Task completed',
+        };
+      } catch (err: any) {
+        return {
+          stdout: '',
+          stderr: err.message,
+          exitCode: 1,
+          success: false,
+          output: '',
+          error: `Remote Codex request failed: ${err.message}`,
+        };
+      }
+    }
+
+    // 1. Try local codex binary first (no sandbox overhead)
+    if (localCodexBin) {
+      try {
+        const localResult = await runLocal(config)
+        if (localResult) return localResult
+      } catch (err: any) {
+        console.warn('[Codex] Local binary failed, falling back to E2B sandbox:', err.message)
+      }
+    }
+
+    // 2. Fall back to E2B sandbox
     // Write output schema if provided
     if (config.outputSchemaPath && !config.imagePath) {
       // Schema should already be written by user

@@ -105,13 +105,14 @@ function validateOrigin(origin: string | null, config: CORSConfig): boolean {
  * }
  * ```
  */
-export function createCORS(config: CORSConfig = DEFAULT_CORS_CONFIG) {
+export function createCORS(config: Partial<CORSConfig> = {}): (request: NextRequest) => NextResponse | null {
+  const mergedConfig: CORSConfig = { ...DEFAULT_CORS_CONFIG, ...config };
   return function cors(request: NextRequest): NextResponse | null {
     const origin = request.headers.get('origin');
     const isPreflight = request.method === 'OPTIONS';
 
     // Validate origin if dynamic origin is enabled
-    if (config.dynamicOrigin && origin && !validateOrigin(origin, config)) {
+    if (mergedConfig.dynamicOrigin && origin && !validateOrigin(origin, mergedConfig)) {
       return NextResponse.json(
         { error: 'Origin not allowed' },
         { status: 403 }
@@ -119,8 +120,8 @@ export function createCORS(config: CORSConfig = DEFAULT_CORS_CONFIG) {
     }
 
     // SECURITY: Cannot use wildcard origin with credentials
-    const hasWildcardOrigin = config.origins.includes('*');
-    const shouldUseCredentials = config.credentials && !hasWildcardOrigin;
+    const hasWildcardOrigin = mergedConfig.origins.includes('*');
+    const shouldUseCredentials = mergedConfig.credentials && !hasWildcardOrigin;
 
     // Create response headers
     const headers: Record<string, string> = {};
@@ -129,26 +130,26 @@ export function createCORS(config: CORSConfig = DEFAULT_CORS_CONFIG) {
     if (origin && hasWildcardOrigin) {
       // When wildcard, echo back the request origin (but don't allow credentials)
       headers['Access-Control-Allow-Origin'] = origin;
-    } else if (origin && validateOrigin(origin, config)) {
+    } else if (origin && validateOrigin(origin, mergedConfig)) {
       headers['Access-Control-Allow-Origin'] = origin;
-    } else if (config.origins.length === 1 && !hasWildcardOrigin) {
-      headers['Access-Control-Allow-Origin'] = config.origins[0];
+    } else if (mergedConfig.origins.length === 1 && !hasWildcardOrigin) {
+      headers['Access-Control-Allow-Origin'] = mergedConfig.origins[0];
     }
 
     // Set Vary header for caching
-    if (config.dynamicOrigin || hasWildcardOrigin) {
+    if (mergedConfig.dynamicOrigin || hasWildcardOrigin) {
       headers['Vary'] = 'Origin';
     }
 
     // Set methods
-    headers['Access-Control-Allow-Methods'] = config.methods.join(', ');
+    headers['Access-Control-Allow-Methods'] = mergedConfig.methods.join(', ');
 
     // Set headers
-    headers['Access-Control-Allow-Headers'] = config.allowedHeaders.join(', ');
+    headers['Access-Control-Allow-Headers'] = mergedConfig.allowedHeaders.join(', ');
 
     // Set exposed headers
-    if (config.exposedHeaders.length > 0) {
-      headers['Access-Control-Expose-Headers'] = config.exposedHeaders.join(', ');
+    if (mergedConfig.exposedHeaders.length > 0) {
+      headers['Access-Control-Expose-Headers'] = mergedConfig.exposedHeaders.join(', ');
     }
 
     // SECURITY: Only set credentials if not using wildcard origin
@@ -159,7 +160,7 @@ export function createCORS(config: CORSConfig = DEFAULT_CORS_CONFIG) {
 
     // Set max age for preflight
     if (isPreflight) {
-      headers['Access-Control-Max-Age'] = String(config.maxAge);
+      headers['Access-Control-Max-Age'] = String(mergedConfig.maxAge);
     }
 
     // Handle preflight requests
@@ -189,40 +190,41 @@ export function createCORS(config: CORSConfig = DEFAULT_CORS_CONFIG) {
  */
 export function addCORSHeaders(
   response: NextResponse,
-  config: CORSConfig = DEFAULT_CORS_CONFIG,
+  config: Partial<CORSConfig> = {},
   request?: NextRequest
 ): NextResponse {
+  const mergedConfig: CORSConfig = { ...DEFAULT_CORS_CONFIG, ...config };
   const origin = request?.headers.get('origin');
 
   // SECURITY: Cannot use wildcard origin with credentials
   // If credentials are enabled but origin is wildcard, we must be explicit
-  const hasWildcardOrigin = config.origins.includes('*');
-  const shouldUseCredentials = config.credentials && !hasWildcardOrigin;
+  const hasWildcardOrigin = mergedConfig.origins.includes('*');
+  const shouldUseCredentials = mergedConfig.credentials && !hasWildcardOrigin;
 
   // Set origin header
   if (origin && hasWildcardOrigin) {
     // When wildcard, echo back the request origin (but don't allow credentials)
     response.headers.set('Access-Control-Allow-Origin', origin);
-  } else if (origin && validateOrigin(origin, config)) {
+  } else if (origin && validateOrigin(origin, mergedConfig)) {
     response.headers.set('Access-Control-Allow-Origin', origin);
-  } else if (config.origins.length === 1 && !hasWildcardOrigin) {
-    response.headers.set('Access-Control-Allow-Origin', config.origins[0]);
+  } else if (mergedConfig.origins.length === 1 && !hasWildcardOrigin) {
+    response.headers.set('Access-Control-Allow-Origin', mergedConfig.origins[0]);
   }
 
   // Set Vary header
-  if (config.dynamicOrigin || hasWildcardOrigin) {
+  if (mergedConfig.dynamicOrigin || hasWildcardOrigin) {
     response.headers.set('Vary', 'Origin');
   }
 
   // Set methods
-  response.headers.set('Access-Control-Allow-Methods', config.methods.join(', '));
+  response.headers.set('Access-Control-Allow-Methods', mergedConfig.methods.join(', '));
 
   // Set headers
-  response.headers.set('Access-Control-Allow-Headers', config.allowedHeaders.join(', '));
+  response.headers.set('Access-Control-Allow-Headers', mergedConfig.allowedHeaders.join(', '));
 
   // Set exposed headers
-  if (config.exposedHeaders.length > 0) {
-    response.headers.set('Access-Control-Expose-Headers', config.exposedHeaders.join(', '));
+  if (mergedConfig.exposedHeaders.length > 0) {
+    response.headers.set('Access-Control-Expose-Headers', mergedConfig.exposedHeaders.join(', '));
   }
 
   // SECURITY: Only set credentials if not using wildcard origin
@@ -255,7 +257,7 @@ export const cors = createCORS();
  */
 export function withCORS<T extends (...args: any[]) => Promise<NextResponse>>(
   handler: T,
-  config: CORSConfig = DEFAULT_CORS_CONFIG
+  config: Partial<CORSConfig> = {}
 ): T {
   const corsMiddleware = createCORS(config);
 
@@ -279,8 +281,9 @@ export function withCORS<T extends (...args: any[]) => Promise<NextResponse>>(
  * @param config - CORS configuration
  * @returns True if origin is valid
  */
-export function isValidOrigin(origin: string, config: CORSConfig = DEFAULT_CORS_CONFIG): boolean {
-  return validateOrigin(origin, config);
+export function isValidOrigin(origin: string, config: Partial<CORSConfig> = {}): boolean {
+  const mergedConfig: CORSConfig = { ...DEFAULT_CORS_CONFIG, ...config };
+  return validateOrigin(origin, mergedConfig);
 }
 
 /**
@@ -289,8 +292,9 @@ export function isValidOrigin(origin: string, config: CORSConfig = DEFAULT_CORS_
  * @param config - CORS configuration
  * @returns Array of allowed origins
  */
-export function getAllowedOrigins(config: CORSConfig = DEFAULT_CORS_CONFIG): string[] {
-  return config.origins;
+export function getAllowedOrigins(config: Partial<CORSConfig> = {}): string[] {
+  const mergedConfig: CORSConfig = { ...DEFAULT_CORS_CONFIG, ...config };
+  return mergedConfig.origins;
 }
 
 /**
@@ -299,9 +303,10 @@ export function getAllowedOrigins(config: CORSConfig = DEFAULT_CORS_CONFIG): str
  * @param origin - Origin to add
  * @param config - CORS configuration
  */
-export function addOrigin(origin: string, config: CORSConfig = DEFAULT_CORS_CONFIG): void {
-  if (!config.origins.includes(origin)) {
-    config.origins.push(origin);
+export function addOrigin(origin: string, config: Partial<CORSConfig> = {}): void {
+  const mergedConfig: CORSConfig = { ...DEFAULT_CORS_CONFIG, ...config };
+  if (!mergedConfig.origins.includes(origin)) {
+    mergedConfig.origins.push(origin);
   }
 }
 
@@ -311,9 +316,10 @@ export function addOrigin(origin: string, config: CORSConfig = DEFAULT_CORS_CONF
  * @param origin - Origin to remove
  * @param config - CORS configuration
  */
-export function removeOrigin(origin: string, config: CORSConfig = DEFAULT_CORS_CONFIG): void {
-  const index = config.origins.indexOf(origin);
+export function removeOrigin(origin: string, config: Partial<CORSConfig> = {}): void {
+  const mergedConfig: CORSConfig = { ...DEFAULT_CORS_CONFIG, ...config };
+  const index = mergedConfig.origins.indexOf(origin);
   if (index > -1) {
-    config.origins.splice(index, 1);
+    mergedConfig.origins.splice(index, 1);
   }
 }

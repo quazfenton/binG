@@ -1014,10 +1014,153 @@ export class VirtualFileSystem implements IFileSystem {
 }
 
 // ============================================================================
+// Node.js Filesystem Adapter (Server-side)
+// ============================================================================
+
+export class NodeFileSystem implements IFileSystem {
+  readonly id: string;
+  readonly name = 'node-fs';
+  readonly isDesktop = true;
+  
+  private workspaceRoot: string = '';
+  private boundaryPath: string | null = null;
+  private userId: string = '';
+  private version: number = 0;
+  
+  constructor() {
+    this.id = `node-${generateId()}`;
+  }
+  
+  async initialize(config: WorkspaceConfig): Promise<void> {
+    const fs = require('fs');
+    const path = require('path');
+    
+    this.userId = config.userId;
+    this.workspaceRoot = config.root;
+    
+    if (!fs.existsSync(this.workspaceRoot)) {
+      fs.mkdirSync(this.workspaceRoot, { recursive: true });
+    }
+    
+    if (config.boundaryEnabled && config.sessionId) {
+      this.boundaryPath = path.join(this.workspaceRoot, config.sessionId);
+      if (!fs.existsSync(this.boundaryPath)) {
+        fs.mkdirSync(this.boundaryPath, { recursive: true });
+      }
+    }
+    
+    console.log('[NodeFS] Initialized', { 
+      workspaceRoot: this.workspaceRoot, 
+      boundaryPath: this.boundaryPath 
+    });
+  }
+
+  private getFullPath(p: string): string {
+    const path = require('path');
+    const base = this.boundaryPath || this.workspaceRoot;
+    return path.resolve(base, p);
+  }
+
+  async readFile(p: string): Promise<FSFile> {
+    const fs = require('fs');
+    const fullPath = this.getFullPath(p);
+    const stats = fs.statSync(fullPath);
+    const content = fs.readFileSync(fullPath, 'utf8');
+    return {
+      path: p,
+      content,
+      size: stats.size,
+      lastModified: stats.mtime.toISOString(),
+      createdAt: stats.birthtime.toISOString(),
+    };
+  }
+
+  async writeFile(p: string, content: string): Promise<FSFile> {
+    const fs = require('fs');
+    const path = require('path');
+    const fullPath = this.getFullPath(p);
+    const dir = path.dirname(fullPath);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(fullPath, content);
+    const stats = fs.statSync(fullPath);
+    this.version++;
+    return {
+      path: p,
+      content,
+      size: stats.size,
+      lastModified: stats.mtime.toISOString(),
+      createdAt: stats.birthtime.toISOString(),
+    };
+  }
+
+  async deletePath(p: string): Promise<{ deletedCount: number }> {
+    const fs = require('fs');
+    const fullPath = this.getFullPath(p);
+    if (fs.statSync(fullPath).isDirectory()) {
+      fs.rmSync(fullPath, { recursive: true });
+    } else {
+      fs.unlinkSync(fullPath);
+    }
+    this.version++;
+    return { deletedCount: 1 };
+  }
+
+  async listDirectory(p?: string): Promise<FSDirectoryListing> {
+    const fs = require('fs');
+    const path = require('path');
+    const target = p ? this.getFullPath(p) : (this.boundaryPath || this.workspaceRoot);
+    const entries = fs.readdirSync(target, { withFileTypes: true });
+    return {
+      path: p || '.',
+      nodes: entries.map((e: any) => ({
+        name: e.name,
+        path: p ? path.join(p, e.name) : e.name,
+        type: e.isDirectory() ? 'directory' : 'file',
+      })),
+    };
+  }
+
+  async search(query: string): Promise<FSSearchResult[]> {
+    return []; // Simple implementation for now
+  }
+
+  async getStats(): Promise<FSStats> {
+    return { totalSize: 0, totalSizeFormatted: '0 B', fileCount: 0, quotaUsage: { sizePercent: 0, fileCountPercent: 0 } };
+  }
+
+  async exists(p: string): Promise<boolean> {
+    const fs = require('fs');
+    return fs.existsSync(this.getFullPath(p));
+  }
+
+  async createDirectory(p: string): Promise<{ path: string; createdAt: string }> {
+    const fs = require('fs');
+    const fullPath = this.getFullPath(p);
+    fs.mkdirSync(fullPath, { recursive: true });
+    this.version++;
+    return { path: p, createdAt: new Date().toISOString() };
+  }
+
+  async getVersion(): Promise<number> { return this.version; }
+  
+  async exportWorkspace(): Promise<{ root: string; version: number; files: FSFile[] }> {
+    return { root: this.workspaceRoot, version: this.version, files: [] };
+  }
+
+  async destroy(): Promise<void> {}
+  async startWatching(): Promise<void> {}
+  async stopWatching(): Promise<void> {}
+}
+
+// ============================================================================
 // Factory & Utilities
 // ============================================================================
 
-export function createFileSystem(): IFileSystem { return isDesktopMode() ? new DesktopFileSystem() : new VirtualFileSystem(); }
+export function createFileSystem(): IFileSystem { 
+  if (isTauriRuntime()) return new DesktopFileSystem();
+  if (isDesktopMode()) return new NodeFileSystem();
+  return new VirtualFileSystem(); 
+}
 export function getFileSystemPlatform(): 'desktop' | 'web' { return getPlatform(); }
 export function isLocalFSAvailable(): boolean { return isDesktopMode() || isTauriRuntime(); }
 export type { WorkspaceConfig as FSWorkspaceConfig };

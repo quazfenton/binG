@@ -81,12 +81,19 @@ describe('FilesystemDiffTracker', () => {
   });
 
   describe('getDiffSummary', () => {
-    it('should return summary when no changes', () => {
+    it('should return summary object when no changes', () => {
       const summary = diffTracker.getDiffSummary(testOwner);
-      expect(summary).toBe('No file changes detected.');
+      // getDiffSummary returns a structured object, not a formatted string
+      expect(summary).toEqual({
+        changedFiles: [],
+        totalChanges: 0,
+        creates: 0,
+        updates: 0,
+        deletes: 0,
+      });
     });
 
-    it('should return formatted summary with changes', () => {
+    it('should return structured summary with changes', () => {
       const file1 = {
         path: '/test/created.ts',
         content: 'new file content',
@@ -118,12 +125,12 @@ describe('FilesystemDiffTracker', () => {
 
       const summary = diffTracker.getDiffSummary();
 
-      expect(summary).toContain('2 files modified');
-      // Note: First version shows as "Created", updates show as "Modified"
-      expect(summary).toContain('📄 Created: /test/created.ts');
-      // Test for modified content (format includes markdown header)
-      expect(summary).toContain('✏️ Modified');
-      expect(summary).toContain('/test/modified.ts');
+      // getDiffSummary returns a structured object
+      expect(summary.totalChanges).toBe(2);
+      expect(summary.creates).toBe(1);
+      expect(summary.updates).toBe(1);
+      expect(summary.changedFiles).toContain('/test/created.ts');
+      expect(summary.changedFiles).toContain('/test/modified.ts');
     });
   });
 });
@@ -144,7 +151,8 @@ describe('VirtualFilesystemService - Diff Integration', () => {
 
       const summary = virtualFilesystem.getDiffSummary(testOwnerId);
 
-      expect(summary).not.toBe('No file changes detected.');
+      // virtualFilesystem.getDiffSummary() returns JSON.stringify(structured object)
+      expect(summary).not.toBe(JSON.stringify({ changedFiles: [], totalChanges: 0, creates: 0, updates: 0, deletes: 0 }));
       expect(summary).toContain(`${root}/file1.ts`);
       expect(summary).toContain(`${root}/file2.ts`);
     });

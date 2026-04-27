@@ -8,7 +8,7 @@ import { RateLimiter } from '@/lib/utils/rate-limiter'
 import { authenticateRequest } from '@/lib/security/jwt-auth'
 import { secureRandomSeed } from '@/lib/utils/crypto-random'
 
-export interface GenerateBody {
+interface GenerateBody {
   prompt: string
   negativePrompt?: string
   width?: number

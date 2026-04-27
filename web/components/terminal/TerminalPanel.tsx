@@ -24,7 +24,7 @@ import { createRefreshScheduler } from '@/lib/virtual-filesystem/refresh-schedul
 import { getSponsorAd, trackAdView, adsEnabled, type EthicalAdResponse } from '@/lib/ads/ethical-ads-service';
 import { desktopPtyManager, shouldUseDesktopPty, type DesktopPtyInstance, requestShellCompletion } from '@/lib/terminal/desktop-pty-provider';
 import { createWebLocalPty, isWebLocalPtyAvailable, type WebLocalPtyInstance } from '@/lib/terminal/web-local-pty';
-import { isDesktopMode } from '@/lib/utils/desktop-env';
+import { isDesktopMode, getDesktopWorkspaceDir } from '@/lib/utils/desktop-env';
 
 const logger = createLogger('TerminalPanel');
 
@@ -829,7 +829,7 @@ export default function TerminalPanel({
     // Starting at project/sessions avoids "directory doesn't exist" errors
     // CORRECTED: Keep project/sessions, not just project
     const parentScopePath = filesystemScopePathRef.current?.replace(/(\/sessions)\/[^/]+$/, '$1') || 'project/sessions';
-    localShellCwdRef.current[id] = parentScopePath;
+    localShellCwdRef.current[id] = (isDesktopMode() ? getDesktopWorkspaceDir() : '') || parentScopePath;
     reconnectCooldownUntilRef.current[id] = 0;
     commandQueueRef.current[id] = [];
     commandHistoryRef.current[id] = [];
@@ -1395,7 +1395,7 @@ export default function TerminalPanel({
           pty = await desktopPtyManager.createSession(terminalId, {
             cols: terminal.cols,
             rows: terminal.rows,
-            cwd: localShellCwdRef.current[terminalId] || 'project/sessions',
+            cwd: localShellCwdRef.current[terminalId] || getDesktopWorkspaceDir() || '.',
           });
         } catch (ptyError) {
           console.error('[TerminalPanel] Failed to create desktop PTY:', ptyError);

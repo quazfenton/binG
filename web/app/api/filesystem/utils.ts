@@ -7,6 +7,7 @@
 import { NextRequest } from 'next/server';
 import { resolveFilesystemOwner, type FilesystemOwnerResolution } from '@/lib/virtual-filesystem/resolve-filesystem-owner';
 import { secureRandomId } from '@/lib/utils/crypto-random';
+import { normalizeSessionPath } from '@/lib/virtual-filesystem/scope-utils';
 
 /**
  * Resolve filesystem owner with graceful fallback
@@ -75,4 +76,25 @@ export async function resolveFilesystemOwnerWithFallback(
       anonSessionId: newAnonId,
     };
   }
+}
+
+/**
+ * Normalize a filesystem path to handle composite session IDs.
+ *
+ * Converts paths like "project/sessions/anon$001" to "project/sessions/001"
+ * This prevents VFS errors when clients send composite session IDs.
+ *
+ * @param path - The filesystem path to normalize
+ * @returns Normalized path with simple session folder names
+ */
+export function normalizeFilesystemPath(path: string): string {
+  const sessionsMatch = path.match(/^project\/sessions\/([^/]+)/i);
+  if (sessionsMatch) {
+    const sessionSegment = sessionsMatch[1];
+    if (sessionSegment.includes('$') || sessionSegment.includes(':')) {
+      const normalized = normalizeSessionPath(sessionSegment);
+      return path.replace(`project/sessions/${sessionSegment}`, normalized);
+    }
+  }
+  return path;
 }
