@@ -8,18 +8,13 @@ import { OrchestrationModeProvider } from '@/contexts/orchestration-mode-context
 import { SpecEnhancementModeProvider } from '@/contexts/spec-enhancement-mode-context';
 import { ThemeProvider } from './theme-provider';
 import { createLogger } from '@/lib/utils/logger';
+import { tauriFetch } from '@/lib/tauri-api-adapter';
 
 const logger = createLogger('Providers:Init');
 
-/**
- * Initialize MCP services on app startup via server-side API route.
- * MCP code uses Node.js APIs (fs, child_process, database) that cannot
- * be bundled into the client — even dynamic imports get traced by Next.js.
- * The API route handles both desktop (Tauri) and web modes server-side.
- */
 async function initializeMCPServices() {
   try {
-    const res = await fetch('/api/mcp/init', { method: 'POST' });
+    const res = await tauriFetch('/api/mcp/init', { method: 'POST' });
     if (!res.ok) {
       logger.error('MCP init API failed', { status: res.status });
     } else {
@@ -34,11 +29,16 @@ export function Providers({ children }: { children: React.ReactNode }) {
   const [mcpInitialized, setMcpInitialized] = useState(false);
 
   useEffect(() => {
-    initializeMCPServices().then(() => {
+    if (typeof window !== 'undefined' && process.env.DESKTOP_MODE === 'true') {
+      initializeMCPServices().then(() => {
+        setMcpInitialized(true);
+      }).catch((error) => {
+        logger.warn('Failed to initialize MCP services', { error: error?.message || String(error) });
+        setMcpInitialized(true); // Continue anyway
+      });
+    } else {
       setMcpInitialized(true);
-    }).catch(() => {
-      setMcpInitialized(true); // Continue anyway
-    });
+    }
   }, []);
 
   return (

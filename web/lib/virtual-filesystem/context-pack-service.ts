@@ -10,12 +10,14 @@
  * - Configurable file filtering (include/exclude patterns)
  * - Size limits and truncation for large files
  * - Token count estimation
+ * - RTK integration for token-efficient output
  */
 
 import { virtualFilesystem } from './virtual-filesystem-service';
 import type { VirtualFilesystemDirectoryListing } from './filesystem-types';
 import { getProjectServices } from '@/lib/project-context';
 import { contentHash } from '@/lib/cache';
+import { summarizeCode } from '@/lib/tools/rtk-integration';
 
 export type ContextPackFormat = 'markdown' | 'xml' | 'json' | 'plain';
 
@@ -38,6 +40,10 @@ export interface ContextPackOptions {
   maxLinesPerFile?: number;
   /** Add line numbers to file contents */
   lineNumbers?: boolean;
+  /** RTK: Enable smart summarization for large files (token reduction) */
+  rtkSmartSummary?: boolean;
+  /** RTK: Maximum lines to keep when summarizing */
+  rtkSummaryMaxLines?: number;
 }
 
 export interface ContextPackFile {
@@ -70,6 +76,13 @@ export interface ContextPackResult {
   hasTruncation: boolean;
   /** Warnings about the pack generation */
   warnings: string[];
+  /** RTK: Token savings statistics */
+  rtkStats?: {
+    originalTokens: number;
+    filteredTokens: number;
+    savedTokens: number;
+    savingsPercent: number;
+  };
 }
 
 const DEFAULT_OPTIONS: Required<ContextPackOptions> = {
@@ -96,6 +109,9 @@ const DEFAULT_OPTIONS: Required<ContextPackOptions> = {
   includeTree: true,
   maxLinesPerFile: 500,
   lineNumbers: false,
+  // RTK settings
+  rtkSmartSummary: true,
+  rtkSummaryMaxLines: 30,
 };
 
 /**
@@ -144,6 +160,45 @@ class ContextPackService {
     // Generate bundle in requested format
     let bundle = this.generateBundle(tree, files, opts);
 
+    // RTK: Calculate original token count before any optimization
+    const originalTokens = Math.ceil(bundle.length / 4);
+
+    // Apply RTK smart summarization to files if enabled
+    let rtkStats: { originalTokens: number; filteredTokens: number; savedTokens: number; savingsPercent: number } | undefined;
+    if (opts.rtkSmartSummary) {
+      // Re-generate bundle with smart summarization applied
+      const summarizedFiles = files.map(f => {
+        if (f.content && f.content.split('\n').length > opts.rtkSummaryMaxLines) {
+          return {
+            ...f,
+            content: summarizeCode(f.content, {
+              maxLines: opts.rtkSummaryMaxLines,
+              includeSignatures: true,
+              includeImports: true,
+            }),
+            truncated: true, // Mark as summarized (reuses truncated flag)
+          };
+        }
+        return f;
+      });
+      
+      // Regenerate bundle with summarized files
+      const newBundle = this.generateBundle(tree, summarizedFiles, opts);
+      
+      // Check if we saved tokens
+      const newTokens = Math.ceil(newBundle.length / 4);
+      if (newTokens < originalTokens) {
+        bundle = newBundle;
+        rtkStats = {
+          originalTokens,
+          filteredTokens: newTokens,
+          savedTokens: originalTokens - newTokens,
+          savingsPercent: Math.round(((originalTokens - newTokens) / originalTokens) * 100),
+        };
+        warnings.push(`RTK: Smart summary saved ${rtkStats.savedTokens} tokens (${rtkStats.savingsPercent}% reduction)`);
+      }
+    }
+
     // Calculate metrics
     const encoder = new TextEncoder();
     let totalSize = encoder.encode(bundle).length;
@@ -180,6 +235,7 @@ class ContextPackService {
       directoryCount: this.countDirectories(tree),
       hasTruncation,
       warnings,
+      rtkStats,
     };
   }
   

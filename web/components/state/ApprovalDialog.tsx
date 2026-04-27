@@ -5,7 +5,7 @@ import { X, AlertTriangle, FileWarning, CheckCircle, XCircle, Loader2 } from 'lu
 
 export interface ApprovalRequest {
   id: string;
-  action: 'delete' | 'overwrite' | 'execute_destructive' | 'create_secret';
+  action: 'delete' | 'overwrite' | 'execute_destructive' | 'create_secret' | 'outside_workspace';
   target: string;
   reason: string;
   diff?: string;
@@ -24,6 +24,7 @@ const actionLabels: Record<string, string> = {
   overwrite: 'Overwrite File',
   execute_destructive: 'Run Destructive Command',
   create_secret: 'Create Secret File',
+  outside_workspace: 'Modify Outside Workspace',
 };
 
 const actionColors: Record<string, string> = {
@@ -31,6 +32,7 @@ const actionColors: Record<string, string> = {
   overwrite: 'bg-orange-500',
   execute_destructive: 'bg-red-600',
   create_secret: 'bg-yellow-500',
+  outside_workspace: 'bg-amber-600',
 };
 
 export function ApprovalDialog({ 

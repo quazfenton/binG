@@ -189,6 +189,7 @@ export class MCPStoreService {
    * Load data from local storage
    */
   private loadFromStorage(): void {
+    if (typeof window === 'undefined') return;
     const stored = loadStoredData();
     
     // Load servers

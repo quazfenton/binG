@@ -31,7 +31,7 @@ import {
   watchWorkspaceForChanges,
 } from '@/lib/virtual-filesystem/vfs-workspace-materializer';
 import { syncFileToVfs } from '@/lib/virtual-filesystem/vfs-workspace-materializer';
-import { getDb } from '@/lib/database/connection';
+import { getDatabase } from '@/lib/database/connection';
 
 const logger = createLogger('LocalPTY');
 
@@ -251,10 +251,10 @@ const MAX_SESSIONS_PER_USER = 5;
 
 // Use globalThis to prevent HMR leaks
 declare global {
-  var __localPtySessions: Map<string, LocalPtySession> | undefined;
+  var __localPtySessions: Map<string, any> | undefined;
 }
 
-const sessions = globalThis.__localPtySessions ??= new Map<string, LocalPtySession>();
+const sessions = globalThis.__localPtySessions ??= new Map<string, LocalPtySession>() as Map<string, any>;
 
 // ============================================================
 // Configuration
@@ -262,9 +262,14 @@ const sessions = globalThis.__localPtySessions ??= new Map<string, LocalPtySessi
 
 type IsolationMode = 'off' | 'localhost' | 'unshare' | 'docker' | 'oracle-vm' | 'on';
 
-const ENABLE_LOCAL_PTY: IsolationMode =
-  (process.env.ENABLE_LOCAL_PTY as IsolationMode) ||
-  (process.env.ORACLE_VM_HOST ? 'oracle-vm' : process.env.NODE_ENV === 'production' ? 'off' : 'on');
+/**
+ * Read the current isolation mode from the environment.
+ * Evaluated per-request so that vi.stubEnv() works in tests.
+ */
+function getIsolationMode(): IsolationMode {
+  return (process.env.ENABLE_LOCAL_PTY as IsolationMode) ||
+    (process.env.ORACLE_VM_HOST ? 'oracle-vm' : process.env.NODE_ENV === 'production' ? 'off' : 'on');
+}
 
 // Docker isolation config
 const DOCKER_IMAGE = process.env.LOCAL_PTY_DOCKER_IMAGE || 'node:20-slim';
@@ -393,11 +398,14 @@ async function resolveWorkspaceDir(userId: string): Promise<string> {
 // ============================================================
 
 function validateDimensions(cols: number, rows: number): { cols: number; rows: number } | null {
-  const c = Math.max(MIN_COLS, Math.min(MAX_COLS, Math.floor(cols)));
-  const r = Math.max(MIN_ROWS, Math.min(MAX_ROWS, Math.floor(rows)));
-  if (isNaN(c) || isNaN(r) || c < MIN_COLS || r < MIN_ROWS) {
+  // Reject raw values outside allowed range BEFORE clamping.
+  // Without this, cols=0 / rows=0 gets clamped to MIN and passes validation.
+  if (isNaN(cols) || isNaN(rows) || cols < MIN_COLS || rows < MIN_ROWS ||
+      cols > MAX_COLS || rows > MAX_ROWS) {
     return null;
   }
+  const c = Math.max(MIN_COLS, Math.min(MAX_COLS, Math.floor(cols)));
+  const r = Math.max(MIN_ROWS, Math.min(MAX_ROWS, Math.floor(rows)));
   return { cols: c, rows: r };
 }
 
@@ -545,6 +553,7 @@ export async function POST(req: NextRequest) {
 
   try {
     // === Security gate ===
+    const ENABLE_LOCAL_PTY = getIsolationMode();
     if (ENABLE_LOCAL_PTY === 'off') {
       return addAnonSessionCookie(NextResponse.json(
         {
@@ -598,9 +607,9 @@ export async function POST(req: NextRequest) {
     if (checkOnly) {
       try {
         await import('node-pty');
-        return addAnonSessionCookie(NextResponse.json({ available: true, mode: ENABLE_LOCAL_PTY }));
+        return addAnonSessionCookie(NextResponse.json({ available: true, mode: getIsolationMode() }));
       } catch {
-        return addAnonSessionCookie(NextResponse.json({ available: false, mode: ENABLE_LOCAL_PTY }, { status: 503 }));
+        return addAnonSessionCookie(NextResponse.json({ available: false, mode: getIsolationMode() }, { status: 503 }));
       }
     }
 
@@ -793,9 +802,8 @@ async function createDirectPtySession(
     );
   }
 
-  registerSession(sessionId, userId, pty, {
+  registerSession(sessionId, userId, pty, workspaceDir, {
     vfsWatcher,
-    workspaceDir,
   });
 
   return NextResponse.json({
@@ -868,7 +876,7 @@ async function createUnsharePtySession(
     // Get the PID of the unshare process for cleanup
     const unsharePid = (pty as any).pid || (pty as any)._pid;
 
-    registerSession(sessionId, userId, pty, { unsharePid, workspaceDir });
+    registerSession(sessionId, userId, pty, workspaceDir, { unsharePid });
 
     console.log(`[Local PTY] Unshare session created: ${sessionId}`);
 
@@ -1096,10 +1104,9 @@ cd "$WORKSPACE_ROOT" 2>/dev/null || true
         },
       });
 
-      registerSession(sessionId, userId, pty, {
+      registerSession(sessionId, userId, pty, workspaceDir, {
         dockerContainerId: containerId,
         vfsWatcher,
-        workspaceDir,
       });
 
       resolve(NextResponse.json({ sessionId, mode: 'docker', workspaceDir }));
@@ -1312,7 +1319,7 @@ async function syncRemoteFileToVfsDirect(
   const normalizedId = userId.replace(/^anon:/, '').replace(/\.\./g, '').replace(/[\\/ \0]/g, '_').substring(0, 255) || '_default';
 
   try {
-    const db = getDb();
+    const db = getDatabase();
     const ext = require('path').extname(filePath).toLowerCase();
     const languageMap: Record<string, string> = {
       '.js': 'javascript', '.jsx': 'javascript', '.ts': 'typescript', '.tsx': 'typescript',
@@ -1522,10 +1529,9 @@ chmod +x '${remoteInitPath}'`, (err: any, setupStream: any) => {
                 sessionId
               );
 
-              registerSession(sessionId, userId, sshPty, {
+              registerSession(sessionId, userId, sshPty, workspace, {
                 sshClient: client,
                 vfsWatcher: remoteVfsSync,
-                workspaceDir: workspace,
               });
 
               logger.info('[Local PTY] Oracle VM SSH session created', {
@@ -1576,7 +1582,8 @@ function registerSession(
   sessionId: string,
   userId: string,
   pty: IPty,
-  extras: Partial<Omit<LocalPtySession, 'sessionId' | 'userId' | 'pty' | 'createdAt' | 'exited' | 'exitCode' | 'outputQueue' | 'workspaceDir'>> & { workspaceDir: string } = {}
+  workspaceDir: string,
+  extras: Partial<Omit<LocalPtySession, 'sessionId' | 'userId' | 'pty' | 'createdAt' | 'exited' | 'exitCode' | 'outputQueue' | 'workspaceDir'>> = {}
 ): void {
   const session: LocalPtySession = {
     sessionId,
@@ -1586,6 +1593,7 @@ function registerSession(
     exited: false,
     exitCode: undefined,
     outputQueue: [],
+    workspaceDir,
     ...extras,
   };
 

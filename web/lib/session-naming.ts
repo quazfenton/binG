@@ -562,3 +562,8 @@ export function checkFileConflicts(
 export function generateUniqueNameWithSuffix(baseName: string): string {
   return generateUniqueName(baseName);
 }
+
+// NOTE: hoistSessionFolder has been moved to @/lib/session-hoist to prevent
+// Node.js built-in modules from being pulled into the client-side webpack bundle.
+// Server code should import directly from '@/lib/session-hoist' instead.
+// Do NOT re-export here — it would re-establish the VFS → node:* import chain.

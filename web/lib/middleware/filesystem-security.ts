@@ -58,7 +58,7 @@ export interface FilesystemConfig {
 /**
  * Default filesystem configuration
  */
-const DEFAULT_FILESYSTEM_CONFIG: FilesystemConfig = {
+export const DEFAULT_FILESYSTEM_CONFIG: FilesystemConfig = {
   baseDir: process.env.WORKSPACE_DIR || '/workspace',
   maxFileSize: parseInt(process.env.MAX_FILE_SIZE || '104857600', 10), // 100MB
   allowedExtensions: ['*', '.ts', '.js', '.tsx', '.jsx', '.json', '.md', '.txt', '.html', '.css', '.py', '.go', '.rs', '.java'],
@@ -257,6 +257,30 @@ export function validateFilesystemOperation(
   content?: string,
   config: FilesystemConfig = DEFAULT_FILESYSTEM_CONFIG
 ): FilesystemValidationResult {
+  // Check operation-specific rules BEFORE path validation so that
+  // special-case error codes (e.g. CANNOT_DELETE_ROOT) take priority
+  // over generic path errors (e.g. ABSOLUTE_PATH_DETECTED).
+  switch (operation) {
+    case 'delete':
+      // Prevent deletion of critical directories
+      if (path === '' || path === '/' || path === '.') {
+        return {
+          valid: false,
+          error: {
+            type: 'operation_error',
+            message: 'Cannot delete root directory',
+            code: 'CANNOT_DELETE_ROOT',
+          },
+        };
+      }
+      break;
+
+    case 'move':
+    case 'copy':
+      // Additional validation for move/copy operations
+      break;
+  }
+
   // Validate path
   const pathValidation = validatePath(path, config);
   if (!pathValidation.valid) {
@@ -277,28 +301,6 @@ export function validateFilesystemOperation(
         return sizeValidation;
       }
     }
-  }
-
-  // Validate operation-specific rules
-  switch (operation) {
-    case 'delete':
-      // Prevent deletion of critical directories
-      if (path === '' || path === '/' || path === '.') {
-        return {
-          valid: false,
-          error: {
-            type: 'operation_error',
-            message: 'Cannot delete root directory',
-            code: 'CANNOT_DELETE_ROOT',
-          },
-        };
-      }
-      break;
-
-    case 'move':
-    case 'copy':
-      // Additional validation for move/copy operations
-      break;
   }
 
   return { valid: true, normalizedPath: pathValidation.normalizedPath };

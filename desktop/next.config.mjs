@@ -98,8 +98,11 @@ const nextConfig = {
         }
       : false,
   },
-  // Tauri desktop mode: use static export when DESKTOP_MODE is set
-  ...(process.env.DESKTOP_MODE === 'true' ? { output: 'export' } : {}),
+  // Tauri desktop mode: use static export for frontend assets
+  ...(process.env.DESKTOP_MODE === 'true' ? {
+    output: 'export',
+    distDir: 'out', // Explicitly set distDir to 'out' for static export
+  } : {}),
   env: {
     DEFAULT_LLM_PROVIDER: process.env.DEFAULT_LLM_PROVIDER,
     DEFAULT_MODEL: process.env.DEFAULT_MODEL,
@@ -143,7 +146,7 @@ const nextConfig = {
     '@tursodatabase/database',
     '@tursodatabase/sync',
   ],
-  webpack: (config, { isServer, dev }) => {
+  webpack: (config, { isServer, dev, webpack }) => {
     if (!isServer) {
       config.externals = [
         ...(config.externals || []),
@@ -161,7 +164,6 @@ const nextConfig = {
         'os',
         'path',
         'assert',
-        'buffer',
         'util',
         'events',
         'module',
@@ -239,10 +241,16 @@ const nextConfig = {
         assert: false,
         os: false,
         path: false,
-        buffer: false,
         util: false,
         events: false,
       };
+
+      config.plugins.push(
+        new webpack.ProvidePlugin({
+          Buffer: ['buffer', 'Buffer'],
+          buffer: ['buffer', 'Buffer'],
+        })
+      );
 
       config.resolve.alias = {
         ...config.resolve.alias,

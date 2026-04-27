@@ -112,7 +112,7 @@ export class PreviewCache {
     } else {
       // Clear all entries for this sandbox
       const keysToDelete: string[] = [];
-      for (const key of this.cache.keys()) {
+      for (const key of Array.from(this.cache.keys())) {
         if (key.startsWith(`${sandboxId}:`)) {
           keysToDelete.push(key);
         }

@@ -1,6 +1,7 @@
 import type { SandboxHandle } from '@/lib/sandbox/providers/sandbox-provider';
 import type { ToolResult } from './sandbox-tools';
 import { createToolExecutorWrapper, type ToolExecution, type TransactionEntry, type ToolExecutorWrapper } from './tool-executor-wrapper';
+import { normalizeToolArgs } from '@/lib/orchestra/shared-agent-context';
 
 export type { ToolExecution, TransactionEntry } from './tool-executor-wrapper';
 
@@ -58,8 +59,19 @@ export class ToolExecutor {
   async execute(toolName: string, params: Record<string, any>): Promise<ToolResult> {
     const startTime = Date.now();
 
+    // Map legacy camelCase tool names to canonical snake_case names
+    const LEGACY_NAME_MAP: Record<string, string> = {
+      readFile: 'read_file',
+      createFile: 'write_file',
+      listFiles: 'list_files',
+      applyDiff: 'apply_diff',
+    };
+    const canonicalName = LEGACY_NAME_MAP[toolName] || toolName;
+    // Normalize args to fix common LLM field-name mistakes
+    params = normalizeToolArgs(canonicalName, params) as Record<string, any>;
+
     // Route through wrapper for capability-mapped tools
-    const capability = this.toolToCapability[toolName];
+    const capability = this.toolToCapability[toolName] || this.toolToCapability[canonicalName];
     if (capability) {
       return this.wrapper.execute(capability, params) as Promise<ToolResult>;
     }

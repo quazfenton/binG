@@ -31,6 +31,10 @@ DOCS_BASE = "https://docs.mem0.ai"
 SEARCH_ENDPOINT = f"{DOCS_BASE}/api/search"
 LLMS_INDEX = f"{DOCS_BASE}/llms.txt"
 
+# Security: restrict fetched URLs to prevent SSRF
+ALLOWED_HOST = "docs.mem0.ai"
+ALLOWED_SCHEMES = ("http", "https")
+
 # Known documentation sections for targeted retrieval
 SECTION_MAP = {
     "platform": [
@@ -110,6 +114,9 @@ def search_docs(query: str, section: str | None = None) -> dict:
 
     # Fallback: search llms.txt index for matching URLs
     index_content = fetch_url(LLMS_INDEX)
+    if index_content.startswith("HTTP Error") or index_content.startswith("URL Error"):
+        return {"error": f"Fallback index fetch failed: {index_content}", "suggestion": "Check network connectivity or try a different query"}
+
     query_lower = query.lower()
     matching_urls = []
 
@@ -134,14 +141,32 @@ def search_docs(query: str, section: str | None = None) -> dict:
 
 def fetch_page(page_path: str) -> dict:
     """Fetch a specific documentation page."""
-    url = f"{DOCS_BASE}{page_path}" if page_path.startswith("/") else page_path
+    # Parse the path/URL to detect any absolute URL with a scheme
+    parsed = urllib.parse.urlparse(page_path)
+    if parsed.scheme:
+        # Absolute URL: validate host is allowed
+        if parsed.hostname != ALLOWED_HOST:
+            return {"error": f"Access denied: host must be {ALLOWED_HOST}, got {parsed.hostname}"}
+        if parsed.scheme not in ALLOWED_SCHEMES:
+            return {"error": f"Access denied: scheme must be http or https, got {parsed.scheme}"}
+        url = page_path
+    else:
+        # Relative path: must start with /, reject file://, ftp://, etc.
+        if not page_path.startswith("/"):
+            return {"error": "Page path must start with '/' or be a docs.mem0.ai URL"}
+        url = f"{DOCS_BASE}{page_path}"
+
     content = fetch_url(url)
+    if content.startswith("HTTP Error") or content.startswith("URL Error"):
+        return {"url": url, "error": content}
     return {"url": url, "content": content[:10000], "truncated": len(content) > 10000}
 
 
 def get_index() -> dict:
     """Fetch the full documentation index from llms.txt."""
     content = fetch_url(LLMS_INDEX)
+    if content.startswith("HTTP Error") or content.startswith("URL Error"):
+        return {"error": f"Failed to fetch documentation index: {content}"}
     urls = [line.strip() for line in content.splitlines() if line.strip() and not line.startswith("#")]
     return {"total_pages": len(urls), "urls": urls, "sections": list(SECTION_MAP.keys())}
 

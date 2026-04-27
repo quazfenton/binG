@@ -103,6 +103,8 @@ import {
 import { initializeComposioService, getComposioService, type ComposioService } from '../integrations/composio-service'
 import { chatLogger } from './chat-logger'
 import { withRetry, isRetryableError } from '../vector-memory/retry'
+// Binary finders for desktop CLI agents (used to determine availability)
+import { findAmpBinarySync, findCodexBinarySync, findKilocodeBinarySync, findPiBinarySync, findClaudeCodeBinarySync, findOpencodeBinarySync } from '../agent-bins'
 
 export interface LLMProvider {
   id: string
@@ -255,6 +257,10 @@ export interface ProviderConfig {
     baseURL?: string
   }
   zen?: {
+    apiKey?: string
+    baseURL?: string
+  }
+  aihubmix?: {
     apiKey?: string
     baseURL?: string
   }
@@ -573,6 +579,34 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     maxTokens: 128000,
     description: 'zen API - Access to Zen and Kimi 2.5 models with extended context windows'
   },
+  aihubmix: {
+    id: 'aihubmix',
+    name: 'AIHubMix',
+    models: [
+      'coding-glm-5.1-free',
+      'coding-minimax-m2.7-free',
+      'coding-glm-5-free',
+      'coding-glm-5-turbo-free',
+      'k2.6-code-preview-free',
+      'coding-minimax-m2.5-free',
+      'gpt-4.1-free',
+      'gemini-3-flash-preview-free',
+      'gpt-4.1-mini-free',
+      'gpt-4.1-nano-free',
+      'gpt-4o-free',
+      'coding-glm-4.7-free',
+      'glm-4.7-flash-free',
+      'gemini-3.1-flash-image-preview-free',
+      'qwen3.6-plus-preview-free',
+      'mimo-v2-flash-free',
+      'kimi-for-coding-free',
+      'coding-minimax-m2.1-free',
+      'coding-glm-4.6-free'
+    ],
+    supportsStreaming: true,
+    maxTokens: 128000,
+    description: 'AIHubMix - Free coding models including GLM, MiniMax, GPT, Gemini, Qwen, and more'
+  },
   opencode: {
     id: 'opencode',
     name: 'OpenCode SDK',
@@ -580,6 +614,56 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     supportsStreaming: true,
     maxTokens: 128000,
     description: 'Local OpenCode instance via SDK - Full agentic capabilities with tool calling'
+  },
+  // Spawn/CLI-style local agents (desktop-first). These can also be used remotely
+  // if a BASE_URL env var is configured for the remote agent host.
+  'opencode-cli': {
+    id: 'opencode-cli',
+    name: 'OpenCode (CLI)',
+    models: ['opencode/cli'],
+    supportsStreaming: true,
+    maxTokens: 128000,
+    description: 'OpenCode CLI (spawned local binary). Desktop-only unless OPENCODE_CLI_BASE_URL is set.'
+  },
+  kilocode: {
+    id: 'kilocode',
+    name: 'Kilocode',
+    models: ['kilocode/local'],
+    supportsStreaming: true,
+    maxTokens: 128000,
+    description: 'Kilocode local CLI or remote Kilocode service (KILO_BASE_URL).'
+  },
+  pi: {
+    id: 'pi',
+    name: 'Pi Agent',
+    models: ['pi/local'],
+    supportsStreaming: true,
+    maxTokens: 128000,
+    description: 'Pi CLI agent (spawn) or remote Pi service (PI_BASE_URL).'
+  },
+  codex: {
+    id: 'codex',
+    name: 'Codex Agent',
+    models: ['codex/cli'],
+    supportsStreaming: true,
+    maxTokens: 128000,
+    description: 'Codex agent (spawned from web/lib/spawn/codex-agent.ts) - Desktop-first or remote via CODEX_BASE_URL.'
+  },
+  amp: {
+    id: 'amp',
+    name: 'Amp CLI',
+    models: ['amp/cli'],
+    supportsStreaming: true,
+    maxTokens: 128000,
+    description: 'Amp CLI (local binary) or remote Amp agent (AMP_BASE_URL).'
+  },
+  'claude-code': {
+    id: 'claude-code',
+    name: 'Claude Code',
+    models: ['claude-code/cli'],
+    supportsStreaming: true,
+    maxTokens: 128000,
+    description: 'Anthropic Claude Code CLI or remote ClaudeCode service (CLAUDE_CODE_BASE_URL).'
   },
   cloudflare: {
     id: 'cloudflare',
@@ -894,6 +978,9 @@ class LLMService {
           case 'zen':
             response = await this.generatezenResponse(model, messages, temperature, maxTokens, requestId, apiKey)
             break;
+          case 'aihubmix':
+            response = await this.generateAihubmixResponse(model, messages, temperature, maxTokens, requestId, apiKey)
+            break;
           case 'opencode':
             await this.initOpencodeClient()
             response = await this.opencodeClient.provider.generateResponse(request)
@@ -1037,6 +1124,12 @@ class LLMService {
             yield chunk;
           }
           break
+        case 'aihubmix':
+          for await (const chunk of this.streamAihubmixResponse(model, messages, temperature, maxTokens)) {
+            chunkCount++;
+            yield chunk;
+          }
+          break
         case 'opencode':
           await this.initOpencodeClient()
           for await (const chunk of this.opencodeClient.provider.generateStreamingResponse(request)) {
@@ -1112,6 +1205,8 @@ class LLMService {
         return currentEnv.GITHUB_MODELS_API_KEY || currentEnv.AZURE_OPENAI_API_KEY || this.config.github?.apiKey || '';
       case 'zen':
         return currentEnv.ZEN_API_KEY || this.config.zen?.apiKey || '';
+      case 'aihubmix':
+        return currentEnv.AIHUBMIX_API_KEY || this.config.aihubmix?.apiKey || '';
       case 'nvidia':
         return currentEnv.NVIDIA_API_KEY || '';
       case 'groq':
@@ -1567,6 +1662,43 @@ class LLMService {
     }
   }
 
+  private async generateAihubmixResponse(
+    model: string,
+    messages: LLMMessage[],
+    temperature: number,
+    maxTokens: number,
+    requestId?: string,
+    apiKeyOverride?: string
+  ): Promise<LLMResponse> {
+    const apiKey = this.getApiKey('aihubmix', apiKeyOverride);
+    if (!apiKey) {
+      throw new Error('AIHubMix API key not configured. Please set AIHUBMIX_API_KEY in your environment variables.');
+    }
+
+    const OpenAIClass = await getOpenAI();
+    const aihubmix = new OpenAIClass({
+      apiKey,
+      baseURL: this.config.aihubmix?.baseURL || 'https://aihubmix.com/v1',
+    });
+
+    const response = await aihubmix.chat.completions.create({
+      model,
+      messages: messages as any,
+      temperature,
+      max_tokens: maxTokens,
+    });
+    const toolCalls = this.normalizeOpenAIToolCalls(response.choices[0]?.message?.tool_calls as any[])
+
+    return {
+      content: response.choices[0]?.message?.content || '',
+      tokensUsed: response.usage?.total_tokens || 0,
+      finishReason: response.choices[0]?.finish_reason || 'stop',
+      timestamp: new Date(),
+      metadata: toolCalls.length ? { toolCalls } : undefined,
+      usage: response.usage
+    }
+  }
+
   private async *streamOpenRouterResponse(
     model: string,
     messages: LLMMessage[],
@@ -1691,6 +1823,40 @@ class LLMService {
     if (!this.zenClient) throw new Error('zen API not initialized');
 
     const stream = await this.zenClient.chat.completions.create({
+      model,
+      messages: messages as any,
+      temperature,
+      max_tokens: maxTokens,
+      stream: true,
+    })
+
+    for await (const chunk of stream) {
+      const delta = chunk.choices[0]?.delta?.content || ''
+      if (delta) {
+        yield { content: delta, isComplete: false }
+      }
+    }
+    yield { content: '', isComplete: true }
+  }
+
+  private async *streamAihubmixResponse(
+    model: string,
+    messages: LLMMessage[],
+    temperature: number,
+    maxTokens: number
+  ): AsyncGenerator<StreamingResponse> {
+    const apiKey = this.getApiKey('aihubmix');
+    if (!apiKey) {
+      throw new Error('AIHubMix API key not configured. Please set AIHUBMIX_API_KEY in your environment variables.');
+    }
+
+    const OpenAIClass = await getOpenAI();
+    const aihubmix = new OpenAIClass({
+      apiKey,
+      baseURL: this.config.aihubmix?.baseURL || 'https://aihubmix.com/v1',
+    });
+
+    const stream = await aihubmix.chat.completions.create({
       model,
       messages: messages as any,
       temperature,
@@ -1991,50 +2157,69 @@ class LLMService {
   // Getter methods for UI integration
   getAvailableProviders(): LLMProvider[] {
     return Object.values(PROVIDERS).filter(provider => {
-      switch (provider.id) {
-        case 'openai':
-          return !!process.env.OPENAI_API_KEY;
-        case 'anthropic':
-          return !!process.env.ANTHROPIC_API_KEY;
-        case 'google':
-          return !!process.env.GOOGLE_API_KEY;
-        case 'cohere':
-          return !!process.env.COHERE_API_KEY;
-        case 'together':
-          return !!process.env.TOGETHER_API_KEY;
-        case 'replicate':
-          return !!process.env.REPLICATE_API_TOKEN;
-        case 'portkey':
-          return !!process.env.PORTKEY_API_KEY;
-        case 'mistral':
-          return !!process.env.MISTRAL_API_KEY;
-        case 'zen':
-          return !!process.env.ZEN_API_KEY;
-        case 'openrouter':
-          return !!process.env.OPENROUTER_API_KEY;
-        case 'chutes':
-          return !!process.env.CHUTES_API_KEY;
-        case 'github':
-          return !!process.env.GITHUB_MODELS_API_KEY || !!process.env.AZURE_OPENAI_API_KEY;
-        case 'composio':
-          return !!process.env.COMPOSIO_API_KEY;
-        case 'cloudflare':
-        case 'zo':
-          // Providers with env vars configured but no request/stream handlers yet
-          return false;
-        case 'nvidia':
-          return !!process.env.NVIDIA_API_KEY;
-        case 'groq':
-          return !!process.env.GROQ_API_KEY;
-        case 'deepinfra':
-          return !!process.env.DEEPINFRA_API_KEY;
-        case 'fireworks':
-          return !!process.env.FIREWORKS_API_KEY;
-        case 'opencode':
-          // OpenCode SDK - check if binary is available or server is running
-          return true; // Always available as it's local
-        default:
-          return false;
+      try {
+        switch (provider.id) {
+          case 'openai':
+            return !!process.env.OPENAI_API_KEY;
+          case 'anthropic':
+            return !!process.env.ANTHROPIC_API_KEY;
+          case 'google':
+            return !!process.env.GOOGLE_API_KEY;
+          case 'cohere':
+            return !!process.env.COHERE_API_KEY;
+          case 'together':
+            return !!process.env.TOGETHER_API_KEY;
+          case 'replicate':
+            return !!process.env.REPLICATE_API_TOKEN;
+          case 'portkey':
+            return !!process.env.PORTKEY_API_KEY;
+          case 'mistral':
+            return !!process.env.MISTRAL_API_KEY;
+          case 'zen':
+            return !!process.env.ZEN_API_KEY;
+          case 'aihubmix':
+            return !!process.env.AIHUBMIX_API_KEY;
+          case 'openrouter':
+            return !!process.env.OPENROUTER_API_KEY;
+          case 'chutes':
+            return !!process.env.CHUTES_API_KEY;
+          case 'github':
+            return !!process.env.GITHUB_MODELS_API_KEY || !!process.env.AZURE_OPENAI_API_KEY;
+          case 'composio':
+            return !!process.env.COMPOSIO_API_KEY;
+          case 'cloudflare':
+          case 'zo':
+            // Providers with env vars configured but no request/stream handlers yet
+            return false;
+          case 'nvidia':
+            return !!process.env.NVIDIA_API_KEY;
+          case 'groq':
+            return !!process.env.GROQ_API_KEY;
+          case 'deepinfra':
+            return !!process.env.DEEPINFRA_API_KEY;
+          case 'fireworks':
+            return !!process.env.FIREWORKS_API_KEY;
+          case 'opencode':
+            // OpenCode SDK - check if binary is available or server is running
+            return !!process.env.OPENCODE_HOSTNAME || !!process.env.OPENCODE_PORT || !!findOpencodeBinarySync();
+          case 'opencode-cli':
+            return !!process.env.OPENCODE_CLI_BASE_URL || !!findOpencodeBinarySync();
+          case 'amp':
+            return !!process.env.AMP_BASE_URL || !!findAmpBinarySync();
+          case 'codex':
+            return !!process.env.CODEX_BASE_URL || !!findCodexBinarySync();
+          case 'kilocode':
+            return !!process.env.KILO_BASE_URL || !!findKilocodeBinarySync();
+          case 'pi':
+            return !!process.env.PI_BASE_URL || !!findPiBinarySync();
+          case 'claude-code':
+            return !!process.env.CLAUDE_CODE_BASE_URL || !!findClaudeCodeBinarySync();
+          default:
+            return false;
+        }
+      } catch (e) {
+        // Any binary detection failures should simply mark provider unavailable
+        return false;
       }
     })
   }
@@ -2230,6 +2415,10 @@ export const llmService = new LLMService({
   zen: {
     apiKey: process.env.ZEN_API_KEY,
     baseURL: process.env.ZEN_BASE_URL
+  },
+  aihubmix: {
+    apiKey: process.env.AIHUBMIX_API_KEY,
+    baseURL: process.env.AIHUBMIX_BASE_URL
   },
   opencode: {
     hostname: process.env.OPENCODE_HOSTNAME || '127.0.0.1',

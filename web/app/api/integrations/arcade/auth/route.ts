@@ -356,7 +356,7 @@ export async function GET(request: NextRequest) {
 // Body: { provider: "github" }
 // Returns the cached OAuth token for direct API calls.
 // ---------------------------------------------------------------------------
-export async function POSTToken(request: NextRequest) {
+async function POSTToken(request: NextRequest) {
   const authResult = await resolveRequestAuth(request, { allowAnonymous: false });
 
   if (!authResult.success || !authResult.userId) {

@@ -18,7 +18,7 @@ describe('Stateful Agent', () => {
       runStatefulAgent,
       getActiveSessionLocks,
       clearAllSessionLocks,
-    } = require('@/lib/stateful-agent/agents/stateful-agent');
+    } = require('@/lib/orchestra/stateful-agent/agents/stateful-agent');
 
     let agent: typeof StatefulAgent;
 
@@ -68,14 +68,14 @@ describe('Stateful Agent', () => {
     });
 
     it('should enforce session locking', async () => {
-      const { getActiveSessionLocks } = require('@/lib/stateful-agent/agents/stateful-agent');
+      const { getActiveSessionLocks } = require('@/lib/orchestra/stateful-agent/agents/stateful-agent');
 
       const beforeLocks = getActiveSessionLocks();
       expect(typeof beforeLocks).toBe('number');
     });
 
     it('should clear session locks', () => {
-      const { clearAllSessionLocks } = require('@/lib/stateful-agent/agents/stateful-agent');
+      const { clearAllSessionLocks } = require('@/lib/orchestra/stateful-agent/agents/stateful-agent');
 
       clearAllSessionLocks();
 
@@ -85,7 +85,7 @@ describe('Stateful Agent', () => {
   });
 
   describe('Discovery Phase', () => {
-    const { StatefulAgent } = require('@/lib/stateful-agent/agents/stateful-agent');
+    const { StatefulAgent } = require('@/lib/orchestra/stateful-agent/agents/stateful-agent');
 
     it('should run discovery phase', async () => {
       const agent = new StatefulAgent();
@@ -114,7 +114,7 @@ describe('Stateful Agent', () => {
   });
 
   describe('Planning Phase', () => {
-    const { StatefulAgent } = require('@/lib/stateful-agent/agents/stateful-agent');
+    const { StatefulAgent } = require('@/lib/orchestra/stateful-agent/agents/stateful-agent');
 
     it('should run planning phase', async () => {
       const agent = new StatefulAgent({ enforcePlanActVerify: true });
@@ -169,7 +169,7 @@ describe('Stateful Agent', () => {
   });
 
   describe('Editing Phase', () => {
-    const { StatefulAgent } = require('@/lib/stateful-agent/agents/stateful-agent');
+    const { StatefulAgent } = require('@/lib/orchestra/stateful-agent/agents/stateful-agent');
 
     it('should run editing phase', async () => {
       const agent = new StatefulAgent();
@@ -197,7 +197,7 @@ describe('Stateful Agent', () => {
   });
 
   describe('Verification Phase', () => {
-    const { StatefulAgent } = require('@/lib/stateful-agent/agents/stateful-agent');
+    const { StatefulAgent } = require('@/lib/orchestra/stateful-agent/agents/stateful-agent');
 
     it('should run verification phase', async () => {
       const agent = new StatefulAgent();
@@ -214,7 +214,7 @@ describe('Stateful Agent', () => {
   });
 
   describe('Self-Healing Phase', () => {
-    const { StatefulAgent } = require('@/lib/stateful-agent/agents/stateful-agent');
+    const { StatefulAgent } = require('@/lib/orchestra/stateful-agent/agents/stateful-agent');
 
     it('should run self-healing phase', async () => {
       const agent = new StatefulAgent({ maxSelfHealAttempts: 3 });
@@ -243,7 +243,7 @@ describe('Stateful Agent', () => {
   });
 
   describe('Stateful Agent Integration', () => {
-    const { runStatefulAgent } = require('@/lib/stateful-agent/agents/stateful-agent');
+    const { runStatefulAgent } = require('@/lib/orchestra/stateful-agent/agents/stateful-agent');
 
     it('should run stateful agent with factory function', async () => {
       vi.spyOn(StatefulAgent.prototype, 'run').mockResolvedValue({
@@ -267,7 +267,7 @@ describe('Stateful Agent', () => {
       acquireSessionLock,
       getActiveSessionLocks,
       clearAllSessionLocks,
-    } = require('@/lib/stateful-agent/agents/stateful-agent');
+    } = require('@/lib/orchestra/stateful-agent/agents/stateful-agent');
 
     it('should acquire session lock', async () => {
       const releaseLock = await acquireSessionLock('session-1');
@@ -305,7 +305,7 @@ describe('Stateful Agent', () => {
 
   describe('Stateful Agent: Full Workflow', () => {
     it('should support complete agent workflow', async () => {
-      const { StatefulAgent } = require('@/lib/stateful-agent/agents/stateful-agent');
+      const { StatefulAgent } = require('@/lib/orchestra/stateful-agent/agents/stateful-agent');
 
       const agent = new StatefulAgent({ sessionId: 'full-workflow-test' });
 

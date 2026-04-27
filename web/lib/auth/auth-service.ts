@@ -744,25 +744,27 @@ export class AuthService {
   /**
    * Revoke session
    */
-  async revokeSession(sessionId: string, userId: number): Promise<{ success: boolean; error?: string }> {
-    try {
-      // Ensure database is ready
-      await this.ensureDatabase();
+   async revokeSession(sessionId: string, userId: number): Promise<{ success: boolean; error?: string }> {
+     try {
+       // Ensure database is ready
+       await this.ensureDatabase();
 
-      // Use raw sessionId to match how sessions are stored
-      const stmt = this.db.prepare('DELETE FROM user_sessions WHERE session_id = ? AND user_id = ?');
-      const result = stmt.run(sessionId, userId);
+       // Hash sessionId for lookup
+       const crypto = require('crypto');
+       const sessionHash = crypto.createHash('sha256').update(sessionId).digest('hex');
+       const stmt = this.db.prepare('DELETE FROM user_sessions WHERE session_id = ? AND user_id = ?');
+       const result = stmt.run(sessionHash, userId);
 
-      if (result.changes === 0) {
-        return { success: false, error: 'Session not found' };
-      }
+       if (result.changes === 0) {
+         return { success: false, error: 'Session not found' };
+       }
 
-      return { success: true };
-    } catch (error) {
-      console.error('Revoke session error:', error);
-      return { success: false, error: 'Failed to revoke session' };
-    }
-  }
+       return { success: true };
+     } catch (error) {
+       console.error('Revoke session error:', error);
+       return { success: false, error: 'Failed to revoke session' };
+     }
+   }
 
   /**
    * Refresh access token using refresh token
@@ -770,67 +772,66 @@ export class AuthService {
    * Validates refresh token and issues new access/refresh token pair
    * Implements token rotation for security (old refresh token is invalidated)
    */
-  async refreshToken(refreshToken: string, sessionInfo?: Partial<SessionInfo>): Promise<AuthResult> {
-    try {
-      // Ensure database is ready
-      await this.ensureDatabase();
+   async refreshToken(refreshToken: string, sessionInfo?: Partial<SessionInfo>): Promise<AuthResult> {
+     try {
+       // Ensure database is ready
+       await this.ensureDatabase();
 
-      // Find session by refresh token
-      // Note: In a production system, refresh tokens should be stored separately
-      // For now, we'll use a simplified approach
-      const stmt = this.db.prepare(`
-        SELECT us.*, u.email, u.id as user_id 
-        FROM user_sessions us
-        JOIN users u ON us.user_id = u.id
-        WHERE us.id = ? AND us.is_active = TRUE AND datetime(us.expires_at) > datetime('now')
-      `);
-      const session = stmt.get(refreshToken) as any;
+       // Hash the presented refresh token for secure lookup
+       const crypto = require('crypto');
+       const sessionHash = crypto.createHash('sha256').update(refreshToken).digest('hex');
 
-      if (!session) {
-        return { success: false, error: 'Invalid or expired refresh token' };
-      }
+       // Find session by hashed refresh token
+       const stmt = this.db.prepare(`
+         SELECT us.*, u.email, u.id as user_id 
+         FROM user_sessions us
+         JOIN users u ON us.user_id = u.id
+         WHERE us.session_id = ? AND us.is_active = TRUE AND datetime(us.expires_at) > datetime('now')
+       `);
+       const session = stmt.get(sessionHash) as any;
 
-      // Check if user is still active
-      if (!session.is_active) {
-        return { success: false, error: 'User account is deactivated' };
-      }
+       if (!session) {
+         return { success: false, error: 'Invalid or expired refresh token' };
+       }
 
-      // Generate new token pair
-      const newToken = generateToken({
-        userId: session.user_id.toString(),
-        email: session.email,
-      });
+       // Check if user is still active
+       if (!session.is_active) {
+         return { success: false, error: 'User account is deactivated' };
+       }
 
-      // Generate new refresh token (token rotation)
-      const newRefreshToken = uuidv4();
-      const newExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
+       // Generate new token pair
+       const newToken = generateToken({
+         userId: session.user_id.toString(),
+         email: session.email,
+       });
 
-      // Invalidate old refresh token and create new one
-      this.db.prepare('DELETE FROM user_sessions WHERE session_id = ?').run(refreshToken);
+       // Generate new refresh token (token rotation)
+       const newRefreshToken = uuidv4();
+       const newExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
 
-      this.db.prepare(`
-        INSERT INTO user_sessions (session_id, user_id, expires_at, ip_address, user_agent)
-        VALUES (?, ?, ?, ?, ?)
-      `).run(newRefreshToken, session.user_id, newExpiresAt.toISOString(),
-             sessionInfo?.ipAddress, sessionInfo?.userAgent);
+       // Invalidate old refresh token (delete by hashed session_id)
+       this.db.prepare('DELETE FROM user_sessions WHERE session_id = ?').run(sessionHash);
 
-      logger.info('Token refreshed successfully', {
-        userId: session.user_id,
-        oldToken: refreshToken.substring(0, 8) + '...',
-        newToken: newRefreshToken.substring(0, 8) + '...',
-      });
+       // Create new session with raw token; createSession will hash it
+       this.dbOps.createSession(newRefreshToken, session.user_id, newExpiresAt, sessionInfo?.ipAddress, sessionInfo?.userAgent);
 
-      return {
-        success: true,
-        token: newToken,
-        sessionId: newRefreshToken,
-        user: this.mapDbUserToUser(session),
-      };
-    } catch (error) {
-      logger.error('Token refresh error', error as Error);
-      return { success: false, error: 'Token refresh failed' };
-    }
-  }
+       logger.info('Token refreshed successfully', {
+         userId: session.user_id,
+         oldToken: refreshToken.substring(0, 8) + '...',
+         newToken: newRefreshToken.substring(0, 8) + '...',
+       });
+
+       return {
+         success: true,
+         token: newToken,
+         sessionId: newRefreshToken,
+         user: this.mapDbUserToUser(session),
+       };
+     } catch (error) {
+       logger.error('Token refresh error', error as Error);
+       return { success: false, error: 'Token refresh failed' };
+     }
+   }
 }
 
 // Export singleton instance

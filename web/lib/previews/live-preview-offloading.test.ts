@@ -410,28 +410,28 @@ describe('LivePreviewOffloading', () => {
   describe('detectPreviewMode', () => {
     it('should return pyodide for simple Python without package.json', () => {
       const result = livePreviewOffloading.detectPreviewMode(
-        ['app.py'], 'flask', 'unknown', true, false, false, null, false, false
+        ['app.py'], 'flask', 'unknown', { hasPython: true, hasNodeServer: false, hasNextJS: false, hasHeavyComputation: false, hasAPIKeys: false }, null
       );
       expect(result).toBe('pyodide');
     });
 
     it('should return iframe for HTML without framework', () => {
       const result = livePreviewOffloading.detectPreviewMode(
-        ['index.html'], 'vanilla', 'unknown', false, false, false, null, false, false
+        ['index.html'], 'vanilla', 'unknown', { hasPython: false, hasNodeServer: false, hasNextJS: false, hasHeavyComputation: false, hasAPIKeys: false }, null
       );
       expect(result).toBe('iframe');
     });
 
     it('should return nextjs for Next.js projects', () => {
       const result = livePreviewOffloading.detectPreviewMode(
-        ['pages/index.js'], 'next', 'unknown', false, false, true, null, false, false
+        ['pages/index.js'], 'next', 'unknown', { hasPython: false, hasNodeServer: false, hasNextJS: true, hasHeavyComputation: false, hasAPIKeys: false }, null
       );
       expect(result).toBe('nextjs');
     });
 
     it('should return sandpack for React/Vue/Svelte', () => {
       const result = livePreviewOffloading.detectPreviewMode(
-        ['src/App.tsx'], 'react', 'unknown', false, false, false, null, false, false
+        ['src/App.tsx'], 'react', 'unknown', { hasPython: false, hasNodeServer: false, hasNextJS: false, hasHeavyComputation: false, hasAPIKeys: false }, null
       );
       expect(result).toBe('sandpack');
     });
@@ -439,7 +439,7 @@ describe('LivePreviewOffloading', () => {
     it('should return webcontainer for Node.js server', () => {
       const pkgJson = { dependencies: { express: '^4.0.0' } };
       const result = livePreviewOffloading.detectPreviewMode(
-        ['server.js', 'package.json'], 'unknown', 'unknown', false, true, false, pkgJson, false, false
+        ['server.js', 'package.json'], 'unknown', 'unknown', { hasPython: false, hasNodeServer: true, hasNextJS: false, hasHeavyComputation: false, hasAPIKeys: false }, pkgJson
       );
       expect(result).toBe('webcontainer');
     });
@@ -447,7 +447,7 @@ describe('LivePreviewOffloading', () => {
     it('should return devbox for Docker projects', () => {
       const pkgJson = { dependencies: { express: '^4.0.0' } };
       const result = livePreviewOffloading.detectPreviewMode(
-        ['server.js', 'Dockerfile', 'package.json'], 'unknown', 'unknown', false, true, false, pkgJson, false, false
+        ['server.js', 'Dockerfile', 'package.json'], 'unknown', 'unknown', { hasPython: false, hasNodeServer: true, hasNextJS: false, hasHeavyComputation: false, hasAPIKeys: false }, pkgJson
       );
       expect(result).toBe('devbox');
     });

@@ -273,7 +273,7 @@ export async function executeE2BAmpAgent(args: {
     const provider = await getSandboxProvider('e2b');
     const handle = await provider.createSandbox({});
 
-    const ampService = handle.getAmpService();
+    const ampService = handle.getAmpService?.();
     if (!ampService) {
       await provider.destroySandbox(handle.id);
       return {
@@ -402,7 +402,7 @@ export async function executeE2BAmpAgentWithRepo(args: {
       await handle.executeCommand(`cd ${sanitizedWorkingDir} && git checkout ${sanitizedBranch}`);
     }
 
-    const ampService = handle.getAmpService();
+    const ampService = handle.getAmpService?.();
     if (!ampService) {
       await provider.destroySandbox(handle.id);
       return {

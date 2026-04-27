@@ -49,6 +49,7 @@ vi.mock('../lib/sandbox/providers', () => ({
     };
     return Promise.resolve(mockProvider);
   }),
+  isProviderAvailable: vi.fn(() => false), // No availability info → best-effort routing
 }))
 
 describe('Cloud Agent + Preview Offload Integration', () => {

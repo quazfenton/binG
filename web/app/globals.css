@@ -10,6 +10,22 @@
 
 /* Mobile-first CSS optimizations and safe area support */
 
+@layer base {
+  body {
+    @apply bg-background text-foreground;
+    background-color: transparent !important;
+    -webkit-app-region: no-drag;
+  }
+}
+
+[data-tauri-drag-region] {
+  -webkit-app-region: drag;
+}
+
+button, a, input, [role="button"] {
+  -webkit-app-region: no-drag;
+}
+
 /* iOS safe area support */
 :root {
     --safe-area-inset-top: env(safe-area-inset-top);

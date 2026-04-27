@@ -11,10 +11,11 @@ import { determineExecutionPolicy } from '@/lib/sandbox/types';
 import { normalizeSessionId } from '@/lib/virtual-filesystem/scope-utils';
 import { emitEvent } from '@/lib/events/bus';
 import { AnyEvent as EventTypes } from '@/lib/events/schema';
+import type { IntentMatch, IntentDefinition } from './intent-schema';
+import { classifyIntentStage1, classifyIntentStage2 } from './intent-schema';
 
 // Re-export types for convenience
-export type { IntentMatch, IntentDefinition, TaskRoutingResult } from './intent-schema';
-export { classifyIntentStage1, classifyIntentStage2 } from './intent-schema';
+export type { IntentMatch, IntentDefinition } from './intent-schema';
 
 /** Task type - what kind of task this is */
 export type TaskType = 'coding' | 'automation' | 'messaging' | 'advanced' | 'unknown' | 'browsing' | 'api';
@@ -489,7 +490,7 @@ class TaskRouter {
       // Emit event for durable execution tracking
       const eventResult = await emitEvent(
         {
-          type: EventTypes.WORKFLOW,
+          type: 'WORKFLOW' as const,
           templateId: advancedType,
           sessionId,
           userId,
@@ -544,7 +545,7 @@ class TaskRouter {
       try {
         await emitEvent(
           {
-            type: EventTypes.WORKFLOW,
+            type: 'WORKFLOW' as const,
             templateId: advancedType,
             sessionId: request.conversationId,
             userId: request.userId,
@@ -688,6 +689,7 @@ class TaskRouter {
       case 'opencode': return this.executeWithOpenCode(request);
       case 'nullclaw': return this.executeWithNullclaw(request, (await this.analyzeTask(request.task)).type);
       case 'cli':      return this.executeWithCliAgent(request);
+      case 'chat':     return this.executeWithChat(request);
       case 'advanced': {
         // END OF ROUTING TREE: Execute advanced task via event system
         // Use cached advanced type from executeTask to avoid re-analysis
@@ -719,14 +721,11 @@ class TaskRouter {
       process.env.V2_AGENT_ENABLED === 'true';
 
     if (!useV2) {
-      const { createOpenCodeEngine } = await import('@/lib/session/agent/opencode-engine-service');
+      const { createOpenCodeEngine } = await import('../lib/session/agent/opencode-engine-service');
       const engine = createOpenCodeEngine({
         model: process.env.OPENCODE_MODEL,
         // CRITICAL FIX: Normalize conversationId to prevent composite IDs in paths
-        workingDir: `/workspace/users/${request.userId}/sessions/${normalizeSessionId(request.conversationId) || request.conversationId}`,
-        enableBash: true,
-        enableFileOps: true,
-        enableCodegen: true,
+        workspaceDir: `/workspace/users/${request.userId}/sessions/${normalizeSessionId(request.conversationId) || request.conversationId}`,
       });
 
       if (request.stream) {
@@ -744,7 +743,7 @@ class TaskRouter {
       };
     }
 
-    const { OpencodeV2Provider } = await import('@/lib/sandbox/spawn/opencode-cli');
+    const { OpencodeV2Provider } = await import('../lib/sandbox/spawn/opencode-cli');
     const { agentSessionManager } = await import('@/lib/session/agent/agent-session-manager');
     const { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } = await import('@/lib/mcp');
 
@@ -765,7 +764,7 @@ class TaskRouter {
       sandboxHandle: session.sandboxHandle,
     });
 
-    const tools = await getMCPToolsForAI_SDK(request.userId);
+    const tools = await getMCPToolsForAI_SDK(request.userId, request.task);
 
     const result = await provider.runAgentLoop({
       userMessage: request.task,
@@ -787,9 +786,11 @@ class TaskRouter {
     const fileChanges: Array<{ path: string; action: string; operation: 'write' | 'patch' | 'delete'; content?: string }> = [];
     if (result.steps) {
       for (const step of result.steps) {
-        if (step.toolName && ['write_file', 'read_file', 'delete_file', 'edit_file', 'Bash'].includes(step.toolName)) {
-          const args = step.args || {};
-          if (step.toolName === 'Bash' && args.command) {
+        const stepAny = step as any;
+        const toolName = stepAny.toolName || stepAny.tool || stepAny.data?.tool || stepAny.data?.name;
+        const args = stepAny.args || stepAny.data?.args || {};
+        if (toolName && ['write_file', 'read_file', 'delete_file', 'edit_file', 'Bash'].includes(toolName)) {
+          if (toolName === 'Bash' && args.command) {
             const match = args.command.match(/(?:>\s*|tee\s+|cat\s*>\s*)([^\s|]+)/);
             if (match) {
               fileChanges.push({ path: match[1], action: 'modify', operation: 'patch' });
@@ -800,8 +801,8 @@ class TaskRouter {
           if (!filePath) continue;
           fileChanges.push({
             path: filePath,
-            action: step.toolName === 'delete_file' ? 'delete' : 'modify',
-            operation: step.toolName === 'delete_file' ? 'delete' : step.toolName === 'edit_file' ? 'patch' : 'write',
+            action: toolName === 'delete_file' ? 'delete' : 'modify',
+            operation: toolName === 'delete_file' ? 'delete' : toolName === 'edit_file' ? 'patch' : 'write',
           });
         }
       }
@@ -866,7 +867,7 @@ class TaskRouter {
       try {
         await emitEvent(
           {
-            type: EventTypes.WORKFLOW,
+            type: 'WORKFLOW' as const,
             templateId: 'nullclaw',
             sessionId: request.conversationId,
             userId: request.userId,
@@ -882,6 +883,14 @@ class TaskRouter {
 
       throw error;
     }
+  }
+
+  private async executeWithChat(request: TaskRequest): Promise<any> {
+    return {
+      success: true,
+      response: 'Chat mode — use the conversation interface',
+      agent: 'chat',
+    };
   }
 
   private async executeWithCliAgent(request: TaskRequest): Promise<any> {

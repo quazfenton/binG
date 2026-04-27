@@ -63,7 +63,7 @@ function getDefaultWorkspaceDir(provider: string): string {
   return PROVIDER_WORKSPACE_DIRS[provider] || '/workspace';
 }
 
-export interface SyncRequest {
+interface SyncRequest {
   sandboxId: string;
   provider: string;
   mode: 'full' | 'incremental' | 'bootstrap';
@@ -73,7 +73,7 @@ export interface SyncRequest {
   timeout?: number;
 }
 
-export interface SyncResponse {
+interface SyncResponse {
   success: boolean;
   message?: string;
   filesSynced?: number;

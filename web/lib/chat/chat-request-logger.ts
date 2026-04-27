@@ -15,6 +15,7 @@
  */
 
 import { getDatabase } from '@/lib/database/connection';
+import { execSchemaFile } from '@/lib/database/schema';
 
 export interface ToolCallTelemetry {
   toolCallId: string;
@@ -95,53 +96,8 @@ export class ChatRequestLogger {
     try {
       this.db = getDatabase();
 
-      // Create request log table
-      this.db.exec(`
-        CREATE TABLE IF NOT EXISTS chat_request_logs (
-          id TEXT PRIMARY KEY,
-          user_id TEXT NOT NULL,
-          provider TEXT NOT NULL,
-          model TEXT NOT NULL,
-          message_count INTEGER NOT NULL,
-          request_size INTEGER NOT NULL,
-          response_size INTEGER,
-          token_usage_prompt INTEGER,
-          token_usage_completion INTEGER,
-          token_usage_total INTEGER,
-          latency_ms INTEGER,
-          streaming BOOLEAN NOT NULL DEFAULT 0,
-          success BOOLEAN NOT NULL DEFAULT 0,
-          error TEXT,
-          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-          metadata TEXT
-        )
-      `);
-
-      // Create indexes for common queries
-      this.db.exec(`
-        CREATE INDEX IF NOT EXISTS idx_chat_logs_user_id
-        ON chat_request_logs(user_id)
-      `);
-
-      this.db.exec(`
-        CREATE INDEX IF NOT EXISTS idx_chat_logs_provider
-        ON chat_request_logs(provider)
-      `);
-
-      this.db.exec(`
-        CREATE INDEX IF NOT EXISTS idx_chat_logs_model
-        ON chat_request_logs(model)
-      `);
-
-      this.db.exec(`
-        CREATE INDEX IF NOT EXISTS idx_chat_logs_created_at
-        ON chat_request_logs(created_at)
-      `);
-
-      this.db.exec(`
-        CREATE INDEX IF NOT EXISTS idx_chat_logs_success
-        ON chat_request_logs(success)
-      `);
+      // logging-schema.sql defines chat_request_logs + tool_calls + hitl_audit_logs
+      execSchemaFile(this.db, 'logging-schema');
 
       this.initialized = true;
       console.log('[ChatRequestLogger] Database initialized');

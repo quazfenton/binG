@@ -1,3 +1,17 @@
+---
+id: sdk-e2b-desktop
+title: Desktop
+aliases:
+  - desktop
+  - desktop.md
+tags: []
+layer: core
+summary: "> ## Documentation Index\r\n> Fetch the complete documentation index at: https://e2b.mintlify.app/llms.txt\r\n> Use this file to discover all available pages before exploring further.\r\n\r\n# Desktop\r\n\r\n> Sandbox with Ubuntu Desktop and VNC access\r\n\r\nThis template creates a sandbox with a full Ubuntu 22.04"
+anchors:
+  - Template definition
+  - Startup script
+  - Building the template
+---
 > ## Documentation Index
 > Fetch the complete documentation index at: https://e2b.mintlify.app/llms.txt
 > Use this file to discover all available pages before exploring further.

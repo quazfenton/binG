@@ -360,8 +360,8 @@ describe('Natural Language → Command Translation (with context)', () => {
 
 describe('VFS Path → Real Path Resolution', () => {
   const workspaceBase = process.platform === 'win32'
-    ? 'C:\\temp\\opencode-workspace'
-    : '/tmp/opencode-workspace';
+    ? 'C:\\temp\\workspace'
+    : '/tmp/workspace';
 
   it('resolves "project/sessions/002" to workspace + sessions/002', () => {
     const resolved = resolveVfsPathToRealPath('project/sessions/002', workspaceBase);
@@ -481,8 +481,8 @@ describe('Capability Router cwd Resolution', () => {
 
   it('resolveVfsPathToRealPath integrates with capability router', () => {
     const workspacePath = process.platform === 'win32'
-      ? 'C:\\temp\\opencode-workspace'
-      : '/tmp/opencode-workspace';
+      ? 'C:\\temp\\workspace'
+      : '/tmp/workspace';
 
     const cwd = resolveVfsPathToRealPath('project/sessions/002', workspacePath);
     expect(cwd).toBe(path.join(workspacePath, 'sessions', '002'));

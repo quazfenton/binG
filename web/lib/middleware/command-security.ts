@@ -15,6 +15,7 @@
  */
 
 import { z } from 'zod';
+import { validatePath } from './filesystem-security';
 
 /**
  * Command validation result
@@ -53,6 +54,17 @@ export interface CommandSecurityConfig {
   /** Maximum memory in MB */
   maxMemory: number;
 }
+
+/**
+ * Dangerous working directory patterns that should never be used as CWD.
+ * Module-level to avoid recompiling regexes per invocation.
+ */
+const DANGEROUS_CWD_PATTERNS = [
+  /^\/etc\//,
+  /^\/proc\//,
+  /^\/sys\//,
+  /^\/dev\/(?!null|zero|random|urandom)/,
+];
 
 /**
  * Default command security configuration
@@ -305,19 +317,43 @@ export async function validateCommandExecution(
   }
 
   // Validate working directory if provided
+  // CWD paths are naturally absolute (e.g. /workspace, /home/user/project)
+  // so we only check for dangerous patterns, not absolute-path rejection.
   if (cwd) {
-    // Use static import to keep function synchronous
-    const { validatePath } = require('./filesystem-security');
-    const cwdValidation = validatePath(cwd);
-    if (!cwdValidation.valid) {
+    // Null byte check
+    if (cwd.includes('\0')) {
       return {
         valid: false,
         error: {
           type: 'command_validation_error',
-          message: `Invalid working directory: ${cwdValidation.error?.message}`,
+          message: 'Working directory contains null bytes',
           code: 'INVALID_CWD',
         },
       };
+    }
+    // Path traversal check
+    if (cwd.includes('..')) {
+      return {
+        valid: false,
+        error: {
+          type: 'command_validation_error',
+          message: 'Working directory contains path traversal ("..")',
+          code: 'INVALID_CWD',
+        },
+      };
+    }
+    // Dangerous system directory check
+    for (const pattern of DANGEROUS_CWD_PATTERNS) {
+      if (pattern.test(cwd)) {
+        return {
+          valid: false,
+          error: {
+            type: 'command_validation_error',
+            message: `Working directory is a dangerous system directory: ${cwd}`,
+            code: 'INVALID_CWD',
+          },
+        };
+      }
     }
   }
 

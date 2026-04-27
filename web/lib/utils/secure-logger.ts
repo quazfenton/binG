@@ -37,14 +37,19 @@ export interface SecureLoggerConfig {
  * @deprecated Use createLogger(source, { secure: true }) instead
  */
 export class SecureLogger extends Logger {
+  private secureEnabled: boolean = true;
+
   constructor(config?: SecureLoggerConfig) {
-    super('SecureLogger', {
-      minLevel: config?.level || 'info',
+    const source = config?.prefix ? config.prefix : 'SecureLogger';
+    const level = config?.level || 'info';
+    super(source, {
+      minLevel: level,
       secure: true,
       showTimestamp: config?.enableTimestamps ?? true,
-      showSource: config?.prefix ? true : false,
+      showSource: !!config?.prefix,
       includeStack: false,
     });
+    this.secureEnabled = config?.enableRedaction ?? true;
   }
 
   /**
@@ -52,7 +57,7 @@ export class SecureLogger extends Logger {
    * @deprecated Use createLogger with secure: true instead
    */
   enableRedaction(): void {
-    (this as any).config.secure = true;
+    this.secureEnabled = true;
   }
 
   /**
@@ -62,7 +67,7 @@ export class SecureLogger extends Logger {
    */
   disableRedaction(): void {
     console.warn('⚠️  Redaction disabled - DO NOT USE IN PRODUCTION');
-    (this as any).config.secure = false;
+    this.secureEnabled = false;
   }
 
   /**
@@ -70,15 +75,53 @@ export class SecureLogger extends Logger {
    * @deprecated Use createLogger(source, { secure: true }).info() instead
    */
   redact(text: string): string {
-    return super['redact'](text);
+    // SecureLogger has its own redaction patterns that differ from unified logger
+    // This maintains backwards compatibility for existing tests
+    if (!this.secureEnabled) {
+      return text; // Redaction disabled
+    }
+    return text
+      .replace(/sk-[a-zA-Z0-9]{3,}/g, '[REDACTED]')  // Allow shorter keys for backwards compatibility
+      .replace(/bearer\s+[a-zA-Z0-9\-_.]{20,}/gi, 'Bearer [REDACTED]')
+      .replace(/api_key=([a-zA-Z0-9]{16,})/gi, 'api_key=[REDACTED]')
+      .replace(/token=([a-zA-Z0-9\-_.]{20,})/gi, 'token=[REDACTED]')
+      .replace(/secret=([a-zA-Z0-9\-_]{16,})/gi, 'secret=[REDACTED]')
+      .replace(/password=([^\s'"]{4,})/gi, 'password=[REDACTED]')
+      .replace(/AKIA[0-9A-Z]{16}/g, '[REDACTED]')
+      .replace(/ghp_[a-zA-Z0-9]{36}/g, '[REDACTED]')
+      .replace(/ya29\.[a-zA-Z0-9\-_]{20,}/g, '[REDACTED]');
   }
 
   /**
    * Redact sensitive data from an object
    * @deprecated Use createLogger(source, { secure: true }).info() instead
    */
-  redactObject(obj: any, _maxDepth?: number): any {
-    return super['sanitizeObject'](obj);
+  redactObject(obj: any, maxDepth = 10): any {
+    if (!obj || typeof obj !== 'object') return obj;
+    if (Array.isArray(obj)) return obj.map(item => this.redactObject(item, maxDepth - 1));
+    if (maxDepth <= 0) return '[Maximum depth exceeded]';
+
+    // Sensitive key names — values under these keys are always redacted
+    const SENSITIVE_KEYS = new Set([
+      'password', 'secret', 'apikey', 'api_key', 'token',
+      'authorization', 'auth', 'accesstoken', 'access_token',
+      'refreshtoken', 'refresh_token',
+    ]);
+
+    const redacted: any = {};
+    for (const [key, value] of Object.entries(obj)) {
+      // Redact values under sensitive key names regardless of string length
+      if (SENSITIVE_KEYS.has(key.toLowerCase()) && value != null) {
+        redacted[key] = '[REDACTED]';
+      } else if (typeof value === 'string') {
+        redacted[key] = this.redact(value);
+      } else if (typeof value === 'object' && value !== null) {
+        redacted[key] = this.redactObject(value, maxDepth - 1);
+      } else {
+        redacted[key] = value;
+      }
+    }
+    return redacted;
   }
 
   /**
@@ -86,14 +129,26 @@ export class SecureLogger extends Logger {
    * @deprecated Use createLogger(source, { secure: true }) instead
    */
   child(prefix: string): SecureLogger {
-    const childConfig = (this as any).config;
+    const currentSource = (this as any).source;
     const child = new SecureLogger({
-      level: childConfig.minLevel,
-      enableRedaction: childConfig.secure,
-      enableTimestamps: childConfig.showTimestamp,
-      prefix: `${childConfig.showSource ? prefix : ''}`,
+      level: (this as any).config.minLevel,
+      enableRedaction: this.secureEnabled,
+      enableTimestamps: (this as any).config.showTimestamp,
+      prefix: currentSource ? `${currentSource} ${prefix}` : prefix,
     });
     return child;
+  }
+
+  /**
+   * Configure logger (legacy API compatibility)
+   * @deprecated Use createLogger(source, { secure: true }) instead
+   */
+  configure(config: { level?: LogLevel; [key: string]: any }) {
+    if (config.level) {
+      (this as any).config.minLevel = config.level;
+    }
+    // Pass through other config
+    super.configure(config as any);
   }
 }
 
@@ -137,5 +192,5 @@ export function redactSensitiveData(text: string): string {
  * @deprecated Use createLogger(source, { secure: true }).info() instead
  */
 export function sanitizeForLogging(obj: any): any {
-  return logger.redactObject(obj);
+  return logger.redactObject(obj, 10);
 }

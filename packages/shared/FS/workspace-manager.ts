@@ -106,10 +106,12 @@ class WorkspaceManager {
     await fileSystem.initialize(config);
 
     // Build per-user workspace path: {root}/users/{userId}/{sessionId}
-    const userWorkspaceRoot = `${root}/users/${options.userId}`;
-    const workspaceRoot = options.sessionId 
-      ? `${userWorkspaceRoot}/${options.sessionId}` 
-      : userWorkspaceRoot;
+    // DESKTOP FIX: In desktop mode, we use the root directly instead of nesting under users/
+    const isDesktop = isDesktopMode();
+    const userWorkspaceRoot = isDesktop ? root : `${root}/users/${options.userId}`;
+    const workspaceRoot = (isDesktop || !options.sessionId)
+      ? userWorkspaceRoot 
+      : `${userWorkspaceRoot}/${options.sessionId}`;
 
     const workspace: WorkspaceInfo = {
       id: workspaceId,

@@ -60,6 +60,41 @@ export interface SymbolContext {
 export type DiffRepairLLM = (prompt: string) => Promise<string>;
 
 /**
+ * Parse and apply diff result to content
+ * Takes current content and diff body, returns applied result
+ */
+/**
+ * Parse and apply diff result to content.
+ *
+ * CRITICAL: When diffBody contains unified diff markers (+/-/@@) but no
+ * ---/+++ headers, `applyDiffToContent` will generate `--- path` / `+++ path`
+ * headers. An empty path produces `--- \n+++ \n` which breaks `parsePatch`.
+ * We use a sentinel path so the generated headers are valid.
+ */
+export function parseDiffResult(currentContent: string, diffBody: string): string | null {
+  // Handle empty diff body
+  if (!diffBody || diffBody.trim().length === 0) {
+    return currentContent;
+  }
+  
+  // Check if diffBody contains unified diff markers
+  const lines = diffBody.split('\n');
+  const hasDiffMarkers = lines.some(line => 
+    line.startsWith('+') || line.startsWith('-') || line.startsWith('@@')
+  );
+  
+  if (!hasDiffMarkers) {
+    // No diff markers - might be full content, return as-is
+    return diffBody;
+  }
+  
+  // Use a sentinel path so generated ---/+++ headers are well-formed
+  // (applyDiffToContent prepends headers when they're missing)
+  const result = applyDiffToContent(currentContent, '__parsed_diff__', diffBody);
+  return result;
+}
+
+/**
  * Apply unified diff to content with robust error handling
  */
 export function applyUnifiedDiffToContent(currentContent: string, path: string, diffBody: string): string | null {

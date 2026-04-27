@@ -25,6 +25,67 @@ All notable changes to this project will be documented in this file.
 - **arcade/auth/route.ts (P1)** — `POSTToken` handler was embedded in auth/route.ts with no actual `/token` route file. Created `/api/integrations/arcade/token/route.ts`.
 - **arcade/auth/route.ts (P1)** — `flowId` was ignored in Phase 2, `waitForProviderAuth` called with placeholder response. Now uses `_fetchConnections` for fresh polling during wait.
 
+## [Unreleased] — Comprehensive System Improvements + Security Hardening + Performance Optimization
+
+### 🔒 Security Hardening & Input Validation
+- **`web/lib/utils/security.ts`** — Centralized security utilities with path sanitization, secret masking, dangerous command detection, and secure validation functions.
+- **`web/lib/utils/config-validation.ts`** — Runtime configuration validation with Zod schemas for database, API, filesystem, and orchestration configs.
+- **`web/lib/utils/error-handling.ts`** — Standardized error handling with custom error types (BinGError, ValidationError, etc.) and user-friendly error messages.
+- **Path traversal prevention** — All file operations now validate paths to prevent `../../../etc/passwd` style attacks.
+- **Secret masking** — API keys, tokens, and passwords are automatically masked in logs and responses.
+- **Command injection prevention** — Dangerous shell commands are detected and blocked before execution.
+
+### 🚀 Performance Optimization & Monitoring
+- **`web/lib/utils/performance.ts`** — Comprehensive performance monitoring with timing decorators, memory usage tracking, and performance reports.
+- **Caching improvements** — Added TTL-based caching for VFS operations, smart invalidation, and performance metrics collection.
+- **Memory usage monitoring** — Track heap usage and detect memory leaks in long-running operations.
+- **Operation timing** — Automatic timing of critical operations with detailed metrics collection.
+
+### 🧪 Test Coverage & Quality Assurance
+- **`web/__tests__/utils/security.test.ts`** — Comprehensive security utility tests covering path validation, secret masking, and command detection.
+- **`web/__tests__/utils/config-validation.test.ts`** — Configuration validation tests with schema testing and environment variable validation.
+- **`web/__tests__/integration/core-integration.test.ts`** — End-to-end integration tests covering orchestration, preview offloading, and security features.
+- **Test isolation improvements** — Mocked external dependencies to prevent flaky tests and improve reliability.
+
+### 🏗️ Architecture Improvements
+- **Modular error handling** — Custom error classes with consistent error codes, status codes, and user-friendly messages.
+- **Configuration validation** — Runtime validation of all configuration objects with detailed error reporting.
+- **Preview provider unification** — Consistent PreviewInfo objects across all cloud providers (E2B, Daytona, Modal) with proper authentication headers.
+- **Fastly & Val Town support** — Added deployment targets for edge computing and serverless functions.
+
+### 🔧 CLI Enhancements
+- **Interactive commit rollback** — `bing rollback` command with arrow key navigation, git integration, and safe rollback operations.
+- **Cross-platform compatibility** — Proper handling of Windows/Unix path differences and terminal capabilities.
+- **Security integration** — CLI commands now validate inputs and prevent dangerous operations.
+
+### 📊 Code Quality Improvements
+- **Type safety** — Eliminated `any` types where possible, added proper TypeScript interfaces and validation.
+- **Input validation** — All user inputs are validated and sanitized before processing.
+- **Error boundaries** — Comprehensive error handling with graceful degradation and user feedback.
+- **Documentation** — Added comprehensive JSDoc comments and usage examples.
+
+### 🏃‍♂️ Runtime Optimizations
+- **Lazy loading** — Modules are loaded on-demand to reduce startup time and memory usage.
+- **Caching strategies** — Intelligent caching with automatic invalidation for frequently accessed data.
+- **Memory management** — Proper cleanup of resources and prevention of memory leaks.
+- **Performance monitoring** — Real-time performance tracking with alerting for slow operations.
+
+### 🤖 Kilocode AI Server Implementation
+- **`web/lib/kilocode/`** — Complete AI-powered code generation server with REST API, streaming support, and agent integration.
+- **Multi-language support** — JavaScript, TypeScript, Python, Java, C++, Go, Rust, PHP with extensible architecture.
+- **Code intelligence features** — Generation from natural language, intelligent completion, analysis, refactoring, and review.
+- **Agent integration** — Native MCP tools for binG agent orchestration with capability-based access control.
+- **CLI interface** — `kilocode` command-line tool for direct server interaction and code operations.
+- **Security & performance** — Authentication, rate limiting, input validation, streaming responses, and performance monitoring.
+- **Production ready** — Comprehensive error handling, logging, configuration validation, and testing infrastructure.
+
+### 🔄 Preview Offloading Improvements
+- **Smart cloud detection** — Enhanced logic for routing projects to appropriate cloud providers based on complexity and requirements.
+- **Code transformation bypass** — Backend and cloud-destined projects skip unnecessary browser transformations.
+- **Provider consistency** — Unified authentication and preview URL handling across all providers.
+
+---
+
 ## [Unreleased] — Streaming Improvements + Prompt Composer + Tool Adapter + Antigravity OAuth + Bug Fixes
 
 ### 🎯 WebSocket Control Channel (Integrated into Next.js Server — No Extra Port)

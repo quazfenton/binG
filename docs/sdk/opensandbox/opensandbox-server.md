@@ -1,3 +1,43 @@
+---
+id: sdk-opensandbox-opensandbox-server
+title: OpenSandbox Server
+aliases:
+  - opensandbox-server
+  - opensandbox-server.md
+tags: []
+layer: core
+summary: "# OpenSandbox Server\r\n\r\nEnglish | [中文](README_zh.md)\r\n\r\nA production-grade, FastAPI-based service for managing the lifecycle of containerized sandboxes. It acts as the control plane to create, run, monitor, and dispose isolated execution environments across container platforms.\r\n\r\n## Features\r\n\r\n###"
+anchors:
+  - Features
+  - Core capabilities
+  - Extended capabilities
+  - Requirements
+  - Quick Start
+  - Installation
+  - Configuration
+  - Egress sidecar for `networkPolicy`
+  - Run the server
+  - Run the server (installed package)
+  - API documentation
+  - API authentication
+  - Example usage
+  - Architecture
+  - Component responsibilities
+  - Sandbox lifecycle states
+  - Configuration reference
+  - Server configuration
+  - Runtime configuration
+  - Egress configuration
+  - Docker configuration
+  - Agent-sandbox configuration
+  - Environment variables
+  - Development
+  - Code quality
+  - Testing
+  - License
+  - Contributing
+  - Support
+---
 # OpenSandbox Server
 
 English | [中文](README_zh.md)

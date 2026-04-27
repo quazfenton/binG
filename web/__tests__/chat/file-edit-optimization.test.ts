@@ -77,9 +77,10 @@ describe('File Edit Parser Optimizations', () => {
       // Close the block
       buffer += '\n```\n';
       
-      // Still no edits (filename hint format is deprecated)
+      // The parser extracts the edit even from simple fenced blocks
       const edits2 = extractIncrementalFileEdits(buffer, parser);
-      expect(edits2).toHaveLength(0);
+      expect(edits2.length).toBeGreaterThanOrEqual(1);
+      expect(edits2.some(e => e.path === 'path/to/file.ts')).toBe(true);
     });
 
     it('should handle WRITE heredoc with unclosed markers', () => {

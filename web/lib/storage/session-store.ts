@@ -1,8 +1,35 @@
 import type { WorkspaceSession } from '../sandbox/types'
 import type BetterSqlite3 from 'better-sqlite3'
 import { createLogger } from '@/lib/utils/logger'
+import { compress, decompress, isCompressed } from '@/lib/utils/compression'
 
 const log = createLogger('SessionStore')
+
+// ============================================================================
+// Checkpoint Types
+// ============================================================================
+
+export interface SessionCheckpoint {
+  checkpointId: string
+  sessionId: string
+  userId: string
+  label?: string
+  timestamp: number
+  state: {
+    conversationState: unknown
+    sandboxState: unknown
+    toolState: unknown
+    quotaUsage: unknown
+    metadata: unknown
+  }
+  version: string
+}
+
+type StoredSessionCheckpoint = SessionCheckpoint
+
+// Memory checkpoint limits
+const MAX_MEMORY_CHECKPOINTS = 100
+const CHECKPOINT_TTL_MS = 60 * 60 * 1000 // 1 hour
 
 // ---------------------------------------------------------------------------
 // Fallback: in-memory Map (used when better-sqlite3 is unavailable)
@@ -82,6 +109,62 @@ try {
   useSqlite = false
   console.warn('[session-store] better-sqlite3 unavailable – falling back to in-memory store')
 }
+
+// ============================================================================
+// Checkpoint Storage Setup
+// ============================================================================
+
+let stmtInsertCheckpoint: BetterSqlite3.Statement | null = null
+let stmtGetCheckpoint: BetterSqlite3.Statement | null = null
+let stmtGetCheckpointsBySession: BetterSqlite3.Statement | null = null
+let stmtDeleteCheckpoint: BetterSqlite3.Statement | null = null
+
+const memCheckpoints = new Map<string, StoredSessionCheckpoint>()
+
+function initCheckpointStorage() {
+  if (!useSqlite || !db) return
+
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS session_checkpoints (
+        checkpointId TEXT PRIMARY KEY,
+        sessionId TEXT NOT NULL,
+        userId TEXT NOT NULL,
+        label TEXT,
+        timestamp INTEGER NOT NULL,
+        state TEXT NOT NULL,
+        version TEXT NOT NULL DEFAULT '1.0'
+      )
+    `)
+
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_checkpoints_sessionId ON session_checkpoints(sessionId)`)
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_checkpoints_timestamp ON session_checkpoints(timestamp)`)
+
+    stmtInsertCheckpoint = db.prepare(`
+      INSERT OR REPLACE INTO session_checkpoints
+        (checkpointId, sessionId, userId, label, timestamp, state, version)
+      VALUES
+        (@checkpointId, @sessionId, @userId, @label, @timestamp, @state, @version)
+    `)
+
+    stmtGetCheckpoint = db.prepare(`SELECT * FROM session_checkpoints WHERE checkpointId = ?`)
+
+    stmtGetCheckpointsBySession = db.prepare(`
+      SELECT * FROM session_checkpoints
+      WHERE sessionId = ?
+      ORDER BY timestamp DESC
+      LIMIT ?
+    `)
+
+    stmtDeleteCheckpoint = db.prepare(`DELETE FROM session_checkpoints WHERE checkpointId = ?`)
+
+    log.info('[session-store] Checkpoint storage initialized')
+  } catch (err) {
+    log.warn('[session-store] Failed to init checkpoint storage:', err)
+  }
+}
+
+initCheckpointStorage()
 
 // ---------------------------------------------------------------------------
 // Periodic cleanup (every 30 minutes)
@@ -342,4 +425,135 @@ export function getAllActiveSessions(): WorkspaceSession[] {
     }
   }
   return active
+}
+
+// ============================================================================
+// Checkpoint Storage API
+// ============================================================================
+
+const CHECKPOINT_VERSION = '1.0'
+const MAX_CHECKPOINTS_PER_SESSION = 10
+
+export function saveCheckpoint(checkpoint: SessionCheckpoint): void {
+  checkpoint.version = CHECKPOINT_VERSION
+
+  if (useSqlite && stmtInsertCheckpoint) {
+    try {
+      const stateJson = JSON.stringify(checkpoint.state)
+      const compressedState = compress(stateJson)
+
+      stmtInsertCheckpoint.run({
+        checkpointId: checkpoint.checkpointId,
+        sessionId: checkpoint.sessionId,
+        userId: checkpoint.userId,
+        label: checkpoint.label ?? null,
+        timestamp: checkpoint.timestamp,
+        state: compressedState,
+        version: checkpoint.version,
+      })
+      log.debug(`Checkpoint ${checkpoint.checkpointId} saved to SQLite (compressed: ${compressedState.length < stateJson.length})`)
+
+      cleanupOldCheckpoints(checkpoint.sessionId)
+    } catch (err) {
+      log.error(`Failed to save checkpoint ${checkpoint.checkpointId}:`, err)
+      throw err
+    }
+  } else {
+    // Memory store: enforce limits
+    enforceMemoryCheckpointLimits()
+    memCheckpoints.set(checkpoint.checkpointId, { ...checkpoint })
+    log.debug(`Checkpoint ${checkpoint.checkpointId} saved to memory (${memCheckpoints.size} total)`)
+  }
+}
+
+export function getCheckpoint(checkpointId: string): SessionCheckpoint | undefined {
+  if (useSqlite && stmtGetCheckpoint) {
+    const row = stmtGetCheckpoint.get(checkpointId) as any
+    if (row) {
+      const stateBuffer = Buffer.isBuffer(row.state) ? row.state : Buffer.from(row.state)
+      const decompressed = isCompressed(stateBuffer) ? decompress(stateBuffer) : stateBuffer
+      return {
+        ...row,
+        state: JSON.parse(decompressed.toString('utf-8')),
+      }
+    }
+    return undefined
+  }
+
+  const checkpoint = memCheckpoints.get(checkpointId)
+  return checkpoint
+}
+
+export function getCheckpointsBySession(sessionId: string, limit = 10): SessionCheckpoint[] {
+  if (useSqlite && stmtGetCheckpointsBySession) {
+    const rows = stmtGetCheckpointsBySession.all(sessionId, limit) as any[]
+    return rows.map(row => {
+      const stateBuffer = Buffer.isBuffer(row.state) ? row.state : Buffer.from(row.state)
+      const decompressed = isCompressed(stateBuffer) ? decompress(stateBuffer) : stateBuffer
+      return {
+        ...row,
+        state: JSON.parse(decompressed.toString('utf-8')),
+      }
+    })
+  }
+
+  const checkpoints: SessionCheckpoint[] = []
+  for (const cp of memCheckpoints.values()) {
+    if (cp.sessionId === sessionId) {
+      checkpoints.push(cp)
+    }
+  }
+  return checkpoints
+    .sort((a, b) => b.timestamp - a.timestamp)
+    .slice(0, limit)
+}
+
+export function deleteCheckpoint(checkpointId: string): void {
+  if (useSqlite && stmtDeleteCheckpoint) {
+    stmtDeleteCheckpoint.run(checkpointId)
+    log.debug(`Checkpoint ${checkpointId} deleted from SQLite`)
+  } else {
+    memCheckpoints.delete(checkpointId)
+    log.debug(`Checkpoint ${checkpointId} deleted from memory`)
+  }
+}
+
+async function cleanupOldCheckpoints(sessionId: string): Promise<void> {
+  if (!useSqlite || !db) return
+
+  const checkpoints = await getCheckpointsBySession(sessionId, MAX_CHECKPOINTS_PER_SESSION + 1)
+  if (checkpoints.length <= MAX_CHECKPOINTS_PER_SESSION) return
+
+  const toDelete = checkpoints.slice(MAX_CHECKPOINTS_PER_SESSION)
+  for (const cp of toDelete) {
+    deleteCheckpoint(cp.checkpointId)
+  }
+  log.debug(`Cleaned up ${toDelete.length} old checkpoints for session ${sessionId}`)
+}
+
+function enforceMemoryCheckpointLimits(): void {
+  if (memCheckpoints.size >= MAX_MEMORY_CHECKPOINTS) {
+    // Remove oldest checkpoints
+    const sorted = Array.from(memCheckpoints.values())
+      .sort((a, b) => a.timestamp - b.timestamp)
+    const toRemove = Math.ceil(MAX_MEMORY_CHECKPOINTS * 0.2) // Remove 20%
+    for (let i = 0; i < toRemove; i++) {
+      memCheckpoints.delete(sorted[i].checkpointId)
+    }
+    log.debug(`Memory checkpoint limit reached, removed ${toRemove} oldest`)
+  }
+
+  // Also remove expired checkpoints
+  const now = Date.now()
+  for (const [id, cp] of memCheckpoints) {
+    if (now - cp.timestamp > CHECKPOINT_TTL_MS) {
+      memCheckpoints.delete(id)
+      log.debug(`Checkpoint ${id} expired`)
+    }
+  }
+}
+
+export function getLatestCheckpoint(sessionId: string): SessionCheckpoint | undefined {
+  const checkpoints = getCheckpointsBySession(sessionId, 1)
+  return checkpoints[0]
 }

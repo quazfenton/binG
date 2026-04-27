@@ -796,21 +796,29 @@ export default function Settings({
                 </div>
               </div>
               <div className="text-xs text-gray-400 flex items-center justify-between">
-                <span>{user?.subscriptionTier === 'premium' ? 'Premium Account' : 'Free Account'}</span>
+                <span>{
+                  user?.subscriptionTier === 'premium' ? 'Premium Account' :
+                  user?.subscriptionTier === 'desktop' ? 'Desktop Edition' :
+                  'Free Account'
+                }</span>
                 <div className="flex items-center gap-1">
                   {user?.subscriptionTier === 'premium' ? (
                     <>
                       <Trophy className="h-3 w-3 text-yellow-400" />
                       <span className="text-yellow-400">Active</span>
                     </>
+                  ) : user?.subscriptionTier === 'desktop' ? (
+                    <span className="text-blue-400">Local</span>
                   ) : (
                     <span className="text-gray-400">Free</span>
                   )}
                 </div>
               </div>
               <div className="text-xs text-gray-500">
-                {user?.subscriptionTier === 'premium' 
+                {user?.subscriptionTier === 'premium'
                   ? 'Premium • Priority support'
+                  : user?.subscriptionTier === 'desktop'
+                  ? 'Desktop Edition • Local features'
                   : 'Unimited prompts • Basic features'
                 }
               </div>
@@ -1437,7 +1445,7 @@ export default function Settings({
                           : 'border-white/10 hover:border-white/20 hover:bg-white/5'
                       }`}
                     >
-                      <div className="text-xs font-medium text-white">{modeInfo.name}</div>
+                      <div className="text-xs font-medium text-white">{modeInfo.label}</div>
                       <div className="text-[10px] text-gray-400 truncate">{modeInfo.description}</div>
                     </button>
                   );

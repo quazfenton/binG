@@ -40,6 +40,16 @@ const CONFIG_DIR = path.join(process.env.HOME || process.env.USERPROFILE || '', 
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 const AUTH_FILE = path.join(CONFIG_DIR, 'auth.json');
 
+// OAuth handler stub — always returns null in bin-enhanced.ts.
+// Unlike bin.ts which lazily imports the real handler via getOauthHandler(),
+// this stub is used because bin-enhanced.ts doesn't support dynamic OAuth loading.
+const oauthHandler: any = {
+  performOauthLogin: async (provider: string) => {
+    console.log(`OAuth login for ${provider} not available in CLI-only mode`);
+    return null;
+  },
+};
+
 // Ensure config directory exists
 fs.ensureDirSync(CONFIG_DIR);
 
@@ -222,6 +232,7 @@ async function chatLoop(options: {
   `));
   
   const messages: any[] = [];
+  const localHistory = new LocalHistoryProvider(process.cwd());
   
   while (true) {
     const userMessage = await prompt(COLORS.primary('\nYou: '));
@@ -317,6 +328,17 @@ ${COLORS.primary('Tips:')}
         role: 'assistant', 
         content: response.response || response.content 
       });
+      
+      // Save interaction to local history (non-critical — errors are silently ignored)
+      try {
+        await localHistory.saveInteraction({
+          user: userMessage,
+          assistant: response.response || response.content,
+          timestamp: Date.now(),
+        });
+      } catch {
+        // History save failure is non-critical
+      }
       
     } catch (error: any) {
       spinner.stop();
@@ -1008,9 +1030,181 @@ program
       process.exit(1);
     }
   });
+import { LocalVFSManager } from './lib/local-vfs-manager';
+import { LocalHistoryProvider } from './lib/local-history-manager';
+import { PreviewManager } from './lib/preview-manager';
+// CLI: removed web/ import — { recordFailure, isBlacklisted } from '../../web/lib/sandbox/preview-circuit-breaker';
 
-// Add remaining sandbox, file, image, voice, tools, and config commands from original CLI
-// ... (keeping existing commands for brevity)
+// ... (existing helper setup)
+
+// CLI: duplicate import removed — // CLI: removed web/ import — { recordFailure, isBlacklisted } from '../../web/lib/sandbox/preview-circuit-breaker';
+// CLI: removed web/ import — { getModalComProvider } from '../../web/lib/sandbox/providers/modal-com-provider';
+
+// Stub: circuit breaker not available in CLI-only mode (web-only module)
+function recordFailure(provider: string): void { /* no-op in CLI */ }
+
+// Stub: preview manager for CLI mode (web version uses full preview offloader)
+function getPreview(): any { return null; }
+
+/**
+ * Validate that a required value is present
+ */
+function validateRequired(value: any, name: string, description?: string): boolean {
+  if (!value || (typeof value === "string" && !value.trim())) {
+    console.log(COLORS.error(`${name} is required${description ? ": " + description : ""}`));
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Handle an error with formatted output
+ */
+function handleError(error: any, context?: string): void {
+
+// oauthHandler is defined at module level (above) for shared access
+  const message = error instanceof Error ? error.message : String(error);
+  if (context) {
+    console.error(COLORS.error(`${context}: ${message}`));
+  } else {
+    console.error(COLORS.error(message));
+  }
+}
+
+// Stub: circuit breaker not available in CLI-only mode (web-only module)
+function isBlacklisted(provider: string): boolean { return false; }
+
+// Stub: Modal.com provider not available in CLI-only mode (web-only module)
+function getModalComProvider(): any { return null; }
+
+
+async function checkProviderHealth(provider: string): Promise<boolean> {
+    // Basic health check simulation
+    if (provider === 'modal') {
+        const p = getModalComProvider();
+        const status = await p.healthCheck();
+        return status.healthy;
+    }
+    return true; // Assume healthy for others unless blacklisted
+}
+
+program
+  .command('preview')
+  .description('Auto-detect project and start local preview with automated fallback')
+  .option('--ignore-circuit-breaker', 'Force retry on blacklisted providers')
+  .action(async (options) => {
+    const files: Record<string, string> = {};
+    const fs = await import('fs-extra');
+    const walk = async (dir: string) => {
+        const entries = await fs.readdir(dir);
+        for (const entry of entries) {
+            if (entry === 'node_modules' || entry === '.git') continue;
+            const fullPath = path.join(dir, entry);
+            if ((await fs.stat(fullPath)).isDirectory()) {
+                await walk(fullPath);
+            } else {
+                files[fullPath] = await fs.readFile(fullPath, 'utf-8');
+            }
+        }
+    };
+    await walk(process.cwd());
+
+    const providers = ['webcontainer', 'codesandbox', 'modal', 'daytona'];
+    const preview = getPreview();
+
+    for (const provider of providers) {
+       // Only skip if blacklisted AND ignore flag is NOT set
+       if (isBlacklisted(provider) && !options.ignoreCircuitBreaker) {
+           console.log(COLORS.warning(`Skipping blacklisted provider: ${provider}`));
+           continue;
+       }
+       
+       try {
+         console.log(COLORS.info(`Attempting preview with: ${provider}`));
+         
+         const health = await checkProviderHealth(provider);
+         if (!health) {
+             console.log(COLORS.warning(`Provider ${provider} unhealthy.`));
+             recordFailure(provider);
+             continue;
+         }
+         
+         const result = await preview.startPreview(files);
+         
+         // Active Watchdog: Monitor server responsiveness for 15s
+         console.log(COLORS.info('Starting Active Watchdog...'));
+         let responded = false;
+         
+         // Check periodically
+         const watchInterval = setInterval(async () => {
+             try {
+                 await axios.get(result.url, { timeout: 2000 });
+                 responded = true;
+             } catch (e) {}
+         }, 2000);
+
+         await new Promise((resolve) => setTimeout(resolve, 15000));
+         clearInterval(watchInterval);
+         
+         if (responded) {
+             console.log(COLORS.success(`Preview confirmed at ${result.url}`));
+             return;
+         } else {
+             throw new Error(`Server at ${result.url} did not respond within 15s.`);
+         }
+
+       } catch (error: any) {
+         console.error(COLORS.error(`Preview failed with ${provider}: ${error.message}`));
+         recordFailure(provider);
+       }
+    }
+    console.error(COLORS.error("All providers exhausted. Preview failed."));
+  });
+
+
+// Helper to get VFS Manager
+const getVFS = () => new LocalVFSManager(process.cwd());
+
+program
+  .command('file:write <path> <content>')
+  .description('Write file locally using local VFS')
+  .action(async (path, content) => {
+    const vfs = getVFS();
+    try {
+      await vfs.commitFile(path, content);
+      console.log(COLORS.success(`File written and committed locally: ${path}`));
+    } catch (error: any) {
+      console.log(COLORS.error(`Failed to write file: ${error.message}`));
+      process.exit(1);
+    }
+  });
+
+program
+  .command('file:revert <path>')
+  .description('Revert file using local history')
+  .action(async (path) => {
+    const vfs = getVFS();
+    const success = await vfs.revertFile(path);
+    if (success) {
+        console.log(COLORS.success(`Reverted: ${path}`));
+    } else {
+        console.log(COLORS.error(`No history found for: ${path}`));
+    }
+  });
+
+// Helper to get History Provider
+const getHistory = () => new LocalHistoryProvider(process.cwd());
+
+program
+  .command('history:prune')
+  .description('Prune old chat history')
+  .option('--days <number>', 'Days to keep', '30')
+  .action(async (options) => {
+    const history = getHistory();
+    await history.pruneHistory(parseInt(options.days));
+    console.log(COLORS.success('History pruned.'));
+  });
+
 
 // ============================================================================
 // EXISTING COMMANDS (Sandbox, Files, Image, Voice, Tools, Config)
@@ -1085,5 +1279,145 @@ ${COLORS.primary('Examples:')}
 
 ${COLORS.primary('Documentation:')} https://github.com/quazfenton/binG/tree/main/docs
 `);
+
+// Add the new sync command
+program
+  .command('sync <localPath> <remotePath>')
+  .description('Sync local file/directory to sandbox')
+  .option('-s, --sandbox <id>', 'Sandbox ID')
+  .option('-d, --delete-local', 'Delete local file after sync')
+  .option('-r, --reverse', 'Sync from sandbox to local')
+  .action(async (localPath, remotePath, options) => {
+    const config = loadConfig();
+    const sandboxId = options.sandbox || config.currentSandbox;
+
+    if (!sandboxId) {
+      console.log(COLORS.error('No sandbox specified. Use -s or set currentSandbox in config.'));
+      process.exit(1);
+    }
+
+    if (!options.reverse && !fs.existsSync(localPath)) {
+      console.log(COLORS.error(`Local path not found: ${localPath}`));
+      process.exit(1);
+    }
+
+    const spinner = ora(`Syncing ${localPath} to ${remotePath}...`).start();
+
+    try {
+      const data: any = { localPath, remotePath, sandboxId };
+      if (options.deleteLocal) data.deleteLocal = true;
+      if (options.reverse) data.reverse = true;
+
+      const result = await apiRequest('/sandbox/sync', {
+        method: 'POST',
+        data,
+      });
+
+      spinner.stop();
+
+      if (result.success) {
+        console.log(COLORS.success('\nSync complete!'));
+        console.log(`  Synced: ${result.syncedItems.join(', ')}`);
+        if (result.deletedLocal && options.deleteLocal) {
+          console.log(`  Deleted local: ${result.deletedLocal.join(', ')}`);
+        }
+        closeReadline();
+      } else {
+        console.log(COLORS.error(`Error: ${result.error}`));
+        process.exit(1);
+      }
+    } catch (error: any) {
+      spinner.stop();
+      console.log(COLORS.error(`Error: ${error.message}`));
+      process.exit(1);
+    }
+  });
+
+// Add the new login command with OAuth logic
+program
+  .command('login')
+  .description('Log in to binG')
+  .option('-e, --email <email>', 'Email address')
+  .option('-p, --password <password>', 'Password')
+  .option('--provider <provider>', 'OAuth provider (e.g., github)')
+  .action(async (options) => {
+    console.log(chalk.cyanBright('\n=== binG Authentication ===\n'));
+    
+    let email = options.email;
+    let password = options.password;
+    let provider = options.provider;
+
+    const auth = loadAuth();
+
+    // Check if already logged in and prompt for re-login
+    if (auth.token && auth.expiresAt && new Date(auth.expiresAt) > new Date()) {
+        const shouldRelogin = await confirm(`Already logged in as ${auth.email}. Relogin?`);
+        if (!shouldRelogin) {
+            console.log(COLORS.info('Skipping login.'));
+            return;
+        }
+        console.log(COLORS.info('Clearing existing session...'));
+        saveAuth({ token: null, userId: null, email: null });
+    }
+
+    // Prompt for auth method if not fully provided via options
+    if (!provider && !options.email && !options.password) {
+        const authMethodChoice = await prompt(
+            COLORS.primary('Enter email/password manually, or press Enter to use OAuth: ')
+        );
+
+        if (authMethodChoice.trim()) {
+            email = authMethodChoice;
+            password = await prompt(COLORS.primary('Password: '));
+        } else {
+            provider = 'bing'; 
+            console.log(COLORS.info(`Initiating binG Auth flow via ${provider}...`));
+        }
+    } else if (options.provider) {
+        provider = options.provider;
+    }
+
+    const spinner = ora('Authenticating...').start();
+
+    try {
+        let authResult;
+        if (provider) {
+            authResult = await oauthHandler.performOauthLogin(provider);
+            saveAuth({
+                token: authResult.token,
+                userId: authResult.userId,
+                email: authResult.email,
+                expiresAt: authResult.expiresAt,
+            });
+            console.log(COLORS.success('\n✓ Authentication successful via OAuth!'));
+            console.log(`  User: ${COLORS.info(authResult.email)}`);
+        } else {
+            if (!email) email = await prompt(COLORS.primary('Email: '));
+            if (!password) password = await prompt(COLORS.primary('Password: '));
+            if (!validateRequired(email, 'Email')) return;
+            if (!validateRequired(password, 'Password')) return;
+
+            authResult = await apiRequest('/auth/login', {
+                method: 'POST',
+                data: { email, password },
+            });
+            
+            saveAuth({
+                token: authResult.token,
+                userId: authResult.userId,
+                email: email,
+                expiresAt: authResult.expiresAt,
+            });
+
+            console.log(COLORS.success('\n✓ Authentication successful!'));
+            console.log(`  User: ${COLORS.info(email)}`);
+        }
+        spinner.stop();
+    } catch (error: any) {
+        spinner.stop();
+        handleError(error, 'Login failed');
+        process.exit(1);
+    }
+  });
 
 program.parse();

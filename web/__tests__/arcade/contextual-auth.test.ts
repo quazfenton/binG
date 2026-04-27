@@ -5,7 +5,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 describe('Arcade Contextual Auth', () => {
-  const { ArcadeService, createArcadeService } = require('@/lib/api/arcade-service');
+  const { ArcadeService, createArcadeService } = require('@/lib/integrations/arcade-service');
 
   beforeEach(() => {
     vi.clearAllMocks();

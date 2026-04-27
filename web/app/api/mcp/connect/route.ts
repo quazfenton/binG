@@ -4,7 +4,11 @@ import { createLogger } from '@/lib/utils/logger'
 import {
   initializeMCPForArchitecture1,
 } from '@/lib/mcp/architecture-integration'
-import { initializeDesktopMCP } from '@/lib/mcp/desktop-mcp-manager'
+import {
+  desktopMCPPresets,
+  isTauriBridgeConnected,
+  getTauriMCPToolCount,
+} from '@/lib/mcp/desktop-mcp-manager'
 import {
   createHTTPTransport,
   isValidMCPURL,
@@ -22,12 +26,15 @@ interface ConnectRequest {
   npxArgs?: string[]
   remoteUrl?: string
   envVars?: Record<string, string>
+  /** Connect Tauri MCP desktop automation server */
+  mode?: 'stdio' | 'remote' | 'tauri-desktop'
+  tauriBridgeUrl?: string
 }
 
 export async function POST(req: Request) {
   try {
     const body: ConnectRequest = await req.json()
-    const { serverId, serverName, npxArgs, remoteUrl, envVars = {} } = body
+    const { serverId, serverName, npxArgs, remoteUrl, envVars = {}, mode, tauriBridgeUrl } = body
 
     if (!serverId || !serverName) {
       return NextResponse.json(
@@ -37,6 +44,30 @@ export async function POST(req: Request) {
     }
 
     const isDesktop = isDesktopMode()
+
+    // === PATH 0: Tauri MCP desktop automation ===
+    if (mode === 'tauri-desktop' && isDesktop) {
+      logger.info('Connecting Tauri MCP desktop automation server')
+
+      const tauriServer = desktopMCPPresets.tauriMCPServer();
+      const config = { ...tauriServer, id: serverId || tauriServer.id, name: serverName || tauriServer.name };
+
+      // Use mcpToolRegistry exclusively
+      mcpToolRegistry.registerServer(config);
+      await (mcpToolRegistry as any).connectServer(config.id);
+
+      // Check bridge connectivity
+      const bridgeConnected = await isTauriBridgeConnected(tauriBridgeUrl);
+      const toolCount = getTauriMCPToolCount();
+
+      return NextResponse.json({
+        ok: true,
+        mode: 'tauri-desktop',
+        bridgeConnected,
+        toolCount,
+        tools: ['ping', 'screenshot', 'get_dom', 'execute_js', 'mouse_click', 'mouse_move', 'mouse_scroll', 'mouse_drag', 'keyboard_input', 'window_list', 'window_focus', 'window_resize', 'window_position', 'local_storage_get', 'local_storage_set', 'local_storage_clear', 'ipc_list_handlers', 'ipc_invoke'],
+      });
+    }
 
     // === PATH 1: Desktop stdio server (npx spawn) ===
     if (isDesktop && npxArgs) {
@@ -122,7 +153,7 @@ export async function POST(req: Request) {
   } catch (error: any) {
     logger.error(`Failed to connect MCP server:`, error.message)
     return NextResponse.json(
-      { error: error.message },
+      { error: 'Failed to connect MCP server' },
       { status: 500 }
     )
   }

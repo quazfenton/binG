@@ -41,6 +41,7 @@ import type { AgentInstance } from './agent-service-manager';
 import type { ClaudeCodeAgent } from './claude-code-agent';
 import type { AmpAgent } from './amp-agent';
 import type { OpenCodeAgent } from './opencode-agent';
+import type { CodexAgent } from './codex-agent';
 
 const logger = createLogger('Agents:Pool');
 
@@ -48,9 +49,9 @@ const logger = createLogger('Agents:Pool');
 // Types
 // ============================================================================
 
-export type PoolAgentType = 'claude-code' | 'amp' | 'opencode';
+export type PoolAgentType = 'claude-code' | 'amp' | 'opencode' | 'codex';
 
-export type PoolAgent = ClaudeCodeAgent | AmpAgent | OpenCodeAgent;
+export type PoolAgent = ClaudeCodeAgent | AmpAgent | OpenCodeAgent | CodexAgent;
 
 export interface AgentPoolConfig {
   /** Minimum number of pre-warmed agents */
@@ -67,6 +68,12 @@ export interface AgentPoolConfig {
     workspaceDir: string;
     model?: string;
     port?: number;
+    /**
+     * Remote address of an already-running agent server.
+     * When set, pooled agents connect directly to this remote endpoint
+     * instead of spawning local processes or containers.
+     */
+    remoteAddress?: string;
     env?: Record<string, string>;
   };
 }
@@ -138,10 +145,10 @@ export class AgentPool extends EventEmitter {
     super();
     this.type = type;
     this.config = {
-      minSize: config.minSize || 1,
-      maxSize: config.maxSize || 5,
-      idleTimeout: config.idleTimeout || 300000, // 5 minutes
-      healthCheckInterval: config.healthCheckInterval || 30000, // 30 seconds
+      minSize: config.minSize ?? 1,
+      maxSize: config.maxSize ?? 5,
+      idleTimeout: config.idleTimeout ?? 300000, // 5 minutes
+      healthCheckInterval: config.healthCheckInterval ?? 30000, // 30 seconds
       agentConfig: config.agentConfig,
     };
 
@@ -162,6 +169,8 @@ export class AgentPool extends EventEmitter {
    * Pre-warm minimum number of agents
    */
   private async preWarm(): Promise<void> {
+    if (this.destroyed) return;
+
     const currentSize = this.agents.size;
     const toCreate = Math.max(0, this.config.minSize - currentSize);
 
@@ -184,6 +193,10 @@ export class AgentPool extends EventEmitter {
    * Create a new agent instance
    */
   private async createAgent(): Promise<PooledAgent> {
+    if (this.destroyed) {
+      throw new Error('Agent pool has been destroyed');
+    }
+
     const id = `agent-${this.type}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     
     logger.debug(`Creating ${this.type} agent: ${id}`);
@@ -210,6 +223,14 @@ export class AgentPool extends EventEmitter {
       case 'opencode': {
         const { createOpenCodeAgent } = await import('./opencode-agent');
         agent = await createOpenCodeAgent({
+          ...this.config.agentConfig,
+          agentId: id,
+        } as any);
+        break;
+      }
+      case 'codex': {
+        const { createCodexAgent } = await import('./codex-agent');
+        agent = await createCodexAgent({
           ...this.config.agentConfig,
           agentId: id,
         } as any);
@@ -565,7 +586,14 @@ const pools = new Map<string, AgentPool>();
  * Get or create an agent pool
  */
 export function getAgentPool(type: PoolAgentType, config: AgentPoolConfig): AgentPool {
-  const key = `${type}:${config.agentConfig.workspaceDir}`;
+  // Include remoteAddress in the key so that local and remote pools
+  // for the same workspace don't collide. Use '#' as separator — it cannot
+  // appear in a valid URL (it's the fragment delimiter, stripped before
+  // reaching the host), so there's no ambiguity with userinfo '@'.
+  const remotePart = config.agentConfig.remoteAddress
+    ? `#${config.agentConfig.remoteAddress}`
+    : '';
+  const key = `${type}:${config.agentConfig.workspaceDir}${remotePart}`;
 
   if (!pools.has(key)) {
     pools.set(key, new AgentPool(type, config));

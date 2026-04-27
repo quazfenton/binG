@@ -1,3 +1,14 @@
+---
+id: functioncallingtoolsupport
+title: functionCallingToolSupport
+aliases:
+  - functionCallingToolSupport
+  - functionCallingToolSupport.md
+tags: []
+layer: core
+summary: "Function Calling & Text-Based Fallback Architecture\r\n\r\n    This document describes how the system handles tool execution across models with varying function calling capabilities, ensuring graceful\r\n    degradation when native tool calling is unavailable or ignored.\r\n\r\n    1. Capability Detection Lo"
+anchors: []
+---
  Function Calling & Text-Based Fallback Architecture
 
     This document describes how the system handles tool execution across models with varying function calling capabilities, ensuring graceful

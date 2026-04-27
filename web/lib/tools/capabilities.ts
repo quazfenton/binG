@@ -382,7 +382,7 @@ export const WEB_SEARCH_CAPABILITY: CapabilityDefinition = {
     url: z.string(),
     snippet: z.string(),
   })),
-  providerPriority: ['nullclaw', 'mcp-search'],
+  providerPriority: ['nullclaw'],
   tags: ['web', 'search', 'google', 'find'],
 };
 
@@ -1973,6 +1973,6 @@ export function searchCapabilities(query: string): CapabilityDefinition[] {
   return ALL_CAPABILITIES.filter(cap =>
     cap.name.toLowerCase().includes(lowerQuery) ||
     cap.description.toLowerCase().includes(lowerQuery) ||
-    cap.tags.some(tag => tag.toLowerCase().includes(lowerQuery))
+    (cap.tags && Array.isArray(cap.tags) && cap.tags.some(tag => tag.toLowerCase().includes(lowerQuery)))
   );
 }

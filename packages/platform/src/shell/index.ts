@@ -55,8 +55,7 @@ export function getShellCommand(): { shell: string; args: string[] } {
 export function validateWorkspacePath(path: string): boolean {
   try {
     if (typeof require === 'undefined') {
-      // Can't validate in browser environment - assume valid
-      return true;
+      return false;
     }
 
     let fs;
@@ -65,7 +64,7 @@ export function validateWorkspacePath(path: string): boolean {
       fs = require('fs');
       pathModule = require('path');
     } catch {
-      return true;
+      return false;
     }
 
     // Check if path is empty

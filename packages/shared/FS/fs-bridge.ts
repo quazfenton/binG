@@ -413,6 +413,8 @@ class FSBridge {
    * module-level dynamic import hasn't resolved yet when this is called.
    */
   private async startRustFileChangeListener(): Promise<void> {
+    if (typeof window === 'undefined') return;
+    
     // If tauriListen isn't ready yet, try to import it lazily
     if (!tauriListen) {
       try {
