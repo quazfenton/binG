@@ -14,7 +14,7 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
-import { LocalBashExecutor, rewriteCommand, canRewrite, filterOutput, estimateTokens, type RTKStats } from './bash-executor-local';
+import { LocalBashExecutor, rewriteCommand, canRewrite, filterOutput, estimateTokens, type RTKStats } from './bash-executor-local.js';
 
 // Create RTK-enabled bash executor for CLI
 export const rtkExecutor = new LocalBashExecutor({
