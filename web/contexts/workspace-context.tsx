@@ -61,11 +61,6 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     })();
   }, []);
 
-  // Don't render the context at all during SSR — desktop-only feature
-  if (!mounted) {
-    return <>{children}</>;
-  }
-
   const applyWorkspaceChange = useCallback(async (newPath: string) => {
     setIsChanging(true);
     try {
@@ -118,6 +113,11 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const setWorkspaceRootFn = useCallback(async (path: string) => {
     await applyWorkspaceChange(path);
   }, [applyWorkspaceChange]);
+
+  // Don't render the context at all during SSR — desktop-only feature
+  if (!mounted) {
+    return <>{children}</>;
+  }
 
   return (
     <WorkspaceContext.Provider

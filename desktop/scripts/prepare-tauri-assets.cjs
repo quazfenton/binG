@@ -123,20 +123,12 @@ fs.mkdirSync(frontendDir, {
   recursive: true,
 });
 
-const frontendIndex = `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Quaz Desktop</title>
-  </head>
-  <body>
-    <noscript>Quaz Desktop requires JavaScript.</noscript>
-  </body>
-</html>
-`;
-fs.writeFileSync(path.join(frontendDir, 'index.html'), frontendIndex, 'utf8');
-console.log('✓ Prepared frontend placeholder assets');
+const desktopShell = path.join(tauriRoot, 'static', 'index.html');
+if (!fs.existsSync(desktopShell)) {
+  throw new Error(`Missing desktop startup shell: ${desktopShell}`);
+}
+fs.copyFileSync(desktopShell, path.join(frontendDir, 'index.html'));
+console.log('✓ Prepared frontend startup shell');
 
 // Copy SQL schema files
 const dbSchemaDir = path.join(webRoot, 'lib', 'database');
