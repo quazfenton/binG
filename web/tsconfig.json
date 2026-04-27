@@ -19,14 +19,30 @@
     "jsx": "react-jsx",
     "baseUrl": ".",
     "paths": {
-      "@/*": ["./*"],
-      "@bing/platform": ["../packages/platform/src/env.ts"],
-      "@bing/platform/*": ["../packages/platform/src/*"],
-      "@bing/shared": ["../packages/shared/index.ts"],
-      "@bing/shared/*": ["../packages/shared/*"],
-      "@bing/shared/agent": ["../packages/shared/agent/index.ts"],
-      "@bing/shared/agent/*": ["../packages/shared/agent/*"],
-      "@bing/infra/*": ["../infra/*"]
+      "@/*": [
+        "./*"
+      ],
+      "@bing/platform": [
+        "../packages/platform/src/env.ts"
+      ],
+      "@bing/platform/*": [
+        "../packages/platform/src/*"
+      ],
+      "@bing/shared": [
+        "../packages/shared/index.ts"
+      ],
+      "@bing/shared/*": [
+        "../packages/shared/*"
+      ],
+      "@bing/shared/agent": [
+        "../packages/shared/agent/index.ts"
+      ],
+      "@bing/shared/agent/*": [
+        "../packages/shared/agent/*"
+      ],
+      "@bing/infra/*": [
+        "../infra/*"
+      ]
     },
     "plugins": [
       {
@@ -34,7 +50,8 @@
       }
     ],
     "downlevelIteration": true,
-    "allowSyntheticDefaultImports": true
+    "allowSyntheticDefaultImports": true,
+    "strictNullChecks": true
   },
   "include": [
     "next-env.d.ts",

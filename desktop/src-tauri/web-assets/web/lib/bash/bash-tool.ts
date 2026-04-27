@@ -18,6 +18,16 @@ import {
   createBashFailureContext,
 } from './bash-event-schema';
 import { executeWithHealing, isCommandSafe as _isCommandSafe } from './self-healing';
+import {
+  rewriteCommand,
+  filterOutput,
+  summarizeOutput,
+  trackSavings,
+  estimateTokens,
+  canRewrite,
+  getCommandCategory,
+  type FilterOptions,
+} from '@/lib/tools/rtk-integration';
 
 /**
  * Re-export isCommandSafe for external consumers
@@ -47,6 +57,16 @@ export interface BashToolConfig {
   onTerminalOutput?: (text: string) => void;
   /** Optional: Get filesystem state for routing decisions */
   getFilesystemState?: () => Record<string, { content?: string; isDirectory?: boolean }>;
+  /** RTK: Enable command rewriting for token reduction */
+  rtkEnableRewrite?: boolean;
+  /** RTK: Enable output filtering for token reduction */
+  rtkEnableFilter?: boolean;
+  /** RTK: Max output lines */
+  rtkMaxLines?: number;
+  /** RTK: Max output characters */
+  rtkMaxChars?: number;
+  /** RTK: Track token savings */
+  rtkTrackSavings?: boolean;
 }
 
 const DEFAULT_CONFIG: BashToolConfig = {
@@ -55,6 +75,12 @@ const DEFAULT_CONFIG: BashToolConfig = {
   maxRetries: 3,
   workingDir: process.env.BASH_WORKING_DIR || '/workspace',
   defaultTimeout: 30000,
+  // RTK settings - enable token reduction by default
+  rtkEnableRewrite: process.env.RTK_ENABLE_REWRITE !== 'false',
+  rtkEnableFilter: process.env.RTK_ENABLE_FILTER !== 'false',
+  rtkMaxLines: parseInt(process.env.RTK_MAX_LINES || '100', 10),
+  rtkMaxChars: parseInt(process.env.RTK_MAX_CHARS || '50000', 10),
+  rtkTrackSavings: process.env.RTK_TRACK_SAVINGS === 'true',
 };
 
 // ============================================================================
@@ -429,6 +455,22 @@ export function createBashTool(config: Partial<BashToolConfig> = {}) {
           throw new Error(`Command blocked by safety filter: ${command.slice(0, 100)}`);
         }
 
+        // RTK: Optionally rewrite command for token optimization
+        // This transforms verbose commands like `git log` to `git log --oneline -20`
+        let rewrittenCommand = command;
+        let rtkCategory: string | null = null;
+        if (cfg.rtkEnableRewrite && canRewrite(command)) {
+          rewrittenCommand = rewriteCommand(command, { enableRewrite: true });
+          rtkCategory = getCommandCategory(command);
+          if (rewrittenCommand !== command) {
+            logger.info('RTK: Command rewritten', {
+              original: command,
+              rewritten: rewrittenCommand,
+              category: rtkCategory,
+            });
+          }
+        }
+
         // ROUTING: Check if command should be simulated vs sandbox via terminal router
         let routeDecision: { mode: string; reason?: string } | null = null;
         if (cfg.getFilesystemState) {
@@ -518,17 +560,17 @@ export function createBashTool(config: Partial<BashToolConfig> = {}) {
         try {
           // PATCH 3: Direct command detection — skip self-healing for trivial commands
           // ls, pwd, whoami, etc. rarely fail — skip the retry loop to save latency
-          const isDirect = isDirectCommand(command);
+          const isDirect = isDirectCommand(rewrittenCommand);
           const shouldSelfHeal = selfHeal && cfg.enableSelfHealing && !isDirect;
 
           if (shouldSelfHeal) {
-            result = await executeWithHealing(command, {
+            result = await executeWithHealing(rewrittenCommand, {
               workingDir: wd,
               maxRetries: cfg.maxRetries,
               timeout,
             });
           } else {
-            result = await executeBashCommand(command, {
+            result = await executeBashCommand(rewrittenCommand, {
               workingDir: wd,
               timeout,
             });
@@ -554,14 +596,55 @@ export function createBashTool(config: Partial<BashToolConfig> = {}) {
           cfg.onTerminalOutput(result.stdout);
         }
 
-        return {
-          success: result.success,
-          output: result.stdout,
-          error: result.stderr,
-          exitCode: result.exitCode,
-          duration: result.duration,
-          outputPath: result.outputPath,
-        };
+        // RTK: Filter output for token reduction
+        // Apply ANSI removal, deduplication, truncation, and grouping
+        let filteredOutput = result.stdout;
+        let rtkStats: { originalTokens: number; filteredTokens: number; savedTokens: number } | undefined;
+        
+        if (cfg.rtkEnableFilter && result.stdout) {
+          const filterOptions: FilterOptions = {
+            maxLines: cfg.rtkMaxLines,
+            maxChars: cfg.rtkMaxChars,
+            groupByFile: true,
+            enableDedupe: true,
+          };
+          filteredOutput = filterOutput(result.stdout, rewrittenCommand, filterOptions);
+          
+          // Track token savings if enabled
+          if (cfg.rtkTrackSavings && filteredOutput !== result.stdout) {
+            const origTokens = estimateTokens(result.stdout);
+            const filteredTokens = estimateTokens(filteredOutput);
+            const savedTokens = origTokens - filteredTokens;
+            
+            rtkStats = {
+              originalTokens: origTokens,
+              filteredTokens,
+              savedTokens,
+            };
+            
+            logger.info('RTK: Token savings', {
+              command: rewrittenCommand,
+              category: rtkCategory,
+              originalTokens: origTokens,
+              filteredTokens,
+              savedTokens,
+              savingsPercent: Math.round((savedTokens / origTokens) * 100),
+            });
+          }
+        }
+
+          return {
+            success: result.success,
+            output: filteredOutput,
+            error: result.stderr,
+            exitCode: result.exitCode,
+            duration: result.duration,
+            outputPath: result.outputPath,
+            // RTK metadata
+            rtkRewritten: rewrittenCommand !== command ? rewrittenCommand : undefined,
+            rtkCategory,
+            rtkStats,
+          };
         } catch (error: any) {
           logger.error('Bash execution failed', {
             command,

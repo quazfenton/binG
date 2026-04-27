@@ -60,15 +60,15 @@ export function isOutsideWorkspace(
   workspaceRoot?: string,
 ): boolean {
   // VFS virtual paths are always inside the workspace
+  const normalizedTarget = normalizePath(targetPath);
   const prefixMatch = VFS_VIRTUAL_PREFIXES.some(
-    (prefix) => targetPath.startsWith(prefix),
+    (prefix) => normalizedTarget.startsWith(prefix),
   );
   if (prefixMatch) return false;
 
   const root = resolveWorkspaceRoot(workspaceRoot);
   if (!root) return false; // No root configured → cannot determine boundary
 
-  const normalizedTarget = normalizePath(targetPath);
   const normalizedRoot = normalizePath(root);
 
   // Empty target → not outside

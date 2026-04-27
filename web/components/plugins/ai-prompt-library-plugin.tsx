@@ -125,7 +125,7 @@ export default function AIPromptLibraryPlugin({ onClose }: PluginProps) {
 
       // Derive provider from selected model to avoid invalid provider-model combos
       const providerForModel = selectedModel.startsWith('claude') ? 'anthropic'
-        : selectedModel.startsWith('llama') || selectedModel.startsWith('mistral') ? 'open_router'
+        : selectedModel.startsWith('llama') || selectedModel.startsWith('mistral') ? 'openrouter'
         : 'openai';
 
       const response = await fetch('/api/chat', {

@@ -936,19 +936,46 @@ export default function MessageBubble({
           <ToolInvocationsList toolInvocations={toolInvocations} />
         )}
 
-        {/* Agent Status Display - Shows agent type and current state */}
-        {!isUser && (message.metadata as any)?.processingSteps && (
-          <div className="mt-3">
-            <AgentStatusDisplay
-              agentType={(message.metadata as any)?.agentType || 'single'}
-              status={isStreaming ? 'executing' : 'completed'}
-              currentAction={(message.metadata as any)?.currentAction}
-              toolInvocations={toolInvocations}
-              processingSteps={(message.metadata as any)?.processingSteps}
-              isVisible={true}
-            />
-          </div>
-        )}
+        {/* Agent Status Display - Shows agent type and current state.
+            Only render when there is real agent activity to show. The pipeline
+            always emits a wrapper "Start agentic pipeline" step, so its mere
+            presence is not enough to justify the (large) status panel — that
+            was rendering on every plain assistant reply and looking ugly. */}
+        {!isUser && (() => {
+          const rawSteps: any[] = Array.isArray((message.metadata as any)?.processingSteps)
+            ? ((message.metadata as any).processingSteps as any[])
+            : [];
+          // Filter out the framing wrapper steps that always run, even on a
+          // plain text response with no tools.
+          const meaningfulSteps = rawSteps.filter(
+            (s) => s && typeof s.step === 'string' && s.step !== 'Start agentic pipeline'
+          );
+          const hasTools = toolInvocations.length > 0;
+          const agentType = (message.metadata as any)?.agentType || 'single';
+          const isMultiAgent = agentType !== 'single';
+          // Hide entirely when the model just produced a normal response.
+          if (!hasTools && meaningfulSteps.length === 0 && !isMultiAgent && !isStreaming) {
+            return null;
+          }
+          // While streaming we still suppress the panel until something
+          // interesting actually happens (a tool call or non-wrapper step).
+          if (isStreaming && !hasTools && meaningfulSteps.length === 0 && !isMultiAgent) {
+            return null;
+          }
+          return (
+            <div className="mt-3">
+              <AgentStatusDisplay
+                agentType={agentType}
+                status={isStreaming ? 'executing' : 'completed'}
+                currentAction={(message.metadata as any)?.currentAction}
+                toolInvocations={toolInvocations}
+                processingSteps={meaningfulSteps}
+                isVisible={true}
+                compact
+              />
+            </div>
+          );
+        })()}
 
         {/* Spec Amplification Progress */}
         {!isUser && (message.metadata as any)?.specAmplification && (
