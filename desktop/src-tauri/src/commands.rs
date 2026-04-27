@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager, State};
+use tauri_plugin_dialog::DialogExt;
 
 
 /// Validates and canonicalizes a workspace-relative path.
@@ -2090,102 +2091,85 @@ pub async fn set_workspace_root(
     app: AppHandle,
     workspace_path: String,
 ) -> Result<serde_json::Value, String> {
-    // Validate the path exists and is a directory
-    let path = PathBuf::from(&workspace_path);
-    if !path.exists() {
-        return Err(format!("Path does not exist: {}", workspace_path));
-    }
-    if !path.is_dir() {
-        return Err(format!("Path is not a directory: {}", workspace_path));
-    }
-
-    // Canonicalize to resolve symlinks and normalize
-    let canonical = std::fs::canonicalize(&path)
-        .map_err(|e| format!("Failed to canonicalize path: {}", e))?;
-
-    let canonical_str = canonical.to_string_lossy().to_string();
-
-    // Update the process environment variable so all child processes
-    // (including the Next.js sidecar) can pick it up
-    std::env::set_var("DESKTOP_WORKSPACE_ROOT", &canonical_str);
-    crate::log::log_msg(&format!("[set_workspace_root] Set DESKTOP_WORKSPACE_ROOT={}", canonical_str));
-
-    // Persist to settings.json so it survives restarts
-    let settings_path_res = settings_path(&app);
-    if let Ok(spath) = settings_path_res {
-        let mut existing = if spath.exists() {
-            std::fs::read_to_string(&spath)
-                .ok()
-                .and_then(|raw| serde_json::from_str(&raw).ok())
-                .unwrap_or(serde_json::json!({}))
-        } else {
-            serde_json::json!({})
-        };
-        // Merge workspaceRoot into the existing settings object
-        if let Some(obj) = existing.as_object_mut() {
-            obj.insert("workspaceRoot".to_string(), serde_json::Value::String(canonical_str.clone()));
+    // Use the unified settings module
+    match settings::update_workspace_root(&app, &workspace_path) {
+        Ok(updated) => {
+            crate::log::log_msg(&format!("[set_workspace_root] Set DESKTOP_WORKSPACE_ROOT={}", updated.workspace.root));
+            Ok(serde_json::json!({
+                "success": true,
+                "path": updated.workspace.root,
+            }))
         }
-        let json = serde_json::to_string_pretty(&existing)
-            .map_err(|e| format!("Failed to serialize settings: {}", e))?;
-        std::fs::write(&spath, json)
-            .map_err(|e| format!("Failed to write settings: {}", e))?;
+        Err(e) => Err(e),
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenDirectoryDialogOptions {
+    pub title: Option<String>,
+    pub default_path: Option<String>,
+}
+
+#[tauri::command]
+pub async fn open_directory_dialog(
+    window: tauri::Window,
+    options: Option<OpenDirectoryDialogOptions>,
+) -> Result<serde_json::Value, String> {
+    let title = options.as_ref().and_then(|opts| opts.title.clone());
+    let default_path = options.as_ref().and_then(|opts| opts.default_path.clone());
+
+    let mut builder = window.dialog().file();
+
+    #[cfg(any(windows, target_os = "macos"))]
+    {
+        builder = builder.set_parent(&window);
     }
 
-    Ok(serde_json::json!({
-        "success": true,
-        "path": canonical_str,
-    }))
+    if let Some(title) = title {
+        builder = builder.set_title(title);
+    }
+
+    if let Some(default_path) = default_path {
+        builder = builder.set_directory(PathBuf::from(default_path));
+    }
+
+    let folder = builder.blocking_pick_folder();
+
+    match folder {
+        Some(path) => {
+            let selected = path
+                .into_path()
+                .map_err(|e| format!("Failed to resolve selected folder: {}", e))?;
+
+            Ok(serde_json::json!({
+                "success": true,
+                "path": selected.to_string_lossy().to_string(),
+            }))
+        }
+        None => Ok(serde_json::json!({
+            "success": false,
+            "error": "Dialog cancelled",
+        })),
+    }
 }
 
-fn settings_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
-    let dir = app.path().app_data_dir()
-        .map_err(|e| format!("Failed to resolve app data dir: {}", e))?;
-    std::fs::create_dir_all(&dir)
-        .map_err(|e| format!("Failed to create app data dir: {}", e))?;
-    Ok(dir.join("settings.json"))
-}
-
+// Settings commands use the unified settings module from settings.rs
 #[tauri::command]
 pub async fn save_settings(
     app: AppHandle,
     settings: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let path = settings_path(&app)?;
-    let json = serde_json::to_string_pretty(&settings)
-        .map_err(|e| format!("Failed to serialize settings: {}", e))?;
-    std::fs::write(&path, json)
-        .map_err(|e| format!("Failed to write settings: {}", e))?;
+    // Deserialize into UnifiedSettings, save, then return success
+    let unified: settings::UnifiedSettings = serde_json::from_value(settings)
+        .map_err(|e| format!("Failed to parse settings: {}", e))?;
+    settings::save_settings(&app, &unified)?;
     Ok(serde_json::json!({ "success": true }))
 }
 
 #[tauri::command]
 pub async fn load_settings(app: AppHandle) -> Result<serde_json::Value, String> {
-    let path = settings_path(&app)?;
-    if !path.exists() {
-        return Ok(serde_json::json!({}));
-    }
-    let raw = std::fs::read_to_string(&path)
-        .map_err(|e| format!("Failed to read settings: {}", e))?;
-    let mut settings: serde_json::Value = serde_json::from_str(&raw)
-        .map_err(|e| format!("Failed to parse settings: {}", e))?;
-
-    if let Some(root) = settings.get("workspaceRoot").and_then(|v| v.as_str()) {
-        let looks_bundled =
-            root.contains("desktop\\src-tauri\\target\\release") ||
-            root.contains("desktop/src-tauri/target/release") ||
-            root.contains("\\web-assets\\") ||
-            root.contains("/web-assets/") ||
-            root.contains("\\node_modules\\") ||
-            root.contains("/node_modules/");
-
-        if looks_bundled {
-            if let Ok(fallback) = std::env::var("DESKTOP_WORKSPACE_ROOT") {
-                if let Some(obj) = settings.as_object_mut() {
-                    obj.insert("workspaceRoot".to_string(), serde_json::Value::String(fallback));
-                }
-            }
-        }
-    }
-
-    Ok(settings)
+    let unified = settings::load_settings(&app)?;
+    serde_json::to_value(unified)
+        .map_err(|e| format!("Failed to serialize settings: {}", e))
 }

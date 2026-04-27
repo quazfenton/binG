@@ -32,7 +32,7 @@ export async function POST(request: NextRequest) {
     console.log('[Auth0 Session Check] Found Auth0 session for user');
 
     // Get or create local user mapping
-    let localUserId: number | null = null;
+    let localUserId: string | null = null;
     
     try {
       localUserId = await getLocalUserIdFromAuth0(auth0UserId);
@@ -49,12 +49,12 @@ export async function POST(request: NextRequest) {
         const db = getDatabase();
 
         if (db) {
-          const userRow = db.prepare('SELECT id FROM users WHERE email = ? AND is_active = TRUE').get(email) as { id: number } | undefined;
+          const userRow = db.prepare('SELECT id FROM users WHERE email = ? AND is_active = TRUE').get(email) as { id: string } | undefined;
 
           if (userRow) {
             // Map existing user to Auth0
             await mapAuth0UserId(userRow.id, auth0UserId);
-            localUserId = userRow.id;
+            localUserId = String(userRow.id);
             console.log('[Auth0 Session Check] Mapped existing user to Auth0:', localUserId);
           } else {
             // Create new user via register - OAuth users bypass email verification
@@ -73,7 +73,7 @@ export async function POST(request: NextRequest) {
             });
 
             if (registerResult.success && registerResult.user) {
-              localUserId = registerResult.user.id;
+              localUserId = String(registerResult.user.id);
               await mapAuth0UserId(localUserId, auth0UserId);
               console.log('[Auth0 Session Check] Created new user and mapped to Auth0:', localUserId);
               // Note: register() sets requiresVerification but we bypass it for OAuth users

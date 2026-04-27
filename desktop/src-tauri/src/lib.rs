@@ -1,5 +1,6 @@
 mod commands;
 mod log;
+mod settings;
 use commands::{PtySessions, CheckpointManager, WatcherRegistry};
 use serde::Serialize;
 use std::process::{Child, Command};
@@ -52,6 +53,7 @@ fn register_invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Syn
 
         // Workspace management
         commands::set_workspace_root,
+        commands::open_directory_dialog,
     ]
 }
 
