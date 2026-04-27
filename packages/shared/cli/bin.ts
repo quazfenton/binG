@@ -240,14 +240,21 @@ let vfsToolDefs: any[] = [];
 async function initializeVFSMCP(userId: string, sessionId: string): Promise<void> {
   if (vfsToolsInitialized) return;
   
+  console.log(COLORS.info('Initializing VFS MCP tools...'));
+  
   try {
     const { getVFSToolDefinitions, initializeVFSTools } = await import(MCP_TOOLS_PATH);
     initializeVFSTools(userId, sessionId, process.cwd());
     vfsToolDefs = getVFSToolDefinitions();
     vfsToolsInitialized = true;
-    console.log(COLORS.success('VFS MCP tools initialized'));
+    console.log(COLORS.success('✓ VFS MCP tools initialized'));
+    console.log(COLORS.info(`  Workspace: ${getWorkspaceRoot()}`));
+    console.log(COLORS.info(`  Tools: ${vfsToolDefs.length} available`));
   } catch (err) {
-    console.log(COLORS.warning('VFS MCP tools not available:', (err as Error).message));
+    console.log(COLORS.warning('⚠ VFS MCP tools initialization failed'));
+    console.log(COLORS.muted(`  Error: ${(err as Error).message}`));
+    console.log(COLORS.muted(`  Path: ${MCP_TOOLS_PATH}`));
+    console.log(COLORS.info('  Note: CLI will use direct filesystem operations instead'));
   }
 }
 
@@ -905,13 +912,40 @@ async function confirmWorkspaceBoundary(
 ): Promise<boolean> {
   const reason = requiresWorkspaceBoundaryConfirmation(operation, targetPath);
   if (!reason) return true;  // Safe — inside workspace
+  
+  const workspaceRoot = getWorkspaceRoot();
+  
   if (forceFlag) {
-    console.warn(COLORS.warn('⚠ Workspace boundary bypassed with --force: ' + reason));
+    console.warn(COLORS.warning('⚠ Workspace boundary bypassed with --force'));
+    console.warn(COLORS.muted(`  Operation: ${operation}`));
+    console.warn(COLORS.muted(`  Target: ${targetPath}`));
+    console.warn(COLORS.muted(`  Workspace: ${workspaceRoot}`));
     return true;
   }
-  console.warn(COLORS.warn('⚠ Workspace Boundary Warning'));
-  console.warn(COLORS.warn('  ' + reason));
-  return confirm();
+  
+  // Interactive confirmation prompt
+  console.log('\n' + COLORS.error('━'.repeat(60)));
+  console.log(COLORS.error('⚠️  WORKSPACE BOUNDARY WARNING'));
+  console.log(COLORS.error('━'.repeat(60)));
+  console.log(COLORS.warning(`  Operation: ${operation}`));
+  console.log(COLORS.warning(`  Target path: ${targetPath}`));
+  console.log(COLORS.warning(`  Workspace root: ${workspaceRoot}`));
+  console.log();
+  console.log(COLORS.info('This operation will affect files outside the configured workspace.'));
+  console.log(COLORS.info('This could potentially access or modify system files.'));
+  console.log();
+  
+  // Use readline directly to avoid double prompt text
+  const rl = createInterface({ input, output });
+  const answer = await new Promise<string>((resolve) => rl.question('Do you want to proceed? [yes/no]: ', (a) => resolve(a)));
+  rl.close();
+  const confirmed = answer.toLowerCase() === 'yes' || answer.toLowerCase() === 'y';
+  
+  if (!confirmed) {
+    console.log(COLORS.muted('Operation cancelled - workspace boundary protection'));
+  }
+  
+  return confirmed;
 }
 
 const FILESYSTEM_PATTERNS = [

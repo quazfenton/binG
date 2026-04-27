@@ -40,6 +40,7 @@ export function WorkspaceIndicator() {
       onMouseLeave={() => setIsHovered(false)}
     >
       <motion.button
+        type="button"
         onClick={openProjectFolder}
         disabled={isChanging}
         className={`
@@ -117,6 +118,7 @@ export function WorkspacePrompt() {
         </p>
       </div>
       <Button
+        type="button"
         onClick={openProjectFolder}
         disabled={isChanging}
         className="bg-blue-500/20 border border-blue-500/30 text-blue-300 hover:bg-blue-500/30 hover:text-blue-200"

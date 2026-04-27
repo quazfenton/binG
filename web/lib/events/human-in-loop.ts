@@ -48,7 +48,7 @@ export async function createApprovalRequest(
   const expiresAt = options?.timeout ? new Date(now.getTime() + options.timeout) : undefined;
 
   db.prepare(`
-    INSERT INTO approval_requests
+    INSERT INTO hitl_approval_requests
     (id, event_id, action, details, status, created_at, expires_at, user_id)
     VALUES (?, ?, ?, ?, 'pending', CURRENT_TIMESTAMP, ?, ?)
   `).run(id, eventId, action, JSON.stringify(details), expiresAt?.toISOString(), options?.userId);
@@ -86,7 +86,7 @@ export async function waitForApproval(
 
   while (Date.now() - startTime < timeoutMs) {
     const request = db.prepare(`
-      SELECT * FROM approval_requests
+      SELECT * FROM hitl_approval_requests
       WHERE id = ?
     `).get(approvalId) as any;
 
@@ -116,7 +116,7 @@ export async function waitForApproval(
     if (request.expires_at && new Date(request.expires_at) < new Date()) {
       // Mark as expired
       db.prepare(`
-        UPDATE approval_requests
+        UPDATE hitl_approval_requests
         SET status = 'expired', updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
       `).run(approvalId);
@@ -143,7 +143,7 @@ export async function respondToApproval(
   const db = getDatabase();
 
   db.prepare(`
-    UPDATE approval_requests
+    UPDATE hitl_approval_requests
     SET status = ?,
         response = ?,
         responded_at = CURRENT_TIMESTAMP,
@@ -165,7 +165,7 @@ export async function getApprovalRequest(approvalId: string): Promise<ApprovalRe
   const db = getDatabase();
 
   const row = db.prepare(`
-    SELECT * FROM approval_requests
+    SELECT * FROM hitl_approval_requests
     WHERE id = ?
   `).get(approvalId) as any;
 
@@ -189,7 +189,7 @@ export async function getPendingApprovals(userId?: string, limit: number = 50): 
 
   if (userId) {
     rows = db.prepare(`
-      SELECT * FROM approval_requests
+      SELECT * FROM hitl_approval_requests
       WHERE status = 'pending'
         AND (user_id = ? OR user_id IS NULL)
       ORDER BY created_at ASC
@@ -197,7 +197,7 @@ export async function getPendingApprovals(userId?: string, limit: number = 50): 
     `).all(userId, limit) as any[];
   } else {
     rows = db.prepare(`
-      SELECT * FROM approval_requests
+      SELECT * FROM hitl_approval_requests
       WHERE status = 'pending'
       ORDER BY created_at ASC
       LIMIT ?
@@ -217,7 +217,7 @@ export async function expireOldApprovals(): Promise<number> {
   const db = getDatabase();
 
   const result = db.prepare(`
-    UPDATE approval_requests
+    UPDATE hitl_approval_requests
     SET status = 'expired', updated_at = CURRENT_TIMESTAMP
     WHERE status = 'pending'
       AND expires_at < CURRENT_TIMESTAMP
@@ -241,10 +241,10 @@ export async function getApprovalStats(): Promise<{
 
   const stats: any = {};
 
-  stats.pending = db.prepare("SELECT COUNT(*) as count FROM approval_requests WHERE status = 'pending'").get() as any;
-  stats.approved = db.prepare("SELECT COUNT(*) as count FROM approval_requests WHERE status = 'approved'").get() as any;
-  stats.rejected = db.prepare("SELECT COUNT(*) as count FROM approval_requests WHERE status = 'rejected'").get() as any;
-  stats.expired = db.prepare("SELECT COUNT(*) as count FROM approval_requests WHERE status = 'expired'").get() as any;
+  stats.pending = db.prepare("SELECT COUNT(*) as count FROM hitl_approval_requests WHERE status = 'pending'").get() as any;
+  stats.approved = db.prepare("SELECT COUNT(*) as count FROM hitl_approval_requests WHERE status = 'approved'").get() as any;
+  stats.rejected = db.prepare("SELECT COUNT(*) as count FROM hitl_approval_requests WHERE status = 'rejected'").get() as any;
+  stats.expired = db.prepare("SELECT COUNT(*) as count FROM hitl_approval_requests WHERE status = 'expired'").get() as any;
 
   return {
     pending: stats.pending.count,
@@ -260,7 +260,7 @@ export async function getApprovalStats(): Promise<{
 export async function initializeApprovalRequests(): Promise<void> {
   const db = getDatabase();
 
-  // approval-requests.sql defines approval_requests (human-in-loop variant with details/response columns)
+  // approval-requests.sql defines hitl_approval_requests (human-in-loop variant with details/response columns)
   execSchemaFile(db, 'approval-requests');
 
   logger.info('Approval requests table initialized');

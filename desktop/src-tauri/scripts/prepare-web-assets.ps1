@@ -35,6 +35,20 @@ if (Test-Path "$webRoot\public") {
     Copy-Item "$webRoot\public" "$destDir\public" -Recurse -Force
 }
 
+# Copy database schema files (SQL + loader TypeScript for runtime schema loading)
+if (Test-Path "$webRoot\lib\database\schema") {
+    Write-Host "  Copying database schema files..." -ForegroundColor Gray
+    New-Item -ItemType Directory -Path "$destDir\web\lib\database\schema" -Force | Out-Null
+    Copy-Item "$webRoot\lib\database\schema\*" "$destDir\web\lib\database\schema\" -Recurse -Force
+}
+
+# Copy migrations
+if (Test-Path "$webRoot\lib\database\migrations") {
+    Write-Host "  Copying database migrations..." -ForegroundColor Gray
+    New-Item -ItemType Directory -Path "$destDir\web\lib\database\migrations" -Force | Out-Null
+    Copy-Item "$webRoot\lib\database\migrations\*" "$destDir\web\lib\database\migrations\" -Recurse -Force
+}
+
 # Copy package.json and next.config.mjs
 Copy-Item "$webRoot\package.json" "$destDir\package.json" -Force
 Copy-Item "$webRoot\next.config.mjs" "$destDir\next.config.mjs" -Force

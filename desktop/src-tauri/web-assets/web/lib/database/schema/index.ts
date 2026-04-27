@@ -11,7 +11,7 @@
  *   - events-schema.sql     → events, scheduled_tasks
  *   - logging-schema.sql    → chat_request_logs, tool_calls, hitl_audit_logs
  *   - fs-edit-schema.sql    → fs_edit_transactions, fs_edit_denials
- *   - approval-requests.sql → approval_requests (human-in-loop variant)
+ *   - approval-requests.sql → hitl_approval_requests (human-in-loop variant)
  *   - healing-log.sql       → event_healing_log (self-healing variant)
  *
  * Note: The core application tables (users, sessions, conversations, messages, etc.)
