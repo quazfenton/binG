@@ -1,6 +1,9 @@
 import { ClientProviders } from '@/components/client-providers'
 import { WorkspaceProviderWrapper } from '@/components/workspace-provider-wrapper'
 
+// Disable static prerendering to prevent useContext errors with providers
+export const dynamic = 'force-dynamic';
+
 export default function MainLayout({
   children,
 }: {

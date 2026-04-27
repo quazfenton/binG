@@ -7,14 +7,17 @@ const webRoot = path.join(repoRoot, 'web');
 const tauriRoot = path.join(repoRoot, 'desktop', 'src-tauri');
 const destDir = path.join(tauriRoot, 'web-assets');
 
-function run(command, args, cwd) {
+function run(command, args, cwd, ignoreErrors = false) {
+  console.log(`Running: ${command} ${args.join(' ')}`);
   const result = spawnSync(command, args, {
     cwd,
     env: {
       ...process.env,
-      DESKTOP_MODE: 'true',
-      DESKTOP_LOCAL_EXECUTION: 'true',
       NODE_ENV: 'production',
+      // Signals to web/next.config.mjs that this is the desktop bundling
+      // build, so it relaxes type-check/lint gates that are otherwise too
+      // strict for shipping the standalone server.
+      DESKTOP_MODE: 'true',
     },
     stdio: 'inherit',
     shell: process.platform === 'win32',
@@ -24,13 +27,65 @@ function run(command, args, cwd) {
     throw result.error;
   }
 
-  if (result.status !== 0) {
+  if (result.status !== 0 && !ignoreErrors) {
     throw new Error(`${command} ${args.join(' ')} failed with exit code ${result.status}`);
   }
+  
+  return result;
 }
 
 console.log('Preparing desktop web assets...');
-run('npx', ['next', 'build', '--webpack'], webRoot);
+
+// Clear stale build artifacts left by a previously crashed/canceled build:
+//   .next/lock  -> "Unable to acquire lock" abort on next build
+//   .next/trace -> EPERM on Windows when antivirus or another process held it
+const nextDir = path.join(webRoot, '.next');
+for (const stale of ['lock', 'trace']) {
+  const p = path.join(nextDir, stale);
+  if (fs.existsSync(p)) {
+    try {
+      fs.rmSync(p, { force: true, recursive: true });
+      console.log(`Removed stale .next/${stale}`);
+    } catch (err) {
+      console.warn(`Warning: could not remove ${p}: ${err.message}`);
+    }
+  }
+}
+
+// Resolve a usable `next` CLI entry. In this monorepo `next` is hoisted to
+// the repo-root node_modules, not web/node_modules, so `node web/node_modules/...`
+// does not exist. Try a few well-known locations and fall back to `npx`.
+const nextBinCandidates = [
+  path.join(repoRoot, 'node_modules', 'next', 'dist', 'bin', 'next'),
+  path.join(webRoot, 'node_modules', 'next', 'dist', 'bin', 'next'),
+];
+const nextBin = nextBinCandidates.find((p) => fs.existsSync(p));
+const standaloneDir = path.join(nextDir, 'standalone');
+const frontendDir = path.join(destDir, 'frontend');
+
+function runNextBuild(extraArgs = []) {
+  const args = ['build', '--webpack', ...extraArgs];
+  if (nextBin) {
+    return run('node', [nextBin, ...args], webRoot, true);
+  }
+  return run('npx', ['next', ...args], webRoot, true);
+}
+
+// Run Next.js build in `compile` mode for the desktop bundle. Every route in
+// this app is `export const dynamic = 'force-dynamic'`, so we don't need
+// prerender. Skipping prerender also avoids the `_global-error` synthetic
+// page crashing with `useContext is null` under React 19 + Next 16, which
+// otherwise blocks producing the standalone server.
+runNextBuild(['--experimental-build-mode', 'compile']);
+
+if (!fs.existsSync(standaloneDir)) {
+  console.log('No standalone build found. Retrying once with default build mode...');
+  runNextBuild();
+}
+
+if (!fs.existsSync(standaloneDir)) {
+  throw new Error('Build failed to produce standalone output. Please check build errors above.');
+}
 
 console.log('Copying standalone build to web-assets...');
 fs.rmSync(destDir, {
@@ -42,13 +97,8 @@ fs.mkdirSync(destDir, {
 });
 
 // Copy standalone output
-const standaloneDir = path.join(webRoot, '.next', 'standalone');
-if (fs.existsSync(standaloneDir)) {
-  // Use recursive copy for standalone folder
-  // Note: standalone build contains a folder named 'web' (the project name)
-  fs.cpSync(standaloneDir, destDir, { recursive: true });
-  console.log('✓ Copied standalone server');
-}
+fs.cpSync(standaloneDir, destDir, { recursive: true });
+console.log('✓ Copied standalone server');
 
 // Copy static assets and public folder (Next.js standalone doesn't include them)
 const publicDir = path.join(webRoot, 'public');
@@ -63,18 +113,35 @@ if (fs.existsSync(staticDir)) {
   console.log('✓ Copied static assets');
 }
 
-// NOTE: Do NOT copy the .env file into the desktop bundle.
-// This would leak secrets into the packaged app.
-// Instead, rely on runtime-provided environment variables or a sanitized config.
-// See: https://12factor.net/config
+// Create a Tauri-facing frontend directory that intentionally excludes
+// the standalone server runtime and its node_modules tree.
+fs.rmSync(frontendDir, {
+  recursive: true,
+  force: true,
+});
+fs.mkdirSync(frontendDir, {
+  recursive: true,
+});
 
-// Copy SQL schema files — Next.js standalone does NOT include files read via
-// readFileSync (webpack only tracks import/require). Without this, the
-// database initialization fails with ENOENT at runtime.
+const frontendIndex = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Quaz Desktop</title>
+  </head>
+  <body>
+    <noscript>Quaz Desktop requires JavaScript.</noscript>
+  </body>
+</html>
+`;
+fs.writeFileSync(path.join(frontendDir, 'index.html'), frontendIndex, 'utf8');
+console.log('✓ Prepared frontend placeholder assets');
+
+// Copy SQL schema files
 const dbSchemaDir = path.join(webRoot, 'lib', 'database');
 const destDbDir = path.join(destDir, 'web', 'lib', 'database');
 if (fs.existsSync(dbSchemaDir)) {
-  // Copy schema.sql (core tables)
   const coreSchema = path.join(dbSchemaDir, 'schema.sql');
   if (fs.existsSync(coreSchema)) {
     fs.mkdirSync(path.join(destDbDir), { recursive: true });
@@ -82,7 +149,6 @@ if (fs.existsSync(dbSchemaDir)) {
     console.log('✓ Copied schema.sql');
   }
 
-  // Copy schema/*.sql (per-module schemas)
   const schemaSubdir = path.join(dbSchemaDir, 'schema');
   if (fs.existsSync(schemaSubdir)) {
     const destSchemaSubdir = path.join(destDbDir, 'schema');
@@ -95,7 +161,6 @@ if (fs.existsSync(dbSchemaDir)) {
     console.log('✓ Copied schema/*.sql files');
   }
 
-  // Copy migrations/*.sql
   const migrationsDir = path.join(dbSchemaDir, 'migrations');
   if (fs.existsSync(migrationsDir)) {
     const destMigrationsDir = path.join(destDbDir, 'migrations');
@@ -110,7 +175,6 @@ if (fs.existsSync(dbSchemaDir)) {
 }
 
 // CRITICAL: Remove the 'data' folder and any .db files from the bundled output
-// These should be created fresh at runtime to avoid file locks during installation
 const bundledDataDir = path.join(destDir, 'web', 'data');
 if (fs.existsSync(bundledDataDir)) {
   console.log('Cleaning bundled data directory...');

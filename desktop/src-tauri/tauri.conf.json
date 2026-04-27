@@ -7,7 +7,7 @@
     "beforeDevCommand": "pnpm --dir ../web dev",
     "devUrl": "http://localhost:3000",
     "beforeBuildCommand": "node scripts/prepare-tauri-assets.cjs",
-    "frontendDist": "static"
+    "frontendDist": "web-assets/frontend"
   },
   "app": {
     "withGlobalTauri": true,

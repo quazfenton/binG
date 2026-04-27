@@ -4823,7 +4823,7 @@ export function WorkspacePanel() {
                 <button
                   onClick={() => {
                     if (confirm(`Delete ${contextMenu.path.split('/').pop()}?`)) {
-                      fetch('/api/filesystem/delete?confirmed=true', {
+                      fetch('/api/filesystem/delete', {
                         method: 'POST',
                         headers: buildApiHeaders(),
                         body: JSON.stringify({ path: resolveScopedPath(contextMenu.path, vfs?.currentPath || '/') }),

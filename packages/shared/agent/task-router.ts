@@ -721,7 +721,7 @@ class TaskRouter {
       process.env.V2_AGENT_ENABLED === 'true';
 
     if (!useV2) {
-      const { createOpenCodeEngine } = await import('../../lib/session/agent/opencode-engine-service');
+      const { createOpenCodeEngine } = await import('../lib/session/agent/opencode-engine-service');
       const engine = createOpenCodeEngine({
         model: process.env.OPENCODE_MODEL,
         // CRITICAL FIX: Normalize conversationId to prevent composite IDs in paths
@@ -743,7 +743,7 @@ class TaskRouter {
       };
     }
 
-    const { OpencodeV2Provider } = await import('../../lib/sandbox/spawn/opencode-cli');
+    const { OpencodeV2Provider } = await import('../lib/sandbox/spawn/opencode-cli');
     const { agentSessionManager } = await import('@/lib/session/agent/agent-session-manager');
     const { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } = await import('@/lib/mcp');
 

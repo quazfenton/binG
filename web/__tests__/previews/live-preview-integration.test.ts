@@ -200,8 +200,7 @@ describe('LivePreview Integration', () => {
       const result = detectProject({ files } as PreviewRequest);
 
       expect(result.framework).toBe('fastapi');
-      // FastAPI now routes to 'modal' for cloud execution
-      expect(['devbox', 'modal']).toContain(result.previewMode);
+      expect(result.previewMode).toBe('devbox');
     });
 
     it('should detect Streamlit project', async () => {
@@ -219,8 +218,7 @@ describe('LivePreview Integration', () => {
       const result = detectProject({ files } as PreviewRequest);
 
       expect(result.framework).toBe('streamlit');
-      // Streamlit now routes to 'modal' for cloud execution
-      expect(['pyodide', 'modal']).toContain(result.previewMode);
+      expect(result.previewMode).toBe('pyodide');
     });
 
     it('should detect Vite project with explicit config', async () => {
@@ -246,9 +244,9 @@ describe('LivePreview Integration', () => {
 
       const result = detectProject({ files } as PreviewRequest);
 
-      expect(result.framework).toBe('vite');
-      // Vite detection may route to 'iframe' if no React/Vue/etc. framework is found
-      expect(['vite', 'iframe']).toContain(result.previewMode);
+expect(result.framework).toBe('vite');
+      // Vite without React/Vue/Svelte routes to iframe for static content
+      expect(['iframe']).toContain(result.previewMode);
     });
 
     it('should detect Webpack project', async () => {

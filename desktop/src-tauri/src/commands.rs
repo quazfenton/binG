@@ -1308,7 +1308,7 @@ pub async fn handle_api_route(req: ApiRouteRequest) -> Result<ApiRouteResponse, 
                 .and_then(|b| b["path"].as_str()).or_else(|| query.and_then(|q| q.get("path")).map(|s| s.as_str()))
                 .unwrap_or("");
 
-            if path.trim().is_empty() || path == "." {
+            if path.trim().is_empty() || path == "." || Path::new(path).components().all(|c| c == std::path::Component::CurDir) {
                 return Ok(ApiRouteResponse {
                     success: false,
                     data: None,

@@ -6,6 +6,7 @@
  * - Safety validation
  * - VFS integration for file operations
  * - Comprehensive logging
+ * - RTK token optimization (command rewriting + output filtering)
  * 
  * Uses existing sandbox infrastructure (executeCommand) - no new sandbox code needed!
  * 
@@ -22,6 +23,7 @@
 import { getSandboxProvider, type SandboxProviderType } from '@/lib/sandbox/providers';
 import { createLogger } from '@/lib/utils/logger';
 import { executeWithHealing } from '@/lib/chat/bash-self-heal';
+import { rewriteCommand, filterOutput, estimateTokenSavings, hasRewriteRule } from '../rtk-rewriter';
 import type { ToolExecutionContext, ToolExecutionResult } from '../tool-integration-system';
 
 const logger = createLogger('Tool:Bash');
@@ -39,6 +41,12 @@ export interface BashToolConfig {
   enableSelfHealing?: boolean;
   /** Maximum healing attempts */
   maxHealingAttempts?: number;
+  /** Enable RTK token optimization (command rewriting + output filtering) */
+  enableRtkOptimization?: boolean;
+  /** RTK max output lines */
+  rtkMaxLines?: number;
+  /** RTK max output characters */
+  rtkMaxChars?: number;
 }
 
 export interface BashToolParams {
@@ -90,6 +98,9 @@ export class BashToolExecutor {
       maxOutputSize: config.maxOutputSize || 1024 * 1024, // 1MB
       enableSelfHealing: config.enableSelfHealing ?? true,
       maxHealingAttempts: config.maxHealingAttempts || 3,
+      enableRtkOptimization: config.enableRtkOptimization ?? true,
+      rtkMaxLines: config.rtkMaxLines || 100,
+      rtkMaxChars: config.rtkMaxChars || 50000,
     };
   }
 
@@ -111,6 +122,19 @@ export class BashToolExecutor {
       timeout,
       enableHealing: enableHealing ?? this.config.enableSelfHealing,
     });
+
+    // RTK: Rewrite command for token optimization
+    const useRtk = this.config.enableRtkOptimization ?? true;
+    let rewritten = command;
+    if (useRtk) {
+      rewritten = rewriteCommand(command);
+      if (rewritten !== command) {
+        logger.debug('RTK: Command rewritten', {
+          original: command.substring(0, 50),
+          rewritten: rewritten.substring(0, 50),
+        });
+      }
+    }
 
     try {
       // Get sandbox handle
@@ -152,14 +176,28 @@ export class BashToolExecutor {
         // Execute with self-healing
         execResult = await executeWithHealing(
           executeCommand,
-          command,
+          rewritten, // Use rewritten command for healing
           this.config.maxHealingAttempts
         );
       } else {
         // Execute without healing (direct execution)
-        execResult = await executeCommand(command);
+        execResult = await executeCommand(rewritten);
         execResult.attempts = 1;
         execResult.fixesApplied = [];
+      }
+
+      // RTK: Filter output for token optimization
+      let finalOutput = execResult.stdout || execResult.stderr;
+      let tokenSavings = null;
+      if (useRtk && finalOutput) {
+        const filtered = filterOutput(rewritten, finalOutput, {
+          maxLines: this.config.rtkMaxLines,
+          maxChars: this.config.rtkMaxChars,
+        });
+        if (filtered !== finalOutput) {
+          tokenSavings = estimateTokenSavings(finalOutput, filtered);
+          finalOutput = filtered;
+        }
       }
 
       const duration = Date.now() - startTime;
@@ -170,11 +208,12 @@ export class BashToolExecutor {
         exitCode: execResult.exitCode,
         attempts: execResult.attempts,
         fixesApplied: execResult.fixesApplied?.length || 0,
+        tokenSavingsPercent: tokenSavings?.savingsPercent,
       });
 
       return {
         success: execResult.success,
-        output: execResult.stdout || execResult.stderr,
+        output: finalOutput,
         stdout: execResult.stdout,
         stderr: execResult.stderr,
         exitCode: execResult.exitCode,

@@ -10,6 +10,17 @@ import { invoke } from '@tauri-apps/api/core';
 import { isDesktopMode, isTauriRuntime } from '@bing/platform/env';
 import { createLogger } from '@/lib/utils/logger';
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
+import {
+  rewriteCommand,
+  filterOutput,
+  groupGrepOutput,
+  summarizeCode,
+  trackSavings,
+  estimateTokens,
+  canRewrite,
+  getCommandCategory,
+  type FilterOptions,
+} from '@/lib/tools/rtk-integration';
 
 const log = createLogger('TauriInvoke');
 
@@ -146,24 +157,137 @@ export async function openDirectoryDialog(options: {
 
 
 /**
- * Execute a shell command in the sandbox
+ * RTK Token Reduction Options for LLM Consumption
+ */
+export interface RTKLLMOptions {
+  /** Apply RTK command rewriting (default: true) */
+  rewriteCommand?: boolean;
+  /** Apply RTK output filtering for LLM consumption (default: true) */
+  filterForLLM?: boolean;
+  /** Group grep/search output by file (default: true) */
+  groupGrepOutput?: boolean;
+  /** Maximum lines in filtered output (default: 100) */
+  maxLines?: number;
+  /** Maximum characters in filtered output (default: 50000) */
+  maxChars?: number;
+  /** Track token savings for analytics (default: false) */
+  trackSavings?: boolean;
+}
+
+const DEFAULT_RTK_LLM_OPTIONS: Required<RTKLLMOptions> = {
+  rewriteCommand: true,
+  filterForLLM: true,
+  groupGrepOutput: true,
+  maxLines: 100,
+  maxChars: 50000,
+  trackSavings: false,
+};
+
+/**
+ * Execute a shell command in the sandbox (desktop mode)
+ * 
+ * @param _sandboxId - Not used - sandbox not implemented in Rust
+ * @param command - The command to execute
+ * @param cwd - Working directory
+ * @param _timeout - Not used - timeout not implemented in Rust
+ * @param rtkOptions - RTK options for LLM consumption (not for terminal display)
  */
 export async function executeCommand(
-  _sandboxId: string,  // Note: Not used - sandbox not implemented in Rust
+  _sandboxId: string,
   command: string,
   cwd?: string,
-  _timeout?: number  // Note: Not used - timeout not implemented in Rust
-): Promise<ExecuteCommandResult> {
+  _timeout?: number,
+  rtkOptions?: RTKLLMOptions
+): Promise<ExecuteCommandResult & {
+  rtkRewritten?: string;
+  rtkCategory?: string;
+  rtkStats?: { originalTokens: number; filteredTokens: number; savedTokens: number; savingsPercent: number };
+}> {
   if (!isTauriAvailable()) {
     throw new Error('Tauri runtime not available');
   }
 
+  const opts = { ...DEFAULT_RTK_LLM_OPTIONS, ...rtkOptions };
+  
+  // RTK: Rewrite command for token optimization (only for LLM consumption)
+  let rewrittenCommand = command;
+  let rtkCategory: string | undefined;
+  let wasRewritten = false;
+  
+  if (opts.rewriteCommand && canRewrite(command)) {
+    rewrittenCommand = rewriteCommand(command, { enableRewrite: true });
+    wasRewritten = rewrittenCommand !== command;
+    rtkCategory = getCommandCategory(command) || undefined;
+    
+    if (wasRewritten) {
+      log.debug('RTK: Command rewritten', {
+        original: command.substring(0, 80),
+        rewritten: rewrittenCommand.substring(0, 80),
+        category: rtkCategory,
+      });
+    }
+  }
+
   try {
-    // Note: Rust handler only accepts 'command' and 'cwd' - sandboxId and timeout are ignored
-    return await invoke<ExecuteCommandResult>('execute_command', {
-      command,
+    const result = await invoke<ExecuteCommandResult>('execute_command', {
+      command: rewrittenCommand,
       cwd,
     });
+
+    // RTK: Filter output for LLM consumption (NOT for terminal display)
+    // Terminal display should get raw output, LLM consumption gets filtered
+    let output = result.output || '';
+    let rtkStats: { originalTokens: number; filteredTokens: number; savedTokens: number; savingsPercent: number } | undefined;
+    
+    if (opts.filterForLLM && result.success && output) {
+      const filterOptions: FilterOptions = {
+        maxLines: opts.maxLines,
+        maxChars: opts.maxChars,
+        groupByFile: opts.groupGrepOutput,
+        enableDedupe: true,
+        enableAnsiFilter: true,
+      };
+      
+      const filtered = filterOutput(output, rewrittenCommand, filterOptions);
+      
+      if (filtered !== output) {
+        output = filtered;
+        
+        // Track token savings if enabled
+        if (opts.trackSavings) {
+          const origTokens = estimateTokens(result.output || '');
+          const filteredTokens = estimateTokens(filtered);
+          const savedTokens = origTokens - filteredTokens;
+          
+          rtkStats = {
+            originalTokens: origTokens,
+            filteredTokens,
+            savedTokens,
+            savingsPercent: Math.round((savedTokens / origTokens) * 100),
+          };
+          
+          log.debug('RTK: Token savings', {
+            command: rewrittenCommand,
+            category: rtkCategory,
+            originalTokens: origTokens,
+            filteredTokens,
+            savedTokens,
+            savingsPercent: rtkStats.savingsPercent + '%',
+          });
+        }
+      }
+    }
+
+    return {
+      success: result.success,
+      output,
+      exit_code: result.exit_code,
+      error: result.error,
+      // RTK metadata for LLM context
+      rtkRewritten: wasRewritten ? rewrittenCommand : undefined,
+      rtkCategory,
+      rtkStats,
+    };
   } catch (error: any) {
     log.error('execute_command failed', error);
     return {
@@ -171,6 +295,8 @@ export async function executeCommand(
       output: '',
       exit_code: 1,
       error: error.message || String(error),
+      rtkRewritten: wasRewritten ? rewrittenCommand : undefined,
+      rtkCategory,
     };
   }
 }
@@ -602,6 +728,21 @@ export const tauriInvoke = {
     }
     try {
       return await invoke<{ success: boolean; error?: string }>('save_secret', { key, value });
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  },
+
+  /**
+   * Set the workspace root directory for the desktop app.
+   * Updates DESKTOP_WORKSPACE_ROOT env var and persists to settings.json.
+   */
+  setWorkspaceRoot: async (workspacePath: string): Promise<{ success: boolean; path?: string; error?: string }> => {
+    if (!isTauriAvailable()) {
+      return { success: false, error: 'Tauri not available' };
+    }
+    try {
+      return await invoke<{ success: boolean; path?: string; error?: string }>('set_workspace_root', { workspacePath });
     } catch (error: any) {
       return { success: false, error: error.message };
     }

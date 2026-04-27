@@ -108,7 +108,7 @@ const CloudStoragePlugin: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   };
 
   const handleGenerateDiff = () => {
-    if (!originalContent) return;
+    if (!selectedFile || !originalContent) return;
     
     // Since the textarea is controlled (value={fileContent}),
     // diffRef.current.value === fileContent always. Compare
