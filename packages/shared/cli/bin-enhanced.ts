@@ -1030,9 +1030,9 @@ program
       process.exit(1);
     }
   });
-import { LocalVFSManager } from './lib/local-vfs-manager';
-import { LocalHistoryProvider } from './lib/local-history-manager';
-import { PreviewManager } from './lib/preview-manager';
+import { LocalVFSManager } from './lib/local-vfs-manager.js';
+import { LocalHistoryProvider } from './lib/local-history-manager.js';
+import { PreviewManager } from './lib/preview-manager.js';
 // CLI: removed web/ import — { recordFailure, isBlacklisted } from '../../web/lib/sandbox/preview-circuit-breaker';
 
 // ... (existing helper setup)
