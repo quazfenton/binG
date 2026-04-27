@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDatabase } from '@/lib/database/connection';
 import { rateLimitMiddleware } from '@/lib/middleware/rate-limiter';
+import { hashValue } from '@/lib/utils/crypto';
 
 export async function POST(request: NextRequest) {
   try {
@@ -57,12 +58,15 @@ export async function POST(request: NextRequest) {
     const token = uuidv4();
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
 
-    // Save token to database
+    // Hash token for secure storage
+    const tokenHash = hashValue(token);
+
+    // Save token hash to database
     db.prepare(`
       UPDATE users 
-      SET email_verification_token = ?, email_verification_expires = ?
+      SET email_verification_token_hash = ?, email_verification_expires = ?
       WHERE email = ?
-    `).run(token, expiresAt.toISOString(), email);
+    `).run(tokenHash, expiresAt.toISOString(), email);
 
     // Send verification email
     const { emailService } = await import('@/lib/email/email-service');

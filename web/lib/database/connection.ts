@@ -672,12 +672,15 @@ export class DatabaseOperations {
   createUserWithVerification(email: string, username: string, passwordHash: string, verificationToken: string, verificationExpires: Date, emailVerified: boolean = false) {
     // Handle empty username - set to NULL to avoid unique constraint conflicts
     const finalUsername = username.trim() || null;
+    // Hash the verification token for secure storage
+    const crypto = require('crypto');
+    const tokenHash = crypto.createHash('sha256').update(verificationToken).digest('hex');
     const stmt = this.db.prepare(`
-      INSERT INTO users (email, username, password_hash, email_verification_token, email_verification_expires, email_verified)
+      INSERT INTO users (email, username, password_hash, email_verification_token_hash, email_verification_expires, email_verified)
       VALUES (?, ?, ?, ?, ?, ?)
     `);
     // Convert boolean to number for SQLite (0 or 1)
-    return stmt.run(email, finalUsername, passwordHash, verificationToken, verificationExpires.toISOString(), emailVerified ? 1 : 0);
+    return stmt.run(email, finalUsername, passwordHash, tokenHash, verificationExpires.toISOString(), emailVerified ? 1 : 0);
   }
 
   getUserByEmail(email: string) {
@@ -838,15 +841,19 @@ export class DatabaseOperations {
   
   // Session management
   createSession(sessionId: string, userId: number, expiresAt: Date, ipAddress?: string, userAgent?: string) {
+    const crypto = require('crypto');
+    const sessionHash = crypto.createHash('sha256').update(sessionId).digest('hex');
     const stmt = this.getPrepared('createSession', `
       INSERT INTO user_sessions (session_id, user_id, expires_at, ip_address, user_agent)
       VALUES (?, ?, ?, ?, ?)
     `);
 
-    return stmt.run(sessionId, userId, expiresAt.toISOString(), ipAddress, userAgent);
+    return stmt.run(sessionHash, userId, expiresAt.toISOString(), ipAddress, userAgent);
   }
 
   getSession(sessionId: string) {
+    const crypto = require('crypto');
+    const sessionHash = crypto.createHash('sha256').update(sessionId).digest('hex');
     const stmt = this.getPrepared('getSession', `
       SELECT s.*, u.email, u.username, u.subscription_tier
       FROM user_sessions s
@@ -854,15 +861,17 @@ export class DatabaseOperations {
       WHERE s.session_id = ? AND s.expires_at > CURRENT_TIMESTAMP AND u.is_active = TRUE
     `);
 
-    return stmt.get(sessionId);
+    return stmt.get(sessionHash);
   }
 
   deleteSession(sessionId: string) {
+    const crypto = require('crypto');
+    const sessionHash = crypto.createHash('sha256').update(sessionId).digest('hex');
     const stmt = this.db.prepare(`
       DELETE FROM user_sessions WHERE session_id = ?
     `);
 
-    return stmt.run(sessionId);
+    return stmt.run(sessionHash);
   }
 
   // Cleanup expired sessions

@@ -349,12 +349,4 @@ export {
   type SnapshotManagerConfig,
 } from './snapshot-manager';
 
-// Preview Offloader — DEPRECATED: use @/lib/previews/live-preview-offloading instead
-// This re-export will be removed in a future release.
-export {
-  previewOffloader,
-  type PreviewProvider,
-  type PreviewOffloadRequest,
-  type OffloadDecision,
-  type ExecuteResult,
-} from './preview-offloader';
+

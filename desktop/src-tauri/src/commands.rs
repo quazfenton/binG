@@ -129,8 +129,93 @@ impl Default for CheckpointState {
     }
 }
 
+/// Validates that a path stays within the workspace root.
+/// Returns the canonical path if valid, or an error if it escapes the workspace.
+fn validate_path_within_workspace(path: &str) -> Result<PathBuf, String> {
+    // Get the workspace root from environment or use current directory as fallback
+    let workspace_root = std::env::var("DESKTOP_WORKSPACE_ROOT")
+        .map(PathBuf::from)
+        .or_else(|_| std::env::current_dir())
+        .map_err(|e| format!("Failed to resolve workspace root: {}", e))?;
+    
+    let canonical_root = std::fs::canonicalize(&workspace_root)
+        .map_err(|e| format!("Failed to canonicalize workspace root: {}", e))?;
+    
+    // Handle empty or current directory paths
+    if path.trim().is_empty() || path == "." || path == "./" {
+        return Ok(canonical_root.clone());
+    }
+    
+    let requested = Path::new(path);
+    
+    // Reject absolute paths
+    if requested.is_absolute() {
+        return Err("Access denied: path must be relative and stay within workspace".to_string());
+    }
+    
+    // Check for path traversal (..) as a path component, not substring
+    for component in requested.components() {
+        if component == std::path::Component::ParentDir {
+            return Err("Access denied: path traversal (..) not allowed within workspace".to_string());
+        }
+    }
+    
+    let full_path = canonical_root.join(requested);
+    
+    // Check if the resolved path is within the workspace
+    let canonical = if full_path.exists() {
+        std::fs::canonicalize(&full_path)
+            .map_err(|e| format!("Failed to canonicalize path: {}", e))?
+    } else {
+        // For non-existent paths, verify the parent is within workspace
+        if let Some(parent) = full_path.parent() {
+            if parent.exists() {
+                let canonical_parent = std::fs::canonicalize(parent)
+                    .map_err(|e| format!("Failed to canonicalize parent: {}", e))?;
+                if !canonical_parent.starts_with(&canonical_root) {
+                    return Err("Access denied: path would escape workspace".to_string());
+                }
+            }
+        }
+        canonical_root.join(requested)
+    };
+    
+    if !canonical.starts_with(&canonical_root) {
+        return Err("Access denied: resolved path escapes workspace".to_string());
+    }
+    
+    Ok(canonical)
+}
+
 #[tauri::command]
 pub async fn execute_command(command: String, cwd: Option<String>) -> Result<CommandResult, String> {
+    // Security: Validate the command doesn't contain path traversal patterns
+    // that could escape the workspace
+    let cmd_lower = command.to_lowercase();
+    
+    // Common dangerous path patterns (platform-aware)
+    #[cfg(target_os = "windows")]
+    let suspicious_patterns = [
+        "..\\..\\",       // Path traversal Windows
+        "\\windows\\system32", // Windows system directory
+        "\\etc\\",        // Unix etc on Windows
+    ];
+    
+    #[cfg(not(target_os = "windows"))]
+    let suspicious_patterns = [
+        "../../",         // Path traversal Unix
+        "../../..",       // Deep path traversal
+        "/etc/",          // Unix system directory
+        "/root/",         // Root home directory
+    ];
+    
+    for pattern in suspicious_patterns {
+        if cmd_lower.contains(pattern) {
+            eprintln!("[execute_command] Blocked suspicious command pattern: {}", pattern);
+            return Err("Access denied: command contains blocked path pattern".to_string());
+        }
+    }
+    
     let shell = if cfg!(target_os = "windows") {
         "powershell"
     } else {
@@ -143,12 +228,25 @@ pub async fn execute_command(command: String, cwd: Option<String>) -> Result<Com
         "-c"
     };
 
+    // Resolve working directory: use DESKTOP_WORKSPACE_ROOT > cwd parameter > process cwd
+    let workspace_root = std::env::var("DESKTOP_WORKSPACE_ROOT")
+        .map(PathBuf::from)
+        .ok();
+    
+    let resolved_cwd = cwd
+        .as_ref()
+        .and_then(|p| validate_path_within_workspace(p).ok())
+        .or_else(|| workspace_root.clone())
+        .unwrap_or_else(|| {
+            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+        });
+
     let mut cmd = Command::new(shell);
     cmd.arg(flag).arg(&command);
-
-    if let Some(dir) = cwd {
-        cmd.current_dir(dir);
-    }
+    cmd.current_dir(&resolved_cwd);
+    
+    // Set workspace root in environment for child processes
+    cmd.env("DESKTOP_WORKSPACE_ROOT", resolved_cwd.to_string_lossy().as_ref());
 
     let output = tauri::async_runtime::spawn_blocking(move || cmd.output())
         .await
@@ -591,6 +689,15 @@ pub async fn create_pty_session(
 ) -> Result<PtyCreateResult, String> {
     let pty_system = native_pty_system();
     
+    // Get workspace root from environment for validation and default
+    let workspace_root = std::env::var("DESKTOP_WORKSPACE_ROOT")
+        .map(PathBuf::from)
+        .ok();
+    let workspace_path = workspace_root
+        .as_ref()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).to_string_lossy().to_string());
+    
     let pair = pty_system
         .openpty(PtySize {
             rows: rows.unwrap_or(24),
@@ -608,13 +715,22 @@ pub async fn create_pty_session(
         }
     });
 
+    // Validate and resolve working directory
+    let resolved_cwd = cwd
+        .as_ref()
+        .and_then(|p| validate_path_within_workspace(p).ok())
+        .or_else(|| workspace_root.clone())
+        .unwrap_or_else(|| {
+            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+        });
+
     let mut cmd = CommandBuilder::new(shell_cmd);
     
-    if let Some(dir) = cwd {
-        cmd.cwd(dir);
-    }
+    // Set validated working directory
+    cmd.cwd(&resolved_cwd);
 
-    // Set environment for interactive shell
+    // Set environment variables for workspace isolation
+    cmd.env("DESKTOP_WORKSPACE_ROOT", &workspace_path);
     cmd.env("TERM", "xterm-256color");
 
     let child = pair.slave.spawn_command(cmd)

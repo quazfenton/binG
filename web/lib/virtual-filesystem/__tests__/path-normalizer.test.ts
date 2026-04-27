@@ -52,19 +52,21 @@ describe('normalizeLLMPath', () => {
   });
 
   describe('path traversal rejection', () => {
-    it('strips .. segments by default', () => {
-      const result = normalizeLLMPath('../../../etc/passwd');
-      expect(result).not.toContain('..');
-      expect(result).toBe('etc/passwd');
+    it('throws on traversal by default (rejectTraversal: true)', () => {
+      expect(() => normalizeLLMPath('../../../etc/passwd')).toThrow('Path traversal');
     });
 
-    it('strips .. from middle of path', () => {
-      const result = normalizeLLMPath('src/../secret/file.ts');
+    it('strips .. from middle of path when stripTraversal is true', () => {
+      const result = normalizeLLMPath('src/../secret/file.ts', { stripTraversal: true });
       expect(result).not.toContain('..');
     });
 
-    it('allows traversal when rejectTraversal is false', () => {
-      const result = normalizeLLMPath('../src/app.ts', { rejectTraversal: false });
+    it('throws on traversal when rejectTraversal is true (default)', () => {
+      expect(() => normalizeLLMPath('../src/app.ts')).toThrow('Path traversal');
+    });
+
+    it('allows traversal when rejectTraversal is false and stripTraversal is false', () => {
+      const result = normalizeLLMPath('../src/app.ts', { rejectTraversal: false, stripTraversal: false });
       expect(result).toContain('..');
     });
   });
@@ -135,6 +137,27 @@ describe('normalizeLLMPath', () => {
     it('prevents workspace/sessions/001/src → double nesting', () => {
       const result = normalizeLLMPath('workspace/sessions/001/src/app.ts', { scopePath: scope });
       expect(result).toBe('src/app.ts');
+    });
+  });
+
+  describe('scope escape prevention', () => {
+    it('throws when path tries to escape to unrelated project scope', () => {
+      expect(() => resolveToScopedPath('project/other-scope/secret.txt', scope))
+        .toThrow('outside the allowed scope');
+    });
+
+    it('re-scopes paths from other sessions (stripping session prefix)', () => {
+      expect(resolveToScopedPath('project/sessions/002/src/app.ts', scope))
+        .toBe('project/sessions/001/src/app.ts');
+    });
+
+    it('allows path that exactly matches scope', () => {
+      expect(resolveToScopedPath('project/sessions/001', scope)).toBe(scope);
+    });
+
+    it('allows path within same session scope', () => {
+      expect(resolveToScopedPath('project/sessions/001/src/app.ts', scope))
+        .toBe('project/sessions/001/src/app.ts');
     });
   });
 });
