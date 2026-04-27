@@ -1,8 +1,10 @@
 -- ============================================================================
 -- Event System Schema
 -- Single source of truth — loaded once via getEventsSchema() in
--- events/store.ts, events/scheduler.ts, events/self-healing.ts, and
--- events/human-in-loop.ts
+-- events/store.ts and events/scheduler.ts
+--
+-- Defines core event tables: events and scheduled_tasks.
+-- Separate schemas define approval_requests and event_healing_log.
 -- ============================================================================
 
 -- Append-only event log
@@ -19,6 +21,7 @@ CREATE TABLE IF NOT EXISTS events (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME,
     completed_at DATETIME,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
     FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE SET NULL
 );
 
@@ -54,44 +57,3 @@ CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_user_id ON scheduled_tasks(user_i
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_type ON scheduled_tasks(task_type);
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_next_active ON scheduled_tasks(next_run, active);
 
--- Human-in-the-loop approval requests
-CREATE TABLE IF NOT EXISTS approval_requests (
-    id TEXT PRIMARY KEY,
-    event_id TEXT,
-    user_id TEXT NOT NULL,
-    conversation_id TEXT,
-    action TEXT NOT NULL,
-    description TEXT NOT NULL,
-    payload TEXT,
-    status TEXT NOT NULL DEFAULT 'pending',
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    expires_at DATETIME,
-    resolved_at DATETIME,
-    resolution TEXT,
-    approver_feedback TEXT,
-    FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE SET NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_approval_requests_event_id ON approval_requests(event_id);
-CREATE INDEX IF NOT EXISTS idx_approval_requests_status ON approval_requests(status);
-CREATE INDEX IF NOT EXISTS idx_approval_requests_user_id ON approval_requests(user_id);
-CREATE INDEX IF NOT EXISTS idx_approval_requests_created_at ON approval_requests(created_at);
-CREATE INDEX IF NOT EXISTS idx_approval_requests_expires_at ON approval_requests(expires_at);
-CREATE INDEX IF NOT EXISTS idx_approval_requests_pending ON approval_requests(status, created_at);
-
--- Self-healing log for event recovery attempts
-CREATE TABLE IF NOT EXISTS event_healing_log (
-    id TEXT PRIMARY KEY,
-    event_id TEXT NOT NULL,
-    strategy TEXT NOT NULL,
-    success BOOLEAN NOT NULL,
-    error_message TEXT,
-    recovery_data TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_healing_log_event_id ON event_healing_log(event_id);
-CREATE INDEX IF NOT EXISTS idx_healing_log_strategy ON event_healing_log(strategy);
-CREATE INDEX IF NOT EXISTS idx_healing_log_success ON event_healing_log(success);
-CREATE INDEX IF NOT EXISTS idx_healing_log_created_at ON event_healing_log(created_at);

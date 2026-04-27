@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { initializeDatabase } from '@/lib/database/db';
 import { generateToken } from '@/lib/auth/jwt';
+import { hashValue } from '@/lib/utils/crypto';
 
 interface EmailService {
   sendPasswordReset(email: string, resetToken: string, resetUrl: string): Promise<boolean>;
@@ -60,10 +61,14 @@ export async function POST(req: Request) {
       type: 'password_reset'
     });
 
-    // In a real application, you would:
-    // 1. Store the reset token in the database with an expiration time
-    // 2. Send an email with the reset link
-    // 3. Create a password reset page that accepts the token
+    // Store hashed token in database for single-use enforcement and revocation
+    const tokenHash = hashValue(resetToken);
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+    db.prepare(`
+      UPDATE users 
+      SET reset_token_hash = ?, reset_token_expires = ?
+      WHERE id = ?
+    `).run(tokenHash, expiresAt.toISOString(), user.id);
     
     // Send password reset email
     const resetUrl = `${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/reset-password?token=${resetToken}`;

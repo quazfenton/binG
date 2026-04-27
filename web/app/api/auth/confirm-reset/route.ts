@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDatabase } from '@/lib/database/connection';
 import { z } from 'zod';
+import { hashValue } from '@/lib/utils/crypto';
 
 // Lazy-loaded JWT module and secret to avoid build failures
 // CRITICAL: These must be at module scope for use in route handlers
@@ -131,7 +132,7 @@ export async function POST(req: NextRequest) {
     // SECURITY: Verify user exists, is active, AND has a valid reset token
     // This prevents token replay attacks where a captured token could be reused
     const user = db.prepare(`
-      SELECT id, email, is_active, reset_token, reset_token_expires 
+      SELECT id, email, is_active, reset_token_hash, reset_token_expires 
       FROM users WHERE id = ?
     `).get(userId) as any;
 
@@ -150,8 +151,8 @@ export async function POST(req: NextRequest) {
     }
 
     // SECURITY: Check if reset token has already been used or doesn't exist
-    // A consumed token will have reset_token set to NULL
-    if (!user.reset_token) {
+    // A consumed token will have reset_token_hash set to NULL
+    if (!user.reset_token_hash) {
       console.warn(`[Security] Password reset token replay attempt for user ${user.email} (ID: ${userId})`);
       return NextResponse.json(
         { 
@@ -176,6 +177,15 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // SECURITY: Verify presented token matches stored hash
+    const tokenHash = hashValue(token);
+    if (user.reset_token_hash !== tokenHash) {
+      return NextResponse.json(
+        { success: false, error: 'Invalid reset token' },
+        { status: 400 }
+      );
+    }
+
     // Hash new password
     const bcrypt = await import('bcryptjs');
     const passwordHash = await bcrypt.hash(newPassword, 10);
@@ -184,7 +194,7 @@ export async function POST(req: NextRequest) {
     db.prepare(`
       UPDATE users
       SET password_hash = ?,
-          reset_token = NULL,
+          reset_token_hash = NULL,
           reset_token_expires = NULL,
           updated_at = CURRENT_TIMESTAMP
       WHERE id = ?

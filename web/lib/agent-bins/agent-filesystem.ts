@@ -191,6 +191,7 @@ class LocalAgentFs implements AgentFilesystem {
     const relative = normalizeLLMPath(filePath, {
       stripDriveLetters: false, // Desktop mode: preserve drive letters for absolute paths
       rejectTraversal: true,
+      stripLeadingSlash: false, // Desktop mode: preserve Unix absolute paths
     });
 
     // If still absolute after normalization, use as-is

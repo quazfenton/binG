@@ -12,15 +12,15 @@ CREATE TABLE IF NOT EXISTS users (
     is_active BOOLEAN DEFAULT TRUE,
     subscription_tier TEXT DEFAULT 'free', -- free, pro, enterprise
     last_login DATETIME,
-    reset_token TEXT,
-    reset_token_expires DATETIME,
-    email_verified BOOLEAN DEFAULT FALSE,
-    email_verification_token TEXT,
+     reset_token_hash TEXT,
+     reset_token_expires DATETIME,
+     email_verified BOOLEAN DEFAULT FALSE,
+     email_verification_token_hash TEXT,
     email_verification_expires DATETIME
 );
 
--- Index for email verification token lookups
-CREATE INDEX IF NOT EXISTS idx_users_email_verification_token ON users(email_verification_token);
+-- Index for email verification token hash lookups
+CREATE INDEX IF NOT EXISTS idx_users_email_verification_token_hash ON users(email_verification_token_hash);
 
 -- API credentials table (encrypted)
 CREATE TABLE IF NOT EXISTS api_credentials (
@@ -176,8 +176,9 @@ VALUES
   ('e2b', 1000, 0, date('now', 'start of month', '+1 month'), FALSE, 5);
 
 -- Session management
+-- Note: session_id stores a SHA-256 hash of the session token for security.
 CREATE TABLE IF NOT EXISTS user_sessions (
-    session_id TEXT PRIMARY KEY, -- session token
+    session_id TEXT PRIMARY KEY, -- session token hash (SHA-256)
     user_id INTEGER NOT NULL,
     expires_at DATETIME NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -262,13 +263,12 @@ SELECT
     u.email,
     u.username,
     u.subscription_tier,
-    COUNT(DISTINCT c.id) as total_conversations,
-    COUNT(DISTINCT m.id) as total_messages,
-    COALESCE(SUM(ul.tokens_used), 0) as total_tokens_used,
-    COALESCE(SUM(ul.cost_usd), 0) as total_cost_usd,
+    -- Use DISTINCT to get unique conversations (handles multiple messages per conversation)
+    (SELECT COUNT(DISTINCT c2.id) FROM conversations c2 WHERE c2.user_id = u.id) as total_conversations,
+    -- Count total messages via conversation relationship
+    (SELECT COUNT(*) FROM conversations c2 JOIN messages m2 ON c2.id = m2.conversation_id WHERE c2.user_id = u.id) as total_messages,
+    -- Aggregate usage_logs independently (no JOIN to messages)
+    COALESCE((SELECT SUM(ul2.tokens_used) FROM usage_logs ul2 WHERE ul2.user_id = u.id), 0) as total_tokens_used,
+    COALESCE((SELECT SUM(ul2.cost_usd) FROM usage_logs ul2 WHERE ul2.user_id = u.id), 0) as total_cost_usd,
     u.created_at as user_created_at
-FROM users u
-LEFT JOIN conversations c ON u.id = c.user_id
-LEFT JOIN messages m ON c.id = m.conversation_id
-LEFT JOIN usage_logs ul ON u.id = ul.user_id
-GROUP BY u.id, u.email, u.username, u.subscription_tier, u.created_at;
+FROM users u;

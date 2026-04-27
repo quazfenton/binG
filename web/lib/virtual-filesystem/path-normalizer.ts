@@ -26,8 +26,12 @@ export interface NormalizePathOptions {
   scopePath?: string;
   /** If true, strip Windows drive letters even when not in desktop mode. Default: true. */
   stripDriveLetters?: boolean;
-  /** If true, reject paths containing `..`. Default: true. */
+  /** If true, reject paths containing `..` by throwing an error. Default: true. */
   rejectTraversal?: boolean;
+  /** If true, silently strip `..` segments instead of throwing. Overrides rejectTraversal. */
+  stripTraversal?: boolean;
+  /** If true, strip leading slash (/) to make path relative. Set false to preserve absolute Unix paths. Default: true. */
+  stripLeadingSlash?: boolean;
 }
 
 export interface NormalizeForDisplayOptions {
@@ -79,6 +83,7 @@ export function normalizeLLMPath(
     scopePath,
     stripDriveLetters = true,
     rejectTraversal = true,
+    stripTraversal = false,
   } = opts;
 
   if (!inputPath || typeof inputPath !== 'string') {
@@ -91,8 +96,8 @@ export function normalizeLLMPath(
     .replace(/\/+/g, '/')     // Collapse double slashes
     .replace(/\/+$/, '');      // Strip trailing slashes
 
-  // Strip leading slash
-  if (p.startsWith('/')) p = p.slice(1);
+   // Strip leading slash (unless explicitly preserved)
+   if (opts.stripLeadingSlash !== false && p.startsWith('/')) p = p.slice(1);
 
   // Strip leading `./` (repeated)
   while (p.startsWith('./')) p = p.slice(2);
@@ -160,16 +165,22 @@ export function normalizeLLMPath(
   }
 
   // Step 5: Path traversal rejection
-  if (rejectTraversal) {
+  if (rejectTraversal && !stripTraversal) {
     const segments = p.split('/');
     if (segments.some(seg => seg === '..')) {
-      // Best-effort: strip traversal segments instead of throwing
+      throw new Error('Path traversal (..) is not allowed');
+    }
+  } else if (stripTraversal) {
+    const segments = p.split('/');
+    if (segments.some(seg => seg === '..')) {
       p = segments.filter(s => s !== '..' && s !== '.').join('/');
     }
   }
 
-  // Strip any remaining leading slashes created by the above steps
-  p = p.replace(/^\/+/, '');
+  // Strip any remaining leading slashes created by the above steps (unless preserving absolute)
+  if (opts.stripLeadingSlash !== false) {
+    p = p.replace(/^\/+/, '');
+  }
 
   // Final guard: empty path after all stripping
   if (!p || !p.trim()) {
@@ -242,8 +253,15 @@ export function resolveToScopedPath(
   // If normalization returned '.', return the scope root
   if (relative === '.') return scopePath;
 
-  // If the relative path already starts with "project/", it's already fully qualified
-  if (relative.startsWith('project/')) return relative;
+  // If the relative path already starts with "project/", validate it's within the expected scope.
+  // Paths like "project/sessions/other-id/file" or "project/other-scope/file" are rejected
+  // to prevent scope escape attacks.
+  if (relative.startsWith('project/')) {
+    if (relative.startsWith(scopePath + '/') || relative === scopePath) {
+      return relative;
+    }
+    throw new Error(`Path "${relative}" is outside the allowed scope "${scopePath}"`);
+  }
 
   return `${scopePath}/${relative}`;
 }

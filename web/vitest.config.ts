@@ -31,8 +31,9 @@ export const INTEGRATION_TEST_PATTERNS = [
  * unrelated work.
  */
 export const UNIMPLEMENTED_MODULE_TEST_PATTERNS = [
-  // preview-offloader.test.ts and cloud-agent-preview-integration.test.ts
-  // are now un-skipped — the preview-offloader module has been implemented.
+  // preview-offloader.ts deleted — tests moved to live-preview-offloading
+  '**/__tests__/preview-offloader.test.ts',
+  '**/__tests__/cloud-agent-preview-integration.test.ts',
 
   '**/__tests__/v2-nullclaw-integration.test.ts',
   // Agent enhanced features — @bing/shared/agent/multi-agent-collaboration, agent-memory

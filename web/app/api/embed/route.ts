@@ -48,7 +48,20 @@ export async function POST(req: NextRequest) {
     const rawIp = req.headers.get("x-forwarded-for") ?? req.headers.get("x-real-ip") ?? "unknown";
     const ip = rawIp.split(",")[0].trim().toLowerCase();
     if (!checkRateLimit(ip)) {
-      return NextResponse.json({ error: "Rate limit exceeded" }, { status: 429 });
+      const entry = rateLimitMap.get(ip);
+      const retryAfter = entry ? Math.ceil((entry.resetAt - Date.now()) / 1000) : 60;
+      return NextResponse.json(
+        { error: "Rate limit exceeded" },
+        {
+          status: 429,
+          headers: {
+            "Retry-After": String(retryAfter),
+            "X-RateLimit-Limit": String(RATE_LIMIT),
+            "X-RateLimit-Remaining": "0",
+            "X-RateLimit-Reset": String(entry?.resetAt ?? Date.now() + RATE_WINDOW_MS),
+          },
+        }
+      );
     }
 
     let body: unknown;

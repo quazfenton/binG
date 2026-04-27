@@ -104,8 +104,13 @@ export function resolveScopedPath(requestedPath: string, scopePath?: string): st
   // '.' means "root of scope" after all stripping
   if (relative === '.') return scope;
 
-  // Already fully-qualified project path
-  if (relative.startsWith('project/')) return relative;
+  // Validate fully-qualified project paths are within the expected scope to prevent scope escape
+  if (relative.startsWith('project/')) {
+    if (relative.startsWith(scope + '/') || relative === scope) {
+      return relative;
+    }
+    throw new Error(`Path "${relative}" is outside the allowed scope "${scope}"`);
+  }
 
   return `${scope}/${relative}`;
 }

@@ -4,8 +4,8 @@
 -- Note: email_verified column is added by migration 001
 -- Note: These columns are now in base schema.sql
 
--- Create unique index for verification token lookups (safe to run multiple times)
-CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_verification_token ON users(email_verification_token);
+-- Create unique index for verification token hash lookups (safe to run multiple times)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_verification_token_hash ON users(email_verification_token_hash);
 
 -- SECURITY FIX: Only verify users who were created BEFORE this migration
 -- Users created AFTER this migration must verify their email normally
@@ -20,7 +20,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_verification_token ON users(em
 --   → No change needed
 UPDATE users
 SET email_verified = TRUE,
-    email_verification_token = NULL,
+    email_verification_token_hash = NULL,
     email_verification_expires = NULL
 WHERE email_verified IS NULL;
 

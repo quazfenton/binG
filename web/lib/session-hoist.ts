@@ -97,14 +97,22 @@ export async function hoistSessionFolder(
 
     // Create new session folder with the LLM's chosen name
     const newBasePath = `project/sessions/${folderName}`;
+    const writeFailures: string[] = [];
     for (const file of filesToMove) {
-      const relativePath = file.path.slice(subPath.length + 1); // Strip subPath/
+      const relativePath = file.path.slice(subPath.length + 1);
       const newPath = `${newBasePath}/${relativePath}`;
       try {
         await virtualFilesystem.writeFile(userId, newPath, file.content, file.language);
       } catch (err: any) {
-        logger.warn(`Hoist: failed to move ${file.path} → ${newPath}: ${err.message}`);
+        logger.warn(`Hoist: failed to write ${file.path} → ${newPath}: ${err.message}`);
+        writeFailures.push(file.path);
       }
+    }
+
+    // Only clean up old files if all writes succeeded
+    if (writeFailures.length > 0) {
+      logger.warn(`Hoist aborted: ${writeFailures.length} files failed to write. Skipping cleanup.`);
+      return sessionId;
     }
 
     // Clean up old session folder (delete all files)
