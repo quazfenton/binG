@@ -6,6 +6,8 @@
  */
 
 import { buildApiHeaders } from '@/lib/utils';
+import { isDesktopMode, isTauriRuntime } from '@bing/platform/env';
+import { tauriFetch } from '@/lib/tauri-api-adapter';
 
 /**
  * Get authentication headers for API requests.
@@ -23,15 +25,21 @@ export async function authenticatedFetch(
   options: RequestInit = {}
 ): Promise<Response> {
   const headers = getAuthHeaders();
-  
-  return fetch(url, {
+
+  const requestInit: RequestInit = {
     ...options,
     headers: {
       ...headers,
       ...(options.headers || {}),
     },
     credentials: 'include', // Include cookies for session
-  });
+  };
+
+  if (isDesktopMode() || isTauriRuntime()) {
+    return tauriFetch(url, requestInit);
+  }
+
+  return fetch(url, requestInit);
 }
 
 /**

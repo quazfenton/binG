@@ -74,7 +74,7 @@ function decrypt(data: string): string {
 
 export interface OAuthConnection {
   id: number;
-  userId: number;
+  userId: string;
   provider: string;
   providerAccountId: string;
   providerDisplayName: string | null;
@@ -87,7 +87,7 @@ export interface OAuthConnection {
 
 export interface OAuthSession {
   id: string;
-  userId: number | null;
+  userId: string | null;
   provider: string;
   state: string;
   nonce: string | null;
@@ -121,7 +121,7 @@ export class OAuthService {
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS external_connections (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
-          user_id INTEGER NOT NULL,
+          user_id TEXT NOT NULL,
           provider TEXT NOT NULL,
           provider_account_id TEXT NOT NULL,
           provider_display_name TEXT,
@@ -140,7 +140,7 @@ export class OAuthService {
 
         CREATE TABLE IF NOT EXISTS oauth_sessions (
           id TEXT PRIMARY KEY,
-          user_id INTEGER,
+          user_id TEXT,
           provider TEXT NOT NULL,
           state TEXT NOT NULL,
           nonce TEXT,
@@ -207,7 +207,7 @@ export class OAuthService {
   }
 
   async createOAuthSession(params: {
-    userId: number;
+    userId: string;
     provider: string;
     redirectUri?: string;
     usePkce?: boolean; // Enable PKCE by default for public clients
@@ -376,7 +376,7 @@ export class OAuthService {
   }
 
   async saveConnection(params: {
-    userId: number;
+    userId: string;
     provider: string;
     providerAccountId: string;
     providerDisplayName?: string;
@@ -426,7 +426,7 @@ export class OAuthService {
     return connection;
   }
 
-  async getUserConnections(userId: number, provider?: string): Promise<OAuthConnection[]> {
+  async getUserConnections(userId: string, provider?: string): Promise<OAuthConnection[]> {
     // Ensure database is available
     if (!this.db) {
       console.warn("[OAuthService] Database not ready");
@@ -448,7 +448,7 @@ export class OAuthService {
     }));
   }
 
-  async getDecryptedToken(connectionId: number, userId: number): Promise<{ accessToken: string; refreshToken?: string } | null> {
+  async getDecryptedToken(connectionId: number, userId: string): Promise<{ accessToken: string; refreshToken?: string } | null> {
     // Ensure database is available
     if (!this.db) {
       console.warn("[OAuthService] Database not ready");
@@ -470,7 +470,7 @@ export class OAuthService {
     };
   }
 
-  async revokeConnection(connectionId: number, userId: number): Promise<boolean> {
+  async revokeConnection(connectionId: number, userId: string): Promise<boolean> {
     // Ensure database is available
     if (!this.db) {
       console.warn("[OAuthService] Database not ready");

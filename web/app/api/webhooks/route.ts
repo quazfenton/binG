@@ -31,7 +31,7 @@ function verifyWebhookSignature(body: string, signature: string | null, secret: 
  * Verify user exists in database before saving OAuth connection
  * Defense in depth to prevent creating orphan connections
  */
-async function verifyUserExists(userId: number): Promise<boolean> {
+async function verifyUserExists(userId: string): Promise<boolean> {
   try {
     const db = getDatabase();
     const stmt = db.prepare('SELECT 1 FROM users WHERE id = ? LIMIT 1');
@@ -82,19 +82,15 @@ async function handleArcadeWebhook(body: any): Promise<NextResponse> {
 
   if (status === 'completed' && user_id) {
     try {
-      // Verify user exists before saving connection (defense in depth)
-      const userId = Number.parseInt(user_id, 10);
-      if (isNaN(userId)) {
-        console.error('[Webhook/Arcade] Invalid user_id in webhook:', user_id);
-        return NextResponse.json({ error: 'Invalid user ID' }, { status: 400 });
-      }
+      // userId is now a string (UUID)
+      const userId = String(user_id);
 
-      // Verify user exists in database
-      const userExists = await verifyUserExists(userId);
-      if (!userExists) {
-        console.error('[Webhook/Arcade] User not found:', userId);
-        return NextResponse.json({ error: 'User not found' }, { status: 404 });
-      }
+        // Verify user exists in database
+        const userExists = await verifyUserExists(userId);
+        if (!userExists) {
+          console.error('[Webhook/Arcade] User not found:', userId);
+          return NextResponse.json({ error: 'User not found' }, { status: 404 });
+        }
 
       // Map Arcade tool names to our internal provider names
       const providerMap: Record<string, string> = {
@@ -127,7 +123,7 @@ async function handleArcadeWebhook(body: any): Promise<NextResponse> {
       // has authorized this provider/service combination
       // For Arcade, we'll store minimal information since Arcade manages the tokens
       await oauthService.saveConnection({
-        userId,
+        userId: userId,
         provider,
         providerAccountId: `arcade_${user_id}`, // Unique identifier for Arcade connection
         providerDisplayName: `${toolPrefix} via Arcade`,
@@ -200,11 +196,8 @@ async function handleNangoWebhook(body: any): Promise<NextResponse> {
         return NextResponse.json({ error: 'No user ID found in webhook tags' }, { status: 400 });
       }
 
-      const userId = Number.parseInt(userIdStr.toString(), 10);
-      if (isNaN(userId)) {
-        console.error('[Webhook/Nango] Invalid user ID:', userIdStr);
-        return NextResponse.json({ error: 'Invalid user ID' }, { status: 400 });
-      }
+      // userId is now a string (UUID)
+      const userId = String(userIdStr);
 
       // Verify user exists before saving connection (defense in depth)
       const userExists = await verifyUserExists(userId);
@@ -216,7 +209,7 @@ async function handleNangoWebhook(body: any): Promise<NextResponse> {
       // For Nango, we store the connectionId which can be used to retrieve tokens later
       // Nango manages the actual tokens, we just need to associate the connectionId with our user
       await oauthService.saveConnection({
-        userId,
+        userId: userId,
         provider,
         providerAccountId: connectionId, // Nango's connection ID
         providerDisplayName: `${providerConfigKey} via Nango`,

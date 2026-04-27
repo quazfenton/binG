@@ -34,13 +34,13 @@ async function resolveArcadeUserId(userId: string): Promise<string> {
     return userId;
   }
 
-  const numericUserId = Number(userId);
-  if (Number.isNaN(numericUserId)) {
-    return userId;
+  // userId is now a string (UUID), try directly
+  if (userId && typeof userId === 'string') {
+    const user = await authService.getUserById(userId);
+    if (user?.email) return user.email;
   }
 
-  const user = await authService.getUserById(numericUserId);
-  return user?.email || userId;
+  return userId;
 }
 
 function extractNangoAction(toolName: string): { integrationId: string; actionName: string } {

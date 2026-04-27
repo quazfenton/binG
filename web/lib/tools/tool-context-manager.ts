@@ -44,10 +44,9 @@ export class ToolContextManager {
   private errorHandler = getToolErrorHandler();
 
   private async resolveUserEmail(userId: string): Promise<string | undefined> {
-    const numericUserId = Number(userId);
-    if (Number.isNaN(numericUserId)) return undefined;
+    if (!userId || typeof userId !== 'string') return undefined;
     try {
-      const user = await authService.getUserById(numericUserId);
+      const user = await authService.getUserById(userId);
       return user?.email;
     } catch {
       return undefined;

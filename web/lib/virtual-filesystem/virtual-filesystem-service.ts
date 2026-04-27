@@ -859,6 +859,42 @@ export class VirtualFilesystemService {
   }
 
   async exportWorkspace(ownerId: string): Promise<VirtualWorkspaceSnapshot & { structure?: Record<string, string[]> }> {
+    if (isDesktopMode() && isUsingLocalFS()) {
+      const snapshot = await fsBridge.exportWorkspace(ownerId);
+      const files: VirtualFile[] = snapshot.files
+        .map((file) => ({
+          path: file.path,
+          content: file.content,
+          language: file.language || 'text',
+          size: file.size ?? 0,
+          version: (file as any).version ?? 1,
+          lastModified: file.lastModified ?? new Date().toISOString(),
+          createdAt: file.createdAt ?? new Date().toISOString(),
+        }))
+        .sort((a, b) => a.path.localeCompare(b.path));
+
+      const structure: Record<string, string[]> = {};
+      for (const file of files) {
+        const parts = file.path.split('/');
+        if (parts.length > 1) {
+          const dir = parts.slice(0, -1).join('/');
+          if (!structure[dir]) {
+            structure[dir] = [];
+          }
+          structure[dir].push(parts[parts.length - 1]);
+        }
+      }
+
+      return {
+        root: snapshot.root,
+        version: snapshot.version,
+        updatedAt: new Date().toISOString(),
+        exportedAt: new Date().toISOString(),
+        files,
+        structure,
+      };
+    }
+
     const workspace = await this.ensureWorkspace(ownerId);
     const files = Array.from(workspace.files.values())
       .map((file) => ({ ...file }))

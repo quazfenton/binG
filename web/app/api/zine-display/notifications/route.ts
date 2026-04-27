@@ -23,7 +23,7 @@ interface NotificationItem {
 // ---------------------------------------------------------------------
 
 async function getProviderToken(
-  userId: number,
+  userId: string,
   provider: string,
   toolName?: string
 ): Promise<{ token: string | null; source: string }> {
@@ -82,7 +82,7 @@ async function getProviderToken(
  * Fetch Discord notifications (recent messages from configured channels)
  * Requires Discord bot token or user token via OAuth
  */
-async function fetchDiscordNotifications(userId: number): Promise<NotificationItem[]> {
+async function fetchDiscordNotifications(userId: string): Promise<NotificationItem[]> {
   try {
     const { token } = await getProviderToken(userId, 'discord');
 
@@ -128,7 +128,7 @@ async function fetchDiscordNotifications(userId: number): Promise<NotificationIt
  * Fetch Gmail notifications (recent unread emails)
  * Requires Gmail OAuth scope
  */
-async function fetchGmailNotifications(userId: number): Promise<NotificationItem[]> {
+async function fetchGmailNotifications(userId: string): Promise<NotificationItem[]> {
   try {
     let token: string | null = null;
     
@@ -209,7 +209,7 @@ async function fetchGmailNotifications(userId: number): Promise<NotificationItem
 /**
  * Fetch Slack notifications (recent messages from configured channels)
  */
-async function fetchSlackNotifications(userId: number): Promise<NotificationItem[]> {
+async function fetchSlackNotifications(userId: string): Promise<NotificationItem[]> {
   try {
     let token: string | null = null;
     
@@ -282,7 +282,7 @@ async function fetchSlackNotifications(userId: number): Promise<NotificationItem
 /**
  * Fetch GitHub notifications (notifications for the user)
  */
-async function fetchGitHubNotifications(userId: number): Promise<NotificationItem[]> {
+async function fetchGitHubNotifications(userId: string): Promise<NotificationItem[]> {
   try {
     let token: string | null = null;
     
@@ -346,7 +346,7 @@ async function fetchGitHubNotifications(userId: number): Promise<NotificationIte
 /**
  * Fetch Twitter/X notifications (if connected)
  */
-async function fetchTwitterNotifications(userId: number): Promise<NotificationItem[]> {
+async function fetchTwitterNotifications(userId: string): Promise<NotificationItem[]> {
   // Twitter API v2 requires elevated access - return mock for now
   // In production, would use OAuth token to fetch mentions/timeline
   return [];
@@ -358,11 +358,10 @@ async function fetchTwitterNotifications(userId: number): Promise<NotificationIt
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
-  const userId = searchParams.get('userId') || '0';
+  const userId = searchParams.get('userId') || '';
   const provider = searchParams.get('provider'); // Optional: fetch specific provider only
-  const numericUserId = Number(userId);
 
-  if (isNaN(numericUserId)) {
+  if (!userId) {
     return NextResponse.json(
       { success: false, error: 'Invalid userId' },
       { status: 400 }
@@ -387,20 +386,20 @@ export async function GET(request: NextRequest) {
       
       switch (p) {
         case 'discord':
-          notifs = await fetchDiscordNotifications(numericUserId);
+          notifs = await fetchDiscordNotifications(userId);
           break;
         case 'gmail':
         case 'google':
-          notifs = await fetchGmailNotifications(numericUserId);
+          notifs = await fetchGmailNotifications(userId);
           break;
         case 'slack':
-          notifs = await fetchSlackNotifications(numericUserId);
+          notifs = await fetchSlackNotifications(userId);
           break;
         case 'github':
-          notifs = await fetchGitHubNotifications(numericUserId);
+          notifs = await fetchGitHubNotifications(userId);
           break;
         case 'twitter':
-          notifs = await fetchTwitterNotifications(numericUserId);
+          notifs = await fetchTwitterNotifications(userId);
           break;
         default:
           console.log(`[Zine-Notifications] Unknown provider: ${p}`);
@@ -441,14 +440,16 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const { action, provider, userId, sourceUrl } = body;
 
-    const numericUserId = Number(userId || '0');
+    if (!userId) {
+      return NextResponse.json({ success: false, error: 'Invalid userId' }, { status: 400 });
+    }
 
     // Fetch custom URL with stored OAuth token
     if (action === 'fetch-with-token' && sourceUrl && provider) {
       let token: string | null = null;
       
       // Get token for the provider
-      const tokenResult = await toolAuthManager.getToolToken(String(numericUserId), `${provider}.read`);
+      const tokenResult = await toolAuthManager.getToolToken(userId, `${provider}.read`);
       token = tokenResult.token;
 
       if (!token) {

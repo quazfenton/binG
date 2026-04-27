@@ -1481,7 +1481,7 @@ export default function TerminalPanel({
             webPty = await createWebLocalPty({
               cols: terminal.cols,
               rows: terminal.rows,
-              cwd: localShellCwdRef.current[terminalId] || 'project/sessions',
+              cwd: localShellCwdRef.current[terminalId] || getDesktopWorkspaceDir() || 'project',
             });
           }
         } catch (ptyError) {

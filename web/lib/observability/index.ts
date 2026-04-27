@@ -13,6 +13,9 @@ export * from './tracing';
 export * from './metrics';
 import { registerAllMetrics } from './metrics';
 
+// Constraint violation monitor exports
+export * from './constraint-violation-monitor';
+
 /**
  * Initialize observability
  */

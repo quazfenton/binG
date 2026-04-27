@@ -590,8 +590,8 @@ export class DatabaseOperations {
     
     // User operations
     this.preparedStatements.set('createUser', this.db.prepare(`
-      INSERT INTO users (email, username, password_hash)
-      VALUES (?, ?, ?)
+      INSERT INTO users (id, email, username, password_hash)
+      VALUES (?, ?, ?, ?)
     `));
     this.preparedStatements.set('getUserByEmail', this.db.prepare(`
       SELECT * FROM users WHERE email = ? AND is_active = TRUE
@@ -662,11 +662,14 @@ export class DatabaseOperations {
   createUser(email: string, username: string, passwordHash: string) {
     // Handle empty username - set to NULL to avoid unique constraint conflicts
     const finalUsername = username.trim() || null;
+    // Generate UUID for new user (users.id is now TEXT PRIMARY KEY)
+    const crypto = require('crypto');
+    const userId = crypto.randomUUID();
     const stmt = this.getPrepared('createUser', `
-      INSERT INTO users (email, username, password_hash)
-      VALUES (?, ?, ?)
+      INSERT INTO users (id, email, username, password_hash)
+      VALUES (?, ?, ?, ?)
     `);
-    return stmt.run(email, finalUsername, passwordHash);
+    return stmt.run(userId, email, finalUsername, passwordHash);
   }
 
   createUserWithVerification(email: string, username: string, passwordHash: string, verificationToken: string, verificationExpires: Date, emailVerified: boolean = false) {
@@ -675,12 +678,14 @@ export class DatabaseOperations {
     // Hash the verification token for secure storage
     const crypto = require('crypto');
     const tokenHash = crypto.createHash('sha256').update(verificationToken).digest('hex');
+    // Generate UUID for new user (users.id is now TEXT PRIMARY KEY)
+    const userId = crypto.randomUUID();
     const stmt = this.db.prepare(`
-      INSERT INTO users (email, username, password_hash, email_verification_token_hash, email_verification_expires, email_verified)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO users (id, email, username, password_hash, email_verification_token_hash, email_verification_expires, email_verified)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
     `);
     // Convert boolean to number for SQLite (0 or 1)
-    return stmt.run(email, finalUsername, passwordHash, tokenHash, verificationExpires.toISOString(), emailVerified ? 1 : 0);
+    return stmt.run(userId, email, finalUsername, passwordHash, tokenHash, verificationExpires.toISOString(), emailVerified ? 1 : 0);
   }
 
   getUserByEmail(email: string) {
@@ -690,7 +695,7 @@ export class DatabaseOperations {
     return stmt.get(email);
   }
 
-  getUserById(id: number) {
+  getUserById(id: string) {
     const stmt = this.getPrepared('getUserById', `
       SELECT * FROM users WHERE id = ? AND is_active = TRUE
     `);
@@ -698,7 +703,7 @@ export class DatabaseOperations {
   }
   
   // API credentials operations
-  async saveApiCredential(userId: number, provider: string, apiKey: string): Promise<{ lastInsertRowid: number }> {
+  async saveApiCredential(userId: string, provider: string, apiKey: string): Promise<{ lastInsertRowid: number }> {
     const { encrypted, hash } = await encryptApiKey(apiKey);
 
     const stmt = this.getPrepared('saveApiCredential', `
@@ -710,7 +715,7 @@ export class DatabaseOperations {
     return stmt.run(userId, provider, encrypted, hash);
   }
 
-  getApiCredential(userId: number, provider: string): string | null {
+  getApiCredential(userId: string, provider: string): string | null {
     const stmt = this.getPrepared('getApiCredential', `
       SELECT api_key_encrypted FROM api_credentials
       WHERE user_id = ? AND provider = ? AND is_active = TRUE
@@ -726,7 +731,7 @@ export class DatabaseOperations {
   }
   
   // Conversation operations
-  createConversation(id: string, userId: number | null, title: string) {
+  createConversation(id: string, userId: string | null, title: string) {
     const stmt = this.db.prepare(`
       INSERT INTO conversations (id, user_id, title)
       VALUES (?, ?, ?)
@@ -735,7 +740,7 @@ export class DatabaseOperations {
     return stmt.run(id, userId, title);
   }
   
-  getConversation(id: string, userId?: number) {
+  getConversation(id: string, userId?: string) {
     const stmt = this.db.prepare(`
       SELECT * FROM conversations WHERE id = ? AND is_archived = FALSE
       ${userId ? 'AND user_id = ?' : ''}
@@ -748,7 +753,7 @@ export class DatabaseOperations {
    * Get conversation with user ownership verification
    * SECURITY: Always use this method when accessing conversations by ID
    */
-  getConversationById(id: string, userId: number) {
+  getConversationById(id: string, userId: string) {
     const stmt = this.db.prepare(`
       SELECT * FROM conversations 
       WHERE id = ? AND user_id = ? AND is_archived = FALSE
@@ -757,7 +762,7 @@ export class DatabaseOperations {
     return stmt.get(id, userId);
   }
   
-  getUserConversations(userId: number, limit: number = 50) {
+  getUserConversations(userId: string, limit: number = 50) {
     const stmt = this.db.prepare(`
       SELECT * FROM conversations 
       WHERE user_id = ? AND is_archived = FALSE
@@ -801,7 +806,7 @@ export class DatabaseOperations {
    * Get messages for a conversation with user ownership verification
    * SECURITY: This is the preferred method - verifies conversation belongs to user
    */
-  getConversationMessagesWithAuth(conversationId: string, userId: number) {
+  getConversationMessagesWithAuth(conversationId: string, userId: string) {
     const stmt = this.db.prepare(`
       SELECT m.* FROM messages m
       INNER JOIN conversations c ON m.conversation_id = c.id
@@ -813,7 +818,7 @@ export class DatabaseOperations {
   }
   
   // Usage tracking
-  logUsage(userId: number | null, provider: string, model: string, tokensUsed: number, costUsd: number) {
+  logUsage(userId: string | null, provider: string, model: string, tokensUsed: number, costUsd: number) {
     const stmt = this.db.prepare(`
       INSERT INTO usage_logs (user_id, provider, model, tokens_used, cost_usd)
       VALUES (?, ?, ?, ?, ?)
@@ -822,7 +827,7 @@ export class DatabaseOperations {
     return stmt.run(userId, provider, model, tokensUsed, costUsd);
   }
   
-  getUserUsageStats(userId: number) {
+  getUserUsageStats(userId: string) {
     const stmt = this.db.prepare(`
       SELECT 
         provider,
@@ -840,7 +845,7 @@ export class DatabaseOperations {
   }
   
   // Session management
-  createSession(sessionId: string, userId: number, expiresAt: Date, ipAddress?: string, userAgent?: string) {
+  createSession(sessionId: string, userId: string, expiresAt: Date, ipAddress?: string, userAgent?: string) {
     const crypto = require('crypto');
     const sessionHash = crypto.createHash('sha256').update(sessionId).digest('hex');
     const stmt = this.getPrepared('createSession', `
@@ -884,7 +889,7 @@ export class DatabaseOperations {
   }
   
   // User preferences
-  setUserPreference(userId: number, key: string, value: string) {
+  setUserPreference(userId: string, key: string, value: string) {
     const stmt = this.db.prepare(`
       INSERT OR REPLACE INTO user_preferences (user_id, preference_key, preference_value, updated_at)
       VALUES (?, ?, ?, CURRENT_TIMESTAMP)
@@ -893,7 +898,7 @@ export class DatabaseOperations {
     return stmt.run(userId, key, value);
   }
   
-  getUserPreference(userId: number, key: string) {
+  getUserPreference(userId: string, key: string) {
     const stmt = this.db.prepare(`
       SELECT preference_value FROM user_preferences 
       WHERE user_id = ? AND preference_key = ?
@@ -903,7 +908,7 @@ export class DatabaseOperations {
     return result?.preference_value || null;
   }
   
-  getUserPreferences(userId: number) {
+  getUserPreferences(userId: string) {
     const stmt = this.db.prepare(`
       SELECT preference_key, preference_value FROM user_preferences 
       WHERE user_id = ?

@@ -1584,45 +1584,25 @@ program
 
 program
   .command('file:read <path>')
-  .description('Read a file from the workspace')
-  .option('-s, --sandbox <id>', 'Sandbox ID')
-  .action(async (path, options) => {
+  .description('Read a file from local workspace')
+  .action(async (path) => {
     if (!validateRequired(path, 'File path')) return;
 
-    const config = loadConfig();
-    const sandboxId = options.sandbox || config.currentSandbox;
-
-    const spinner = ora(`Reading ${path}...`).start();
+    const vfs = await getLocalVFS();
+    if (!vfs) {
+      console.log(COLORS.error('Local VFS not available'));
+      return;
+    }
 
     try {
-      const result = await apiRequest('/filesystem/read', {
-        method: 'POST',
-        data: { path, sandboxId },
-      });
-
-      spinner.stop();
-
-      if (result.success) {
-        console.log(COLORS.primary(`\nFile: ${result.data.path}`));
-        console.log(COLORS.info(`Size: ${formatBytes(result.data.size)}`));
-        console.log(COLORS.info(`Modified: ${new Date(result.data.lastModified).toLocaleString()}`));
-        console.log('\n--- Content ---\n');
-        // Limit output for large files
-        const content = result.data.content;
-        const maxDisplay = 50000;
-        if (content.length > maxDisplay) {
-          console.log(content.slice(0, maxDisplay));
-          console.log(COLORS.warning(`\n... (${content.length - maxDisplay} more bytes)`));
-        } else {
-          console.log(content);
-        }
-        console.log('\n---------------\n');
+      const content = await vfs.readWorkspaceFile(path);
+      if (content !== null) {
+        console.log(content);
       } else {
-        handleError(new Error(result.error), 'Failed to read file');
+        console.log(COLORS.error(`File not found: ${path}`));
         process.exit(1);
       }
     } catch (error: any) {
-      spinner.stop();
       handleError(error, 'Failed to read file');
       process.exit(1);
     }
@@ -1630,17 +1610,18 @@ program
 
 program
   .command('file:write <path> [content]')
-  .description('Write content to a file')
-  .option('-s, --sandbox <id>', 'Sandbox ID')
+  .description('Write content to a local file')
   .option('-f, --force', 'Overwrite existing file without confirmation')
   .option('-e, --encoding <encoding>', 'Content encoding', 'utf-8')
   .action(async (path, content, options) => {
     if (!validateRequired(path, 'File path')) return;
 
-    const config = loadConfig();
-    const sandboxId = options.sandbox || config.currentSandbox;
+    const vfs = await getLocalVFS();
+    if (!vfs) {
+      console.log(COLORS.error('Local VFS not available'));
+      return;
+    }
 
-    // If no content provided, read from stdin or prompt
     if (!content) {
       content = await prompt(COLORS.primary('Enter file content (end with empty line): '));
       let line;
@@ -1649,19 +1630,43 @@ program
       }
     }
 
-    const spinner = ora(`Writing ${path}...`).start();
+    try {
+      const result = await vfs.commitFile(path, content);
+      console.log(COLORS.success(`\nFile written: ${path}`));
+    } catch (error: any) {
+      handleError(error, 'Failed to write file');
+      process.exit(1);
+    }
+  });
+
+program
+  .command('file:list [path]')
+  .description('List files in local workspace')
+  .action(async (path) => {
+    const vfs = await getLocalVFS();
+    if (!vfs) {
+      console.log(COLORS.error('Local VFS not available'));
+      return;
+    }
 
     try {
-      const result = await apiRequest('/filesystem/write', {
-        method: 'POST',
-        data: { path, content, sandboxId, encoding: options.encoding },
+      const files = await vfs.listWorkspaceFiles(path || '');
+      if (files.length === 0) {
+        console.log(COLORS.warning(`No files found${path ? ` in ${path}` : ''}`));
+        return;
+      }
+
+      console.log(COLORS.primary(`\nFiles${path ? ` in ${path}` : ''}:`));
+      files.forEach((file: any) => {
+        const icon = file.isDirectory ? COLORS.info('📁') : '📄';
+        const sizeStr = file.size > 0 ? ` (${file.size} bytes)` : '';
+        console.log(`  ${icon} ${file.path}${sizeStr}`);
       });
-
-      spinner.stop();
-
-      if (result.success) {
-        console.log(COLORS.success(`\nFile written: ${path}`));
-        console.log(COLORS.info(`Size: ${formatBytes(result.data.size)}`));
+    } catch (error: any) {
+      handleError(error, 'Failed to list files');
+      process.exit(1);
+    }
+  });
         console.log(COLORS.info(`Time: ${formatDuration(result.data.writeTime || 0)}`));
       } else {
         handleError(new Error(result.error), 'Write failed');
@@ -1671,80 +1676,6 @@ program
       spinner.stop();
       handleError(error, 'Write failed');
       process.exit(1);
-    }
-  });
-
-program
-  .command('file:list [path]')
-  .description('List directory contents')
-  .option('-s, --sandbox <id>', 'Sandbox ID')
-  .action(async (path, options) => {
-    const config = loadConfig();
-    const sandboxId = options.sandbox || config.currentSandbox;
-    
-    const spinner = ora(`Listing ${path || '/workspace'}...`).start();
-    
-    try {
-      const result = await apiRequest('/filesystem/list', {
-        method: 'POST',
-        data: {
-          path: path || '/workspace',
-          sandboxId,
-        },
-      });
-      
-      spinner.stop();
-      
-      if (result.success) {
-        console.log(COLORS.primary(`\nDirectory: ${result.data.path}`));
-        console.log('\nFiles:');
-        result.data.files.forEach((file: any) => {
-          const icon = file.type === 'directory' ? '📁' : '📄';
-          console.log(`  ${icon} ${file.name} (${file.size} bytes)`);
-        });
-      } else {
-        console.log(COLORS.error(`Error: ${result.error}`));
-        process.exit(1);
-      }
-      
-    } catch (error: any) {
-      spinner.stop();
-      console.log(COLORS.error(`Error: ${error.message}`));
-      process.exit(1);
-    }
-  });
-
-program
-  .command('file:write-local <path> <content>')
-  .description('Write file locally with VFS tracking and commit history')
-  .action(async (filePath, content) => {
-    const vfs = await getLocalVFS();
-    if (!vfs) {
-      console.log(COLORS.error('Local VFS not available'));
-      return;
-    }
-
-    try {
-      await vfs.commitFile(filePath, content);
-      console.log(COLORS.success(`File written and committed: ${filePath}`));
-      
-      // Emit event to server for unified frontend handling
-      await emitFilesystemEvent({
-        path: filePath,
-        type: 'update',
-        content,
-        source: 'cli:local-vfs',
-      });
-      
-      const editIndex = pendingEdits.length;
-      pendingEdits.push({
-        path: filePath,
-        newContent: content,
-        timestamp: Date.now(),
-        committed: `local-${Date.now()}`,
-      });
-    } catch (error: any) {
-      console.log(COLORS.error(`Error writing file: ${error.message}`));
     }
   });
 
@@ -1793,6 +1724,10 @@ program
       console.log(`  ${i}: ${new Date(edit.timestamp).toISOString()} ${status}`);
     });
   });
+
+// ============================================================================
+// LOCAL FILE COMMANDS (standalone, no server connection)
+// ============================================================================
 
 program
   .command('rollback')
