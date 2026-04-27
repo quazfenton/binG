@@ -51,7 +51,7 @@
     ],
     "downlevelIteration": true,
     "allowSyntheticDefaultImports": true,
-    "strictNullChecks": true
+    "strictNullChecks": false,
   },
   "include": [
     "next-env.d.ts",

@@ -483,14 +483,17 @@ pub fn run() {
 
     // Capture the user's launch directory BEFORE spawning the sidecar.
     // The sidecar's own CWD will be the web bundle dir, so we need to
-    // capture this here and pass it via the LAUNCH_CWD env var.
+    // capture this here and pass it through the workspace env vars used by
+    // the web app and shared platform helpers.
     let launch_cwd = std::env::current_dir()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| ".".to_string());
     log::log_msg(&format!("[run] Captured launch directory: {}", launch_cwd));
     
-    // Set LAUNCH_CWD so the sidecar knows the user's real working directory
+    // Set both names for compatibility with older and newer workspace helpers.
     std::env::set_var("LAUNCH_CWD", &launch_cwd);
+    std::env::set_var("INITIAL_CWD", &launch_cwd);
+    std::env::set_var("DESKTOP_WORKSPACE_ROOT", &launch_cwd);
 
     // Wrap the sidecar child process so it gets killed on drop
     let sidecar_child: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(None));
@@ -548,7 +551,9 @@ pub fn run() {
                 sidecar_json
             );
 
-            // Create the main window
+            // Create the main window using the bundled startup shell. The
+            // shell shows the loading UI and redirects to the sidecar once it
+            // is reachable, which preserves the draggable title region.
             let url = "index.html".to_string();
 
             let builder = tauri::WebviewWindowBuilder::new(

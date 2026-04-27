@@ -2050,6 +2050,26 @@ pub async fn load_settings(app: AppHandle) -> Result<serde_json::Value, String> 
     }
     let raw = std::fs::read_to_string(&path)
         .map_err(|e| format!("Failed to read settings: {}", e))?;
-    serde_json::from_str(&raw)
-        .map_err(|e| format!("Failed to parse settings: {}", e))
+    let mut settings: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| format!("Failed to parse settings: {}", e))?;
+
+    if let Some(root) = settings.get("workspaceRoot").and_then(|v| v.as_str()) {
+        let looks_bundled =
+            root.contains("desktop\\src-tauri\\target\\release") ||
+            root.contains("desktop/src-tauri/target/release") ||
+            root.contains("\\web-assets\\") ||
+            root.contains("/web-assets/") ||
+            root.contains("\\node_modules\\") ||
+            root.contains("/node_modules/");
+
+        if looks_bundled {
+            if let Ok(fallback) = std::env::var("DESKTOP_WORKSPACE_ROOT") {
+                if let Some(obj) = settings.as_object_mut() {
+                    obj.insert("workspaceRoot".to_string(), serde_json::Value::String(fallback));
+                }
+            }
+        }
+    }
+
+    Ok(settings)
 }
