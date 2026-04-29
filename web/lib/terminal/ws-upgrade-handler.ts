@@ -158,8 +158,17 @@ export async function handleTerminalWsUpgrade(
     const p = Array.isArray(proto) ? proto[0] : proto;
     if (p?.startsWith('Bearer ')) token = p.substring(7);
   }
+  // HIGH-3 fix: Query param token removed — tokens in URLs are logged in
+  // browser history, server access logs, referrer headers, and proxy logs.
+  // Use Authorization header or Sec-WebSocket-Protocol instead.
   if (!token && query.token) {
-    console.warn('[WsUpgrade] Token via query param is insecure; use Authorization header.');
+    console.warn('[WsUpgrade] Token via query param is DEPRECATED and will be removed. Use Authorization header or Sec-WebSocket-Protocol.');
+    // In production, reject query param tokens entirely
+    if (process.env.NODE_ENV === 'production') {
+      console.warn('[WsUpgrade] Query param token rejected in production mode');
+      socket.destroy();
+      return;
+    }
     token = query.token as string;
   }
 

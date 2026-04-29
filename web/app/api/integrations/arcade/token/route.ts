@@ -36,25 +36,26 @@ function normalizeProvider(raw: string): string {
 async function resolveArcadeUserId(appUserId: string): Promise<string> {
   const strategy = (process.env.ARCADE_USER_ID_STRATEGY || 'email').toLowerCase();
 
-  if (strategy === 'email') {
-    try {
-      // userId is now a string (UUID), try directly first
-      let user = await authService.getUserById(appUserId);
-      if (user?.email) return user.email;
-      
-      // Legacy: try parsing as numeric for backwards compatibility
-      const numeric = parseInt(appUserId, 10);
-      if (!isNaN(numeric)) {
-        // Try to find user by treating the string as a numeric id
-        // This handles migration cases where old numeric IDs might be referenced
-        user = await authService.getUserById(String(numeric));
-        if (user?.email) return user.email;
-      }
-    } catch {
-      // fall through
-    }
-    return appUserId; // return as-is if not found
-  }
+   if (strategy === 'email') {
+     try {
+       // userId is now a string (UUID), try directly first
+       let user = await authService.getUserById(appUserId);
+       if (user?.email) return user.email;
+       
+       // Legacy: try parsing as numeric for backwards compatibility
+       // Use strict numeric check to avoid partial parsing (e.g., "123abc" -> 123)
+       const numeric = /^\d+$/.test(appUserId) ? parseInt(appUserId, 10) : NaN;
+       if (!isNaN(numeric)) {
+         // Try to find user by treating the string as a numeric id
+         // This handles migration cases where old numeric IDs might be referenced
+         user = await authService.getUserById(String(numeric));
+         if (user?.email) return user.email;
+       }
+     } catch {
+       // fall through
+     }
+     return appUserId; // return as-is if not found
+   }
 
   // strategy === 'id'
   return appUserId;

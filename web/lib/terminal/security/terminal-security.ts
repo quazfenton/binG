@@ -27,6 +27,15 @@ interface DangerPattern {
 }
 
 const DANGEROUS_PATTERNS: DangerPattern[] = [
+  // === Shell metacharacter injection (CRIT-1 fix) ===
+  // These patterns allow command chaining/substitution which bypass single-command security
+  { pattern: /&&/, reason: 'Command chaining with && — potential command injection', severity: 'high' },
+  { pattern: /\|\|/, reason: 'Command chaining with || — potential command injection', severity: 'high' },
+  { pattern: /;\s*(rm|curl|wget|bash|sh|cat|nc|ncat|ssh|python|perl|ruby|chmod|chown|sudo|su)\b/, reason: 'Command chaining with ; — potential command injection', severity: 'high' },
+  { pattern: /\$\(/, reason: 'Command substitution $() — potential command injection', severity: 'critical' },
+  { pattern: /`[^`]+`/, reason: 'Backtick command substitution — potential command injection', severity: 'critical' },
+  { pattern: /\|\s*(ba)?sh\b/, reason: 'Pipe to shell — potential command injection', severity: 'critical' },
+
   // File destruction
   { pattern: /rm\s+-rf\s+\//, reason: 'Attempt to delete root filesystem', severity: 'critical' },
   { pattern: /rm\s+-rf\s+\s*\*|rm\s+-rf\s+\./, reason: 'Recursive delete pattern', severity: 'high' },
@@ -78,6 +87,8 @@ const DANGEROUS_PATTERNS: DangerPattern[] = [
   
   // Reverse shells
   { pattern: /bash\s+-i\s+>&\s+\/dev\/tcp\//, reason: 'Bash reverse shell', severity: 'critical' },
+  { pattern: /sh\s+-c\s/, reason: 'Shell with -c flag — arbitrary command execution', severity: 'critical' },
+  { pattern: /bash\s+-c\s/, reason: 'Bash with -c flag — arbitrary command execution', severity: 'critical' },
   { pattern: /nc\s+-e\s+\/bin\/(ba)?sh/, reason: 'Netcat reverse shell', severity: 'critical' },
   { pattern: /python\s+-c\s+['"].*socket.*connect/, reason: 'Python reverse shell', severity: 'critical' },
   { pattern: /perl\s+-e\s+['"].*socket/, reason: 'Perl reverse shell', severity: 'critical' },

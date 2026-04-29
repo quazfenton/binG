@@ -1,7 +1,7 @@
 # Code Review Summary: web/lib Modules
 
 **Review Date:** April 29, 2026  
-**Total Modules Reviewed:** 35+
+**Total Modules Reviewed:** 40+
 
 ---
 
@@ -37,8 +37,13 @@
 | packages/shared/agent | 40+ | 9 | Good |
 | spawn/ | 10 | 8 | Good |
 | context/ | 1 | 2 | Good |
+| crewai/ | 20+ | 5 | Good |
+| figma/ | 5 | 0 | Not currently imported |
+| blaxel/ | 4 | 0 | Not currently imported |
+| bash/ | 6 | 0 | Not currently imported |
+| agent-bins/ | 3 | 0 | Not currently imported |
 
-**Total Issues Found:** 210+
+**Total Issues Found:** 230+
 
 ---
 

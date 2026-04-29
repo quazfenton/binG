@@ -122,3 +122,27 @@ export function isSupported(): boolean {
   }
   return 'Notification' in window;
 }
+
+/**
+ * LOW-11 fix: Get the current notification backend type.
+ * Useful for UI indicators showing which notification system is active.
+ */
+export function getNotificationBackend(): 'desktop-tauri' | 'browser-api' | 'unavailable' {
+  if (isDesktopMode()) {
+    return 'desktop-tauri';
+  }
+  if (typeof window !== 'undefined' && 'Notification' in window) {
+    return 'browser-api';
+  }
+  return 'unavailable';
+}
+
+/**
+ * LOW-11 fix: Check if a real push notification backend is configured (not just browser API).
+ * Returns true only if there's a server-side push notification service
+ * (e.g. web push with VAPID keys) — not just the browser Notification API.
+ */
+export function hasPushNotificationBackend(): boolean {
+  // Check for VAPID public key — indicates a real push service is configured
+  return !!process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
+}

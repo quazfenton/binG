@@ -24,7 +24,15 @@ class WebStorage implements StorageAdapter {
   }
 
   async set<T>(key: string, value: T): Promise<void> {
-    localStorage.setItem(key, JSON.stringify(value));
+    try {
+      localStorage.setItem(key, JSON.stringify(value));
+    } catch (error: unknown) {
+      // MED-3 fix: Handle QuotaExceededError instead of crashing
+      if (error instanceof DOMException && error.name === 'QuotaExceededError') {
+        throw new Error('Storage quota exceeded — clear unused data or reduce stored values');
+      }
+      throw error;
+    }
   }
 
   async remove(key: string): Promise<void> {

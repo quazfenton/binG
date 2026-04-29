@@ -389,4 +389,54 @@ For a **local developer tool**, this is acceptable **if clearly documented**. Ho
 
 ---
 
-**Status:** 🔴 **BLOCKED** — Do not publish until build fixed and security warnings added.
+**Status:** 🟡 **PARTIALLY REMEDIATED** — Security fixes applied 2026-04-30. Build verification still needed before publish.
+
+---
+
+## Remediation Log
+
+### CRIT-1: Package Not Buildable — Empty index.ts — **FIXED** ✅
+- **File:** `packages/mcp-server/src/index.ts`
+- **Fix:** Populated with proper exports: tool factories (createAgentTool, getAgentStatusTool, stopAgentTool, spawnAgentSessionTool, voiceSpeechTool, generateImageTool), registerExtractedTools, and ServerConfig type. Consumers can now use the package programmatically without running the stdio server.
+
+### CRIT-4: Arbitrary Shell Command Execution Enabled by Default — **FIXED** ✅
+- **File:** `packages/mcp-server/src/stdio-server.ts`
+- **Fix:** Inverted `BING_ENABLE_COMMAND_EXECUTION` logic from `!== 'false'` (enabled by default) to `=== 'true'` (disabled by default). Command execution now requires explicit opt-in. Startup log message clearly states when disabled and how to enable.
+
+### CRIT-5: Path Traversal via Symlink (TOCTOU) — **FIXED** ✅
+- **File:** `packages/mcp-server/src/stdio-server.ts`
+- **Fix:** `validatePath()` is now async and resolves symlinks via `fs.realpath()` at validation time. If path doesn't exist yet (new file), validates parent directory's realpath instead. Removed all redundant per-tool realpath checks since validation is now centralized and atomic.
+
+### HIGH-6: Shell Injection in TTS Tool — **FIXED** ✅
+- **File:** `packages/mcp-server/src/tools/voice-tools.ts`
+- **Fix:** Text is written to a temp file and Python reads it via `open()` instead of embedding text inline in the command string. Model and voice params validated with regex to prevent injection. Temp text file cleaned up on error path.
+
+### MED-1: Input Validation Incomplete — **FIXED** ✅
+- **Files:** All tool files
+- **Fix:** Added zod min/max validation to all tool input schemas:
+  - `path`: `.min(1)` on all filesystem tools
+  - `command`: `.min(1).max(65536)` on execute_command
+  - `timeout`: `.int().min(1000).max(300000)` on execute_command
+  - `task/goal`: `.min(1).max(10000)` on agent tools
+  - `maxIterations`: `.int().min(1).max(500)` on spawn_agent_session
+  - `width/height`: `.int().min(64).max(4096)` on generate_image
+  - `numImages`: `.int().min(1).max(4)` on generate_image
+
+### MED-7: Agent Tools Have No Resource Limits — **FIXED** ✅
+- **File:** `packages/mcp-server/src/tools/agent-tools.ts`
+- **Fix:** Added `MAX_ACTIVE_AGENTS` limit (default 10, configurable via `BING_MAX_AGENTS` env var with NaN-safe parsing). `cleanupStaleAgents()` removes completed/failed agents older than 1 hour. Both `create_agent` and `spawn_agent_session` check limit before spawning.
+
+### Other Fixes
+- **registry.ts:** Fixed import paths (`./agent-tools` instead of `./tools/agent-tools`)
+- **image-tools.ts:** Typed JSON responses with proper interfaces to fix TS `unknown` errors
+- **stdio-server.ts:** `ServerConfig` interface now exported for programmatic use
+
+### MED-README: README Security Warning — **FIXED** ✅
+- **File:** `packages/mcp-server/README.md`
+- **Fix:** Added prominent critical security warning at the top of the Security section: "This MCP server runs without sandboxing in standalone mode. Always run in a container/VM with minimal permissions." Also updated Command Execution Safety subsection to document that execution is disabled by default, requires explicit opt-in, and logs a warning when disabled.
+
+### Not Yet Addressed
+- CRIT-2: `dist/` not generated (build not run yet — CI step needed)
+- CRIT-3: NDJSON framing in client code (separate module)
+- MED-2: Tool name collision risk (no namespacing)
+- No unit tests added yet

@@ -3,9 +3,9 @@
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { createAgentTool, getAgentStatusTool, stopAgentTool, spawnAgentSessionTool } from './tools/agent-tools';
-import { voiceSpeechTool } from './tools/voice-tools';
-import { generateImageTool } from './tools/image-tools';
+import { createAgentTool, getAgentStatusTool, stopAgentTool, spawnAgentSessionTool } from './agent-tools';
+import { voiceSpeechTool } from './voice-tools';
+import { generateImageTool } from './image-tools';
 
 /**
  * Register all non-stub tools with the MCP server

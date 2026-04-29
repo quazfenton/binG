@@ -449,6 +449,17 @@ class VoiceService {
   private mediaRecorder: MediaRecorder | null = null;
   private audioChunks: Blob[] = [];
   private mistralTranscribeInterval: ReturnType<typeof setInterval> | null = null;
+  
+  // VAD (Voice Activity Detection) support
+  private vadEnabled = true;
+  private silenceThreshold = 0.02; // Threshold for silence detection (normalized between 0-1)
+  private silenceDuration = 1500; // ms of silence before considering speech ended
+  private lastSpeechTime = 0;
+  private vadCheckInterval: ReturnType<typeof setInterval> | null = null;
+  
+  // Audio buffer for Mistral with overlap
+  private audioBufferOverlap = 0.5; // 50% overlap between chunks
+  private lastAudioBuffer: Blob[] = []; // Keep previous chunk for overlap
 
   async startListening(): Promise<boolean> {
     if (typeof window === "undefined") {
@@ -498,6 +509,8 @@ class VoiceService {
 
       this.mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
       this.audioChunks = [];
+      this.lastAudioBuffer = [];
+      this.lastSpeechTime = Date.now();
 
       this.mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
@@ -508,16 +521,29 @@ class VoiceService {
       this.mediaRecorder.start();
       this.isListening = true;
 
+      // Start VAD checking if enabled
+      if (this.vadEnabled) {
+        this.startVADChecking();
+      }
+
       // Periodically collect chunks and send to Mistral for transcription
+      // IMPROVEMENT: Audio buffer overlap to prevent word cutoff between chunks
       this.mistralTranscribeInterval = setInterval(async () => {
         if (this.audioChunks.length === 0) return;
 
-        const blob = new Blob(this.audioChunks, { type: 'audio/webm' });
+        // Combine current chunks with overlap from last buffer
+        const combinedChunks = [...this.lastAudioBuffer, ...this.audioChunks];
+        const blob = new Blob(combinedChunks, { type: 'audio/webm' });
+
+        // Keep last chunk(s) for next iteration's overlap (50% overlap)
+        const overlapCount = Math.ceil(this.audioChunks.length * this.audioBufferOverlap);
+        this.lastAudioBuffer = this.audioChunks.slice(-overlapCount);
         this.audioChunks = [];
 
         try {
           const text = await this.transcribeWithMistral(blob);
           if (text) {
+            this.lastSpeechTime = Date.now();
             this.emitEvent({
               type: 'transcription',
               data: { text, isFinal: true, confidence: 1 },
@@ -534,6 +560,53 @@ class VoiceService {
       console.error("Failed to start Mistral STT:", error);
       return false;
     }
+  }
+
+  /**
+   * IMPROVEMENT: Voice Activity Detection - automatically stop listening when silence detected
+   */
+  private startVADChecking(): void {
+    if (this.vadCheckInterval) {
+      return;
+    }
+
+    this.vadCheckInterval = setInterval(() => {
+      const now = Date.now();
+      const timeSinceSpeech = now - this.lastSpeechTime;
+
+      if (timeSinceSpeech > this.silenceDuration && this.isListening) {
+        this.emitEvent({
+          type: 'transcription',
+          data: { text: '', isFinal: true, confidence: 1, vadDetected: true },
+          timestamp: Date.now(),
+        });
+        this.stopListening();
+      }
+    }, 500); // Check every 500ms
+  }
+
+  private stopVADChecking(): void {
+    if (this.vadCheckInterval) {
+      clearInterval(this.vadCheckInterval);
+      this.vadCheckInterval = null;
+    }
+  }
+
+  /**
+   * Enable/disable Voice Activity Detection
+   */
+  setVADEnabled(enabled: boolean): void {
+    this.vadEnabled = enabled;
+  }
+
+  /**
+   * Configure VAD sensitivity
+   * @param silenceDuration - milliseconds of silence before stopping (lower = more aggressive)
+   * @param threshold - volume threshold (0-1, lower = more sensitive)
+   */
+  configureVAD(silenceDuration: number, threshold: number): void {
+    this.silenceDuration = silenceDuration;
+    this.silenceThreshold = Math.max(0, Math.min(1, threshold));
   }
 
   stopListening() {
@@ -554,6 +627,8 @@ class VoiceService {
       this.mistralTranscribeInterval = null;
     }
 
+    this.stopVADChecking();
+
     if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
       this.mediaRecorder.stop();
       this.mediaRecorder.stream.getTracks().forEach(t => t.stop());
@@ -561,6 +636,7 @@ class VoiceService {
     }
 
     this.audioChunks = [];
+    this.lastAudioBuffer = [];
     this.isListening = false;
   }
 
@@ -657,6 +733,7 @@ class VoiceService {
   destroy() {
     this.stopSpeaking();
     this.stopListening();
+    this.stopVADChecking();
     this.disconnectFromLivekit();
     this.eventHandlers = [];
   }

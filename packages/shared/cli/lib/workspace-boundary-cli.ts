@@ -19,7 +19,7 @@ export {
   VFS_VIRTUAL_PREFIXES,
   type WorkspaceBoundaryResult,
   type WorkspaceBoundaryConfirmationOptions,
-} from '../lib/workspace-boundary';
+} from '../../shared/lib/workspace-boundary';
 
 // Re-export analyzeCommandImpact if needed
 export { extractFilePathsFromCommand } from '../lib/workspace-boundary';

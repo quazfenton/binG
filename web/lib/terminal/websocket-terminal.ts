@@ -15,6 +15,14 @@ import { verifyToken } from '@/lib/security/jwt-auth';
 
 const logger = createLogger('WebSocketTerminal');
 
+// HIGH-4 fix: Maximum WebSocket message size (1MB)
+const MAX_WS_MESSAGE_SIZE = parseInt(process.env.MAX_WS_MESSAGE_SIZE || '1048576', 10);
+
+// HIGH-5 fix: Rate limiting for WebSocket messages
+const WS_RATE_LIMIT_WINDOW_MS = 1000; // 1 second
+const WS_RATE_LIMIT_MAX_MESSAGES = 100; // Max 100 messages per second per session
+const wsMessageCounts = new Map<string, { count: number; resetAt: number }>();
+
 export interface TerminalSession {
   sessionId: string;
   sandboxId: string;
@@ -286,7 +294,24 @@ export class WebSocketTerminalServer extends EventEmitter {
       // Handle PTY output
       pty.onData?.((data: string) => {
         if (ws.readyState === WebSocket.OPEN) {
-          ws.send(data);
+          // HIGH-4 fix: Enforce message size limit on PTY output
+          // Use byte-level truncation to avoid splitting UTF-8 multi-byte sequences
+          if (data.length > MAX_WS_MESSAGE_SIZE) {
+            logger.warn(`PTY output exceeds max size (${data.length} > ${MAX_WS_MESSAGE_SIZE}), truncating`, {
+              sessionId: sid,
+            });
+            try {
+              const buf = Buffer.from(data, 'utf8');
+              // Strip trailing replacement character if byte boundary fell mid-UTF8-sequence
+              const truncated = buf.subarray(0, MAX_WS_MESSAGE_SIZE).toString('utf8').replace(/\ufffd$/, '');
+              ws.send(truncated + '\r\n\x1b[31m[Output truncated — exceeded size limit]\x1b[0m\r\n');
+            } catch {
+              // Fallback to string slice if Buffer approach fails
+              ws.send(data.slice(0, MAX_WS_MESSAGE_SIZE) + '\r\n\x1b[31m[Output truncated — exceeded size limit]\x1b[0m\r\n');
+            }
+          } else {
+            ws.send(data);
+          }
         }
         terminalSession.lastActive = new Date();
       });
@@ -300,6 +325,31 @@ export class WebSocketTerminalServer extends EventEmitter {
 
       // Handle WebSocket messages - forward to PTY
       ws.on('message', (data: Buffer) => {
+        // HIGH-4 fix: Enforce message size limit on incoming messages
+        if (data.length > MAX_WS_MESSAGE_SIZE) {
+          logger.warn(`WebSocket message too large: ${data.length} bytes (max: ${MAX_WS_MESSAGE_SIZE})`, {
+            sessionId: sid,
+          });
+          ws.close(4007, `Message too large (max ${MAX_WS_MESSAGE_SIZE / 1024}KB)`);
+          return;
+        }
+        
+        // HIGH-5 fix: Rate limit incoming WebSocket messages
+        const now = Date.now();
+        let rateEntry = wsMessageCounts.get(sid);
+        if (!rateEntry || now >= rateEntry.resetAt) {
+          rateEntry = { count: 1, resetAt: now + WS_RATE_LIMIT_WINDOW_MS };
+          wsMessageCounts.set(sid, rateEntry);
+        } else {
+          rateEntry.count++;
+        }
+        
+        if (rateEntry.count > WS_RATE_LIMIT_MAX_MESSAGES) {
+          logger.warn(`WebSocket rate limit exceeded for session ${sid}: ${rateEntry.count} messages/sec`);
+          ws.close(4008, 'Rate limit exceeded: too many messages');
+          return;
+        }
+        
         logger.debug(`WebSocket message received for session ${sid}: ${data.length} bytes`);
         this.handleMessage(terminalSession, data);
       });
@@ -424,6 +474,8 @@ export class WebSocketTerminalServer extends EventEmitter {
     }
 
     this.sessions.delete(sessionId);
+    // HIGH-5 fix: Clean up rate limit entry on session close
+    wsMessageCounts.delete(sessionId);
     logger.info(`Terminal session ${sessionId} closed. Active sessions: ${this.sessions.size}`);
     this.emit('session_terminated', session);
   }
@@ -439,6 +491,13 @@ export class WebSocketTerminalServer extends EventEmitter {
           this.emit('session_idle_timeout', session);
           this.closeSession(sessionId);
           closedCount++;
+        }
+      }
+      // Cleanup stale rate limit entries for sessions that no longer exist
+      // (safety net for ungraceful disconnects where closeSession wasn't called)
+      for (const [sessionId] of wsMessageCounts.entries()) {
+        if (!this.sessions.has(sessionId)) {
+          wsMessageCounts.delete(sessionId);
         }
       }
       if (closedCount > 0) {

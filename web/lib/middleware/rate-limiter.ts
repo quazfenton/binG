@@ -355,10 +355,10 @@ export function resetRateLimit(identifier: string, configKey: keyof typeof RATE_
 export function getRateLimitStatus(
   identifier: string,
   configKey: keyof typeof RATE_LIMIT_CONFIGS,
-  tier?: RateLimitTier
+  tier: RateLimitTier = RATE_LIMIT_TIERS.free
 ): { count: number; windowMs: number; maxRequests: number; resetAfter: number } | null {
   const config = RATE_LIMIT_CONFIGS[configKey];
-  const key = `${identifier}:${config.windowMs}`;
+  const key = `${identifier}:${config.windowMs}:${tier.name}`;
   const entry = rateLimitStore.get(key);
 
   if (!entry) {

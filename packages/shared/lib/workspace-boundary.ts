@@ -45,7 +45,6 @@ export const DESTRUCTIVE_OPERATIONS = new Set([
   'rename',
   'mkdir', // mkdir outside workspace can have side effects
 ]);
-
 /**
  * VFS virtual path prefixes that are always considered inside the workspace.
  * These are the canonical prefixes used by the virtual filesystem layer
@@ -54,12 +53,9 @@ export const DESTRUCTIVE_OPERATIONS = new Set([
 export const VFS_VIRTUAL_PREFIXES = [
   '/project/',
   '/workspace/',
-  '/home/',
   'project/',
   'workspace/',
-  'home/',
 ];
-
 // ──────────────────────────────────────────────────────────────────────────────
 // Workspace Root Resolution
 // ──────────────────────────────────────────────────────────────────────────────
@@ -160,34 +156,39 @@ export function normalizePath(p: string): string {
  * @returns true if the path resolves outside the workspace boundary
  */
 export function isOutsideWorkspace(
-  targetPath: string,
-  workspaceRoot?: string,
+   targetPath: string,
+   workspaceRoot?: string,
 ): boolean {
-  // VFS virtual paths are always inside the workspace
-  const normalizedTarget = normalizePath(targetPath);
-  const prefixMatch = VFS_VIRTUAL_PREFIXES.some(
-    (prefix) => normalizedTarget.startsWith(prefix),
-  );
-  if (prefixMatch) return false;
+   // VFS virtual paths are always inside the workspace
+   const normalizedTarget = normalizePath(targetPath);
+   const prefixMatch = VFS_VIRTUAL_PREFIXES.some(
+     (prefix) => normalizedTarget.startsWith(prefix),
+   );
+   if (prefixMatch) return false;
 
-  const root = resolveWorkspaceRoot(workspaceRoot);
-  if (!root) return false; // No root configured → cannot determine boundary
+   const root = resolveWorkspaceRoot(workspaceRoot);
+   if (!root) return false; // No root configured → cannot determine boundary
 
-  const normalizedRoot = normalizePath(root);
+   const normalizedRoot = normalizePath(root);
 
-  // Empty target → not outside
-  if (!normalizedTarget) return false;
+   // Empty target → not outside
+   if (!normalizedTarget) return false;
 
-  // If the target starts with the root prefix, it's inside
-  if (
-    normalizedTarget.startsWith(normalizedRoot + '/') ||
-    normalizedTarget === normalizedRoot
-  ) {
-    return false;
-  }
+   // Resolve relative paths against workspace root before comparison
+   const resolvedTarget = path.isAbsolute(targetPath) 
+     ? normalizedTarget 
+     : normalizePath(`${root}/${targetPath}`);
 
-  return true;
-}
+   // If the target starts with the root prefix, it's inside
+   if (
+     resolvedTarget.startsWith(normalizedRoot + '/') ||
+     resolvedTarget === normalizedRoot
+   ) {
+     return false;
+   }
+
+   return true;
+ }
 
 /**
  * Determine whether a destructive operation requires workspace-boundary
@@ -241,38 +242,37 @@ export interface WorkspaceBoundaryConfirmationOptions {
  * @returns Confirmation message object, or null if not needed
  */
 export function buildWorkspaceBoundaryWarning(
-  options: WorkspaceBoundaryConfirmationOptions,
+   options: WorkspaceBoundaryConfirmationOptions,
 ): { shouldConfirm: boolean; message: string } | null {
-  const { operation, targetPath, forceFlag, workspaceRoot } = options;
-
-  // Check if confirmation is needed
-  const check = requiresWorkspaceBoundaryConfirmation(operation, targetPath, workspaceRoot);
-  
-  if (!check.needsConfirmation) {
-    return null; // No confirmation needed - safe operation
-  }
-
-  if (forceFlag) {
-    return {
-      shouldConfirm: true, // Force bypasses confirmation but warning is still useful
-      message: `⚠ Workspace boundary bypassed with --force\n` +
-        `  Operation: ${operation}\n` +
-        `  Target: ${targetPath}\n` +
-        `  Workspace: ${check.workspaceRoot}`,
-    };
-  }
-
-  return {
-    shouldConfirm: true,
-    message: `⚠️  WORKSPACE BOUNDARY WARNING\n` +
-      `  Operation: ${operation}\n` +
-      `  Target path: ${targetPath}\n` +
-      `  Workspace root: ${check.workspaceRoot}\n\n` +
-      `This operation will affect files outside the configured workspace.\n` +
-      `This could potentially access or modify system files.`,
-  };
-}
-
+   const { operation, targetPath, forceFlag, workspaceRoot } = options;
+ 
+   // Check if confirmation is needed
+   const check = requiresWorkspaceBoundaryConfirmation(operation, targetPath, workspaceRoot);
+   
+   if (!check.needsConfirmation) {
+     return null; // No confirmation needed - safe operation
+   }
+ 
+   if (forceFlag) {
+     return {
+       shouldConfirm: false, // Force flag bypasses confirmation
+       message: `⚠ Workspace boundary bypassed with --force\n` +
+         `  Operation: ${operation}\n` +
+         `  Target: ${targetPath}\n` +
+         `  Workspace: ${check.workspaceRoot}`,
+     };
+   }
+ 
+   return {
+     shouldConfirm: true,
+     message: `⚠️  WORKSPACE BOUNDARY WARNING\n` +
+       `  Operation: ${operation}\n` +
+       `  Target path: ${targetPath}\n` +
+       `  Workspace root: ${check.workspaceRoot}\n\n` +
+       `This operation will affect files outside the configured workspace.\n` +
+       `This could potentially access or modify system files.`,
+   };
+ }
 /**
  * Parse a command to extract filesystem operation and targets.
  * Useful for CLI tools that need to analyze user commands.
@@ -282,27 +282,34 @@ export function buildWorkspaceBoundaryWarning(
  */
 export function extractFilePathsFromCommand(command: string): string[] {
   const paths: string[] = [];
-  
+
   // Common filesystem operation patterns
+  // Matches command + optional space/flags + path
   const patterns = [
-    /rm(?:\/|-[rf]+\/)?\b(?:\/[^'\"\n\r]+|\/[^\n\r]+)/gi,
-    /del\b(?:\/[^'\"\n\r]+|\/[^\n\r]+)/gi,
-    /rmdir\b(?:\/[^'\"\n\r]+|\/[^\n\r]+)/gi,
-    /mv\b(?:\/[^'\"\n\r]+|\/[^\n\r]+)/gi,
-    /cp\b(?:\/[^'\"\n\r]+|\/[^\n\r]+)/gi,
-    /cat\b(?:\/[^'\"\n\r]+|\/[^\n\r]+)/gi,
-    /write\b(?:\/[^'\"\n\r]+|\/[^\n\r]+)/gi,
-    /touch\b(?:\/[^'\"\n\r]+|\/[^\n\r]+)/gi,
+    /rm(?:\s+-[rf]+)*\s+([^\s\n\r]+)/gi,
+    /del\s+([^\s\n\r]+)/gi,
+    /rmdir\s+([^\s\n\r]+)/gi,
+    /mv\s+([^\s\n\r]+)\s+([^\s\n\r]+)/gi,
+    /cp\s+([^\s\n\r]+)\s+([^\s\n\r]+)/gi,
+    /cat\s+([^\s\n\r]+)/gi,
+    /write\s+([^\s\n\r]+)/gi,
+    /touch\s+([^\s\n\r]+)/gi,
   ];
 
   for (const pattern of patterns) {
-    const matches = command.match(pattern);
-    if (matches) {
-      paths.push(...matches.map(m => m.replace(/^(?:rm|del|rmdir|mv|cp|cat|write|touch)\b/, '').trim()));
+    let match;
+    // Reset regex index before matching
+    pattern.lastIndex = 0;
+    while ((match = pattern.exec(command)) !== null) {
+      // Capture groups (paths start from index 1)
+      for (let i = 1; i < match.length; i++) {
+        if (match[i]) paths.push(match[i]);
+      }
     }
   }
 
   return [...new Set(paths)]; // Deduplicate
+}
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

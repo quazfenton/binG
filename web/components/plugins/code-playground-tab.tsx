@@ -114,14 +114,17 @@ const TEMPLATES: CodeTemplate[] = [
   },
 ];
 
-// Execute code via API
+// Execute code via API (cookies are sent automatically by the browser)
 async function executeCode(code: string, language: string, timeout?: number): Promise<{
   success: boolean;
   output: string;
   error?: string;
   executionTime: number;
+  warnings?: string[];
 }> {
   try {
+    // Browser automatically sends cookies (including authjs.session-token)
+    // with same-origin requests — no need to manually extract and set Bearer header
     const response = await fetch('/api/code/execute', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -131,6 +134,26 @@ async function executeCode(code: string, language: string, timeout?: number): Pr
         timeout,
       }),
     });
+
+    // Handle auth errors gracefully
+    if (response.status === 401) {
+      return {
+        success: false,
+        output: '',
+        error: 'Authentication required. Please log in to execute code.',
+        executionTime: 0,
+      };
+    }
+    
+    if (response.status === 429) {
+      const data = await response.json();
+      return {
+        success: false,
+        output: '',
+        error: data.error || 'Rate limit exceeded. Please wait before executing more code.',
+        executionTime: 0,
+      };
+    }
 
     const result = await response.json();
 
@@ -143,9 +166,11 @@ async function executeCode(code: string, language: string, timeout?: number): Pr
       output: result.output,
       error: result.error,
       executionTime: result.executionTime,
+      warnings: result.warnings,
     };
-  } catch (err: any) {
-    console.error('[CodePlayground] Failed to execute code:', err);
+  } catch (err: unknown) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    console.error('[CodePlayground] Failed to execute code:', errMsg);
     throw err;
   }
 }
@@ -226,16 +251,20 @@ export default function CodePlaygroundTab() {
 
       if (result.success) {
         setOutput(result.output);
+        if (result.warnings && result.warnings.length > 0) {
+          toast.warning(`Security warnings: ${result.warnings.join('; ')}`);
+        }
         toast.success(`Executed in ${result.executionTime}ms`);
       } else {
         setError(result.error || 'Execution failed');
         toast.error("Execution failed");
       }
-    } catch (err: any) {
+    } catch (error: unknown) {
       if (!isMountedRef.current) return;
       
-      setError(err.message);
-      toast.error(err.message || "Execution failed");
+      const errMsg = error instanceof Error ? error.message : String(error);
+      setError(errMsg);
+      toast.error(errMsg || "Execution failed");
     } finally {
       setIsRunning(false);
     }
@@ -272,7 +301,7 @@ export default function CodePlaygroundTab() {
       setLanguage(template.language);
       setActiveTab("editor");
       toast.success(`Loaded ${template.name} template`);
-    } catch (err: any) {
+    } catch {
       // Fallback to local template
       setCode(template.code);
       setLanguage(template.language);

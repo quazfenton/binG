@@ -88,6 +88,26 @@ export function validateCommand(command: string): {
     };
   }
 
+  // MED-2 fix: Port metacharacter checks from deprecated SandboxSecurityManager.sanitizeCommand
+  // NOTE: Bare `$` is NOT blocked here because it causes widespread false positives
+  // (e.g., `echo $HOME`, `npm run $SCRIPT`). Instead, `$(` command substitution
+  // is caught by the injectionPatterns below. The sandbox-only path
+  // (SandboxSecurityManager.sanitizeCommand) still blocks bare `$` since it
+  // runs in a more restricted context.
+  const SHELL_METADATA_CHARS: Array<{ char: string; name: string }> = [
+    { char: '`', name: 'backtick' },
+    { char: '\n', name: 'newline' },
+    { char: '\r', name: 'carriage return' },
+  ];
+  for (const { char, name } of SHELL_METADATA_CHARS) {
+    if (command.includes(char)) {
+      return {
+        valid: false,
+        reason: `Shell metacharacter '${name}' detected in command — potential injection`,
+      };
+    }
+  }
+
   // Check against blocked patterns
   for (const pattern of BLOCKED_COMMAND_PATTERNS) {
     if (pattern.test(command)) {

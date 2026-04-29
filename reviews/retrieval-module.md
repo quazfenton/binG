@@ -252,7 +252,7 @@ import { buildContext, injectContextIntoPrompt, buildContextSystemPrompt } from 
 
 ## Wiring Issues
 
-### NOT Wired In / Dead Code
+### NOT Wired In / Standalone Sections
 
 None detected. All exports are used somewhere in the codebase.
 
