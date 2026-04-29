@@ -37,15 +37,75 @@ class TauriBridgeClient {
     this.ws = null;
     this.pendingRequests = new Map();
     this.messageId = 0;
+    this.isConnecting = false;
+    this.isClosing = false;
+    this.reconnectDelay = 1000; // Initial delay: 1 second
+    this.maxReconnectDelay = 30000; // Max delay: 30 seconds
   }
 
   connect() {
     return new Promise((resolve, reject) => {
+      this.isConnecting = true;
+      this.isClosing = false;
       this.ws = new WebSocket(BRIDGE_URL);
-      this.ws.on("open", () => resolve());
-      this.ws.on("error", (err) => reject(err));
+      
+      this.ws.on("open", () => {
+        this.isConnecting = false;
+        this.reconnectDelay = 1000; // Reset delay on successful connect
+        console.error("[TauriBridge] Connected to bridge");
+        resolve();
+      });
+      
+      this.ws.on("error", (err) => {
+        this.isConnecting = false;
+        console.error("[TauriBridge] Connection error:", err.message);
+        reject(err);
+      });
+      
+      this.ws.on("close", (code, reason) => {
+        console.error(`[TauriBridge] Connection closed (code=${code}, reason=${reason || 'none'})`);
+        this.isConnecting = false;
+        
+        // Reject all pending requests since connection is closed
+        for (const [id, pending] of this.pendingRequests) {
+          pending.reject(new Error(`Bridge disconnected (code=${code})`));
+        }
+        this.pendingRequests.clear();
+        
+        // Attempt reconnection unless explicitly closing
+        if (!this.isClosing) {
+          this.scheduleReconnect();
+        }
+      });
+      
       this.ws.on("message", (data) => this.handleMessage(data.toString()));
     });
+  }
+
+  scheduleReconnect() {
+    // Don't reconnect if already closing or already connecting
+    if (this.isClosing || this.isConnecting) {
+      console.error("[TauriBridge] Skipping reconnect (closing=${this.isClosing}, connecting=${this.isConnecting})");
+      return;
+    }
+    
+    const delay = this.reconnectDelay;
+    console.error(`[TauriBridge] Scheduling reconnect in ${delay}ms (delay will increase up to ${this.maxReconnectDelay}ms)`);
+    
+    setTimeout(async () => {
+      if (this.isClosing) return;
+      
+      console.error("[TauriBridge] Attempting to reconnect...");
+      try {
+        await this.connect();
+        console.error("[TauriBridge] Reconnected successfully");
+      } catch (err) {
+        console.error(`[TauriBridge] Reconnection failed: ${err.message}`);
+        // Exponential backoff with jitter
+        this.reconnectDelay = Math.min(this.reconnectDelay * 2 + Math.random() * 1000, this.maxReconnectDelay);
+        this.scheduleReconnect();
+      }
+    }, delay);
   }
 
   handleMessage(raw) {
@@ -64,9 +124,16 @@ class TauriBridgeClient {
   }
 
   async call(method, params = {}) {
+    // If not connected, try to connect first
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      throw new Error("Bridge not connected");
+      console.error("[TauriBridge] Not connected, attempting to connect...");
+      await this.connect();
     }
+    
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      throw new Error("Bridge not connected and reconnection failed");
+    }
+    
     const id = `req-${++this.messageId}`;
     return new Promise((resolve, reject) => {
       this.pendingRequests.set(id, { resolve, reject });
@@ -74,7 +141,8 @@ class TauriBridgeClient {
     });
   }
 
-  close(): void {
+  close() {
+    this.isClosing = true;
     this.ws?.close();
     this.ws = null;
   }
@@ -92,7 +160,7 @@ const server = new McpServer({
 const bridge = new TauriBridgeClient();
 
 // Helper: ensure bridge is connected
-async function ensureBridge(): Promise<TauriBridgeClient> {
+async function ensureBridge() {
   if (!bridge) throw new Error("Tauri MCP bridge not initialized");
   return bridge;
 }

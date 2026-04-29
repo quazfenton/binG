@@ -25,8 +25,10 @@ import { compress, decompress, isCompressed } from '@/lib/utils/compression';
 import { toolResultCache, toolCacheKey } from '@/lib/cache';
 // import { emitFilesystemUpdated } from './sync/sync-events'; // Imported but not used - central emit deferred for now
 
-// Default configuration
-const DEFAULT_WORKSPACE_ROOT = process.env.DEFAULT_WORKSPACE_ROOT || 'project';
+// Default configuration - use DESKTOP_WORKSPACE_ROOT for desktop mode
+// Priority: window.__SIDECAR_CONFIG__ (Tauri) > DESKTOP_WORKSPACE_ROOT > INITIAL_CWD > 'project'
+import { getDesktopWorkspaceDir } from '@/lib/utils/desktop-env';
+const DEFAULT_WORKSPACE_ROOT = getDesktopWorkspaceDir();
 const MAX_PATH_LENGTH = 1024;
 const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB per file
 const MAX_TOTAL_WORKSPACE_SIZE = 500 * 1024 * 1024; // 500MB total workspace
