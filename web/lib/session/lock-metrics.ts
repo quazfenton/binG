@@ -427,8 +427,8 @@ export function getLockHealth(): {
  * Clear all metrics (for testing only)
  */
 export function __clearAllMetrics__(): void {
-  metrics.length = 0;
-  alertHistory.length = 0;
+  metrics.splice(0, metrics.length);
+  alertHistory.splice(0, alertHistory.length);
   log.warn('All lock metrics cleared (testing only)');
 }
 

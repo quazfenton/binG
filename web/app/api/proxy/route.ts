@@ -65,6 +65,7 @@ function isBlockedHostname(hostname: string): boolean {
 /**
  * Check if IP address is private/internal (SSRF protection)
  * Handles IPv4, IPv6, and IPv4-mapped IPv6 addresses (::ffff:127.0.0.1)
+ * Uses proper CIDR range checking to avoid false positives like 172.160.x.x
  */
 function isPrivateIP(ip: string): boolean {
   try {
@@ -73,21 +74,45 @@ function isPrivateIP(ip: string): boolean {
     const mappedIpv4 = normalizedIp.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/)?.[1];
     const candidate = mappedIpv4 ?? normalizedIp;
     
-    // Check against private/internal IP ranges
-    if (
-      candidate === '127.0.0.1' || candidate === '::1' || candidate === '0.0.0.0' ||
-      candidate.startsWith('10.') || candidate.startsWith('192.168.') ||
-      candidate.startsWith('172.16.') || candidate.startsWith('172.17.') || candidate.startsWith('172.18.') ||
-      candidate.startsWith('172.19.') || candidate.startsWith('172.20.') || candidate.startsWith('172.21.') ||
-      candidate.startsWith('172.22.') || candidate.startsWith('172.23.') || candidate.startsWith('172.24.') ||
-      candidate.startsWith('172.25.') || candidate.startsWith('172.26.') || candidate.startsWith('172.27.') ||
-      candidate.startsWith('172.28.') || candidate.startsWith('172.29.') || candidate.startsWith('172.30.') ||
-      candidate.startsWith('172.31.') ||
-      candidate.startsWith('169.254.') || candidate.startsWith('100.100.') ||
-      candidate.startsWith('fc') || candidate.startsWith('fd') || candidate.startsWith('fe80:')
-    ) {
-      return true;
+    // Handle IPv6 addresses directly (non-mapped)
+    if (candidate.includes(':') && !mappedIpv4) {
+      // Link-local, unique local, loopback
+      if (candidate.startsWith('fe80:') || candidate.startsWith('fc') || candidate.startsWith('fd') || candidate === '::1') {
+        return true;
+      }
+      return false;
     }
+    
+    // Parse IPv4 address
+    const parts = candidate.split('.').map(Number);
+    if (parts.length !== 4 || parts.some(isNaN)) {
+      return false;
+    }
+    
+    const [a, b, c, d] = parts;
+    
+    // 127.0.0.0/8 (loopback)
+    if (a === 127) return true;
+    
+    // 0.0.0.0/8 (current network)
+    if (a === 0) return true;
+    
+    // 10.0.0.0/8
+    if (a === 10) return true;
+    
+    // 192.168.0.0/16
+    if (a === 192 && b === 168) return true;
+    
+    // 172.16.0.0/12 (NOT 172.160.x.x which is a public IP range!)
+    // Must check 16 <= second_octet <= 31 to correctly identify private range
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    
+    // 169.254.0.0/16 (link-local)
+    if (a === 169 && b === 254) return true;
+    
+    // 100.100.0.0/16 (carrier-grade NAT)
+    if (a === 100 && b === 100) return true;
+    
     return false;
   } catch {
     // Fail closed: treat errors as private/blocked for safety

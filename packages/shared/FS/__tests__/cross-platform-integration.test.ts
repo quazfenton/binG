@@ -349,7 +349,7 @@ describe('MCP Integration Tests', () => {
       const processes: number[] = [];
       
       // Simulate cleanup
-      processes.length = 0;
+      processes.splice(0, processes.length);
       
       expect(processes.length).toBe(0);
     });

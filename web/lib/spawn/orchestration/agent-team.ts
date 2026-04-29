@@ -208,8 +208,8 @@ export interface TeamProgress {
 
 export class AgentTeam extends EventEmitter {
   private config: Required<AgentTeamConfig>;
-  private pools: Map<PoolAgentType, any> = new Map();
-  private activeAgents: Map<AgentRole, PoolAgent> = new Map();
+  private pools: Map<PoolAgentType, any> = new Map<PoolAgentType, any>();
+  private activeAgents: Map<AgentRole, PoolAgent> = new Map<AgentRole, PoolAgent>();
   private progress: TeamProgress = {
     iteration: 0,
     currentAgent: 'manager',
@@ -591,7 +591,7 @@ Create a unified final output that incorporates the best elements from all contr
       this.updateProgress('all', iteration * 20, `Iteration ${iteration}/${this.config.maxIterations}`);
 
       // Each agent provides solution
-      solutions.length = 0; // Clear array for new iteration
+      solutions.splice(0, solutions.length); // Clear array for new iteration
 
       for (const [role, agent] of agents) {
         const result = await this.runLLM({

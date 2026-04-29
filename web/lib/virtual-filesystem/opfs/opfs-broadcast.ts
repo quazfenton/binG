@@ -70,7 +70,7 @@ export class OPFSBroadcast {
   private adapter: typeof opfsAdapter;
   private options: Required<OPFSBroadcastConfig>;
   private tabId: string;
-  private tabs: Map<string, TabPresence> = new Map();
+  private tabs: Map<string, TabPresence> = new Map<string, TabPresence>();
   private handlers: Set<BroadcastChannelHandler> = new Set();
   private presenceInterval: NodeJS.Timeout | null = null;
   private cleanupInterval: NodeJS.Timeout | null = null;

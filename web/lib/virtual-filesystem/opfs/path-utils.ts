@@ -33,7 +33,7 @@ export function resolveOPFSPath(
 ): string {
   const {
     root = '',
-    mounts = new Map(),
+    mounts = new Map<string, string>(),
     allowTraversal = false,
   } = options;
 

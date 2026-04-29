@@ -619,7 +619,7 @@ export function generateUnifiedDiffs(
   maxDiffEntries = 20,
   maxDiffLines = 200
 ): Array<{ path: string; diff: string; status: 'modified' | 'created' | 'deleted' }> {
-  const entries: Array<{ path: string; diff: string; status: 'modified' | 'created' | 'deleted'; significance: number }> = [];
+  const entries: Array<{ path: string; diff: string; status: 'modified' | 'created' | 'deleted'; significance: number }> = new Array();
 
   // All unique paths across both snapshots
   const allPaths = new Set([...before.keys(), ...after.keys()]);
@@ -771,7 +771,7 @@ function computeDiffOps(
   a: string[],
   b: string[]
 ): Array<{ type: 'equal' | 'delete' | 'insert'; start: number; count: number }> {
-  const ops: Array<{ type: 'equal' | 'delete' | 'insert'; start: number; count: number }> = [];
+  const ops: Array<{ type: 'equal' | 'delete' | 'insert'; start: number; count: number }> = new Array();
   const m = a.length;
   const n = b.length;
 
@@ -798,7 +798,7 @@ function computeDiffOps(
   // Backtrack to find operations
   let i = m;
   let j = n;
-  const reverseOps: Array<{ type: 'equal' | 'delete' | 'insert'; start: number; count: number }> = [];
+  const reverseOps: Array<{ type: 'equal' | 'delete' | 'insert'; start: number; count: number }> = new Array();
 
   while (i > 0 || j > 0) {
     if (i > 0 && j > 0 && a[i - 1] === b[j - 1]) {
@@ -1310,7 +1310,7 @@ async function buildAbbreviatedTree(
   }
 
   // Always include all dirs, even if empty of referenced files
-  const allEntries: Array<{ node: VirtualFilesystemNode; shown: boolean }> = [];
+  const allEntries: Array<{ node: VirtualFilesystemNode; shown: boolean }> = new Array();
   for (const dir of dirs) allEntries.push({ node: dir, shown: true });
   for (const file of shownFiles) allEntries.push({ node: file, shown: true });
 

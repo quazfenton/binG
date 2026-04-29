@@ -17,7 +17,7 @@
 
 // Simple event emitter for browser compatibility (avoid Node.js 'events' module)
 class SimpleEventEmitter<T extends Record<string, any[]>> {
-  private listeners: Map<keyof T, Set<(...args: any[]) => void>> = new Map();
+  private listeners: Map<keyof T, Set<(...args: any[]) => void>> = new Map<keyof T, Set<(...args: any[]) => void>>();
 
   on<K extends keyof T>(event: K, listener: (...args: T[K]) => void): void {
     if (!this.listeners.has(event)) {
@@ -94,9 +94,9 @@ export type OPFSEventMap = {
 
 export class OPFSCore extends SimpleEventEmitter<OPFSEventMap> {
   private rootHandle: FileSystemDirectoryHandle | null = null;
-  private fileHandleCache: Map<string, OPFSFileHandle> = new Map();
-  private directoryHandleCache: Map<string, FileSystemDirectoryHandle> = new Map();
-  private writeLocks: Map<string, Promise<void>> = new Map();
+  private fileHandleCache: Map<string, OPFSFileHandle> = new Map<string, OPFSFileHandle>();
+  private directoryHandleCache: Map<string, FileSystemDirectoryHandle> = new Map<string, FileSystemDirectoryHandle>();
+  private writeLocks: Map<string, Promise<void>> = new Map<string, Promise<void>>();
   private options: Required<OPFSOptions>;
   private initialized = false;
   private workspaceId: string | null = null;

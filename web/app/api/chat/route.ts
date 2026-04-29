@@ -2384,7 +2384,7 @@ const config: UnifiedAgentConfig = {
               for (const pending of pendingEvents) {
                 realEmit(pending.event, { requestId: streamRequestId, ...pending.data, timestamp: pending.timestamp });
               }
-              pendingEvents.length = 0;
+              pendingEvents.splice(0, pendingEvents.length);
 
               const cleanup = () => {
                 encoderRef = null;
@@ -3121,7 +3121,7 @@ const config: UnifiedAgentConfig = {
               for (const pending of pendingEvents) {
                 realEmit(pending.event, { requestId: streamRequestId, ...pending.data, timestamp: pending.timestamp });
               }
-              pendingEvents.length = 0;
+              pendingEvents.splice(0, pendingEvents.length);
 
               const cleanup = () => {
                 encoderRef = null;
@@ -3700,7 +3700,7 @@ const config: UnifiedAgentConfig = {
             for (const pending of pendingEvents) {
               realEmit(pending.event, { requestId: streamRequestId, ...pending.data, timestamp: pending.timestamp });
             }
-            pendingEvents.length = 0;
+            pendingEvents.splice(0, pendingEvents.length);
 
             // Handle client disconnect
             if (request.signal) {
@@ -4025,7 +4025,7 @@ const config: UnifiedAgentConfig = {
       // Streaming responses handle cleanup in the stream's finally block
       if (!(stream && selectedProvider.supportsStreaming)) {
         acceptDeferredEvents = false;
-        pendingEvents.length = 0;
+        pendingEvents.splice(0, pendingEvents.length);
         emitRef.current = null;
       }
     }

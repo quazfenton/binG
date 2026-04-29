@@ -1,0 +1,13 @@
+Service Name | Entry Point | Ports | Dependencies | Start Command | Docker compose service? | Notes on consolidation potential
+---|---|---|---|---|---|---
+Service Name | Entry Point | Ports | Dependencies | Start Command | Docker compose service? | Notes on consolidation potential
+Web Dev Server (Next.js) | web/server.ts | 3000 (HTTP), 8080 (WebSocket) | Redis, Postgres, Agent Gateway | npm run dev:ws (dev), npm run start:ws (prod) | Yes (as 'app' service) | Could potentially merge WebSocket server into main Next.js app
+Desktop app (Tauri) | desktop/entry.ts | N/A (IPC with Next.js) | Next.js renderer process | npm run tauri dev (dev), cargo tauri build (prod) | No (built separately) | Could be merged with Next.js as a build target
+MCP server (stdio) | packages/mcp-server/src/stdio-server.ts | N/A (stdio) | Workspace filesystem | bing-mcp CLI | No | Runs as standalone process via CLI, not a network service
+Agent Gateway (Fastify) | packages/shared/agent/services/agent-gateway/src/index.ts | 3002 | Redis, Postgres | npm start (in container) | Yes (as 'agent-gateway' service) | Could potentially merge with Agent Worker as they're tightly coupled
+Agent Worker (Mastra) | packages/shared/agent/services/agent-worker/src/index.ts | 3003 | Redis, Nullclaw, Microsandbox | npm start (in container) | Yes (as 'agent-worker' service) | Could potentially merge with Agent Gateway as they're tightly coupled
+Scheduler (BullMQ) | packages/shared/services/scheduler/index.ts | 3007 | Redis, Nullclaw, Sandbox Pool, Background Worker, Gateway | node index.ts | Yes (implied in docker-compose) | Could merge with Background Worker as both handle scheduled tasks
+Planner Worker | packages/shared/services/planner-worker/index.ts | 3004 | Redis, Qdrant | node index.ts | Yes (as 'planner' service in docker-compose.v2.yml) | Could potentially merge with Scheduler as both handle task orchestration
+Sandbox Pool Manager | (embedded in sandbox service) | 3005 | Redis | npm start (in container) | Yes (as 'sandbox' service) | Could merge with Background Worker as both manage sandbox lifecycles
+Background Worker | packages/shared/services/background-worker/index.ts | 3006 | Redis, Qdrant | node index.ts | Yes (as 'background' service) | Could merge with Scheduler as both handle background processing
+Face Tracking Server (Python) | packages/shared/face-tracking-server/app.py | 5001 | None (localhost-only) | python app.py | No | Runs as standalone Python Flask service, could be containerized
