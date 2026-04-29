@@ -82,7 +82,7 @@ export interface SmitheryConfig {
  */
 export class SmitheryRegistry {
   private client: SmitheryClient;
-  private installedServers: Map<string, SmitheryServer> = new Map();
+  private installedServers: Map<string, SmitheryServer> = new Map<string, SmitheryServer>();
 
   constructor(config?: SmitheryConfig) {
     this.client = new SmitheryClient(config);

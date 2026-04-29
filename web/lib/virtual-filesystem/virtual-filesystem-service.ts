@@ -25,8 +25,10 @@ import { compress, decompress, isCompressed } from '@/lib/utils/compression';
 import { toolResultCache, toolCacheKey } from '@/lib/cache';
 // import { emitFilesystemUpdated } from './sync/sync-events'; // Imported but not used - central emit deferred for now
 
-// Default configuration
-const DEFAULT_WORKSPACE_ROOT = process.env.DEFAULT_WORKSPACE_ROOT || 'project';
+// Default configuration - use DESKTOP_WORKSPACE_ROOT for desktop mode
+// Priority: window.__SIDECAR_CONFIG__ (Tauri) > DESKTOP_WORKSPACE_ROOT > INITIAL_CWD > 'project'
+import { getDesktopWorkspaceDir } from '@/lib/utils/desktop-env';
+const DEFAULT_WORKSPACE_ROOT = getDesktopWorkspaceDir();
 const MAX_PATH_LENGTH = 1024;
 const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB per file
 const MAX_TOTAL_WORKSPACE_SIZE = 500 * 1024 * 1024; // 500MB total workspace
@@ -77,7 +79,7 @@ export class VirtualFilesystemService {
   private readonly workspaceRoot: string;
   private readonly workspaces = new Map<string, WorkspaceState>();
   private readonly events = new EventEmitter();
-  private batchManager: Map<string, VFSBatchOperations> = new Map();
+  private batchManager: Map<string, VFSBatchOperations> = new Map<string, VFSBatchOperations>();
 
   /**
    * Get batch operations manager for a specific owner
@@ -234,6 +236,21 @@ export class VirtualFilesystemService {
     const file = workspace.files.get(normalizedPath);
 
     if (!file) {
+      // SECURITY: Even if file doesn't exist, throw generic 'File not found'
+      // to avoid leaking information about whether files exist in other workspaces
+      throw new Error(`File not found: ${normalizedPath}`);
+    }
+
+    // SECURITY FIX: Verify file ownership
+    // Each file is stored with its ownerId. If a file exists in the workspace but
+    // belongs to a different owner (e.g., from mock DB returning wrong owner data),
+    // we must reject the access to prevent cross-workspace data leakage.
+    if (file.ownerId && file.ownerId !== ownerId) {
+      console.warn(`[VFS] SECURITY: Cross-workspace access blocked`, {
+        requestingOwner: ownerId,
+        fileOwner: file.ownerId,
+        path: normalizedPath
+      });
       throw new Error(`File not found: ${normalizedPath}`);
     }
 
@@ -377,6 +394,7 @@ export class VirtualFilesystemService {
       createdAt: previous?.createdAt || now,
       version: (previous?.version || 0) + 1,
       size: fileSize,
+      ownerId: this.sanitizeOwnerId(ownerId), // CRITICAL: Track ownership for security
     };
 
     workspace.files.set(normalizedPath, file);
@@ -859,6 +877,42 @@ export class VirtualFilesystemService {
   }
 
   async exportWorkspace(ownerId: string): Promise<VirtualWorkspaceSnapshot & { structure?: Record<string, string[]> }> {
+    if (isDesktopMode() && isUsingLocalFS()) {
+      const snapshot = await fsBridge.exportWorkspace(ownerId);
+      const files: VirtualFile[] = snapshot.files
+        .map((file) => ({
+          path: file.path,
+          content: file.content,
+          language: file.language || 'text',
+          size: file.size ?? 0,
+          version: (file as any).version ?? 1,
+          lastModified: file.lastModified ?? new Date().toISOString(),
+          createdAt: file.createdAt ?? new Date().toISOString(),
+        }))
+        .sort((a, b) => a.path.localeCompare(b.path));
+
+      const structure: Record<string, string[]> = {};
+      for (const file of files) {
+        const parts = file.path.split('/');
+        if (parts.length > 1) {
+          const dir = parts.slice(0, -1).join('/');
+          if (!structure[dir]) {
+            structure[dir] = [];
+          }
+          structure[dir].push(parts[parts.length - 1]);
+        }
+      }
+
+      return {
+        root: snapshot.root,
+        version: snapshot.version,
+        updatedAt: new Date().toISOString(),
+        exportedAt: new Date().toISOString(),
+        files,
+        structure,
+      };
+    }
+
     const workspace = await this.ensureWorkspace(ownerId);
     const files = Array.from(workspace.files.values())
       .map((file) => ({ ...file }))
@@ -1089,9 +1143,7 @@ export class VirtualFilesystemService {
           version: number;
           created_at: string;
           updated_at: string;
-        }>;
-
-        if (rows.length > 0 || meta) {
+        }>;          if (rows.length > 0 || meta) {
           workspace.files = new Map(rows.map(row => {
             // FIX: Normalize backslashes to forward slashes when loading from DB.
             // Stale entries from Windows may contain backslashes that break path matching.
@@ -1108,6 +1160,7 @@ export class VirtualFilesystemService {
               lastModified: row.updated_at,
               createdAt: row.created_at,
               isDirectoryMarker: normalizedPath.endsWith('/.directory'),
+              ownerId: normalizedOwnerId, // SECURITY: Track ownership for DB-loaded files
             } as VirtualFile];
           }));
 

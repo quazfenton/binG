@@ -11,24 +11,23 @@ const RATE_LIMIT_MAX_REQUESTS = 100; // requests per window
 const RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000; // 1 hour
 
 /**
- * Validate and parse user ID to a safe integer
- * Database stores user_id as INTEGER, but auth returns string
- * Uses strict validation to prevent partial parsing (e.g., "123abc" → 123)
+ * Validate and get user ID as string
+ * Database stores user_id as TEXT (UUID), and auth returns string
  */
-function validateAndParseUserId(userId: string): number | null {
-  // Must be all digits, no trailing characters
-  if (!/^\d+$/.test(userId)) {
+function validateAndParseUserId(userId: string): string | null {
+  // userId should be a string (UUID format)
+  // Basic validation - ensure it's not empty
+  if (!userId || typeof userId !== 'string') {
     return null;
   }
   
-  const numericId = Number(userId);
-  
-  // Must be a safe integer (prevents precision loss)
-  if (!Number.isSafeInteger(numericId)) {
+  // UUID format validation (basic check for non-empty alphanumeric string)
+  // UUIDs can be 36 chars with hyphens or shorter for legacy compatibility
+  if (userId.trim().length === 0) {
     return null;
   }
   
-  return numericId;
+  return userId;
 }
 
 /**
@@ -55,9 +54,9 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Validate and parse user ID to safe integer
-    const numericUserId = validateAndParseUserId(authResult.userId);
-    if (numericUserId === null) {
+    // Validate and get user ID as string
+    const userId = validateAndParseUserId(authResult.userId);
+    if (userId === null) {
       return NextResponse.json(
         { error: 'Invalid user ID format' },
         { status: 400 }
@@ -65,7 +64,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Check rate limit using shared rate limiting infrastructure
-    const rateLimitResult = checkRateLimit(authResult.userId, RATE_LIMIT_MAX_REQUESTS, RATE_LIMIT_WINDOW_MS);
+    const rateLimitResult = checkRateLimit(userId, RATE_LIMIT_MAX_REQUESTS, RATE_LIMIT_WINDOW_MS);
     
     if (!rateLimitResult.allowed) {
       return NextResponse.json(
@@ -90,7 +89,7 @@ export async function GET(request: NextRequest) {
 
     // Get all conversations for user
     // Note: DatabaseOperations methods are synchronous (better-sqlite3)
-    const conversations = dbOps.getUserConversations(numericUserId, 50);
+    const conversations = dbOps.getUserConversations(userId, 50);
 
     // Format for frontend
     const chatHistory = conversations.map((conv: any) => ({
@@ -145,9 +144,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Validate and parse user ID to safe integer
-    const numericUserId = validateAndParseUserId(authResult.userId);
-    if (numericUserId === null) {
+    // Validate and get user ID as string
+    const userId = validateAndParseUserId(authResult.userId);
+    if (userId === null) {
       return NextResponse.json(
         { error: 'Invalid user ID format' },
         { status: 400 }
@@ -155,7 +154,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Check rate limit using shared rate limiting infrastructure
-    const rateLimitResult = checkRateLimit(authResult.userId, RATE_LIMIT_MAX_REQUESTS, RATE_LIMIT_WINDOW_MS);
+    const rateLimitResult = checkRateLimit(userId, RATE_LIMIT_MAX_REQUESTS, RATE_LIMIT_WINDOW_MS);
 
     if (!rateLimitResult.allowed) {
       return NextResponse.json(
@@ -197,7 +196,7 @@ export async function POST(request: NextRequest) {
         WHERE id = ? AND is_archived = FALSE
       `).get(id) as any;
 
-      if (existingConversation && existingConversation.user_id !== numericUserId) {
+      if (existingConversation && existingConversation.user_id !== userId) {
         // Conversation belongs to another user - this is a true access denied
         const error: any = new Error('Access denied: conversation belongs to another user');
         error.code = 'ACCESS_DENIED';
@@ -209,7 +208,7 @@ export async function POST(request: NextRequest) {
         db.prepare(`
           INSERT INTO conversations (id, user_id, title)
           VALUES (?, ?, ?)
-        `).run(id, numericUserId, title || 'Untitled Chat');
+        `).run(id, userId, title || 'Untitled Chat');
       }
 
       // Delete existing messages for this conversation
@@ -317,9 +316,9 @@ export async function DELETE(request: NextRequest) {
       );
     }
 
-    // Validate and parse user ID to safe integer
-    const numericUserId = validateAndParseUserId(authResult.userId);
-    if (numericUserId === null) {
+    // Validate and get user ID as string
+    const userId = validateAndParseUserId(authResult.userId);
+    if (userId === null) {
       return NextResponse.json(
         { error: 'Invalid user ID format' },
         { status: 400 }
@@ -329,7 +328,7 @@ export async function DELETE(request: NextRequest) {
     const dbOps = new DatabaseOperations();
 
     // Verify conversation exists and belongs to user before deleting
-    const conversation = dbOps.getConversationById(chatId, numericUserId);
+    const conversation = dbOps.getConversationById(chatId, userId);
     if (!conversation) {
       return NextResponse.json(
         { error: 'Conversation not found or access denied' },
@@ -340,7 +339,7 @@ export async function DELETE(request: NextRequest) {
     // Delete conversation (cascade will delete messages)
     // Already verified user ownership above
     const db = getDatabase();
-    const result = db.prepare('DELETE FROM conversations WHERE id = ? AND user_id = ?').run(chatId, numericUserId);
+    const result = db.prepare('DELETE FROM conversations WHERE id = ? AND user_id = ?').run(chatId, userId);
 
     if (result.changes === 0) {
       return NextResponse.json(

@@ -35,7 +35,7 @@ export interface TamboTool {
  * Tool registry singleton
  */
 class TamboToolRegistry {
-  private tools: Map<string, TamboTool> = new Map();
+  private tools: Map<string, TamboTool> = new Map<string, TamboTool>();
   private initialized = false;
 
   /**

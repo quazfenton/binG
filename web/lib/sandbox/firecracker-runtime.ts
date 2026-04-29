@@ -85,7 +85,7 @@ export interface VMInstance {
 }
 
 export class FirecrackerRuntime extends EventEmitter {
-  private vms: Map<string, VMInstance> = new Map();
+  private vms: Map<string, VMInstance> = new Map<string, VMInstance>();
   private readonly firecrackerBin: string;
   private readonly jailerBin: string;
   private readonly baseDir: string;
@@ -404,7 +404,7 @@ export class FirecrackerRuntime extends EventEmitter {
 
 // Process-based fallback runtime (for development/testing)
 export class ProcessRuntime extends EventEmitter {
-  private processes: Map<string, ChildProcess> = new Map();
+  private processes: Map<string, ChildProcess> = new Map<string, ChildProcess>();
   private readonly baseWorkspaceDir: string;
 
   constructor(baseWorkspaceDir: string = '/tmp/workspaces') {

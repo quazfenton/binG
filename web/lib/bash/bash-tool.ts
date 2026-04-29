@@ -203,9 +203,9 @@ export function registerBashHook(type: keyof typeof hooks, handler: BashHookHand
  * Clear all hooks (for testing).
  */
 export function clearBashHooks(): void {
-  hooks.preExecution.length = 0;
-  hooks.postExecution.length = 0;
-  hooks.onError.length = 0;
+  hooks.preExecution.splice(0, hooks.preExecution.length);
+  hooks.postExecution.splice(0, hooks.postExecution.length);
+  hooks.onError.splice(0, hooks.onError.length);
 }
 
 async function triggerHooks(type: keyof typeof hooks, ctx: BashHookContext): Promise<BashHookResult | null> {
@@ -522,7 +522,7 @@ export function createBashTool(config: Partial<BashToolConfig> = {}) {
               };
             }
             // 'sandbox' mode falls through to normal execution
-          } catch (e) {
+          } catch (e: unknown) {
             // Router unavailable - fall through to normal execution
             logger.debug('Command router unavailable', { error: (e as Error).message });
           }

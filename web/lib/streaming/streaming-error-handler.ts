@@ -31,7 +31,7 @@ export interface ErrorRecoveryOptions {
 }
 
 export class StreamingErrorHandler {
-  private errorCounts: Map<string, number> = new Map();
+  private errorCounts: Map<string, number> = new Map<string, number>();
   private recoveryOptions: ErrorRecoveryOptions;
   
   // Recovery tracking

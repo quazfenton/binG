@@ -73,7 +73,7 @@ export interface OpencodeSessionManagerConfig {
 export class OpencodeSessionManager {
   private baseUrl: string
   private timeout: number
-  private sessions: Map<string, Session> = new Map()
+  private sessions: Map<string, Session> = new Map<string, Session>();
 
   constructor(config: OpencodeSessionManagerConfig = {}) {
     const hostname = config.hostname || process.env.OPENCODE_HOSTNAME || '127.0.0.1'

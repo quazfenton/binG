@@ -87,8 +87,8 @@ export class OPFSAdapter {
   private usingFallback = false;
   private writeQueue: QueuedWrite[] = [];
   private syncInProgress = false;
-  private lastSyncTime: Map<string, number> = new Map();
-  private fileVersions: Map<string, { opfs: number; server: number }> = new Map();
+  private lastSyncTime: Map<string, number> = new Map<string, number>();
+  private fileVersions: Map<string, { opfs: number; server: number }> = new Map<string, { opfs: number; server: number }>();
   private syncInterval: NodeJS.Timeout | null = null;
   private enabled = false;
   private ownerId: string | null = null;

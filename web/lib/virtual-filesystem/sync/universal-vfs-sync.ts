@@ -266,7 +266,7 @@ class E2BSyncStrategy implements ProviderSyncStrategy {
 
 // Universal VFS Sync Service
 export class UniversalVfsSync {
-  private static strategies: Map<string, ProviderSyncStrategy> = new Map();
+  private static strategies: Map<string, ProviderSyncStrategy> = new Map<string, ProviderSyncStrategy>();
 
   static {
     this.registerStrategy(new SpritesSyncStrategy());

@@ -551,7 +551,7 @@ export const OFFLOAD_THRESHOLDS = {
 // ============================================================================
 
 export class LivePreviewOffloading {
-  private cloudDestCache: Map<string, boolean> = new Map();
+  private cloudDestCache: Map<string, boolean> = new Map<string, boolean>();
 
   /**
    * Analyze project for offload heuristics
@@ -1350,7 +1350,7 @@ export class LivePreviewOffloading {
     const cacheKey = `${detection.framework}-${detection.hasBackend}-${detection.hasNodeServer}-${detection.hasPython}-${detection.hasHeavyComputation}-${detection.hasAPIKeys}`;
 
     if (!this.cloudDestCache) {
-      this.cloudDestCache = new Map();
+      this.cloudDestCache = new Map<string, boolean>();
     }
 
     if (this.cloudDestCache.has(cacheKey)) {

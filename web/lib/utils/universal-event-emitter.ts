@@ -22,7 +22,7 @@ interface EventEmitterLike {
  * Browser-compatible EventEmitter implementation
  */
 class BrowserEventEmitter implements EventEmitterLike {
-  private events: Map<string, EventListener[]> = new Map();
+  private events: Map<string, EventListener[]> = new Map<string, EventListener[]>();
 
   on(event: string, listener: EventListener): this {
     if (!this.events.has(event)) {

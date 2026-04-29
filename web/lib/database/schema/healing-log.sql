@@ -16,6 +16,8 @@ CREATE TABLE IF NOT EXISTS event_healing_log (
     strategy TEXT NOT NULL,
     success BOOLEAN NOT NULL,
     explanation TEXT,
+    fix_applied TEXT,
+    confidence REAL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
 );

@@ -108,6 +108,39 @@ describe('Mem0 Power', () => {
   });
 });
 
+describe('Mem0 Circuit Breaker', () => {
+  it('exposes circuit state inspector and reset helper', async () => {
+    const { getMem0CircuitState, resetMem0CircuitBreaker } = await import('../mem0-power');
+    resetMem0CircuitBreaker();
+    const state = getMem0CircuitState();
+    expect(state.state).toBe('CLOSED');
+    expect(state.recentFailures).toBe(0);
+    expect(state.reopensAt).toBeNull();
+  });
+
+  it('closes the breaker after reset', async () => {
+    const { getMem0CircuitState, resetMem0CircuitBreaker } = await import('../mem0-power');
+    resetMem0CircuitBreaker();
+    expect(getMem0CircuitState().state).toBe('CLOSED');
+  });
+
+  it('isMem0Configured returns false when API key missing', async () => {
+    const originalKey = process.env.MEM0_API_KEY;
+    delete process.env.MEM0_API_KEY;
+    const { isMem0Configured, resetMem0CircuitBreaker } = await import('../mem0-power');
+    resetMem0CircuitBreaker();
+    expect(isMem0Configured()).toBe(false);
+    if (originalKey !== undefined) process.env.MEM0_API_KEY = originalKey;
+  });
+});
+
+describe('Mem0 Search Cache', () => {
+  it('clearMem0SearchCache is callable', async () => {
+    const { clearMem0SearchCache } = await import('../mem0-power');
+    expect(() => clearMem0SearchCache()).not.toThrow();
+  });
+});
+
 describe('Mem0 Power Manifest', () => {
   it('should have required power metadata', async () => {
     const { mem0PowerManifest } = await import('../mem0-power');

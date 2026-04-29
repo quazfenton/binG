@@ -50,7 +50,7 @@ const DEFAULT_QUOTA_CONFIG: QuotaConfig = {
 }
 
 export class MistralQuotaManager {
-  private usageRecords: Map<string, UsageRecord> = new Map()
+  private usageRecords: Map<string, UsageRecord> = new Map<string, UsageRecord>()
   private config: QuotaConfig
   private quotaResetDate: Date
 

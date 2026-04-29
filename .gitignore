@@ -78,3 +78,7 @@ desktop/src-tauri/target/*
 **/dist/*
 dist/
 build/
+
+# Tauri web assets (built from web/ source - never commit build artifacts)
+desktop/src-tauri/web-assets/
+**/web-assets/

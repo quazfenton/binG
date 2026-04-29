@@ -204,7 +204,7 @@ export class MCPConnectionPool {
       }
       pending.reject(new Error('Connection pool shutting down'));
     }
-    this.pendingRequests.length = 0;
+    this.pendingRequests.splice(0, this.pendingRequests.length);
 
     // Close all connections
     const closePromises = this.pool.map((pooled) =>
@@ -212,7 +212,7 @@ export class MCPConnectionPool {
     );
     
     await Promise.allSettled(closePromises);
-    this.pool.length = 0;
+    this.pool.splice(0, this.pool.length);
 
     logger.info('MCP Connection Pool shutdown complete', { serverId: this.serverId });
   }

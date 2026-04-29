@@ -78,7 +78,7 @@ export class SandboxRateLimiter {
 
   constructor(configs: Record<string, RateLimitConfig>) {
     this.limits = new Map(Object.entries(configs))
-    this.entries = new Map()
+    this.entries = new Map<string, RateLimitEntry>()
 
     // Start cleanup interval (every minute)
     this.startCleanup()

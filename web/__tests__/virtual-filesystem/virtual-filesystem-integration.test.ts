@@ -15,6 +15,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 // VFS workspace prefix used in path normalization
 const WORKSPACE_PREFIX = 'test-workspace/';
+import { resetMockDatabase } from '@/lib/database/connection';
 import { VirtualFilesystemService, type FilesystemChangeEvent, type ConflictEvent } from '@/lib/virtual-filesystem/virtual-filesystem-service';
 import { FilesystemDiffTracker, type FileDiff, type DiffHunk } from '@/lib/virtual-filesystem/filesystem-diffs';
 import { VFSBatchOperations } from '@/lib/virtual-filesystem/vfs-batch-operations';
@@ -47,6 +48,11 @@ describe('Virtual Filesystem Integration', () => {
   let diffTracker: FilesystemDiffTracker;
 
   beforeEach(async () => {
+    // CRITICAL: Reset all state to ensure clean test isolation
+    // This prevents test data leakage across test cases
+    delete (globalThis as any).__vfsSingleton__;
+    resetMockDatabase();
+    
     vfs = new VirtualFilesystemService({
       workspaceRoot: 'test-workspace',
       storageDir: '/tmp/test-vfs-storage',

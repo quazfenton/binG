@@ -27,13 +27,14 @@ export async function DELETE(
       }, { status: 401 });
     }
 
-    const numericUserId = parseInt(authResult.userId, 10);
+    // userId is now a string (UUID)
+    const userId = authResult.userId;
 
-    if (isNaN(numericUserId)) {
+    if (!userId) {
       return NextResponse.json({ error: 'Invalid userId' }, { status: 400 });
     }
 
-    const success = await disconnectProviderAll(numericUserId, provider);
+    const success = await disconnectProviderAll(userId, provider);
 
     if (success) {
       return NextResponse.json({

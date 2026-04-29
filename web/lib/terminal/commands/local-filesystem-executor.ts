@@ -22,6 +22,7 @@
  */
 
 import { createLogger } from '../../utils/logger'
+import { isDesktopMode } from '@bing/platform/env'
 
 const logger = createLogger('LocalFilesystem')
 
@@ -98,7 +99,7 @@ export class LocalCommandExecutor {
 
     // Initialize cwd - use external cwd if available, otherwise default
     const extCwd = this.getExtCwd?.()
-    const defaultCwd = 'project/sessions'
+    const defaultCwd = isDesktopMode() ? 'project' : 'project/sessions'
 
     // Use external cwd if provided and valid, otherwise use default
     // FIX: Validate that the CWD actually exists in the filesystem - if not, fall back to default
@@ -118,8 +119,10 @@ export class LocalCommandExecutor {
         initialCwd = defaultCwd;
         const fsWithDefaults: Record<string, LocalFilesystemEntry> = {
           'project': { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() },
-          'project/sessions': { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() },
         };
+        if (!isDesktopMode()) {
+          fsWithDefaults['project/sessions'] = { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() };
+        }
         // Merge with existing filesystem
         this.fileSystem = { ...fs, ...fsWithDefaults };
         this.saveToExternal();

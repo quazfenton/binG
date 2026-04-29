@@ -72,7 +72,7 @@ export class RedisCheckpointer implements Checkpointer {
 }
 
 export class MemoryCheckpointer implements Checkpointer {
-  private store: Map<string, { state: any; metadata?: Record<string, any> }> = new Map();
+  private store: Map<string, { state: any; metadata?: Record<string, any> }> = new Map<string, { state: any; metadata?: Record<string, any> }>();
   private ttl: number;
 
   constructor(config?: { ttl?: number }) {

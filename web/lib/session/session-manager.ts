@@ -312,7 +312,7 @@ export class SessionManager {
       if (session.sandboxHandle) {
         try {
           await session.sandboxHandle.executeCommand('echo "Session cleanup complete"');
-        } catch (e) {
+        } catch (e: unknown) {
           // Ignore cleanup errors
         }
       }
@@ -324,7 +324,7 @@ export class SessionManager {
       // Cleanup session from session-naming.ts tracking
       try {
         unregisterActiveSession(conversationId);
-      } catch (e) {
+      } catch (e: unknown) {
         // Non-fatal - session naming cleanup is optional
         logger.debug(`Failed to cleanup session name for ${conversationId}:`, e);
       }
@@ -652,7 +652,7 @@ export class SessionManager {
 
     // Track job in session
     if (!session.backgroundJobs) {
-      session.backgroundJobs = new Map();
+      session.backgroundJobs = new Map<string, any>();
     }
     session.backgroundJobs.set(job.jobId, job);
 
@@ -832,6 +832,16 @@ export class SessionManager {
           // No separator found — treat entire key as userId with empty conversationId
           userId = key;
           conversationId = '';
+        }
+        // Bug 5 fix: destroy sandbox VM before removing session from memory
+        const _sess = this.sessions.get(key);
+        if (_sess?.sandboxId) {
+          try {
+            const { sandboxBridge } = await import('../sandbox/sandbox-service-bridge');
+            await sandboxBridge.cleanupSession(_sess.id, _sess.sandboxId);
+          } catch (_sbErr: any) {
+            logger.warn(`Sandbox cleanup failed for session ${_sess.id}: ${_sbErr.message}`);
+          }
         }
         await this.destroySession(userId, conversationId);
       } catch (error: any) {

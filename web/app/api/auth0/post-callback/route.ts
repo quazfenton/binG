@@ -76,7 +76,7 @@ export async function POST(request: NextRequest) {
         const { getDatabase } = await import('@/lib/database/connection');
         const db = getDatabase();
         if (db) {
-          const userRow = db.prepare('SELECT id FROM users WHERE email = ? AND is_active = TRUE').get(trustedEmail) as { id: number } | undefined;
+          const userRow = db.prepare('SELECT id FROM users WHERE email = ? AND is_active = TRUE').get(trustedEmail) as { id: string } | undefined;
           if (userRow) {
             await mapAuth0UserId(userRow.id, auth0UserId);
             console.log('[Auth0 Post-Callback] Mapped Auth0 user to local user:', userRow.id);

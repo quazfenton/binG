@@ -307,7 +307,7 @@ class E2BSandboxHandle implements SandboxHandle {
   private sandbox: E2BSandboxType
   private config: SandboxCreateConfig
   private e2bModule: any
-  private ptySessions: Map<string, { pid: number; handle: any }> = new Map()
+  private ptySessions: Map<string, { pid: number; handle: any }> = new Map<string, { pid: number; handle: any }>();
   private ampService?: E2BAmpService
   private codexService?: E2BCodexService
 

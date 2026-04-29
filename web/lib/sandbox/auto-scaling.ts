@@ -170,8 +170,8 @@ export interface ResourceUsage {
  * Manages automatic scaling based on policies.
  */
 export class AutoScalingManager extends EventEmitter {
-  private policies: Map<string, ScalingPolicy> = new Map();
-  private lastScalingDecision: Map<string, number> = new Map();
+  private policies: Map<string, ScalingPolicy> = new Map<string, ScalingPolicy>();
+  private lastScalingDecision: Map<string, number> = new Map<string, number>();
   private currentResources: {
     cpu: number;
     memory: number;

@@ -33,7 +33,7 @@ export function resolveOPFSPath(
 ): string {
   const {
     root = '',
-    mounts = new Map(),
+    mounts = new Map<string, string>(),
     allowTraversal = false,
   } = options;
 
@@ -208,7 +208,7 @@ export function isPathUnderRoot(path: string, root: string): boolean {
  * Create mount point manager
  */
 export class MountManager {
-  private mounts: Map<string, MountPoint> = new Map();
+  private mounts: Map<string, MountPoint> = new Map<string, MountPoint>();
 
   /**
    * Mount a target path at an alias

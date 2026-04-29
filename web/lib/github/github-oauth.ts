@@ -307,7 +307,7 @@ export async function getGitHubUser(accessToken: string): Promise<GitHubUser> {
 /**
  * Save GitHub token to database
  */
-export async function saveGitHubToken(userId: number, token: GitHubToken, user: GitHubUser): Promise<boolean> {
+export async function saveGitHubToken(userId: string, token: GitHubToken, user: GitHubUser): Promise<boolean> {
   try {
     const db = getDatabase();
 
@@ -365,7 +365,7 @@ export async function saveGitHubToken(userId: number, token: GitHubToken, user: 
 /**
  * Get GitHub token from database
  */
-export async function getGitHubToken(userId: number): Promise<string | null> {
+export async function getGitHubToken(userId: string): Promise<string | null> {
   try {
     const db = getDatabase();
     const stmt = db.prepare(`
@@ -391,7 +391,7 @@ export async function getGitHubToken(userId: number): Promise<string | null> {
 /**
  * Check if GitHub is connected
  */
-export function isGitHubConnected(userId: number): boolean {
+export function isGitHubConnected(userId: string): boolean {
   try {
     const db = getDatabase();
     const stmt = db.prepare(`
@@ -408,7 +408,7 @@ export function isGitHubConnected(userId: number): boolean {
 /**
  * Disconnect GitHub
  */
-export function disconnectGitHub(userId: number): boolean {
+export function disconnectGitHub(userId: string): boolean {
   try {
     const db = getDatabase();
     const stmt = db.prepare(`

@@ -120,7 +120,7 @@ interface PendingSync {
   timestamp: number;
 }
 
-let pendingSyncs: Map<string, PendingSync> = new Map();
+let pendingSyncs: Map<string, PendingSync> = new Map<string, PendingSync>();
 let syncTimeout: ReturnType<typeof setTimeout> | null = null;
 let isProcessingSyncs = false;
 

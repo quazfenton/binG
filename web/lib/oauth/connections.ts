@@ -16,12 +16,12 @@ import { oauthService } from '../auth/oauth-service';
 import { getDatabase, encryptApiKey, decryptApiKey } from '../database/connection';
 
 // Lazy-loaded functions to avoid circular dependency
-async function getAccessTokenForConnection(connection: string, userId?: number) {
+async function getAccessTokenForConnection(connection: string, userId?: string) {
   const { getAccessTokenForConnection: fn } = await import('@/lib/auth0');
   return fn(connection, userId);
 }
 
-function isProviderConnected(userId: number, provider: string): boolean {
+function isProviderConnected(userId: string, provider: string): boolean {
   try {
     const db = getDatabase();
     const stmt = db.prepare(`
@@ -90,7 +90,7 @@ async function fetchGitHub<T>(endpoint: string, token?: string): Promise<T> {
  * Get user's GitHub repos via Auth0 connection token
  * @param userId - Optional user ID for database token retrieval
  */
-export async function getGitHubRepos(connectionToken?: string | null, userId?: number): Promise<GitHubRepo[]> {
+export async function getGitHubRepos(connectionToken?: string | null, userId?: string): Promise<GitHubRepo[]> {
   const token = connectionToken || await getAccessTokenForConnection(AUTH0_CONNECTIONS.GITHUB, userId);
   
   if (!token) {
@@ -109,7 +109,7 @@ export async function getGitHubRepoContents(
   repo: string,
   path: string = '',
   connectionToken?: string | null,
-  userId?: number
+  userId?: string
 ): Promise<GitHubFile[]> {
   const token = connectionToken || await getAccessTokenForConnection(AUTH0_CONNECTIONS.GITHUB, userId);
   
@@ -128,7 +128,7 @@ export async function getGitHubRepoContents(
 export async function getGitHubFileContent(
   downloadUrl: string,
   connectionToken?: string | null,
-  userId?: number
+  userId?: string
 ): Promise<string> {
   const token = connectionToken || await getAccessTokenForConnection(AUTH0_CONNECTIONS.GITHUB, userId);
   
@@ -159,8 +159,8 @@ export async function fetchGitHubRepoFiles(
   path: string = '',
   connectionToken?: string | null,
   maxFiles: number = 100,
-  existingFiles: Map<string, string> = new Map(),
-  userId?: number
+  existingFiles: Map<string, string> = new Map<string, string>(),
+  userId?: string
 ): Promise<Map<string, string>> {
   if (existingFiles.size >= maxFiles) return existingFiles;
 
@@ -188,7 +188,7 @@ export async function fetchGitHubRepoFiles(
  * Check if GitHub connection is available (consolidated check)
  * @param userId - Optional user ID to check database
  */
-export async function isGitHubConnected(userId?: number): Promise<boolean> {
+export async function isGitHubConnected(userId?: string): Promise<boolean> {
   try {
     // Check cache/database first
     if (userId) {
@@ -224,7 +224,7 @@ export async function isGitHubConnected(userId?: number): Promise<boolean> {
  * @param provider - Provider to check (e.g., 'github', 'google', 'slack')
  * @returns true if connected via ANY system (Nango/Arcade/Composio/Auth0)
  */
-export async function isProviderConnectedAny(userId: number, provider: string): Promise<boolean> {
+export async function isProviderConnectedAny(userId: string, provider: string): Promise<boolean> {
   try {
     // 1. Check database for Nango/Arcade/Composio connections
     const db = getDatabase();
@@ -256,7 +256,7 @@ import { getAuth0ConnectionForPlatform as getAuth0ConnectionName } from './provi
  * @param userId - User ID to check
  * @returns Array of provider names that are connected
  */
-export async function getAllConnectedProviders(userId: number): Promise<string[]> {
+export async function getAllConnectedProviders(userId: string): Promise<string[]> {
   const connectedProviders = new Set<string>();
   
   try {
@@ -297,7 +297,7 @@ export async function getAllConnectedProviders(userId: number): Promise<string[]
  * @param auth0UserId - The Auth0 user ID (session.user.sub)
  * @returns Local user ID or null if not found
  */
-export async function getLocalUserIdFromAuth0(auth0UserId: string): Promise<number | null> {
+export async function getLocalUserIdFromAuth0(auth0UserId: string): Promise<string | null> {
   try {
     const db = getDatabase();
     // Look up user by auth0 id if stored, or by matching email from session
@@ -307,7 +307,7 @@ export async function getLocalUserIdFromAuth0(auth0UserId: string): Promise<numb
       WHERE preference_key = 'auth0_user_id' AND preference_value = ?
       LIMIT 1
     `);
-    const row = stmt.get(auth0UserId) as { user_id: number } | undefined;
+    const row = stmt.get(auth0UserId) as { user_id: string } | undefined;
     return row?.user_id ?? null;
   } catch {
     return null;
@@ -321,7 +321,7 @@ export async function getLocalUserIdFromAuth0(auth0UserId: string): Promise<numb
  * @param localUserId - Local database user ID
  * @param auth0UserId - Auth0 user ID
  */
-export async function mapAuth0UserId(localUserId: number, auth0UserId: string): Promise<boolean> {
+export async function mapAuth0UserId(localUserId: string, auth0UserId: string): Promise<boolean> {
   try {
     const db = getDatabase();
     const stmt = db.prepare(`
@@ -342,7 +342,7 @@ export async function mapAuth0UserId(localUserId: number, auth0UserId: string): 
  * @param userId - Local user ID
  * @param provider - Provider to disconnect (e.g., 'github', 'google', 'slack')
  */
-export async function disconnectProviderAll(userId: number, provider: string): Promise<boolean> {
+export async function disconnectProviderAll(userId: string, provider: string): Promise<boolean> {
   let success = true;
   
   try {

@@ -5,6 +5,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { resetMockDatabase } from '@/lib/database/connection';
 import { filesystemEditDatabase } from '@/lib/virtual-filesystem/filesystem-edit-database';
 import { filesystemEditSessionService } from '@/lib/virtual-filesystem/filesystem-edit-session-service';
 import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-service';
@@ -29,6 +30,8 @@ describe('FilesystemEditDatabase', () => {
   const testConversationId = 'test-db-conversation';
 
   beforeEach(async () => {
+    // CRITICAL: Reset mock database to ensure clean test isolation
+    resetMockDatabase();
     vi.clearAllMocks();
     // Reset mock implementations for each test
     mockedVFS.readFile.mockImplementation(async (ownerId: string, path: string) => {
@@ -419,8 +422,9 @@ describe('FilesystemEditSessionService - Integration', () => {
   const testConversationId = 'test-integration-conversation';
 
   beforeEach(() => {
+    // CRITICAL: Reset mock database to ensure clean test isolation
+    resetMockDatabase();
     // Clear in-memory state
-    // Note: Database state persists across tests
   });
 
   describe('Transaction persistence flow', () => {

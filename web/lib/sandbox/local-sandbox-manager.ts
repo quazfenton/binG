@@ -49,10 +49,10 @@ export interface FileEntry {
 }
 
 export class SandboxManager extends EventEmitter {
-  private sandboxes: Map<string, Sandbox> = new Map();
+  private sandboxes: Map<string, Sandbox> = new Map<string, Sandbox>();
   private baseWorkspaceDir: string;
   private baseSnapshotDir: string;
-  private runningProcesses: Map<string, ChildProcess> = new Map();
+  private runningProcesses: Map<string, ChildProcess> = new Map<string, ChildProcess>();
 
   constructor(baseWorkspaceDir: string = '/tmp/workspaces', baseSnapshotDir: string = '/tmp/snapshots') {
     super();

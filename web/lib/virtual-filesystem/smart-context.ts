@@ -183,7 +183,7 @@ function extractPromptSignals(prompt: string): {
   }
 
   // Extract meaningful keywords (excluding common stop words)
-  const stopWords = new Set(['the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should', 'may', 'might', 'can', 'to', 'of', 'in', 'for', 'on', 'with', 'at', 'by', 'from', 'as', 'into', 'through', 'during', 'before', 'after', 'and', 'but', 'or', 'nor', 'not', 'so', 'yet', 'both', 'either', 'neither', 'each', 'every', 'all', 'any', 'few', 'more', 'most', 'other', 'some', 'such', 'no', 'only', 'own', 'same', 'than', 'too', 'very', 'just', 'because', 'if', 'when', 'where', 'what', 'which', 'who', 'whom', 'how', 'this', 'that', 'these', 'those', 'it', 'its', 'they', 'them', 'their', 'we', 'us', 'our', 'you', 'your', 'he', 'him', 'his', 'she', 'her', 'i', 'my', 'me']);
+  const stopWords = new Set<string>(['the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should', 'may', 'might', 'can', 'to', 'of', 'in', 'for', 'on', 'with', 'at', 'by', 'from', 'as', 'into', 'through', 'during', 'before', 'after', 'and', 'but', 'or', 'nor', 'not', 'so', 'yet', 'both', 'either', 'neither', 'each', 'every', 'all', 'any', 'few', 'more', 'most', 'other', 'some', 'such', 'no', 'only', 'own', 'same', 'than', 'too', 'very', 'just', 'because', 'if', 'when', 'where', 'what', 'which', 'who', 'whom', 'how', 'this', 'that', 'these', 'those', 'it', 'its', 'they', 'them', 'their', 'we', 'us', 'our', 'you', 'your', 'he', 'him', 'his', 'she', 'her', 'i', 'my', 'me']);
   for (const word of lower.split(/[\s,;:.!?(){}[\]<>]+/)) {
     if (word.length > 3 && !stopWords.has(word) && !/^\d+$/.test(word)) {
       keywords.add(word);
@@ -319,7 +319,7 @@ function resolveImportPath(
     // Try with extensions — prioritize source file's language first
     const sourceExts = getExtensionsForLanguage(sourceExt);
     const fallbackExts = ['', '.ts', '.tsx', '.js', '.jsx', '.py', '.rs', '.go', '.css', '.scss'];
-    const allExts = [...new Set([...sourceExts, ...fallbackExts])];
+    const allExts = [...new Set<string>([...sourceExts, ...fallbackExts])];
 
     for (const ext of allExts) {
       const withExt = candidate + ext;
@@ -619,10 +619,10 @@ export function generateUnifiedDiffs(
   maxDiffEntries = 20,
   maxDiffLines = 200
 ): Array<{ path: string; diff: string; status: 'modified' | 'created' | 'deleted' }> {
-  const entries: Array<{ path: string; diff: string; status: 'modified' | 'created' | 'deleted'; significance: number }> = [];
+  const entries: Array<{ path: string; diff: string; status: 'modified' | 'created' | 'deleted'; significance: number }> = new Array<{ path: string; diff: string; status: 'modified' | 'created' | 'deleted'; significance: number }>();
 
   // All unique paths across both snapshots
-  const allPaths = new Set([...before.keys(), ...after.keys()]);
+  const allPaths = new Set<string>([...before.keys(), ...after.keys()]);
 
   for (const path of allPaths) {
     const beforeContent = before.get(path) ?? null;
@@ -771,7 +771,7 @@ function computeDiffOps(
   a: string[],
   b: string[]
 ): Array<{ type: 'equal' | 'delete' | 'insert'; start: number; count: number }> {
-  const ops: Array<{ type: 'equal' | 'delete' | 'insert'; start: number; count: number }> = [];
+  const ops: Array<{ type: 'equal' | 'delete' | 'insert'; start: number; count: number }> = new Array<{ type: 'equal' | 'delete' | 'insert'; start: number; count: number }>();
   const m = a.length;
   const n = b.length;
 
@@ -798,7 +798,7 @@ function computeDiffOps(
   // Backtrack to find operations
   let i = m;
   let j = n;
-  const reverseOps: Array<{ type: 'equal' | 'delete' | 'insert'; start: number; count: number }> = [];
+  const reverseOps: Array<{ type: 'equal' | 'delete' | 'insert'; start: number; count: number }> = new Array<{ type: 'equal' | 'delete' | 'insert'; start: number; count: number }>();
 
   while (i > 0 || j > 0) {
     if (i > 0 && j > 0 && a[i - 1] === b[j - 1]) {
@@ -909,8 +909,8 @@ export async function generateSmartContext(options: SmartContextOptions): Promis
     };
   }
   
-  const explicitFiles = new Set(explicitFileList.map(f => f.toLowerCase()));
-  const recentSessionFiles = new Set(recentSessionFileList.map(f => f.toLowerCase()));
+  const explicitFiles = new Set<string>(explicitFileList.map(f => f.toLowerCase()));
+  const recentSessionFiles = new Set<string>(recentSessionFileList.map(f => f.toLowerCase()));
   const signals = extractPromptSignals(prompt || '');
   const normalizedProjectPath = currentProjectPath?.toLowerCase();
 
@@ -998,9 +998,9 @@ export async function generateSmartContext(options: SmartContextOptions): Promis
       try {
         const content = await virtualFilesystem.readFile(userId, file.path);
         const imports = extractImportsFromContent(content.content, file.path, allFilePathsLower, allFilePathsOriginal);
-        importMap.set(file.path.toLowerCase(), new Set(imports));
+        importMap.set(file.path.toLowerCase(), new Set<string>(imports));
         for (const imp of imports) {
-          if (!reverseImportMap.has(imp)) reverseImportMap.set(imp, new Set());
+          if (!reverseImportMap.has(imp)) reverseImportMap.set(imp, new Set<string>());
           reverseImportMap.get(imp)!.add(file.path.toLowerCase());
         }
       } catch {
@@ -1225,7 +1225,7 @@ async function buildTreeString(
   maxDepth: number = 10,
   ownerId: string = '',
   currentPath: string = '/',
-  visitedDirs: Set<string> = new Set()
+  visitedDirs: Set<string> = new Set<string>()
 ): Promise<string> {
   if (depth >= maxDepth || nodes.length === 0) return '';
   
@@ -1310,7 +1310,7 @@ async function buildAbbreviatedTree(
   }
 
   // Always include all dirs, even if empty of referenced files
-  const allEntries: Array<{ node: VirtualFilesystemNode; shown: boolean }> = [];
+  const allEntries: Array<{ node: VirtualFilesystemNode; shown: boolean }> = new Array<{ node: VirtualFilesystemNode; shown: boolean }>();
   for (const dir of dirs) allEntries.push({ node: dir, shown: true });
   for (const file of shownFiles) allEntries.push({ node: file, shown: true });
 
@@ -1713,7 +1713,7 @@ export function detectFileReadRequest(llmResponse: string): { files: string[]; c
   if (inFileCount > 0 && confidence === 'low') confidence = 'low';
 
   // Deduplicate
-  return { files: Array.from(new Set(requestedFiles)), confidence };
+  return { files: Array.from(new Set<string>(requestedFiles)), confidence };
 }
 
 /**
@@ -1759,7 +1759,7 @@ export async function autoContinueWithFiles(options: {
   const toolRequestedFiles = toolCalls ? extractToolCallFileRequests(toolCalls) : [];
 
   // Combine and deduplicate
-  const allRequestedFiles = Array.from(new Set([...textRequestedFiles, ...toolRequestedFiles]));
+  const allRequestedFiles = Array.from(new Set<string>([...textRequestedFiles, ...toolRequestedFiles]));
 
   if (allRequestedFiles.length === 0) {
     return null; // No files requested, no continuation needed
