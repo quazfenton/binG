@@ -46,9 +46,15 @@ export const getDefaultWorkspaceRoot = platformGetDefaultWorkspaceRoot;
  * Re-implementation of the removed function using platform-safe methods
  */
 export function getDesktopWorkspaceDir(): string {
+  // Priority 1: Tauri config (set at app startup, available in browser context)
+  if (typeof window !== 'undefined' && (window as any).__SIDECAR_CONFIG__?.workspace_root) {
+    return (window as any).__SIDECAR_CONFIG__.workspace_root;
+  }
+  // Priority 2: Environment variable (set by Tauri before spawning sidecar)
   if (typeof process !== 'undefined' && process.env.DESKTOP_WORKSPACE_ROOT) {
     return process.env.DESKTOP_WORKSPACE_ROOT;
   }
+  // Priority 3: Fallback to platform defaults
   return getDefaultWorkspaceRoot();
 }
 

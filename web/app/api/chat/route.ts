@@ -24,7 +24,7 @@ import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp';
 import { workforceManager } from '@bing/shared/agent/workforce-manager';
 import { createTaskClassifier as createTaskClassifierShared } from '@bing/shared/agent/task-classifier';
 import { VFS_FILE_EDITING_TOOL_PROMPT } from '@bing/shared/agent/system-prompts';
-import { mem0Search, buildMem0SystemPrompt, isMem0Configured, mem0Add } from '@/lib/powers/mem0-power';
+import { mem0Search, buildMem0SystemPrompt, isMem0Configured, mem0Add, prewarmMem0Cache } from '@/lib/powers/mem0-power';
 import { createSSEEmitter, SSE_RESPONSE_HEADERS, SSE_EVENT_TYPES } from '@/lib/streaming/sse-event-schema';
 // Lazy imports — avoid 'ws' module resolution during instrumentation context
 // import { streamStateManager } from '@/lib/streaming/stream-state-manager';
@@ -491,7 +491,7 @@ export async function POST(request: NextRequest) {
               toolSuccessRate: retryModel.toolSuccessRate,
             });
           }
-        } catch (error) {
+        } catch (error: unknown) {
           chatLogger.warn('Failed to select retry model, using original', error);
         }
       }
@@ -709,6 +709,21 @@ export async function POST(request: NextRequest) {
     const userPrompt = typeof lastUserMessage?.content === 'string' ? lastUserMessage.content : '';
     const scopePathForHybrid = sanitizeScopePath(requestedScopePath);
 
+    // Pre-warm mem0 cache on first message of a thread. Fires a background
+    // broad-memory query so the targeted search inside the Promise.all below
+    // can hit the in-process cache (~0 ms) on a warm TLS connection instead
+    // of paying the cold-connect/handshake cost. Idempotent (no-op if already
+    // warmed for this user in the last 2 min). Safe when MEM0_API_KEY unset
+    // or the circuit breaker is OPEN (returns early).
+    {
+      const userMessageCount = processedMessages.filter(
+        (m) => m.role === 'user',
+      ).length;
+      if (userMessageCount <= 1) {
+        prewarmMem0Cache(filesystemOwnerId);
+      }
+    }
+
     const [denialContext, workspaceSessionContext, mem0Result, hybridContext] = await Promise.all([
       // Get recent filesystem edit denials
       filesystemEditSessionService.getRecentDenials(
@@ -722,12 +737,17 @@ export async function POST(request: NextRequest) {
             maxTokens: body.maxTokens,
           })
         : Promise.resolve(''),
-      // Search mem0 for relevant memories (runs in parallel)
+      // Search mem0 for relevant memories (runs in parallel).
+      // NOTE: We deliberately do NOT scope by sessionId on search — we want
+      // cross-thread recall (user preferences, past decisions). The current
+      // thread's history is already in the prompt anyway.
       isMem0Configured() && typeof lastUserMessage?.content === 'string'
         ? mem0Search({
             query: lastUserMessage.content,
             userId: filesystemOwnerId,
             limit: 5,
+            // Tighter threshold + filter for chat hot path; keeps noise out
+            threshold: 0.4,
           }).catch((memError: any) => {
             chatLogger.warn('Mem0 search failed (non-critical)', { error: memError.message });
             return { success: false, results: [] };
@@ -1260,8 +1280,8 @@ const config: UnifiedAgentConfig = {
                         diff: isPatch ? (edit.diff || '') : undefined,
                         isFinal: true,  // Mark as final parse edit for frontend
                       });
-                    }
-                  } catch (error) {
+                      }
+                  } catch (error: unknown) {
                     chatLogger.warn('Failed to emit final file edits', {
                       requestId,
                       error: error instanceof Error ? error.message : String(error),
@@ -1327,7 +1347,7 @@ const config: UnifiedAgentConfig = {
                         errors: appliedEditsResult.errors.slice(0, 5),
                       });
                     }
-                  } catch (e) {
+                  } catch (e: unknown) {
                     chatLogger.warn('Agentic path: VFS write failed (non-fatal)', {
                       error: e instanceof Error ? e.message : String(e),
                     });
@@ -1562,7 +1582,7 @@ const config: UnifiedAgentConfig = {
                       diff: isPatch ? (edit.diff || '') : undefined,
                     });
                   }
-                } catch (parseError) {
+                } catch (parseError: unknown) {
                   // Ignore parse errors during error handling
                 }
               }
@@ -2107,7 +2127,7 @@ const config: UnifiedAgentConfig = {
             source: 'non-streaming',
           });
         }
-      } catch (error) {
+      } catch (error: unknown) {
         // Disable batch mode on error to prevent stuck state
         disableVFSBatchMode(filesystemOwnerId);
         throw error;
@@ -2361,7 +2381,7 @@ const config: UnifiedAgentConfig = {
                     maxTokens: clientResponse.usage?.total_tokens || 65536,
                   });
                   streamStateCreated = true;
-                } catch (e) {
+                } catch (e: unknown) {
                   chatLogger.warn('Failed to create stream state', {
                     streamRequestId,
                     error: e instanceof Error ? e.message : String(e),
@@ -2379,7 +2399,7 @@ const config: UnifiedAgentConfig = {
               for (const pending of pendingEvents) {
                 realEmit(pending.event, { requestId: streamRequestId, ...pending.data, timestamp: pending.timestamp });
               }
-              pendingEvents.length = 0;
+              pendingEvents.splice(0, pendingEvents.length);
 
               const cleanup = () => {
                 encoderRef = null;
@@ -2415,9 +2435,12 @@ const config: UnifiedAgentConfig = {
                     // Track tokens in stream state (non-fatal if it fails)
                     try {
                       if (ssm) ssm.appendToken(streamRequestId, tokenBuffer);
-                    } catch (e) {
-                      // Non-fatal — stream state tracking shouldn't break the main stream
+                    } catch (e: unknown) {
+                      // Non-fatal - stream state tracking shouldn't break the main stream
                     }
+                    tokenBuffer = '';
+                    lastTokenEmitTime = Date.now();
+                  }
                     tokenBuffer = '';
                     lastTokenEmitTime = Date.now();
                   }
@@ -2915,7 +2938,15 @@ const config: UnifiedAgentConfig = {
                     // Store conversation in mem0 for persistent memory (fire-and-forget, non-blocking)
                     // Use streamingContentBuffer which has the full response
                     if (isMem0Configured()) {
-                      storeConversationInMem0(messages, streamingContentBuffer, filesystemOwnerId, streamRequestId).catch(() => {});
+                      storeConversationInMem0(messages, streamingContentBuffer, filesystemOwnerId, streamRequestId, {
+                        sessionId: resolvedConversationId,
+                        metadata: {
+                          threadId: resolvedConversationId,
+                          scopePath: scopePathForHybrid || undefined,
+                          requestId: streamRequestId,
+                          path: 'streaming',
+                        },
+                      }).catch(() => {});
                     }
 
                     break; // Exit loop when complete
@@ -3108,7 +3139,7 @@ const config: UnifiedAgentConfig = {
               for (const pending of pendingEvents) {
                 realEmit(pending.event, { requestId: streamRequestId, ...pending.data, timestamp: pending.timestamp });
               }
-              pendingEvents.length = 0;
+              pendingEvents.splice(0, pendingEvents.length);
 
               const cleanup = () => {
                 encoderRef = null;
@@ -3401,7 +3432,15 @@ const config: UnifiedAgentConfig = {
 
                 // Store conversation in mem0 for persistent memory (fire-and-forget, non-blocking)
                 if (isMem0Configured()) {
-                  storeConversationInMem0(messages, finalContent, filesystemOwnerId, streamRequestId).catch(() => {});
+                  storeConversationInMem0(messages, finalContent, filesystemOwnerId, streamRequestId, {
+                    sessionId: resolvedConversationId,
+                    metadata: {
+                      threadId: resolvedConversationId,
+                      scopePath: scopePathForHybrid || undefined,
+                      requestId: streamRequestId,
+                      path: 'tool-loop',
+                    },
+                  }).catch(() => {});
                 }
 
                 // SPEC AMPLIFICATION: Trigger after ToolLoopAgent streaming completes
@@ -3679,7 +3718,7 @@ const config: UnifiedAgentConfig = {
             for (const pending of pendingEvents) {
               realEmit(pending.event, { requestId: streamRequestId, ...pending.data, timestamp: pending.timestamp });
             }
-            pendingEvents.length = 0;
+            pendingEvents.splice(0, pendingEvents.length);
 
             // Handle client disconnect
             if (request.signal) {
@@ -3803,7 +3842,15 @@ const config: UnifiedAgentConfig = {
               // Store conversation in mem0 for persistent memory (fire-and-forget, non-blocking)
               // Use clientResponse.content for the fallback streaming path
               if (isMem0Configured() && clientResponse.content) {
-                storeConversationInMem0(messages, clientResponse.content, filesystemOwnerId, streamRequestId).catch(() => {});
+                storeConversationInMem0(messages, clientResponse.content, filesystemOwnerId, streamRequestId, {
+                  sessionId: resolvedConversationId,
+                  metadata: {
+                    threadId: resolvedConversationId,
+                    scopePath: scopePathForHybrid || undefined,
+                    requestId: streamRequestId,
+                    path: 'fallback-streaming',
+                  },
+                }).catch(() => {});
               }
 
               // Log provider latency for observability
@@ -3936,7 +3983,15 @@ const config: UnifiedAgentConfig = {
       // This runs after the response is sent to not delay the client
       const responseContentForMemory = clientResponse.content || '';
       if (isMem0Configured()) {
-        storeConversationInMem0(messages, responseContentForMemory, filesystemOwnerId, requestId).catch(() => {});
+        storeConversationInMem0(messages, responseContentForMemory, filesystemOwnerId, requestId, {
+          sessionId: resolvedConversationId,
+          metadata: {
+            threadId: resolvedConversationId,
+            scopePath: scopePathForHybrid || undefined,
+            requestId,
+            path: 'non-streaming',
+          },
+        }).catch(() => {});
       }
 
       const responseStatus = clientResponse.success ? 200 : 500;
@@ -3988,7 +4043,7 @@ const config: UnifiedAgentConfig = {
       // Streaming responses handle cleanup in the stream's finally block
       if (!(stream && selectedProvider.supportsStreaming)) {
         acceptDeferredEvents = false;
-        pendingEvents.length = 0;
+        pendingEvents.splice(0, pendingEvents.length);
         emitRef.current = null;
       }
     }
@@ -4661,49 +4716,114 @@ function buildAgenticContext(messages: LLMMessage[]): string {
 }
 
 /**
- * Store conversation in mem0 for persistent memory
- * This runs after each chat response to build persistent context
+ * Per-request dedup guard: each request id is allowed to write to mem0 once.
+ * Multiple stream paths (regular streaming, tool-loop, fallback, non-streaming)
+ * race to fire-and-forget after completion; without this guard the same
+ * conversation would be added 2-4× per response. See call sites near the
+ * `realEmit('done')`, `ToolLoopAgent stream completed`, and non-streaming
+ * paths in this file.
+ */
+const _mem0WrittenRequestIds = new Set<string>();
+const MEM0_WRITTEN_LRU_CAP = 1024;
+
+/**
+ * Truncate long content so a single user/assistant message can't blow through
+ * the Mem0 token budget. 8K chars ≈ 2K tokens which is plenty for memory
+ * extraction; longer content is rarely useful as a "memory".
+ */
+const MEM0_MAX_CHAR_PER_MSG = 8_000;
+function truncateForMem0(s: string): string {
+  if (s.length <= MEM0_MAX_CHAR_PER_MSG) return s;
+  return s.slice(0, MEM0_MAX_CHAR_PER_MSG) + '\n…[truncated]';
+}
+
+/**
+ * Store conversation in mem0 for persistent memory.
+ *
+ * Sends only the *new* turn pair (last user message + assistant response)
+ * rather than the full conversation history. Mem0 already stores all prior
+ * turns from previous requests, so re-sending the entire `messages` array
+ * every turn duplicates work, wastes tokens, and inflates extraction cost.
+ *
+ * Also dedupes by `requestId` because multiple stream completion paths
+ * fire-and-forget call this in the same request.
  */
 async function storeConversationInMem0(
   messages: LLMMessage[],
   responseContent: string,
   userId: string,
-  requestId: string
+  requestId: string,
+  options: { sessionId?: string; metadata?: Record<string, any> } = {},
 ): Promise<void> {
   if (!isMem0Configured()) {
     return;
   }
 
+  // Per-request dedup
+  if (_mem0WrittenRequestIds.has(requestId)) {
+    return;
+  }
+  _mem0WrittenRequestIds.add(requestId);
+  // Cheap LRU eviction: when oversized, drop the oldest insertion-order entries
+  if (_mem0WrittenRequestIds.size > MEM0_WRITTEN_LRU_CAP) {
+    const it = _mem0WrittenRequestIds.values();
+    for (let i = 0; i < 128; i++) {
+      const next = it.next();
+      if (next.done) break;
+      _mem0WrittenRequestIds.delete(next.value);
+    }
+  }
+
   try {
-    // Extract user and assistant messages from the conversation
-    const conversationMessages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }> = [];
-    
-    for (const msg of messages) {
-      if (msg.role === 'user' && typeof msg.content === 'string') {
-        conversationMessages.push({ role: 'user', content: msg.content });
-      } else if (msg.role === 'assistant' && typeof msg.content === 'string') {
-        conversationMessages.push({ role: 'assistant', content: msg.content });
+    // Find the last user message in the request; that is the "new turn".
+    let lastUser: { content: string } | null = null;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i];
+      if (msg.role === 'user' && typeof msg.content === 'string' && msg.content.trim().length > 0) {
+        lastUser = { content: msg.content };
+        break;
       }
     }
 
-    // Add the final response if we have one
-    if (responseContent && responseContent.trim().length > 0) {
-      conversationMessages.push({ role: 'assistant', content: responseContent });
-    }
-
-    // Only store if we have meaningful conversation (at least user message + response)
-    if (conversationMessages.length < 2) {
+    const cleanResponse = (responseContent || '').trim();
+    if (!lastUser && !cleanResponse) {
       return;
     }
 
-    // Call mem0 to store the conversation
+    // If the last message in `messages` is already an assistant message that
+    // matches `responseContent`, don't append it again.
+    const tail = messages[messages.length - 1];
+    const tailIsResponse =
+      !!tail &&
+      tail.role === 'assistant' &&
+      typeof tail.content === 'string' &&
+      tail.content.trim() === cleanResponse;
+
+    const turnPair: Array<{ role: 'user' | 'assistant' | 'system'; content: string }> = [];
+    if (lastUser) {
+      turnPair.push({ role: 'user', content: truncateForMem0(lastUser.content) });
+    }
+    if (cleanResponse && !tailIsResponse) {
+      turnPair.push({ role: 'assistant', content: truncateForMem0(cleanResponse) });
+    } else if (tailIsResponse && tail && typeof tail.content === 'string') {
+      // Use the (already-trimmed) tail assistant message
+      turnPair.push({ role: 'assistant', content: truncateForMem0(tail.content) });
+    }
+
+    // Need at least one user + one assistant message for a meaningful memory
+    if (turnPair.length < 2) {
+      return;
+    }
+
     const result = await mem0Add({
-      messages: conversationMessages,
+      messages: turnPair,
       userId,
+      sessionId: options.sessionId,
+      metadata: options.metadata,
     });
 
     if (result.success) {
-      chatLogger.debug('Stored conversation in mem0', { requestId, userId, messageCount: conversationMessages.length });
+      chatLogger.debug('Stored conversation in mem0', { requestId, userId, messageCount: turnPair.length });
     } else {
       chatLogger.warn('Failed to store conversation in mem0', { requestId, error: result.error });
     }

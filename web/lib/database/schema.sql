@@ -3,7 +3,7 @@
 
 -- Users table
 CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT PRIMARY KEY,
     email TEXT UNIQUE NOT NULL,
     username TEXT UNIQUE,
     password_hash TEXT NOT NULL,
@@ -12,10 +12,10 @@ CREATE TABLE IF NOT EXISTS users (
     is_active BOOLEAN DEFAULT TRUE,
     subscription_tier TEXT DEFAULT 'free', -- free, pro, enterprise
     last_login DATETIME,
-     reset_token_hash TEXT,
-     reset_token_expires DATETIME,
-     email_verified BOOLEAN DEFAULT FALSE,
-     email_verification_token_hash TEXT,
+    reset_token_hash TEXT,
+    reset_token_expires DATETIME,
+    email_verified BOOLEAN DEFAULT FALSE,
+    email_verification_token_hash TEXT,
     email_verification_expires DATETIME
 );
 
@@ -25,7 +25,7 @@ CREATE INDEX IF NOT EXISTS idx_users_email_verification_token_hash ON users(emai
 -- API credentials table (encrypted)
 CREATE TABLE IF NOT EXISTS api_credentials (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
+    user_id TEXT NOT NULL,
     provider TEXT NOT NULL, -- openai, anthropic, google, etc.
     api_key_encrypted TEXT NOT NULL,
     api_key_hash TEXT NOT NULL, -- for verification without decryption
@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS api_credentials (
 -- Chat conversations
 CREATE TABLE IF NOT EXISTS conversations (
     id TEXT PRIMARY KEY, -- UUID
-    user_id INTEGER,
+    user_id TEXT,
     title TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -63,7 +63,7 @@ CREATE TABLE IF NOT EXISTS messages (
 -- Usage tracking
 CREATE TABLE IF NOT EXISTS usage_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
+    user_id TEXT,
     provider TEXT NOT NULL,
     model TEXT NOT NULL,
     tokens_used INTEGER DEFAULT 0,
@@ -75,12 +75,12 @@ CREATE TABLE IF NOT EXISTS usage_logs (
 -- User preferences
 CREATE TABLE IF NOT EXISTS user_preferences (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
+    user_id TEXT NOT NULL,
     preference_key TEXT NOT NULL,
     preference_value TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
     UNIQUE(user_id, preference_key)
 );
 
@@ -102,7 +102,7 @@ CREATE INDEX IF NOT EXISTS idx_email_quotas_provider ON email_provider_quotas(pr
 -- OAuth and external connections
 CREATE TABLE IF NOT EXISTS external_connections (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
+    user_id TEXT NOT NULL,
     provider TEXT NOT NULL,
     provider_account_id TEXT NOT NULL,
     provider_display_name TEXT,
@@ -122,7 +122,7 @@ CREATE TABLE IF NOT EXISTS external_connections (
 
 CREATE TABLE IF NOT EXISTS oauth_sessions (
     id TEXT PRIMARY KEY,
-    user_id INTEGER,
+    user_id TEXT,
     provider TEXT NOT NULL,
     state TEXT NOT NULL,
     nonce TEXT,
@@ -138,7 +138,7 @@ CREATE TABLE IF NOT EXISTS oauth_sessions (
 
 CREATE TABLE IF NOT EXISTS service_permissions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
+    user_id TEXT NOT NULL,
     connection_id INTEGER NOT NULL,
     service_name TEXT NOT NULL,
     permission_level TEXT NOT NULL DEFAULT 'read',
@@ -175,11 +175,30 @@ VALUES
   ('smtp', 10000, 0, date('now', 'start of month', '+1 month'), FALSE, 4),
   ('e2b', 1000, 0, date('now', 'start of month', '+1 month'), FALSE, 5);
 
--- Session management
+-- Terminal sessions table (for sandbox session tracking)
+-- This is referenced by events.session_id FK
+CREATE TABLE IF NOT EXISTS sessions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    sandbox_id TEXT NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    last_active TEXT DEFAULT CURRENT_TIMESTAMP,
+    config TEXT,
+    status TEXT DEFAULT 'active',
+    terminal_output TEXT,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_sandbox ON sessions(sandbox_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
+CREATE INDEX IF NOT EXISTS idx_sessions_last_active ON sessions(last_active);
+
+-- User authentication sessions (for auth token hashing)
 -- Note: session_id stores a SHA-256 hash of the session token for security.
 CREATE TABLE IF NOT EXISTS user_sessions (
     session_id TEXT PRIMARY KEY, -- session token hash (SHA-256)
-    user_id INTEGER NOT NULL,
+    user_id TEXT NOT NULL,
     expires_at DATETIME NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     ip_address TEXT,

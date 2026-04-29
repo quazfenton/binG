@@ -76,7 +76,7 @@ export async function GET(request: NextRequest) {
       const email = auth0Session.user.email;
 
       if (email) {
-        const userRow = db.prepare('SELECT id FROM users WHERE email = ? AND is_active = TRUE').get(email) as { id: number } | undefined;
+        const userRow = db.prepare('SELECT id FROM users WHERE email = ? AND is_active = TRUE').get(email) as { id: string } | undefined;
         if (userRow) {
           localUserId = userRow.id;
           console.log('[GitHub Callback] Found local user by email:', localUserId);

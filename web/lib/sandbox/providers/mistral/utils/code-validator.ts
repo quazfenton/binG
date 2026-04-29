@@ -24,7 +24,7 @@ export interface ValidationRule {
 }
 
 export class CodeValidator {
-  private rules: Map<string, ValidationRule> = new Map();
+  private rules: Map<string, ValidationRule> = new Map<string, ValidationRule>();
   private allowedLanguages: Set<CodeLanguage> = new Set([
     'python',
     'python3',

@@ -23,7 +23,7 @@ export interface PreviewRegistration {
 }
 
 export class PreviewRegistry extends EventEmitter {
-  private targets: Map<string, PreviewTarget> = new Map();
+  private targets: Map<string, PreviewTarget> = new Map<string, PreviewTarget>();
   private healthCheckInterval: NodeJS.Timeout | null = null;
 
   constructor(private healthCheckIntervalMs: number = 30000) {

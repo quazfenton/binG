@@ -99,7 +99,7 @@ export interface RenderFrame {
  */
 export class EnhancedBufferManager extends BrowserEventEmitter {
   private config: BufferConfig;
-  private sessions: Map<string, StreamSession> = new Map();
+  private sessions: Map<string, StreamSession> = new Map<string, StreamSession>();
   private renderScheduler: RenderScheduler;
   private recoveryManager: RecoveryManager;
 
@@ -642,8 +642,8 @@ class StreamSession extends BrowserEventEmitter {
  */
 class RenderScheduler extends BrowserEventEmitter {
   private throttleMs: number;
-  private renderQueue: Map<string, StreamChunk[]> = new Map();
-  private scheduledFrames: Set<string> = new Set();
+  private renderQueue: Map<string, StreamChunk[]> = new Map<string, StreamChunk[]>();
+  private scheduledFrames: Set<string> = new Set<string>();
 
   constructor(throttleMs: number) {
     super();
@@ -698,7 +698,7 @@ class RenderScheduler extends BrowserEventEmitter {
  */
 class RecoveryManager {
   private config: BufferConfig;
-  private retryAttempts: Map<string, number> = new Map();
+  private retryAttempts: Map<string, number> = new Map<string, number>();
 
   constructor(config: BufferConfig) {
     this.config = config;

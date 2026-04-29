@@ -16,7 +16,7 @@ export type ServiceType = 'gmail' | 'drive' | 'calendar' | 'contacts' | 'docs' |
 
 export interface ServicePermission {
   id?: number;
-  userId: number;
+  userId: string;
   connectionId: number;
   serviceName: ServiceType | string;
   permissionLevel: PermissionLevel;
@@ -117,7 +117,7 @@ export const SERVICE_PERMISSIONS: Record<ServiceType, {
 /**
  * Get all connections with their permissions for a user
  */
-export async function getUserConnectionPermissions(userId: number): Promise<ConnectionWithPermissions[]> {
+export async function getUserConnectionPermissions(userId: string): Promise<ConnectionWithPermissions[]> {
   const db = getDatabase();
   
   // Get all external connections
@@ -182,7 +182,7 @@ export async function getUserConnectionPermissions(userId: number): Promise<Conn
  * Grant permission for a specific service
  */
 export async function grantServicePermission(
-  userId: number,
+  userId: string,
   connectionId: number,
   serviceName: ServiceType | string,
   permissionLevel: PermissionLevel = 'read',
@@ -238,7 +238,7 @@ export async function grantServicePermission(
  * Revoke permission for a specific service
  */
 export async function revokeServicePermission(
-  userId: number,
+  userId: string,
   connectionId: number,
   serviceName: ServiceType | string
 ): Promise<boolean> {
@@ -257,7 +257,7 @@ export async function revokeServicePermission(
  * Check if a specific service permission is granted
  */
 export function hasServicePermission(
-  userId: number,
+  userId: string,
   connectionId: number,
   serviceName: ServiceType | string,
   requiredLevel: PermissionLevel = 'read'
@@ -288,7 +288,7 @@ export function hasServicePermission(
  * Get all granted permissions for automation tools (Composio/Arcade/Nango)
  * Returns permissions that can be used for tool authorization
  */
-export async function getAutomationToolPermissions(userId: number): Promise<{
+export async function getAutomationToolPermissions(userId: string): Promise<{
   provider: string;
   serviceName: string;
   permissionLevel: PermissionLevel;
@@ -323,7 +323,7 @@ export async function getAutomationToolPermissions(userId: number): Promise<{
  * Update permission level for a service
  */
 export async function updatePermissionLevel(
-  userId: number,
+  userId: string,
   connectionId: number,
   serviceName: ServiceType | string,
   newLevel: PermissionLevel
@@ -343,7 +343,7 @@ export async function updatePermissionLevel(
  * Log permission usage for analytics and security auditing
  */
 export async function logPermissionUsage(
-  userId: number,
+  userId: string,
   connectionId: number,
   serviceName: string,
   action: string,
@@ -371,7 +371,7 @@ export async function logPermissionUsage(
 /**
  * Get permission usage statistics
  */
-export async function getPermissionUsageStats(userId: number): Promise<{
+export async function getPermissionUsageStats(userId: string): Promise<{
   totalConnections: number;
   activePermissions: number;
   servicesUsed: string[];

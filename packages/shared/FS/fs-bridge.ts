@@ -14,17 +14,15 @@ import { createLogger } from '@/lib/utils/logger';
 // Import Tauri event listening for Rust file change events
 let tauriListen: typeof import('@tauri-apps/api/event').listen | null = null;
 let tauriUnlisten: import('@tauri-apps/api/event').UnlistenFn | null = null;
+let tauriImportPromise: Promise<void> | null = null;
 
-try {
-  if (typeof window !== 'undefined') {
-    import('@tauri-apps/api/event').then((eventModule) => {
-      tauriListen = eventModule.listen;
-    }).catch(() => {
-      tauriListen = null;
-    });
-  }
-} catch {
-  tauriListen = null;
+// Start async import - may not resolve before first use
+if (typeof window !== 'undefined') {
+  tauriImportPromise = import('@tauri-apps/api/event').then((eventModule) => {
+    tauriListen = eventModule.listen;
+  }).catch(() => {
+    tauriListen = null;
+  });
 }
 
 const log = createLogger('FSBridge');
@@ -409,27 +407,50 @@ class FSBridge {
    * When Rust write_file is called, it emits a 'file-change' event
    * This allows the TypeScript VFS layer to create shadow commits
    *
-   * FIX: Lazy import with retry to handle race condition where the
-   * module-level dynamic import hasn't resolved yet when this is called.
+   * FIX: Retry loop to handle race condition where the module-level
+   * dynamic import hasn't resolved yet when this is called.
    */
   private async startRustFileChangeListener(): Promise<void> {
     if (typeof window === 'undefined') return;
     
-    // If tauriListen isn't ready yet, try to import it lazily
-    if (!tauriListen) {
+    const MAX_RETRIES = 10;
+    const RETRY_DELAY_MS = 100;
+    let attempts = 0;
+
+    // Wait for module-level import to complete first (if it exists)
+    if (tauriImportPromise) {
       try {
-        const eventModule = await import('@tauri-apps/api/event');
-        tauriListen = eventModule.listen;
+        await tauriImportPromise;
       } catch {
-        // Tauri not available or not in desktop mode — skip silently
-        log.debug('Tauri event listening not available, skipping Rust file change listener');
-        return;
+        // Ignore - we'll try importing directly below
       }
     }
 
-    // Double-check after lazy import
+    // Retry loop to handle race condition
+    while (attempts < MAX_RETRIES) {
+      // If tauriListen is ready, we're done
+      if (tauriListen) break;
+
+      // Try to import it lazily
+      try {
+        const eventModule = await import('@tauri-apps/api/event');
+        tauriListen = eventModule.listen;
+        if (tauriListen) break; // Success!
+      } catch {
+        // Import failed, will retry
+      }
+
+      attempts++;
+      
+      if (attempts < MAX_RETRIES) {
+        // Wait before retry
+        await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS));
+      }
+    }
+
+    // Final check - if still null, give up
     if (!tauriListen) {
-      log.debug('Tauri listen function still null after import, skipping');
+      log.debug('Tauri event listening not available after retries, skipping Rust file change listener');
       return;
     }
 

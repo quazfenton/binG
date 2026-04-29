@@ -10,6 +10,8 @@
  */
 
 import { isDesktopMode, isTauriRuntime, getPlatform, getDefaultWorkspaceRoot } from '@bing/platform/env';
+import os from 'os';
+import path from 'path';
 
 // Lazy crypto for generating UUIDs - avoids bundling Node.js 'crypto' in client
 let _cryptoRandomUUID: (() => string) | null = null;
@@ -183,7 +185,9 @@ export class DesktopFileSystem implements IFileSystem {
   private version: number = 0;
   private tauriFs: TauriFsModule | null = null;
   private tauriWatch: TauriFsWatchModule | null = null;
-  private baseDir: number = 0; // BaseDirectory.Home = 0
+  // Note: Tauri v2 plugin-fs uses absolute paths, no baseDir needed
+  // Keep for backward compatibility with v1-style callers
+  private baseDir: number | undefined = undefined;
   private watcher: { close: () => Promise<void> } | null = null;
   private watcherCallbacks: Set<FileWatcherCallback> = new Set();
   private isWatching: boolean = false;
@@ -191,7 +195,7 @@ export class DesktopFileSystem implements IFileSystem {
   // Poll-based fallback for file watching
   private pollWatcher: NodeJS.Timeout | null = null;
   private pollIntervalMs: number = 3000; // Default 3 seconds
-  private fileStates: Map<string, { mtime: number; size: number }> = new Map();
+  private fileStates: Map<string, { mtime: number; size: number }> = new Map<string, { mtime: number; size: number }>();
   private usePollFallback: boolean = false;
   
   constructor() {
@@ -214,9 +218,16 @@ export class DesktopFileSystem implements IFileSystem {
     
     this.userId = config.userId;
     
-    // Use config root or fall back to default workspace folder name
-    // For Tauri, the workspace is relative to the home directory
-    this.workspaceRoot = config.root || 'workspace';
+    // Use DESKTOP_WORKSPACE_ROOT env var if set (aligned with Rust backend)
+    // Fall back to config.root, then to 'workspace' relative to home
+    const envWorkspaceRoot = typeof process !== 'undefined' ? process.env.DESKTOP_WORKSPACE_ROOT : null;
+    this.workspaceRoot = envWorkspaceRoot || config.root || 'workspace';
+    
+    // Normalize workspaceRoot - if it's a relative path, resolve it relative to home
+    if (!path.isAbsolute(this.workspaceRoot)) {
+      const homeDir = os.homedir();
+      this.workspaceRoot = path.join(homeDir, this.workspaceRoot);
+    }
     
     if (!this.workspaceRoot) {
       throw new Error('Cannot determine workspace root for desktop mode');
@@ -250,7 +261,7 @@ export class DesktopFileSystem implements IFileSystem {
     const envPollInterval = process.env.DESKTOP_FS_POLL_INTERVAL;
     if (envPollInterval) {
       const parsed = parseInt(envPollInterval, 10);
-      if (!isNaN(parsed) && parsed >= 1000) {
+      if (!Number.isNaN(parsed) && parsed >= 1000) {
         this.pollIntervalMs = Math.min(parsed, 30000); // Cap at 30 seconds
       }
     }
@@ -320,8 +331,8 @@ export class DesktopFileSystem implements IFileSystem {
             }
           });
         },
+        // Tauri v2 plugin-fs doesn't use baseDir - use absolute paths
         { 
-          baseDir: this.baseDir, 
           recursive: true 
         }
       );
@@ -394,18 +405,18 @@ export class DesktopFileSystem implements IFileSystem {
     if (!this.tauriFs) return;
     
     try {
-      const entries = await this.tauriFs.readDir(dirPath, { baseDir: this.baseDir });
+      const entries = await this.tauriFs.readDir(dirPath);
       
       for (const entry of entries) {
         if (entry.name?.startsWith('.')) continue;
         
-        const entryPath = `${dirPath}/${entry.name}`;
+        const entryPath = path.join(dirPath, entry.name);
         
         if (entry.isDirectory) {
           await this.scanAndCacheFileStates(entryPath);
         } else {
           try {
-            const stat = await this.tauriFs.stat(entryPath, { baseDir: this.baseDir });
+            const stat = await this.tauriFs.stat(entryPath);
             this.fileStates.set(this.normalizePath(entryPath), {
               mtime: stat.mtime,
               size: stat.size
@@ -432,12 +443,12 @@ export class DesktopFileSystem implements IFileSystem {
     const dirBasePath = this.normalizePath(dirPath);
     
     try {
-      const entries = await this.tauriFs.readDir(dirPath, { baseDir: this.baseDir });
+      const entries = await this.tauriFs.readDir(dirPath);
       
       for (const entry of entries) {
         if (entry.name?.startsWith('.')) continue;
         
-        const entryPath = `${dirPath}/${entry.name}`;
+        const entryPath = path.join(dirPath, entry.name);
         const normalizedPath = this.normalizePath(entryPath);
         
         if (entry.isDirectory) {
@@ -450,7 +461,7 @@ export class DesktopFileSystem implements IFileSystem {
           changes.push(...subChanges);
         } else {
           try {
-            const stat = await this.tauriFs.stat(entryPath, { baseDir: this.baseDir });
+            const stat = await this.tauriFs.stat(entryPath);
             currentFiles.set(normalizedPath, { mtime: stat.mtime, size: stat.size });
             
             const previousState = this.fileStates.get(normalizedPath);
@@ -537,11 +548,12 @@ export class DesktopFileSystem implements IFileSystem {
   /**
    * Ensure a directory exists using Tauri FS with baseDir
    */
-  private async ensureDirectory(dirPath: string): Promise<void> {
+  private  async ensureDirectory(dirPath: string): Promise<void> {
     if (!this.tauriFs) throw new Error('Tauri FS not initialized');
-    const exists = await this.tauriFs.exists(dirPath, { baseDir: this.baseDir });
+    // Tauri v2 uses absolute paths, no baseDir needed
+    const exists = await this.tauriFs.exists(dirPath);
     if (!exists) {
-      await this.tauriFs.mkdir(dirPath, { baseDir: this.baseDir, recursive: true });
+      await this.tauriFs.mkdir(dirPath, { recursive: true });
     }
   }
   
@@ -595,15 +607,15 @@ export class DesktopFileSystem implements IFileSystem {
     
     const fullPath = this.resolvePath(path);
     
-    // Check if it's a directory
-    const stat = await this.tauriFs.stat(fullPath, { baseDir: this.baseDir }).catch(() => null);
+    // Check if it's a directory (v2 uses absolute paths)
+    const stat = await this.tauriFs.stat(fullPath).catch(() => null);
     if (stat?.isDirectory) throw new Error(`Cannot read directory: ${path}`);
     
-    // Read file content with baseDir option
-    const content = await this.tauriFs.readTextFile(fullPath, { baseDir: this.baseDir });
+    // Read file content (v2 uses absolute paths)
+    const content = await this.tauriFs.readTextFile(fullPath);
     this.version++;
     
-    const fileStat = await this.tauriFs.stat(fullPath, { baseDir: this.baseDir });
+    const fileStat = await this.tauriFs.stat(fullPath);
     
     return { 
       path: this.normalizePath(fullPath), 
@@ -623,17 +635,17 @@ export class DesktopFileSystem implements IFileSystem {
     
     const fullPath = this.resolvePath(path);
     
-    // Ensure parent directory exists
-    const parentDir = fullPath.substring(0, fullPath.lastIndexOf('/'));
-    if (parentDir) {
+    // Ensure parent directory exists (v2 uses absolute paths)
+    const parentDir = path.dirname(fullPath);
+    if (parentDir && parentDir !== fullPath) {
       await this.ensureDirectory(parentDir);
     }
     
-    // Write file using Tauri FS with baseDir option
-    await this.tauriFs.writeTextFile(fullPath, content, { baseDir: this.baseDir });
+    // Write file using Tauri FS (v2 uses absolute paths, no baseDir)
+    await this.tauriFs.writeTextFile(fullPath, content);
     this.version++;
     
-    const stat = await this.tauriFs.stat(fullPath, { baseDir: this.baseDir });
+    const stat = await this.tauriFs.stat(fullPath);
     
     return { 
       path: this.normalizePath(fullPath), 
@@ -653,14 +665,14 @@ export class DesktopFileSystem implements IFileSystem {
     
     const fullPath = this.resolvePath(path);
     
-    // Check if it's a directory or file
-    const stat = await this.tauriFs.stat(fullPath, { baseDir: this.baseDir }).catch(() => null);
+    // Check if it's a directory or file (v2 uses absolute paths)
+    const stat = await this.tauriFs.stat(fullPath).catch(() => null);
     if (!stat) {
       throw new Error(`Path does not exist: ${path}`);
     }
     
-    // Remove using Tauri FS with baseDir option
-    await this.tauriFs.remove(fullPath, { baseDir: this.baseDir, recursive: stat.isDirectory });
+    // Remove using Tauri FS (v2 uses absolute paths)
+    await this.tauriFs.remove(fullPath, { recursive: stat.isDirectory });
     this.version++;
     
     return { deletedCount: 1 };
@@ -674,18 +686,18 @@ export class DesktopFileSystem implements IFileSystem {
     
     const fullPath = dirPath ? this.resolvePath(dirPath) : (this.boundaryPath || this.workspaceRoot);
     
-    // Read directory using Tauri FS with baseDir option
-    const entries = await this.tauriFs.readDir(fullPath, { baseDir: this.baseDir });
+    // Read directory using Tauri FS (v2 uses absolute paths)
+    const entries = await this.tauriFs.readDir(fullPath);
     
     const nodes: FSDirectoryEntry[] = [];
     for (const entry of entries) {
       if (entry.name?.startsWith('.')) continue;
       
-      const entryPath = `${fullPath}/${entry.name}`;
+      const entryPath = path.join(fullPath, entry.name);
       let size: number | undefined;
       
       try {
-        const stat = await this.tauriFs.stat(entryPath, { baseDir: this.baseDir });
+        const stat = await this.tauriFs.stat(entryPath);
         size = stat.isFile ? stat.size : undefined;
       } catch {
         // Entry may not be accessible
@@ -731,19 +743,19 @@ export class DesktopFileSystem implements IFileSystem {
     if (!this.tauriFs) return;
     
     try {
-      const entries = await this.tauriFs.readDir(dirPath, { baseDir: this.baseDir });
+      const entries = await this.tauriFs.readDir(dirPath);
       
       for (const entry of entries) {
         if (results.length >= limit) break;
         if (entry.name?.startsWith('.')) continue;
         
-        const entryPath = `${dirPath}/${entry.name}`;
+        const entryPath = path.join(dirPath, entry.name);
         
         if (entry.isDirectory) {
           await this.searchRecursive(entryPath, query, results, limit);
         } else if (entry.isFile || entry.isDirectory === false) {
           try {
-            const stat = await this.tauriFs.stat(entryPath, { baseDir: this.baseDir });
+            const stat = await this.tauriFs.stat(entryPath);
             if (stat.size > 1024 * 1024) continue;
             
             const fileName = entry.name!.toLowerCase();
@@ -760,7 +772,7 @@ export class DesktopFileSystem implements IFileSystem {
               });
             } else if (shouldSearchContent) {
               try {
-                const content = await this.tauriFs.readTextFile(entryPath, { baseDir: this.baseDir });
+                const content = await this.tauriFs.readTextFile(entryPath);
                 const idx = content.toLowerCase().indexOf(query);
                 
                 if (idx !== -1) {
@@ -826,18 +838,18 @@ export class DesktopFileSystem implements IFileSystem {
     if (!this.tauriFs) return;
     
     try {
-      const entries = await this.tauriFs.readDir(dirPath, { baseDir: this.baseDir });
+      const entries = await this.tauriFs.readDir(dirPath);
       
       for (const entry of entries) {
         if (entry.name?.startsWith('.')) continue;
         
-        const entryPath = `${dirPath}/${entry.name}`;
+        const entryPath = path.join(dirPath, entry.name);
         
         if (entry.isDirectory) {
           await this.walkDirectoryForStats(entryPath, callback);
         } else {
           try {
-            const stat = await this.tauriFs.stat(entryPath, { baseDir: this.baseDir });
+            const stat = await this.tauriFs.stat(entryPath);
             if (stat.isFile) {
               await callback(entryPath, stat.size);
             }
@@ -850,16 +862,46 @@ export class DesktopFileSystem implements IFileSystem {
       // Directory may not exist - ignore
     }
   }
-  
+
   async exists(path: string): Promise<boolean> {
     if (!this.tauriFs) return false;
     try {
-      return await this.tauriFs.exists(this.resolvePath(path), { baseDir: this.baseDir });
+      return await this.tauriFs.exists(this.resolvePath(path));
     } catch {
       return false;
     }
   }
-  
+
+  /**
+   * Undo the last file edit by restoring previous content
+   * Returns list of available undo entries for a file
+   */
+  async getUndoHistory(filePath?: string): Promise<Array<{ id: string; originalPath: string; timestamp: string; size: number }>> {
+    try {
+      const tauriCore = await import('@tauri-apps/api/core');
+      const result = await tauriCore.invoke<{ entries: Array<{ id: string; originalPath: string; timestamp: string; size: number }>; count: number }>('list_undo_entries', { filePath });
+      return result.entries || [];
+    } catch (error) {
+      console.error('[DesktopFS] Failed to get undo history:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Restore a file to its previous state using an undo entry ID
+   */
+  async undoFileEdit(undoId: string, filePath: string): Promise<{ success: boolean; message: string }> {
+    try {
+      const tauriCore = await import('@tauri-apps/api/core');
+      const result = await tauriCore.invoke<{ success: boolean; message: string }>('undo_file_edit', { undoId, filePath });
+      this.version++;
+      return result;
+    } catch (error) {
+      console.error('[DesktopFS] Failed to undo edit:', error);
+      throw new Error(`Failed to undo edit: ${error}`);
+    }
+  }
+
   async createDirectory(path: string): Promise<{ path: string; createdAt: string }> {
     if (!this.tauriFs) throw new Error('Tauri FS not initialized');
     
@@ -882,8 +924,8 @@ export class DesktopFileSystem implements IFileSystem {
     
     await this.walkDirectoryForStats(rootPath, async (filePath, size) => {
       try {
-        const content = await this.tauriFs!.readTextFile(filePath, { baseDir: this.baseDir });
-        const stat = await this.tauriFs!.stat(filePath, { baseDir: this.baseDir });
+        const content = await this.tauriFs!.readTextFile(filePath);
+        const stat = await this.tauriFs!.stat(filePath);
         
         files.push({
           path: this.normalizePath(filePath),
@@ -964,7 +1006,7 @@ export class VirtualFileSystem implements IFileSystem {
   private ownerId: string = '';
   private initialized = false;
   private isWatching: boolean = false;
-  private watcherCallbacks: Set<FileWatcherCallback> = new Set();
+  private watcherCallbacks: Set<FileWatcherCallback> = new Set<FileWatcherCallback>();
   
   constructor() { this.id = `virtual-${generateId()}`; }
   

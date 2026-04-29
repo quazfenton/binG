@@ -19,7 +19,7 @@ export interface PluginMigrationConfig {
 
 export class PluginMigrationService {
   private static instance: PluginMigrationService;
-  private tabConfigs: Map<string, PluginTabConfig> = new Map();
+  private tabConfigs: Map<string, PluginTabConfig> = new Map<string, PluginTabConfig>();
   private migrationHistory: PluginMigrationConfig[] = [];
   private initialized = false;
 

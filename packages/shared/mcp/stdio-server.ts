@@ -706,7 +706,8 @@ server.registerTool(
 // ============================================================================
 
 try {
-  const { registerMultiAgentTools } = await import('../../../web/lib/mcp/multi-agent-tools');
+  // Use absolute import path to support isolated builds
+  const { registerMultiAgentTools } = await import('@/lib/mcp/multi-agent-tools');
   registerMultiAgentTools(server);
   logger.info('Registered multi-agent tools');
 } catch (error: any) {

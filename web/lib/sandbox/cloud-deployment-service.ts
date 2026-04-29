@@ -87,8 +87,8 @@ export interface DeploymentResult {
 // ============================================================================
 
 export class CloudDeploymentService {
-  private deployments: Map<string, CloudDeployment> = new Map();
-  private providerHealth: Map<CloudProvider, boolean> = new Map();
+  private deployments: Map<string, CloudDeployment> = new Map<string, CloudDeployment>();
+  private providerHealth: Map<CloudProvider, boolean> = new Map<CloudProvider, boolean>();
   private healthCheckTimer?: NodeJS.Timeout;
   private readonly DEFAULT_CONFIG: CloudDeploymentConfig = {
     providers: ['fastly', 'vercel', 'e2b', 'daytona'],

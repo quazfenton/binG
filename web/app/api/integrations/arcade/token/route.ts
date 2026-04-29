@@ -38,12 +38,22 @@ async function resolveArcadeUserId(appUserId: string): Promise<string> {
 
   if (strategy === 'email') {
     try {
-      const user = await authService.getUserById(parseInt(appUserId, 10));
+      // userId is now a string (UUID), try directly first
+      let user = await authService.getUserById(appUserId);
       if (user?.email) return user.email;
+      
+      // Legacy: try parsing as numeric for backwards compatibility
+      const numeric = parseInt(appUserId, 10);
+      if (!isNaN(numeric)) {
+        // Try to find user by treating the string as a numeric id
+        // This handles migration cases where old numeric IDs might be referenced
+        user = await authService.getUserById(String(numeric));
+        if (user?.email) return user.email;
+      }
     } catch {
       // fall through
     }
-    return appUserId; // numeric ID as fallback
+    return appUserId; // return as-is if not found
   }
 
   // strategy === 'id'
