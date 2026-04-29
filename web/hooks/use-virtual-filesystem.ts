@@ -243,6 +243,19 @@ export function useVirtualFilesystem(
 
   // Compute the resolved session-scoped path for initialization
   const resolveInitialSessionPath = (): string => {
+    // CRITICAL FIX: In desktop mode, use DESKTOP_WORKSPACE_ROOT directly
+    // The VFS in desktop mode accesses the actual filesystem, not a virtual 'project/' hierarchy
+    // Files are stored at the workspace root, not under 'project/' subdirectory
+    if (typeof window !== 'undefined') {
+      const tauriConfig = (window as any).__SIDECAR_CONFIG__;
+      const desktopWsRoot = (tauriConfig?.workspace_root) || 
+                            (typeof process !== 'undefined' ? process.env?.DESKTOP_WORKSPACE_ROOT : null);
+      if (desktopWsRoot) {
+        // In desktop mode, use the actual workspace root path
+        return desktopWsRoot.replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
+      }
+    }
+    
     // Priority 1: If initialPath is already a scoped path (e.g., "project/sessions/..."), use it
     if (initialPath && initialPath.includes('sessions/')) {
       return initialPath.replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
