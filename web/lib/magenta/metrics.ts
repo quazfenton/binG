@@ -124,6 +124,6 @@ export function getMetricsSummary(): MetricsSummary {
 }
 
 export function clearMetrics() {
-  _traces.length = 0;
+  _traces.splice(0, _traces.length);
   _counters.clear();
 }

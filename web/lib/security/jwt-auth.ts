@@ -100,12 +100,12 @@ function getSecretKey(): string {
     return 'dev-insecure-key-change-in-production-' + Date.now();
   }
 
-  // Validate key strength
-  if (secretKey.length < 16) {
-    throw new Error(
-      'JWT_SECRET must be at least 16 characters. ' +
-      'Use a secure random string (e.g., openssl rand -hex 32)'
-    );
+
+  // Validate key strength — HMAC-SHA256 needs >= 32 bytes of entropy (Bug 4 fix)
+  if (secretKey.length < 32) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('JWT_SECRET must be at least 32 characters in production. Generate: openssl rand -hex 32');
+    }
   }
 
   return secretKey;

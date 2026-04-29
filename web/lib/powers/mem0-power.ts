@@ -358,11 +358,127 @@ class Mem0Client {
 
 let mem0Client: Mem0Client | null = null;
 
+// ─── Circuit breaker ────────────────────────────────────────────────────────
+// On sustained Mem0 outages, every chat request would otherwise eat the 2.5 s
+// search timeout. Trip the breaker after N transient failures within a window;
+// while open, `isMem0Configured()` returns false so callers skip Mem0 entirely
+// (no fetch, no timeout, ~0 ms cost). After the cooldown elapses, the next
+// request is allowed through (HALF_OPEN probe). A success closes the breaker;
+// another failure re-opens it for another cooldown.
+const CIRCUIT_FAIL_THRESHOLD = 3;
+const CIRCUIT_FAIL_WINDOW_MS = 60_000;
+const CIRCUIT_COOLDOWN_MS = 5 * 60_000; // 5 minutes
+const _circuitFailures: number[] = [];
+let _circuitOpenUntil = 0;
+let _circuitProbeInFlight = false;
+
+/** Returns true while the breaker is OPEN (skip Mem0 calls entirely). */
+function isCircuitOpen(): boolean {
+  if (_circuitOpenUntil === 0) return false;
+  if (Date.now() < _circuitOpenUntil) return true;
+  // Cooldown elapsed — allow exactly one probe to pass through (HALF_OPEN).
+  // Subsequent calls during the same probe still see OPEN to avoid stampedes.
+  if (!_circuitProbeInFlight) {
+    _circuitProbeInFlight = true;
+    return false;
+  }
+  return true;
+}
+
+/** Record a transient/network/timeout failure. Trips the breaker if threshold met. */
+function recordMem0Failure(reason: string): void {
+  const now = Date.now();
+  // Drop failures outside the rolling window
+  while (_circuitFailures.length > 0 && now - _circuitFailures[0] > CIRCUIT_FAIL_WINDOW_MS) {
+    _circuitFailures.shift();
+  }
+  _circuitFailures.push(now);
+  if (_circuitFailures.length >= CIRCUIT_FAIL_THRESHOLD) {
+    _circuitOpenUntil = now + CIRCUIT_COOLDOWN_MS;
+    _circuitFailures.splice(0, _circuitFailures.length);
+    _circuitProbeInFlight = false;
+    log.warn('Mem0 circuit breaker OPEN', {
+      reason,
+      cooldownMs: CIRCUIT_COOLDOWN_MS,
+      reopensAt: new Date(_circuitOpenUntil).toISOString(),
+    });
+  }
+  // If a probe failed during HALF_OPEN, immediately re-open the circuit.
+  if (_circuitProbeInFlight) {
+    _circuitProbeInFlight = false;
+    _circuitOpenUntil = now + CIRCUIT_COOLDOWN_MS;
+    log.warn('Mem0 probe failed — circuit re-opened', {
+      reason,
+      reopensAt: new Date(_circuitOpenUntil).toISOString(),
+    });
+  }
+}
+
+/** Record a successful call. Resets the breaker. */
+function recordMem0Success(): void {
+  if (_circuitFailures.length > 0) _circuitFailures.splice(0, _circuitFailures.length);
+  if (_circuitOpenUntil !== 0 || _circuitProbeInFlight) {
+    log.info('Mem0 circuit breaker CLOSED');
+  }
+  _circuitOpenUntil = 0;
+  _circuitProbeInFlight = false;
+}
+
+/** Inspect circuit state (for diagnostics / health endpoints). */
+export function getMem0CircuitState(): {
+  state: 'CLOSED' | 'OPEN' | 'HALF_OPEN';
+  recentFailures: number;
+  reopensAt: string | null;
+} {
+  const now = Date.now();
+  if (_circuitOpenUntil > now) {
+    return {
+      state: 'OPEN',
+      recentFailures: _circuitFailures.length,
+      reopensAt: new Date(_circuitOpenUntil).toISOString(),
+    };
+  }
+  if (_circuitOpenUntil !== 0 && _circuitProbeInFlight) {
+    return { state: 'HALF_OPEN', recentFailures: _circuitFailures.length, reopensAt: null };
+  }
+  return { state: 'CLOSED', recentFailures: _circuitFailures.length, reopensAt: null };
+}
+
+/** Test/diagnostic helper — force-close the breaker. */
+export function resetMem0CircuitBreaker(): void {
+  _circuitFailures.splice(0, _circuitFailures.length);
+  _circuitOpenUntil = 0;
+  _circuitProbeInFlight = false;
+}
+
 /**
- * Check if mem0 is configured with API key
+ * Decide whether an error should count as a circuit failure.
+ * Bad-input/4xx errors are caller bugs and shouldn't trip the breaker —
+ * only transport-level problems (timeout/5xx/network) should.
+ */
+function isCircuitTrippingError(err: any): boolean {
+  const msg = String(err?.message || '');
+  if (/timed out/i.test(msg)) return true;
+  if (/HTTP 5\d{2}/i.test(msg)) return true;
+  if (/HTTP 408|HTTP 425|HTTP 429/i.test(msg)) return true;
+  // Bare network errors (no HTTP status) — fetch failures, DNS, etc.
+  if (!/HTTP \d{3}/i.test(msg)) return true;
+  return false;
+}
+
+/**
+ * Check if mem0 is configured with API key.
+ * Returns false if the circuit breaker is OPEN — so all callers automatically
+ * skip Mem0 during sustained outages with zero added latency.
  */
 export function isMem0Configured(): boolean {
-  return !!process.env.MEM0_API_KEY && process.env.MEM0_API_KEY.length > 0;
+  if (!process.env.MEM0_API_KEY || process.env.MEM0_API_KEY.length === 0) {
+    return false;
+  }
+  if (isCircuitOpen()) {
+    return false;
+  }
+  return true;
 }
 
 /**
@@ -409,8 +525,9 @@ export async function mem0Add(
 ): Promise<{ success: boolean; results?: Mem0Memory[]; error?: string }> {
   try {
     const client = getMem0Client(config.apiKey);
+    const effectiveUserId = args.userId || config.userId;
     const result = await client.add(args.messages, {
-      userId: args.userId || config.userId,
+      userId: effectiveUserId,
       agentId: args.agentId || config.agentId,
       sessionId: args.sessionId || config.sessionId,
       metadata: args.metadata,
@@ -418,16 +535,85 @@ export async function mem0Add(
       timeoutMs: args.timeoutMs,
     });
     log.info('Mem0 memories added', { count: result.results?.length || 0 });
+    recordMem0Success();
+    // Invalidate search cache for this user — new memories may change results.
+    // (Mem0 add is asynchronous server-side, but cache reflects the user's
+    // intent so dropping stale results is the right call.)
+    if (effectiveUserId) {
+      invalidateMem0SearchCacheForUser(effectiveUserId);
+    }
     return { success: true, results: result.results };
   } catch (err: any) {
     log.error('mem0_add failed', { error: err.message });
+    if (isCircuitTrippingError(err)) {
+      recordMem0Failure(`add: ${err.message}`);
+    }
     return { success: false, error: err.message };
+  }
+}
+
+/** Drop all cached search entries for a user. Called after successful adds. */
+function invalidateMem0SearchCacheForUser(userId: string): void {
+  // Cache key starts with `${userId}|...` — see makeMem0SearchCacheKey.
+  const prefix = `${userId}|`;
+  for (const key of _mem0SearchCache.keys()) {
+    if (key.startsWith(prefix)) {
+      _mem0SearchCache.delete(key);
+    }
   }
 }
 
 /**
  * Action: Search memories
  */
+// ─── Search-result cache ────────────────────────────────────────────────────
+// Identical chat retries/double-clicks/auto-resends within ~30s shouldn't hit
+// the Mem0 API again. Tiny in-memory TTL cache keyed by all parameters that
+// affect the result. Bypass with `noCache: true` (e.g., immediately after a
+// write that should change retrieval).
+const MEM0_SEARCH_CACHE_TTL_MS = 30_000;
+const MEM0_SEARCH_CACHE_MAX = 256;
+type Mem0SearchCacheEntry = {
+  expiresAt: number;
+  result: { success: boolean; results?: Mem0Memory[]; error?: string };
+};
+const _mem0SearchCache = new Map<string, Mem0SearchCacheEntry>();
+
+function makeMem0SearchCacheKey(args: {
+  query: string;
+  userId?: string;
+  agentId?: string;
+  sessionId?: string;
+  limit?: number;
+  filters?: Record<string, any>;
+  keywordSearch?: boolean;
+  rerank?: boolean;
+  filterMemories?: boolean;
+  threshold?: number;
+}): string {
+  // Truncate query to keep keys bounded; identical-prefix queries collide
+  // intentionally to maximize cache hits on near-duplicate prompts.
+  const q = (args.query || '').slice(0, 200);
+  const filters = args.filters ? JSON.stringify(args.filters) : '';
+  return [
+    args.userId ?? '',
+    args.agentId ?? '',
+    args.sessionId ?? '',
+    args.limit ?? '',
+    args.threshold ?? '',
+    args.keywordSearch === false ? '0' : '1',
+    args.rerank === false ? '0' : '1',
+    args.filterMemories ? '1' : '0',
+    filters,
+    q,
+  ].join('|');
+}
+
+/** Test/diagnostic helper — clear the in-memory mem0 search cache. */
+export function clearMem0SearchCache(): void {
+  _mem0SearchCache.clear();
+}
+
 export async function mem0Search(
   args: {
     query: string;
@@ -445,9 +631,35 @@ export async function mem0Search(
     /** Drop results below this score (e.g., 0.3) */
     threshold?: number;
     timeoutMs?: number;
+    /** Skip the in-memory cache for this call */
+    noCache?: boolean;
   },
   config: Mem0Config = {}
 ): Promise<{ success: boolean; results?: Mem0Memory[]; error?: string }> {
+  // Cache lookup
+  const cacheKey = makeMem0SearchCacheKey({
+    query: args.query,
+    userId: args.userId || config.userId,
+    agentId: args.agentId || config.agentId,
+    sessionId: args.sessionId || config.sessionId,
+    limit: args.limit,
+    filters: args.filters,
+    keywordSearch: args.keywordSearch,
+    rerank: args.rerank,
+    filterMemories: args.filterMemories,
+    threshold: args.threshold,
+  });
+  if (!args.noCache) {
+    const cached = _mem0SearchCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      log.debug('Mem0 search cache hit', { query: args.query.slice(0, 60) });
+      return cached.result;
+    }
+    if (cached) {
+      _mem0SearchCache.delete(cacheKey);
+    }
+  }
+
   try {
     const client = getMem0Client(config.apiKey);
     const result = await client.search(args.query, {
@@ -463,9 +675,26 @@ export async function mem0Search(
       timeoutMs: args.timeoutMs,
     });
     log.info('Mem0 search completed', { query: args.query, count: result.results?.length || 0 });
-    return { success: true, results: result.results };
+    recordMem0Success();
+    const out = { success: true, results: result.results };
+    // Store in cache (only successful results — failures should retry)
+    if (!args.noCache) {
+      // Cheap LRU: when oversized, drop the oldest insertion
+      if (_mem0SearchCache.size >= MEM0_SEARCH_CACHE_MAX) {
+        const firstKey = _mem0SearchCache.keys().next().value;
+        if (firstKey !== undefined) _mem0SearchCache.delete(firstKey);
+      }
+      _mem0SearchCache.set(cacheKey, {
+        expiresAt: Date.now() + MEM0_SEARCH_CACHE_TTL_MS,
+        result: out,
+      });
+    }
+    return out;
   } catch (err: any) {
     log.error('mem0_search failed', { error: err.message });
+    if (isCircuitTrippingError(err)) {
+      recordMem0Failure(`search: ${err.message}`);
+    }
     return { success: false, error: err.message };
   }
 }

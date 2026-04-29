@@ -186,7 +186,8 @@ export class LocalVFSManager {
 
       // Path traversal protection: ensure the resolved path stays within workspace
       const resolvedPath = path.resolve(targetPath);
-      if (!resolvedPath.startsWith(this.workspacePath + path.sep) && resolvedPath !== this.workspacePath) {
+      const resolvedRoot = path.resolve(this.workspacePath);
+      if (!resolvedPath.startsWith(resolvedRoot + path.sep) && resolvedPath !== resolvedRoot) {
         return false;
       }
 
