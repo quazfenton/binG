@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { authService } from '@/lib/auth/auth-service';
 import { rateLimitMiddleware } from '@/lib/middleware/rate-limiter';
+import { generateCsrfToken, setCsrfCookie } from '@/lib/auth/csrf';
+import { generateMfaToken } from '@/lib/auth/jwt';
 
 export async function POST(request: NextRequest) {
   try {
@@ -41,6 +43,13 @@ export async function POST(request: NextRequest) {
     );
 
     if (!result.success) {
+      // MED-5 fix: Log login failure for invalid credentials
+      try {
+        const { logLoginFailure } = await import('@/lib/auth/auth-audit-logger');
+        logLoginFailure(email, 'invalid_credentials', request);
+      } catch (auditError) {
+        console.warn('[Login] Audit log failed:', auditError);
+      }
       return NextResponse.json(
         { success: false, error: result.error },
         { status: 401 }
@@ -63,6 +72,49 @@ export async function POST(request: NextRequest) {
         },
         { status: 403 }
       );
+    }
+
+    // MED-6 fix: Check if user has MFA enabled.
+    // If so, don't complete login — return a short-lived MFA token
+    // that the client must use to complete the /auth/mfa/challenge flow.
+    if (result.user?.id) {
+      try {
+        const { getDatabase } = require('@/lib/database/connection');
+        const db = getDatabase();
+        if (db) {
+          const mfaRecord = db.prepare(
+            'SELECT is_enabled FROM user_mfa WHERE user_id = ? AND mfa_type = ?'
+          ).get(String(result.user.id), 'totp') as any;
+
+          if (mfaRecord?.is_enabled) {
+            // Generate a short-lived MFA token (5 min TTL) using jwt.ts helper
+            const mfaToken = generateMfaToken(String(result.user.id));
+
+            // Invalidate the session we just created — login isn't complete yet
+            if (result.sessionId) {
+              await authService.logout(result.sessionId);
+            }
+
+            return NextResponse.json({
+              success: false,
+              mfaRequired: true,
+              mfaToken,
+              message: 'MFA verification required. POST /auth/mfa/challenge with your TOTP code.',
+            });
+          }
+        }
+      } catch (mfaError) {
+        // MFA check failed — log but continue with normal login (fail open)
+        console.warn('[Login] MFA check failed, proceeding without MFA:', mfaError);
+      }
+    }
+
+    // MED-5 fix: Log successful login
+    try {
+      const { logLoginSuccess } = await import('@/lib/auth/auth-audit-logger');
+      logLoginSuccess(String(result.user?.id), email, request, { mfaEnabled: !!mfaRecord?.is_enabled });
+    } catch (auditError) {
+      console.warn('[Login] Audit log failed:', auditError);
     }
 
     // Set session cookie
@@ -95,6 +147,10 @@ export async function POST(request: NextRequest) {
         path: '/',
       });
     }
+
+    // HIGH-10 fix: Set CSRF token cookie on successful login
+    const csrfToken = generateCsrfToken();
+    setCsrfCookie(response, csrfToken);
 
     // Clear anonymous session cookie — authenticated users should NOT
     // fall back to their old anonymous workspace identity

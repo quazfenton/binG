@@ -58,6 +58,17 @@ export class InMemoryVectorStore implements VectorStore {
     for (const entry of this.entries.values()) {
       if (filter && !this.matchesFilter(entry, filter)) continue;
 
+      // LOW fix: Skip entries with dimension mismatch — cosineSimilarity returns 0
+      // but we want to skip them entirely to avoid polluting results with zero-scores
+      if (query.length !== entry.embedding.length) {
+        logger.warn('Skipping entry with mismatched embedding dimensions', {
+          entryId: entry.id,
+          queryDim: query.length,
+          entryDim: entry.embedding.length,
+        });
+        continue;
+      }
+
       const score = cosineSimilarity(query, entry.embedding);
       candidates.push({ entry, score });
     }

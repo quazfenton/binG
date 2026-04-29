@@ -37,6 +37,8 @@ const imageGenerationRateLimiter = new RateLimiter(
 // Allowed models/providers (configurable via environment)
 const ALLOWED_MODELS = process.env.IMAGE_GENERATION_ALLOWED_MODELS?.split(',') || [
   'mistral',
+  'google',
+  'vercel',
   'replicate',
 ]
 
@@ -127,15 +129,45 @@ export async function POST(req: NextRequest) {
       )
     }
 
+    // Check Google Imagen free tier quota (500 images/day)
+    if (selectedProvider === 'google' && model === 'google:gemini-2.5-flash-image-preview') {
+      try {
+        const { imageQuotaManager } = await import('@/lib/image-generation/quota-manager');
+        await imageQuotaManager.initialize();
+        
+        const quotaCheck = await imageQuotaManager.checkQuota('google', 'gemini-2.5-flash-image-preview');
+        
+        if (!quotaCheck.allowed) {
+          clearTimeout(timeoutId);
+          return NextResponse.json(
+            {
+              error: `Daily quota exceeded for Google Imagen free tier (gemini-2.5-flash-image-preview).`,
+              limit: quotaCheck.limit,
+              remaining: quotaCheck.remaining,
+              resetDate: quotaCheck.resetDate,
+              documentation: 'This free model has a 500 images/day limit. Upgrade to paid models or use other providers.'
+            },
+            { status: 429 }
+          );
+        }
+      } catch (quotaError) {
+        console.error('Quota check error:', quotaError);
+        // If quota check fails, allow the request but log the error
+        log.warn('Quota check failed, allowing request', { error: quotaError });
+      }
+    }
+
     // ✅ FIX 1: Early API key validation - check if ANY provider is configured
     const hasMistralKey = !!process.env.MISTRAL_API_KEY
+    const hasGoogleKey = !!process.env.GEMINI_API_KEY
+    const hasVercelKey = !!process.env.VERCEL_API_KEY
     const hasReplicateKey = !!process.env.REPLICATE_API_TOKEN
     
-    if (!hasMistralKey && !hasReplicateKey) {
+    if (!hasMistralKey && !hasGoogleKey && !hasVercelKey && !hasReplicateKey) {
       clearTimeout(timeoutId)
       return NextResponse.json(
         { 
-          error: 'No image generation providers configured. Please set MISTRAL_API_KEY or REPLICATE_API_TOKEN in your environment variables.' 
+          error: 'No image generation providers configured. Please set MISTRAL_API_KEY, GEMINI_API_KEY (for Google Imagen), VERCEL_API_KEY, or REPLICATE_API_TOKEN in your environment variables.' 
         },
         { status: 503 }
       )
@@ -149,6 +181,14 @@ export async function POST(req: NextRequest) {
       mistral: {
         apiKey: process.env.MISTRAL_API_KEY,
         baseURL: process.env.MISTRAL_BASE_URL,
+      },
+      google: {
+        apiKey: process.env.GEMINI_API_KEY,
+        baseURL: process.env.GEMINI_BASE_URL,
+      },
+      vercel: {
+        apiKey: process.env.VERCEL_API_KEY,
+        baseURL: process.env.VERCEL_BASE_URL,
       },
       replicate: {
         apiKey: process.env.REPLICATE_API_TOKEN,
@@ -196,6 +236,29 @@ export async function POST(req: NextRequest) {
     }
 
     clearTimeout(timeoutId)
+
+    // Increment quota usage for Google Imagen free tier
+    if (result.provider === 'google' && result.model === 'google:gemini-2.5-flash-image-preview') {
+      try {
+        const { imageQuotaManager } = await import('@/lib/image-generation/quota-manager');
+        await imageQuotaManager.incrementUsage('google', 'gemini-2.5-flash-image-preview', result.images?.length || 1);
+      } catch (quotaError) {
+        console.error('Failed to increment quota:', quotaError);
+        // Non-blocking - don't fail the request if quota tracking fails
+      }
+    }
+
+    // Telemetry logging for image generation
+    const generationEndTime = Date.now();
+    const generationLatency = generationEndTime - startTime;
+    console.log(`[ImageGeneration] Successfully generated ${result.images?.length || 0} image(s)`, {
+      provider: result.provider,
+      model: result.model,
+      latencyMs: generationLatency,
+      imageCount: result.images?.length,
+      totalWidth: result.images?.reduce((sum, img) => sum + (img.width || 0), 0),
+      totalHeight: result.images?.reduce((sum, img) => sum + (img.height || 0), 0),
+    });
 
     return NextResponse.json({
       success: true,

@@ -214,6 +214,14 @@ export async function POST(req: NextRequest) {
       console.error('[Security] Failed to increment token version on password reset:', tokenVersionError);
     }
 
+    // MED-5 fix: Log successful password reset
+    try {
+      const { logPasswordResetComplete } = await import('@/lib/auth/auth-audit-logger');
+      logPasswordResetComplete(userId);
+    } catch (auditError) {
+      console.warn('[ConfirmReset] Audit log failed:', auditError);
+    }
+
     // Log security event
     console.log(`[Security] Password reset successful for user ${user.email} (ID: ${userId})`);
 

@@ -7,8 +7,9 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import Redis from 'ioredis';
+import { Queue } from 'bullmq';
 import { v4 as uuidv4 } from 'uuid';
-import { createLogger } from './logger';
+import { createLogger } from './logger.js';
 
 const logger = createLogger('Agent:Gateway');
 
@@ -18,6 +19,9 @@ const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 const REDIS_STREAM_KEY = process.env.REDIS_STREAM_KEY || 'agent:events';
 const JOB_TIMEOUT_MS = parseInt(process.env.JOB_TIMEOUT_MS || '300000');
 const SESSION_TIMEOUT_MS = parseInt(process.env.SESSION_TIMEOUT_MS || '3600000');
+const PUBSUB_CHANNEL = 'agent:events';
+const JOB_QUEUE = 'agent:jobs';
+const SESSIONS_KEY = 'agent:sessions';
 
 const redis = new Redis(REDIS_URL);
 const redisPub = new Redis(REDIS_URL);
@@ -29,10 +33,29 @@ const redisPub = new Redis(REDIS_URL);
 const sharedSubscriber = new Redis(REDIS_URL);
 const sseClients = new Map<string, Set<(event: AgentEvent) => void>>();
 
-sharedSubscriber.subscribe(PUBSUB_CHANNEL);
-sharedSubscriber.on('message', (channel: string, message: string) => {
+// PERF fix: Single shared subscriber uses psubscribe (pattern match) to catch all
+// session-specific channels AND the global channel in one subscription.
+// publishEvent() publishes to both global + per-session channels, so we use psubscribe
+// with pattern `agent:events*` to match `agent:events` (global) and `agent:events:<sessionId>`.
+// pmessage handler deduplicates by tracking last-seen event IDs.
+const seenEventIds = new Map<string, number>(); // dedup key → timestamp
+const DEDUP_WINDOW_MS = 5000; // ignore duplicate events within 5s
+
+sharedSubscriber.psubscribe(`${PUBSUB_CHANNEL}*`);
+sharedSubscriber.on('pmessage', (_pattern: string, channel: string, message: string) => {
   try {
     const event: AgentEvent = JSON.parse(message);
+    // Deduplicate: publishEvent sends to both global and per-session channels,
+    // so we'll receive the same event twice. Skip if seen recently.
+    // Include data hash to avoid collisions when distinct events share sessionId+type+timestamp.
+    const dataHint = typeof event.data === 'object' && event.data !== null
+      ? JSON.stringify(event.data).slice(0, 64)
+      : String(event.data || '').slice(0, 64);
+    const dedupKey = `${event.sessionId || ''}:${event.type}:${event.timestamp}:${dataHint}`;
+    const lastSeen = seenEventIds.get(dedupKey);
+    if (lastSeen && Date.now() - lastSeen < DEDUP_WINDOW_MS) return;
+    seenEventIds.set(dedupKey, Date.now());
+
     // Route to session-specific clients
     if (event.sessionId) {
       const clients = sseClients.get(event.sessionId);
@@ -42,7 +65,7 @@ sharedSubscriber.on('message', (channel: string, message: string) => {
         }
       }
     }
-    // Also route to wildcard listeners (e.g., admin dashboards)
+    // Route to wildcard listeners (e.g., admin dashboards monitoring all events)
     const wildcardClients = sseClients.get('*');
     if (wildcardClients) {
       for (const callback of wildcardClients) {
@@ -54,28 +77,31 @@ sharedSubscriber.on('message', (channel: string, message: string) => {
   }
 });
 
+// Periodically clean up dedup map to prevent unbounded growth
+setInterval(() => {
+  const cutoff = Date.now() - DEDUP_WINDOW_MS * 2;
+  for (const [key, ts] of seenEventIds) {
+    if (ts < cutoff) seenEventIds.delete(key);
+  }
+}, 30000).unref();
+
 function registerSSEClient(sessionId: string, callback: (event: AgentEvent) => void): () => void {
   if (!sseClients.has(sessionId)) {
     sseClients.set(sessionId, new Set());
   }
   sseClients.get(sessionId)!.add(callback);
-  // Also subscribe to session-specific channel for targeted events
-  sharedSubscriber.subscribe(`${PUBSUB_CHANNEL}:${sessionId}`).catch(() => {});
+  // No need to subscribe to individual channels — psubscribe(`${PUBSUB_CHANNEL}*`)
+  // already catches all session-specific channels and the global channel.
   return () => {
     const clients = sseClients.get(sessionId);
     if (clients) {
       clients.delete(callback);
       if (clients.size === 0) {
         sseClients.delete(sessionId);
-        sharedSubscriber.unsubscribe(`${PUBSUB_CHANNEL}:${sessionId}`).catch(() => {});
       }
     }
   };
 }
-
-const PUBSUB_CHANNEL = 'agent:events';
-const JOB_QUEUE = 'agent:jobs';
-const SESSIONS_KEY = 'agent:sessions';
 
 interface AgentSession {
   id: string;
@@ -88,7 +114,8 @@ interface AgentSession {
 }
 
 interface AgentJob {
-  id: string;
+  id?: string;
+  type: 'agent-task';
   sessionId: string;
   userId: string;
   conversationId: string;
@@ -106,6 +133,8 @@ interface AgentEvent {
   data: any;
   timestamp: number;
 }
+
+const jobQueue = new Queue<AgentJob>(JOB_QUEUE, { connection: redis });
 
 async function publishEvent(event: AgentEvent): Promise<void> {
   const message = JSON.stringify(event);
@@ -168,11 +197,11 @@ async function start() {
     await redis.expire(`${SESSIONS_KEY}:${sessionId}`, Math.floor(SESSION_TIMEOUT_MS / 1000));
 
     const job: AgentJob = {
-      id: jobId, sessionId, userId, conversationId, prompt, context, tools, model,
+      id: jobId, type: 'agent-task', sessionId, userId, conversationId, prompt, context, tools, model,
       createdAt: Date.now(), status: 'pending',
     };
 
-    await redis.lpush(JOB_QUEUE, JSON.stringify(job));
+    await jobQueue.add('agent-task', job, { jobId });
     await publishEvent({ type: 'job:ready', sessionId, data: { jobId }, timestamp: Date.now() });
 
     logger.info('Created job', { jobId, sessionId, userId, requestId });
@@ -215,9 +244,17 @@ async function start() {
 
   fastify.get('/jobs/:jobId', async (request: any, reply: any) => {
     const { jobId } = request.params;
-    const jobData = await redis.get(`agent:job:${jobId}`);
-    if (!jobData) return reply.status(404).send({ error: 'Job not found' });
-    return JSON.parse(jobData);
+    const job = await jobQueue.getJob(jobId);
+    if (!job) return reply.status(404).send({ error: 'Job not found' });
+    return {
+      id: job.id,
+      name: job.name,
+      state: await job.getState(),
+      data: job.data,
+      progress: job.progress,
+      attemptsMade: job.attemptsMade,
+      createdAt: job.timestamp,
+    };
   });
 
   fastify.get('/sessions/:sessionId', async (request: any, reply: any) => {
@@ -241,8 +278,17 @@ async function start() {
   });
 
   fastify.get('/jobs', async () => {
-    const jobs = await redis.lrange(JOB_QUEUE, 0, -1);
-    return { count: jobs.length, jobs: jobs.map(j => JSON.parse(j)) };
+    const jobs = await jobQueue.getJobs(['wait', 'active', 'delayed', 'prioritized', 'waiting-children']);
+    const entries = await Promise.all(
+      jobs.map(async (job) => ({
+        id: job.id,
+        name: job.name,
+        state: await job.getState(),
+        data: job.data,
+        createdAt: job.timestamp,
+      }))
+    );
+    return { count: entries.length, jobs: entries };
   });
 
   fastify.get('/sessions', async () => {
@@ -391,12 +437,14 @@ async function start() {
     const jobId = `job-${Date.now()}`;
     const newSessionId = `session-${conversationId}-${Date.now()}`;
     const job = {
-      id: jobId, sessionId: newSessionId, userId, conversationId,
+      id: jobId,
+      type: 'agent-task' as const,
+      sessionId: newSessionId, userId, conversationId,
       prompt: checkpoint.prompt, context: checkpoint.context,
       createdAt: Date.now(), status: 'pending', resumeFrom: sessionId,
     };
 
-    await redis.lpush(JOB_QUEUE, JSON.stringify(job));
+    await jobQueue.add('agent-task', job, { jobId });
     await publishEvent({ type: 'job:resume', sessionId: newSessionId, data: { jobId, resumeFrom: sessionId }, timestamp: Date.now() });
 
     return { jobId, sessionId: newSessionId, status: 'pending', resumeFrom: sessionId };
@@ -429,6 +477,9 @@ async function gracefulShutdown(signal: string): Promise<void> {
     // Stop accepting new connections
     await fastify.close();
     logger.info('Fastify server closed');
+    
+    await jobQueue.close();
+    logger.info('BullMQ queue producer closed');
     
     // Close Redis connections
     await redis.quit();

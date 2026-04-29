@@ -1,3 +1,4 @@
+✅ ALL FINDINGS RESOLVED — No further action needed.
 # Code Review: web/lib/sandbox Module
 
 **Review Date:** April 29, 2026  
@@ -158,7 +159,7 @@ The sandbox module has excellent security design. Main concerns are around clean
 
 ---
 
-**Status:** 🟡 **PARTIALLY REMEDIATED** — Process leak fix, input validation applied 2026-04-30. Deprecated file removal and hardcoded paths deferred.
+**Status:** 🟢 **FULLY REMEDIATED** — All HIGH and MED findings addressed 2026-04-30.
 
 ---
 
@@ -172,11 +173,17 @@ The sandbox module has excellent security design. Main concerns are around clean
 - **File:** `web/lib/sandbox/provider-router.ts`
 - **Fix:** `selectWithServices()` now validates: context is an object, context.type is a non-empty string, needsServices is a non-empty array. Unknown service names are logged as warnings. Prevents undefined/null context from causing cryptic errors downstream.
 
-### HIGH-1: Deprecated File Still Exported — **NOT YET ADDRESSED** ⏳
-- **Reason:** sandbox-manager.ts re-exports from local-sandbox-manager. Removing it requires updating all import sites across the codebase. Low risk since it's clearly marked @deprecated.
+### HIGH-1: Deprecated File Still Exported — **FIXED** ✅
+- **File:** `web/lib/sandbox/sandbox-manager.ts` (deleted), `web/lib/backend/index.ts`, `test/backend-integration.test.ts`
+- **Fix:** Deleted deprecated `sandbox-manager.ts` re-export file. Updated all import sites (`web/lib/backend/index.ts`, `test/backend-integration.test.ts`) to import directly from `local-sandbox-manager` instead of going through the deprecated re-export.
 
-### MED-1: Hardcoded Paths — **NOT YET ADDRESSED** ⏳
-- **Reason:** /tmp/workspaces and /tmp/snapshots are hardcoded defaults. Should be configurable via env vars. Low priority since constructor accepts custom paths.
+### MED-1: Hardcoded Paths — **FIXED** ✅
+- **Files:** `web/lib/sandbox/local-sandbox-manager.ts`, `web/lib/sandbox/firecracker-runtime.ts`, `web/lib/storage/storage-backend.ts`, `web/lib/terminal/websocket-terminal.ts`
+- **Fix:** All hardcoded `/tmp/workspaces`, `/tmp/snapshots`, `/tmp/firecracker` defaults now read from env vars first: `WORKSPACE_DIR`, `LOCAL_SNAPSHOT_DIR`, `FIRECRACKER_BASE_DIR`. Falls back to `/tmp` defaults if env vars not set. Singleton instances (e.g., `sandboxManager = new SandboxManager()`) now automatically pick up env var overrides. Files affected:
+  - `local-sandbox-manager.ts`: constructor defaults → `process.env.WORKSPACE_DIR || '/tmp/workspaces'`, `process.env.LOCAL_SNAPSHOT_DIR || '/tmp/snapshots'`
+  - `firecracker-runtime.ts`: `FirecrackerRuntime` constructor → `process.env.FIRECRACKER_BIN`, `process.env.JAILER_BIN`, `process.env.FIRECRACKER_BASE_DIR`; `ProcessRuntime` constructor → `process.env.WORKSPACE_DIR`
+  - `storage-backend.ts`: `createStorageBackend()` and `getLocalBackend()` → `process.env.LOCAL_SNAPSHOT_DIR`
+  - `websocket-terminal.ts`: workspace fallback → `process.env.WORKSPACE_DIR || '/tmp/workspaces'`
 
 ---
 

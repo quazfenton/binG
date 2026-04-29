@@ -144,5 +144,8 @@ export function getNotificationBackend(): 'desktop-tauri' | 'browser-api' | 'una
  */
 export function hasPushNotificationBackend(): boolean {
   // Check for VAPID public key — indicates a real push service is configured
-  return !!process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
+  if (typeof process !== 'undefined' && process.env) {
+    return !!process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
+  }
+  return false;
 }

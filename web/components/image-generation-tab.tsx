@@ -49,6 +49,10 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { clipboard } from "@bing/platform/clipboard";
+import { useApiKeys } from '@/hooks/use-api-keys';
+import { useBYOKFallback } from '@/hooks/use-byok-fallback';
+import BYOKFadeInInput, { BYOKFadeInWrapper } from '@/components/byok-fade-in-input';
+import { useState } from 'react';
 
 /**
  * Image Generation Tab Component
@@ -130,12 +134,43 @@ const MODELS = [
   { value: "black-forest-labs/flux-schnell", label: "Flux Schnell", provider: "replicate" },
   { value: "stability-ai/stable-diffusion-3.5-large", label: "SD 3.5 Large", provider: "replicate" },
   { value: "mistral-medium-2505", label: "Mistral (FLUX Ultra)", provider: "mistral" },
+  { value: "google:gemini-2.5-flash-image-preview", label: "Gemini 2.5 Flash Image (Free - 500/day)", provider: "google" },
+  { value: "google:imagen-4.0-fast-generate-001", label: "Imagen 4.0 Fast (Paid)", provider: "google" },
+  { value: "google:imagen-4.0-generate-001", label: "Imagen 4.0 (Paid)", provider: "google" },
+  { value: "google:imagen-4.0-ultra-generate-001", label: "Imagen 4.0 Ultra (Paid)", provider: "google" },
+  { value: "vercel:bfl/flux-2-flex", label: "Flux 2 Flex", provider: "vercel" },
+  { value: "vercel:bfl/flux-2-klein-4b", label: "Flux 2 Klein 4B", provider: "vercel" },
+  { value: "vercel:bfl/flux-2-klein-9b", label: "Flux 2 Klein 9B", provider: "vercel" },
+  { value: "vercel:bfl/flux-2-max", label: "Flux 2 Max", provider: "vercel" },
+  { value: "vercel:bfl/flux-2-pro", label: "Flux 2 Pro", provider: "vercel" },
+  { value: "vercel:bfl/flux-kontext-max", label: "Flux Kontext Max", provider: "vercel" },
+  { value: "vercel:bfl/flux-kontext-pro", label: "Flux Kontext Pro", provider: "vercel" },
+  { value: "vercel:bfl/flux-pro-1.0-fill", label: "Flux Pro 1.0 Fill", provider: "vercel" },
+  { value: "vercel:bfl/flux-pro-1.1", label: "Flux Pro 1.1", provider: "vercel" },
+  { value: "vercel:bfl/flux-pro-1.1-ultra", label: "Flux Pro 1.1 Ultra", provider: "vercel" },
+  { value: "vercel:bytedance/seedream-4.0", label: "Seedream 4.0", provider: "vercel" },
+  { value: "vercel:bytedance/seedream-4.5", label: "Seedream 4.5", provider: "vercel" },
+  { value: "vercel:bytedance/seedream-5.0-lite", label: "Seedream 5.0 Lite", provider: "vercel" },
+  { value: "vercel:google/imagen-4.0-fast-generate-001", label: "Imagen 4.0 Fast", provider: "vercel" },
+  { value: "vercel:google/imagen-4.0-generate-001", label: "Imagen 4.0", provider: "vercel" },
+  { value: "vercel:google/imagen-4.0-ultra-generate-001", label: "Imagen 4.0 Ultra", provider: "vercel" },
+  { value: "vercel:openai/gpt-image-1", label: "GPT Image 1", provider: "vercel" },
+  { value: "vercel:openai/gpt-image-1-mini", label: "GPT Image 1 Mini", provider: "vercel" },
+  { value: "vercel:openai/gpt-image-1.5", label: "GPT Image 1.5", provider: "vercel" },
+  { value: "vercel:openai/gpt-image-2", label: "GPT Image 2", provider: "vercel" },
+  { value: "vercel:prodia/flux-fast-schnell", label: "Flux Fast Schnell", provider: "vercel" },
+  { value: "vercel:recraft/recraft-v2", label: "Recraft v2", provider: "vercel" },
+  { value: "vercel:recraft/recraft-v3", label: "Recraft v3", provider: "vercel" },
+  { value: "vercel:recraft/recraft-v4", label: "Recraft v4", provider: "vercel" },
+  { value: "vercel:recraft/recraft-v4-pro", label: "Recraft v4 Pro", provider: "vercel" },
 ];
 
 const PROVIDERS = [
   { value: "auto", label: "Auto (with Fallback)" },
   { value: "mistral", label: "Mistral AI" },
+  { value: "google", label: "Google Imagen" },
   { value: "replicate", label: "Replicate" },
+  { value: "vercel", label: "Vercel" },
 ];
 
 const QUALITY_PRESETS: Record<string, { steps: number; guidance: number; label: string }> = {
@@ -164,6 +199,19 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
   });
 
   const [isGenerating, setIsGenerating] = useState(false);
+  
+  const { 
+    showBYOKInput, 
+    byokError, 
+    setShowBYOKInput, 
+    setByokError, 
+    recordFailure,
+    handleApiKeySave,
+    handleRetry,
+  } = useBYOKFallback();
+  
+  const { apiKeys, getApiKey } = useApiKeys();
+  
   const [generatedImages, setGeneratedImages] = useState<GeneratedImage[]>(() => {
     // Load from localStorage on mount
     if (typeof window !== 'undefined') {
@@ -329,7 +377,11 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
         toast.info("Generation cancelled");
       } else {
         console.error("Generation error:", error);
-        toast.error(error.message || "Failed to generate image");
+        const errorMessage = error.message || "Failed to generate image";
+        toast.error(errorMessage);
+        
+        // Record this failure and show BYOK input if appropriate
+        recordFailure(params.provider === 'auto' ? selectedProvider : params.provider, error);
       }
     } finally {
       setIsGenerating(false);
@@ -516,7 +568,21 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
   }, []);
 
   return (
-    <div className="h-full flex flex-col">
+    <>
+      <BYOKFadeInWrapper isVisible={showBYOKInput} onDismiss={() => setShowBYOKInput(false)}>
+        {byokError && (
+          <BYOKFadeInInput
+            providerId={byokError.providerId}
+            providerName={byokError.providerName}
+            errorMessage={byokError.errorMessage}
+            onSave={handleApiKeySave}
+            onRetry={handleRetry}
+            onDismiss={() => setShowBYOKInput(false)}
+            initialApiKey={getApiKey(byokError.providerId)}
+          />
+        )}
+      </BYOKFadeInWrapper>
+      <div className="h-full flex flex-col">
       {/* Header */}
       <div className="flex items-center justify-between p-4">
         <div className="flex items-center gap-2">

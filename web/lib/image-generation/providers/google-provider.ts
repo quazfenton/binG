@@ -1,0 +1,307 @@
+/**
+ * Google Image Generation Provider
+ * Uses Google's Gemini API for image generation (Imagen 4 and Gemini 2.5 Flash Image)
+ * 
+ * Note: This provider uses GEMINI_API_KEY which is distinct from GOOGLE_API_KEY
+ * used for LLM language model calls.
+ */
+
+import { GoogleGenAI } from '@google/genai';
+import type {
+  ImageGenerationProvider,
+  ImageGenerationParams,
+  ImageGenerationResponse,
+  GeneratedImage,
+  ProviderConfig,
+  ProviderCapabilities,
+  ImageGenerationError,
+  ImageGenerationErrorType,
+} from '../types';
+import { ImageGenerationErrorType as ErrorType } from '../types';
+
+export class GoogleImageProvider implements ImageGenerationProvider {
+  readonly id = 'google';
+  readonly name = 'Google Imagen';
+  readonly defaultModel = 'imagen-4.0-fast-generate-001';
+  
+  private client: GoogleGenAI | null = null;
+  private apiKey?: string;
+  private baseURL?: string;
+
+  readonly models = [
+    // Free tier model (500 images/day limit)
+    'gemini-2.5-flash-image-preview', // Free tier - 500 images/day
+    // Paid models (require paid tier)
+    'imagen-4.0-fast-generate-001',    // Paid
+    'imagen-4.0-generate-001',        // Paid
+    'imagen-4.0-ultra-generate-001',  // Paid
+    'gemini-3.1-flash-image-preview',  // Paid
+    'gemini-3-pro-image-preview',      // Paid
+  ];
+
+  readonly capabilities: ProviderCapabilities = {
+    aspectRatios: ['1:1', '16:9', '9:16', '4:3', '3:2', '2:3', '21:9'],
+    resolutions: [
+      { width: 512, height: 512 },
+      { width: 768, height: 768 },
+      { width: 1024, height: 1024 },
+      { width: 1280, height: 720 },
+      { width: 720, height: 1280 },
+      { width: 1152, height: 864 },
+      { width: 1152, height: 768 },
+      { width: 768, height: 1152 },
+      { width: 1344, height: 576 },
+      { width: 2048, height: 2048 },
+      { width: 2560, height: 1440 }, // 2K
+      { width: 3840, height: 2160 }, // 4K (Pro model only)
+    ],
+    supportsNegativePrompt: true,
+    supportsImg2Img: true, // Gemini supports image editing
+    supportsSeed: false,
+    supportsBatchGeneration: false,
+    supportsSamplers: false,
+    maxBatchSize: 1,
+    stylePresets: ['None', 'Photorealistic', 'Artistic', 'Creative', 'General'],
+    qualityPresets: ['low', 'medium', 'high', 'ultra'],
+  };
+
+  initialize(config: ProviderConfig): void {
+    this.apiKey = config.apiKey;
+    this.baseURL = config.baseURL;
+    
+    if (this.apiKey) {
+      this.client = new GoogleGenAI({ apiKey: this.apiKey });
+    }
+  }
+
+  async isAvailable(): Promise<boolean> {
+    if (!this.client || !this.apiKey) {
+      return false;
+    }
+    
+    try {
+      // Try to list available models
+      await this.client.listModels();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async generate(
+    params: ImageGenerationParams,
+    signal?: AbortSignal
+  ): Promise<ImageGenerationResponse> {
+    if (!this.client) {
+      throw this.createError(
+        'Google Imagen provider not initialized. Please check your GEMINI_API_KEY environment variable.',
+        ErrorType.NOT_CONFIGURED
+      );
+    }
+
+    console.log('[GoogleImageProvider] Starting image generation with prompt:', params.prompt.substring(0, 100));
+
+    const startTime = Date.now();
+    const controller = new AbortController();
+
+    if (signal) {
+      signal.addEventListener('abort', () => controller.abort());
+    }
+
+    try {
+      // Use the requested model or default
+      const model = params.extra?.model as string || this.defaultModel;
+      
+      // Validate model
+      if (!this.models.includes(model)) {
+        throw this.createError(
+          `Model ${model} is not supported by Google Imagen.`,
+          ErrorType.INVALID_MODEL
+        );
+      }
+      
+      // Check if this is the free tier model
+      const isFreeTier = model === 'gemini-2.5-flash-image-preview';
+      if (isFreeTier) {
+        console.log('[GoogleImageProvider] Using free tier model (500 images/day limit)');
+      } else {
+        console.log('[GoogleImageProvider] Using paid model:', model);
+      }
+      
+      // Validate that we only use free tier models unless explicitly allowed
+      const allowedModels = this.models;
+      if (!allowedModels.includes(model)) {
+        throw this.createError(
+          `Model ${model} is not available in the free tier or not supported by Google Imagen.`,
+          ErrorType.INVALID_MODEL
+        );
+      }
+
+      console.log('[GoogleImageProvider] Generating image with model:', model);
+
+      const response = await this.client.models.generateImages({
+        model,
+        prompt: this.buildPrompt(params),
+        config: {
+          aspectRatio: params.aspectRatio || '1:1',
+          ...(params.negativePrompt && { negativePrompt: params.negativePrompt }),
+        },
+      }, {
+        signal: controller.signal,
+      });
+
+      console.log('[GoogleImageProvider] Got response with', response.generatedImages?.length || 0, 'images');
+
+      if (!response.generatedImages || response.generatedImages.length === 0) {
+        throw this.createError(
+          'No images were generated by the Google Imagen API',
+          ErrorType.GENERATION_FAILED
+        );
+      }
+
+      const image = response.generatedImages[0].image;
+      if (!image?.imageBytes) {
+        throw this.createError(
+          'No valid image data returned from Google Imagen API',
+          ErrorType.GENERATION_FAILED
+        );
+      }
+
+      // Convert to our standard format
+      const generatedImage: GeneratedImage = {
+        url: `data:${image.mimeType || 'image/png'};base64,${image.imageBytes}`,
+        width: params.width || 1024,
+        height: params.height || 1024,
+        metadata: {
+          model: model,
+          provider: this.id,
+          mimeType: image.mimeType || 'image/png',
+          quality: params.quality,
+          style: params.style,
+        },
+      };
+
+      const duration = Date.now() - startTime;
+      console.log(`[GoogleImageProvider] Successfully generated image in ${duration}ms`);
+
+      return {
+        success: true,
+        images: [generatedImage],
+        provider: this.id,
+        model: model,
+        usage: {
+          credits: 1,
+        },
+      };
+    } catch (error) {
+      const duration = Date.now() - startTime;
+      console.error(`[GoogleImageProvider] Error after ${duration}ms:`, error);
+
+      if (error instanceof Error) {
+        if (error.name === 'AbortError' || error.message.includes('aborted')) {
+          throw this.createError(
+            'Image generation timed out',
+            ErrorType.TIMEOUT
+          );
+        }
+
+        if (error.message.includes('429') || error.message.includes('rate limit')) {
+          throw this.createError(
+            'Rate limit exceeded. Please try again later.',
+            ErrorType.RATE_LIMITED,
+            error
+          );
+        }
+
+        if (error.message.includes('401') || error.message.includes('403') || error.message.includes('unauthorized')) {
+          throw this.createError(
+            'Authentication failed. Please check your GEMINI_API_KEY.',
+            ErrorType.AUTH_FAILED,
+            error
+          );
+        }
+
+        if (error.message.includes('Invalid model') || error.message.includes('model not found')) {
+          throw this.createError(
+            `Model ${params.extra?.model || this.defaultModel} is not available or not supported by Google Imagen.`,
+            ErrorType.INVALID_MODEL,
+            error
+          );
+        }
+
+        throw this.createError(
+          `Image generation failed: ${error.message}`,
+          ErrorType.GENERATION_FAILED,
+          error
+        );
+      }
+
+      throw this.createError(
+        'Unknown error during image generation',
+        ErrorType.GENERATION_FAILED
+      );
+    }
+  }
+
+  getDefaultParams(): Partial<ImageGenerationParams> {
+    return {
+      width: 1024,
+      height: 1024,
+      numImages: 1,
+      quality: 'high',
+    };
+  }
+
+  private buildPrompt(params: ImageGenerationParams): string {
+    let prompt = params.prompt;
+
+    // Add quality modifiers
+    if (params.quality) {
+      const qualityModifiers: Record<string, string> = {
+        low: '',
+        medium: ', high quality',
+        high: ', highly detailed, professional quality, sharp focus',
+        ultra: ', ultra detailed, masterpiece, best quality, professional photography, 8k resolution',
+      };
+      if (qualityModifiers[params.quality]) {
+        prompt += qualityModifiers[params.quality];
+      }
+    }
+
+    // Add aspect ratio context
+    if (params.aspectRatio) {
+      const ratioHints: Record<string, string> = {
+        '1:1': '',
+        '16:9': ', cinematic widescreen composition',
+        '9:16': ', vertical portrait composition, perfect for mobile',
+        '4:3': ', classic photography composition',
+        '3:2': ', landscape photography format',
+        '2:3': ', portrait photography format',
+        '21:9': ', ultrawide cinematic composition',
+      };
+      if (ratioHints[params.aspectRatio]) {
+        prompt += ratioHints[params.aspectRatio];
+      }
+    }
+
+    // Add style context
+    if (params.style && params.style !== 'None') {
+      prompt += `, ${params.style} artistic style`;
+    }
+
+    return prompt;
+  }
+
+  private createError(
+    message: string,
+    type: ImageGenerationErrorType,
+    originalError?: Error
+  ): ImageGenerationError {
+    const error = new Error(message) as ImageGenerationError;
+    error.name = 'ImageGenerationError';
+    (error as any).type = type;
+    (error as any).provider = this.id;
+    (error as any).originalError = originalError;
+    return error;
+  }
+}

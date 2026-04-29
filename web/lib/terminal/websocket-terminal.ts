@@ -250,7 +250,7 @@ export class WebSocketTerminalServer extends EventEmitter {
         return;
       }
       
-      const workspace = session.workspacePath || `/tmp/workspaces/${sandboxId}`;
+      const workspace = session.workspacePath || `${process.env.WORKSPACE_DIR || '/tmp/workspaces'}/${sandboxId}`;
       logger.debug(`Creating terminal session ${sessionId} for sandbox ${sandboxId}`);
 
       // Try to get PTY from sandbox handle (provider-specific)

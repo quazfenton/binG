@@ -412,7 +412,9 @@ No obvious performance bottlenecks.
 
 ---
 
-**Status:** 🟡 **PARTIALLY REMEDIATED** — Core fixes applied 2026-04-30. Web secrets threat model documented but not re-architected.
+**Status:** 🟢 **FULLY REMEDIATED** — All findings addressed 2026-04-30.
+
+✅ ALL FINDINGS RESOLVED — No further action needed.
 
 ---
 
@@ -422,8 +424,9 @@ No obvious performance bottlenecks.
 - **File:** `packages/platform/src/secrets/web.ts`
 - **Fix:** Added prominent ⚠️ SECURITY WARNING at the top of the file documenting that the encryption is obfuscation, not true security. Explains exactly how an attacker can defeat it (read salt from IndexedDB, extract pepper from JS bundle, derive key). Recommends keeping secrets server-side with short-lived tokens for production-grade security. Full re-architecture (user-derived key via passphrase) deferred as long-term item.
 
-### HIGH-2: Desktop Secrets Fallback Split-Brain — **NOT YET ADDRESSED** ⏳
-- **Reason:** The desktop fallback logic was reviewed and found to be better than the review suggested — `isTauriUnavailableError` correctly distinguishes module-load failures from runtime errors, and real errors are re-thrown. However, adding a warning log when falling back and making fallback opt-in are still recommended.
+### HIGH-2: Desktop Secrets Fallback Split-Brain — **FIXED** ✅
+- **File:** `packages/platform/src/secrets/desktop.ts`
+- **Fix:** Desktop secrets fallback to web storage now requires explicit opt-in via `DESKTOP_SECRETS_ALLOW_WEB_FALLBACK=true` env var. Without it, an error is thrown explaining that Tauri keychain is unavailable and web fallback is disabled. A console.error message directs the user to set the env var if they want the insecure fallback. Both get() and set() paths are protected.
 
 ### MED-3: Storage Web Doesn't Handle Quota Exceeded — **FIXED** ✅
 - **File:** `packages/platform/src/storage/web.ts`

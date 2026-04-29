@@ -14,6 +14,7 @@ import { requireAdminApiOrForbidden } from '@/lib/auth/admin';
 import { getDatabase } from '@/lib/database/connection';
 import { constraintMonitor } from '@/lib/observability/constraint-violation-monitor';
 import { orphanedRecordCleaner, OrphanedRecordInfo } from '@/lib/database/orphaned-record-cleaner';
+import { csrfCheckOrReject } from '@/lib/auth/csrf';
 
 interface DeleteUserRequest {
   userId: string;
@@ -256,6 +257,10 @@ async function deleteUser(
  */
 export async function POST(req: NextRequest): Promise<NextResponse> {
   try {
+    // HIGH-10 fix: CSRF protection on user deletion
+    const csrfReject = csrfCheckOrReject(req);
+    if (csrfReject) return csrfReject;
+
     // Require admin access
     const admin = await requireAdminApiOrForbidden(req);
     if (admin instanceof NextResponse) {
