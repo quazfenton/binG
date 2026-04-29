@@ -306,7 +306,7 @@ export interface PreviewMount {
 }
 
 export class PreviewMountManager extends EventEmitter {
-  private mounts: Map<string, PreviewMount> = new Map();
+  private mounts: Map<string, PreviewMount> = new Map<string, PreviewMount>();
 
   async mount(config: PreviewMount): Promise<void> {
     const key = `${config.sandboxId}:${config.port}`;

@@ -131,7 +131,7 @@ async function websocketTerminal(sandboxId: string, options?: { tauri?: boolean;
         process.stdin.on('data', async (data) => {
           try {
             await invoke('write_pty_input', { sessionId, data: data.toString() });
-          } catch (err) {
+          } catch (err: unknown) {
             console.log(COLORS.error(`Write error: ${err}`));
           }
         });
@@ -165,7 +165,7 @@ async function websocketTerminal(sandboxId: string, options?: { tauri?: boolean;
 
         return;
       }
-    } catch (err) {
+    } catch (err: unknown) {
       console.log(COLORS.warning(`Tauri mode unavailable: ${err}`));
       console.log(COLORS.info('Falling back to server mode...'));
     }
@@ -562,7 +562,7 @@ function openFileInEditor(filePath: string): void {
 
 async function processSSEStream(response: AsyncIterable<any>): Promise<string> {
   let fullResponse = '';
-  let collectedDiffs: Array<{ path: string; diff: string; changeType: string }> = new Array();
+  let collectedDiffs: Array<{ path: string; diff: string; changeType: string }> = new Array<{ path: string; diff: string; changeType: string }>();
   
   try {
     for await (const chunk of response) {
@@ -647,7 +647,7 @@ async function processSSEStream(response: AsyncIterable<any>): Promise<string> {
           break;
       }
     }
-  } catch (err) {
+  } catch (err: unknown) {
     // Stream errored — return what we have
     console.log(`\n${COLORS.error('Stream error:')} ${err instanceof Error ? err.message : err}`);
   }
@@ -876,7 +876,7 @@ class CircuitBreaker {
       const result = await fn();
       this.onSuccess();
       return result;
-    } catch (error) {
+    } catch (error: unknown) {
       this.onFailure();
       throw error;
     }
@@ -1142,7 +1142,7 @@ function loadConfig(): any {
     if (fs.existsSync(CONFIG_FILE)) {
       return JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8'));
     }
-  } catch (error) {
+  } catch (error: unknown) {
     console.warn(COLORS.warning('Warning: Could not load config file'));
   }
   return {
@@ -1369,7 +1369,7 @@ function loadAuth(): any {
     if (fs.existsSync(AUTH_FILE)) {
       return JSON.parse(fs.readFileSync(AUTH_FILE, 'utf-8'));
     }
-  } catch (error) {
+  } catch (error: unknown) {
     console.warn(COLORS.warning('Warning: Could not load auth file'));
   }
   return { token: null, userId: null };

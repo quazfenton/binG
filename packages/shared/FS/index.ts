@@ -195,7 +195,7 @@ export class DesktopFileSystem implements IFileSystem {
   // Poll-based fallback for file watching
   private pollWatcher: NodeJS.Timeout | null = null;
   private pollIntervalMs: number = 3000; // Default 3 seconds
-  private fileStates: Map<string, { mtime: number; size: number }> = new Map();
+  private fileStates: Map<string, { mtime: number; size: number }> = new Map<string, { mtime: number; size: number }>();
   private usePollFallback: boolean = false;
   
   constructor() {
@@ -1006,7 +1006,7 @@ export class VirtualFileSystem implements IFileSystem {
   private ownerId: string = '';
   private initialized = false;
   private isWatching: boolean = false;
-  private watcherCallbacks: Set<FileWatcherCallback> = new Set();
+  private watcherCallbacks: Set<FileWatcherCallback> = new Set<FileWatcherCallback>();
   
   constructor() { this.id = `virtual-${generateId()}`; }
   

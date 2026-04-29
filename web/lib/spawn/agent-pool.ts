@@ -121,7 +121,7 @@ export interface PooledAgent {
 export class AgentPool extends EventEmitter {
   private type: PoolAgentType;
   private config: Required<AgentPoolConfig>;
-  private agents: Map<string, PooledAgent> = new Map();
+  private agents: Map<string, PooledAgent> = new Map<string, PooledAgent>();
   private waitQueue: Array<{
     resolve: (agent: PoolAgent) => void;
     reject: (error: Error) => void;

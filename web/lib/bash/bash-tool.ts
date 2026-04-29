@@ -522,7 +522,7 @@ export function createBashTool(config: Partial<BashToolConfig> = {}) {
               };
             }
             // 'sandbox' mode falls through to normal execution
-          } catch (e) {
+          } catch (e: unknown) {
             // Router unavailable - fall through to normal execution
             logger.debug('Command router unavailable', { error: (e as Error).message });
           }

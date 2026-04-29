@@ -27,8 +27,8 @@ export interface Snapshot {
 }
 
 export class SandboxPersistenceManager {
-  private snapshots: Map<string, Snapshot[]> = new Map();
-  private lastSyncHashes: Map<string, Map<string, string>> = new Map();
+  private snapshots: Map<string, Snapshot[]> = new Map<string, Snapshot[]>();
+  private lastSyncHashes: Map<string, Map<string, string>> = new Map<string, Map<string, string>>();
 
   /**
    * Perform an incremental sync of VFS files to the sandbox

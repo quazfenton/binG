@@ -45,7 +45,7 @@ const DEFAULT_CIRCUIT_BREAKER_CONFIG: CircuitBreakerConfig = {
  * Circuit breaker for provider health tracking
  */
 class ProviderCircuitBreaker {
-  private states: Map<string, CircuitBreakerState> = new Map();
+  private states: Map<string, CircuitBreakerState> = new Map<string, CircuitBreakerState>();
   private config: CircuitBreakerConfig;
 
   constructor(config: CircuitBreakerConfig = DEFAULT_CIRCUIT_BREAKER_CONFIG) {
@@ -458,7 +458,7 @@ interface ProviderHealthMetrics {
 }
 
 class ProviderHealthMonitor {
-  private metrics: Map<ProviderName, ProviderHealthMetrics> = new Map();
+  private metrics: Map<ProviderName, ProviderHealthMetrics> = new Map<ProviderName, ProviderHealthMetrics>();
 
   constructor() {
     // Initialize metrics for all providers

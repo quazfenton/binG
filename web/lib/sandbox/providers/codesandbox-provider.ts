@@ -853,7 +853,7 @@ class CodeSandboxHandle implements SandboxHandle {
     const resolved = SandboxSecurityManager.resolvePath(this.workspaceDir, dirPath)
     const intervalMs = 2000
     
-    let lastFiles: Map<string, string> = new Map()
+    let lastFiles: Map<string, string> = new Map<string, string>()
     
     const listFiles = async () => {
       try {

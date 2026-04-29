@@ -91,9 +91,9 @@ type NullclawContainer = any;
 
 class NullclawMCPBridge {
   private config: NullclawBridgeConfig;
-  private containerPool: Map<string, NullclawContainer> = new Map();
-  private taskQueue: Map<string, NullclawTask> = new Map();
-  private sessionToContainer: Map<string, string> = new Map();
+  private containerPool: Map<string, NullclawContainer> = new Map<string, NullclawContainer>();
+  private taskQueue: Map<string, NullclawTask> = new Map<string, NullclawTask>();
+  private sessionToContainer: Map<string, string> = new Map<string, string>();
 
   constructor(config: Partial<NullclawBridgeConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };

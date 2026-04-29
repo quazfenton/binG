@@ -61,7 +61,7 @@ export interface IntentFieldConfig {
 // ─── Intent Field ──────────────────────────────────────────────────────────
 
 class IntentField {
-  vectors: Map<string, IntentVector> = new Map();
+  vectors: Map<string, IntentVector> = new Map<string, IntentVector>();
   private decayFactor: number;
 
   constructor(decayFactor: number = 0.97) {

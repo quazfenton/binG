@@ -247,7 +247,7 @@ class ProviderHealthChecker {
  * Manages health checkers for multiple providers
  */
 export class HealthCheckManager {
-  private checkers: Map<string, ProviderHealthChecker> = new Map();
+  private checkers: Map<string, ProviderHealthChecker> = new Map<string, ProviderHealthChecker>();
   private defaultConfig: Partial<HealthCheckConfig> = {};
 
   constructor(defaultConfig?: Partial<HealthCheckConfig>) {
@@ -313,7 +313,7 @@ export class HealthCheckManager {
    * Get all provider health statuses
    */
   getAllHealth(): Map<string, ProviderHealth> {
-    const health = new Map();
+    const health = new Map<string, ProviderHealth>();
     for (const [providerId, checker] of this.checkers.entries()) {
       health.set(providerId, checker.getHealth());
     }

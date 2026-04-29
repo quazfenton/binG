@@ -24,7 +24,7 @@ import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp';
 import { workforceManager } from '@bing/shared/agent/workforce-manager';
 import { createTaskClassifier as createTaskClassifierShared } from '@bing/shared/agent/task-classifier';
 import { VFS_FILE_EDITING_TOOL_PROMPT } from '@bing/shared/agent/system-prompts';
-import { mem0Search, buildMem0SystemPrompt, isMem0Configured, mem0Add } from '@/lib/powers/mem0-power';
+import { mem0Search, buildMem0SystemPrompt, isMem0Configured, mem0Add, prewarmMem0Cache } from '@/lib/powers/mem0-power';
 import { createSSEEmitter, SSE_RESPONSE_HEADERS, SSE_EVENT_TYPES } from '@/lib/streaming/sse-event-schema';
 // Lazy imports — avoid 'ws' module resolution during instrumentation context
 // import { streamStateManager } from '@/lib/streaming/stream-state-manager';
@@ -491,7 +491,7 @@ export async function POST(request: NextRequest) {
               toolSuccessRate: retryModel.toolSuccessRate,
             });
           }
-        } catch (error) {
+        } catch (error: unknown) {
           chatLogger.warn('Failed to select retry model, using original', error);
         }
       }
@@ -708,6 +708,21 @@ export async function POST(request: NextRequest) {
     // This reduces latency by 40-60% by not waiting for each operation sequentially
     const userPrompt = typeof lastUserMessage?.content === 'string' ? lastUserMessage.content : '';
     const scopePathForHybrid = sanitizeScopePath(requestedScopePath);
+
+    // Pre-warm mem0 cache on first message of a thread. Fires a background
+    // broad-memory query so the targeted search inside the Promise.all below
+    // can hit the in-process cache (~0 ms) on a warm TLS connection instead
+    // of paying the cold-connect/handshake cost. Idempotent (no-op if already
+    // warmed for this user in the last 2 min). Safe when MEM0_API_KEY unset
+    // or the circuit breaker is OPEN (returns early).
+    {
+      const userMessageCount = processedMessages.filter(
+        (m) => m.role === 'user',
+      ).length;
+      if (userMessageCount <= 1) {
+        prewarmMem0Cache(filesystemOwnerId);
+      }
+    }
 
     const [denialContext, workspaceSessionContext, mem0Result, hybridContext] = await Promise.all([
       // Get recent filesystem edit denials
@@ -1265,8 +1280,8 @@ const config: UnifiedAgentConfig = {
                         diff: isPatch ? (edit.diff || '') : undefined,
                         isFinal: true,  // Mark as final parse edit for frontend
                       });
-                    }
-                  } catch (error) {
+                      }
+                  } catch (error: unknown) {
                     chatLogger.warn('Failed to emit final file edits', {
                       requestId,
                       error: error instanceof Error ? error.message : String(error),
@@ -1332,7 +1347,7 @@ const config: UnifiedAgentConfig = {
                         errors: appliedEditsResult.errors.slice(0, 5),
                       });
                     }
-                  } catch (e) {
+                  } catch (e: unknown) {
                     chatLogger.warn('Agentic path: VFS write failed (non-fatal)', {
                       error: e instanceof Error ? e.message : String(e),
                     });
@@ -1567,7 +1582,7 @@ const config: UnifiedAgentConfig = {
                       diff: isPatch ? (edit.diff || '') : undefined,
                     });
                   }
-                } catch (parseError) {
+                } catch (parseError: unknown) {
                   // Ignore parse errors during error handling
                 }
               }
@@ -2112,7 +2127,7 @@ const config: UnifiedAgentConfig = {
             source: 'non-streaming',
           });
         }
-      } catch (error) {
+      } catch (error: unknown) {
         // Disable batch mode on error to prevent stuck state
         disableVFSBatchMode(filesystemOwnerId);
         throw error;
@@ -2366,7 +2381,7 @@ const config: UnifiedAgentConfig = {
                     maxTokens: clientResponse.usage?.total_tokens || 65536,
                   });
                   streamStateCreated = true;
-                } catch (e) {
+                } catch (e: unknown) {
                   chatLogger.warn('Failed to create stream state', {
                     streamRequestId,
                     error: e instanceof Error ? e.message : String(e),
@@ -2420,9 +2435,12 @@ const config: UnifiedAgentConfig = {
                     // Track tokens in stream state (non-fatal if it fails)
                     try {
                       if (ssm) ssm.appendToken(streamRequestId, tokenBuffer);
-                    } catch (e) {
-                      // Non-fatal — stream state tracking shouldn't break the main stream
+                    } catch (e: unknown) {
+                      // Non-fatal - stream state tracking shouldn't break the main stream
                     }
+                    tokenBuffer = '';
+                    lastTokenEmitTime = Date.now();
+                  }
                     tokenBuffer = '';
                     lastTokenEmitTime = Date.now();
                   }

@@ -21,7 +21,7 @@ export class NangoRateLimiter {
   private requestCounts: Map<
     string,
     { count: number; resetTime: number; timestamps: number[] }
-  > = new Map();
+  > = new Map<string, { count: number; resetTime: number; timestamps: number[] }>();
 
   private configs: Record<string, RateLimitConfig>;
 

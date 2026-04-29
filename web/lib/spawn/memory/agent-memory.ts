@@ -158,7 +158,7 @@ export interface AgentMemoryConfig {
 
 class LocalVectorStore {
   private indexPath: string;
-  private index: Map<string, { vector: number[]; entry: MemoryEntry }> = new Map();
+  private index: Map<string, { vector: number[]; entry: MemoryEntry }> = new Map<string, { vector: number[]; entry: MemoryEntry }>();
   private projectId: string | undefined;
 
   constructor(workspaceDir: string, projectId?: string) {
