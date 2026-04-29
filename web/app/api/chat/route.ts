@@ -2926,7 +2926,7 @@ const config: UnifiedAgentConfig = {
                     try {
                       if (ssm) ssm.complete(streamRequestId, doneEventData.finishReason);
                       if (nsc) nsc(streamRequestId);
-                    } catch (e) {
+                    } catch (e: unknown) {
                       chatLogger.warn('Failed to update stream state on completion', {
                         streamRequestId,
                         error: e instanceof Error ? e.message : String(e),
