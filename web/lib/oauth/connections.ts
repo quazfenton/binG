@@ -159,7 +159,7 @@ export async function fetchGitHubRepoFiles(
   path: string = '',
   connectionToken?: string | null,
   maxFiles: number = 100,
-  existingFiles: Map<string, string> = new Map(),
+  existingFiles: Map<string, string> = new Map<string, string>(),
   userId?: string
 ): Promise<Map<string, string>> {
   if (existingFiles.size >= maxFiles) return existingFiles;

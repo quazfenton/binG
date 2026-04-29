@@ -767,7 +767,7 @@ export function getSavingsSummary(): {
  * Clear token history
  */
 export function clearHistory(): void {
-  tokenHistory.length = 0;
+  tokenHistory.splice(0, tokenHistory.length);
 }
 
 // ============================================================================

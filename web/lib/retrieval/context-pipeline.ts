@@ -20,6 +20,7 @@
 import { retrieveHybrid, type HybridRetrievalResult } from "../retrieval/hybrid-retrieval";
 import { createLogger } from "@/lib/utils/logger";
 import { increment } from "../agent/metrics";
+import { mem0Search, buildMem0SystemPrompt, isMem0Configured } from "../powers/mem0-power";
 
 const logger = createLogger("ContextPipeline");
 
@@ -53,8 +54,31 @@ export interface PipelineContextOptions {
   maxTokens?: number;
   /** Existing workspace session context (from buildWorkspaceSessionContext) */
   workspaceContext?: string;
-  /** Memory context string */
+  /**
+   * Pre-computed memory context string. If supplied, the pipeline skips its
+   * own mem0 search and uses this as Source 4. Provided for backward compat.
+   */
   memoryContext?: string;
+  /**
+   * Run mem0 search inside the pipeline. When provided (and mem0 is
+   * configured), the pipeline will issue a timeout-bounded search in parallel
+   * with hybrid retrieval and emit it as Source 4. Ignored if `memoryContext`
+   * is also set (precomputed wins).
+   */
+  memorySearch?: {
+    /** User identifier for scoping memories */
+    userId: string;
+    /** Optional thread/session run_id (used for filtering, but search is user-scoped) */
+    sessionId?: string;
+    /** Optional agent identifier */
+    agentId?: string;
+    /** Max results to retrieve (default 5) */
+    limit?: number;
+    /** Score threshold; results below are dropped (default 0.4) */
+    threshold?: number;
+    /** Per-call timeout (default: sourceTimeoutMs) */
+    timeoutMs?: number;
+  };
   /** Timeout per source in ms (default: 3000) */
   sourceTimeoutMs?: number;
 }
@@ -75,27 +99,71 @@ export async function runContextPipeline(
   const results: ContextSourceResult[] = [];
   const sourceTimeout = opts.sourceTimeoutMs ?? 3_000;
 
-  // ── Source 1: Hybrid retrieval (AST symbols → smart-context fallback) ─────
+  // ── Async sources (run in parallel) ───────────────────────────────────────
+  // Source 1: Hybrid retrieval (AST symbols → smart-context fallback)
+  // Source 4 (when not precomputed): Memory search via mem0
+  const asyncTasks: Array<Promise<ContextSourceResult>> = [];
+
   if (opts.projectId && opts.prompt) {
-    results.push(await withTimeout(
-      "hybrid-retrieval",
-      async () => {
-        const result = await retrieveHybrid({
-          userId: opts.userId,
-          projectId: opts.projectId,
-          prompt: opts.prompt,
-          explicitFiles: opts.explicitFiles,
-          scopePath: opts.scopePath,
-          tabId: opts.tabId,
-          maxContextTokens: opts.maxTokens,
-        });
-        if (result.source === "fallback" || !result.bundle) {
-          throw new Error("Hybrid retrieval returned fallback");
-        }
-        return result.bundle;
-      },
-      sourceTimeout,
-    ));
+    asyncTasks.push(
+      withTimeout(
+        "hybrid-retrieval",
+        async () => {
+          const result = await retrieveHybrid({
+            userId: opts.userId,
+            projectId: opts.projectId,
+            prompt: opts.prompt,
+            explicitFiles: opts.explicitFiles,
+            scopePath: opts.scopePath,
+            tabId: opts.tabId,
+            maxContextTokens: opts.maxTokens,
+          });
+          if (result.source === "fallback" || !result.bundle) {
+            throw new Error("Hybrid retrieval returned fallback");
+          }
+          return result.bundle;
+        },
+        sourceTimeout,
+      ),
+    );
+  }
+
+  const shouldRunMemorySearch =
+    !opts.memoryContext && opts.memorySearch && opts.prompt && isMem0Configured();
+  if (shouldRunMemorySearch && opts.memorySearch) {
+    const ms = opts.memorySearch;
+    asyncTasks.push(
+      withTimeout(
+        "memory",
+        async () => {
+          const res = await mem0Search({
+            query: opts.prompt,
+            userId: ms.userId,
+            sessionId: ms.sessionId,
+            agentId: ms.agentId,
+            limit: ms.limit ?? 5,
+            threshold: ms.threshold ?? 0.4,
+            timeoutMs: ms.timeoutMs ?? sourceTimeout,
+          });
+          if (!res.success || !res.results || res.results.length === 0) {
+            throw new Error("No relevant memories");
+          }
+          const formatted = buildMem0SystemPrompt(res.results, {
+            threshold: ms.threshold ?? 0.4,
+          });
+          if (!formatted) {
+            throw new Error("All memories below threshold");
+          }
+          return formatted;
+        },
+        ms.timeoutMs ?? sourceTimeout,
+      ),
+    );
+  }
+
+  if (asyncTasks.length > 0) {
+    const settled = await Promise.all(asyncTasks);
+    for (const r of settled) results.push(r);
   }
 
   // ── Source 2: Workspace session context (context-pack / file listing) ─────
@@ -118,7 +186,7 @@ export async function runContextPipeline(
     });
   }
 
-  // ── Source 4: Memory context ──────────────────────────────────────────────
+  // ── Source 4 (precomputed legacy): Memory context ─────────────────────────
   if (opts.memoryContext && opts.memoryContext.length > 0) {
     results.push({
       source: "memory",

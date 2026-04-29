@@ -79,7 +79,7 @@ export class VirtualFilesystemService {
   private readonly workspaceRoot: string;
   private readonly workspaces = new Map<string, WorkspaceState>();
   private readonly events = new EventEmitter();
-  private batchManager: Map<string, VFSBatchOperations> = new Map();
+  private batchManager: Map<string, VFSBatchOperations> = new Map<string, VFSBatchOperations>();
 
   /**
    * Get batch operations manager for a specific owner

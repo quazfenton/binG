@@ -341,8 +341,12 @@ export function getRateLimitHeaders(
  */
 export function resetRateLimit(identifier: string, configKey: keyof typeof RATE_LIMIT_CONFIGS): void {
   const config = RATE_LIMIT_CONFIGS[configKey];
-  const key = `${identifier}:${config.windowMs}`;
-  rateLimitStore.delete(key);
+  // Bug 6 fix: checkRateLimit keys include tier suffix; delete all tier variants
+  for (const tier of Object.keys(RATE_LIMIT_TIERS)) {
+    rateLimitStore.delete(\:\:\);
+  }
+  // Also delete legacy key without tier (backward compat)
+  rateLimitStore.delete(\:\);
 }
 
 /**
@@ -350,7 +354,8 @@ export function resetRateLimit(identifier: string, configKey: keyof typeof RATE_
  */
 export function getRateLimitStatus(
   identifier: string,
-  configKey: keyof typeof RATE_LIMIT_CONFIGS
+  configKey: keyof typeof RATE_LIMIT_CONFIGS,
+  tier?: RateLimitTier
 ): { count: number; windowMs: number; maxRequests: number; resetAfter: number } | null {
   const config = RATE_LIMIT_CONFIGS[configKey];
   const key = `${identifier}:${config.windowMs}`;

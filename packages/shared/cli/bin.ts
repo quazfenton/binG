@@ -562,9 +562,8 @@ function openFileInEditor(filePath: string): void {
 
 async function processSSEStream(response: AsyncIterable<any>): Promise<string> {
   let fullResponse = '';
-  let streamDone = false;
-  let collectedDiffs: Array<{ path: string; diff: string; changeType: string }> = [];
-
+  let collectedDiffs: Array<{ path: string; diff: string; changeType: string }> = new Array();
+  
   try {
     for await (const chunk of response) {
       const line = chunk.trim();
@@ -594,7 +593,7 @@ async function processSSEStream(response: AsyncIterable<any>): Promise<string> {
                 console.log(`  ${i}: ${COLORS.primary(fileName)} ${COLORS.muted(shortPath)} [r] revert`);
               });
               console.log(COLORS.success('═'.repeat(55)));
-              pendingFileEdits.length = 0;
+              pendingFileEdits.splice(0, pendingFileEdits.length);
             }
             return fullResponse;
           }
@@ -648,11 +647,12 @@ async function processSSEStream(response: AsyncIterable<any>): Promise<string> {
           break;
       }
     }
-  } catch {
-    streamDone = true;
+  } catch (err) {
+    // Stream errored — return what we have
+    console.log(`\n${COLORS.error('Stream error:')} ${err instanceof Error ? err.message : err}`);
   }
   
-  if (pendingFileEdits.length > 0 || streamDone) {
+  if (pendingFileEdits.length > 0) {
     console.log(`\n\n${COLORS.success('═'.repeat(55))}`);
     console.log(`${COLORS.accent('📁 File Edits:')} ${pendingFileEdits.length} file(s) modified`);
     
@@ -698,9 +698,9 @@ async function processSSEStream(response: AsyncIterable<any>): Promise<string> {
     
     // CRITICAL FIX: Clear pendingFileEdits after stream processing completes
     // This prevents old edits from persisting across chat sessions
-    pendingFileEdits.length = 0;
+    pendingFileEdits.splice(0, pendingFileEdits.length);
   }
-  
+
   return fullResponse;
 }
 
@@ -912,7 +912,7 @@ class CircuitBreaker {
   reset(): void { this.state.failures = 0; this.state.isOpen = false; this.halfOpenSuccesses = 0; }
 }
 
-const providerCircuitBreakers: Map<string, CircuitBreaker> = new Map();
+const providerCircuitBreakers: Map<string, CircuitBreaker> = new Map<string, CircuitBreaker>();
 
 function getCircuitBreaker(provider: string): CircuitBreaker {
   if (!providerCircuitBreakers.has(provider)) {
@@ -1304,7 +1304,7 @@ function analyzeCommandImpact(command: string): CommandImpact {
   // MEDIUM = unknown/unpredictable new commands (requires Enter approval)
   // HIGH = explicitly destructive (rm -rf, format, etc.) — extra warning in red
   const isLocalMode = localMode.isLocal || localMode.isDesktop;
-  const LOCAL_SAFE_COMMANDS = /^\s*(cat|ls|dir|echo|pwd|mkdir|touch|head|tail|grep|find|wc|sort|uniq|npm|pnpm|yarn|bun|npx|node|python|pip|git\s+status|git\s+log|git\s+diff|git\s+branch|git\s+show)\b/i;
+  const LOCAL_SAFE_COMMANDS = /^\s*(cat|ls|dir|echo|pwd|mkdir|touch|head|tail|grep|find|wc|sort|uniq|npm|pnpm|yarn|bun|npx|node|python|pip|git\s+(?:status|log|diff|branch|show))\b/i;
 
   const impact: CommandImpact = {
     command: sanitized,
@@ -1531,7 +1531,7 @@ async function chatLoop(options: { agent?: string; stream?: boolean }): Promise<
     }
     
     if (lowerMessage === 'clear') {
-      messages.length = 0;
+      messages.splice(0, messages.length);
       console.log(COLORS.info('Conversation history cleared'));
       continue;
     }

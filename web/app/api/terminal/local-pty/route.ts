@@ -1722,7 +1722,7 @@ export async function GET(req: NextRequest) {
         // Drain output queue (type-safe, no `any` casts)
         if (s.outputQueue.length > 0) {
           const output = s.outputQueue.join('');
-          s.outputQueue.length = 0; // Clear queue
+          s.outputQueue.splice(0, s.outputQueue.length); // Clear queue
           send({ type: 'pty', data: output });
         }
 

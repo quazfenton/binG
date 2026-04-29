@@ -64,6 +64,9 @@ function getSessionTokenHashSecret(): Buffer {
 /**
  * Account lockout tracking
  * Prevents brute-force attacks by locking accounts after too many failed attempts
+ * 
+ * SECURITY: Includes LRU eviction to prevent memory exhaustion DoS via unique email enumeration
+ * Maximum entries capped at MAX_LOGIN_TRACKED_EMAILS to prevent unbounded Map growth
  */
 interface FailedLoginAttempt {
   email: string;
@@ -72,10 +75,38 @@ interface FailedLoginAttempt {
   userAgent?: string;
 }
 
+const MAX_LOGIN_TRACKED_EMAILS = 10000; // LRU cap to prevent memory exhaustion DoS
 const failedLoginAttempts = new Map<string, FailedLoginAttempt[]>();
+let entryCount = 0; // Track number of unique emails in the Map
+
 const LOCKOUT_THRESHOLD = 5; // Number of failed attempts before lockout
 const LOCKOUT_DURATION_MS = 30 * 60 * 1000; // 30 minutes lockout
 const ATTEMPT_WINDOW_MS = 30 * 60 * 1000; // Track attempts within 30 minutes
+
+/**
+ * Evict oldest entries if we're at capacity (LRU eviction)
+ */
+function evictOldestIfNeeded(): void {
+  if (entryCount <= MAX_LOGIN_TRACKED_EMAILS) return;
+  
+  // Find and remove the oldest entry
+  let oldestKey: string | null = null;
+  let oldestTime = Infinity;
+  
+  for (const [email, attempts] of failedLoginAttempts) {
+    const oldestAttempt = attempts[0];
+    if (oldestAttempt && oldestAttempt.timestamp < oldestTime) {
+      oldestTime = oldestAttempt.timestamp;
+      oldestKey = email;
+    }
+  }
+  
+  if (oldestKey) {
+    failedLoginAttempts.delete(oldestKey);
+    entryCount--;
+    console.warn(`[Auth] LRU eviction: removed oldest entry for ${oldestKey}`);
+  }
+}
 
 /**
  * Check if account is locked due to too many failed login attempts
@@ -111,30 +142,56 @@ function checkAccountLockout(email: string): {
 
 /**
  * Record a failed login attempt
+ * Includes LRU eviction to prevent memory exhaustion DoS
  */
 function recordFailedLogin(email: string, ipAddress: string, userAgent?: string): void {
-  const attempts = failedLoginAttempts.get(email.toLowerCase()) || [];
+  const emailKey = email.toLowerCase();
+  
+  // Check if this email already exists (to track entry count correctly)
+  const exists = failedLoginAttempts.has(emailKey);
+  
+  // LRU eviction: remove oldest entries if at capacity and this is a new email
+  if (!exists && entryCount >= MAX_LOGIN_TRACKED_EMAILS) {
+    evictOldestIfNeeded();
+  }
+  
+  const attempts = failedLoginAttempts.get(emailKey) || [];
   attempts.push({
-    email: email.toLowerCase(),
+    email: emailKey,
     timestamp: Date.now(),
     ipAddress,
     userAgent,
   });
-  failedLoginAttempts.set(email.toLowerCase(), attempts);
+  failedLoginAttempts.set(emailKey, attempts);
+  
+  if (!exists) {
+    entryCount++;
+  }
   
   // Cleanup old attempts (keep only recent ones)
   const now = Date.now();
   const recentAttempts = attempts.filter(a => now - a.timestamp < ATTEMPT_WINDOW_MS);
-  failedLoginAttempts.set(email.toLowerCase(), recentAttempts);
   
-  console.warn(`[Auth] Failed login attempt for ${email} from ${ipAddress} (${recentAttempts.length}/${LOCKOUT_THRESHOLD})`);
+  // If all attempts are now expired, remove the entry entirely
+  if (recentAttempts.length === 0) {
+    failedLoginAttempts.delete(emailKey);
+    entryCount--;
+  } else {
+    failedLoginAttempts.set(emailKey, recentAttempts);
+  }
+  
+  console.warn(`[Auth] Failed login attempt for ${email} from ${ipAddress} (${recentAttempts.length}/${LOCKOUT_THRESHOLD}) [tracking ${entryCount} emails]`);
 }
 
 /**
  * Clear failed login attempts for an email (called on successful login)
  */
 function clearFailedLogins(email: string): void {
-  failedLoginAttempts.delete(email.toLowerCase());
+  const emailKey = email.toLowerCase();
+  if (failedLoginAttempts.has(emailKey)) {
+    failedLoginAttempts.delete(emailKey);
+    entryCount--;
+  }
 }
 
 /**
@@ -150,7 +207,11 @@ export function getFailedLoginCount(email: string): number {
  * Manually clear lockout for an email (for admin use)
  */
 export function clearAccountLockout(email: string): void {
-  failedLoginAttempts.delete(email.toLowerCase());
+  const emailKey = email.toLowerCase();
+  if (failedLoginAttempts.has(emailKey)) {
+    failedLoginAttempts.delete(emailKey);
+    entryCount--;
+  }
 }
 
 /**
