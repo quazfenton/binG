@@ -100,7 +100,7 @@ export interface JwtPayload {
   email: string;
   type?: string;
   jti: string; // Unique token identifier for blacklist
-  tokenVersion?: number; // For token rotation on password change
+  tokenVersion: number; // HIGH-12 fix: Required — checked on verify against DB value
 }
 
 export interface AuthResult {
@@ -108,6 +108,7 @@ export interface AuthResult {
   userId?: string;
   email?: string;
   error?: string;
+  tokenVersion?: number; // Exposed for downstream checks
 }
 
 /**
@@ -193,10 +194,34 @@ export async function verifyAuth(request: NextRequest): Promise<AuthResult> {
         audience: 'bing-users', // Validate audience
       }) as JwtPayload;
 
+      // HIGH-12 fix: Check tokenVersion against database value
+      // If the user's tokenVersion has been incremented (password change, admin revocation),
+      // all previously issued tokens are invalid.
+      // HIGH-12 fix: Default to 1 for tokens missing tokenVersion (backward compat)
+      // DB default is also 1, so existing tokens (with no version field) will match
+      // and not be incorrectly rejected on deploy.
+      const tokenVersion = decoded.tokenVersion ?? 1;
+      try {
+        const dbTokenVersion = getUserTokenVersion(decoded.userId);
+        if (dbTokenVersion !== null && tokenVersion < dbTokenVersion) {
+          logger.warn('Token version mismatch — token revoked by password change or admin action', {
+            userId: decoded.userId,
+            tokenVersion,
+            dbTokenVersion,
+          });
+          return { success: false, error: 'Token has been revoked' };
+        }
+      } catch (versionError) {
+        // If DB lookup fails, allow the token (fail open for availability)
+        // but log loudly so ops can investigate
+        logger.error('Token version check failed, allowing token (fail open)', versionError as Error);
+      }
+
       return {
         success: true,
         userId: decoded.userId,
-        email: decoded.email
+        email: decoded.email,
+        tokenVersion,
       };
     } catch (jwtError) {
       const error = jwtError instanceof Error ? jwtError : new Error('JWT verification failed');
@@ -218,15 +243,65 @@ export async function verifyAuth(request: NextRequest): Promise<AuthResult> {
   }
 }
 
+/**
+ * HIGH-12 fix: Get current token version for a user from the database.
+ * Returns null if DB not available (fail open for availability).
+ */
+function getUserTokenVersion(userId: string): number | null {
+  try {
+    // Lazy load to avoid circular deps at module level
+    const { getDatabase } = require('../database/connection');
+    const db = getDatabase();
+    if (!db) return null;
+    const row = db.prepare('SELECT token_version FROM users WHERE id = ?').get(userId) as any;
+    return row?.token_version ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * HIGH-12 fix: Increment a user's token version, invalidating all previous JWTs.
+ * Called on password change, admin revocation, etc.
+ */
+export function incrementUserTokenVersion(userId: string): number {
+  try {
+    const { getDatabase } = require('../database/connection');
+    const db = getDatabase();
+    if (!db) {
+      logger.error('Cannot increment token version — DB not available', { userId });
+      return -1;
+    }
+    // NOTE: token_version column should be added via DB schema migration.
+    // ALTER TABLE is NOT run here on every call — too expensive for hot path.
+    // If column doesn't exist, the query below will throw and be caught.
+    const result = db.prepare('UPDATE users SET token_version = COALESCE(token_version, 1) + 1 WHERE id = ?').run(userId);
+    const newVersion = db.prepare('SELECT token_version FROM users WHERE id = ?').get(userId) as any;
+    logger.info('Token version incremented', { userId, newVersion: newVersion?.token_version });
+    return newVersion?.token_version ?? -1;
+  } catch (error) {
+    logger.error('Failed to increment token version', error as Error);
+    return -1;
+  }
+}
+
 export function generateToken(payload: { userId: string; email: string; type?: string; tokenVersion?: number }): string {
-  const expiresIn = payload.type === 'password_reset' ? '1h' : '7d';
+  // MED-1 fix: Access token TTL reduced from 7 days to 1 hour.
+  // Long-lived sessions should use refresh tokens, not long-lived JWTs.
+  // Password reset tokens use shorter TTL (15 min) for security.
+  const expiresIn = payload.type === 'password_reset' ? '15m' : '1h';
   
   // Generate unique token identifier (JTI) for blacklist support
   const jti = require('crypto').randomBytes(16).toString('hex');
 
+  // HIGH-12 fix: Always include tokenVersion in JWT payload
+  // Default to 1 if not provided (backward compatibility with existing tokens)
+  const tokenVersion = payload.tokenVersion ?? 1;
+  
   // Add issuer and audience claims for better security
   const fullPayload = {
     ...payload,
+    tokenVersion,
     jti,
     iss: 'bing-app',
     aud: 'bing-users',
@@ -250,13 +325,16 @@ export function generateToken(payload: { userId: string; email: string; type?: s
 
 /**
  * Invalidate all tokens for a user (e.g., on password change)
- * Increments token version, making all previous tokens invalid
+ * HIGH-12 fix: Now actually increments tokenVersion in the database,
+ * making all previously issued JWTs fail the version check on verify.
  */
 export async function invalidateAllUserTokens(userId: string): Promise<void> {
-  // In a real implementation, this would:
-  // 1. Increment tokenVersion in database
-  // 2. Optionally blacklist all active tokens
-  logger.info('All tokens invalidated for user', { userId });
+  const newVersion = incrementUserTokenVersion(userId);
+  if (newVersion < 0) {
+    logger.error('Failed to invalidate tokens for user — token version not incremented', { userId });
+  } else {
+    logger.info('All tokens invalidated for user via token version increment', { userId, newVersion });
+  }
 }
 
 /**

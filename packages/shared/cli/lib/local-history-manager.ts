@@ -74,8 +74,8 @@ export class LocalHistoryProvider {
       const filePath = path.join(this.historyDir, file);
       const stats = await fs.stat(filePath);
       
-      // Prune files older than cutoff AND larger than 100KB (archive cleanup)
-      if (stats.mtimeMs < cutoffTime && stats.size > 100 * 1024) {
+      // Prune files older than cutoff
+      if (stats.mtimeMs < cutoffTime) {
         await fs.remove(filePath);
         console.log(`[History] Pruned ${file}`);
       }
@@ -84,14 +84,22 @@ export class LocalHistoryProvider {
 
   async getHistory(day?: string): Promise<any[]> {
     const date = day || new Date().toISOString().split('T')[0];
-    const filePath = path.join(this.historyDir, `history-${date}.json`);
+    const files = (await fs.readdir(this.historyDir))
+      .filter((file) => file.startsWith(`history-${date}`) && file.endsWith('.json'))
+      .sort();
     
-    if (!fs.existsSync(filePath)) {
+    if (files.length === 0) {
       return [];
     }
     
     try {
-      return await fs.readJson(filePath);
+      const histories = await Promise.all(
+        files.map(async (file) => {
+          const content = await fs.readJson(path.join(this.historyDir, file));
+          return Array.isArray(content) ? content : [];
+        })
+      );
+      return histories.flat();
     } catch {
       return [];
     }

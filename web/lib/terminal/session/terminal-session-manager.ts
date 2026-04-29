@@ -113,6 +113,9 @@ let stmtGetByUser: BetterSqlite3.Statement | null = null
 const SESSION_TTL_MS = 4 * 60 * 60 * 1000 // 4 hours
 const CLEANUP_INTERVAL_MS = 30 * 60 * 1000 // 30 minutes
 
+// MED-4 fix: Per-user session limit to prevent session hoarding
+const MAX_SESSIONS_PER_USER = parseInt(process.env.MAX_TERMINAL_SESSIONS_PER_USER || '5', 10) || 5;
+
 // Initialize SQLite
 try {
   const { default: getDatabase } = require('../../database/connection') as { default: () => BetterSqlite3.Database }
@@ -363,6 +366,18 @@ export class TerminalSessionManager {
    * Create session for user
    */
   async createSession(options: CreateSessionOptions): Promise<UserTerminalSession> {
+    // MED-4 fix: Enforce per-user session limit
+    const existingSessions = this.getSessionsByUserId(options.userId)
+      .filter(s => s.status === 'active' || s.status === 'idle');
+    if (existingSessions.length >= MAX_SESSIONS_PER_USER) {
+      // Close the oldest session to make room
+      const oldest = existingSessions.sort((a, b) => a.lastActive - b.lastActive)[0];
+      if (oldest) {
+        logger.info(`Closing oldest session ${oldest.sessionId} for user ${options.userId} (limit: ${MAX_SESSIONS_PER_USER})`);
+        this.activeSessions.delete(oldest.sessionId);
+        this.updateSession(oldest.sessionId, { status: 'suspended' });
+      }
+    }
     const {
       userId,
       providerType = 'daytona',
@@ -446,7 +461,16 @@ export class TerminalSessionManager {
     this.saveSession(session)
     this.activeSessions.set(session.sessionId, session)
 
-    logger.info(`Created new session ${session.sessionId} for user ${userId} on ${providerType}`)
+    // MED-7 fix: Enhanced audit trail — log session creation with structured metadata
+    logger.info(`Created new session for user`, {
+      sessionId: session.sessionId,
+      userId,
+      providerType,
+      mode,
+      sandboxId: handle.id,
+      event: 'session_created',
+      timestamp: new Date().toISOString(),
+    })
     return session
   }
 
@@ -494,7 +518,17 @@ export class TerminalSessionManager {
     })
 
     this.activeSessions.delete(sessionId)
-    logger.info(`Disconnected session ${sessionId}${snapshotId ? ' with snapshot' : ''}`)
+
+    // MED-7 fix: Enhanced audit trail — log session disconnect with structured metadata
+    logger.info('Session disconnected', {
+      sessionId,
+      userId: session.userId,
+      reason,
+      hadSnapshot: !!snapshotId,
+      snapshotId,
+      event: 'session_disconnected',
+      timestamp: new Date().toISOString(),
+    })
 
     return { success: true, snapshotId }
   }
@@ -998,19 +1032,32 @@ export class TerminalSessionManager {
    * Validate session structure
    */
   private validateSession(session: any): session is TerminalSessionState {
-    return (
-      session &&
-      typeof session.sessionId === 'string' &&
-      typeof session.sandboxId === 'string' &&
-      typeof session.ptySessionId === 'string' &&
-      typeof session.userId === 'string' &&
-      typeof session.mode === 'string' &&
-      typeof session.cwd === 'string' &&
-      typeof session.cols === 'number' &&
-      typeof session.rows === 'number' &&
-      typeof session.lastActive === 'number' &&
-      Array.isArray(session.history)
-    )
+    // MED-5 fix: Enhanced validation including metadata fields
+    if (
+      !session ||
+      typeof session.sessionId !== 'string' ||
+      typeof session.sandboxId !== 'string' ||
+      typeof session.ptySessionId !== 'string' ||
+      typeof session.userId !== 'string' ||
+      typeof session.mode === 'string' && !['pty', 'command-mode', 'sandbox-cmd', 'local'].includes(session.mode) ||
+      typeof session.cwd !== 'string' ||
+      typeof session.cols !== 'number' ||
+      session.cols < 1 || session.cols > 500 ||
+      typeof session.rows !== 'number' ||
+      session.rows < 1 || session.rows > 200 ||
+      typeof session.lastActive !== 'number' ||
+      !Array.isArray(session.history)
+    ) {
+      return false;
+    }
+    // Validate metadata if present
+    if (session.metadata !== undefined && session.metadata !== null) {
+      if (typeof session.metadata !== 'object' || Array.isArray(session.metadata)) return false;
+      // Validate known metadata keys are of correct type
+      if ('autoSnapshotEnabled' in session.metadata && typeof session.metadata.autoSnapshotEnabled !== 'boolean') return false;
+      if ('restoredFromSnapshot' in session.metadata && typeof session.metadata.restoredFromSnapshot !== 'boolean') return false;
+    }
+    return true;
   }
 
   /**

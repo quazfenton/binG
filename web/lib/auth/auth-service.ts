@@ -79,15 +79,26 @@ const MAX_LOGIN_TRACKED_EMAILS = 10000; // LRU cap to prevent memory exhaustion 
 const failedLoginAttempts = new Map<string, FailedLoginAttempt[]>();
 let entryCount = 0; // Track number of unique emails in the Map
 
-const LOCKOUT_THRESHOLD = 5; // Number of failed attempts before lockout
-const LOCKOUT_DURATION_MS = 30 * 60 * 1000; // 30 minutes lockout
+const LOCKOUT_THRESHOLD = 5; // Number of failed attempts before first lockout
 const ATTEMPT_WINDOW_MS = 30 * 60 * 1000; // Track attempts within 30 minutes
+
+// HIGH-7 fix: Progressive lockout durations (exponential backoff)
+// 1st lockout: 5 min, 2nd: 30 min, 3rd: 2 hours, 4th+: 24 hours
+const LOCKOUT_DURATIONS_MS = [
+  5 * 60 * 1000,     // 5 minutes (1st lockout)
+  30 * 60 * 1000,   // 30 minutes (2nd lockout)
+  2 * 60 * 60 * 1000, // 2 hours (3rd lockout)
+  24 * 60 * 60 * 1000, // 24 hours (4th+ lockout)
+];
+
+// Track how many times an account has been locked (for escalation)
+const lockoutCountMap = new Map<string, number>();
 
 /**
  * Evict oldest entries if we're at capacity (LRU eviction)
  */
 function evictOldestIfNeeded(): void {
-  if (entryCount <= MAX_LOGIN_TRACKED_EMAILS) return;
+  if (entryCount < MAX_LOGIN_TRACKED_EMAILS) return;
   
   // Find and remove the oldest entry
   let oldestKey: string | null = null;
@@ -103,6 +114,7 @@ function evictOldestIfNeeded(): void {
   
   if (oldestKey) {
     failedLoginAttempts.delete(oldestKey);
+    lockoutCountMap.delete(oldestKey); // HIGH-7 fix: Clean up lockout counts alongside attempts
     entryCount--;
     console.warn(`[Auth] LRU eviction: removed oldest entry for ${oldestKey}`);
   }
@@ -116,16 +128,30 @@ function checkAccountLockout(email: string): {
   unlockAfter?: number;
   remainingAttempts?: number;
 } {
-  const attempts = failedLoginAttempts.get(email.toLowerCase()) || [];
+  const emailKey = email.toLowerCase();
+  const attempts = failedLoginAttempts.get(emailKey) || [];
   const now = Date.now();
   
   // Filter to attempts within the window
   const recentAttempts = attempts.filter(a => now - a.timestamp < ATTEMPT_WINDOW_MS);
   
   if (recentAttempts.length >= LOCKOUT_THRESHOLD) {
-    // Find the oldest attempt to calculate unlock time
-    const oldestAttempt = recentAttempts[0];
-    const unlockAfter = oldestAttempt.timestamp + LOCKOUT_DURATION_MS;
+    // HIGH-7 fix: Progressive lockout — escalation based on how many times locked
+    const lockoutCount = lockoutCountMap.get(emailKey) || 0;
+    const durationIndex = Math.min(lockoutCount, LOCKOUT_DURATIONS_MS.length - 1);
+    const lockoutDuration = LOCKOUT_DURATIONS_MS[durationIndex];
+    
+    // Find the most recent attempt to calculate unlock time
+    const latestAttempt = recentAttempts[recentAttempts.length - 1];
+    const unlockAfter = latestAttempt.timestamp + lockoutDuration;
+    
+    // If unlock time has passed, account is no longer locked
+    if (now >= unlockAfter) {
+      return {
+        locked: false,
+        remainingAttempts: LOCKOUT_THRESHOLD,
+      };
+    }
     
     return {
       locked: true,
@@ -180,7 +206,16 @@ function recordFailedLogin(email: string, ipAddress: string, userAgent?: string)
     failedLoginAttempts.set(emailKey, recentAttempts);
   }
   
-  console.warn(`[Auth] Failed login attempt for ${email} from ${ipAddress} (${recentAttempts.length}/${LOCKOUT_THRESHOLD}) [tracking ${entryCount} emails]`);
+  // HIGH-7 fix: If this attempt triggers a lockout, increment the lockout count for escalation
+  if (recentAttempts.length >= LOCKOUT_THRESHOLD) {
+    const currentCount = lockoutCountMap.get(emailKey) || 0;
+    lockoutCountMap.set(emailKey, currentCount + 1);
+    const durationIndex = Math.min(currentCount, LOCKOUT_DURATIONS_MS.length - 1);
+    const durationMin = Math.round(LOCKOUT_DURATIONS_MS[durationIndex] / 60000);
+    console.warn(`[Auth] Account LOCKED (escalation level ${currentCount + 1}): ${email} from ${ipAddress} — lockout duration: ${durationMin} minutes`);
+  } else {
+    console.warn(`[Auth] Failed login attempt for ${email} from ${ipAddress} (${recentAttempts.length}/${LOCKOUT_THRESHOLD}) [tracking ${entryCount} emails]`);
+  }
 }
 
 /**
@@ -192,6 +227,10 @@ function clearFailedLogins(email: string): void {
     failedLoginAttempts.delete(emailKey);
     entryCount--;
   }
+  // HIGH-7 fix: Reset lockout escalation on successful login
+  // (but keep the count for logging — reset only if it's been >24h since last lockout)
+  // This prevents indefinite escalation from ancient lockouts
+  lockoutCountMap.delete(emailKey);
 }
 
 /**
@@ -428,7 +467,7 @@ export class AuthService {
       // Return success - OAuth users are auto-verified, regular users need to verify
       return {
         success: true,
-        user: this.mapDbUserToUser(user),
+        user: user,
         requiresVerification: !credentials.emailVerified,
         message: credentials.emailVerified
           ? 'Registration successful! You are now logged in.'
@@ -485,6 +524,17 @@ export class AuthService {
 
       // SUCCESS: Clear failed login attempts on successful login
       clearFailedLogins(credentials.email);
+
+      // CRIT-4 fix: Invalidate all previous sessions for this user before creating a new one.
+      // This prevents session fixation attacks where an attacker pre-sets a session cookie
+      // and the victim's login doesn't invalidate it.
+      try {
+        this.invalidateAllSessionsForUser(dbUser.id);
+        logger.info('Invalidated previous sessions on login', { userId: dbUser.id });
+      } catch (cleanupError) {
+        // Log but don't fail login if session cleanup fails
+        logger.error('Failed to invalidate previous sessions on login', cleanupError as Error);
+      }
 
       // Update last login
       this.updateLastLogin(dbUser.id);
@@ -782,6 +832,28 @@ export class AuthService {
       this.dbOps.cleanupExpiredSessions();
     } catch (error) {
       console.error('Session cleanup error:', error);
+    }
+  }
+
+  /**
+   * Invalidate all active sessions for a user.
+   * Used on login (CRIT-4: session fixation prevention) and password change.
+   */
+  async invalidateAllSessionsForUser(userId: string): Promise<number> {
+    try {
+      await this.ensureDatabase();
+      const stmt = this.db.prepare(
+        'DELETE FROM user_sessions WHERE user_id = ?'
+      );
+      const result = stmt.run(userId);
+      const count = result.changes || 0;
+      if (count > 0) {
+        logger.info('Invalidated all sessions for user', { userId, count });
+      }
+      return count;
+    } catch (error) {
+      logger.error('Failed to invalidate sessions for user', error as Error);
+      return 0;
     }
   }
 

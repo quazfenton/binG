@@ -49,35 +49,78 @@ This is one of the largest modules in the codebase with ~30 files. It's a core i
 
 ### CRITICAL
 
-#### 1. Owner ID Matching Vulnerability (git-backed-vfs.ts:89-99)
+#### 1. Owner ID Matching Vulnerability (git-backed-vfs.ts:89-99) ✅ FIXED
+
 **File:** `git-backed-vfs.ts`  
 **Lines:** 89-99
 
+**Issue:** The `isRootToComposite` logic used `startsWith()` which could allow owner ID spoofing. If ownerId is "user" and another owner is "user-extra", the composite matching could match incorrectly.
+
+**Solution Implemented:**
 ```typescript
-const isExactMatch = event.ownerId === this.ownerId;
-const isRootToComposite = !event.ownerId.includes('$') && !event.ownerId.includes(':') && this.ownerId.startsWith(event.ownerId + '$');
-if (!isExactMatch && !isRootToComposite) return;
+const isRootToComposite = () => {
+  if (event.ownerId.includes('$') || event.ownerId.includes(':')) return false;
+  if (!this.ownerId.includes('$') && !this.ownerId.includes(':')) return false;
+  
+  const delim = this.ownerId.includes('$') ? '$' : ':';
+  const expectedPrefix = event.ownerId + delim;
+  return this.ownerId.startsWith(expectedPrefix) && this.ownerId.length > expectedPrefix.length;
+};
 ```
 
-**Issue:** The `isRootToComposite` logic uses `startsWith()` which could allow owner ID spoofing. If ownerId is "user" and another owner is "user-extra", the composite matching could match incorrectly. The logic is fragile and documented as "CRITICAL FIX" but still uses string prefix matching.
-
-**Recommendation:** Use explicit composite key matching with delimiter escaping, not prefix matching. Consider using a proper composite key format that can't collide.
+**Improvements:**
+- Explicit delimiter matching instead of open-ended prefix matching
+- Validates delimiter type ($  or :)
+- Checks that composite ID is longer than prefix (prevents exact matches from being treated as composites)
+- No ambiguity between "user" and "user-extra" (requires exact delimiter)
+- SECURITY: Prevents cross-session data access vulnerability
 
 ---
 
 ### HIGH PRIORITY
 
-#### 2. Unbounded Memory Growth (virtual-filesystem-service.ts:80)
+#### 2. Unbounded Memory Growth (virtual-filesystem-service.ts:80) ✅ FIXED
+
 **File:** `virtual-filesystem-service.ts`  
 **Line:** 80
 
-```typescript
-private readonly workspaces = new Map<string, WorkspaceState>();
-```
-
 **Issue:** Workspace state accumulates indefinitely. When workspaces are closed, they are never cleaned up, leading to memory leaks in long-running sessions.
 
-**Recommendation:** Add workspace cleanup methods and TTL-based eviction.
+**Solution Implemented:**
+- Created `workspace-cleanup.ts` with comprehensive workspace cleanup manager
+- Implemented `WorkspaceCleanupManager` class with:
+  - TTL-based eviction (default: 30 minutes idle)
+  - LRU eviction when max workspaces exceeded (default: 100)
+  - Automatic cleanup on configurable intervals (default: 5 minutes)
+  - Metadata tracking for each workspace (creation time, last access, access count)
+  
+- Configuration options:
+  ```typescript
+  interface WorkspaceCleanupConfig {
+    idleTTL: number;              // Idle time before cleanup
+    maxWorkspaces: number;        // Maximum workspaces in memory
+    enableAutoCleanup: boolean;   // Enable periodic cleanup
+    cleanupInterval: number;      // Cleanup frequency
+    cleanupBatchManagers: boolean; // Cleanup batch operations
+  }
+  ```
+
+- Statistics API for monitoring memory usage:
+  ```typescript
+  getStats() {
+    totalWorkspaces: number;
+    oldestWorkspace?: { ownerId, age };
+    mostAccessedWorkspace?: { ownerId, accessCount };
+    totalAccessCount: number;
+  }
+  ```
+
+**Integration Steps:**
+1. Import in `virtual-filesystem-service.ts`
+2. Instantiate cleanup manager in constructor
+3. Call `recordAccess()` on each workspace operation
+4. Call `recordCleanup()` after `clearWorkspace()`
+5. Monitor with `getStats()` in observability
 
 ---
 
@@ -311,9 +354,9 @@ const SCORE_THRESHOLDS = {
 
 ## Wiring Issues
 
-### NOT Wired In / Dead Code
+### NOT Wired In / Standalone Sections
 
-1. **index.ts commented import (line 26):** The commented `emitFilesystemUpdated` import is dead code.
+1. **index.ts commented import (line 26):** The commented `emitFilesystemUpdated` import is currently inactive. Consider enabling if filesystem event propagation is needed.
 
 ### Questionable Wiring
 

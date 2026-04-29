@@ -18,6 +18,7 @@ import { execSchemaFile } from '@/lib/database/schema';
 import { emitEvent } from './bus';
 import { createLogger } from '@/lib/utils/logger';
 import { EventTypes } from './schema';
+import { expireOldApprovals } from './human-in-loop';
 
 const logger = createLogger('Events:Scheduler');
 
@@ -129,6 +130,7 @@ export async function runScheduler(): Promise<{
   emitted: number;
   skipped: number;
   errors: number;
+  approvalsExpired: number;
 }> {
   const db = getDatabase();
   const now = new Date();
@@ -138,7 +140,15 @@ export async function runScheduler(): Promise<{
   // Check if database is ready
   if (!db) {
     logger.warn('Database not ready, skipping scheduler run');
-    return { emitted: 0, skipped: 0, errors: 0 };
+    return { emitted: 0, skipped: 0, errors: 0, approvalsExpired: 0 };
+  }
+
+  // MED-8 fix: Sweep expired pending approvals on every scheduler run
+  let approvalsExpired = 0;
+  try {
+    approvalsExpired = await expireOldApprovals();
+  } catch (error: any) {
+    logger.warn('Failed to expire old approvals', { error: error.message });
   }
 
   try {
@@ -225,10 +235,10 @@ export async function runScheduler(): Promise<{
       }
     }
 
-    return { emitted, skipped, errors };
+    return { emitted, skipped, errors, approvalsExpired };
   } catch (error: any) {
     logger.error('Scheduler failed', { error: error.message });
-    return { emitted: 0, skipped: 0, errors: 1 };
+    return { emitted: 0, skipped: 0, errors: 1, approvalsExpired: 0 };
   }
 }
 

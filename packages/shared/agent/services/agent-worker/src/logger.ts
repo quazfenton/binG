@@ -1,5 +1,9 @@
 /**
  * Simple logger for agent services
+ *
+ * NOTE (MED-10): This file is duplicated in agent-gateway/src/logger.ts.
+ * Both services are standalone microservices that cannot import from @/lib/utils/logger.
+ * TODO: Extract to a shared @bing/shared/logger package for DRY.
  */
 
 export interface LogLevel {

@@ -205,6 +205,15 @@ export async function POST(req: NextRequest) {
       DELETE FROM user_sessions WHERE user_id = ?
     `).run(userId);
 
+    // HIGH-12 fix: Invalidate all existing JWTs by incrementing token version
+    try {
+      const { incrementUserTokenVersion } = await import('@/lib/auth/jwt');
+      incrementUserTokenVersion(userId);
+    } catch (tokenVersionError) {
+      // Log but don't fail — session deletion is the primary invalidation
+      console.error('[Security] Failed to increment token version on password reset:', tokenVersionError);
+    }
+
     // Log security event
     console.log(`[Security] Password reset successful for user ${user.email} (ID: ${userId})`);
 

@@ -1,10 +1,33 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { authService } from '@/lib/auth/auth-service';
-import { verifyAuth, generateToken } from '@/lib/auth/jwt';
+import { generateToken } from '@/lib/auth/jwt';
+import { RateLimiter } from '@/lib/security';
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('Auth:Refresh');
+
+// HIGH-5 fix: Rate limit refresh endpoint — 10 requests per hour per user/IP
+const refreshRateLimiter = new RateLimiter(10, 60 * 60 * 1000);
 
 export async function POST(request: NextRequest) {
   try {
-    // Try session-based refresh first
+    // HIGH-5 fix: Rate limit refresh requests
+    const clientIP =
+      request.headers.get('cf-connecting-ip') ||
+      request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
+      request.headers.get('x-real-ip') ||
+      'unknown';
+
+    if (!refreshRateLimiter.isAllowed(clientIP)) {
+      const retryAfter = refreshRateLimiter.getRetryAfter(clientIP);
+      logger.warn('Refresh rate limit exceeded', { ip: clientIP, retryAfter });
+      return NextResponse.json(
+        { error: 'Too many refresh requests', retryAfter },
+        { status: 429, headers: { 'Retry-After': retryAfter.toString() } }
+      );
+    }
+
+    // Try session-based refresh first (primary path)
     const sessionId = request.cookies.get('session_id')?.value;
 
     if (sessionId) {
@@ -17,6 +40,18 @@ export async function POST(request: NextRequest) {
           email: sessionResult.user.email
         });
 
+        // HIGH-5 fix: Per-user rate limit for authenticated refresh
+        if (sessionResult.user.id) {
+          const userKey = `user:${sessionResult.user.id}`;
+          if (!refreshRateLimiter.isAllowed(userKey)) {
+            logger.warn('Per-user refresh rate limit exceeded', { userId: sessionResult.user.id });
+            return NextResponse.json(
+              { error: 'Too many refresh requests' },
+              { status: 429 }
+            );
+          }
+        }
+
         return NextResponse.json({
           success: true,
           token: newToken,
@@ -25,31 +60,26 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Fallback to JWT-based refresh
-    const authResult = await verifyAuth(request);
-
-    if (!authResult.success || !authResult.userId) {
+    // HIGH-5 fix: Remove JWT fallback — refresh tokens should be the only way to extend sessions.
+    // Previously, a valid JWT alone could refresh, allowing stolen JWTs to persist indefinitely.
+    // Now, only a valid session cookie (refresh token) can refresh — JWT-only requests are rejected.
+    const authHeader = request.headers.get('authorization');
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      // JWT-only refresh is no longer allowed — attacker with stolen JWT could refresh forever
+      logger.warn('JWT-only refresh attempt rejected (session cookie required)', {
+        ip: clientIP,
+      });
       return NextResponse.json(
-        { error: 'Invalid or expired token' },
+        { error: 'Session cookie required for token refresh. Re-authenticate to obtain a new session.' },
         { status: 401 }
       );
     }
 
-    // Generate new token (email is optional)
-    const newToken = generateToken({
-      userId: authResult.userId,
-      email: authResult.email
-    });
-
-    // Get user details
-    const userId = authResult.userId || '';
-    const user = await authService.getUserById(userId);
-
-    return NextResponse.json({
-      success: true,
-      token: newToken,
-      user: user
-    });
+    // No session cookie and no valid auth
+    return NextResponse.json(
+      { error: 'Invalid or expired session. Please log in again.' },
+      { status: 401 }
+    );
 
   } catch (error) {
     console.error('Token refresh error:', error);

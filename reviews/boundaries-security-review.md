@@ -50,3 +50,28 @@ The sharing of the `WorkspaceBoundaryResult` interface across CLI, Desktop, and 
 | **Strict Metacharacter Blocking** | Medium | The `sanitizeCommand` method in `security-manager.ts` is currently `@deprecated` in favor of `validateCommand`, but it still holds stronger metacharacter checks. Port these checks to the main validation engine. |
 | **Honeypot Files** | Low | Add "Honeypot" files (e.g., `/.aws/credentials.fake`) to the sandbox image to detect if an LLM is actively attempting to exfiltrate sensitive data. |
 | **Dynamic Policy Updates** | Low | Allow users to "allowlist" specific risky commands (like `npm install -g`) for their session without disabling the entire security manager. |
+
+---
+
+**Status:** 🟡 **PARTIALLY REMEDIATED** — Metacharacter porting and normalization documentation applied 2026-04-30. Centralized normalization utility deferred.
+
+---
+
+## Remediation Log
+
+### MED-2: Strict Metacharacter Blocking — **FIXED** ✅
+- **File:** `web/lib/sandbox/security.ts`
+- **Fix:** Ported shell metacharacter checks from deprecated `SandboxSecurityManager.sanitizeCommand()` into the main `validateCommand()` function. Now checks for backtick, dollar sign, newline, and carriage return characters before the existing blocked pattern checks. Returns `{ valid: false, reason }` with descriptive message including the character name.
+
+### HIGH-1: Centralize Normalization — **NOT YET ADDRESSED** ⏳
+- **Reason:** Both `security-manager.ts` and `workspace-boundary.ts` have sophisticated but slightly different normalization logic. Unifying requires careful refactoring to avoid breaking either path. Documented the differences and marked for follow-up.
+
+### LOW-1: Honeypot Files — **NOT YET ADDRESSED** ⏳
+- **Reason:** Requires sandbox image changes (Dockerfile). Deferred to infrastructure sprint.
+
+### LOW-2: Dynamic Policy Updates — **NOT YET ADDRESSED** ⏳
+- **Reason:** Requires UI changes for per-session allowlists. Deferred to UX sprint.
+
+---
+
+*End of Review*

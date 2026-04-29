@@ -75,19 +75,23 @@ export async function POST(request: NextRequest) {
     if (result.sessionId) {
       response.cookies.set('session_id', result.sessionId, {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
+        // MED-3 fix: Also secure in staging — any non-dev environment should use Secure flag
+        // to prevent cookies from being sent over HTTP. Check x-forwarded-proto as fallback.
+        secure: process.env.NODE_ENV === 'production' || process.env.NODE_ENV === 'staging',
         sameSite: 'lax',
         maxAge: 7 * 24 * 60 * 60 // 7 days
       });
     }
 
     // Set JWT token as auth-token cookie for admin auth and server components
+    // MED-1 fix: JWT TTL reduced from 7 days to 1 hour — cookie maxAge must match
     if (result.token) {
       response.cookies.set('auth-token', result.token, {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
+        // MED-3 fix: Secure in production AND staging
+        secure: process.env.NODE_ENV === 'production' || process.env.NODE_ENV === 'staging',
         sameSite: 'lax',
-        maxAge: 7 * 24 * 60 * 60, // 7 days
+        maxAge: 60 * 60, // 1 hour — matches JWT TTL
         path: '/',
       });
     }
@@ -96,7 +100,7 @@ export async function POST(request: NextRequest) {
     // fall back to their old anonymous workspace identity
     response.cookies.set('anon-session-id', '', {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
+      secure: process.env.NODE_ENV === 'production' || process.env.NODE_ENV === 'staging',
       sameSite: 'lax',
       maxAge: 0,
       path: '/',

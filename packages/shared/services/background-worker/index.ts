@@ -10,6 +10,8 @@
  * - File system watching for changes
  * - Vector database synchronization
  * - Background job processing
+ * - Race condition prevention during indexing
+ * - Concurrent operation limits for stability
  */
 
 import { createServer } from 'http';

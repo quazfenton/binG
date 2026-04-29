@@ -311,9 +311,6 @@ export function setWorkspaceRoot(workspacePath: string): void {
   settings.workspace.root = workspacePath;
   settings.workspace.lastOpened = new Date().toISOString();
   saveSettings(settings);
-  
-  // Also update environment variable for consistency
-  process.env.DESKTOP_WORKSPACE_ROOT = workspacePath;
 }
 
 // ============================================================================

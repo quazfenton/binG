@@ -165,7 +165,7 @@ export function setAuthCookie(
   }
 ): void {
   const {
-    maxAge = 86400, // 24 hours
+    maxAge = 3600, // 1 hour — matches JWT TTL
     secure = process.env.NODE_ENV === 'production',
     sameSite = 'strict',
     path = '/',

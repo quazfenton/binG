@@ -155,14 +155,16 @@ export function withAuth<T extends NextResponse>(
     };
 
     try {
-      // Rate limiting check
+      // === CRIT-1 fix: Pre-auth rate limit check (IP-based, unauthenticated) ===
+      // This prevents unauthenticated flood attacks before we do expensive JWT verification.
+      // Post-auth per-user rate limiting is applied below after authentication succeeds.
       if (rateLimit) {
         const limiter = requiredRoles.length > 0 ? authRateLimiter : apiRateLimiter;
         
         if (!limiter.isAllowed(clientIP)) {
           const retryAfter = limiter.getRetryAfter(clientIP);
           
-          logger.warn('Rate limit exceeded', { 
+          logger.warn('Rate limit exceeded (IP-based, pre-auth)', { 
             ip: clientIP, 
             path: request.nextUrl.pathname,
             retryAfter,
@@ -195,90 +197,11 @@ export function withAuth<T extends NextResponse>(
         authResult.rateLimitRemaining = limiter.getRemaining(clientIP);
       }
 
-      // Authentication check
+      // Authentication check — try in order: Bearer JWT → Cookie → Desktop bypass → Anonymous
       const authHeader = request.headers.get('authorization');
 
-      // Desktop mode: only bypass auth for allowed paths (not all requests)
-      if (!authHeader || !authHeader.startsWith('Bearer ')) {
-        // Check if this path is allowed for desktop bypass
-        const isBypassAllowed = await checkDesktopBypass(request);
-
-        if (isBypassAllowed) {
-          const desktopUser = await getDesktopUser(request);
-          if (desktopUser) {
-            // Desktop bypass allowed, but role-protected routes still need JWT
-            if (requiredRoles.length > 0) {
-              logger.warn('Role-protected route accessed via desktop bypass', {
-                path: request.nextUrl.pathname,
-                required: requiredRoles,
-              });
-
-              const response = NextResponse.json(
-                { error: 'Role-protected routes require JWT authentication' },
-                { status: 401 }
-              );
-
-              if (addSecurityHeaders) {
-                Object.entries(securityHeaders).forEach(([key, value]) => {
-                  response.headers.set(key, value);
-                });
-              }
-
-              return response as T;
-            }
-
-            authResult.authenticated = true;
-            authResult.success = true;
-            authResult.userId = desktopUser.userId;
-            authResult.email = desktopUser.email;
-            logger.debug('Desktop auth bypass used', { userId: desktopUser.userId });
-          } else if (allowAnonymous) {
-            authResult.authenticated = true;
-            authResult.success = true;
-          } else {
-            logger.warn('Missing authorization header', {
-              path: request.nextUrl.pathname,
-              ip: clientIP,
-            });
-
-            const response = NextResponse.json(
-              { error: 'Authorization required' },
-              { status: 401 }
-            );
-
-            if (addSecurityHeaders) {
-              Object.entries(securityHeaders).forEach(([key, value]) => {
-                response.headers.set(key, value);
-              });
-            }
-
-            return response as T;
-          }
-        } else if (allowAnonymous) {
-          authResult.authenticated = true;
-          authResult.success = true;
-        } else {
-          logger.warn('Missing authorization header', {
-            path: request.nextUrl.pathname,
-            ip: clientIP,
-          });
-
-          const response = NextResponse.json(
-            { error: 'Authorization required' },
-            { status: 401 }
-          );
-
-          if (addSecurityHeaders) {
-            Object.entries(securityHeaders).forEach(([key, value]) => {
-              response.headers.set(key, value);
-            });
-          }
-
-          return response as T;
-        }
-      } else {
-        // Verify JWT using existing auth-service
-        const token = authHeader.substring(7);
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        // === Path 1: Bearer JWT authentication ===
         const verifyResult = await verifyAuth(request);
 
         if (!verifyResult.success) {
@@ -308,6 +231,43 @@ export function withAuth<T extends NextResponse>(
         authResult.userId = verifyResult.userId;
         authResult.email = verifyResult.email;
 
+        // === CRIT-1 fix: Post-auth per-user rate limiting ===
+        // Authenticated users get a separate rate limit keyed by userId to prevent
+        // bypass via IP rotation (VPN, botnet, CDN). This is in addition to the
+        // pre-auth IP-based check above.
+        if (rateLimit && authResult.userId) {
+          const userLimiter = requiredRoles.length > 0 ? authRateLimiter : apiRateLimiter;
+          const userRateLimitKey = `user:${authResult.userId}`;
+          if (!userLimiter.isAllowed(userRateLimitKey)) {
+            const retryAfter = userLimiter.getRetryAfter(userRateLimitKey);
+            logger.warn('Per-user rate limit exceeded (authenticated)', {
+              userId: authResult.userId,
+              path: request.nextUrl.pathname,
+              retryAfter,
+            });
+            const response = NextResponse.json(
+              { error: 'Too many requests', retryAfter },
+              {
+                status: 429,
+                headers: {
+                  'Retry-After': retryAfter.toString(),
+                  'X-RateLimit-Remaining': '0',
+                },
+              }
+            );
+            if (addSecurityHeaders) {
+              Object.entries(securityHeaders).forEach(([key, value]) => {
+                response.headers.set(key, value);
+              });
+            }
+            return response as T;
+          }
+          authResult.rateLimitRemaining = Math.min(
+            authResult.rateLimitRemaining ?? Infinity,
+            userLimiter.getRemaining(userRateLimitKey)
+          );
+        }
+
         // Role checking (if required)
         if (requiredRoles.length > 0) {
           const userRole = (verifyResult as any).role || 'user';
@@ -324,6 +284,144 @@ export function withAuth<T extends NextResponse>(
               { error: 'Insufficient permissions' },
               { status: 403 }
             ) as T;
+          }
+        }
+        // Fall through to common handler invocation
+      } else {
+        // No Bearer header — try cookie-based auth, then desktop bypass
+        const cookieAuthResult = await verifyAuth(request);
+
+        if (cookieAuthResult.success && cookieAuthResult.userId) {
+          // === Path 2: Cookie-based authentication ===
+          authResult.authenticated = true;
+          authResult.success = true;
+          authResult.userId = cookieAuthResult.userId;
+          authResult.email = cookieAuthResult.email;
+
+          // === CRIT-1 fix: Post-auth per-user rate limiting (cookie path) ===
+          if (rateLimit && authResult.userId) {
+            const userLimiter = requiredRoles.length > 0 ? authRateLimiter : apiRateLimiter;
+            const userRateLimitKey = `user:${authResult.userId}`;
+            if (!userLimiter.isAllowed(userRateLimitKey)) {
+              const retryAfter = userLimiter.getRetryAfter(userRateLimitKey);
+              logger.warn('Per-user rate limit exceeded (cookie auth)', {
+                userId: authResult.userId,
+                path: request.nextUrl.pathname,
+                retryAfter,
+              });
+              const response = NextResponse.json(
+                { error: 'Too many requests', retryAfter },
+                { status: 429, headers: { 'Retry-After': retryAfter.toString() } }
+              );
+              if (addSecurityHeaders) {
+                Object.entries(securityHeaders).forEach(([key, value]) => {
+                  response.headers.set(key, value);
+                });
+              }
+              return response as T;
+            }
+            authResult.rateLimitRemaining = Math.min(
+              authResult.rateLimitRemaining ?? Infinity,
+              userLimiter.getRemaining(userRateLimitKey)
+            );
+          }
+
+          // Role checking for cookie-authenticated users
+          if (requiredRoles.length > 0) {
+            const userRole = (cookieAuthResult as any).role || 'user';
+            if (!requiredRoles.includes(userRole as any)) {
+              logger.warn('Insufficient permissions (cookie auth)', {
+                userId: authResult.userId,
+                path: request.nextUrl.pathname,
+                required: requiredRoles,
+                actual: userRole,
+              });
+              return NextResponse.json(
+                { error: 'Insufficient permissions' },
+                { status: 403 }
+              ) as T;
+            }
+          }
+          // Fall through to common handler invocation
+        } else {
+          // Cookie auth failed — try desktop bypass
+          const isBypassAllowed = await checkDesktopBypass(request);
+
+          if (isBypassAllowed) {
+            // === Path 3: Desktop bypass ===
+            const desktopUser = await getDesktopUser(request);
+            if (desktopUser) {
+              // Desktop bypass allowed, but role-protected routes still need JWT
+              if (requiredRoles.length > 0) {
+                logger.warn('Role-protected route accessed via desktop bypass', {
+                  path: request.nextUrl.pathname,
+                  required: requiredRoles,
+                });
+
+                const response = NextResponse.json(
+                  { error: 'Role-protected routes require JWT authentication' },
+                  { status: 401 }
+                );
+
+                if (addSecurityHeaders) {
+                  Object.entries(securityHeaders).forEach(([key, value]) => {
+                    response.headers.set(key, value);
+                  });
+                }
+
+                return response as T;
+              }
+
+              authResult.authenticated = true;
+              authResult.success = true;
+              authResult.userId = desktopUser.userId;
+              authResult.email = desktopUser.email;
+              logger.debug('Desktop auth bypass used', { userId: desktopUser.userId });
+            } else if (allowAnonymous) {
+              // === Path 4: Anonymous access ===
+              authResult.authenticated = true;
+              authResult.success = true;
+            } else {
+              logger.warn('Missing authorization header', {
+                path: request.nextUrl.pathname,
+                ip: clientIP,
+              });
+
+              const response = NextResponse.json(
+                { error: 'Authorization required' },
+                { status: 401 }
+              );
+
+              if (addSecurityHeaders) {
+                Object.entries(securityHeaders).forEach(([key, value]) => {
+                  response.headers.set(key, value);
+                });
+              }
+
+              return response as T;
+            }
+          } else if (allowAnonymous) {
+            // === Path 4b: Anonymous access (no desktop bypass) ===
+            authResult.authenticated = true;
+            authResult.success = true;
+          } else {
+            logger.warn('Missing authorization header', {
+              path: request.nextUrl.pathname,
+              ip: clientIP,
+            });
+
+            const response = NextResponse.json(
+              { error: 'Authorization required' },
+              { status: 401 }
+            );
+
+            if (addSecurityHeaders) {
+              Object.entries(securityHeaders).forEach(([key, value]) => {
+                response.headers.set(key, value);
+              });
+            }
+
+            return response as T;
           }
         }
       }
@@ -397,34 +495,65 @@ export async function checkAuth(
   
   const authHeader = request.headers.get('authorization');
   
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    if (allowAnonymous) {
-      return { authenticated: true, success: true };
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    // Bearer JWT authentication
+    const verifyResult = await verifyAuth(request);
+    
+    if (!verifyResult.success) {
+      return {
+        authenticated: false,
+        success: false,
+        error: verifyResult.error,
+        statusCode: 401,
+      };
     }
+
     return {
-      authenticated: false,
-      success: false,
-      error: 'Authorization required',
-      statusCode: 401,
+      authenticated: true,
+      success: true,
+      userId: verifyResult.userId,
+      email: verifyResult.email,
     };
   }
 
-  const verifyResult = await verifyAuth(request);
-  
-  if (!verifyResult.success) {
+  // No Bearer header — try cookie-based auth (consistent with withAuth)
+  const cookieAuthResult = await verifyAuth(request);
+  if (cookieAuthResult.success && cookieAuthResult.userId) {
     return {
-      authenticated: false,
-      success: false,
-      error: verifyResult.error,
-      statusCode: 401,
+      authenticated: true,
+      success: true,
+      userId: cookieAuthResult.userId,
+      email: cookieAuthResult.email,
     };
   }
 
+  // No valid Bearer or cookie auth — try desktop bypass (consistent with withAuth)
+  try {
+    const { shouldBypassAuth } = await import('./desktop-auth-bypass');
+    if (shouldBypassAuth(request)) {
+      const { getDesktopUserContext } = await import('./desktop-auth-bypass');
+      const desktopUser = getDesktopUserContext();
+      if (desktopUser) {
+        return {
+          authenticated: true,
+          success: true,
+          userId: desktopUser.userId,
+          email: desktopUser.email,
+        };
+      }
+    }
+  } catch {
+    // desktop-auth-bypass not available — continue
+  }
+
+  if (allowAnonymous) {
+    return { authenticated: true, success: true };
+  }
   return {
-    authenticated: true,
-    success: true,
-    userId: verifyResult.userId,
-    email: verifyResult.email,
+    authenticated: false,
+    success: false,
+    error: 'Authorization required',
+    statusCode: 401,
   };
 }
 

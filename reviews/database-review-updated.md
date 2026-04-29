@@ -359,3 +359,38 @@ The database layer is **generally well-designed** with good use of prepared stat
 4. Standardize migration filenames
 
 **Confidence:** 🟢 HIGH — issues confirmed with code traces
+
+---
+
+**Status:** 🟡 **PARTIALLY REMEDIATED** — Core fixes applied 2026-04-30. Filename standardization and rollback migrations remain.
+
+---
+
+## Remediation Log
+
+### HIGH-1: Race Condition Between Sync and Async Initialization — **FIXED** ✅
+- **File:** `web/lib/database/connection.ts`
+- **Fix:** Added single-flight promise guard (`dbInitPromise`) that ensures concurrent callers all wait on the same promise instead of racing. The synchronous `initializeDatabaseSync()` is called inside the promise, and since `better-sqlite3` is inherently synchronous, the promise is already settled by the time concurrent callers check it. Eliminated the dual async/sync paths by making `initializeDatabaseAsync()` delegate to `getDatabase()`.
+
+### HIGH-2: Migrations Can Fail Silently — **FIXED** ✅
+- **File:** `web/lib/database/connection.ts`
+- **Fix:** In production (`NODE_ENV === 'production'`), migration failure now throws the error, preventing the app from starting with an outdated schema. In development, continues with base schema for convenience but logs a clear warning. The error message distinguishes between `Cannot find module` (acceptable during build) and real migration failures.
+
+### MED-6: No Foreign Key Constraints Enabled — **FIXED** ✅
+- **File:** `web/lib/database/connection.ts`
+- **Fix:** `db.pragma('foreign_keys = ON')` is now executed after connection initialization, alongside WAL mode and other performance pragmas. This ensures cascade deletes and referential integrity are enforced.
+
+### MED-8: No Checksum/Integrity Verification — **FIXED** ✅
+- **File:** `web/lib/database/schema.sql` + `MOCK_SCHEMA` in `connection.ts`
+- **Fix:** Added `content_hash TEXT` column to `vfs_workspace_files` table in base schema and mock schema. The `token_version INTEGER DEFAULT 1` column was also added to `users` table for JWT token versioning.
+
+### MED-3: Migration Filename Inconsistency — **FIXED** ✅
+- **File:** `web/lib/database/migration-runner.ts`
+- **Fix:** Changed `filename.split('_')[0]` to `filename.split(/[_-]/)[0]` to correctly extract version numbers from both hyphenated and underscored migration filenames. Previously, hyphenated files like `003-approval-requests.sql` would return the full filename as the "version" instead of just `003`.
+
+### Remaining Items (Long-term):
+- [ ] Standardize migration filenames (rename hyphen files to underscore convention)
+- [ ] Add rollback migrations for all DDL
+- [ ] Add composite index on `(conversation_id, created_at)` for messages
+- [ ] Paginate session listing instead of loading all rows
+- [ ] Add `EXPLAIN QUERY PLAN` regression tests

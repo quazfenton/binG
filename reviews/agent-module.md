@@ -172,7 +172,7 @@ export async function defaultValidate(): Promise<string | null> {
 
 ## Wiring Issues
 
-### NOT Wired In / Dead Code
+### NOT Wired In / Standalone Sections
 
 1. **types.ts** - Check if all types are used
 2. **plugins.ts** - Check if plugin system is active

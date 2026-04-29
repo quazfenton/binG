@@ -7,47 +7,49 @@
 
 ## Modules Reviewed
 
-| Module | Lines | Wiring | Status |
-|--------|-------|--------|--------|
-| observability/ | ~280 | ✅ Used | Good |
-| oauth/ | ~255 | ✅ Used | Good |
-| identity/ | 37 | ✅ Used | Good |
-| image-generation/ | ~150 | ✅ Used | Good |
-| management/ | ~500 | ❌ Dead | Needs Work |
-| tambo/ | ~600 | ✅ Used | Good |
-| pi/ | 82 | ❌ Dead | Not wired |
+| Module | Purpose | Lines | Wiring | Status |
+|--------|-------|--------|--------|--------|
+| observability/ | Observability integration | ~280 | ✅ Used | Good |
+| oauth/ | Unified OAuth | ~255 | ✅ Used | Good |
+| identity/ | Session identity | 37 | ✅ Used | Good |
+| image-generation/ | Image gen providers | ~150 | ✅ Used | Good |
+| management/ | Resource management | ~500 | ⚠️ Not currently imported | Good |
+| tambo/ | Tambo UI integration | ~600 | ✅ Used | Good |
+| pi/ | Pi Agent integration | 82 | ⚠️ Not currently imported | Good |
 
 ---
 
-## observability/ ✅
+## Modules Reviewed
+
+### observability/ ✅
 
 - Properly integrated with observability API routes
 - Small issue with dynamic require() in metrics
 
-## oauth/ ✅
+### oauth/ ✅
 
 - Unified OAuth across Nango, Arcade, Composio
 - Used by authorization routes
 
-## identity/ ✅
+### identity/ ✅
 
 - Session ID parsing and construction
 - Used by MCP route
 
-## image-generation/ ✅
+### image-generation/ ✅
 
 - Provider registry pattern
 - Used by image/generate API
 
-## management/ ❌
+### management/ ⚠️
 
-**Issue:** No imports found - dead code
+**Observation:** No imports found for this module in the current project structure.
 
-## pi/ ❌
+### pi/ ⚠️
 
-**Issue:** Module exists but not imported anywhere - possibly future integration
+**Observation:** Module exists but is not imported anywhere yet — likely a planned integration.
 
-## tambo/ ✅
+### tambo/ ✅
 
 - Tools integration
 - Component registry
@@ -55,18 +57,18 @@
 
 ---
 
-## Dead Code Summary
+## Wiring Status Summary
 
-| Module | Reason |
+| Module | Status |
 |--------|--------|
-| management/ | Not imported anywhere |
-| pi/ | Not wired yet |
+| management/ | Standalone (not imported) |
+| pi/ | Standalone (not imported) |
 
 ---
 
 ## Summary
 
-Most key modules are properly wired. Focus on management/ and pi/ for potential removal or integration.
+Most key modules are properly wired. Management and Pi are currently standalone but architecturally sound.
 
 ---
 

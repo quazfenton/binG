@@ -431,6 +431,26 @@ export class ProviderRouter {
    * Select provider with service capabilities
    */
   async selectWithServices(context: TaskContext & { needsServices: ProviderService[] }): Promise<ProviderSelectionResult> {
+    // HIGH fix: Validate input parameters before provider selection
+    if (!context || typeof context !== 'object') {
+      throw new Error('Invalid context: expected an object with type and needsServices');
+    }
+    if (!context.type || typeof context.type !== 'string') {
+      throw new Error('Invalid context.type: expected a non-empty string');
+    }
+    if (!Array.isArray(context.needsServices) || context.needsServices.length === 0) {
+      throw new Error('Invalid context.needsServices: expected a non-empty array of service names');
+    }
+    // Validate each service name is a known ProviderService
+    const validServices = new Set([
+      'pty', 'preview', 'snapshot', 'batch', 'agent', 'computer-use',
+      'lsp', 'object-storage', 'persistent-fs', 'auto-suspend', 'services', 'desktop',
+    ]);
+    for (const service of context.needsServices) {
+      if (!validServices.has(service)) {
+        logger.warn('Unknown provider service requested', { service });
+      }
+    }
     return this.evaluateProviders(context);
   }
   

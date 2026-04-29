@@ -57,6 +57,26 @@ const SANDBOX_ONLY_COMMANDS = new Set([
 ]);
 
 /**
+ * Commands that are ALWAYS blocked — even sandbox execution is too dangerous
+ * (CRIT-2 fix: prevents bash -c "malicious" and sh -c "malicious" bypass)
+ */
+const BLOCKED_COMMANDS = new Set([
+  'bash', 'sh', 'zsh', 'csh', 'tcsh', 'dash', 'ksh', 'fish',
+]);
+
+/**
+ * Dangerous flags for SANDBOX_ONLY_COMMANDS that enable arbitrary execution
+ * e.g., curl -d @/etc/passwd (data exfiltration), ssh -R (reverse tunnel)
+ */
+const DANGEROUS_FLAGS: Record<string, RegExp[]> = {
+  curl: [/--data\s+@/, /-d\s+@/, /--form[--]?\s+@/, /-F\s+@/, /--upload-file/, /-T\s+@/, /@[-\/]/],
+  wget: [/--post-data/, /--post-file/, /--input-file/],
+  ssh: [/-R\s/, /-L\s/, /-W\s/, /-o\s*StrictHostKeyChecking/],
+  nc: [/-e\s/, /--exec/, /--sh-exec/],
+  ncat: [/-e\s/, /--exec/, /--sh-exec/, /--ssl/],
+};
+
+/**
  * Commands that need confirmation (destructive or can overwrite)
  */
 const CONFIRM_MAYBE_COMMANDS = new Set([
@@ -127,7 +147,31 @@ export function routeLLMCommand(
     };
   }
   
-  // Step 2: Check for dangerous patterns
+  // Step 2 (CRIT-2 fix): Block shell commands entirely — bash/sh/zsh with -c bypass sandbox isolation
+  if (BLOCKED_COMMANDS.has(cmd)) {
+    return {
+      mode: 'blocked',
+      reason: `Shell command '${cmd}' is blocked — use individual commands instead of shell invocation`,
+      originalCommand: command,
+    };
+  }
+  
+  // Step 2b (CRIT-2 fix): Check for dangerous flags on sandbox-only commands
+  const dangerousFlags = DANGEROUS_FLAGS[cmd];
+  if (dangerousFlags) {
+    const fullArgString = args.join(' ') + ' ' + flags.join(' ');
+    for (const flagPattern of dangerousFlags) {
+      if (flagPattern.test(fullArgString)) {
+        return {
+          mode: 'blocked',
+          reason: `Dangerous flag for '${cmd}' blocked — potential data exfiltration or remote access`,
+          originalCommand: command,
+        };
+      }
+    }
+  }
+  
+  // Step 2c: Check for dangerous patterns
   if (CONFIRM_ALWAYS_COMMANDS.has(fullCmd) || CONFIRM_ALWAYS_COMMANDS.has(fullWithArgs)) {
     return {
       mode: 'confirm',

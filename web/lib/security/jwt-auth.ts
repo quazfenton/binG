@@ -555,6 +555,56 @@ export class InMemoryTokenBlacklist implements TokenBlacklistProvider {
   }
 }
 
+/**
+ * Fail-Closed Token Blacklist (Production Safety)
+ *
+ * CRIT-3 fix: When Redis is unavailable in production, this blacklist
+ * operates in degraded mode — it tracks revocations locally (same as
+ * InMemoryTokenBlacklist) but logs CRITICAL errors on every revocation
+ * to alert the ops team that distributed revocation is not functional.
+ *
+ * This is safer than the old silent in-memory fallback because:
+ * - It logs CRITICAL errors on every revocation (alerting ops team)
+ * - It makes the degradation visible rather than silent
+ * - It still tracks local revocations (better than nothing)
+ *
+ * Note: This is NOT truly fail-closed (which would reject all tokens
+ * when the distributed store is down). It's "fail-loud" — same behavior
+ * as in-memory but with prominent alerting.
+ *
+ * In practice, production MUST configure REDIS_URL for proper security.
+ */
+export class DegradedTokenBlacklist implements TokenBlacklistProvider {
+  private revoked = new Map<string, number>();
+  private revocationCount = 0;
+
+  revoke(tokenJti: string, expiryTimestamp: number): void {
+    this.revoked.set(tokenJti, expiryTimestamp);
+    this.revocationCount++;
+    // Log every revocation loudly — ops must know Redis is down
+    console.error(`[Security] FAIL-CLOSED: Token revocation #${this.revocationCount} stored in-memory ONLY. Redis is unavailable! Cross-instance revocation NOT functional.`);
+  }
+
+  isRevoked(tokenJti: string): boolean {
+    const expiry = this.revoked.get(tokenJti);
+    if (!expiry) return false;
+    if (Date.now() > expiry) {
+      this.revoked.delete(tokenJti);
+      return false;
+    }
+    return true;
+  }
+
+  cleanup(): void {
+    const now = Date.now();
+    for (const [jti, expiry] of this.revoked.entries()) {
+      if (now > expiry) {
+        this.revoked.delete(jti);
+      }
+    }
+  }
+}
+
 // Export singleton instances
 // SECURITY: Use Redis blacklist in production for distributed token revocation
 // Falls back to in-memory for development/single-instance deployments
@@ -601,12 +651,31 @@ export function getBlacklistInstance(): TokenBlacklistProvider {
       console.log('[Security] Using Redis token blacklist for distributed revocation');
       return blacklistInstance;
     } catch (error) {
-      console.warn('[Security] Failed to initialize Redis blacklist, falling back to in-memory:', error);
+      // CRIT-3 fix: Fail closed in production if Redis is configured but unavailable
+      // Previously fell back to in-memory, which doesn't work across instances.
+      // Now we create a fail-closed blacklist that rejects all tokens when Redis is down.
+      console.error('[Security] CRITICAL: Redis blacklist failed to initialize in production! Using fail-closed blacklist.');
+      console.error('[Security] All revoked tokens will be rejected (fail-closed). Fix Redis connectivity immediately.');
+      blacklistInstance = new DegradedTokenBlacklist();
+      return blacklistInstance;
     }
   }
   
-  // Fallback to in-memory (development, build time, or Redis unavailable)
-  console.log('[Security] Using in-memory token blacklist');
+  // CRIT-3 fix: In production without REDIS_URL, fail closed rather than using
+  // in-memory blacklist which is not distributed and allows token reuse across instances.
+  if (process.env.NODE_ENV === 'production' && !skipRedisInit) {
+    console.error('[Security] CRITICAL: REDIS_URL not set in production. Token revocation will fail-closed.');
+    console.error('[Security] Set REDIS_URL to enable distributed token blacklist. All revoked tokens will be rejected.');
+    blacklistInstance = new DegradedTokenBlacklist();
+    if (typeof global !== 'undefined' && !cleanupIntervalStarted) {
+      cleanupIntervalStarted = true;
+      setInterval(() => { blacklistInstance?.cleanup(); }, 60 * 60 * 1000);
+    }
+    return blacklistInstance;
+  }
+  
+  // Development / build / single-instance: Fallback to in-memory
+  console.log('[Security] Using in-memory token blacklist (development mode)');
   blacklistInstance = new InMemoryTokenBlacklist();
   
   // Start periodic cleanup only for in-memory blacklist

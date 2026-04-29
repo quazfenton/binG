@@ -4,12 +4,33 @@
  * Multi-language code execution with sandbox isolation
  * Supports: JavaScript, TypeScript, Python, HTML, CSS, SQL, Bash
  *
+ * SECURITY: JS/TS/Python/Bash execution uses sandbox providers (never eval()).
+ * HTML/CSS/SQL/JSON are validated/rendered without server-side execution.
+ *
  * @see lib/sandbox/ for sandbox providers
  */
 
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('CodeExecutor');
+
+// Maximum code size (50KB)
+const MAX_CODE_LENGTH = 50000;
+
+// Dangerous patterns that should never be executed (defense-in-depth)
+// The sandbox is the primary security boundary; these patterns are logged as warnings
+const DANGEROUS_PATTERNS: Array<{ pattern: RegExp; description: string }> = [
+  { pattern: /process\./, description: 'process object access' },
+  { pattern: /require\s*\(/, description: 'require() module loading' },
+  { pattern: /import\s+.*from\s+['"]/, description: 'ES module import' },
+  { pattern: /\beval\s*\(/, description: 'eval() call' },
+  { pattern: /new\s+Function\s*\(/, description: 'Function constructor' },
+  { pattern: /child_process/, description: 'child_process module' },
+  { pattern: /__dirname|__filename/, description: 'Node.js path globals' },
+  { pattern: /\bglobal\b\./, description: 'global object access' },
+  { pattern: /setTimeout\s*\(\s*['"`]/, description: 'setTimeout with string arg' },
+  { pattern: /setInterval\s*\(\s*['"`]/, description: 'setInterval with string arg' },
+];
 
 export type CodeLanguage = 
   | 'javascript' 
@@ -35,6 +56,21 @@ export interface CodeExecutionResult {
   error?: string;
   executionTime: number;
   language: CodeLanguage;
+  warnings?: string[]; // Security warnings from pattern detection (defense-in-depth)
+}
+
+/**
+ * Validate code for dangerous patterns before execution
+ * Returns list of human-readable descriptions of detected patterns (empty = safe)
+ */
+function detectDangerousPatterns(code: string): string[] {
+  const detected: string[] = [];
+  for (const { pattern, description } of DANGEROUS_PATTERNS) {
+    if (pattern.test(code)) {
+      detected.push(description);
+    }
+  }
+  return detected;
 }
 
 /**
@@ -45,36 +81,71 @@ export async function executeCode(request: CodeExecutionRequest): Promise<CodeEx
   const startTime = Date.now();
 
   try {
+    // Input validation
+    if (!code || typeof code !== 'string') {
+      throw new Error('Code is required and must be a string');
+    }
+    if (code.length > MAX_CODE_LENGTH) {
+      throw new Error(`Code exceeds maximum length of ${MAX_CODE_LENGTH} characters`);
+    }
+
+    // Code execution languages require sandbox + dangerous pattern scan
+    const requiresSandbox = ['javascript', 'typescript', 'python', 'bash'].includes(language);
+    let warnings: string[] | undefined;
+    if (requiresSandbox) {
+      const dangerousPatterns = detectDangerousPatterns(code);
+      if (dangerousPatterns.length > 0) {
+        logger.warn('Dangerous code pattern detected', { language, patterns: dangerousPatterns });
+        // Don't block execution entirely (sandbox provides isolation), but include warnings in response
+        // The sandbox is the primary security boundary; pattern detection is defense-in-depth
+        warnings = dangerousPatterns.map(p => `Security warning: ${p} detected. Execution continues in sandbox.`);
+      }
+    }
+
+    let result: CodeExecutionResult;
     switch (language) {
       case 'javascript':
       case 'typescript':
-        return await executeJavaScript(code, timeout);
+        result = await executeJavaScript(code, timeout);
+        break;
       
       case 'python':
-        return await executePython(code, stdin, timeout);
+        result = await executePython(code, stdin, timeout);
+        break;
       
       case 'html':
       case 'css':
-        return await executeWeb(code, language);
+        result = await executeWeb(code, language);
+        break;
       
       case 'sql':
-        return await executeSQL(code, timeout);
+        result = await executeSQL(code, timeout);
+        break;
       
       case 'bash':
-        return await executeBash(code, timeout);
+        result = await executeBash(code, timeout);
+        break;
       
       case 'json':
-        return await validateJSON(code);
+        result = await validateJSON(code);
+        break;
       
       default:
         throw new Error(`Unsupported language: ${language}`);
     }
-  } catch (error: any) {
-    logger.error('Code execution failed:', { language, error: error.message });
+    
+    // Attach warnings to result
+    if (warnings && warnings.length > 0) {
+      result.warnings = warnings;
+    }
+    return result;
+  } catch (error: unknown) {
+    const errMsg = error instanceof Error ? error.message : String(error);
+    logger.error('Code execution failed:', { language, error: errMsg });
     return {
       success: false,
       output: '',
-      error: error.message,
+      error: errMsg,
       executionTime: Date.now() - startTime,
       language,
     };
@@ -82,56 +153,41 @@ export async function executeCode(request: CodeExecutionRequest): Promise<CodeEx
 }
 
 /**
- * Execute JavaScript/TypeScript code
+ * Execute JavaScript/TypeScript code using sandbox provider
+ * 
+ * SECURITY: Never uses eval(). Code runs in an isolated sandbox
+ * with proper process isolation, resource limits, and network restrictions.
+ * Falls back to returning a "sandbox unavailable" message rather than
+ * falling back to insecure eval().
  */
 async function executeJavaScript(code: string, timeout: number): Promise<CodeExecutionResult> {
   const startTime = Date.now();
   
   try {
-    // Capture console.log output
-    let output = '';
-    const originalLog = console.log;
-    const originalError = console.error;
+    // Attempt sandbox-based execution
+    const { executeInSandbox } = await import('@/lib/sandbox/code-executor');
     
-    console.log = (...args) => {
-      output += args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ') + '\n';
-    };
-    
-    console.error = (...args) => {
-      output += args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ') + '\n';
-    };
-
-    // Execute with timeout
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error('Execution timeout')), timeout);
+    const result = await executeInSandbox(code, 'javascript', {
+      timeout: Math.min(timeout, 30000), // Hard cap at 30s
     });
-
-    const execPromise = new Promise<any>(async (resolve) => {
-      // Handle TypeScript by stripping types (simple approach)
-      const jsCode = code.replace(/:\s*\w+/g, '').replace(/import\s+.*?;/g, '').replace(/export\s+/g, '');
-      
-      // Execute in isolated context
-      const result = await eval(`(async () => { ${jsCode} })()`);
-      resolve(result);
-    });
-
-    const result = await Promise.race([execPromise, timeoutPromise]);
-    
-    // Restore console
-    console.log = originalLog;
-    console.error = originalError;
 
     return {
-      success: true,
-      output: output + (result !== undefined ? `\n=> ${JSON.stringify(result, null, 2)}` : ''),
-      executionTime: Date.now() - startTime,
+      success: result.exitCode === 0,
+      output: result.output || '',
+      error: result.error,
+      executionTime: result.executionTime || Date.now() - startTime,
       language: 'javascript',
     };
-  } catch (error: any) {
+  } catch (sandboxError: unknown) {
+    const errMsg = sandboxError instanceof Error ? sandboxError.message : String(sandboxError);
+    logger.warn('Sandbox unavailable for JS execution', { error: errMsg });
+    
+    // DO NOT fall back to eval() — return error instead
     return {
       success: false,
       output: '',
-      error: error.message,
+      error: 'Code execution requires a sandbox provider. Configure SANDBOX_PROVIDER to enable live execution. ' +
+             'HTML/CSS/JSON preview is available without sandbox.',
       executionTime: Date.now() - startTime,
       language: 'javascript',
     };
@@ -139,27 +195,34 @@ async function executeJavaScript(code: string, timeout: number): Promise<CodeExe
 }
 
 /**
- * Execute Python code via API
+ * Execute Python code via sandbox provider
  */
 async function executePython(code: string, stdin: string | undefined, timeout: number): Promise<CodeExecutionResult> {
   const startTime = Date.now();
 
   try {
-    // Use external Python execution service (e.g., Piston, Judge0)
-    // For now, simulate with timeout
-    await new Promise(resolve => setTimeout(resolve, Math.min(timeout, 1000)));
+    const { executeInSandbox } = await import('@/lib/sandbox/code-executor');
+    
+    const result = await executeInSandbox(code, 'python', {
+      input: stdin,
+      timeout: Math.min(timeout, 30000),
+    });
 
     return {
-      success: true,
-      output: 'Python execution requires external service (Piston/Judge0)\nConfigure PISTON_URL or JUDGE0_URL in .env',
-      executionTime: Date.now() - startTime,
+      success: result.exitCode === 0,
+      output: result.output || '',
+      error: result.error,
+      executionTime: result.executionTime || Date.now() - startTime,
       language: 'python',
     };
-  } catch (error: any) {
+  } catch (sandboxError: unknown) {
+    const errMsg = sandboxError instanceof Error ? sandboxError.message : String(sandboxError);
+    logger.warn('Sandbox unavailable for Python execution', { error: errMsg });
+    
     return {
       success: false,
       output: '',
-      error: error.message,
+      error: 'Python execution requires a sandbox provider. Configure SANDBOX_PROVIDER to enable live execution.',
       executionTime: Date.now() - startTime,
       language: 'python',
     };
@@ -180,7 +243,7 @@ async function executeWeb(code: string, language: 'html' | 'css'): Promise<CodeE
 }
 
 /**
- * Execute SQL (simulation)
+ * Validate SQL syntax (no live execution — preview only)
  */
 async function executeSQL(code: string, timeout: number): Promise<CodeExecutionResult> {
   const startTime = Date.now();
@@ -193,17 +256,24 @@ async function executeSQL(code: string, timeout: number): Promise<CodeExecutionR
       throw new Error('Invalid SQL statement');
     }
 
+    // SECURITY: Block destructive SQL without WHERE clause
+    const destructiveWithoutWhere = /^(DROP|TRUNCATE)\b/i.test(upperCode) ||
+      (/^(DELETE|UPDATE)\b/i.test(upperCode) && !/\bWHERE\b/i.test(upperCode));
+    if (destructiveWithoutWhere) {
+      throw new Error('Destructive SQL without WHERE clause is not allowed in playground');
+    }
+
     return {
       success: true,
-      output: 'SQL execution requires database connection\nConfigure DATABASE_URL for live SQL execution',
+      output: 'SQL syntax valid. Live execution requires database connection.\nConfigure DATABASE_URL for live SQL execution.',
       executionTime: Date.now() - startTime,
       language: 'sql',
     };
-  } catch (error: any) {
+  } catch (error: unknown) {
     return {
       success: false,
       output: '',
-      error: error.message,
+      error: error instanceof Error ? error.message : String(error),
       executionTime: Date.now() - startTime,
       language: 'sql',
     };
@@ -211,33 +281,58 @@ async function executeSQL(code: string, timeout: number): Promise<CodeExecutionR
 }
 
 /**
- * Execute Bash command
+ * Execute Bash command via sandbox provider
  */
 async function executeBash(code: string, timeout: number): Promise<CodeExecutionResult> {
   const startTime = Date.now();
 
   try {
-    // SECURITY: Only allow safe commands in playground
-    const blockedCommands = ['rm -rf', 'sudo', 'chmod 777', 'curl | bash', 'wget | bash'];
+    // SECURITY: Block obviously dangerous patterns (defense-in-depth, sandbox is primary boundary)
+    const blockedPatterns = [
+      /rm\s+-rf\s+\//,                    // Recursive force delete from root
+      /:\s*\(\s*\)\s*\{.*?\|.*?&/,           // Fork bomb pattern (various spacings)
+      /\/dev\/tcp\//,                      // Reverse shell via /dev/tcp (any variant)
+    ];
     
-    for (const blocked of blockedCommands) {
-      if (code.includes(blocked)) {
-        throw new Error(`Command blocked for security: ${blocked}`);
+    for (const pattern of blockedPatterns) {
+      if (pattern.test(code)) {
+        throw new Error(`Command blocked for security: dangerous pattern detected`);
       }
     }
 
-    // For security, bash execution requires sandbox
+    // Attempt sandbox-based execution
+    const { executeInSandbox } = await import('@/lib/sandbox/code-executor');
+    
+    const result = await executeInSandbox(code, 'bash', {
+      timeout: Math.min(timeout, 30000),
+    });
+
     return {
-      success: true,
-      output: 'Bash execution requires sandbox environment\nConfigure SANDBOX_PROVIDER for live bash execution',
-      executionTime: Date.now() - startTime,
+      success: result.exitCode === 0,
+      output: result.output || '',
+      error: result.error,
+      executionTime: result.executionTime || Date.now() - startTime,
       language: 'bash',
     };
-  } catch (error: any) {
+  } catch (sandboxError: unknown) {
+    // If sandbox import fails (not the pattern check above), return unavailable message
+    if (sandboxError instanceof Error && sandboxError.message.includes('dangerous pattern')) {
+      return {
+        success: false,
+        output: '',
+        error: sandboxError.message,
+        executionTime: Date.now() - startTime,
+        language: 'bash',
+      };
+    }
+    
+    const errMsg = sandboxError instanceof Error ? sandboxError.message : String(sandboxError);
+    logger.warn('Sandbox unavailable for Bash execution', { error: errMsg });
+    
     return {
       success: false,
       output: '',
-      error: error.message,
+      error: 'Bash execution requires a sandbox provider. Configure SANDBOX_PROVIDER to enable live execution.',
       executionTime: Date.now() - startTime,
       language: 'bash',
     };
@@ -258,11 +353,11 @@ async function validateJSON(code: string): Promise<CodeExecutionResult> {
       executionTime: Date.now() - startTime,
       language: 'json',
     };
-  } catch (error: any) {
+  } catch (error: unknown) {
     return {
       success: false,
       output: '',
-      error: `Invalid JSON: ${error.message}`,
+      error: `Invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
       executionTime: Date.now() - startTime,
       language: 'json',
     };

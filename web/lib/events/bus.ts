@@ -19,6 +19,82 @@ import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('Events:Bus');
 
+// MED-3 fix: Subscriber circuit breaker — prevent cascading failures
+// Tracks consecutive failures per subscriber and opens the circuit after threshold
+interface CircuitBreakerState {
+  failures: number;
+  lastFailureTime: number;
+  openUntil: number; // Timestamp when circuit will close again
+}
+const subscriberCircuits = new Map<string, CircuitBreakerState>();
+const CIRCUIT_BREAKER_THRESHOLD = 5; // Open after 5 consecutive failures
+const CIRCUIT_BREAKER_RESET_MS = 60 * 1000; // Reset after 1 minute of being open
+const CIRCUIT_BREAKER_HALF_OPEN_MAX = 1; // Allow 1 request in half-open state
+
+function isCircuitOpen(subscriberId: string): boolean {
+  const circuit = subscriberCircuits.get(subscriberId);
+  if (!circuit) return false;
+  if (circuit.failures < CIRCUIT_BREAKER_THRESHOLD) return false;
+  // Check if reset period has elapsed (half-open state)
+  if (Date.now() >= circuit.openUntil) {
+    circuit.failures = CIRCUIT_BREAKER_THRESHOLD - CIRCUIT_BREAKER_HALF_OPEN_MAX;
+    return false; // Allow one request through
+  }
+  return true;
+}
+
+function recordSuccess(subscriberId: string): void {
+  subscriberCircuits.delete(subscriberId); // Reset on success
+}
+
+function recordFailure(subscriberId: string): void {
+  const circuit = subscriberCircuits.get(subscriberId) || { failures: 0, lastFailureTime: 0, openUntil: 0 };
+  circuit.failures++;
+  circuit.lastFailureTime = Date.now();
+  if (circuit.failures >= CIRCUIT_BREAKER_THRESHOLD) {
+    circuit.openUntil = Date.now() + CIRCUIT_BREAKER_RESET_MS;
+    logger.warn('Circuit breaker opened for subscriber', {
+      subscriberId,
+      failures: circuit.failures,
+      openUntil: new Date(circuit.openUntil).toISOString(),
+    });
+  }
+  subscriberCircuits.set(subscriberId, circuit);
+}
+
+// Periodic cleanup of stale circuit breaker entries (prevent unbounded growth)
+const CIRCUIT_CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+let circuitCleanupTimer: ReturnType<typeof setInterval> | null = null;
+
+function startCircuitCleanup(): void {
+  if (circuitCleanupTimer) return; // Already running
+  circuitCleanupTimer = setInterval(() => {
+    const now = Date.now();
+    for (const [id, circuit] of subscriberCircuits) {
+      // Remove entries where circuit has been open and reset period has long passed
+      if (circuit.failures >= CIRCUIT_BREAKER_THRESHOLD && now > circuit.openUntil + CIRCUIT_BREAKER_RESET_MS) {
+        subscriberCircuits.delete(id);
+      } else if (circuit.failures < CIRCUIT_BREAKER_THRESHOLD && now - circuit.lastFailureTime > CIRCUIT_CLEANUP_INTERVAL_MS) {
+        // Also clean up entries with old failures that never hit threshold
+        subscriberCircuits.delete(id);
+      }
+    }
+  }, CIRCUIT_CLEANUP_INTERVAL_MS);
+  // Don't prevent process exit
+  if (circuitCleanupTimer && typeof circuitCleanupTimer === 'object' && 'unref' in circuitCleanupTimer) {
+    (circuitCleanupTimer as any).unref();
+  }
+}
+
+// Lazy init: start cleanup timer on first emitEvent call
+let circuitCleanupStarted = false;
+function ensureCircuitCleanup(): void {
+  if (!circuitCleanupStarted) {
+    circuitCleanupStarted = true;
+    startCircuitCleanup();
+  }
+}
+
 /**
  * Result of emitting an event
  */
@@ -67,14 +143,28 @@ export async function emitEvent(
   sessionId?: string
 ): Promise<EmitEventResult> {
   try {
+    // MED-3 fix: Check circuit breaker before Trigger.dev dispatch
+    // Track per-backend (trigger/local) instead of per-event-type — a failing
+    // Trigger.dev dispatch shouldn't block local execution of the same event type.
+    ensureCircuitCleanup();
+    const subscriberId = 'backend:trigger'; // Circuit is for Trigger.dev dispatch path
+    const circuitWasOpen = isCircuitOpen(subscriberId);
+    if (circuitWasOpen) {
+      logger.warn('Circuit breaker open for Trigger.dev — falling back to local', {
+        subscriberId,
+        input: (input as any)?.type,
+      });
+      // Skip Trigger.dev dispatch — fall through to local
+    }
+
     // Validate event schema
     const parsed = AnyEvent.parse(input);
 
     // Persist to event store (always - for audit/replay)
     const event = await createEvent(parsed, userId, sessionId);
 
-    // Try to dispatch to Trigger.dev if configured
-    const useTrigger = await isTriggerConfigured();
+    // Try to dispatch to Trigger.dev if configured AND circuit is not open
+    const useTrigger = !circuitWasOpen && await isTriggerConfigured();
 
     if (useTrigger) {
       try {
@@ -88,13 +178,15 @@ export async function emitEvent(
           sessionId,
         });
 
+        recordSuccess(subscriberId);
         return {
           eventId: event.id,
           status: 'dispatched',
           backend: 'trigger',
         };
       } catch (triggerError: any) {
-        // Trigger.dev dispatch failed — fall back to local polling
+        // Trigger.dev dispatch failed — record failure for circuit breaker and fall back to local
+        recordFailure(subscriberId);
         logger.warn('Trigger.dev dispatch failed, falling back to local', {
           eventId: event.id,
           error: triggerError.message,
@@ -102,7 +194,10 @@ export async function emitEvent(
       }
     }
 
-    // Local execution (fallback or Trigger.dev not configured)
+    // Local execution (fallback or Trigger.dev not configured or circuit open)
+    // NOTE: Do NOT call recordSuccess here — local success doesn't prove Trigger.dev is healthy.
+    // The circuit recovers naturally via half-open: after reset period, one request is let through
+    // to test Trigger.dev, and if that succeeds, recordSuccess is called in the Trigger.dev path.
     logger.info('Event emitted (local)', {
       eventId: event.id,
       type: event.type,
@@ -116,6 +211,9 @@ export async function emitEvent(
       backend: 'local',
     };
   } catch (error: any) {
+    // Note: Only Trigger.dev-specific failures are recorded in the circuit breaker
+    // (in the inner catch above). General errors (Zod validation, DB failures) should
+    // NOT affect the Trigger.dev circuit — they're unrelated to dispatch health.
     logger.error('Failed to emit event', {
       error: error.message,
       input,
