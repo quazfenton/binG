@@ -58,10 +58,10 @@ export interface MCPToolCallResult {
  * Manages tools from multiple MCP servers
  */
 export class MCPToolRegistry {
-  private clients: Map<string, any> = new Map()
-  private serverConfigs: Map<string, MCPServerConfig> = new Map()
-  private tools: Map<string, MCPToolWrapper> = new Map()
-  private eventListeners: Set<(event: MCPRegistryEvent) => void> = new Set()
+  private clients: Map<string, any> = new Map<string, any>()
+  private serverConfigs: Map<string, MCPServerConfig> = new Map<string, MCPServerConfig>()
+  private tools: Map<string, MCPToolWrapper> = new Map<string, MCPToolWrapper>()
+  private eventListeners: Set<(event: MCPRegistryEvent) => void> = new Set<(event: MCPRegistryEvent) => void>();
 
   /**
    * Register a server configuration

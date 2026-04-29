@@ -1,444 +1,263 @@
-/**
- * ripgrep.ts — Real ripgrep executor with auto-detect + JS fallback.
- *
- * Resolution order for the `rg` binary:
- *   1. `process.env.RG_BIN` (explicit override)
- *   2. `<repoRoot>/tools/bin/rg.exe` (Windows) / `tools/bin/rg` (Unix)
- *   3. `@vscode/ripgrep` npm package (ships prebuilt binaries cross-platform)
- *   4. System `PATH` (`rg` / `rg.exe`)
- *   5. JS fallback (line-by-line regex scan across walked files)
- *
- * To enable real ripgrep:
- *   - Drop a `rg` / `rg.exe` binary at `tools/bin/` in the repo, OR
- *   - `npm install @vscode/ripgrep` (adds 8MB cross-platform binaries), OR
- *   - Set `RG_BIN=/abs/path/to/rg`
- *
- * The JS fallback is intentionally simple — it is correct but ~10–100× slower
- * than real ripgrep. Production deployments should ship a binary.
- */
+// Server-only module - do not import directly in Client Components
+export const runtime = 'nodejs';
 
 import { spawn } from 'node:child_process';
-import { promises as fs } from 'node:fs';
-import path from 'node:path';
-import { createLogger } from '@/lib/utils/logger';
-
-const log = createLogger('Search:Ripgrep');
-
-// ─── Binary detection ───────────────────────────────────────────────────────
-
-let _rgPathCache: string | null | undefined; // undefined = not probed yet
-
-/**
- * Resolve the ripgrep binary path. Cached after first call.
- * Returns `null` when no binary is available (caller should use JS fallback).
- */
-export async function resolveRipgrepPath(): Promise<string | null> {
-  if (_rgPathCache !== undefined) return _rgPathCache;
-
-  const isWin = process.platform === 'win32';
-  const rgName = isWin ? 'rg.exe' : 'rg';
-  const candidates: string[] = [];
-
-  // 1. Env override
-  if (process.env.RG_BIN) {
-    candidates.push(process.env.RG_BIN);
-  }
-
-  // 2. Repo-bundled binary
-  // Walk up from this file to find a directory containing tools/bin/rg
-  const repoRoot = findRepoRoot(__dirname) ?? process.cwd();
-  candidates.push(path.join(repoRoot, 'tools', 'bin', rgName));
-
-  // 3. @vscode/ripgrep npm package
-  try {
-    // @ts-ignore - optional dependency, may not be installed
-    const vscodeRg = await import('@vscode/ripgrep').catch(() => null);
-    if (vscodeRg && typeof (vscodeRg as any).rgPath === 'string') {
-      candidates.push((vscodeRg as any).rgPath);
-    }
-  } catch {
-    // Not installed — skip
-  }
-
-  // 4. System PATH (no full path; rely on PATH lookup)
-  candidates.push(rgName);
-
-  for (const candidate of candidates) {
-    if (await isExecutable(candidate)) {
-      _rgPathCache = candidate;
-      log.info('Ripgrep binary resolved', { path: candidate });
-      return candidate;
-    }
-  }
-
-  _rgPathCache = null;
-  log.debug('Ripgrep binary not found — JS fallback will be used', {
-    triedPathCount: candidates.length,
-  });
-  return null;
-}
-
-/** Test/diagnostic helper — clear the binary path cache. */
-export function clearRipgrepPathCache(): void {
-  _rgPathCache = undefined;
-}
-
-/** Cheap probe: returns true if the binary path can be executed. */
-async function isExecutable(p: string): Promise<boolean> {
-  // For absolute or relative paths, stat first. For PATH-only names,
-  // attempt a `--version` spawn (rg returns 0 on `--version`).
-  if (p.includes(path.sep) || /[/\\]/.test(p)) {
-    try {
-      const st = await fs.stat(p);
-      return st.isFile();
-    } catch {
-      return false;
-    }
-  }
-  // Bare name — try executing
-  return new Promise<boolean>((resolve) => {
-    const child = spawn(p, ['--version'], { stdio: 'ignore', shell: false });
-    child.on('error', () => resolve(false));
-    child.on('exit', (code) => resolve(code === 0));
-  });
-}
-
-/** Walk up from a directory looking for `package.json`, return that directory. */
-function findRepoRoot(start: string): string | null {
-  let dir = start;
-  for (let i = 0; i < 12; i++) {
-    if (fsExistsSync(path.join(dir, 'package.json'))) return dir;
-    const parent = path.dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return null;
-}
-
-// Tiny sync existence check (no need to require fs.existsSync separately)
-function fsExistsSync(p: string): boolean {
-  try {
-    require('node:fs').accessSync(p);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-// ─── Search API ─────────────────────────────────────────────────────────────
+import * as path from 'node:path';
+import * as fs from 'node:fs';
 
 export interface RipgrepMatch {
-  /** Absolute or relative file path (as returned by rg) */
+  type: 'match';
   path: string;
-  /** 1-indexed line number */
-  line: number;
-  /** Matching line contents (no trailing newline) */
-  content: string;
-  /** Lines before the match (in order, oldest first) */
-  contextBefore?: string[];
-  /** Lines after the match (in order) */
-  contextAfter?: string[];
-}
-
-export interface RipgrepOptions {
-  /** Pattern. Treated as regex unless `fixedString` is true. */
-  query: string;
-  /** Root directory to search. Defaults to cwd. */
-  path?: string;
-  /** Glob filter (e.g., "*.ts", "**/*.{ts,tsx}"). May be repeated as array. */
-  glob?: string | string[];
-  /** Treat the query as a literal string (no regex). */
-  fixedString?: boolean;
-  /** Case-insensitive search. */
-  caseInsensitive?: boolean;
-  /** Match whole words only. */
-  wordRegexp?: boolean;
-  /** Allow multi-line patterns. */
-  multiline?: boolean;
-  /** Max results across all files (default 200). */
-  maxResults?: number;
-  /** Max results per file (default 50). */
-  maxCountPerFile?: number;
-  /** Lines of context before/after each match (default 0). */
-  contextLines?: number;
-  /** Hard timeout in ms (default 10_000). */
-  timeoutMs?: number;
+  lineNumber: number;
+  line: number; // Alias for lineNumber for backward compatibility
+  content: string; // Line content alias
+  lines: string;
+  absoluteOffset: number;
+  submatches?: { match: string; start: number; end: number }[];
+  contextBefore?: string[]; // Lines before the match (for contextLines option)
+  contextAfter?: string[]; // Lines after the match (for contextLines option)
 }
 
 export interface RipgrepResult {
   matches: RipgrepMatch[];
-  usedRipgrep: boolean;
-  truncated: boolean;
-  durationMs: number;
+  stats: {
+    searches: number;
+    matches: number;
+    filesWithMatches: number;
+    filesSearched: number;
+    elapsedMs: number;
+  };
+  errors: string[];
+  usedRipgrep: boolean; // Indicates whether real ripgrep was used vs JS fallback
+}
+
+export interface RipgrepOptions {
+  query: string;
+  path?: string;
+  glob?: string | string[];
+  fixedString?: boolean;
+  caseInsensitive?: boolean;
+  wordRegexp?: boolean;
+  follow?: boolean;
+  maxResults?: number;
+  maxCountPerFile?: number;
+  contextLines?: number;
+  timeoutMs?: number;
+}
+
+// Path caching for ripgrep binary
+let cachedRgBin: string | null = null;
+
+/**
+ * Clear the ripgrep binary path cache.
+ * Useful for tests that need to reset the path.
+ */
+export function clearRipgrepPathCache(): void {
+  cachedRgBin = null;
 }
 
 /**
- * Run a search. Uses ripgrep when available, otherwise a JS fallback.
+ * Check if ripgrep binary is available (cached check).
  */
-export async function ripgrepSearch(opts: RipgrepOptions): Promise<RipgrepResult> {
-  const start = Date.now();
-  const rgPath = await resolveRipgrepPath();
-  if (rgPath) {
-    try {
-      const result = await runRipgrep(rgPath, opts);
-      return { ...result, usedRipgrep: true, durationMs: Date.now() - start };
-    } catch (err: any) {
-      log.warn('Ripgrep execution failed — falling back to JS scan', { error: err.message });
-    }
+export function isRipgrepAvailable(): boolean {
+  return getRgBin() !== null;
+}
+
+/**
+ * Resolve ripgrep binary path (cached).
+ * @deprecated Use getRgBin() directly for explicit path checking
+ */
+export function resolveRipgrepPath(): string | null {
+  return getRgBin();
+}
+
+function getRgBin(): string | null {
+  if (cachedRgBin !== null) return cachedRgBin;
+  if (process.env.RG_BIN) {
+    cachedRgBin = process.env.RG_BIN;
+    return cachedRgBin;
   }
-  const fallback = await jsScan(opts);
-  return { ...fallback, usedRipgrep: false, durationMs: Date.now() - start };
+  // Use __dirname equivalent for CommonJS or process.cwd() fallback
+  const baseDir = typeof __dirname !== 'undefined' ? __dirname : process.cwd();
+  const binDir = path.join(baseDir, '..', '..', 'tools', 'bin');
+  const candidates = [
+    path.join(binDir, process.platform === 'win32' ? 'rg.exe' : 'rg'),
+    path.join(binDir, 'ripgrep', 'rg'),
+  ];
+  for (const candidate of candidates) {
+    try { fs.accessSync(candidate, fs.constants.X_OK); cachedRgBin = candidate; return cachedRgBin; } catch {}
+  }
+  // Fall back to system rg
+  cachedRgBin = 'rg';
+  return cachedRgBin;
 }
 
-/** Probe whether real ripgrep is available (without running a search). */
-export async function isRipgrepAvailable(): Promise<boolean> {
-  return (await resolveRipgrepPath()) !== null;
-}
-
-// ─── Real ripgrep runner ───────────────────────────────────────────────────
-
-async function runRipgrep(
-  rgPath: string,
-  opts: RipgrepOptions,
-): Promise<{ matches: RipgrepMatch[]; truncated: boolean }> {
-  const args: string[] = ['--json', '--no-messages'];
-  if (opts.caseInsensitive) args.push('--ignore-case');
-  if (opts.wordRegexp) args.push('--word-regexp');
-  if (opts.multiline) args.push('--multiline');
-  if (opts.fixedString) args.push('--fixed-strings');
+function buildArgs(opts: RipgrepOptions, cwd: string): string[] {
+  const args: string[] = [];
+  if (opts.fixedString) args.push('-F');
+  if (opts.caseInsensitive) args.push('-i');
+  if (opts.wordRegexp) args.push('-w');
+  if (opts.follow) args.push('-L');
   if (opts.contextLines && opts.contextLines > 0) {
-    args.push('--context', String(opts.contextLines));
+    args.push(`-${'B'.repeat(opts.contextLines)}`, `-${'A'.repeat(opts.contextLines)}`);
   }
-  const maxCountPerFile = opts.maxCountPerFile ?? 50;
-  args.push('--max-count', String(maxCountPerFile));
-  const globs = Array.isArray(opts.glob) ? opts.glob : opts.glob ? [opts.glob] : [];
-  for (const g of globs) {
-    args.push('--glob', g);
+  args.push('--json');
+  if (opts.maxCountPerFile !== undefined) args.push('--max-count', String(opts.maxCountPerFile));
+  if (opts.glob) {
+    const globs = Array.isArray(opts.glob) ? opts.glob : [opts.glob];
+    for (const g of globs) args.push('--glob', g);
   }
-  args.push('--', opts.query);
-  if (opts.path) args.push(opts.path);
+  if (opts.maxResults !== undefined) args.push('--limit', String(opts.maxResults));
+  args.push('--timeout', String(opts.timeoutMs ?? 10000));
+  args.push(opts.query);
+  args.push(opts.path ?? cwd);
+  return args;
+}
 
-  const maxResults = opts.maxResults ?? 200;
-  const timeoutMs = opts.timeoutMs ?? 10_000;
+interface RgJsonLine {
+  type: string;
+  data?: {
+    path?: { text?: string };
+    lines?: { text?: string };
+    line_number?: number;
+    absolute_offset?: number;
+    submatches?: Array<{ match: { text: string }; start: number; end: number }>;
+  };
+}
 
-  return new Promise((resolve, reject) => {
-    const child = spawn(rgPath, args, { stdio: ['ignore', 'pipe', 'pipe'] });
-    const matches: RipgrepMatch[] = [];
-    let truncated = false;
-    let buffer = '';
-    let pendingContext: { before: string[]; line: number; content: string } | null = null;
-    const ctxBefore: string[] = [];
-    let ctxAfterCount = 0;
-
-    const timer = setTimeout(() => {
-      child.kill();
-      reject(new Error(`ripgrep timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-
-    child.stdout.on('data', (chunk: Buffer) => {
-      if (truncated) return;
-      buffer += chunk.toString('utf8');
-      let idx;
-      while ((idx = buffer.indexOf('\n')) >= 0) {
-        const lineStr = buffer.slice(0, idx);
-        buffer = buffer.slice(idx + 1);
-        if (!lineStr) continue;
-        let event: any;
+async function runRipgrep(opts: RipgrepOptions, cwd: string): Promise<RipgrepResult> {
+  const rgBin = getRgBin();
+  if (!rgBin) return { matches: [], stats: { searches: 0, matches: 0, filesWithMatches: 0, filesSearched: 0, elapsedMs: 0 }, errors: ['Ripgrep binary not found'], usedRipgrep: false };
+  const startTime = Date.now();
+  const args = buildArgs(opts, cwd);
+  return new Promise((resolve) => {
+    const proc = spawn(rgBin, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '', stderr = '';
+    const errors: string[] = [];
+    proc.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
+    proc.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+    const timer = setTimeout(() => { proc.kill('SIGKILL'); errors.push('Ripgrep timed out'); }, opts.timeoutMs ?? 10000);
+    proc.on('close', (code) => {
+      clearTimeout(timer);
+      const elapsedMs = Date.now() - startTime;
+      if (code !== 0 && code !== null && code !== 1) errors.push(stderr || 'Ripgrep error');
+      const matches: RipgrepMatch[] = [];
+      let filesWithMatches = 0, filesSearched = 0;
+      for (const line of stdout.split('\n').filter(Boolean)) {
         try {
-          event = JSON.parse(lineStr);
-        } catch {
-          continue;
-        }
-        if (event.type === 'match') {
-          const data = event.data;
-          const filePath = data.path?.text ?? data.path?.bytes ?? '';
-          const lineNumber = data.line_number ?? 0;
-          const content = (data.lines?.text ?? '').replace(/\r?\n$/, '');
-          matches.push({
-            path: filePath,
-            line: lineNumber,
-            content,
-            contextBefore: ctxBefore.length > 0 ? [...ctxBefore] : undefined,
-          });
-          ctxBefore.splice(0, ctxBefore.length);
-          if (matches.length >= maxResults) {
-            truncated = true;
-            child.kill();
-            return;
+          const parsed = JSON.parse(line) as RgJsonLine;
+          if (parsed.type === 'match' && parsed.data) {
+            const match: RipgrepMatch = {
+              type: 'match',
+              path: parsed.data.path?.text ?? '',
+              lines: parsed.data.lines?.text ?? '',
+              lineNumber: parsed.data.line_number ?? 0,
+              line: parsed.data.line_number ?? 0, // Backward compat alias
+              content: parsed.data.lines?.text ?? '', // Backward compat alias
+              absoluteOffset: parsed.data.absolute_offset ?? 0,
+            };
+            if (parsed.data.submatches) match.submatches = parsed.data.submatches.map(s => ({ match: s.match.text, start: s.start, end: s.end }));
+            matches.push(match);
+          } else if (parsed.type === 'begin' || parsed.type === 'end') {
+            filesSearched++;
           }
-        } else if (event.type === 'context') {
-          const data = event.data;
-          const content = (data.lines?.text ?? '').replace(/\r?\n$/, '');
-          // Attach context-after to the most recent match if applicable
-          if (matches.length > 0 && (opts.contextLines ?? 0) > 0) {
-            const last = matches[matches.length - 1];
-            if (!last.contextAfter) last.contextAfter = [];
-            if (last.contextAfter.length < (opts.contextLines ?? 0)) {
-              last.contextAfter.push(content);
-              continue;
-            }
-          }
-          ctxBefore.push(content);
-          if (ctxBefore.length > (opts.contextLines ?? 0)) ctxBefore.shift();
-        }
+        } catch {}
       }
+      const uniquePaths = new Set(matches.map(m => m.path));
+      filesWithMatches = uniquePaths.size;
+      resolve({ matches, stats: { searches: 1, matches: matches.length, filesWithMatches, filesSearched, elapsedMs }, errors, usedRipgrep: rgBin !== null && code !== null && code !== 1 });
     });
-
-    child.stderr.on('data', () => {
-      /* ignored */
-    });
-
-    child.on('error', (err) => {
-      clearTimeout(timer);
-      reject(err);
-    });
-
-    child.on('exit', (code) => {
-      clearTimeout(timer);
-      // rg exit codes: 0 = matches found, 1 = no matches, 2 = error
-      if (code === 0 || code === 1 || truncated || code === null) {
-        resolve({ matches, truncated });
-      } else {
-        reject(new Error(`ripgrep exited with code ${code}`));
-      }
-    });
+    proc.on('error', (err) => { clearTimeout(timer); resolve({ matches: [], stats: { searches: 0, matches: 0, filesWithMatches: 0, filesSearched: 0, elapsedMs: Date.now() - startTime }, errors: [err.message], usedRipgrep: false }); });
   });
 }
 
-// ─── JS fallback ───────────────────────────────────────────────────────────
-
-const FALLBACK_FILE_LIMIT = 5_000;
-const FALLBACK_FILE_SIZE_LIMIT = 1_000_000; // 1MB
-const FALLBACK_SKIP_DIRS = new Set([
-  'node_modules', '.git', '.next', 'dist', 'build', 'target',
-  '.cache', 'coverage', '.turbo', 'out', '.parcel-cache',
-]);
-
-async function jsScan(
-  opts: RipgrepOptions,
-): Promise<{ matches: RipgrepMatch[]; truncated: boolean }> {
-  const root = opts.path ?? process.cwd();
+async function runJsSearch(opts: RipgrepOptions, cwd: string): Promise<RipgrepResult> {
+  const searchPath = opts.path ? path.join(cwd, opts.path) : cwd;
+  const maxResults = opts.maxResults ?? 100;
+  const contextLines = opts.contextLines ?? 0;
   const matches: RipgrepMatch[] = [];
-  const maxResults = opts.maxResults ?? 200;
-  const maxCountPerFile = opts.maxCountPerFile ?? 50;
-  const ctxN = opts.contextLines ?? 0;
-  let truncated = false;
-
-  // Build regex
+  async function walkDir(dir: string): Promise<string[]> {
+    const files: string[] = [];
+    try {
+      const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.name === 'node_modules' || entry.name === '.git') continue;
+        const fullPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) files.push(...(await walkDir(fullPath)));
+        else if (entry.isFile()) files.push(fullPath);
+      }
+    } catch {}
+    return files;
+  }
   const flags = opts.caseInsensitive ? 'i' : '';
-  let pattern = opts.fixedString
-    ? opts.query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    : opts.query;
+  let pattern = opts.query;
+  if (opts.fixedString) {
+    // Escape special regex chars for literal string matching
+    // Character class needs ] escaped as \] and \ escaped as \\
+    const escapeRegex = /[.*+?^${}()|[\]\\]/g;
+    pattern = pattern.replace(escapeRegex, '\\$&');
+  }
   if (opts.wordRegexp) pattern = `\\b(?:${pattern})\\b`;
   let re: RegExp;
-  try {
-    re = new RegExp(pattern, flags);
-  } catch (err: any) {
-    throw new Error(`Invalid regex: ${err.message}`);
-  }
-
-  // Build glob matchers (very basic — just extension/name suffix support)
-  const globs = Array.isArray(opts.glob) ? opts.glob : opts.glob ? [opts.glob] : [];
-  const globRegexes = globs.map(globToRegex);
-
-  let filesScanned = 0;
-
-  async function walk(dir: string): Promise<void> {
-    if (matches.length >= maxResults || filesScanned >= FALLBACK_FILE_LIMIT) {
-      truncated = true;
-      return;
-    }
-    let entries;
+  try { re = new RegExp(pattern, flags); } catch { return { matches: [], stats: { searches: 0, matches: 0, filesWithMatches: 0, filesSearched: 0, elapsedMs: 0 }, errors: ['Invalid regex'], usedRipgrep: false }; }
+  const startTime = Date.now();
+  let filesSearched = 0;
+  async function searchFile(filePath: string): Promise<void> {
+    if (matches.length >= maxResults) return;
     try {
-      entries = await fs.readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      if (matches.length >= maxResults) {
-        truncated = true;
-        return;
-      }
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        if (FALLBACK_SKIP_DIRS.has(entry.name) || entry.name.startsWith('.')) continue;
-        await walk(full);
-      } else if (entry.isFile()) {
-        if (globRegexes.length > 0 && !globRegexes.some((r) => r.test(full) || r.test(entry.name))) {
-          continue;
-        }
-        filesScanned++;
-        if (filesScanned >= FALLBACK_FILE_LIMIT) {
-          truncated = true;
-          return;
-        }
-        try {
-          const stat = await fs.stat(full);
-          if (stat.size > FALLBACK_FILE_SIZE_LIMIT) continue;
-          const content = await fs.readFile(full, 'utf8');
-          const lines = content.split(/\r?\n/);
-          let perFile = 0;
-          for (let i = 0; i < lines.length; i++) {
-            if (perFile >= maxCountPerFile) break;
-            if (re.test(lines[i])) {
-              const before = ctxN > 0 ? lines.slice(Math.max(0, i - ctxN), i) : undefined;
-              const after = ctxN > 0 ? lines.slice(i + 1, i + 1 + ctxN) : undefined;
-              matches.push({
-                path: full,
-                line: i + 1,
-                content: lines[i],
-                contextBefore: before,
-                contextAfter: after,
-              });
-              perFile++;
-              if (matches.length >= maxResults) {
-                truncated = true;
-                return;
-              }
-            }
+      const content = await fs.promises.readFile(filePath, 'utf8');
+      filesSearched++;
+      const lines = content.split('\n');
+      let offset = 0;
+      let fileMatches = 0;
+      const maxPerFile = opts.maxCountPerFile ?? 50;
+      for (let i = 0; i < lines.length; i++) {
+        if (fileMatches >= maxPerFile || matches.length >= maxResults) break;
+        const line = lines[i];
+        if (re.test(line)) {
+          const match: RipgrepMatch = {
+            type: 'match',
+            path: path.relative(cwd, filePath),
+            lines: line,
+            lineNumber: i + 1,
+            line: i + 1, // Backward compat alias
+            content: line, // Backward compat alias
+            absoluteOffset: offset,
+          };
+          
+          // Add context lines if requested
+          if (contextLines > 0) {
+            match.contextBefore = lines.slice(Math.max(0, i - contextLines), i);
+            match.contextAfter = lines.slice(i + 1, Math.min(lines.length, i + 1 + contextLines));
           }
-        } catch {
-          // Binary or unreadable file — skip
+          
+          matches.push(match);
+          fileMatches++;
         }
+        offset += Buffer.byteLength(line, 'utf8') + 1;
       }
-    }
+    } catch {}
   }
-
-  await walk(root);
-  return { matches, truncated };
+  try {
+    const files = await walkDir(searchPath);
+    for (const file of files) { if (matches.length >= maxResults) break; await searchFile(file); }
+  } catch {}
+  const uniquePaths = new Set(matches.map(m => m.path));
+  return { matches, stats: { searches: 1, matches: matches.length, filesWithMatches: uniquePaths.size, filesSearched, elapsedMs: Date.now() - startTime }, errors: [], usedRipgrep: false };
 }
 
-/** Convert a basic glob (`*`, `**`, `?`, `{a,b}`) to a regex. */
-function globToRegex(glob: string): RegExp {
-  let re = '';
-  let i = 0;
-  while (i < glob.length) {
-    const c = glob[i];
-    if (c === '*') {
-      if (glob[i + 1] === '*') {
-        re += '.*';
-        i += 2;
-        continue;
-      }
-      re += '[^/\\\\]*';
-    } else if (c === '?') {
-      re += '[^/\\\\]';
-    } else if (c === '{') {
-      const end = glob.indexOf('}', i);
-      if (end === -1) {
-        re += '\\{';
-      } else {
-        const parts = glob.slice(i + 1, end).split(',');
-        re += '(?:' + parts.map((p) => p.replace(/[.+^${}()|[\]\\]/g, '\\$&')).join('|') + ')';
-        i = end + 1;
-        continue;
-      }
-    } else if (/[.+^${}()|[\]\\]/.test(c)) {
-      re += '\\' + c;
-    } else {
-      re += c;
-    }
-    i++;
+export async function ripgrep(opts: RipgrepOptions): Promise<RipgrepResult> {
+  const cwd = opts.path ?? process.cwd();
+  const rgResult = await runRipgrep(opts, cwd);
+  
+  // If ripgrep had errors and no matches, fall back to JS search
+  if (rgResult.errors.length > 0 && rgResult.matches.length === 0) {
+    const jsResult = await runJsSearch(opts, cwd);
+    return { ...jsResult, usedRipgrep: false };
   }
-  return new RegExp(re + '$');
+  
+  return rgResult;
 }
+
+// Backward compatibility alias
+export const ripgrepSearch = ripgrep;

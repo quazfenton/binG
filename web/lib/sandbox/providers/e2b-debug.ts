@@ -105,7 +105,7 @@ export interface ExecutionTrace {
  */
 export class E2BDebugManager extends EventEmitter {
   private logs: DebugLogEntry[] = [];
-  private traces: Map<string, ExecutionTrace> = new Map();
+  private traces: Map<string, ExecutionTrace> = new Map<string, ExecutionTrace>();
   private completedTraces: ExecutionTrace[] = [];
   private enabled: boolean = false;
   private readonly MAX_LOGS = 10000;

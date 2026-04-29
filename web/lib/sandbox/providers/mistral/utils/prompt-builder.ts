@@ -24,7 +24,7 @@ export interface PromptContext {
 }
 
 export class PromptBuilder {
-  private templates: Map<string, PromptTemplate> = new Map();
+  private templates: Map<string, PromptTemplate> = new Map<string, PromptTemplate>();
 
   constructor() {
     this.initializeDefaultTemplates();

@@ -154,7 +154,7 @@ export interface UsageStats {
  * Tracks and analyzes E2B sandbox usage.
  */
 export class E2BAnalyticsManager extends EventEmitter {
-  private metrics: Map<string, ExecutionMetrics> = new Map();
+  private metrics: Map<string, ExecutionMetrics> = new Map<string, ExecutionMetrics>();
   private completedMetrics: ExecutionMetrics[] = [];
   private readonly MAX_COMPLETED = 10000;
   

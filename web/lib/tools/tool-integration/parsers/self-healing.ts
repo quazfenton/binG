@@ -16,7 +16,7 @@ interface HealingCacheEntry {
 }
 
 export class SelfHealingToolValidator {
-  private healingCache: Map<string, HealingCacheEntry> = new Map();
+  private healingCache: Map<string, HealingCacheEntry> = new Map<string, HealingCacheEntry>();
   private readonly CACHE_MAX_SIZE = 1000;
   private readonly CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 

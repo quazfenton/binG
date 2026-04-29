@@ -400,7 +400,7 @@ export class AgentFSMount {
  * and handles lifecycle (create, get, list, destroy).
  */
 export class AgentFSMountManager {
-  private mounts: Map<string, AgentFSMount> = new Map();
+  private mounts: Map<string, AgentFSMount> = new Map<string, AgentFSMount>();
 
   /**
    * Create or open an AgentFS mount

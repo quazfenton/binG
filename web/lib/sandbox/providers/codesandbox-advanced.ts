@@ -160,7 +160,7 @@ export class CodeSandboxExecutionRecorder {
  * Snapshot Manager - Creates and manages filesystem snapshots
  */
 export class CodeSandboxSnapshotManager {
-  private snapshots: Map<string, FileSnapshot> = new Map()
+  private snapshots: Map<string, FileSnapshot> = new Map<string, FileSnapshot>()
   private sandboxId: string
 
   constructor(sandboxId: string) {
@@ -289,7 +289,7 @@ export class CodeSandboxSnapshotManager {
  * Idle Manager - Auto-suspends sandboxes after inactivity
  */
 export class CodeSandboxIdleManager {
-  private trackers: Map<string, ActivityTracker> = new Map()
+  private trackers: Map<string, ActivityTracker> = new Map<string, ActivityTracker>();
   private checkInterval: NodeJS.Timeout | null = null
   private idleTimeoutMs: number
   private onSuspend: ((sandboxId: string) => Promise<void>) | null = null
@@ -423,7 +423,7 @@ export class CodeSandboxResourceScaler {
  * Port Manager - Tracks exposed ports and their URLs
  */
 export class CodeSandboxPortManager {
-  private ports: Map<number, { host: string; openedAt: number }> = new Map()
+  private ports: Map<number, { host: string; openedAt: number }> = new Map<number, { host: string; openedAt: number }>();
   private listeners: Array<(port: number, url: string) => void> = []
   private handle: SandboxHandle | null = null
 

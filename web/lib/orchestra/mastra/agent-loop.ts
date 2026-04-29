@@ -477,7 +477,7 @@ export class AgentLoop {
    * Track recent failed tool calls to detect loops.
    * Uses shared loop detector from shared-agent-context.ts.
    */
-  private failedToolCalls: Map<string, number> = new Map();
+  private failedToolCalls: Map<string, number> = new Map<string, number>();
   private loopState: LoopDetectorState = createLoopDetectorState();
 
   /**

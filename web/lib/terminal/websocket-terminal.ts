@@ -28,7 +28,7 @@ export interface TerminalSession {
 
 export class WebSocketTerminalServer extends EventEmitter {
   private wss: WebSocketServer | null = null;
-  private sessions: Map<string, TerminalSession> = new Map();
+  private sessions: Map<string, TerminalSession> = new Map<string, TerminalSession>();
   private readonly idleTimeout: number;
   private readonly maxSessions: number;
 

@@ -376,7 +376,7 @@ export class CircuitBreakerOpenError extends Error {
 // ---------------------------------------------------------------------------
 
 export class CircuitBreakerManager {
-  private breakers: Map<string, CircuitBreaker> = new Map();
+  private breakers: Map<string, CircuitBreaker> = new Map<string, CircuitBreaker>();
   private defaultConfig: Partial<CircuitBreakerConfig>;
 
   constructor(defaultConfig?: Partial<CircuitBreakerConfig>) {

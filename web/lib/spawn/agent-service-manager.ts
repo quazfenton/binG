@@ -208,7 +208,7 @@ const AGENT_DEFAULTS: Record<AgentType, {
 // ============================================================================
 
 export class AgentServiceManager extends EventEmitter {
-  private agents: Map<string, AgentInstance> = new Map();
+  private agents: Map<string, AgentInstance> = new Map<string, AgentInstance>();
   private dockerAvailable: boolean = false;
 
   constructor() {
