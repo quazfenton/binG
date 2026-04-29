@@ -120,7 +120,7 @@ export interface SessionExecutionResult {
  */
 export class E2BSessionManager {
   private sandbox: SandboxHandle;
-  private sessions: Map<string, SessionMetadata> = new Map();
+  private sessions: Map<string, SessionMetadata> = new Map<string, SessionMetadata>();
   private readonly SESSION_TIMEOUT_MS = 24 * 60 * 60 * 1000; // 24 hours
 
   constructor(sandbox: SandboxHandle) {

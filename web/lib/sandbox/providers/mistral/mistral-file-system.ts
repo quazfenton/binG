@@ -38,8 +38,8 @@ export interface FilesystemStats {
 }
 
 export class MistralVirtualFilesystem {
-  private files: Map<string, VirtualFile> = new Map()
-  private directories: Map<string, VirtualDirectory> = new Map()
+  private files: Map<string, VirtualFile> = new Map<string, VirtualFile>()
+  private directories: Map<string, VirtualDirectory> = new Map<string, VirtualDirectory>()
   private workspaceRoot: string
   private stats: FilesystemStats
 

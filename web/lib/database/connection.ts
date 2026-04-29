@@ -183,7 +183,7 @@ export function resetMockDatabase(): void {
 }
 
 // In-memory schema for mock database (split into individual CREATE statements for reliable parsing)
-const MOCK_SCHEMA = `CREATE TABLE IF NOT EXISTS vfs_workspace_meta (id INTEGER PRIMARY KEY AUTOINCREMENT, owner_id TEXT UNIQUE NOT NULL, version INTEGER DEFAULT 1, root TEXT NOT NULL DEFAULT '/', created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP, last_accessed_at TEXT); CREATE TABLE IF NOT EXISTS vfs_workspace_files (id INTEGER PRIMARY KEY AUTOINCREMENT, owner_id TEXT NOT NULL, path TEXT NOT NULL, content TEXT, content_hash TEXT, size INTEGER DEFAULT 0, is_directory INTEGER DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP, UNIQUE(owner_id, path)); CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL, username TEXT, password_hash TEXT, is_active INTEGER DEFAULT 1, created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP, email_verified INTEGER DEFAULT 0, email_verification_token_hash TEXT, email_verification_expires TEXT, subscription_tier TEXT DEFAULT 'free'); CREATE TABLE IF NOT EXISTS user_sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT UNIQUE NOT NULL, user_id TEXT NOT NULL, expires_at TEXT NOT NULL, ip_address TEXT, user_agent TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE); CREATE TABLE IF NOT EXISTS api_credentials (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, provider TEXT NOT NULL, api_key_encrypted TEXT NOT NULL, api_key_hash TEXT, is_active INTEGER DEFAULT 1, updated_at TEXT DEFAULT CURRENT_TIMESTAMP, created_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE, UNIQUE(user_id, provider)); CREATE TABLE IF NOT EXISTS external_connections (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, provider TEXT NOT NULL, access_token_encrypted TEXT NOT NULL, refresh_token_encrypted TEXT, token_expires_at TEXT, is_active INTEGER DEFAULT 1, updated_at TEXT DEFAULT CURRENT_TIMESTAMP, created_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE, UNIQUE(user_id, provider)); CREATE TABLE IF NOT EXISTS conversations (id TEXT PRIMARY KEY, user_id TEXT, title TEXT, is_archived INTEGER DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL); CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, provider TEXT, model TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE); CREATE TABLE IF NOT EXISTS user_preferences (user_id TEXT NOT NULL, preference_key TEXT NOT NULL, preference_value TEXT, updated_at TEXT DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (user_id, preference_key), FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE); CREATE TABLE IF NOT EXISTS usage_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, provider TEXT NOT NULL, model TEXT NOT NULL, tokens_used INTEGER DEFAULT 0, cost_usd REAL DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL); CREATE TABLE IF NOT EXISTS oauth_sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT UNIQUE NOT NULL, user_id TEXT NOT NULL, provider TEXT NOT NULL, redirect_uri TEXT, state TEXT, expires_at TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE); CREATE TABLE IF NOT EXISTS service_permissions (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, service TEXT NOT NULL, permission TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE, UNIQUE(user_id, service, permission)); CREATE TABLE IF NOT EXISTS token_refresh_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, provider TEXT NOT NULL, success INTEGER DEFAULT 0, error_message TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE); CREATE TABLE IF NOT EXISTS sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT UNIQUE NOT NULL, user_id TEXT, workspace_path TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, expires_at TEXT); CREATE TABLE IF NOT EXISTS shadow_commits (id INTEGER PRIMARY KEY AUTOINCREMENT, file_path TEXT NOT NULL, content TEXT, commit_hash TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP); CREATE TABLE IF NOT EXISTS skills (id INTEGER PRIMARY KEY AUTOINCREMENT, skill_name TEXT UNIQUE NOT NULL, enabled INTEGER DEFAULT 1, config TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP); CREATE TABLE IF NOT EXISTS email_provider_quotas (id INTEGER PRIMARY KEY AUTOINCREMENT, provider TEXT NOT NULL, daily_limit INTEGER DEFAULT 100, used_today INTEGER DEFAULT 0, reset_date TEXT, UNIQUE(provider));`;
+const MOCK_SCHEMA = `CREATE TABLE IF NOT EXISTS vfs_workspace_meta (id INTEGER PRIMARY KEY AUTOINCREMENT, owner_id TEXT UNIQUE NOT NULL, version INTEGER DEFAULT 1, root TEXT NOT NULL DEFAULT '/', created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP, last_accessed_at TEXT); CREATE TABLE IF NOT EXISTS vfs_workspace_files (id INTEGER PRIMARY KEY AUTOINCREMENT, owner_id TEXT NOT NULL, path TEXT NOT NULL, content TEXT, content_hash TEXT, size INTEGER DEFAULT 0, is_directory INTEGER DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP, UNIQUE(owner_id, path)); CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL, username TEXT, password_hash TEXT, is_active INTEGER DEFAULT 1, created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP, email_verified INTEGER DEFAULT 0, email_verification_token_hash TEXT, email_verification_expires TEXT, subscription_tier TEXT DEFAULT 'free'); CREATE TABLE IF NOT EXISTS user_sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT UNIQUE NOT NULL, user_id TEXT NOT NULL, expires_at TEXT NOT NULL, ip_address TEXT, user_agent TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE); CREATE TABLE IF NOT EXISTS api_credentials (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, provider TEXT NOT NULL, api_key_encrypted TEXT NOT NULL, api_key_hash TEXT, is_active INTEGER DEFAULT 1, updated_at TEXT DEFAULT CURRENT_TIMESTAMP, created_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE, UNIQUE(user_id, provider)); CREATE TABLE IF NOT EXISTS external_connections (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, provider TEXT NOT NULL, access_token_encrypted TEXT NOT NULL, refresh_token_encrypted TEXT, token_expires_at TEXT, is_active INTEGER DEFAULT 1, updated_at TEXT DEFAULT CURRENT_TIMESTAMP, created_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE, UNIQUE(user_id, provider)); CREATE TABLE IF NOT EXISTS conversations (id TEXT PRIMARY KEY, user_id TEXT, title TEXT, is_archived INTEGER DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL); CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, provider TEXT, model TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE); CREATE TABLE IF NOT EXISTS user_preferences (user_id TEXT NOT NULL, preference_key TEXT NOT NULL, preference_value TEXT, updated_at TEXT DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (user_id, preference_key), FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE); CREATE TABLE IF NOT EXISTS usage_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, provider TEXT NOT NULL, model TEXT NOT NULL, tokens_used INTEGER DEFAULT 0, cost_usd REAL DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL); CREATE TABLE IF NOT EXISTS oauth_sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT UNIQUE NOT NULL, user_id TEXT NOT NULL, provider TEXT NOT NULL, redirect_uri TEXT, state TEXT, expires_at TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE); CREATE TABLE IF NOT EXISTS service_permissions (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, service TEXT NOT NULL, permission TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE, UNIQUE(user_id, service, permission)); CREATE TABLE IF NOT EXISTS token_refresh_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, provider TEXT NOT NULL, success INTEGER DEFAULT 0, error_message TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE); CREATE TABLE IF NOT EXISTS sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT UNIQUE NOT NULL, user_id TEXT, workspace_path TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, expires_at TEXT); CREATE TABLE IF NOT EXISTS shadow_commits (id INTEGER PRIMARY KEY AUTOINCREMENT, file_path TEXT NOT NULL, content TEXT, commit_hash TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP); CREATE TABLE IF NOT EXISTS skills (id INTEGER PRIMARY KEY AUTOINCREMENT, skill_name TEXT UNIQUE NOT NULL, enabled INTEGER DEFAULT 1, config TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP); CREATE TABLE IF NOT EXISTS email_provider_quotas (id INTEGER PRIMARY KEY AUTOINCREMENT, provider TEXT NOT NULL, daily_limit INTEGER DEFAULT 100, used_today INTEGER DEFAULT 0, reset_date TEXT, UNIQUE(provider)); CREATE TABLE IF NOT EXISTS fs_edit_transactions (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, conversation_id TEXT NOT NULL, request_id TEXT NOT NULL, created_at TEXT NOT NULL, status TEXT NOT NULL, operations_json TEXT, errors_json TEXT, denied_reason TEXT, updated_at TEXT DEFAULT CURRENT_TIMESTAMP); CREATE TABLE IF NOT EXISTS fs_edit_denials (id INTEGER PRIMARY KEY AUTOINCREMENT, transaction_id TEXT NOT NULL, conversation_id TEXT NOT NULL, reason TEXT NOT NULL, paths_json TEXT NOT NULL);`;
 
 function getMockDatabase() {
   if (!_mockDatabase) {
@@ -244,22 +244,35 @@ function getMockDatabase() {
           const isUpdate = upperSql.startsWith('UPDATE');
           const isDelete = upperSql.startsWith('DELETE');
 
-          // Extract table name from SQL
+          // Extract table name from SQL - handle various SQL patterns
           let tableName = '';
-          if (upperSql.includes('FROM')) {
-            const fromMatch = sql.match(/FROM\s+(\w+)/i);
+          // Match INTO table_name or INSERT INTO table_name
+          const intoMatch = sql.match(/INTO\s+`?(\w+)`?/i) || sql.match(/INSERT\s+INTO\s+`?(\w+)`?/i);
+          if (intoMatch) tableName = intoMatch[1];
+          // Match FROM table_name
+          else if (upperSql.includes('FROM')) {
+            const fromMatch = sql.match(/FROM\s+`?(\w+)`?/i);
             if (fromMatch) tableName = fromMatch[1];
-          } else if (upperSql.includes('INTO')) {
-            const intoMatch = sql.match(/INTO\s+(\w+)/i);
-            if (intoMatch) tableName = intoMatch[1];
-          } else if (upperSql.includes('UPDATE')) {
-            const updateMatch = sql.match(/UPDATE\s+(\w+)/i);
+          }
+          // Match UPDATE table_name
+          else if (upperSql.includes('UPDATE')) {
+            const updateMatch = sql.match(/UPDATE\s+`?(\w+)`?/i);
             if (updateMatch) tableName = updateMatch[1];
           }
+          // Match DELETE FROM table_name
+          else if (upperSql.includes('DELETE')) {
+            const deleteMatch = sql.match(/DELETE\s+FROM\s+`?(\w+)`?/i);
+            if (deleteMatch) tableName = deleteMatch[1];
+          }
 
-          // Normalize table name (remove pluralization for mock)
-          const normalizedTable = tableName.replace(/s$/, '').toLowerCase();
-          const actualTable = tables[normalizedTable] !== undefined ? normalizedTable : tableName.toLowerCase();
+          // Normalize table name - ensure it's lowercase and check if it exists
+          const normalizedTable = tableName.toLowerCase();
+          // First try exact match, then try without trailing 's'
+          const actualTable = tables[normalizedTable] 
+            ? normalizedTable 
+            : tables[normalizedTable.replace(/s$/, '')] 
+              ? normalizedTable.replace(/s$/, '')
+              : normalizedTable;
 
           const stmt = {
             run: (...params: any[]) => {
@@ -270,7 +283,7 @@ function getMockDatabase() {
 
               if (isInsert) {
                 // Create a mock row based on INSERT
-                const mockRow: any = { id: tables[actualTable].length + 1 };
+                const mockRow: any = {};
                 // Extract column names from SQL (simplified)
                 const colMatch = sql.match(/\(([^)]+)\)\s*VALUES/i);
                 if (colMatch) {
@@ -280,8 +293,36 @@ function getMockDatabase() {
                     mockRow[colName] = params[idx] ?? null;
                   });
                 }
+                
+                // Auto-generate id if not provided
+                if (!mockRow.id && actualTable.includes('fs_edit')) {
+                  mockRow.id = `mock_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+                }
+                
                 tables[actualTable].push(mockRow);
                 return { lastInsertRowid: tables[actualTable].length, changes: 1 };
+              }
+
+              // Handle UPDATE statements
+              if (isUpdate) {
+                const whereMatch = sql.match(/WHERE\s+(\w+)\s*=\s*\?/i);
+                if (whereMatch && params.length > 0) {
+                  const filterColumn = whereMatch[1].toLowerCase();
+                  const filterValue = params[params.length - 1]; // WHERE clause param is last
+                  const setValue = params.length > 1 ? params[0] : params[0]; // SET param is first
+                  
+                  // Find and update matching row
+                  const rowIndex = tables[actualTable].findIndex(r => r[filterColumn] === filterValue);
+                  if (rowIndex >= 0) {
+                    // Extract SET column
+                    const setMatch = sql.match(/SET\s+(\w+)/i);
+                    if (setMatch) {
+                      tables[actualTable][rowIndex][setMatch[1].toLowerCase()] = setValue;
+                      return { lastInsertRowid: 0, changes: 1 };
+                    }
+                  }
+                }
+                return { lastInsertRowid: 0, changes: 0 };
               }
 
               return { lastInsertRowid: 0, changes: 0 };
@@ -292,10 +333,37 @@ function getMockDatabase() {
                 return null;
               }
 
-              // Simple mock: return first matching row or null
-              // For WHERE clauses, we just return the first row
-              if (tables[actualTable].length > 0) {
-                return { ...tables[actualTable][0] };
+              const rows = tables[actualTable];
+              
+              // Parse WHERE clause to understand what to filter by
+              const whereMatch = sql.match(/WHERE\s+(\w+)(?:\s*=|\s+AND|\s+OR|$)/i);
+              
+              if (whereMatch && params.length > 0) {
+                const filterColumn = whereMatch[1].toLowerCase();
+                const filterValue = params[0];
+                
+                // SECURITY: For owner_id filtering, verify ownership
+                if (filterColumn === 'owner_id' && rows.length > 0 && 'owner_id' in rows[0]) {
+                  const match = rows.find(r => r.owner_id === filterValue);
+                  return match ? { ...match } : null;
+                }
+                
+                // For id filtering (transaction, conversation, etc.), find by id
+                if (filterColumn === 'id' && rows.length > 0 && 'id' in rows[0]) {
+                  const match = rows.find(r => r.id === filterValue);
+                  return match ? { ...match } : null;
+                }
+                
+                // For conversation_id filtering
+                if (filterColumn === 'conversation_id' && rows.length > 0 && 'conversation_id' in rows[0]) {
+                  const match = rows.find(r => r.conversation_id === filterValue);
+                  return match ? { ...match } : null;
+                }
+              }
+              
+              // Fallback: return first row if no filtering needed
+              if (rows.length > 0) {
+                return { ...rows[0] };
               }
               return null;
             },
@@ -304,7 +372,56 @@ function getMockDatabase() {
               if (!tables[actualTable]) {
                 return [];
               }
-              return [...tables[actualTable]];
+
+              // SECURITY: Filter by ownerId if present in params
+              // This is critical for VFS workspace isolation
+              const ownerIdParam = params[0];
+              let rows = tables[actualTable];
+              
+              if (ownerIdParam !== undefined && rows.length > 0) {
+                // Check if rows have owner_id column
+                const firstRow = rows[0];
+                if (firstRow && 'owner_id' in firstRow) {
+                  // Filter to only return rows matching the ownerId
+                  rows = rows.filter(r => r.owner_id === ownerIdParam);
+                }
+              }
+              
+              // Parse ORDER BY and LIMIT from SQL
+              // Match ORDER BY column_name [ASC|DESC] LIMIT n
+              const orderByMatch = sql.match(/ORDER\s+BY\s+(\w+)(?:\s+(ASC|DESC))?/i);
+              const limitMatch = sql.match(/LIMIT\s+(\d+|\?)/i);
+              
+              if (orderByMatch) {
+                const orderCol = orderByMatch[1].toLowerCase();
+                const orderDir = orderByMatch[2]?.toUpperCase() === 'DESC' ? -1 : 1;
+                rows = [...rows].sort((a: any, b: any) => {
+                  // Handle snake_case column names
+                  const colName = orderCol.includes('_') ? orderCol : 
+                    Object.keys(a).find(k => k.toLowerCase() === orderCol) || orderCol;
+                  const aVal = a[colName];
+                  const bVal = b[colName];
+                  if (aVal < bVal) return -1 * orderDir;
+                  if (aVal > bVal) return 1 * orderDir;
+                  return 0;
+                });
+              }
+              
+              if (limitMatch) {
+                const limitStr = limitMatch[1];
+                if (limitStr !== '?') {
+                  const limit = parseInt(limitStr, 10);
+                  rows = rows.slice(0, limit);
+                } else if (params.length > 1) {
+                  // Use the next param as limit
+                  const limit = parseInt(params[1], 10);
+                  if (!isNaN(limit)) {
+                    rows = rows.slice(0, limit);
+                  }
+                }
+              }
+              
+              return rows.map(r => ({ ...r }));
             },
 
             bind: () => stmt,
@@ -394,7 +511,7 @@ export function getDatabase(): any {
       try {
         initializeDatabaseSync();
         resolve();
-      } catch (err) {
+      } catch (err: unknown) {
         console.error('[DB] Synchronous database initialization failed:', err);
         dbInitPromise = null; // allow retry
         reject(err);
@@ -459,7 +576,7 @@ function initializeDatabaseSync(): void {
           }
         }
       }
-    } catch (migrationError) {
+      } catch (migrationError: unknown) {
       if (!migrationError.message?.includes('Cannot find module')) {
         console.warn('[database] Migrations failed (continuing with base schema):', migrationError);
       }
@@ -500,7 +617,7 @@ async function initializeSchemaSync(): Promise<void> {
     }
 
     console.log('Database base schema initialized');
-  } catch (error) {
+  } catch (error: unknown) {
     console.error('Failed to initialize base schema:', error);
     throw error;
   }
@@ -515,7 +632,7 @@ async function initializeSchema() {
     await migrationRunner.runMigrations();
 
     console.log('Database migrations completed');
-  } catch (error) {
+  } catch (error: unknown) {
     console.error('Failed to run migrations:', error);
     throw error;
   }
@@ -573,7 +690,7 @@ export function decryptApiKey(encryptedData: string): string {
       let decrypted = decipher.update(encrypted, 'hex', 'utf8');
       decrypted += decipher.final('utf8');
       return decrypted;
-    } catch (error) {
+    } catch (error: unknown) {
       console.error('[decryptApiKey] New format decryption failed:', error);
     }
   }
@@ -636,7 +753,7 @@ export async function migrateLegacyEncryptedKeys(): Promise<{ migrated: number; 
           (crypto as any).createDecipheriv('aes-256-cbc', encKey, iv);
           // If this succeeds, it's new format - skip
           continue;
-        } catch (e) {
+        } catch (e: unknown) {
           // New format failed, this is legacy - migrate it
           const decipher = crypto.createDecipheriv('aes-256-cbc', getEncryptionKey(), Buffer.alloc(16, 0));
           let decrypted = decipher.update(encrypted, 'hex', 'utf8');
@@ -651,14 +768,14 @@ export async function migrateLegacyEncryptedKeys(): Promise<{ migrated: number; 
           migrated++;
           console.log(`[MigrateKeys] Migrated API key for user ${cred.user_id}, provider ${cred.provider}`);
         }
-      } catch (err) {
+      } catch (err: unknown) {
         errors++;
         console.error(`[MigrateKeys] Failed to migrate key for user ${cred.user_id}, provider ${cred.provider}:`, err);
       }
     }
 
     console.log(`[MigrateKeys] Migration complete: ${migrated} migrated, ${errors} errors`);
-  } catch (error) {
+  } catch (error: unknown) {
     console.error('[MigrateKeys] Migration failed:', error);
     errors++;
   }

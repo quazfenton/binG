@@ -816,7 +816,7 @@ Score each solution from 0-100 and explain which is best.`,
     task: TeamTask
   ): Promise<{ bestSolution: string; consensusScore: number }> {
     const agents = Array.from(this.activeAgents.entries());
-    const votes: Map<number, number> = new Map();
+    const votes: Map<number, number> = new Map<number, number>();
 
     // Each agent votes
     for (const [role, agent] of agents) {

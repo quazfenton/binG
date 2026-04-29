@@ -69,7 +69,7 @@ export interface KnowledgeSearchResult {
  * Swap to SQLite store when scaling beyond that.
  */
 class InMemoryKnowledgeStore {
-  private chunks: Map<string, KnowledgeChunk> = new Map();
+  private chunks: Map<string, KnowledgeChunk> = new Map<string, KnowledgeChunk>();
   private readonly EMBED_DIM: number;
 
   constructor(dimension: number = 512) {

@@ -223,7 +223,7 @@ export class AgentFSSandboxHandle implements SandboxHandle {
 export class AgentFSProvider implements SandboxProvider {
   readonly name = 'agentfs'
 
-  private instances: Map<string, AgentFSSandboxHandle> = new Map()
+  private instances: Map<string, AgentFSSandboxHandle> = new Map<string, AgentFSSandboxHandle>();
 
   isAvailable(): boolean {
     // AgentFS works with local SQLite (no config needed) or Turso cloud (optional)

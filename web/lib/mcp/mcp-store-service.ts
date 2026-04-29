@@ -174,8 +174,8 @@ function saveStoredData(data: Partial<StoredData>): void {
 // ============================================================================
 
 export class MCPStoreService {
-  private servers: Map<string, MCPServerPackage> = new Map();
-  private apiKeys: Map<string, string> = new Map();
+  private servers: Map<string, MCPServerPackage> = new Map<string, MCPServerPackage>();
+  private apiKeys: Map<string, string> = new Map<string, string>();
   private config: MCPStoreConfig = {};
   private smitheryService = getSmitheryService();
   private syncInProgress = false;

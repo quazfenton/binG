@@ -90,7 +90,7 @@ export class MistralAgentProvider implements SandboxProvider {
   readonly name = 'mistral-agent'
   private client: Mistral
   private config: MistralProviderConfig
-  private workspacePersistence: Map<string, WorkspaceState> = new Map()
+  private workspacePersistence: Map<string, WorkspaceState> = new Map<string, WorkspaceState>()
 
   constructor(config?: Partial<MistralProviderConfig>) {
     const rawApiKey = process.env.MISTRAL_API_KEY || process.env.MISTRAL_KEY || ''

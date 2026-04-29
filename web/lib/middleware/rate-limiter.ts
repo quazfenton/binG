@@ -343,10 +343,10 @@ export function resetRateLimit(identifier: string, configKey: keyof typeof RATE_
   const config = RATE_LIMIT_CONFIGS[configKey];
   // Bug 6 fix: checkRateLimit keys include tier suffix; delete all tier variants
   for (const tier of Object.keys(RATE_LIMIT_TIERS)) {
-    rateLimitStore.delete(\:\:\);
+    rateLimitStore.delete(`${identifier}:${config.windowMs}:${tier}`);
   }
   // Also delete legacy key without tier (backward compat)
-  rateLimitStore.delete(\:\);
+  rateLimitStore.delete(`${identifier}:${config.windowMs}`);
 }
 
 /**
@@ -440,4 +440,4 @@ export function checkUserRateLimit(
  */
 export function getUserRateLimitTier(userId?: string, apiKey?: string): RateLimitTier {
   return getRateLimitTier(userId, apiKey);
-}
+}

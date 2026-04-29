@@ -8,6 +8,7 @@ export interface VirtualFile {
   createdAt: string;
   version: number;
   size: number;
+  ownerId?: string; // SECURITY: Owner ID for workspace isolation verification
   isDirectoryMarker?: boolean; // True for .directory marker files
   
   // Shadow commit system properties (for VFS sync and session tracking)

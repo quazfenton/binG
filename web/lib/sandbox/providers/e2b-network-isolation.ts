@@ -112,7 +112,7 @@ export interface NetworkTrafficLog {
  * Manages network isolation for sandboxes.
  */
 export class E2BNetworkIsolation {
-  private policies: Map<string, NetworkPolicy> = new Map();
+  private policies: Map<string, NetworkPolicy> = new Map<string, NetworkPolicy>();
   private trafficLogs: NetworkTrafficLog[] = [];
   private readonly MAX_LOGS = 10000;
 

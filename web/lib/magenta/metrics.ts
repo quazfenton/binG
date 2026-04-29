@@ -118,7 +118,7 @@ export function getMetricsSummary(): MetricsSummary {
     };
   });
 
-  const counters = Object.fromEntries(_counters);
+  const counters = Object.fromEntries(_counters) as Record<string, number>;
 
   return { traces, counters };
 }

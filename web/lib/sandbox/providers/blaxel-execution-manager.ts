@@ -30,7 +30,7 @@ export interface BlaxelCallbackResult {
  * Manages pending async executions and callback routing
  */
 class BlaxelExecutionManager extends EventEmitter {
-  private pendingExecutions: Map<string, PendingExecution> = new Map();
+  private pendingExecutions: Map<string, PendingExecution> = new Map<string, PendingExecution>();
   private readonly EXECUTION_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes (Blaxel max)
   private readonly CLEANUP_INTERVAL_MS = 60 * 1000; // Check every minute
   private readonly MAX_PENDING_EXECUTIONS = 100;

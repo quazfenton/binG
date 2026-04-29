@@ -109,7 +109,7 @@ export interface ResourceAlert {
  * Monitors Sprites resource usage.
  */
 export class SpritesResourceMonitor extends EventEmitter {
-  private metrics: Map<string, SpritesResourceMetrics[]> = new Map();
+  private metrics: Map<string, SpritesResourceMetrics[]> = new Map<string, SpritesResourceMetrics[]>();
   private alerts: ResourceAlert[] = [];
   private thresholds = {
     memory: { warning: 70, critical: 90 },

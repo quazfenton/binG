@@ -68,7 +68,7 @@ export class MistralMultiAgentCollaboration {
   private client: Mistral
   private apiKey: string
   private config: Required<CollaborationConfig>
-  private agents: Map<string, AgentSpec> = new Map()
+  private agents: Map<string, AgentSpec> = new Map<string, AgentSpec>()
   private messageQueue: AgentMessage[] = []
 
   constructor(apiKey: string, config: CollaborationConfig = {}, serverURL?: string) {

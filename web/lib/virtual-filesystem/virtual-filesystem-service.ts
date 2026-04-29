@@ -236,6 +236,21 @@ export class VirtualFilesystemService {
     const file = workspace.files.get(normalizedPath);
 
     if (!file) {
+      // SECURITY: Even if file doesn't exist, throw generic 'File not found'
+      // to avoid leaking information about whether files exist in other workspaces
+      throw new Error(`File not found: ${normalizedPath}`);
+    }
+
+    // SECURITY FIX: Verify file ownership
+    // Each file is stored with its ownerId. If a file exists in the workspace but
+    // belongs to a different owner (e.g., from mock DB returning wrong owner data),
+    // we must reject the access to prevent cross-workspace data leakage.
+    if (file.ownerId && file.ownerId !== ownerId) {
+      console.warn(`[VFS] SECURITY: Cross-workspace access blocked`, {
+        requestingOwner: ownerId,
+        fileOwner: file.ownerId,
+        path: normalizedPath
+      });
       throw new Error(`File not found: ${normalizedPath}`);
     }
 
@@ -379,6 +394,7 @@ export class VirtualFilesystemService {
       createdAt: previous?.createdAt || now,
       version: (previous?.version || 0) + 1,
       size: fileSize,
+      ownerId: this.sanitizeOwnerId(ownerId), // CRITICAL: Track ownership for security
     };
 
     workspace.files.set(normalizedPath, file);
@@ -1127,9 +1143,7 @@ export class VirtualFilesystemService {
           version: number;
           created_at: string;
           updated_at: string;
-        }>;
-
-        if (rows.length > 0 || meta) {
+        }>;          if (rows.length > 0 || meta) {
           workspace.files = new Map(rows.map(row => {
             // FIX: Normalize backslashes to forward slashes when loading from DB.
             // Stale entries from Windows may contain backslashes that break path matching.
@@ -1146,6 +1160,7 @@ export class VirtualFilesystemService {
               lastModified: row.updated_at,
               createdAt: row.created_at,
               isDirectoryMarker: normalizedPath.endsWith('/.directory'),
+              ownerId: normalizedOwnerId, // SECURITY: Track ownership for DB-loaded files
             } as VirtualFile];
           }));
 

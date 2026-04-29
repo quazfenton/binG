@@ -142,7 +142,7 @@ export async function createCliPiSession(config: PiConfig): Promise<PiSession> {
   let buffer = '';
   let isStreaming = false;
   const listeners: Set<(event: PiEvent) => void> = new Set();
-  let pendingRequests: Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void }> = new Map();
+  let pendingRequests: Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void }> = new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
   let requestId = 0;
 
   // Handle stdout for events and responses

@@ -312,7 +312,7 @@ export class SessionManager {
       if (session.sandboxHandle) {
         try {
           await session.sandboxHandle.executeCommand('echo "Session cleanup complete"');
-        } catch (e) {
+        } catch (e: unknown) {
           // Ignore cleanup errors
         }
       }
@@ -324,7 +324,7 @@ export class SessionManager {
       // Cleanup session from session-naming.ts tracking
       try {
         unregisterActiveSession(conversationId);
-      } catch (e) {
+      } catch (e: unknown) {
         // Non-fatal - session naming cleanup is optional
         logger.debug(`Failed to cleanup session name for ${conversationId}:`, e);
       }
@@ -840,7 +840,7 @@ export class SessionManager {
             const { sandboxBridge } = await import('../sandbox/sandbox-service-bridge');
             await sandboxBridge.cleanupSession(_sess.id, _sess.sandboxId);
           } catch (_sbErr: any) {
-            logger.warn(Sandbox cleanup failed for \: \);
+            logger.warn(`Sandbox cleanup failed for session ${_sess.id}: ${_sbErr.message}`);
           }
         }
         await this.destroySession(userId, conversationId);

@@ -57,7 +57,7 @@ export class GitBackedVFS {
   private shadowCommitManager: ShadowCommitManager;
   private options: Required<GitVFSOptions>;
   private changeBuffer: GitVFSChange[] = [];
-  private transactionLog: Map<string, TransactionEntry[]> = new Map();
+  private transactionLog: Map<string, TransactionEntry[]> = new Map<string, TransactionEntry[]>();
   // FIX: Track the owner this instance belongs to — prevents duplicate handling
   // when multiple GitVFS instances exist (one per owner+session composite key).
   // Without this, every instance's listener fires for ALL file change events.

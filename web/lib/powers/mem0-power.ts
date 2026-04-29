@@ -563,6 +563,92 @@ function invalidateMem0SearchCacheForUser(userId: string): void {
   }
 }
 
+// ─── Pre-warm helper ────────────────────────────────────────────────────────
+// Fires a fire-and-forget broad mem0 search to populate the in-memory cache
+// before the user's first hot-path request needs memory. The actual chat
+// request still issues its own targeted query (different cache key), but this
+// hides the TLS handshake / cold connection latency behind whatever else is
+// loading at session boot.
+
+const PREWARM_DEDUP_WINDOW_MS = 2 * 60_000; // don't prewarm same user > once per 2 min
+const _mem0PrewarmedAt = new Map<string, number>();
+
+/**
+ * Warm the mem0 search cache for a user with a broad memory query.
+ *
+ * Returns immediately (does not await the network call). Idempotent within
+ * a 2-minute window per user — repeated calls are no-ops.
+ *
+ * Wire this up at session/thread boot (e.g., when the chat UI mounts, or on
+ * the first user message of a new conversation).
+ *
+ * @param userId The user whose memories to pre-fetch.
+ * @param opts.query Optional broad query (default: profile/preference style).
+ * @param opts.limit Max memories to retrieve (default 10).
+ */
+export function prewarmMem0Cache(
+  userId: string,
+  opts: { query?: string; limit?: number; agentId?: string } = {},
+): void {
+  if (!userId) return;
+  if (!isMem0Configured()) return; // also short-circuits when circuit is OPEN
+
+  const now = Date.now();
+  const lastAt = _mem0PrewarmedAt.get(userId) ?? 0;
+  if (now - lastAt < PREWARM_DEDUP_WINDOW_MS) {
+    return;
+  }
+  _mem0PrewarmedAt.set(userId, now);
+
+  // LRU cap — drop oldest dedup entries to bound memory
+  if (_mem0PrewarmedAt.size > 1024) {
+    const it = _mem0PrewarmedAt.keys();
+    for (let i = 0; i < 128; i++) {
+      const next = it.next();
+      if (next.done) break;
+      _mem0PrewarmedAt.delete(next.value);
+    }
+  }
+
+  // Default broad query — designed to surface durable user-level memories
+  // (preferences, conventions, project facts) that are useful regardless of
+  // the specific next prompt. The search result populates the LRU cache, so
+  // a follow-up `mem0Search` from the chat route with the same shape hits
+  // the cache (~0 ms) instead of the network.
+  const query =
+    opts.query ??
+    'user preferences, conventions, project context, past decisions';
+
+  // Fire-and-forget. Errors are logged at debug — never propagate.
+  mem0Search({
+    query,
+    userId,
+    agentId: opts.agentId,
+    limit: opts.limit ?? 10,
+    threshold: 0.3,
+  }).then(
+    (res) => {
+      if (res.success) {
+        log.debug('Mem0 cache pre-warmed', {
+          userId,
+          memoryCount: res.results?.length ?? 0,
+        });
+      }
+    },
+    () => {
+      // Already logged inside mem0Search
+    },
+  );
+}
+
+/**
+ * Test/diagnostic helper — clear pre-warm dedup state so subsequent
+ * `prewarmMem0Cache` calls fire the network request again.
+ */
+export function resetMem0PrewarmState(): void {
+  _mem0PrewarmedAt.clear();
+}
+
 /**
  * Action: Search memories
  */

@@ -277,7 +277,7 @@ const SPEED_OPTIMAL_MAPPING: Record<TaskType, { provider: string; model: string 
 }
 
 class AdvancedToolRouterImpl implements AdvancedToolRouter {
-  private metrics: Map<string, ProviderMetrics> = new Map()
+  private metrics: Map<string, ProviderMetrics> = new Map<string, ProviderMetrics>()
   private costHistory: CostTracking[] = []
   private optimizationGoal: OptimizationGoal
   private maxCostHistory: number

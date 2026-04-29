@@ -65,19 +65,17 @@ export class DesktopVFSService {
   
   // === IMPROVEMENT 1: Per-session debounce queues ===
   // Each PTY session gets its own debounce queue instead of global
-  private sessionDebounceQueues: Map<string, NodeJS.Timeout> = new Map();
-  private pendingSessionSyncs: Map<string, Set<string>> = new Map();  // ownerId -> set of paths to sync
-  private readonly DEBOUNCE_DELAY_MS = 300;  // Debounce delay per session
-  
+  private sessionDebounceQueues: Map<string, NodeJS.Timeout> = new Map<string, NodeJS.Timeout>();
+  private pendingSessionSyncs: Map<string, Set<string>> = new Map<string, Set<string>>();  // ownerId -> set of paths to sync
+
   // === IMPROVEMENT 2: Dedup deletes ===
   // Track recently deleted files to prevent duplicate delete events
-  private recentlyDeletedFiles: Map<string, number> = new Map();  // path -> timestamp
-  private readonly DELETE_DEDUP_WINDOW_MS = 2000;  // Window to dedup delete events
-  private knownFiles: Map<string, Set<string>> = new Map();  // Track known files per owner for delete detection
-  
+  private recentlyDeletedFiles: Map<string, number> = new Map<string, number>();  // path -> timestamp
+  private knownFiles: Map<string, Set<string>> = new Map<string, Set<string>>();  // Track known files per owner for delete detection
+
   // === IMPROVEMENT 3: File sync coalescing ===
   // Merge multiple changes to same file within coalescing window
-  private pendingFileChanges: Map<string, { content: string; timestamp: number }> = new Map();  // path -> {content, timestamp}
+  private pendingFileChanges: Map<string, { content: string; timestamp: number }> = new Map<string, { content: string; timestamp: number }>();  // path -> {content, timestamp}
   private coalescingTimer: NodeJS.Timeout | null = null;
   private readonly COALESCING_WINDOW_MS = 500;  // Window to coalesce changes
 
