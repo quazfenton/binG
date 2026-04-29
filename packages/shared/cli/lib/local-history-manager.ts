@@ -95,8 +95,12 @@ export class LocalHistoryProvider {
     try {
       const histories = await Promise.all(
         files.map(async (file) => {
-          const content = await fs.readJson(path.join(this.historyDir, file));
-          return Array.isArray(content) ? content : [];
+          try {
+            const content = await fs.readJson(path.join(this.historyDir, file));
+            return Array.isArray(content) ? content : [];
+          } catch {
+            return [];
+          }
         })
       );
       return histories.flat();

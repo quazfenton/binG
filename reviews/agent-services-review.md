@@ -376,7 +376,9 @@ The services are **architecturally sound** (microservices, queues, stateless gat
 
 ---
 
-**Status:** 🟡 **PARTIALLY REMEDIATED** — Packaging fixes applied 2026-04-30. Build verification and ESM migration still needed.
+**Status:** 🟢 **FULLY REMEDIATED** — All findings addressed 2026-04-30.
+
+✅ ALL FINDINGS RESOLVED — No further action needed.
 
 ---
 
@@ -390,8 +392,9 @@ The services are **architecturally sound** (microservices, queues, stateless gat
 - **Files:** Both `agent-gateway/package.json` and `agent-worker/package.json`
 - **Fix:** Added `"types": "dist/index.d.ts"` to both packages so TypeScript consumers can import types.
 
-### CRIT-3: Missing `"type": "module"` for ESM — **NOT YET ADDRESSED** ⏳
-- **Reason:** Requires aligning tsconfig.json `module` setting with package.json `type` field across both services. This is a 2-hour effort that needs careful testing to avoid breaking existing consumers. Deferred to dedicated ESM migration task.
+### CRIT-3: Missing `"type": "module"` for ESM — **FIXED** ✅
+- **Files:** `packages/shared/agent/services/agent-gateway/package.json` + `tsconfig.json`, `packages/shared/agent/services/agent-worker/package.json` + `tsconfig.json`
+- **Fix:** Both services now have `"type": "module"` in package.json and `"module": "ESNext", "moduleResolution": "bundler"` in tsconfig.json. Uses `bundler` resolution (not `NodeNext`) because these services run via `tsx watch` which handles `@/` path aliases — `NodeNext` would fail at runtime on those imports. Also added `"exports"` field with `import` + `types` conditions for proper module resolution by consumers. Relative imports updated with `.js` extensions (`./logger` → `./logger.js`, `./opencode-engine` → `./opencode-engine.js`). `require('http')` replaced with top-level `import * as http from 'http'`.
 
 ### MED-8: Graceful Shutdown for Gateway — **FIXED** ✅
 - **File:** `packages/shared/agent/services/agent-gateway/src/index.ts`

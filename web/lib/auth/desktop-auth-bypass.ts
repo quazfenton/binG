@@ -107,9 +107,9 @@ export function withDesktopAuth<T extends NextResponse>(
         ) as T;
       }
 
+      // HIGH-8 fix: email removed from EnhancedAuthResult — do not assign here
       const standardUser: DesktopUserContext = {
         userId: auth.userId || 'unknown',
-        email: auth.email,
         isLocalUser: false,
       };
 

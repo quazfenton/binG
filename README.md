@@ -83,11 +83,22 @@ binG is not just another chat interface—it's a **full-stack agentic workspace*
 - **Dark Theme**: Easy on the eyes for extended sessions
 
 ### 🖼️ Image Generation (NEW)
-- **Multi-Provider Support**: Mistral AI (FLUX1.1 Ultra), Replicate (SDXL, Flux)
+- **Multi-Provider Support**: Mistral AI (FLUX1.1 Ultra), Google Imagen (free + paid), Replicate (SDXL, Flux)
 - **ComfyUI-Style Controls**: Aspect ratio, quality presets, style selection
 - **Virtual Filesystem**: Save/generated images to workspace
-- **Fallback Chain**: Automatic provider failover (Mistral → Replicate)
-- **Quota Management**: Monthly usage tracking and limits
+- **Fallback Chain**: Automatic provider failover (Mistral → Google Free → Google Paid → Replicate)
+- **Quota Management**: Daily usage tracking for free tier (500 images/day limit)
+- **Free Tier**: `gemini-2.5-flash-image-preview` (500 images/day with `GEMINI_API_KEY`)
+- **Paid Models**: All other Google Imagen models require paid Gemini API access
+
+### 🎥 Video Generation (Experimental - Coming Soon)
+- **Text-to-Video**: Generate videos from text prompts using Alibaba WAN, Google Veo, Kling AI
+- **Image-to-Video**: Animate still images with motion and effects
+- **Multi-Provider Support**: Vercel AI and Google Veo video models with automatic failover
+- **Advanced Controls**: Duration, motion strength, camera movement, style presets
+- **Quality Presets**: Low (2s) to Ultra (16s) with resolution options up to 4K
+- **Experimental Feature**: Enable with `NEXT_PUBLIC_VIDEO_GENERATION_ENABLED=true`
+- **Paid Models**: All video models require paid API access (Veo 3.0/3.1 via `GEMINI_API_KEY`)
 
 ### 🧪 Comprehensive Testing (NEW)
 - **E2E Tests**: 80+ Playwright tests for all major workflows
@@ -198,7 +209,8 @@ docker-compose down
 ```env
 # At least ONE LLM provider must be configured
 OPENROUTER_API_KEY=sk-or-...        # Recommended (access to 100+ models)
-GOOGLE_API_KEY=...                   # Google Gemini
+GOOGLE_API_KEY=...                   # Google Gemini (LLM language models)
+GEMINI_API_KEY=...                   # Google Gemini (Imagen/Veo image/video generation)
 ANTHROPIC_API_KEY=sk-ant-...         # Claude
 MISTRAL_API_KEY=...                  # Mistral AI
 GITHUB_MODELS_API_KEY=...            # GitHub Models (via Azure)
@@ -249,6 +261,10 @@ SANDBOX_RATE_LIMIT_FILE_OPS_MAX=50
 SPRITES_ENABLE_TAR_PIPE_SYNC=true     # 10x faster file sync
 SPRITES_ENABLE_SSHFS=true             # Mount filesystem locally
 SPRITES_CHECKPOINT_AUTO_CREATE=true   # Auto-save before dangerous ops
+
+# Video Generation (Experimental)
+NEXT_PUBLIC_VIDEO_GENERATION_ENABLED=false  # Set to true to enable video generation
+VIDEO_GENERATION_ALLOWED_MODELS=vercel    # Supported: vercel
 
 # Blaxel MCP Server (for AI assistants)
 BLAXEL_MCP_ENABLED=true

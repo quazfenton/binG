@@ -2,8 +2,15 @@
   "name": "agent-worker",
   "version": "1.0.0",
   "description": "Agent Worker - Runs OpenCode engine loop",
+  "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",

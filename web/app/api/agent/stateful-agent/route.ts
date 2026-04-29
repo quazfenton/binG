@@ -282,8 +282,10 @@ export async function POST(request: NextRequest) {
       conversationHistory: messages.slice(0, -1),
     });
 
+    // MED-2 fix: runAgentLoop now returns { success: false } instead of throwing,
+    // so check legacyResult.success instead of hardcoding true
     return NextResponse.json({
-      success: true,
+      success: legacyResult.success !== false,
       response: legacyResult.response,
       steps: legacyResult.totalSteps,
       sandboxId: targetSandboxId,

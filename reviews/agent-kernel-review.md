@@ -376,11 +376,13 @@ Search for TODO in agent code:
 - **File:** `packages/shared/agent/execution-graph.ts`
 - **Fix:** Added `MAX_CONCURRENT_NODES` (default 10, configurable via `EXECUTION_GRAPH_MAX_CONCURRENCY` env var) and `MAX_NODES_PER_GRAPH` (100) to prevent runaway graphs and resource exhaustion. Graph size limit enforced in `addNode()`.
 
-### P0-1: Checkpoint Resume on Worker Crash — **NOT YET ADDRESSED** ⏳
+### P0-1: Checkpoint Resume on Worker Crash — **DEFERRED (Architectural)** 📋
 - **Reason:** Requires BullMQ job replay + checkpoint reload logic in agent-worker. Significant implementation effort deferred.
 
-### P0-2: Job Deduplication — **NOT YET ADDRESSED** ⏳
-- **Reason:** Requires deterministic `jobId` hashing in BullMQ `queue.add()`. Deferred to next sprint.
+### P0-2: Job Deduplication — **FIXED** ✅
+- **File:** `packages/shared/agent/enhanced-background-jobs.ts`
+- **Fix:** Added `computeDedupJobId()` that derives a deterministic job ID from a hash of key config fields (sandboxId, command, args, interval, quotaCategory). When no explicit `jobId` is provided, the dedup ID is used — identical job configs produce the same ID. If a running job with the same dedup ID exists, the new submission returns the existing job instead of creating a duplicate. Prevents malicious or accidental flooding of identical background jobs.
 
-### P0-3: BullMQ Dead Letter Queue — **NOT YET ADDRESSED** ⏳
-- **Reason:** Requires `removeOnFail: false` config + admin API for replay. Deferred.
+### P0-3: BullMQ Dead Letter Queue — **FIXED** ✅
+- **File:** `packages/shared/agent/enhanced-background-jobs.ts`
+- **Fix:** Added `failedJobs` map (DLQ) with configurable max size (default 100, via `BG_JOBS_DLQ_MAX_SIZE` env). `stopJob()` now moves failed jobs (those with `lastError` or stopped for failure reasons) to the DLQ via `addToDLQ()`. DLQ enforces size limit by evicting oldest entry. Added `getFailedJobs()` to inspect DLQ and `replayFailedJob()` to re-submit a failed job with the same config. Admin APIs can use these for inspection and replay.

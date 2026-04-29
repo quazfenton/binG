@@ -6,6 +6,7 @@
 
 import { z } from 'zod';
 import { spawn } from 'child_process';
+import { randomUUID } from 'crypto';
 import { promises as fs } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -73,12 +74,13 @@ export function voiceSpeechTool() {
 
 async function generateKittenTTS(text: string, voice: string, model: string) {
   const tempDir = tmpdir();
-  const outputPath = join(tempDir, `kittentts-${Date.now()}.wav`);
+  const tempId = `${Date.now()}-${randomUUID()}`;
+  const outputPath = join(tempDir, `kittentts-${tempId}.wav`);
 
   // HIGH-6 fix: Write text to a temp file and pass filename to Python,
   // instead of embedding text inline in a shell command. This prevents
   // shell/Python injection via crafted text containing ''' or other escapes.
-  const textFilePath = join(tempDir, `kittentts-text-${Date.now()}.txt`);
+  const textFilePath = join(tempDir, `kittentts-text-${tempId}.txt`);
   await fs.writeFile(textFilePath, text, 'utf-8');
 
   // Validate model and voice names to prevent injection via those params

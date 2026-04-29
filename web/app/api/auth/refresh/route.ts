@@ -35,9 +35,11 @@ export async function POST(request: NextRequest) {
 
       if (sessionResult.success && sessionResult.user) {
         // Session is valid, generate new token
+        // HIGH-8 fix: email removed from JWT — use getUserEmail() from jwt.ts if needed
+        // tokenVersion default to 1 (matching other callers)
         const newToken = generateToken({
           userId: sessionResult.user.id.toString(),
-          email: sessionResult.user.email
+          tokenVersion: (sessionResult.user as any).token_version ?? 1,
         });
 
         // HIGH-5 fix: Per-user rate limit for authenticated refresh
@@ -50,6 +52,14 @@ export async function POST(request: NextRequest) {
               { status: 429 }
             );
           }
+        }
+
+        // MED-5 fix: Log token refresh
+        try {
+          const { logTokenRefresh } = await import('@/lib/auth/auth-audit-logger');
+          logTokenRefresh(String(sessionResult.user.id), request);
+        } catch (auditError) {
+          console.warn('[Refresh] Audit log failed:', auditError);
         }
 
         return NextResponse.json({

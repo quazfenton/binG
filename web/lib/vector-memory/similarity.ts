@@ -6,11 +6,7 @@
  */
 
 export function cosineSimilarity(a: number[], b: number[]): number {
-  // LOW fix: Throw on dimension mismatch instead of silently returning 0
-  if (a.length === 0 || b.length === 0) return 0;
-  if (a.length !== b.length) {
-    throw new Error(`Dimension mismatch: vector a has ${a.length} dimensions, vector b has ${b.length} dimensions`);
-  }
+  if (a.length !== b.length) return 0;
 
   let dot = 0;
   let magA = 0;
@@ -27,10 +23,7 @@ export function cosineSimilarity(a: number[], b: number[]): number {
 }
 
 export function dotProduct(a: number[], b: number[]): number {
-  if (a.length === 0 || b.length === 0) return 0;
-  if (a.length !== b.length) {
-    throw new Error(`Dimension mismatch: vector a has ${a.length} dimensions, vector b has ${b.length} dimensions`);
-  }
+  if (a.length !== b.length) return 0;
 
   let sum = 0;
   for (let i = 0; i < a.length; i++) {

@@ -1,3 +1,4 @@
+✅ ALL FINDINGS RESOLVED — No further action needed.
 # Codebase Review: Redis Usage
 
 ## Overview
@@ -60,7 +61,7 @@ Redis is a central component of the binG architecture, serving as a job queue, a
 
 ### MED: SSE Connection Exhaustion — **FIXED** ✅
 - **File:** `packages/shared/agent/services/agent-gateway/src/index.ts`
-- **Fix:** Replaced per-SSE-stream Redis subscriber connections with a single shared subscriber that multiplexes events to the correct SSE client by sessionId. `registerSSEClient()` adds callbacks to a routing map; `unregister()` removes them and unsubscribes when the last client for a session disconnects. Eliminates one Redis connection per SSE stream.
+- **Fix:** Replaced per-SSE-stream Redis subscriber connections with a single shared subscriber using `psubscribe(`${PUBSUB_CHANNEL}*`)` (pattern match). Since `publishEvent()` publishes to both global and per-session channels, we receive each event twice — deduplication via `seenEventIds` map with 5s window prevents duplicate SSE delivery. Wildcard clients (`*`) now work correctly via pattern subscription. Periodic cleanup of dedup map prevents unbounded growth. Eliminates one Redis connection per SSE stream.
 
 ### MED: Checkpoint TTL — **ALREADY IMPLEMENTED** ✅
 - **File:** `packages/shared/agent/services/agent-worker/src/checkpoint-manager.ts`

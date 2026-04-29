@@ -207,19 +207,19 @@ The module is well-structured for swapping backends. Implementation of SQLite or
 - **File:** `web/lib/vector-memory/store.ts`
 - **Fix:** Added `maxEntries` (default 5000, configurable via `VECTOR_STORE_MAX_ENTRIES` env) with LRU eviction. When capacity is reached, the oldest entry (by insertion order) is evicted before adding new ones. `entryOrder` array tracks insertion order. `evictIfNeeded()` is called before each `add()`/`addBatch()`. At ~12KB/entry, 5000 entries ≈ 60MB cap.
 
-### HIGH-2: No Persistence — **NOT YET ADDRESSED** ⏳
+### HIGH-2: No Persistence — **DEFERRED (Architectural)** 📋
 - **Reason:** Requires SQLite/HNSW backend swap. The `VectorStore` interface is already designed for this — implementation is a longer-term project.
 
-### HIGH-3: O(n) Search Complexity — **NOT YET ADDRESSED** ⏳
+### HIGH-3: O(n) Search Complexity — **DEFERRED (Architectural)** 📋
 - **Reason:** Requires HNSW or ANN index. Linear scan is acceptable for <5000 entries (the new cap). At scale, backend swap will address this.
 
 ### MED-4: No Embedding Cache — **ALREADY IMPLEMENTED** ✅
 - **File:** `web/lib/vector-memory/embeddings.ts`
 - **Note:** `APIEmbeddingProvider` already uses `embeddingCache` with content hash lookup (1-hour TTL). `embedBatch()` also checks cache before making API calls. No fix needed.
 
-### LOW-6: No Error Handling in Similarity — **FIXED** ✅
-- **File:** `web/lib/vector-memory/similarity.ts`
-- **Fix:** `cosineSimilarity()` and `dotProduct()` now throw `Error` with dimension mismatch details instead of silently returning 0. Empty vectors still return 0 (no dimension to mismatch).
+### LOW-6: No Error Handling in Similarity — **PARTIALLY FIXED** ✅
+- **File:** `web/lib/vector-memory/similarity.ts` + `web/lib/vector-memory/store.ts`
+- **Fix:** Kept `cosineSimilarity()`/`dotProduct()` returning 0 on mismatch (not throwing — too many callers across codebase). Instead, `store.ts` search() now explicitly checks `query.length !== entry.embedding.length` and skips mismatched entries with a warning log, preventing zero-score pollution in search results.
 
 ### LOW-9: No Batch Embedding Support — **ALREADY IMPLEMENTED** ✅
 - **Note:** `APIEmbeddingProvider.embedBatch()` already exists with cache-aware batching.
