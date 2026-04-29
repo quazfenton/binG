@@ -97,7 +97,8 @@ function getTokenBlacklist(): Map<string, number> {
 
 export interface JwtPayload {
   userId: string;
-  email: string;
+  // HIGH-8 fix: Email removed from JWT payload — PII should not be in tokens.
+  // Email is available from the database when needed (e.g., via getUserById).
   type?: string;
   jti: string; // Unique token identifier for blacklist
   tokenVersion: number; // HIGH-12 fix: Required — checked on verify against DB value
@@ -106,7 +107,6 @@ export interface JwtPayload {
 export interface AuthResult {
   success: boolean;
   userId?: string;
-  email?: string;
   error?: string;
   tokenVersion?: number; // Exposed for downstream checks
 }
@@ -217,10 +217,11 @@ export async function verifyAuth(request: NextRequest): Promise<AuthResult> {
         logger.error('Token version check failed, allowing token (fail open)', versionError as Error);
       }
 
+      // HIGH-8 fix: Email removed from JWT — fetch from DB/cache when needed
+      // (see getUserEmail below for a cached lookup, or query users table directly)
       return {
         success: true,
         userId: decoded.userId,
-        email: decoded.email,
         tokenVersion,
       };
     } catch (jwtError) {
@@ -285,7 +286,11 @@ export function incrementUserTokenVersion(userId: string): number {
   }
 }
 
-export function generateToken(payload: { userId: string; email: string; type?: string; tokenVersion?: number }): string {
+// HIGH-8 fix: Email is explicitly stripped from the JWT payload.
+// PII should not be stored in tokens. If email is needed, use getUserEmail(userId) from DB.
+export function generateToken(payload: { userId: string; email?: string; type?: string; tokenVersion?: number }): string {
+  // Strip email from payload so it never ends up in the JWT (even if caller passes it)
+  const { email: _email, ...payloadWithoutEmail } = payload;
   // MED-1 fix: Access token TTL reduced from 7 days to 1 hour.
   // Long-lived sessions should use refresh tokens, not long-lived JWTs.
   // Password reset tokens use shorter TTL (15 min) for security.
@@ -300,7 +305,7 @@ export function generateToken(payload: { userId: string; email: string; type?: s
   
   // Add issuer and audience claims for better security
   const fullPayload = {
-    ...payload,
+    ...payloadWithoutEmail,
     tokenVersion,
     jti,
     iss: 'bing-app',
@@ -334,6 +339,66 @@ export async function invalidateAllUserTokens(userId: string): Promise<void> {
     logger.error('Failed to invalidate tokens for user — token version not incremented', { userId });
   } else {
     logger.info('All tokens invalidated for user via token version increment', { userId, newVersion });
+  }
+}
+
+/**
+ * MED-6 fix: Generate a short-lived MFA challenge token.
+ * Used during login flow when user has MFA enabled.
+ * This token is NOT a full auth token — it only contains the userId
+ * and has a 5-minute TTL. It's verified by /auth/mfa/challenge to
+ * complete the second factor before issuing a real session.
+ *
+ * Uses the same lazy-loaded JWT module and secret as other tokens.
+ */
+export function generateMfaToken(userId: string): string {
+  const jwt = getJwtModule();
+  const jti = require('crypto').randomBytes(16).toString('hex');
+  return jwt.sign(
+    { userId, purpose: 'mfa-challenge', jti },
+    getJwtSecret(),
+    {
+      expiresIn: '5m',
+      algorithm: 'HS256',
+      issuer: 'bing-app',
+      audience: 'bing-mfa',
+    }
+  );
+}
+
+/**
+ * MED-6 fix: Verify an MFA challenge token.
+ * Returns the userId if valid, or throws on invalid/expired tokens.
+ */
+export function verifyMfaToken(mfaToken: string): { userId: string; jti: string } {
+  const jwt = getJwtModule();
+  const decoded = jwt.verify(mfaToken, getJwtSecret(), {
+    algorithms: ['HS256'],
+    issuer: 'bing-app',
+    audience: 'bing-mfa',
+  }) as { userId?: string; purpose?: string; jti?: string };
+
+  if (!decoded.userId || decoded.purpose !== 'mfa-challenge') {
+    throw new Error('Invalid MFA token payload');
+  }
+
+  return { userId: decoded.userId, jti: decoded.jti || '' };
+}
+
+/**
+ * HIGH-8 fix: Get user email from database by userId.
+ * Used when email is needed after JWT verification (email no longer in JWT).
+ * Non-blocking: returns null if DB not available.
+ */
+export function getUserEmail(userId: string): string | null {
+  try {
+    const { getDatabase } = require('../database/connection');
+    const db = getDatabase();
+    if (!db) return null;
+    const row = db.prepare('SELECT email FROM users WHERE id = ?').get(userId) as any;
+    return row?.email || null;
+  } catch {
+    return null;
   }
 }
 

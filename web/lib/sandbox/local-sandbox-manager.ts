@@ -54,7 +54,10 @@ export class SandboxManager extends EventEmitter {
   private baseSnapshotDir: string;
   private runningProcesses: Map<string, ChildProcess> = new Map<string, ChildProcess>();
 
-  constructor(baseWorkspaceDir: string = '/tmp/workspaces', baseSnapshotDir: string = '/tmp/snapshots') {
+  constructor(
+    baseWorkspaceDir: string = process.env.WORKSPACE_DIR || '/tmp/workspaces',
+    baseSnapshotDir: string = process.env.LOCAL_SNAPSHOT_DIR || '/tmp/snapshots'
+  ) {
     super();
     
     // SECURITY: Validate and resolve base directories
@@ -422,6 +425,7 @@ export class SandboxManager extends EventEmitter {
   }
 }
 
-// Singleton instance
+// Singleton instance — reads paths from env vars (WORKSPACE_DIR, LOCAL_SNAPSHOT_DIR)
+// Falls back to /tmp/workspaces and /tmp/snapshots if env vars not set
 export const sandboxManager = new SandboxManager();
 

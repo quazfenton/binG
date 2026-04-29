@@ -551,11 +551,6 @@ export class ConstraintViolationMonitor {
       this.logInfoViolation(violation);
     }
 
-    // Track dropped alerts if rate limit exceeded
-    if (!this.throttler.shouldSendImmediately()) {
-      this.totalAlertsDropped++;
-    }
-
     // Notify callbacks via throttler (batched/rate-limited)
     this.throttler.queueAlert(alert);
   }
@@ -602,29 +597,6 @@ export class ConstraintViolationMonitor {
       userId?: string;
       onError?: (error: Error, violation: ConstraintViolation | null) => void;
     }
-  ): Promise<T> {
-    try {
-      return await operation();
-    } catch (error) {
-      const parsed = this.parseConstraintViolationError(error as Error);
-      
-      if (parsed) {
-        parsed.userId = options.userId;
-        parsed.operation = options.operationName;
-        
-        this.recordViolation(parsed, {
-          userId: options.userId,
-          operation: options.operationName,
-        });
-        
-        if (options.onError) {
-          options.onError(error as Error, parsed);
-        }
-      }
-      
-      throw error;
-    }
-  }
   ): Promise<T> {
     try {
       return await operation();

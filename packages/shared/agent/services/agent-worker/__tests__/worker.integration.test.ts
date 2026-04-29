@@ -34,10 +34,8 @@ describe('Agent Worker Integration Tests', () => {
   });
 
   beforeEach(async () => {
-    // Clear queue before each test
-    await queue.clean(0, 100, 'completed');
-    await queue.clean(0, 100, 'failed');
-    await queue.clean(0, 100, 'delayed');
+    // Clear all queue state before each test for strict isolation
+    await queue.obliterate({ force: true });
   });
 
   describe('Job Queue Reliability', () => {

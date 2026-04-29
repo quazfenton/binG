@@ -71,11 +71,12 @@ Orchestra provides core agent orchestration. Quality is decent. Main concern is 
 - **File:** `web/lib/orchestra/unified-agent-state.ts`
 - **Fix:** Added `trimState()` function that enforces configurable bounds on all state arrays: messages (200 max, preserves system prompt), VFS entries (500 max, evicts largest first), transaction log (200), errors (100), terminal output (500). Single VFS file content truncated at 1MB. All mutation functions (`addStateMessage`, `addStateError`, `updateStateVfs`) call `trimState()` after modification. Bounds are configurable via env vars (`AGENT_MAX_MESSAGES`, etc.).
 
-### MED-1: State Not Persistent — **NOT YET ADDRESSED** ⏳
+### MED-1: State Not Persistent — **DEFERRED (Architectural)** 📋
 - **Reason:** Requires Redis/SQLite checkpoint integration. Deferred to reliability sprint.
 
-### MED-2: Missing Error Boundaries — **NOT YET ADDRESSED** ⏳
-- **Reason:** Requires try-catch wrappers around agent loop steps. Deferred.
+### MED-2: Missing Error Boundaries — **FIXED** ✅
+- **File:** `web/lib/orchestra/agent-loop.ts`
+- **Fix:** Added three layers of error boundaries: (1) Sandbox handle acquisition wrapped in try/catch — returns structured error result if sandbox unavailable instead of crashing. (2) Individual tool execution wrapped in try/catch inside `executeTool` — tool errors are returned as `ToolResult` with `success: false` instead of propagating up to crash the entire agent loop. (3) Outer catch block returns structured `AgentLoopResult` with `success: false` instead of throwing — callers always get a result object.
 
 ---
 

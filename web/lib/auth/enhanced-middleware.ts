@@ -30,11 +30,12 @@ async function checkDesktopBypass(request: NextRequest): Promise<boolean> {
  * Get desktop user context if in desktop mode
  * Lazily imported to avoid circular deps
  */
-async function getDesktopUser(request: NextRequest): Promise<{ userId: string; email?: string } | null> {
+async function getDesktopUser(request: NextRequest): Promise<{ userId: string } | null> {
   try {
     const { getDesktopUserContext } = await import('./desktop-auth-bypass');
     const user = getDesktopUserContext();
-    return user ? { userId: user.userId, email: user.email } : null;
+    // HIGH-8 fix: email removed — caller fetches from DB if needed
+    return user ? { userId: user.userId } : null;
   } catch {
     return null;
   }
@@ -71,11 +72,11 @@ export interface AuthMiddlewareOptions {
 /**
  * Authentication result with extended info
  */
+// HIGH-8 fix: email removed from EnhancedAuthResult — caller fetches from DB if needed
 export interface EnhancedAuthResult {
   authenticated: boolean;
   success: boolean;
   userId?: string;
-  email?: string;
   error?: string;
   statusCode?: number;
   rateLimitRemaining?: number;
@@ -229,7 +230,7 @@ export function withAuth<T extends NextResponse>(
         authResult.authenticated = true;
         authResult.success = true;
         authResult.userId = verifyResult.userId;
-        authResult.email = verifyResult.email;
+        // HIGH-8 fix: email removed — fetch from DB when needed
 
         // === CRIT-1 fix: Post-auth per-user rate limiting ===
         // Authenticated users get a separate rate limit keyed by userId to prevent
@@ -296,9 +297,9 @@ export function withAuth<T extends NextResponse>(
           authResult.authenticated = true;
           authResult.success = true;
           authResult.userId = cookieAuthResult.userId;
-          authResult.email = cookieAuthResult.email;
-
-          // === CRIT-1 fix: Post-auth per-user rate limiting (cookie path) ===
+        // HIGH-8 fix: email removed from auth result — fetch from DB when needed
+        
+        // === CRIT-1 fix: Post-auth per-user rate limiting (cookie path) ===
           if (rateLimit && authResult.userId) {
             const userLimiter = requiredRoles.length > 0 ? authRateLimiter : apiRateLimiter;
             const userRateLimitKey = `user:${authResult.userId}`;
@@ -375,7 +376,7 @@ export function withAuth<T extends NextResponse>(
               authResult.authenticated = true;
               authResult.success = true;
               authResult.userId = desktopUser.userId;
-              authResult.email = desktopUser.email;
+              // HIGH-8 fix: email removed — fetch from DB when needed
               logger.debug('Desktop auth bypass used', { userId: desktopUser.userId });
             } else if (allowAnonymous) {
               // === Path 4: Anonymous access ===
@@ -512,7 +513,7 @@ export async function checkAuth(
       authenticated: true,
       success: true,
       userId: verifyResult.userId,
-      email: verifyResult.email,
+      // HIGH-8 fix: email removed — fetch from DB when needed
     };
   }
 
@@ -523,7 +524,7 @@ export async function checkAuth(
       authenticated: true,
       success: true,
       userId: cookieAuthResult.userId,
-      email: cookieAuthResult.email,
+      // HIGH-8 fix: email removed — fetch from DB when needed
     };
   }
 
@@ -538,7 +539,7 @@ export async function checkAuth(
           authenticated: true,
           success: true,
           userId: desktopUser.userId,
-          email: desktopUser.email,
+          // HIGH-8 fix: email removed — fetch from DB when needed
         };
       }
     }

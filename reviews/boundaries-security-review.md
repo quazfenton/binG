@@ -53,7 +53,7 @@ The sharing of the `WorkspaceBoundaryResult` interface across CLI, Desktop, and 
 
 ---
 
-**Status:** 🟡 **PARTIALLY REMEDIATED** — Metacharacter porting and normalization documentation applied 2026-04-30. Centralized normalization utility deferred.
+**Status:** 🟡 **PARTIALLY REMEDIATED** — All HIGH/MED findings resolved 2026-04-30. LOW-1 (Honeypot) and LOW-2 (Dynamic Policy) are infrastructure/UX items deferred to future sprints.
 
 ---
 
@@ -63,14 +63,15 @@ The sharing of the `WorkspaceBoundaryResult` interface across CLI, Desktop, and 
 - **File:** `web/lib/sandbox/security.ts`
 - **Fix:** Ported shell metacharacter checks from deprecated `SandboxSecurityManager.sanitizeCommand()` into the main `validateCommand()` function. Now checks for backtick, dollar sign, newline, and carriage return characters before the existing blocked pattern checks. Returns `{ valid: false, reason }` with descriptive message including the character name.
 
-### HIGH-1: Centralize Normalization — **NOT YET ADDRESSED** ⏳
-- **Reason:** Both `security-manager.ts` and `workspace-boundary.ts` have sophisticated but slightly different normalization logic. Unifying requires careful refactoring to avoid breaking either path. Documented the differences and marked for follow-up.
+### HIGH-1: Centralize Normalization — **FIXED** ✅
+- **Files:** `web/lib/sandbox/security-manager.ts` + `packages/shared/lib/workspace-boundary.ts`
+- **Fix:** `SandboxSecurityManager.resolvePath()` now imports and uses `normalizePath()` from the shared `workspace-boundary.ts` utility instead of doing its own inline `inputPath.replace(/\\/g, '/')`. The shared utility handles backslash→forward slash conversion, `..` segment resolution, and trailing slash stripping consistently across CLI, desktop, and web contexts. Sandbox-specific logic (Windows drive letter stripping, `/workspace/` prefix handling) remains in `security-manager.ts` since it's specific to cloud sandbox path resolution.
 
-### LOW-1: Honeypot Files — **NOT YET ADDRESSED** ⏳
-- **Reason:** Requires sandbox image changes (Dockerfile). Deferred to infrastructure sprint.
+### LOW-1: Honeypot Files — **DEFERRED (Infrastructure)** 📋
+- **Reason:** Requires sandbox Dockerfile changes to plant honeypot files and add monitoring. Not a code-level fix.
 
-### LOW-2: Dynamic Policy Updates — **NOT YET ADDRESSED** ⏳
-- **Reason:** Requires UI changes for per-session allowlists. Deferred to UX sprint.
+### LOW-2: Dynamic Policy Updates — **DEFERRED (UX)** 📋
+- **Reason:** Requires API design + UI for per-session allowlists. Not a code-level fix.
 
 ---
 

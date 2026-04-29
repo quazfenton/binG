@@ -14,8 +14,10 @@
 import { Worker, Job } from 'bullmq';
 import Redis from 'ioredis';
 import * as fs from 'fs/promises';
-import { createLogger } from './logger';
-import { getOpenCodeEngine, OpenCodeEngine } from './opencode-engine';
+import * as http from 'http';
+import * as path from 'path';
+import { createLogger } from './logger.js';
+import { getOpenCodeEngine, OpenCodeEngine } from './opencode-engine.js';
 import { executeV2Task } from '@bing/shared/agent/v2-executor';
 import { taskRouter } from '@bing/shared/agent/task-router';
 import { providerRouter, latencyTracker } from '@/lib/sandbox/provider-router';
@@ -38,6 +40,15 @@ const redisPub = new Redis(REDIS_URL);
 
 const PUBSUB_CHANNEL = 'agent:events';
 const JOB_QUEUE_NAME = 'agent:jobs';
+const SAFE_PATH_SEGMENT_REGEX = /^[a-zA-Z0-9._-]+$/;
+
+function sanitizePathSegment(segment: string, field: string): string {
+  const candidate = segment.trim();
+  if (!candidate || candidate === '.' || candidate === '..' || !SAFE_PATH_SEGMENT_REGEX.test(candidate)) {
+    throw new Error(`Invalid ${field} for workspace path`);
+  }
+  return candidate;
+}
 
 // Shared job schema - matches infra/queue types
 interface AgentJob {
@@ -136,7 +147,9 @@ async function runOpenCode(job: Job<AgentJob>): Promise<void> {
 
     // CRITICAL FIX: Normalize conversationId to prevent composite IDs in workspace paths
     const simpleSessionId = normalizeSessionId(conversationId) || conversationId;
-    const workspaceDir = `/workspace/users/${userId}/sessions/${simpleSessionId}`;
+    const safeUserId = sanitizePathSegment(userId, 'userId');
+    const safeSessionId = sanitizePathSegment(simpleSessionId, 'conversationId');
+    const workspaceDir = path.posix.join('/workspace/users', safeUserId, 'sessions', safeSessionId);
     await fs.mkdir(workspaceDir, { recursive: true }).catch(() => {});
 
     let selectedProvider: string | undefined;
@@ -335,7 +348,6 @@ async function startWorker(): Promise<void> {
   await new Promise(() => {});
 }
 
-const http = require('http');
 const server = http.createServer(async (req: any, res: any) => {
   if (req.url === '/health') {
     const engineHealthy = opencodeEngine?.isHealthy() ?? false;
@@ -348,7 +360,9 @@ const server = http.createServer(async (req: any, res: any) => {
     } catch {}
 
     try {
-      workerHealthy = bullWorker !== null && !bullWorker.isPaused();
+      if (bullWorker !== null) {
+        workerHealthy = !(await bullWorker.isPaused());
+      }
     } catch {}
 
     res.writeHead(200, { 'Content-Type': 'application/json' });

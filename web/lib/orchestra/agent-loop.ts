@@ -67,11 +67,39 @@ interface AgentLoopResult {
   success?: boolean
 }
 
+/**
+ * Run the core agent loop with sandbox tools.
+ *
+ * MED-2 fix: Contract change — this function NO LONGER throws on error.
+ * Instead, it returns `{ success: false, response: '...', steps: [], totalSteps: 0 }`.
+ * Callers that previously relied on `try { await runAgentLoop(...) } catch { ... }`
+ * should now check `result.success !== false` instead.
+ *
+ * Three layers of error boundaries:
+ * 1. Sandbox handle acquisition — returns error result if sandbox unavailable
+ * 2. Individual tool execution — returns ToolResult with success:false instead of throwing
+ * 3. Outer catch — returns structured AgentLoopResult with success:false instead of throwing
+ */
 export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoopResult> {
   const { userMessage, sandboxId, userId, conversationHistory, onToolExecution, onStreamChunk, onReasoningChunk } = options
   const llm = getLLMProvider()
 
-  const sandboxHandle = await (coreSandboxService as any).getSandbox(sandboxId)
+  // MED-2 fix: Wrap sandbox handle acquisition in error boundary
+  let sandboxHandle: any;
+  try {
+    sandboxHandle = await (coreSandboxService as any).getSandbox(sandboxId);
+  } catch (error: any) {
+    sandboxEvents.emit(sandboxId, 'agent:error', {
+      message: `Sandbox unavailable: ${error.message}`,
+    });
+    return {
+      response: `Error: Sandbox ${sandboxId} is not available. ${error.message}`,
+      steps: [],
+      totalSteps: 0,
+      success: false,
+    };
+  }
+
   const systemPrompt = getSystemPrompt(sandboxHandle.workspaceDir)
 
   // Create wrapper with rate limiting, HITL, process tracking, and learning
@@ -97,18 +125,32 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
         onStreamChunk?.(chunk)
       },
       async executeTool(name: string, args: Record<string, any>): Promise<ToolResult> {
-        sandboxEvents.emit(sandboxId, 'agent:tool_start', { toolName: name, args })
-        const capId = mapToolToCapability(name);
-        const wrapperResult = await wrapper.execute(capId, args);
-        // Record execution with agency for learning
-        wrapper.recordExecution(userMessage, wrapperResult.success, [capId]);
-        sandboxEvents.emit(sandboxId, 'agent:tool_result', { toolName: name, args, result: wrapperResult })
-        return {
-          success: wrapperResult.success,
-          output: wrapperResult.output,
-          exitCode: wrapperResult.exitCode,
-          error: wrapperResult.error,
-        };
+        // MED-2 fix: Wrap individual tool execution in error boundary
+        // so a single tool failure doesn't crash the entire agent loop
+        try {
+          sandboxEvents.emit(sandboxId, 'agent:tool_start', { toolName: name, args })
+          const capId = mapToolToCapability(name);
+          const wrapperResult = await wrapper.execute(capId, args);
+          // Record execution with agency for learning
+          wrapper.recordExecution(userMessage, wrapperResult.success, [capId]);
+          sandboxEvents.emit(sandboxId, 'agent:tool_result', { toolName: name, args, result: wrapperResult })
+          return {
+            success: wrapperResult.success,
+            output: wrapperResult.output,
+            exitCode: wrapperResult.exitCode,
+            error: wrapperResult.error,
+          };
+        } catch (toolError: any) {
+          // Return error as tool result instead of crashing the loop
+          const errorResult = {
+            success: false,
+            output: `Tool execution error: ${toolError.message}`,
+            exitCode: 1,
+            error: toolError.message,
+          };
+          sandboxEvents.emit(sandboxId, 'agent:tool_result', { toolName: name, args, result: errorResult })
+          return errorResult;
+        }
       },
       onReasoningChunk(chunk: string, type?: 'thought' | 'reasoning' | 'plan' | 'reflection') {
         sandboxEvents.emit(sandboxId, 'agent:reasoning_chunk', { text: chunk, type })
@@ -130,6 +172,13 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
     sandboxEvents.emit(sandboxId, 'agent:error', {
       message: error instanceof Error ? error.message : String(error),
     })
-    throw error
+    // MED-2 fix: Return error result instead of throwing — callers get a
+    // structured result with success: false rather than an uncaught exception
+    return {
+      response: `Agent loop error: ${error instanceof Error ? error.message : String(error)}`,
+      steps: [],
+      totalSteps: 0,
+      success: false,
+    };
   }
 }

@@ -310,7 +310,6 @@ export function extractFilePathsFromCommand(command: string): string[] {
 
   return [...new Set(paths)]; // Deduplicate
 }
-}
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Re-exports for convenience

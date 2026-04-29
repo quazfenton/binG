@@ -1,9 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyAuth } from '@/lib/auth/jwt';
 import { initializeDatabase, hashPassword, comparePassword } from '@/lib/database/db';
+import { csrfCheckOrReject } from '@/lib/auth/csrf';
 
 export async function PUT(request: NextRequest) {
   try {
+    // HIGH-10 fix: CSRF protection on profile update
+    const csrfReject = csrfCheckOrReject(request);
+    if (csrfReject) return csrfReject;
+
     const authResult = await verifyAuth(request);
     
     if (!authResult.success) {

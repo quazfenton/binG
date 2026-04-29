@@ -347,7 +347,7 @@ The event system is **simplicity-over-reliability** — fine for development and
 
 ---
 
-**Status:** 🟡 **PARTIALLY REMEDIATED** — Core reliability fixes applied 2026-04-30. BullMQ migration deferred as long-term item.
+**Status:** 🟡 **PARTIALLY REMEDIATED** — All HIGH/MED findings resolved 2026-04-30. MED-5/MED-1 (BullMQ migration) deferred as long-term architectural item.
 
 ---
 
@@ -357,8 +357,9 @@ The event system is **simplicity-over-reliability** — fine for development and
 - **Files:** `web/lib/events/human-in-loop.ts` + `web/lib/events/scheduler.ts`
 - **Fix:** `expireOldApprovals()` already existed in `human-in-loop.ts` (updates `status = 'expired'` where `expires_at < now`). Wired it into the scheduler — `runScheduler()` now calls `expireOldApprovals()` on every run (every 5 min by default). Returns `approvalsExpired` count in scheduler result. Errors in the expiry sweep are caught and logged without disrupting the scheduler.
 
-### HIGH-6: In-Memory Scheduler Loses Jobs on Restart — **NOT YET ADDRESSED** ⏳
-- **Reason:** The scheduler already persists scheduled tasks to SQLite (`scheduled_tasks` table). On startup, `runScheduler()` queries due tasks from DB. The in-memory concern is about *intervals* being cleared on restart, but since the scheduler polls the DB on each tick, jobs are not lost — only the interval timer needs restarting (which `startScheduler()` does on server boot). This is already correctly implemented. Marking as no further action needed.
+### HIGH-6: In-Memory Scheduler Loses Jobs on Restart — **ALREADY CORRECTLY IMPLEMENTED** ✅
+- **File:** `web/lib/events/scheduler.ts`
+- **Note:** The scheduler already persists scheduled tasks to SQLite (`scheduled_tasks` table). On startup, `runScheduler()` queries due tasks from DB. The in-memory concern is about *intervals* being cleared on restart, but since the scheduler polls the DB on each tick, jobs are not lost — only the interval timer needs restarting (which `startScheduler()` does on server boot). No fix needed.
 
 ### MED-3: No Circuit Breaker for Subscribers — **FIXED** ✅
 - **File:** `web/lib/events/bus.ts`
@@ -372,5 +373,5 @@ The event system is **simplicity-over-reliability** — fine for development and
 - **File:** `web/lib/events/trigger/handlers/webhook.ts`
 - **Fix:** Added per-target-host rate limiting (`WEBHOOK_RATE_LIMIT_MAX=100` per minute, configurable via env). Targets exceeding the limit get 429 responses. Stale rate limit entries cleaned up every 5 minutes.
 
-### MED-5 / MED-1: Event Persistence & Loss on Crash — **NOT YET ADDRESSED** ⏳
+### MED-5 / MED-1: Event Persistence & Loss on Crash — **DEFERRED (Architectural)** 📋
 - **Reason:** Requires BullMQ or outbox pattern migration — significant architectural change deferred to long-term roadmap.

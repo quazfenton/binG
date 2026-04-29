@@ -81,6 +81,8 @@ export interface EnhancedJob extends Omit<EnhancedJobConfig, 'interval' | 'timeo
   timeoutMs?: number;
   // Loop token to prevent duplicate loops on resume
   loopToken?: number;
+  // P0-2 fix: Store dedup ID on job for O(1) cleanup in stopJob()
+  dedupId?: string;
 }
 
 export interface JobExecutionResult {
@@ -130,6 +132,12 @@ export interface EnhancedBackgroundJobsEvents {
 
 export class EnhancedBackgroundJobsManager extends EventEmitter {
   private jobs: Map<string, EnhancedJob> = new Map();
+  // P0-2 fix: Separate dedup lookup map — dedupId → jobId, so we can find the real job
+  // when a dedup ID is computed from job config (jobs are stored under their random UUID jobId).
+  private dedupLookup: Map<string, string> = new Map();
+  // P0-3 fix: Dead Letter Queue — retain failed jobs for inspection/replay instead of discarding
+  private failedJobs: Map<string, EnhancedJob & { sessionId?: string; args?: string[]; tags?: string[]; quotaCategory?: string; maxExecutions?: number; timeout?: number }> = new Map();
+  private readonly MAX_FAILED_JOBS = parseInt(process.env.BG_JOBS_DLQ_MAX_SIZE || '100', 10) || 100;
   private executor?: JobExecutor;
   private sessionManager?: any;
   private executionGraphEngine?: any;
@@ -191,6 +199,24 @@ export class EnhancedBackgroundJobsManager extends EventEmitter {
     if (this.jobs.has(jobId)) {
       logger.error('Attempted to start job with duplicate ID', { jobId });
       throw new Error(`Background job already exists: ${jobId}`);
+    }
+
+    // P0-2 fix: Job deduplication — derive a dedup ID from the job config so identical
+    // jobs are detected. Jobs are stored under their random UUID jobId, so we use a
+    // separate dedupLookup map (dedupId → jobId) to find the real job.
+    const dedupId = config.jobId || this.computeDedupJobId(config);
+    const existingJobId = this.dedupLookup.get(dedupId);
+    if (existingJobId) {
+      const existingJob = this.jobs.get(existingJobId);
+      if (existingJob && existingJob.status === 'running') {
+        logger.warn('Duplicate background job detected — returning existing', {
+          dedupId,
+          existingJobId,
+          sandboxId: config.sandboxId,
+          command: config.command.substring(0, 80),
+        });
+        return existingJob;
+      }
     }
 
     const {
@@ -334,6 +360,9 @@ export class EnhancedBackgroundJobsManager extends EventEmitter {
     this.executeJobLoop(job);
 
     this.jobs.set(jobId, job);
+    // P0-2 fix: Register dedup lookup so duplicate submissions find this job
+    this.dedupLookup.set(dedupId, jobId);
+    job.dedupId = dedupId; // Store for O(1) cleanup in stopJob()
     this.emit('job:started', job);
 
     logger.info('Background job started successfully', {
@@ -463,6 +492,8 @@ export class EnhancedBackgroundJobsManager extends EventEmitter {
             });
             job.status = 'completed';
             this.emit('job:max-executions', job.jobId);
+            // P0-2 fix: Clean up dedupLookup when job naturally completes
+            this.cleanupDedupEntry(job);
             break;
           }
 
@@ -477,6 +508,8 @@ export class EnhancedBackgroundJobsManager extends EventEmitter {
                 });
                 job.status = 'completed';
                 this.emit('job:stop-condition', job.jobId, job.stopCondition);
+                // P0-2 fix: Clean up dedupLookup when job naturally completes
+                this.cleanupDedupEntry(job);
                 break;
               }
             } catch (conditionError: any) {
@@ -743,6 +776,14 @@ export class EnhancedBackgroundJobsManager extends EventEmitter {
       }
     }
 
+    // P0-3 fix: Move failed jobs to Dead Letter Queue for inspection/replay
+    if (job.lastError || reason.toLowerCase().includes('fail') || reason.toLowerCase().includes('error')) {
+      this.addToDLQ(job);
+    }
+
+    // P0-2 fix: Clean up dedup lookup entry
+    this.cleanupDedupEntry(job);
+
     this.jobs.delete(jobId);
     this.emit('job:stopped', jobId, reason);
 
@@ -897,6 +938,86 @@ export class EnhancedBackgroundJobsManager extends EventEmitter {
     this.emit('shutdown');
 
     logger.info('Background Jobs Manager shut down complete');
+  }
+
+  /**
+   * Add a failed job to the Dead Letter Queue.
+   * P0-3 fix: Retain failed jobs for inspection and replay instead of discarding.
+   */
+  private addToDLQ(job: EnhancedJob): void {
+    // Enforce DLQ size limit — evict oldest entry if at capacity
+    if (this.failedJobs.size >= this.MAX_FAILED_JOBS) {
+      const oldestKey = this.failedJobs.keys().next().value;
+      if (oldestKey) this.failedJobs.delete(oldestKey);
+    }
+    this.failedJobs.set(job.jobId, job);
+    logger.info('Job added to Dead Letter Queue', {
+      jobId: job.jobId,
+      dlqSize: this.failedJobs.size,
+    });
+  }
+
+  /**
+   * Clean up dedup lookup entry when a job naturally completes or fails.
+   * P0-2 fix: Prevents memory leak from stale dedupLookup entries accumulating
+   * in long-running processes.
+   */
+  private cleanupDedupEntry(job: EnhancedJob): void {
+    if (job.dedupId) {
+      this.dedupLookup.delete(job.dedupId);
+    }
+  }
+
+  /**
+   * Compute a deterministic job ID from job config for deduplication.
+   * P0-2 fix: Identical job configs produce the same ID, preventing duplicate jobs.
+   */
+  private computeDedupJobId(config: EnhancedJobConfig): string {
+    // Hash key fields that define job identity
+    const key = `${config.sandboxId}:${config.command}:${config.args?.join(',')}:${config.interval}:${config.quotaCategory}`;
+    // Simple deterministic hash (no crypto dependency needed)
+    let hash = 0;
+    for (let i = 0; i < key.length; i++) {
+      const char = key.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash; // Convert to 32-bit integer
+    }
+    return `dedup-${Math.abs(hash).toString(36)}`;
+  }
+
+  /**
+   * Get failed job history (Dead Letter Queue).
+   * P0-3 fix: Failed jobs are retained for inspection and replay instead of being discarded.
+   */
+  getFailedJobs(): Array<{ jobId: string; command: string; lastError?: Error; executionCount: number; createdAt: Date }> {
+    return Array.from(this.failedJobs.values());
+  }
+
+  /**
+   * Replay a failed job by re-submitting it with the same config.
+   * P0-3 fix: Admin API can replay failed jobs from the DLQ.
+   */
+  async replayFailedJob(jobId: string): Promise<EnhancedJob | null> {
+    const failed = this.failedJobs.get(jobId);
+    if (!failed) return null;
+
+    // Remove from DLQ
+    this.failedJobs.delete(jobId);
+
+    // Re-submit with same config
+    return this.startJob({
+      jobId: `replay-${jobId}`,
+      sessionId: failed.sessionId,
+      sandboxId: failed.sandboxId,
+      command: failed.command,
+      args: failed.args,
+      interval: failed.interval,
+      timeout: failed.timeout,
+      description: `Replay of failed job ${jobId}`,
+      tags: [...(failed.tags || []), 'replayed'],
+      quotaCategory: failed.quotaCategory,
+      maxExecutions: failed.maxExecutions,
+    });
   }
 
   /**

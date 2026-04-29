@@ -79,6 +79,25 @@ const MAX_LOGIN_TRACKED_EMAILS = 10000; // LRU cap to prevent memory exhaustion 
 const failedLoginAttempts = new Map<string, FailedLoginAttempt[]>();
 let entryCount = 0; // Track number of unique emails in the Map
 
+/**
+ * MED-2 fix: Common password blocklist — patterns that are too easily guessable.
+ * Uses exact-match (Set.has()) to avoid false positives on longer passwords
+ * that merely contain a common substring (e.g., "masterplan!2024" should not
+ * be blocked just because it contains "master").
+ */
+const COMMON_PASSWORDS = new Set([
+  'password', 'qwerty', 'abc123', 'letmein', 'welcome',
+  'admin', 'login', 'master', 'hello', 'football',
+  'monkey', 'dragon', 'shadow', 'sunshine', 'trustno1',
+  'iloveyou', 'princess', 'passw0rd', '123456', '12345678',
+  '123456789', '1234567890', 'qwerty123', 'password1', 'password123',
+  'admin123', 'letmein123', 'welcome123', 'master123', 'login123',
+  // Common keyboard walks
+  'qwertyuiop', 'asdfghjkl', 'zxcvbnm', '!@#$%^&*',
+  // Repeated patterns
+  'aaaaaaaaaaaa', '111111111111', 'abcd1234!',
+]);
+
 const LOCKOUT_THRESHOLD = 5; // Number of failed attempts before first lockout
 const ATTEMPT_WINDOW_MS = 30 * 60 * 1000; // Track attempts within 30 minutes
 
@@ -554,9 +573,9 @@ export class AuthService {
       );
 
       // Generate JWT token
+      // HIGH-8 fix: email removed from JWT — use getUserEmail() from jwt.ts if needed
       const token = generateToken({
         userId: dbUser.id.toString(),
-        email: dbUser.email
       });
 
       return {
@@ -784,10 +803,18 @@ export class AuthService {
 
   /**
    * Validate password strength
+   *
+   * MED-2 fix: Enhanced password policy — 12 char minimum, special character required,
+   * common password blocklist. Previous policy was 8 chars + upper/lower/digit only.
    */
   private validatePassword(password: string): { valid: boolean; error?: string } {
-    if (password.length < 8) {
-      return { valid: false, error: 'Password must be at least 8 characters long' };
+    // MED-2 fix: Increased from 8 to 12 characters for better brute-force resistance
+    if (password.length < 12) {
+      return { valid: false, error: 'Password must be at least 12 characters long' };
+    }
+
+    if (password.length > 128) {
+      return { valid: false, error: 'Password must be at most 128 characters long' };
     }
 
     if (!/(?=.*[a-z])/.test(password)) {
@@ -800,6 +827,18 @@ export class AuthService {
 
     if (!/(?=.*\d)/.test(password)) {
       return { valid: false, error: 'Password must contain at least one number' };
+    }
+
+    // MED-2 fix: Require at least one special character
+    if (!/(?=.*[^a-zA-Z0-9])/.test(password)) {
+      return { valid: false, error: 'Password must contain at least one special character (!@#$%^&* etc.)' };
+    }
+
+    // MED-2 fix: Block commonly used passwords (exact match only to avoid false positives
+    // on longer passwords that merely contain a common substring like "masterplan!2024")
+    const lower = password.toLowerCase();
+    if (COMMON_PASSWORDS.has(lower)) {
+      return { valid: false, error: 'This password is too common. Choose a more unique password.' };
     }
 
     return { valid: true };
@@ -937,9 +976,9 @@ export class AuthService {
        }
 
        // Generate new token pair
+       // HIGH-8 fix: email removed from JWT — use getUserEmail() from jwt.ts if needed
        const newToken = generateToken({
          userId: session.user_id.toString(),
-         email: session.email,
        });
 
        // Generate new refresh token (token rotation)

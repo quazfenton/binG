@@ -91,7 +91,11 @@ export class ExecutionGraphEngine {
   private graphs = new Map<string, ExecutionGraph>();
   private readonly DEFAULT_MAX_RETRIES = 3;
   // MED-1 fix: Limit concurrent node execution to prevent resource exhaustion
-  private readonly MAX_CONCURRENT_NODES = parseInt(process.env.EXECUTION_GRAPH_MAX_CONCURRENCY || '10', 10) || 10;
+  private readonly MAX_CONCURRENT_NODES = (() => {
+    const parsed = parseInt(process.env.EXECUTION_GRAPH_MAX_CONCURRENCY || '10', 10);
+    if (Number.isNaN(parsed)) return 10;
+    return Math.max(1, parsed);
+  })();
   // Max graph size to prevent runaway graphs
   private readonly MAX_NODES_PER_GRAPH = 100;
 
