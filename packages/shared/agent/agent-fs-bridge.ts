@@ -85,6 +85,11 @@ class AgentFSBridge {
 
       logger.info(`Syncing ${sessionFiles.length} files to sandbox`);
 
+      // Write via sandbox handle
+      if (!sandboxPath) {
+        throw new Error('No workspace path available');
+      }
+
       // Sync each file to sandbox
       for (const file of sessionFiles) {
         try {

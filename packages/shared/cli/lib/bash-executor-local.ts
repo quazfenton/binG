@@ -77,9 +77,10 @@ function validateWorkspacePath(filePath: string, workspaceRoot?: string): boolea
   
   // If workspace root is specified, ensure path is within it
   if (workspaceRoot) {
-    const normalized = path.normalize(filePath);
-    const normalizedRoot = path.normalize(workspaceRoot);
-    return normalized.startsWith(normalizedRoot) || normalizedRoot.startsWith(normalized);
+    const normalized = path.normalize(path.resolve(filePath));
+    const normalizedRoot = path.normalize(path.resolve(workspaceRoot));
+    // Only allow if path starts with root, NOT if root starts with path (which is insecure)
+    return normalized.startsWith(normalizedRoot + path.sep) || normalized === normalizedRoot;
   }
   
   // Check against allowed prefixes
@@ -206,6 +207,9 @@ function filterOutput(output: string, command: string, options: {
       repeatCount = 1;
     }
   }
+  // Flush final accumulated repeats if file ends with repeated lines
+  if (repeatCount > 3) { deduped.push(`[repeated ${repeatCount}x]`); }
+  
   filtered = deduped.join('\n');
   
   // Group grep output by file

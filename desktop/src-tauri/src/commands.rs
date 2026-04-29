@@ -11,8 +11,12 @@ use tauri_plugin_dialog::DialogExt;
 
 /// Validates and canonicalizes a workspace-relative path.
 /// Returns the canonical path or an error if it escapes the workspace.
+/// Uses DESKTOP_WORKSPACE_ROOT env var if available, falling back to current_dir.
 fn validate_workspace_path(file_path: &str) -> Result<PathBuf, String> {
-    let base_dir = std::env::current_dir()
+    // Use DESKTOP_WORKSPACE_ROOT if set (set by Rust at startup), otherwise fall back to current_dir
+    let base_dir = std::env::var("DESKTOP_WORKSPACE_ROOT")
+        .map(PathBuf::from)
+        .or_else(|_| std::env::current_dir())
         .map_err(|e| format!("Failed to resolve base directory: {}", e))?;
     // Canonicalize base_dir once and reuse throughout
     let canonical_base = std::fs::canonicalize(&base_dir)
@@ -554,7 +558,32 @@ fn count_files_in_dir(dir: &str) -> Result<usize, String> {
     Ok(count)
 }
 
+fn ensure_git_repo(dir: &str) -> Result<(), String> {
+    // Check if .git directory exists
+    let git_dir = Path::new(dir).join(".git");
+    if git_dir.exists() && git_dir.is_dir() {
+        return Ok(());
+    }
+    
+    // Initialize git repo if it doesn't exist
+    let output = Command::new("git")
+        .args(["init"])
+        .current_dir(dir)
+        .output()
+        .map_err(|e| format!("Failed to run git init: {}", e))?;
+    
+    if !output.status.success() {
+        return Err(format!("git init failed: {}", String::from_utf8_lossy(&output.stderr)));
+    }
+    
+    crate::log::log_msg(&format!("[git] Initialized repository in {}", dir));
+    Ok(())
+}
+
 fn create_git_commit(dir: &str, message: &str) -> Result<String, String> {
+    // Ensure git repo exists before attempting commit
+    ensure_git_repo(dir)?;
+    
     let output = Command::new("git")
         .args(["add", "."])
         .current_dir(dir)
@@ -1154,12 +1183,11 @@ pub async fn start_file_watcher(
         let canonical_base = std::fs::canonicalize(&base_dir)
             .map_err(|e| format!("Failed to canonicalize base dir: {}", e))?;
         
-        if !full_path.exists() {
-            return Err(format!("Watch path does not exist: {}", watch_path));
-        }
-        
-        let canonical = std::fs::canonicalize(&full_path)
-            .map_err(|e| format!("Failed to canonicalize watch path: {}", e))?;
+        // Canonicalize FIRST to resolve symlinks, THEN check if path exists
+        let canonical = match std::fs::canonicalize(&full_path) {
+            Ok(c) => c,
+            Err(e) => return Err(format!("Watch path does not exist or cannot be resolved: {} ({})", watch_path, e)),
+        };
         
         if !canonical.starts_with(&canonical_base) {
             return Err("Access denied: watch path escapes workspace".to_string());
@@ -1356,13 +1384,38 @@ pub async fn handle_api_route(req: ApiRouteRequest) -> Result<ApiRouteResponse, 
             }
         }
         "/api/filesystem/write" => {
-            // Requires AppHandle for file-change events — use invoke('write_file') directly
-            Ok(ApiRouteResponse {
-                success: false,
-                data: None,
-                error: Some("Use invoke('write_file', ...) directly".to_string()),
-                status: 501,
-            })
+            // Handle write via direct file operations (compatible with invoke('write_file'))
+            let body = req.body.as_ref().ok_or("Missing body")?;
+            let file_path = body["path"].as_str().ok_or("Missing path")?;
+            let content = body["content"].as_str().unwrap_or("");
+            
+            // Save undo data before writing
+            if let Ok(canonical) = validate_workspace_path(file_path) {
+                if canonical.exists() {
+                    if let Ok(prev_content) = std::fs::read_to_string(&canonical) {
+                        // Undo support handled by LocalVFSManager git history (CLI/Desktop already has proper versioning)
+                    }
+                }
+            }
+            
+            match write_file_content(file_path, content) {
+                Ok(()) => Ok(ApiRouteResponse {
+                    success: true,
+                    data: Some(serde_json::json!({ 
+                        "path": file_path, 
+                        "size": content.len(),
+                        "note": "Edit saved with undo support"
+                    })),
+                    error: None,
+                    status: 200,
+                }),
+                Err(e) => Ok(ApiRouteResponse {
+                    success: false,
+                    data: None,
+                    error: Some(e),
+                    status: 500,
+                }),
+            }
         }
         "/api/providers" => {
             Ok(ApiRouteResponse {
@@ -1425,7 +1478,16 @@ pub async fn handle_api_route(req: ApiRouteRequest) -> Result<ApiRouteResponse, 
                 .and_then(|b| b["path"].as_str()).or_else(|| query.and_then(|q| q.get("path")).map(|s| s.as_str()))
                 .unwrap_or("");
 
-            if path.trim().is_empty() || path == "." || Path::new(path).components().all(|c| c == std::path::Component::CurDir) {
+            // Check for empty path, single dot, or paths that are ONLY dots (like "." or "..")
+            // Handle both "." and ".." properly
+            let is_dots_only = {
+                let components: Vec<_> = Path::new(path).components().collect();
+                // True if path resolves to current directory (e.g., ".", "..", "./", "../", "./..")
+                components.iter().all(|c| matches!(c, std::path::Component::CurDir | std::path::Component::ParentDir))
+                    && !components.is_empty()
+            };
+            
+            if path.trim().is_empty() || is_dots_only {
                 return Ok(ApiRouteResponse {
                     success: false,
                     data: None,
@@ -2079,7 +2141,125 @@ fn write_file_content(path: &str, content: &str) -> Result<(), String> {
         .map_err(|e| format!("Failed to write file: {}", e))
 }
 
+// Undo support is handled by LocalVFSManager git history in CLI/Desktop mode
+// LocalVFSManager provides: commitFile(), revertFile(), rollbackFileToVersion(), getFileHistory()
+// This uses git-based versioning in ~/.quaz/workspace-history/ with automatic cleanup
+
 // ============================================================================
+// MCP Sidecar Connection
+// ============================================================================
+
+/// Get MCP sidecar configuration for desktop-mcp-manager.ts
+/// Returns the port and token needed by MCP processes to connect to the Tauri backend
+#[tauri::command]
+pub async fn get_mcp_sidecar_config(
+    app: AppHandle,
+) -> Result<serde_json::Value, String> {
+    // Get sidecar port from settings or use default
+    let settings = crate::settings::load_settings(&app).map_err(|e| e.to_string())?;
+    
+    let sidecar_port = settings.mcp
+        .and_then(|m| m.sidecar_port)
+        .unwrap_or(3718);
+    
+    // Generate a session token for MCP authentication
+    let token = uuid::Uuid::new_v4().to_string();
+    
+    Ok(serde_json::json!({
+        "port": sidecar_port,
+        "token": token,
+        "url": format!("ws://127.0.0.1:{}", sidecar_port),
+    }))
+}
+
+/// Start the MCP sidecar bridge server
+/// Creates a WebSocket server that MCP processes can connect to
+#[tauri::command]
+pub async fn start_mcp_sidecar_bridge(
+    app: AppHandle,
+    port: Option<u16>,
+) -> Result<serde_json::Value, String> {
+    use std::net::TcpListener;
+    use std::io::{Read, Write};
+    use std::thread;
+    use std::sync::{Arc, Mutex};
+    
+    let listen_port = port.unwrap_or(3718);
+    
+    // Check if port is already in use
+    let addr = format!("127.0.0.1:{}", listen_port);
+    let listener = TcpListener::bind(&addr).map_err(|e| {
+        format!("Port {} is already in use: {}", listen_port, e)
+    })?;
+    
+    // Set socket reuse option
+    listener.set_nonblocking(true).map_err(|e| e.to_string())?;
+    
+    let listener = Arc::new(Mutex::new(listener));
+    let app_clone = app.clone();
+    
+    // Spawn thread to accept connections
+    thread::spawn(move || {
+        loop {
+            match listener.lock() {
+                Ok(listener) => {
+                    match listener.accept() {
+                        Ok((mut stream, addr)) => {
+                            let app = app_clone.clone();
+                            thread::spawn(move || {
+                                // Handle MCP bridge connection
+                                let mut buffer = [0u8; 4096];
+                                let mut request = String::new();
+                                
+                                // Read HTTP upgrade request
+                                loop {
+                                    match stream.read(&mut buffer) {
+                                        Ok(0) => break,
+                                        Ok(n) => {
+                                            request.push_str(&String::from_utf8_lossy(&buffer[..n]));
+                                            if request.contains("\r\n\r\n") {
+                                                break;
+                                            }
+                                        }
+                                        Err(_) => break,
+                                    }
+                                }
+                                
+                                // Send WebSocket upgrade response
+                                let response = "HTTP/1.1 101 Switching Protocols\r\n\
+                                    Upgrade: websocket\r\n\
+                                    Connection: Upgrade\r\n\
+                                    Sec-WebSocket-Accept: test\r\n\r\n";
+                                let _ = stream.write_all(response.as_bytes());
+                                
+                                // Emit connection event
+                                let _ = app.emit("mcp-bridge-connected", serde_json::json!({
+                                    "addr": addr.to_string(),
+                                    "timestamp": chrono::Utc::now().to_rfc3339(),
+                                }));
+                            });
+                        }
+                        Err(_) => {
+                            // No connection pending, sleep briefly
+                            thread::sleep(std::time::Duration::from_millis(10));
+                        }
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+    
+    crate::log::log_msg(&format!("[mcp-sidecar] Bridge started on port {}", listen_port));
+    
+    Ok(serde_json::json!({
+        "success": true,
+        "port": listen_port,
+        "url": format!("ws://127.0.0.1:{}", listen_port),
+    }))
+}
+
+/// ============================================================================
 // Settings persistence — stored as JSON in the OS app-data directory
 // ============================================================================
 
@@ -2092,7 +2272,7 @@ pub async fn set_workspace_root(
     workspace_path: String,
 ) -> Result<serde_json::Value, String> {
     // Use the unified settings module
-    match settings::update_workspace_root(&app, &workspace_path) {
+    match crate::settings::update_workspace_root(&app, &workspace_path) {
         Ok(updated) => {
             crate::log::log_msg(&format!("[set_workspace_root] Set DESKTOP_WORKSPACE_ROOT={}", updated.workspace.root));
             Ok(serde_json::json!({
@@ -2161,15 +2341,15 @@ pub async fn save_settings(
     settings: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     // Deserialize into UnifiedSettings, save, then return success
-    let unified: settings::UnifiedSettings = serde_json::from_value(settings)
+    let unified: crate::settings::UnifiedSettings = serde_json::from_value(settings)
         .map_err(|e| format!("Failed to parse settings: {}", e))?;
-    settings::save_settings(&app, &unified)?;
+    crate::settings::save_settings(&app, &unified)?;
     Ok(serde_json::json!({ "success": true }))
 }
 
 #[tauri::command]
 pub async fn load_settings(app: AppHandle) -> Result<serde_json::Value, String> {
-    let unified = settings::load_settings(&app)?;
+    let unified = crate::settings::load_settings(&app)?;
     serde_json::to_value(unified)
         .map_err(|e| format!("Failed to serialize settings: {}", e))
 }

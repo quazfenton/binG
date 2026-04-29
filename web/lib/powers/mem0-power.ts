@@ -43,6 +43,52 @@ export interface Mem0Memory {
 // Mem0 Client (simplified wrapper around mem0ai)
 // ============================================================================
 
+// Default timeouts (override via Mem0Config or per-call where applicable)
+const DEFAULT_SEARCH_TIMEOUT_MS = 2_500;
+const DEFAULT_ADD_TIMEOUT_MS = 8_000;
+const DEFAULT_DEFAULT_TIMEOUT_MS = 5_000;
+const ADD_MAX_RETRIES = 1; // 1 retry on transient errors (total: 2 attempts)
+
+/**
+ * fetch with AbortController-driven timeout. Throws an Error("timeout") on
+ * deadline; rethrows underlying fetch errors otherwise.
+ */
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+): Promise<Response> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: ctrl.signal });
+  } catch (err: any) {
+    if (err?.name === 'AbortError') {
+      throw new Error(`Mem0 request timed out after ${timeoutMs}ms`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Decide whether an HTTP status is worth retrying. */
+function isRetryableStatus(status: number): boolean {
+  return status === 408 || status === 425 || status === 429 || (status >= 500 && status <= 599);
+}
+
+/** Sleep helper for retry backoff. */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Exponential backoff with jitter (ms): 250, 750, 1750, … */
+function backoffMs(attempt: number): number {
+  const base = 250 * Math.pow(2, attempt);
+  const jitter = Math.floor(Math.random() * 100);
+  return base + jitter;
+}
+
 class Mem0Client {
   private apiKey: string;
   private baseUrl = 'https://api.mem0.ai';
@@ -52,41 +98,77 @@ class Mem0Client {
   }
 
   /**
-   * Add memories from conversation messages
+   * Add memories from conversation messages.
+   * Retries on transient errors (429/5xx/network) with exponential backoff.
    */
   async add(
-    messages: Array<{ role: string; content: string }>,
-    options: { userId?: string; agentId?: string; sessionId?: string } = {}
+    messages: Array<{ role: string; content: string; name?: string }>,
+    options: {
+      userId?: string;
+      agentId?: string;
+      sessionId?: string;
+      metadata?: Record<string, any>;
+      infer?: boolean;
+      timeoutMs?: number;
+    } = {}
   ): Promise<{ results?: Mem0Memory[]; message?: string }> {
-    try {
-      const response = await fetch(`${this.baseUrl}/v1/memories/`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Token ${this.apiKey}`,
-        },
-        body: JSON.stringify({
-          messages,
-          user_id: options.userId,
-          agent_id: options.agentId,
-          run_id: options.sessionId,
-        }),
-      });
+    const timeoutMs = options.timeoutMs ?? DEFAULT_ADD_TIMEOUT_MS;
+    const body = JSON.stringify({
+      messages,
+      user_id: options.userId,
+      agent_id: options.agentId,
+      run_id: options.sessionId,
+      metadata: options.metadata,
+      ...(options.infer === false ? { infer: false } : {}),
+    });
 
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.detail || 'Failed to add memories');
+    let lastErr: any;
+    for (let attempt = 0; attempt <= ADD_MAX_RETRIES; attempt++) {
+      try {
+        const response = await fetchWithTimeout(
+          `${this.baseUrl}/v1/memories/`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Token ${this.apiKey}`,
+            },
+            body,
+          },
+          timeoutMs,
+        );
+
+        if (!response.ok) {
+          const errBody = await response.json().catch(() => ({}));
+          const message = errBody.detail || `Failed to add memories (HTTP ${response.status})`;
+          if (isRetryableStatus(response.status) && attempt < ADD_MAX_RETRIES) {
+            lastErr = new Error(message);
+            await sleep(backoffMs(attempt));
+            continue;
+          }
+          throw new Error(message);
+        }
+
+        return await response.json();
+      } catch (err: any) {
+        lastErr = err;
+        // Retry on network/timeout errors, but only within retry budget
+        if (attempt < ADD_MAX_RETRIES) {
+          await sleep(backoffMs(attempt));
+          continue;
+        }
+        log.error('Mem0 add failed', { error: err.message, attempts: attempt + 1 });
+        throw err;
       }
-
-      return await response.json();
-    } catch (err: any) {
-      log.error('Mem0 add failed', { error: err.message });
-      throw err;
     }
+    // Defensive — loop always returns or throws above
+    throw lastErr ?? new Error('Mem0 add failed');
   }
 
   /**
-   * Search memories for a query
+   * Search memories for a query.
+   * Hot path — no retries (caller wraps in fire-and-forget). Uses advanced
+   * retrieval flags (keyword_search + rerank + threshold) for higher quality.
    */
   async search(
     query: string,
@@ -96,28 +178,43 @@ class Mem0Client {
       sessionId?: string;
       limit?: number;
       filters?: Record<string, any>;
+      keywordSearch?: boolean;
+      rerank?: boolean;
+      filterMemories?: boolean;
+      threshold?: number;
+      timeoutMs?: number;
     } = {}
   ): Promise<{ results?: Mem0Memory[] }> {
+    const timeoutMs = options.timeoutMs ?? DEFAULT_SEARCH_TIMEOUT_MS;
     try {
-      const response = await fetch(`${this.baseUrl}/v1/memories/search/`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Token ${this.apiKey}`,
+      const response = await fetchWithTimeout(
+        `${this.baseUrl}/v1/memories/search/`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Token ${this.apiKey}`,
+          },
+          body: JSON.stringify({
+            query,
+            user_id: options.userId,
+            agent_id: options.agentId,
+            run_id: options.sessionId,
+            limit: options.limit || 10,
+            filters: options.filters,
+            // Advanced retrieval — defaults tuned for balanced precision/latency
+            keyword_search: options.keywordSearch ?? true,
+            rerank: options.rerank ?? true,
+            ...(options.filterMemories ? { filter_memories: true } : {}),
+            ...(options.threshold !== undefined ? { threshold: options.threshold } : {}),
+          }),
         },
-        body: JSON.stringify({
-          query,
-          user_id: options.userId,
-          agent_id: options.agentId,
-          run_id: options.sessionId,
-          limit: options.limit || 10,
-          filters: options.filters,
-        }),
-      });
+        timeoutMs,
+      );
 
       if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.detail || 'Failed to search memories');
+        const errBody = await response.json().catch(() => ({}));
+        throw new Error(errBody.detail || `Failed to search memories (HTTP ${response.status})`);
       }
 
       return await response.json();
@@ -131,24 +228,29 @@ class Mem0Client {
    * Get all memories for a user/agent
    */
   async getAll(
-    options: { userId?: string; agentId?: string; limit?: number } = {}
+    options: { userId?: string; agentId?: string; limit?: number; timeoutMs?: number } = {}
   ): Promise<{ results?: Mem0Memory[] }> {
+    const timeoutMs = options.timeoutMs ?? DEFAULT_DEFAULT_TIMEOUT_MS;
     try {
       const params = new URLSearchParams();
       if (options.userId) params.append('user_id', options.userId);
       if (options.agentId) params.append('agent_id', options.agentId);
       if (options.limit) params.append('limit', String(options.limit));
 
-      const response = await fetch(`${this.baseUrl}/v1/memories/?${params}`, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Token ${this.apiKey}`,
+      const response = await fetchWithTimeout(
+        `${this.baseUrl}/v1/memories/?${params}`,
+        {
+          method: 'GET',
+          headers: {
+            'Authorization': `Token ${this.apiKey}`,
+          },
         },
-      });
+        timeoutMs,
+      );
 
       if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.detail || 'Failed to get memories');
+        const errBody = await response.json().catch(() => ({}));
+        throw new Error(errBody.detail || `Failed to get memories (HTTP ${response.status})`);
       }
 
       return await response.json();
@@ -161,20 +263,24 @@ class Mem0Client {
   /**
    * Update a memory
    */
-  async update(memoryId: string, text: string): Promise<{ message?: string }> {
+  async update(memoryId: string, text: string, timeoutMs = DEFAULT_DEFAULT_TIMEOUT_MS): Promise<{ message?: string }> {
     try {
-      const response = await fetch(`${this.baseUrl}/v1/memories/${memoryId}/`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Token ${this.apiKey}`,
+      const response = await fetchWithTimeout(
+        `${this.baseUrl}/v1/memories/${memoryId}/`,
+        {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Token ${this.apiKey}`,
+          },
+          body: JSON.stringify({ memory: text }),
         },
-        body: JSON.stringify({ memory: text }),
-      });
+        timeoutMs,
+      );
 
       if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.detail || 'Failed to update memory');
+        const errBody = await response.json().catch(() => ({}));
+        throw new Error(errBody.detail || `Failed to update memory (HTTP ${response.status})`);
       }
 
       return await response.json();
@@ -187,18 +293,22 @@ class Mem0Client {
   /**
    * Delete a memory
    */
-  async delete(memoryId: string): Promise<{ message?: string }> {
+  async delete(memoryId: string, timeoutMs = DEFAULT_DEFAULT_TIMEOUT_MS): Promise<{ message?: string }> {
     try {
-      const response = await fetch(`${this.baseUrl}/v1/memories/${memoryId}/`, {
-        method: 'DELETE',
-        headers: {
-          'Authorization': `Token ${this.apiKey}`,
+      const response = await fetchWithTimeout(
+        `${this.baseUrl}/v1/memories/${memoryId}/`,
+        {
+          method: 'DELETE',
+          headers: {
+            'Authorization': `Token ${this.apiKey}`,
+          },
         },
-      });
+        timeoutMs,
+      );
 
       if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.detail || 'Failed to delete memory');
+        const errBody = await response.json().catch(() => ({}));
+        throw new Error(errBody.detail || `Failed to delete memory (HTTP ${response.status})`);
       }
 
       return await response.json();
@@ -211,22 +321,27 @@ class Mem0Client {
   /**
    * Delete all memories for a user/agent
    */
-  async deleteAll(options: { userId?: string; agentId?: string } = {}): Promise<{ message?: string }> {
+  async deleteAll(options: { userId?: string; agentId?: string; timeoutMs?: number } = {}): Promise<{ message?: string }> {
+    const timeoutMs = options.timeoutMs ?? DEFAULT_DEFAULT_TIMEOUT_MS;
     try {
       const params = new URLSearchParams();
       if (options.userId) params.append('user_id', options.userId);
       if (options.agentId) params.append('agent_id', options.agentId);
 
-      const response = await fetch(`${this.baseUrl}/v1/memories/?${params}`, {
-        method: 'DELETE',
-        headers: {
-          'Authorization': `Token ${this.apiKey}`,
+      const response = await fetchWithTimeout(
+        `${this.baseUrl}/v1/memories/?${params}`,
+        {
+          method: 'DELETE',
+          headers: {
+            'Authorization': `Token ${this.apiKey}`,
+          },
         },
-      });
+        timeoutMs,
+      );
 
       if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.detail || 'Failed to delete memories');
+        const errBody = await response.json().catch(() => ({}));
+        throw new Error(errBody.detail || `Failed to delete memories (HTTP ${response.status})`);
       }
 
       return await response.json();
@@ -281,10 +396,14 @@ export function resetMem0Client(): void {
  */
 export async function mem0Add(
   args: {
-    messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }>;
+    messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string; name?: string }>;
     userId?: string;
     agentId?: string;
     sessionId?: string;
+    metadata?: Record<string, any>;
+    /** Set false to skip Mem0 LLM extraction (fast path for explicit user notes) */
+    infer?: boolean;
+    timeoutMs?: number;
   },
   config: Mem0Config = {}
 ): Promise<{ success: boolean; results?: Mem0Memory[]; error?: string }> {
@@ -294,6 +413,9 @@ export async function mem0Add(
       userId: args.userId || config.userId,
       agentId: args.agentId || config.agentId,
       sessionId: args.sessionId || config.sessionId,
+      metadata: args.metadata,
+      infer: args.infer,
+      timeoutMs: args.timeoutMs,
     });
     log.info('Mem0 memories added', { count: result.results?.length || 0 });
     return { success: true, results: result.results };
@@ -314,6 +436,15 @@ export async function mem0Search(
     sessionId?: string;
     limit?: number;
     filters?: Record<string, any>;
+    /** Expand results with keyword matches (default: true) */
+    keywordSearch?: boolean;
+    /** Deep semantic reordering (default: true) */
+    rerank?: boolean;
+    /** Drop low-relevance results entirely (default: false; +200ms) */
+    filterMemories?: boolean;
+    /** Drop results below this score (e.g., 0.3) */
+    threshold?: number;
+    timeoutMs?: number;
   },
   config: Mem0Config = {}
 ): Promise<{ success: boolean; results?: Mem0Memory[]; error?: string }> {
@@ -325,6 +456,11 @@ export async function mem0Search(
       sessionId: args.sessionId || config.sessionId,
       limit: args.limit,
       filters: args.filters,
+      keywordSearch: args.keywordSearch,
+      rerank: args.rerank,
+      filterMemories: args.filterMemories,
+      threshold: args.threshold,
+      timeoutMs: args.timeoutMs,
     });
     log.info('Mem0 search completed', { query: args.query, count: result.results?.length || 0 });
     return { success: true, results: result.results };
@@ -599,18 +735,45 @@ export async function buildMem0Tools(context: { userId?: string; sessionId?: str
 // ============================================================================
 
 /**
- * Build system prompt with memory context (for auto-retrieval)
+ * Build system prompt with memory context (for auto-retrieval).
+ *
+ * - Drops memories below `threshold` (default 0.3) so noise doesn't pollute
+ *   the LLM context.
+ * - Sorts by descending score so the most relevant memories appear first.
+ * - Includes the score so the model knows how confident the retrieval was.
+ *
  * @param memories Array of memory objects to include in prompt
+ * @param opts.threshold Minimum score; memories below this are dropped
+ * @param opts.showScores Append score to each bullet (default: true)
  */
-export function buildMem0SystemPrompt(memories: Mem0Memory[]): string {
+export function buildMem0SystemPrompt(
+  memories: Mem0Memory[],
+  opts: { threshold?: number; showScores?: boolean } = {}
+): string {
   if (!memories || memories.length === 0) {
     return '';
   }
-  
-  const memoryList = memories
-    .map(m => `- ${m.memory}`)
+
+  const threshold = opts.threshold ?? 0.3;
+  const showScores = opts.showScores ?? true;
+
+  const filtered = memories
+    .filter(m => m && typeof m.memory === 'string' && (m.score ?? 1) >= threshold)
+    .sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+
+  if (filtered.length === 0) {
+    return '';
+  }
+
+  const memoryList = filtered
+    .map(m => {
+      if (showScores && typeof m.score === 'number') {
+        return `- (${m.score.toFixed(2)}) ${m.memory}`;
+      }
+      return `- ${m.memory}`;
+    })
     .join('\n');
-  
+
   return `\n## Relevant User Memories\n\n${memoryList}\n`;
 }
 

@@ -48,6 +48,8 @@ function getDirname(): string {
 const __dirname = getDirname();
 const __filename = process.argv[1] || '';
 import { spawn, ChildProcess } from 'child_process';
+import { WebSocket } from 'ws';
+import FormData from 'form-data';
 import { Readable } from 'stream';
 
 // RTK CLI Commands - Token-optimized command execution for LLM consumption
@@ -86,6 +88,142 @@ const KEYS_FILE = path.join(CONFIG_DIR, 'keys.json'); // BYOK keys storage
 
 // Ensure config directory exists
 fs.ensureDirSync(CONFIG_DIR);
+
+// WebSocket Terminal - interactive terminal for sandboxes
+// Supports both remote (server) and local (Tauri) modes
+async function websocketTerminal(sandboxId: string, options?: { tauri?: boolean; cwd?: string }): Promise<void> {
+  const auth = loadAuth();
+
+  if (!sandboxId) {
+    console.log(COLORS.error('Sandbox ID required'));
+    process.exit(1);
+  }
+
+  console.log(chalk.cyanBright('\n=== binG WebSocket Terminal ===\n'));
+
+  // Tauri mode: use PTY session via Tauri invoke
+  if (options?.tauri || localMode.isDesktop) {
+    try {
+      // Dynamically import Tauri invoke if available
+      const { invoke } = await import('@tauri-apps/api/core').catch(() => ({ invoke: null }));
+      
+      if (invoke) {
+        console.log(COLORS.info('Using Tauri PTY session (local mode)'));
+        
+        // Create PTY session
+        const ptyResult = await invoke<{ session_id: string; success: boolean; error?: string }>(
+          'create_pty_session',
+          { cols: 120, rows: 30, cwd: options?.cwd || getWorkspaceRoot(), shell: null }
+        );
+        
+        if (!ptyResult.success || !ptyResult.session_id) {
+          console.log(COLORS.error(`Failed to create PTY session: ${ptyResult.error}`));
+          process.exit(1);
+        }
+        
+        const sessionId = ptyResult.session_id;
+        console.log(COLORS.success(`✓ PTY session created: ${sessionId}`));
+        console.log(COLORS.info('Type commands and press Enter\n'));
+
+        // Set up terminal input
+        if (process.stdin.isTTY) process.stdin.setRawMode(true);
+        
+        process.stdin.on('data', async (data) => {
+          try {
+            await invoke('write_pty_input', { sessionId, data: data.toString() });
+          } catch (err) {
+            console.log(COLORS.error(`Write error: ${err}`));
+          }
+        });
+
+        // Listen for PTY output via Tauri events (handled by Tauri sidecar)
+        // For now, use polling approach with periodic output reads
+        let active = true;
+        const pollInterval = setInterval(async () => {
+          if (!active) {
+            clearInterval(pollInterval);
+            return;
+          }
+          try {
+            // Send empty input to trigger output read
+            // In a full implementation, this would use event listeners
+          } catch {
+            // Ignore polling errors
+          }
+        }, 100);
+
+        process.on('SIGINT', async () => {
+          active = false;
+          clearInterval(pollInterval);
+          if (process.stdin.isTTY) process.stdin.setRawMode(false);
+          try {
+            await invoke('close_pty_session', { sessionId });
+          } catch {}
+          console.log(COLORS.info('\nPTY session closed'));
+          process.exit(0);
+        });
+
+        return;
+      }
+    } catch (err) {
+      console.log(COLORS.warning(`Tauri mode unavailable: ${err}`));
+      console.log(COLORS.info('Falling back to server mode...'));
+    }
+  }
+
+  // Server mode: use WebSocket via API
+  console.log(COLORS.info(`Connecting to sandbox: ${sandboxId}`));
+
+  try {
+    const sessionResponse = await apiRequest('/sandbox/terminal', { method: 'POST', data: {} });
+    const sessionId = sessionResponse.sessionId || sessionResponse.id;
+    const actualSandboxId = sessionResponse.sandboxId || sandboxId;
+
+    if (!sessionId) {
+      console.log(COLORS.error('Failed to create terminal session'));
+      process.exit(1);
+    }
+
+    const wsInfo = await apiRequest(
+      `/sandbox/terminal/ws?sessionId=${encodeURIComponent(sessionId)}&sandboxId=${encodeURIComponent(actualSandboxId)}`,
+      { method: 'GET' }
+    );
+
+    const wsUrl = wsInfo.wsUrl || wsInfo.url || `ws://localhost:3001/ws?sessionId=${encodeURIComponent(sessionId)}&sandboxId=${encodeURIComponent(actualSandboxId)}`;
+    const ws = new WebSocket(wsUrl, { headers: auth.token ? { Authorization: `Bearer ${auth.token}` } : {} });
+
+    ws.on('open', () => {
+      console.log(COLORS.success('✓ Connected to terminal'));
+      console.log(COLORS.info('Type commands and press Enter\n'));
+
+      if (process.stdin.isTTY) process.stdin.setRawMode(true);
+      process.stdin.on('data', (data) => {
+        ws.send(JSON.stringify({ type: 'input', data: data.toString() }));
+      });
+    });
+
+    ws.on('message', (data) => {
+      try {
+        const msg = JSON.parse(data.toString());
+        if (msg.type === 'pty' || msg.type === 'output') process.stdout.write(msg.data);
+        else if (msg.type === 'ping') ws.send(JSON.stringify({ type: 'pong' }));
+        else if (msg.type === 'error') console.log(COLORS.error(msg.data));
+      } catch { process.stdout.write(data.toString()); }
+    });
+
+    ws.on('close', () => {
+      if (process.stdin.isTTY && process.stdin.isRaw) process.stdin.setRawMode(false);
+      console.log(COLORS.info('\nDisconnected from terminal'));
+      process.exit(0);
+    });
+
+    ws.on('error', (err) => { console.log(COLORS.error(`WebSocket error: ${err.message}`)); process.exit(1); });
+    process.on('SIGINT', () => { if (process.stdin.isTTY) process.stdin.setRawMode(false); ws.close(); process.exit(0); });
+  } catch (error: any) {
+    console.log(COLORS.error(`Failed to connect: ${error.message}`));
+    process.exit(1);
+  }
+}
 
 // ============================================================================
 // Global Error Handling & Input Validation
@@ -238,13 +376,15 @@ interface FileEditEvent {
 
 // Resolve vfs-mcp-tools.ts from multiple candidate locations to handle both
 // source (packages/shared/cli/) and compiled (packages/shared/cli/dist/) layouts.
+// VFS MCP tools path resolution - tries multiple candidate locations
 const MCP_TOOLS_PATH = (() => {
   const candidates = [
     path.join(__dirname, '..', '..', '..', 'web', 'lib', 'mcp', 'vfs-mcp-tools.ts'),   // source layout
     path.join(__dirname, '..', '..', '..', '..', 'web', 'lib', 'mcp', 'vfs-mcp-tools.ts'), // dist layout
     path.join(__dirname, '..', '..', '..', '..', 'web', 'lib', 'mcp', 'vfs-mcp-tools.js'), // compiled js
   ];
-  return candidates.find((p) => { try { return require('fs').existsSync(p); } catch { return false; } }) ?? candidates[0];
+  // Use fs.existsSync directly (not require) for ESM compatibility
+  return candidates.find((p) => fs.existsSync(p)) || candidates[0];
 })();
 
 let vfsToolsInitialized = false;
@@ -424,7 +564,7 @@ async function processSSEStream(response: AsyncIterable<any>): Promise<string> {
   let fullResponse = '';
   let streamDone = false;
   let collectedDiffs: Array<{ path: string; diff: string; changeType: string }> = [];
-  
+
   try {
     for await (const chunk of response) {
       const line = chunk.trim();
@@ -438,14 +578,26 @@ async function processSSEStream(response: AsyncIterable<any>): Promise<string> {
       
       switch (event.type) {
         case 'file_edit':
-        case SSE_EVENT_TYPES.FILE_EDIT:
-          processFileEditEvent(event.data);
-          break;
-        case 'done':
-        case 'primary_done':
-        case SSE_EVENT_TYPES.PRIMARY_DONE:
-          streamDone = true;
-          break;
+          case SSE_EVENT_TYPES.FILE_EDIT:
+            processFileEditEvent(event.data);
+            break;
+          case 'done':
+          case 'primary_done':
+          case SSE_EVENT_TYPES.PRIMARY_DONE:
+            // Return immediately — do NOT wait for stream to close
+            if (pendingFileEdits.length > 0 || fullResponse) {
+              console.log(`\n\n${COLORS.success('═'.repeat(55))}`);
+              console.log(`${COLORS.accent('📁 File Edits:')} ${pendingFileEdits.length} file(s) modified`);
+              pendingFileEdits.forEach((edit, i) => {
+                const fileName = edit.path.split(/[/\\]/).pop() || edit.path;
+                const shortPath = edit.path.length > 40 ? '...' + edit.path.slice(-37) : edit.path;
+                console.log(`  ${i}: ${COLORS.primary(fileName)} ${COLORS.muted(shortPath)} [r] revert`);
+              });
+              console.log(COLORS.success('═'.repeat(55)));
+              pendingFileEdits.length = 0;
+            }
+            return fullResponse;
+          }
         case 'token':
           process.stdout.write(event.data);
           fullResponse += event.data;
@@ -543,6 +695,10 @@ async function processSSEStream(response: AsyncIterable<any>): Promise<string> {
         await handleRevertEdit(editIndex);
       }
     }
+    
+    // CRITICAL FIX: Clear pendingFileEdits after stream processing completes
+    // This prevents old edits from persisting across chat sessions
+    pendingFileEdits.length = 0;
   }
   
   return fullResponse;
@@ -678,6 +834,161 @@ function listKeys(): { provider: string; hasKey: boolean }[] {
   const keys = loadKeys();
   const supported = ['openai', 'anthropic', 'google', 'mistral', 'github', 'cohere', 'huggingface', 'replicate'];
   return supported.map(p => ({ provider: p, hasKey: !!keys[p.toLowerCase()] }));
+}
+
+// ============================================================================
+// Circuit Breaker for Provider Fallback
+// ============================================================================
+
+interface CircuitBreakerState {
+  failures: number;
+  lastFailure: number;
+  isOpen: boolean;
+  resetTimeout: number;
+}
+
+class CircuitBreaker {
+  private state: CircuitBreakerState;
+  private readonly failureThreshold: number;
+  private readonly resetTimeout: number;
+  private readonly halfOpenAttempts: number;
+  private halfOpenSuccesses: number;
+
+  constructor(failureThreshold = 5, resetTimeout = 30000) {
+    this.failureThreshold = failureThreshold;
+    this.resetTimeout = resetTimeout;
+    this.halfOpenAttempts = 2;
+    this.state = { failures: 0, lastFailure: 0, isOpen: false, resetTimeout };
+    this.halfOpenSuccesses = 0;
+  }
+
+  async execute<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.state.isOpen) {
+      if (Date.now() - this.state.lastFailure >= this.state.resetTimeout) {
+        this.state.isOpen = false;
+        this.halfOpenSuccesses = 0;
+        console.log(COLORS.info('⚡ Circuit breaker: trying half-open state'));
+      } else {
+        throw new Error(`Circuit breaker OPEN. Retry in ${Math.ceil((this.state.resetTimeout - (Date.now() - this.state.lastFailure)) / 1000)}s`);
+      }
+    }
+    try {
+      const result = await fn();
+      this.onSuccess();
+      return result;
+    } catch (error) {
+      this.onFailure();
+      throw error;
+    }
+  }
+
+  private onSuccess(): void {
+    if (this.state.isOpen) {
+      this.halfOpenSuccesses++;
+      if (this.halfOpenSuccesses >= this.halfOpenAttempts) {
+        this.state.failures = 0;
+        this.state.isOpen = false;
+        this.halfOpenSuccesses = 0;
+        console.log(COLORS.success('✓ Circuit breaker: CLOSED (recovered)'));
+      }
+    } else {
+      this.state.failures = 0;
+    }
+  }
+
+  private onFailure(): void {
+    this.state.failures++;
+    this.state.lastFailure = Date.now();
+    if (this.state.failures >= this.failureThreshold) {
+      this.state.isOpen = true;
+      console.log(COLORS.warning(`⚠ Circuit breaker: OPEN after ${this.state.failures} failures`));
+    }
+  }
+
+  getState(): { isOpen: boolean; failures: number; lastFailure: number } {
+    return { isOpen: this.state.isOpen, failures: this.state.failures, lastFailure: this.state.lastFailure };
+  }
+
+  reset(): void { this.state.failures = 0; this.state.isOpen = false; this.halfOpenSuccesses = 0; }
+}
+
+const providerCircuitBreakers: Map<string, CircuitBreaker> = new Map();
+
+function getCircuitBreaker(provider: string): CircuitBreaker {
+  if (!providerCircuitBreakers.has(provider)) {
+    providerCircuitBreakers.set(provider, new CircuitBreaker(5, 60000));
+  }
+  return providerCircuitBreakers.get(provider)!;
+}
+
+function resetAllCircuitBreakers(): void {
+  for (const cb of providerCircuitBreakers.values()) cb.reset();
+  console.log(COLORS.info('All circuit breakers reset'));
+}
+
+// Multi-provider execution with circuit breaker fallback
+async function executeWithProviderFallback<T>(
+  providers: string[],
+  fn: (provider: string) => Promise<T>,
+): Promise<T> {
+  const errors: string[] = [];
+  for (const provider of providers) {
+    const breaker = getCircuitBreaker(provider);
+    try {
+      console.log(COLORS.muted(`  Trying ${provider}...`));
+      const result = await breaker.execute(() => fn(provider));
+      console.log(COLORS.success(`  ✓ ${provider} succeeded`));
+      return result;
+    } catch (error: any) {
+      errors.push(`${provider}: ${error.message}`);
+      console.log(COLORS.warning(`  ✗ ${provider} failed: ${error.message}`));
+    }
+  }
+  throw new Error(`All providers failed:\n  ${errors.join('\n  ')}`);
+}
+
+// ============================================================================
+// Modal.com Sandbox Provider (stubbed - requires API key configuration)
+// ============================================================================
+
+interface ModalSandboxInstance {
+  sandboxId: string;
+  sessionId: string;
+  wsUrl: string;
+  status: 'creating' | 'running' | 'stopped' | 'error';
+}
+
+async function getModalComProvider(): Promise<{
+  create: (config: any) => Promise<ModalSandboxInstance>;
+  execute: (sandboxId: string, command: string) => Promise<{ output: string; exitCode: number }>;
+  destroy: (sandboxId: string) => Promise<void>;
+  status: (sandboxId: string) => Promise<{ status: string }>;
+} | null> {
+  const keys = loadKeys();
+  if (!keys.modal_com) {
+    console.log(COLORS.warning('⚠ Modal.com not configured. Set key with: bing keys:set modal_com <api_key>'));
+    return null;
+  }
+  return {
+    async create(config: any): Promise<ModalSandboxInstance> {
+      const spinner = ora('Creating Modal.com sandbox...').start();
+      try {
+        const result = await apiRequest('/sandbox', { method: 'POST', data: { provider: 'modal-com', ...config } });
+        spinner.stop();
+        console.log(COLORS.success('✓ Modal.com sandbox created'));
+        return { sandboxId: result.sandboxId, sessionId: result.sessionId, wsUrl: result.wsUrl, status: 'running' };
+      } catch (error: any) { spinner.stop(); throw error; }
+    },
+    async execute(sandboxId: string, command: string): Promise<{ output: string; exitCode: number }> {
+      return await apiRequest('/sandbox/execute', { method: 'POST', data: { sandboxId, command } });
+    },
+    async destroy(sandboxId: string): Promise<void> {
+      await apiRequest('/sandbox', { method: 'DELETE', data: { sandboxId } });
+    },
+    async status(sandboxId: string): Promise<{ status: string }> {
+      return await apiRequest(`/sandbox/${sandboxId}/status`);
+    },
+  };
 }
 
 // ============================================================================
@@ -910,7 +1221,7 @@ function requiresWorkspaceBoundaryConfirmation(
   if (!WORKSPACE_DESTRUCTIVE_OPS.has(operation)) return null;
   if (!isOutsideWorkspace(targetPath)) return null;
   const root = getWorkspaceRoot();
-  return null;
+  return `Operation '${operation}' targets path '${targetPath}' outside workspace root '${root}'. This operation could affect system files or data outside the configured workspace.`;
 }
 
 /**
@@ -993,7 +1304,7 @@ function analyzeCommandImpact(command: string): CommandImpact {
   // MEDIUM = unknown/unpredictable new commands (requires Enter approval)
   // HIGH = explicitly destructive (rm -rf, format, etc.) — extra warning in red
   const isLocalMode = localMode.isLocal || localMode.isDesktop;
-  const LOCAL_SAFE_COMMANDS = /^\s*(cat|ls|dir|echo|pwd|mkdir|touch|head|tail|grep|find|wc|sort|uniq|npm|pnpm|yarn|bun|npx|node|python|pip|git status|git log|git diff|git branch)\b/i;
+  const LOCAL_SAFE_COMMANDS = /^\s*(cat|ls|dir|echo|pwd|mkdir|touch|head|tail|grep|find|wc|sort|uniq|npm|pnpm|yarn|bun|npx|node|python|pip|git\s+status|git\s+log|git\s+diff|git\s+branch|git\s+show)\b/i;
 
   const impact: CommandImpact = {
     command: sanitized,
@@ -1557,6 +1868,20 @@ program
   });
 
 program
+  .command('sandbox:terminal')
+  .description('Connect to interactive WebSocket terminal')
+  .option('-s, --sandbox <id>', 'Sandbox ID')
+  .action(async (options) => {
+    const config = loadConfig();
+    const sandboxId = options.sandbox || config.currentSandbox;
+    if (!sandboxId) {
+      console.log(COLORS.error('No sandbox specified. Use -s or create one first.'));
+      process.exit(1);
+    }
+    await websocketTerminal(sandboxId);
+  });
+
+program
   .command('sandbox:list')
   .description('List active sandboxes')
   .action(async () => {
@@ -1701,6 +2026,21 @@ program
     } catch (error: any) {
       console.log(COLORS.error(`Error reverting file: ${error.message}`));
     }
+  });
+
+program
+  .command('history:prune')
+  .description('Prune old chat history')
+  .option('--days <number>', 'Days to keep', '30')
+  .action(async (options) => {
+    const spinner = ora('Pruning history...').start();
+    try {
+      const { LocalHistoryProvider } = await import('./lib/local-history-manager.js');
+      const history = new LocalHistoryProvider(process.cwd());
+      await history.pruneHistory(parseInt(options.days));
+      spinner.stop();
+      console.log(COLORS.success('History pruned successfully!'));
+    } catch (error: any) { spinner.stop(); console.log(COLORS.error(`Error: ${error.message}`)); }
   });
 
 program
@@ -2016,6 +2356,170 @@ program
     }
   });
 
+// ============================================================================
+// GIT COMMANDS
+// ============================================================================
+
+program
+  .command('git:status')
+  .description('Show Git status in sandbox')
+  .option('-s, --sandbox <id>', 'Sandbox ID')
+  .action(async (options) => {
+    const config = loadConfig();
+    const sandboxId = options.sandbox || config.currentSandbox;
+    if (!sandboxId) { console.log(COLORS.error('No sandbox specified')); process.exit(1); }
+    const spinner = ora('Getting Git status...').start();
+    try {
+      const result = await apiRequest('/sandbox/execute', {
+        method: 'POST',
+        data: { sandboxId, command: 'git status --porcelain -b' },
+      });
+      spinner.stop();
+      console.log(COLORS.primary('\nGit Status:'));
+      console.log(result.output || 'Working tree clean');
+    } catch (error: any) { spinner.stop(); console.log(COLORS.error(`Error: ${error.message}`)); }
+  });
+
+program
+  .command('git:commit <message>')
+  .description('Commit changes in sandbox')
+  .option('-s, --sandbox <id>', 'Sandbox ID')
+  .option('-a, --all', 'Stage all changes')
+  .action(async (message, options) => {
+    const config = loadConfig();
+    const sandboxId = options.sandbox || config.currentSandbox;
+    if (!sandboxId) { console.log(COLORS.error('No sandbox specified')); process.exit(1); }
+    const spinner = ora('Committing changes...').start();
+    try {
+      if (options.all) await apiRequest('/sandbox/execute', { method: 'POST', data: { sandboxId, command: 'git add -A' } });
+      const escapedMessage = message.replace(/'/g, "'\\''");
+      const result = await apiRequest('/sandbox/execute', { method: 'POST', data: { sandboxId, command: `git commit -m '${escapedMessage}'` } });
+      spinner.stop();
+      console.log(result.success ? COLORS.success('\nChanges committed!') : COLORS.error(`Error: ${result.error}`));
+    } catch (error: any) { spinner.stop(); console.log(COLORS.error(`Error: ${error.message}`)); }
+  });
+
+program
+  .command('git:push')
+  .description('Push changes to remote')
+  .option('-s, --sandbox <id>', 'Sandbox ID')
+  .option('-r, --remote <name>', 'Remote name (default: origin)')
+  .option('-b, --branch <name>', 'Branch name')
+  .action(async (options) => {
+    const config = loadConfig();
+    const sandboxId = options.sandbox || config.currentSandbox;
+    if (!sandboxId) { console.log(COLORS.error('No sandbox specified')); process.exit(1); }
+    if (!await confirm('Are you sure you want to push changes?')) { console.log(COLORS.info('Cancelled')); return; }
+    const spinner = ora('Pushing changes...').start();
+    try {
+      const remote = options.remote || 'origin';
+      const target = [remote, options.branch].filter(Boolean).join(' ');
+      const result = await apiRequest('/sandbox/execute', { method: 'POST', data: { sandboxId, command: `git push ${target}`.trim() } });
+      spinner.stop();
+      console.log(result.success ? COLORS.success('\nChanges pushed!') : COLORS.error(`Error: ${result.error}`));
+    } catch (error: any) { spinner.stop(); console.log(COLORS.error(`Error: ${error.message}`)); }
+  });
+
+// ============================================================================
+// STORAGE COMMANDS
+// ============================================================================
+
+program
+  .command('storage:upload <localPath> <remotePath>')
+  .description('Upload file to cloud storage')
+  .action(async (localPath, remotePath) => {
+    if (!fs.existsSync(localPath)) { console.log(COLORS.error(`File not found: ${localPath}`)); process.exit(1); }
+    const spinner = ora('Uploading file...').start();
+    try {
+      const formData = new FormData();
+      formData.append('file', fs.createReadStream(localPath));
+      formData.append('path', remotePath);
+      const config = loadConfig();
+      const auth = loadAuth();
+      const contentLength = await new Promise<number>((resolve, reject) => {
+        formData.getLength((err, length) => { if (err) reject(err); else resolve(length); });
+      });
+      const response = await axios.post(`${config.apiBase}/storage/upload`, formData, {
+        headers: { ...formData.getHeaders(), 'Content-Length': contentLength, ...(auth.token ? { Authorization: `Bearer ${auth.token}` } : {}) },
+      });
+      spinner.stop();
+      if (response.data.success) {
+        console.log(COLORS.success('\nFile uploaded!'));
+        console.log(`  URL: ${COLORS.info(response.data.data.url)}`);
+      } else { console.log(COLORS.error(`Error: ${response.data.error}`)); process.exit(1); }
+    } catch (error: any) { spinner.stop(); console.log(COLORS.error(`Error: ${error.message}`)); }
+  });
+
+program
+  .command('storage:list [path]')
+  .description('List cloud storage files')
+  .action(async (path) => {
+    const spinner = ora('Fetching files...').start();
+    try {
+      const result = await apiRequest('/storage/list', { method: 'POST', data: { prefix: path || '' } });
+      spinner.stop();
+      if (result.success && result.data?.length > 0) {
+        console.log(COLORS.primary('\nCloud Storage Files:'));
+        result.data.forEach((file: string) => console.log(`  📄 ${file}`));
+      } else { console.log(COLORS.info('\nNo files found')); }
+    } catch (error: any) { spinner.stop(); console.log(COLORS.error(`Error: ${error.message}`)); }
+  });
+
+program
+  .command('storage:usage')
+  .description('Show storage usage')
+  .action(async () => {
+    const spinner = ora('Fetching usage...').start();
+    try {
+      const result = await apiRequest('/storage/usage', { method: 'GET' });
+      spinner.stop();
+      if (result.success) {
+        const used = Math.round(result.data.used / 1024 / 1024);
+        const limit = Math.round(result.data.limit / 1024 / 1024);
+        const percentage = Math.round((result.data.used / result.data.limit) * 100);
+        console.log(COLORS.primary('\nStorage Usage:'));
+        console.log(`  Used: ${COLORS.info(`${used} MB`)} / ${COLORS.info(`${limit} MB`)}`);
+        console.log(`  Percentage: ${COLORS.info(`${percentage}%`)}`);
+        const barLength = 30;
+        const filled = Math.max(0, Math.min(barLength, Math.round((percentage / 100) * barLength)));
+        console.log(`  [${'█'.repeat(filled)}${'░'.repeat(barLength - filled)}]`);
+      } else { console.log(COLORS.error(`Error: ${result.error}`)); }
+    } catch (error: any) { spinner.stop(); console.log(COLORS.error(`Error: ${error.message}`)); }
+  });
+
+// ============================================================================
+// SYNC COMMAND
+// ============================================================================
+
+program
+  .command('sync <localPath> <remotePath>')
+  .description('Sync local file/directory to sandbox')
+  .option('-s, --sandbox <id>', 'Sandbox ID')
+  .option('-d, --delete-local', 'Delete local file after sync')
+  .option('-r, --reverse', 'Sync from sandbox to local')
+  .action(async (localPath, remotePath, options) => {
+    const config = loadConfig();
+    const sandboxId = options.sandbox || config.currentSandbox;
+    if (!sandboxId) { console.log(COLORS.error('No sandbox specified')); process.exit(1); }
+    if (!options.reverse && !fs.existsSync(localPath)) { console.log(COLORS.error(`Local path not found: ${localPath}`)); process.exit(1); }
+    const spinner = ora(`Syncing ${localPath} to ${remotePath}...`).start();
+    try {
+      const data: any = { localPath, remotePath, sandboxId };
+      if (options.deleteLocal) data.deleteLocal = true;
+      if (options.reverse) data.reverse = true;
+      const result = await apiRequest('/sandbox/sync', { method: 'POST', data });
+      spinner.stop();
+      if (result.success) {
+        console.log(COLORS.success('\nSync complete!'));
+        console.log(`  Synced: ${result.syncedItems.join(', ')}`);
+      } else { console.log(COLORS.error(`Error: ${result.error}`)); process.exit(1); }
+    } catch (error: any) { spinner.stop(); console.log(COLORS.error(`Error: ${error.message}`)); }
+  });
+
+// ============================================================================
+// INTEGRATIONS COMMAND
+// ============================================================================
+
 program
   .command('integrations:list')
   .description('List OAuth integrations')
@@ -2040,6 +2544,120 @@ program
         console.log(COLORS.info('\nNo integrations configured'));
       }
 
+    } catch (error: any) {
+      spinner.stop();
+      console.log(COLORS.error(`Error: ${error.message}`));
+      process.exit(1);
+    }
+  });
+
+program
+  .command('oauth:complete')
+  .description('Complete OAuth authentication for a provider')
+  .option('-p, --provider <provider>', 'OAuth provider (github, google, openai, huggingface)')
+  .option('-c, --code <code>', 'Authorization code from OAuth callback')
+  .option('--port <port>', 'Local server port for callback', '3847')
+  .action(async (options) => {
+    if (!options.provider) {
+      console.log(COLORS.error('\nError: --provider is required'));
+      console.log(COLORS.info('Available providers: github, google, openai, huggingface'));
+      process.exit(1);
+    }
+
+    const spinner = ora(`Completing OAuth for ${options.provider}...`).start();
+    
+    try {
+      // In CLI mode, use direct API exchange if code is provided
+      if (options.code) {
+        const result = await apiRequest('/auth/oauth/callback', {
+          method: 'POST',
+          data: {
+            provider: options.provider,
+            code: options.code,
+          },
+        });
+        
+        spinner.stop();
+        
+        if (result.success) {
+          console.log(COLORS.success(`\n✓ ${options.provider} OAuth completed successfully!`));
+          console.log(COLORS.info(`  Account: ${result.account || 'authenticated'}`));
+        } else {
+          console.log(COLORS.error(`\n✗ OAuth failed: ${result.error}`));
+          process.exit(1);
+        }
+      } else {
+        // Start local OAuth callback server
+        console.log(COLORS.info('\nStarting OAuth callback server...'));
+        console.log(COLORS.info(`  URL: http://localhost:${options.port}/callback`));
+        console.log(COLORS.info('  Waiting for browser to complete authentication...'));
+        
+        const { startOAuthServer } = await import('./lib/oauth-callback-server.js');
+        const serverResult = await startOAuthServer(options.provider, parseInt(options.port));
+        
+        spinner.stop();
+        
+        if (serverResult.success) {
+          console.log(COLORS.success(`\n✓ ${options.provider} OAuth completed successfully!`));
+          console.log(COLORS.info(`  Account: ${serverResult.account || 'authenticated'}`));
+        } else {
+          console.log(COLORS.error(`\n✗ OAuth failed: ${serverResult.error}`));
+          process.exit(1);
+        }
+      }
+    } catch (error: any) {
+      spinner.stop();
+      console.log(COLORS.error(`Error: ${error.message}`));
+      process.exit(1);
+    }
+  });
+
+program
+  .command('oauth:init <provider>')
+  .description('Start OAuth flow for a provider (opens browser)')
+  .option('-p, --port <port>', 'Callback port', '3847')
+  .action(async (provider, options) => {
+    const supported = ['github', 'google', 'openai', 'huggingface'];
+    if (!supported.includes(provider.toLowerCase())) {
+      console.log(COLORS.error(`\nError: Unsupported provider '${provider}'`));
+      console.log(COLORS.info(`Supported providers: ${supported.join(', ')}`));
+      process.exit(1);
+    }
+
+    const spinner = ora(`Starting ${provider} OAuth flow...`).start();
+    
+    try {
+      // Get OAuth URL from server
+      const result = await apiRequest('/auth/oauth/url', {
+        method: 'POST',
+        data: { provider, callbackPort: parseInt(options.port) },
+      });
+      
+      spinner.stop();
+      
+      if (result.url) {
+        console.log(COLORS.success(`\n✓ Opening OAuth URL for ${provider}...`));
+        console.log(COLORS.info(`  URL: ${result.url}`));
+        console.log(COLORS.info(`  Callback: http://localhost:${options.port}/callback`));
+        
+        // Open browser
+        const open = process.platform === 'win32' ? 'start' : 'open';
+        spawn(open, [result.url], { detached: true, stdio: 'ignore' });
+        
+        // Start callback server
+        const { startOAuthServer } = await import('./lib/oauth-callback-server.js');
+        const serverResult = await startOAuthServer(provider, parseInt(options.port));
+        
+        if (serverResult.success) {
+          console.log(COLORS.success(`\n✓ ${provider} OAuth completed successfully!`));
+        } else {
+          console.log(COLORS.error(`\n✗ OAuth failed: ${serverResult.error}`));
+          process.exit(1);
+        }
+      } else {
+        console.log(COLORS.error(`\n✗ Failed to get OAuth URL: ${result.error}`));
+        process.exit(1);
+      }
     } catch (error: any) {
       spinner.stop();
       console.log(COLORS.error(`Error: ${error.message}`));
@@ -3301,12 +3919,12 @@ program
         DEFAULT_TEMPERATURE: process.env.DEFAULT_TEMPERATURE || null,
         DEFAULT_MAX_TOKENS: process.env.DEFAULT_MAX_TOKENS || null,
         SANDBOX_PROVIDER: process.env.SANDBOX_PROVIDER || null,
-        DESKTOP_MODE: process.env.DESKTOP_MODE || null,
-        DESKTOP_LOCAL_EXECUTION: process.env.DESKTOP_LOCAL_EXECUTION || null,
-        ENABLE_VOICE_FEATURES: process.env.ENABLE_VOICE_FEATURES || null,
-        ENABLE_IMAGE_GENERATION: process.env.ENABLE_IMAGE_GENERATION || null,
-        ENABLE_CHAT_HISTORY: process.env.ENABLE_CHAT_HISTORY || null,
-        ENABLE_CODE_EXECUTION: process.env.ENABLE_CODE_EXECUTION || null,
+        DESKTOP_MODE: process.env.DESKTOP_MODE === 'true' ? 'true' : null,
+        DESKTOP_LOCAL_EXECUTION: process.env.DESKTOP_LOCAL_EXECUTION === 'true' ? 'true' : null,
+        ENABLE_VOICE_FEATURES: null,
+        ENABLE_IMAGE_GENERATION: null,
+        ENABLE_CHAT_HISTORY: null,
+        ENABLE_CODE_EXECUTION: null,
       };
 
       if (options.json) {
@@ -4250,59 +4868,6 @@ program
     } catch (error: any) {
       spinner.stop();
       handleError(error, 'OAuth connect failed');
-    }
-  });
-
-// ============================================================================
-// STORAGE COMMANDS
-// ============================================================================
-
-program
-  .command('storage:list')
-  .description('List stored files')
-  .option('-b, --bucket <bucket>', 'Bucket name')
-  .action(async (options) => {
-    const spinner = ora('Loading storage...').start();
-    try {
-      const result = await apiRequest(`/storage/files${options.bucket ? '?bucket=' + options.bucket : ''}`);
-      spinner.stop();
-      console.log(chalk.cyanBright('\n=== Storage Files ===\n'));
-      for (const file of result.files || result) {
-        console.log(COLORS.primary(`${file.key}:`) + ` ${formatBytes(file.size)}`);
-        console.log(`  ${COLORS.info('Modified:')} ${file.modifiedAt}\n`);
-      }
-    } catch (error: any) {
-      spinner.stop();
-      handleError(error);
-    }
-  });
-
-program
-  .command('storage:upload <path>')
-  .description('Upload file to storage')
-  .option('-b, --bucket <bucket>', 'Bucket name')
-  .option('-k, --key <key>', 'Storage key')
-  .action(async (path, options) => {
-    if (!validateRequired(path, 'File path', 'Path to local file')) return;
-    if (!validatePath(path, true)) return;
-
-    const spinner = ora('Uploading file...').start();
-    try {
-      const content = fs.readFileSync(path);
-      const result = await apiRequest('/storage/upload', {
-        method: 'POST',
-        data: {
-          key: options.key || path,
-          bucket: options.bucket,
-          content: content.toString('base64'),
-        },
-      });
-      spinner.stop();
-      console.log(COLORS.success('\nFile uploaded!'));
-      console.log(COLORS.info(`Key: ${result.key}`));
-    } catch (error: any) {
-      spinner.stop();
-      handleError(error, 'Upload failed');
     }
   });
 
