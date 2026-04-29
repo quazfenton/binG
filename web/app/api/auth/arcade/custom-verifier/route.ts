@@ -15,10 +15,18 @@ async function resolveArcadeUserId(appUserId: string): Promise<string> {
   const strategy = (process.env.ARCADE_USER_ID_STRATEGY || 'email').toLowerCase();
   if (strategy !== 'email') return appUserId;
 
+  // userId is now a string (UUID), try to get user by string id
+  const user = await authService.getUserById(appUserId);
+  if (user?.email) return user.email;
+  
+  // If not found by UUID, try to interpret as numeric email for legacy compatibility
   const numeric = Number(appUserId);
-  if (Number.isNaN(numeric)) return appUserId;
-  const user = await authService.getUserById(numeric);
-  return user?.email || appUserId;
+  if (!Number.isNaN(numeric)) {
+    // Legacy numeric ID - this shouldn't happen with new users but handle gracefully
+    return appUserId;
+  }
+  
+  return appUserId;
 }
 
 async function confirmUserWithArcade(flowId: string, userId: string): Promise<any> {

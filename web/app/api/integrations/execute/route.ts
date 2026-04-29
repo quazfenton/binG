@@ -324,8 +324,8 @@ function createLocalHandler() {
  */
 function createGitHubHandler() {
   return async (action: string, params: Record<string, unknown>, context: HandlerContext) => {
-    const userId = Number(context.userId);
-    if (!Number.isFinite(userId) || userId <= 0) {
+    const userId = context.userId;
+    if (!userId || userId === 'anonymous') {
       return { success: false, error: 'Authentication required', requiresAuth: true, provider: 'github' };
     }
     return executeGitHubAction(action, params, userId);
@@ -562,7 +562,7 @@ async function executeContextPack(userId: string, params: Record<string, unknown
  * Execute GitHub action using existing github-oauth.ts.
  * Each action validates required params and returns normalized data.
  */
-async function executeGitHubAction(action: string, params: Record<string, unknown>, userId: number) {
+async function executeGitHubAction(action: string, params: Record<string, unknown>, userId: string) {
   const { getGitHubToken, githubApi, getGitHubRepos, getGitHubBranches, getGitHubCommits } = await import('@/lib/github/github-oauth');
   const token = await getGitHubToken(userId);
 

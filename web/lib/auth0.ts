@@ -39,12 +39,12 @@ async function decryptApiKey(encryptedData: string) {
 
 // Lazy-loaded mapping functions to avoid circular dependency
 // These will be called inside callback to avoid import issues
-async function getLocalUserIdFromAuth0(auth0UserId: string): Promise<number | null> {
+async function getLocalUserIdFromAuth0(auth0UserId: string): Promise<string | null> {
   const { getLocalUserIdFromAuth0: fn } = await import("./oauth/connections");
   return fn(auth0UserId);
 }
 
-async function mapAuth0UserId(localUserId: number, auth0UserId: string): Promise<boolean> {
+async function mapAuth0UserId(localUserId: string, auth0UserId: string): Promise<boolean> {
   const { mapAuth0UserId: fn } = await import("./oauth/connections");
   return fn(localUserId, auth0UserId);
 }
@@ -62,14 +62,14 @@ const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes - tokens typically last longer
 /**
  * Get cache key for connection and optional userId
  */
-function getCacheKey(connection: string, userId?: number): string {
+function getCacheKey(connection: string, userId?: string): string {
   return userId ? `${userId}:${connection}` : connection;
 }
 
 /**
  * Get cached token if valid, otherwise returns null
  */
-function getCachedToken(connection: string, userId?: number): string | null {
+function getCachedToken(connection: string, userId?: string): string | null {
   const key = getCacheKey(connection, userId);
   const entry = tokenCache.get(key);
   if (entry && entry.expiresAt > Date.now()) {
@@ -82,7 +82,7 @@ function getCachedToken(connection: string, userId?: number): string | null {
 /**
  * Cache a token for a connection and userId
  */
-function cacheToken(connection: string, token: string, expiresIn: number = 3600, userId?: number): void {
+function cacheToken(connection: string, token: string, expiresIn: number = 3600, userId?: string): void {
   const key = getCacheKey(connection, userId);
   const ttl = Math.min(expiresIn * 1000, CACHE_TTL_MS);
   tokenCache.set(key, {
@@ -108,7 +108,7 @@ export function clearCachedToken(connection: string): void {
 /**
  * Clear cached tokens for a specific user
  */
-export function clearCachedTokensForUser(userId: number): void {
+export function clearCachedTokensForUser(userId: string): void {
   for (const key of tokenCache.keys()) {
     if (key.startsWith(`${userId}:`)) {
       tokenCache.delete(key);
@@ -129,7 +129,7 @@ export function clearAllCachedTokens(): void {
 
 interface ConnectedAccountRecord {
   id?: number;
-  user_id: number;
+  user_id: string;
   provider: string;
   provider_account_id: string;
   provider_display_name?: string;
@@ -148,7 +148,7 @@ interface ConnectedAccountRecord {
  * Save a connected account to the database
  */
 export async function saveConnectedAccount(
-  userId: number,
+  userId: string,
   provider: string,
   providerAccountId: string,
   providerDisplayName?: string,
@@ -208,7 +208,7 @@ export async function saveConnectedAccount(
 /**
  * Get all connected accounts for a user
  */
-export async function getConnectedAccountsByUser(userId: number): Promise<ConnectedAccountRecord[]> {
+export async function getConnectedAccountsByUser(userId: string): Promise<ConnectedAccountRecord[]> {
   try {
     const db = await getDatabase();
     const stmt = db.prepare(`
@@ -226,7 +226,7 @@ export async function getConnectedAccountsByUser(userId: number): Promise<Connec
 /**
  * Check if a provider is connected for a user
  */
-export async function isProviderConnected(userId: number, provider: string): Promise<boolean> {
+export async function isProviderConnected(userId: string, provider: string): Promise<boolean> {
   try {
     const db = await getDatabase();
     const stmt = db.prepare(`
@@ -244,7 +244,7 @@ export async function isProviderConnected(userId: number, provider: string): Pro
 /**
  * Disconnect a provider for a user
  */
-export async function disconnectProvider(userId: number, provider: string): Promise<boolean> {
+export async function disconnectProvider(userId: string, provider: string): Promise<boolean> {
   try {
     const db = await getDatabase();
     const stmt = db.prepare(`
@@ -269,7 +269,7 @@ export async function disconnectProvider(userId: number, provider: string): Prom
  * Get decrypted access token for a connected account
  * Returns token with its expiration time to enable proper cache TTL management
  */
-export async function getStoredAccessToken(userId: number, provider: string): Promise<{ token: string; expiresAt?: Date } | null> {
+export async function getStoredAccessToken(userId: string, provider: string): Promise<{ token: string; expiresAt?: Date } | null> {
   try {
     const db = await getDatabase();
     const stmt = db.prepare(`
@@ -345,7 +345,7 @@ export async function getAuth0AccessToken() {
  * @param userId - Optional user ID to retrieve stored tokens from database
  * @returns The access token for the connection, or null if not available
  */
-export async function getAccessTokenForConnection(connection: string, userId?: number) {
+export async function getAccessTokenForConnection(connection: string, userId?: string) {
   // Check cache first with userId scope if provided
   const cachedToken = getCachedToken(connection, userId);
   if (cachedToken) {

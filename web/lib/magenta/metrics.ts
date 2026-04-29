@@ -118,12 +118,12 @@ export function getMetricsSummary(): MetricsSummary {
     };
   });
 
-  const counters = Object.fromEntries(_counters);
+  const counters = Object.fromEntries(_counters) as Record<string, number>;
 
   return { traces, counters };
 }
 
 export function clearMetrics() {
-  _traces.length = 0;
+  _traces.splice(0, _traces.length);
   _counters.clear();
 }

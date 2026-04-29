@@ -35,6 +35,11 @@ import { terminalManager } from '@/lib/terminal/terminal-manager';
 import { createLogger } from '@/lib/utils/logger';
 import { getDatabaseSessionStore } from '@/lib/database/session-store';
 import { logMCPStartupHealth } from '@/lib/mcp';
+import {
+  handleTerminalWsUpgrade,
+  incrementUserWsCount,
+  decrementUserWsCount,
+} from '@/lib/terminal/ws-upgrade-handler';
 
 const logger = createLogger('Server');
 
@@ -296,6 +301,7 @@ app.prepare().then(startup).then(() => {
     if (!hasPty) {
       console.log(`[WebSocket] No PTY available for ${sessionId}, closing so client can fallback`);
       activeWsConnections--; // Decrement before early return
+      decrementUserWsCount(userId); // Bug 9: per-user tracking
       ws.send(JSON.stringify({
         type: 'error',
         error: 'PTY not available - using command-mode',
@@ -399,6 +405,7 @@ app.prepare().then(startup).then(() => {
       terminalManager.unregisterWebSocketConnection(sessionId);
       clearInterval(pingInterval);
       activeWsConnections--; // FIX: Decrement connection counter
+      decrementUserWsCount(userId); // Bug 9: per-user tracking
       if (pongTimeout) {
         clearTimeout(pongTimeout);
         pongTimeout = null;

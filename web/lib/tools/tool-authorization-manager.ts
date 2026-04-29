@@ -19,7 +19,7 @@ export interface ToolAuthorizationContext {
 
 export interface OAuthConnectionResult {
   id: number;
-  userId: number;
+  userId: string;
   provider: string;
   providerAccountId: string;
   providerDisplayName: string | null;
@@ -66,21 +66,20 @@ export class ToolAuthorizationManager {
       return false;
     }
 
-    // Convert string userId to number for database query
-    const numericUserId = Number(userId);
-    if (isNaN(numericUserId)) {
+    // userId is now a string (UUID)
+    if (!userId || typeof userId !== 'string') {
       throw new Error(`Invalid userId: ${userId}`);
     }
 
     // Check if user has an active connection for this provider
     // Priority order: 1) Nango/Arcade/Composio, 2) Auth0 Connected Accounts (fallback)
-    const connections = await oauthService.getUserConnections(numericUserId, provider);
+    const connections = await oauthService.getUserConnections(userId, provider);
     if (connections.some(c => c.isActive)) {
       return true;
     }
 
     // Fallback: Check Auth0 Connected Accounts
-    if (await this.hasAuth0Connection(provider, numericUserId)) {
+    if (await this.hasAuth0Connection(provider, userId)) {
       return true;
     }
 
@@ -91,7 +90,7 @@ export class ToolAuthorizationManager {
    * Check if user has an Auth0 connection for the provider
    * Used as fallback when Nango/Arcade/Composio connections are not available
    */
-  private async hasAuth0Connection(provider: string, userId: number): Promise<boolean> {
+  private async hasAuth0Connection(provider: string, userId: string): Promise<boolean> {
     try {
       const auth0Connection = getAuth0ConnectionForPlatform(provider);
       if (!auth0Connection) {
@@ -123,14 +122,14 @@ export class ToolAuthorizationManager {
       return { token: null, source: null };
     }
 
-    const numericUserId = Number(userId);
-    if (!isNaN(numericUserId)) {
-      const connections = await oauthService.getUserConnections(numericUserId, provider);
+    // userId is now a string (UUID)
+    if (userId && typeof userId === 'string') {
+      const connections = await oauthService.getUserConnections(userId, provider);
       const activeConnection = connections.find(c => c.isActive);
       
       if (activeConnection) {
         try {
-          const decrypted = await oauthService.getDecryptedToken(activeConnection.id, numericUserId);
+          const decrypted = await oauthService.getDecryptedToken(activeConnection.id, userId);
           if (decrypted?.accessToken) {
             const source = this.getTokenSourceForProvider(provider);
             return { token: decrypted.accessToken, source };
@@ -144,7 +143,7 @@ export class ToolAuthorizationManager {
     const auth0Connection = getAuth0ConnectionForPlatform(provider);
     if (auth0Connection) {
       try {
-        const token = await getAccessTokenForConnection(auth0Connection, numericUserId);
+        const token = await getAccessTokenForConnection(auth0Connection, userId);
         if (token) {
           return { token, source: 'auth0' };
         }
@@ -245,8 +244,7 @@ export class ToolAuthorizationManager {
    */
   async listConnections(userId: string, provider?: string): Promise<OAuthListResult> {
     try {
-      const numericUserId = Number(userId);
-      if (isNaN(numericUserId)) {
+      if (!userId || typeof userId !== 'string') {
         return {
           success: false,
           connections: [],
@@ -254,7 +252,7 @@ export class ToolAuthorizationManager {
         };
       }
 
-      const connections = await oauthService.getUserConnections(numericUserId, provider);
+      const connections = await oauthService.getUserConnections(userId, provider);
       const connectionResults: OAuthConnectionResult[] = connections.map(c => ({
         id: c.id,
         userId: c.userId,
@@ -304,8 +302,7 @@ export class ToolAuthorizationManager {
     connectionId?: string
   ): Promise<OAuthRevokeResult> {
     try {
-      const numericUserId = Number(userId);
-      if (isNaN(numericUserId)) {
+      if (!userId || typeof userId !== 'string') {
         return {
           success: false,
           provider,
@@ -315,7 +312,7 @@ export class ToolAuthorizationManager {
       }
 
       // Get connections for this provider
-      const connections = await oauthService.getUserConnections(numericUserId, provider);
+      const connections = await oauthService.getUserConnections(userId, provider);
 
       if (connections.length === 0) {
         return {
@@ -330,7 +327,7 @@ export class ToolAuthorizationManager {
       let revokedCount = 0;
       for (const conn of connections) {
         if (connectionId && String(conn.id) !== connectionId) continue;
-        const revoked = await oauthService.revokeConnection(conn.id, numericUserId);
+        const revoked = await oauthService.revokeConnection(conn.id, userId);
         if (revoked) revokedCount++;
       }
 
@@ -456,12 +453,10 @@ export class ToolAuthorizationManager {
       let arcadeUserId = userId;
 
       if (strategy === 'email') {
-        const numericUserId = Number(userId);
-        if (!isNaN(numericUserId)) {
-          const user = await authService.getUserById(numericUserId);
-          if (user?.email) {
-            arcadeUserId = user.email;
-          }
+        // userId is now a string (UUID), try directly
+        const user = await authService.getUserById(userId);
+        if (user?.email) {
+          arcadeUserId = user.email;
         }
       }
 
@@ -650,13 +645,11 @@ export class ToolAuthorizationManager {
   }
 
   async getAvailableTools(userId: string): Promise<string[]> {
-    // Convert string userId to number for database query
-    const numericUserId = Number(userId);
-    if (isNaN(numericUserId)) {
+    if (!userId || typeof userId !== 'string') {
       throw new Error(`Invalid userId: ${userId}`);
     }
 
-    const connections = await oauthService.getUserConnections(numericUserId);
+    const connections = await oauthService.getUserConnections(userId);
     const activeProviders = new Set(connections.map(c => c.provider));
 
     return Object.entries(TOOL_PROVIDER_MAP)
@@ -665,13 +658,11 @@ export class ToolAuthorizationManager {
   }
 
   async getConnectedProviders(userId: string): Promise<string[]> {
-    // Convert string userId to number for database query
-    const numericUserId = Number(userId);
-    if (isNaN(numericUserId)) {
+    if (!userId || typeof userId !== 'string') {
       throw new Error(`Invalid userId: ${userId}`);
     }
 
-    const connections = await oauthService.getUserConnections(numericUserId);
+    const connections = await oauthService.getUserConnections(userId);
     return Array.from(new Set(connections.map(c => c.provider)));
   }
 }

@@ -96,10 +96,10 @@ export interface FileWatcherHandle {
 export class VFSFileWatcher extends EventEmitter {
   private ownerId: string;
   private config: WatchConfig;
-  private fileSnapshots: Map<string, string> = new Map();
+  private fileSnapshots: Map<string, string> = new Map<string, string>();
   private watchInterval: NodeJS.Timeout | null = null;
   private readonly WATCH_INTERVAL_MS = 500;
-  private debounceTimers: Map<string, NodeJS.Timeout> = new Map();
+  private debounceTimers: Map<string, NodeJS.Timeout> = new Map<string, NodeJS.Timeout>();
   private id: string;
 
   constructor(ownerId: string, config: WatchConfig = {}) {

@@ -48,7 +48,7 @@ function requiresWorkspaceBoundaryConfirmation(
 ): string | null {
   if (!WORKSPACE_DESTRUCTIVE_OPS.has(operation)) return null;
   if (!isOutsideWorkspace(targetPath)) return null;
-  return `Operation '${operation}' targets path outside workspace`;
+  return `Operation '${operation}' targets path '${targetPath}' outside workspace root '${getWorkspaceRoot()}'. This operation could affect system files or data outside the configured workspace.`;
 }
 
 function validatePathTraversal(pathStr: string): { valid: boolean; reason?: string } {
@@ -262,7 +262,7 @@ describe('Workspace Boundary Enforcement Integration Tests', () => {
     });
 
     it('should return null for operations inside workspace', () => {
-      const result = requiresWorkspaceBoundaryConfirmation('delete', 'test.txt');
+      const result = requiresWorkspaceBoundaryConfirmation('delete', path.join(getWorkspaceRoot(), 'test.txt'));
       expect(result).toBeNull();
     });
 
@@ -270,7 +270,7 @@ describe('Workspace Boundary Enforcement Integration Tests', () => {
       const outsideMove = requiresWorkspaceBoundaryConfirmation('move', '/etc/passwd');
       expect(outsideMove).not.toBeNull();
       
-      const insideMove = requiresWorkspaceBoundaryConfirmation('move', 'test.txt');
+      const insideMove = requiresWorkspaceBoundaryConfirmation('move', path.join(getWorkspaceRoot(), 'test.txt'));
       expect(insideMove).toBeNull();
     });
 
@@ -353,7 +353,7 @@ describe('Workspace Boundary Enforcement Integration Tests', () => {
     });
 
     it('should not prompt when operation is safe', async () => {
-      const insidePath = 'test.txt';
+      const insidePath = path.join(workspaceRoot, 'test.txt');
       const needsConfirmation = requiresWorkspaceBoundaryConfirmation('delete', insidePath);
       expect(needsConfirmation).toBeNull();
     });
@@ -413,7 +413,7 @@ describe('Workspace Boundary Enforcement Integration Tests', () => {
       
       // Inside workspace - should be allowed
       for (const op of ops) {
-        const needsConfirm = requiresWorkspaceBoundaryConfirmation(op, 'workspace-file.txt');
+        const needsConfirm = requiresWorkspaceBoundaryConfirmation(op, path.join(workspaceRoot, 'workspace-file.txt'));
         expect(needsConfirm).toBeNull();
       }
       
@@ -507,7 +507,7 @@ describe('Workspace Boundary Enforcement Integration Tests', () => {
       const rootWithSlash = workspaceRoot + '/';
       process.env.WORKSPACE_ROOT = rootWithSlash;
       
-      const fileInRoot = 'test.txt';
+      const fileInRoot = path.join(workspaceRoot, 'test.txt');
       expect(isOutsideWorkspace(fileInRoot)).toBe(false);
     });
 
@@ -515,7 +515,7 @@ describe('Workspace Boundary Enforcement Integration Tests', () => {
       const rootWithBackslash = workspaceRoot.replace(/\//g, '\\');
       process.env.WORKSPACE_ROOT = rootWithBackslash;
       
-      const fileInRoot = 'test.txt';
+      const fileInRoot = path.join(workspaceRoot, 'test.txt');
       expect(isOutsideWorkspace(fileInRoot)).toBe(false);
     });
 
@@ -523,7 +523,7 @@ describe('Workspace Boundary Enforcement Integration Tests', () => {
       const rootMixed = workspaceRoot.replace(/\\/g, '/') + '\\';
       process.env.WORKSPACE_ROOT = rootMixed;
       
-      const fileInRoot = 'test.txt';
+      const fileInRoot = path.join(workspaceRoot, 'test.txt');
       expect(isOutsideWorkspace(fileInRoot)).toBe(false);
     });
 
@@ -621,11 +621,11 @@ describe('Workspace Boundary Enforcement Integration Tests', () => {
 
     it('should allow safe development operations', () => {
       const devPaths = [
-        'src/index.ts',
-        'lib/utils.ts',
-        'tests/test.ts',
-        'package.json',
-        '.env.local',
+        path.join(getWorkspaceRoot(), 'src', 'index.ts'),
+        path.join(getWorkspaceRoot(), 'lib', 'utils.ts'),
+        path.join(getWorkspaceRoot(), 'tests', 'test.ts'),
+        path.join(getWorkspaceRoot(), 'package.json'),
+        path.join(getWorkspaceRoot(), '.env.local'),
       ];
 
       for (const devPath of devPaths) {

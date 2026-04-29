@@ -15,7 +15,7 @@ export interface MountPoint {
 
 export class VirtualFS extends EventEmitter {
   public readonly root: string;
-  private mounts: Map<string, string> = new Map();
+  private mounts: Map<string, string> = new Map<string, string>();
 
   constructor(root: string) {
     super();

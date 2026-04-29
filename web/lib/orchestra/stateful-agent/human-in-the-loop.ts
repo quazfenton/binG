@@ -27,7 +27,13 @@ class HumanInTheLoopManager {
     createdAt: Date;
     requestLogged: boolean;
     resolved: boolean;  // Flag to prevent race condition
-  }> = new Map();
+  }> = new Map<string, {
+    request: InterruptRequest;
+    resolve: (response: InterruptResponse) => void;
+    createdAt: Date;
+    requestLogged: boolean;
+    resolved: boolean;  // Flag to prevent race condition
+  }>();
 
   private handler: InterruptHandler | null = null;
 

@@ -1,5 +1,6 @@
 mod commands;
 mod log;
+mod settings;
 use commands::{PtySessions, CheckpointManager, WatcherRegistry};
 use serde::Serialize;
 use std::process::{Child, Command};
@@ -45,25 +46,26 @@ fn register_invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Syn
         commands::delete_checkpoint,
         // File system watcher
         commands::start_file_watcher,
-        commands::stop_file_watcher,        // Settings persistence
+        commands::stop_file_watcher,
+        // Undo operations (handled by LocalVFSManager git history in CLI/Desktop)
+        // MCP sidecar connection
+        commands::get_mcp_sidecar_config,
+        commands::start_mcp_sidecar_bridge,
+        // Settings persistence
         commands::save_settings,
-
         commands::load_settings,
-
         // Workspace management
         commands::set_workspace_root,
+        commands::open_directory_dialog,
     ]
 }
 
 /// Generate a random auth token for the sidecar
-fn apply_no_window(_cmd: &mut Command) {
-    // TEMPORARILY DISABLED TO DEBUG SIDECAR CRASH
-    /*
+fn apply_no_window(cmd: &mut Command) {
     #[cfg(windows)]
     {
-        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW - prevents console window flicker
     }
-    */
 }
 
 /// Generate a random auth token for the sidecar
@@ -433,6 +435,7 @@ fn wait_for_server(port: u16, timeout: Duration) -> bool {
 pub struct SidecarConfig {
     pub port: u16,
     pub token: String,
+    pub workspace_root: String,
 }
 
 /// Kill any lingering Next.js processes on the sidecar port.
@@ -545,6 +548,7 @@ pub fn run() {
             let sidecar_json = serde_json::to_string(&SidecarConfig {
                 port,
                 token: auth_token.clone(),
+                workspace_root: launch_cwd.clone(),
             }).unwrap();
             let init_script = format!(
                 "window.__SIDECAR_CONFIG__ = {};",

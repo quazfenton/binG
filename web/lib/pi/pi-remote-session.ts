@@ -21,7 +21,7 @@ export async function createRemotePiSession(config: PiConfig & { remoteUrl: stri
   let sessionId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   let isStreaming = false;
   const listenerBase = `${baseUrl}/events/${sessionId}`;
-  const listeners: Map<string, (event: PiEvent) => void> = new Map();
+  const listeners: Map<string, (event: PiEvent) => void> = new Map<string, (event: PiEvent) => void>();
   let eventSource: EventSource | null = null;
 
   // Connect to event stream

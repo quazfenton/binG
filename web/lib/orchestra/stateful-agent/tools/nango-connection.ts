@@ -14,7 +14,7 @@ export interface NangoConnectionInfo {
 
 export class NangoConnectionManager {
   private nango: Nango | null = null;
-  private connectionCache: Map<string, { data: any; cachedAt: number }> = new Map();
+  private connectionCache: Map<string, { data: any; cachedAt: number }> = new Map<string, { data: any; cachedAt: number }>();
   private cacheTtlMs: number;
   private initialized = false;
 
