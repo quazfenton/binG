@@ -37,4 +37,4 @@ const result = spawnSync(process.execPath, [mainScript, ...args], {
 });
 
 // Forward exit code
-process.exit(result?.status || 0);
+process.exit(result?.status !== null ? result.status : 1);

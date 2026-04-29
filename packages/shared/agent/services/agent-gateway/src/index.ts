@@ -12,7 +12,7 @@ import { createLogger } from './logger';
 
 const logger = createLogger('Agent:Gateway');
 
-const fastify = Fastify({ logger: true });
+const fastify = Fastify({ logger: true, requestIdHeader: 'x-request-id', requestIdLogLabel: 'reqId' });
 
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 const REDIS_STREAM_KEY = process.env.REDIS_STREAM_KEY || 'agent:events';
@@ -20,8 +20,58 @@ const JOB_TIMEOUT_MS = parseInt(process.env.JOB_TIMEOUT_MS || '300000');
 const SESSION_TIMEOUT_MS = parseInt(process.env.SESSION_TIMEOUT_MS || '3600000');
 
 const redis = new Redis(REDIS_URL);
-const redisSub = new Redis(REDIS_URL);
 const redisPub = new Redis(REDIS_URL);
+
+// PERF fix: Single shared subscription connection with multiplexing
+// Previously, each SSE stream created a new Redis connection — this could exhaust
+// connections under high traffic. Now we use one subscriber that routes events
+// to the correct SSE client by sessionId.
+const sharedSubscriber = new Redis(REDIS_URL);
+const sseClients = new Map<string, Set<(event: AgentEvent) => void>>();
+
+sharedSubscriber.subscribe(PUBSUB_CHANNEL);
+sharedSubscriber.on('message', (channel: string, message: string) => {
+  try {
+    const event: AgentEvent = JSON.parse(message);
+    // Route to session-specific clients
+    if (event.sessionId) {
+      const clients = sseClients.get(event.sessionId);
+      if (clients) {
+        for (const callback of clients) {
+          try { callback(event); } catch {}
+        }
+      }
+    }
+    // Also route to wildcard listeners (e.g., admin dashboards)
+    const wildcardClients = sseClients.get('*');
+    if (wildcardClients) {
+      for (const callback of wildcardClients) {
+        try { callback(event); } catch {}
+      }
+    }
+  } catch (e) {
+    // Ignore parse errors for non-event messages
+  }
+});
+
+function registerSSEClient(sessionId: string, callback: (event: AgentEvent) => void): () => void {
+  if (!sseClients.has(sessionId)) {
+    sseClients.set(sessionId, new Set());
+  }
+  sseClients.get(sessionId)!.add(callback);
+  // Also subscribe to session-specific channel for targeted events
+  sharedSubscriber.subscribe(`${PUBSUB_CHANNEL}:${sessionId}`).catch(() => {});
+  return () => {
+    const clients = sseClients.get(sessionId);
+    if (clients) {
+      clients.delete(callback);
+      if (clients.size === 0) {
+        sseClients.delete(sessionId);
+        sharedSubscriber.unsubscribe(`${PUBSUB_CHANNEL}:${sessionId}`).catch(() => {});
+      }
+    }
+  };
+}
 
 const PUBSUB_CHANNEL = 'agent:events';
 const JOB_QUEUE = 'agent:jobs';
@@ -70,23 +120,9 @@ async function publishEvent(event: AgentEvent): Promise<void> {
   }
 }
 
-async function subscribeToSession(sessionId: string, callback: (event: AgentEvent) => void): Promise<Redis> {
-  const subscriber = new Redis(REDIS_URL);
-  // Only subscribe to the session-specific channel to avoid processing unrelated events
-  const sessionChannel = `${PUBSUB_CHANNEL}:${sessionId}`;
-  await subscriber.subscribe(sessionChannel);
-  subscriber.on('message', (channel: string, message: string) => {
-    // Ignore messages from other channels
-    if (channel !== sessionChannel) return;
-    try {
-      const event: AgentEvent = JSON.parse(message);
-      callback(event);
-    } catch (e) {
-      logger.error('Failed to parse event', { error: e });
-    }
-  });
-  return subscriber;
-}
+// subscribeToSession is DEPRECATED — replaced by registerSSEClient() which uses
+// the shared multiplexed subscriber connection instead of creating a new Redis
+// connection per SSE stream.
 
 async function start() {
   await fastify.register(cors, { origin: true, methods: ['GET', 'POST', 'OPTIONS'] });
@@ -102,6 +138,10 @@ async function start() {
   });
 
   fastify.post('/jobs', async (request: any, reply: any) => {
+    // MED-9 fix: Propagate request ID for distributed tracing
+    const requestId = request.id || request.headers['x-request-id'] || `req-${uuidv4()}`;
+    reply.header('x-request-id', requestId);
+    
     const { userId, conversationId, prompt, context, tools, model } = request.body || {};
     if (!userId || !prompt) {
       return reply.status(400).send({ error: 'userId and prompt are required' });
@@ -135,7 +175,7 @@ async function start() {
     await redis.lpush(JOB_QUEUE, JSON.stringify(job));
     await publishEvent({ type: 'job:ready', sessionId, data: { jobId }, timestamp: Date.now() });
 
-    logger.info('Created job', { jobId, sessionId, userId });
+    logger.info('Created job', { jobId, sessionId, userId, requestId });
     return { jobId, sessionId, status: 'pending' };
   });
 
@@ -147,11 +187,11 @@ async function start() {
     });
     reply.raw.write(`event: connected\ndata: ${JSON.stringify({ sessionId, timestamp: Date.now() })}\n\n`);
 
-    let subscriber: Redis | null = null;
     let isActive = true;
 
     try {
-      subscriber = await subscribeToSession(sessionId, (event: AgentEvent) => {
+      // PERF fix: Use shared multiplexed subscriber instead of creating a new Redis connection per SSE stream
+      const unregister = registerSSEClient(sessionId, (event: AgentEvent) => {
         if (!isActive) return;
         reply.raw.write(`event: ${event.type}\ndata: ${JSON.stringify(event.data)}\n\n`);
       });
@@ -163,7 +203,7 @@ async function start() {
       request.raw.on('close', () => {
         isActive = false;
         clearInterval(heartbeat);
-        if (subscriber) { subscriber.unsubscribe(); subscriber.disconnect(); }
+        unregister(); // Remove from shared subscriber routing
         logger.info('Session disconnected', { sessionId });
       });
     } catch (error: any) {
@@ -206,12 +246,16 @@ async function start() {
   });
 
   fastify.get('/sessions', async () => {
-    const keys = await redis.keys(`${SESSIONS_KEY}:*`);
-    const sessions = [];
-    for (const key of keys) {
-      const data = await redis.hgetall(key);
-      if (data && data.id) {
-        sessions.push({ id: data.id, userId: data.userId, status: data.status, createdAt: parseInt(data.createdAt || '0') });
+    // PERF fix: Replace redis.keys() (O(N) blocking) with redis.scanStream() for
+    // non-blocking iteration. KEYS can block the Redis event loop in production.
+    const sessions: any[] = [];
+    const stream = redis.scanStream({ match: `${SESSIONS_KEY}:*`, count: 100 });
+    for await (const keys of stream as AsyncIterable<string[]>) {
+      for (const key of keys) {
+        const data = await redis.hgetall(key);
+        if (data && data.id) {
+          sessions.push({ id: data.id, userId: data.userId, status: data.status, createdAt: parseInt(data.createdAt || '0') });
+        }
       }
     }
     return { sessions };
@@ -370,11 +414,39 @@ async function start() {
   }
 }
 
-process.on('SIGTERM', async () => {
-  logger.info('Gateway shutting down');
-  await redis.quit(); await redisSub.quit(); await redisPub.quit();
-  await fastify.close();
-  process.exit(0);
-});
+// MED-8 fix: Graceful shutdown with timeout — drains connections before closing
+const GATEWAY_SHUTDOWN_TIMEOUT_MS = parseInt(process.env.SHUTDOWN_TIMEOUT_MS || '30000', 10);
+
+async function gracefulShutdown(signal: string): Promise<void> {
+  logger.info(`Gateway received ${signal}, starting graceful shutdown`);
+  
+  const forceTimer = setTimeout(() => {
+    logger.error('Gateway shutdown timeout exceeded, forcing exit');
+    process.exit(1);
+  }, GATEWAY_SHUTDOWN_TIMEOUT_MS);
+  
+  try {
+    // Stop accepting new connections
+    await fastify.close();
+    logger.info('Fastify server closed');
+    
+    // Close Redis connections
+    await redis.quit();
+    await sharedSubscriber.quit();
+    await redisPub.quit();
+    logger.info('Redis connections closed');
+    
+    clearTimeout(forceTimer);
+    logger.info('Gateway shutdown complete');
+    process.exit(0);
+  } catch (error: any) {
+    logger.error('Error during gateway shutdown', { error: error.message });
+    clearTimeout(forceTimer);
+    process.exit(1);
+  }
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 start();

@@ -16,7 +16,8 @@ CREATE TABLE IF NOT EXISTS users (
     reset_token_expires DATETIME,
     email_verified BOOLEAN DEFAULT FALSE,
     email_verification_token_hash TEXT,
-    email_verification_expires DATETIME
+    email_verification_expires DATETIME,
+    token_version INTEGER DEFAULT 1  -- HIGH-12: Incremented on password change/admin revocation to invalidate existing JWTs
 );
 
 -- Index for email verification token hash lookups

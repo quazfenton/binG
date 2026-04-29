@@ -26,7 +26,15 @@ export interface FsAdapter {
 class WebFs implements FsAdapter {
   async readFile(input: string | File): Promise<string> {
     if (typeof input === 'string') {
-      throw new Error('Web fs readFile requires a File object, not a path string');
+      // MED-6 fix: Throw NotImplementedError for path-based reads in web mode
+      // Previously threw a generic Error — callers couldn't distinguish
+      // "web doesn't support this" from "actual I/O failure"
+      const err: Error & { code?: string } = new Error(
+        'Web fs readFile requires a File object, not a path string. '
+        + 'Path-based filesystem access is not available in browser mode.'
+      );
+      err.code = 'ENOTSUP'; // Not supported
+      throw err;
     }
     return await input.text();
   }

@@ -373,3 +373,34 @@ Same fixes, plus:
 The services are **architecturally sound** (microservices, queues, stateless gateway) but **undercooked** for production. The **build/publish issues** are blockers. After fixing packaging, focus on **observability** and **error resilience**.
 
 **Confidence:** 🟢 HIGH — Issues clearly identified with remediation paths
+
+---
+
+**Status:** 🟡 **PARTIALLY REMEDIATED** — Packaging fixes applied 2026-04-30. Build verification and ESM migration still needed.
+
+---
+
+## Remediation Log
+
+### CRIT-1 / CRIT-2: Missing dist/ & prepublishOnly — **FIXED** ✅
+- **Files:** `packages/shared/agent/services/agent-gateway/package.json` + `agent-worker/package.json`
+- **Fix:** Added `"prepublishOnly": "npm run build"` to both package.json files. This ensures `tsc` runs before `npm publish`, preventing broken packages from being released. Note: dist/ must still be built before publish; prepublishOnly is the safety net.
+
+### MED-1: Missing `types` Field in Agent-Gateway — **FIXED** ✅
+- **Files:** Both `agent-gateway/package.json` and `agent-worker/package.json`
+- **Fix:** Added `"types": "dist/index.d.ts"` to both packages so TypeScript consumers can import types.
+
+### CRIT-3: Missing `"type": "module"` for ESM — **NOT YET ADDRESSED** ⏳
+- **Reason:** Requires aligning tsconfig.json `module` setting with package.json `type` field across both services. This is a 2-hour effort that needs careful testing to avoid breaking existing consumers. Deferred to dedicated ESM migration task.
+
+### MED-8: Graceful Shutdown for Gateway — **FIXED** ✅
+- **File:** `packages/shared/agent/services/agent-gateway/src/index.ts`
+- **Fix:** Replaced bare `process.on('SIGTERM')` with structured graceful shutdown: sets `isShuttingDown` flag, stops accepting new connections (`fastify.close()`), allows 30s for in-flight requests to complete, then closes Redis connections and exits. `isShuttingDown` flag checked in `/jobs` endpoint to return 503 during shutdown. SIGINT also handled with immediate shutdown.
+
+### MED-9: Request ID Propagation — **FIXED** ✅
+- **File:** `packages/shared/agent/services/agent-gateway/src/index.ts`
+- **Fix:** Fastify configured with `requestIdHeader: 'x-request-id'` and `requestIdLogLabel: 'reqId'`. The `/jobs` endpoint now reads `x-request-id` from request headers (or generates one via `uuidv4()`), sets it as a response header, and includes it in structured log output. Enables distributed tracing across gateway → worker → LLM calls.
+
+### MED-10: Duplicate Logger — **DOCUMENTED** ✅ (not yet extracted)
+- **Files:** `agent-gateway/src/logger.ts` + `agent-worker/src/logger.ts`
+- **Fix:** Added TODO comments in both files noting the duplication and recommending extraction to `@bing/shared/logger`. Both services are standalone microservices that cannot import from `@/lib/utils/logger` (which uses path aliases). Full extraction deferred to shared package creation.

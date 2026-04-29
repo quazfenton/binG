@@ -146,7 +146,7 @@ The sandbox security module is well-designed:
 - Used by: previews (port detection)
 - Used by: sandbox-connection-manager
 
-### Dead Code
+### Standalone Logic
 
 1. **sandbox-manager.ts** - Marked deprecated but still exported
 
@@ -155,6 +155,28 @@ The sandbox security module is well-designed:
 ## Summary
 
 The sandbox module has excellent security design. Main concerns are around cleanup and deprecated code.
+
+---
+
+**Status:** 🟡 **PARTIALLY REMEDIATED** — Process leak fix, input validation applied 2026-04-30. Deprecated file removal and hardcoded paths deferred.
+
+---
+
+## Remediation Log
+
+### HIGH-2: Process Leak Risk — **FIXED** ✅
+- **File:** `web/lib/sandbox/local-sandbox-manager.ts`
+- **Fix:** `deleteSandbox()` now sends SIGTERM first, then schedules SIGKILL after 5s if process hasn't exited. `shutdown()` sends SIGTERM to all processes, waits 1s, then force-kills any remaining. Timers use `.unref()` to not prevent process exit.
+
+### HIGH-3: Missing Input Validation — **FIXED** ✅
+- **File:** `web/lib/sandbox/provider-router.ts`
+- **Fix:** `selectWithServices()` now validates: context is an object, context.type is a non-empty string, needsServices is a non-empty array. Unknown service names are logged as warnings. Prevents undefined/null context from causing cryptic errors downstream.
+
+### HIGH-1: Deprecated File Still Exported — **NOT YET ADDRESSED** ⏳
+- **Reason:** sandbox-manager.ts re-exports from local-sandbox-manager. Removing it requires updating all import sites across the codebase. Low risk since it's clearly marked @deprecated.
+
+### MED-1: Hardcoded Paths — **NOT YET ADDRESSED** ⏳
+- **Reason:** /tmp/workspaces and /tmp/snapshots are hardcoded defaults. Should be configurable via env vars. Low priority since constructor accepts custom paths.
 
 ---
 

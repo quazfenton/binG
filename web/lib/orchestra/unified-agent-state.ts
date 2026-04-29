@@ -383,6 +383,72 @@ export function createUnifiedAgentState(options: {
 }
 
 // ============================================================================
+// State Bounds & Cleanup (HIGH-1 fix: prevent unbounded state growth)
+// ============================================================================
+
+/** Maximum number of messages retained in execution state */
+const MAX_MESSAGES = parseInt(process.env.AGENT_MAX_MESSAGES || '200', 10) || 200;
+/** Maximum number of VFS entries retained in execution state */
+const MAX_VFS_ENTRIES = parseInt(process.env.AGENT_MAX_VFS_ENTRIES || '500', 10) || 500;
+/** Maximum number of transaction log entries */
+const MAX_TRANSACTION_LOG = parseInt(process.env.AGENT_MAX_TRANSACTION_LOG || '200', 10) || 200;
+/** Maximum number of error entries */
+const MAX_ERRORS = parseInt(process.env.AGENT_MAX_ERRORS || '100', 10) || 100;
+/** Maximum number of terminal output entries */
+const MAX_TERMINAL_OUTPUT = parseInt(process.env.AGENT_MAX_TERMINAL_OUTPUT || '500', 10) || 500;
+/** Maximum size of a single VFS file content (1MB) */
+const MAX_VFS_FILE_SIZE = parseInt(process.env.AGENT_MAX_VFS_FILE_SIZE || '1048576', 10) || 1048576;
+
+/**
+ * Trim state arrays to bounded sizes to prevent unbounded memory growth.
+ * Called after state mutations that append to arrays.
+ */
+export function trimState(state: UnifiedAgentState): void {
+  if (state.execution) {
+    // Trim messages (keep most recent)
+    if (state.execution.messages.length > MAX_MESSAGES) {
+      // Always keep the first system message if present
+      const firstMsg = state.execution.messages[0]?.role === 'system' ? [state.execution.messages[0]] : [];
+      state.execution.messages = [
+        ...firstMsg,
+        ...state.execution.messages.slice(-(MAX_MESSAGES - firstMsg.length)),
+      ];
+    }
+
+    // Trim VFS entries (LRU-like: remove oldest entries if over limit)
+    const vfsKeys = Object.keys(state.execution.vfs);
+    if (vfsKeys.length > MAX_VFS_ENTRIES) {
+      // Remove entries with the largest content first as a heuristic
+      // (they consume the most memory)
+      const sorted = vfsKeys.sort((a, b) =>
+        state.execution.vfs[b].length - state.execution.vfs[a].length
+      );
+      const toRemove = sorted.slice(0, vfsKeys.length - MAX_VFS_ENTRIES);
+      for (const key of toRemove) {
+        delete state.execution.vfs[key];
+      }
+    }
+
+    // Trim transaction log (keep most recent)
+    if (state.execution.transactionLog.length > MAX_TRANSACTION_LOG) {
+      state.execution.transactionLog = state.execution.transactionLog.slice(-MAX_TRANSACTION_LOG);
+    }
+
+    // Trim errors (keep most recent)
+    if (state.execution.errors.length > MAX_ERRORS) {
+      state.execution.errors = state.execution.errors.slice(-MAX_ERRORS);
+    }
+  }
+
+  if (state.session) {
+    // Trim terminal output (keep most recent)
+    if (state.session.terminalOutput && state.session.terminalOutput.length > MAX_TERMINAL_OUTPUT) {
+      state.session.terminalOutput = state.session.terminalOutput.slice(-MAX_TERMINAL_OUTPUT);
+    }
+  }
+}
+
+// ============================================================================
 // State Utilities
 // ============================================================================
 
@@ -408,6 +474,7 @@ export function addStateError(
       timestamp: Date.now(),
     })
   }
+  trimState(state) // HIGH-1 fix: trim after mutation
   updateStateActivity(state)
 }
 
@@ -436,10 +503,11 @@ export function addStateMessage(
 ): void {
   if (state.execution) {
     state.execution.messages.push(message)
+  } else if (state.langgraph) {
+    // langgraph always sets state.execution, so this branch is defensive only
+    // (previously both branches pushed to same array, causing duplicates)
   }
-  if (state.langgraph) {
-    state.execution?.messages.push(message)
-  }
+  trimState(state) // HIGH-1 fix: trim after mutation
   updateStateActivity(state)
 }
 
@@ -452,8 +520,14 @@ export function updateStateVfs(
   content: string
 ): void {
   if (state.execution) {
+    // HIGH-1 fix: Truncate oversized file content before storing
+    if (content.length > MAX_VFS_FILE_SIZE) {
+      const truncationMsg = `\n... [truncated at ${MAX_VFS_FILE_SIZE} bytes]`;
+      content = content.slice(0, MAX_VFS_FILE_SIZE - truncationMsg.length) + truncationMsg;
+    }
     state.execution.vfs[path] = content
   }
+  trimState(state) // HIGH-1 fix: trim after mutation
   updateStateActivity(state)
 }
 

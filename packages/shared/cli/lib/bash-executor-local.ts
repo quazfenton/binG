@@ -77,7 +77,8 @@ function validateWorkspacePath(filePath: string, workspaceRoot?: string): boolea
   
   // If workspace root is specified, ensure path is within it
   if (workspaceRoot) {
-    const normalized = path.normalize(path.resolve(filePath));
+    // Resolve filePath relative to workspaceRoot, not process.cwd()
+    const normalized = path.normalize(path.resolve(workspaceRoot, filePath));
     const normalizedRoot = path.normalize(path.resolve(workspaceRoot));
     // Only allow if path starts with root, NOT if root starts with path (which is insecure)
     return normalized.startsWith(normalizedRoot + path.sep) || normalized === normalizedRoot;

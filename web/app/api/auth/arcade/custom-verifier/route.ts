@@ -19,12 +19,14 @@ async function resolveArcadeUserId(appUserId: string): Promise<string> {
   const user = await authService.getUserById(appUserId);
   if (user?.email) return user.email;
   
-  // If not found by UUID, try to interpret as numeric email for legacy compatibility
-  const numeric = Number(appUserId);
-  if (!Number.isNaN(numeric)) {
-    // Legacy numeric ID - this shouldn't happen with new users but handle gracefully
-    return appUserId;
-  }
+   // If not found by UUID, try to interpret as numeric email for legacy compatibility
+   const numeric = Number(appUserId);
+   if (!Number.isNaN(numeric)) {
+     // Legacy numeric ID - try to find user by treating the string as a numeric id
+     // This handles migration cases where old numeric IDs might be referenced
+     const user = await authService.getUserById(String(numeric));
+     if (user?.email) return user.email;
+   }
   
   return appUserId;
 }

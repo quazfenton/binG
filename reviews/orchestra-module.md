@@ -61,4 +61,22 @@ Orchestra provides core agent orchestration. Quality is decent. Main concern is 
 
 ---
 
+**Status:** 🟡 **PARTIALLY REMEDIATED** — Unbounded state fix applied 2026-04-30. State persistence and error boundaries deferred.
+
+---
+
+## Remediation Log
+
+### HIGH-1: Unbounded Agent State — **FIXED** ✅
+- **File:** `web/lib/orchestra/unified-agent-state.ts`
+- **Fix:** Added `trimState()` function that enforces configurable bounds on all state arrays: messages (200 max, preserves system prompt), VFS entries (500 max, evicts largest first), transaction log (200), errors (100), terminal output (500). Single VFS file content truncated at 1MB. All mutation functions (`addStateMessage`, `addStateError`, `updateStateVfs`) call `trimState()` after modification. Bounds are configurable via env vars (`AGENT_MAX_MESSAGES`, etc.).
+
+### MED-1: State Not Persistent — **NOT YET ADDRESSED** ⏳
+- **Reason:** Requires Redis/SQLite checkpoint integration. Deferred to reliability sprint.
+
+### MED-2: Missing Error Boundaries — **NOT YET ADDRESSED** ⏳
+- **Reason:** Requires try-catch wrappers around agent loop steps. Deferred.
+
+---
+
 *End of Review*

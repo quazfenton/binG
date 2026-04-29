@@ -160,11 +160,11 @@ export default defineConfig({
       ...UNIMPLEMENTED_MODULE_TEST_PATTERNS,
     ],
     testTimeout: 30000,
-  },
-  env: {
-    // Force mock database during tests to avoid schema initialization issues
-    // The mock now has all required tables (including VFS tables from migrations)
-    SKIP_DB_INIT: 'true',
+    env: {
+      // Force mock database during tests to avoid schema initialization issues
+      // The mock now has all required tables (including VFS tables from migrations)
+      SKIP_DB_INIT: 'true',
+    },
   },
   resolve: {
     alias: {

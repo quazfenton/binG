@@ -102,11 +102,8 @@ export async function runContextPipeline(
   // ── Async sources (run in parallel) ───────────────────────────────────────
   // Source 1: Hybrid retrieval (AST symbols → smart-context fallback)
   // Source 4 (when not precomputed): Memory search via mem0
-  const asyncTasks: Array<Promise<ContextSourceResult>> = [];
-
-  if (opts.projectId && opts.prompt) {
-    asyncTasks.push(
-      withTimeout(
+  const hybridTask = (opts.projectId && opts.prompt)
+    ? withTimeout(
         "hybrid-retrieval",
         async () => {
           const result = await retrieveHybrid({
@@ -124,18 +121,16 @@ export async function runContextPipeline(
           return result.bundle;
         },
         sourceTimeout,
-      ),
-    );
-  }
+      )
+    : Promise.resolve({ source: "hybrid-retrieval", text: "", succeeded: false, durationMs: 0 });
 
   const shouldRunMemorySearch =
     !opts.memoryContext && opts.memorySearch && opts.prompt && isMem0Configured();
-  if (shouldRunMemorySearch && opts.memorySearch) {
-    const ms = opts.memorySearch;
-    asyncTasks.push(
-      withTimeout(
+  const memoryTask = shouldRunMemorySearch && opts.memorySearch
+    ? withTimeout(
         "memory",
         async () => {
+          const ms = opts.memorySearch!;
           const res = await mem0Search({
             query: opts.prompt,
             userId: ms.userId,
@@ -156,14 +151,19 @@ export async function runContextPipeline(
           }
           return formatted;
         },
-        ms.timeoutMs ?? sourceTimeout,
-      ),
-    );
-  }
+        opts.memorySearch!.timeoutMs ?? sourceTimeout,
+      )
+    : Promise.resolve({ source: "memory", text: "", succeeded: false, durationMs: 0 });
 
-  if (asyncTasks.length > 0) {
-    const settled = await Promise.all(asyncTasks);
-    for (const r of settled) results.push(r);
+  // Await both async tasks in parallel
+  const [hybridResult, memoryResult] = await Promise.all([hybridTask, memoryTask]);
+
+  // ── Source 1: Hybrid retrieval ──────────────────────────────────────────
+  if (hybridResult.succeeded) {
+    results.push(hybridResult);
+  } else if (hybridResult.error) {
+    // Keep failed result for telemetry if it was actually attempted
+    results.push(hybridResult);
   }
 
   // ── Source 2: Workspace session context (context-pack / file listing) ─────
@@ -186,14 +186,19 @@ export async function runContextPipeline(
     });
   }
 
-  // ── Source 4 (precomputed legacy): Memory context ─────────────────────────
-  if (opts.memoryContext && opts.memoryContext.length > 0) {
+  // ── Source 4: Memory context (async or precomputed legacy) ────────────────
+  if (memoryResult.succeeded) {
+    results.push(memoryResult);
+  } else if (opts.memoryContext && opts.memoryContext.length > 0) {
     results.push({
       source: "memory",
       text: opts.memoryContext,
       succeeded: true,
       durationMs: 0,
     });
+  } else if (memoryResult.error && shouldRunMemorySearch) {
+    // Keep failed result for telemetry
+    results.push(memoryResult);
   }
 
   // ── Source 5: Minimal fallback ────────────────────────────────────────────

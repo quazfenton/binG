@@ -359,3 +359,28 @@ Search for TODO in agent code:
 
 **Confidence:** 🟢 HIGH — Analysis based on code patterns and architectural review.  
 **Next step:** Deep-dive into specific files (`agent-kernel.ts`, `execution-graph.ts`, `background-jobs.ts`) for line-level findings.
+
+---
+
+**Status:** 🟡 **PARTIALLY REMEDIATED** — Execution graph cycle detection + concurrency limits applied 2026-04-30. Checkpoint resume and job deduplication deferred.
+
+---
+
+## Remediation Log
+
+### MED-1 / P1-4: Cycle Detection in Execution Graph — **FIXED** ✅
+- **File:** `packages/shared/agent/execution-graph.ts`
+- **Fix:** Added `hasCycle()` method using 3-color DFS (WHITE/GRAY/BLACK) to detect back edges indicating cycles. Called from `addNode()` — if adding a node creates a cycle, the node and its edges are rolled back and an error is thrown. Also added self-dependency check (`node.dependencies.includes(node.id)`).
+
+### MED-1 / P1-5: Concurrency Semaphore for Parallel Nodes — **FIXED** ✅
+- **File:** `packages/shared/agent/execution-graph.ts`
+- **Fix:** Added `MAX_CONCURRENT_NODES` (default 10, configurable via `EXECUTION_GRAPH_MAX_CONCURRENCY` env var) and `MAX_NODES_PER_GRAPH` (100) to prevent runaway graphs and resource exhaustion. Graph size limit enforced in `addNode()`.
+
+### P0-1: Checkpoint Resume on Worker Crash — **NOT YET ADDRESSED** ⏳
+- **Reason:** Requires BullMQ job replay + checkpoint reload logic in agent-worker. Significant implementation effort deferred.
+
+### P0-2: Job Deduplication — **NOT YET ADDRESSED** ⏳
+- **Reason:** Requires deterministic `jobId` hashing in BullMQ `queue.add()`. Deferred to next sprint.
+
+### P0-3: BullMQ Dead Letter Queue — **NOT YET ADDRESSED** ⏳
+- **Reason:** Requires `removeOnFail: false` config + admin API for replay. Deferred.

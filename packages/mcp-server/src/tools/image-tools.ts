@@ -37,12 +37,14 @@ export function generateImageTool() {
     inputSchema: z.object({
       prompt: z.string().describe('Image generation prompt'),
       negativePrompt: z.string().optional().describe('Negative prompt (what to exclude)'),
-      width: z.number().optional().describe('Image width (default: 1024)'),
-      height: z.number().optional().describe('Image height (default: 1024)'),
+      // MED-1 fix: Clamp dimensions to prevent memory exhaustion (max 4096px)
+      width: z.number().int().min(64).max(4096).optional().describe('Image width (64-4096, default: 1024)'),
+      height: z.number().int().min(64).max(4096).optional().describe('Image height (64-4096, default: 1024)'),
       model: z.string().optional().describe('Model name (flux, sdxl, etc.)'),
       provider: z.enum(ALLOWED_PROVIDERS).optional().describe('Image generation provider'),
       aspectRatio: z.enum(VALID_ASPECT_RATIOS).optional().describe('Aspect ratio'),
-      numImages: z.number().optional().describe('Number of images to generate (1-4)'),
+      // MED-1 fix: Limit number of images per request
+      numImages: z.number().int().min(1).max(4).optional().describe('Number of images to generate (1-4)'),
       seed: z.number().optional().describe('Random seed for reproducibility'),
     }),
     execute: async ({
@@ -74,9 +76,10 @@ export function generateImageTool() {
       }
 
       const selectedProvider = provider || 'pollinations'; // Free by default
+      // Dimensions already validated by zod schema (64-4096)
       const imgWidth = width || 1024;
       const imgHeight = height || 1024;
-      const count = Math.min(numImages || 1, 4);
+      const count = numImages || 1; // Already clamped by zod schema (1-4)
 
       // Try each provider in order of preference
       const results: ImageGenerationResult[] = [];
@@ -226,7 +229,7 @@ async function generateWithMistral(prompt: string, width: number, height: number
     throw new Error(`Mistral API error: ${response.status} ${text.slice(0, 200)}`);
   }
 
-  const data = await response.json();
+  const data = (await response.json()) as { data?: Array<{ url?: string }> };
   const imageUrl = data.data?.[0]?.url;
 
   if (!imageUrl) {
@@ -276,7 +279,7 @@ async function generateWithReplicate(prompt: string, width: number, height: numb
     throw new Error(`Replicate API error: ${response.status} ${text.slice(0, 200)}`);
   }
 
-  const prediction = await response.json();
+  const prediction = (await response.json()) as { urls?: { get?: string }; status?: string; error?: string; output?: string | string[] };
   const predictionUrl = prediction.urls?.get;
 
   if (!predictionUrl) {
@@ -292,7 +295,7 @@ async function generateWithReplicate(prompt: string, width: number, height: numb
       signal: AbortSignal.timeout(30000),
     });
 
-    const status = await statusResponse.json();
+    const status = (await statusResponse.json()) as { status?: string; error?: string; output?: string | string[] };
 
     if (status.status === 'succeeded') {
       const imageUrl = Array.isArray(status.output) ? status.output[0] : status.output;

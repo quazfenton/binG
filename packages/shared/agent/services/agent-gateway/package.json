@@ -3,10 +3,12 @@
   "version": "1.0.0",
   "description": "Agent Gateway - Session management + SSE streaming + job queue",
   "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "fastify": "^5.8.1",
