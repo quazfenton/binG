@@ -140,27 +140,31 @@ export class MigrationRunner {
       try {
         console.log(`Executing migration ${migration.version}: ${migration.filename}`);
 
-        // Execute migration in a transaction
-        this.db.transaction(() => {
-          // Double-check if migration was already executed (e.g. by another process)
-          const alreadyExecuted = this.db.prepare(
-            'SELECT 1 FROM schema_migrations WHERE version = ?'
-          ).get(migration.version);
+    // Execute migration in a transaction
+    // Check if migration is already executed first, outside the transaction to be safe
+    const alreadyExecuted = this.db.prepare(
+      'SELECT 1 FROM schema_migrations WHERE version = ?'
+    ).get(migration.version);
 
-          if (alreadyExecuted) {
-            console.log(`Migration ${migration.version} already executed, skipping`);
-            return;
-          }
+    if (alreadyExecuted) {
+      console.log(`Migration ${migration.version} already executed, skipping`);
+      continue;
+    }
 
-          this.db.exec(migration.sql);
+    try {
+      this.db.exec(migration.sql);
 
-          // Record migration as executed
-          const stmt = this.db.prepare(`
-            INSERT OR IGNORE INTO schema_migrations (version, filename)
-            VALUES (?, ?)
-          `);
-          stmt.run(migration.version, migration.filename);
-        })();
+      // Record migration as executed
+      const stmt = this.db.prepare(`
+        INSERT OR IGNORE INTO schema_migrations (version, filename)
+        VALUES (?, ?)
+      `);
+      stmt.run(migration.version, migration.filename);
+      console.log(`Migration ${migration.version} completed successfully`);
+    } catch (error) {
+      console.error(`Migration ${migration.version} failed:`, error);
+      throw error;
+    }
 
         console.log(`Migration ${migration.version} completed successfully`);
       } catch (error) {
