@@ -329,14 +329,20 @@ export function registerTaskCommands(
         
         // Apply step expansion with scope enrichment
         if (options.expand && steps) {
-          const { expandStepIntoDetail } = await import('@/lib/memory/task-persistence');
-          steps = await Promise.all(
-            steps.map(async (s) => {
-              const expanded = expandStepIntoDetail(s.description);
-              // Update description with enriched scope
-              return { ...s, description: expanded.expanded.join('\n') };
-            })
-          );
+          // CLI fix: Use relative path instead of web-app alias @/
+          // The @/ alias is not defined in CLI runtime
+          try {
+            const { expandStepIntoDetail } = await import('../../shared/lib/memory/task-persistence.js');
+            steps = await Promise.all(
+              steps.map(async (s) => {
+                const expanded = expandStepIntoDetail(s.description);
+                // Update description with enriched scope
+                return { ...s, description: expanded.expanded.join('\n') };
+              })
+            );
+          } catch (importErr) {
+            console.log(COLORS.warning('Step expansion unavailable: module not found'));
+          }
         }
         
         const result: ApiResponse<Task> = await apiRequest('/memory/task/create', {
@@ -431,6 +437,21 @@ export function registerTaskCommands(
               status: 'pending',
             }))
           );
+          
+          // FIX: Apply --expand to new steps if requested
+          if (options.expand && addSteps) {
+            try {
+              const { expandStepIntoDetail } = await import('../../shared/lib/memory/task-persistence.js');
+              addSteps = await Promise.all(
+                addSteps.map(async (s) => {
+                  const expanded = expandStepIntoDetail(s.description);
+                  return { ...s, description: expanded.expanded.join('\n') };
+                })
+              );
+            } catch (importErr) {
+              console.log(COLORS.warning('Step expansion unavailable: module not found'));
+            }
+          }
         }
         
         const result: ApiResponse<Task> = await apiRequest('/memory/task/edit', {

@@ -93,12 +93,22 @@ def _run_python_coverage(
             with open('/tmp/coverage.json') as f:
                 report = json.load(f)
             
-            # Find the file in the report
+            # Find the file in the report using precise path matching
+            # Use normalized absolute paths to avoid subdirectory mismatches
+            from pathlib import Path
+            source_abs = str(Path(source_path).resolve())
             for file_data in report.get('files', []):
-                if file_data['path'].endswith(module_name + '.py'):
+                # Compare resolved paths for accuracy
+                file_abs = str(Path(file_data['path']).resolve())
+                if file_abs == source_abs or file_data['path'].endswith(f'/{module_name}.py'):
                     return CoverageResult(
-                        line_percent=file_data['summary']['covered_lines'] / max(file_data['summary']['num_statements'], 1) * 100,
-                        branch_percent=file_data['summary'].get('branch_percent'),
+                        # Handle zero-statements case explicitly
+                        num_statements = file_data['summary']['num_statements']
+                        if num_statements == 0:
+                            # File with no executable statements - report 0% coverage, not 100%
+                            return CoverageResult(
+                                line_percent=0.0,
+                                branch_percent=file_data['summary'].get('branch_percent'),
                         covered_lines=file_data['summary']['covered_lines'],
                         total_lines=file_data['summary']['num_statements'],
                         missing_lines=file_data['summary'].get('missing_lines', []),

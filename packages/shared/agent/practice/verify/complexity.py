@@ -42,7 +42,7 @@ class ComplexityAnalyzer(ast.NodeVisitor):
         # Complexity-contributing node types
         self.complexity_nodes = (
             ast.If, ast.For, ast.While, ast.ExceptHandler,
-            ast.With, ast.Assert, ast.Comprehension,
+            ast.With, ast.Assert, ast.comprehension,
             ast.BoolOp, ast.Compare,
         )
     
@@ -298,8 +298,8 @@ def _parse_complexity_requirements(text: str) -> dict:
     
     text_lower = text.lower()
     
-    # Parse CC requirements
-    cc_match = re.search(r'cc[:\/\/]?\/?\/?\/?\/?(\b10|\b15|\b20|\b5)', text_lower)
+    # Parse CC requirements - match any integer value, not just specific ones
+    cc_match = re.search(r'(?:cc|cyclomatic\s*complexity)[^\d]*(\d+)', text_lower)
     if cc_match:
         requirements['max_cyclomatic_complexity'] = int(cc_match.group(1))
     
@@ -322,12 +322,20 @@ def _merge_radon_results(ast_result: ComplexityResult, radon: dict) -> Complexit
     if not radon or not isinstance(radon, dict):
         return ast_result
     
-    # Radon provides per-function CC scores
+    # Radon provides per-function CC scores, function lengths, and nesting depth
     functions = radon.get('functions', [])
     if functions:
+        # Update cyclomatic complexity
         max_cc = max(f.get('complexity', 0) for f in functions)
         if max_cc > ast_result.cyclomatic_complexity:
             ast_result.cyclomatic_complexity = max_cc
+        
+        # Update max function length from Radon if higher
+        for f in functions:
+            if 'loc' in f:  # Radon uses 'loc' for lines of code
+                radon_length = f.get('loc', 0)
+                if radon_length > ast_result.max_function_length:
+                    ast_result.max_function_length = radon_length
     
     return ast_result
 

@@ -78,10 +78,14 @@ let bullWorker: Worker<AgentJob> | null = null;
 /**
  * Acquire job lock to prevent concurrent execution of same job.
  * Uses Redis-based distributed locking for atomicity across worker instances.
+ * 
+ * FIX: Lock TTL now derived from JOB_TIMEOUT_MS to stay in sync with BullMQ lockDuration.
+ * This prevents premature lock expiry (duplicate execution) or stale locks (jobs skipped).
  */
 async function acquireJobLock(jobId: string): Promise<(() => Promise<void>) | null> {
   const lockKey = `lock:job:${jobId}`;
-  const lockTimeout = 3600000; // 1 hour (matches JOB_TIMEOUT_MS)
+  // FIX: Use same timeout as BullMQ lockDuration to keep worker/job lock behavior synchronized
+  const lockTimeout = JOB_TIMEOUT_MS;
 
   // Try to acquire lock via Redis SET NX
   const result = await redis.set(lockKey, 'locked', 'PX', lockTimeout, 'NX');
