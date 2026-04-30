@@ -46,6 +46,9 @@ export function useVoiceSettings() {
         case "disconnected":
           setIsConnected(false);
           break;
+        case "settings":
+          setSettings(event.data.settings);
+          break;
       }
     };
 

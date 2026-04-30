@@ -13,8 +13,6 @@ export {
   type IntegrationConfig,
 } from './tool-integration-system';
 
-export { ToolUtilities, createToolUtilities } from './tool-utilities';
-
 // ============================================================================
 // Tool Registry (Auto-Registration)
 // ============================================================================

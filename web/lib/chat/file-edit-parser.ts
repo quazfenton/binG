@@ -3384,7 +3384,7 @@ export function createIncrementalParser(): IncrementalParseState {
  *
  * Cost: O(tailChars) — bounded constant, not proportional to buffer size.
  */
-function detectUnclosedTags(
+export function detectUnclosedTags(
   windowText: string,
   windowStart: number,
   tailChars: number

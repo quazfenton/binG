@@ -75,7 +75,7 @@ export default async function AntigravitySetupPage() {
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold">Antigravity Master Account Setup</h1>
         <span className="text-xs bg-gray-100 dark:bg-gray-800 px-2 py-1 rounded text-gray-500">
-          Admin · {admin.email}
+          Admin
         </span>
       </div>
 

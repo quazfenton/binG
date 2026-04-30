@@ -24,7 +24,15 @@ export function useApiKeys() {
         const saved = await secrets.get('user-api-keys');
         
         if (!cancelled && saved) {
-          setApiKeys(JSON.parse(saved));
+          try {
+            const parsed = JSON.parse(saved);
+            // Validate that we got an object (Record<string, string>)
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+              setApiKeys(parsed);
+            }
+          } catch (parseError) {
+            console.error('[useApiKeys] Failed to parse saved keys:', parseError);
+          }
         }
       } catch (e) {
         console.error('Failed to load API keys:', e);
@@ -45,10 +53,16 @@ export function useApiKeys() {
       if (typeof window === 'undefined') return;
       
       const { secrets } = await import('@bing/platform/secrets');
-      const updatedKeys = { ...apiKeys, [providerId]: apiKey };
       
-      await secrets.set('user-api-keys', JSON.stringify(updatedKeys));
-      setApiKeys(updatedKeys);
+      // Use functional update to avoid race conditions with stale closure state
+      setApiKeys(prev => {
+        const updated = { ...prev, [providerId]: apiKey };
+        // Fire and forget persistence to secrets storage
+        secrets.set('user-api-keys', JSON.stringify(updated)).catch(e => {
+          console.error('[useApiKeys] Persistence failed:', e);
+        });
+        return updated;
+      });
       
       // Notify other components to refresh provider availability
       window.dispatchEvent(new CustomEvent('user-api-keys-changed'));

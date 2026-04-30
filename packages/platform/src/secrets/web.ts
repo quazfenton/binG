@@ -296,10 +296,18 @@ class WebSecrets implements SecretsAdapter {
   }
 
   async set(key: string, value: string): Promise<void> {
-    const db = await this.getDB();
-    const cryptoKey = await this.getKey();
-    const encrypted = await encrypt(value, cryptoKey);
-    await idbPut(db, SECRET_STORE, key, encrypted);
+    try {
+      // ⚠️ SECURITY WARNING: This stores secrets in browser-accessible storage.
+      // Client-side encryption is obfuscation, NOT true security.
+      // DO NOT use this for production root keys or high-value credentials.
+      const db = await this.getDB();
+      const cryptoKey = await this.getKey();
+      const encrypted = await encrypt(value, cryptoKey);
+      await idbPut(db, SECRET_STORE, key, encrypted);
+    } catch (err) {
+      console.error('[WebSecrets] Failed to set secret:', err instanceof Error ? err.message : String(err));
+      throw new Error(`Failed to store secret "${key}": ${err instanceof Error ? err.message : 'Unknown error'}`);
+    }
   }
 
   async remove(key: string): Promise<void> {

@@ -93,7 +93,22 @@ describe('Agent Worker Integration Tests', () => {
       }
 
       expect(jobs.length).toBe(jobCount);
-      const waiting = await queue.getWaitingCount();
+      
+      // PERF fix: Wait for jobs to settle in the waiting state with timeout
+      // BullMQ may take a moment to reflect the waiting count accurately
+      const maxRetries = 10;
+      let waiting = 0;
+      for (let i = 0; i < maxRetries; i++) {
+        waiting = await queue.getWaitingCount();
+        if (waiting === jobCount) break;
+        await new Promise(r => setTimeout(r, 100));
+      }
+      
+      // Fail with clear message if jobs didn't settle in time
+      if (waiting !== jobCount) {
+        throw new Error(`Expected ${jobCount} waiting jobs, but got ${waiting} after ${maxRetries} retries`);
+      }
+      
       expect(waiting).toBe(jobCount);
     });
 
@@ -258,9 +273,14 @@ describe('Agent Worker Integration Tests', () => {
   });
 
   describe('Event Stream', () => {
-    it('should publish events to Redis Stream', async () => {
-      const streamKey = 'agent:events';
+    const streamKey = 'agent:events';
 
+    beforeEach(async () => {
+      // PERF fix: Ensure clean stream state before each test
+      await redis.del(streamKey);
+    });
+
+    it('should publish events to Redis Stream', async () => {
       // Add an event
       const eventData = JSON.stringify({
         type: 'job:started',
@@ -281,7 +301,6 @@ describe('Agent Worker Integration Tests', () => {
     });
 
     it('should preserve event sequence', async () => {
-      const streamKey = 'agent:events';
       const sessionId = 'sequence-test';
 
       // Publish events in order
@@ -299,9 +318,22 @@ describe('Agent Worker Integration Tests', () => {
         }));
       }
 
-      // Verify order
+      // Verify order and content
       const storedEvents = await redis.xrange(streamKey, '-', '+');
       expect(storedEvents.length).toBeGreaterThanOrEqual(events.length);
+      
+      // Validate that events are stored in correct order with correct content
+      const recentEvents = storedEvents.slice(-events.length);
+      for (let i = 0; i < events.length; i++) {
+        // Guard against array bounds if stored events are fewer than expected
+        if (i >= recentEvents.length) {
+          throw new Error(`Missing event at index ${i}: stored ${recentEvents.length}, expected ${events.length}`);
+        }
+        const [, fields] = recentEvents[i] as any;
+        const storedEvent = JSON.parse(fields[1]);
+        expect(storedEvent.type).toBe(events[i].type);
+        expect(storedEvent.data.stage).toBe(events[i].data.stage);
+      }
     });
   });
 

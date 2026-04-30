@@ -1,38 +1,19 @@
 /**
- * KittenTTS Server Integration
+ * KittenTTS Server Integration (Optimized)
  * 
- * This module provides a server-side interface to KittenTTS for generating
- * high-quality speech from text. It spawns a Python process to run the model.
- * 
- * KittenTTS models:
- * - kitten-tts-mini-0.8: 80M version (highest quality)
- * - kitten-tts-micro-0.8: 40M version (balances speed and quality)
- * - kitten-tts-nano-0.8: 15M version (tiny and fastest)
- * 
- * Available voices: Bella, Jasper, Luna, Bruno, Rosie, Hugo, Kiki, Leo
+ * This module prefers connecting to a long-running KittenTTS FastAPI server
+ * on port 8005 for low-latency synthesis. If the server is not available,
+ * it falls back to spawning a Python process.
  */
 
 import { spawn } from 'child_process';
 import path from 'path';
 import os from 'os';
 import fs from 'fs';
-import { promisify } from 'util';
+import { voiceServerManager } from './server-control';
 
-const writeFileAsync = promisify(fs.writeFile);
-const unlinkAsync = promisify(fs.unlink);
-
-// Default configuration
-const DEFAULT_MODEL = 'KittenML/kitten-tts-mini-0.8';
-const DEFAULT_VOICE = 'Bruno';
-const SAMPLE_RATE = 24000;
-
-// Input validation limits
-const MAX_TEXT_LENGTH = 2000;
-const MIN_TEXT_LENGTH = 1;
-
-// Model caching - singleton pattern for performance
-let cachedModel: any = null;
-let cachedModelName: string | null = null;
+const PORT = process.env.KITTEN_TTS_PORT || 8005;
+const SERVER_URL = `http://127.0.0.1:${PORT}`;
 
 export interface TTSRequest {
   text: string;
@@ -43,183 +24,102 @@ export interface TTSRequest {
 
 export interface TTSResponse {
   success: boolean;
-  audioData?: string; // Base64 encoded audio
-  audioPath?: string;
+  audioData?: string; // Base64 encoded data URI
   error?: string;
 }
 
-// Voice options
-export const KITTEN_VOICES = [
-  'Bella', 'Jasper', 'Luna', 'Bruno', 'Rosie', 'Hugo', 'Kiki', 'Leo'
-] as const;
+export const KITTEN_VOICES = ['Bella', 'Jasper', 'Luna', 'Bruno', 'Rosie', 'Hugo', 'Kiki', 'Leo'] as const;
 
-export type KittenVoice = typeof KITTEN_VOICES[number];
-
-// Model options
 export const KITTEN_MODELS = [
-  { id: 'KittenML/kitten-tts-mini-0.8', name: 'Mini (80M)', description: 'Highest quality' },
-  { id: 'KittenML/kitten-tts-micro-0.8', name: 'Micro (40M)', description: 'Balanced' },
-  { id: 'KittenML/kitten-tts-nano-0.8', name: 'Nano (15M)', description: 'Fastest' },
+  { id: 'KittenML/kitten-tts-mini-0.8', name: 'Mini (80M)' },
+  { id: 'KittenML/kitten-tts-micro-0.8', name: 'Micro (40M)' },
+  { id: 'KittenML/kitten-tts-nano-0.8', name: 'Nano (15M)' },
 ] as const;
 
 /**
  * Generate speech using KittenTTS
- * 
- * @param request - TTS request with text and optional voice/model
- * @returns Promise<TTSResponse> - Base64 encoded audio or error
  */
 export async function generateSpeech(request: TTSRequest): Promise<TTSResponse> {
-  const { text, voice = DEFAULT_VOICE, model = DEFAULT_MODEL } = request;
-  
-  // Input validation
-  if (!text || text.trim().length === 0) {
-    return { success: false, error: 'Text is required' };
-  }
-  
-  if (text.length > MAX_TEXT_LENGTH) {
-    return { success: false, error: `Text too long. Maximum ${MAX_TEXT_LENGTH} characters allowed.` };
-  }
-  
-  if (text.length < MIN_TEXT_LENGTH) {
-    return { success: false, error: 'Text too short.' };
-  }
-  
-  if (!KITTEN_VOICES.includes(voice as KittenVoice)) {
-    return { success: false, error: `Invalid voice. Choose from: ${KITTEN_VOICES.join(', ')}` };
+  // 1. Try hitting the long-running FastAPI server first (Latency: ~50-200ms)
+  try {
+    const response = await fetch(`${SERVER_URL}/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text: request.text,
+        voice: request.voice || 'Bruno',
+        model_id: request.model || 'KittenML/kitten-tts-mini-0.8',
+        speed: request.speed || 1.0,
+      }),
+      // Set a short timeout. If server isn't up, we fallback immediately.
+      signal: AbortSignal.timeout(2000),
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      return {
+        success: true,
+        audioData: `data:audio/wav;base64,${data.audioData}`
+      };
+    }
+  } catch (err) {
+    console.debug('[KittenTTS] FastAPI server not available, falling back to process spawn');
   }
 
-  // Validate model
-  const validModels = KITTEN_MODELS.map(m => m.id) as string[];
-  if (!validModels.includes(model)) {
-    return { success: false, error: `Invalid model. Choose from: ${validModels.join(', ')}` };
-  }
+  // 2. Fallback: Spawn-per-request (Latency: ~2-5s due to imports)
+  // Ensure we try to start the server in the background for next time
+  void voiceServerManager.startKittenServer();
 
-  // Create a unique temp file for this request
+  return performLegacySpawn(request);
+}
+
+async function performLegacySpawn(request: TTSRequest): Promise<TTSResponse> {
+  const { text, voice = 'Bruno', model = 'KittenML/kitten-tts-mini-0.8' } = request;
   const tempDir = os.tmpdir();
-  const tempOutputPath = path.join(tempDir, `kittentts-${Date.now()}.wav`);
+  const tempId = `${Date.now()}-${Math.random().toString(36).substring(7)}`;
+  const tempOutputPath = path.join(tempDir, `kittentts-${tempId}.wav`);
   
-  // Escape text for Python string literal - use single quotes with proper escaping
   const escapedText = text.replace(/'/g, "'\\''").replace(/\n/g, '\\n');
   
-  // Create Python script that uses sys.argv for safe parameter passing
   const pythonScript = `
-import sys
-import os
-
-# Add current directory to path for imports
-sys.path.insert(0, os.getcwd())
-
+import sys, os
+from kittentts import KittenTTS
+import soundfile as sf
 try:
-    from kittentts import KittenTTS
-    import soundfile as sf
-    
-    # Get parameters from command line arguments (safer than string interpolation)
-    model = sys.argv[1] if len(sys.argv) > 1 else 'KittenML/kitten-tts-mini-0.8'
-    voice = sys.argv[2] if len(sys.argv) > 2 else 'Bruno'
-    text = sys.argv[3] if len(sys.argv) > 3 else ''
-    output_path = sys.argv[4] if len(sys.argv) > 4 else '/tmp/output.wav'
-    
-    # Generate audio
-    m = KittenTTS(model)
-    audio = m.generate(text=text, voice=voice)
-    
-    # Save to temp file
-    sf.write(output_path, audio, 24000)
-    
+    m = KittenTTS('${model}')
+    audio = m.generate(text='''${escapedText}''', voice='${voice}')
+    sf.write('${tempOutputPath.replace(/\\/g, '/')}', audio, 24000)
     print("SUCCESS")
 except Exception as e:
     print(f"ERROR: {str(e)}", file=sys.stderr)
     sys.exit(1)
-`.replace(/\n/g, '; ');  // Single line for argument passing
+`;
 
   return new Promise((resolve) => {
-    const pythonProcess = spawn('python3', [
-      '-c', pythonScript,
-      model,           // sys.argv[1]
-      voice,           // sys.argv[2]
-      escapedText,     // sys.argv[3]
-      tempOutputPath   // sys.argv[4]
-    ], {
-      cwd: process.cwd(),
-      env: {
-        ...process.env,
-        PYTHONPATH: process.env.PYTHONPATH || '',
-      },
-      stdio: ['pipe', 'pipe', 'pipe']
-    });
-
-    let stdout = '';
+    const proc = spawn('python3', ['-c', pythonScript], { stdio: ['pipe', 'pipe', 'pipe'] });
     let stderr = '';
-
-    pythonProcess.stdout.on('data', (data) => {
-      stdout += data.toString();
-    });
-
-    pythonProcess.stderr.on('data', (data) => {
-      stderr += data.toString();
-    });
-
-    pythonProcess.on('close', async (code) => {
-      if (code !== 0) {
-        console.error('[KittenTTS] Error:', stderr);
-        resolve({ success: false, error: stderr || 'Generation failed' });
-        return;
-      }
-
-      // Read the generated audio file
+    proc.stderr.on('data', (d) => stderr += d.toString());
+    proc.on('close', (code) => {
+      if (code !== 0) return resolve({ success: false, error: stderr || 'Spawn failed' });
       try {
-        if (fs.existsSync(tempOutputPath)) {
-          const audioBuffer = fs.readFileSync(tempOutputPath);
-          const base64Audio = audioBuffer.toString('base64');
-          
-          // Clean up temp file
-          try {
-            await unlinkAsync(tempOutputPath);
-          } catch (e) {
-            // Ignore cleanup errors
-          }
-          
-          resolve({
-            success: true,
-            audioData: `data:audio/wav;base64,${base64Audio}`
-          });
-        } else {
-          resolve({ success: false, error: 'Audio file not generated' });
-        }
-      } catch (error) {
-        console.error('[KittenTTS] File error:', error);
-        resolve({ success: false, error: 'Failed to read audio output' });
+        const buffer = fs.readFileSync(tempOutputPath);
+        fs.unlinkSync(tempOutputPath);
+        resolve({ success: true, audioData: `data:audio/wav;base64,${buffer.toString('base64')}` });
+      } catch (e) {
+        resolve({ success: false, error: 'Failed to read output' });
       }
     });
-
-    // Timeout after 60 seconds
-    setTimeout(() => {
-      pythonProcess.kill();
-      resolve({ success: false, error: 'Generation timed out' });
-    }, 60000);
   });
 }
 
-/**
- * Check if KittenTTS is available on the system
- */
 export async function checkKittenTTSAvailability(): Promise<boolean> {
+  try {
+    const res = await fetch(`${SERVER_URL}/health`, { signal: AbortSignal.timeout(1000) });
+    if (res.ok) return true;
+  } catch {}
+  
   return new Promise((resolve) => {
-    const pythonProcess = spawn('python3', ['-c', 'from kittentts import KittenTTS; print("OK")'], {
-      stdio: ['pipe', 'pipe', 'pipe']
-    });
-
-    pythonProcess.on('close', (code) => {
-      resolve(code === 0);
-    });
-
-    pythonProcess.on('error', () => {
-      resolve(false);
-    });
-
-    setTimeout(() => {
-      pythonProcess.kill();
-      resolve(false);
-    }, 5000);
+    const proc = spawn('python3', ['-c', 'import kittentts'], { stdio: 'ignore' });
+    proc.on('close', (code) => resolve(code === 0));
   });
 }

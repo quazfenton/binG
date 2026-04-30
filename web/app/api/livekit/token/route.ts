@@ -1,9 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { AccessToken } from 'livekit-server-sdk';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
+import { voiceServerManager } from '@/lib/voice/server-control';
 
 export async function POST(req: NextRequest) {
   try {
+    // Auto-start local LiveKit if configured for development
+    await voiceServerManager.startLiveKitServer();
+
     // SECURITY: Require authentication to prevent unauthorized token generation
     const authResult = await resolveRequestAuth(req, {
       allowAnonymous: false,

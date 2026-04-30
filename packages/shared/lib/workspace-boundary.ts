@@ -146,6 +146,27 @@ export function normalizePath(p: string): string {
 // ──────────────────────────────────────────────────────────────────────────────
 
 /**
+ * Check whether a given file path is absolute.
+ * Supports POSIX, Windows drive letters, AND Windows UNC paths.
+ * 
+ * UNC paths like \\server\share\file are absolute and should not be
+ * treated as relative paths inside the workspace.
+ */
+function isAbsolutePath(p: string): boolean {
+  // POSIX absolute path
+  if (p.startsWith('/')) return true;
+  
+  // Windows drive letter (e.g., C:\ or D:/)
+  if (/^[a-zA-Z]:[\\/]/.test(p)) return true;
+  
+  // Windows UNC path (e.g., \\server\share or \\192.168.1.1\share)
+  // UNC paths start with \\ and have at least server\share components
+  if (/^\\\\[^\\/:*?"<>|]+\\[^\\/:*?"<>|]+/.test(p)) return true;
+  
+  return false;
+}
+
+/**
  * Check whether a given file path is outside the workspace root.
  * 
  * VFS-awareness: Virtual paths (e.g., `/project/foo.txt`, `/workspace/bar.txt`)
@@ -176,7 +197,7 @@ export function isOutsideWorkspace(
    if (!normalizedTarget) return false;
 
    // Resolve relative paths against workspace root before comparison
-   const resolvedTarget = path.isAbsolute(targetPath) 
+   const resolvedTarget = isAbsolutePath(targetPath) 
      ? normalizedTarget 
      : normalizePath(`${root}/${targetPath}`);
 
@@ -278,33 +299,51 @@ export function buildWorkspaceBoundaryWarning(
  * Parse a command to extract filesystem operation and targets.
  * Useful for CLI tools that need to analyze user commands.
  * 
+ * CRIT-7 fix: Robustly handles quoted paths and escaped spaces.
+ * 
  * @param command The command string to analyze
  * @returns Array of detected file paths
  */
 export function extractFilePathsFromCommand(command: string): string[] {
   const paths: string[] = [];
 
+  // Helper to extract paths from a string, handling quotes
+  const extractFromArgString = (str: string) => {
+    // This regex matches:
+    // 1. Double quoted strings: "..."
+    // 2. Single quoted strings: '...'
+    // 3. Unquoted strings (ended by space, or end of string): ...
+    const argRegex = /"([^"\\]*(?:\\.[^"\\]*)*)"|'([^'\\]*(?:\\.[^'\\]*)*)'|([^\s\\]*(?:\\.[^\s\\]*)*)+/g;
+    let m;
+    while ((m = argRegex.exec(str)) !== null) {
+      const path = m[1] || m[2] || m[3];
+      if (path && path.length > 0) {
+        // Clean up escaping
+        paths.push(path.replace(/\\(.)/g, '$1'));
+      }
+    }
+  };
+
   // Common filesystem operation patterns
-  // Matches command + optional space/flags + path
+  // Matches command + optional space/flags
   const patterns = [
-    /rm(?:\s+-[rf]+)*\s+([^\s\n\r]+)/gi,
-    /del\s+([^\s\n\r]+)/gi,
-    /rmdir\s+([^\s\n\r]+)/gi,
-    /mv\s+([^\s\n\r]+)\s+([^\s\n\r]+)/gi,
-    /cp\s+([^\s\n\r]+)\s+([^\s\n\r]+)/gi,
-    /cat\s+([^\s\n\r]+)/gi,
-    /write\s+([^\s\n\r]+)/gi,
-    /touch\s+([^\s\n\r]+)/gi,
+    { cmd: /rm(?:\s+-[rf]+)*/gi, multiple: true },
+    { cmd: /del/gi, multiple: true },
+    { cmd: /rmdir/gi, multiple: true },
+    { cmd: /mv/gi, multiple: true },
+    { cmd: /cp/gi, multiple: true },
+    { cmd: /cat/gi, multiple: true },
+    { cmd: /write/gi, multiple: true },
+    { cmd: /touch/gi, multiple: true },
   ];
 
   for (const pattern of patterns) {
+    const regex = new RegExp(`(?:^|&&|;|\\|)\\s*${pattern.cmd.source}\\s+(.*)`, 'gi');
     let match;
-    // Reset regex index before matching
-    pattern.lastIndex = 0;
-    while ((match = pattern.exec(command)) !== null) {
-      // Capture groups (paths start from index 1)
-      for (let i = 1; i < match.length; i++) {
-        if (match[i]) paths.push(match[i]);
+    while ((match = regex.exec(command)) !== null) {
+      const argString = match[1];
+      if (argString) {
+        extractFromArgString(argString);
       }
     }
   }

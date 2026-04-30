@@ -1165,6 +1165,208 @@ export const MCP_CALL_TOOL_CAPABILITY: CapabilityDefinition = {
 };
 
 // ============================================================================
+// Task/Plan Management Capabilities
+// ============================================================================
+
+export const TASK_LIST_CAPABILITY: CapabilityDefinition = {
+  id: 'task.list',
+  name: 'List Tasks',
+  category: 'memory',
+  description: 'List all tasks with optional filtering by status, retention level, or tags. Returns tasks sorted by priority and recency.',
+  inputSchema: z.object({
+    status: z.enum(['pending', 'in_progress', 'blocked', 'completed', 'failed', 'cancelled']).optional()
+      .describe('Filter by task status'),
+    retention: z.enum(['scratch', 'active', 'queued', 'suspended', 'archived']).optional()
+      .describe('Filter by retention level'),
+    tags: z.array(z.string()).optional().describe('Filter by tags'),
+    limit: z.number().optional().default(20).describe('Maximum tasks to return'),
+    offset: z.number().optional().default(0).describe('Number of tasks to skip for pagination'),
+  }),
+  outputSchema: z.object({
+    tasks: z.array(z.object({
+      id: z.string(),
+      title: z.string(),
+      description: z.string().optional(),
+      status: z.string(),
+      retention: z.string(),
+      priority: z.number(),
+      progress: z.number(),
+      steps: z.array(z.object({
+        id: z.string(),
+        description: z.string(),
+        status: z.string(),
+        order: z.number(),
+      })).optional(),
+      tags: z.array(z.string()),
+      createdAt: z.number(),
+      updatedAt: z.number(),
+    })),
+    pagination: z.object({
+      offset: z.number(),
+      limit: z.number(),
+      total: z.number(),
+      hasMore: z.boolean(),
+    }),
+  }),
+  providerPriority: ['memory-service'],
+  tags: ['task', 'list', 'todo', 'plan', 'tasks'],
+  metadata: {
+    latency: 'low',
+    cost: 'low',
+    reliability: 0.99,
+  },
+};
+
+export const TASK_CREATE_CAPABILITY: CapabilityDefinition = {
+  id: 'task.create',
+  name: 'Create Task',
+  category: 'memory',
+  description: 'Create a new task or plan. Supports multi-step tasks with ordered steps.',
+  inputSchema: z.object({
+    title: z.string().describe('Task title'),
+    description: z.string().optional().describe('Task description'),
+    steps: z.array(z.object({
+      description: z.string(),
+      order: z.number().optional(),
+    })).optional().describe('Initial steps for the task'),
+    priority: z.number().min(0).max(100).optional().default(50).describe('Priority (0-100, higher = more important)'),
+    retention: z.enum(['scratch', 'active', 'queued', 'suspended', 'archived']).optional().default('queued'),
+    tags: z.array(z.string()).optional().describe('Tags for categorization'),
+    parentId: z.string().optional().describe('Parent task ID for hierarchical tasks'),
+    dueDate: z.number().optional().describe('Due date timestamp (ms)'),
+  }),
+  outputSchema: z.object({
+    success: z.boolean(),
+    task: z.object({
+      id: z.string(),
+      title: z.string(),
+      status: z.string(),
+      steps: z.array(z.any()).optional(),
+    }),
+  }),
+  providerPriority: ['memory-service'],
+  tags: ['task', 'create', 'new', 'todo', 'plan'],
+  metadata: {
+    latency: 'low',
+    cost: 'low',
+    reliability: 0.99,
+  },
+};
+
+export const TASK_EDIT_CAPABILITY: CapabilityDefinition = {
+  id: 'task.edit',
+  name: 'Edit Task',
+  category: 'memory',
+  description: 'Edit an existing task - update title, description, priority, tags, or add/modify steps.',
+  inputSchema: z.object({
+    taskId: z.string().describe('Task ID to edit'),
+    title: z.string().optional().describe('New title'),
+    description: z.string().optional().describe('New description'),
+    priority: z.number().min(0).max(100).optional().describe('New priority (0-100)'),
+    tags: z.array(z.string()).optional().describe('New tags (replaces existing)'),
+    status: z.enum(['pending', 'in_progress', 'blocked', 'completed', 'failed', 'cancelled']).optional()
+      .describe('New status'),
+    addSteps: z.array(z.object({
+      description: z.string(),
+      afterStepId: z.string().optional(),
+    })).optional().describe('Steps to append'),
+    editStep: z.object({
+      stepId: z.string(),
+      description: z.string().optional(),
+      status: z.enum(['pending', 'completed', 'skipped', 'failed']).optional(),
+      notes: z.string().optional(),
+    }).optional().describe('Step to edit'),
+    reorderSteps: z.array(z.string()).optional().describe('New step order (array of step IDs)'),
+  }),
+  outputSchema: z.object({
+    success: z.boolean(),
+    task: z.object({
+      id: z.string(),
+      title: z.string(),
+      steps: z.array(z.any()).optional(),
+    }),
+  }),
+  providerPriority: ['memory-service'],
+  tags: ['task', 'edit', 'update', 'modify', 'steps'],
+  metadata: {
+    latency: 'low',
+    cost: 'low',
+    reliability: 0.99,
+  },
+};
+
+export const TASK_DELETE_CAPABILITY: CapabilityDefinition = {
+  id: 'task.delete',
+  name: 'Delete Task',
+  category: 'memory',
+  description: 'Delete a task. Also deletes child tasks recursively.',
+  inputSchema: z.object({
+    taskId: z.string().describe('Task ID to delete'),
+  }),
+  outputSchema: z.object({
+    success: z.boolean(),
+  }),
+  providerPriority: ['memory-service'],
+  tags: ['task', 'delete', 'remove'],
+  metadata: {
+    latency: 'low',
+    cost: 'low',
+    reliability: 0.95,
+  },
+};
+
+export const TASK_SEARCH_CAPABILITY: CapabilityDefinition = {
+  id: 'task.search',
+  name: 'Search Tasks',
+  category: 'memory',
+  description: 'Search tasks by query. Matches title, description, and tags using partial matching.',
+  inputSchema: z.object({
+    query: z.string().describe('Search query'),
+    limit: z.number().optional().default(10).describe('Maximum results'),
+  }),
+  outputSchema: z.array(z.object({
+    id: z.string(),
+    title: z.string(),
+    description: z.string().optional(),
+    status: z.string(),
+    tags: z.array(z.string()),
+  })),
+  providerPriority: ['memory-service'],
+  tags: ['task', 'search', 'find', 'query'],
+  metadata: {
+    latency: 'low',
+    cost: 'low',
+    reliability: 0.99,
+  },
+};
+
+export const TASK_GET_UNFINISHED_CAPABILITY: CapabilityDefinition = {
+  id: 'task.getUnfinished',
+  name: 'Get Unfinished Tasks',
+  category: 'memory',
+  description: 'Get all unfinished pending tasks for re-context injection. Useful for reminding about ongoing work.',
+  inputSchema: z.object({
+    limit: z.number().optional().default(10).describe('Maximum tasks to return'),
+    minAgeMs: z.number().optional().describe('Minimum task age in ms (for filtering old tasks)'),
+  }),
+  outputSchema: z.array(z.object({
+    id: z.string(),
+    title: z.string(),
+    status: z.string(),
+    priority: z.number(),
+    progress: z.number(),
+    updatedAt: z.number(),
+  })),
+  providerPriority: ['memory-service'],
+  tags: ['task', 'unfinished', 'pending', 'in_progress', 'recontext'],
+  metadata: {
+    latency: 'low',
+    cost: 'low',
+    reliability: 0.99,
+  },
+};
+
+// ============================================================================
 // Process Management Capabilities
 // ============================================================================
 
@@ -1923,6 +2125,13 @@ export const ALL_CAPABILITIES: CapabilityDefinition[] = [
   SCHEDULE_TASK_CAPABILITY,
   TASK_STATUS_CAPABILITY,
   TASK_CANCEL_CAPABILITY,
+  // Task/Plan Management
+  TASK_LIST_CAPABILITY,
+  TASK_CREATE_CAPABILITY,
+  TASK_EDIT_CAPABILITY,
+  TASK_DELETE_CAPABILITY,
+  TASK_SEARCH_CAPABILITY,
+  TASK_GET_UNFINISHED_CAPABILITY,
   // Workflow / Agent Planning
   WORKFLOW_DISCOVERY_CAPABILITY,
   WORKFLOW_PLAN_CAPABILITY,

@@ -122,10 +122,16 @@ export async function POST(request: NextRequest) {
 
       // Generate JWT token for the user
       // HIGH-8 fix: email removed from JWT — use getUserEmail() from jwt.ts if needed
-      const { generateToken } = await import('@/lib/auth/jwt');
-      const token = generateToken({
-        userId: user.id.toString(),
-      });
+      let token;
+      try {
+        const { generateToken } = await import('@/lib/auth/jwt');
+        token = generateToken({
+          userId: user.id.toString(),
+        });
+      } catch (tokenError) {
+        console.error('[Auth0 Session Check] Token generation failed:', tokenError);
+        return NextResponse.json({ error: 'Failed to generate access token' }, { status: 500 });
+      }
 
       // Return response with session cookie and token
       const response = NextResponse.json({
