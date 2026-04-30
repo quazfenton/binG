@@ -10,7 +10,7 @@
  * - LLM-based evaluation option (when evalModel is configured)
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 // Mock the logger to prevent console spam
 vi.mock('@/lib/utils/logger', () => ({

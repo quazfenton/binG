@@ -3,9 +3,15 @@
  * 
  * This module contains Node.js-specific shell detection and validation logic.
  * It is intended for use in server-side or desktop-local execution contexts.
+ * 
+ * ESM compatibility: Uses dynamic imports and createRequire for Node.js module access.
  */
 
 import { type DesktopConfig } from '../env';
+import { createRequire } from 'node:module';
+
+// createRequire for ESM compatibility - allows using require in ESM modules
+const _require = createRequire(import.meta.url);
 
 /**
  * Sanitize and validate shell path to prevent PATH manipulation attacks.
@@ -25,7 +31,8 @@ function validateShellPath(shellPath: string): string | null {
   // Normalize path to prevent directory traversal (e.g., /bin/../bin/sh)
   let normalized: string;
   try {
-    const pathModule = require('path');
+    // ESM-compatible: use _require for Node.js modules in this ESM package
+    const pathModule = _require('path');
     normalized = pathModule.normalize(shellPath);
   } catch {
     // Fallback: convert backslashes and normalize traversal manually
@@ -45,16 +52,16 @@ function validateShellPath(shellPath: string): string | null {
   }
   
   // Validate file exists and is executable (on supported platforms)
+  // NOTE: Uses _require (createRequire) for ESM compatibility since platform package is ESM
   try {
-    if (typeof require !== 'undefined') {
-      const fs = require('fs');
-      const stats = fs.statSync(normalized);
-      // Check if it's a file (not directory) and executable
-      if (stats.isFile()) {
-        const mode = stats.mode;
-        // Check owner execute permission (bit 6)
-        if (mode & 0o100) return normalized;
-      }
+    const fs = _require('fs');
+    const stats = fs.statSync(normalized);
+    // Check if it's a file (not directory) and executable
+    if (stats.isFile()) {
+      const mode = stats.mode;
+      // Check ALL execute bits (owner, group, other) - not just owner
+      // This handles multi-user environments where shell may be executable by group/other
+      if (mode & 0o111) return normalized;
     }
   } catch {
     // File doesn't exist or can't be accessed
@@ -103,18 +110,9 @@ export function getShellCommand(): { shell: string; args: string[] } {
  */
 export function validateWorkspacePath(path: string): boolean {
   try {
-    if (typeof require === 'undefined') {
-      return false;
-    }
-
-    let fs;
-    let pathModule;
-    try {
-      fs = require('fs');
-      pathModule = require('path');
-    } catch {
-      return false;
-    }
+    // ESM-compatible: use _require for fs and path modules (always available since we create it at module level)
+    const fs = _require('fs');
+    const pathModule = _require('path');
 
     // Check if path is empty
     if (!path) return false;

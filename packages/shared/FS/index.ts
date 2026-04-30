@@ -651,8 +651,9 @@ export class DesktopFileSystem implements IFileSystem {
       path: this.normalizePath(fullPath), 
       content, 
       language: language || this.getLanguage(filePath), 
-      lastModified: new Date().toISOString(), 
-      createdAt: new Date().toISOString(), 
+      // Use actual file mtime from stat, not new Date() which loses filesystem metadata
+      lastModified: new Date(stat.mtime).toISOString(), 
+      createdAt: new Date(stat.mtime).toISOString(), 
       size: stat.size 
     };
   }

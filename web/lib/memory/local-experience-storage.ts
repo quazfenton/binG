@@ -122,6 +122,7 @@ class FileSystemBackend implements StorageBackend {
   }
 
   private async ensureDirectory(): Promise<void> {
+    if (typeof window !== 'undefined') return;
     const fs = await import('fs/promises');
     const path = await import('path');
     const dir = path.dirname(this.filePath);
@@ -134,6 +135,7 @@ class FileSystemBackend implements StorageBackend {
 
   async save(experiences: AgentExperience[]): Promise<void> {
     try {
+      if (typeof window !== 'undefined') return;
       await this.ensureDirectory();
       const fs = await import('fs/promises');
       const data = JSON.stringify(experiences, null, 2);
@@ -146,6 +148,7 @@ class FileSystemBackend implements StorageBackend {
 
   async load(): Promise<AgentExperience[]> {
     try {
+      if (typeof window !== 'undefined') return [];
       const fs = await import('fs/promises');
       const data = await fs.readFile(this.filePath, 'utf-8');
       const experiences = JSON.parse(data) as AgentExperience[];

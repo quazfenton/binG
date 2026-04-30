@@ -169,6 +169,7 @@ interface TaskStorageBackend {
   save(tasks: Task[]): Promise<void>;
   load(): Promise<Task[]>;
   clear(): Promise<void>;
+  isAvailable(): boolean;
 }
 
 /**

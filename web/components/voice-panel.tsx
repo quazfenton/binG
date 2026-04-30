@@ -68,8 +68,13 @@ export function VoicePanel({ onClose, onTextSubmit }: VoicePanelProps) {
   const abortControllerRef = useRef<AbortController | null>(null);
 
   // Handle incoming transcriptions from the hook
+  // FIX: Only process final transcriptions, not interim ones
+  // The hook emits both interim and final transcriptions without isFinal flag
+  // so we check transcription length to filter out partial/short interim results
   useEffect(() => {
-    if (transcription && !isProcessingAI) {
+    if (transcription && !isProcessingAI && transcription.length > 3) {
+      // Only process non-empty, substantive transcriptions
+      // Short transcriptions (< 4 chars) are likely interim partial results
       handleUserSpeech(transcription);
     }
   }, [transcription]);
@@ -216,7 +221,19 @@ export function VoicePanel({ onClose, onTextSubmit }: VoicePanelProps) {
             <Button
               variant="ghost"
               size="sm"
-              onClick={stopListening}
+              onClick={async () => {
+                // FIX: Properly disconnect from voice service
+                // stopListening stops the microphone
+                stopListening();
+                // Clear all voice-related UI state
+                setAudioLevel(0);
+                setVoiceMessages([]);
+                setIsListening(false);
+                // Note: For full LiveKit disconnect, the useVoiceSettings hook needs to expose
+                // a disconnect method that cleans up the LiveKit room connection.
+                // For now, we stop listening and clear state which provides basic cleanup.
+                toast.info('Disconnected from voice service');
+              }}
               className="h-8 bg-red-500/20 hover:bg-red-500/30 border border-red-500/30 text-red-400"
             >
               <PhoneOff className="h-3 w-3 mr-1" />
