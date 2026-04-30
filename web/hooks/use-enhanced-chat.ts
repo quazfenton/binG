@@ -183,6 +183,8 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
   const abortControllerRef = useRef<AbortController | null>(null);
   const currentMessageRef = useRef<Message | null>(null);
   const messagesRef = useRef<Message[]>([]);
+  // Tracks consecutive stepReprompt auto-continues to prevent infinite loops
+  const stepRepromptCountRef = useRef(0);
   const isMountedRef = useRef(true);
 
   // Track mount state to prevent stale callbacks
@@ -245,6 +247,8 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
   }, [messages]);
 
   const handleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    // Reset stepReprompt counter on manual user input (new conversation turn)
+    stepRepromptCountRef.current = 0;
     setInput(e.target.value);
   }, []);
 
@@ -868,6 +872,39 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
 
                         clearTimeout(timeoutId);
 
+                        // CRITICAL FIX: Prevent endless retry bubbles
+                        // Check if there's already a retry bubble for this original message
+                        const existingRetryBubble = currentMessages.find(
+                          msg => msg.id?.startsWith('assistant-retry-') && 
+                                msg.metadata?.originalProvider === doneMetadata.provider
+                        );
+                        
+                        // After max retries, stop and show error instead of creating more bubbles
+                        if (retryCount >= maxRetries) {
+                          console.error(`[Chat] Max retries (${maxRetries}) exceeded, giving up`);
+                          clearTimeout(timeoutId);
+                          setIsLoading(false);
+                          setAgentStatus('completed');
+                          
+                          // Update the original message with an error state instead of retrying
+                          setMessages(prev => prev.map(msg =>
+                            msg.id === assistantMessage.id
+                              ? {
+                                  ...msg,
+                                  content: 'I encountered an issue generating a response. Please try again or use a different provider.',
+                                  metadata: {
+                                    ...(msg.metadata || {}),
+                                    ...doneMetadata,
+                                    isEmptyResponse: false,
+                                    hasError: true,
+                                    errorMessage: 'Max retries exceeded for empty response',
+                                  },
+                                }
+                              : msg
+                          ));
+                          break;
+                        }
+                        
                         const toolContext = buildEmptyResponseRetryContext({
                           toolInvocations: streamingToolInvocations,
                           filesystemEdits: eventData.filesystem,
@@ -1134,6 +1171,48 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                     options.onFinish(finalMsg);
                   }
 
+                  // Step Reprompt: Auto-continue multi-step routing flows
+                  // If the server included routing.stepReprompt in the DONE event metadata,
+                  // the routing plan has remaining steps. Auto-send the reprompt as a
+                  // follow-up user message so the LLM continues executing the plan.
+                  //
+                  // Guards: (1) cap at 5 auto-continues to prevent infinite loops,
+                  //         (2) skip if inputQueue has items (user typed during streaming),
+                  //         (3) skip if response was empty (retry logic handles that).
+                  const MAX_STEP_REPROMPTS = 5;
+                  const stepRepromptCount = stepRepromptCountRef.current;
+                  const stepReprompt = doneMetadata?.routing?.stepReprompt;
+                  if (
+                    stepReprompt &&
+                    typeof stepReprompt === 'string' &&
+                    stepReprompt.trim() &&
+                    !isEmptyResponse &&
+                    stepRepromptCount < MAX_STEP_REPROMPTS &&
+                    inputQueue.length === 0
+                  ) {
+                    console.log('[StepReprompt] Auto-continuing multi-step flow', {
+                      stepRepromptPreview: stepReprompt.slice(0, 80),
+                      primaryRole: doneMetadata?.routing?.primaryRole,
+                      estimatedSteps: doneMetadata?.routing?.estimatedSteps,
+                      continuationNumber: stepRepromptCount + 1,
+                      maxContinuations: MAX_STEP_REPROMPTS,
+                    });
+                  
+                    // Set input and submit after state settles
+                    // Increment counter so subsequent DONE events know how many auto-continues happened
+                    stepRepromptCountRef.current++;
+                    setInput(stepReprompt);
+                    setTimeout(() => {
+                      if (!isMountedRef.current) return;
+                      handleSubmit(
+                        {
+                          preventDefault: () => {},
+                          currentTarget: { reset: () => {} },
+                        } as React.FormEvent<HTMLFormElement>
+                      );
+                    }, 150);
+                  }
+                  
                   return;
 
                 case 'error': {

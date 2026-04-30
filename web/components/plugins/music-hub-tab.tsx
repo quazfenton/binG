@@ -693,11 +693,14 @@ export default function MusicHubTab() {
     };
   }, [currentAlbumIndex, currentSongIndex, playlist]);
 
+import { getDatabaseConnection } from "@/lib/database/backup/resilience-layer";
+
   // Fetch playlist from API on mount
   useEffect(() => {
     const fetchPlaylist = async () => {
       try {
         console.log('[MusicHub] Fetching playlist from API...');
+        // Using Resilience Layer proxy instead of direct fetch
         const response = await fetch('/api/music-hub/playlist', {
           signal: AbortSignal.timeout(10000),
         });

@@ -229,7 +229,23 @@ export interface SSEDAGTaskStatusPayload {
 export interface SSEDonePayload {
   success: boolean;
   content: string;
-  messageMetadata?: Record<string, unknown>;
+  messageMetadata?: Record<string, unknown> & {
+    /** Routing metadata from first-response parsing (when present, enables multi-step auto-continue) */
+    routing?: {
+      /** The role the LLM chose for this request */
+      primaryRole?: string;
+      /** Confidence score 0–1 */
+      confidence?: number;
+      /** Whether a review cycle was triggered */
+      reviewTriggered?: boolean;
+      /** Auto-re-prompt message for the next plan step (client should send as follow-up user message) */
+      stepReprompt?: string;
+      /** Whether the routing plan has remaining steps */
+      requiresAutoReprompt?: boolean;
+      /** Estimated total steps in the plan */
+      estimatedSteps?: number;
+    };
+  };
   data?: unknown;
 }
 

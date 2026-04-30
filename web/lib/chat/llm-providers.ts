@@ -2591,6 +2591,8 @@ class LLMService {
             return !!process.env.GITHUB_MODELS_API_KEY || !!process.env.AZURE_OPENAI_API_KEY;
           case 'composio':
             return !!process.env.COMPOSIO_API_KEY;
+          case 'vercel':
+            return !!process.env.VERCEL_API_KEY;
           case 'cloudflare':
           case 'zo':
             // Providers with env vars configured but no request/stream handlers yet

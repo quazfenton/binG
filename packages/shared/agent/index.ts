@@ -202,6 +202,16 @@ export {
   type AgentRoleConfig,
 } from './system-prompts';
 
+export {
+  DYNAMIC_FIRST_RESPONSE_ROUTING,
+  DYNAMIC_FEEDBACK_INJECTION,
+  DYNAMIC_ROLE_REDIRECTION,
+  DYNAMIC_TOOL_SELECTION,
+  DYNAMIC_SPECIFICATIONS,
+  FEEDBACK_PROMPT_SUFFIX,
+  generateDynamicInjection,
+} from './system-prompts-dynamic';
+
 // Prompt Composer — Structured, dynamic prompt composition with tool injection
 export {
   // Composition API
@@ -369,3 +379,28 @@ export {
   type RotationRecommendation,
   type WeightedHistoryEntry,
 } from './successive-tracker';
+
+export {
+  parseFirstResponseRouting,
+  routingToRoleRedirectSection,
+  shouldTriggerReview,
+  getNextPlanStep,
+  generateStepReprompt,
+  formatRoleRedirectOptions,
+  type RoutingMetadata,
+  type ParsedRouting,
+  type TaskClassification as RoutingClassification,
+  type TaskComplexity,
+  type SpecializationRoute,
+  type AgentRoleName,
+  type RoleOption,
+  type ToolCallOption,
+  type PlanStep,
+} from './first-response-routing';
+
+export {
+  tryRepairJson,
+  extractFirstJsonObject,
+  stripJsonComments,
+  removeTrailingCommas,
+} from './spec-parser-utils';
