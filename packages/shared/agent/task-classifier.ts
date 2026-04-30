@@ -18,9 +18,14 @@
  * ```
  */
 
-import { createLogger } from '@/lib/utils/logger';
-
-const log = createLogger('TaskClassifier');
+// FIX: Use native console logging since @/lib/utils/logger is a web alias not accessible from shared package
+// This prevents build failures when shared package is used standalone
+const log = {
+  debug: (...args: any[]) => { if (process.env.DEBUG) console.log('[TaskClassifier]', ...args); },
+  warn: (...args: any[]) => console.warn('[TaskClassifier]', ...args),
+  error: (...args: any[]) => console.error('[TaskClassifier]', ...args),
+  info: (...args: any[]) => console.log('[TaskClassifier]', ...args),
+};
 
 export interface TaskClassification {
   complexity: 'simple' | 'moderate' | 'complex';
@@ -264,18 +269,40 @@ export class TaskClassifier {
       let fastModelProvider: string | undefined;
       let fastModelName: string | undefined;
 
+      // FIX: Use conditional import for model-ranker (web-only path)
+      // This path is only available when running in the web context, not in standalone shared package
       try {
-        const { getSpecGenerationModel } = await import('@/lib/models/model-ranker');
+        const { getSpecGenerationModel, isRateLimited, recordRateLimitError } = await import('@/lib/models/model-ranker');
         const ranked = await getSpecGenerationModel();
         if (ranked) {
+          // FIX: Check circuit breaker before using this model
+          if (isRateLimited(ranked.provider, ranked.model)) {
+            log.debug('Model ranker suggested rate-limited model, skipping');
+            throw new Error('Model rate limited');
+          }
           fastModelProvider = ranked.provider;
           fastModelName = ranked.model;
         }
       } catch {
-        // Model ranker unavailable — will fall back to default below
+        // Model ranker unavailable in this context (shared package running standalone)
+        log.debug('Model ranker not available or model rate-limited, using fallback selection');
       }
 
-      // Fallback: If model ranker unavailable or telemetry is empty, use Mistral Small
+      // FIX: Fallback to model rotation (which also checks rate limits)
+      if (!fastModelProvider || !fastModelName) {
+        try {
+          const { getModelForRotation, isRateLimited, recordRateLimitError } = await import('@/lib/models/model-ranker');
+          const rotationPick = getModelForRotation();
+          if (rotationPick && !isRateLimited(rotationPick.provider, rotationPick.model)) {
+            fastModelProvider = rotationPick.provider;
+            fastModelName = rotationPick.model;
+          }
+        } catch {
+          // Rotation not available
+        }
+      }
+
+      // Final fallback: if rotation also unavailable, use a common working model
       if (!fastModelProvider || !fastModelName) {
         fastModelProvider = 'mistral';
         fastModelName = 'mistral-small-latest';

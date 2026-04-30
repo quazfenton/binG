@@ -17,6 +17,36 @@
 import { getDatabase } from '@/lib/database/connection';
 import { execSchemaFile } from '@/lib/database/schema';
 
+// Dynamic import to avoid circular dependency with model-ranker
+// model-ranker imports chatRequestLogger, so we import recordModelAttempt lazily
+
+/**
+ * Async wrapper for recordModelAttempt to avoid circular imports
+ */
+async function recordModelAttemptAsync(provider: string, model: string, success: boolean): Promise<void> {
+  try {
+    const { recordModelAttempt } = await import('@/lib/models/model-ranker');
+    recordModelAttempt(provider, model, success);
+  } catch (error) {
+    console.warn('[ChatRequestLogger] Failed to record model attempt:', error);
+  }
+}
+
+/**
+ * FIX: Also track rate limit errors for circuit breaker
+ * This ensures failed attempts update the rotation data even before request completion
+ */
+async function recordRateLimitErrorAsync(provider: string, model: string): Promise<void> {
+  try {
+    const { recordRateLimitError, recordModelAttempt } = await import('@/lib/models/model-ranker');
+    recordRateLimitError(provider, model);
+    // FIX: Also record as a failed attempt so rotation tracking knows this model failed
+    recordModelAttempt(provider, model, false);
+  } catch (error) {
+    console.warn('[ChatRequestLogger] Failed to record rate limit error:', error);
+  }
+}
+
 export interface ToolCallTelemetry {
   toolCallId: string;
   toolName: string;
@@ -172,6 +202,21 @@ export class ChatRequestLogger {
     // so the model never gets selected again for fastModel or tool-capable routing
     const isModelNotFoundError = error && /not found|invalid.*model|model.*invalid|does not exist|unknown model|404/i.test(error);
 
+    // FIX: Detect rate limit errors (429) and track them immediately
+    // This ensures the circuit breaker and rotation tracking are updated
+    // even for streaming requests that fail before completion
+    const isRateLimitError = error && /429|rate.?limit|too many requests|quota exceeded/i.test(error);
+    const finalProvider = actualProvider || provider;
+    const finalModel = actualModel || model;
+
+    // FIX: Track rate limit errors immediately (before the DB write)
+    // This ensures rotation tracking and circuit breaker are updated
+    if (isRateLimitError && finalProvider && finalModel && finalModel !== 'unknown') {
+      recordRateLimitErrorAsync(finalProvider, finalModel).catch(() => {
+        // Non-fatal - don't fail logging due to rate limit tracking
+      });
+    }
+
     // Compute telemetry scores
     let telemetryScores = this.computeTelemetryScores({
       latencyMs: latencyMs || 0,
@@ -257,6 +302,18 @@ export class ChatRequestLogger {
           `tools=${(telemetryScores?.toolSuccessRate || 0).toFixed(2)} ` +
           `overall=${(telemetryScores?.overallScore || 0).toFixed(2)}`
         );
+      }
+
+      // CRITICAL: Record model attempt for rotation tracking
+      // This allows the model-ranker to prefer untested models over stuck ones
+      // Using dynamic import to avoid circular dependency with model-ranker
+      const finalProvider = actualProvider || provider;
+      const finalModel = actualModel || model;
+      if (finalProvider && finalModel && finalModel !== 'unknown') {
+        // Dynamic import to avoid circular dependency
+        recordModelAttemptAsync(finalProvider, finalModel, success).catch(() => {
+          // Non-fatal - don't fail logging due to rotation tracking
+        });
       }
     } catch (error) {
       console.error('[ChatRequestLogger] Failed to log request complete:', error);

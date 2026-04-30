@@ -3,6 +3,8 @@
  */
 
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
+import type { CacheExportEntry, CacheType } from '../cache-exporter';
+
 
 // Mock the logger
 vi.mock('@/lib/utils/logger', () => ({
@@ -24,20 +26,14 @@ vi.mock('@/lib/memory/task-persistence', () => ({
 }));
 
 describe('CacheExportManager', () => {
-  let CacheExportManager: any;
-  let CacheExportEntry: any;
-  let CacheType: any;
-  let getCacheExportManager: any;
+  let CacheExportManager: any;  let getCacheExportManager: any;
   let resetCacheExportManager: any;
 
   beforeEach(async () => {
     vi.resetModules();
     
     const module = await import('../cache-exporter');
-    CacheExportManager = module.CacheExportManager;
-    CacheExportEntry = module.CacheExportEntry;
-    CacheType = module.CacheType;
-    getCacheExportManager = module.getCacheExportManager;
+    CacheExportManager = module.CacheExportManager;    getCacheExportManager = module.getCacheExportManager;
     resetCacheExportManager = module.resetCacheExportManager;
     
     // Reset singleton between tests

@@ -1350,7 +1350,7 @@ export default function Settings({
                 </div>
                 <div
                   className={`custom-toggle ${isListening ? 'active' : ''}`}
-                  onClick={() => isListening ? stopListening() : startListening()}
+                  onClick={toggleVoiceInput}
                 >
                   <div className="custom-toggle-slider" />
                 </div>

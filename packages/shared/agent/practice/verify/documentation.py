@@ -306,7 +306,8 @@ def verify_func(sample: EvaluationSample, timeout_score: float = 0, **kwargs) ->
     if not issues and not readme_result.get('missing_sections'):
         reasoning = f'✓ Well-documented: {result.function_docstrings} functions with docstrings, {result.type_hint_coverage:.0%} type hints'
     else:
-        reasoning = f'⚠ Documentation gaps: {issues[0] if issues else \"incomplete docs\"}'
+        reasoning = msg = issues[0] if issues else 'incomplete docs'
+        reasoning = f'⚠ Documentation gaps: {msg}'
     
     return {
         'reward': max(0.0, reward),
