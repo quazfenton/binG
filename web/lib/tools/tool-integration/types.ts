@@ -12,10 +12,17 @@ export interface ToolConfig {
   outputSchema?: z.ZodSchema;
 }
 
+/**
+ * Latency budget options for capability routing.
+ * Allows the router to skip high-latency providers when fast responses are needed.
+ */
+export type LatencyBudget = 'fast' | 'balanced' | 'quality';
+
 export interface ToolExecutionContext {
   userId: string;
   conversationId?: string;
   scopePath?: string;  // VFS scope path for session-scoped file operations
+  latencyBudget?: LatencyBudget;  // Budget hint for provider selection
   metadata?: Record<string, any>;
 }
 

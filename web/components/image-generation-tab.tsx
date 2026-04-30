@@ -232,7 +232,11 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
       try {
         const saved = localStorage.getItem('generated-images');
         if (saved) {
-          return JSON.parse(saved);
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed)) {
+            // Validate structure
+            return parsed.filter(img => img && typeof img.url === 'string' && typeof img.width === 'number');
+          }
         }
       } catch (e) {
         console.warn('[ImageGenerationTab] Failed to load images from localStorage:', e);
@@ -248,7 +252,11 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
       try {
         const saved = localStorage.getItem('generation-history');
         if (saved) {
-          return JSON.parse(saved);
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed)) {
+            // Validate structure
+            return parsed.filter(item => item && typeof item.prompt === 'string');
+          }
         }
       } catch (e) {
         console.warn('[ImageGenerationTab] Failed to load history from localStorage:', e);
@@ -398,7 +406,9 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
         toast.error(errorMessage);
         
         // Record this failure and show BYOK input if appropriate
-        recordTotalFailure(params.provider === 'auto' ? selectedProvider : params.provider, error, 'image', () => generateFnRef.current?.());
+        // Use params.provider or default to 'auto'
+        const provider = params.provider === 'auto' ? 'auto' : params.provider;
+        recordTotalFailure(provider, error, 'image', () => generateFnRef.current?.());
       }
     } finally {
       setIsGenerating(false);
@@ -561,7 +571,7 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
 
   // Reuse image parameters
   const reuseParameters = useCallback((historyItem: GenerationParams) => {
-    setParams(historyItem);
+    setParams(prev => ({ ...prev, ...historyItem }));
     toast.success("Parameters loaded");
   }, []);
 

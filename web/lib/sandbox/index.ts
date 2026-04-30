@@ -135,7 +135,7 @@ export {
   type TerminalHandlerWiringConfig,
 } from '../terminal/commands/terminal-handler-wiring'
 
-// ==================== Phase 1 Integration (NEW) ====================
+// ==================== Phase 1 Integration ====================
 // Per-user terminal session isolation, auto-snapshots, VFS sync, provider MCP tools
 
 export {
@@ -176,24 +176,12 @@ export {
   type PTYConnectOptions,
   type PTYDisconnectOptions,
   type PTYTerminalInstance,
-  
-  // Phase 1 integration helper
-  Phase1Integration,
-  phase1,
-  createSessionWithAutoSnapshot,
-  restoreLatestAndSync,
 } from './phase1-integration';
 
-// ==================== Phase 2 Integration (NEW) ====================
+// ==================== Phase 2 Integration ====================
 // Provider router, E2B deep integration, Daytona Computer Use, CodeSandbox Batch, Live Preview
 
 export {
-  // Phase 2 unified API
-  Phase2Integration,
-  phase2,
-  runAgentTaskWithAutoProvider,
-  runCIWithAutoProvider,
-
   // Provider Router
   ProviderRouter,
   providerRouter,
@@ -271,16 +259,10 @@ export {
   type PreviewRequest,
 } from './phase2-integration';
 
-// ==================== Phase 3 Integration (NEW) ====================
+// ==================== Phase 3 Integration ====================
 // Cross-provider snapshots, LSP integration, GPU routing, object storage
 
 export {
-  // Phase 3 unified API
-  Phase3Integration,
-  phase3,
-  migrateAndSync,
-  getCodeIntelligence,
-  
   // Snapshot Portability
   SnapshotPortability,
   snapshotPortability,

@@ -647,6 +647,7 @@ export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string)
 
   // NEW: Include Nullclaw tools when enabled
   // TASK-AWARE: Only include for messaging/automation tasks
+  // NOTE: Exclude 'nullclaw_status' - it's an internal status tool, not for LLM use
   let nullclawTools: Array<{
     type: 'function'
     function: {
@@ -657,18 +658,24 @@ export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string)
   }> = [];
   if (process.env.NULLCLAW_ENABLED === 'true') {
     const allNullclawTools = nullclawMCPBridge.getToolDefinitions();
+    // Filter out internal/status tools that shouldn't be exposed to the LLM
+    const filteredTools = allNullclawTools.filter(tool => {
+      const name = tool.function.name.toLowerCase();
+      // Exclude status/check tools - they are internal utilities
+      return name !== 'nullclaw_status';
+    });
     if (taskFilter) {
       const taskLower = taskFilter.toLowerCase();
       const needsMessaging = taskLower.includes('send') || taskLower.includes('message') || taskLower.includes('discord') || taskLower.includes('telegram');
       const needsBrowse = taskLower.includes('browse') || taskLower.includes('web_automation');
-      nullclawTools = allNullclawTools.filter(tool => {
+      nullclawTools = filteredTools.filter(tool => {
         const name = tool.function.name.toLowerCase();
         if (name.includes('discord') || name.includes('telegram') || name.includes('send')) return needsMessaging;
         if (name.includes('browse') || name.includes('automate')) return needsBrowse;
         return true;
       });
     } else {
-      nullclawTools = allNullclawTools;
+      nullclawTools = filteredTools;
     }
   }
 

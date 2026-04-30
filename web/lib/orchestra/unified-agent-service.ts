@@ -24,6 +24,7 @@ import { runAgentLoop as runV2AgentLoop } from './agent-loop';
 import { getConfiguredFallbackChain } from '../chat/provider-fallback-chains';
 import { chatRequestLogger } from '../chat/chat-request-logger';
 import { extractFileWritesFromLLMResponse, type FileWrite } from '../chat/file-diff-utils';
+import { getRecontextSupplement } from '@/lib/memory/cache-exporter';
 import {
   createOpenCodeEngine,
   type OpenCodeEngineResult,
@@ -40,6 +41,23 @@ import {
 } from './stateful-agent/agents/stateful-agent';
 import { createLogger } from '@/lib/utils/logger';
 import { mastraWorkflowIntegration } from '@bing/shared/agent/mastra-workflow-integration';
+
+import {
+  createFeedbackEntry,
+  addFeedback,
+  injectFeedback,
+  detectHealingTrigger,
+  generateHealingPrompt,
+  type FeedbackContext,
+} from '@bing/shared/agent/feedback-injection';
+import {
+  getTracker,
+  recordResponse,
+  recordToolCall,
+  checkReEvalTrigger,
+  recordReEval,
+  generateTrackerSummary,
+} from '@bing/shared/agent/successive-tracker';
 import {
   buildWorkspaceSnapshot,
   normalizeToolArgs,
@@ -68,6 +86,7 @@ import {
   runEnergyDrivenMode,
   runDistributedCognitionMode,
   runCognitiveResonanceMode,
+  runExecutionControllerMode,
   type DualProcessConfig,
   type AdversarialConfig,
   type AttractorConfig,
@@ -75,6 +94,7 @@ import {
   type EnergyDrivenConfig,
   type DistributedConfig,
   type ResonanceConfig,
+  type ExecutionControllerConfig,
 } from './modes';
 import {
   runRetrievalPipeline,
@@ -161,7 +181,7 @@ export interface UnifiedAgentConfig {
   model?: string;
 
   // Mode override (optional - auto-detected from env if not specified)
-  mode?: 'v1-api' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'opencode-sdk' | 'mastra-workflow' | 'desktop' | 'v1-progressive-build' | 'dual-process' | 'adversarial-verify' | 'attractor-driven' | 'intent-driven' | 'energy-driven' | 'distributed-cognition' | 'cognitive-resonance' | 'auto';
+  mode?: 'v1-api' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'opencode-sdk' | 'mastra-workflow' | 'desktop' | 'v1-progressive-build' | 'dual-process' | 'adversarial-verify' | 'attractor-driven' | 'intent-driven' | 'energy-driven' | 'distributed-cognition' | 'cognitive-resonance' | 'execution-controller' | 'auto';
 
   // Harness mode options
   dualProcessConfig?: DualProcessConfig;
@@ -171,6 +191,7 @@ export interface UnifiedAgentConfig {
   energyConfig?: EnergyDrivenConfig;
   distributedConfig?: DistributedConfig;
   resonanceConfig?: ResonanceConfig;
+  executionControllerConfig?: ExecutionControllerConfig;
 
   // Mastra workflow options
   workflowId?: string; // Use specific Mastra workflow
@@ -503,6 +524,27 @@ export async function processUnifiedAgentRequest(
   // system prompt or user message as appropriate.
   config._autoInjectContext = autoInjectContext;
 
+  // Inject re-context supplement for unfinished tasks (periodic reminders)
+  // Only inject if not too many messages already (avoid bloating the context)
+  try {
+    if (config.conversationHistory && config.conversationHistory.length < 20) {
+      const recontextSupplement = getRecontextSupplement({ limit: 3 });
+      if (recontextSupplement) {
+        // Add as a system message so the agent knows about pending tasks
+        config.conversationHistory.unshift({
+          role: 'system',
+          content:
+            '## Pending Tasks Reminder\n\n' +
+            recontextSupplement +
+            '\n\n---\nConsider these pending tasks while working. ' +
+            'You can use task.list, task.getUnfinished, or task.edit to manage them.',
+        });
+      }
+    }
+  } catch (err: any) {
+    log.debug('Re-context injection skipped', { error: err?.message });
+  }
+
   log.info('═══════════════════════════════════════════════');
   log.info('[UnifiedAgent] ┌─ REQUEST ENTRY ──────────────────────────');
   log.info('[UnifiedAgent] │ provider:', config.provider || process.env.LLM_PROVIDER || 'mistral');
@@ -602,6 +644,9 @@ export async function processUnifiedAgentRequest(
       case 'cognitive-resonance':
         log.info('[UnifiedAgent] → cognitive-resonance mode (independent agreement)');
         return await runCognitiveResonanceMode(config, config.resonanceConfig);
+      case 'execution-controller':
+        log.info('[UnifiedAgent] → execution-controller mode (self-correcting execution loop)');
+        return await runExecutionControllerMode(config, config.executionControllerConfig);
 
       case 'v1-api':
       default:
@@ -1644,6 +1689,18 @@ async function runV1ApiWithTools(
   messages: Array<{ role: string; content: string }>,
   startTime: number
 ): Promise<UnifiedAgentResult> {
+
+  // === SESSION TRACKING FOR SUCCESSIVE CALLS ===
+  const sessionId = config.sessionId || `session-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  const feedbackContext: FeedbackContext = {
+    sessionId,
+    turnNumber: 0,
+    feedbackEntries: [],
+    totalTokens: 0,
+  };
+  const tracker = getTracker(sessionId);
+  tracker.reset?.();
+  // === END SESSION TRACKING ===
   // Ensure tool system is initialized for capability-based execution
   if (!isToolSystemReady()) {
     await initToolSystem({ userId: config.userId || 'system', enableMCP: true, enableSandbox: true });
@@ -1748,6 +1805,15 @@ async function runV1ApiWithTools(
             // Normalize args to fix common LLM mistakes (wrong field names, etc.)
             const args = normalizeToolArgs(toolDef.name, rawArgs) as Record<string, any>;
             const toolResult = await capabilityExecuteTool(toolDef.name, args);
+n            // FIX: Track tool call for successive tracking
+            recordToolCall(sessionId);
+            
+            // FIX: Check for re-evaluation trigger
+            const reEvalTrigger = checkReEvalTrigger(sessionId);
+            if (reEvalTrigger.triggered) {
+              log.info("[ReEval-V1] Trigger detected", { reason: reEvalTrigger.reason });
+              recordReEval(sessionId);
+            }
             config.onToolExecution?.(toolDef.name, args, toolResult);
 
             // Track for no-progress loop detection
@@ -1796,6 +1862,21 @@ async function runV1ApiWithTools(
         });
       }
     } catch (error) {
+      // FIX: Track tool failure for feedback injection
+      const failureEntry = createFeedbackEntry(
+        'failure',
+        `Tool execution failed: ${error instanceof Error ? error.message : String(error)}`,
+        'tool_execution',
+        { toolName: currentTool, error: String(error) },
+        'medium'
+      );
+      feedbackContext.turnNumber++;
+      addFeedback(feedbackContext, failureEntry);
+      log.info('[Feedback-Inject] Tool failure tracked', {
+        toolName: currentTool,
+        severity: failureEntry.severity,
+      });
+
       log.warn('[V1-API-WITH-TOOLS] RAG retrieval failed, continuing without it', {
         error: error instanceof Error ? error.message : String(error),
       });
@@ -1827,7 +1908,21 @@ async function runV1ApiWithTools(
         hasRag: !!ragContext,
       });
     } else if (config.systemPrompt) {
-      const systemContent = config.systemPrompt + ragContext + workspaceSnippet;
+      let systemContent = config.systemPrompt + ragContext + workspaceSnippet;
+      // FIX: Inject dynamic feedback and tracker summary into system prompt for self-routing
+      if ((config as any)._injectedFeedback || (config as any)._trackerSummary) {
+        const injected = (config as any)._injectedFeedback;
+        const trackerSummary = (config as any)._trackerSummary;
+        const feedbackParts = [];
+        if (injected?.correctionSection) feedbackParts.push(injected.correctionSection);
+        if (injected?.healingInstructions) feedbackParts.push(injected.healingInstructions);
+        if (injected?.formatGuidance) feedbackParts.push(injected.formatGuidance);
+        if (trackerSummary) feedbackParts.push(trackerSummary);
+        if (feedbackParts.length > 0) {
+          systemContent += '\n\n' + feedbackParts.join('\n\n');
+          log.info('[V1-API-WITH-TOOLS] Injected feedback into system prompt', { feedbackParts: feedbackParts.length });
+        }
+      }
       llmMessages.push({ role: 'system', content: systemContent });
     } else if (ragContext) {
       llmMessages.push({ role: 'system', content: `You are an AI coding assistant.${ragContext}${workspaceSnippet}` });
@@ -2022,7 +2117,19 @@ async function runV1ApiWithTools(
     }
   }
 
-  // All providers failed
+    // FIX: Track provider failure for feedback injection
+  const providerFailureEntry = createFeedbackEntry(
+    'failure',
+    `All providers failed: ${lastError?.message || 'Unknown error'}. Tried: ${allErrors.map(e => e.provider).join(', ')}`,
+    'llm_response',
+    { errors: allErrors.map(e => ({ provider: e.provider, error: e.error?.message })) },
+    'critical'
+  );
+  feedbackContext.turnNumber++;
+  addFeedback(feedbackContext, providerFailureEntry);
+  recordResponse(sessionId, 0, false);
+
+// All providers failed
   const duration = Date.now() - startTime;
 
   log.error('[V1-API-WITH-TOOLS] ┌─ ALL PROVIDERS FAILED ──────────');
@@ -2052,6 +2159,18 @@ async function runV1Orchestrated(
   messages: any[],
   startTime: number
 ): Promise<UnifiedAgentResult> {
+  // === SESSION TRACKING FOR SUCCESSIVE CALLS ===
+  const sessionId = config.sessionId || `session-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  const feedbackContext: FeedbackContext = {
+    sessionId,
+    turnNumber: 0,
+    feedbackEntries: [],
+    totalTokens: 0,
+  };
+  const tracker = getTracker(sessionId);
+  tracker.reset?.();
+  // === END SESSION TRACKING ===
+
   // Ensure tool system is initialized
   if (!isToolSystemReady()) {
     await initToolSystem({ userId: config.userId || 'system', enableMCP: true, enableSandbox: true });
@@ -2092,7 +2211,56 @@ async function runV1Orchestrated(
       if (event.type === 'done') {
         content = event.response;
         stepsCount = event.stats?.iterations || 0;
+        
+        // FIX: Track response and check for healing trigger
+        const freshTracker = getTracker(sessionId);
+        recordResponse(sessionId, content.length, true);
+        const healingTrigger = detectHealingTrigger(feedbackContext, content, freshTracker.consecutiveToolCalls);
+        if (healingTrigger.detected) {
+          log.info('[AutoHealing-Orchestrated] Healing trigger detected', { 
+            reason: healingTrigger.reason,
+            healingMode: healingTrigger.healingMode,
+          });
+          // FIX: Inject dynamic feedback and tracker summary for self-routing
+          const injectedFeedback = injectFeedback(feedbackContext);
+          const trackerSummary = generateTrackerSummary(sessionId);
+          (config as any)._injectedFeedback = injectedFeedback;
+          (config as any)._trackerSummary = trackerSummary;
+          log.info('[AutoHealing-Orchestrated] Feedback injection prepared', { hasFeedback: !!injectedFeedback, hasSummary: !!trackerSummary });
+        }
       } else if (event.type === 'tool_result') {
+        // FIX: Track tool call for successive tracking
+        recordToolCall(sessionId);
+        
+        // FIX: Check for re-evaluation trigger
+        const reEvalTrigger = checkReEvalTrigger(sessionId);
+        if (reEvalTrigger.triggered) {
+          log.info('[ReEval-Orchestrated] Trigger detected', { 
+            reason: reEvalTrigger.reason,
+            recommendedAction: reEvalTrigger.recommendedAction,
+          });
+          recordReEval(sessionId);
+        }
+        
+        const toolResult = event.result;
+        
+        // FIX: Track tool result for feedback injection
+        if (toolResult && typeof toolResult === 'object' && 'success' in toolResult && !toolResult.success) {
+          const failureEntry = createFeedbackEntry(
+            'failure',
+            `Tool ${event.tool} failed in orchestrator: ${JSON.stringify(toolResult).slice(0, 200)}`,
+            'tool_execution',
+            { toolName: event.tool, result: toolResult },
+            'medium'
+          );
+          feedbackContext.turnNumber++;
+          addFeedback(feedbackContext, failureEntry);
+          log.info('[Feedback-Orchestrated] Tool failure tracked', {
+            toolName: event.tool,
+            severity: failureEntry.severity,
+          });
+        }
+
         steps.push({
           toolName: event.tool,
           args: {},
@@ -2163,6 +2331,18 @@ async function runV1ApiCompletion(
   llmProvider: LLMProvider,
   startTime: number
 ): Promise<UnifiedAgentResult> {
+  // === SESSION TRACKING FOR SUCCESSIVE CALLS ===
+  const sessionId = config.sessionId || `session-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  const feedbackContext: FeedbackContext = {
+    sessionId,
+    turnNumber: 0,
+    feedbackEntries: [],
+    totalTokens: 0,
+  };
+  const tracker = getTracker(sessionId);
+  tracker.reset?.();
+  // === END SESSION TRACKING ===
+
   if (process.env.ENABLE_V1_ORCHESTRATOR === 'true') {
     // PlanActVerify orchestrator is available as a standalone mode
     // (mode: 'energy-driven' or mode: 'attractor-driven') instead of
@@ -2376,7 +2556,38 @@ async function runV1ApiCompletion(
         ? uniqueProviders.slice(0, uniqueProviders.indexOf(providerName) + 1)
         : [];
 
-      return {
+      
+      // FIX: Track response and check for healing triggers in completion path
+      const responseSuccess = content.trim().length > 0;
+      recordResponse(sessionId, content.length, responseSuccess);
+      const freshTracker = getTracker(sessionId);
+      const healingTrigger = detectHealingTrigger(feedbackContext, content, freshTracker.consecutiveToolCalls);
+      if (healingTrigger.detected) {
+        log.info('[AutoHealing-Completion] Healing trigger detected', { reason: healingTrigger.reason, healingMode: healingTrigger.healingMode });
+        const healingPrompt = generateHealingPrompt(healingTrigger, feedbackContext, config.userMessage);
+        (config as any)._healingPrompt = healingPrompt;
+        // FIX: Inject dynamic feedback and tracker summary for self-routing
+        const injectedFeedback = injectFeedback(feedbackContext);
+        const trackerSummary = generateTrackerSummary(sessionId);
+        (config as any)._injectedFeedback = injectedFeedback;
+        (config as any)._trackerSummary = trackerSummary;
+        log.info('[AutoHealing-Completion] Feedback injection prepared', { hasFeedback: !!injectedFeedback, hasSummary: !!trackerSummary });
+        // Also inject feedback into messages for completion path
+        if (injectedFeedback || trackerSummary) {
+          const feedbackParts = [];
+          if (injectedFeedback?.correctionSection) feedbackParts.push(injectedFeedback.correctionSection);
+          if (injectedFeedback?.healingInstructions) feedbackParts.push(injectedFeedback.healingInstructions);
+          if (injectedFeedback?.formatGuidance) feedbackParts.push(injectedFeedback.formatGuidance);
+          if (trackerSummary) feedbackParts.push(trackerSummary);
+          if (feedbackParts.length > 0) {
+            const feedbackSystemMsg = { role: 'system' as const, content: feedbackParts.join('\n\n') };
+            messages = [feedbackSystemMsg, ...messages];
+            log.info('[V1-API-COMPLETION] Injected feedback into messages array', { feedbackParts: feedbackParts.length });
+          }
+        }
+      }
+
+return {
         success: true,
         response: content || 'No response generated',
         mode: 'v1-api',
@@ -2401,7 +2612,19 @@ async function runV1ApiCompletion(
     }
   }
 
-  // All providers failed
+    // FIX: Track provider failure for feedback injection
+  const providerFailureEntry = createFeedbackEntry(
+    'failure',
+    `All providers failed in completion: ${lastError?.message || 'Unknown error'}. Tried: ${uniqueProviders.join(', ')}`,
+    'llm_response',
+    { providers: uniqueProviders, error: lastError?.message },
+    'critical'
+  );
+  feedbackContext.turnNumber++;
+  addFeedback(feedbackContext, providerFailureEntry);
+  recordResponse(sessionId, 0, false);
+
+// All providers failed
   const latencyMs = Date.now() - startTime;
 
   log.error('[V1-API-COMPLETION] ┌─ ALL PROVIDERS FAILED ─────────');

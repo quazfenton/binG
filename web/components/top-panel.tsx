@@ -78,6 +78,7 @@ import PStreamEmbedPlugin from "./plugins/pstream-embed-plugin";
 import { MonacoVFSEditor } from "./monaco-vfs-editor";
 import { BookmarksCurationPlugin } from "@/components/bookmarks/bookmarks-curation-plugin";
 import { MCPStore } from "@/components/mcp/mcp-store";
+import { ExperiencePanel } from "@/components/experience-panel";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -1396,6 +1397,18 @@ export default function TopPanel() {
                   </TabsContent>
 
                   <TabsContent value="movies" className="h-full mt-0">
+                    <TabErrorBoundary tabName="Movies">
+                      <PStreamEmbedPlugin onClose={closeTopPanel} />
+                    </TabErrorBoundary>
+                  </TabsContent>
+
+                  <TabsContent value="experience" className="h-full mt-0">
+                    <TabErrorBoundary tabName="Experience">
+                      <ExperiencePanel />
+                    </TabErrorBoundary>
+                  </TabsContent>
+
+                  <TabsContent value="movies-old" className="h-full mt-0">
                     <TabErrorBoundary tabName="Movies">
                       <PStreamEmbedPlugin onClose={closeTopPanel} />
                     </TabErrorBoundary>

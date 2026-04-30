@@ -1,5 +1,6 @@
 -- Migration: Add events.user_id Foreign Key Constraint
 -- Created: 2026-02-18
+-- Updated: 2026-04-30 - Removed hitl_approval_requests reference (created in migration 016)
 -- Purpose: Add FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 --          to the events table for referential integrity consistency with
 --          scheduled_tasks table.
@@ -11,7 +12,7 @@
 -- 4. Restore the data
 --
 -- Note: PRAGMA foreign_keys must be enabled on all connections that access this DB.
--- The hitl_approval_requests table has FK(event_id) REFERENCES events(id) ON DELETE CASCADE,
+-- The hitl_approval_requests table (created in migration 016) has FK(event_id) REFERENCES events(id) ON DELETE CASCADE,
 -- which is preserved through the table recreation.
 
 -- PRAGMA statements must be executed BEFORE BEGIN TRANSACTION in SQLite
@@ -131,14 +132,8 @@ CREATE INDEX IF NOT EXISTS idx_events_created_status ON events(created_at, statu
 -- Step 5: Verify FK constraint is working
 -- =============================================================================
 
--- Verify hitl_approval_requests FK still references events correctly
-SELECT
-  'FK constraint verification: hitl_approval_requests' as check_name,
-  CASE 
-    WHEN (SELECT COUNT(*) FROM hitl_approval_requests WHERE event_id NOT IN (SELECT id FROM events)) = 0 
-    THEN 'PASS: All hitl_approval_requests reference valid events'
-    ELSE 'FAIL: Orphaned hitl_approval_requests detected'
-  END as result;
+-- Note: hitl_approval_requests table is created in migration 016
+-- This verification will be done there after both tables exist
 
 -- Log final statistics
 SELECT

@@ -334,7 +334,7 @@ export function generateToken(payload: { userId: string; email?: string; type?: 
  * making all previously issued JWTs fail the version check on verify.
  */
 export async function invalidateAllUserTokens(userId: string): Promise<void> {
-  const newVersion = incrementUserTokenVersion(userId);
+  const newVersion = await incrementUserTokenVersion(userId);
   if (newVersion < 0) {
     logger.error('Failed to invalidate tokens for user — token version not incremented', { userId });
   } else {
