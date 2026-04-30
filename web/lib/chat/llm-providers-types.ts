@@ -12,11 +12,17 @@
  * import from llm-providers.ts directly.
  */
 
+// Model configuration with optional tags
+export interface ModelConfig {
+  id: string;
+  tags?: string[];
+}
+
 // Provider metadata — just config, no SDK
 export interface LLMProviderConfig {
   id: string;
   name: string;
-  models: string[];
+  models: Array<ModelConfig | string>;  // Support both object and string formats
   apiKeyEnv?: string;
   description?: string;
   supportsStreaming?: boolean;
@@ -346,3 +352,9 @@ export function providerSupportsStreaming(providerId: string): boolean {
 export function providerSupportsFunctionCalling(providerId: string): boolean {
   return PROVIDERS[providerId]?.supportsFunctionCalling ?? false;
 }
+
+/**
+ * Re-export CLI provider utilities for client-side filtering.
+ * These are safe to import on the client since they only check env vars server-side.
+ */
+export { CLI_PROVIDERS, isCLIProvider, isCLIProviderConfigured } from './vercel-ai-streaming';

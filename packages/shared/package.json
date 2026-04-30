@@ -1,0 +1,11 @@
+{
+  "name": "@bing/shared",
+  "version": "1.0.0",
+  "exports": {
+    "./agent": "./agent/index.ts",
+    "./agent/*": "./agent/*"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  }
+}

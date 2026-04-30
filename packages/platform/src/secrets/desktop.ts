@@ -77,12 +77,20 @@ class DesktopSecrets implements SecretsAdapter {
         // HIGH-2 fix: Require opt-in before falling back to insecure web storage
         // Previously, missing Tauri silently fell back to localStorage — this is dangerous
         // because the user expects keychain-level security but gets obfuscated localStorage.
-        // HIGH-2 fix: Use import.meta.env for Tauri browser context compatibility
-        // In Tauri, process.env may not be available in the browser context.
-        // Fall back to checking both process.env (Node.js) and import.meta.env (Vite/Tauri).
-        const allowFallback =
-          (typeof process !== 'undefined' && process.env?.DESKTOP_SECRETS_ALLOW_WEB_FALLBACK === 'true') ||
-          (typeof import.meta !== 'undefined' && (import.meta as any).env?.DESKTOP_SECRETS_ALLOW_WEB_FALLBACK === 'true');
+        // HIGH-2 fix: Use robust environment detection to prevent ReferenceErrors
+        let allowFallback = false;
+        if (typeof process !== 'undefined' && process.env?.DESKTOP_SECRETS_ALLOW_WEB_FALLBACK === 'true') {
+          allowFallback = true;
+        } else {
+          try {
+            // Guard import.meta for older bundlers/runtimes that throw ReferenceError at parse time
+            if (typeof import.meta !== 'undefined' && (import.meta as any).env?.DESKTOP_SECRETS_ALLOW_WEB_FALLBACK === 'true') {
+              allowFallback = true;
+            }
+          } catch (e) {
+            // import.meta not supported/accessible
+          }
+        }
         if (!allowFallback) {
           console.error('[DesktopSecrets] Tauri unavailable and web fallback NOT allowed.',
             'Set DESKTOP_SECRETS_ALLOW_WEB_FALLBACK=true to enable insecure fallback.');
@@ -120,12 +128,20 @@ class DesktopSecrets implements SecretsAdapter {
       const category = categorizeError(error);
       if (category === 'TAURI_UNAVAILABLE') {
         // HIGH-2 fix: Require opt-in before falling back to insecure web storage
-        // HIGH-2 fix: Use import.meta.env for Tauri browser context compatibility
-        // In Tauri, process.env may not be available in the browser context.
-        // Fall back to checking both process.env (Node.js) and import.meta.env (Vite/Tauri).
-        const allowFallback =
-          (typeof process !== 'undefined' && process.env?.DESKTOP_SECRETS_ALLOW_WEB_FALLBACK === 'true') ||
-          (typeof import.meta !== 'undefined' && (import.meta as any).env?.DESKTOP_SECRETS_ALLOW_WEB_FALLBACK === 'true');
+        // HIGH-2 fix: Use robust environment detection to prevent ReferenceErrors
+        let allowFallback = false;
+        if (typeof process !== 'undefined' && process.env?.DESKTOP_SECRETS_ALLOW_WEB_FALLBACK === 'true') {
+          allowFallback = true;
+        } else {
+          try {
+            // Guard import.meta for older bundlers/runtimes that throw ReferenceError at parse time
+            if (typeof import.meta !== 'undefined' && (import.meta as any).env?.DESKTOP_SECRETS_ALLOW_WEB_FALLBACK === 'true') {
+              allowFallback = true;
+            }
+          } catch (e) {
+            // import.meta not supported/accessible
+          }
+        }
         if (!allowFallback) {
           console.error('[DesktopSecrets] Tauri unavailable and web fallback NOT allowed.',
             'Set DESKTOP_SECRETS_ALLOW_WEB_FALLBACK=true to enable insecure fallback.');
@@ -162,12 +178,20 @@ class DesktopSecrets implements SecretsAdapter {
       if (category === 'NOT_FOUND') return; // Already gone — idempotent
       if (category === 'TAURI_UNAVAILABLE') {
         // HIGH-2 fix: Require opt-in before falling back to insecure web storage
-        // HIGH-2 fix: Use import.meta.env for Tauri browser context compatibility
-        // In Tauri, process.env may not be available in the browser context.
-        // Fall back to checking both process.env (Node.js) and import.meta.env (Vite/Tauri).
-        const allowFallback =
-          (typeof process !== 'undefined' && process.env?.DESKTOP_SECRETS_ALLOW_WEB_FALLBACK === 'true') ||
-          (typeof import.meta !== 'undefined' && (import.meta as any).env?.DESKTOP_SECRETS_ALLOW_WEB_FALLBACK === 'true');
+        // HIGH-2 fix: Use robust environment detection to prevent ReferenceErrors
+        let allowFallback = false;
+        if (typeof process !== 'undefined' && process.env?.DESKTOP_SECRETS_ALLOW_WEB_FALLBACK === 'true') {
+          allowFallback = true;
+        } else {
+          try {
+            // Guard import.meta for older bundlers/runtimes that throw ReferenceError at parse time
+            if (typeof import.meta !== 'undefined' && (import.meta as any).env?.DESKTOP_SECRETS_ALLOW_WEB_FALLBACK === 'true') {
+              allowFallback = true;
+            }
+          } catch (e) {
+            // import.meta not supported/accessible
+          }
+        }
         if (!allowFallback) {
           console.error('[DesktopSecrets] Tauri unavailable and web fallback NOT allowed.',
             'Set DESKTOP_SECRETS_ALLOW_WEB_FALLBACK=true to enable insecure fallback.');

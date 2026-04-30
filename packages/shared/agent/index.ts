@@ -333,3 +333,39 @@ export {
   type ParamDiff,
   type PresetDerivation,
 } from './prompt-parameters.codec';
+
+// Feedback Injection — Failure tracking, correction prompt generation, auto-healing
+export {
+  createFeedbackEntry,
+  addFeedback,
+  injectFeedback,
+  analyzeFailure,
+  detectHealingTrigger,
+  generateHealingPrompt,
+  generateCorrectionPrompt,
+  resolveFeedback,
+  getFeedbackStats,
+  generateFeedbackSummary,
+  type FeedbackEntry,
+  type FeedbackContext,
+  type CorrectionPrompt,
+  type HealingTrigger,
+  type RoleRedirect,
+} from './feedback-injection';
+
+// Successive Tracker — Response/tool call tracking, re-evaluation triggers, rotation weighting
+export {
+  getTracker,
+  recordToolCall,
+  recordResponse,
+  checkReEvalTrigger,
+  recordReEval,
+  generateTrackerSummary,
+  getRotationRecommendation,
+  cleanupTrackers,
+  resetTracker,
+  type SuccessiveTracker,
+  type ReEvalTrigger,
+  type RotationRecommendation,
+  type WeightedHistoryEntry,
+} from './successive-tracker';

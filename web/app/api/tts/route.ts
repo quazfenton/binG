@@ -1,11 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { generateSpeech, checkKittenTTSAvailability, KITTEN_VOICES, KITTEN_MODELS } from '@/lib/voice/kitten-tts-server';
+import { voiceServerManager } from '@/lib/voice/server-control';
 import { auth0 } from '@/lib/auth0';
 
 const VALID_MODEL_IDS = KITTEN_MODELS.map(m => m.id);
 
 export async function POST(req: NextRequest) {
   try {
+    // Auto-start local service if needed
+    await voiceServerManager.startKittenServer();
+
     // Authenticate user before allowing TTS generation
     const session = await auth0.getSession(req);
     if (!session?.user) {

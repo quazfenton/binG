@@ -37,7 +37,7 @@ class DesktopStorage implements StorageAdapter {
       console.error('[DesktopStorage] Failed to ensure directory:', error);
       throw new Error(`Failed to create storage directory: ${
         error instanceof Error ? error.message : String(error)
-      }`);
+      }`, { cause: error });
     }
   }
 

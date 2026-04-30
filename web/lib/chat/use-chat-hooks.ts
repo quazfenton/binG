@@ -93,6 +93,17 @@ export interface ChatState {
   clearError: () => void;
 }
 
+// Global type for circuit breaker
+declare global {
+  interface Window {
+    __chatCircuitBreaker?: {
+      error: string;
+      count: number;
+      time: number;
+    };
+  }
+}
+
 /**
  * Enhanced useChat hook with binG features
  * 
@@ -134,6 +145,15 @@ export function useChatEnhanced(options: UseChatOptions = {}): ChatState {
     message: Message | { role: string; content: string },
     options?: { data?: any }
   ): Promise<string | null | undefined> => {
+    
+    // Check client-side circuit breaker
+    if (window.__chatCircuitBreaker && window.__chatCircuitBreaker.count >= 3 && 
+        Date.now() - window.__chatCircuitBreaker.time < 30000) {
+      const circuitError = new Error('Circuit breaker active: stopping repeated failed attempts.');
+      setError(circuitError);
+      throw circuitError;
+    }
+
     setIsLoading(true);
     setError(undefined);
 
@@ -188,9 +208,18 @@ export function useChatEnhanced(options: UseChatOptions = {}): ChatState {
       setRetryCount(0);
       return data.content;
     } catch (err: any) {
+      // Simple client-side circuit breaker logic
+      const errorKey = err?.message || 'unknown';
+      if (window.__chatCircuitBreaker?.error === errorKey && 
+          Date.now() - window.__chatCircuitBreaker.time < 30000) {
+        window.__chatCircuitBreaker.count++;
+      } else {
+        window.__chatCircuitBreaker = { error: errorKey, count: 1, time: Date.now() };
+      }
+
       setError(err);
       
-      if (retryCount < maxRetries) {
+      if (retryCount < maxRetries && window.__chatCircuitBreaker.count < 3) {
         setRetryCount(prev => prev + 1);
         // Retry with exponential backoff
         await new Promise(resolve => setTimeout(resolve, Math.pow(2, retryCount) * 1000));

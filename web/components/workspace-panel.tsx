@@ -88,11 +88,12 @@ import { VersionHistoryPanel } from "@/components/version-history-panel";
 import { MCPServersTab } from "@/components/mcp/mcp-servers-tab";
 import { useVirtualFilesystem } from "@/hooks/use-virtual-filesystem";
 import { emitFilesystemUpdated, onFilesystemUpdated } from "@/lib/virtual-filesystem/sync/sync-events";
-import { useVoiceInput } from "@/hooks/use-voice-input";
+import { useVoiceSettings } from "@/lib/voice/use-voice";
 import { useMultiRotatingStatements } from "@/hooks/use-rotating-statements";
 import { useReasoningUI } from "@/lib/chat/use-chat-hooks";
 import { useOrchestrationMode, getOrchestrationModeHeaders } from "@/contexts/orchestration-mode-context";
 import AgentTab from "@/components/agent-tab";
+import { ExperiencePanel } from "@/components/experience-panel";
 import { clipboard } from "@bing/platform/clipboard";
 
 function ChatLoadingIndicator({ provider, model }: { provider: string; model: string }) {
@@ -372,6 +373,7 @@ const TAB_DEFS: TabDef[] = [
   { value: 'frontier-feed', label: 'Frontier', icon: Sparkles },
   { value: 'command-deck', label: 'Actions', icon: Command },
   { value: 'mcp-servers', label: 'MCP', icon: Puzzle },
+  { value: 'experience', label: 'Experience', icon: Brain },
 ];
 
 // ---------------------------------------------------------------------------
@@ -388,9 +390,9 @@ interface ScrollableTabBarProps {
   visibleTabs: PanelTab[];
 }
 
-function ScrollableTabBar({ 
-  tabs, 
-  activeTab, 
+function ScrollableTabBar({
+  tabs,
+  activeTab,
   onTabChange,
   isTabVisible,
   toggleTabVisibility,
@@ -549,7 +551,7 @@ function ScrollableTabBar({
             </button>
           );
         })}
-        
+
         {/* Add tab button */}
         {hiddenTabDefs.length > 0 && (
           <DropdownMenu>
@@ -737,7 +739,7 @@ export function WorkspacePanel() {
 
   const [selectedFile, setSelectedFile] = useState<FileNode | null>(null);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
-  
+
   // Chat Thread Management - Multiple simultaneous chat threads
   const [chatThreads, setChatThreads] = useState<ChatThread[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
@@ -745,17 +747,17 @@ export function WorkspacePanel() {
   const [isChatLoading, setIsChatLoading] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<Array<{ path: string; content: string }>>([]);
   const [showFilePicker, setShowFilePicker] = useState(false);
-  
+
   // Chat provider/model selection
   const [chatProvider, setChatProvider] = useState('openrouter');
   const [chatModel, setChatModel] = useState('nvidia/nemotron-3-30b-a3b:free');
-  
+
   // Abort controller for stopping chat
   // Agent mode context from orchestration mode selector
   const { config: orchestrationConfig } = useOrchestrationMode();
-  
+
   const chatAbortControllerRef = useRef<AbortController | null>(null);
-  
+
   // Code preview panel
   const [showCodePreview, setShowCodePreview] = useState(false);
 
@@ -763,22 +765,22 @@ export function WorkspacePanel() {
   const [showThreadSidebar, setShowThreadSidebar] = useState(false);
 
   // Voice input
-  const { isListening, startListening, stopListening, transcript } = useVoiceInput();
-  
-  // Update chat input when transcript changes
+  const { isListening, startListening, stopListening, transcription } = useVoiceSettings();
+
+  // Update chat input when transcription changes
   useEffect(() => {
-    if (transcript) {
-      setChatInput(prev => prev + transcript);
+    if (transcription) {
+      setChatInput(prev => prev + transcription);
     }
-  }, [transcript]);
-  
+  }, [transcription]);
+
   // Get active thread and its messages
-  const activeThread = useMemo(() => 
-    chatThreads.find(t => t.id === activeThreadId) || null, 
+  const activeThread = useMemo(() =>
+    chatThreads.find(t => t.id === activeThreadId) || null,
     [chatThreads, activeThreadId]
   );
   const chatMessages = activeThread?.messages || [];
-  
+
   // GitHub Import state
   const [showGithubImport, setShowGithubImport] = useState(false);
   const [githubUrl, setGithubUrl] = useState('');
@@ -852,7 +854,7 @@ export function WorkspacePanel() {
       }
     }
     // Default visible tabs: Files, Chat, Automate, Compare, Remote, Actions, Videos
-    return ['explorer', 'chat', 'automations', 'compare', 'remote', 'command-deck', 'youtube'];
+    return ['explorer', 'agent', 'chat', 'automations', 'compare', 'remote', 'command-deck', 'youtube', 'experience'];
   });
 
   // Save visible tabs to localStorage whenever they change
@@ -978,7 +980,7 @@ export function WorkspacePanel() {
   const switchThread = useCallback((threadId: string) => {
     setActiveThreadId(threadId);
     // Update last active time
-    setChatThreads(prev => prev.map(t => 
+    setChatThreads(prev => prev.map(t =>
       t.id === threadId ? { ...t, lastActiveAt: Date.now() } : t
     ));
   }, []);
@@ -995,14 +997,14 @@ export function WorkspacePanel() {
   }, [activeThreadId]);
 
   const renameThread = useCallback((threadId: string, newName: string) => {
-    setChatThreads(prev => prev.map(t => 
+    setChatThreads(prev => prev.map(t =>
       t.id === threadId ? { ...t, name: newName } : t
     ));
   }, []);
 
   // Update messages for active thread
   const setThreadMessages = useCallback((messages: Message[]) => {
-    setChatThreads(prev => prev.map(t => 
+    setChatThreads(prev => prev.map(t =>
       t.id === activeThreadId ? { ...t, messages, lastActiveAt: Date.now() } : t
     ));
   }, [activeThreadId]);
@@ -1047,7 +1049,7 @@ export function WorkspacePanel() {
   useEffect(() => {
     localStorage.setItem('experimental-music-playlist', JSON.stringify(playlist));
   }, [playlist]);
-  
+
   // YouTube state - Default: Lofi Hip Hop Radio
   const [youtubeVideoId, setYoutubeVideoId] = useState("jfKfPfyJRdk");
   const [isYoutubeFullscreen, setIsYoutubeFullscreen] = useState(true);
@@ -1064,10 +1066,10 @@ export function WorkspacePanel() {
   useEffect(() => {
     localStorage.setItem('experimental-youtube-video', youtubeVideoId);
   }, [youtubeVideoId]);
-  
+
   // Agent status display state
   const [showAgentStatus, setShowAgentStatus] = useState(false);
-  
+
   // Forum state
   interface ForumPost {
     id: string;
@@ -1078,7 +1080,7 @@ export function WorkspacePanel() {
     comments: ForumComment[];
     isAnonymous: boolean;
   }
-  
+
   interface ForumComment {
     id: string;
     author: string;
@@ -1086,7 +1088,7 @@ export function WorkspacePanel() {
     timestamp: number;
     isAnonymous: boolean;
   }
-  
+
   const [forumPosts, setForumPosts] = useState<ForumPost[]>([
     {
       id: "1",
@@ -1117,7 +1119,7 @@ export function WorkspacePanel() {
   const filteredAutomations = React.useMemo(() => {
     return automationData.filter(automation => {
       const matchesCategory = automationCategory === 'all' || automation.category === automationCategory;
-      const matchesSearch = !automationSearch || 
+      const matchesSearch = !automationSearch ||
         automation.name.toLowerCase().includes(automationSearch.toLowerCase()) ||
         automation.description.toLowerCase().includes(automationSearch.toLowerCase()) ||
         automation.tags.some(tag => tag.toLowerCase().includes(automationSearch.toLowerCase()));
@@ -1148,7 +1150,7 @@ export function WorkspacePanel() {
   useEffect(() => {
     localStorage.setItem('experimental-forum-posts', JSON.stringify(forumPosts));
   }, [forumPosts]);
-  
+
   // Agent Activity state
   interface ToolInvocation {
     id: string;
@@ -1158,14 +1160,14 @@ export function WorkspacePanel() {
     result?: any;
     timestamp: number;
   }
-  
+
   interface ReasoningChunk {
     id: string;
     type: 'thought' | 'plan' | 'reasoning' | 'reflection';
     content: string;
     timestamp: number;
   }
-  
+
   interface ProcessingStep {
     id: string;
     step: string;
@@ -1173,14 +1175,14 @@ export function WorkspacePanel() {
     stepIndex: number;
     timestamp: number;
   }
-  
+
   interface GitCommit {
     version: number;
     filesChanged: number;
     paths: string[];
     timestamp: number;
   }
-  
+
   interface AgentActivity {
     status: 'idle' | 'thinking' | 'executing' | 'completed';
     currentAction: string;
@@ -1191,7 +1193,7 @@ export function WorkspacePanel() {
     diffs: Array<{ path: string; diff: string; changeType: string }>;
     tokenUsage?: { prompt: number; completion: number; total: number };
   }
-  
+
   const [agentActivity, setAgentActivity] = useState<AgentActivity>({
     status: 'idle',
     currentAction: '',
@@ -1201,15 +1203,15 @@ export function WorkspacePanel() {
     gitCommits: [],
     diffs: [],
   });
-  
+
   const [expandedToolId, setExpandedToolId] = useState<string | null>(null);
   const [showReasoning, setShowReasoning] = useState(true);
   const [showSteps, setShowSteps] = useState(true);
-  
+
   // Get agent activity from hook (will be wired later)
   // For now, using local state that can be updated by parent component via props
   const { agentActivity: externalAgentActivity, setAgentActivity: setExternalAgentActivity } =
-    typeof window !== 'undefined' 
+    typeof window !== 'undefined'
       ? (window as any).__agentActivity || { agentActivity: undefined, setAgentActivity: undefined }
       : { agentActivity: undefined, setAgentActivity: undefined };
 
@@ -1316,7 +1318,7 @@ export function WorkspacePanel() {
     const initialize = async () => {
       // Pre-warm chat API in background
       fetch('/api/chat/prewarm').catch(() => {});
-      
+
       try {
         const response = await fetch('/api/providers');
         if (response.ok) {
@@ -1347,7 +1349,7 @@ export function WorkspacePanel() {
       try {
         const snapshot = await vfs.getSnapshot();
         setVfsSnapshot(snapshot);
-        
+
         // Auto-expand all folders on initial load
         if (snapshot?.files) {
           const folders = new Set<string>();
@@ -1361,7 +1363,7 @@ export function WorkspacePanel() {
           });
           setExpandedFolders(folders);
         }
-        
+
         // Initialize filesystem state with snapshot data
         // Use stable session ID from user session (not Date.now() which changes on refresh)
         const stableSessionId = `session-${getOrCreateAnonymousSessionId()}`;
@@ -1583,20 +1585,20 @@ export function WorkspacePanel() {
       // Process SSE stream
       while (true) {
         const { done, value } = await reader.read();
-        
+
         if (done) break;
-        
+
         // Check if request was aborted
         if (abortController.signal.aborted) {
           break;
         }
-        
+
         buffer += decoder.decode(value, { stream: true });
-        
+
         // Process complete SSE events in buffer
         const lines = buffer.split('\n');
         buffer = lines.pop() || ''; // Keep incomplete line in buffer
-        
+
         for (const line of lines) {
           // Parse SSE format: "event: type\ndata: {json}"
           let eventType = '';
@@ -1604,14 +1606,14 @@ export function WorkspacePanel() {
             eventType = line.slice(7).trim();
             continue;
           }
-          
+
           if (line.startsWith('data: ')) {
             const dataStr = line.slice(6).trim();
             if (!dataStr) continue;
-            
+
             try {
               const data = JSON.parse(dataStr);
-              
+
               // Use eventType from the event line, not data.type (which doesn't exist in the payload)
               switch (eventType || data.type) {
                 case SSE_EVENT_TYPES.TOKEN:
@@ -1841,40 +1843,40 @@ export function WorkspacePanel() {
         }
       }
     }
-    
+
     if (!/^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
       videoId = 'jfKfPfyJRdk';
     }
-    
+
     return `https://www.youtube.com/embed/${videoId}?autoplay=1&loop=1&playlist=${videoId}`;
   }, []);
 
   const extractYouTubeId = useCallback((urlOrId: string): string | null => {
     if (!urlOrId) return null;
-    
+
     // If it's already just an ID (11 characters, alphanumeric with - and _)
     if (/^[a-zA-Z0-9_-]{11}$/.test(urlOrId)) {
       return urlOrId;
     }
-    
+
     // Standard YouTube URL: https://www.youtube.com/watch?v=VIDEO_ID
     const watchMatch = urlOrId.match(/[?&]v=([a-zA-Z0-9_-]{11})/);
     if (watchMatch) {
       return watchMatch[1];
     }
-    
+
     // Shortened URL: https://youtu.be/VIDEO_ID
     const shortMatch = urlOrId.match(/youtu\.be\/([a-zA-Z0-9_-]{11})/);
     if (shortMatch) {
       return shortMatch[1];
     }
-    
+
     // Embed URL: https://www.youtube.com/embed/VIDEO_ID
     const embedMatch = urlOrId.match(/\/embed\/([a-zA-Z0-9_-]{11})/);
     if (embedMatch) {
       return embedMatch[1];
     }
-    
+
     return null;
   }, []);
 
@@ -1885,7 +1887,7 @@ export function WorkspacePanel() {
   }, [activeThreadId, setThreadMessages]);
 
   const exportChatHistory = useCallback(() => {
-    const chatText = chatMessages.map((msg) => 
+    const chatText = chatMessages.map((msg) =>
       `[${new Date(msg.timestamp).toLocaleString()}] ${msg.role === 'user' ? 'You' : 'Assistant'}: ${msg.content}`
     ).join('\n\n');
     clipboard.writeText(chatText);
@@ -1917,7 +1919,7 @@ export function WorkspacePanel() {
   // Forum actions
   const handleCreatePost = useCallback(() => {
     if (!newPostContent.trim()) return;
-    
+
     const newPost: ForumPost = {
       id: Date.now().toString(),
       author: isAnonymousPost ? "Anonymous" : "You",
@@ -1927,7 +1929,7 @@ export function WorkspacePanel() {
       comments: [],
       isAnonymous: isAnonymousPost,
     };
-    
+
     setForumPosts((prev) => [newPost, ...prev]);
     setNewPostContent("");
     toast.success("Post published", { description: "Your post is now visible to everyone" });
@@ -1941,7 +1943,7 @@ export function WorkspacePanel() {
 
   const handleAddComment = useCallback((postId: string, content: string) => {
     if (!content.trim()) return;
-    
+
     const newComment: ForumComment = {
       id: Date.now().toString(),
       author: "Anonymous",
@@ -1949,17 +1951,17 @@ export function WorkspacePanel() {
       timestamp: Date.now(),
       isAnonymous: true,
     };
-    
+
     setForumPosts((prev) => prev.map(p =>
       p.id === postId ? { ...p, comments: [...p.comments, newComment] } : p
     ));
-    
+
     // Clear the comment input for this post
     setNewCommentContent((prev) => ({
       ...prev,
       [postId]: "",
     }));
-    
+
     toast.success("Comment added");
   }, []);
 
@@ -2283,7 +2285,7 @@ export function WorkspacePanel() {
             if (retryResponse.ok) {
               await listDirectory(vfs?.currentPath || '/');
               toast.success('File renamed successfully');
-              
+
               // Emit filesystem SSE event for rename operation
               emitFilesystemUpdated({
                 path: newPath,
@@ -2374,10 +2376,10 @@ export function WorkspacePanel() {
     const handleKeyDown = (e: KeyboardEvent) => {
       // Only handle if a file is selected and we're in the file tree area
       if (!selectedFile) return;
-      
-      const isInFileTree = document.activeElement?.closest('.file-tree') || 
+
+      const isInFileTree = document.activeElement?.closest('.file-tree') ||
         document.activeElement?.closest('[data-file-tree]');
-      
+
       // F2 to rename selected file
       if (e.key === 'F2' && selectedFile) {
         e.preventDefault();
@@ -2815,7 +2817,7 @@ export function WorkspacePanel() {
                 className="absolute right-0 top-0 bottom-0 w-1 cursor-ew-resize hover:bg-blue-400/50 transition-colors z-10"
                 onMouseDown={handleMouseDown}
               />
-              
+
               {/* Glassmorphism background */}
               <div className="absolute inset-0 bg-black/60 backdrop-blur-xl border-r border-white/10" />
 
@@ -2983,12 +2985,12 @@ export function WorkspacePanel() {
                 </div>
 
                 {/* Explorer Tab */}
-                  <TabsContent 
-                    value="explorer" 
-                    className="flex-1 mt-0 overflow-y-auto" 
+                  <TabsContent
+                    value="explorer"
+                    className="flex-1 mt-0 overflow-y-auto"
                     data-file-tree
                   >
-                    <div 
+                    <div
                       className="h-full overflow-y-auto custom-scrollbar"
                       ref={(el) => {
                         explorerScrollRef.current = el;
@@ -3081,7 +3083,7 @@ export function WorkspacePanel() {
                           </Button>
                         </div>
                       </div>
-                      
+
                       {/* File creation input */}
                       {(isCreatingFile || isCreatingFolder) && (
                         <div className="mb-2 p-2 bg-white/10 rounded border border-white/20">
@@ -3122,9 +3124,9 @@ export function WorkspacePanel() {
                           </div>
                         </div>
                       )}
-                      
+
                       {renderFileTree(fileTree)}
-                      
+
                       {selectedFile && (
                         <>
                           <Separator className="my-4 bg-white/10" />
@@ -3361,7 +3363,7 @@ export function WorkspacePanel() {
                       </Button>
                     </div>
                   </div>
-                   
+
                   <div className={`flex-1 flex overflow-hidden ${showCodePreview ? 'gap-2' : ''}`}>
                     <div className={`flex-1 overflow-y-auto p-4 space-y-4 ${showCodePreview ? 'pr-0' : ''}`}>
                     {/* Agent Status Banner */}
@@ -3562,7 +3564,7 @@ export function WorkspacePanel() {
                     )}
                     <div ref={chatEndRef} />
                   </div>
-                    
+
                     {/* Code Preview Panel */}
                     {showCodePreview && (
                       <div className="w-1/2 border-l border-white/10 overflow-hidden flex flex-col">
@@ -3627,7 +3629,7 @@ export function WorkspacePanel() {
                         )}
                       </Button>
                     </div>
-                    
+
                     {/* Attached Files Display */}
                     {attachedFiles.length > 0 && (
                       <div className="flex flex-wrap gap-2 p-2 border-t border-white/10">
@@ -3645,7 +3647,7 @@ export function WorkspacePanel() {
                         ))}
                       </div>
                     )}
-                    
+
                     {/* File Picker Dropdown */}
                     {showFilePicker && (
                       <div className="border-t border-white/10 p-2 max-h-48 overflow-y-auto bg-black/60">
@@ -3686,6 +3688,12 @@ export function WorkspacePanel() {
                 {/* Agent Tab - Orchestration Mode Selector */}
                 <TabsContent value="agent" className="flex-1 mt-0 overflow-hidden">
                   <AgentTab onClose={() => setTab('explorer')} />
+                </TabsContent>
+
+                <TabsContent value="experience" className="h-full mt-0">
+                  <TabErrorBoundary tabName="Experience">
+                    <ExperiencePanel />
+                  </TabErrorBoundary>
                 </TabsContent>
 
                 {/* Thinking Area Tab */}
@@ -3878,7 +3886,7 @@ export function WorkspacePanel() {
 
                 {/* Music Playlist Tab */}
                 <TabsContent value="music" className="flex-1 mt-0 overflow-hidden">
-                  <div 
+                  <div
                     className="h-full overflow-y-auto custom-scrollbar"
                     tabIndex={0}
                     role="region"
@@ -3934,7 +3942,7 @@ export function WorkspacePanel() {
                           <p className="text-xs text-white/60 truncate">
                             {playlist[currentSongIndex]?.artist || "Unknown"}
                           </p>
-                          
+
                           {/* Controls */}
                           <div className="flex items-center justify-center gap-4 mt-4">
                             <Button
@@ -4025,7 +4033,7 @@ export function WorkspacePanel() {
                                   <ChevronDown className="h-3 w-3" />
                                 </button>
                               </div>
-                              
+
                               <div
                                 className="flex-1 cursor-pointer flex items-center gap-2"
                                 onClick={() => playSong(index)}
@@ -4125,7 +4133,7 @@ export function WorkspacePanel() {
                               <span className="text-xs font-medium text-green-400">Available Now</span>
                             </div>
                             {availableAutomations.map((automation) => (
-                              <Card 
+                              <Card
                                 key={automation.id}
                                 className="bg-gradient-to-br from-green-500/20 to-emerald-500/10 border-green-500/40 hover:border-green-500/60 cursor-pointer transition-all duration-300 group"
                                 onClick={() => toast.success(`Launching ${automation.name}`, { description: `Starting ${automation.description.toLowerCase()}...` })}
@@ -4171,7 +4179,7 @@ export function WorkspacePanel() {
                               <span className="text-xs font-medium text-white/50">Coming Soon</span>
                             </div>
                             {comingSoonAutomations.map((automation) => (
-                              <Card 
+                              <Card
                                 key={automation.id}
                                 className="bg-gradient-to-br from-purple-500/10 to-blue-500/10 border-purple-500/30 hover:border-purple-500/50 cursor-pointer transition-all duration-300 group"
                                 onClick={() => toast.info("Coming Soon", { description: automation.description })}
@@ -4205,9 +4213,9 @@ export function WorkspacePanel() {
                           <div className="text-center py-8">
                             <Search className="h-8 w-8 mx-auto mb-2 text-white/30" />
                             <p className="text-white/50 text-sm">No automations match your search</p>
-                            <Button 
-                              variant="ghost" 
-                              size="sm" 
+                            <Button
+                              variant="ghost"
+                              size="sm"
                               onClick={() => { setAutomationSearch(''); setAutomationCategory('all'); }}
                               className="mt-2 text-cyan-400"
                             >
@@ -4238,7 +4246,7 @@ export function WorkspacePanel() {
                     <div className="flex-1 relative w-full h-full bg-black">
                       {/* Faded background overlay */}
                       <div className="absolute inset-0 bg-gradient-to-b from-black/80 via-black/40 to-black/80 pointer-events-none z-10" />
-                      
+
                       {/* YouTube Iframe */}
                       <iframe
                         className="absolute inset-0 w-full h-full"
@@ -4293,7 +4301,7 @@ export function WorkspacePanel() {
                           <RotateCcw className="h-4 w-4" />
                         </Button>
                       </div>
-                      
+
                       {/* Minimize button */}
                       <Button
                         variant="ghost"
@@ -4509,11 +4517,11 @@ export function WorkspacePanel() {
                 </TabsContent>
 
                 {/* Integrations Tab - OAuth Connections */}
-                <TabsContent 
-                  value="integrations" 
+                <TabsContent
+                  value="integrations"
                   className="flex-1 mt-0 overflow-y-auto"
                 >
-                  <div 
+                  <div
                     className="h-full overflow-y-auto custom-scrollbar"
                     ref={(el) => {
                       integrationsScrollRef.current = el;
@@ -4575,7 +4583,7 @@ export function WorkspacePanel() {
 
                 {/* News Tab - News feed from multiple sources */}
                 <TabsContent value="news" className="flex-1 mt-0 overflow-hidden">
-                  <div 
+                  <div
                     className="h-full overflow-y-auto custom-scrollbar"
                     tabIndex={0}
                     role="region"
@@ -4595,7 +4603,7 @@ export function WorkspacePanel() {
 
                 {/* Cron Jobs Tab - Authenticated users only, max 1 job per user */}
                 <TabsContent value="cronjobs" className="flex-1 mt-0 overflow-hidden">
-                  <div 
+                  <div
                     className="h-full overflow-y-auto custom-scrollbar"
                     tabIndex={0}
                     role="region"
@@ -4615,7 +4623,7 @@ export function WorkspacePanel() {
 
                 {/* Frontier Feed Tab */}
                 <TabsContent value="frontier-feed" className="flex-1 mt-0 overflow-hidden">
-                  <div 
+                  <div
                     className="h-full overflow-y-auto custom-scrollbar"
                     tabIndex={0}
                     role="region"
@@ -4634,8 +4642,8 @@ export function WorkspacePanel() {
                 </TabsContent>
 
                 {/* Command Deck Tab */}
-                <TabsContent 
-                  value="command-deck" 
+                <TabsContent
+                  value="command-deck"
                   className="flex-1 mt-0 overflow-y-auto"
                 >
                   <div
@@ -4677,11 +4685,11 @@ export function WorkspacePanel() {
                 </TabsContent>
 
                 {/* MCP Servers Tab */}
-                <TabsContent 
-                  value="mcp-servers" 
+                <TabsContent
+                  value="mcp-servers"
                   className="flex-1 mt-0 overflow-y-auto"
                 >
-                  <div 
+                  <div
                     className="h-full overflow-y-auto custom-scrollbar"
                     ref={(el) => {
                       mcpScrollRef.current = el;
@@ -5002,7 +5010,7 @@ export function WorkspacePanel() {
                     Refresh
                   </Button>
                 </div>
-                
+
                 {isLoadingRepos ? (
                   <div className="flex items-center justify-center py-8">
                     <Loader2 className="h-6 w-6 animate-spin text-white/60" />

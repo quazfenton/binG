@@ -9,6 +9,8 @@ import { buildApiHeaders } from '@/lib/utils';
 import type { AgentType, AgentStatus } from '@/components/agent-status-display';
 import { isValidExtractedPath } from '@/lib/chat/file-edit-parser';  // NEW: Server-side validation
 import { useStreamControl } from './use-stream-control';
+import { voiceService } from '@/lib/voice/voice-service';
+import { streamingSpeaker } from '@/lib/voice/streaming-speaker';
 
 export interface UseChatOptions {
   api: string;
@@ -305,6 +307,11 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
 
     if (!input.trim()) {
       return;
+    }
+
+    // Reset streaming speaker if enabled
+    if (voiceService.getSettings().autoSpeakStream) {
+      streamingSpeaker.reset();
     }
 
     // Queue input if already loading (streaming response in progress)
@@ -680,6 +687,11 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                         ? { ...msg, content: accumulatedContent }
                         : msg
                     ));
+
+                    // Feed to streaming speaker if enabled
+                    if (voiceService.getSettings().autoSpeakStream) {
+                      streamingSpeaker.feed(accumulatedContent);
+                    }
                   }
                   // Update agent status to executing if we're receiving tokens
                   // Use functional update to avoid stale closure
@@ -719,6 +731,11 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                         ? { ...msg, content: accumulatedContent }
                         : msg
                     ));
+
+                    // Feed to streaming speaker if enabled
+                    if (voiceService.getSettings().autoSpeakStream) {
+                      streamingSpeaker.feed(accumulatedContent);
+                    }
                   }
                   // Update agent status to executing if we're receiving content
                   if (agentStatus === 'thinking') {
@@ -1100,6 +1117,11 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                     });
                     // Use setTimeout to ensure state settles before processing next
                     setTimeout(() => processQueue(), 100);
+                  }
+
+                  // Finalize streaming speaker if enabled
+                  if (voiceService.getSettings().autoSpeakStream) {
+                    void streamingSpeaker.finalizeWithContent(doneContent);
                   }
 
                   if (options.onFinish) {

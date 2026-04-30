@@ -22,9 +22,4 @@ export { withRetry, isRetryableError } from './retry';
 export type { RetryOptions } from './retry';
 export { createPipeline, runTaskGraph } from './pipeline';
 export type { PipelineStep, TaskNode } from './pipeline';
-export {
-  indexFileContent,
-  handleFileEvent,
-  wireWatcherToIndex,
-  clearHashCache,
-} from './file-indexing';
+

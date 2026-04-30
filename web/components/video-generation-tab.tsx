@@ -221,7 +221,11 @@ export default function VideoGenerationTab({ onVideoGenerated }: VideoGeneration
       try {
         const saved = localStorage.getItem('generated-videos');
         if (saved) {
-          return JSON.parse(saved);
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed)) {
+            // Validate structure
+            return parsed.filter(v => v && typeof v.url === 'string' && typeof v.duration === 'number');
+          }
         }
       } catch (e) {
         console.warn('[VideoGenerationTab] Failed to load videos from localStorage:', e);
@@ -237,7 +241,11 @@ export default function VideoGenerationTab({ onVideoGenerated }: VideoGeneration
       try {
         const saved = localStorage.getItem('video-generation-history');
         if (saved) {
-          return JSON.parse(saved);
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed)) {
+            // Validate structure
+            return parsed.filter(item => item && typeof item.prompt === 'string');
+          }
         }
       } catch (e) {
         console.warn('[VideoGenerationTab] Failed to load history from localStorage:', e);
@@ -371,7 +379,8 @@ export default function VideoGenerationTab({ onVideoGenerated }: VideoGeneration
         toast.error(errorMessage);
         
         // Record this failure and show BYOK input if appropriate
-        recordTotalFailure(params.provider === 'auto' ? selectedProvider : params.provider, error, 'video', () => generateFnRef.current?.());
+        const provider = params.provider === 'auto' ? 'auto' : params.provider;
+        recordTotalFailure(provider, error, 'video', () => generateFnRef.current?.());
       }
     } finally {
       setIsGenerating(false);
@@ -412,7 +421,7 @@ export default function VideoGenerationTab({ onVideoGenerated }: VideoGeneration
 
   // Reuse video parameters
   const reuseParameters = useCallback((historyItem: GenerationParams) => {
-    setParams(historyItem);
+    setParams(prev => ({ ...prev, ...historyItem }));
     toast.success("Parameters loaded");
   }, []);
 

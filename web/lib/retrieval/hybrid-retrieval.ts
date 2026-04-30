@@ -35,6 +35,7 @@ interface CachedAnalysis {
 
 const PROJECT_ANALYSIS_CACHE = new Map<string, CachedAnalysis>();
 const PROJECT_ANALYSIS_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const MAX_PROJECT_ANALYSIS_CACHE = 50; // Maximum number of cached analyses
 
 /**
  * Get cached project analysis or compute fresh value.
@@ -64,6 +65,11 @@ async function getCachedProjectAnalysis(
 
     // Cache the result
     if (result) {
+      // Evict oldest entries if cache is full
+      if (PROJECT_ANALYSIS_CACHE.size >= MAX_PROJECT_ANALYSIS_CACHE) {
+        const oldestKey = PROJECT_ANALYSIS_CACHE.keys().next().value;
+        if (oldestKey) PROJECT_ANALYSIS_CACHE.delete(oldestKey);
+      }
       PROJECT_ANALYSIS_CACHE.set(cacheKey, { result, timestamp: Date.now() });
     }
 

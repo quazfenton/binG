@@ -23,6 +23,10 @@ import { advancedToolCallDispatcher } from '../tools/tool-integration/parsers/di
 import { callMCPToolFromAI_SDK, getMCPToolsForAI_SDK } from '../mcp/architecture-integration';
 import { chatLogger } from './chat-logger';
 import { chatRequestLogger } from './chat-request-logger';
+import { isCLIProvider } from './vercel-ai-streaming';
+import { recordRateLimitError } from '../models/model-ranker';
+import { sandboxMetrics } from '@/lib/backend/metrics';
+import { classifyFailure, FailureType } from '@/lib/errors/failure-classifier';
 
 export interface EnhancedLLMRequest extends LLMRequest {
   fallbackProviders?: string[];
@@ -612,18 +616,38 @@ export class EnhancedLLMService {
       )
       
       return result
-    } catch (primaryError) {
-      const primaryLatency = Date.now() - requestStartTime;
-      chatLogger.warn('Primary provider failed', { requestId, provider: actualProvider, model: actualModel }, {
-        latencyMs: primaryLatency,
-        error: primaryError instanceof Error ? primaryError.message : String(primaryError),
+    } catch (primaryError: any) {
+      const enhancedError = this.enhanceError(primaryError, actualProvider, actualModel);
+      
+      chatLogger.warn('Primary provider failed', { 
+        requestId, 
+        provider: actualProvider, 
+        model: actualModel,
+        failureType: enhancedError.failureType 
+      }, {
+        latencyMs: Date.now() - requestStartTime,
+        error: enhancedError.message,
       });
 
+      // MODE SWITCHING LOGIC: If PERMANENT, don't waste time on fallbacks
+      if (enhancedError.failureType === 'PERMANENT') {
+        chatLogger.error('Permanent failure detected, aborting fallback chain', { requestId });
+        throw enhancedError;
+      }
+
       const fallbacks = fallbackProviders || this.fallbackChains.get(actualProvider) || [];
-      const availableFallbacks = fallbacks.filter(fallbackProvider =>
-        this.getProviderConfigForRequest(fallbackProvider, requestId) &&
-        this.isProviderHealthy(fallbackProvider)
-      );
+
+      // Dynamically select fallback using modelRanker
+      const { getRetryModel } = await import('@/lib/models/model-ranker');
+      const fallbackModelInfo = await getRetryModel({
+        failedModel: actualModel,
+        failedProvider: actualProvider,
+      });
+
+      // Prioritize ModelRanker choice if available, otherwise use existing chain
+      const availableFallbacks = fallbackModelInfo 
+        ? [fallbackModelInfo.provider] 
+        : fallbacks.filter(fp => this.getProviderConfigForRequest(fp, requestId) && this.isProviderHealthy(fp));
 
       // Track the fallback chain with detailed error information
       const fallbackChainLog: string[] = [];
@@ -738,6 +762,19 @@ export class EnhancedLLMService {
     const { provider, fallbackProviders, requestId, apiKeys, contextPack, ...llmRequest } = request;
     const primaryProvider = provider || getProviderForTask('chat');
     const streamStartTime = Date.now();
+
+    // CRITICAL FIX: CLI providers (opencode-cli, pi, kilocode, etc.) spawn local binaries
+    // and have their own streaming logic. They must NOT go through Vercel AI SDK.
+    if (isCLIProvider(primaryProvider)) {
+      chatLogger.info('[CLI-PROVIDER] Routing CLI provider to binary spawn path', {
+        requestId,
+        provider: primaryProvider,
+        model: llmRequest.model,
+      });
+
+      yield* this.streamWithCLIBinary(primaryProvider, request, requestId);
+      return;
+    }
 
     // Load persisted API keys on first use (lazy, async-safe)
     await this.loadPersistedApiKeys(requestId);
@@ -1095,6 +1132,7 @@ export class EnhancedLLMService {
       }
 
       // Fallback to legacy streaming for unsupported providers
+      // CLI providers are already routed above, so this fallback is for other legacy providers
       chatLogger.warn('Provider not supported by Vercel AI SDK, using legacy streaming', { provider: primaryProvider });
 
       const fullRequest = { ...llmRequest, messages: processedMessages, provider: primaryProvider, apiKey: userApiKey || llmRequest.apiKey };
@@ -1350,12 +1388,15 @@ export class EnhancedLLMService {
       });
       return response;
     } catch (error) {
+      const type = classifyFailure(error);
+      sandboxMetrics.circuitBreakerOperations.inc({ provider, operation: 'call', result: type });
       const callLatency = Date.now() - callStartTime;
       chatLogger.debug('Provider call failed', { requestId, provider, model: request.model }, {
         latencyMs: callLatency,
         error: error instanceof Error ? error.message : String(error),
+        failureType: type,
       });
-      throw this.enhanceError(error as Error, provider);
+      throw this.enhanceError(error as Error, provider, request.model);
     }
   }
 
@@ -1458,14 +1499,19 @@ export class EnhancedLLMService {
     return health.isHealthy !== false;
   }
 
-  private enhanceError(error: Error, provider: string): Error {
-    const enhancedError = new Error(error.message);
+  private enhanceError(error: Error, provider: string, model?: string): Error & { failureType?: FailureType } {
+    const enhancedError = error as Error & { failureType?: FailureType };
+    enhancedError.failureType = classifyFailure(error);
+    
     const msg = error.message.toLowerCase();
 
     // Check for HTTP status codes first (more specific than text patterns)
     if (msg.includes('401') || msg.includes('403')) {
       enhancedError.message = `Authentication failed for ${provider}. Please check your API key configuration.`;
     } else if (msg.includes('429') || msg.includes('rate limit')) {
+      // CRITICAL: Record rate limit error for circuit breaker tracking
+      // This prevents infinite retry loops on rate-limited models
+      recordRateLimitError(provider, model || 'default');
       enhancedError.message = `Rate limit exceeded for ${provider}. The system will automatically try alternative providers.`;
     } else if (msg.includes('402') || msg.includes('quota') || msg.includes('billing')) {
       enhancedError.message = `API quota exceeded for ${provider}. Switching to alternative provider.`;
@@ -1487,6 +1533,269 @@ export class EnhancedLLMService {
     (error as any).code = code;
     (error as any).originalError = originalError;
     return error;
+  }
+
+  /**
+   * Route CLI providers (opencode-cli, pi, etc.) to their native binary spawn path.
+   * These providers spawn local binaries instead of using API calls.
+   */
+  private async *streamWithCLIBinary(
+    provider: string,
+    request: EnhancedLLMRequest,
+    requestId?: string
+  ): AsyncGenerator<StreamingResponse> {
+    // EnhancedLLMRequest extends LLMRequest, so request IS the LLM request
+    const messages = request.messages || [];
+    const lastUserMessage = [...messages].reverse().find((m: any) => m.role === 'user');
+    const userMessage = typeof lastUserMessage?.content === 'string'
+      ? lastUserMessage.content
+      : (Array.isArray(lastUserMessage?.content)
+          ? (lastUserMessage.content.find((c: any) => c.type === 'text') as any)?.text || ''
+          : '');
+
+    const userId = request.userId || 'anonymous';
+    const conversationId = request.conversationId || '';
+    const sessionId = normalizeSessionId(conversationId) || 'default';
+    const model = request.model || 'local';
+
+    chatLogger.info('[CLI-PROVIDER] Starting CLI binary streaming', {
+      requestId,
+      provider,
+      userId,
+      sessionId,
+      model,
+      messageLength: userMessage.length,
+    });
+
+    try {
+      let result: any;
+
+      if (provider === 'opencode-cli') {
+        // Check if opencode binary is available
+        const { findOpencodeBinarySync } = await import('../agent-bins/find-opencode-binary');
+        const binaryPath = findOpencodeBinarySync();
+        if (!binaryPath) {
+          chatLogger.error('[CLI-PROVIDER] opencode binary not found', { requestId });
+          yield {
+            content: 'OpenCode CLI binary not found. Please install it with: npm install -g opencode-ai',
+            isComplete: true,
+            finishReason: 'error',
+            timestamp: new Date(),
+            metadata: { error: 'OpenCode CLI not installed', actualProvider: provider },
+          };
+          return;
+        }
+
+        // Import and use OpencodeV2Provider
+        const { OpencodeV2Provider } = await import('../sandbox/spawn/opencode-cli');
+        const providerInstance = new OpencodeV2Provider({
+          session: {
+            userId,
+            conversationId,
+            enableMcp: true,
+            workspaceDir: request.scopePath || `project/sessions/${sessionId}`,
+          },
+        });
+
+        // Build tools if needed - getAllTools returns Record<string, Tool>
+        let tools: Record<string, any> = {};
+        if (request.enableTools !== false) {
+          try {
+            const { getAllTools } = await import('./vercel-ai-tools');
+            tools = await getAllTools({
+              userId,
+              conversationId,
+              sessionId,
+              requestId,
+              scopePath: request.scopePath || `project/sessions/${sessionId}`,
+              lastUserMessage: userMessage,
+            });
+            chatLogger.debug('[CLI-PROVIDER] Built tools for opencode-cli', {
+              requestId,
+              toolCount: Object.keys(tools).length,
+            });
+          } catch (toolErr: any) {
+            chatLogger.warn('[CLI-PROVIDER] Failed to build tools for opencode-cli', {
+              requestId,
+              error: toolErr.message,
+            });
+          }
+        }
+
+        // Get system prompt from messages
+        const systemMessage = messages.find((m: any) => m.role === 'system');
+        const systemPrompt = typeof systemMessage?.content === 'string'
+          ? systemMessage.content
+          : '';
+
+        const toolManager = getToolManager();
+        result = await providerInstance.runAgentLoop({
+          userMessage,
+          tools,
+          systemPrompt,
+          maxSteps: 15,
+          cwd: request.scopePath || `project/sessions/${sessionId}`,
+          executeTool: async (toolName: string, args: Record<string, any>) => {
+            try {
+              return await toolManager.executeTool(toolName, args, {
+                userId,
+                conversationId,
+                metadata: { source: 'cli_provider', provider },
+              });
+            } catch (err: any) {
+              return { success: false, output: `Tool execution failed: ${err.message}`, exitCode: 1 };
+            }
+          },
+          onToolExecution: (toolName: string, args: any, toolResult: any) => {
+            chatLogger.debug('[CLI-PROVIDER] Tool execution', { requestId, provider, toolName, success: toolResult.success });
+          },
+          onStreamChunk: () => {},
+        });
+
+      } else if (provider === 'pi') {
+        // Check if pi binary is available
+        const { findPiBinarySync } = await import('../agent-bins/find-pi-binary');
+        const binaryPath = findPiBinarySync();
+        if (!binaryPath) {
+          chatLogger.error('[CLI-PROVIDER] pi binary not found', { requestId });
+          yield {
+            content: 'Pi CLI binary not found. Please install it.',
+            isComplete: true,
+            finishReason: 'error',
+            timestamp: new Date(),
+            metadata: { error: 'Pi CLI not installed', actualProvider: provider },
+          };
+          return;
+        }
+
+        // Use the actual LLM provider from request.model, or default to 'anthropic'
+        // The 'pi' provider is a CLI wrapper that delegates to an actual LLM provider
+        const actualLlmProvider = request.model && request.model !== 'local' 
+          ? request.model.split('/')[0]  // Extract provider from model like 'anthropic/claude-3.5'
+          : 'anthropic';  // Default to anthropic if no model specified
+        
+        const { createCliPiSession } = await import('../pi/pi-cli-session');
+        
+        // Wrap createCliPiSession in try-catch to handle initialization failures
+        let session: any;
+        try {
+          session = await createCliPiSession({
+            cwd: request.scopePath || process.cwd(),
+            mode: 'local',
+            provider: actualLlmProvider,
+            modelId: model !== 'local' ? model : undefined,
+          });
+        } catch (initError: any) {
+          chatLogger.error('[CLI-PROVIDER] Failed to initialize pi session', { requestId, error: initError.message });
+          yield {
+            content: `Failed to initialize Pi session: ${initError.message}`,
+            isComplete: true,
+            finishReason: 'error',
+            timestamp: new Date(),
+            metadata: { error: initError.message, actualProvider: provider },
+          };
+          return;
+        }
+
+        // Yield streaming chunks as they come
+        let streamedContent = '';
+        session.subscribe((event: any) => {
+          if (event.type === 'message_update') {
+            const delta = event.assistantMessageEvent?.delta || '';
+            streamedContent += delta;
+            // Yield partial content immediately
+            chatLogger.debug('[CLI-PROVIDER] PI streaming chunk', {
+              requestId,
+              provider,
+              chunkLength: delta.length,
+              totalSoFar: streamedContent.length,
+            });
+          }
+        });
+
+        // Wrap session.prompt() in try-catch to handle runtime errors
+        try {
+          await session.prompt(userMessage, { streamingBehavior: 'steer' });
+        } catch (promptErr: any) {
+          chatLogger.error('[CLI-PROVIDER] Pi session.prompt() failed', { requestId, error: promptErr.message });
+          session.dispose();
+          yield {
+            content: `Pi session error: ${promptErr.message}`,
+            isComplete: true,
+            finishReason: 'error',
+            timestamp: new Date(),
+            metadata: { error: promptErr.message, actualProvider: provider },
+          };
+          return;
+        }
+        
+        // Wait for agent_end event or timeout (max 60 seconds)
+        const maxWait = 60000;
+        await new Promise<void>((resolve) => {
+          session.subscribe((event: any) => {
+            if (event.type === 'agent_end') {
+              resolve();
+            }
+          });
+          setTimeout(resolve, maxWait);
+        });
+
+        const finalMessages = await session.getMessages();
+        const lastMessage = finalMessages[finalMessages.length - 1];
+
+        result = {
+          response: lastMessage?.content?.[0]?.text || streamedContent,
+          messages: finalMessages,
+        };
+        // Only dispose if session was successfully created
+        if (session?.dispose) {
+          session.dispose();
+        }
+
+      } else {
+        // Unknown CLI provider - yield error
+        chatLogger.error('[CLI-PROVIDER] Unknown CLI provider', { requestId, provider });
+        yield {
+          content: `Unknown CLI provider: ${provider}. Supported CLI providers: opencode-cli, pi`,
+          isComplete: true,
+          finishReason: 'error',
+          timestamp: new Date(),
+          metadata: { error: `Provider "${provider}" is not a recognized CLI provider`, actualProvider: provider },
+        };
+        return;
+      }
+
+      chatLogger.info('[CLI-PROVIDER] CLI streaming completed', {
+        requestId,
+        provider,
+        responseLength: result.response?.length || 0,
+        steps: result.steps?.length || 0,
+      });
+
+      yield {
+        content: result.response || '',
+        isComplete: true,
+        finishReason: 'stop',
+        timestamp: new Date(),
+        metadata: {
+          actualProvider: provider,
+          actualModel: model,
+          steps: result.steps || [],
+        },
+      };
+
+    } catch (error: any) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      chatLogger.error('[CLI-PROVIDER] CLI streaming failed', { requestId, provider, error: errorMsg });
+
+      yield {
+        content: '',
+        isComplete: true,
+        finishReason: 'error',
+        timestamp: new Date(),
+        metadata: { error: errorMsg, actualProvider: provider },
+      };
+    }
   }
 
   getProviderHealth(): Record<string, any> {

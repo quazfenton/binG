@@ -35,12 +35,12 @@ const imageGenerationRateLimiter = new RateLimiter(
 )
 
 // Allowed models/providers (configurable via environment)
-const ALLOWED_MODELS = process.env.IMAGE_GENERATION_ALLOWED_MODELS?.split(',') || [
+const ALLOWED_MODELS = (process.env.IMAGE_GENERATION_ALLOWED_MODELS?.split(',').map(s => s.trim()).filter(Boolean)) || [
   'mistral',
   'google',
   'vercel',
   'replicate',
-]
+];
 
 export async function POST(req: NextRequest) {
   const controller = new AbortController()
@@ -133,7 +133,7 @@ export async function POST(req: NextRequest) {
     if (selectedProvider === 'google' && model === 'google:gemini-2.5-flash-image-preview') {
       try {
         const { quotaManager } = await import('@/lib/management/quota-manager');
-        const quotaCheck = quotaManager.checkQuota('google_imagen');
+        const quotaCheck = await quotaManager.checkQuota('google_imagen');
         
         if (!quotaCheck.allowed) {
           clearTimeout(timeoutId);
@@ -148,7 +148,12 @@ export async function POST(req: NextRequest) {
           );
         }
       } catch (quotaError) {
+        clearTimeout(timeoutId);
         console.error('Quota check error:', quotaError);
+        return NextResponse.json(
+          { error: 'Quota check unavailable. Please try again later.' },
+          { status: 503 }
+        );
       }
     }
 
@@ -201,6 +206,15 @@ export async function POST(req: NextRequest) {
       )
     }
 
+    // Check provider availability if a preferred provider is specified
+    if (preferredProvider && !availableProviders.includes(preferredProvider)) {
+      clearTimeout(timeoutId);
+      return NextResponse.json(
+        { error: `Requested provider '${preferredProvider}' is not available.` },
+        { status: 503 }
+      );
+    }
+
     // Build unified parameters
     const params: ImageGenerationParams = {
       prompt: prompt.trim(),
@@ -220,6 +234,7 @@ export async function POST(req: NextRequest) {
       extra: model ? { model } : {},
     }
 
+    const startTime = Date.now();
     let result
 
     if (preferredProvider) {

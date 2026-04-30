@@ -10,6 +10,7 @@
 
 import { search } from "../retrieval/search";
 import { buildContext, injectContextIntoPrompt, buildContextSystemPrompt } from "../context/contextBuilder";
+import { buildExperiencePromptSupplement, initializeExperienceCache, recordTaskOutcome } from "../memory/agent-experience";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -61,11 +62,12 @@ function buildAgentPrompt(opts: {
   filePath: string;
   currentContent: string;
   context: string;
+  experienceSupplement: string;
   lastError: string;
   iteration: number;
   lastStrategy?: string;
 }): string {
-  const { task, filePath, currentContent, context, lastError, iteration, lastStrategy } = opts;
+  const { task, filePath, currentContent, context, experienceSupplement, lastError, iteration, lastStrategy } = opts;
 
   const retryBlock =
     lastError.length > 0
@@ -88,6 +90,8 @@ ${currentContent}
 \`\`\`
 
 ${context.length > 0 ? `## Relevant codebase context\n${context}` : ""}
+
+${experienceSupplement}
 
 ${retryBlock}
 
@@ -160,6 +164,12 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentResult>
   const contextText = contextObj.text;
   const systemPrompt = buildContextSystemPrompt();
 
+  // Get relevant experiences for this task
+  await ensureExperienceInitialized();
+  const experienceSupplement = await buildExperiencePromptSupplement(task, {
+    maxExperiences: 5,
+  });
+
   for (let i = 0; i < maxIterations; i++) {
     onIteration?.({ iteration: i + 1, status: "applying" });
 
@@ -169,6 +179,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentResult>
       filePath,
       currentContent,
       context: contextText,
+      experienceSupplement,
       lastError,
       iteration: i,
       lastStrategy,
@@ -219,6 +230,9 @@ Try: output the complete function/block instead of a minimal diff.`;
         await writeFile(filePath, patchResult.content);
       }
 
+      // Record successful task outcome for experience learning
+      await recordTaskOutcome(task, true).catch(() => {});
+
       return {
         success: true,
         content: patchResult.content,
@@ -239,6 +253,9 @@ Try: output the complete function/block instead of a minimal diff.`;
     });
   }
 
+  // Record failed task outcome
+  await recordTaskOutcome(task, false).catch(() => {});
+
   return {
     success: false,
     content: currentContent,
@@ -246,6 +263,32 @@ Try: output the complete function/block instead of a minimal diff.`;
     error: lastError || "Max iterations reached",
   };
 }
+
+// ─── Experience System Initialization ─────────────────────────────────────────
+
+/**
+ * Initialize the agent experience system.
+ * Auto-initializes on first use if not called explicitly.
+ */
+let experienceInitialized = false;
+
+export async function initializeAgentExperience(): Promise<void> {
+  if (experienceInitialized) return;
+  
+  await initializeExperienceCache(true).catch(err => {
+    console.warn('[AgentLoop] Failed to initialize experience cache:', err);
+  });
+  
+  experienceInitialized = true;
+}
+
+// Auto-initialize on first use
+export const ensureExperienceInitialized = (): Promise<void> => {
+  if (!experienceInitialized) {
+    return initializeAgentExperience();
+  }
+  return Promise.resolve();
+};
 
 // ─── Multi-file Agent ─────────────────────────────────────────────────────────
 
