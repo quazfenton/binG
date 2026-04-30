@@ -90,6 +90,14 @@ export interface GraphExecutionResult {
 export class ExecutionGraphEngine {
   private graphs = new Map<string, ExecutionGraph>();
   private readonly DEFAULT_MAX_RETRIES = 3;
+  // MED-1 fix: Limit concurrent node execution to prevent resource exhaustion
+  private readonly MAX_CONCURRENT_NODES = (() => {
+    const parsed = parseInt(process.env.EXECUTION_GRAPH_MAX_CONCURRENCY || '10', 10);
+    if (Number.isNaN(parsed)) return 10;
+    return Math.max(1, parsed);
+  })();
+  // Max graph size to prevent runaway graphs
+  private readonly MAX_NODES_PER_GRAPH = 100;
 
   /**
    * Create new execution graph
@@ -126,6 +134,16 @@ export class ExecutionGraphEngine {
     graph: ExecutionGraph,
     node: Omit<ExecutionNode, 'status' | 'retryCount' | 'maxRetries'>
   ): ExecutionNode {
+    // Validate graph size limit
+    if (graph.nodes.size >= this.MAX_NODES_PER_GRAPH) {
+      throw new Error(`Graph exceeds maximum node limit (${this.MAX_NODES_PER_GRAPH}). Reduce the number of tasks or split into subgraphs.`);
+    }
+
+    // Self-dependency check
+    if (node.dependencies.includes(node.id)) {
+      throw new Error(`Node "${node.id}" has a self-dependency (cycle). Remove the self-reference.`);
+    }
+
     const newNode: ExecutionNode = {
       ...node,
       status: node.dependencies.length === 0 ? 'pending' : 'blocked',
@@ -138,6 +156,20 @@ export class ExecutionGraphEngine {
     // Add edges for dependencies
     for (const depId of node.dependencies) {
       this.addEdge(graph, depId, node.id);
+    }
+
+    // Cycle detection: validate that adding this node doesn't create a cycle
+    if (this.hasCycle(graph)) {
+      // Rollback: remove the node and its edges
+      graph.nodes.delete(node.id);
+      for (const depId of node.dependencies) {
+        const edges = graph.edges.get(depId);
+        if (edges) {
+          edges.delete(node.id);
+          if (edges.size === 0) graph.edges.delete(depId);
+        }
+      }
+      throw new Error(`Adding node "${node.id}" would create a cycle in the execution graph. Check dependencies for circular references.`);
     }
 
     logger.debug('Node added to graph', {
@@ -206,7 +238,8 @@ export class ExecutionGraphEngine {
       });
     }
 
-    return ready;
+    // Enforce concurrency limit — only return up to MAX_CONCURRENT_NODES ready nodes
+    return ready.slice(0, this.MAX_CONCURRENT_NODES);
   }
 
   /**
@@ -482,6 +515,47 @@ export class ExecutionGraphEngine {
       graph.completedAt = Date.now();
       logger.warn('Graph finished with failures', { graphId: graph.id });
     }
+  }
+
+  /**
+   * Detect cycles in the graph using DFS.
+   * Returns true if a cycle exists (graph is not a valid DAG).
+   */
+  private hasCycle(graph: ExecutionGraph): boolean {
+    const WHITE = 0; // unvisited
+    const GRAY = 1;  // in current DFS path
+    const BLACK = 2; // fully processed
+
+    const color = new Map<string, number>();
+    for (const nodeId of graph.nodes.keys()) {
+      color.set(nodeId, WHITE);
+    }
+
+    const dfs = (nodeId: string): boolean => {
+      color.set(nodeId, GRAY);
+      const neighbors = graph.edges.get(nodeId);
+      if (neighbors) {
+        for (const neighbor of neighbors) {
+          const neighborColor = color.get(neighbor);
+          if (neighborColor === GRAY) {
+            // Back edge found — cycle detected
+            return true;
+          }
+          if (neighborColor === WHITE && dfs(neighbor)) {
+            return true;
+          }
+        }
+      }
+      color.set(nodeId, BLACK);
+      return false;
+    };
+
+    for (const nodeId of graph.nodes.keys()) {
+      if (color.get(nodeId) === WHITE) {
+        if (dfs(nodeId)) return true;
+      }
+    }
+    return false;
   }
 
   private checkGraphFailed(graph: ExecutionGraph): void {

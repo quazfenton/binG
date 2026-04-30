@@ -51,7 +51,7 @@ export interface ToolExecutionContext {
 /**
  * Provider types supported by Vercel AI SDK
  */
-export type VercelProvider = 'openai' | 'anthropic' | 'google' | 'mistral' | 'openrouter';
+export type VercelProvider = 'openai' | 'anthropic' | 'google' | 'mistral' | 'openrouter' | 'vercel';
 
 /**
  * Instructions for models that don't support function calling.
@@ -240,6 +240,7 @@ export function getVercelModel(
     'google': 'GOOGLE_API_KEY',
     'mistral': 'MISTRAL_API_KEY',
     'openrouter': 'OPENROUTER_API_KEY',
+    'vercel': 'VERCEL_API_KEY',
     'chutes': 'CHUTES_API_KEY',
     'github': 'GITHUB_MODELS_API_KEY',
     'nvidia': 'NVIDIA_API_KEY',
@@ -322,6 +323,14 @@ export function getVercelModel(
         baseURL: baseURL || currentEnv.MISTRAL_BASE_URL,
       });
       return mistral(model);
+    }
+
+    case 'vercel': {
+      const openai = createOpenAI({
+        apiKey: apiKey || currentEnv.VERCEL_API_KEY,
+        baseURL: baseURL || currentEnv.VERCEL_BASE_URL || 'https://api.vercel.com/v1',
+      });
+      return openai(model);
     }
 
     default:

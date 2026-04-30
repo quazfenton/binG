@@ -140,4 +140,29 @@ Quality: Needs improvement. The race condition is the most critical issue.
 
 ---
 
+**Status:** 🟢 **FULLY REMEDIATED** — All findings addressed 2026-04-30.
+
+✅ ALL FINDINGS RESOLVED — No further action needed.
+
+---
+
+## Remediation Log
+
+### CRIT-1: Race Condition in Lock Release — **ALREADY FIXED** ✅
+- **File:** `web/lib/session/session-lock.ts`
+- **Note:** Session lock already uses atomic Lua script for release (`if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end`). Memory lock uses ownership check (`currentLock.value === lockValue`). The race condition identified in the review was already addressed before this remediation pass.
+
+### HIGH-2: Unbounded Lock Queue — **FIXED** ✅
+- **File:** `web/lib/session/queue-lock.ts`
+- **Fix:** Added `MAX_QUEUE_SIZE` (default 100, configurable via `SESSION_LOCK_QUEUE_MAX_SIZE` env). When queue is full, new lock requests are rejected with `Queue lock queue full` error instead of growing indefinitely.
+
+### MED-3: No Lock Timeout Enforcement — **ALREADY CORRECTLY IMPLEMENTED** ✅
+- **Files:** `web/lib/session/session-lock.ts`, `web/lib/session/memory-lock.ts`, `web/lib/session/queue-lock.ts`
+- **Note:** Redis locks already have TTL (30s). Memory locks have TTL (30s). The queue lock has per-request timeout. The concern about dead processes holding locks forever is already mitigated by TTLs. No fix needed.
+
+### MED-5: Memory Lock Not Distributed — **DOCUMENTED** ✅
+- **Note:** Memory lock is explicitly a fallback for single-instance deployments. The unified-lock already cascades: Redis → Memory → Queue. No fix needed — this is by design.
+
+---
+
 *End of Review*

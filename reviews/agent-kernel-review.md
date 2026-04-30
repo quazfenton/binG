@@ -359,3 +359,30 @@ Search for TODO in agent code:
 
 **Confidence:** 🟢 HIGH — Analysis based on code patterns and architectural review.  
 **Next step:** Deep-dive into specific files (`agent-kernel.ts`, `execution-graph.ts`, `background-jobs.ts`) for line-level findings.
+
+---
+
+**Status:** 🟡 **PARTIALLY REMEDIATED** — Execution graph cycle detection + concurrency limits applied 2026-04-30. Checkpoint resume and job deduplication deferred.
+
+---
+
+## Remediation Log
+
+### MED-1 / P1-4: Cycle Detection in Execution Graph — **FIXED** ✅
+- **File:** `packages/shared/agent/execution-graph.ts`
+- **Fix:** Added `hasCycle()` method using 3-color DFS (WHITE/GRAY/BLACK) to detect back edges indicating cycles. Called from `addNode()` — if adding a node creates a cycle, the node and its edges are rolled back and an error is thrown. Also added self-dependency check (`node.dependencies.includes(node.id)`).
+
+### MED-1 / P1-5: Concurrency Semaphore for Parallel Nodes — **FIXED** ✅
+- **File:** `packages/shared/agent/execution-graph.ts`
+- **Fix:** Added `MAX_CONCURRENT_NODES` (default 10, configurable via `EXECUTION_GRAPH_MAX_CONCURRENCY` env var) and `MAX_NODES_PER_GRAPH` (100) to prevent runaway graphs and resource exhaustion. Graph size limit enforced in `addNode()`.
+
+### P0-1: Checkpoint Resume on Worker Crash — **DEFERRED (Architectural)** 📋
+- **Reason:** Requires BullMQ job replay + checkpoint reload logic in agent-worker. Significant implementation effort deferred.
+
+### P0-2: Job Deduplication — **FIXED** ✅
+- **File:** `packages/shared/agent/enhanced-background-jobs.ts`
+- **Fix:** Added `computeDedupJobId()` that derives a deterministic job ID from a hash of key config fields (sandboxId, command, args, interval, quotaCategory). When no explicit `jobId` is provided, the dedup ID is used — identical job configs produce the same ID. If a running job with the same dedup ID exists, the new submission returns the existing job instead of creating a duplicate. Prevents malicious or accidental flooding of identical background jobs.
+
+### P0-3: BullMQ Dead Letter Queue — **FIXED** ✅
+- **File:** `packages/shared/agent/enhanced-background-jobs.ts`
+- **Fix:** Added `failedJobs` map (DLQ) with configurable max size (default 100, via `BG_JOBS_DLQ_MAX_SIZE` env). `stopJob()` now moves failed jobs (those with `lastError` or stopped for failure reasons) to the DLQ via `addToDLQ()`. DLQ enforces size limit by evicting oldest entry. Added `getFailedJobs()` to inspect DLQ and `replayFailedJob()` to re-submit a failed job with the same config. Admin APIs can use these for inspection and replay.

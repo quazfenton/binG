@@ -74,7 +74,24 @@ class DesktopSecrets implements SecretsAdapter {
       // If Tauri IS loaded but the command failed, the error is real —
       // falling back would silently store secrets in the wrong backend.
       if (category === 'TAURI_UNAVAILABLE') {
-        console.warn('[DesktopSecrets] Tauri unavailable — falling back to web secrets for get():',
+        // HIGH-2 fix: Require opt-in before falling back to insecure web storage
+        // Previously, missing Tauri silently fell back to localStorage — this is dangerous
+        // because the user expects keychain-level security but gets obfuscated localStorage.
+        // HIGH-2 fix: Use import.meta.env for Tauri browser context compatibility
+        // In Tauri, process.env may not be available in the browser context.
+        // Fall back to checking both process.env (Node.js) and import.meta.env (Vite/Tauri).
+        const allowFallback =
+          (typeof process !== 'undefined' && process.env?.DESKTOP_SECRETS_ALLOW_WEB_FALLBACK === 'true') ||
+          (typeof import.meta !== 'undefined' && (import.meta as any).env?.DESKTOP_SECRETS_ALLOW_WEB_FALLBACK === 'true');
+        if (!allowFallback) {
+          console.error('[DesktopSecrets] Tauri unavailable and web fallback NOT allowed.',
+            'Set DESKTOP_SECRETS_ALLOW_WEB_FALLBACK=true to enable insecure fallback.');
+          throw new Error(
+            `Cannot read secret "${key}" — Tauri keychain unavailable and web fallback disabled. ` +
+            `Set DESKTOP_SECRETS_ALLOW_WEB_FALLBACK=true to allow insecure localStorage fallback.`
+          );
+        }
+        console.warn('[DesktopSecrets] Tauri unavailable — falling back to web secrets (INSECURE) for get():',
           error instanceof Error ? error.message : String(error));
         const { secrets } = await getWebSecrets();
         return secrets.get(key);
@@ -102,7 +119,22 @@ class DesktopSecrets implements SecretsAdapter {
     } catch (error) {
       const category = categorizeError(error);
       if (category === 'TAURI_UNAVAILABLE') {
-        console.warn('[DesktopSecrets] Tauri unavailable — falling back to web secrets for set():',
+        // HIGH-2 fix: Require opt-in before falling back to insecure web storage
+        // HIGH-2 fix: Use import.meta.env for Tauri browser context compatibility
+        // In Tauri, process.env may not be available in the browser context.
+        // Fall back to checking both process.env (Node.js) and import.meta.env (Vite/Tauri).
+        const allowFallback =
+          (typeof process !== 'undefined' && process.env?.DESKTOP_SECRETS_ALLOW_WEB_FALLBACK === 'true') ||
+          (typeof import.meta !== 'undefined' && (import.meta as any).env?.DESKTOP_SECRETS_ALLOW_WEB_FALLBACK === 'true');
+        if (!allowFallback) {
+          console.error('[DesktopSecrets] Tauri unavailable and web fallback NOT allowed.',
+            'Set DESKTOP_SECRETS_ALLOW_WEB_FALLBACK=true to enable insecure fallback.');
+          throw new Error(
+            `Cannot store secret "${key}" — Tauri keychain unavailable and web fallback disabled. ` +
+            `Set DESKTOP_SECRETS_ALLOW_WEB_FALLBACK=true to allow insecure localStorage fallback.`
+          );
+        }
+        console.warn('[DesktopSecrets] Tauri unavailable — falling back to web secrets (INSECURE) for set():',
           error instanceof Error ? error.message : String(error));
         const { secrets } = await getWebSecrets();
         await secrets.set(key, value);
@@ -129,7 +161,22 @@ class DesktopSecrets implements SecretsAdapter {
       const category = categorizeError(error);
       if (category === 'NOT_FOUND') return; // Already gone — idempotent
       if (category === 'TAURI_UNAVAILABLE') {
-        console.warn('[DesktopSecrets] Tauri unavailable — falling back to web secrets for remove():',
+        // HIGH-2 fix: Require opt-in before falling back to insecure web storage
+        // HIGH-2 fix: Use import.meta.env for Tauri browser context compatibility
+        // In Tauri, process.env may not be available in the browser context.
+        // Fall back to checking both process.env (Node.js) and import.meta.env (Vite/Tauri).
+        const allowFallback =
+          (typeof process !== 'undefined' && process.env?.DESKTOP_SECRETS_ALLOW_WEB_FALLBACK === 'true') ||
+          (typeof import.meta !== 'undefined' && (import.meta as any).env?.DESKTOP_SECRETS_ALLOW_WEB_FALLBACK === 'true');
+        if (!allowFallback) {
+          console.error('[DesktopSecrets] Tauri unavailable and web fallback NOT allowed.',
+            'Set DESKTOP_SECRETS_ALLOW_WEB_FALLBACK=true to enable insecure fallback.');
+          throw new Error(
+            `Cannot remove secret "${key}" — Tauri keychain unavailable and web fallback disabled. ` +
+            `Set DESKTOP_SECRETS_ALLOW_WEB_FALLBACK=true to allow insecure localStorage fallback.`
+          );
+        }
+        console.warn('[DesktopSecrets] Tauri unavailable — falling back to web secrets (INSECURE) for remove():',
           error instanceof Error ? error.message : String(error));
         const { secrets } = await getWebSecrets();
         await secrets.remove(key);

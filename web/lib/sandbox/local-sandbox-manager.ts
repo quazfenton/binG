@@ -54,7 +54,10 @@ export class SandboxManager extends EventEmitter {
   private baseSnapshotDir: string;
   private runningProcesses: Map<string, ChildProcess> = new Map<string, ChildProcess>();
 
-  constructor(baseWorkspaceDir: string = '/tmp/workspaces', baseSnapshotDir: string = '/tmp/snapshots') {
+  constructor(
+    baseWorkspaceDir: string = process.env.WORKSPACE_DIR || '/tmp/workspaces',
+    baseSnapshotDir: string = process.env.LOCAL_SNAPSHOT_DIR || '/tmp/snapshots'
+  ) {
     super();
     
     // SECURITY: Validate and resolve base directories
@@ -370,10 +373,19 @@ export class SandboxManager extends EventEmitter {
       throw new Error(`Sandbox not found: ${sandboxId}`);
     }
 
-    // Kill any running processes
+    // HIGH fix: Kill running processes with SIGKILL fallback
     const process = this.runningProcesses.get(sandboxId);
     if (process) {
+      // First try SIGTERM (graceful), then SIGKILL after 5s if still running
       process.kill('SIGTERM');
+      const forceKillTimer = setTimeout(() => {
+        try {
+          if (!process.killed) {
+            process.kill('SIGKILL');
+          }
+        } catch {}
+      }, 5000);
+      forceKillTimer.unref(); // Don't prevent process exit
       this.runningProcesses.delete(sandboxId);
     }
 
@@ -386,9 +398,26 @@ export class SandboxManager extends EventEmitter {
   }
 
   async shutdown(): Promise<void> {
-    // Kill all running processes
+    // HIGH fix: Kill all running processes with SIGKILL fallback
     for (const [sandboxId, process] of this.runningProcesses.entries()) {
       process.kill('SIGTERM');
+      // If process hasn't exited after 3s, force kill
+      const forceKillTimer = setTimeout(() => {
+        try {
+          if (!process.killed) {
+            process.kill('SIGKILL');
+          }
+        } catch {}
+      }, 3000);
+      forceKillTimer.unref();
+    }
+    // Wait briefly for graceful shutdown, then clear
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    // Force-kill any remaining processes
+    for (const [, process] of this.runningProcesses.entries()) {
+      try {
+        if (!process.killed) process.kill('SIGKILL');
+      } catch {}
     }
     this.runningProcesses.clear();
     this.sandboxes.clear();
@@ -396,6 +425,7 @@ export class SandboxManager extends EventEmitter {
   }
 }
 
-// Singleton instance
+// Singleton instance — reads paths from env vars (WORKSPACE_DIR, LOCAL_SNAPSHOT_DIR)
+// Falls back to /tmp/workspaces and /tmp/snapshots if env vars not set
 export const sandboxManager = new SandboxManager();
 

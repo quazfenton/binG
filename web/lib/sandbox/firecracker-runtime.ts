@@ -91,9 +91,9 @@ export class FirecrackerRuntime extends EventEmitter {
   private readonly baseDir: string;
 
   constructor(
-    firecrackerBin: string = '/usr/bin/firecracker',
-    jailerBin: string = '/usr/bin/jailer',
-    baseDir: string = '/tmp/firecracker'
+    firecrackerBin: string = process.env.FIRECRACKER_BIN || '/usr/bin/firecracker',
+    jailerBin: string = process.env.JAILER_BIN || '/usr/bin/jailer',
+    baseDir: string = process.env.FIRECRACKER_BASE_DIR || '/tmp/firecracker'
   ) {
     super();
     this.firecrackerBin = firecrackerBin;
@@ -407,7 +407,7 @@ export class ProcessRuntime extends EventEmitter {
   private processes: Map<string, ChildProcess> = new Map<string, ChildProcess>();
   private readonly baseWorkspaceDir: string;
 
-  constructor(baseWorkspaceDir: string = '/tmp/workspaces') {
+  constructor(baseWorkspaceDir: string = process.env.WORKSPACE_DIR || '/tmp/workspaces') {
     super();
     this.baseWorkspaceDir = baseWorkspaceDir;
 

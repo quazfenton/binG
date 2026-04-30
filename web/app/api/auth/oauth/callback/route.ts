@@ -32,6 +32,13 @@ function getClientCredentials(provider: string): { clientId: string; clientSecre
 }
 
 export async function GET(req: NextRequest) {
+  // LOW-2 fix: In production, use generic OAuth error messages to avoid leaking
+  // provider details (e.g., which providers are configured, which failed).
+  // In development, keep specific errors for debugging.
+  const isProd = process.env.NODE_ENV === 'production';
+  const genericError = 'authentication_failed';
+  const oauthError = (specific: string) => isProd ? genericError : specific;
+
   try {
     const code = req.nextUrl.searchParams.get('code');
     const state = req.nextUrl.searchParams.get('state');
@@ -42,39 +49,39 @@ export async function GET(req: NextRequest) {
       // For popup flows, redirect to error page
       if (origin) {
         return NextResponse.redirect(
-          `${req.nextUrl.origin}/api/auth/oauth/error?error=${encodeURIComponent(error)}&origin=${encodeURIComponent(origin)}`
+          `${req.nextUrl.origin}/api/auth/oauth/error?error=${encodeURIComponent(oauthError(error))}&origin=${encodeURIComponent(origin)}`
         );
       }
-      return NextResponse.redirect(`${req.nextUrl.origin}/settings?oauth_error=${encodeURIComponent(error)}`);
+      return NextResponse.redirect(`${req.nextUrl.origin}/settings?oauth_error=${encodeURIComponent(oauthError(error))}`);
     }
 
     if (!code || !state) {
       if (origin) {
         return NextResponse.redirect(
-          `${req.nextUrl.origin}/api/auth/oauth/error?error=missing_params&origin=${encodeURIComponent(origin)}`
+          `${req.nextUrl.origin}/api/auth/oauth/error?error=${encodeURIComponent(oauthError('missing_params'))}&origin=${encodeURIComponent(origin)}`
         );
       }
-      return NextResponse.redirect(`${req.nextUrl.origin}/settings?oauth_error=missing_params`);
+      return NextResponse.redirect(`${req.nextUrl.origin}/settings?oauth_error=${encodeURIComponent(oauthError('missing_params'))}`);
     }
 
     const session = await oauthService.getOAuthSessionByState(state);
     if (!session) {
       if (origin) {
         return NextResponse.redirect(
-          `${req.nextUrl.origin}/api/auth/oauth/error?error=invalid_state&origin=${encodeURIComponent(origin)}`
+          `${req.nextUrl.origin}/api/auth/oauth/error?error=${encodeURIComponent(oauthError('invalid_state'))}&origin=${encodeURIComponent(origin)}`
         );
       }
-      return NextResponse.redirect(`${req.nextUrl.origin}/settings?oauth_error=invalid_state`);
+      return NextResponse.redirect(`${req.nextUrl.origin}/settings?oauth_error=${encodeURIComponent(oauthError('invalid_state'))}`);
     }
 
     const tokenEndpoint = TOKEN_ENDPOINTS[session.provider];
     if (!tokenEndpoint) {
       if (origin) {
         return NextResponse.redirect(
-          `${req.nextUrl.origin}/api/auth/oauth/error?error=unsupported_provider&origin=${encodeURIComponent(origin)}`
+          `${req.nextUrl.origin}/api/auth/oauth/error?error=${encodeURIComponent(oauthError('unsupported_provider'))}&origin=${encodeURIComponent(origin)}`
         );
       }
-      return NextResponse.redirect(`${req.nextUrl.origin}/settings?oauth_error=unsupported_provider`);
+      return NextResponse.redirect(`${req.nextUrl.origin}/settings?oauth_error=${encodeURIComponent(oauthError('unsupported_provider'))}`);
     }
 
     // Get and validate provider credentials
@@ -83,10 +90,10 @@ export async function GET(req: NextRequest) {
       // Provider not configured - return early with clear error
       if (origin) {
         return NextResponse.redirect(
-          `${req.nextUrl.origin}/api/auth/oauth/error?error=provider_not_configured&origin=${encodeURIComponent(origin)}`
+          `${req.nextUrl.origin}/api/auth/oauth/error?error=${encodeURIComponent(oauthError('provider_not_configured'))}&origin=${encodeURIComponent(origin)}`
         );
       }
-      return NextResponse.redirect(`${req.nextUrl.origin}/settings?oauth_error=provider_not_configured`);
+      return NextResponse.redirect(`${req.nextUrl.origin}/settings?oauth_error=${encodeURIComponent(oauthError('provider_not_configured'))}`);
     }
     
     const { clientId, clientSecret } = credentials;
@@ -123,10 +130,10 @@ export async function GET(req: NextRequest) {
       console.error('[OAuth] Token exchange failed:', errBody);
       if (origin) {
         return NextResponse.redirect(
-          `${req.nextUrl.origin}/api/auth/oauth/error?error=token_exchange_failed&origin=${encodeURIComponent(origin)}`
+          `${req.nextUrl.origin}/api/auth/oauth/error?error=${encodeURIComponent(oauthError('token_exchange_failed'))}&origin=${encodeURIComponent(origin)}`
         );
       }
-      return NextResponse.redirect(`${req.nextUrl.origin}/settings?oauth_error=token_exchange_failed`);
+      return NextResponse.redirect(`${req.nextUrl.origin}/settings?oauth_error=${encodeURIComponent(oauthError('token_exchange_failed'))}`);
     }
 
     const tokenData = await tokenResponse.json();
@@ -172,10 +179,10 @@ export async function GET(req: NextRequest) {
       console.error('[OAuth] Session has no userId, cannot save connection');
       if (origin) {
         return NextResponse.redirect(
-          `${req.nextUrl.origin}/api/auth/oauth/error?error=no_user&origin=${encodeURIComponent(origin)}`
+          `${req.nextUrl.origin}/api/auth/oauth/error?error=${encodeURIComponent(oauthError('no_user'))}&origin=${encodeURIComponent(origin)}`
         );
       }
-      return NextResponse.redirect(`${req.nextUrl.origin}/settings?oauth_error=no_user`);
+      return NextResponse.redirect(`${req.nextUrl.origin}/settings?oauth_error=${encodeURIComponent(oauthError('no_user'))}`);
     }
 
     // Save the connection
@@ -195,19 +202,19 @@ export async function GET(req: NextRequest) {
     if (origin) {
       // Redirect to success page which will postMessage to opener and close popup
       return NextResponse.redirect(
-        `${req.nextUrl.origin}/api/auth/oauth/success?provider=${encodeURIComponent(session.provider)}&origin=${encodeURIComponent(origin)}`
+        `${req.nextUrl.origin}/api/auth/oauth/success?provider=${encodeURIComponent(isProd ? 'connected' : session.provider)}&origin=${encodeURIComponent(origin)}`
       );
     }
 
-    return NextResponse.redirect(`${req.nextUrl.origin}/settings?oauth_success=${encodeURIComponent(session.provider)}`);
+    return NextResponse.redirect(`${req.nextUrl.origin}/settings?oauth_success=${encodeURIComponent(isProd ? 'connected' : session.provider)}`);
   } catch (error: any) {
     console.error('[OAuth] Callback error:', error);
     const origin = req.nextUrl.searchParams.get('origin');
     if (origin) {
       return NextResponse.redirect(
-        `${req.nextUrl.origin}/api/auth/oauth/error?error=internal&origin=${encodeURIComponent(origin)}`
+        `${req.nextUrl.origin}/api/auth/oauth/error?error=${encodeURIComponent(oauthError('internal'))}&origin=${encodeURIComponent(origin)}`
       );
     }
-    return NextResponse.redirect(`${req.nextUrl.origin}/settings?oauth_error=internal`);
+    return NextResponse.redirect(`${req.nextUrl.origin}/settings?oauth_error=${encodeURIComponent(oauthError('internal'))}`);
   }
 }

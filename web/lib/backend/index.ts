@@ -36,7 +36,7 @@ export {
   type PreviewRegistration,
 } from '../previews/preview-router';
 
-// Sandbox Manager
+// Sandbox Manager (import from local-sandbox-manager directly — deprecated sandbox-manager.ts removed)
 export {
   SandboxManager,
   sandboxManager,
@@ -44,7 +44,7 @@ export {
   type SandboxConfig,
   type ExecResult as SandboxExecResult,
   type FileEntry,
-} from '../sandbox/sandbox-manager';
+} from '../sandbox/local-sandbox-manager';
 
 // Adapters
 export {

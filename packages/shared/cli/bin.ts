@@ -38,7 +38,9 @@ function getDirname(): string {
     return path.dirname(process.execPath);
   }
   // Check for Windows executable path in the execPath
-  if (process.platform === 'win32' && process.execPath.includes('.exe')) {
+  // Exclude node.exe and bun.exe to avoid returning the runtime directory instead of script directory
+  if (process.platform === 'win32' && process.execPath.includes('.exe') && 
+      !process.execPath.includes('node.exe') && !process.execPath.includes('bun.exe')) {
     return path.dirname(process.execPath);
   }
   // Standard __dirname from CommonJS or tsx

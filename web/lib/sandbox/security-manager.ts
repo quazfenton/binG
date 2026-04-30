@@ -11,6 +11,7 @@
  */
 
 import { resolve, relative, posix as posixPath } from 'node:path';
+import { normalizePath as sharedNormalizePath } from '@bing/shared/lib/workspace-boundary';
 import { 
   FilePathSchema, 
   FileContentSchema, 
@@ -62,12 +63,15 @@ export class SandboxSecurityManager {
       throw new Error(`Security Exception: Invalid path - ${error.message}`);
     }
 
-    // Normalize path separators
-    let normalized = inputPath.replace(/\\/g, '/');
+    // HIGH-1 fix: Use shared normalizePath from workspace-boundary.ts for consistent
+    // path normalization across CLI, desktop, and web contexts.
+    // The shared utility handles: backslash→forward slash, .. segment resolution, trailing slashes.
+    // Sandbox-specific logic (Windows drive letter stripping, /workspace/ prefix handling)
+    // is still done here since it's specific to cloud sandbox path resolution.
+    let normalized = sharedNormalizePath(inputPath);
 
     // Handle embedded Windows paths in Linux paths, e.g. "/home/user/C:/home/user"
     // This happens when a Windows absolute path is concatenated with a workspace dir
-    // Pattern: some-prefix + DriveLetter:/ + rest
     const embeddedWindowsPath = normalized.match(/^(.*?)([A-Za-z]):\/(.*)$/);
     if (embeddedWindowsPath && normalized.startsWith('/')) {
       const prefix = embeddedWindowsPath[1];
@@ -83,18 +87,15 @@ export class SandboxSecurityManager {
     }
 
     // Check for Windows drive letters (e.g., C:\, D:\) - convert to Linux path
-    // These appear as absolute paths on Windows but need special handling on Linux
     const windowsDriveMatch = normalized.match(/^([A-Za-z]):\//);
     if (windowsDriveMatch) {
-      const driveLetter = windowsDriveMatch[1].toLowerCase();
       console.warn(`[SandboxSecurityManager] Converting Windows path to Linux path`, {
         inputPath,
         normalized,
-        driveLetter,
+        driveLetter: windowsDriveMatch[1].toLowerCase(),
         workspaceDir,
         hint: 'Windows absolute path detected - stripping drive letter'
       });
-      // Strip the drive letter (e.g., "C:/home/user" -> "/home/user")
       normalized = normalized.slice(2);
     }
 

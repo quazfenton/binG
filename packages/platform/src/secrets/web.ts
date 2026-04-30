@@ -4,7 +4,16 @@
  * Stores user secrets (auth tokens, API keys) encrypted in IndexedDB
  * using AES-GCM with a PBKDF2-derived key.
  *
- * Security model:
+ * ⚠️  SECURITY WARNING (HIGH-1): This encryption is **obfuscation, not true security**.
+ * An attacker with browser access (XSS, devtools, physical access) can:
+ *   1. Read the salt from IndexedDB META_STORE
+ *   2. Extract the hardcoded pepper from the JavaScript bundle
+ *   3. Derive the AES key locally and decrypt all stored secrets
+ *
+ * This protects against casual inspection only. For production-grade security,
+ * keep secrets server-side and use short-lived tokens.
+ *
+ * Security model (defense-in-depth, NOT confidentiality guarantee):
  * - A random salt is generated per browser profile
  * - A fixed "pepper" is combined with the salt via PBKDF2 to derive the AES key
  * - The key material is stored separately from encrypted ciphertext in IndexedDB

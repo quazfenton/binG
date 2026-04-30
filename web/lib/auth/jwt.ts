@@ -97,17 +97,18 @@ function getTokenBlacklist(): Map<string, number> {
 
 export interface JwtPayload {
   userId: string;
-  email: string;
+  // HIGH-8 fix: Email removed from JWT payload — PII should not be in tokens.
+  // Email is available from the database when needed (e.g., via getUserById).
   type?: string;
   jti: string; // Unique token identifier for blacklist
-  tokenVersion?: number; // For token rotation on password change
+  tokenVersion: number; // HIGH-12 fix: Required — checked on verify against DB value
 }
 
 export interface AuthResult {
   success: boolean;
   userId?: string;
-  email?: string;
   error?: string;
+  tokenVersion?: number; // Exposed for downstream checks
 }
 
 /**
@@ -193,10 +194,35 @@ export async function verifyAuth(request: NextRequest): Promise<AuthResult> {
         audience: 'bing-users', // Validate audience
       }) as JwtPayload;
 
+      // HIGH-12 fix: Check tokenVersion against database value
+      // If the user's tokenVersion has been incremented (password change, admin revocation),
+      // all previously issued tokens are invalid.
+      // HIGH-12 fix: Default to 1 for tokens missing tokenVersion (backward compat)
+      // DB default is also 1, so existing tokens (with no version field) will match
+      // and not be incorrectly rejected on deploy.
+      const tokenVersion = decoded.tokenVersion ?? 1;
+      try {
+        const dbTokenVersion = getUserTokenVersion(decoded.userId);
+        if (dbTokenVersion !== null && tokenVersion < dbTokenVersion) {
+          logger.warn('Token version mismatch — token revoked by password change or admin action', {
+            userId: decoded.userId,
+            tokenVersion,
+            dbTokenVersion,
+          });
+          return { success: false, error: 'Token has been revoked' };
+        }
+      } catch (versionError) {
+        // If DB lookup fails, allow the token (fail open for availability)
+        // but log loudly so ops can investigate
+        logger.error('Token version check failed, allowing token (fail open)', versionError as Error);
+      }
+
+      // HIGH-8 fix: Email removed from JWT — fetch from DB/cache when needed
+      // (see getUserEmail below for a cached lookup, or query users table directly)
       return {
         success: true,
         userId: decoded.userId,
-        email: decoded.email
+        tokenVersion,
       };
     } catch (jwtError) {
       const error = jwtError instanceof Error ? jwtError : new Error('JWT verification failed');
@@ -218,15 +244,69 @@ export async function verifyAuth(request: NextRequest): Promise<AuthResult> {
   }
 }
 
-export function generateToken(payload: { userId: string; email: string; type?: string; tokenVersion?: number }): string {
-  const expiresIn = payload.type === 'password_reset' ? '1h' : '7d';
+/**
+ * HIGH-12 fix: Get current token version for a user from the database.
+ * Returns null if DB not available (fail open for availability).
+ */
+function getUserTokenVersion(userId: string): number | null {
+  try {
+    // Lazy load to avoid circular deps at module level
+    const { getDatabase } = require('../database/connection');
+    const db = getDatabase();
+    if (!db) return null;
+    const row = db.prepare('SELECT token_version FROM users WHERE id = ?').get(userId) as any;
+    return row?.token_version ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * HIGH-12 fix: Increment a user's token version, invalidating all previous JWTs.
+ * Called on password change, admin revocation, etc.
+ */
+export function incrementUserTokenVersion(userId: string): number {
+  try {
+    const { getDatabase } = require('../database/connection');
+    const db = getDatabase();
+    if (!db) {
+      logger.error('Cannot increment token version — DB not available', { userId });
+      return -1;
+    }
+    // NOTE: token_version column should be added via DB schema migration.
+    // ALTER TABLE is NOT run here on every call — too expensive for hot path.
+    // If column doesn't exist, the query below will throw and be caught.
+    const result = db.prepare('UPDATE users SET token_version = COALESCE(token_version, 1) + 1 WHERE id = ?').run(userId);
+    const newVersion = db.prepare('SELECT token_version FROM users WHERE id = ?').get(userId) as any;
+    logger.info('Token version incremented', { userId, newVersion: newVersion?.token_version });
+    return newVersion?.token_version ?? -1;
+  } catch (error) {
+    logger.error('Failed to increment token version', error as Error);
+    return -1;
+  }
+}
+
+// HIGH-8 fix: Email is explicitly stripped from the JWT payload.
+// PII should not be stored in tokens. If email is needed, use getUserEmail(userId) from DB.
+export function generateToken(payload: { userId: string; email?: string; type?: string; tokenVersion?: number }): string {
+  // Strip email from payload so it never ends up in the JWT (even if caller passes it)
+  const { email: _email, ...payloadWithoutEmail } = payload;
+  // MED-1 fix: Access token TTL reduced from 7 days to 1 hour.
+  // Long-lived sessions should use refresh tokens, not long-lived JWTs.
+  // Password reset tokens use shorter TTL (15 min) for security.
+  const expiresIn = payload.type === 'password_reset' ? '15m' : '1h';
   
   // Generate unique token identifier (JTI) for blacklist support
   const jti = require('crypto').randomBytes(16).toString('hex');
 
+  // HIGH-12 fix: Always include tokenVersion in JWT payload
+  // Default to 1 if not provided (backward compatibility with existing tokens)
+  const tokenVersion = payload.tokenVersion ?? 1;
+  
   // Add issuer and audience claims for better security
   const fullPayload = {
-    ...payload,
+    ...payloadWithoutEmail,
+    tokenVersion,
     jti,
     iss: 'bing-app',
     aud: 'bing-users',
@@ -250,13 +330,76 @@ export function generateToken(payload: { userId: string; email: string; type?: s
 
 /**
  * Invalidate all tokens for a user (e.g., on password change)
- * Increments token version, making all previous tokens invalid
+ * HIGH-12 fix: Now actually increments tokenVersion in the database,
+ * making all previously issued JWTs fail the version check on verify.
  */
 export async function invalidateAllUserTokens(userId: string): Promise<void> {
-  // In a real implementation, this would:
-  // 1. Increment tokenVersion in database
-  // 2. Optionally blacklist all active tokens
-  logger.info('All tokens invalidated for user', { userId });
+  const newVersion = incrementUserTokenVersion(userId);
+  if (newVersion < 0) {
+    logger.error('Failed to invalidate tokens for user — token version not incremented', { userId });
+  } else {
+    logger.info('All tokens invalidated for user via token version increment', { userId, newVersion });
+  }
+}
+
+/**
+ * MED-6 fix: Generate a short-lived MFA challenge token.
+ * Used during login flow when user has MFA enabled.
+ * This token is NOT a full auth token — it only contains the userId
+ * and has a 5-minute TTL. It's verified by /auth/mfa/challenge to
+ * complete the second factor before issuing a real session.
+ *
+ * Uses the same lazy-loaded JWT module and secret as other tokens.
+ */
+export function generateMfaToken(userId: string): string {
+  const jwt = getJwtModule();
+  const jti = require('crypto').randomBytes(16).toString('hex');
+  return jwt.sign(
+    { userId, purpose: 'mfa-challenge', jti },
+    getJwtSecret(),
+    {
+      expiresIn: '5m',
+      algorithm: 'HS256',
+      issuer: 'bing-app',
+      audience: 'bing-mfa',
+    }
+  );
+}
+
+/**
+ * MED-6 fix: Verify an MFA challenge token.
+ * Returns the userId if valid, or throws on invalid/expired tokens.
+ */
+export function verifyMfaToken(mfaToken: string): { userId: string; jti: string } {
+  const jwt = getJwtModule();
+  const decoded = jwt.verify(mfaToken, getJwtSecret(), {
+    algorithms: ['HS256'],
+    issuer: 'bing-app',
+    audience: 'bing-mfa',
+  }) as { userId?: string; purpose?: string; jti?: string };
+
+  if (!decoded.userId || decoded.purpose !== 'mfa-challenge') {
+    throw new Error('Invalid MFA token payload');
+  }
+
+  return { userId: decoded.userId, jti: decoded.jti || '' };
+}
+
+/**
+ * HIGH-8 fix: Get user email from database by userId.
+ * Used when email is needed after JWT verification (email no longer in JWT).
+ * Non-blocking: returns null if DB not available.
+ */
+export function getUserEmail(userId: string): string | null {
+  try {
+    const { getDatabase } = require('../database/connection');
+    const db = getDatabase();
+    if (!db) return null;
+    const row = db.prepare('SELECT email FROM users WHERE id = ?').get(userId) as any;
+    return row?.email || null;
+  } catch {
+    return null;
+  }
 }
 
 /**

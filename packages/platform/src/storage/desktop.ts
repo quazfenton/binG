@@ -31,8 +31,13 @@ class DesktopStorage implements StorageAdapter {
       if (!dirExists) {
         await mkdir(APP_DATA_DIR, { baseDir: BaseDirectory.AppData, recursive: true });
       }
-    } catch (error) {
+    } catch (error: unknown) {
+      // MED-5 fix: Re-throw after logging so callers get a clear error
+      // instead of a confusing Tauri write failure later
       console.error('[DesktopStorage] Failed to ensure directory:', error);
+      throw new Error(`Failed to create storage directory: ${
+        error instanceof Error ? error.message : String(error)
+      }`);
     }
   }
 

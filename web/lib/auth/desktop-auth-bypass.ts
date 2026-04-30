@@ -57,6 +57,10 @@ export function getDesktopUserContext(): DesktopUserContext | null {
 
 /**
  * Check if request should bypass authentication in desktop mode
+ *
+ * CRIT-2 fix: Reduced bypass paths to only non-sensitive endpoints.
+ * Sensitive endpoints like agent/stream and terminal/ws now require
+ * real authentication even in desktop mode.
  */
 export function shouldBypassAuth(request: NextRequest): boolean {
   if (!isDesktopMode()) {
@@ -66,11 +70,13 @@ export function shouldBypassAuth(request: NextRequest): boolean {
   const path = request.nextUrl.pathname;
 
   // Bypass auth for these paths in desktop mode
+  // SECURITY: Only non-sensitive endpoints — agent/stream and terminal/ws
+  // removed because they allow arbitrary code execution and must require
+  // real JWT/session authentication even in desktop mode.
   const bypassPaths = [
     '/api/health',
     '/api/desktop',
     '/api/filesystem/snapshot',
-    '/api/agent/stream',
   ];
 
   return bypassPaths.some((p) => path === p || path.startsWith(`${p}/`));
@@ -101,9 +107,9 @@ export function withDesktopAuth<T extends NextResponse>(
         ) as T;
       }
 
+      // HIGH-8 fix: email removed from EnhancedAuthResult — do not assign here
       const standardUser: DesktopUserContext = {
         userId: auth.userId || 'unknown',
-        email: auth.email,
         isLocalUser: false,
       };
 

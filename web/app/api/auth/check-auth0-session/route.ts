@@ -121,10 +121,10 @@ export async function POST(request: NextRequest) {
       }
 
       // Generate JWT token for the user
+      // HIGH-8 fix: email removed from JWT — use getUserEmail() from jwt.ts if needed
       const { generateToken } = await import('@/lib/auth/jwt');
       const token = generateToken({
         userId: user.id.toString(),
-        email: user.email,
       });
 
       // Return response with session cookie and token

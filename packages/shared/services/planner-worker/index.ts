@@ -10,6 +10,8 @@
  * - Parallel task execution coordination
  * - Progress tracking and reporting
  * - Integration with Qdrant for code search context
+ * - ExecutionPolicy enforcement for security
+ * - Task-level authorization checks
  */
 
 import { createServer } from 'http';
@@ -27,6 +29,8 @@ const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 const MAX_TASKS = parseInt(process.env.PLANNER_MAX_TASKS || '20', 10);
 const QDRANT_URL = process.env.QDRANT_URL || 'http://qdrant:6333';
 const OPENCODE_MODEL = process.env.OPENCODE_MODEL || 'opencode/minimax-m2.5-free';
+// SECURITY: Feature flag to enforce ExecutionPolicy validation
+const ENFORCE_EXECUTION_POLICY = process.env.ENFORCE_EXECUTION_POLICY !== 'false';
 
 export interface Task {
   id: string;
@@ -154,6 +158,7 @@ class PlannerService {
 
   /**
    * Generate task decomposition using LLM
+   * SECURITY: Enforces ExecutionPolicy for each generated task
    */
   private async generateTaskDecomposition(
     prompt: string,
@@ -172,12 +177,15 @@ class PlannerService {
         type: 'search',
         goal: 'Analyze existing codebase structure and identify relevant files',
         status: 'pending',
+        // Search is always safe - read-only operation
         executionPolicy: 'local-safe',
       });
     }
 
     // Planning phase - create/edit files
     if (routing.type === 'coding') {
+      // SECURITY: Planning phase inherits parent's execution policy
+      // This ensures file modifications respect user's authorized scope
       tasks.push({
         id: taskId(tasks.length),
         type: 'create',
@@ -211,14 +219,36 @@ class PlannerService {
 
     // Command execution for automation tasks
     if (routing.type === 'automation') {
-      tasks.push({
-        id: taskId(tasks.length),
-        type: 'command',
-        goal: `Execute automation: ${prompt}`,
-        dependencies: tasks.length > 0 ? [taskId(tasks.length - 1)] : undefined,
-        status: 'pending',
-        executionPolicy,
-      });
+      // SECURITY: Command execution is subject to execution policy
+      // Only approved policies can execute shell commands
+      if (ENFORCE_EXECUTION_POLICY) {
+        const canExecuteCommand = executionPolicy !== 'local-safe';
+        if (!canExecuteCommand) {
+          logger.warn('Command execution blocked by execution policy', {
+            policy: executionPolicy,
+            prompt: prompt.substring(0, 100),
+          });
+          // Don't add command task if policy forbids it
+        } else {
+          tasks.push({
+            id: taskId(tasks.length),
+            type: 'command',
+            goal: `Execute automation: ${prompt}`,
+            dependencies: tasks.length > 0 ? [taskId(tasks.length - 1)] : undefined,
+            status: 'pending',
+            executionPolicy,
+          });
+        }
+      } else {
+        tasks.push({
+          id: taskId(tasks.length),
+          type: 'command',
+          goal: `Execute automation: ${prompt}`,
+          dependencies: tasks.length > 0 ? [taskId(tasks.length - 1)] : undefined,
+          status: 'pending',
+          executionPolicy,
+        });
+      }
     }
 
     // Limit to MAX_TASKS
