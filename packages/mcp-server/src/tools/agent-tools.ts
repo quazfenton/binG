@@ -6,6 +6,7 @@
  */
 
 import { z } from 'zod';
+import { randomUUID } from 'crypto';
 
 // ─── In-Memory Agent Registry ──────────────────────────────────────────────
 interface AgentSession {
@@ -39,10 +40,16 @@ function getActiveAgentCount(): number {
 // Cleanup stale agents (completed/failed > 1 hour ago)
 function cleanupStaleAgents(): void {
   const oneHourAgo = Date.now() - 3600000;
+  const toDelete: string[] = [];
+
   for (const [id, session] of agentRegistry.entries()) {
     if ((session.status === 'completed' || session.status === 'failed') && session.lastActivity < oneHourAgo) {
-      agentRegistry.delete(id);
+      toDelete.push(id);
     }
+  }
+
+  for (const id of toDelete) {
+    agentRegistry.delete(id);
   }
 }
 
@@ -76,7 +83,7 @@ export function createAgentTool() {
         };
       }
 
-      const agentId = `agent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const agentId = `agent-${randomUUID()}`;
 
       const session: AgentSession = {
         id: agentId,
@@ -236,7 +243,7 @@ export function spawnAgentSessionTool() {
         };
       }
 
-      const sessionId = `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const sessionId = `session-${randomUUID()}`;
 
       const session: AgentSession = {
         id: sessionId,

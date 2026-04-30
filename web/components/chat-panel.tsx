@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { type Message } from "@/types";
 import { toast } from "sonner";
-import { useVoiceInput } from "@/hooks/use-voice-input";
+import { useVoiceSettings } from "@/lib/voice/use-voice";
 import MessageBubble from "@/components/message-bubble";
 import Settings from "@/components/settings";
 import CodePreviewPanel from "@/components/code-preview-panel";
@@ -56,8 +56,8 @@ export function ChatPanel({
   onProviderChange,
   streamingState,
 }: ChatPanelProps) {
-  const { isListening, startListening, stopListening, transcript } =
-    useVoiceInput();
+  const { isListening, startListening, stopListening, transcription } =
+    useVoiceSettings();
 
   const [isCodePreviewOpen, setIsCodePreviewOpen] = useState(false);
   const [isAccessibilityOptionsOpen, setIsAccessibilityOptionsOpen] = useState(false);
@@ -152,10 +152,10 @@ export function ChatPanel({
   }, []);
 
   useEffect(() => {
-    if (transcript) {
-      setInput(transcript); // Use setInput directly
+    if (transcription) {
+      setInput(transcription); // Use setInput directly
     }
-  }, [transcript, setInput]);
+  }, [transcription, setInput]);
 
   // This function now takes the content string directly from InteractionPanel
   const handleUserMessageSubmit = (content: string) => {

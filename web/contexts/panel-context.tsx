@@ -2,7 +2,7 @@
 
 import React, { createContext, useContext, useState, useCallback } from "react";
 
-export type PanelTab = "explorer" | "chat" | "thinking" | "music" | "automations" | "youtube" | "forum" | "agent" | "compare" | "integrations" | "git" | "voice" | "remote" | "news" | "cronjobs" | "frontier-feed" | "command-deck" | "mcp-servers";
+export type PanelTab = "explorer" | "chat" | "thinking" | "music" | "automations" | "youtube" | "forum" | "agent" | "compare" | "integrations" | "git" | "voice" | "remote" | "news" | "cronjobs" | "frontier-feed" | "command-deck" | "mcp-servers" | "experience";
 
 export type TopPanelTab =
   | "news"

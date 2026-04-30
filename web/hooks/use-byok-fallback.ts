@@ -21,6 +21,8 @@ export function useBYOKFallback() {
   
   // Reset failure count when keys change (user added a key)
   useEffect(() => {
+    if (typeof window === 'undefined') return;
+
     const handleKeyChange = () => {
       setTotalFailureCount(0);
     };
@@ -46,6 +48,12 @@ export function useBYOKFallback() {
         // Automatically retry if no explicit onSuccess provided
         retryFn();
       }
+    } else {
+      // Provide user feedback on failure
+      setByokError(prev => prev ? {
+        ...prev,
+        errorMessage: 'Failed to save API key. Please check your key format and try again.'
+      } : null);
     }
   };
   

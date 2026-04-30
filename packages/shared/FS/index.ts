@@ -630,10 +630,10 @@ export class DesktopFileSystem implements IFileSystem {
   /**
    * Write a file to the local filesystem using Tauri FS API with baseDir
    */
-  async writeFile(path: string, content: string, language?: string): Promise<FSFile> {
+  async writeFile(filePath: string, content: string, language?: string): Promise<FSFile> {
     if (!this.tauriFs) throw new Error('Tauri FS not initialized');
     
-    const fullPath = this.resolvePath(path);
+    const fullPath = this.resolvePath(filePath);
     
     // Ensure parent directory exists (v2 uses absolute paths)
     const parentDir = path.dirname(fullPath);
@@ -650,7 +650,7 @@ export class DesktopFileSystem implements IFileSystem {
     return { 
       path: this.normalizePath(fullPath), 
       content, 
-      language: language || this.getLanguage(path), 
+      language: language || this.getLanguage(filePath), 
       lastModified: new Date().toISOString(), 
       createdAt: new Date().toISOString(), 
       size: stat.size 

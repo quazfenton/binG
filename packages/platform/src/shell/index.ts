@@ -8,8 +8,67 @@
 import { type DesktopConfig } from '../env';
 
 /**
+ * Sanitize and validate shell path to prevent PATH manipulation attacks.
+ * Ensures the path is an absolute, normalized path that exists and is executable.
+ */
+function validateShellPath(shellPath: string): string | null {
+  // Reject relative paths - prevents PATH manipulation
+  if (!shellPath.startsWith('/')) {
+    return null;
+  }
+  
+  // Reject paths with null bytes (poison null byte attack)
+  if (shellPath.includes('\0')) {
+    return null;
+  }
+  
+  // Normalize path to prevent directory traversal (e.g., /bin/../bin/sh)
+  let normalized: string;
+  try {
+    const pathModule = require('path');
+    normalized = pathModule.normalize(shellPath);
+  } catch {
+    // Fallback: convert backslashes and normalize traversal manually
+    normalized = shellPath.replace(/\\/g, '/');
+    // Remove any ../ components
+    while (normalized.includes('/../')) {
+      normalized = normalized.replace(/\/\.\.\//, '/');
+    }
+    // Remove any ./ components
+    normalized = normalized.replace(/\/\.\//g, '/');
+  }
+  
+  // Reject if path changed after normalization (directory traversal attempt)
+  // This catches cases like "/bin/../bin/sh" -> "/bin/sh"
+  if (normalized !== shellPath.replace(/\\/g, '/')) {
+    return null;
+  }
+  
+  // Validate file exists and is executable (on supported platforms)
+  try {
+    if (typeof require !== 'undefined') {
+      const fs = require('fs');
+      const stats = fs.statSync(normalized);
+      // Check if it's a file (not directory) and executable
+      if (stats.isFile()) {
+        const mode = stats.mode;
+        // Check owner execute permission (bit 6)
+        if (mode & 0o100) return normalized;
+      }
+    }
+  } catch {
+    // File doesn't exist or can't be accessed
+  }
+  
+  return null;
+}
+
+/**
  * Get the platform-appropriate shell command
  * Used by the sandbox provider for command execution
+ * 
+ * Security: Shell path is validated to prevent PATH manipulation attacks
+ * where a malicious user could inject a fake shell via environment variables.
  */
 export function getShellCommand(): { shell: string; args: string[] } {
   const platform = typeof process !== 'undefined' ? process.platform : 'linux';
@@ -18,34 +77,24 @@ export function getShellCommand(): { shell: string; args: string[] } {
     return { shell: 'powershell.exe', args: ['-NoProfile', '-Command'] };
   }
 
-  const userShell = typeof process !== 'undefined' ? process.env.SHELL : undefined;
   const fallbackShells = ['/bin/bash', '/bin/sh', '/usr/bin/bash', '/usr/bin/sh'];
 
-  // Try user shell first, then fallbacks
-  const shellsToTry = userShell ? [userShell, ...fallbackShells] : fallbackShells;
+  // NOTE: We do NOT trust process.env.SHELL directly as it could be
+  // manipulated in shared server environments. Instead, we only use
+  // well-known system paths that we can verify exist.
+  // If you need user-preferred shells, add them to the fallback list
+  // with proper validation.
 
-  for (const shell of shellsToTry) {
-    try {
-      if (typeof require !== 'undefined') {
-        try {
-          const fs = require('fs');
-          if (fs.existsSync(shell)) {
-            return { shell, args: ['-c'] };
-          }
-        } catch {
-          // Module not found or other require error
-          continue;
-        }
-      } else {
-        // Can't check - use first available
-        return { shell, args: ['-c'] };
-      }
-    } catch {
-      continue;
+  // Try known shells in order of preference
+  for (const shell of fallbackShells) {
+    const validated = validateShellPath(shell);
+    if (validated) {
+      return { shell: validated, args: ['-c'] };
     }
   }
 
-  // Final fallback
+  // Final fallback - last resort for compatibility
+  // Uses the safest possible option
   return { shell: '/bin/sh', args: ['-c'] };
 }
 

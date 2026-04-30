@@ -67,5 +67,29 @@ export async function initializeServer(): Promise<void> {
     });
   }
 
+  // Initialize task store and register cache export shutdown hook
+  try {
+    const { initializeTaskStore } = require('./memory/task-persistence');
+    await initializeTaskStore();
+    logger.info('✓ Task store initialized');
+  } catch (error) {
+    logger.warn('⏳ Task store initialization failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  // Register cache export shutdown hook (Node.js only)
+  if (typeof process !== 'undefined' && process.env.NODE_ENV !== 'test') {
+    try {
+      const { registerShutdownHook } = require('./memory/cache-exporter');
+      registerShutdownHook();
+      logger.info('✓ Cache export shutdown hook registered');
+    } catch (error) {
+      logger.warn('⏳ Cache export shutdown hook registration failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   logger.info('Server initialization complete');
 }

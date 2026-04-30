@@ -77,18 +77,37 @@ function validateWorkspacePath(filePath: string, workspaceRoot?: string): boolea
   
   // If workspace root is specified, ensure path is within it
   if (workspaceRoot) {
-    // Resolve filePath relative to workspaceRoot, not process.cwd()
-    const normalized = path.normalize(path.resolve(workspaceRoot, filePath));
-    const normalizedRoot = path.normalize(path.resolve(workspaceRoot));
-    
-    // Ensure root prefix ends with exactly one separator unless it's the root itself
-    const rootPrefix = normalizedRoot.endsWith(path.sep) ? normalizedRoot : normalizedRoot + path.sep;
-    
-    // Only allow if path is the root itself or starts with the root prefix
-    return normalized === normalizedRoot || normalized.startsWith(rootPrefix);
+    try {
+      // CRIT fix: Resolve symlinks via realpathSync before containment check.
+      // This prevents "symlink escape" attacks where a path looks like it is
+      // in the workspace but actually points outside.
+      const fullPath = path.resolve(workspaceRoot, filePath);
+      const normalizedRoot = fs.realpathSync(path.resolve(workspaceRoot));
+      
+      // If path doesn't exist yet, check its parent directory instead
+      let currentPath = fullPath;
+      while (currentPath !== path.parse(currentPath).root) {
+        try {
+          const real = fs.realpathSync(currentPath);
+          const normalized = path.normalize(real);
+          const rootPrefix = normalizedRoot.endsWith(path.sep) ? normalizedRoot : normalizedRoot + path.sep;
+          return normalized === normalizedRoot || normalized.startsWith(rootPrefix);
+        } catch (e: any) {
+          if (e.code === 'ENOENT') {
+            currentPath = path.dirname(currentPath);
+            continue;
+          }
+          throw e;
+        }
+      }
+      return false;
+    } catch (e) {
+      // If realpath fails (e.g. permission denied or invalid path), fail closed
+      return false;
+    }
   }
   
-  // Check against allowed prefixes
+  // Check against allowed prefixes (without symlink resolution, as these are generic)
   for (const prefix of ALLOWED_PREFIXES) {
     if (prefix && filePath.startsWith(prefix)) {
       return true;

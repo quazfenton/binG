@@ -36,5 +36,10 @@ const result = spawnSync(process.execPath, [mainScript, ...args], {
   shell: true,
 });
 
+if (result.error) {
+  console.error('Failed to launch CLI:', result.error.message);
+  process.exit(1);
+}
+
 // Forward exit code
-process.exit(result?.status !== null ? result.status : 1);
+process.exit(result.status !== null ? result.status : 1);
