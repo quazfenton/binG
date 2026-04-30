@@ -43,3 +43,11 @@ export {
   runCognitiveResonanceMode,
   type ResonanceConfig,
 } from './cognitive-resonance';
+
+export {
+  runExecutionControllerMode,
+  type ExecutionControllerConfig,
+  type Evaluation,
+  type CompletionScore,
+  type TriggerResult,
+} from './execution-controller';
