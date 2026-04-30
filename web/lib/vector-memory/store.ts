@@ -25,7 +25,8 @@ export class InMemoryVectorStore implements VectorStore {
   private entryOrder: string[] = []; // Track insertion order for LRU eviction
 
   constructor(options?: { maxEntries?: number }) {
-    this.maxEntries = options?.maxEntries ?? parseInt(process.env.VECTOR_STORE_MAX_ENTRIES || '5000', 10) || 5000;
+    const envMax = parseInt(process.env.VECTOR_STORE_MAX_ENTRIES || '5000', 10);
+    this.maxEntries = options?.maxEntries ?? (isNaN(envMax) ? 5000 : envMax);
   }
 
   async add(entry: VectorEntry): Promise<void> {

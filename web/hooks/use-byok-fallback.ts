@@ -1,28 +1,28 @@
-use client;
+"use client";
 
 import { useState, useEffect } from 'react';
 import { useApiKeys } from './use-api-keys';
 
 /**
  * Hook for managing BYOK (Bring Your Own Key) fallback UX
- * Tracks consecutive failures and shows BYOK input when appropriate
+ * Tracks consecutive total failures and shows BYOK input when appropriate
  */
 export function useBYOKFallback() {
-  const [failureCount, setFailureCount] = useState<Record<string, number>>({});
+  const [totalFailureCount, setTotalFailureCount] = useState(0);
   const [showBYOKInput, setShowBYOKInput] = useState(false);
   const [byokError, setByokError] = useState<{
     providerId: string;
     providerName: string;
     errorMessage: string;
+    onRetry?: () => void;
   } | null>(null);
   
   const { apiKeys, saveApiKey, getApiKey, hasApiKey } = useApiKeys();
   
   // Reset failure count when keys change (user added a key)
   useEffect(() => {
-    // Listen for key changes
     const handleKeyChange = () => {
-      setFailureCount({});
+      setTotalFailureCount(0);
     };
     
     window.addEventListener('user-api-keys-changed', handleKeyChange);
@@ -32,83 +32,90 @@ export function useBYOKFallback() {
   }, []);
   
   // Handle API key save from BYOK input
-  const handleApiKeySave = async (providerId: string, apiKey: string) => {
+  const handleApiKeySave = async (providerId: string, apiKey: string, options?: { onSuccess?: () => void }) => {
     const success = await saveApiKey(providerId, apiKey);
     if (success) {
       setShowBYOKInput(false);
+      const retryFn = byokError?.onRetry;
       setByokError(null);
-      setFailureCount({}); // Reset failure count
-      // Refresh the page to use the new key
-      window.location.reload();
+      setTotalFailureCount(0); // Reset failure count
+      
+      if (options?.onSuccess) {
+        options.onSuccess();
+      } else if (retryFn) {
+        // Automatically retry if no explicit onSuccess provided
+        retryFn();
+      }
     }
   };
   
   // Handle retry with same key
   const handleRetry = () => {
+    const retryFn = byokError?.onRetry;
     setShowBYOKInput(false);
     setByokError(null);
-    // Re-attempt the generation with the existing key
-    // The calling component should trigger the retry
-  };
-  
-  // Record a failure for a specific provider
-  const recordFailure = (providerId: string, error: Error) => {
-    const providerName = getProviderName(providerId);
-    const errorMessage = error.message;
-    
-    // Check if this is a key-related error
-    const isKeyError = isKeyRelatedError(errorMessage);
-    
-    if (isKeyError) {
-      setFailureCount(prev => ({
-        ...prev,
-        [providerId]: (prev[providerId] || 0) + 1
-      }));
-      
-      // For LLM chat, require 3 consecutive failures
-      // For image/video, show on first failure
-      const requiredFailures = isLLMProvider(providerId) ? 3 : 1;
-      
-      if ((failureCount[providerId] || 0) + 1 >= requiredFailures) {
-        // Check if user already has a key for this provider
-        const existingKey = getApiKey(providerId);
-        let customErrorMessage = errorMessage;
-        
-        if (existingKey) {
-          customErrorMessage = `Request failed with your ${providerName} API key. The key may be invalid, expired, or have insufficient credits.`;
-        } else {
-          customErrorMessage = `No ${providerName} API key configured. Please enter your API key to use this provider.`;
-        }
-        
-        setByokError({
-          providerId,
-          providerName,
-          errorMessage: customErrorMessage
-        });
-        setShowBYOKInput(true);
-      }
+    if (retryFn) {
+      retryFn();
     }
   };
   
-  // Reset failure count for a provider
-  const resetFailureCount = (providerId: string) => {
-    setFailureCount(prev => {
-      const newCount = { ...prev };
-      delete newCount[providerId];
-      return newCount;
+  /**
+   * Record a total failure (after all internal fallbacks failed)
+   * @param providerId Primary provider that was being used
+   * @param error The final error received
+   * @param type The type of generation ('chat', 'image', 'video')
+   * @param onRetry Callback to retry the operation
+   */
+  const recordTotalFailure = (providerId: string, error: Error, type: 'chat' | 'image' | 'video', onRetry?: () => void) => {
+    const providerName = getProviderName(providerId);
+    const errorMessage = error.message;
+    
+    if (type === 'chat') {
+      const newCount = totalFailureCount + 1;
+      setTotalFailureCount(newCount);
+      
+      // For LLM chat, require 3 consecutive BACK-TO-BACK total failures
+      if (newCount >= 3) {
+        triggerBYOK(providerId, providerName, errorMessage, onRetry);
+      }
+    } else {
+      // For image/video, show immediately on any total failure
+      triggerBYOK(providerId, providerName, errorMessage, onRetry);
+    }
+  };
+
+  const triggerBYOK = (providerId: string, providerName: string, errorMessage: string, onRetry?: () => void) => {
+    const existingKey = getApiKey(providerId);
+    let customErrorMessage = errorMessage;
+    
+    if (existingKey) {
+      customErrorMessage = `Request failed even with your custom ${providerName} key. The key might be invalid, expired, or rate-limited. You can update it below.`;
+    } else {
+      customErrorMessage = `All server-side fallbacks failed for ${providerName}. You can continue by providing your own API key.`;
+    }
+    
+    setByokError({
+      providerId,
+      providerName,
+      errorMessage: customErrorMessage,
+      onRetry
     });
+    setShowBYOKInput(true);
+  };
+  
+  const resetFailureCount = () => {
+    setTotalFailureCount(0);
   };
   
   return {
     showBYOKInput,
     byokError,
     setShowBYOKInput,
-    setByokError,
-    recordFailure,
+    recordTotalFailure,
     resetFailureCount,
     handleApiKeySave,
     handleRetry,
-    failureCount,
+    totalFailureCount,
   };
 }
 
@@ -149,11 +156,4 @@ function getProviderName(providerId: string): string {
     vercel: 'Vercel',
   };
   return providerNames[providerId.toLowerCase()] || providerId;
-}
-
-// Helper function to check if provider is LLM (vs image/video)
-function isLLMProvider(providerId: string): boolean {
-  // Image/video providers
-  const imageVideoProviders = ['mistral', 'google', 'vercel', 'replicate', 'cloudflare'];
-  return !imageVideoProviders.includes(providerId.toLowerCase());
 }

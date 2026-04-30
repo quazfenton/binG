@@ -80,8 +80,12 @@ function validateWorkspacePath(filePath: string, workspaceRoot?: string): boolea
     // Resolve filePath relative to workspaceRoot, not process.cwd()
     const normalized = path.normalize(path.resolve(workspaceRoot, filePath));
     const normalizedRoot = path.normalize(path.resolve(workspaceRoot));
-    // Only allow if path starts with root, NOT if root starts with path (which is insecure)
-    return normalized.startsWith(normalizedRoot + path.sep) || normalized === normalizedRoot;
+    
+    // Ensure root prefix ends with exactly one separator unless it's the root itself
+    const rootPrefix = normalizedRoot.endsWith(path.sep) ? normalizedRoot : normalizedRoot + path.sep;
+    
+    // Only allow if path is the root itself or starts with the root prefix
+    return normalized === normalizedRoot || normalized.startsWith(rootPrefix);
   }
   
   // Check against allowed prefixes

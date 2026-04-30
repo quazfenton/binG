@@ -10,6 +10,7 @@ import type {
   VideoGenerationResponse,
   VideoProviderConfig,
 } from '../types';
+import { VIDEO_QUALITY_PRESETS } from '../provider-registry';
 
 export class VercelVideoProvider implements VideoGenerationProvider {
   readonly id = 'vercel';

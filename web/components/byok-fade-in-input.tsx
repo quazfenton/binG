@@ -1,9 +1,9 @@
-use client";
-
+"use client";
 import React, { useState, useEffect, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Key, Save, X, AlertTriangle, RefreshCw } from 'lucide-react';
+import { Key, Save, X, AlertTriangle, RefreshCw, Eye, EyeOff, Loader2 } from 'lucide-react';
+import { Label } from '@/components/ui/label';
 import { toast } from 'sonner';
 import { motion, AnimatePresence } from 'framer-motion';
 

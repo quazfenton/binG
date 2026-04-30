@@ -72,6 +72,36 @@ export class GoogleVideoProvider implements VideoGenerationProvider {
         }
       },
       {
+        id: 'google:veo-3.1-generate-preview',
+        tags: ['text-to-video', 'paid'],
+        type: 'text-to-video',
+        capabilities: {
+          maxDuration: 64,
+          resolutions: [{ width: 2560, height: 1440 }],
+          styles: ['cinematic', 'realistic', 'fantasy', 'sci-fi', 'anime']
+        }
+      },
+      {
+        id: 'google:veo-3.1-fast-generate-preview',
+        tags: ['text-to-video', 'paid', 'fast'],
+        type: 'text-to-video',
+        capabilities: {
+          maxDuration: 16,
+          resolutions: [{ width: 1920, height: 1080 }],
+          styles: ['cinematic', 'realistic', 'fantasy']
+        }
+      },
+      {
+        id: 'google:veo-3.1-lite-generate-preview',
+        tags: ['text-to-video', 'paid', 'lite'],
+        type: 'text-to-video',
+        capabilities: {
+          maxDuration: 8,
+          resolutions: [{ width: 1280, height: 720 }],
+          styles: ['cinematic', 'realistic']
+        }
+      },
+      {
         id: 'google:veo-3.1-generate-001',
         tags: ['text-to-video', 'paid'],
         type: 'text-to-video',

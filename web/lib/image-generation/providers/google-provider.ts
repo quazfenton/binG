@@ -127,15 +127,6 @@ export class GoogleImageProvider implements ImageGenerationProvider {
       } else {
         console.log('[GoogleImageProvider] Using paid model:', model);
       }
-      
-      // Validate that we only use free tier models unless explicitly allowed
-      const allowedModels = this.models;
-      if (!allowedModels.includes(model)) {
-        throw this.createError(
-          `Model ${model} is not available in the free tier or not supported by Google Imagen.`,
-          ErrorType.INVALID_MODEL
-        );
-      }
 
       console.log('[GoogleImageProvider] Generating image with model:', model);
 
