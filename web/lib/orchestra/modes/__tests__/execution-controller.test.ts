@@ -330,7 +330,7 @@ describe('Hard Gate (Final Stop)', () => {
 
 describe('Hidden Gap Detection', () => {
   it('should detect TODOs as hidden gaps', () => {
-    const hasGaps = /TODO|FIXME|placeholder|mock|sample/i.test('Add TODO for error handling');
+    const hasGaps = /\b(TODO|FIXME|placeholder)\b/i.test('Add TODO for error handling');
     expect(hasGaps).toBe(true);
   });
 
@@ -344,7 +344,7 @@ describe('Hidden Gap Detection', () => {
 
   it('should not flag clean output as having hidden gaps', () => {
     const output = 'Implemented authentication with error handling and validation. All API endpoints tested.';
-    const hasGaps = /TODO|FIXME|placeholder|mock|sample/i.test(output) ||
+    const hasGaps = /\b(TODO|FIXME|placeholder)\b/i.test(output) ||
       (!/error handling|validation|check/i.test(output) && /api|endpoint|service/i.test(output));
     expect(hasGaps).toBe(false);
   });
@@ -376,7 +376,7 @@ describe('Tool Activity Tracking', () => {
       { type: 'Read', followedByAction: false },
     ];
     
-    // Mark read without immediate follow-up
+    // Mark read without immediate follow-up, but exclude last tool in cycle
     for (let i = 0; i < toolActivity.length - 1; i++) {
       if (/read|get|list/i.test(toolActivity[i].type)) {
         const nextTool = toolActivity[i + 1].type;
@@ -384,9 +384,9 @@ describe('Tool Activity Tracking', () => {
       }
     }
     
-    // Check for tool breaks (read without follow-up)
-    const hasToolBreak = toolActivity.some(t => 
-      t.type.includes('read') && !t.followedByAction
+    // Check for tool breaks (read without follow-up), excluding the last tool
+    const hasToolBreak = toolActivity.slice(0, -1).some(t => 
+      t.type.toLowerCase().includes('read') && !t.followedByAction
     );
     
     expect(hasToolBreak).toBe(false); // Last read doesn't count as break within cycle

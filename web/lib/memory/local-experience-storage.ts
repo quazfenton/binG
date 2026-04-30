@@ -103,7 +103,10 @@ class FileSystemBackend implements StorageBackend {
 
   constructor() {
     // Use ~/.quaz for config directory (not XDG to match user expectation)
-    const homeDir = process.env.HOME || process.env.USERPROFILE || '~';
+    const homeDir = process.env.HOME || process.env.USERPROFILE;
+    if (!homeDir) {
+      throw new Error('Cannot determine home directory for local storage');
+    }
     const configDir = process.env.QUAZ_CONFIG_DIR || `${homeDir}/.quaz`;
     this.filePath = `${configDir}/experiences.json`;
     this.location = this.filePath;
@@ -181,6 +184,7 @@ export class LocalExperienceStorage {
   private saveDebounceMs = 1000; // Debounce saves by 1 second
   private isDirty = false;
   private pendingResolve: (() => void) | null = null;
+  private latestExperiences: AgentExperience[] | null = null;
 
   constructor(options?: { backend?: StorageBackend }) {
     this.backend = options?.backend || this.createDefaultBackend();
@@ -213,9 +217,11 @@ export class LocalExperienceStorage {
 
   /**
    * Save experiences to local storage (debounced)
+   * Note: Only the latest state will be saved. Intermediate updates between debounce calls may be lost.
    */
   async save(experiences: AgentExperience[]): Promise<void> {
     this.isDirty = true;
+    this.latestExperiences = experiences;
     
     // Clear existing timer and pending resolve
     if (this.saveDebounceTimer) {
@@ -232,7 +238,9 @@ export class LocalExperienceStorage {
       this.pendingResolve = resolve;
       this.saveDebounceTimer = setTimeout(async () => {
         this.pendingResolve = null;
-        await this.backend.save(experiences);
+        if (this.latestExperiences) {
+          await this.backend.save(this.latestExperiences);
+        }
         this.isDirty = false;
         resolve();
       }, this.saveDebounceMs);

@@ -39,9 +39,9 @@ export const BulkOperationsBar: React.FC<BulkOperationsBarProps> = ({ selectedCo
     <div className={cn("flex items-center gap-2 p-3 bg-secondary rounded-lg", className)}>
       <span className="text-sm font-medium">{selectedCount} selected</span>
       <div className="flex-1" />
-      {config.onDelete && <Button size="sm" variant="destructive" onClick={() => config.onDelete?.([])}><Trash2 className="w-4 h-4 mr-1" />Delete</Button>}
-      {config.onRename && <Button size="sm" variant="outline" onClick={() => config.onRename?.('', '')}><Edit3 className="w-4 h-4 mr-1" />Rename</Button>}
-      {config.onExport && <Button size="sm" variant="outline" onClick={() => config.onExport?.([])}><Download className="w-4 h-4 mr-1" />Export</Button>}
+      {config.onDelete && <Button size="sm" variant="destructive" onClick={() => config.onDelete?.(Array.from(selectedIds))}><Trash2 className="w-4 h-4 mr-1" />Delete</Button>}
+      {config.onRename && <Button size="sm" variant="outline" onClick={() => { const id = Array.from(selectedIds)[0]; if (id) config.onRename?.(id, '') }}><Edit3 className="w-4 h-4 mr-1" />Rename</Button>}
+      {config.onExport && <Button size="sm" variant="outline" onClick={() => config.onExport?.(Array.from(selectedIds))}><Download className="w-4 h-4 mr-1" />Export</Button>}
       <Button size="sm" variant="ghost" onClick={onClear}>Clear</Button>
     </div>
   )

@@ -22,8 +22,8 @@ export function MatrixChatTab() {
       <div className="flex-1 overflow-y-auto space-y-4 mb-4">
         {messages.map((msg) => (
           <div key={msg.id} className="p-2 bg-slate-800 rounded">
-            <span className="font-bold text-blue-400">{msg.sender}: </span>
-            {msg.content}
+            <span className="font-bold text-blue-400">{msg.sender.replace(/[&<>"']/g, "")}: </span>
+            {msg.content.replace(/[&<>"']/g, "")}
           </div>
         ))}
       </div>

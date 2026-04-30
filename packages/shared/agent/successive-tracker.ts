@@ -101,10 +101,14 @@ export function resetTracker(sessionId: string): void {
  */
 export function cleanupTrackers(maxAgeMs: number = 30 * 60 * 1000): void {
   const now = Date.now();
+  const toDelete: string[] = [];
   for (const [sessionId, tracker] of trackers.entries()) {
     if (now - tracker.lastResponseTime > maxAgeMs) {
-      trackers.delete(sessionId);
+      toDelete.push(sessionId);
     }
+  }
+  for (const sessionId of toDelete) {
+    trackers.delete(sessionId);
   }
 }
 

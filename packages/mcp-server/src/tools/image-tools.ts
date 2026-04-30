@@ -291,31 +291,42 @@ async function generateWithReplicate(prompt: string, width: number, height: numb
     const delay = Math.min(2000 * Math.pow(1.5, i), 15000);
     await new Promise(r => setTimeout(r, delay));
 
-    const statusResponse = await fetch(predictionUrl, {
-      headers: { Authorization: `Bearer ${apiToken}` },
-      signal: AbortSignal.timeout(30000),
-    });
+    try {
+      const statusResponse = await fetch(predictionUrl, {
+        headers: { Authorization: `Bearer ${apiToken}` },
+        signal: AbortSignal.timeout(30000),
+      });
 
-    const status = (await statusResponse.json()) as { status?: string; error?: string; output?: string | string[] };      if (status.status === 'succeeded') {
-      // Return all images if multiple were generated, otherwise the single URL
-      const imageUrls = Array.isArray(status.output) ? status.output : [status.output as string];
-      const imageUrl = imageUrls[0]; // Use the first one for the single-image result structure
+      const status = (await statusResponse.json()) as { status?: string; error?: string; output?: string | string[] };
+      if (status.status === 'succeeded') {
+        // Return all images if multiple were generated, otherwise the single URL
+        const imageUrls = Array.isArray(status.output) ? status.output : [status.output as string];
+        const imageUrl = imageUrls[0]; // Use the first one for the single-image result structure
 
-      // Validate image URL is present and non-empty before returning
-      if (!imageUrl || typeof imageUrl !== 'string' || imageUrl.trim() === '') {
-        throw new Error('No valid image URL returned from Replicate prediction');
+        // Validate image URL is present and non-empty before returning
+        if (!imageUrl || typeof imageUrl !== 'string' || imageUrl.trim() === '') {
+          throw new Error('No valid image URL returned from Replicate prediction');
+        }
+
+        return {
+          success: true,
+          url: imageUrl,
+          prompt,
+          provider: 'replicate',
+        };
       }
 
-      return {
-        success: true,
-        url: imageUrl,
-        prompt,
-        provider: 'replicate',
-      };
-    }
-
-    if (status.status === 'failed' || status.status === 'canceled') {
-      throw new Error(`Replicate prediction ${status.status}: ${status.error || 'Unknown error'}`);
+      if (status.status === 'failed' || status.status === 'canceled') {
+        throw new Error(`Replicate prediction ${status.status}: ${status.error || 'Unknown error'}`);
+      }
+    } catch (err) {
+      // On network errors, log and continue to next polling iteration
+      console.error(`Network error polling prediction (attempt ${i + 1}/30):`, err);
+      if (i === 29) {
+        // If this is the last attempt and we have a network error, throw it
+        throw new Error(`Failed to poll Replicate prediction after 30 attempts: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      }
+      // Otherwise continue to next iteration
     }
   }
 
