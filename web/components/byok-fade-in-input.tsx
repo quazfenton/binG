@@ -112,29 +112,17 @@ export default function BYOKFadeInInput({
             <div className="relative">
               <Input
                 ref={inputRef}
-                type={showPassword ? 'text' : 'password'}
+                type="password"
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
                 onKeyDown={handleKeyDown}
                 placeholder={`sk-${providerId}-...`}
-                className="bg-black/50 border-white/20 text-white placeholder:text-gray-600 pr-10"
+                className="bg-black/50 border-white/20 text-white placeholder:text-gray-600"
               />
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => setShowPassword(!showPassword)}
-                className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7 p-0 text-gray-400 hover:text-white"
-              >
-                {showPassword ? (
-                  <EyeOff className="h-3 w-3" />
-                ) : (
-                  <Eye className="h-3 w-3" />
-                )}
-              </Button>
             </div>
             {initialApiKey && (
               <p className="text-xs text-gray-400 mt-2">
-                Current key: {showPassword ? initialApiKey : '••••••••'}
+                Current key is saved.
               </p>
             )}
           </div>
@@ -156,7 +144,7 @@ export default function BYOKFadeInInput({
         </div>
 
         <div className="flex gap-3">
-          {initialApiKey && (
+          {initialApiKey && apiKey === initialApiKey && (
             <Button
               variant="outline"
               onClick={onRetry}

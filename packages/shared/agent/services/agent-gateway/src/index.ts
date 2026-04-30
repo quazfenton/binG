@@ -19,19 +19,17 @@ const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 const REDIS_STREAM_KEY = process.env.REDIS_STREAM_KEY || 'agent:events';
 const JOB_TIMEOUT_MS = parseInt(process.env.JOB_TIMEOUT_MS || '300000');
 const SESSION_TIMEOUT_MS = parseInt(process.env.SESSION_TIMEOUT_MS || '3600000');
-const PUBSUB_CHANNEL = 'agent:events';
 const JOB_QUEUE = 'agent:jobs';
 const SESSIONS_KEY = 'agent:sessions';
 
 const redis = new Redis(REDIS_URL);
 const redisPub = new Redis(REDIS_URL);
 
-// PERF fix: Single shared subscription connection with multiplexing
-// Previously, each SSE stream created a new Redis connection — this could exhaust
-// connections under high traffic. Now we use one subscriber that routes events
-// to the correct SSE client by sessionId.
+const PUBSUB_CHANNEL = 'agent:events';
 const sharedSubscriber = new Redis(REDIS_URL);
 const sseClients = new Map<string, Set<(event: AgentEvent) => void>>();
+
+sharedSubscriber.subscribe(PUBSUB_CHANNEL);
 
 // PERF fix: Single shared subscriber uses psubscribe (pattern match) to catch all
 // session-specific channels AND the global channel in one subscription.
@@ -297,8 +295,9 @@ async function start() {
     const sessions: any[] = [];
     const stream = redis.scanStream({ match: `${SESSIONS_KEY}:*`, count: 100 });
     for await (const keys of stream as AsyncIterable<string[]>) {
-      for (const key of keys) {
-        const data = await redis.hgetall(key);
+      // PERF fix: Batch hgetall calls using Promise.all to reduce sequential round-trips
+      const results = await Promise.all(keys.map(key => redis.hgetall(key)));
+      for (const data of results) {
         if (data && data.id) {
           sessions.push({ id: data.id, userId: data.userId, status: data.status, createdAt: parseInt(data.createdAt || '0') });
         }

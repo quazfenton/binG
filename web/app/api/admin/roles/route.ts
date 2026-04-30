@@ -23,7 +23,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ success: false, error: 'userId query parameter is required' }, { status: 400 });
   }
 
-  const roles = getUserRoles(userId);
+  const roles = await getUserRoles(userId);
   return NextResponse.json({ success: true, roles });
 }
 
@@ -61,7 +61,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const result = grantRole({
+    const result = await grantRole({
       userId,
       role,
       resource,
@@ -74,7 +74,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Audit log
-    logAdminAction({
+    await logAdminAction({
       actorUserId: admin.userId,
       action: 'role:grant',
       targetUserId: userId,
@@ -116,14 +116,14 @@ export async function DELETE(request: NextRequest) {
       );
     }
 
-    const result = revokeRole(userId, role, resource);
+    const result = await revokeRole(userId, role, resource);
 
     if (!result.success) {
       return NextResponse.json({ success: false, error: result.error }, { status: 500 });
     }
 
     // Audit log
-    logAdminAction({
+    await logAdminAction({
       actorUserId: admin.userId,
       action: 'role:revoke',
       targetUserId: userId,

@@ -116,8 +116,11 @@ async function generateKittenTTS(text: string, voice: string, model: string) {
 
     pythonProcess.on('close', async (code) => {
       if (code !== 0) {
-        // Cleanup temp text file on error (HIGH-6: prevent temp file leaks)
-        await fs.unlink(textFilePath).catch(() => {});
+        // Cleanup temp files on error (HIGH-6: prevent temp file leaks)
+        await Promise.all([
+          fs.unlink(textFilePath).catch(() => {}),
+          fs.unlink(outputPath).catch(() => {}),
+        ]);
         resolve({
           content: [{ type: 'text' as const, text: `KittenTTS error: ${stderr || 'exit code ' + code}` }],
           isError: true,

@@ -137,10 +137,13 @@ import ImageGenerationTab from "./image-generation-tab";
 import SquareSplitHorizontal from "lucide-react/dist/esm/icons/square-split-horizontal";
 import Bell from "lucide-react/dist/esm/icons/bell";
 import { ImportDialog } from "./file-import/import-dialog";
-import { useVoiceInput } from "../hooks/use-voice-input";
+import { useVoiceSettings } from "../lib/voice/use-voice";
+import { VoiceToggleButton } from "./voice/voice-toggle";
 import { getSponsorAd, trackAdView, adsEnabled, type EthicalAdResponse } from "../lib/ads/ethical-ads-service";
 import { ResponseStyleSelector } from "./response-style-selector";
 import { ResponseStyleProvider, useResponseStyle } from "@/contexts/response-style-context";
+// VoiceToggleButton already imported above
+// import { VoiceToggleButton } from "./voice/voice-toggle";
 
 // Pop-out plugin windows for Plugins tab
 const popOutPlugins: Plugin[] = [
@@ -505,7 +508,7 @@ export default function InteractionPanel({
   }, [onClearPendingInput]);
 
   // Voice input
-  const { isListening, startListening, stopListening, transcript } = useVoiceInput();
+  const { isListening, startListening, stopListening, transcription } = useVoiceSettings();
 
   // Rotating sponsor ad (EthicalAds)
   const [sponsorAd, setSponsorAd] = useState<EthicalAdResponse | null>(null);
@@ -523,10 +526,10 @@ export default function InteractionPanel({
   }, []);
 
   useEffect(() => {
-    if (transcript) {
-      setInput(input + transcript);
+    if (transcription) {
+      setInput(input + transcription);
     }
-  }, [transcript, setInput]);
+  }, [transcription, setInput]);
 
   const handleVoiceToggle = useCallback(() => {
     if (isListening) {
@@ -2055,22 +2058,7 @@ export default function InteractionPanel({
                       >
                         <Cloud className="w-4 h-4 text-blue-400" />
                       </button>
-                      <button
-                        type="button"
-                        onClick={handleVoiceToggle}
-                        className={`p-1.5 rounded-md border transition-colors ${
-                          isListening
-                            ? "bg-red-500/20 border-red-400/50 animate-pulse"
-                            : "bg-white/5 border-white/10 hover:bg-white/15"
-                        }`}
-                        title={isListening ? "Stop listening" : "Voice input"}
-                      >
-                        {isListening ? (
-                          <MicOff className="w-4 h-4 text-red-400" />
-                        ) : (
-                          <Mic className="w-4 h-4 text-white/60" />
-                        )}
-                      </button>
+                      <VoiceToggleButton />
                     </div>
 
                     {showFileSelector && (
@@ -2281,32 +2269,35 @@ export default function InteractionPanel({
                       </div>
                     )}
                   </div>
-                  {isProcessing && onStopGeneration ? (
-                    <Button
-                      type="button"
-                      variant="destructive"
-                      className="self-end min-w-[80px] bg-red-600/80 hover:bg-red-600 border border-red-500/50 rounded-2xl z-20"
-                      onClick={onStopGeneration}
-                    >
-                      <Square className="h-4 w-4 mr-2" />
-                      Stop
-                    </Button>
-                  ) : (
-                    <Button
-                      type="submit"
-                      className="self-end min-w-[80px] bg-white/10 hover:bg-white/20 border border-white/20 rounded-2xl z-20"
-                      disabled={isProcessing || !input.trim()}
-                    >
-                      {isProcessing ? (
-                        <Loader2 className="h-4 w-4 thinking-spinner" />
-                      ) : (
-                        <>
-                          <Send className="h-4 w-4 mr-2" />
-                          Send
-                        </>
-                      )}
-                    </Button>
-                  )}
+                  <div className="flex gap-2 self-end">
+                    <VoiceToggleButton className="mb-0.5" />
+                    {isProcessing && onStopGeneration ? (
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        className="min-w-[80px] bg-red-600/80 hover:bg-red-600 border border-red-500/50 rounded-2xl z-20"
+                        onClick={onStopGeneration}
+                      >
+                        <Square className="h-4 w-4 mr-2" />
+                        Stop
+                      </Button>
+                    ) : (
+                      <Button
+                        type="submit"
+                        className="min-w-[80px] bg-white/10 hover:bg-white/20 border border-white/20 rounded-2xl z-20"
+                        disabled={isProcessing || !input.trim()}
+                      >
+                        {isProcessing ? (
+                          <Loader2 className="h-4 w-4 thinking-spinner" />
+                        ) : (
+                          <>
+                            <Send className="h-4 w-4 mr-2" />
+                            Send
+                          </>
+                        )}
+                      </Button>
+                    )}
+                  </div>
 
                   {/* Pending Input Indicator */}
                   {pendingInput && (

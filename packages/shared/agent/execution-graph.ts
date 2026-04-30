@@ -144,6 +144,13 @@ export class ExecutionGraphEngine {
       throw new Error(`Node "${node.id}" has a self-dependency (cycle). Remove the self-reference.`);
     }
 
+    // Validate that all dependencies exist in the graph
+    for (const depId of node.dependencies) {
+      if (!graph.nodes.has(depId)) {
+        throw new Error(`Dependency node "${depId}" does not exist in the graph. Add all dependencies before referencing them.`);
+      }
+    }
+
     const newNode: ExecutionNode = {
       ...node,
       status: node.dependencies.length === 0 ? 'pending' : 'blocked',

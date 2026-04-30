@@ -135,6 +135,8 @@ export class EnhancedBackgroundJobsManager extends EventEmitter {
   // P0-2 fix: Separate dedup lookup map — dedupId → jobId, so we can find the real job
   // when a dedup ID is computed from job config (jobs are stored under their random UUID jobId).
   private dedupLookup: Map<string, string> = new Map();
+  // Tracking ongoing job starts to prevent race conditions during deduplication
+  private pendingStarts: Map<string, Promise<EnhancedJob>> = new Map();
   // P0-3 fix: Dead Letter Queue — retain failed jobs for inspection/replay instead of discarding
   private failedJobs: Map<string, EnhancedJob & { sessionId?: string; args?: string[]; tags?: string[]; quotaCategory?: string; maxExecutions?: number; timeout?: number }> = new Map();
   private readonly MAX_FAILED_JOBS = parseInt(process.env.BG_JOBS_DLQ_MAX_SIZE || '100', 10) || 100;
@@ -182,9 +184,35 @@ export class EnhancedBackgroundJobsManager extends EventEmitter {
   }
 
   /**
-   * Start a new background job with enhanced tracking
+   * Start a new background job with enhanced tracking.
+   * 
+   * P0-2 fix: Includes atomic check-and-set for deduplication to prevent 
+   * concurrent requests from starting the same job twice.
    */
   async startJob(config: EnhancedJobConfig): Promise<EnhancedJob> {
+    const dedupId = config.jobId || this.computeDedupJobId(config);
+    
+    // Check if this specific job is already being started
+    const pending = this.pendingStarts.get(dedupId);
+    if (pending) {
+      logger.debug('Waiting for existing job start to complete', { dedupId });
+      return pending;
+    }
+
+    // Create start promise to act as a lock
+    const startPromise = (async () => {
+      try {
+        return await this.performStartJob(config, dedupId);
+      } finally {
+        this.pendingStarts.delete(dedupId);
+      }
+    })();
+
+    this.pendingStarts.set(dedupId, startPromise);
+    return startPromise;
+  }
+
+  private async performStartJob(config: EnhancedJobConfig, dedupId: string): Promise<EnhancedJob> {
     const jobId = config.jobId || randomUUID();
     
     logger.debug('Starting background job', {
@@ -201,10 +229,6 @@ export class EnhancedBackgroundJobsManager extends EventEmitter {
       throw new Error(`Background job already exists: ${jobId}`);
     }
 
-    // P0-2 fix: Job deduplication — derive a dedup ID from the job config so identical
-    // jobs are detected. Jobs are stored under their random UUID jobId, so we use a
-    // separate dedupLookup map (dedupId → jobId) to find the real job.
-    const dedupId = config.jobId || this.computeDedupJobId(config);
     const existingJobId = this.dedupLookup.get(dedupId);
     if (existingJobId) {
       const existingJob = this.jobs.get(existingJobId);

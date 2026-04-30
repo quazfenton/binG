@@ -131,7 +131,8 @@ export function getNotificationBackend(): 'desktop-tauri' | 'browser-api' | 'una
   if (isDesktopMode()) {
     return 'desktop-tauri';
   }
-  if (typeof window !== 'undefined' && 'Notification' in window) {
+  // Robust check for browser Notification API (safeguard for SSR/Edge)
+  if (typeof window !== 'undefined' && typeof window.Notification !== 'undefined') {
     return 'browser-api';
   }
   return 'unavailable';
@@ -143,9 +144,11 @@ export function getNotificationBackend(): 'desktop-tauri' | 'browser-api' | 'una
  * (e.g. web push with VAPID keys) — not just the browser Notification API.
  */
 export function hasPushNotificationBackend(): boolean {
-  // Check for VAPID public key — indicates a real push service is configured
-  if (typeof process !== 'undefined' && process.env) {
-    return !!process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
+  // Check for VAPID public key — indicates a real push service is configured.
+  // Validate key format roughly (Base64URL, usually ~87 chars) to avoid false positives from placeholder text.
+  if (typeof process !== 'undefined' && process.env?.NEXT_PUBLIC_VAPID_PUBLIC_KEY) {
+    const key = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
+    return key.length > 20 && !key.includes('YOUR_');
   }
   return false;
 }

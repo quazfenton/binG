@@ -72,31 +72,27 @@ interface AgentEvent {
   timestamp: number;
 }
 
-// Track active jobs to prevent race conditions
-const activeJobIds = new Set<string>();
-const jobLocks = new Map<string, Promise<void>>();
-
 let opencodeEngine: OpenCodeEngine;
 let bullWorker: Worker<AgentJob> | null = null;
 
 /**
- * Acquire job lock to prevent concurrent execution of same job
+ * Acquire job lock to prevent concurrent execution of same job.
+ * Uses Redis-based distributed locking for atomicity across worker instances.
  */
-async function acquireJobLock(jobId: string): Promise<() => void> {
-  while (jobLocks.has(jobId)) {
-    await jobLocks.get(jobId);
+async function acquireJobLock(jobId: string): Promise<(() => Promise<void>) | null> {
+  const lockKey = `lock:job:${jobId}`;
+  const lockTimeout = 3600000; // 1 hour (matches JOB_TIMEOUT_MS)
+
+  // Try to acquire lock via Redis SET NX
+  const result = await redis.set(lockKey, 'locked', 'PX', lockTimeout, 'NX');
+  
+  if (result !== 'OK') {
+    return null; // Lock already held
   }
 
-  let releaseLock: () => void;
-  const lockPromise = new Promise<void>(resolve => {
-    releaseLock = resolve;
-  });
-
-  jobLocks.set(jobId, lockPromise);
-
-  return () => {
-    jobLocks.delete(jobId);
-    releaseLock!();
+  // Return release function
+  return async () => {
+    await redis.del(lockKey);
   };
 }
 
@@ -122,14 +118,12 @@ async function runOpenCode(job: Job<AgentJob>): Promise<void> {
   const jobId = job.id!;
   const releaseLock = await acquireJobLock(jobId);
 
+  if (!releaseLock) {
+    logger.warn('Job already being processed (lock held), skipping', { jobId });
+    return;
+  }
+
   try {
-    if (activeJobIds.has(jobId)) {
-      logger.warn('Job already being processed, skipping', { jobId });
-      return;
-    }
-
-    activeJobIds.add(jobId);
-
     const { sessionId, userId, conversationId, prompt, context } = job.data;
     const startTime = Date.now();
 
@@ -292,8 +286,7 @@ async function runOpenCode(job: Job<AgentJob>): Promise<void> {
       throw error;
     }
   } finally {
-    activeJobIds.delete(jobId);
-    releaseLock();
+    await releaseLock();
   }
 }
 
@@ -372,7 +365,7 @@ const server = http.createServer(async (req: any, res: any) => {
       engine: engineHealthy ? 'ready' : 'starting',
       redis: redisHealthy ? 'connected' : 'disconnected',
       bullWorker: workerHealthy ? 'running' : 'stopped',
-      activeJobs: activeJobIds.size,
+      activeJobs: 0, // In-memory tracking replaced by Redis locks
     }));
   } else if (req.url === '/ready') {
     const ready = (opencodeEngine?.isHealthy() ?? false) && bullWorker !== null;
@@ -397,22 +390,27 @@ startWorker().catch(err => {
 // Graceful shutdown with timeout
 async function shutdown() {
   logger.info('Worker shutting down gracefully...');
+  const SHUTDOWN_STEP_TIMEOUT = 5000;
+
+  const withTimeout = (promise: Promise<any>, name: string) => 
+    Promise.race([
+      promise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error(`${name} shutdown timed out`)), SHUTDOWN_STEP_TIMEOUT))
+    ]);
 
   try {
     server.close();
 
     if (bullWorker) {
-      await bullWorker.close();
-      logger.info('BullMQ worker closed');
+      await withTimeout(bullWorker.close(), 'BullMQ worker').catch(err => logger.warn(err.message));
     }
 
     if (opencodeEngine) {
-      await opencodeEngine.shutdown();
-      logger.info('OpenCode engine shut down');
+      await withTimeout(opencodeEngine.shutdown(), 'OpenCode engine').catch(err => logger.warn(err.message));
     }
 
-    await redis.quit();
-    await redisPub.quit();
+    await withTimeout(redis.quit(), 'Redis client').catch(() => redis.disconnect());
+    await withTimeout(redisPub.quit(), 'Redis publisher').catch(() => redisPub.disconnect());
     logger.info('Redis connections closed');
 
     logger.info('Worker shutdown complete');

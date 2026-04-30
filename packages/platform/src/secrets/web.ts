@@ -296,6 +296,9 @@ class WebSecrets implements SecretsAdapter {
   }
 
   async set(key: string, value: string): Promise<void> {
+    // ⚠️ SECURITY WARNING: This stores secrets in browser-accessible storage.
+    // Client-side encryption is obfuscation, NOT true security.
+    // DO NOT use this for production root keys or high-value credentials.
     const db = await this.getDB();
     const cryptoKey = await this.getKey();
     const encrypted = await encrypt(value, cryptoKey);

@@ -43,6 +43,23 @@ SELECT
     email_verified, email_verification_token_hash, email_verification_expires, token_version
 FROM users;
 
+-- 2b. Update foreign keys in referencing tables to ensure types match
+-- This prevents issues with strict foreign key checks in some environments
+UPDATE api_credentials SET user_id = CAST(user_id AS TEXT);
+UPDATE conversations SET user_id = CAST(user_id AS TEXT);
+UPDATE usage_logs SET user_id = CAST(user_id AS TEXT);
+UPDATE user_preferences SET user_id = CAST(user_id AS TEXT);
+UPDATE external_connections SET user_id = CAST(user_id AS TEXT);
+UPDATE oauth_sessions SET user_id = CAST(user_id AS TEXT);
+UPDATE service_permissions SET user_id = CAST(user_id AS TEXT);
+UPDATE sessions SET user_id = CAST(user_id AS TEXT);
+UPDATE user_sessions SET user_id = CAST(user_id AS TEXT);
+UPDATE user_roles SET user_id = CAST(user_id AS TEXT), granted_by = CAST(granted_by AS TEXT);
+UPDATE admin_audit_log SET actor_user_id = CAST(actor_user_id AS TEXT), target_user_id = CAST(target_user_id AS TEXT);
+UPDATE user_mfa SET user_id = CAST(user_id AS TEXT);
+UPDATE skills SET user_id = CAST(user_id AS TEXT);
+UPDATE shadow_commits SET owner_id = 'user:' || CAST(SUBSTR(owner_id, 6) AS TEXT) WHERE owner_id LIKE 'user:%';
+
 -- 3. Drop old table and rename new one
 DROP TABLE users;
 ALTER TABLE users_new RENAME TO users;

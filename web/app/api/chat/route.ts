@@ -574,17 +574,20 @@ export async function POST(request: NextRequest) {
       // Only allow exact model match or prefix match (e.g., "gpt-4" matches "gpt-4-turbo")
       // Reject suffix-only matches like "free" or "latest" that could match multiple models
       const isModelSupported = selectedProvider.models.some(
-        m => m === model || m.startsWith(`${model}:`)
+        m => {
+          const modelId = typeof m === 'string' ? m : (m as any).id;
+          return modelId === model || modelId.startsWith(`${model}:`);
+        }
       );
 
       if (!isModelSupported) {
         chatLogger.error('Model not supported', { requestId, provider, model }, {
-          availableModels: selectedProvider.models,
+          availableModels: selectedProvider.models.map(m => typeof m === 'string' ? m : (m as any).id),
         });
         return NextResponse.json(
           {
             error: `Model ${model} is not supported by ${provider}`,
-            availableModels: selectedProvider.models,
+            availableModels: selectedProvider.models.map(m => typeof m === 'string' ? m : (m as any).id),
           },
           { status: 400 },
         );
@@ -602,9 +605,15 @@ export async function POST(request: NextRequest) {
 
     // Normalize model name to match PROVIDERS constant
     // Only allow exact match or prefix match, not suffix-only matches
-    const normalizedModel = selectedProvider.models.find(
-      m => m === model || m.startsWith(`${model}:`)
-    ) || model;
+    const normalizedModelEntry = selectedProvider.models.find(
+      m => {
+        const modelId = typeof m === 'string' ? m : (m as any).id;
+        return modelId === model || modelId.startsWith(`${model}:`);
+      }
+    );
+    const normalizedModel = typeof normalizedModelEntry === 'string' 
+      ? normalizedModelEntry 
+      : (normalizedModelEntry as any)?.id || model;
     const attachedFilesystemFiles = normalizeFilesystemContext(filesystemContext?.attachedFiles);
 
     // Extract @mentions from the last user message to prioritize files

@@ -50,17 +50,28 @@ export async function POST(request: NextRequest) {
     }
 
     // Decrypt and verify TOTP code
-    const secret = decryptTotpSecret(mfaRecord.secret_encrypted);
+    let secret: string;
+    try {
+      secret = decryptTotpSecret(mfaRecord.secret_encrypted);
+    } catch (decryptError) {
+      console.error('[MFA Verify] Decryption failed:', decryptError);
+      return NextResponse.json({ success: false, error: 'Failed to decrypt MFA secret' }, { status: 500 });
+    }
+
     const totpResult = verifyTotpCode(secret, code);
     if (!totpResult.valid) {
       return NextResponse.json({ success: false, error: 'Invalid verification code' }, { status: 401 });
     }
 
-    // Enable MFA
-    db.prepare(`
+    // Enable MFA - including is_enabled = FALSE condition to prevent race conditions
+    const updateResult = db.prepare(`
       UPDATE user_mfa SET is_enabled = TRUE, verified_at = CURRENT_TIMESTAMP
-      WHERE user_id = ? AND mfa_type = ?
+      WHERE user_id = ? AND mfa_type = ? AND is_enabled = FALSE
     `).run(authResult.userId, 'totp');
+
+    if (updateResult.changes === 0) {
+      return NextResponse.json({ success: false, error: 'MFA already enabled or setup invalid' }, { status: 400 });
+    }
 
     return NextResponse.json({
       success: true,

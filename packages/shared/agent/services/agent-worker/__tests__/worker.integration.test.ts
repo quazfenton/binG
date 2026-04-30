@@ -93,7 +93,16 @@ describe('Agent Worker Integration Tests', () => {
       }
 
       expect(jobs.length).toBe(jobCount);
-      const waiting = await queue.getWaitingCount();
+      
+      // PERF fix: Wait for jobs to settle in the waiting state
+      // BullMQ may take a moment to reflect the waiting count accurately
+      let waiting = 0;
+      for (let i = 0; i < 5; i++) {
+        waiting = await queue.getWaitingCount();
+        if (waiting === jobCount) break;
+        await new Promise(r => setTimeout(r, 100));
+      }
+      
       expect(waiting).toBe(jobCount);
     });
 
@@ -258,9 +267,14 @@ describe('Agent Worker Integration Tests', () => {
   });
 
   describe('Event Stream', () => {
-    it('should publish events to Redis Stream', async () => {
-      const streamKey = 'agent:events';
+    const streamKey = 'agent:events';
 
+    beforeEach(async () => {
+      // PERF fix: Ensure clean stream state before each test
+      await redis.del(streamKey);
+    });
+
+    it('should publish events to Redis Stream', async () => {
       // Add an event
       const eventData = JSON.stringify({
         type: 'job:started',
@@ -281,7 +295,6 @@ describe('Agent Worker Integration Tests', () => {
     });
 
     it('should preserve event sequence', async () => {
-      const streamKey = 'agent:events';
       const sessionId = 'sequence-test';
 
       // Publish events in order

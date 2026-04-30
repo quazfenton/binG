@@ -1344,13 +1344,13 @@ export default function Settings({
                   ) : voiceEnabled ? (
                     <Mic className="h-4 w-4 mr-2 text-blue-400" />
                   ) : (
-                    <MicOff className="h-4 w-4 mr-2" />
+                    <MicOff className="h-4 w-4 mr-2 text-white/30" />
                   )}
-                  <Label htmlFor="voice-input">Voice Input</Label>
+                  <Label htmlFor="voice-input">Voice Recognition</Label>
                 </div>
                 <div
-                  className={`custom-toggle ${voiceEnabled ? 'active' : ''}`}
-                  onClick={() => onVoiceToggle && onVoiceToggle(!voiceEnabled)}
+                  className={`custom-toggle ${isListening ? 'active' : ''}`}
+                  onClick={() => isListening ? stopListening() : startListening()}
                 >
                   <div className="custom-toggle-slider" />
                 </div>

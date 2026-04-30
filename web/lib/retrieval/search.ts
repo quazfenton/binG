@@ -31,8 +31,59 @@ export interface TabMemory {
 }
 
 const TAB_MEMORIES = new Map<string, TabMemory>();
+const TAB_MEMORY_TTL_MS = 30 * 60 * 1000; // 30 minutes TTL
+const MAX_TAB_MEMORIES = 100; // Maximum number of tab memories
+
+// Export TAB_MEMORIES for cache-exporter integration
+export { TAB_MEMORIES };
+
+/**
+ * Evict oldest entries if cache exceeds max size.
+ * Called automatically when adding new entries.
+ */
+function evictOldestTabMemories(): number {
+  if (TAB_MEMORIES.size < MAX_TAB_MEMORIES) return 0;
+  let cleaned = 0;
+  // Remove oldest entries until under limit (Map maintains insertion order)
+  while (TAB_MEMORIES.size >= MAX_TAB_MEMORIES && TAB_MEMORIES.size > 0) {
+    const firstKey = TAB_MEMORIES.keys().next().value;
+    if (firstKey) {
+      TAB_MEMORIES.delete(firstKey);
+      cleaned++;
+    }
+  }
+  return cleaned;
+}
+
+/**
+ * Cleanup stale tab memories to prevent memory leaks.
+ * Called periodically or on memory pressure.
+ */
+export function cleanupStaleTabMemories(): number {
+  const now = Date.now();
+  let cleaned = 0;
+  for (const [tabId, mem] of TAB_MEMORIES.entries()) {
+    // Check if tab memory is stale (empty and older than TTL)
+    const isStale = !mem.lastQueries.length && !mem.recentSymbols.length;
+    if (isStale || TAB_MEMORIES.size > MAX_TAB_MEMORIES) {
+      TAB_MEMORIES.delete(tabId);
+      cleaned++;
+    }
+  }
+  return cleaned;
+}
+
+/**
+ * Clear all tab memories (for testing or reset)
+ */
+export function clearAllTabMemories(): void {
+  TAB_MEMORIES.clear();
+}
 
 export function getTabMemory(tabId: string, projectId: string): TabMemory {
+  // Auto-evict if at capacity
+  evictOldestTabMemories();
+  
   if (!TAB_MEMORIES.has(tabId)) {
     TAB_MEMORIES.set(tabId, {
       tabId,
@@ -71,6 +122,77 @@ export function recordSymbolAccess(tabId: string, symbolId: string): void {
   const mem = TAB_MEMORIES.get(tabId);
   if (!mem) return;
   mem.recentSymbols = [symbolId, ...mem.recentSymbols.filter((s) => s !== symbolId)].slice(0, 50);
+}
+
+// ─── Tab Memory Export/Import for Cache Persistence ─────────────────────────
+
+/**
+ * Get all tab memories for export (cache persistence)
+ */
+export function getAllTabMemories(): TabMemory[] {
+  return Array.from(TAB_MEMORIES.values());
+}
+
+/**
+ * Set a tab memory (for cache restoration)
+ */
+export function setTabMemory(tabId: string, mem: TabMemory): void {
+  // Convert openFiles from array back to Set if needed
+  const entry: TabMemory = {
+    ...mem,
+    openFiles: mem.openFiles instanceof Set ? mem.openFiles : new Set(mem.openFiles),
+  };
+  TAB_MEMORIES.set(tabId, entry);
+}
+
+/**
+ * Get tab memory by ID
+ */
+export function getTabMemoryById(tabId: string): TabMemory | undefined {
+  return TAB_MEMORIES.get(tabId);
+}
+
+/**
+ * Delete a tab memory
+ */
+export function deleteTabMemory(tabId: string): boolean {
+  return TAB_MEMORIES.delete(tabId);
+}
+
+/**
+ * Clear all tab memories
+ */
+export function clearAllTabMemories(): void {
+  TAB_MEMORIES.clear();
+}
+
+/**
+ * Get tab memory statistics
+ */
+export function getTabMemoryStats(): {
+  count: number;
+  maxSize: number;
+  oldestEntry: number | null;
+  newestEntry: number | null;
+} {
+  const entries = Array.from(TAB_MEMORIES.values());
+  let oldest: number | null = null;
+  let newest: number | null = null;
+  
+  for (const mem of entries) {
+    const time = mem.lastQueries.length > 0 ? Date.now() : null;
+    if (time !== null) {
+      if (oldest === null || time < oldest) oldest = time;
+      if (newest === null || time > newest) newest = time;
+    }
+  }
+  
+  return {
+    count: TAB_MEMORIES.size,
+    maxSize: MAX_TAB_MEMORIES,
+    oldestEntry: oldest,
+    newestEntry: newest,
+  };
 }
 
 // ─── Grep (keyword) Search ────────────────────────────────────────────────────

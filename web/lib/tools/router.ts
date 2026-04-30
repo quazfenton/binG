@@ -1,4 +1,4 @@
-// FORCE RECOMPILE: 1775662791909
+// Tool capability router
 /**
  * Capability Router - Maps capabilities to actual tool providers
  *
@@ -19,7 +19,7 @@ import {
   ALL_CAPABILITIES,
   type CapabilityCategory,
 } from './capabilities';
-import type { ToolExecutionContext, ToolExecutionResult } from './tool-integration/types';
+import type { ToolExecutionContext, ToolExecutionResult, LatencyBudget } from './tool-integration/types';
 import { getToolManager } from './index';
 import { getArcadeService } from '../integrations/arcade-service';
 import { getNangoService } from '../integrations/nango-service';
@@ -1103,11 +1103,159 @@ class GitHelperProvider implements CapabilityProvider {
 }
 
 /**
+ * Task Provider - handles task/plan management capabilities
+ */
+class TaskProvider implements CapabilityProvider {
+  readonly id = 'memory-service';
+  readonly name = 'Task Manager';
+  readonly capabilities = [
+    'task.list', 'task.create', 'task.edit', 'task.delete', 'task.search',
+    'task.getUnfinished', 'memory.store', 'memory.retrieve'
+  ];
+
+  private taskStore: any = null;
+
+  async isAvailable(): Promise<boolean> {
+    try {
+      const { getTaskStore } = await import('../memory/task-persistence');
+      this.taskStore = getTaskStore();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async execute(
+    capabilityId: string,
+    input: any,
+    context: ToolExecutionContext
+  ): Promise<ToolExecutionResult> {
+    if (!this.taskStore) {
+      await this.isAvailable();
+    }
+    if (!this.taskStore) {
+      return { success: false, error: 'Task store not available' };
+    }
+
+    try {
+      switch (capabilityId) {
+        case 'task.list': {
+          const filter: any = {};
+          if (input.status) filter.status = [input.status];
+          if (input.retention) filter.retention = [input.retention];
+          if (input.tags) filter.tags = input.tags;
+          const tasks = this.taskStore.getAll(filter).slice(0, input.limit || 20);
+          return {
+            success: true,
+            output: tasks.map(t => ({
+              id: t.id, title: t.title, description: t.description,
+              status: t.status, retention: t.retention, priority: t.priority,
+              progress: t.progress, steps: t.steps, tags: t.tags,
+              createdAt: t.createdAt, updatedAt: t.updatedAt,
+            })),
+          };
+        }
+
+        case 'task.create': {
+          const task = await this.taskStore.create({
+            title: input.title,
+            description: input.description,
+            steps: input.steps?.map((s: any, i: number) => ({
+              description: s.description,
+              order: s.order ?? i,
+            })),
+            priority: input.priority ?? 50,
+            retention: input.retention ?? 'queued',
+            tags: input.tags ?? [],
+            parentId: input.parentId,
+            dueDate: input.dueDate,
+          });
+          return {
+            success: true,
+            output: {
+              success: true,
+              task: { id: task.id, title: task.title, status: task.status, steps: task.steps },
+            },
+          };
+        }
+
+        case 'task.edit': {
+          const updates: any = {};
+          if (input.title) updates.title = input.title;
+          if (input.description) updates.description = input.description;
+          if (input.priority !== undefined) updates.priority = input.priority;
+          if (input.tags) updates.tags = input.tags;
+          if (input.status) updates.status = input.status;
+
+          if (input.addSteps) {
+            await this.taskStore.appendSteps(input.taskId, input.addSteps);
+          }
+          if (input.editStep) {
+            await this.taskStore.editStep(input.taskId, input.editStep.stepId, {
+              description: input.editStep.description,
+              status: input.editStep.status,
+              notes: input.editStep.notes,
+            });
+          }
+          if (input.reorderSteps) {
+            await this.taskStore.reorderSteps(input.taskId, input.reorderSteps);
+          }
+
+          const task = await this.taskStore.update(input.taskId, updates);
+          return {
+            success: !!task,
+            output: {
+              success: !!task,
+              task: task ? { id: task.id, title: task.title, steps: task.steps } : null,
+            },
+          };
+        }
+
+        case 'task.delete': {
+          const deleted = await this.taskStore.delete(input.taskId);
+          return { success: deleted, output: { success: deleted } };
+        }
+
+        case 'task.search': {
+          const tasks = this.taskStore.search(input.query).slice(0, input.limit || 10);
+          return {
+            success: true,
+            output: tasks.map(t => ({
+              id: t.id, title: t.title, description: t.description,
+              status: t.status, tags: t.tags,
+            })),
+          };
+        }
+
+        case 'task.getUnfinished': {
+          const tasks = this.taskStore.getUnfinishedTasks({
+            limit: input.limit ?? 10,
+            minAge: input.minAgeMs,
+          });
+          return {
+            success: true,
+            output: tasks.map(t => ({
+              id: t.id, title: t.title, status: t.status,
+              priority: t.priority, progress: t.progress, updatedAt: t.updatedAt,
+            })),
+          };
+        }
+
+        default:
+          return { success: false, error: `Unknown task capability: ${capabilityId}` };
+      }
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  }
+}
+
+/**
  * Memory Service Provider - key-value storage with TTL and namespaces
  * Uses KV store for persistent storage (Redis/SQLite/in-memory)
  */
 class MemoryServiceProvider implements CapabilityProvider {
-  readonly id = 'memory-service';
+  readonly id = 'memory-service-kv';
   readonly name = 'Memory Service';
   readonly capabilities = ['memory.store', 'memory.retrieve'];
 
@@ -1765,6 +1913,9 @@ export class CapabilityRouter {
     this.registerProvider(new NullclawProvider());
     this.registerProvider(new NativeWebFetchProvider());
     this.registerProvider(new BlaxelProvider());
+    // Register TaskProvider first (handles task.* + memory.* via task store)
+    this.registerProvider(new TaskProvider());
+    // Register MemoryServiceProvider for KV store operations (renamed to avoid ID conflict)
     this.registerProvider(new MemoryServiceProvider());
     this.registerProvider(new RipgrepProvider());
     this.registerProvider(new ContextPackProvider());
@@ -1783,7 +1934,7 @@ export class CapabilityRouter {
    * Get the best available provider for a capability (synchronous check)
    * For async checks, the provider will be validated during execution
    */
-  private selectProvider(capability: CapabilityDefinition): CapabilityProvider | null {
+  private selectProvider(capability: CapabilityDefinition, latencyBudget?: LatencyBudget): CapabilityProvider | null {
     const availableProviders: Array<{ provider: CapabilityProvider; score: number }> = [];
 
     for (const providerId of capability.providerPriority) {
@@ -1795,7 +1946,7 @@ export class CapabilityRouter {
       // Handle both sync and async availability checks
       if (available === true || available instanceof Promise) {
         // Score this provider based on metadata
-        const score = this.scoreProvider(providerId, capability);
+        const score = this.scoreProvider(providerId, capability, latencyBudget);
         availableProviders.push({ provider, score });
       }
     }
@@ -1813,15 +1964,27 @@ export class CapabilityRouter {
    * Score a provider based on capability metadata and learned agency data
    * Higher score = better choice
    */
-  private scoreProvider(providerId: string, capability: CapabilityDefinition): number {
+  private scoreProvider(providerId: string, capability: CapabilityDefinition, latencyBudget?: LatencyBudget): number {
     let score = 100; // Base score
 
     // Apply metadata-based scoring
     if (capability.metadata) {
-      // Latency scoring
-      if (capability.metadata.latency === 'low') score += 20;
-      else if (capability.metadata.latency === 'medium') score += 10;
-      else if (capability.metadata.latency === 'high') score -= 10;
+      // Latency scoring (adjust based on budget)
+      if (latencyBudget === 'fast') {
+        // For fast budget, heavily penalize high-latency providers
+        if (capability.metadata.latency === 'low') score += 30;
+        else if (capability.metadata.latency === 'medium') score -= 10;
+        else if (capability.metadata.latency === 'high') score -= 40;
+      } else if (latencyBudget === 'quality') {
+        // For quality budget, reward accuracy over speed
+        if (capability.metadata.latency === 'high') score += 15;
+        else if (capability.metadata.latency === 'low') score -= 5;
+      } else {
+        // Balanced: default latency scoring
+        if (capability.metadata.latency === 'low') score += 20;
+        else if (capability.metadata.latency === 'medium') score += 10;
+        else if (capability.metadata.latency === 'high') score -= 10;
+      }
 
       // Cost scoring
       if (capability.metadata.cost === 'low') score += 15;
@@ -1896,8 +2059,11 @@ export class CapabilityRouter {
       }
     }
 
+    // Extract latency budget from context for provider selection
+    const latencyBudget: LatencyBudget | undefined = context.latencyBudget;
+
     // Try execution with self-healing retry
-    return this.executeWithSelfHeal(capabilityId, validatedInput, context, capability);
+    return this.executeWithSelfHeal(capabilityId, validatedInput, context, capability, 2, latencyBudget);
   }
 
   /**
@@ -1911,13 +2077,14 @@ export class CapabilityRouter {
     context: ToolExecutionContext,
     capability: CapabilityDefinition,
     maxAttempts: number = 2,
+    latencyBudget?: LatencyBudget,
   ): Promise<ToolExecutionResult> {
     let lastError = '';
     let attempt = 0;
 
     while (attempt < maxAttempts) {
       attempt++;
-      const result = await this.tryAllProviders(capabilityId, input, context, capability);
+      const result = await this.tryAllProviders(capabilityId, input, context, capability, latencyBudget);
 
       if (result.success) return result;
 
@@ -1956,8 +2123,9 @@ export class CapabilityRouter {
     input: any,
     context: ToolExecutionContext,
     capability: CapabilityDefinition,
+    latencyBudget?: LatencyBudget,
   ): Promise<ToolExecutionResult> {
-    const providerScores = this.getScoredProviders(capability);
+    const providerScores = this.getScoredProviders(capability, latencyBudget);
     const errors: string[] = [];
 
     for (const { providerId, provider, score } of providerScores) {
@@ -2049,7 +2217,7 @@ Return ONLY the corrected input object as JSON.`,
   /**
    * Get providers sorted by score (highest first)
    */
-  private getScoredProviders(capability: CapabilityDefinition): Array<{
+  private getScoredProviders(capability: CapabilityDefinition, latencyBudget?: LatencyBudget): Array<{
     providerId: string;
     provider: CapabilityProvider;
     score: number;
@@ -2060,7 +2228,13 @@ Return ONLY the corrected input object as JSON.`,
       const provider = this.providers.get(providerId);
       if (!provider) continue;
 
-      const score = this.scoreProvider(providerId, capability);
+      const score = this.scoreProvider(providerId, capability, latencyBudget);
+      
+      // Skip high-latency providers for 'fast' budget
+      if (latencyBudget === 'fast' && capability.metadata?.latency === 'high') {
+        continue;
+      }
+      
       scored.push({ providerId, provider, score });
     }
 
