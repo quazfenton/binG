@@ -57,6 +57,7 @@ import { Readable } from 'stream';
 // RTK CLI Commands - Token-optimized command execution for LLM consumption
 import { registerRTKCommands } from "./lib/rtk-cli-commands.js";
 
+import { registerTaskCommands } from "./lib/task-commands.js";
 // Load environment variables
 dotenv.config();
 
@@ -1476,6 +1477,44 @@ async function confirm(question: string): Promise<boolean> {
 /**
  * Interactive chat loop
  */
+
+// ============================================================================
+// Task Context for CLI Chat - Re-context reminders
+// ============================================================================
+
+async function getTaskContextForChat(): Promise<string> {
+  try {
+    const result = await apiRequest('/memory/task/getUnfinished', {
+      method: 'POST',
+      data: { limit: 5 },
+    }).catch(() => null);
+    
+    if (!result || !result.tasks?.length) return '';
+    
+    const tasks = result.tasks;
+    const taskList = tasks.map((t) => {
+      const progress = Math.round((t.progress || 0) * 100);
+      const steps = t.steps || [];
+      const completed = steps.filter((s) => s.status === 'completed').length;
+      return '- ' + t.title + ' [' + t.status + '] ' + progress + '% (' + completed + '/' + steps.length + ')';
+    }).join('
+');
+    
+    return '
+
+' +
+      '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+' +
+      '📋 PENDING TASKS (for re-context):
+' +
+      taskList + '
+' +
+      '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━';
+  } catch (err) {
+    return '';
+  }
+}
+
 async function chatLoop(options: { agent?: string; stream?: boolean }): Promise<void> {
   const config = loadConfig();
   const auth = loadAuth();
@@ -1511,6 +1550,11 @@ async function chatLoop(options: { agent?: string; stream?: boolean }): Promise<
 ╚═══════════════════════════════════════════════════════════╝
   `));
   
+
+  // Show pending tasks for re-context
+  const taskContext = await getTaskContextForChat();
+  if (taskContext) console.log(taskContext);
+
   const messages: any[] = [];
   
   // Add system message with fallback prompt instructions
@@ -5504,6 +5548,41 @@ async function runTUI(designName: string = 'avantgarde'): Promise<void> {
 // MAIN ENTRY POINT
 // ============================================================================
 
+// ============================================================================
+// Task Persistence Initialization
+// ============================================================================
+
+/**
+ * Initialize task store and register cache export shutdown hook.
+ * Uses getDirname() for bundled mode compatibility.
+ */
+async function initializeTaskPersistence(): Promise<void> {
+  try {
+    const path = await import('path');
+    const { getDirname } = await import('./lib/get-dirname.js');
+    const basePath = getDirname();
+
+    const taskPersistencePath = path.join(basePath, '..', '..', 'web', 'lib', 'memory', 'task-persistence.js');
+    const cacheExporterPath = path.join(basePath, '..', '..', 'web', 'lib', 'memory', 'cache-exporter.js');
+
+    try {
+      const taskPersistence = await import(taskPersistencePath);
+      if (taskPersistence.initializeTaskStore) {
+        await taskPersistence.initializeTaskStore();
+        console.log('✓ Task store initialized');
+      }
+    } catch (err) { /* task persistence not available */ }
+
+    try {
+      const cacheExporter = await import(cacheExporterPath);
+      if (cacheExporter.registerShutdownHook) {
+        cacheExporter.registerShutdownHook();
+        console.log('✓ Cache export shutdown hook registered');
+      }
+    } catch (err) { /* cache export not available */ }
+  } catch (err) { /* silently skip */ }
+}
+
 const args = process.argv.slice(2);
 
 // (localMode is hoisted to the top of the file)
@@ -5524,6 +5603,16 @@ if (args.length === 0) {
     } catch (err) {
       console.warn('RTK commands not available:', err.message);
     }
+
+  initializeTaskPersistence().catch(() => {});
+
+
+  // Register Task Commands
+  try {
+    registerTaskCommands(program, apiRequest, prompt);
+  } catch (err) {
+    console.warn('Task commands not available:', err.message);
+  }
 
 program.parse();
 }

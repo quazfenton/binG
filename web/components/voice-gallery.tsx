@@ -149,7 +149,20 @@ export function VoiceSettingsPanel() {
               className="rounded"
             />
             <label htmlFor="auto-speak" className="text-sm font-medium">
-              Auto-Speak Responses
+              Auto-Speak Full Response
+            </label>
+          </div>
+
+          <div className="flex items-center space-x-3">
+            <input
+              type="checkbox"
+              id="auto-speak-stream"
+              checked={settings.autoSpeakStream}
+              onChange={(e) => updateSettings({ autoSpeakStream: e.target.checked })}
+              className="rounded"
+            />
+            <label htmlFor="auto-speak-stream" className="text-sm font-medium">
+              Auto-Speak Stream (Incremental)
             </label>
           </div>
 

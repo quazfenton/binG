@@ -1289,6 +1289,1028 @@ export async function createPlanTask(
   return { rootTask, stepTasks };
 }
 
+/**
+ * Multi-perspective analysis viewpoints for step enrichment
+ */
+export enum StepPerspective {
+  /** Technical implementation perspective */
+  TECHNICAL = 'technical',
+  /** Quality assurance perspective */
+  QA = 'qa',
+  /** User experience perspective */
+  UX = 'ux',
+  /** Security and compliance perspective */
+  SECURITY = 'security',
+}
+
+/**
+ * Enrichment quality metrics
+ */
+export interface EnrichmentMetrics {
+  /** Clarity score (0-100) */
+  clarity: number;
+  /** Completeness score (0-100) */
+  completeness: number;
+  /** Actionability score (0-100) */
+  actionability: number;
+  /** Risk assessment score (0-100) */
+  riskAssessment: number;
+  /** Overall quality score (0-100) */
+  overall: number;
+}
+
+/**
+ * Micro-step for hierarchical segmentation
+ */
+export interface MicroStep {
+  /** Step description */
+  description: string;
+  /** Order index */
+  order: number;
+  /** Perspective that generated this step */
+  perspective?: StepPerspective;
+  /** Dependencies on other micro-steps */
+  dependencies?: string[];
+  /** Risk level (low/medium/high) */
+  riskLevel?: 'low' | 'medium' | 'high';
+  /** Time estimate in minutes (optional) */
+  estimatedMinutes?: number;
+}
+
+/**
+ * Multi-perspective enriched step result
+ */
+export interface MultiPerspectiveEnrichment {
+  /** Original step description */
+  original: string;
+  /** Enriched step description */
+  enriched: string;
+  /** Detailed breakdown by perspective */
+  perspectives: {
+    technical: string;
+    qa: string;
+    ux: string;
+    security: string;
+  };
+  /** Micro-steps from hierarchical segmentation */
+  microSteps: MicroStep[];
+  /** Quality metrics */
+  metrics: EnrichmentMetrics;
+  /** Risk flags */
+  risks: string[];
+  /** Recommendations */
+  recommendations: string[];
+}
+
+/**
+ * Technical perspective analysis
+ */
+function analyzeFromTechnicalPerspective(step: string, context?: string): string {
+  const analysis: string[] = [];
+  
+  // Architecture considerations
+  if (/implement|create|add/i.test(step)) {
+    analysis.push('• Consider modularity and separation of concerns');
+    analysis.push('• Evaluate integration points with existing systems');
+    analysis.push('• Assess performance implications and scalability');
+  }
+  
+  // Error handling
+  if (/fix|update|refactor/i.test(step)) {
+    analysis.push('• Identify potential side effects and dependencies');
+    analysis.push('• Plan for backward compatibility if applicable');
+    analysis.push('• Document API contracts and interfaces');
+  }
+  
+  // Code quality
+  analysis.push('• Follow existing coding standards and patterns');
+  analysis.push('• Include error handling and edge case coverage');
+  analysis.push('• Consider logging and observability requirements');
+  
+  return analysis.join('\n');
+}
+
+/**
+ * QA perspective analysis
+ */
+function analyzeFromQAPerspective(step: string, context?: string): string {
+  const analysis: string[] = [];
+  
+  // Testability
+  analysis.push('• Define clear success criteria and acceptance tests');
+  analysis.push('• Identify edge cases and boundary conditions');
+  
+  // Verification
+  if (/test|verify|check/i.test(step)) {
+    analysis.push('• Specify test data requirements and fixtures');
+    analysis.push('• Plan for automated regression testing');
+  } else {
+    analysis.push('• Plan manual and automated verification steps');
+  }
+  
+  // Quality gates
+  if (/implement|create|add/i.test(step)) {
+    analysis.push('• Consider integration testing with dependent components');
+    analysis.push('• Define performance benchmarks if applicable');
+  }
+  
+  // Documentation
+  analysis.push('• Ensure test coverage meets quality thresholds');
+  analysis.push('• Document expected behavior and edge cases');
+  
+  return analysis.join('\n');
+}
+
+/**
+ * UX perspective analysis
+ */
+function analyzeFromUXPerspective(step: string, context?: string): string {
+  const analysis: string[] = [];
+  
+  // User impact
+  if (/implement|create|add/i.test(step)) {
+    analysis.push('• Evaluate impact on user workflows and experience');
+    analysis.push('• Consider accessibility requirements (WCAG compliance)');
+    analysis.push('• Plan for user onboarding if behavior changes');
+  }
+  
+  // Feedback
+  if (/fix|update/i.test(step)) {
+    analysis.push('• Consider how changes affect existing user expectations');
+    analysis.push('• Plan communication strategy for behavior changes');
+  }
+  
+  // Usability
+  analysis.push('• Ensure UI/UX consistency with existing patterns');
+  analysis.push('• Consider error messages and user guidance');
+  analysis.push('• Plan for gradual rollout if significant change');
+  
+  return analysis.join('\n');
+}
+
+/**
+ * Security perspective analysis
+ */
+function analyzeFromSecurityPerspective(step: string, context?: string): string {
+  const analysis: string[] = [];
+  
+  // Input validation
+  if (/implement|create|add|fix/i.test(step)) {
+    analysis.push('• Validate all input data and sanitize user content');
+    analysis.push('• Apply principle of least privilege');
+    analysis.push('• Consider authentication and authorization requirements');
+  }
+  
+  // Data handling
+  if (/test|verify|check/i.test(step)) {
+    analysis.push('• Review data exposure and privacy implications');
+  } else {
+    analysis.push('• Ensure sensitive data is handled securely');
+    analysis.push('• Consider encryption requirements for data at rest/transit');
+  }
+  
+  // Compliance
+  analysis.push('• Audit trail and logging for sensitive operations');
+  analysis.push('• Consider regulatory compliance (GDPR, SOC2, etc.)');
+  analysis.push('• Plan security review if handling PII or financial data');
+  
+  return analysis.join('\n');
+}
+
+/**
+ * Segment step into hierarchical micro-steps
+ */
+function segmentIntoMicroSteps(step: string, context?: string): MicroStep[] {
+  const microSteps: MicroStep[] = [];
+  let order = 0;
+  
+  // Helper to add dependency safely (only if there are previous steps)
+  const addDependency = (): string[] => {
+    if (microSteps.length > 0) {
+      return [microSteps[microSteps.length - 1].description];
+    }
+    return [];
+  };
+  
+  // Phase 1: Discovery/Planning
+  const hasImplementation = /implement|create|add/i.test(step);
+  const hasFix = /fix|update|refactor/i.test(step);
+  const hasTesting = /test|verify|check/i.test(step);
+  
+  if (hasImplementation || hasFix) {
+    // Add planning micro-steps
+    microSteps.push({
+      description: 'Research and gather requirements for: ' + step,
+      order: order++,
+      perspective: StepPerspective.TECHNICAL,
+      riskLevel: 'low',
+      estimatedMinutes: 15,
+    });
+    
+    microSteps.push({
+      description: 'Design solution architecture',
+      order: order++,
+      perspective: StepPerspective.TECHNICAL,
+      dependencies: [microSteps[0].description],
+      riskLevel: 'medium',
+      estimatedMinutes: 20,
+    });
+  }
+  
+  // Phase 2: Implementation
+  if (hasImplementation) {
+    microSteps.push({
+      description: 'Implement core functionality for: ' + step,
+      order: order++,
+      perspective: StepPerspective.TECHNICAL,
+      riskLevel: 'medium',
+      estimatedMinutes: 60,
+    });
+    
+    microSteps.push({
+      description: 'Add error handling and edge cases',
+      order: order++,
+      perspective: StepPerspective.TECHNICAL,
+      dependencies: addDependency(),
+      riskLevel: 'medium',
+      estimatedMinutes: 20,
+    });
+  }
+  
+  if (hasFix) {
+    microSteps.push({
+      description: 'Identify root cause of: ' + step,
+      order: order++,
+      perspective: StepPerspective.QA,
+      riskLevel: 'high',
+      estimatedMinutes: 30,
+    });
+    
+    microSteps.push({
+      description: 'Implement fix with regression prevention',
+      order: order++,
+      perspective: StepPerspective.TECHNICAL,
+      dependencies: addDependency(),
+      riskLevel: 'high',
+      estimatedMinutes: 45,
+    });
+  }
+  
+  // Phase 3: Quality Assurance
+  if (hasImplementation || hasFix) {
+    microSteps.push({
+      description: 'Write/update unit tests',
+      order: order++,
+      perspective: StepPerspective.QA,
+      dependencies: addDependency(),
+      riskLevel: 'low',
+      estimatedMinutes: 30,
+    });
+    
+    microSteps.push({
+      description: 'Run integration tests and verify functionality',
+      order: order++,
+      perspective: StepPerspective.QA,
+      dependencies: addDependency(),
+      riskLevel: 'medium',
+      estimatedMinutes: 20,
+    });
+  }
+  
+  if (hasTesting) {
+    microSteps.push({
+      description: 'Define test criteria for: ' + step,
+      order: order++,
+      perspective: StepPerspective.QA,
+      riskLevel: 'low',
+      estimatedMinutes: 15,
+    });
+    
+    microSteps.push({
+      description: 'Execute tests and document results',
+      order: order++,
+      perspective: StepPerspective.QA,
+      dependencies: addDependency(),
+      riskLevel: 'low',
+      estimatedMinutes: 30,
+    });
+  }
+  
+  // Phase 4: Validation & Documentation
+  // Calculate second-to-last dependency if exists
+  const secondLastDep = microSteps.length >= 2 
+    ? [microSteps[microSteps.length - 2].description] 
+    : [];
+  
+  microSteps.push({
+    description: 'Validate against original requirements',
+    order: order++,
+    perspective: StepPerspective.QA,
+    dependencies: secondLastDep,
+    riskLevel: 'low',
+    estimatedMinutes: 10,
+  });
+  
+  microSteps.push({
+    description: 'Update documentation and mark complete',
+    order: order++,
+    perspective: StepPerspective.TECHNICAL,
+    dependencies: addDependency(),
+    riskLevel: 'low',
+    estimatedMinutes: 10,
+  });
+  
+  return microSteps;
+}
+
+/**
+ * Calculate enrichment quality metrics
+ */
+function calculateEnrichmentMetrics(
+  step: string,
+  enriched: string,
+  microSteps: MicroStep[]
+): EnrichmentMetrics {
+  // Clarity: based on sentence completeness and specificity
+  const hasVerb = /^(implement|create|add|fix|update|test|verify|check|review|document)/i.test(step);
+  const hasObject = step.split(' ').length > 2;
+  const clarity = (hasVerb ? 30 : 0) + (hasObject ? 30 : 0) + (enriched.length > step.length ? 20 : 0) + Math.min(20, microSteps.length * 5);
+  
+  // Completeness: based on micro-steps and context coverage
+  const completeness = Math.min(100, 30 + microSteps.length * 15 + (enriched.includes('\n') ? 20 : 0));
+  
+  // Actionability: based on ordered steps with estimates
+  const hasEstimates = microSteps.filter(m => m.estimatedMinutes).length > 0;
+  const hasOrder = microSteps.every(m => m.order !== undefined);
+  const actionability = (hasEstimates ? 40 : 0) + (hasOrder ? 30 : 0) + Math.min(30, microSteps.length * 10);
+  
+  // Risk assessment: based on risk flags and high-risk steps
+  const highRiskSteps = microSteps.filter(m => m.riskLevel === 'high').length;
+  const riskAssessment = Math.max(0, 100 - highRiskSteps * 25 - (step.includes('fix') ? 15 : 0));
+  
+  // Overall: weighted average
+  const overall = Math.round((clarity * 0.3 + completeness * 0.3 + actionability * 0.25 + riskAssessment * 0.15));
+  
+  return {
+    clarity: Math.min(100, clarity),
+    completeness: Math.min(100, completeness),
+    actionability: Math.min(100, actionability),
+    riskAssessment: Math.min(100, riskAssessment),
+    overall: Math.min(100, overall),
+  };
+}
+
+/**
+ * Identify risks in step
+ */
+function identifyRisks(step: string, microSteps: MicroStep[]): string[] {
+  const risks: string[] = [];
+  
+  // Technical risks
+  if (/fix|update|refactor/i.test(step)) {
+    risks.push('⚠️ Risk: Changes may introduce regressions in dependent components');
+  }
+  
+  if (/create|add/i.test(step)) {
+    risks.push('⚠️ Risk: New functionality may conflict with existing architecture');
+  }
+  
+  // Security risks
+  if (/implement|create|add/i.test(step)) {
+    if (/user|auth|login|password|credential/i.test(step)) {
+      risks.push('🔒 Security: Authentication/authorization validation required');
+    }
+    if (/input|form|upload|file/i.test(step)) {
+      risks.push('🔒 Security: Input validation and sanitization required');
+    }
+  }
+  
+  // High-risk micro-steps
+  const highRiskCount = microSteps.filter(m => m.riskLevel === 'high').length;
+  if (highRiskCount > 0) {
+    risks.push(`⚠️ Risk: ${highRiskCount} high-risk micro-step(s) identified`);
+  }
+  
+  // Complexity risk
+  if (microSteps.length > 6) {
+    risks.push('⚠️ Complexity: Consider breaking into smaller sub-tasks');
+  }
+  
+  return risks;
+}
+
+/**
+ * Generate recommendations based on analysis
+ */
+function generateRecommendations(
+  step: string,
+  metrics: EnrichmentMetrics,
+  risks: string[]
+): string[] {
+  const recommendations: string[] = [];
+  
+  // Quality-based recommendations
+  if (metrics.clarity < 70) {
+    recommendations.push('💡 Consider adding more specific action words (implement, configure, deploy)');
+  }
+  
+  if (metrics.completeness < 70) {
+    recommendations.push('💡 Break down into smaller, more specific steps for better tracking');
+  }
+  
+  if (metrics.actionability < 70) {
+    recommendations.push('💡 Add time estimates and dependencies to improve planning');
+  }
+  
+  // Risk-based recommendations
+  if (risks.some(r => r.includes('Security'))) {
+    recommendations.push('💡 Schedule security review before deployment');
+  }
+  
+  if (risks.some(r => r.includes('regression'))) {
+    recommendations.push('💡 Plan regression testing in staging environment');
+  }
+  
+  // General recommendations
+  if (metrics.overall >= 80) {
+    recommendations.push('✅ Step is well-defined with good actionability');
+  }
+  
+  return recommendations;
+}
+
+/**
+ * Enrich a step description using LLM-like expansion
+ * Takes a brief step description and returns a more detailed version
+ * with qualifications, scope, and enriched context
+ */
+export async function enrichStep(
+  step: string,
+  context?: string
+): Promise<{ enriched: string; breakdown?: string[] }> {
+  // Pattern-based enrichment for common step types
+  const enriched = step.trim();
+  
+  // Detection patterns for expansion
+  const patterns = [
+    // Implementation steps
+    { pattern: /^implement/i, prefix: 'Implement the following: ', enrich: (s: string) => s },
+    { pattern: /^add/i, prefix: 'Add the following feature/component: ', enrich: (s: string) => s },
+    { pattern: /^create/i, prefix: 'Create a new instance of: ', enrich: (s: string) => s },
+    { pattern: /^fix/i, prefix: 'Fix the following issue: ', enrich: (s: string) => s },
+    { pattern: /^update/i, prefix: 'Update/upgrade: ', enrich: (s: string) => s },
+    { pattern: /^refactor/i, prefix: 'Refactor/improve: ', enrich: (s: string) => s },
+    // Testing steps
+    { pattern: /^test/i, prefix: 'Test the following scenario: ', enrich: (s: string) => s },
+    { pattern: /^verify/i, prefix: 'Verify that: ', enrich: (s: string) => s },
+    { pattern: /^check/i, prefix: 'Check for: ', enrich: (s: string) => s },
+    // Documentation steps
+    { pattern: /^document/i, prefix: 'Document the following: ', enrich: (s: string) => s },
+    { pattern: /^write/i, prefix: 'Write documentation for: ', enrich: (s: string) => s },
+    { pattern: /^review/i, prefix: 'Review the following: ', enrich: (s: string) => s },
+  ];
+  
+  // Apply pattern-based enrichment
+  for (const { pattern, prefix, enrich } of patterns) {
+    if (pattern.test(enriched)) {
+      const detailed = enrich(enriched);
+      // Add scope qualifiers based on context
+      const withContext = context 
+        ? `${detailed} (Context: ${context})` 
+        : detailed;
+      
+      return {
+        enriched: withContext,
+        breakdown: [
+          `• ${prefix}${enriched}`,
+          '• Sub-tasks: Identify dependencies',
+          '• Verification: Test completion criteria',
+        ],
+      };
+    }
+  }
+  
+  // Default enrichment for unrecognized patterns
+  return {
+    enriched: context 
+      ? `${enriched} (Context: ${context})` 
+      : enriched,
+    breakdown: [
+      `• ${enriched}`,
+      '• Break down into smaller steps if needed',
+      '• Add completion criteria',
+    ],
+  };
+}
+
+/**
+ * Multi-perspective step enrichment - state-of-the-art analysis
+ * Analyzes step from 4 perspectives: Technical, QA, UX, Security
+ */
+export async function enrichStepMultiPerspective(
+  step: string,
+  context?: string,
+  options?: {
+    includeMicroSteps?: boolean;
+    targetMetrics?: Partial<EnrichmentMetrics>;
+  }
+): Promise<MultiPerspectiveEnrichment> {
+  // Analyze from each perspective
+  const perspectives = {
+    technical: analyzeFromTechnicalPerspective(step, context),
+    qa: analyzeFromQAPerspective(step, context),
+    ux: analyzeFromUXPerspective(step, context),
+    security: analyzeFromSecurityPerspective(step, context),
+  };
+  
+  // Segment into micro-steps if requested
+  const microSteps = options?.includeMicroSteps !== false 
+    ? segmentIntoMicroSteps(step, context) 
+    : [];
+  
+  // Calculate quality metrics
+  const metrics = calculateEnrichmentMetrics(step, step, microSteps);
+  
+  // Identify risks
+  const risks = identifyRisks(step, microSteps);
+  
+  // Generate recommendations
+  const recommendations = generateRecommendations(step, metrics, risks);
+  
+  // Build enriched description
+  const enriched = context 
+    ? `${step.trim()} (Context: ${context})` 
+    : step.trim();
+  
+  return {
+    original: step,
+    enriched,
+    perspectives,
+    microSteps,
+    metrics,
+    risks,
+    recommendations,
+  };
+}
+
+/**
+ * Batch multi-perspective enrichment for multiple steps
+ * 
+ * @param steps - Array of step descriptions to enrich
+ * @param context - Optional context for enrichment
+ * @param options - Configuration options
+ * @param options.parallel - Whether to process in parallel (default: true)
+ * @param options.includeMicroSteps - Whether to include micro-step segmentation (default: true)
+ * @returns Array of MultiPerspectiveEnrichment results (with error property on failure)
+ * 
+ * @example
+ * ```typescript
+ * const results = await enrichStepsMultiPerspective([
+ *   'Implement user authentication',
+ *   'Add error handling'
+ * ], 'building a web app');
+ * 
+ * // Handle results (some may have 'error' property)
+ * results.forEach((r, i) => {
+ *   if ('error' in r) {
+ *     console.log(`Step ${i} failed:`, r.error);
+ *   } else {
+ *     console.log(`Step ${i} enriched:`, r.enriched);
+ *   }
+ * });
+ * ```
+ */
+export async function enrichStepsMultiPerspective(
+  steps: string[],
+  context?: string,
+  options?: {
+    includeMicroSteps?: boolean;
+    parallel?: boolean;
+  }
+): Promise<Array<MultiPerspectiveEnrichment & { error?: string }>> {
+  if (options?.parallel !== false) {
+    // Parallel processing with error isolation - each step is wrapped in try/catch
+    return Promise.all(
+      steps.map(async (step, index) => {
+        try {
+          return await enrichStepMultiPerspective(step, context, options);
+        } catch (error) {
+          // Return error result for this step, but don't reject the entire batch
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          return {
+            original: step,
+            enriched: step, // Fallback to original
+            perspectives: {
+              technical: '⚠️ Error during analysis',
+              qa: '⚠️ Error during analysis',
+              ux: '⚠️ Error during analysis',
+              security: '⚠️ Error during analysis',
+            },
+            microSteps: [],
+            metrics: {
+              clarity: 0,
+              completeness: 0,
+              actionability: 0,
+              riskAssessment: 0,
+              overall: 0,
+            },
+            risks: [`Error at step ${index + 1}: ${errorMessage}`],
+            recommendations: ['Review step definition and try again'],
+            error: errorMessage,
+          };
+        }
+      })
+    );
+  }
+  
+  // Sequential processing with error isolation
+  const results: Array<MultiPerspectiveEnrichment & { error?: string }> = [];
+  for (let i = 0; i < steps.length; i++) {
+    try {
+      const result = await enrichStepMultiPerspective(steps[i], context, options);
+      results.push(result);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      results.push({
+        original: steps[i],
+        enriched: steps[i],
+        perspectives: {
+          technical: '⚠️ Error during analysis',
+          qa: '⚠️ Error during analysis',
+          ux: '⚠️ Error during analysis',
+          security: '⚠️ Error during analysis',
+        },
+        microSteps: [],
+        metrics: {
+          clarity: 0,
+          completeness: 0,
+          actionability: 0,
+          riskAssessment: 0,
+          overall: 0,
+        },
+        risks: [`Error at step ${i + 1}: ${errorMessage}`],
+        recommendations: ['Review step definition and try again'],
+        error: errorMessage,
+      });
+    }
+  }
+  return results;
+}
+
+/**
+ * Hierarchical step segmentation - break complex steps into ordered micro-steps
+ * 
+ * @param step - The step description to segment
+ * @param options - Optional configuration (maxDepth, includeDependencies - currently unused for synchronous version)
+ * @returns Array of MicroStep objects with ordered breakdown
+ * 
+ * @example
+ * ```typescript
+ * const steps = segmentStepHierarchically('Implement user authentication');
+ * // Returns: [ MicroStep { description, order, perspective, ... }, ... ]
+ * ```
+ */
+export function segmentStepHierarchically(
+  step: string,
+  options?: {
+    maxDepth?: number;
+    includeDependencies?: boolean;
+  }
+): MicroStep[] {
+  // This is a synchronous wrapper - the actual logic is in segmentIntoMicroSteps
+  // Future: could support async with LLM-based segmentation for more complex steps
+  return segmentIntoMicroSteps(step, options?.includeDependencies);
+}
+
+/**
+ * Generate step recommendations based on task context
+ */
+export function generateStepRecommendations(
+  task: Task,
+  currentStepIndex?: number
+): string[] {
+  const recommendations: string[] = [];
+  
+  // Task-level recommendations
+  if (task.progress < 30) {
+    recommendations.push('💡 Consider adding more granular initial steps');
+  }
+  
+  if (task.progress > 70 && task.progress < 100) {
+    recommendations.push('💡 nearing completion - ensure testing and documentation');
+  }
+  
+  // Step-level recommendations
+  if (currentStepIndex !== undefined && task.steps) {
+    const currentStep = task.steps[currentStepIndex];
+    if (currentStep) {
+      if (currentStep.status === 'in_progress') {
+        recommendations.push(`💡 Currently working on: ${currentStep.description}`);
+      }
+      
+      // Check for unstarted steps after current
+      const upcomingSteps = task.steps.slice(currentStepIndex + 1);
+      const pendingCount = upcomingSteps.filter(s => s.status === 'pending').length;
+      if (pendingCount > 3) {
+        recommendations.push(`💡 ${pendingCount} upcoming steps - consider adding milestones`);
+      }
+    }
+  }
+  
+  // Priority-based recommendations
+  if (task.priority >= 80) {
+    recommendations.push('🔥 High priority task - consider allocating focused time');
+  }
+  
+  // Time-based recommendations
+  if (task.dueDate) {
+    const daysUntilDue = Math.ceil((task.dueDate - Date.now()) / (1000 * 60 * 60 * 24));
+    if (daysUntilDue <= 2 && task.status !== 'completed') {
+      recommendations.push(`⚠️ Due in ${daysUntilDue} day(s) - prioritize remaining steps`);
+    }
+  }
+  
+  return recommendations;
+}
+
+/**
+ * Expand a step into detailed sub-steps with scope enrichment
+ * Provides microscopic detailing of step qualifications and enriched scope
+ */
+export function expandStepIntoDetail(
+  step: string,
+  context?: string
+): {
+  original: string;
+  expanded: string[];
+  scope: {
+    inclusions: string[];
+    exclusions: string[];
+    qualifications: string[];
+  };
+  complexity: 'simple' | 'moderate' | 'complex';
+} {
+  const trimmedStep = step.trim();
+  const expanded: string[] = [];
+  const scope = {
+    inclusions: [] as string[],
+    exclusions: [] as string[],
+    qualifications: [] as string[],
+  };
+  
+  // Detect step type for targeted expansion
+  const isImplement = /^implement/i.test(trimmedStep);
+  const isCreate = /^create/i.test(trimmedStep);
+  const isFix = /^fix/i.test(trimmedStep);
+  const isTest = /^test/i.test(trimmedStep);
+  const isDocument = /^(?:document|write|review)/i.test(trimmedStep);
+  
+  // Scope analysis
+  if (isImplement || isCreate) {
+    scope.inclusions.push('Core functionality implementation');
+    scope.inclusions.push('Error handling');
+    scope.inclusions.push('Input validation');
+    scope.exclusions.push('Major architectural refactoring');
+    scope.exclusions.push('UI changes unless specified');
+    scope.qualifications.push('Must integrate with existing code patterns');
+    scope.qualifications.push('Follow established coding standards');
+  }
+  
+  if (isFix) {
+    scope.inclusions.push('Root cause identification');
+    scope.inclusions.push('Fix implementation');
+    scope.inclusions.push('Regression prevention');
+    scope.exclusions.push('Feature additions');
+    scope.qualifications.push('Must not break existing functionality');
+    scope.qualifications.push('Consider backward compatibility');
+  }
+  
+  if (isTest) {
+    scope.inclusions.push('Test case definition');
+    scope.inclusions.push('Test data preparation');
+    scope.inclusions.push('Execution and documentation');
+    scope.exclusions.push('Code changes unless fixing test');
+    scope.qualifications.push('Define clear pass/fail criteria');
+  }
+  
+  if (isDocument) {
+    scope.inclusions.push('Content creation');
+    scope.inclusions.push('Review and revision');
+    scope.inclusions.push('Final approval');
+    scope.exclusions.push('Code implementation');
+    scope.qualifications.push('Must be clear and actionable');
+    scope.qualifications.push('Include examples where helpful');
+  }
+  
+  // Generate expanded sub-steps based on complexity
+  const wordCount = trimmedStep.split(/\s+/).length;
+  const hasComplexTerms = /framework|system|module|service|api|database/i.test(trimmedStep);
+  const complexity: 'simple' | 'moderate' | 'complex' = 
+    wordCount > 10 || hasComplexTerms ? 'complex' :
+    wordCount > 5 ? 'moderate' : 'simple';
+  
+  // Basic expansion for all
+  expanded.push(`1. Analyze requirements for: ${trimmedStep}`);
+  
+  if (isImplement || isCreate) {
+    expanded.push('2. Design implementation approach');
+    expanded.push('3. Implement core functionality');
+    expanded.push('4. Add error handling and edge cases');
+    if (complexity === 'complex') {
+      expanded.push('5. Add integration with dependent components');
+      expanded.push('6. Perform security review');
+    }
+    expanded.push(complexity === 'complex' ? '7. Test and verify' : '5. Test and verify');
+    expanded.push(complexity === 'complex' ? '8. Update documentation' : '6. Update documentation');
+  } else if (isFix) {
+    expanded.push('2. Identify root cause');
+    expanded.push('3. Implement fix');
+    expanded.push('4. Add regression tests');
+    expanded.push('5. Verify fix and test edge cases');
+  } else if (isTest) {
+    expanded.push('2. Define test criteria');
+    expanded.push('3. Prepare test data');
+    expanded.push('4. Execute tests');
+    expanded.push('5. Document results');
+  } else if (isDocument) {
+    expanded.push('2. Research and gather information');
+    expanded.push('3. Create draft content');
+    expanded.push('4. Review and revise');
+    expanded.push('5. Finalize and publish');
+  } else {
+    expanded.push('2. Execute the step');
+    expanded.push('3. Verify completion');
+    expanded.push('4. Document results');
+  }
+  
+  return {
+    original: trimmedStep,
+    expanded,
+    scope,
+    complexity,
+  };
+}
+
+/**
+ * Interactive step completion marking
+ * Marks steps as LLM-suggested or user-verified with quality feedback
+ * 
+ * This enables tracking of step completion quality over time, allowing:
+ * - LLM to self-assess work quality
+ * - User to verify/override LLM assessments
+ * - Historical quality tracking for agent improvement
+ */
+export interface StepCompletionMark {
+  stepId: string;
+  stepDescription: string;
+  markedBy: 'llm' | 'user';
+  timestamp: number;
+  quality?: 'excellent' | 'good' | 'needs_work';
+  feedback?: string;
+}
+
+/**
+ * Mark a step completion with quality feedback
+ * 
+ * @param stepDescription - Description of the completed step
+ * @param markedBy - Who marked the completion ('llm' for agent, 'user' for human)
+ * @param options - Optional quality rating and feedback
+ * @returns StepCompletionMark with unique ID and timestamp
+ * 
+ * @example
+ * ```typescript
+ * // LLM self-assessment after completing a task
+ * const mark = markStepCompletion(
+ *   'Implemented user authentication with JWT',
+ *   'llm',
+ *   { quality: 'good', feedback: 'Completed but could improve test coverage' }
+ * );
+ * 
+ * // User verification after reviewing LLM work
+ * const userMark = markStepCompletion(
+ *   'Added error handling to API endpoints',
+ *   'user',
+ *   { quality: 'excellent', feedback: 'Thorough implementation' }
+ * );
+ * 
+ * // Use with TaskStore to track completion
+ * await store.completeStep(taskId, stepId, mark.feedback);
+ * ```
+ * 
+ * @see TaskStore.completeStep
+ * @see TaskStore.completeStepWithMark
+ */
+export function markStepCompletion(
+  stepDescription: string,
+  markedBy: 'llm' | 'user',
+  options?: {
+    quality?: 'excellent' | 'good' | 'needs_work';
+    feedback?: string;
+  }
+): StepCompletionMark {
+  return {
+    stepId: `step_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    stepDescription,
+    markedBy,
+    timestamp: Date.now(),
+    quality: options?.quality,
+    feedback: options?.feedback,
+  };
+}
+
+/**
+ * Extended TaskStore method for completing steps with quality marks
+ * 
+ * @param taskId - Task ID
+ * @param stepId - Step ID to complete
+ * @param mark - Completion mark from markStepCompletion()
+ * @returns Updated task or null
+ * 
+ * @example
+ * ```typescript
+ * const mark = markStepCompletion(
+ *   'Implement feature X',
+ *   'llm',
+ *   { quality: 'good' }
+ * );
+ * await store.completeStepWithMark(taskId, stepId, mark);
+ * ```
+ */
+export async function completeStepWithMark(
+  taskId: string,
+  stepId: string,
+  mark: StepCompletionMark
+): Promise<Task | null> {
+  const store = getTaskStore();
+  return store.completeStep(taskId, stepId, mark.feedback);
+}
+
+/**
+ * Validate step quality and return improvement suggestions
+ */
+export function validateStepQuality(
+  step: string
+): { valid: boolean; issues: string[]; suggestions: string[] } {
+  const issues: string[] = [];
+  const suggestions: string[] = [];
+  
+  // Check for action verb at START of string (after trimming)
+  const trimmedStep = step.trim();
+  const actionVerbs = ['implement', 'create', 'add', 'fix', 'update', 'refactor', 'test', 'verify', 'check', 'review', 'document', 'configure', 'deploy', 'debug', 'write', 'build', 'setup', 'install', 'run', 'execute', 'analyze', 'design', 'plan', 'research'];
+  const firstWord = trimmedStep.split(/\s+/)[0]?.toLowerCase() || '';
+  const hasActionVerb = actionVerbs.some(verb => firstWord === verb || firstWord.startsWith(verb + ' '));
+  
+  if (!hasActionVerb) {
+    issues.push('Missing action verb at start of step');
+    suggestions.push('Start with: ' + actionVerbs.slice(0, 8).join(', ') + ', etc.');
+  }
+  
+  // Check for specificity
+  const words = trimmedStep.split(/\s+/);
+  if (words.length < 3) {
+    issues.push('Step is too vague');
+    suggestions.push('Add more context about what exactly needs to be done');
+  }
+  
+  // Check for vague terms (word boundary matching to avoid partial matches)
+  const vagueTerms = ['stuff', 'things', 'it', 'this', 'that', 'etc', 'something'];
+  const wordPattern = new RegExp('\\b(' + vagueTerms.join('|') + ')\\b', 'i');
+  const hasVague = wordPattern.test(trimmedStep);
+  if (hasVague) {
+    issues.push('Contains vague terminology');
+    suggestions.push('Replace vague terms with specific descriptions');
+  }
+  
+  // Check for ambiguity
+  if (/and then|after that|some point|then also/i.test(trimmedStep)) {
+    issues.push('Step may contain multiple actions');
+    suggestions.push('Consider breaking into separate steps for better tracking');
+  }
+  
+  return {
+    valid: issues.length === 0,
+    issues,
+    suggestions,
+  };
+}
+
+/**
+ * Enrich multiple steps at once (batch operation)
+ */
+export async function enrichSteps(
+  steps: string[],
+  context?: string
+): Promise<Array<{ original: string; enriched: string; breakdown?: string[] }>> {
+  return Promise.all(
+    steps.map(step => enrichStep(step, context))
+      .map((p, i) => p.then(result => ({
+        original: steps[i],
+        enriched: result.enriched,
+        breakdown: result.breakdown,
+      })))
+  );
+}
+
 // ============================================================================
 // Convenience Functions
 // ============================================================================

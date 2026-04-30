@@ -9,6 +9,7 @@ import {
 } from "livekit-client";
 import { rankModels } from "@/lib/models/model-ranker";
 import { providerCircuitBreakers } from "@/lib/utils/circuit-breaker";
+import { resourceTelemetry } from "@/lib/management/resource-telemetry";
 
 // LocalTrackOptions type from livekit-client
 interface LocalTrackOptions {
@@ -18,6 +19,7 @@ interface LocalTrackOptions {
 export interface VoiceSettings {
   enabled: boolean;
   autoSpeak: boolean;
+  autoSpeakStream: boolean; // NEW: Persistent setting for stream TTS
   speechRate: number;
   speechPitch: number;
   speechVolume: number;
@@ -56,10 +58,13 @@ class VoiceService {
   private localAudioTrack: LocalAudioTrack | null = null;
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 3;
+  private vadEnabled = false;
+  private vadThreshold = 0.1;
 
   private settings: VoiceSettings = {
     enabled: false,
     autoSpeak: false,
+    autoSpeakStream: false,
     speechRate: 0.9,
     speechPitch: 1.0,
     speechVolume: 0.8,
@@ -258,9 +263,15 @@ class VoiceService {
     let lastError = null;
     for (const provider of providersToTry) {
       const breaker = providerCircuitBreakers.get(`tts:${provider}` as any);
-      try { await breaker.execute(async () => { await this.speakWithProvider(text, provider, settings); });
+      const startTime = Date.now();
+      try {
+        await breaker.execute(async () => { await this.speakWithProvider(text, provider, settings); });
+        resourceTelemetry.recordProviderCall(`tts:${provider}`, Date.now() - startTime, true);
         this.emitEvent({ type: "synthesis", data: { text, completed: true, provider }, timestamp: Date.now() }); return;
-      } catch (e) { console.warn(`TTS provider ${provider} failed, trying next...`, e); lastError = e; }
+      } catch (e) {
+        resourceTelemetry.recordProviderCall(`tts:${provider}`, Date.now() - startTime, false);
+        console.warn(`TTS provider ${provider} failed, trying next...`, e); lastError = e;
+      }
     }
     this.emitEvent({ type: "error", data: { message: "All TTS providers failed", error: lastError }, timestamp: Date.now() });
     throw lastError || new Error("All TTS providers failed");
@@ -282,6 +293,7 @@ class VoiceService {
     const candidates: STTProvider[] = [this.settings.sttProvider, 'deepgram', 'gladia', 'mistral', 'browser', 'assemblyai'];
     const unique = Array.from(new Set(candidates));
     for (const provider of unique) {
+      const startTime = Date.now();
       try {
         if (provider === 'browser' && !this.recognition) continue;
         const breaker = providerCircuitBreakers.get(`stt:${provider}` as any);
@@ -291,8 +303,14 @@ class VoiceService {
           if (provider === 'browser') { this.recognition.start(); this.isListening = true; started = true; }
           else started = await this.startChunkedListening(provider);
         });
-        if (started) return true;
-      } catch (e) { console.warn(`STT provider ${provider} failed:`, e); }
+        if (started) {
+          resourceTelemetry.recordProviderCall(`stt:${provider}`, Date.now() - startTime, true);
+          return true;
+        }
+      } catch (e) {
+        resourceTelemetry.recordProviderCall(`stt:${provider}`, Date.now() - startTime, false);
+        console.warn(`STT provider ${provider} failed:`, e);
+      }
     }
     return false;
   }
@@ -359,6 +377,24 @@ class VoiceService {
   getAvailableVoices(): SpeechSynthesisVoice[] { return [...this.voices]; }
   isLivekitConnected(): boolean { return this.isConnected; }
   isSpeechSynthesisSupported(): boolean { return typeof window !== "undefined" && !!this.synthesis; }
+  
+  configureVAD(silenceDuration: number, threshold: number): void {
+    // VAD will use these thresholds when checking audio levels
+    this.silenceDuration = silenceDuration;
+    this.vadThreshold = threshold;
+  }
+  
+  setVADEnabled(enabled: boolean): void {
+    this.vadEnabled = enabled;
+  }
+  
+  isVoiceSupported(): boolean {
+    return typeof window !== "undefined" && (!!this.synthesis || !!this.recognition);
+  }
+  
+  isSpeechRecognitionSupported(): boolean {
+    return typeof window !== "undefined" && !!this.recognition;
+  }
 }
 
 export const voiceService = new VoiceService();
