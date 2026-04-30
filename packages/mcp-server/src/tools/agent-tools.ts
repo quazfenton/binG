@@ -83,12 +83,17 @@ export function createAgentTool() {
         };
       }
 
+      // Validate model parameter - only accept known models
+      const validatedModel = (model && ALLOWED_MODELS.includes(model as typeof ALLOWED_MODELS[number]))
+        ? model
+        : 'mistral-small-latest';
+      
       const agentId = `agent-${randomUUID()}`;
 
       const session: AgentSession = {
         id: agentId,
         goal: task,
-        model: model || 'mistral-small-latest',
+        model: validatedModel,
         status: 'running',
         startedAt: Date.now(),
         lastActivity: Date.now(),

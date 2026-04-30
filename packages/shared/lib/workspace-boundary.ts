@@ -147,10 +147,23 @@ export function normalizePath(p: string): string {
 
 /**
  * Check whether a given file path is absolute.
- * Supports both POSIX and Windows style absolute paths.
+ * Supports POSIX, Windows drive letters, AND Windows UNC paths.
+ * 
+ * UNC paths like \\server\share\file are absolute and should not be
+ * treated as relative paths inside the workspace.
  */
 function isAbsolutePath(p: string): boolean {
-  return p.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(p);
+  // POSIX absolute path
+  if (p.startsWith('/')) return true;
+  
+  // Windows drive letter (e.g., C:\ or D:/)
+  if (/^[a-zA-Z]:[\\/]/.test(p)) return true;
+  
+  // Windows UNC path (e.g., \\server\share or \\192.168.1.1\share)
+  // UNC paths start with \\ and have at least server\share components
+  if (/^\\\\[^\\/:*?"<>|]+\\[^\\/:*?"<>|]+/.test(p)) return true;
+  
+  return false;
 }
 
 /**

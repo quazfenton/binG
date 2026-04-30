@@ -186,11 +186,18 @@ class StyleAnalyzer:
             return False
         
         first = node.body[0]
+        # Check for required attributes and type before accessing nested value
+        if not (isinstance(first, ast.Expr) and hasattr(first, 'value')):
+            return False
+        if not isinstance(first.value, (ast.Str, ast.Constant)):
+            return False
+        # Only access .value if it exists (Constant has it, Str may not in some AST variants)
+        if not hasattr(first.value, 'value'):
+            return False
+        docstring_value = first.value.value
         return (
-            isinstance(first, ast.Expr) and 
-            isinstance(first.value, (ast.Str, ast.Constant)) and
-            isinstance(first.value.value, str) and
-            len(first.value.value.strip()) > 0
+            isinstance(docstring_value, str) and
+            len(docstring_value.strip()) > 0
         )
     
     def _check_regex_patterns(self, code: str) -> None:
@@ -231,6 +238,7 @@ def run_ruff_check(code: str, timeout: int = 30) -> Optional[list[StyleIssue]]:
     Returns:
         List of StyleIssue objects, or None if Ruff not available
     '''
+    temp_path = None
     try:
         import tempfile
         import json
@@ -248,6 +256,7 @@ def run_ruff_check(code: str, timeout: int = 30) -> Optional[list[StyleIssue]]:
         
         import os
         os.unlink(temp_path)
+        temp_path = None  # Mark as cleaned up
         
         if result.stdout:
             try:
@@ -260,6 +269,14 @@ def run_ruff_check(code: str, timeout: int = 30) -> Optional[list[StyleIssue]]:
         
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return None
+    finally:
+        # Ensure temp file is always cleaned up, even on exception
+        if temp_path:
+            try:
+                import os
+                os.unlink(temp_path)
+            except:
+                pass
 
 
 def run_flake8_check(code: str, timeout: int = 30) -> Optional[list[StyleIssue]]:
@@ -269,6 +286,7 @@ def run_flake8_check(code: str, timeout: int = 30) -> Optional[list[StyleIssue]]
     Returns:
         List of StyleIssue objects, or None if Flake8 not available
     '''
+    temp_path = None
     try:
         import tempfile
         
@@ -285,6 +303,7 @@ def run_flake8_check(code: str, timeout: int = 30) -> Optional[list[StyleIssue]]
         
         import os
         os.unlink(temp_path)
+        temp_path = None  # Mark as cleaned up
         
         if result.stdout:
             try:
@@ -298,6 +317,14 @@ def run_flake8_check(code: str, timeout: int = 30) -> Optional[list[StyleIssue]]
         
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return None
+    finally:
+        # Ensure temp file is always cleaned up, even on exception
+        if temp_path:
+            try:
+                import os
+                os.unlink(temp_path)
+            except:
+                pass
 
 
 def _parse_ruff_issue(issue: dict) -> StyleIssue:

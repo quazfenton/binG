@@ -3695,7 +3695,6 @@ export function WorkspacePanel() {
                     <ExperiencePanel />
                   </TabErrorBoundary>
                 </TabsContent>
-                </TabsContent>
 
                 {/* Thinking Area Tab */}
                 <TabsContent value="thinking" className="flex-1 mt-0 overflow-hidden">

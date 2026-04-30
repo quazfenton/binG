@@ -160,13 +160,6 @@ export function deleteTabMemory(tabId: string): boolean {
 }
 
 /**
- * Clear all tab memories
- */
-export function clearAllTabMemories(): void {
-  TAB_MEMORIES.clear();
-}
-
-/**
  * Get tab memory statistics
  */
 export function getTabMemoryStats(): {

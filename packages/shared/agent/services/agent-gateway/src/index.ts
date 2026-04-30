@@ -292,18 +292,23 @@ async function start() {
   fastify.get('/sessions', async () => {
     // PERF fix: Replace redis.keys() (O(N) blocking) with redis.scanStream() for
     // non-blocking iteration. KEYS can block the Redis event loop in production.
-    const sessions: any[] = [];
-    const stream = redis.scanStream({ match: `${SESSIONS_KEY}:*`, count: 100 });
-    for await (const keys of stream as AsyncIterable<string[]>) {
-      // PERF fix: Batch hgetall calls using Promise.all to reduce sequential round-trips
-      const results = await Promise.all(keys.map(key => redis.hgetall(key)));
-      for (const data of results) {
-        if (data && data.id) {
-          sessions.push({ id: data.id, userId: data.userId, status: data.status, createdAt: parseInt(data.createdAt || '0') });
+    try {
+      const sessions: any[] = [];
+      const stream = redis.scanStream({ match: `${SESSIONS_KEY}:*`, count: 100 });
+      for await (const keys of stream as AsyncIterable<string[]>) {
+        // PERF fix: Batch hgetall calls using Promise.all to reduce sequential round-trips
+        const results = await Promise.all(keys.map(key => redis.hgetall(key)));
+        for (const data of results) {
+          if (data && data.id) {
+            sessions.push({ id: data.id, userId: data.userId, status: data.status, createdAt: parseInt(data.createdAt || '0') });
+          }
         }
       }
+      return { sessions };
+    } catch (err) {
+      logger.error('Failed to enumerate sessions', { error: err instanceof Error ? err.message : String(err) });
+      return { sessions: [], error: 'Failed to enumerate sessions' };
     }
-    return { sessions };
   });
 
   fastify.get('/streams', async () => {

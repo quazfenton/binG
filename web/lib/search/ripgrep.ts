@@ -171,6 +171,41 @@ async function runRipgrep(opts: RipgrepOptions, cwd: string): Promise<RipgrepRes
   });
 }
 
+/**
+ * Convert a basic glob (`*`, `**`, `?`, `{a,b}`) to a regex. Used by the JS
+ * fallback to filter files when `opts.glob` is provided. Real ripgrep handles
+ * globs natively via `--glob`.
+ */
+function globToRegex(glob: string): RegExp {
+  let re = '';
+  let i = 0;
+  while (i < glob.length) {
+    const c = glob[i];
+    if (c === '*') {
+      if (glob[i + 1] === '*') { re += '.*'; i += 2; continue; }
+      re += '[^/\\\\]*';
+    } else if (c === '?') {
+      re += '[^/\\\\]';
+    } else if (c === '{') {
+      const end = glob.indexOf('}', i);
+      if (end === -1) {
+        re += '\\{';
+      } else {
+        const parts = glob.slice(i + 1, end).split(',');
+        re += '(?:' + parts.map((p) => p.replace(/[.+^${}()|[\]\\]/g, '\\$&')).join('|') + ')';
+        i = end + 1;
+        continue;
+      }
+    } else if (/[.+^${}()|[\]\\]/.test(c)) {
+      re += '\\' + c;
+    } else {
+      re += c;
+    }
+    i++;
+  }
+  return new RegExp(re + '$');
+}
+
 async function runJsSearch(opts: RipgrepOptions, cwd: string): Promise<RipgrepResult> {
   // Bug fix: when opts.path is absolute, path.join(cwd, opts.path) produces
   // garbage on Windows ("c:\repo\c:\Temp\x") and on POSIX produces a doubled
