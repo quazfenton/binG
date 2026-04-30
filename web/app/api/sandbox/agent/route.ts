@@ -69,6 +69,7 @@ export async function POST(req: NextRequest) {
             response: result.response,
             totalSteps: result.totalSteps,
             steps: result.steps,
+            success: result.success !== false,
           });
           controller.enqueue(encoder.encode(`data: ${finalEvent}\n\n`));
           controller.close();

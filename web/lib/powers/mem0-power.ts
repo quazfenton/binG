@@ -541,6 +541,9 @@ export async function mem0Add(
     // intent so dropping stale results is the right call.)
     if (effectiveUserId) {
       invalidateMem0SearchCacheForUser(effectiveUserId);
+    } else {
+      // Fallback: clear entire search cache if userId is absent
+      clearMem0SearchCache();
     }
     return { success: true, results: result.results };
   } catch (err: any) {
@@ -679,7 +682,7 @@ function makeMem0SearchCacheKey(args: {
 }): string {
   // Truncate query to keep keys bounded; identical-prefix queries collide
   // intentionally to maximize cache hits on near-duplicate prompts.
-  const q = (args.query || '').slice(0, 200);
+  const q = (args.query || '').slice(0, 500);
   const filters = args.filters ? JSON.stringify(args.filters) : '';
   return [
     args.userId ?? '',

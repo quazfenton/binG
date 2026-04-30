@@ -1,9 +1,27 @@
 # Ignore Markdown files in the entire repository
-*.md linguist-documentation=true
+**/*.md linguist-documentation=true
 docs/** linguist-documentation=true
+reviews/** linguist-documentation=true
+**/*.txt linguist-generated=true
+
 
 # Ignore everything inside the test/ folder for diffs and analysis
 tests-results/** linguist-generated=true
 deprecated/** linguist-documentation=true
-*.png linguist-generated=true
-*.svg linguist-generated=true
+
+# Treat PDFs and images as binary (no diffs)
+**/*.png binary
+*.jpg binary
+**/*.svg binary
+*.sqlite binary
+
+
+
+# Mark lockfiles as generated so they are collapsed by default in reviews
+package-lock.json linguist-generated=true
+pnpm-lock.yaml linguist-generated=true
+yarn.lock linguist-generated=true
+
+# Mark minified CSS/JS as generated
+*.min.js linguist-generated=true
+*.min.css linguist-generated=true

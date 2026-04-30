@@ -17,6 +17,8 @@ const log = createLogger('Session:Lock:Queue');
 
 const QUEUE_LOCK_TIMEOUT_MS = parseInt(process.env.SESSION_LOCK_QUEUE_TIMEOUT || '60000');
 const QUEUE_CLEANUP_INTERVAL_MS = 30000;
+// HIGH fix: Add queue size limit to prevent unbounded memory growth
+const MAX_QUEUE_SIZE = parseInt(process.env.SESSION_LOCK_QUEUE_MAX_SIZE || '100');
 
 interface QueueEntry {
   resolve: (release: QueueLockRelease) => void;
@@ -179,6 +181,14 @@ export async function acquireQueueLock(
     } else {
       // Wait in queue - position is current queue length + 1 (will be decremented when others complete)
       const position = queue.entries.length + 1;
+      
+      // HIGH fix: Enforce queue size limit — reject if queue is full
+      if (queue.entries.length >= MAX_QUEUE_SIZE) {
+        clearTimeout(timeoutTimer);
+        rejectPromise(new Error(`Queue lock queue full for session ${sessionId} (max ${MAX_QUEUE_SIZE})`));
+        return;
+      }
+      
       queue.entries.push(queueEntry);
       
       log.debug('Queue lock waiting', { 

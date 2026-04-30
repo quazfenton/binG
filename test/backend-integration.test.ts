@@ -13,7 +13,7 @@ import {
 import {
   SandboxManager,
   sandboxManager,
-} from '@/lib/sandbox/sandbox-manager';
+} from '@/lib/sandbox/local-sandbox-manager';
 import { QuotaManager, quotaManager } from '@/lib/management/quota';
 import { WorkspaceManager, workspaceManager } from '@bing/shared/agent/agent-workspace';
 import { sandboxMetrics } from '@/lib/backend/metrics';

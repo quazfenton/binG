@@ -6,6 +6,7 @@
 
 import { z } from 'zod';
 import { spawn } from 'child_process';
+import { randomUUID } from 'crypto';
 import { promises as fs } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -73,22 +74,35 @@ export function voiceSpeechTool() {
 
 async function generateKittenTTS(text: string, voice: string, model: string) {
   const tempDir = tmpdir();
-  const outputPath = join(tempDir, `kittentts-${Date.now()}.wav`);
+  const tempId = `${Date.now()}-${randomUUID()}`;
+  const outputPath = join(tempDir, `kittentts-${tempId}.wav`);
 
-  // Escape text for Python
-  const escapedText = text.replace(/'/g, "'\\''").replace(/\n/g, '\\n');
+  // HIGH-6 fix: Write text to a temp file and pass filename to Python,
+  // instead of embedding text inline in a shell command. This prevents
+  // shell/Python injection via crafted text containing ''' or other escapes.
+  const textFilePath = join(tempDir, `kittentts-text-${tempId}.txt`);
+  await fs.writeFile(textFilePath, text, 'utf-8');
+
+  // Validate model and voice names to prevent injection via those params
+  const safeModel = /^[a-zA-Z0-9\/._-]+$/.test(model) ? model : 'KittenML/kitten-tts-mini-0.8';
+  const safeVoice = /^[a-zA-Z0-9]+$/.test(voice) ? voice : 'Bruno';
 
   const pythonScript = [
     'import sys, os',
     'try:',
     '    from kittentts import KittenTTS',
     '    import soundfile as sf',
-    `    m = KittenTTS('${model}')`,
-    `    audio = m.generate(text='''${escapedText}''', voice='${voice}')`,
-    `    sf.write('${outputPath}', audio, 24000)`,
+    `    m = KittenTTS('${safeModel}')`,
+    `    with open('${textFilePath.replace(/'/g, "'\\''")}', 'r', encoding='utf-8') as f:`,
+    '        text_content = f.read()',
+    `    audio = m.generate(text=text_content, voice='${safeVoice}')`,
+    `    sf.write('${outputPath.replace(/'/g, "'\\''")}', audio, 24000)`,
     '    print("SUCCESS")',
+    '    os.unlink("' + textFilePath.replace(/'/g, "'\\''") + '")',
     'except Exception as e:',
     '    print(f"ERROR: {str(e)}", file=sys.stderr)',
+    '    try: os.unlink("' + textFilePath.replace(/'/g, "'\\''") + '")',
+    '    except: pass',
     '    sys.exit(1)',
   ].join('; ');
 
@@ -102,6 +116,8 @@ async function generateKittenTTS(text: string, voice: string, model: string) {
 
     pythonProcess.on('close', async (code) => {
       if (code !== 0) {
+        // Cleanup temp text file on error (HIGH-6: prevent temp file leaks)
+        await fs.unlink(textFilePath).catch(() => {});
         resolve({
           content: [{ type: 'text' as const, text: `KittenTTS error: ${stderr || 'exit code ' + code}` }],
           isError: true,

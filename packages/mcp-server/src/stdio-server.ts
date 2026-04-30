@@ -21,7 +21,7 @@ const execAsync = promisify(exec);
 
 // ─── Configuration ───────────────────────────────────────────────
 
-interface ServerConfig {
+export interface ServerConfig {
   /** Root workspace directory for file operations */
   workspaceRoot: string;
   /** Maximum command execution timeout in ms */
@@ -42,7 +42,9 @@ const parsePositiveInt = (envVal: string | undefined, fallback: number): number 
 
 const MAX_COMMAND_TIMEOUT = parsePositiveInt(process.env.BING_MAX_COMMAND_TIMEOUT, 30000);
 const MAX_READ_FILE_SIZE = parsePositiveInt(process.env.BING_MAX_READ_FILE_SIZE, 1048576); // 1MB default
-const ENABLE_COMMAND_EXECUTION = process.env.BING_ENABLE_COMMAND_EXECUTION !== 'false';
+// CRIT-4 fix: Command execution is DISABLED by default.
+// Must explicitly opt-in with BING_ENABLE_COMMAND_EXECUTION=true.
+const ENABLE_COMMAND_EXECUTION = process.env.BING_ENABLE_COMMAND_EXECUTION === 'true';
 
 const config: ServerConfig = {
   workspaceRoot: resolve(DEFAULT_WORKSPACE_ROOT),
@@ -56,8 +58,12 @@ const config: ServerConfig = {
 /**
  * Validate and resolve a file path to prevent directory traversal attacks.
  * Ensures the resolved path is within the workspace root.
+ *
+ * CRIT-5 fix: Resolves symlinks via realpath at validation time to prevent
+ * TOCTOU races and symlink-based traversal. If the path doesn't exist yet
+ * (e.g., for write_file to a new file), validates the parent directory instead.
  */
-function validatePath(requestedPath: string): string {
+async function validatePath(requestedPath: string): Promise<string> {
   // Resolve the path (handles . and ..)
   const resolvedPath = isAbsolute(requestedPath)
     ? resolve(requestedPath)
@@ -78,7 +84,45 @@ function validatePath(requestedPath: string): string {
     );
   }
 
-  return normalized;
+  // CRIT-5 fix: Resolve symlinks to prevent symlink-based traversal.
+  // A symlink inside the workspace pointing to /etc would pass the prefix check
+  // above but still escape the workspace. realpath resolves all symlinks.
+  try {
+    const realPath = await fs.realpath(normalized);
+    const realNormalized = normalize(realPath);
+    if (realNormalized !== workspaceRoot && !realNormalized.startsWith(workspacePrefix)) {
+      throw new Error(
+        `Path traversal detected (symlink): "${requestedPath}" resolves outside workspace "${config.workspaceRoot}"`
+      );
+    }
+    return realNormalized;
+  } catch (error: any) {
+    if (error.code === 'ENOENT') {
+      // Path doesn't exist yet (e.g., write_file creating a new file).
+      // Validate the parent directory instead, if it exists.
+      const parentDir = normalized.substring(0, normalized.lastIndexOf(sep));
+      if (parentDir) {
+        try {
+          const realParent = await fs.realpath(parentDir);
+          const realParentNormalized = normalize(realParent);
+          if (realParentNormalized !== workspaceRoot && !realParentNormalized.startsWith(workspacePrefix)) {
+            throw new Error(
+              `Path traversal detected (symlink in parent): "${requestedPath}" resolves outside workspace`
+            );
+          }
+        } catch (parentError: any) {
+          if (parentError.code === 'ENOENT') {
+            // Parent doesn't exist either — the path is deeply new.
+            // The normalize+prefix check above is sufficient since no symlinks exist.
+            return normalized;
+          }
+          throw parentError;
+        }
+      }
+      return normalized;
+    }
+    throw error;
+  }
 }
 
 /**
@@ -147,35 +191,16 @@ server.tool(
   'read_file',
   'Read files from sandbox workspace with size limits and path validation',
   {
-    path: z.string().describe('File path (relative to workspace root)'),
+    // MED-1 fix: Validate path is non-empty
+    path: z.string().min(1).describe('File path (relative to workspace root)'),
   },
   async ({ path }) => {
     try {
-      const validatedPath = validatePath(path);
+      // validatePath now resolves symlinks internally (CRIT-5 fix)
+      const validatedPath = await validatePath(path);
 
-      // Resolve the real path to prevent symlink escapes
-      // e.g., a symlink inside the workspace pointing to /etc/passwd
-      const realPath = normalize(await fs.realpath(validatedPath));
-      const workspaceRoot = normalize(config.workspaceRoot);
-      const workspacePrefix = workspaceRoot.endsWith(sep)
-        ? workspaceRoot
-        : `${workspaceRoot}${sep}`;
-
-      // Re-check that the real path still stays inside the workspace root
-      if (realPath !== workspaceRoot && !realPath.startsWith(workspacePrefix)) {
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: `Error: Path traversal detected: "${path}" resolves outside workspace`,
-            },
-          ],
-          isError: true,
-        };
-      }
-
-      // Check if file exists (use realPath to stat the actual target)
-      const stat = await fs.stat(realPath);
+      // Check if file exists
+      const stat = await fs.stat(validatedPath);
       if (!stat.isFile()) {
         return {
           content: [{ type: 'text' as const, text: `Error: "${path}" is not a file` }],
@@ -196,8 +221,8 @@ server.tool(
         };
       }
 
-      // Read file content from the resolved real path
-      const content = await fs.readFile(realPath, 'utf-8');
+      // Read file content
+      const content = await fs.readFile(validatedPath, 'utf-8');
       const language = detectLanguage(path);
 
       return {
@@ -230,42 +255,23 @@ server.tool(
   'write_file',
   'Write files to sandbox workspace with automatic directory creation',
   {
-    path: z.string().describe('File path (relative to workspace root)'),
+    // MED-1 fix: Validate path and content are non-empty
+    path: z.string().min(1).describe('File path (relative to workspace root)'),
     content: z.string().describe('File content'),
   },
   async ({ path, content }) => {
     try {
-      const validatedPath = validatePath(path);
-
-      // Resolve the real path to prevent symlink escapes
-      // e.g., a symlink inside the workspace pointing outside the workspace
-      const realPath = normalize(await fs.realpath(validatedPath));
-      const workspaceRoot = normalize(config.workspaceRoot);
-      const workspacePrefix = workspaceRoot.endsWith(sep)
-        ? workspaceRoot
-        : `${workspaceRoot}${sep}`;
-
-      // Re-check that the real path still stays inside the workspace root
-      if (realPath !== workspaceRoot && !realPath.startsWith(workspacePrefix)) {
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: `Error: Path traversal detected: "${path}" resolves outside workspace`,
-            },
-          ],
-          isError: true,
-        };
-      }
+      // validatePath now resolves symlinks internally (CRIT-5 fix)
+      const validatedPath = await validatePath(path);
 
       // Ensure parent directory exists
-      const parentDir = realPath.substring(0, realPath.lastIndexOf(sep));
+      const parentDir = validatedPath.substring(0, validatedPath.lastIndexOf(sep));
       if (parentDir) {
         await fs.mkdir(parentDir, { recursive: true });
       }
 
-      // Write file to the resolved real path
-      await fs.writeFile(realPath, content, 'utf-8');
+      // Write file
+      await fs.writeFile(validatedPath, content, 'utf-8');
 
       const language = detectLanguage(path);
       const size = Buffer.byteLength(content, 'utf-8');
@@ -300,34 +306,16 @@ server.tool(
   'list_directory',
   'List directory contents with file metadata (type, size)',
   {
-    path: z.string().default('.').describe('Directory path (relative to workspace root)'),
+    // MED-1 fix: Validate path
+    path: z.string().min(1).default('.').describe('Directory path (relative to workspace root)'),
   },
   async ({ path }) => {
     try {
-      const validatedPath = validatePath(path);
-
-      // Resolve the real path to prevent symlink escapes
-      const realPath = normalize(await fs.realpath(validatedPath));
-      const workspaceRoot = normalize(config.workspaceRoot);
-      const workspacePrefix = workspaceRoot.endsWith(sep)
-        ? workspaceRoot
-        : `${workspaceRoot}${sep}`;
-
-      // Re-check that the real path still stays inside the workspace root
-      if (realPath !== workspaceRoot && !realPath.startsWith(workspacePrefix)) {
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: `Error: Path traversal detected: "${path}" resolves outside workspace`,
-            },
-          ],
-          isError: true,
-        };
-      }
+      // validatePath now resolves symlinks internally (CRIT-5 fix)
+      const validatedPath = await validatePath(path);
 
       // Check if path exists and is a directory
-      const stat = await fs.stat(realPath);
+      const stat = await fs.stat(validatedPath);
       if (!stat.isDirectory()) {
         return {
           content: [{ type: 'text' as const, text: `Error: "${path}" is not a directory` }],
@@ -336,7 +324,7 @@ server.tool(
       }
 
       // Read directory
-      const entries = await fs.readdir(realPath, { withFileTypes: true });
+      const entries = await fs.readdir(validatedPath, { withFileTypes: true });
 
       // Get metadata for each entry
       const lines: string[] = [];
@@ -344,7 +332,7 @@ server.tool(
         // Skip hidden files/directories
         if (entry.name.startsWith('.')) continue;
 
-        const entryPath = join(realPath, entry.name);
+        const entryPath = join(validatedPath, entry.name);
         try {
           const entryStat = await fs.stat(entryPath);
           const type = entry.isDirectory() ? 'dir' : 'file';
@@ -395,9 +383,10 @@ server.tool(
   'execute_command',
   'Execute shell commands in workspace with timeout protection',
   {
-    command: z.string().describe('Shell command to execute'),
+    // MED-1 fix: Validate command is non-empty, timeout has bounds
+    command: z.string().min(1).max(65536).describe('Shell command to execute'),
     workingDir: z.string().optional().describe('Working directory (relative to workspace root)'),
-    timeout: z.number().optional().describe('Timeout in milliseconds (default: 30000)'),
+    timeout: z.number().int().min(1000).max(300000).optional().describe('Timeout in milliseconds (1000-300000, default: 30000)'),
   },
   async ({ command, workingDir, timeout }) => {
     // Check if command execution is enabled
@@ -406,7 +395,7 @@ server.tool(
         content: [
           {
             type: 'text' as const,
-            text: 'Error: Command execution is disabled. Set BING_ENABLE_COMMAND_EXECUTION=true to enable.',
+            text: 'Error: Command execution is disabled by default for security. Set BING_ENABLE_COMMAND_EXECUTION=true to enable.'
           },
         ],
         isError: true,
@@ -417,28 +406,8 @@ server.tool(
       // Validate working directory if provided
       let cwd = config.workspaceRoot;
       if (workingDir) {
-        cwd = validatePath(workingDir);
-
-        // Resolve the real path to prevent symlink escapes
-        const realCwd = normalize(await fs.realpath(cwd));
-        const workspaceRoot = normalize(config.workspaceRoot);
-        const workspacePrefix = workspaceRoot.endsWith(sep)
-          ? workspaceRoot
-          : `${workspaceRoot}${sep}`;
-
-        // Re-check that the real path still stays inside the workspace root
-        if (realCwd !== workspaceRoot && !realCwd.startsWith(workspacePrefix)) {
-          return {
-            content: [
-              {
-                type: 'text' as const,
-                text: `Error: Path traversal detected: "${workingDir}" resolves outside workspace`,
-              },
-            ],
-            isError: true,
-          };
-        }
-        cwd = realCwd;
+        // validatePath now resolves symlinks internally (CRIT-5 fix)
+        cwd = await validatePath(workingDir);
 
         // Verify directory exists
         const stat = await fs.stat(cwd);
@@ -528,7 +497,7 @@ async function main() {
   console.error(`[binG MCP Server]   Workspace: ${config.workspaceRoot}`);
   console.error(`[binG MCP Server]   Max command timeout: ${config.maxCommandTimeout}ms`);
   console.error(`[binG MCP Server]   Max read file size: ${formatFileSize(config.maxReadFileSize)}`);
-  console.error(`[binG MCP Server]   Command execution: ${config.enableCommandExecution ? 'enabled' : 'disabled'}`);
+  console.error(`[binG MCP Server]   Command execution: ${config.enableCommandExecution ? 'ENABLED' : 'DISABLED (default — set BING_ENABLE_COMMAND_EXECUTION=true to enable)'}`);
 
   // Verify workspace directory exists
   try {

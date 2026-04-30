@@ -2,17 +2,22 @@
  * Agent Worker - Runs OpenCode engine loop with Git-Backed VFS
  *
  * Features:
- * - Pull jobs from Redis queue
+ * - BullMQ-based reliable job queue (replacing raw BRPOP)
  * - Persistent OpenCode engine (no CLI spawn)
  * - Redis PubSub + Streams for events
  * - Checkpoint/resume for crash recovery
  * - Integration with task-router and provider-router for optimal execution
+ * - Automatic retries and error recovery
+ * - Race condition protection and graceful shutdown
  */
 
+import { Worker, Job } from 'bullmq';
 import Redis from 'ioredis';
 import * as fs from 'fs/promises';
-import { createLogger } from './logger';
-import { getOpenCodeEngine, OpenCodeEngine } from './opencode-engine';
+import * as http from 'http';
+import * as path from 'path';
+import { createLogger } from './logger.js';
+import { getOpenCodeEngine, OpenCodeEngine } from './opencode-engine.js';
 import { executeV2Task } from '@bing/shared/agent/v2-executor';
 import { taskRouter } from '@bing/shared/agent/task-router';
 import { providerRouter, latencyTracker } from '@/lib/sandbox/provider-router';
@@ -27,15 +32,28 @@ const OPENCODE_MODEL = process.env.OPENCODE_MODEL || 'opencode/minimax-m2.5-free
 const OPENCODE_MAX_STEPS = parseInt(process.env.OPENCODE_MAX_STEPS || '15');
 const WORKER_CONCURRENCY = parseInt(process.env.WORKER_CONCURRENCY || '4');
 const GIT_VFS_AUTO_COMMIT = process.env.GIT_VFS_AUTO_COMMIT !== 'false';
+const JOB_TIMEOUT_MS = parseInt(process.env.JOB_TIMEOUT_MS || '3600000'); // 1 hour default
+const MAX_RETRIES = parseInt(process.env.MAX_RETRIES || '2');
 
 const redis = new Redis(REDIS_URL);
 const redisPub = new Redis(REDIS_URL);
 
 const PUBSUB_CHANNEL = 'agent:events';
-const JOB_QUEUE = 'agent:jobs';
+const JOB_QUEUE_NAME = 'agent:jobs';
+const SAFE_PATH_SEGMENT_REGEX = /^[a-zA-Z0-9._-]+$/;
 
+function sanitizePathSegment(segment: string, field: string): string {
+  const candidate = segment.trim();
+  if (!candidate || candidate === '.' || candidate === '..' || !SAFE_PATH_SEGMENT_REGEX.test(candidate)) {
+    throw new Error(`Invalid ${field} for workspace path`);
+  }
+  return candidate;
+}
+
+// Shared job schema - matches infra/queue types
 interface AgentJob {
-  id: string;
+  id?: string;
+  type: 'agent-task';
   sessionId: string;
   userId: string;
   conversationId: string;
@@ -54,161 +72,228 @@ interface AgentEvent {
   timestamp: number;
 }
 
+// Track active jobs to prevent race conditions
+const activeJobIds = new Set<string>();
+const jobLocks = new Map<string, Promise<void>>();
+
 let opencodeEngine: OpenCodeEngine;
+let bullWorker: Worker<AgentJob> | null = null;
+
+/**
+ * Acquire job lock to prevent concurrent execution of same job
+ */
+async function acquireJobLock(jobId: string): Promise<() => void> {
+  while (jobLocks.has(jobId)) {
+    await jobLocks.get(jobId);
+  }
+
+  let releaseLock: () => void;
+  const lockPromise = new Promise<void>(resolve => {
+    releaseLock = resolve;
+  });
+
+  jobLocks.set(jobId, lockPromise);
+
+  return () => {
+    jobLocks.delete(jobId);
+    releaseLock!();
+  };
+}
 
 async function publishEvent(event: AgentEvent): Promise<void> {
   const message = JSON.stringify(event);
-  await redisPub.publish(PUBSUB_CHANNEL, message);
-  if (event.sessionId) {
-    await redisPub.publish(`${PUBSUB_CHANNEL}:${event.sessionId}`, message);
-  }
-
   try {
-    await redis.xadd(REDIS_STREAM_KEY, '*', 'event', message);
-  } catch (e) {
-    logger.warn('Failed to add event to stream', { error: e });
+    await redisPub.publish(PUBSUB_CHANNEL, message);
+    if (event.sessionId) {
+      await redisPub.publish(`${PUBSUB_CHANNEL}:${event.sessionId}`, message);
+    }
+
+    try {
+      await redis.xadd(REDIS_STREAM_KEY, '*', 'event', message);
+    } catch (e) {
+      logger.warn('Failed to add event to stream', { error: e });
+    }
+  } catch (error: any) {
+    logger.error('Failed to publish event', { error: error.message, eventType: event.type });
   }
 }
 
-async function runOpenCode(job: AgentJob): Promise<void> {
-  const { id: jobId, sessionId, userId, conversationId, prompt, context } = job;
-  const startTime = Date.now();
-  const routing = await taskRouter.analyzeTask(prompt);
-
-  logger.info('Starting job with task routing', { jobId, sessionId, userId, routingTarget: routing.target });
-
-  job.status = 'processing';
-  await redis.set(`agent:job:${jobId}`, JSON.stringify(job), 'EX', 3600);
-
-  // CRITICAL FIX: Normalize conversationId to prevent composite IDs in workspace paths
-  const simpleSessionId = normalizeSessionId(conversationId) || conversationId; // Use original if normalize returns empty
-  const workspaceDir = `/workspace/users/${userId}/sessions/${simpleSessionId}`;
-  await fs.mkdir(workspaceDir, { recursive: true }).catch(() => {});
-
-  let selectedProvider: string | undefined;
-  let executionPolicy: string | undefined;
+async function runOpenCode(job: Job<AgentJob>): Promise<void> {
+  const jobId = job.id!;
+  const releaseLock = await acquireJobLock(jobId);
 
   try {
-    executionPolicy = determineExecutionPolicy({
-      task: prompt,
-      requiresBash: /bash|shell|command|execute|run\s+\w+/i.test(prompt),
-      requiresFileWrite: /write|create|save|edit|modify|delete\s+(file|\w+\.\w+)/i.test(prompt),
-      requiresBackend: /server|api|database|backend|express|fastapi|flask|django/i.test(prompt),
-      requiresGUI: /gui|desktop|browser|electron|tauri/i.test(prompt),
-      isLongRunning: /server|daemon|service|long-running|persistent/i.test(prompt),
-    });
-
-    const providerSelection = await providerRouter.selectWithServices({
-      type: executionPolicy === 'desktop-required' ? 'computer-use' : 'agent',
-      duration: executionPolicy === 'local-safe' ? 'short' : 'medium',
-      requiresPersistence: executionPolicy === 'persistent-sandbox',
-      needsServices: executionPolicy === 'desktop-required' ? ['desktop'] : ['pty'],
-      performancePriority: 'latency',
-    });
-    selectedProvider = providerSelection.provider;
-
-    await publishEvent({
-      type: 'job:started',
-      sessionId,
-      data: {
-        jobId,
-        prompt: prompt.substring(0, 100),
-        executionPolicy,
-        selectedProvider,
-        routing,
-      },
-      timestamp: Date.now(),
-    });
-
-    await publishEvent({
-      type: 'init',
-      sessionId,
-      data: {
-        agent: 'opencode',
-        sessionId,
-        timestamp: Date.now(),
-        gitVfsEnabled: GIT_VFS_AUTO_COMMIT,
-        executionPolicy,
-        provider: selectedProvider,
-        routing,
-      },
-      timestamp: Date.now(),
-    });
-
-    const result = await executeV2Task({
-      userId,
-      conversationId,
-      task: prompt,
-      context,
-      preferredAgent: routing.target === 'chat' ? undefined : routing.target,
-      executionPolicy: executionPolicy as any,
-    });
-
-    // result?.data is dynamic execution output — cast for property access
-    const resultData = (result?.data ?? result) as Record<string, unknown> | undefined;
-    const responseContent = result?.content || resultData?.response || resultData?.content || '';
-    const latency = Date.now() - startTime;
-
-    if (selectedProvider && (resultData?.agent === 'opencode' || routing.target === 'opencode')) {
-      latencyTracker.record(selectedProvider as any, latency);
+    if (activeJobIds.has(jobId)) {
+      logger.warn('Job already being processed, skipping', { jobId });
+      return;
     }
 
-    // CRITICAL FIX: Publish done event in separate try-catch to avoid marking successful jobs as failed
-    // If notification fails, log error but don't overwrite successful job status
+    activeJobIds.add(jobId);
+
+    const { sessionId, userId, conversationId, prompt, context } = job.data;
+    const startTime = Date.now();
+
+    // Update job progress
+    await job.updateProgress(5);
+
+    const routing = await taskRouter.analyzeTask(prompt);
+
+    logger.info('Starting job with task routing', {
+      jobId,
+      sessionId,
+      userId,
+      routingTarget: routing.target,
+    });
+
+    // CRITICAL FIX: Normalize conversationId to prevent composite IDs in workspace paths
+    const simpleSessionId = normalizeSessionId(conversationId) || conversationId;
+    const safeUserId = sanitizePathSegment(userId, 'userId');
+    const safeSessionId = sanitizePathSegment(simpleSessionId, 'conversationId');
+    const workspaceDir = path.posix.join('/workspace/users', safeUserId, 'sessions', safeSessionId);
+    await fs.mkdir(workspaceDir, { recursive: true }).catch(() => {});
+
+    let selectedProvider: string | undefined;
+    let executionPolicy: string | undefined;
+
     try {
+      await job.updateProgress(15);
+
+      executionPolicy = determineExecutionPolicy({
+        task: prompt,
+        requiresBash: /bash|shell|command|execute|run\s+\w+/i.test(prompt),
+        requiresFileWrite: /write|create|save|edit|modify|delete\s+(file|\w+\.\w+)/i.test(prompt),
+        requiresBackend: /server|api|database|backend|express|fastapi|flask|django/i.test(prompt),
+        requiresGUI: /gui|desktop|browser|electron|tauri/i.test(prompt),
+        isLongRunning: /server|daemon|service|long-running|persistent/i.test(prompt),
+      });
+
+      const providerSelection = await providerRouter.selectWithServices({
+        type: executionPolicy === 'desktop-required' ? 'computer-use' : 'agent',
+        duration: executionPolicy === 'local-safe' ? 'short' : 'medium',
+        requiresPersistence: executionPolicy === 'persistent-sandbox',
+        needsServices: executionPolicy === 'desktop-required' ? ['desktop'] : ['pty'],
+        performancePriority: 'latency',
+      });
+      selectedProvider = providerSelection.provider;
+
+      await job.updateProgress(30);
+
       await publishEvent({
-        type: 'done',
+        type: 'job:started',
         sessionId,
         data: {
-          response: responseContent,
-          timestamp: Date.now(),
-          latency,
-          provider: selectedProvider,
+          jobId,
+          prompt: prompt.substring(0, 100),
           executionPolicy,
+          selectedProvider,
           routing,
-          result: resultData,
         },
         timestamp: Date.now(),
       });
-    } catch (publishError: any) {
-      logger.error('Failed to publish done event (job still completed successfully)', {
-        jobId,
+
+      await publishEvent({
+        type: 'init',
         sessionId,
-        error: publishError.message,
-      });
-      // Don't rethrow - job was successful, only notification failed
-    }
-
-    job.status = 'completed';
-    await redis.set(`agent:job:${jobId}`, JSON.stringify(job), 'EX', 3600);
-
-    logger.info('Job completed', {
-      jobId,
-      latency,
-      success: result?.success,
-      provider: selectedProvider,
-      routingTarget: routing.target,
-    });
-  } catch (error: any) {
-    const latency = Date.now() - startTime;
-    job.status = 'failed';
-    await redis.set(`agent:job:${jobId}`, JSON.stringify(job), 'EX', 3600);
-
-    logger.error('Job failed', { jobId, error: error.message, executionPolicy, selectedProvider });
-
-    await publishEvent({
-      type: 'error',
-      sessionId,
-      data: {
-        error: error.message,
+        data: {
+          agent: 'opencode',
+          sessionId,
+          timestamp: Date.now(),
+          gitVfsEnabled: GIT_VFS_AUTO_COMMIT,
+          executionPolicy,
+          provider: selectedProvider,
+          routing,
+        },
         timestamp: Date.now(),
+      });
+
+      await job.updateProgress(50);
+
+      const result = await executeV2Task({
+        userId,
+        conversationId,
+        task: prompt,
+        context,
+        preferredAgent: routing.target === 'chat' ? undefined : routing.target,
+        executionPolicy: executionPolicy as any,
+      });
+
+      await job.updateProgress(85);
+
+      const resultData = (result?.data ?? result) as Record<string, unknown> | undefined;
+      const responseContent = result?.content || resultData?.response || resultData?.content || '';
+      const latency = Date.now() - startTime;
+
+      if (selectedProvider && (resultData?.agent === 'opencode' || routing.target === 'opencode')) {
+        latencyTracker.record(selectedProvider as any, latency);
+      }
+
+      // CRITICAL FIX: Publish done event in separate try-catch to avoid marking successful jobs as failed
+      try {
+        await publishEvent({
+          type: 'done',
+          sessionId,
+          data: {
+            response: responseContent,
+            timestamp: Date.now(),
+            latency,
+            provider: selectedProvider,
+            executionPolicy,
+            routing,
+            result: resultData,
+          },
+          timestamp: Date.now(),
+        });
+      } catch (publishError: any) {
+        logger.error('Failed to publish done event (job still completed successfully)', {
+          jobId,
+          sessionId,
+          error: publishError.message,
+        });
+      }
+
+      await job.updateProgress(100);
+
+      logger.info('Job completed', {
+        jobId,
         latency,
+        success: result?.success,
         provider: selectedProvider,
+        routingTarget: routing.target,
+      });
+    } catch (error: any) {
+      const latency = Date.now() - startTime;
+
+      logger.error('Job failed', {
+        jobId,
+        error: error.message,
         executionPolicy,
-        routing,
-      },
-      timestamp: Date.now(),
-    });
+        selectedProvider,
+        stack: error.stack,
+      });
+
+      try {
+        await publishEvent({
+          type: 'error',
+          sessionId,
+          data: {
+            error: error.message,
+            timestamp: Date.now(),
+            latency,
+            provider: selectedProvider,
+            executionPolicy,
+            routing,
+          },
+          timestamp: Date.now(),
+        });
+      } catch (publishError: any) {
+        logger.error('Failed to publish error event', { jobId, error: publishError.message });
+      }
+
+      throw error;
+    }
+  } finally {
+    activeJobIds.delete(jobId);
+    releaseLock();
   }
 }
 
@@ -223,52 +308,74 @@ async function startWorker(): Promise<void> {
   await opencodeEngine.ready();
   logger.info('OpenCode engine ready');
 
-  const workers: Promise<void>[] = [];
+  // Create BullMQ worker for reliable job processing
+  bullWorker = new Worker<AgentJob>(
+    JOB_QUEUE_NAME,
+    async (job: Job<AgentJob>) => {
+      logger.info(`Processing job ${job.id}`, { sessionId: job.data.sessionId });
+      await runOpenCode(job);
+    },
+    {
+      connection: redis,
+      concurrency: WORKER_CONCURRENCY,
+      settings: {
+        lockDuration: JOB_TIMEOUT_MS,
+        lockRenewTime: Math.min(30000, JOB_TIMEOUT_MS / 10),
+        maxStalledCount: 2,
+      },
+    }
+  );
 
-  for (let i = 0; i < WORKER_CONCURRENCY; i++) {
-    const workerId = i;
-    const worker = (async () => {
-      while (true) {
-        try {
-          const result = await redis.brpop(JOB_QUEUE, 5);
-          if (result) {
-            const [, jobData] = result;
-            const job: AgentJob = JSON.parse(jobData);
-            logger.info(`Worker ${workerId} processing job`, { jobId: job.id });
-            await runOpenCode(job);
-          }
-        } catch (error: any) {
-          logger.error(`Worker ${workerId} error`, { error: error.message });
-          await new Promise(resolve => setTimeout(resolve, 1000));
-        }
-      }
-    })();
+  // Event handlers
+  bullWorker.on('completed', (job: Job) => {
+    logger.info(`Job ${job.id} completed successfully`, { sessionId: job.data?.sessionId });
+  });
 
-    workers.push(worker);
-  }
+  bullWorker.on('failed', (job: Job | undefined, error: Error) => {
+    logger.error(`Job ${job?.id} failed`, {
+      error: error.message,
+      sessionId: job?.data?.sessionId,
+    });
+  });
 
-  await Promise.all(workers);
+  bullWorker.on('error', (error: Error) => {
+    logger.error('Worker error', { error: error.message });
+  });
+
+  logger.info('BullMQ worker initialized successfully');
+
+  // Keep process running
+  await new Promise(() => {});
 }
 
-const http = require('http');
 const server = http.createServer(async (req: any, res: any) => {
   if (req.url === '/health') {
     const engineHealthy = opencodeEngine?.isHealthy() ?? false;
     let redisHealthy = false;
+    let workerHealthy = false;
+
     try {
       await redis.ping();
       redisHealthy = true;
     } catch {}
 
+    try {
+      if (bullWorker !== null) {
+        workerHealthy = !(await bullWorker.isPaused());
+      }
+    } catch {}
+
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
-      status: engineHealthy && redisHealthy ? 'ok' : 'degraded',
+      status: (engineHealthy && redisHealthy && workerHealthy) ? 'ok' : 'degraded',
       worker: 'agent-worker',
       engine: engineHealthy ? 'ready' : 'starting',
       redis: redisHealthy ? 'connected' : 'disconnected',
+      bullWorker: workerHealthy ? 'running' : 'stopped',
+      activeJobs: activeJobIds.size,
     }));
   } else if (req.url === '/ready') {
-    const ready = (opencodeEngine?.isHealthy() ?? false);
+    const ready = (opencodeEngine?.isHealthy() ?? false) && bullWorker !== null;
     res.writeHead(ready ? 200 : 503, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ready }));
   } else {
@@ -287,10 +394,52 @@ startWorker().catch(err => {
   process.exit(1);
 });
 
-process.on('SIGTERM', async () => {
-  logger.info('Worker shutting down');
-  await opencodeEngine?.shutdown();
-  await redis.quit();
-  await redisPub.quit();
-  process.exit(0);
+// Graceful shutdown with timeout
+async function shutdown() {
+  logger.info('Worker shutting down gracefully...');
+
+  try {
+    server.close();
+
+    if (bullWorker) {
+      await bullWorker.close();
+      logger.info('BullMQ worker closed');
+    }
+
+    if (opencodeEngine) {
+      await opencodeEngine.shutdown();
+      logger.info('OpenCode engine shut down');
+    }
+
+    await redis.quit();
+    await redisPub.quit();
+    logger.info('Redis connections closed');
+
+    logger.info('Worker shutdown complete');
+    process.exit(0);
+  } catch (error: any) {
+    logger.error('Error during shutdown', { error: error.message });
+    process.exit(1);
+  }
+}
+
+const SHUTDOWN_TIMEOUT_MS = parseInt(process.env.SHUTDOWN_TIMEOUT_MS || '30000');
+process.on('SIGTERM', () => {
+  logger.info('Received SIGTERM signal');
+  const shutdownTimer = setTimeout(() => {
+    logger.error('Shutdown timeout, forcing exit');
+    process.exit(1);
+  }, SHUTDOWN_TIMEOUT_MS);
+
+  shutdown().finally(() => clearTimeout(shutdownTimer));
+});
+
+process.on('SIGINT', () => {
+  logger.info('Received SIGINT signal');
+  const shutdownTimer = setTimeout(() => {
+    logger.error('Shutdown timeout, forcing exit');
+    process.exit(1);
+  }, SHUTDOWN_TIMEOUT_MS);
+
+  shutdown().finally(() => clearTimeout(shutdownTimer));
 });

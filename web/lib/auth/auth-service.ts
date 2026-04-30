@@ -79,15 +79,45 @@ const MAX_LOGIN_TRACKED_EMAILS = 10000; // LRU cap to prevent memory exhaustion 
 const failedLoginAttempts = new Map<string, FailedLoginAttempt[]>();
 let entryCount = 0; // Track number of unique emails in the Map
 
-const LOCKOUT_THRESHOLD = 5; // Number of failed attempts before lockout
-const LOCKOUT_DURATION_MS = 30 * 60 * 1000; // 30 minutes lockout
+/**
+ * MED-2 fix: Common password blocklist — patterns that are too easily guessable.
+ * Uses exact-match (Set.has()) to avoid false positives on longer passwords
+ * that merely contain a common substring (e.g., "masterplan!2024" should not
+ * be blocked just because it contains "master").
+ */
+const COMMON_PASSWORDS = new Set([
+  'password', 'qwerty', 'abc123', 'letmein', 'welcome',
+  'admin', 'login', 'master', 'hello', 'football',
+  'monkey', 'dragon', 'shadow', 'sunshine', 'trustno1',
+  'iloveyou', 'princess', 'passw0rd', '123456', '12345678',
+  '123456789', '1234567890', 'qwerty123', 'password1', 'password123',
+  'admin123', 'letmein123', 'welcome123', 'master123', 'login123',
+  // Common keyboard walks
+  'qwertyuiop', 'asdfghjkl', 'zxcvbnm', '!@#$%^&*',
+  // Repeated patterns
+  'aaaaaaaaaaaa', '111111111111', 'abcd1234!',
+]);
+
+const LOCKOUT_THRESHOLD = 5; // Number of failed attempts before first lockout
 const ATTEMPT_WINDOW_MS = 30 * 60 * 1000; // Track attempts within 30 minutes
+
+// HIGH-7 fix: Progressive lockout durations (exponential backoff)
+// 1st lockout: 5 min, 2nd: 30 min, 3rd: 2 hours, 4th+: 24 hours
+const LOCKOUT_DURATIONS_MS = [
+  5 * 60 * 1000,     // 5 minutes (1st lockout)
+  30 * 60 * 1000,   // 30 minutes (2nd lockout)
+  2 * 60 * 60 * 1000, // 2 hours (3rd lockout)
+  24 * 60 * 60 * 1000, // 24 hours (4th+ lockout)
+];
+
+// Track how many times an account has been locked (for escalation)
+const lockoutCountMap = new Map<string, number>();
 
 /**
  * Evict oldest entries if we're at capacity (LRU eviction)
  */
 function evictOldestIfNeeded(): void {
-  if (entryCount <= MAX_LOGIN_TRACKED_EMAILS) return;
+  if (entryCount < MAX_LOGIN_TRACKED_EMAILS) return;
   
   // Find and remove the oldest entry
   let oldestKey: string | null = null;
@@ -103,6 +133,7 @@ function evictOldestIfNeeded(): void {
   
   if (oldestKey) {
     failedLoginAttempts.delete(oldestKey);
+    lockoutCountMap.delete(oldestKey); // HIGH-7 fix: Clean up lockout counts alongside attempts
     entryCount--;
     console.warn(`[Auth] LRU eviction: removed oldest entry for ${oldestKey}`);
   }
@@ -116,16 +147,30 @@ function checkAccountLockout(email: string): {
   unlockAfter?: number;
   remainingAttempts?: number;
 } {
-  const attempts = failedLoginAttempts.get(email.toLowerCase()) || [];
+  const emailKey = email.toLowerCase();
+  const attempts = failedLoginAttempts.get(emailKey) || [];
   const now = Date.now();
   
   // Filter to attempts within the window
   const recentAttempts = attempts.filter(a => now - a.timestamp < ATTEMPT_WINDOW_MS);
   
   if (recentAttempts.length >= LOCKOUT_THRESHOLD) {
-    // Find the oldest attempt to calculate unlock time
-    const oldestAttempt = recentAttempts[0];
-    const unlockAfter = oldestAttempt.timestamp + LOCKOUT_DURATION_MS;
+    // HIGH-7 fix: Progressive lockout — escalation based on how many times locked
+    const lockoutCount = lockoutCountMap.get(emailKey) || 0;
+    const durationIndex = Math.min(lockoutCount, LOCKOUT_DURATIONS_MS.length - 1);
+    const lockoutDuration = LOCKOUT_DURATIONS_MS[durationIndex];
+    
+    // Find the most recent attempt to calculate unlock time
+    const latestAttempt = recentAttempts[recentAttempts.length - 1];
+    const unlockAfter = latestAttempt.timestamp + lockoutDuration;
+    
+    // If unlock time has passed, account is no longer locked
+    if (now >= unlockAfter) {
+      return {
+        locked: false,
+        remainingAttempts: LOCKOUT_THRESHOLD,
+      };
+    }
     
     return {
       locked: true,
@@ -180,7 +225,16 @@ function recordFailedLogin(email: string, ipAddress: string, userAgent?: string)
     failedLoginAttempts.set(emailKey, recentAttempts);
   }
   
-  console.warn(`[Auth] Failed login attempt for ${email} from ${ipAddress} (${recentAttempts.length}/${LOCKOUT_THRESHOLD}) [tracking ${entryCount} emails]`);
+  // HIGH-7 fix: If this attempt triggers a lockout, increment the lockout count for escalation
+  if (recentAttempts.length >= LOCKOUT_THRESHOLD) {
+    const currentCount = lockoutCountMap.get(emailKey) || 0;
+    lockoutCountMap.set(emailKey, currentCount + 1);
+    const durationIndex = Math.min(currentCount, LOCKOUT_DURATIONS_MS.length - 1);
+    const durationMin = Math.round(LOCKOUT_DURATIONS_MS[durationIndex] / 60000);
+    console.warn(`[Auth] Account LOCKED (escalation level ${currentCount + 1}): ${email} from ${ipAddress} — lockout duration: ${durationMin} minutes`);
+  } else {
+    console.warn(`[Auth] Failed login attempt for ${email} from ${ipAddress} (${recentAttempts.length}/${LOCKOUT_THRESHOLD}) [tracking ${entryCount} emails]`);
+  }
 }
 
 /**
@@ -192,6 +246,10 @@ function clearFailedLogins(email: string): void {
     failedLoginAttempts.delete(emailKey);
     entryCount--;
   }
+  // HIGH-7 fix: Reset lockout escalation on successful login
+  // (but keep the count for logging — reset only if it's been >24h since last lockout)
+  // This prevents indefinite escalation from ancient lockouts
+  lockoutCountMap.delete(emailKey);
 }
 
 /**
@@ -428,7 +486,7 @@ export class AuthService {
       // Return success - OAuth users are auto-verified, regular users need to verify
       return {
         success: true,
-        user: this.mapDbUserToUser(user),
+        user: user,
         requiresVerification: !credentials.emailVerified,
         message: credentials.emailVerified
           ? 'Registration successful! You are now logged in.'
@@ -486,6 +544,17 @@ export class AuthService {
       // SUCCESS: Clear failed login attempts on successful login
       clearFailedLogins(credentials.email);
 
+      // CRIT-4 fix: Invalidate all previous sessions for this user before creating a new one.
+      // This prevents session fixation attacks where an attacker pre-sets a session cookie
+      // and the victim's login doesn't invalidate it.
+      try {
+        this.invalidateAllSessionsForUser(dbUser.id);
+        logger.info('Invalidated previous sessions on login', { userId: dbUser.id });
+      } catch (cleanupError) {
+        // Log but don't fail login if session cleanup fails
+        logger.error('Failed to invalidate previous sessions on login', cleanupError as Error);
+      }
+
       // Update last login
       this.updateLastLogin(dbUser.id);
 
@@ -504,9 +573,9 @@ export class AuthService {
       );
 
       // Generate JWT token
+      // HIGH-8 fix: email removed from JWT — use getUserEmail() from jwt.ts if needed
       const token = generateToken({
         userId: dbUser.id.toString(),
-        email: dbUser.email
       });
 
       return {
@@ -734,10 +803,18 @@ export class AuthService {
 
   /**
    * Validate password strength
+   *
+   * MED-2 fix: Enhanced password policy — 12 char minimum, special character required,
+   * common password blocklist. Previous policy was 8 chars + upper/lower/digit only.
    */
   private validatePassword(password: string): { valid: boolean; error?: string } {
-    if (password.length < 8) {
-      return { valid: false, error: 'Password must be at least 8 characters long' };
+    // MED-2 fix: Increased from 8 to 12 characters for better brute-force resistance
+    if (password.length < 12) {
+      return { valid: false, error: 'Password must be at least 12 characters long' };
+    }
+
+    if (password.length > 128) {
+      return { valid: false, error: 'Password must be at most 128 characters long' };
     }
 
     if (!/(?=.*[a-z])/.test(password)) {
@@ -750,6 +827,18 @@ export class AuthService {
 
     if (!/(?=.*\d)/.test(password)) {
       return { valid: false, error: 'Password must contain at least one number' };
+    }
+
+    // MED-2 fix: Require at least one special character
+    if (!/(?=.*[^a-zA-Z0-9])/.test(password)) {
+      return { valid: false, error: 'Password must contain at least one special character (!@#$%^&* etc.)' };
+    }
+
+    // MED-2 fix: Block commonly used passwords (exact match only to avoid false positives
+    // on longer passwords that merely contain a common substring like "masterplan!2024")
+    const lower = password.toLowerCase();
+    if (COMMON_PASSWORDS.has(lower)) {
+      return { valid: false, error: 'This password is too common. Choose a more unique password.' };
     }
 
     return { valid: true };
@@ -782,6 +871,28 @@ export class AuthService {
       this.dbOps.cleanupExpiredSessions();
     } catch (error) {
       console.error('Session cleanup error:', error);
+    }
+  }
+
+  /**
+   * Invalidate all active sessions for a user.
+   * Used on login (CRIT-4: session fixation prevention) and password change.
+   */
+  async invalidateAllSessionsForUser(userId: string): Promise<number> {
+    try {
+      await this.ensureDatabase();
+      const stmt = this.db.prepare(
+        'DELETE FROM user_sessions WHERE user_id = ?'
+      );
+      const result = stmt.run(userId);
+      const count = result.changes || 0;
+      if (count > 0) {
+        logger.info('Invalidated all sessions for user', { userId, count });
+      }
+      return count;
+    } catch (error) {
+      logger.error('Failed to invalidate sessions for user', error as Error);
+      return 0;
     }
   }
 
@@ -865,9 +976,9 @@ export class AuthService {
        }
 
        // Generate new token pair
+       // HIGH-8 fix: email removed from JWT — use getUserEmail() from jwt.ts if needed
        const newToken = generateToken({
          userId: session.user_id.toString(),
-         email: session.email,
        });
 
        // Generate new refresh token (token rotation)

@@ -10,8 +10,17 @@
  *
  * To run the server directly, use the `bing-mcp` CLI binary or import
  * `./stdio-server.js` explicitly with full awareness of the side effects.
+ *
+ * CRIT-1 fix: Export tool functions and types for programmatic use.
+ * Consumers can register individual tools with their own MCP server instance
+ * without running the standalone stdio server.
  */
 
-// No library exports — this package is intended to be run as a CLI,
-// not imported as a side-effect-free library.
-export {};
+// Re-export tool factories for programmatic use
+export { createAgentTool, getAgentStatusTool, stopAgentTool, spawnAgentSessionTool } from './tools/agent-tools';
+export { voiceSpeechTool } from './tools/voice-tools';
+export { generateImageTool } from './tools/image-tools';
+export { registerExtractedTools } from './tools/registry';
+
+// Re-export server config type (not the singleton, to avoid side effects)
+export type { ServerConfig } from './stdio-server';

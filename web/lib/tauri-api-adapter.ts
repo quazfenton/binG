@@ -131,7 +131,10 @@ const TAURI_COMMAND_MAP: Record<string, TauriRouteMapping> = {
   // Filesystem routes
   '/api/filesystem/read': {
     command: 'read_file',
-    args: (url) => ({ file_path: url.searchParams.get('path') || '' }),
+    args: async (_url, body) => {
+      const data = typeof body === 'string' ? JSON.parse(body) : body;
+      return { file_path: data.path || data.filePath || '' };
+    },
   },
   '/api/filesystem/list': {
     command: 'list_directory',

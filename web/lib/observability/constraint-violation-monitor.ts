@@ -142,6 +142,7 @@ class AlertThrottler {
     }
 
     // Rate limit window expired, reset
+    this.state.alertCountInWindow = 0;
     return true;
   }
 
@@ -552,11 +553,6 @@ export class ConstraintViolationMonitor {
 
     // Notify callbacks via throttler (batched/rate-limited)
     this.throttler.queueAlert(alert);
-    
-    // Track dropped alerts
-    if (!this.throttler.shouldSendImmediately()) {
-      this.totalAlertsDropped++;
-    }
   }
 
   /**
@@ -595,7 +591,7 @@ export class ConstraintViolationMonitor {
    * Execute a database operation with constraint monitoring
    */
   async executeWithMonitoring<T>(
-    operation: () => T,
+    operation: () => Promise<T> | T,
     options: {
       operationName: string;
       userId?: string;
@@ -603,7 +599,7 @@ export class ConstraintViolationMonitor {
     }
   ): Promise<T> {
     try {
-      return operation();
+      return await operation();
     } catch (error) {
       const parsed = this.parseConstraintViolationError(error as Error);
       

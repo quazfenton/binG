@@ -107,12 +107,18 @@ export function createDefaultSettings(workspaceRoot?: string): UnifiedSettings {
       email: null,
       expiresAt: null,
     },
-    llm: {
-      provider: process.env.DEFAULT_LLM_PROVIDER || 'anthropic',
-      model: process.env.DEFAULT_MODEL || 'claude-3-5-sonnet-latest',
-      temperature: parseFloat(process.env.DEFAULT_TEMPERATURE || '0.7'),
-      maxTokens: parseInt(process.env.DEFAULT_MAX_TOKENS || '80000', 10),
-    },
+     llm: {
+       provider: process.env.DEFAULT_LLM_PROVIDER || 'anthropic',
+       model: process.env.DEFAULT_MODEL || 'claude-3-5-sonnet-latest',
+       temperature: (() => {
+         const temp = parseFloat(process.env.DEFAULT_TEMPERATURE || '0.7');
+         return isNaN(temp) ? 0.7 : temp;
+       })(),
+       maxTokens: (() => {
+         const tokens = parseInt(process.env.DEFAULT_MAX_TOKENS || '80000', 10);
+         return isNaN(tokens) ? 80000 : tokens;
+       })(),
+     },
     sandbox: {
       provider: process.env.SANDBOX_PROVIDER || 'daytona',
       currentSandboxId: undefined,

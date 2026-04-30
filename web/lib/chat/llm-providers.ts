@@ -109,7 +109,7 @@ import { findAmpBinarySync, findCodexBinarySync, findKilocodeBinarySync, findPiB
 export interface LLMProvider {
   id: string
   name: string
-  models: string[]
+  models: Array<{ id: string; tags?: string[] } | string>
   supportsStreaming: boolean
   maxTokens: number
   description: string
@@ -279,9 +279,361 @@ export interface ProviderConfig {
     defaultProjectId?: string
     // Per-user accounts are loaded from DB, not config
   }
+  vercel?: {
+    apiKey?: string
+    baseURL?: string
+  }
 }
 
 export const PROVIDERS: Record<string, LLMProvider> = {
+  vercel: {
+    id: "vercel",
+    name: "Vercel",
+    models: [
+      "vercel:alibaba/qwen-3-14b",
+      "vercel:alibaba/qwen-3-235b",
+      "vercel:alibaba/qwen-3-30b",
+      "vercel:alibaba/qwen-3-32b",
+      "vercel:alibaba/qwen-3.6-max-preview",
+      "vercel:alibaba/qwen3-235b-a22b-thinking",
+      "vercel:alibaba/qwen3-coder",
+      "vercel:alibaba/qwen3-coder-30b-a3b",
+      "vercel:alibaba/qwen3-coder-next",
+      "vercel:alibaba/qwen3-coder-plus",
+      "vercel:alibaba/qwen3-max",
+      "vercel:alibaba/qwen3-max-preview",
+      "vercel:alibaba/qwen3-max-thinking",
+      "vercel:alibaba/qwen3-next-80b-a3b-instruct",
+      "vercel:alibaba/qwen3-next-80b-a3b-thinking",
+      "vercel:alibaba/qwen3-vl-instruct",
+      "vercel:alibaba/qwen3-vl-thinking",
+      "vercel:alibaba/qwen3.5-flash",
+      "vercel:alibaba/qwen3.5-plus",
+      "vercel:alibaba/qwen3.6-plus",
+      "vercel:amazon/nova-2-lite",
+      "vercel:amazon/nova-lite",
+      "vercel:amazon/nova-micro",
+      "vercel:amazon/nova-pro",
+      "vercel:anthropic/claude-3-haiku",
+      "vercel:anthropic/claude-3.5-haiku",
+      "vercel:anthropic/claude-3.7-sonnet",
+      "vercel:anthropic/claude-haiku-4.5",
+      "vercel:anthropic/claude-opus-4",
+      "vercel:anthropic/claude-opus-4.1",
+      "vercel:anthropic/claude-opus-4.5",
+      "vercel:anthropic/claude-opus-4.6",
+      "vercel:anthropic/claude-opus-4.7",
+      "vercel:anthropic/claude-sonnet-4",
+      "vercel:anthropic/claude-sonnet-4.5",
+      "vercel:anthropic/claude-sonnet-4.6",
+      "vercel:arcee-ai/trinity-large-preview",
+      "vercel:arcee-ai/trinity-large-thinking",
+      "vercel:arcee-ai/trinity-mini",
+      "vercel:bytedance/seed-1.6",
+      "vercel:bytedance/seed-1.8",
+      "vercel:cohere/command-a",
+      "vercel:deepseek/deepseek-r1",
+      "vercel:deepseek/deepseek-v3",
+      "vercel:deepseek/deepseek-v3.1",
+      "vercel:deepseek/deepseek-v3.1-terminus",
+      "vercel:deepseek/deepseek-v3.2",
+      "vercel:deepseek/deepseek-v3.2-thinking",
+      "vercel:deepseek/deepseek-v4-flash",
+      "vercel:deepseek/deepseek-v4-pro",
+      "vercel:google/gemini-2.0-flash",
+      "vercel:google/gemini-2.0-flash-lite",
+      "vercel:google/gemini-2.5-flash",
+      "vercel:google/gemini-2.5-flash-image",
+      "vercel:google/gemini-2.5-flash-lite",
+      "vercel:google/gemini-2.5-pro",
+      "vercel:google/gemini-3-flash",
+      "vercel:google/gemini-3-pro-image",
+      "vercel:google/gemini-3-pro-preview",
+      "vercel:google/gemini-3.1-flash-image-preview",
+      "vercel:google/gemini-3.1-flash-lite-preview",
+      "vercel:google/gemini-3.1-pro-preview",
+      "vercel:google/gemma-4-26b-a4b-it",
+      "vercel:google/gemma-4-31b-it",
+      "vercel:inception/mercury-2",
+      "vercel:inception/mercury-coder-small",
+      "vercel:interfaze/interfaze-beta",
+      "vercel:kwaipilot/kat-coder-pro-v1",
+      "vercel:kwaipilot/kat-coder-pro-v2",
+      "vercel:meituan/longcat-flash-chat",
+      "vercel:meituan/longcat-flash-thinking-2601",
+      "vercel:meta/llama-3.1-70b",
+      "vercel:meta/llama-3.1-8b",
+      "vercel:meta/llama-3.2-11b",
+      "vercel:meta/llama-3.2-1b",
+      "vercel:meta/llama-3.2-3b",
+      "vercel:meta/llama-3.2-90b",
+      "vercel:meta/llama-3.3-70b",
+      "vercel:meta/llama-4-maverick",
+      "vercel:meta/llama-4-scout",
+      "vercel:minimax/minimax-m2",
+      "vercel:minimax/minimax-m2.1",
+      "vercel:minimax/minimax-m2.1-lightning",
+      "vercel:minimax/minimax-m2.5",
+      "vercel:minimax/minimax-m2.5-highspeed",
+      "vercel:minimax/minimax-m2.7",
+      "vercel:minimax/minimax-m2.7-highspeed",
+      "vercel:mistral/codestral",
+      "vercel:mistral/devstral-2",
+      "vercel:mistral/devstral-small",
+      "vercel:mistral/devstral-small-2",
+      "vercel:mistral/magistral-medium",
+      "vercel:mistral/magistral-small",
+      "vercel:mistral/ministral-14b",
+      "vercel:mistral/ministral-3b",
+      "vercel:mistral/ministral-8b",
+      "vercel:mistral/mistral-large-3",
+      "vercel:mistral/mistral-medium",
+      "vercel:mistral/mistral-nemo",
+      "vercel:mistral/mistral-small",
+      "vercel:mistral/mixtral-8x22b-instruct",
+      "vercel:mistral/pixtral-12b",
+      "vercel:mistral/pixtral-large",
+      "vercel:moonshotai/kimi-k2",
+      "vercel:moonshotai/kimi-k2-0905",
+      "vercel:moonshotai/kimi-k2-thinking",
+      "vercel:moonshotai/kimi-k2-thinking-turbo",
+      "vercel:moonshotai/kimi-k2-turbo",
+      "vercel:moonshotai/kimi-k2.5",
+      "vercel:moonshotai/kimi-k2.6",
+      "vercel:morph/morph-v3-fast",
+      "vercel:morph/morph-v3-large",
+      "vercel:nvidia/nemotron-3-nano-30b-a3b",
+      "vercel:nvidia/nemotron-3-super-120b-a12b",
+      "vercel:nvidia/nemotron-nano-12b-v2-vl",
+      "vercel:nvidia/nemotron-nano-9b-v2",
+      "vercel:openai/gpt-3.5-turbo",
+      "vercel:openai/gpt-3.5-turbo-instruct",
+      "vercel:openai/gpt-4-turbo",
+      "vercel:openai/gpt-4.1",
+      "vercel:openai/gpt-4.1-mini",
+      "vercel:openai/gpt-4.1-nano",
+      "vercel:openai/gpt-4o",
+      "vercel:openai/gpt-4o-mini",
+      "vercel:openai/gpt-4o-mini-search-preview",
+      "vercel:openai/gpt-5",
+      "vercel:openai/gpt-5-chat",
+      "vercel:openai/gpt-5-codex",
+      "vercel:openai/gpt-5-mini",
+      "vercel:openai/gpt-5-nano",
+      "vercel:openai/gpt-5-pro",
+      "vercel:openai/gpt-5.1-codex",
+      "vercel:openai/gpt-5.1-codex-max",
+      "vercel:openai/gpt-5.1-codex-mini",
+      "vercel:openai/gpt-5.1-instant",
+      "vercel:openai/gpt-5.1-thinking",
+      "vercel:openai/gpt-5.2",
+      "vercel:openai/gpt-5.2-chat",
+      "vercel:openai/gpt-5.2-codex",
+      "vercel:openai/gpt-5.2-pro",
+      "vercel:openai/gpt-5.3-chat",
+      "vercel:openai/gpt-5.3-codex",
+      "vercel:openai/gpt-5.4",
+      "vercel:openai/gpt-5.4-mini",
+      "vercel:openai/gpt-5.4-nano",
+      "vercel:openai/gpt-5.4-pro",
+      "vercel:openai/gpt-5.5",
+      "vercel:openai/gpt-5.5-pro",
+      "vercel:openai/gpt-image-1",
+      "vercel:openai/gpt-image-1-mini",
+      "vercel:openai/gpt-image-1.5",
+      "vercel:openai/gpt-image-2",
+      "vercel:openai/gpt-oss-120b",
+      "vercel:openai/gpt-oss-20b",
+      "vercel:openai/gpt-oss-safeguard-20b",
+      "vercel:openai/o1",
+      "vercel:openai/o3",
+      "vercel:openai/o3-deep-research",
+      "vercel:openai/o3-mini",
+      "vercel:openai/o3-pro",
+      "vercel:openai/o4-mini",
+      "vercel:perplexity/sonar",
+      "vercel:perplexity/sonar-pro",
+      "vercel:perplexity/sonar-reasoning-pro",
+      "vercel:prime-intellect/intellect-3",
+      "vercel:xai/grok-3",
+      "vercel:xai/grok-3-fast",
+      "vercel:xai/grok-3-mini",
+      "vercel:xai/grok-3-mini-fast"
+    ],
+    modelConfigs: [
+      { id: "vercel:alibaba/qwen-3-14b", tags: ["reasoning", "tool-use"] },
+      { id: "vercel:alibaba/qwen-3-235b", tags: ["tool-use", "implicit-caching"] },
+      { id: "vercel:alibaba/qwen-3-30b", tags: ["reasoning", "tool-use"] },
+      { id: "vercel:alibaba/qwen-3-32b", tags: ["reasoning", "tool-use"] },
+      { id: "vercel:alibaba/qwen-3.6-max-preview", tags: ["reasoning", "tool-use", "implicit-caching", "file-input", "vision"] },
+      { id: "vercel:alibaba/qwen3-235b-a22b-thinking", tags: ["tool-use", "vision", "file-input", "reasoning"] },
+      { id: "vercel:alibaba/qwen3-coder", tags: ["tool-use"] },
+      { id: "vercel:alibaba/qwen3-coder-30b-a3b", tags: ["reasoning", "tool-use"] },
+      { id: "vercel:alibaba/qwen3-coder-next", tags: ["tool-use"] },
+      { id: "vercel:alibaba/qwen3-coder-plus", tags: ["tool-use"] },
+      { id: "vercel:alibaba/qwen3-max", tags: ["tool-use", "implicit-caching"] },
+      { id: "vercel:alibaba/qwen3-max-preview", tags: ["tool-use", "implicit-caching"] },
+      { id: "vercel:alibaba/qwen3-max-thinking", tags: ["reasoning", "tool-use", "implicit-caching"] },
+      { id: "vercel:alibaba/qwen3-next-80b-a3b-instruct", tags: [] },
+      { id: "vercel:alibaba/qwen3-next-80b-a3b-thinking", tags: [] },
+      { id: "vercel:alibaba/qwen3-vl-instruct", tags: ["vision"] },
+      { id: "vercel:alibaba/qwen3-vl-thinking", tags: ["vision", "reasoning", "tool-use"] },
+      { id: "vercel:alibaba/qwen3.5-flash", tags: ["vision", "explicit-caching", "file-input", "reasoning", "tool-use"] },
+      { id: "vercel:alibaba/qwen3.5-plus", tags: ["vision", "explicit-caching", "file-input", "reasoning", "tool-use"] },
+      { id: "vercel:alibaba/qwen3.6-plus", tags: ["reasoning", "tool-use", "implicit-caching", "vision", "file-input"] },
+      { id: "vercel:amazon/nova-2-lite", tags: ["reasoning", "vision"] },
+      { id: "vercel:amazon/nova-lite", tags: [] },
+      { id: "vercel:amazon/nova-micro", tags: [] },
+      { id: "vercel:amazon/nova-pro", tags: [] },
+      { id: "vercel:anthropic/claude-3-haiku", tags: ["tool-use", "vision", "explicit-caching"] },
+      { id: "vercel:anthropic/claude-3.5-haiku", tags: ["file-input", "tool-use", "vision", "explicit-caching"] },
+      { id: "vercel:anthropic/claude-3.7-sonnet", tags: ["file-input", "reasoning", "tool-use", "vision", "explicit-caching"] },
+      { id: "vercel:anthropic/claude-haiku-4.5", tags: ["file-input", "reasoning", "tool-use", "vision", "explicit-caching"] },
+      { id: "vercel:anthropic/claude-opus-4", tags: ["file-input", "reasoning", "tool-use", "vision", "explicit-caching"] },
+      { id: "vercel:anthropic/claude-opus-4.1", tags: ["file-input", "reasoning", "tool-use", "vision", "explicit-caching"] },
+      { id: "vercel:anthropic/claude-opus-4.5", tags: ["tool-use", "reasoning", "vision", "file-input", "explicit-caching"] },
+      { id: "vercel:anthropic/claude-opus-4.6", tags: ["tool-use", "reasoning", "vision", "file-input", "explicit-caching", "web-search"] },
+      { id: "vercel:anthropic/claude-opus-4.7", tags: ["tool-use", "reasoning", "vision", "file-input", "explicit-caching", "web-search"] },
+      { id: "vercel:anthropic/claude-sonnet-4", tags: ["file-input", "reasoning", "tool-use", "vision", "explicit-caching"] },
+      { id: "vercel:anthropic/claude-sonnet-4.5", tags: ["file-input", "reasoning", "tool-use", "vision", "explicit-caching"] },
+      { id: "vercel:anthropic/claude-sonnet-4.6", tags: ["file-input", "reasoning", "tool-use", "vision", "explicit-caching", "web-search"] },
+      { id: "vercel:arcee-ai/trinity-large-preview", tags: ["tool-use"] },
+      { id: "vercel:arcee-ai/trinity-large-thinking", tags: ["reasoning", "tool-use", "implicit-caching"] },
+      { id: "vercel:arcee-ai/trinity-mini", tags: [] },
+      { id: "vercel:bytedance/seed-1.6", tags: ["reasoning", "tool-use", "implicit-caching"] },
+      { id: "vercel:bytedance/seed-1.8", tags: ["reasoning", "vision", "implicit-caching"] },
+      { id: "vercel:cohere/command-a", tags: ["tool-use"] },
+      { id: "vercel:deepseek/deepseek-r1", tags: ["reasoning", "tool-use"] },
+      { id: "vercel:deepseek/deepseek-v3", tags: ["tool-use"] },
+      { id: "vercel:deepseek/deepseek-v3.1", tags: ["reasoning", "tool-use"] },
+      { id: "vercel:deepseek/deepseek-v3.1-terminus", tags: ["reasoning", "tool-use"] },
+      { id: "vercel:deepseek/deepseek-v3.2", tags: ["tool-use", "implicit-caching"] },
+      { id: "vercel:deepseek/deepseek-v3.2-thinking", tags: ["tool-use"] },
+      { id: "vercel:deepseek/deepseek-v4-flash", tags: ["reasoning", "tool-use", "implicit-caching"] },
+      { id: "vercel:deepseek/deepseek-v4-pro", tags: ["reasoning", "tool-use", "implicit-caching"] },
+      { id: "vercel:google/gemini-2.0-flash", tags: ["file-input", "tool-use", "vision", "web-search"] },
+      { id: "vercel:google/gemini-2.0-flash-lite", tags: ["file-input", "tool-use", "vision", "web-search"] },
+      { id: "vercel:google/gemini-2.5-flash", tags: ["file-input", "reasoning", "tool-use", "vision", "web-search", "implicit-caching"] },
+      { id: "vercel:google/gemini-2.5-flash-image", tags: ["image-generation", "web-search"] },
+      { id: "vercel:google/gemini-2.5-flash-lite", tags: ["file-input", "reasoning", "tool-use", "vision", "web-search", "implicit-caching"] },
+      { id: "vercel:google/gemini-2.5-pro", tags: ["file-input", "reasoning", "tool-use", "vision", "web-search", "implicit-caching"] },
+      { id: "vercel:google/gemini-3-flash", tags: ["reasoning", "tool-use", "file-input", "vision", "web-search", "implicit-caching"] },
+      { id: "vercel:google/gemini-3-pro-image", tags: ["image-generation", "web-search"] },
+      { id: "vercel:google/gemini-3-pro-preview", tags: ["file-input", "tool-use", "reasoning", "vision", "web-search", "implicit-caching"] },
+      { id: "vercel:google/gemini-3.1-flash-image-preview", tags: ["image-generation", "web-search", "vision", "reasoning"] },
+      { id: "vercel:google/gemini-3.1-flash-lite-preview", tags: ["reasoning", "tool-use", "implicit-caching", "vision", "file-input", "web-search"] },
+      { id: "vercel:google/gemini-3.1-pro-preview", tags: ["file-input", "tool-use", "reasoning", "vision", "web-search", "implicit-caching"] },
+      { id: "vercel:google/gemma-4-26b-a4b-it", tags: ["vision", "tool-use", "file-input"] },
+      { id: "vercel:google/gemma-4-31b-it", tags: ["tool-use", "vision", "file-input"] },
+      { id: "vercel:inception/mercury-2", tags: ["tool-use", "reasoning"] },
+      { id: "vercel:inception/mercury-coder-small", tags: ["tool-use"] },
+      { id: "vercel:interfaze/interfaze-beta", tags: ["reasoning"] },
+      { id: "vercel:kwaipilot/kat-coder-pro-v1", tags: ["reasoning"] },
+      { id: "vercel:kwaipilot/kat-coder-pro-v2", tags: ["tool-use", "reasoning", "implicit-caching"] },
+      { id: "vercel:meituan/longcat-flash-chat", tags: ["tool-use"] },
+      { id: "vercel:meituan/longcat-flash-thinking-2601", tags: ["reasoning"] },
+      { id: "vercel:meta/llama-3.1-70b", tags: ["tool-use"] },
+      { id: "vercel:meta/llama-3.1-8b", tags: ["tool-use"] },
+      { id: "vercel:meta/llama-3.2-11b", tags: ["tool-use", "vision"] },
+      { id: "vercel:meta/llama-3.2-1b", tags: [] },
+      { id: "vercel:meta/llama-3.2-3b", tags: [] },
+      { id: "vercel:meta/llama-3.2-90b", tags: ["tool-use", "vision"] },
+      { id: "vercel:meta/llama-3.3-70b", tags: ["tool-use"] },
+      { id: "vercel:meta/llama-4-maverick", tags: ["tool-use", "vision"] },
+      { id: "vercel:meta/llama-4-scout", tags: ["tool-use", "vision"] },
+      { id: "vercel:minimax/minimax-m2", tags: ["reasoning", "tool-use", "implicit-caching"] },
+      { id: "vercel:minimax/minimax-m2.1", tags: ["reasoning", "tool-use", "implicit-caching"] },
+      { id: "vercel:minimax/minimax-m2.1-lightning", tags: ["reasoning", "tool-use", "implicit-caching"] },
+      { id: "vercel:minimax/minimax-m2.5", tags: ["reasoning", "tool-use", "implicit-caching"] },
+      { id: "vercel:minimax/minimax-m2.5-highspeed", tags: ["reasoning", "tool-use", "implicit-caching"] },
+      { id: "vercel:minimax/minimax-m2.7", tags: ["reasoning", "tool-use", "implicit-caching", "file-input", "vision"] },
+      { id: "vercel:minimax/minimax-m2.7-highspeed", tags: ["reasoning", "tool-use", "implicit-caching", "vision"] },
+      { id: "vercel:mistral/codestral", tags: ["tool-use"] },
+      { id: "vercel:mistral/devstral-2", tags: ["tool-use"] },
+      { id: "vercel:mistral/devstral-small", tags: ["tool-use"] },
+      { id: "vercel:mistral/devstral-small-2", tags: ["tool-use"] },
+      { id: "vercel:mistral/magistral-medium", tags: ["reasoning", "vision"] },
+      { id: "vercel:mistral/magistral-small", tags: ["reasoning", "vision"] },
+      { id: "vercel:mistral/ministral-14b", tags: ["vision", "file-input"] },
+      { id: "vercel:mistral/ministral-3b", tags: ["tool-use"] },
+      { id: "vercel:mistral/ministral-8b", tags: ["tool-use"] },
+      { id: "vercel:mistral/mistral-large-3", tags: ["vision"] },
+      { id: "vercel:mistral/mistral-medium", tags: ["tool-use", "vision"] },
+      { id: "vercel:mistral/mistral-nemo", tags: [] },
+      { id: "vercel:mistral/mistral-small", tags: ["tool-use", "vision"] },
+      { id: "vercel:mistral/mixtral-8x22b-instruct", tags: [] },
+      { id: "vercel:mistral/pixtral-12b", tags: ["tool-use", "vision"] },
+      { id: "vercel:mistral/pixtral-large", tags: ["tool-use", "vision"] },
+      { id: "vercel:moonshotai/kimi-k2", tags: ["tool-use"] },
+      { id: "vercel:moonshotai/kimi-k2-0905", tags: ["tool-use"] },
+      { id: "vercel:moonshotai/kimi-k2-thinking", tags: ["reasoning", "tool-use", "implicit-caching"] },
+      { id: "vercel:moonshotai/kimi-k2-thinking-turbo", tags: ["reasoning", "tool-use", "implicit-caching"] },
+      { id: "vercel:moonshotai/kimi-k2-turbo", tags: ["tool-use"] },
+      { id: "vercel:moonshotai/kimi-k2.5", tags: ["reasoning", "vision", "tool-use", "implicit-caching"] },
+      { id: "vercel:moonshotai/kimi-k2.6", tags: ["reasoning", "tool-use", "vision", "file-input", "implicit-caching"] },
+      { id: "vercel:morph/morph-v3-fast", tags: [] },
+      { id: "vercel:morph/morph-v3-large", tags: [] },
+      { id: "vercel:nvidia/nemotron-3-nano-30b-a3b", tags: ["reasoning"] },
+      { id: "vercel:nvidia/nemotron-3-super-120b-a12b", tags: [] },
+      { id: "vercel:nvidia/nemotron-nano-12b-v2-vl", tags: ["vision", "reasoning", "tool-use"] },
+      { id: "vercel:nvidia/nemotron-nano-9b-v2", tags: ["reasoning", "tool-use"] },
+      { id: "vercel:openai/gpt-3.5-turbo", tags: [] },
+      { id: "vercel:openai/gpt-3.5-turbo-instruct", tags: [] },
+      { id: "vercel:openai/gpt-4-turbo", tags: ["tool-use", "vision"] },
+      { id: "vercel:openai/gpt-4.1", tags: ["file-input", "tool-use", "vision", "implicit-caching", "web-search"] },
+      { id: "vercel:openai/gpt-4.1-mini", tags: ["file-input", "tool-use", "vision", "implicit-caching", "web-search"] },
+      { id: "vercel:openai/gpt-4.1-nano", tags: ["file-input", "tool-use", "vision", "implicit-caching", "web-search"] },
+      { id: "vercel:openai/gpt-4o", tags: ["file-input", "tool-use", "vision", "implicit-caching", "web-search"] },
+      { id: "vercel:openai/gpt-4o-mini", tags: ["file-input", "tool-use", "vision", "implicit-caching", "web-search"] },
+      { id: "vercel:openai/gpt-4o-mini-search-preview", tags: ["web-search"] },
+      { id: "vercel:openai/gpt-5", tags: ["file-input", "implicit-caching", "reasoning", "tool-use", "vision", "image-generation", "web-search"] },
+      { id: "vercel:openai/gpt-5-chat", tags: ["tool-use", "implicit-caching", "file-input", "image-generation", "vision", "reasoning", "web-search"] },
+      { id: "vercel:openai/gpt-5-codex", tags: ["file-input", "implicit-caching", "reasoning", "tool-use", "web-search"] },
+      { id: "vercel:openai/gpt-5-mini", tags: ["file-input", "implicit-caching", "reasoning", "tool-use", "vision", "web-search"] },
+      { id: "vercel:openai/gpt-5-nano", tags: ["file-input", "implicit-caching", "reasoning", "tool-use", "vision", "image-generation", "web-search"] },
+      { id: "vercel:openai/gpt-5-pro", tags: ["file-input", "implicit-caching", "reasoning", "tool-use", "vision", "image-generation", "web-search"] },
+      { id: "vercel:openai/gpt-5.1-codex", tags: ["file-input", "tool-use", "reasoning", "vision", "web-search", "implicit-caching"] },
+      { id: "vercel:openai/gpt-5.1-codex-max", tags: ["reasoning", "file-input", "tool-use", "vision", "web-search", "implicit-caching"] },
+      { id: "vercel:openai/gpt-5.1-codex-mini", tags: ["reasoning", "file-input", "vision", "tool-use", "web-search", "implicit-caching"] },
+      { id: "vercel:openai/gpt-5.1-instant", tags: ["tool-use", "vision", "file-input", "reasoning", "implicit-caching", "web-search"] },
+      { id: "vercel:openai/gpt-5.1-thinking", tags: ["tool-use", "implicit-caching", "file-input", "reasoning", "vision", "web-search", "image-generation"] },
+      { id: "vercel:openai/gpt-5.2", tags: ["tool-use", "vision", "file-input", "reasoning", "implicit-caching", "web-search"] },
+      { id: "vercel:openai/gpt-5.2-chat", tags: ["vision", "file-input", "tool-use", "reasoning", "implicit-caching", "web-search"] },
+      { id: "vercel:openai/gpt-5.2-codex", tags: ["file-input", "tool-use", "reasoning", "vision", "web-search", "implicit-caching"] },
+      { id: "vercel:openai/gpt-5.2-pro", tags: ["tool-use", "vision", "implicit-caching", "reasoning", "file-input", "web-search"] },
+      { id: "vercel:openai/gpt-5.3-chat", tags: ["vision", "file-input", "tool-use", "reasoning", "implicit-caching", "web-search"] },
+      { id: "vercel:openai/gpt-5.3-codex", tags: ["reasoning", "tool-use", "file-input", "vision", "web-search", "implicit-caching"] },
+      { id: "vercel:openai/gpt-5.4", tags: ["reasoning", "tool-use", "vision", "file-input", "implicit-caching", "web-search"] },
+      { id: "vercel:openai/gpt-5.4-mini", tags: ["reasoning", "tool-use", "vision", "file-input", "implicit-caching", "web-search"] },
+      { id: "vercel:openai/gpt-5.4-nano", tags: ["reasoning", "tool-use", "implicit-caching", "web-search", "vision", "file-input"] },
+      { id: "vercel:openai/gpt-5.4-pro", tags: ["reasoning", "tool-use", "vision", "file-input", "implicit-caching", "web-search"] },
+      { id: "vercel:openai/gpt-5.5", tags: ["reasoning", "tool-use", "web-search", "implicit-caching", "file-input", "vision"] },
+      { id: "vercel:openai/gpt-5.5-pro", tags: ["reasoning", "tool-use", "implicit-caching", "file-input", "web-search", "vision"] },
+      { id: "vercel:openai/gpt-image-1", tags: ["image-generation"] },
+      { id: "vercel:openai/gpt-image-1-mini", tags: ["image-generation"] },
+      { id: "vercel:openai/gpt-image-1.5", tags: ["image-generation"] },
+      { id: "vercel:openai/gpt-image-2", tags: ["image-generation"] },
+      { id: "vercel:openai/gpt-oss-120b", tags: ["implicit-caching"] },
+      { id: "vercel:openai/gpt-oss-20b", tags: ["reasoning", "tool-use"] },
+      { id: "vercel:openai/gpt-oss-safeguard-20b", tags: ["reasoning", "tool-use"] },
+      { id: "vercel:openai/o1", tags: ["file-input", "reasoning", "tool-use", "vision", "implicit-caching"] },
+      { id: "vercel:openai/o3", tags: ["file-input", "reasoning", "tool-use", "vision", "implicit-caching"] },
+      { id: "vercel:openai/o3-deep-research", tags: ["reasoning", "file-input", "tool-use", "vision", "implicit-caching"] },
+      { id: "vercel:openai/o3-mini", tags: ["reasoning", "tool-use", "implicit-caching"] },
+      { id: "vercel:openai/o3-pro", tags: ["reasoning", "vision", "file-input", "tool-use", "web-search"] },
+      { id: "vercel:openai/o4-mini", tags: ["file-input", "reasoning", "tool-use", "vision", "implicit-caching", "web-search"] },
+      { id: "vercel:perplexity/sonar", tags: ["tool-use", "vision"] },
+      { id: "vercel:perplexity/sonar-pro", tags: ["tool-use", "vision"] },
+      { id: "vercel:perplexity/sonar-reasoning-pro", tags: ["reasoning"] },
+      { id: "vercel:prime-intellect/intellect-3", tags: ["reasoning", "tool-use"] },
+      { id: "vercel:xai/grok-3", tags: ["tool-use"] },
+      { id: "vercel:xai/grok-3-fast", tags: ["tool-use"] },
+      { id: "vercel:xai/grok-3-mini", tags: ["tool-use"] },
+      { id: "vercel:xai/grok-3-mini-fast", tags: ["tool-use"] }
+    ],    supportsStreaming: true,
+    maxTokens: 128000,
+    description: 'Vercel AI models'
+  },
   openai: {
     id: 'openai',
     name: 'OpenAI',
@@ -735,6 +1087,7 @@ class LLMService {
   private portkey: any = null
   private mistral: any = null
   private zenClient: any = null
+  private vercel: any = null
   private composioService: ComposioService | null = null
   private opencodeClient: any = null
   private config: ProviderConfig = {}
@@ -774,6 +1127,7 @@ class LLMService {
       openrouter: { ...this.config.openrouter, apiKey: currentEnv.OPENROUTER_API_KEY || this.config.openrouter?.apiKey, baseURL: currentEnv.OPENROUTER_BASE_URL || this.config.openrouter?.baseURL },
       github: { ...this.config.github, apiKey: currentEnv.GITHUB_MODELS_API_KEY || currentEnv.AZURE_OPENAI_API_KEY || this.config.github?.apiKey },
       zen: { ...this.config.zen, apiKey: currentEnv.ZEN_API_KEY || this.config.zen?.apiKey },
+      vercel: { ...this.config.vercel, apiKey: currentEnv.VERCEL_API_KEY || this.config.vercel?.apiKey, baseURL: currentEnv.VERCEL_BASE_URL || this.config.vercel?.baseURL },
     };
     
     // Initialize OpenAI
@@ -847,6 +1201,15 @@ class LLMService {
       this.zenClient = new OpenAIClass({
         apiKey: config.zen.apiKey,
         baseURL: config.zen.baseURL || 'https://api.zen.ai/v1'
+      })
+    }
+
+    // Initialize Vercel (uses OpenAI client)
+    if (config.vercel?.apiKey && !this.vercel) {
+      const OpenAIClass = await getOpenAI()
+      this.vercel = new OpenAIClass({
+        apiKey: config.vercel.apiKey,
+        baseURL: config.vercel.baseURL || 'https://api.vercel.com/v1'
       })
     }
   }
@@ -987,6 +1350,9 @@ class LLMService {
             break;
           case 'antigravity':
             response = await this.generateAntigravityResponse(model, messages, temperature, maxTokens, requestId)
+            break;
+          case 'vercel':
+            response = await this.generateVercelResponse(model, messages, temperature, maxTokens, requestId, apiKey)
             break;
           default:
             throw createLLMError(`Unsupported provider: ${provider}`, {
@@ -1143,6 +1509,12 @@ class LLMService {
             yield chunk;
           }
           break
+        case 'vercel':
+          for await (const chunk of this.streamVercelResponse(model, messages, temperature, maxTokens)) {
+            chunkCount++;
+            yield chunk;
+          }
+          break
         default:
           throw new Error(`Streaming is not supported for provider: ${provider}`);
       }
@@ -1207,6 +1579,8 @@ class LLMService {
         return currentEnv.ZEN_API_KEY || this.config.zen?.apiKey || '';
       case 'aihubmix':
         return currentEnv.AIHUBMIX_API_KEY || this.config.aihubmix?.apiKey || '';
+      case 'vercel':
+        return currentEnv.VERCEL_API_KEY || this.config.vercel?.apiKey || '';
       case 'nvidia':
         return currentEnv.NVIDIA_API_KEY || '';
       case 'groq':
@@ -2374,6 +2748,96 @@ class LLMService {
 
     throw lastError || new Error('All Antigravity accounts failed');
   }
+
+  private async generateVercelResponse(
+    model: string,
+    messages: LLMMessage[],
+    temperature: number,
+    maxTokens: number,
+    requestId?: string,
+    apiKeyOverride?: string
+  ): Promise<LLMResponse> {
+    const apiKey = this.getApiKey('vercel', apiKeyOverride);
+    if (!apiKey) {
+      throw new Error('Vercel API key not configured. Please set VERCEL_API_KEY in your environment variables.');
+    }
+
+    // Create request-scoped client to avoid race conditions with concurrent requests
+    let vercelClient = this.vercel;
+    if (apiKeyOverride && apiKey !== this.config.vercel?.apiKey) {
+      const OpenAIClass = await getOpenAI();
+      vercelClient = new OpenAIClass({ apiKey, baseURL: this.config.vercel?.baseURL });
+    } else if (!vercelClient) {
+      const OpenAIClass = await getOpenAI();
+      vercelClient = new OpenAIClass({ apiKey, baseURL: this.config.vercel?.baseURL });
+      this.vercel = vercelClient; // Only cache when using default key
+    }
+
+    const response = await vercelClient.chat.completions.create({
+      model,
+      messages: messages as any,
+      temperature,
+      max_tokens: maxTokens,
+    })
+    const toolCalls = this.normalizeOpenAIToolCalls(response.choices[0]?.message?.tool_calls as any[])
+
+    return {
+      content: response.choices[0]?.message?.content || '',
+      tokensUsed: response.usage?.total_tokens || 0,
+      finishReason: response.choices[0]?.finish_reason || 'stop',
+      timestamp: new Date(),
+      metadata: toolCalls.length ? { toolCalls } : undefined,
+      usage: response.usage
+    }
+  }
+
+  private async *streamVercelResponse(
+    model: string,
+    messages: LLMMessage[],
+    temperature: number,
+    maxTokens: number
+  ): AsyncGenerator<StreamingResponse> {
+    const apiKey = this.getApiKey('vercel');
+    if (!apiKey) {
+      throw new Error('Vercel API key not configured. Please set VERCEL_API_KEY in your environment variables.');
+    }
+
+    // Create request-scoped client to avoid race conditions with concurrent requests
+    let vercelClient = this.vercel;
+    if (!vercelClient) {
+      const OpenAIClass = await getOpenAI();
+      vercelClient = new OpenAIClass({ apiKey, baseURL: this.config.vercel?.baseURL });
+      this.vercel = vercelClient;
+    }
+
+    const response = await vercelClient.chat.completions.create({
+      model,
+      messages: messages as any,
+      temperature,
+      max_tokens: maxTokens,
+      stream: true,
+    })
+
+    for await (const chunk of response) {
+      const content = chunk.choices[0]?.delta?.content || '';
+      const toolCalls = this.normalizeOpenAIToolCalls(chunk.choices[0]?.delta?.tool_calls as any[])
+
+      yield {
+        content,
+        isComplete: false,
+        tokensUsed: chunk.usage?.total_tokens || 0,
+        finishReason: chunk.choices[0]?.finish_reason || undefined,
+        metadata: toolCalls.length ? { toolCalls } : undefined,
+        usage: chunk.usage
+      };
+    }
+
+    yield {
+      content: '',
+      isComplete: true,
+      finishReason: 'stop',
+    };
+  }
 }
 
 export const llmService = new LLMService({
@@ -2419,6 +2883,10 @@ export const llmService = new LLMService({
   aihubmix: {
     apiKey: process.env.AIHUBMIX_API_KEY,
     baseURL: process.env.AIHUBMIX_BASE_URL
+  },
+  vercel: {
+    apiKey: process.env.VERCEL_API_KEY,
+    baseURL: process.env.VERCEL_BASE_URL
   },
   opencode: {
     hostname: process.env.OPENCODE_HOSTNAME || '127.0.0.1',

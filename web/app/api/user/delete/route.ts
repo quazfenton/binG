@@ -14,6 +14,7 @@ import { requireAdminApiOrForbidden } from '@/lib/auth/admin';
 import { getDatabase } from '@/lib/database/connection';
 import { constraintMonitor } from '@/lib/observability/constraint-violation-monitor';
 import { orphanedRecordCleaner, OrphanedRecordInfo } from '@/lib/database/orphaned-record-cleaner';
+import { csrfCheckOrReject } from '@/lib/auth/csrf';
 
 interface DeleteUserRequest {
   userId: string;
@@ -130,109 +131,116 @@ async function deleteUser(
   // Count affected records
   result.orphanedData = countAffectedRecords(db, userId, dependentTables);
 
-  try {
-    // Enable foreign key enforcement
-    db.exec('PRAGMA foreign_keys = ON');
+   try {
+     // Enable foreign key enforcement
+     db.exec('PRAGMA foreign_keys = ON');
 
-    // ============================================
-    // AUTOMATIC CLEANUP + USER DELETION PHASE
-    // ============================================
-    // Wrap both cleanup and deletion in a single transaction for atomicity
-    // If either fails, both changes are rolled back
-    db.exec('BEGIN TRANSACTION');
+     // ============================================
+     // AUTOMATIC CLEANUP + USER DELETION PHASE
+     // ============================================
+     // Wrap both cleanup and deletion in a single transaction for atomicity
+     // If either fails, both changes are rolled back
+     db.exec('BEGIN TRANSACTION');
 
-    try {
-      // Clean up orphaned records for this specific user before deletion
-      const cleanupResult = cleaner.cleanupForUserDeletion(userId);
-      
-      // Store orphan info in result
-      result.cleanupPerformed.orphansFound = cleanupResult.orphansFound;
+     try {
+       // Clean up orphaned records for this specific user before deletion
+       const cleanupResult = cleaner.cleanupForUserDeletion(userId);
+       
+       // Store orphan info in result
+       result.cleanupPerformed.orphansFound = cleanupResult.orphansFound;
 
-      // If cleanup was performed (records were deleted), log it
-      if (cleanupResult.totalCleaned > 0) {
-        result.cleanupPerformed.autoCleanup = true;
-        result.cleanupPerformed.tablesCleaned = cleanupResult.cleanedTables;
-        result.cleanupPerformed.recordsCleaned = cleanupResult.totalCleaned;
+       // If cleanup was performed (records were deleted), log it
+       if (cleanupResult.totalCleaned > 0) {
+         result.cleanupPerformed.autoCleanup = true;
+         result.cleanupPerformed.tablesCleaned = cleanupResult.cleanedTables;
+         result.cleanupPerformed.recordsCleaned = cleanupResult.totalCleaned;
 
-        console.log(
-          `[AUDIT] Auto-cleanup performed before user ${userId} deletion: ` +
-          `${cleanupResult.totalCleaned} records from ${cleanupResult.cleanedTables.length} tables`
-        );
-      }
+         console.log(
+           `[AUDIT] Auto-cleanup performed before user ${userId} deletion: ` +
+           `${cleanupResult.totalCleaned} records from ${cleanupResult.cleanedTables.length} tables`
+         );
+       }
 
-      // ============================================
-      // USER DELETION PHASE
-      // ============================================
+       // ============================================
+       // USER DELETION PHASE
+       // ============================================
 
-      try {
-        // Delete from tables in order (respecting FK dependencies)
-      // First, delete from tables that reference users but may not have FK
-      for (const rel of dependentTables) {
-        if (options?.skipTables?.includes(rel.table)) {
-          continue;
-        }
+       try {
+         // Delete from tables in order (respecting FK dependencies)
+       // First, delete from tables that reference users but may not have FK
+       for (const rel of dependentTables) {
+         if (options?.skipTables?.includes(rel.table)) {
+           continue;
+         }
+ 
+         try {
+           // Log before deletion
+           console.log(`[UserDelete] Deleting from ${rel.table} where ${rel.column} = ${userId}`);
+           
+           const deleteStmt = db.prepare(
+             `DELETE FROM ${rel.table} WHERE ${rel.column} = ?`
+           );
+           const deleteResult = deleteStmt.run(userId);
+           
+           result.deletedTables.push(`${rel.table} (${deleteResult.changes} rows)`);
+           
+         } catch (error: any) {
+           // Record constraint violation
+           monitor.recordUserDeletionViolation(
+             error,
+             userId,
+             { table: rel.table, column: rel.column }
+           );
+           
+           result.constraintViolations.push(
+             `${rel.table}: ${error.message}`
+           );
 
-        try {
-          // Log before deletion
-          console.log(`[UserDelete] Deleting from ${rel.table} where ${rel.column} = ${userId}`);
-          
-          const deleteStmt = db.prepare(
-            `DELETE FROM ${rel.table} WHERE ${rel.column} = ?`
-          );
-          const deleteResult = deleteStmt.run(userId);
-          
-          result.deletedTables.push(`${rel.table} (${deleteResult.changes} rows)`);
-          
-        } catch (error: any) {
-          // Record constraint violation
-          monitor.recordUserDeletionViolation(
-            error,
-            userId,
-            { table: rel.table, column: rel.column }
-          );
-          
-          result.constraintViolations.push(
-            `${rel.table}: ${error.message}`
-          );
+           // If not forcing, rethrow
+           if (!options?.force) {
+             throw error;
+           }
+         }
+       }
 
-          // If not forcing, rethrow
-          if (!options?.force) {
-            throw error;
-          }
-        }
-      }
+       // Finally, delete the user
+       const userStmt = db.prepare('DELETE FROM users WHERE id = ?');
+       const userResult = userStmt.run(userId);
 
-      // Finally, delete the user
-      const userStmt = db.prepare('DELETE FROM users WHERE id = ?');
-      const userResult = userStmt.run(userId);
+       if (userResult.changes === 0) {
+         throw new Error(`User ${userId} not found`);
+       }
 
-      if (userResult.changes === 0) {
-        throw new Error(`User ${userId} not found`);
-      }
+       result.deletedTables.push(`users (1 row)`);
+       result.success = true;
 
-      result.deletedTables.push(`users (1 row)`);
-      result.success = true;
+       // Commit transaction
+       db.exec('COMMIT');
 
-      // Commit transaction
-      db.exec('COMMIT');
-
-      console.log(`[UserDelete] Successfully deleted user ${userId}`);
-      
-    } catch (error: any) {
-      // Rollback on error
-      db.exec('ROLLBACK');
-      
-      // Note: Violations are already recorded in recordUserDeletionViolation above
-      // No need to double-record
-      
-      throw error;
-    }
-    } catch (error: any) {
-      // Outer catch for transaction-level errors
-      result.error = error.message;
-      
-      console.error(`[UserDelete] Failed to delete user ${userId}:`, error);
-    }
+       console.log(`[UserDelete] Successfully deleted user ${userId}`);
+       
+     } catch (error: any) {
+       // Rollback on error
+       db.exec('ROLLBACK');
+       
+       // Note: Violations are already recorded in recordUserDeletionViolation above
+       // No need to double-record
+       
+       throw error;
+     }
+     } catch (error: any) {
+       // Make sure to rollback transaction if we get here
+       try {
+         db.exec('ROLLBACK');
+       } catch (rollbackError) {
+         console.error(`[UserDelete] Failed to rollback transaction:`, rollbackError);
+       }
+       
+       // Outer catch for transaction-level errors
+       result.error = error.message;
+       
+       console.error(`[UserDelete] Failed to delete user ${userId}:`, error);
+     }
 
   } catch (error: any) {
     result.error = error.message;
@@ -249,6 +257,10 @@ async function deleteUser(
  */
 export async function POST(req: NextRequest): Promise<NextResponse> {
   try {
+    // HIGH-10 fix: CSRF protection on user deletion
+    const csrfReject = csrfCheckOrReject(req);
+    if (csrfReject) return csrfReject;
+
     // Require admin access
     const admin = await requireAdminApiOrForbidden(req);
     if (admin instanceof NextResponse) {

@@ -4,6 +4,7 @@ import { rateLimiters } from '@/lib/middleware/rate-limit';
 import { validateRequest, schemas } from '@/lib/middleware/validate';
 import { createLogger } from '@/lib/utils/logger';
 import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-service';
+import { generateCsrfToken, setCsrfCookie } from '@/lib/auth/csrf';
 
 const logger = createLogger('API:Auth:Register');
 
@@ -94,6 +95,15 @@ export const POST = validateRequest(registerSchema)(async (request, { validatedB
         error: result.error,
       });
 
+      // MED-5 fix: Log registration failure
+      try {
+        const { logRegisterFailure } = await import('@/lib/auth/auth-audit-logger');
+        const reason = result.error?.includes('already') ? 'email_already_exists' : 'unknown';
+        logRegisterFailure(email, reason, request);
+      } catch (auditError) {
+        console.warn('[Register] Audit log failed:', auditError);
+      }
+
       return NextResponse.json(
         { success: false, error: result.error },
         { status: 400 }
@@ -116,6 +126,14 @@ export const POST = validateRequest(registerSchema)(async (request, { validatedB
     }
 
     logger.info('Registration successful', { email, userId: result.user?.id });
+
+    // MED-5 fix: Log successful registration
+    try {
+      const { logRegisterSuccess } = await import('@/lib/auth/auth-audit-logger');
+      logRegisterSuccess(String(result.user?.id), email, request, { requiresVerification: result.requiresVerification });
+    } catch (auditError) {
+      console.warn('[Register] Audit log failed:', auditError);
+    }
 
     // Transfer anonymous VFS data to the newly created authenticated user
     await transferVFSFromAnonymous(request, result.user);
@@ -145,6 +163,10 @@ export const POST = validateRequest(registerSchema)(async (request, { validatedB
         path: '/',
       });
     }
+
+    // HIGH-10 fix: Set CSRF token cookie on successful registration
+    const csrfToken = generateCsrfToken();
+    setCsrfCookie(response, csrfToken);
 
     return response;
   } catch (error) {

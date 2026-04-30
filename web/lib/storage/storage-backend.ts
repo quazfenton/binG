@@ -490,7 +490,7 @@ export function createStorageBackend(config: Partial<StorageConfig> & { type: 's
       prefix: config.prefix || 'snapshots/',
     });
   } else {
-    return new LocalStorageBackend(config.baseDir || '/tmp/snapshots');
+    return new LocalStorageBackend(config.baseDir || process.env.LOCAL_SNAPSHOT_DIR || '/tmp/snapshots');
   }
 }
 
@@ -505,7 +505,7 @@ export function getS3Backend(config: StorageConfig): S3StorageBackend {
   return s3Backend;
 }
 
-export function getLocalBackend(baseDir: string = '/tmp/snapshots'): LocalStorageBackend {
+export function getLocalBackend(baseDir: string = process.env.LOCAL_SNAPSHOT_DIR || '/tmp/snapshots'): LocalStorageBackend {
   if (!localBackend) {
     localBackend = new LocalStorageBackend(baseDir);
   }

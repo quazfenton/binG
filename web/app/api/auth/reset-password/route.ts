@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { initializeDatabase } from '@/lib/database/db';
 import { generateToken } from '@/lib/auth/jwt';
 import { hashValue } from '@/lib/utils/crypto';
@@ -36,7 +36,7 @@ const emailService: EmailService = {
   }
 };
 
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
   try {
     const { email } = await req.json();
 
@@ -55,9 +55,9 @@ export async function POST(req: Request) {
     }
 
     // Generate a password reset token (valid for 1 hour)
+    // HIGH-8 fix: email removed from JWT — user ID is sufficient for password reset
     const resetToken = generateToken({
       userId: user.id.toString(),
-      email: user.email,
       type: 'password_reset'
     });
 
@@ -73,6 +73,14 @@ export async function POST(req: Request) {
     // Send password reset email
     const resetUrl = `${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/reset-password?token=${resetToken}`;
     await emailService.sendPasswordReset(email, resetToken, resetUrl);
+
+    // MED-5 fix: Log password reset request
+    try {
+      const { logPasswordResetRequest } = await import('@/lib/auth/auth-audit-logger');
+      logPasswordResetRequest(String(user.id), email, request);
+    } catch (auditError) {
+      console.warn('[ResetPassword] Audit log failed:', auditError);
+    }
 
     return NextResponse.json({
       message: 'If an account with that email exists, a password reset link has been sent.',

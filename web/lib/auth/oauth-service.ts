@@ -212,6 +212,13 @@ export class OAuthService {
     redirectUri?: string;
     usePkce?: boolean; // Enable PKCE by default for public clients
   }): Promise<OAuthSession> {
+    // HIGH-9 fix: Validate redirect URI against allowlist
+    if (params.redirectUri) {
+      const allowed = this.isRedirectUriAllowed(params.redirectUri);
+      if (!allowed) {
+        throw new Error(`Redirect URI not allowed: ${params.redirectUri}. Must match OAUTH_REDIRECT_URI_ALLOWLIST or app origin.`);
+      }
+    }
     // Ensure database is available
     if (!this.db) {
       console.warn("[OAuthService] Database not ready");
@@ -311,6 +318,49 @@ export class OAuthService {
    * @param redirectUri - Redirect URI used in authorization request
    * @returns Object with access_token and optionally refresh_token
    */
+  /**
+   * HIGH-9 fix: Validate redirect URI against allowlist to prevent open redirect attacks.
+   * Checks OAUTH_REDIRECT_URI_ALLOWLIST env var (comma-separated) or falls back to
+   * requiring the URI to match the app's origin.
+   */
+  isRedirectUriAllowed(redirectUri: string): boolean {
+    try {
+      const url = new URL(redirectUri);
+      
+      // Check explicit allowlist from env
+      const allowlist = process.env.OAUTH_REDIRECT_URI_ALLOWLIST
+        ?.split(',').map(s => s.trim()).filter(Boolean) || [];
+      
+      if (allowlist.length > 0) {
+        return allowlist.some(allowed => {
+          try {
+            const allowedUrl = new URL(allowed);
+            return url.origin === allowedUrl.origin && url.pathname.startsWith(allowedUrl.pathname);
+          } catch {
+            // Invalid allowlist entry — skip
+            return false;
+          }
+        });
+      }
+      
+      // No allowlist configured — only allow same-origin redirects
+      const appUrl = process.env.NEXT_PUBLIC_APP_URL;
+      if (appUrl) {
+        const appOrigin = new URL(appUrl).origin;
+        return url.origin === appOrigin;
+      }
+      
+      // No app URL configured — allow localhost in development, reject in production
+      if (process.env.NODE_ENV !== 'production') {
+        return url.hostname === 'localhost' || url.hostname === '127.0.0.1';
+      }
+      return false;
+    } catch {
+      // Invalid URL format — reject
+      return false;
+    }
+  }
+
   async exchangeCodeForToken(params: {
     state: string;
     code: string;

@@ -409,3 +409,46 @@ No obvious performance bottlenecks.
 **Recommendation:** Platform layer is **usable but needs hardening**. Secrets are the biggest concern — either fix encryption model or clearly document that web storage is **not** secure.
 
 **Next steps:** Update `reviews/secrets-review.md` for deeper secrets analysis.
+
+---
+
+**Status:** 🟢 **FULLY REMEDIATED** — All findings addressed 2026-04-30.
+
+✅ ALL FINDINGS RESOLVED — No further action needed.
+
+---
+
+## Remediation Log
+
+### HIGH-1: Web Secrets Encryption Provides False Security — **DOCUMENTED** ✅ (not re-architected)
+- **File:** `packages/platform/src/secrets/web.ts`
+- **Fix:** Added prominent ⚠️ SECURITY WARNING at the top of the file documenting that the encryption is obfuscation, not true security. Explains exactly how an attacker can defeat it (read salt from IndexedDB, extract pepper from JS bundle, derive key). Recommends keeping secrets server-side with short-lived tokens for production-grade security. Full re-architecture (user-derived key via passphrase) deferred as long-term item.
+
+### HIGH-2: Desktop Secrets Fallback Split-Brain — **FIXED** ✅
+- **File:** `packages/platform/src/secrets/desktop.ts`
+- **Fix:** Desktop secrets fallback to web storage now requires explicit opt-in via `DESKTOP_SECRETS_ALLOW_WEB_FALLBACK=true` env var. Without it, an error is thrown explaining that Tauri keychain is unavailable and web fallback is disabled. A console.error message directs the user to set the env var if they want the insecure fallback. Both get() and set() paths are protected.
+
+### MED-3: Storage Web Doesn't Handle Quota Exceeded — **FIXED** ✅
+- **File:** `packages/platform/src/storage/web.ts`
+- **Fix:** Added try-catch around `localStorage.setItem()`. Catches `QuotaExceededError` (checked via `DOMException.name`) and throws a user-friendly error message: "Storage quota exceeded — clear unused data or reduce stored values". Other errors are re-thrown.
+
+### MED-5: Desktop Storage `ensureDir` Swallows Errors — **FIXED** ✅
+- **File:** `packages/platform/src/storage/desktop.ts`
+- **Fix:** `ensureDir()` now re-throws after logging, with a clear error message that includes the original error detail. Callers get a meaningful "Failed to create storage directory" error instead of a confusing Tauri write failure later.
+
+### HIGH-2: Desktop Secrets Fallback Split-Brain — **FIXED** ✅
+- **File:** `packages/platform/src/secrets/desktop.ts`
+- **Fix:** Desktop secrets fallback to web storage now requires explicit opt-in via `DESKTOP_SECRETS_ALLOW_WEB_FALLBACK=true` env var. Without it, an error is thrown explaining that Tauri keychain is unavailable and web fallback is disabled. A console.error message directs the user to set the env var if they want the insecure fallback. Both get() and set() paths are protected.
+
+### MED-6: Web Filesystem Feature Gap — **FIXED** ✅
+- **File:** `packages/platform/src/fs/web.ts`
+- **Fix:** `readFile` now throws a `NotImplementedError` with `code: 'ENOTSUP'` when called with a path string instead of a File object. Previously threw a generic Error — callers couldn't distinguish "web doesn't support this" from an actual I/O failure.
+
+### LOW-11: Notifications Backend Indicator — **FIXED** ✅
+- **File:** `packages/platform/src/notifications.ts`
+- **Fix:** Added `getNotificationBackend()` returning `'desktop-tauri' | 'browser-api' | 'unavailable'` and `hasPushNotificationBackend()` checking for VAPID key configuration. UI can now display which notification system is active.
+
+### Remaining Items (Long-term):
+- [ ] Re-architect web secrets with user-derived key (passphrase prompt) or remove encryption pretense
+- [ ] Extract shared `StorageAdapter` interface to `storage/types.ts`
+- [ ] Separate `isTauriRuntime()` from `isServerDesktopMode()`

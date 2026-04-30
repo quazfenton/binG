@@ -6,6 +6,7 @@
  */
 
 import { join, resolve, normalize, isAbsolute, sep } from 'path';
+import { existsSync, realpathSync } from 'fs';
 import { z } from 'zod';
 import { createSecureHash } from './crypto-utils';
 
@@ -37,7 +38,7 @@ export function safeJoin(base: string, ...paths: string[]): string {
   }
 
   // SECURITY: URL decode paths to catch encoded path traversal attempts
-  // e.g., "..%2F..%2Fetc%2Fpasswd" should be treated same as "../.. /etc/passwd"
+  // e.g., "..%2F..%2Fetc%2Fpasswd" should be treated same as "../../etc/passwd"
   const decodedPaths = paths.map(p => {
     try {
       return decodeURIComponent(p);
@@ -53,9 +54,40 @@ export function safeJoin(base: string, ...paths: string[]): string {
   const joined = join(normalizedBase, ...decodedPaths);
 
   // Normalize to resolve any .. or . segments
-  const resolved = normalize(joined);
+  let resolved = normalize(joined);
 
-  // SECURITY: Verify the result is still within base
+  // SECURITY (HIGH-2 fix): Resolve symlinks with realpath to prevent symlink-based path traversal
+  // An attacker can create a symlink inside the workspace pointing to /etc/passwd,
+  // then access it via cat evil_link — realpath resolves the true filesystem path
+  try {
+    // Only resolve if the path exists on disk — realpath fails on non-existent paths
+    if (existsSync(resolved)) {
+      const realResolved = realpathSync.native(resolved);
+      const realBase = realpathSync.native(normalizedBase);
+      
+      // Re-check containment with resolved paths
+      const realBaseForward = realBase.replace(/\\/g, '/');
+      const realResolvedForward = realResolved.replace(/\\/g, '/');
+      const baseWithSep = realBaseForward.endsWith('/') ? realBaseForward : realBaseForward + '/';
+      
+      if (!realResolvedForward.startsWith(baseWithSep) && realResolvedForward !== realBaseForward) {
+        throw new Error(
+          `Symlink traversal detected: "${realResolved}" (via symlink) is outside base "${realBase}"`
+        );
+      }
+      
+      resolved = realResolved;
+    }
+  } catch (err: unknown) {
+    // If the error is our own traversal error, re-throw it
+    if (err instanceof Error && err.message.startsWith('Symlink traversal detected')) {
+      throw err;
+    }
+    // realpathSync can fail if path doesn't exist yet — that's OK, use string-based check
+    // This is safe because you can't traverse via a symlink that doesn't exist
+  }
+
+  // SECURITY: Verify the result is still within base (string-based containment check)
   // Add trailing separator to prevent partial matches
   // e.g., '/tmp/workspaces-evil' would start with '/tmp/workspaces'
   // Normalize separators to forward slashes for cross-platform comparison
@@ -338,6 +370,9 @@ export const securityHeaders = {
   'Content-Security-Policy': "default-src 'self'",
   'Referrer-Policy': 'strict-origin-when-cross-origin',
   'Permissions-Policy': 'geolocation=(), microphone=(), camera=()',
+  // MED-9 fix: Add HSTS header to enforce HTTPS and prevent SSL stripping attacks
+  // Start with 5-minute max-age for safe initial deployment; increase after validation
+  'Strict-Transport-Security': 'max-age=300; includeSubDomains',
 };
 
 /**

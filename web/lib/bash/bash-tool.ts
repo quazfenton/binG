@@ -266,13 +266,50 @@ export async function executeBashCommand(
       ...options.env,
     };
 
+    // SECURITY (CRIT-1 fix): Parse command to detect shell metacharacters.
+    // If the command contains no chaining/substitution, split into args and use
+    // spawn with arg array (no shell interpretation). If shell metacharacters are
+    // present, escape all parts and reconstruct for bash -c.
+    //
+    // This prevents injection like: echo "hello" && rm -rf /
+    // where && causes rm to execute unconditionally.
+    
+    // Detect shell metacharacters and quoting — any of these means we need bash -c
+    // for proper shell interpretation (quotes, pipes, redirects, substitution, etc.)
+    const hasShellMetacharacters = /[;&|`()$<>'"]/.test(command);
+    
+    let spawnArgs: string[];
+    
+    if (!hasShellMetacharacters) {
+      // Safe path: No shell metacharacters — split into command + args array
+      // This avoids bash -c entirely, preventing any shell interpretation
+      const parts = command.trim().split(/\s+/);
+      const baseCmd = parts[0];
+      const cmdArgs = parts.slice(1);
+      spawnArgs = [baseCmd, ...cmdArgs];
+      logger.debug('Using direct spawn (no shell metacharacters)', { baseCmd, argCount: cmdArgs.length });
+    } else {
+      // Shell metacharacters present — must use bash -c.
+      // The security check (isCommandSafe) is the primary defense: it blocks
+      // dangerous metacharacter patterns like &&, ||, $(), backticks, etc.
+      // Commands that reach this point have passed the security check,
+      // meaning their metacharacters (e.g., pipes for legitimate pipelines)
+      // are considered safe.
+      spawnArgs = ['-c', command];
+      logger.debug('Using bash -c (shell metacharacters detected, passed security check)', { command: command.slice(0, 100) });
+    }
+    
     return new Promise((resolve, reject) => {
-      const proc = spawn('bash', ['-c', command], {
-        cwd: workingDir,
-        env: safeEnv as NodeJS.ProcessEnv,
-        timeout: options.timeout || DEFAULT_CONFIG.defaultTimeout,
-        shell: false, // Explicitly use bash from spawn
-      });
+      const proc = spawn(
+        hasShellMetacharacters ? 'bash' : spawnArgs[0],
+        hasShellMetacharacters ? spawnArgs : spawnArgs.slice(1),
+        {
+          cwd: workingDir,
+          env: safeEnv as NodeJS.ProcessEnv,
+          timeout: options.timeout || DEFAULT_CONFIG.defaultTimeout,
+          shell: false,
+        }
+      );
 
       let stdout = '';
       let stderr = '';

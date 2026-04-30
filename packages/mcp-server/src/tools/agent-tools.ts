@@ -21,6 +21,31 @@ interface AgentSession {
 
 const agentRegistry = new Map<string, AgentSession>();
 
+// MED-7 fix: Limit concurrent active agents to prevent resource exhaustion
+// Use safe parse with fallback (parseInt alone can return NaN, bypassing the limit)
+const MAX_ACTIVE_AGENTS = (() => {
+  const parsed = parseInt(process.env.BING_MAX_AGENTS || '10', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 10;
+})();
+
+function getActiveAgentCount(): number {
+  let count = 0;
+  for (const session of agentRegistry.values()) {
+    if (session.status === 'running' || session.status === 'idle') count++;
+  }
+  return count;
+}
+
+// Cleanup stale agents (completed/failed > 1 hour ago)
+function cleanupStaleAgents(): void {
+  const oneHourAgo = Date.now() - 3600000;
+  for (const [id, session] of agentRegistry.entries()) {
+    if ((session.status === 'completed' || session.status === 'failed') && session.lastActivity < oneHourAgo) {
+      agentRegistry.delete(id);
+    }
+  }
+}
+
 /**
  * create_agent — Create and spawn an AI agent for task execution
  *
@@ -32,11 +57,25 @@ export function createAgentTool() {
     name: 'create_agent',
     description: 'Create and spawn an AI agent for task execution with execution policy control',
     inputSchema: z.object({
-      task: z.string().describe('Task description or goal for the agent to execute'),
+      // MED-1 fix: Add min length validation to prevent empty/malicious task strings
+      task: z.string().min(1).max(10000).describe('Task description or goal for the agent to execute'),
       model: z.string().optional().describe('LLM model to use (default: mistral-small-latest)'),
       executionPolicy: z.string().optional().describe('Execution policy (default: sandboxed)'),
     }),
     execute: async ({ task, model, executionPolicy }: { task: string; model?: string; executionPolicy?: string }) => {
+      // MED-7 fix: Check active agent limit before spawning
+      cleanupStaleAgents();
+      const activeCount = getActiveAgentCount();
+      if (activeCount >= MAX_ACTIVE_AGENTS) {
+        return {
+          content: [{
+            type: 'text' as const,
+            text: `Error: Maximum active agents reached (${MAX_ACTIVE_AGENTS}). Stop existing agents first or set BING_MAX_AGENTS to increase the limit.`,
+          }],
+          isError: true,
+        };
+      }
+
       const agentId = `agent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
       const session: AgentSession = {
@@ -178,11 +217,25 @@ export function spawnAgentSessionTool() {
     name: 'spawn_agent_session',
     description: 'Spawn persistent agent session for complex multi-step workflows',
     inputSchema: z.object({
-      goal: z.string().describe('Session goal / high-level task description'),
+      // MED-1 fix: Add min/max validation
+      goal: z.string().min(1).max(10000).describe('Session goal / high-level task description'),
       mode: z.string().optional().describe('Agent mode: code, analysis, creative, etc.'),
-      maxIterations: z.number().optional().describe('Maximum iteration count (default: 50)'),
+      maxIterations: z.number().int().min(1).max(500).optional().describe('Maximum iteration count (default: 50)'),
     }),
     execute: async ({ goal, mode, maxIterations }: { goal: string; mode?: string; maxIterations?: number }) => {
+      // MED-7 fix: Check active agent limit
+      cleanupStaleAgents();
+      const activeCount = getActiveAgentCount();
+      if (activeCount >= MAX_ACTIVE_AGENTS) {
+        return {
+          content: [{
+            type: 'text' as const,
+            text: `Error: Maximum active agents reached (${MAX_ACTIVE_AGENTS}). Stop existing agents first.`,
+          }],
+          isError: true,
+        };
+      }
+
       const sessionId = `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
       const session: AgentSession = {
