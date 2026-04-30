@@ -24,6 +24,7 @@ import { runAgentLoop as runV2AgentLoop } from './agent-loop';
 import { getConfiguredFallbackChain } from '../chat/provider-fallback-chains';
 import { chatRequestLogger } from '../chat/chat-request-logger';
 import { extractFileWritesFromLLMResponse, type FileWrite } from '../chat/file-diff-utils';
+import { getRecontextSupplement } from '@/lib/memory/cache-exporter';
 import {
   createOpenCodeEngine,
   type OpenCodeEngineResult,
@@ -68,6 +69,7 @@ import {
   runEnergyDrivenMode,
   runDistributedCognitionMode,
   runCognitiveResonanceMode,
+  runExecutionControllerMode,
   type DualProcessConfig,
   type AdversarialConfig,
   type AttractorConfig,
@@ -75,6 +77,7 @@ import {
   type EnergyDrivenConfig,
   type DistributedConfig,
   type ResonanceConfig,
+  type ExecutionControllerConfig,
 } from './modes';
 import {
   runRetrievalPipeline,
@@ -161,7 +164,7 @@ export interface UnifiedAgentConfig {
   model?: string;
 
   // Mode override (optional - auto-detected from env if not specified)
-  mode?: 'v1-api' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'opencode-sdk' | 'mastra-workflow' | 'desktop' | 'v1-progressive-build' | 'dual-process' | 'adversarial-verify' | 'attractor-driven' | 'intent-driven' | 'energy-driven' | 'distributed-cognition' | 'cognitive-resonance' | 'auto';
+  mode?: 'v1-api' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'opencode-sdk' | 'mastra-workflow' | 'desktop' | 'v1-progressive-build' | 'dual-process' | 'adversarial-verify' | 'attractor-driven' | 'intent-driven' | 'energy-driven' | 'distributed-cognition' | 'cognitive-resonance' | 'execution-controller' | 'auto';
 
   // Harness mode options
   dualProcessConfig?: DualProcessConfig;
@@ -171,6 +174,7 @@ export interface UnifiedAgentConfig {
   energyConfig?: EnergyDrivenConfig;
   distributedConfig?: DistributedConfig;
   resonanceConfig?: ResonanceConfig;
+  executionControllerConfig?: ExecutionControllerConfig;
 
   // Mastra workflow options
   workflowId?: string; // Use specific Mastra workflow
@@ -503,6 +507,27 @@ export async function processUnifiedAgentRequest(
   // system prompt or user message as appropriate.
   config._autoInjectContext = autoInjectContext;
 
+  // Inject re-context supplement for unfinished tasks (periodic reminders)
+  // Only inject if not too many messages already (avoid bloating the context)
+  try {
+    if (config.conversationHistory && config.conversationHistory.length < 20) {
+      const recontextSupplement = getRecontextSupplement({ limit: 3 });
+      if (recontextSupplement) {
+        // Add as a system message so the agent knows about pending tasks
+        config.conversationHistory.unshift({
+          role: 'system',
+          content:
+            '## Pending Tasks Reminder\n\n' +
+            recontextSupplement +
+            '\n\n---\nConsider these pending tasks while working. ' +
+            'You can use task.list, task.getUnfinished, or task.edit to manage them.',
+        });
+      }
+    }
+  } catch (err: any) {
+    log.debug('Re-context injection skipped', { error: err?.message });
+  }
+
   log.info('═══════════════════════════════════════════════');
   log.info('[UnifiedAgent] ┌─ REQUEST ENTRY ──────────────────────────');
   log.info('[UnifiedAgent] │ provider:', config.provider || process.env.LLM_PROVIDER || 'mistral');
@@ -602,6 +627,9 @@ export async function processUnifiedAgentRequest(
       case 'cognitive-resonance':
         log.info('[UnifiedAgent] → cognitive-resonance mode (independent agreement)');
         return await runCognitiveResonanceMode(config, config.resonanceConfig);
+      case 'execution-controller':
+        log.info('[UnifiedAgent] → execution-controller mode (self-correcting execution loop)');
+        return await runExecutionControllerMode(config, config.executionControllerConfig);
 
       case 'v1-api':
       default:

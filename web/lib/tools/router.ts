@@ -1110,7 +1110,8 @@ class TaskProvider implements CapabilityProvider {
   readonly name = 'Task Manager';
   readonly capabilities = [
     'task.list', 'task.create', 'task.edit', 'task.delete', 'task.search',
-    'task.getUnfinished', 'memory.store', 'memory.retrieve'
+    'task.getUnfinished', 'task.enrichStep', 'task.enrichStepMulti', 'task.segmentStep', 
+    'task.validateStep', 'task.expandStep', 'memory.store', 'memory.retrieve'
   ];
 
   private taskStore: any = null;
@@ -1144,15 +1145,26 @@ class TaskProvider implements CapabilityProvider {
           if (input.status) filter.status = [input.status];
           if (input.retention) filter.retention = [input.retention];
           if (input.tags) filter.tags = input.tags;
-          const tasks = this.taskStore.getAll(filter).slice(0, input.limit || 20);
+          const offset = Math.max(0, input.offset ?? 0);
+          const limit = Math.max(1, Math.min(input.limit ?? 20, 100));
+          const allTasks = this.taskStore.getAll(filter);
+          const paginatedTasks = allTasks.slice(offset, offset + limit);
           return {
             success: true,
-            output: tasks.map(t => ({
-              id: t.id, title: t.title, description: t.description,
-              status: t.status, retention: t.retention, priority: t.priority,
-              progress: t.progress, steps: t.steps, tags: t.tags,
-              createdAt: t.createdAt, updatedAt: t.updatedAt,
-            })),
+            output: {
+              tasks: paginatedTasks.map(t => ({
+                id: t.id, title: t.title, description: t.description,
+                status: t.status, retention: t.retention, priority: t.priority,
+                progress: t.progress, steps: t.steps, tags: t.tags,
+                createdAt: t.createdAt, updatedAt: t.updatedAt,
+              })),
+              pagination: {
+                offset,
+                limit,
+                total: allTasks.length,
+                hasMore: offset + limit < allTasks.length,
+              },
+            },
           };
         }
 
@@ -1170,6 +1182,10 @@ class TaskProvider implements CapabilityProvider {
             parentId: input.parentId,
             dueDate: input.dueDate,
           });
+          // Refresh re-context TTL for newly created tasks
+          const { markTasksForRecontext } = await import('../memory/cache-exporter');
+          markTasksForRecontext([task.id]);
+
           return {
             success: true,
             output: {
@@ -1202,6 +1218,13 @@ class TaskProvider implements CapabilityProvider {
           }
 
           const task = await this.taskStore.update(input.taskId, updates);
+
+          // Mark task for re-context on completion
+          if (task && (updates.status === 'completed' || updates.status === 'failed')) {
+            const { markTasksForRecontext } = await import('../memory/cache-exporter');
+            markTasksForRecontext([input.taskId]);
+          }
+
           return {
             success: !!task,
             output: {
@@ -1239,6 +1262,100 @@ class TaskProvider implements CapabilityProvider {
               priority: t.priority, progress: t.progress, updatedAt: t.updatedAt,
             })),
           };
+        }
+
+        case 'task.enrichStep': {
+          if (!input.step || typeof input.step !== 'string') {
+            return { success: false, error: 'input.step is required and must be a string' };
+          }
+          try {
+            const { enrichStep } = await import('../memory/task-persistence');
+            const result = await enrichStep(
+              input.step,
+              input.context
+            );
+            return {
+              success: true,
+              output: result,
+            };
+          } catch (error: any) {
+            return { success: false, error: error.message };
+          }
+        }
+
+        case 'task.enrichStepMulti': {
+          if (!input.step || typeof input.step !== 'string') {
+            return { success: false, error: 'input.step is required and must be a string' };
+          }
+          try {
+            const { enrichStepMultiPerspective } = await import('../memory/task-persistence');
+            const result = await enrichStepMultiPerspective(
+              input.step,
+              input.context,
+              { includeMicroSteps: input.includeMicroSteps !== false }
+            );
+            return {
+              success: true,
+              output: result,
+            };
+          } catch (error: any) {
+            return { success: false, error: error.message };
+          }
+        }
+
+        case 'task.segmentStep': {
+          if (!input.step || typeof input.step !== 'string') {
+            return { success: false, error: 'input.step is required and must be a string' };
+          }
+          try {
+            const { segmentStepHierarchically } = await import('../memory/task-persistence');
+            const microSteps = segmentStepHierarchically(input.step, {
+              maxDepth: input.maxDepth,
+              includeDependencies: input.includeDependencies !== false,
+            });
+            return {
+              success: true,
+              output: {
+                microSteps,
+                totalSteps: microSteps.length,
+                estimatedTotalMinutes: microSteps.reduce((sum, m) => sum + (m.estimatedMinutes || 0), 0),
+              },
+            };
+          } catch (error: any) {
+            return { success: false, error: error.message };
+          }
+        }
+
+        case 'task.validateStep': {
+          if (!input.step || typeof input.step !== 'string') {
+            return { success: false, error: 'input.step is required and must be a string' };
+          }
+          try {
+            const { validateStepQuality } = await import('../memory/task-persistence');
+            const result = validateStepQuality(input.step);
+            return {
+              success: true,
+              output: result,
+            };
+          } catch (error: any) {
+            return { success: false, error: error.message };
+          }
+        }
+
+        case 'task.expandStep': {
+          if (!input.step || typeof input.step !== 'string') {
+            return { success: false, error: 'input.step is required and must be a string' };
+          }
+          try {
+            const { expandStepIntoDetail } = await import('../memory/task-persistence');
+            const result = expandStepIntoDetail(input.step, input.context);
+            return {
+              success: true,
+              output: result,
+            };
+          } catch (error: any) {
+            return { success: false, error: error.message };
+          }
         }
 
         default:

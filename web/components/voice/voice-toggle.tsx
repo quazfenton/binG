@@ -2,7 +2,7 @@
 
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Mic, MicOff, Volume2, Settings, Sliders, Cpu, Activity } from "lucide-react";
+import { Mic, MicOff, Volume2, Settings, Sliders, Cpu, Activity, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useVoiceSettings, useVoiceCapabilities } from "@/lib/voice/use-voice";
 import { cn } from "@/lib/utils";
@@ -35,7 +35,6 @@ export function VoiceToggleButton({ className }: { className?: string }) {
       stopListening();
     } else {
       startListening();
-      // Provide haptic feedback if available
       if (typeof navigator !== 'undefined' && navigator.vibrate) {
         navigator.vibrate(50);
       }
@@ -83,7 +82,6 @@ export function VoiceToggleButton({ className }: { className?: string }) {
                     size="icon"
                     variant={isListening ? "default" : "outline"}
                     onClick={(e) => {
-                      // Only toggle if we didn't just trigger the menu
                       if (!showMenu) handleToggle();
                       e.preventDefault();
                     }}
@@ -125,7 +123,6 @@ export function VoiceToggleButton({ className }: { className?: string }) {
                     </AnimatePresence>
                   </Button>
                   
-                  {/* Press Progress Ring */}
                   {isPressing && (
                     <svg className="absolute inset-0 w-full h-full -rotate-90 pointer-events-none">
                       <motion.circle
@@ -143,7 +140,6 @@ export function VoiceToggleButton({ className }: { className?: string }) {
                     </svg>
                   )}
                   
-                  {/* Pulsing indicator when listening */}
                   <AnimatePresence>
                     {isListening && (
                       <motion.div
@@ -227,27 +223,39 @@ export function VoiceToggleButton({ className }: { className?: string }) {
 
             <DropdownMenuSeparator className="bg-white/10" />
             
-            <DropdownMenuItem 
-              className="text-xs focus:bg-white/10 focus:text-white flex items-center gap-2 rounded-md mx-1 my-1"
-              onClick={() => updateSettings({ autoSpeak: !settings.autoSpeak })}
-            >
-              <Volume2 className={cn("h-4 w-4 transition-colors", settings.autoSpeak ? "text-cyan-400" : "text-white/40")} />
-              <div className="flex flex-col">
-                <span>Auto-Speak Responses</span>
-                <span className="text-[9px] text-white/40 font-normal">{settings.autoSpeak ? "Always read AI replies" : "Disabled"}</span>
-              </div>
-            </DropdownMenuItem>
+            <div className="px-1 space-y-0.5">
+              <DropdownMenuItem 
+                className="text-xs focus:bg-white/10 focus:text-white flex items-center gap-2 rounded-md transition-colors py-2"
+                onClick={() => updateSettings({ autoSpeak: !settings.autoSpeak })}
+              >
+                <Volume2 className={cn("h-4 w-4 transition-colors", settings.autoSpeak ? "text-cyan-400" : "text-white/40")} />
+                <div className="flex flex-col">
+                  <span className="font-medium">Auto-Speak (Full)</span>
+                  <span className="text-[9px] text-white/40 font-normal">{settings.autoSpeak ? "Read complete reply" : "Disabled"}</span>
+                </div>
+              </DropdownMenuItem>
+
+              <DropdownMenuItem 
+                className="text-xs focus:bg-white/10 focus:text-white flex items-center gap-2 rounded-md transition-colors py-2"
+                onClick={() => updateSettings({ autoSpeakStream: !settings.autoSpeakStream })}
+              >
+                <Zap className={cn("h-4 w-4 transition-colors", settings.autoSpeakStream ? "text-yellow-400" : "text-white/40")} />
+                <div className="flex flex-col">
+                  <span className="font-medium">Live Narrator</span>
+                  <span className="text-[9px] text-white/40 font-normal">{settings.autoSpeakStream ? "Incremental speech" : "Disabled"}</span>
+                </div>
+              </DropdownMenuItem>
+            </div>
             
             <DropdownMenuSeparator className="bg-white/10" />
             
             <DropdownMenuItem className="text-xs focus:bg-white/10 focus:text-white text-cyan-400 font-medium rounded-md mx-1 mb-1">
               <Settings className="h-3 w-3 mr-2" />
-              Advanced Voice Settings...
+              Voice Control Panel
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
         
-        {/* Waveform visualization when listening */}
         <AnimatePresence>
           {isListening && (
             <motion.div

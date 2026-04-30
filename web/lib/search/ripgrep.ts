@@ -172,7 +172,12 @@ async function runRipgrep(opts: RipgrepOptions, cwd: string): Promise<RipgrepRes
 }
 
 async function runJsSearch(opts: RipgrepOptions, cwd: string): Promise<RipgrepResult> {
-  const searchPath = opts.path ? path.join(cwd, opts.path) : cwd;
+  // Bug fix: when opts.path is absolute, path.join(cwd, opts.path) produces
+  // garbage on Windows ("c:\repo\c:\Temp\x") and on POSIX produces a doubled
+  // path ("/repo//tmp/x"). Use the absolute path as-is when provided.
+  const searchPath = opts.path
+    ? (path.isAbsolute(opts.path) ? opts.path : path.join(cwd, opts.path))
+    : cwd;
   const maxResults = opts.maxResults ?? 100;
   const contextLines = opts.contextLines ?? 0;
   const matches: RipgrepMatch[] = [];
@@ -239,7 +244,22 @@ async function runJsSearch(opts: RipgrepOptions, cwd: string): Promise<RipgrepRe
     } catch {}
   }
   try {
-    const files = await walkDir(searchPath);
+    const allFiles = await walkDir(searchPath);
+    // Apply glob filtering (the JS fallback didn't honor opts.glob originally).
+    // Real ripgrep handles globs natively via --glob; this brings the fallback
+    // into rough parity for common patterns ("*.ts", "**/*.{ts,tsx}", etc.).
+    const globs = opts.glob
+      ? (Array.isArray(opts.glob) ? opts.glob : [opts.glob])
+      : [];
+    const globRegexes = globs.map(globToRegex);
+    const files = globRegexes.length === 0
+      ? allFiles
+      : allFiles.filter((f) => {
+          const base = path.basename(f);
+          // Match against either the full path or just the base name so that
+          // both "*.txt" and "src/**/*.ts" patterns work.
+          return globRegexes.some((r) => r.test(f) || r.test(base));
+        });
     for (const file of files) { if (matches.length >= maxResults) break; await searchFile(file); }
   } catch {}
   const uniquePaths = new Set(matches.map(m => m.path));
