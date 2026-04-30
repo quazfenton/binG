@@ -270,6 +270,9 @@ server.tool(
         await fs.mkdir(parentDir, { recursive: true });
       }
 
+      // Re-validate immediately before write to narrow TOCTOU window
+      await validatePath(path);
+
       // Write file
       await fs.writeFile(validatedPath, content, 'utf-8');
 

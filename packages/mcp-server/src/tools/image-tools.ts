@@ -286,19 +286,26 @@ async function generateWithReplicate(prompt: string, width: number, height: numb
     throw new Error('No prediction URL returned');
   }
 
-  // Poll for completion
+  // Poll for completion with exponential backoff
   for (let i = 0; i < 30; i++) {
-    await new Promise(r => setTimeout(r, 2000));
+    const delay = Math.min(2000 * Math.pow(1.5, i), 15000);
+    await new Promise(r => setTimeout(r, delay));
 
     const statusResponse = await fetch(predictionUrl, {
       headers: { Authorization: `Bearer ${apiToken}` },
       signal: AbortSignal.timeout(30000),
     });
 
-    const status = (await statusResponse.json()) as { status?: string; error?: string; output?: string | string[] };
+    const status = (await statusResponse.json()) as { status?: string; error?: string; output?: string | string[] };      if (status.status === 'succeeded') {
+      // Return all images if multiple were generated, otherwise the single URL
+      const imageUrls = Array.isArray(status.output) ? status.output : [status.output as string];
+      const imageUrl = imageUrls[0]; // Use the first one for the single-image result structure
 
-    if (status.status === 'succeeded') {
-      const imageUrl = Array.isArray(status.output) ? status.output[0] : status.output;
+      // Validate image URL is present and non-empty before returning
+      if (!imageUrl || typeof imageUrl !== 'string' || imageUrl.trim() === '') {
+        throw new Error('No valid image URL returned from Replicate prediction');
+      }
+
       return {
         success: true,
         url: imageUrl,

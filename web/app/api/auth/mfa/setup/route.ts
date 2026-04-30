@@ -54,11 +54,18 @@ export async function POST(request: NextRequest) {
     // Get user email for provisioning URI
     const user = db.prepare('SELECT email FROM users WHERE id = ?').get(authResult.userId) as any;
 
-    // Store in DB (not enabled yet — user must verify first)
-    db.prepare(`
-      INSERT INTO user_mfa (user_id, mfa_type, secret_encrypted, backup_codes, is_enabled)
-      VALUES (?, ?, ?, ?, FALSE)
-    `).run(authResult.userId, 'totp', encryptedSecret, hashedBackupCodes);
+    // Store in DB in a transaction to ensure atomicity
+    try {
+      db.transaction(() => {
+        db.prepare(`
+          INSERT INTO user_mfa (user_id, mfa_type, secret_encrypted, backup_codes, is_enabled)
+          VALUES (?, ?, ?, ?, FALSE)
+        `).run(authResult.userId, 'totp', encryptedSecret, hashedBackupCodes);
+      })();
+    } catch (dbError) {
+      console.error('[MFA Setup] DB insertion failed:', dbError);
+      throw new Error('Failed to initialize MFA record');
+    }
 
     // Generate provisioning URI for QR code
     const provisioningUri = generateTotpUri(secret, user?.email || '', 'binG');
@@ -66,7 +73,7 @@ export async function POST(request: NextRequest) {
     // MED-5 fix: Log MFA setup (success — not enabled yet, verification needed)
     try {
       const { logMfaSetup } = await import('@/lib/auth/auth-audit-logger');
-      logMfaSetup(authResult.userId, request);
+      await logMfaSetup(authResult.userId, request);
     } catch (auditError) {
       console.warn('[MFA Setup] Audit log failed:', auditError);
     }
@@ -75,7 +82,8 @@ export async function POST(request: NextRequest) {
       success: true,
       provisioningUri,
       backupCodes, // Show once — user must save these
-      message: 'Scan the QR code with your authenticator app, then verify with a code to enable MFA.',
+      message: 'MFA initialized. IMPORTANT: Save your backup codes now! They will not be shown again.',
+      warning: 'Store your backup codes in a safe place. If you lose access to your authenticator app, these are the only way to recover your account.',
     });
   } catch (error) {
     console.error('[MFA Setup] Error:', error);

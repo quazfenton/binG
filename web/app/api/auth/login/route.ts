@@ -46,7 +46,7 @@ export async function POST(request: NextRequest) {
       // MED-5 fix: Log login failure for invalid credentials
       try {
         const { logLoginFailure } = await import('@/lib/auth/auth-audit-logger');
-        logLoginFailure(email, 'invalid_credentials', request);
+        await logLoginFailure(email, 'invalid_credentials', request);
       } catch (auditError) {
         console.warn('[Login] Audit log failed:', auditError);
       }
@@ -77,6 +77,7 @@ export async function POST(request: NextRequest) {
     // MED-6 fix: Check if user has MFA enabled.
     // If so, don't complete login — return a short-lived MFA token
     // that the client must use to complete the /auth/mfa/challenge flow.
+    let mfaEnabled = false;
     if (result.user?.id) {
       try {
         const { getDatabase } = require('@/lib/database/connection');
@@ -85,8 +86,9 @@ export async function POST(request: NextRequest) {
           const mfaRecord = db.prepare(
             'SELECT is_enabled FROM user_mfa WHERE user_id = ? AND mfa_type = ?'
           ).get(String(result.user.id), 'totp') as any;
+          mfaEnabled = !!mfaRecord?.is_enabled;
 
-          if (mfaRecord?.is_enabled) {
+          if (mfaEnabled) {
             // Generate a short-lived MFA token (5 min TTL) using jwt.ts helper
             const mfaToken = generateMfaToken(String(result.user.id));
 
@@ -112,7 +114,7 @@ export async function POST(request: NextRequest) {
     // MED-5 fix: Log successful login
     try {
       const { logLoginSuccess } = await import('@/lib/auth/auth-audit-logger');
-      logLoginSuccess(String(result.user?.id), email, request, { mfaEnabled: !!mfaRecord?.is_enabled });
+      await logLoginSuccess(String(result.user?.id), email, request, { mfaEnabled });
     } catch (auditError) {
       console.warn('[Login] Audit log failed:', auditError);
     }
@@ -129,7 +131,7 @@ export async function POST(request: NextRequest) {
         httpOnly: true,
         // MED-3 fix: Also secure in staging — any non-dev environment should use Secure flag
         // to prevent cookies from being sent over HTTP. Check x-forwarded-proto as fallback.
-        secure: process.env.NODE_ENV === 'production' || process.env.NODE_ENV === 'staging',
+        secure: (process.env.NODE_ENV as string) === 'production' || (process.env.NODE_ENV as string) === 'staging',
         sameSite: 'lax',
         maxAge: 7 * 24 * 60 * 60 // 7 days
       });
@@ -141,7 +143,7 @@ export async function POST(request: NextRequest) {
       response.cookies.set('auth-token', result.token, {
         httpOnly: true,
         // MED-3 fix: Secure in production AND staging
-        secure: process.env.NODE_ENV === 'production' || process.env.NODE_ENV === 'staging',
+        secure: (process.env.NODE_ENV as string) === 'production' || (process.env.NODE_ENV as string) === 'staging',
         sameSite: 'lax',
         maxAge: 60 * 60, // 1 hour — matches JWT TTL
         path: '/',
@@ -156,7 +158,7 @@ export async function POST(request: NextRequest) {
     // fall back to their old anonymous workspace identity
     response.cookies.set('anon-session-id', '', {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production' || process.env.NODE_ENV === 'staging',
+      secure: (process.env.NODE_ENV as string) === 'production' || (process.env.NODE_ENV as string) === 'staging',
       sameSite: 'lax',
       maxAge: 0,
       path: '/',

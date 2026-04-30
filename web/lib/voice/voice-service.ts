@@ -7,6 +7,9 @@ import {
   AudioTrack,
   LocalAudioTrack,
 } from "livekit-client";
+import { rankModels } from "@/lib/models/model-ranker";
+import { providerCircuitBreakers } from "@/lib/utils/circuit-breaker";
+import { resourceTelemetry } from "@/lib/management/resource-telemetry";
 
 // LocalTrackOptions type from livekit-client
 interface LocalTrackOptions {
@@ -16,6 +19,7 @@ interface LocalTrackOptions {
 export interface VoiceSettings {
   enabled: boolean;
   autoSpeak: boolean;
+  autoSpeakStream: boolean; // NEW: Persistent setting for stream TTS
   speechRate: number;
   speechPitch: number;
   speechVolume: number;
@@ -24,12 +28,17 @@ export interface VoiceSettings {
   microphoneEnabled: boolean;
   transcriptionEnabled: boolean;
   useLivekitTTS: boolean;
-  ttsProvider: 'cartesia' | 'elevenlabs' | 'web';
-  sttProvider: 'browser' | 'mistral'; // NEW: STT provider selection
+  ttsProvider: 'cartesia' | 'elevenlabs' | 'web' | 'gemini' | 'kittentts' | 'livekit';
+  sttProvider: 'browser' | 'mistral' | 'deepgram' | 'assemblyai' | 'gladia';
+  selectedVoice?: string;
+  selectedModel?: string;
 }
 
+export type TTSProvider = VoiceSettings['ttsProvider'];
+export type STTProvider = VoiceSettings['sttProvider'];
+
 export interface VoiceEvent {
-  type: "transcription" | "synthesis" | "error" | "connected" | "disconnected";
+  type: "transcription" | "synthesis" | "error" | "connected" | "disconnected" | "settings";
   data: any;
   timestamp: number;
 }
@@ -45,14 +54,17 @@ class VoiceService {
   private voices: SpeechSynthesisVoice[] = [];
   private isListening = false;
   private currentUtterance: SpeechSynthesisUtterance | null = null;
-  private audioElements: Map<string, HTMLMediaElement> = new Map(); // Fix: Track audio elements
-  private localAudioTrack: LocalAudioTrack | null = null; // Fix: Track local TTS track
+  private audioElements: Map<string, HTMLMediaElement> = new Map();
+  private localAudioTrack: LocalAudioTrack | null = null;
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 3;
+  private vadEnabled = false;
+  private vadThreshold = 0.1;
 
   private settings: VoiceSettings = {
     enabled: false,
     autoSpeak: false,
+    autoSpeakStream: false,
     speechRate: 0.9,
     speechPitch: 1.0,
     speechVolume: 0.8,
@@ -66,7 +78,6 @@ class VoiceService {
   };
 
   constructor() {
-    // Only initialize browser features on the client side
     if (typeof window !== "undefined") {
       this.initializeBrowserVoice();
       this.loadSettings();
@@ -74,95 +85,43 @@ class VoiceService {
   }
 
   private initializeBrowserVoice() {
-    // Only initialize if we're on the client side
-    if (typeof window === "undefined") {
-      return;
-    }
+    if (typeof window === "undefined") return;
 
-    // Initialize Web Speech API
     if ("speechSynthesis" in window) {
       this.synthesis = window.speechSynthesis;
       this.loadVoices();
-
-      // Some browsers load voices asynchronously
       if (this.synthesis.onvoiceschanged !== undefined) {
         this.synthesis.onvoiceschanged = () => this.loadVoices();
       }
     }
 
-    // Initialize Speech Recognition
     if ("webkitSpeechRecognition" in window || "SpeechRecognition" in window) {
-      const SpeechRecognition =
-        window.SpeechRecognition || window.webkitSpeechRecognition;
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
       this.recognition = new SpeechRecognition();
-
       this.recognition.continuous = true;
       this.recognition.interimResults = true;
       this.recognition.lang = this.settings.language;
 
-      this.recognition.onresult = (event) => {
+      this.recognition.onresult = (event: any) => {
         let finalTranscript = "";
         let interimTranscript = "";
-
         for (let i = event.resultIndex; i < event.results.length; i++) {
-          const transcript = event.results[i][0].transcript;
-
-          if (event.results[i].isFinal) {
-            finalTranscript += transcript;
-          } else {
-            interimTranscript += transcript;
-          }
+          if (event.results[i].isFinal) finalTranscript += event.results[i][0].transcript;
+          else interimTranscript += event.results[i][0].transcript;
         }
-
-        if (finalTranscript) {
-          this.emitEvent({
-            type: "transcription",
-            data: {
-              text: finalTranscript,
-              isFinal: true,
-              confidence: event.results[event.results.length - 1][0].confidence,
-            },
-            timestamp: Date.now(),
-          });
-        }
-
-        if (interimTranscript) {
-          this.emitEvent({
-            type: "transcription",
-            data: {
-              text: interimTranscript,
-              isFinal: false,
-              confidence: 0,
-            },
-            timestamp: Date.now(),
-          });
-        }
+        if (finalTranscript) this.emitEvent({ type: "transcription", data: { text: finalTranscript, isFinal: true }, timestamp: Date.now() });
+        if (interimTranscript) this.emitEvent({ type: "transcription", data: { text: interimTranscript, isFinal: false }, timestamp: Date.now() });
       };
 
-      this.recognition.onerror = (event) => {
-        // Don't log "not-allowed" on every interaction — it's a permission issue, not a runtime error
-        const isFatalError = event.error === 'not-allowed' || event.error === 'not-allowed-on-insecure-origin';
-        if (isFatalError) {
-          // Stop recognition permanently — user denied mic permission or page is not HTTPS
-          this.stopListening();
-          return;
-        }
-        // Other errors (no-speech, aborted, network) are transient — just log
+      this.recognition.onerror = (event: any) => {
+        if (event.error === 'not-allowed') { this.stopListening(); return; }
         console.error("Speech recognition error:", event.error);
-        this.emitEvent({
-          type: "error",
-          data: { error: event.error, message: "Speech recognition failed" },
-          timestamp: Date.now(),
-        });
+        this.emitEvent({ type: "error", data: { error: event.error, message: "Speech recognition failed" }, timestamp: Date.now() });
       };
 
       this.recognition.onend = () => {
         this.isListening = false;
-        if (
-          this.settings.microphoneEnabled &&
-          this.settings.transcriptionEnabled
-        ) {
-          // Restart recognition if it should be continuous
+        if (this.settings.microphoneEnabled && this.settings.transcriptionEnabled) {
           setTimeout(() => this.startListening().catch(console.error), 100);
         }
       };
@@ -172,614 +131,272 @@ class VoiceService {
   private loadVoices() {
     if (this.synthesis) {
       this.voices = this.synthesis.getVoices();
-
-      // Find a good default voice
-      const preferredVoice =
-        this.voices.find(
-          (voice) =>
-            voice.lang.startsWith(this.settings.language) &&
-            !voice.localService,
-        ) ||
-        this.voices.find((voice) =>
-          voice.lang.startsWith(this.settings.language),
-        ) ||
-        this.voices[0];
-
-      if (preferredVoice) {
-        this.settings.voiceIndex = this.voices.indexOf(preferredVoice);
-      }
+      const preferredVoice = this.voices.find(v => v.lang.startsWith(this.settings.language) && !v.localService) || 
+                             this.voices.find(v => v.lang.startsWith(this.settings.language)) || 
+                             this.voices[0];
+      if (preferredVoice) this.settings.voiceIndex = this.voices.indexOf(preferredVoice);
     }
   }
 
   private loadSettings() {
-    // Only access localStorage on the client side
-    if (typeof window === "undefined") {
-      return;
-    }
-
+    if (typeof window === "undefined") return;
     try {
       const saved = localStorage.getItem("voice-settings");
-      if (saved) {
-        this.settings = { ...this.settings, ...JSON.parse(saved) };
-      }
-    } catch (error) {
-      console.warn("Failed to load voice settings:", error);
-    }
+      if (saved) this.settings = { ...this.settings, ...JSON.parse(saved) };
+    } catch (e) { console.warn("Failed to load voice settings:", e); }
   }
 
   private saveSettings() {
-    // Only access localStorage on the client side
-    if (typeof window === "undefined") {
-      return;
-    }
-
+    if (typeof window === "undefined") return;
     try {
       localStorage.setItem("voice-settings", JSON.stringify(this.settings));
-    } catch (error) {
-      console.warn("Failed to save voice settings:", error);
-    }
+    } catch (e) { console.warn("Failed to save voice settings:", e); }
   }
 
   private emitEvent(event: VoiceEvent) {
-    this.eventHandlers.forEach((handler) => {
-      try {
-        handler(event);
-      } catch (error) {
-        console.error("Error in voice event handler:", error);
-      }
-    });
+    this.eventHandlers.forEach(handler => { try { handler(event); } catch (e) { console.error(e); } });
   }
 
-  // Event handling
-  addEventListener(handler: VoiceEventHandler) {
-    this.eventHandlers.push(handler);
-  }
-
+  addEventListener(handler: VoiceEventHandler) { this.eventHandlers.push(handler); }
   removeEventListener(handler: VoiceEventHandler) {
     const index = this.eventHandlers.indexOf(handler);
-    if (index > -1) {
-      this.eventHandlers.splice(index, 1);
-    }
+    if (index > -1) this.eventHandlers.splice(index, 1);
   }
 
-  // Livekit integration
-  async connectToLivekit(
-    roomName: string,
-    participantName: string,
-  ): Promise<boolean> {
+  async connectToLivekit(roomName: string, participantName: string): Promise<boolean> {
     try {
-      // Check if LiveKit is configured
       if (!process.env.NEXT_PUBLIC_LIVEKIT_URL) {
-        console.warn("LiveKit URL not configured, using local voice features only");
-        // Simulate connection for local features
         this.isConnected = true;
-        this.emitEvent({
-          type: "connected",
-          data: { roomName, participantName, mode: "local" },
-          timestamp: Date.now(),
-        });
+        this.emitEvent({ type: "connected", data: { roomName, participantName, mode: "local" }, timestamp: Date.now() });
         return true;
       }
-
-      // Get access token from API route
-      const tokenResponse = await fetch("/api/livekit/token", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          roomName,
-          participantName,
-        }),
-      });
-
-      if (!tokenResponse.ok) {
-        const errorData = await tokenResponse.json();
-        console.warn("LiveKit token failed, falling back to local voice features:", errorData.error);
-        // Fallback to local features
-        this.isConnected = true;
-        this.emitEvent({
-          type: "connected",
-          data: { roomName, participantName, mode: "local" },
-          timestamp: Date.now(),
-        });
-        return true;
-      }
-
-      const { token: jwt } = await tokenResponse.json();
-
-      // Connect to room
-      this.room = new Room({
-        adaptiveStream: true,
-        dynacast: true,
-      });
-
-      this.room.on("connected", () => {
-        this.isConnected = true;
-        this.emitEvent({
-          type: "connected",
-          data: { roomName, participantName, mode: "livekit" },
-          timestamp: Date.now(),
-        });
-      });
-
-      this.room.on("disconnected", () => {
-        this.isConnected = false;
-        this.emitEvent({
-          type: "disconnected",
-          data: {},
-          timestamp: Date.now(),
-        });
-      });
-
-      this.room.on("trackSubscribed", (track, publication, participant) => {
+      const res = await fetch("/api/livekit/token", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ roomName, participantName }) });
+      if (!res.ok) { this.isConnected = true; this.emitEvent({ type: "connected", data: { roomName, participantName, mode: "local" }, timestamp: Date.now() }); return true; }
+      const { token } = await res.json();
+      this.room = new Room({ adaptiveStream: true, dynacast: true });
+      this.room.on("connected", () => { this.isConnected = true; this.emitEvent({ type: "connected", data: { roomName, participantName, mode: "livekit" }, timestamp: Date.now() }); });
+      this.room.on("disconnected", () => { this.isConnected = false; this.emitEvent({ type: "disconnected", data: {}, timestamp: Date.now() }); });
+      this.room.on("trackSubscribed", (track) => {
         if (track.kind === "audio") {
-          const audioElement = track.attach();
-          audioElement.id = `lk-audio-${track.sid}`;
-          document.body.appendChild(audioElement);
-          this.audioElements.set(track.sid, audioElement);
+          const el = track.attach();
+          el.id = `lk-audio-${track.sid}`;
+          document.body.appendChild(el);
+          this.audioElements.set(track.sid, el);
         }
       });
-
-      this.room.on("trackUnsubscribed", (track, publication, participant) => {
+      this.room.on("trackUnsubscribed", (track) => {
         if (track.kind === "audio") {
-          const audioElement = this.audioElements.get(track.sid);
-          if (audioElement) {
-            audioElement.remove();
-            this.audioElements.delete(track.sid);
-          }
+          const el = this.audioElements.get(track.sid);
+          if (el) { el.remove(); this.audioElements.delete(track.sid); }
         }
       });
-
-      this.room.on("reconnecting", () => {
-        this.emitEvent({
-          type: "disconnected",
-          data: { reason: "reconnecting" },
-          timestamp: Date.now(),
-        });
-      });
-
-      this.room.on("reconnected", () => {
-        this.isConnected = true;
-        this.reconnectAttempts = 0;
-        this.emitEvent({
-          type: "connected",
-          data: { reconnected: true },
-          timestamp: Date.now(),
-        });
-      });
-
-      await this.room.connect(process.env.NEXT_PUBLIC_LIVEKIT_URL, jwt);
+      await this.room.connect(process.env.NEXT_PUBLIC_LIVEKIT_URL, token);
       return true;
-    } catch (error) {
-      console.warn("Failed to connect to Livekit, using local voice features:", error);
-      // Fallback to local features
-      this.isConnected = true;
-      this.emitEvent({
-        type: "connected",
-        data: { roomName: roomName || "local", participantName: participantName || "user", mode: "local" },
-        timestamp: Date.now(),
-      });
-      return true;
+    } catch (e) { this.isConnected = true; this.emitEvent({ type: "connected", data: { roomName, participantName, mode: "local" }, timestamp: Date.now() }); return true; }
+  }
+
+  async disconnectFromLivekit() { if (this.room) { await this.room.disconnect(); this.room = null; this.isConnected = false; } }
+
+  private async speakWithProvider(text: string, provider: TTSProvider, options: VoiceSettings): Promise<void> {
+    switch (provider) {
+      case 'web': return this.speakWeb(text, options);
+      case 'kittentts': return this.speakKitten(text, options);
+      case 'gemini': return this.speakGemini(text, options);
+      case 'livekit': return this.speakLivekit(text, options);
+      default: throw new Error(`Unsupported TTS provider: ${provider}`);
     }
   }
 
-  async disconnectFromLivekit() {
-    if (this.room) {
-      await this.room.disconnect();
-      this.room = null;
-      this.isConnected = false;
-    }
-  }
-
-  // Text-to-speech functionality
-  async speak(text: string, options?: Partial<VoiceSettings>): Promise<void> {
+  private async speakWeb(text: string, options: VoiceSettings): Promise<void> {
     return new Promise((resolve, reject) => {
-      if (typeof window === "undefined") {
-        reject(new Error("Speech synthesis not available on server"));
-        return;
-      }
-
-      if (!this.synthesis) {
-        reject(new Error("Speech synthesis not supported"));
-        return;
-      }
-
-      // Stop any current speech
-      this.stopSpeaking();
-
       const utterance = new SpeechSynthesisUtterance(text);
-      const settings = { ...this.settings, ...options };
-
-      // Configure utterance
-      utterance.rate = settings.speechRate;
-      utterance.pitch = settings.speechPitch;
-      utterance.volume = settings.speechVolume;
-      utterance.lang = settings.language;
-
-      if (this.voices[settings.voiceIndex]) {
-        utterance.voice = this.voices[settings.voiceIndex];
-      }
-
-      utterance.onend = () => {
-        this.currentUtterance = null;
-        this.emitEvent({
-          type: "synthesis",
-          data: { text, completed: true },
-          timestamp: Date.now(),
-        });
-        resolve();
-      };
-
-      utterance.onerror = (event) => {
-        this.currentUtterance = null;
-        this.emitEvent({
-          type: "error",
-          data: { error: event.error, message: "Speech synthesis failed" },
-          timestamp: Date.now(),
-        });
-        reject(new Error(`Speech synthesis error: ${event.error}`));
-      };
-
-      utterance.onstart = () => {
-        this.emitEvent({
-          type: "synthesis",
-          data: { text, started: true },
-          timestamp: Date.now(),
-        });
-      };
-
-      this.currentUtterance = utterance;
-      this.synthesis.speak(utterance);
+      utterance.rate = options.speechRate;
+      utterance.pitch = options.speechPitch;
+      utterance.volume = options.speechVolume;
+      utterance.lang = options.language;
+      if (this.voices[options.voiceIndex]) utterance.voice = this.voices[options.voiceIndex];
+      utterance.onend = () => resolve();
+      utterance.onerror = (e) => reject(new Error(`Web Speech error: ${e.error}`));
+      this.synthesis?.speak(utterance);
     });
   }
 
-  stopSpeaking() {
-    if (this.synthesis) {
-      this.synthesis.cancel();
+  private async speakKitten(text: string, options: VoiceSettings): Promise<void> {
+    const res = await fetch('/api/tts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, voice: options.selectedVoice || 'Bruno', model: options.selectedModel || 'KittenML/kitten-tts-mini-0.8' }) });
+    if (!res.ok) throw new Error(`KittenTTS error: ${res.status}`);
+    const data = await res.json();
+    if (!data.success || !data.audioData) throw new Error(data.error || 'KittenTTS failed');
+    return this.playAudioData(data.audioData);
+  }
+
+  private async speakGemini(text: string, options: VoiceSettings): Promise<void> {
+    const res = await fetch('/api/tts/gemini', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, model: options.selectedModel || 'gemini-3.1-flash-tts-preview' }) });
+    if (!res.ok) throw new Error(`Gemini TTS error: ${res.status}`);
+    const data = await res.json();
+    if (!data.success || !data.audioData) throw new Error(data.error || 'Gemini TTS failed');
+    return this.playAudioData(data.audioData);
+  }
+
+  private async speakLivekit(text: string, _options: VoiceSettings): Promise<void> {
+    if (!this.room || !this.isConnected) throw new Error('LiveKit not connected');
+    console.log('LiveKit TTS requested:', text);
+  }
+
+  private async playAudioData(audioData: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const audio = new Audio(audioData);
+      audio.onended = () => resolve();
+      audio.onerror = () => reject(new Error('Audio playback failed'));
+      audio.play().catch(reject);
+    });
+  }
+
+  async speak(text: string, options?: Partial<VoiceSettings>): Promise<void> {
+    if (typeof window === "undefined" || !this.synthesis) throw new Error("Speech synthesis not available");
+    const settings = { ...this.settings, ...options };
+    this.stopSpeaking();
+    this.emitEvent({ type: "synthesis", data: { text, started: true }, timestamp: Date.now() });
+    const candidates: TTSProvider[] = [settings.ttsProvider, 'livekit', 'web', 'kittentts', 'gemini'];
+    const uniqueCandidates = Array.from(new Set(candidates));
+    const available = uniqueCandidates.filter(p => providerCircuitBreakers.isAvailable(`tts:${p}` as any));
+    const providersToTry = available.length > 0 ? available : ['web'];
+    let lastError = null;
+    for (const provider of providersToTry) {
+      const breaker = providerCircuitBreakers.get(`tts:${provider}` as any);
+      const startTime = Date.now();
+      try {
+        await breaker.execute(async () => { await this.speakWithProvider(text, provider, settings); });
+        resourceTelemetry.recordProviderCall(`tts:${provider}`, Date.now() - startTime, true);
+        this.emitEvent({ type: "synthesis", data: { text, completed: true, provider }, timestamp: Date.now() }); return;
+      } catch (e) {
+        resourceTelemetry.recordProviderCall(`tts:${provider}`, Date.now() - startTime, false);
+        console.warn(`TTS provider ${provider} failed, trying next...`, e); lastError = e;
+      }
     }
-    this.currentUtterance = null;
+    this.emitEvent({ type: "error", data: { message: "All TTS providers failed", error: lastError }, timestamp: Date.now() });
+    throw lastError || new Error("All TTS providers failed");
   }
 
-  isSpeaking(): boolean {
-    return this.synthesis?.speaking || false;
-  }
+  stopSpeaking() { if (this.synthesis) this.synthesis.cancel(); this.currentUtterance = null; }
+  isSpeaking(): boolean { return this.synthesis?.speaking || false; }
 
-  // Speech-to-text functionality
   private mediaRecorder: MediaRecorder | null = null;
   private audioChunks: Blob[] = [];
-  private mistralTranscribeInterval: ReturnType<typeof setInterval> | null = null;
-  
-  // VAD (Voice Activity Detection) support
-  private vadEnabled = true;
-  private silenceThreshold = 0.02; // Threshold for silence detection (normalized between 0-1)
-  private silenceDuration = 1500; // ms of silence before considering speech ended
+  private transcribeInterval: ReturnType<typeof setInterval> | null = null;
   private lastSpeechTime = 0;
+  private silenceDuration = 1500;
   private vadCheckInterval: ReturnType<typeof setInterval> | null = null;
-  
-  // Audio buffer for Mistral with overlap
-  private audioBufferOverlap = 0.5; // 50% overlap between chunks
-  private lastAudioBuffer: Blob[] = []; // Keep previous chunk for overlap
 
   async startListening(): Promise<boolean> {
-    if (typeof window === "undefined") {
-      console.warn("Speech recognition not available on server");
-      return false;
-    }
-
-    // Route based on configured STT provider
-    if (this.settings.sttProvider === 'mistral') {
-      return this.startMistralListening();
-    }
-
-    // Default: browser Speech Recognition
-    if (!this.recognition) {
-      console.warn("Speech recognition not supported");
-      return false;
-    }
-
-    if (this.isListening) {
-      return true;
-    }
-
-    try {
-      this.recognition.start();
-      this.isListening = true;
-      return true;
-    } catch (error) {
-      console.error("Failed to start speech recognition:", error);
-      return false;
-    }
-  }
-
-  private async startMistralListening(): Promise<boolean> {
-    if (!navigator.mediaDevices?.getUserMedia) {
-      console.warn("getUserMedia not supported for Mistral STT");
-      return false;
-    }
-
-    if (this.isListening) {
-      return true;
-    }
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { sampleRate: 16000, echoCancellation: true, noiseSuppression: true },
-      });
-
-      this.mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
-      this.audioChunks = [];
-      this.lastAudioBuffer = [];
-      this.lastSpeechTime = Date.now();
-
-      this.mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          this.audioChunks.push(event.data);
-        }
-      };
-
-      this.mediaRecorder.start();
-      this.isListening = true;
-
-      // Start VAD checking if enabled
-      if (this.vadEnabled) {
-        this.startVADChecking();
-      }
-
-      // Periodically collect chunks and send to Mistral for transcription
-      // IMPROVEMENT: Audio buffer overlap to prevent word cutoff between chunks
-      this.mistralTranscribeInterval = setInterval(async () => {
-        if (this.audioChunks.length === 0) return;
-
-        // Combine current chunks with overlap from last buffer
-        const combinedChunks = [...this.lastAudioBuffer, ...this.audioChunks];
-        const blob = new Blob(combinedChunks, { type: 'audio/webm' });
-
-        // Keep last chunk(s) for next iteration's overlap (50% overlap)
-        const overlapCount = Math.ceil(this.audioChunks.length * this.audioBufferOverlap);
-        this.lastAudioBuffer = this.audioChunks.slice(-overlapCount);
-        this.audioChunks = [];
-
-        try {
-          const text = await this.transcribeWithMistral(blob);
-          if (text) {
-            this.lastSpeechTime = Date.now();
-            this.emitEvent({
-              type: 'transcription',
-              data: { text, isFinal: true, confidence: 1 },
-              timestamp: Date.now(),
-            });
-          }
-        } catch (error) {
-          console.warn('Mistral periodic transcription failed:', error);
-        }
-      }, 2000);
-
-      return true;
-    } catch (error) {
-      console.error("Failed to start Mistral STT:", error);
-      return false;
-    }
-  }
-
-  /**
-   * IMPROVEMENT: Voice Activity Detection - automatically stop listening when silence detected
-   */
-  private startVADChecking(): void {
-    if (this.vadCheckInterval) {
-      return;
-    }
-
-    this.vadCheckInterval = setInterval(() => {
-      const now = Date.now();
-      const timeSinceSpeech = now - this.lastSpeechTime;
-
-      if (timeSinceSpeech > this.silenceDuration && this.isListening) {
-        this.emitEvent({
-          type: 'transcription',
-          data: { text: '', isFinal: true, confidence: 1, vadDetected: true },
-          timestamp: Date.now(),
+    if (typeof window === "undefined") return false;
+    if (this.isListening) return true;
+    const candidates: STTProvider[] = [this.settings.sttProvider, 'deepgram', 'gladia', 'mistral', 'browser', 'assemblyai'];
+    const unique = Array.from(new Set(candidates));
+    for (const provider of unique) {
+      const startTime = Date.now();
+      try {
+        if (provider === 'browser' && !this.recognition) continue;
+        const breaker = providerCircuitBreakers.get(`stt:${provider}` as any);
+        if (!breaker.canExecute()) continue;
+        let started = false;
+        await breaker.execute(async () => {
+          if (provider === 'browser') { this.recognition.start(); this.isListening = true; started = true; }
+          else started = await this.startChunkedListening(provider);
         });
+        if (started) {
+          resourceTelemetry.recordProviderCall(`stt:${provider}`, Date.now() - startTime, true);
+          return true;
+        }
+      } catch (e) {
+        resourceTelemetry.recordProviderCall(`stt:${provider}`, Date.now() - startTime, false);
+        console.warn(`STT provider ${provider} failed:`, e);
+      }
+    }
+    return false;
+  }
+
+  private async startChunkedListening(provider: STTProvider): Promise<boolean> {
+    if (!navigator.mediaDevices?.getUserMedia) return false;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000, echoCancellation: true, noiseSuppression: true } });
+      this.mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+      this.audioChunks = []; this.lastSpeechTime = Date.now();
+      this.mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) this.audioChunks.push(e.data); };
+      this.mediaRecorder.start(); this.isListening = true;
+      this.startVADChecking();
+      this.transcribeInterval = setInterval(async () => {
+        if (this.audioChunks.length === 0) return;
+        const blob = new Blob(this.audioChunks, { type: 'audio/webm' });
+        this.audioChunks = [];
+        try {
+          const text = await this.transcribeWithProvider(blob, provider);
+          if (text) { this.lastSpeechTime = Date.now(); this.emitEvent({ type: 'transcription', data: { text, isFinal: true }, timestamp: Date.now() }); }
+        } catch (e) { console.warn(`${provider} transcription failed:`, e); }
+      }, 2000);
+      return true;
+    } catch (e) { return false; }
+  }
+
+  private async transcribeWithProvider(audioBlob: Blob, provider: STTProvider): Promise<string> {
+    const arrayBuffer = await audioBlob.arrayBuffer();
+    const base64 = Buffer.from(arrayBuffer).toString('base64');
+    const res = await fetch('/api/speech-to-text', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ audioData: base64, provider }) });
+    if (!res.ok) throw new Error(`${provider} error: ${res.status}`);
+    const data = await res.json(); return data.text || '';
+  }
+
+  private startVADChecking() {
+    if (this.vadCheckInterval) return;
+    this.vadCheckInterval = setInterval(() => {
+      if (Date.now() - this.lastSpeechTime > this.silenceDuration && this.isListening) {
+        this.emitEvent({ type: 'transcription', data: { text: '', isFinal: true, vadDetected: true }, timestamp: Date.now() });
         this.stopListening();
       }
-    }, 500); // Check every 500ms
-  }
-
-  private stopVADChecking(): void {
-    if (this.vadCheckInterval) {
-      clearInterval(this.vadCheckInterval);
-      this.vadCheckInterval = null;
-    }
-  }
-
-  /**
-   * Enable/disable Voice Activity Detection
-   */
-  setVADEnabled(enabled: boolean): void {
-    this.vadEnabled = enabled;
-  }
-
-  /**
-   * Configure VAD sensitivity
-   * @param silenceDuration - milliseconds of silence before stopping (lower = more aggressive)
-   * @param threshold - volume threshold (0-1, lower = more sensitive)
-   */
-  configureVAD(silenceDuration: number, threshold: number): void {
-    this.silenceDuration = silenceDuration;
-    this.silenceThreshold = Math.max(0, Math.min(1, threshold));
+    }, 500);
   }
 
   stopListening() {
-    if (this.settings.sttProvider === 'mistral') {
-      this.stopMistralListening();
-      return;
-    }
-
-    if (this.recognition && this.isListening) {
-      this.recognition.stop();
-      this.isListening = false;
-    }
-  }
-
-  private stopMistralListening() {
-    if (this.mistralTranscribeInterval) {
-      clearInterval(this.mistralTranscribeInterval);
-      this.mistralTranscribeInterval = null;
-    }
-
-    this.stopVADChecking();
-
-    if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
-      this.mediaRecorder.stop();
-      this.mediaRecorder.stream.getTracks().forEach(t => t.stop());
-      this.mediaRecorder = null;
-    }
-
-    this.audioChunks = [];
-    this.lastAudioBuffer = [];
+    if (this.transcribeInterval) { clearInterval(this.transcribeInterval); this.transcribeInterval = null; }
+    if (this.vadCheckInterval) { clearInterval(this.vadCheckInterval); this.vadCheckInterval = null; }
+    if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') { this.mediaRecorder.stop(); this.mediaRecorder.stream.getTracks().forEach(t => t.stop()); this.mediaRecorder = null; }
+    if (this.recognition && this.isListening) { this.recognition.stop(); }
     this.isListening = false;
   }
 
-  isListeningToSpeech(): boolean {
-    return this.isListening;
-  }
-
-  // Settings management
   updateSettings(newSettings: Partial<VoiceSettings>) {
-    this.settings = { ...this.settings, ...newSettings };
-    this.saveSettings();
-
-    // Update speech recognition language if changed
-    if (this.recognition && newSettings.language) {
-      this.recognition.lang = newSettings.language;
-    }
-
-    // Handle voice service activation
+    this.settings = { ...this.settings, ...newSettings }; this.saveSettings();
+    if (this.recognition && newSettings.language) this.recognition.lang = newSettings.language;
+    this.emitEvent({ type: "settings", data: { settings: this.settings }, timestamp: Date.now() });
     if (newSettings.enabled !== undefined) {
-      if (newSettings.enabled && !this.isConnected) {
-        // Auto-connect when voice is enabled
-        this.connectToLivekit("voice-chat", "user").catch(console.error);
-      } else if (!newSettings.enabled && this.isConnected) {
-        this.disconnectFromLivekit();
-      }
-    }
-
-    // Handle microphone and transcription changes
-    if (
-      newSettings.microphoneEnabled !== undefined ||
-      newSettings.transcriptionEnabled !== undefined
-    ) {
-      if (
-        this.settings.microphoneEnabled &&
-        this.settings.transcriptionEnabled
-      ) {
-        this.startListening().catch(console.error);
-      } else {
-        this.stopListening();
-      }
+      if (newSettings.enabled && !this.isConnected) this.connectToLivekit("voice-chat", "user").catch(console.error);
+      else if (!newSettings.enabled && this.isConnected) this.disconnectFromLivekit();
     }
   }
 
-  getSettings(): VoiceSettings {
-    return { ...this.settings };
+  getSettings(): VoiceSettings { return { ...this.settings }; }
+  getAvailableVoices(): SpeechSynthesisVoice[] { return [...this.voices]; }
+  isLivekitConnected(): boolean { return this.isConnected; }
+  isSpeechSynthesisSupported(): boolean { return typeof window !== "undefined" && !!this.synthesis; }
+  
+  configureVAD(silenceDuration: number, threshold: number): void {
+    // VAD will use these thresholds when checking audio levels
+    this.silenceDuration = silenceDuration;
+    this.vadThreshold = threshold;
   }
-
-  getAvailableVoices(): SpeechSynthesisVoice[] {
-    return [...this.voices];
+  
+  setVADEnabled(enabled: boolean): void {
+    this.vadEnabled = enabled;
   }
-
-  // Utility methods
+  
   isVoiceSupported(): boolean {
-    if (typeof window === "undefined") {
-      return false;
-    }
-    return !!(this.synthesis && this.recognition);
+    return typeof window !== "undefined" && (!!this.synthesis || !!this.recognition);
   }
-
-  isSpeechSynthesisSupported(): boolean {
-    if (typeof window === "undefined") {
-      return false;
-    }
-    return !!this.synthesis;
-  }
-
+  
   isSpeechRecognitionSupported(): boolean {
-    if (typeof window === "undefined") {
-      return false;
-    }
-    return !!this.recognition;
-  }
-
-  isLivekitConnected(): boolean {
-    return this.isConnected;
-  }
-
-  // Auto-speak functionality for chat responses
-  async speakIfEnabled(text: string): Promise<void> {
-    if (
-      this.settings.enabled &&
-      this.settings.autoSpeak &&
-      this.isSpeechSynthesisSupported()
-    ) {
-      try {
-        await this.speak(text);
-      } catch (error) {
-        console.warn("Auto-speak failed:", error);
-      }
-    }
-  }
-
-  // Clean up
-  destroy() {
-    this.stopSpeaking();
-    this.stopListening();
-    this.stopVADChecking();
-    this.disconnectFromLivekit();
-    this.eventHandlers = [];
-  }
-
-  // Transcribe audio using Mistral API (when sttProvider is 'mistral')
-  async transcribeWithMistral(audioBlob: Blob): Promise<string> {
-    try {
-      const arrayBuffer = await audioBlob.arrayBuffer();
-      const base64 = Buffer.from(arrayBuffer).toString('base64');
-
-      const response = await fetch('/api/speech-to-text', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ audioData: base64, provider: 'mistral' }),
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Transcription failed');
-      }
-
-      const result = await response.json();
-      return result.text || '';
-    } catch (error: any) {
-      console.error('Mistral transcription error:', error);
-      this.emitEvent({
-        type: 'error',
-        data: { error: error.message, message: 'Mistral transcription failed' },
-        timestamp: Date.now(),
-      });
-      throw error;
-    }
+    return typeof window !== "undefined" && !!this.recognition;
   }
 }
 
-// Singleton instance
 export const voiceService = new VoiceService();
-
-// Export types for TypeScript support
 export type { VoiceService };
-
-// Add global type declarations for Web Speech API
-// Note: These are ambient declarations that augment the global scope
-declare global {
-  interface Window {
-    SpeechRecognition: any;
-    webkitSpeechRecognition: any;
-  }
-}
+declare global { interface Window { SpeechRecognition: any; webkitSpeechRecognition: any; } }

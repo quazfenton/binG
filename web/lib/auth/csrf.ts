@@ -47,7 +47,7 @@ export function generateCsrfToken(): string {
 export function setCsrfCookie(response: NextResponse, token: string): void {
   response.cookies.set(CSRF_COOKIE_NAME, token, {
     httpOnly: false, // Client JS must read this to send as header
-    secure: process.env.NODE_ENV === 'production' || process.env.NODE_ENV === 'staging',
+    secure: (process.env.NODE_ENV as string) === 'production' || (process.env.NODE_ENV as string) === 'staging',
     sameSite: 'lax',
     path: '/',
     maxAge: 60 * 60, // 1 hour — matches JWT TTL

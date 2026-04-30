@@ -210,6 +210,22 @@ export default function ConversationInterface() {
     return "nvidia/nemotron-3-nano-30b-a3b:free";
   });
   const [isVoiceEnabled, setIsVoiceEnabled] = useState(false);
+  
+  // Sync voice enabled state with voiceService
+  useEffect(() => {
+    const { voiceService } = require('@/lib/voice/voice-service');
+    const settings = voiceService.getSettings();
+    setIsVoiceEnabled(settings.enabled);
+
+    const handleVoiceEvent = (event: any) => {
+      if (event.type === 'settings') {
+        setIsVoiceEnabled(event.data.settings.enabled);
+      }
+    };
+
+    voiceService.addEventListener(handleVoiceEvent);
+    return () => voiceService.removeEventListener(handleVoiceEvent);
+  }, []);
   const [livekitEnabled, setLivekitEnabled] = useState(false);
   const [chatHistory, setChatHistory] = useState<ChatHistory[]>([]);
   const [currentConversationId, setCurrentConversationId] = useState<
@@ -1331,15 +1347,13 @@ export default function ConversationInterface() {
   }, [error, rotateToNextProvider]);
 
   const handleVoiceToggle = (enabled: boolean) => {
-    setIsVoiceEnabled(enabled);
-    const voiceSettings = voiceService.getSettings();
     voiceService.updateSettings({
-      ...voiceSettings,
       enabled,
       autoSpeak: enabled,
       microphoneEnabled: enabled,
       transcriptionEnabled: enabled,
     });
+    setIsVoiceEnabled(enabled);
 
     if (enabled) {
       toast.success("Voice features enabled");

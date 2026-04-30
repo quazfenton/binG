@@ -33,13 +33,13 @@ export async function POST(request: NextRequest) {
       // Delete ALL sessions for this user (cleanup any stale sessions)
       const authResult = await authService.validateSession(sessionId);
       if (authResult.user?.id) {
-        deleteSessionsByUserId(String(authResult.user.id));
+        await deleteSessionsByUserId(String(authResult.user.id));
         console.log('[Logout] All sessions deleted for user:', authResult.user.id);
 
         // MED-5 fix: Log logout event
         try {
           const { logLogout } = await import('@/lib/auth/auth-audit-logger');
-          logLogout(String(authResult.user.id), request);
+          await logLogout(String(authResult.user.id), request);
         } catch (auditError) {
           console.warn('[Logout] Audit log failed:', auditError);
         }
