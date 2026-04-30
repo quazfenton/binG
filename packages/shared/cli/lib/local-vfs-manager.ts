@@ -354,9 +354,14 @@ export class LocalVFSManager {
    */
   async listWorkspaceFiles(dirPath: string = ''): Promise<Array<{ path: string; isDirectory: boolean; size: number }>> {
     const targetDir = path.join(this.workspacePath, dirPath);
-    const resolvedPath = path.resolve(targetDir);
     
-    if (!resolvedPath.startsWith(this.workspacePath + path.sep) && resolvedPath !== this.workspacePath) {
+    // Resolve paths to ensure they stay within the workspace boundary
+    const [resolvedRoot, resolvedPath] = await Promise.all([
+      fs.realpath(this.workspacePath),
+      fs.realpath(targetDir),
+    ]);
+    
+    if (!resolvedPath.startsWith(resolvedRoot + path.sep) && resolvedPath !== resolvedRoot) {
       return [];
     }
 

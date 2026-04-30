@@ -87,16 +87,28 @@ export class GitBackedVFS {
    * from all buffering the same change when N GitBackedVFS instances exist.
    */
   private handleFileChange(event: FilesystemChangeEvent): void {
-    // Ignore events for other owners — each GitBackedVFS instance only cares
-    // about its own owner's file changes.
-    // The ownerId may be a compositeKey (ownerId$sessionId), so check both
-    // exact match and prefix match (compositeKey starts with event.ownerId).
-    // CRITICAL FIX: Use exact owner ID matching to prevent cross-session data leaks.
-    // Previously, prefix matching caused instance "1$004" to process events from "1$005"
-    // because both start with "1$". Now only exact matches or root-owner→composite matches.
+    // SECURITY FIX: Proper owner ID matching to prevent cross-session data leaks
+    // Previously used startsWith() which could allow spoofing:
+    // - Owner "user" would match "user-extra" (incorrect)
+    // - Owner "1$session" would match "1$session-extra" (incorrect)
+    // Now using explicit composite key matching with delimiter validation
+    
     const isExactMatch = event.ownerId === this.ownerId;
-    const isRootToComposite = !event.ownerId.includes('$') && !event.ownerId.includes(':') && this.ownerId.startsWith(event.ownerId + '$');
-    if (!isExactMatch && !isRootToComposite) return;
+    
+    // For composite keys, only match if:
+    // 1. Event has no delimiter (root owner)
+    // 2. This instance is for that root owner
+    // 3. Delimiter immediately follows
+    const isRootToComposite = () => {
+      if (event.ownerId.includes('$') || event.ownerId.includes(':')) return false;
+      if (!this.ownerId.includes('$') && !this.ownerId.includes(':')) return false;
+      
+      const delim = this.ownerId.includes('$') ? '$' : ':';
+      const expectedPrefix = event.ownerId + delim;
+      return this.ownerId.startsWith(expectedPrefix) && this.ownerId.length > expectedPrefix.length;
+    };
+    
+    if (!isExactMatch && !isRootToComposite()) return;
     if (!this.options.autoCommit || this.isPersisting) return;
 
     // Deduplicate: skip if this path is already buffered at same or newer version

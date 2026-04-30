@@ -16,7 +16,8 @@ CREATE TABLE IF NOT EXISTS users (
     reset_token_expires DATETIME,
     email_verified BOOLEAN DEFAULT FALSE,
     email_verification_token_hash TEXT,
-    email_verification_expires DATETIME
+    email_verification_expires DATETIME,
+    token_version INTEGER DEFAULT 1  -- HIGH-12: Incremented on password change/admin revocation to invalidate existing JWTs
 );
 
 -- Index for email verification token hash lookups
@@ -247,6 +248,62 @@ CREATE INDEX IF NOT EXISTS idx_shadow_commits_session_id ON shadow_commits(sessi
 CREATE INDEX IF NOT EXISTS idx_shadow_commits_owner_id ON shadow_commits(owner_id);
 CREATE INDEX IF NOT EXISTS idx_shadow_commits_timestamp ON shadow_commits(timestamp);
 CREATE INDEX IF NOT EXISTS idx_shadow_commits_created_at ON shadow_commits(created_at);
+
+-- HIGH-6 fix: User roles table (DB-backed RBAC replacing static ADMIN_USER_IDS env var)
+CREATE TABLE IF NOT EXISTS user_roles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    role TEXT NOT NULL,           -- 'admin', 'billing', 'moderator', etc.
+    resource TEXT,                -- Optional resource scope (NULL = global role)
+    granted_by TEXT,              -- User ID who granted the role
+    granted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    expires_at DATETIME,         -- Optional expiry for temporary roles
+    is_active BOOLEAN DEFAULT TRUE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    UNIQUE(user_id, role, resource)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_roles_user_id ON user_roles(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_roles_role ON user_roles(role);
+CREATE INDEX IF NOT EXISTS idx_user_roles_active ON user_roles(is_active);
+
+-- HIGH-6 fix: Admin audit log — tracks all admin actions for accountability
+CREATE TABLE IF NOT EXISTS admin_audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    actor_user_id TEXT NOT NULL,
+    action TEXT NOT NULL,              -- e.g., 'role:grant', 'role:revoke', 'user:delete'
+    target_user_id TEXT,
+    target_resource TEXT,
+    details TEXT,                      -- JSON blob with action-specific details
+    ip_address TEXT,
+    user_agent TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (actor_user_id) REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_admin_audit_actor ON admin_audit_log(actor_user_id);
+CREATE INDEX IF NOT EXISTS idx_admin_audit_action ON admin_audit_log(action);
+CREATE INDEX IF NOT EXISTS idx_admin_audit_target ON admin_audit_log(target_user_id);
+CREATE INDEX IF NOT EXISTS idx_admin_audit_created ON admin_audit_log(created_at);
+
+-- MED-6 fix: User MFA table (TOTP-based second factor)
+CREATE TABLE IF NOT EXISTS user_mfa (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    mfa_type TEXT NOT NULL DEFAULT 'totp',  -- 'totp' (future: 'webauthn')
+    secret_encrypted TEXT NOT NULL,          -- TOTP secret, encrypted at rest
+    backup_codes TEXT,                       -- JSON array of hashed backup codes
+    is_enabled BOOLEAN DEFAULT FALSE,        -- Must be explicitly enabled after setup
+    verified_at DATETIME,                    -- When user completed setup verification
+    last_used_at DATETIME,                   -- Last successful MFA challenge
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    UNIQUE(user_id, mfa_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_mfa_user_id ON user_mfa(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_mfa_enabled ON user_mfa(is_enabled);
 
 -- Skills table (DB-backed skill persistence complementing filesystem SkillsManager)
 CREATE TABLE IF NOT EXISTS skills (

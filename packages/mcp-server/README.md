@@ -209,14 +209,18 @@ Execute shell commands with timeout and working directory support.
 
 ## Security
 
+> ⚠️ **CRITICAL SECURITY NOTICE**: This MCP server runs **without sandboxing** in standalone mode. File operations and command execution run with the permissions of the process user. **Always** run in a container/VM with minimal permissions. Never expose this server to untrusted input without proper isolation.
+
 ### Path Validation
 All file operations use path validation to prevent directory traversal attacks. Requested paths are resolved and checked against the workspace root to ensure they don't escape the allowed directory.
 
 ### Command Execution Safety
+- **Command execution is DISABLED by default** (`BING_ENABLE_COMMAND_EXECUTION` must be explicitly set to `'true'`)
 - Commands execute with the user's permissions (no additional sandboxing in standalone mode)
 - Timeout protection prevents runaway processes
-- Can be disabled for read-only deployments
+- Path validation on working directory (resolves symlinks)
 - Output buffered with 10MB limit
+- When disabled, a warning is logged at startup
 
 ### Recommendations for Production
 - Run in a container or VM with resource limits

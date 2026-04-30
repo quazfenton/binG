@@ -4,9 +4,14 @@ import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge';
 import { deleteSessionsByUserId } from '@/lib/storage/session-store';
 import { revokeToken, extractTokenFromHeader } from '@/lib/security/jwt-auth';
 import { authCache } from '@/lib/auth/request-auth';
+import { csrfCheckOrReject } from '@/lib/auth/csrf';
 
 export async function POST(request: NextRequest) {
   try {
+    // HIGH-10 fix: CSRF protection on logout
+    const csrfReject = csrfCheckOrReject(request);
+    if (csrfReject) return csrfReject;
+
     // Get session ID from cookie
     const sessionId = request.cookies.get('session_id')?.value;
 
@@ -30,6 +35,14 @@ export async function POST(request: NextRequest) {
       if (authResult.user?.id) {
         deleteSessionsByUserId(String(authResult.user.id));
         console.log('[Logout] All sessions deleted for user:', authResult.user.id);
+
+        // MED-5 fix: Log logout event
+        try {
+          const { logLogout } = await import('@/lib/auth/auth-audit-logger');
+          logLogout(String(authResult.user.id), request);
+        } catch (auditError) {
+          console.warn('[Logout] Audit log failed:', auditError);
+        }
       }
       
       // Logout user (delete session)

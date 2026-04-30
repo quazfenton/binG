@@ -98,78 +98,86 @@ export class OrphanedRecordCleaner {
   /**
    * Scan for orphaned records across all configured tables
    */
-  scanForOrphans(): OrphanedRecordInfo[] {
-    const db = getDatabase();
-    const orphans: OrphanedRecordInfo[] = [];
+   scanForOrphans(): OrphanedRecordInfo[] {
+     const db = getDatabase();
+     const orphans: OrphanedRecordInfo[] = [];
 
-    for (const { table, column } of this.config.tables) {
-      try {
-        // Check if table exists
-        const tableExists = db.prepare(
-          `SELECT name FROM sqlite_master WHERE type='table' AND name=?`
-        ).get(table);
+     for (const { table, column } of this.config.tables) {
+       // Validate identifiers to prevent SQL injection
+       if (!this.isValidIdentifier(table) || !this.isValidIdentifier(column)) {
+         if (this.config.verbose) {
+           console.log(`[OrphanCleaner] Invalid identifier: ${table}.${column}, skipping`);
+         }
+         continue;
+       }
+       
+       try {
+         // Check if table exists
+         const tableExists = db.prepare(
+           `SELECT name FROM sqlite_master WHERE type='table' AND name=?`
+         ).get(table);
 
-        if (!tableExists) {
-          if (this.config.verbose) {
-            console.log(`[OrphanCleaner] Table ${table} does not exist, skipping`);
-          }
-          continue;
-        }
+         if (!tableExists) {
+           if (this.config.verbose) {
+             console.log(`[OrphanCleaner] Table ${table} does not exist, skipping`);
+           }
+           continue;
+         }
 
-        // Count orphaned records (records with user_id not in users table)
-        // Using NOT EXISTS for better performance on large tables
-        const countResult = db.prepare(`
-          SELECT COUNT(*) as count 
-          FROM ${table} 
-          WHERE ${column} IS NOT NULL 
-          AND NOT EXISTS (SELECT 1 FROM users WHERE id = ${table}.${column})
-        `).get() as { count: number };
+         // Count orphaned records (records with user_id not in users table)
+         // Using NOT EXISTS for better performance on large tables
+         const countResult = db.prepare(`
+           SELECT COUNT(*) as count 
+           FROM ${table} 
+           WHERE ${column} IS NOT NULL 
+           AND NOT EXISTS (SELECT 1 FROM users WHERE id = ${table}.${column})
+         `).get() as { count: number };
 
-        if (countResult.count > 0) {
-          // Get oldest orphan timestamp if available
-          let oldestOrphan: Date | undefined;
-          try {
-            const createdAtCol = db.prepare(
-              `SELECT sql FROM sqlite_master WHERE type='table' AND name=?`
-            ).get(table) as { sql: string } | undefined;
+         if (countResult.count > 0) {
+           // Get oldest orphan timestamp if available
+           let oldestOrphan: Date | undefined;
+           try {
+             const createdAtCol = db.prepare(
+               `SELECT sql FROM sqlite_master WHERE type='table' AND name=?`
+             ).get(table) as { sql: string } | undefined;
 
-            // Check if table has created_at column
-            if (createdAtCol?.sql?.includes('created_at')) {
-              const oldestResult = db.prepare(`
-                SELECT MIN(created_at) as oldest 
-                FROM ${table} 
-                WHERE ${column} IS NOT NULL 
-                AND NOT EXISTS (SELECT 1 FROM users WHERE id = ${table}.${column})
-              `).get() as { oldest: string | null } | undefined;
+             // Check if table has created_at column
+             if (createdAtCol?.sql?.includes('created_at')) {
+               const oldestResult = db.prepare(`
+                 SELECT MIN(created_at) as oldest 
+                 FROM ${table} 
+                 WHERE ${column} IS NOT NULL 
+                 AND NOT EXISTS (SELECT 1 FROM users WHERE id = ${table}.${column})
+               `).get() as { oldest: string | null } | undefined;
 
-              if (oldestResult?.oldest) {
-                oldestOrphan = new Date(oldestResult.oldest);
-              }
-            }
-          } catch {
-            // Ignore if we can't get oldest timestamp
-          }
+               if (oldestResult?.oldest) {
+                 oldestOrphan = new Date(oldestResult.oldest);
+               }
+             }
+           } catch {
+             // Ignore if we can't get oldest timestamp
+           }
 
-          orphans.push({
-            table,
-            column,
-            orphanedCount: countResult.count,
-            oldestOrphan,
-          });
+           orphans.push({
+             table,
+             column,
+             orphanedCount: countResult.count,
+             oldestOrphan,
+           });
 
-          if (this.config.verbose) {
-            console.log(
-              `[OrphanCleaner] Found ${countResult.count} orphaned records in ${table}.${column}`
-            );
-          }
-        }
-      } catch (error: any) {
-        console.error(`[OrphanCleaner] Error scanning ${table}:`, error.message);
-      }
-    }
+           if (this.config.verbose) {
+             console.log(
+               `[OrphanCleaner] Found ${countResult.count} orphaned records in ${table}.${column}`
+             );
+           }
+         }
+       } catch (error: any) {
+         console.error(`[OrphanCleaner] Error scanning ${table}:`, error.message);
+       }
+     }
 
-    return orphans;
-  }
+     return orphans;
+   }
 
   /**
    * Get total count of all orphaned records
@@ -179,51 +187,61 @@ export class OrphanedRecordCleaner {
     return orphans.reduce((sum, o) => sum + o.orphanedCount, 0);
   }
 
-  /**
-   * Clean up orphaned records in a specific table
-   */
-  private cleanupTable(
-    db: any,
-    table: string,
-    column: string
-  ): CleanupResult {
-    const startTime = Date.now();
-    
-    try {
-      // Delete orphaned records in batches
-      let totalDeleted = 0;
-      let batchDeleted = this.config.batchSize;
+   /**
+    * Clean up orphaned records in a specific table
+    */
+   private cleanupTable(
+     db: any,
+     table: string,
+     column: string
+   ): CleanupResult {
+     const startTime = Date.now();
+     
+     try {
+       // Validate identifiers to prevent SQL injection
+       if (!this.isValidIdentifier(table) || !this.isValidIdentifier(column)) {
+         return {
+           table,
+           deletedCount: 0,
+           durationMs: Date.now() - startTime,
+           error: `Invalid identifier: ${table}.${column}`,
+         };
+       }
+       
+       // Delete orphaned records in batches
+       let totalDeleted = 0;
+       let batchDeleted = this.config.batchSize;
 
-      while (batchDeleted === this.config.batchSize) {
-        const result = db.prepare(`
-          DELETE FROM ${table}
-          WHERE ${column} IS NOT NULL
-          AND NOT EXISTS (SELECT 1 FROM users WHERE id = ${table}.${column})
-          LIMIT ?
-        `).run(this.config.batchSize);
+       while (batchDeleted === this.config.batchSize) {
+         const result = db.prepare(`
+           DELETE FROM ${table}
+           WHERE ${column} IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM users WHERE id = ${table}.${column})
+           LIMIT ?
+         `).run(this.config.batchSize);
 
-        batchDeleted = result.changes;
-        totalDeleted += batchDeleted;
+         batchDeleted = result.changes;
+         totalDeleted += batchDeleted;
 
-        if (this.config.verbose && batchDeleted > 0) {
-          console.log(`[OrphanCleaner] ${table}: deleted batch of ${batchDeleted} records`);
-        }
-      }
+         if (this.config.verbose && batchDeleted > 0) {
+           console.log(`[OrphanCleaner] ${table}: deleted batch of ${batchDeleted} records`);
+         }
+       }
 
-      return {
-        table,
-        deletedCount: totalDeleted,
-        durationMs: Date.now() - startTime,
-      };
-    } catch (error: any) {
-      return {
-        table,
-        deletedCount: 0,
-        durationMs: Date.now() - startTime,
-        error: error.message,
-      };
-    }
-  }
+       return {
+         table,
+         deletedCount: totalDeleted,
+         durationMs: Date.now() - startTime,
+       };
+     } catch (error: any) {
+       return {
+         table,
+         deletedCount: 0,
+         durationMs: Date.now() - startTime,
+         error: error.message,
+       };
+     }
+   }
 
   /**
    * Clean up all orphaned records across configured tables

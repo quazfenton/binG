@@ -153,7 +153,8 @@ export default function Settings({
   useEffect(() => {
     let cancelled = false;
     if (typeof window === 'undefined') return;
-    (async () => {
+    
+    const loadKeys = async () => {
       try {
         const { secrets } = await import('@bing/platform/secrets');
         const saved = await secrets.get('user-api-keys');
@@ -163,8 +164,20 @@ export default function Settings({
       } catch (e) {
         console.error('Failed to load user API keys:', e);
       }
-    })();
-    return () => { cancelled = true; };
+    };
+
+    loadKeys();
+
+    // Sync state when keys are changed from other components (e.g. BYOK popup)
+    const handleKeysChanged = () => {
+      loadKeys();
+    };
+    window.addEventListener('user-api-keys-changed', handleKeysChanged);
+
+    return () => { 
+      cancelled = true; 
+      window.removeEventListener('user-api-keys-changed', handleKeysChanged);
+    };
   }, []);
 
   // Save user API keys to localStorage

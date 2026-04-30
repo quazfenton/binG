@@ -1,4 +1,4 @@
-﻿import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { PROVIDERS } from "@/lib/chat/llm-providers";
 import { errorHandler } from "@/lib/chat/error-handler";
 import { responseRouter } from "@/lib/api/response-router";
@@ -2441,9 +2441,6 @@ const config: UnifiedAgentConfig = {
                     tokenBuffer = '';
                     lastTokenEmitTime = Date.now();
                   }
-                    tokenBuffer = '';
-                    lastTokenEmitTime = Date.now();
-                  }
                 };
 
                 for await (const streamChunk of unifiedResponse.stream as AsyncGenerator<StreamingResponse>) {
@@ -2926,7 +2923,7 @@ const config: UnifiedAgentConfig = {
                     try {
                       if (ssm) ssm.complete(streamRequestId, doneEventData.finishReason);
                       if (nsc) nsc(streamRequestId);
-                    } catch (e) {
+                    } catch (e: unknown) {
                       chatLogger.warn('Failed to update stream state on completion', {
                         streamRequestId,
                         error: e instanceof Error ? e.message : String(e),

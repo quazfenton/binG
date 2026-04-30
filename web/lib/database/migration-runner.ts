@@ -104,7 +104,9 @@ export class MigrationRunner {
         .sort();
 
       return files.map((filename: string) => {
-        const version = filename.split('_')[0];
+        // Extract version: handle both underscore and hyphen separators
+        // e.g., "001_events.sql" → "001", "003-approval-requests.sql" → "003"
+        const version = filename.split(/[_-]/)[0];
         const sql = readFileSync(join(this.migrationsPath, filename), 'utf-8');
         return { version, filename, sql };
       });

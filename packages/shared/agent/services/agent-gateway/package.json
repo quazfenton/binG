@@ -2,15 +2,25 @@
   "name": "agent-gateway",
   "version": "1.0.0",
   "description": "Agent Gateway - Session management + SSE streaming + job queue",
+  "type": "module",
   "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "fastify": "^5.8.1",
     "@fastify/cors": "^11.1.0",
+    "bullmq": "^5.0.0",
     "ioredis": "^5.3.2",
     "uuid": "^9.0.0",
     "pino": "^8.17.0",

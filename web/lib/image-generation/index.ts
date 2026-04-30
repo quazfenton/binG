@@ -28,6 +28,8 @@ export * from './types';
 // Providers
 export { MistralImageProvider } from './providers/mistral-provider';
 export { ReplicateImageProvider } from './providers/replicate-provider';
+export { VercelImageProvider } from './providers/vercel-provider';
+export { GoogleImageProvider } from './providers/google-provider';
 
 // Registry
 export { 
