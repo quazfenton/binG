@@ -17,8 +17,75 @@ import { chatRequestLogger } from '@/lib/chat/chat-request-logger'
 import { toolCallTracker } from '@/lib/chat/tool-call-tracker'
 import { getToolCallTelemetrySummary } from '@/lib/chat/tool-call-telemetry'
 import { createLogger } from '@/lib/utils/logger'
+import { PROVIDERS } from '@/lib/chat/llm-providers'
 
 const logger = createLogger('Model:Ranker')
+
+// Track which models have been tried for rotation
+const triedModels = new Map<string, { lastTryTime: number; successCount: number; failCount: number }>()
+const MODEL_ROTATION_WINDOW_MS = 5 * 60 * 1000 // 5 minutes
+
+// Rate limit circuit breaker: track when a model/provider combo gets 429 errors
+interface RateLimitState {
+  last429Time: number
+  consecutive429Count: number
+}
+const rateLimitedModels = new Map<string, RateLimitState>()
+const RATE_LIMIT_COOLDOWN_MS = 60000 // 1 minute cooldown after rate limit
+const RATE_LIMIT_CIRCUIT_BREAKER_THRESHOLD = 3 // Trip circuit breaker after 3 consecutive 429s
+
+export function recordRateLimitError(provider: string, model: string): void {
+  const key = `${provider}:${model}`
+  const now = Date.now()
+  const existing = rateLimitedModels.get(key)
+  
+  if (existing) {
+    // If last 429 was within 30 seconds, increment consecutive count
+    if (now - existing.last429Time < 30000) {
+      existing.consecutive429Count++
+    } else {
+      // Reset if more than 30 seconds since last 429
+      existing.consecutive429Count = 1
+    }
+    existing.last429Time = now
+  } else {
+    rateLimitedModels.set(key, { last429Time: now, consecutive429Count: 1 })
+  }
+  
+  logger.warn('[RateLimit] Recorded 429 error', {
+    provider,
+    model,
+    consecutive429Count: rateLimitedModels.get(key)?.consecutive429Count,
+    circuitBreakerTripped: (rateLimitedModels.get(key)?.consecutive429Count || 0) >= RATE_LIMIT_CIRCUIT_BREAKER_THRESHOLD,
+  })
+}
+
+export function isRateLimited(provider: string, model: string): boolean {
+  const key = `${provider}:${model}`
+  const state = rateLimitedModels.get(key)
+  
+  if (!state) return false
+  
+  const now = Date.now()
+  // Check if still in cooldown period
+  if (now - state.last429Time > RATE_LIMIT_COOLDOWN_MS) {
+    // Cooldown expired, clear the entry
+    rateLimitedModels.delete(key)
+    return false
+  }
+  
+  // If circuit breaker threshold reached, stay rate limited longer
+  if (state.consecutive429Count >= RATE_LIMIT_CIRCUIT_BREAKER_THRESHOLD) {
+    logger.warn('[RateLimit] Circuit breaker active', { provider, model, consecutive429Count: state.consecutive429Count })
+    return true
+  }
+  
+  return true
+}
+
+export function clearRateLimitState(provider: string, model: string): void {
+  rateLimitedModels.delete(`${provider}:${model}`)
+}
 
 export interface ModelStats {
   provider: string
@@ -69,12 +136,14 @@ export function scoreModel(m: ModelStats): number {
   const normalizedLatency = Math.min(m.avgLatency / 10000, 1)
 
   // Calculate composite score
+  // We want to maximize success and minimize latency, 
+  // with failures acting as a massive penalty.
   const score = (
-    normalizedLatency * LATENCY_WEIGHT +
-    m.failureRate * FAILURE_WEIGHT_SCORE
-  ) * staleFactor
+    (normalizedLatency * LATENCY_WEIGHT) +
+    (m.failureRate * FAILURE_WEIGHT)
+  ) * staleFactor;
 
-  return score
+  return score;
 }
 
 /**
@@ -224,6 +293,164 @@ function getProviderStatsFromTelemetry(): ModelStats[] {
 }
 
 /**
+ * Add ALL configured models to the stats pool, giving untested models a chance
+ */
+function addConfiguredModels(modelMap: Map<string, ModelStats>): void {
+  // Safety check: PROVIDERS must exist
+  if (!PROVIDERS || typeof PROVIDERS !== 'object') {
+    logger.warn('PROVIDERS not available, cannot add configured models')
+    return
+  }
+  
+  // Iterate through all providers and their models
+  for (const [providerName, providerConfig] of Object.entries(PROVIDERS)) {
+    if (!providerConfig?.models || !Array.isArray(providerConfig.models)) continue
+    
+    for (const modelName of providerConfig.models) {
+      const key = `${providerName}:${modelName}`
+      
+      // Only add if not already in the map (telemetry data takes precedence)
+      if (!modelMap.has(key)) {
+        // Check if this provider has an API key configured
+        const hasApiKey = isProviderConfiguredForTelemetry(providerName)
+        
+        if (hasApiKey) {
+          // Add untested model with neutral stats (gives it a chance)
+          modelMap.set(key, {
+            provider: providerName,
+            model: modelName,
+            avgLatency: 2000, // neutral latency estimate
+            failureRate: 0, // optimistic default
+            lastUpdated: Date.now(),
+            totalCalls: 0, // untested
+            successRate: 1, // optimistic
+          })
+          logger.debug('Added untested model to pool', { provider: providerName, model: modelName })
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Check if a provider is configured (has API key) for telemetry purposes
+ */
+function isProviderConfiguredForTelemetry(provider: string): boolean {
+  const apiKeyEnvVars: Record<string, string> = {
+    'openai': 'OPENAI_API_KEY',
+    'anthropic': 'ANTHROPIC_API_KEY',
+    'google': 'GOOGLE_API_KEY',
+    'mistral': 'MISTRAL_API_KEY',
+    'openrouter': 'OPENROUTER_API_KEY',
+    'chutes': 'CHUTES_API_KEY',
+    'portkey': 'PORTKEY_API_KEY',
+    'github': 'GITHUB_MODELS_API_KEY',
+    'nvidia': 'NVIDIA_API_KEY',
+    'groq': 'GROQ_API_KEY',
+    'deepinfra': 'DEEPINFRA_API_KEY',
+    'fireworks': 'FIREWORKS_API_KEY',
+    'together': 'TOGETHER_API_KEY',
+    'zen': 'ZEN_API_KEY',
+  }
+  
+  const envVar = apiKeyEnvVars[provider.toLowerCase()]
+  return envVar ? !!process.env[envVar] : false
+}
+
+/**
+ * Record model try attempt for rotation tracking
+ */
+export function recordModelAttempt(provider: string, model: string, success: boolean): void {
+  const key = `${provider}:${model}`
+  const now = Date.now()
+  
+  const existing = triedModels.get(key) || { lastTryTime: 0, successCount: 0, failCount: 0 }
+  
+  // Reset if outside rotation window
+  if (now - existing.lastTryTime > MODEL_ROTATION_WINDOW_MS) {
+    existing.successCount = 0
+    existing.failCount = 0
+  }
+  
+  existing.lastTryTime = now
+  if (success) {
+    existing.successCount++
+  } else {
+    existing.failCount++
+  }
+  
+  triedModels.set(key, existing)
+}
+
+/**
+ * Get next model for rotation (prefers untested/failed models)
+ * FIX: Now shares the same provider iteration logic with addConfiguredModels() to avoid inconsistencies
+ */
+export function getModelForRotation(excludeProvider?: string): { provider: string; model: string } | null {
+  const now = Date.now()
+  
+  // FIX: Use the same iteration logic as addConfiguredModels() to ensure consistency
+  // Collect all untested or failed models
+  const candidates: Array<{ key: string; provider: string; model: string; priority: number }> = []
+  
+  // Safety check: PROVIDERS must exist
+  if (!PROVIDERS || typeof PROVIDERS !== 'object') {
+    logger.warn('PROVIDERS not available, cannot get model for rotation')
+    return null
+  }
+  
+  for (const [providerName, providerConfig] of Object.entries(PROVIDERS)) {
+    if (!providerConfig?.models || !Array.isArray(providerConfig.models)) continue
+    if (excludeProvider && providerName === excludeProvider) continue
+    if (!isProviderConfiguredForTelemetry(providerName)) continue
+    
+    for (const modelName of providerConfig.models) {
+      const key = `${providerName}:${modelName}`
+      
+      // FIX: Check rate limit circuit breaker before including this model
+      if (isRateLimited(providerName, modelName)) {
+        logger.debug('Skipping rate-limited model in rotation', { provider: providerName, model: modelName })
+        continue
+      }
+      
+      const attempt = triedModels.get(key)
+      
+      // Prioritize untested models, then models with failures outside the window
+      let priority = 100 // highest priority for untested
+      
+      if (attempt) {
+        if (now - attempt.lastTryTime > MODEL_ROTATION_WINDOW_MS) {
+          // Outside rotation window, give it another chance
+          priority = 50
+        } else {
+          // Recently tried, lower priority
+          priority = 10 - (attempt.failCount * 5) // More failures = lower priority
+        }
+      }
+      
+      candidates.push({ key, provider: providerName, model: modelName, priority })
+    }
+  }
+  
+  // Sort by priority (highest first) then shuffle within same priority for variety
+  candidates.sort((a, b) => b.priority - a.priority)
+  
+  // Take a random model from the top candidates to add variety
+  const topCandidates = candidates.filter(c => c.priority === candidates[0]?.priority)
+  const selected = topCandidates[Math.floor(Math.random() * topCandidates.length)]
+  
+  if (selected) {
+    logger.debug('Selected model for rotation', {
+      provider: selected.provider,
+      model: selected.model,
+      priority: selected.priority,
+    })
+  }
+  
+  return selected ? { provider: selected.provider, model: selected.model } : null
+}
+
+/**
  * Get combined model stats from all telemetry sources
  */
 export async function getModelStatsFromTelemetry(): Promise<ModelStats[]> {
@@ -232,15 +459,18 @@ export async function getModelStatsFromTelemetry(): Promise<ModelStats[]> {
     Promise.resolve(getProviderStatsFromTelemetry())
   ])
   
-  // Combine and deduplicate
+  // Combine and deduplicate - FIXED: Use provider+model key for all entries
+  // This ensures we track MULTIPLE models per provider, not just one
   const modelMap = new Map<string, ModelStats>()
   
-  // Add provider-level stats first
+  // Add provider-level stats with a special suffix to distinguish from model-specific
   providerStats.forEach(stat => {
-    modelMap.set(stat.provider, stat)
+    const key = `${stat.provider}:${stat.model}`
+    modelMap.set(key, stat)
   })
   
-  // Add model-specific stats (override provider-level if available)
+  // Add model-specific stats (override provider-level only for SAME model)
+  // CRITICAL FIX: Use `${provider}:${model}` as key, not just `provider`
   chatLoggerStats.forEach(stat => {
     const key = `${stat.provider}:${stat.model}`
     modelMap.set(key, stat)
@@ -263,15 +493,23 @@ export async function getModelStatsFromTelemetry(): Promise<ModelStats[]> {
     }
   } catch { /* in-memory telemetry is best-effort */ }
 
+  // CRITICAL FIX: Add ALL configured models to give untested models a chance
+  addConfiguredModels(modelMap)
+
   const allStats = Array.from(modelMap.values())
+  
+  // CRITICAL: Filter out rate-limited models from the stats
+  const activeStats = allStats.filter(stat => !isRateLimited(stat.provider, stat.model))
   
   logger.debug('Model stats retrieved', {
     totalModels: allStats.length,
     fromChatLogger: chatLoggerStats.length,
     fromProviderTelemetry: providerStats.length,
+    rateLimitedModels: allStats.length - activeStats.length,
+    rateLimitedKeys: Array.from(rateLimitedModels.keys()),
   })
   
-  return allStats
+  return activeStats
 }
 
 /**
@@ -296,17 +534,14 @@ export async function getSpecGenerationModel(): Promise<RankedModel | null> {
 /**
  * Get recommended model for retry after empty response or failed tool calls.
  *
- * Selection strategy (gated, not linear):
- * 1. Must have at least MIN_TOOL_CALLS data points for statistical significance
- * 2. Must be above MIN_TOOL_SUCCESS_RATE threshold (filters out broken models)
- * 3. Among qualified models, rank by avgToolScore (weighted) + latency fallback
- * 4. Prefer models different from the failed one (avoids repeating same failure)
- * 5. If no model has tool data, fall back to latency-based selection
+ * Selection strategy:
+ * 1. Prefer models from DIFFERENT providers (not just different models) to avoid rate limits
+ * 2. Give preference to UNTESTED models (totalCalls === 0) to discover new working options
+ * 3. Among tested models, rank by tool performance if available
+ * 4. Fall back to latency-based selection
  *
- * This prevents:
- * - Choosing a model with 1 successful read_file but 10 failed writes
- * - Always choosing the same expensive/rate-limited model
- * - Switching to a model that's known to be broken at tool calling
+ * This ensures untested models get a chance instead of being stuck with only
+ * models that have succeeded in the past.
  */
 export async function getRetryModel(options?: {
   /** The model that just failed (empty response, failed tool calls) */
@@ -320,66 +555,147 @@ export async function getRetryModel(options?: {
 
   const stats = await getModelStatsFromTelemetry()
 
-  // Filter to models with tool call data
+  // Priority 1: Untested models (totalCalls === 0) from DIFFERENT providers
+  // This gives new models a chance to prove themselves
+  const untestedModels = stats.filter(m => 
+    m.totalCalls === 0 && m.provider !== failedProvider
+  )
+  
+  if (untestedModels.length > 0) {
+    // Use rotation logic to pick an untested model
+    const rotationPick = getModelForRotation(failedProvider)
+    if (rotationPick) {
+      logger.info('Selected retry model (untested, different provider)', {
+        selected: `${rotationPick.provider}:${rotationPick.model}`,
+        failedProvider,
+        failedModel,
+        reason: 'untested model rotation',
+      })
+      return {
+        provider: rotationPick.provider,
+        model: rotationPick.model,
+        avgLatency: 2000,
+        failureRate: 0,
+        lastUpdated: Date.now(),
+        totalCalls: 0,
+        successRate: 1,
+        score: 0,
+        rank: 1,
+      }
+    }
+  }
+
+  // Priority 2: Tested models with tool data, different provider
   const modelsWithToolData = stats.filter(m =>
-    m.toolCallScore !== undefined && m.totalCalls > 0
+    m.toolCallScore !== undefined && m.totalCalls > 0 && m.provider !== failedProvider
   )
 
-  const MIN_TOOL_CALLS = 3 // Minimum tool calls for statistical significance
-  const MIN_TOOL_SUCCESS_RATE = 0.5 // Must succeed at least 50% of tool calls
+  const MIN_TOOL_CALLS = 3
+  const MIN_TOOL_SUCCESS_RATE = 0.5
 
-  // Gate 1: Filter to models with sufficient tool call data
   const qualifiedModels = modelsWithToolData.filter(m => {
-    // Must have minimum tool calls — use toolCallTotalCalls if available, else derive from toolCallScore
     const toolCalls = m.toolCallTotalCalls || m.totalCalls
     if (toolCalls < MIN_TOOL_CALLS) return false
-
-    // Must have acceptable tool success rate
     if (m.toolSuccessRate !== undefined && m.toolSuccessRate < MIN_TOOL_SUCCESS_RATE) return false
-
     return true
   })
 
-  // Gate 2: If we have qualified models, rank by tool performance
   if (qualifiedModels.length > 0) {
-    // Rank by avgToolScore (primary) then latency (secondary)
     const ranked = qualifiedModels
       .map(m => {
-        // Composite score: 70% tool performance, 30% latency
+        // Weighted Ranking:
+        // Score = (Tool Success * 0.5) - (Latency * 0.3) - (Failure Rate * 0.2)
         const toolScore = m.avgToolScore !== undefined ? m.avgToolScore : 0
         const normalizedLatency = Math.min(m.avgLatency / 10000, 1)
-        const compositeScore = (toolScore * 0.7) - (normalizedLatency * 0.3)
+        
+        // Final score: Higher is better
+        const compositeScore = (toolScore * 0.5) - (normalizedLatency * 0.3) - (m.failureRate * 0.2)
         return { ...m, score: compositeScore }
       })
       .sort((a, b) => b.score - a.score)
 
-    // Gate 3: Prefer models different from the failed one
-    const nonFailedModels = ranked.filter(m =>
-      m.model !== failedModel || m.provider !== failedProvider
-    )
-
-    // If there are non-failed qualified models, use the best one
-    if (nonFailedModels.length > 0) {
-      logger.info('Selected retry model (different from failed model)', {
-        selected: `${nonFailedModels[0].provider}:${nonFailedModels[0].model}`,
-        failed: `${failedProvider}:${failedModel}`,
-        avgToolScore: nonFailedModels[0].avgToolScore,
-        totalCalls: nonFailedModels[0].totalCalls,
-      })
-      return { ...nonFailedModels[0], rank: 1 }
-    }
-
-    // If the failed model is the only qualified one, still use it (it might have been a fluke)
-    logger.info('Selected retry model (only qualified option is failed model)', {
+    logger.info('Selected retry model (tested, tool-ranked, different provider)', {
       selected: `${ranked[0].provider}:${ranked[0].model}`,
-      avgToolScore: ranked[0].avgToolScore,
+      failedProvider,
+      failedModel,
+      toolScore: ranked[0].avgToolScore,
     })
     return { ...ranked[0], rank: 1 }
   }
 
-  // Gate 4: No tool data — fall back to latency-based selection
-  logger.info('No tool call data available, falling back to latency-based selection')
-  return getBestModelForUseCase(stats, 'balanced', 1)
+  // Priority 3: Any tested model from different provider
+  const testedDifferentProvider = stats.filter(m => 
+    m.totalCalls > 0 && m.provider !== failedProvider
+  )
+  
+  if (testedDifferentProvider.length > 0) {
+    const result = getBestModelForUseCase(testedDifferentProvider, 'balanced', 1)
+    if (result) {
+      logger.info('Selected retry model (tested, different provider, latency-based)', {
+        selected: `${result.provider}:${result.model}`,
+        failedProvider,
+      })
+      return result
+    }
+  }
+
+  // Priority 4: Untested model from SAME provider (different model)
+  const untestedSameProvider = stats.filter(m => 
+    m.totalCalls === 0 && m.provider === failedProvider && m.model !== failedModel
+  )
+  
+  if (untestedSameProvider.length > 0) {
+    const pick = untestedSameProvider[Math.floor(Math.random() * untestedSameProvider.length)]
+    logger.info('Selected retry model (untested, same provider, different model)', {
+      selected: `${pick.provider}:${pick.model}`,
+      failedModel,
+    })
+    return { ...pick, score: 0, rank: 1 }
+  }
+
+  // Last resort: Use model rotation even if same provider
+  const rotationPick = getModelForRotation()
+  if (rotationPick) {
+    logger.info('Selected retry model (rotation fallback)', {
+      selected: `${rotationPick.provider}:${rotationPick.model}`,
+      failedProvider,
+    })
+    return {
+      provider: rotationPick.provider,
+      model: rotationPick.model,
+      avgLatency: 2000,
+      failureRate: 0,
+      lastUpdated: Date.now(),
+      totalCalls: 0,
+      successRate: 1,
+      score: 0,
+      rank: 1,
+    }
+  }
+
+  // Final fallback: return ANY untested model to avoid getting stuck
+  const anyUntested = stats.filter(m => m.totalCalls === 0 && m.model !== failedModel)
+  if (anyUntested.length > 0) {
+    const pick = anyUntested[Math.floor(Math.random() * anyUntested.length)]
+    logger.warn('Selected retry model (final fallback, any untested)', {
+      selected: `${pick.provider}:${pick.model}`,
+      failedProvider,
+    })
+    return { ...pick, score: 0, rank: 1 }
+  }
+
+  // Absolute last resort: return the first tested model (different model)
+  const anyDifferentModel = stats.filter(m => m.model !== failedModel)
+  if (anyDifferentModel.length > 0) {
+    const pick = anyDifferentModel[0]
+    logger.warn('Selected retry model (absolute last resort)', {
+      selected: `${pick.provider}:${pick.model}`,
+    })
+    return { ...pick, score: 0, rank: 1 }
+  }
+
+  logger.error('No alternative models available for retry - all models exhausted')
+  return null
 }
 
 /**

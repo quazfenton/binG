@@ -972,50 +972,80 @@ export const PROVIDERS: Record<string, LLMProvider> = {
   'opencode-cli': {
     id: 'opencode-cli',
     name: 'OpenCode (CLI)',
-    models: ['opencode/cli'],
+    models: [
+      { id: 'claude-3-5-sonnet', tags: ['fast', 'balanced'] },
+      { id: 'claude-sonnet-4-5-20250929', tags: ['balanced'] },
+      { id: 'claude-opus-4-5-20250929', tags: ['powerful'] },
+      { id: 'gpt-4o', tags: ['fast'] },
+      { id: 'gemini-2.5-flash', tags: ['fast', 'balanced'] },
+    ],
     supportsStreaming: true,
     maxTokens: 128000,
-    description: 'OpenCode CLI (spawned local binary). Desktop-only unless OPENCODE_CLI_BASE_URL is set.'
+    description: 'OpenCode CLI (spawned local binary). Desktop-only unless OPENCODE_CLI_BASE_URL is set. Uses OPENCODE_API_KEY env var.'
   },
   kilocode: {
     id: 'kilocode',
     name: 'Kilocode',
-    models: ['kilocode/local'],
+    models: [
+      { id: 'local', tags: ['local', 'fast'] },
+      { id: 'claude-3-5-sonnet', tags: ['cloud', 'balanced'] },
+      { id: 'claude-sonnet-4-5-20250929', tags: ['cloud'] },
+    ],
     supportsStreaming: true,
     maxTokens: 128000,
-    description: 'Kilocode local CLI or remote Kilocode service (KILO_BASE_URL).'
+    description: 'Kilocode local CLI or remote Kilocode service. Uses KILO_API_KEY env var.'
   },
   pi: {
     id: 'pi',
     name: 'Pi Agent',
-    models: ['pi/local'],
+    models: [
+      { id: 'local', tags: ['local', 'fast'] },
+      { id: 'claude-sonnet-4-5-20250929', tags: ['anthropic'] },
+      { id: 'claude-opus-4-5-20250929', tags: ['anthropic', 'powerful'] },
+      { id: 'claude-3-5-sonnet', tags: ['anthropic', 'fast'] },
+      { id: 'gpt-4o', tags: ['openai'] },
+    ],
     supportsStreaming: true,
     maxTokens: 128000,
-    description: 'Pi CLI agent (spawn) or remote Pi service (PI_BASE_URL).'
+    description: 'Pi CLI agent (spawn) or remote Pi service. Uses ANTHROPIC_API_KEY for LLM access.'
   },
   codex: {
     id: 'codex',
     name: 'Codex Agent',
-    models: ['codex/cli'],
+    models: [
+      { id: 'local', tags: ['local', 'fast'] },
+      { id: 'gpt-4o', tags: ['openai'] },
+      { id: 'gpt-4-turbo', tags: ['openai'] },
+      { id: 'claude-3-5-sonnet', tags: ['anthropic'] },
+    ],
     supportsStreaming: true,
     maxTokens: 128000,
-    description: 'Codex agent (spawned from web/lib/spawn/codex-agent.ts) - Desktop-first or remote via CODEX_BASE_URL.'
+    description: 'Codex agent (spawned locally). Uses OPENAI_API_KEY env var.'
   },
   amp: {
     id: 'amp',
     name: 'Amp CLI',
-    models: ['amp/cli'],
+    models: [
+      { id: 'local', tags: ['local', 'fast'] },
+      { id: 'amp-coder-1', tags: ['custom'] },
+      { id: 'claude-3-5-sonnet', tags: ['anthropic'] },
+    ],
     supportsStreaming: true,
     maxTokens: 128000,
-    description: 'Amp CLI (local binary) or remote Amp agent (AMP_BASE_URL).'
+    description: 'Amp CLI (local binary) or remote Amp agent. Uses AMP_API_KEY env var.'
   },
   'claude-code': {
     id: 'claude-code',
     name: 'Claude Code',
-    models: ['claude-code/cli'],
+    models: [
+      { id: 'claude-sonnet-4-5-20250929', tags: ['balanced'] },
+      { id: 'claude-opus-4-5-20250929', tags: ['powerful'] },
+      { id: 'claude-3-5-sonnet', tags: ['fast'] },
+      { id: 'claude-haiku-4-5', tags: ['fast', 'lightweight'] },
+    ],
     supportsStreaming: true,
     maxTokens: 128000,
-    description: 'Anthropic Claude Code CLI or remote ClaudeCode service (CLAUDE_CODE_BASE_URL).'
+    description: 'Anthropic Claude Code CLI. Uses ANTHROPIC_API_KEY env var.'
   },
   cloudflare: {
     id: 'cloudflare',

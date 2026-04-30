@@ -351,7 +351,7 @@ def _llm_based_coverage_verification(
     if not llm:
         return {
             'reward': 0.5,
-            'reasoning': f'Coverage verification skipped (no test infrastructure: {error or 'no paths'})',
+            'reasoning': f'Coverage verification skipped (no test infrastructure: {error or "no paths"})',
         }
     
     prompt = f'''Evaluate the code quality and test coverage practices.
@@ -394,5 +394,5 @@ Respond with just the number and a one-line reason.'''
     
     return {
         'reward': 0.5,
-        'reasoning': f'Coverage verification failed: {error or 'unknown error'}',
+        'reasoning': f'Coverage verification failed: {error or "unknown error"}',
     }

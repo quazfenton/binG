@@ -220,6 +220,7 @@ export async function POST(req: NextRequest) {
       extra: model ? { model } : {},
     }
 
+    const startTime = Date.now();
     let result
 
     if (preferredProvider) {

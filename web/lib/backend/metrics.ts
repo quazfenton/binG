@@ -4,7 +4,7 @@
  * Migrated from ephemeral/serverless_workers_sdk/metrics.py
  */
 
-import { EventEmitter } from 'node:events';
+import { EventEmitter } from 'events';
 import { IncomingMessage, ServerResponse } from 'http';
 
 export type MetricType = 'counter' | 'gauge' | 'histogram' | 'summary';

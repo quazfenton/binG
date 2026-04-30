@@ -123,10 +123,10 @@ export function ExperiencePanel({ onClose }: ExperiencePanelProps) {
     return () => clearTimeout(debounceTimer);
   }, [fetchExperiences, searchQuery, selectedCategory]);
 
-  // Fetch stats on mount
+  // Fetch data on mount (this also clears loading)
   useEffect(() => {
-    fetchStats();
-  }, [fetchStats]);
+    loadData();
+  }, [loadData]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
