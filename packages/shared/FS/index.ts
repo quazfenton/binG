@@ -11,7 +11,7 @@
 
 import { isDesktopMode, isTauriRuntime, getPlatform, getDefaultWorkspaceRoot } from '@bing/platform/env';
 import os from 'os';
-import path from 'path';
+import * as path from 'path';
 
 // Lazy crypto for generating UUIDs - avoids bundling Node.js 'crypto' in client
 let _cryptoRandomUUID: (() => string) | null = null;

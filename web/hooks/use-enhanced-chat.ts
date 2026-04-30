@@ -30,6 +30,7 @@ export interface UseChatReturn {
   setMessages: (messages: Message[] | ((prev: Message[]) => Message[])) => void;
   stop: () => void;
   setInput: (input: string) => void;
+  reload: () => void;
   // Agent status for multi-agent display
   agentStatus: {
     type: AgentType;
@@ -2304,6 +2305,28 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
     setMessages,
     stop,
     setInput,
+    reload: () => {
+      if (messages.length === 0 || isLoading) return;
+      
+      // Find last user message
+      const lastUserMessage = [...messages].reverse().find(m => m.role === 'user');
+      if (!lastUserMessage) return;
+
+      // Remove any messages after the last user message
+      const lastUserIndex = messages.findIndex(m => m.id === lastUserMessage.id);
+      const filteredMessages = messages.slice(0, lastUserIndex + 1);
+      
+      setMessages(filteredMessages);
+      setInput(lastUserMessage.content);
+      
+      // Use setTimeout to allow state update before handleSubmit
+      setTimeout(() => {
+        const mockEvent = {
+          preventDefault: () => {},
+        } as React.FormEvent<HTMLFormElement>;
+        handleSubmit(mockEvent);
+      }, 50);
+    },
     // Agent status for multi-agent display
     agentStatus: {
       type: agentType,

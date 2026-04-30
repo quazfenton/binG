@@ -1,5 +1,3 @@
-use client";
-
 import React, { useState, useCallback, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -52,8 +50,6 @@ import { clipboard } from "@bing/platform/clipboard";
 import { useApiKeys } from '@/hooks/use-api-keys';
 import { useBYOKFallback } from '@/hooks/use-byok-fallback';
 import BYOKFadeInInput, { BYOKFadeInWrapper } from '@/components/byok-fade-in-input';
-import { useState } from 'react';
-
 /**
  * Video Generation Tab Component
  * Interface for AI video generation with multiple providers and models
@@ -90,13 +86,13 @@ interface GenerationParams {
   initImageUrl?: string;
 }
 
-// Import video generation utilities
+// Import video generation utilities from the video-generation module
 import {
   getAllVideoModels,
   getVideoAspectRatios,
   getVideoStyles,
   getVideoQualityPresets
-} from "@/lib/video-generation";
+} from "@/lib/video-generation/video-generation";
 
 // Get models and presets from the video generation module
 const VIDEO_ASPECT_RATIOS = getVideoAspectRatios();
@@ -155,8 +151,8 @@ export default function VideoGenerationTab({ onVideoGenerated }: VideoGeneration
     showBYOKInput, 
     byokError, 
     setShowBYOKInput, 
-    setByokError, 
-    recordFailure,
+    recordTotalFailure,
+    resetFailureCount,
     handleApiKeySave,
     handleRetry,
   } = useBYOKFallback();
@@ -358,6 +354,9 @@ export default function VideoGenerationTab({ onVideoGenerated }: VideoGeneration
           `Generated ${videos.length} video${videos.length > 1 ? "s" : ""} using ${data?.data?.provider || data?.provider || 'unknown'}`
         );
 
+        // Reset BYOK failure count on success
+        resetFailureCount();
+
         onVideoGenerated?.(videos[0].url);
       } else {
         console.error('[VideoGenerationTab] No videos in response:', data);
@@ -372,7 +371,7 @@ export default function VideoGenerationTab({ onVideoGenerated }: VideoGeneration
         toast.error(errorMessage);
         
         // Record this failure and show BYOK input if appropriate
-        recordFailure(params.provider === 'auto' ? selectedProvider : params.provider, error);
+        recordTotalFailure(params.provider === 'auto' ? selectedProvider : params.provider, error, 'video', () => generateFnRef.current?.());
       }
     } finally {
       setIsGenerating(false);
@@ -948,6 +947,7 @@ export default function VideoGenerationTab({ onVideoGenerated }: VideoGeneration
           </div>
         </div>
       </div>
-    </div>
+      </div>
+    </>
   );
 }

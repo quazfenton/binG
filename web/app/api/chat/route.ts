@@ -1,4 +1,4 @@
-﻿import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { PROVIDERS } from "@/lib/chat/llm-providers";
 import { errorHandler } from "@/lib/chat/error-handler";
 import { responseRouter } from "@/lib/api/response-router";
@@ -2438,9 +2438,6 @@ const config: UnifiedAgentConfig = {
                     } catch (e: unknown) {
                       // Non-fatal - stream state tracking shouldn't break the main stream
                     }
-                    tokenBuffer = '';
-                    lastTokenEmitTime = Date.now();
-                  }
                     tokenBuffer = '';
                     lastTokenEmitTime = Date.now();
                   }

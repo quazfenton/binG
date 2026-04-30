@@ -123,13 +123,14 @@ export function normalizePath(p: string): string {
   // the Node path module (works in browser and CLI too).
   const segments = n.split('/');
   const resolved: string[] = [];
+  const isAbsolute = p.startsWith('/') || /^[A-Z]:/i.test(p);
+  
   for (const seg of segments) {
     if (seg === '..') {
       if (resolved.length > 0 && resolved[resolved.length - 1] !== '..') {
         resolved.pop();
-      } else {
-        // .. above root — keep it so the comparison will correctly
-        // flag the path as outside the workspace
+      } else if (!isAbsolute) {
+        // Keep .. for relative paths only
         resolved.push('..');
       }
     } else if (seg !== '.' && seg !== '') {

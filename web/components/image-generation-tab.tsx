@@ -1,5 +1,3 @@
-"use client";
-
 import React, { useState, useCallback, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -52,7 +50,7 @@ import { clipboard } from "@bing/platform/clipboard";
 import { useApiKeys } from '@/hooks/use-api-keys';
 import { useBYOKFallback } from '@/hooks/use-byok-fallback';
 import BYOKFadeInInput, { BYOKFadeInWrapper } from '@/components/byok-fade-in-input';
-import { useState } from 'react';
+
 
 /**
  * Image Generation Tab Component
@@ -135,6 +133,8 @@ const MODELS = [
   { value: "stability-ai/stable-diffusion-3.5-large", label: "SD 3.5 Large", provider: "replicate" },
   { value: "mistral-medium-2505", label: "Mistral (FLUX Ultra)", provider: "mistral" },
   { value: "google:gemini-2.5-flash-image-preview", label: "Gemini 2.5 Flash Image (Free - 500/day)", provider: "google" },
+  { value: "google:gemini-3.1-flash-image-preview", label: "Gemini 3.1 Flash Image (Paid)", provider: "google" },
+  { value: "google:gemini-3-pro-image-preview", label: "Gemini 3 Pro Image (Paid)", provider: "google" },
   { value: "google:imagen-4.0-fast-generate-001", label: "Imagen 4.0 Fast (Paid)", provider: "google" },
   { value: "google:imagen-4.0-generate-001", label: "Imagen 4.0 (Paid)", provider: "google" },
   { value: "google:imagen-4.0-ultra-generate-001", label: "Imagen 4.0 Ultra (Paid)", provider: "google" },
@@ -165,6 +165,13 @@ const MODELS = [
   { value: "vercel:recraft/recraft-v4-pro", label: "Recraft v4 Pro", provider: "vercel" },
 ];
 
+const FILTERED_MODELS = MODELS.filter(model => {
+  if (model.provider === 'google') {
+    return process.env.NEXT_PUBLIC_GOOGLE_IMAGEN_ENABLED === 'true';
+  }
+  return true;
+});
+
 const PROVIDERS = [
   { value: "auto", label: "Auto (with Fallback)" },
   { value: "mistral", label: "Mistral AI" },
@@ -172,6 +179,13 @@ const PROVIDERS = [
   { value: "replicate", label: "Replicate" },
   { value: "vercel", label: "Vercel" },
 ];
+
+const FILTERED_PROVIDERS = PROVIDERS.filter(p => {
+  if (p.value === 'google') {
+    return process.env.NEXT_PUBLIC_GOOGLE_IMAGEN_ENABLED === 'true';
+  }
+  return true;
+});
 
 const QUALITY_PRESETS: Record<string, { steps: number; guidance: number; label: string }> = {
   low: { steps: 20, guidance: 5, label: "Fast" },
@@ -204,8 +218,8 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
     showBYOKInput, 
     byokError, 
     setShowBYOKInput, 
-    setByokError, 
-    recordFailure,
+    recordTotalFailure,
+    resetFailureCount,
     handleApiKeySave,
     handleRetry,
   } = useBYOKFallback();
@@ -367,6 +381,9 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
           `Generated ${images.length} image${images.length > 1 ? "s" : ""} using ${data?.data?.provider || data?.provider || 'unknown'}`
         );
 
+        // Reset BYOK failure count on success
+        resetFailureCount();
+
         onImageGenerated?.(images[0].url);
       } else {
         console.error('[ImageGenerationTab] No images in response:', data);
@@ -381,7 +398,7 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
         toast.error(errorMessage);
         
         // Record this failure and show BYOK input if appropriate
-        recordFailure(params.provider === 'auto' ? selectedProvider : params.provider, error);
+        recordTotalFailure(params.provider === 'auto' ? selectedProvider : params.provider, error, 'image', () => generateFnRef.current?.());
       }
     } finally {
       setIsGenerating(false);
@@ -741,7 +758,7 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          {PROVIDERS.map((provider) => (
+                          {FILTERED_PROVIDERS.map((provider) => (
                             <SelectItem key={provider.value} value={provider.value}>
                               {provider.label}
                             </SelectItem>
@@ -763,7 +780,7 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          {MODELS.map((model) => (
+                          {FILTERED_MODELS.map((model) => (
                             <SelectItem key={model.value} value={model.value}>
                               {model.label}
                             </SelectItem>
@@ -1083,6 +1100,7 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
           </div>
         </div>
       </div>
-    </div>
+      </div>
+    </>
   );
 }

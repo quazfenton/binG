@@ -132,19 +132,16 @@ export async function POST(req: NextRequest) {
     // Check Google Imagen free tier quota (500 images/day)
     if (selectedProvider === 'google' && model === 'google:gemini-2.5-flash-image-preview') {
       try {
-        const { imageQuotaManager } = await import('@/lib/image-generation/quota-manager');
-        await imageQuotaManager.initialize();
-        
-        const quotaCheck = await imageQuotaManager.checkQuota('google', 'gemini-2.5-flash-image-preview');
+        const { quotaManager } = await import('@/lib/management/quota-manager');
+        const quotaCheck = quotaManager.checkQuota('google_imagen');
         
         if (!quotaCheck.allowed) {
           clearTimeout(timeoutId);
           return NextResponse.json(
             {
               error: `Daily quota exceeded for Google Imagen free tier (gemini-2.5-flash-image-preview).`,
-              limit: quotaCheck.limit,
-              remaining: quotaCheck.remaining,
-              resetDate: quotaCheck.resetDate,
+              limit: 500,
+              remaining: 0,
               documentation: 'This free model has a 500 images/day limit. Upgrade to paid models or use other providers.'
             },
             { status: 429 }
@@ -152,8 +149,6 @@ export async function POST(req: NextRequest) {
         }
       } catch (quotaError) {
         console.error('Quota check error:', quotaError);
-        // If quota check fails, allow the request but log the error
-        log.warn('Quota check failed, allowing request', { error: quotaError });
       }
     }
 
@@ -240,11 +235,10 @@ export async function POST(req: NextRequest) {
     // Increment quota usage for Google Imagen free tier
     if (result.provider === 'google' && result.model === 'google:gemini-2.5-flash-image-preview') {
       try {
-        const { imageQuotaManager } = await import('@/lib/image-generation/quota-manager');
-        await imageQuotaManager.incrementUsage('google', 'gemini-2.5-flash-image-preview', result.images?.length || 1);
+        const { quotaManager } = await import('@/lib/management/quota-manager');
+        quotaManager.incrementUsage('google_imagen', result.images?.length || 1);
       } catch (quotaError) {
         console.error('Failed to increment quota:', quotaError);
-        // Non-blocking - don't fail the request if quota tracking fails
       }
     }
 

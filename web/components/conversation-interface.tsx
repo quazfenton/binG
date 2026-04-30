@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react"; // Import useCallback, useMemo, and useRef
 import { usePanel } from "@/contexts/panel-context";
@@ -30,6 +30,9 @@ import { useSpecEnhancementMode, getSpecEnhancementModeInfo } from "@/contexts/s
 import type { SpecEnhancementMode } from "@/contexts/spec-enhancement-mode-context";
 import { useResponseStyle } from "@/contexts/response-style-context";
 import { resolveScopedPath } from "@/lib/virtual-filesystem/scope-utils";
+import { useBYOKFallback } from '@/hooks/use-byok-fallback';
+import BYOKFadeInInput, { BYOKFadeInWrapper } from '@/components/byok-fade-in-input';
+import { useApiKeys } from '@/hooks/use-api-keys';
 
 type AttachedVirtualFile = any;
 import { emitFilesystemUpdated, onFilesystemUpdated } from "@/lib/virtual-filesystem/sync/sync-events";
@@ -601,6 +604,18 @@ export default function ConversationInterface() {
     };
   }, [showAccessibility, showCodePreview, showHistory]);
 
+  const { 
+    showBYOKInput, 
+    byokError, 
+    setShowBYOKInput, 
+    recordTotalFailure,
+    resetFailureCount,
+    handleApiKeySave,
+    handleRetry,
+  } = useBYOKFallback();
+
+  const { getApiKey } = useApiKeys();
+
   const {
     messages,
     input,
@@ -610,6 +625,7 @@ export default function ConversationInterface() {
     setMessages,
     stop,
     setInput, // Destructure setInput from enhanced chat hook
+    reload,
   } = useEnhancedChat({
     api: "/api/chat",
     orchestrationMode: orchestrationConfig.mode,
@@ -658,10 +674,17 @@ export default function ConversationInterface() {
     },
     onError: (error) => {
       toast.error(error.message);
+      // Record this failure for BYOK trigger (threshold of 3 for chat)
+      recordTotalFailure(providerRef.current, error, 'chat', () => {
+        reload();
+      });
       // Clean up any active streaming sessions on error
       enhancedBufferManager.cleanup();
     },
     onFinish: () => {
+      // Reset BYOK failure count on successful completion
+      resetFailureCount();
+
       if (messages.length > 0) {
         const savedChatId = saveCurrentChat(
           messages,
@@ -1913,7 +1936,7 @@ export default function ConversationInterface() {
   }, [messages]);
 
   // Retry function to resend the last user message
-  const handleRetry = () => {
+  const handleBYOKRetry = () => {
     if (messages.length > 0) {
       // Find the last user message
       const lastUserMessage = [...messages]
@@ -2015,7 +2038,21 @@ export default function ConversationInterface() {
   }, [isChatResizing, isWorkspaceOpen]);
 
   return (
-    <div className="relative w-full h-screen overflow-hidden touch-pan-y z-[1]">
+    <>
+      <BYOKFadeInWrapper isVisible={showBYOKInput} onDismiss={() => setShowBYOKInput(false)}>
+        {byokError && (
+          <BYOKFadeInInput
+            providerId={byokError.providerId}
+            providerName={byokError.providerName}
+            errorMessage={byokError.errorMessage}
+            onSave={handleApiKeySave}
+            onRetry={handleBYOKRetry}
+            onDismiss={() => setShowBYOKInput(false)}
+            initialApiKey={getApiKey(byokError.providerId)}
+          />
+        )}
+      </BYOKFadeInWrapper>
+      <div className="relative w-full h-screen overflow-hidden touch-pan-y z-[1]">
       {/* Subtle animated background */}
       <div className="absolute inset-0 opacity-45">
         <div
@@ -2136,7 +2173,7 @@ export default function ConversationInterface() {
           // it stays queued and will be sent when they press Send again
           // This allows them to continue their thought after stopping
         }}
-        onRetry={handleRetry}
+        onRetry={handleBYOKRetry}
         currentProvider={currentProvider}
         currentModel={currentModel}
         error={error?.message}
@@ -2229,6 +2266,7 @@ export default function ConversationInterface() {
           onCancel={handleDenyEdits}
         />
       )}
-    </div>
+      </div>
+    </>
   );
 }
