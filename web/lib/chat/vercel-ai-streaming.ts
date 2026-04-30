@@ -51,7 +51,78 @@ export interface ToolExecutionContext {
 /**
  * Provider types supported by Vercel AI SDK
  */
-export type VercelProvider = 'openai' | 'anthropic' | 'google' | 'mistral' | 'openrouter' | 'vercel';
+export type VercelProvider = 'openai' | 'anthropic' | 'google' | 'mistral' | 'openrouter';
+
+/**
+ * CLI providers that spawn local binaries instead of using API calls.
+ * These providers should NOT be routed through Vercel AI SDK streaming.
+ * Instead, they need their own binary spawn logic.
+ */
+export const CLI_PROVIDERS = ['opencode-cli', 'pi', 'kilocode', 'codex', 'amp', 'claude-code'] as const;
+export type CLIProvider = typeof CLI_PROVIDERS[number];
+
+/**
+ * Check if a provider is a CLI provider that spawns local binaries
+ */
+export function isCLIProvider(provider: string): boolean {
+  return (CLI_PROVIDERS as readonly string[]).includes(provider);
+}
+
+/**
+ * Check if a CLI provider is properly configured with required env vars.
+ * CLI providers that aren't configured should be hidden from the UI selector
+ * to avoid confusing UX where options appear but don't work.
+ * 
+ * Each CLI provider requires different env vars:
+ * - opencode-cli: OPENCODE_MODEL (optional, uses default if not set)
+ * - pi: PI_BASE_URL or local pi binary
+ * - kilocode: KILO_BASE_URL or local kilocode binary
+ * - codex: CODEX_BASE_URL or local codex binary  
+ * - amp: AMP_BASE_URL or local amp binary
+ * - claude-code: CLAUDE_CODE_BASE_URL or local claude binary
+ */
+export function isCLIProviderConfigured(provider: string): boolean {
+  if (!isCLIProvider(provider)) return true; // Non-CLI providers don't need filtering
+  
+  const currentEnv: any = typeof process !== 'undefined' ? process.env : {};
+  
+  switch (provider) {
+    case 'opencode-cli':
+      // Configured if OPENCODE_MODEL is set OR binary is available
+      return !!(currentEnv.OPENCODE_MODEL || currentEnv.OPENCODE_CLI_BASE_URL);
+    case 'pi':
+      // Configured if PI_BASE_URL is set (SDK mode) OR binary is available
+      return !!(currentEnv.PI_BASE_URL);
+    case 'kilocode':
+      // Configured if KILO_BASE_URL is set
+      return !!(currentEnv.KILO_BASE_URL || currentEnv.KILO_API_KEY);
+    case 'codex':
+      // Configured if CODEX_BASE_URL is set
+      return !!(currentEnv.CODEX_BASE_URL || currentEnv.CODEX_API_KEY);
+    case 'amp':
+      // Configured if AMP_BASE_URL is set
+      return !!(currentEnv.AMP_BASE_URL || currentEnv.AMP_API_KEY);
+    case 'claude-code':
+      // Configured if CLAUDE_CODE_BASE_URL is set OR binary is available
+      return !!(currentEnv.CLAUDE_CODE_BASE_URL || currentEnv.OPENAI_API_KEY);
+    default:
+      return false;
+  }
+}
+
+/**
+ * Error thrown when a CLI provider is routed to Vercel AI SDK
+ */
+export class CLIProviderError extends Error {
+  readonly provider: string;
+  readonly isCLIProvider: true = true;
+
+  constructor(provider: string, message: string) {
+    super(message);
+    this.name = 'CLIProviderError';
+    this.provider = provider;
+  }
+}
 
 /**
  * Instructions for models that don't support function calling.
@@ -210,6 +281,9 @@ const OPENAI_COMPATIBLE_PROVIDERS: Record<string, OpenAICompatibleConfig> = {
  * 
  * FIX: Added better error handling and provider validation for ToolLoopAgent compatibility
  * Also validates that model name doesn't look like a provider name
+ * 
+ * NOTE: CLI providers (opencode-cli, pi, etc.) should NOT be routed here.
+ * Use their own binary spawn logic instead.
  */
 export function getVercelModel(
   provider: VercelProvider | string,
@@ -217,6 +291,23 @@ export function getVercelModel(
   apiKey?: string,
   baseURL?: string
 ) {
+  // CRITICAL: CLI providers should not be routed to Vercel AI SDK
+  // They spawn local binaries and have their own streaming logic
+  if (isCLIProvider(provider)) {
+    chatLogger.error('[CLI-PROVIDER-ERROR] CLI provider routed to Vercel AI SDK', {
+      provider,
+      model,
+      error: 'CLI providers (opencode-cli, pi, etc.) must use binary spawn path, not Vercel AI SDK',
+      solution: 'Use the provider\'s spawn method (e.g., piProviders.runAgentLoop, OpencodeV2Provider.runAgentLoop)',
+    });
+    throw new CLIProviderError(
+      provider,
+      `Provider "${provider}" is a CLI provider that spawns local binaries. ` +
+      `It must NOT be routed through Vercel AI SDK. ` +
+      `Use the provider's native spawn method (e.g., opencode-cli spawn, pi binary) instead.`
+    );
+  }
+
   const currentEnv: any = typeof process !== 'undefined' ? process.env : {};
 
   // Guard against undefined/null model — use env default
@@ -441,6 +532,24 @@ export async function* streamWithVercelAI(
       apiKey,
       baseURL,
     };
+  }
+
+  const { provider: providerName } = opts;
+
+  // CRITICAL: CLI providers must NOT be routed through Vercel AI SDK
+  // They spawn local binaries (opencode-cli, pi, kilocode, etc.)
+  if (isCLIProvider(provider)) {
+    chatLogger.error('[CLI-PROVIDER-ERROR] streamWithVercelAI called with CLI provider', {
+      provider,
+      error: 'CLI providers must use their own binary spawn streaming, not streamWithVercelAI',
+      solution: 'Route CLI providers to their spawn method in enhanced-llm-service.ts',
+    });
+    throw new CLIProviderError(
+      provider,
+      `Cannot use streamWithVercelAI for CLI provider "${provider}". ` +
+      `This provider spawns a local binary and has its own streaming logic. ` +
+      `Please route it to the provider's native spawn method instead.`
+    );
   }
 
   const {

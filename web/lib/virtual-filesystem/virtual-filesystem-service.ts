@@ -262,7 +262,7 @@ export class VirtualFilesystemService {
     filePath: string,
     content: string,
     language?: string,
-    options?: { failIfExists?: boolean; append?: boolean },
+    options?: { failIfExists?: boolean; append?: boolean; bypassSync?: boolean },
     _sessionId?: string // optional: for GitBackedVFS session scoping (unused in base VFS)
   ): Promise<VirtualFile> {
     // Desktop mode: Use local filesystem instead of VFS
@@ -276,18 +276,21 @@ export class VirtualFilesystemService {
         
         // Emit filesystem change event for UI updates
         const version = await fsBridge.getVersion(ownerId);
-        this.emitFileChange(ownerId, file.path, changeType, version);
-        this.emitSnapshotChange(ownerId, version);
         
-        // Emit global filesystem-updated event for cross-tab sync and real-time UI updates
-        emitFilesystemUpdated({
-          path: file.path,
-          paths: [file.path],
-          type: changeType,
-          workspaceVersion: version,
-          source: changeType === 'update' ? 'desktop-fs-update' : 'desktop-fs-create',
-          sessionId: ownerId,
-        });
+        if (!options?.bypassSync) {
+            this.emitFileChange(ownerId, file.path, changeType, version);
+            this.emitSnapshotChange(ownerId, version);
+            
+            // Emit global filesystem-updated event for cross-tab sync and real-time UI updates
+            emitFilesystemUpdated({
+              path: file.path,
+              paths: [file.path],
+              type: changeType,
+              workspaceVersion: version,
+              source: changeType === 'update' ? 'desktop-fs-update' : 'desktop-fs-create',
+              sessionId: ownerId,
+            });
+        }
         
         return {
           path: file.path,

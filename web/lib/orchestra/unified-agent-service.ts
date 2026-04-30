@@ -41,6 +41,23 @@ import {
 } from './stateful-agent/agents/stateful-agent';
 import { createLogger } from '@/lib/utils/logger';
 import { mastraWorkflowIntegration } from '@bing/shared/agent/mastra-workflow-integration';
+
+import {
+  createFeedbackEntry,
+  addFeedback,
+  injectFeedback,
+  detectHealingTrigger,
+  generateHealingPrompt,
+  type FeedbackContext,
+} from '@bing/shared/agent/feedback-injection';
+import {
+  getTracker,
+  recordResponse,
+  recordToolCall,
+  checkReEvalTrigger,
+  recordReEval,
+  generateTrackerSummary,
+} from '@bing/shared/agent/successive-tracker';
 import {
   buildWorkspaceSnapshot,
   normalizeToolArgs,
@@ -1672,6 +1689,18 @@ async function runV1ApiWithTools(
   messages: Array<{ role: string; content: string }>,
   startTime: number
 ): Promise<UnifiedAgentResult> {
+
+  // === SESSION TRACKING FOR SUCCESSIVE CALLS ===
+  const sessionId = config.sessionId || `session-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  const feedbackContext: FeedbackContext = {
+    sessionId,
+    turnNumber: 0,
+    feedbackEntries: [],
+    totalTokens: 0,
+  };
+  const tracker = getTracker(sessionId);
+  tracker.reset?.();
+  // === END SESSION TRACKING ===
   // Ensure tool system is initialized for capability-based execution
   if (!isToolSystemReady()) {
     await initToolSystem({ userId: config.userId || 'system', enableMCP: true, enableSandbox: true });
@@ -1776,6 +1805,15 @@ async function runV1ApiWithTools(
             // Normalize args to fix common LLM mistakes (wrong field names, etc.)
             const args = normalizeToolArgs(toolDef.name, rawArgs) as Record<string, any>;
             const toolResult = await capabilityExecuteTool(toolDef.name, args);
+n            // FIX: Track tool call for successive tracking
+            recordToolCall(sessionId);
+            
+            // FIX: Check for re-evaluation trigger
+            const reEvalTrigger = checkReEvalTrigger(sessionId);
+            if (reEvalTrigger.triggered) {
+              log.info("[ReEval-V1] Trigger detected", { reason: reEvalTrigger.reason });
+              recordReEval(sessionId);
+            }
             config.onToolExecution?.(toolDef.name, args, toolResult);
 
             // Track for no-progress loop detection
@@ -1824,6 +1862,21 @@ async function runV1ApiWithTools(
         });
       }
     } catch (error) {
+      // FIX: Track tool failure for feedback injection
+      const failureEntry = createFeedbackEntry(
+        'failure',
+        `Tool execution failed: ${error instanceof Error ? error.message : String(error)}`,
+        'tool_execution',
+        { toolName: currentTool, error: String(error) },
+        'medium'
+      );
+      feedbackContext.turnNumber++;
+      addFeedback(feedbackContext, failureEntry);
+      log.info('[Feedback-Inject] Tool failure tracked', {
+        toolName: currentTool,
+        severity: failureEntry.severity,
+      });
+
       log.warn('[V1-API-WITH-TOOLS] RAG retrieval failed, continuing without it', {
         error: error instanceof Error ? error.message : String(error),
       });
@@ -2050,7 +2103,19 @@ async function runV1ApiWithTools(
     }
   }
 
-  // All providers failed
+    // FIX: Track provider failure for feedback injection
+  const providerFailureEntry = createFeedbackEntry(
+    'failure',
+    `All providers failed: ${lastError?.message || 'Unknown error'}. Tried: ${allErrors.map(e => e.provider).join(', ')}`,
+    'llm_response',
+    { errors: allErrors.map(e => ({ provider: e.provider, error: e.error?.message })) },
+    'critical'
+  );
+  feedbackContext.turnNumber++;
+  addFeedback(feedbackContext, providerFailureEntry);
+  recordResponse(sessionId, 0, false);
+
+// All providers failed
   const duration = Date.now() - startTime;
 
   log.error('[V1-API-WITH-TOOLS] ┌─ ALL PROVIDERS FAILED ──────────');
@@ -2080,6 +2145,18 @@ async function runV1Orchestrated(
   messages: any[],
   startTime: number
 ): Promise<UnifiedAgentResult> {
+  // === SESSION TRACKING FOR SUCCESSIVE CALLS ===
+  const sessionId = config.sessionId || `session-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  const feedbackContext: FeedbackContext = {
+    sessionId,
+    turnNumber: 0,
+    feedbackEntries: [],
+    totalTokens: 0,
+  };
+  const tracker = getTracker(sessionId);
+  tracker.reset?.();
+  // === END SESSION TRACKING ===
+
   // Ensure tool system is initialized
   if (!isToolSystemReady()) {
     await initToolSystem({ userId: config.userId || 'system', enableMCP: true, enableSandbox: true });
@@ -2120,7 +2197,50 @@ async function runV1Orchestrated(
       if (event.type === 'done') {
         content = event.response;
         stepsCount = event.stats?.iterations || 0;
+        
+        // FIX: Track response and check for healing trigger
+        const freshTracker = getTracker(sessionId);
+        recordResponse(sessionId, content.length, true);
+        const healingTrigger = detectHealingTrigger(feedbackContext, content, freshTracker.consecutiveToolCalls);
+        if (healingTrigger.detected) {
+          log.info('[AutoHealing-Orchestrated] Healing trigger detected', { 
+            reason: healingTrigger.reason,
+            healingMode: healingTrigger.healingMode,
+          });
+        }
       } else if (event.type === 'tool_result') {
+        // FIX: Track tool call for successive tracking
+        recordToolCall(sessionId);
+        
+        // FIX: Check for re-evaluation trigger
+        const reEvalTrigger = checkReEvalTrigger(sessionId);
+        if (reEvalTrigger.triggered) {
+          log.info('[ReEval-Orchestrated] Trigger detected', { 
+            reason: reEvalTrigger.reason,
+            recommendedAction: reEvalTrigger.recommendedAction,
+          });
+          recordReEval(sessionId);
+        }
+        
+        const toolResult = event.result;
+        
+        // FIX: Track tool result for feedback injection
+        if (toolResult && typeof toolResult === 'object' && 'success' in toolResult && !toolResult.success) {
+          const failureEntry = createFeedbackEntry(
+            'failure',
+            `Tool ${event.tool} failed in orchestrator: ${JSON.stringify(toolResult).slice(0, 200)}`,
+            'tool_execution',
+            { toolName: event.tool, result: toolResult },
+            'medium'
+          );
+          feedbackContext.turnNumber++;
+          addFeedback(feedbackContext, failureEntry);
+          log.info('[Feedback-Orchestrated] Tool failure tracked', {
+            toolName: event.tool,
+            severity: failureEntry.severity,
+          });
+        }
+
         steps.push({
           toolName: event.tool,
           args: {},
@@ -2191,6 +2311,18 @@ async function runV1ApiCompletion(
   llmProvider: LLMProvider,
   startTime: number
 ): Promise<UnifiedAgentResult> {
+  // === SESSION TRACKING FOR SUCCESSIVE CALLS ===
+  const sessionId = config.sessionId || `session-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  const feedbackContext: FeedbackContext = {
+    sessionId,
+    turnNumber: 0,
+    feedbackEntries: [],
+    totalTokens: 0,
+  };
+  const tracker = getTracker(sessionId);
+  tracker.reset?.();
+  // === END SESSION TRACKING ===
+
   if (process.env.ENABLE_V1_ORCHESTRATOR === 'true') {
     // PlanActVerify orchestrator is available as a standalone mode
     // (mode: 'energy-driven' or mode: 'attractor-driven') instead of
@@ -2404,7 +2536,19 @@ async function runV1ApiCompletion(
         ? uniqueProviders.slice(0, uniqueProviders.indexOf(providerName) + 1)
         : [];
 
-      return {
+      
+      // FIX: Track response and check for healing triggers in completion path
+      const responseSuccess = content.trim().length > 0;
+      recordResponse(sessionId, content.length, responseSuccess);
+      const freshTracker = getTracker(sessionId);
+      const healingTrigger = detectHealingTrigger(feedbackContext, content, freshTracker.consecutiveToolCalls);
+      if (healingTrigger.detected) {
+        log.info('[AutoHealing-Completion] Healing trigger detected', { reason: healingTrigger.reason, healingMode: healingTrigger.healingMode });
+        const healingPrompt = generateHealingPrompt(healingTrigger, feedbackContext, config.userMessage);
+        (config as any)._healingPrompt = healingPrompt;
+      }
+
+return {
         success: true,
         response: content || 'No response generated',
         mode: 'v1-api',
@@ -2429,7 +2573,19 @@ async function runV1ApiCompletion(
     }
   }
 
-  // All providers failed
+    // FIX: Track provider failure for feedback injection
+  const providerFailureEntry = createFeedbackEntry(
+    'failure',
+    `All providers failed in completion: ${lastError?.message || 'Unknown error'}. Tried: ${uniqueProviders.join(', ')}`,
+    'llm_response',
+    { providers: uniqueProviders, error: lastError?.message },
+    'critical'
+  );
+  feedbackContext.turnNumber++;
+  addFeedback(feedbackContext, providerFailureEntry);
+  recordResponse(sessionId, 0, false);
+
+// All providers failed
   const latencyMs = Date.now() - startTime;
 
   log.error('[V1-API-COMPLETION] ┌─ ALL PROVIDERS FAILED ─────────');

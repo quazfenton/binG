@@ -378,11 +378,14 @@ const ProviderSelector = React.memo(function ProviderSelector({
             .map((provider) => (
               <SelectGroup key={provider.id}>
                 <SelectLabel>{provider.name}</SelectLabel>
-                {provider.models.map((model: string) => (
-                  <SelectItem key={model} value={`${provider.id}:${model}`}>
-                    {model}
-                  </SelectItem>
-                ))}
+                {provider.models.map((model: ModelConfig | string) => {
+                  const modelId = typeof model === "string" ? model : model.id;
+                  return (
+                    <SelectItem key={`${provider.id}:${modelId}`} value={`${provider.id}:${modelId}`}>
+                      {modelId}
+                    </SelectItem>
+                  );
+                })}
               </SelectGroup>
             ))}
           {availableProviders.filter((p: any) => p.isAvailable !== false).length === 0 && (
