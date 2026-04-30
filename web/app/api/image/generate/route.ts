@@ -148,7 +148,12 @@ export async function POST(req: NextRequest) {
           );
         }
       } catch (quotaError) {
+        clearTimeout(timeoutId);
         console.error('Quota check error:', quotaError);
+        return NextResponse.json(
+          { error: 'Quota check unavailable. Please try again later.' },
+          { status: 503 }
+        );
       }
     }
 
@@ -199,6 +204,15 @@ export async function POST(req: NextRequest) {
         { error: 'Image generation service unavailable. Please try again later.' },
         { status: 503 }
       )
+    }
+
+    // Check provider availability if a preferred provider is specified
+    if (preferredProvider && !availableProviders.includes(preferredProvider)) {
+      clearTimeout(timeoutId);
+      return NextResponse.json(
+        { error: `Requested provider '${preferredProvider}' is not available.` },
+        { status: 503 }
+      );
     }
 
     // Build unified parameters

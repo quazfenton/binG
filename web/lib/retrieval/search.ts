@@ -28,6 +28,8 @@ export interface TabMemory {
   openFiles: Set<string>;
   recentSymbols: string[]; // ordered, newest first
   lastQueries: string[];
+  createdAt: number;
+  lastUpdatedAt: number;
 }
 
 const TAB_MEMORIES = new Map<string, TabMemory>();
@@ -85,12 +87,15 @@ export function getTabMemory(tabId: string, projectId: string): TabMemory {
   evictOldestTabMemories();
   
   if (!TAB_MEMORIES.has(tabId)) {
+    const now = Date.now();
     TAB_MEMORIES.set(tabId, {
       tabId,
       projectId,
       openFiles: new Set(),
       recentSymbols: [],
       lastQueries: [],
+      createdAt: now,
+      lastUpdatedAt: now,
     });
   }
   return TAB_MEMORIES.get(tabId)!;
@@ -116,12 +121,14 @@ export function updateTabMemory(
       ...mem.lastQueries,
     ].slice(0, 20);
   }
+  mem.lastUpdatedAt = Date.now();
 }
 
 export function recordSymbolAccess(tabId: string, symbolId: string): void {
   const mem = TAB_MEMORIES.get(tabId);
   if (!mem) return;
   mem.recentSymbols = [symbolId, ...mem.recentSymbols.filter((s) => s !== symbolId)].slice(0, 50);
+  mem.lastUpdatedAt = Date.now();
 }
 
 // ─── Tab Memory Export/Import for Cache Persistence ─────────────────────────
@@ -173,10 +180,11 @@ export function getTabMemoryStats(): {
   let newest: number | null = null;
   
   for (const mem of entries) {
-    const time = mem.lastQueries.length > 0 ? Date.now() : null;
-    if (time !== null) {
-      if (oldest === null || time < oldest) oldest = time;
-      if (newest === null || time > newest) newest = time;
+    if (mem.createdAt) {
+      if (oldest === null || mem.createdAt < oldest) oldest = mem.createdAt;
+    }
+    if (mem.lastUpdatedAt) {
+      if (newest === null || mem.lastUpdatedAt > newest) newest = mem.lastUpdatedAt;
     }
   }
   

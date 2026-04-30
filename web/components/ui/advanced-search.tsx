@@ -64,7 +64,10 @@ export const AdvancedSearch: React.FC<AdvancedSearchProps> = ({ filters, onSearc
                   )}
                   {filter.type === 'multiselect' && (
                     <div className="flex flex-wrap gap-1">{filter.options?.map(o => (
-                      <button key={o} onClick={() => { const current = (filterValues[filter.id] as string[]) || []; updateFilter(filter.id, current.includes(o) ? current.filter(v => v !== o) : [...current, o]) }}
+                      <button key={o} onClick={() => { 
+                        const current = Array.isArray(filterValues[filter.id]) ? (filterValues[filter.id] as string[]) : []; 
+                        updateFilter(filter.id, current.includes(o) ? current.filter(v => v !== o) : [...current, o]) 
+                      }}
                         className={cn("px-2 py-1 text-xs rounded border", (filterValues[filter.id] as string[])?.includes(o) ? "bg-primary text-primary-foreground border-primary" : "border-secondary")}>{o}</button>
                     ))}</div>
                   )}

@@ -1908,7 +1908,21 @@ n            // FIX: Track tool call for successive tracking
         hasRag: !!ragContext,
       });
     } else if (config.systemPrompt) {
-      const systemContent = config.systemPrompt + ragContext + workspaceSnippet;
+      let systemContent = config.systemPrompt + ragContext + workspaceSnippet;
+      // FIX: Inject dynamic feedback and tracker summary into system prompt for self-routing
+      if ((config as any)._injectedFeedback || (config as any)._trackerSummary) {
+        const injected = (config as any)._injectedFeedback;
+        const trackerSummary = (config as any)._trackerSummary;
+        const feedbackParts = [];
+        if (injected?.correctionSection) feedbackParts.push(injected.correctionSection);
+        if (injected?.healingInstructions) feedbackParts.push(injected.healingInstructions);
+        if (injected?.formatGuidance) feedbackParts.push(injected.formatGuidance);
+        if (trackerSummary) feedbackParts.push(trackerSummary);
+        if (feedbackParts.length > 0) {
+          systemContent += '\n\n' + feedbackParts.join('\n\n');
+          log.info('[V1-API-WITH-TOOLS] Injected feedback into system prompt', { feedbackParts: feedbackParts.length });
+        }
+      }
       llmMessages.push({ role: 'system', content: systemContent });
     } else if (ragContext) {
       llmMessages.push({ role: 'system', content: `You are an AI coding assistant.${ragContext}${workspaceSnippet}` });
@@ -2207,6 +2221,12 @@ async function runV1Orchestrated(
             reason: healingTrigger.reason,
             healingMode: healingTrigger.healingMode,
           });
+          // FIX: Inject dynamic feedback and tracker summary for self-routing
+          const injectedFeedback = injectFeedback(feedbackContext);
+          const trackerSummary = generateTrackerSummary(sessionId);
+          (config as any)._injectedFeedback = injectedFeedback;
+          (config as any)._trackerSummary = trackerSummary;
+          log.info('[AutoHealing-Orchestrated] Feedback injection prepared', { hasFeedback: !!injectedFeedback, hasSummary: !!trackerSummary });
         }
       } else if (event.type === 'tool_result') {
         // FIX: Track tool call for successive tracking
@@ -2546,6 +2566,25 @@ async function runV1ApiCompletion(
         log.info('[AutoHealing-Completion] Healing trigger detected', { reason: healingTrigger.reason, healingMode: healingTrigger.healingMode });
         const healingPrompt = generateHealingPrompt(healingTrigger, feedbackContext, config.userMessage);
         (config as any)._healingPrompt = healingPrompt;
+        // FIX: Inject dynamic feedback and tracker summary for self-routing
+        const injectedFeedback = injectFeedback(feedbackContext);
+        const trackerSummary = generateTrackerSummary(sessionId);
+        (config as any)._injectedFeedback = injectedFeedback;
+        (config as any)._trackerSummary = trackerSummary;
+        log.info('[AutoHealing-Completion] Feedback injection prepared', { hasFeedback: !!injectedFeedback, hasSummary: !!trackerSummary });
+        // Also inject feedback into messages for completion path
+        if (injectedFeedback || trackerSummary) {
+          const feedbackParts = [];
+          if (injectedFeedback?.correctionSection) feedbackParts.push(injectedFeedback.correctionSection);
+          if (injectedFeedback?.healingInstructions) feedbackParts.push(injectedFeedback.healingInstructions);
+          if (injectedFeedback?.formatGuidance) feedbackParts.push(injectedFeedback.formatGuidance);
+          if (trackerSummary) feedbackParts.push(trackerSummary);
+          if (feedbackParts.length > 0) {
+            const feedbackSystemMsg = { role: 'system' as const, content: feedbackParts.join('\n\n') };
+            messages = [feedbackSystemMsg, ...messages];
+            log.info('[V1-API-COMPLETION] Injected feedback into messages array', { feedbackParts: feedbackParts.length });
+          }
+        }
       }
 
 return {
