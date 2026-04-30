@@ -77,7 +77,7 @@ export async function POST(req: NextRequest) {
     // MED-5 fix: Log password reset request
     try {
       const { logPasswordResetRequest } = await import('@/lib/auth/auth-audit-logger');
-      logPasswordResetRequest(String(user.id), email, request);
+      logPasswordResetRequest(String(user.id), email, req);
     } catch (auditError) {
       console.warn('[ResetPassword] Audit log failed:', auditError);
     }

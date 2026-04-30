@@ -35,12 +35,12 @@ const imageGenerationRateLimiter = new RateLimiter(
 )
 
 // Allowed models/providers (configurable via environment)
-const ALLOWED_MODELS = process.env.IMAGE_GENERATION_ALLOWED_MODELS?.split(',') || [
+const ALLOWED_MODELS = (process.env.IMAGE_GENERATION_ALLOWED_MODELS?.split(',').map(s => s.trim()).filter(Boolean)) || [
   'mistral',
   'google',
   'vercel',
   'replicate',
-]
+];
 
 export async function POST(req: NextRequest) {
   const controller = new AbortController()
@@ -133,7 +133,7 @@ export async function POST(req: NextRequest) {
     if (selectedProvider === 'google' && model === 'google:gemini-2.5-flash-image-preview') {
       try {
         const { quotaManager } = await import('@/lib/management/quota-manager');
-        const quotaCheck = quotaManager.checkQuota('google_imagen');
+        const quotaCheck = await quotaManager.checkQuota('google_imagen');
         
         if (!quotaCheck.allowed) {
           clearTimeout(timeoutId);

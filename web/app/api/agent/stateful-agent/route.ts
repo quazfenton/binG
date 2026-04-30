@@ -276,18 +276,20 @@ export async function POST(request: NextRequest) {
       targetSandboxId = sandbox.id;
     }
 
+    const conversationHistory = messages.length > 1 ? messages.slice(0, -1) : [];
+
     const legacyResult = await runAgentLoop({
       userMessage,
       sandboxId: targetSandboxId,
-      conversationHistory: messages.slice(0, -1),
+      conversationHistory,
     });
 
     // MED-2 fix: runAgentLoop now returns { success: false } instead of throwing,
     // so check legacyResult.success instead of hardcoding true
     return NextResponse.json({
       success: legacyResult.success !== false,
-      response: legacyResult.response,
-      steps: legacyResult.totalSteps,
+      response: legacyResult.response ?? '',
+      steps: legacyResult.totalSteps ?? 0,
       sandboxId: targetSandboxId,
       metadata: {
         agentType: 'legacy',

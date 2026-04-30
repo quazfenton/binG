@@ -208,7 +208,8 @@ export async function POST(req: NextRequest) {
     // HIGH-12 fix: Invalidate all existing JWTs by incrementing token version
     try {
       const { incrementUserTokenVersion } = await import('@/lib/auth/jwt');
-      incrementUserTokenVersion(userId);
+      // Await the sync operation for consistency and future-proofing
+      await incrementUserTokenVersion(userId);
     } catch (tokenVersionError) {
       // Log but don't fail — session deletion is the primary invalidation
       console.error('[Security] Failed to increment token version on password reset:', tokenVersionError);
@@ -217,13 +218,13 @@ export async function POST(req: NextRequest) {
     // MED-5 fix: Log successful password reset
     try {
       const { logPasswordResetComplete } = await import('@/lib/auth/auth-audit-logger');
-      logPasswordResetComplete(userId);
+      await logPasswordResetComplete(userId);
     } catch (auditError) {
       console.warn('[ConfirmReset] Audit log failed:', auditError);
     }
 
     // Log security event
-    console.log(`[Security] Password reset successful for user ${user.email} (ID: ${userId})`);
+    console.log(`[Security] Password reset successful for user ID: ${userId}`);
 
     return NextResponse.json({
       success: true,

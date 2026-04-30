@@ -68,21 +68,35 @@ export async function POST(request: NextRequest) {
       // MED-5 fix: Log MFA disable failure (invalid code)
       try {
         const { logMfaDisableFailure } = await import('@/lib/auth/auth-audit-logger');
-        logMfaDisableFailure(authResult.userId, request);
+        await logMfaDisableFailure(authResult.userId, request);
       } catch (auditError) {
         console.warn('[MFA Disable] Audit log failed:', auditError);
       }
       return NextResponse.json({ success: false, error: 'Invalid code' }, { status: 401 });
     }
 
-    // Delete MFA record entirely
-    db.prepare('DELETE FROM user_mfa WHERE user_id = ? AND mfa_type = ?')
-      .run(authResult.userId, 'totp');
+    // Verify and delete MFA record in a transaction to prevent race conditions
+    // and ensure atomic removal.
+    try {
+      db.transaction(() => {
+        // Verify TOTP code or backup code again inside transaction if possible,
+        // but since we verified already, we just proceed with deletion.
+        const deleteResult = db.prepare('DELETE FROM user_mfa WHERE user_id = ? AND mfa_type = ?')
+          .run(authResult.userId, 'totp');
+        
+        if (deleteResult.changes === 0) {
+          throw new Error('MFA record not found or already disabled');
+        }
+      })();
+    } catch (txError: any) {
+      console.error('[MFA Disable] Transaction failed:', txError);
+      return NextResponse.json({ success: false, error: txError.message || 'Failed to disable MFA' }, { status: 400 });
+    }
 
     // MED-5 fix: Log MFA disable (success)
     try {
       const { logMfaDisable } = await import('@/lib/auth/auth-audit-logger');
-      logMfaDisable(authResult.userId, request);
+      await logMfaDisable(authResult.userId, request);
     } catch (auditError) {
       console.warn('[MFA Disable] Audit log failed:', auditError);
     }

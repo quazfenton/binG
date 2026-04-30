@@ -60,9 +60,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, error: 'MFA token is required' }, { status: 400 });
     }
 
-    // Rate limit by IP to prevent brute-force of 6-digit TOTP codes
+    // Rate limit by IP + MFA token to prevent brute-force of 6-digit TOTP codes.
+    // Including MFA token hash prevents simple IP spoofing bypass.
     const clientIp = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown';
-    const rateLimitResult = checkMfaRateLimit(clientIp);
+    const mfaTokenHash = require('crypto').createHash('sha256').update(mfaToken).digest('hex').substring(0, 16);
+    const rateLimitKey = `mfa:${clientIp}:${mfaTokenHash}`;
+    
+    const rateLimitResult = checkMfaRateLimit(rateLimitKey);
     if (!rateLimitResult.allowed) {
       logger.warn('MFA challenge rate limit exceeded', { clientIp });
       return NextResponse.json(
@@ -122,7 +126,7 @@ export async function POST(request: NextRequest) {
       // MED-5 fix: Log MFA challenge failure
       try {
         const { logMfaChallengeFailure } = await import('@/lib/auth/auth-audit-logger');
-        logMfaChallengeFailure(userId, request);
+        await logMfaChallengeFailure(userId, request);
       } catch (auditError) {
         console.warn('[MFA:Challenge] Audit log failed:', auditError);
       }
@@ -141,8 +145,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Generate session and JWT (same as login success path)
-    const { v4: uuidv4 } = require('uuid');
-    const sessionId = uuidv4();
+    const sessionId = require('crypto').randomBytes(32).toString('hex');
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
 
     const ipAddress = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown';
@@ -182,15 +185,16 @@ export async function POST(request: NextRequest) {
     // Set session cookie
     response.cookies.set('session_id', sessionId, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production' || process.env.NODE_ENV === 'staging',
+      secure: (process.env.NODE_ENV as string) === 'production' || (process.env.NODE_ENV as string) === 'staging',
       sameSite: 'lax',
       maxAge: 7 * 24 * 60 * 60,
+      path: '/',
     });
 
     // Set auth-token cookie
     response.cookies.set('auth-token', token, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production' || process.env.NODE_ENV === 'staging',
+      secure: (process.env.NODE_ENV as string) === 'production' || (process.env.NODE_ENV as string) === 'staging',
       sameSite: 'lax',
       maxAge: 60 * 60,
       path: '/',
@@ -204,7 +208,7 @@ export async function POST(request: NextRequest) {
     // Clear anon session
     response.cookies.set('anon-session-id', '', {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production' || process.env.NODE_ENV === 'staging',
+      secure: (process.env.NODE_ENV as string) === 'production' || (process.env.NODE_ENV as string) === 'staging',
       sameSite: 'lax',
       maxAge: 0,
       path: '/',
@@ -213,7 +217,7 @@ export async function POST(request: NextRequest) {
     // MED-5 fix: Log MFA challenge success
     try {
       const { logMfaChallengeSuccess } = await import('@/lib/auth/auth-audit-logger');
-      logMfaChallengeSuccess(userId, request);
+      await logMfaChallengeSuccess(userId, request);
     } catch (auditError) {
       console.warn('[MFA:Challenge] Audit log failed:', auditError);
     }

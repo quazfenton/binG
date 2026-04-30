@@ -23,8 +23,10 @@ import {
   GitBranch,
   Cloud,
   Users,
+  Sparkles,
 } from "lucide-react";
 import { useOrchestrationMode, type OrchestrationMode } from "@/contexts/orchestration-mode-context";
+import { getExperienceStats } from "@/lib/memory/agent-experience";
 import { toast } from "sonner";
 
 interface AgentTabProps {
@@ -77,6 +79,9 @@ export default function AgentTab({ onClose }: AgentTabProps) {
   const [modes, setModes] = useState<ModeData[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  
+  // Get experience stats for inline display
+  const experienceStats = getExperienceStats();
 
   useEffect(() => {
     fetchModes();
@@ -275,6 +280,52 @@ export default function AgentTab({ onClose }: AgentTabProps) {
             })()}
           </CardContent>
         </Card>
+
+        {/* Inline Experience Stats */}
+        {experienceStats.totalExperiences > 0 && (
+          <Card className="bg-purple-500/10 border-purple-500/30">
+            <CardContent className="p-3">
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="h-4 w-4 text-purple-400" />
+                  <span className="text-xs font-medium text-white/90">Agent Learning</span>
+                </div>
+                <Badge variant="secondary" className="text-[10px] bg-purple-500/20 text-purple-300">
+                  {experienceStats.totalExperiences} experiences
+                </Badge>
+              </div>
+              <div className="grid grid-cols-3 gap-2 text-center">
+                <div className="p-2 rounded bg-white/5">
+                  <p className="text-lg font-bold text-white/90">{experienceStats.totalExperiences}</p>
+                  <p className="text-[10px] text-white/50">Total</p>
+                </div>
+                <div className="p-2 rounded bg-white/5">
+                  <p className={`text-lg font-bold ${
+                    experienceStats.averageSuccessRate >= 0.7 ? 'text-green-400' :
+                    experienceStats.averageSuccessRate >= 0.5 ? 'text-yellow-400' : 'text-red-400'
+                  }`}>
+                    {(experienceStats.averageSuccessRate * 100).toFixed(0)}%
+                  </p>
+                  <p className="text-[10px] text-white/50">Avg Success</p>
+                </div>
+                <div className="p-2 rounded bg-white/5">
+                  <p className="text-lg font-bold text-white/90">
+                    {Object.keys(experienceStats.byCategory).length}
+                  </p>
+                  <p className="text-[10px] text-white/50">Categories</p>
+                </div>
+              </div>
+              {/* Category breakdown */}
+              <div className="flex flex-wrap gap-1 mt-2">
+                {Object.entries(experienceStats.byCategory).map(([cat, count]) => (
+                  <Badge key={cat} variant="secondary" className="text-[8px] bg-white/10">
+                    {cat}: {count}
+                  </Badge>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         <Separator className="bg-white/10" />
 
