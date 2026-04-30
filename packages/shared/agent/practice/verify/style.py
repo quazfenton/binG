@@ -402,6 +402,16 @@ def verify_func(sample: EvaluationSample, timeout_score: float = 0, **kwargs) ->
     if flake8_issues:
         result.issues.extend(flake8_issues)
     
+    # Deduplicate issues from multiple sources
+    seen = set()
+    unique_issues = []
+    for issue in result.issues:
+        key = (issue.code, issue.line, issue.message)
+        if key not in seen:
+            seen.add(key)
+            unique_issues.append(issue)
+    result.issues = unique_issues
+    
     # Calculate reward
     error_penalty = result.error_count * 0.15 if strict_mode else result.error_count * 0.1
     warning_penalty = result.warning_count * 0.05
@@ -458,19 +468,28 @@ Respond with just the number and a one-line reason.'''
     
     try:
         import asyncio
-        result = asyncio.get_event_loop().run_until_complete(
-            llm.chat_completion(
-                messages=[{'role': 'user', 'content': prompt}],
-                temperature=0.3,
-            )
-        )
         
-        match = re.search(r'([0-9]*\\.?[0-9]+)', result)
-        if match:
-            return {
-                'reward': float(match.group(1)),
-                'reasoning': f'LLM style check: {result[:100]}',
-            }
+        # Check if event loop is already running
+        try:
+            loop = asyncio.get_running_loop()
+            # Event loop is already running - we can't use run_until_complete
+            # Fall back to default score
+            pass
+        except RuntimeError:
+            # No event loop is running, safe to use run_until_complete
+            result = asyncio.get_event_loop().run_until_complete(
+                llm.chat_completion(
+                    messages=[{'role': 'user', 'content': prompt}],
+                    temperature=0.3,
+                )
+            )
+            
+            match = re.search(r'([0-9]*\\.?[0-9]+)', result)
+            if match:
+                return {
+                    'reward': float(match.group(1)),
+                    'reasoning': f'LLM style check: {result[:100]}',
+                }
     except Exception:
         pass
     
