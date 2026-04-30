@@ -119,7 +119,7 @@ let previousMetrics = {
 export async function initializeTelemetry(customConfig?: Partial<TelemetryConfig>): Promise<void> {
   config = { ...config, ...customConfig }
 
-  if (!config.enabled) {
+  if (!config.enabled || process.env.DISABLE_OTEL === 'true') {
     logger.info('Telemetry disabled')
     return
   }

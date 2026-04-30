@@ -276,6 +276,23 @@ export class CircuitBreaker {
     }
   }
 
+  /**
+   * Public API: Record a successful operation result.
+   * Safe to call from external code — validates state before delegating to internal onSuccess().
+   */
+  recordSuccess(): void {
+    if (this.state === 'OPEN') return; // Ignore success recording when circuit is open
+    this.onSuccess();
+  }
+
+  /**
+   * Public API: Record a failed operation result.
+   * Safe to call from external code — classifies error and delegates to internal onFailure().
+   */
+  recordFailure(error: any): void {
+    this.onFailure(error);
+  }
+
   private onSuccess(): void {
     this.stats.successfulRequests++;
     this.stats.lastSuccessTime = Date.now();

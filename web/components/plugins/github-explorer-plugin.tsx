@@ -109,13 +109,24 @@ const GitHubExplorerPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =>
   };
 
   const ghFetch = useCallback(async (url: string) => {
-    const headers: HeadersInit = { Accept: 'application/vnd.github.v3+json' };
-    if (token) headers.Authorization = `token ${token}`;
+    // If no token is provided, use the backend proxy to avoid direct client-side rate limits
+    if (!token) {
+        const response = await fetch('/api/integrations/github', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'proxy-fetch', url }),
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'GitHub API error');
+        return result.data;
+    }
+
+    const headers: HeadersInit = { Accept: 'application/vnd.github.v3+json', Authorization: `token ${token}` };
     const res = await fetch(url, { headers });
     if (res.status === 403) {
       const retryAfter = res.headers.get('retry-after');
       throw new Error(
-        `GitHub API rate limit exceeded.${retryAfter ? ` Try again in ${retryAfter}s.` : ''} ${token ? '' : 'Add a token for higher limits (5000 req/hour).'}`,
+        `GitHub API rate limit exceeded.${retryAfter ? ` Try again in ${retryAfter}s.` : ''}`,
       );
     }
     if (!res.ok) throw new Error(`GitHub API error: ${res.statusText}`);

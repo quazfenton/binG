@@ -6,7 +6,38 @@
  * @module observability/tracing
  */
 
-import { trace, context, Span, SpanKind, SpanStatusCode } from '@opentelemetry/api';
+/**
+ * Optional OpenTelemetry wrapper
+ * Gracefully degrades to no-op stubs if OpenTelemetry is not installed.
+ */
+let otelApi: any = null;
+
+try {
+  otelApi = require('@opentelemetry/api');
+} catch (e) {
+  console.warn('[Observability] OpenTelemetry API not found, running with no-op stubs.');
+}
+
+const noOpSpan = {
+  end: () => {},
+  setAttribute: () => {},
+  setStatus: () => {},
+  addEvent: () => {},
+};
+
+export const trace = otelApi?.trace ?? {
+  getTracer: () => ({
+    startSpan: () => noOpSpan,
+  }),
+};
+
+export const context = otelApi?.context ?? {
+  active: () => ({}),
+  with: (_ctx: any, fn: Function) => fn(),
+};
+
+export const SpanKind = otelApi?.SpanKind ?? { INTERNAL: 0, SERVER: 1, CLIENT: 2 };
+export const SpanStatusCode = otelApi?.SpanStatusCode ?? { UNSET: 0, OK: 1, ERROR: 2 };
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('Observability:Tracing');

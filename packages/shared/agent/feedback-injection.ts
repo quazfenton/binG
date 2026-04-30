@@ -12,6 +12,8 @@
  * - Successive re-prompting with accumulated feedback
  */
 
+import { formatRoleRedirectOptions } from './first-response-routing';
+
 export interface FeedbackEntry {
   id: string;
   timestamp: number;
@@ -83,7 +85,7 @@ export function createFeedbackEntry(
  */
 export function addFeedback(context: FeedbackContext, entry: FeedbackEntry): FeedbackContext {
   const entries = [...context.accumulatedFeedback, entry].slice(-MAX_FEEDBACK_ENTRIES);
-  const recentFailures = entries.filter(f => f.type === 'failure' && Date.now() - f.timestamp < FEEDBACK_TTL);
+  const recentFailures = entries.filter(f => f.type === 'failure' && Date.now() - f.timestamp < FEEDBACK_TTL_MS);
   const corrections = entries.filter(f => f.type === 'correction');
   
   return {
@@ -401,7 +403,9 @@ export function injectFeedback(context: FeedbackContext): InjectedFeedback {
     formatGuidance += '- Match protocol specifications\n';
   }
   
-  // Build role redirect section
+  // Build role redirect section — ALWAYS active (response-embedded routing).
+  // Even without failures, we include default role options so the first response
+  // always contains routing metadata for the dynamic injector to use.
   let roleRedirectSection: string | undefined;
   const allRedirects: RoleRedirect[] = [];
   for (const failure of recentFailures.slice(-3)) {
@@ -409,20 +413,18 @@ export function injectFeedback(context: FeedbackContext): InjectedFeedback {
     allRedirects.push(...(analysis.correctionPrompt.redirectSuggestions || []));
   }
   
-  if (allRedirects.length > 0) {
-    roleRedirectSection = '\n## Role Redirect Options\n';
-    roleRedirectSection += 'Consider these specialized roles for better handling:\n\n';
-    
-    // Sort by weight and deduplicate
-    const sorted = allRedirects
-      .filter((r, i) => allRedirects.findIndex(x => x.role === r.role) === i)
-      .sort((a, b) => b.weight - a.weight)
-      .slice(0, 3);
-    
-    sorted.forEach(redirect => {
-      roleRedirectSection += `- **${redirect.role}** (${(redirect.weight * 100).toFixed(0)}% match): ${redirect.reason}\n`;
-    });
+  // If no failure-based redirects, generate default role options based on context
+  if (allRedirects.length === 0) {
+    allRedirects.push(
+      { role: 'coder', weight: 0.8, reason: 'default primary role for code tasks', triggerCondition: 'always' },
+      { role: 'reviewer', weight: 0.4, reason: 'secondary role for quality checks', triggerCondition: 'always' },
+      { role: 'planner', weight: 0.3, reason: 'decomposition role for complex tasks', triggerCondition: 'complexity > low' },
+    );
   }
+  
+  // Always generate the section (not conditional on allRedirects.length > 0)
+  // Use shared formatting helper (deduplicates, sorts by weight, includes header)
+  roleRedirectSection = formatRoleRedirectOptions(allRedirects);
   
   return {
     correctionSection,
