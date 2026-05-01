@@ -588,9 +588,12 @@ export class EnhancedLLMService {
         // Re-throw with categorization so the Orchestrator knows how to handle the retry/fallback
         throw this.enhanceError(primaryError, actualProvider, actualModel);
       }
+    } catch (outerError: any) {
+      throw outerError;
     }
+  }
 
-    async *generateStreamingResponse(request: EnhancedLLMRequest): AsyncGenerator<StreamingResponse> {
+  async *generateStreamingResponse(request: any) {
     const { provider, fallbackProviders, requestId, apiKeys, contextPack, ...llmRequest } = request;
     const primaryProvider = provider || getProviderForTask('chat');
     const streamStartTime = Date.now();

@@ -7,6 +7,9 @@ const isDesktopBuild = process.env.DESKTOP_MODE === 'true' || process.env.DESKTO
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Vendored workspace packages (web/.bing-platform, web/.bing-shared) ship raw .ts;
+  // tell Next to transpile them during the Vercel build.
+  transpilePackages: ['@bing/platform', '@bing/shared'],
   // Turbopack config - required when using webpack
   turbopack: {},
   onDemandEntries: {
@@ -169,6 +172,9 @@ const nextConfig = {
     '@tursodatabase/sync',
   ],
   webpack: (config, { isServer, dev, webpack }) => {
+    // Let Next.js SWC handle TypeScript/TSX by default (supports generators, JSX, etc.)
+    // Only add custom loaders if SWC fails
+
     if (!isServer) {
       config.resolve.fallback = {
         ...config.resolve.fallback,
@@ -198,29 +204,28 @@ const nextConfig = {
         dns: false,
         'node:fs': false,
         'node:fs/promises': false,
-        'node:child_process': false,
       };
-    }
 
-    if (dev) {
-      const existingIgnoreWarnings = config.ignoreWarnings || [];
-      config.ignoreWarnings = [
-        ...existingIgnoreWarnings,
-        (warning) => {
-          const moduleName = typeof warning.module === 'string'
-            ? warning.module
-            : (warning.module?.resource || '');
-          const message = warning.message || '';
+      if (dev) {
+        const existingIgnoreWarnings = config.ignoreWarnings || [];
+        config.ignoreWarnings = [
+          ...existingIgnoreWarnings,
+          (warning) => {
+            const moduleName = typeof warning.module === 'string'
+              ? warning.module
+              : (warning.module?.resource || '');
+            const message = warning.message || '';
 
-          if (moduleName && moduleName.includes('require-in-the-middle')) {
-            return true;
-          }
-          if (message.includes('Critical dependency: require function is used')) {
-            return true;
-          }
-          return message.includes('viewport');
-        },
-      ];
+            if (moduleName && moduleName.includes('require-in-the-middle')) {
+              return true;
+            }
+            if (message.includes('Critical dependency: require function is used')) {
+              return true;
+            }
+            return message.includes('viewport');
+          },
+        ];
+      }
     }
 
     config.resolve.extensionAlias = {
@@ -276,7 +281,7 @@ const nextConfig = {
       '@bing/shared/agent/services/agent-worker/src': resolve(packagesRoot, 'shared/agent/services/agent-worker/src/index.ts'),
       '@bing/shared/agent/services/agent-gateway/src': resolve(packagesRoot, 'shared/agent/services/agent-gateway/src/index.ts'),
       '@bing/shared/agent/tool-router/tool-router': resolve(packagesRoot, 'shared/agent/tool-router/tool-router.ts'),
-      
+
       // Direct module resolution aliases for Turbopack/Webpack compatibility
       '@bing/shared/agent/cloud-agent-offload': resolve(packagesRoot, 'shared/agent/cloud-agent-offload.ts'),
       '@bing/shared/agent/system-prompts': resolve(packagesRoot, 'shared/agent/system-prompts.ts'),

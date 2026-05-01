@@ -1,10 +1,11 @@
 # binG Agent Guidelines
 
 This file is the working contract for agents editing `binG`. Prefer what the repository actually does over older docs.
+  
 
 ## Working Rules
-- Assume the worktree is dirty. Do not revert unrelated user changes.
-- Prefer `rg` / `rg --files` for search.
+- Assume the worktree is dirty. Do not revert unrelated user changes. DO NOT ever use 'git restore' or 'git checkout' to revert a file (to avoid carelessly wiping all unsaved progress beyond your edits) just to fix a small error. This may only be used if NECESSARY and sparingly when a file has been completely corrupted/truncated from a latest bad edit, and even then, only CAREFULLY after you have used 'git diff' to review file history and ensure that you reapply any uncommitted progress that will be lost.   
+- Prefer `rg` / `rg --files` for search, or retry commands if user's possible Windows environment cause an improper command to fail.
 - Use `pnpm` for project commands.
 - Use `@/` imports for repo-root paths.
 - Default exports are mainly for React components; prefer named exports elsewhere.
@@ -115,8 +116,6 @@ npx vitest run path/to/file.test.ts
 - Did you avoid introducing new secrets or logging existing ones?
 
 ## Known Issues Worth Remembering
-- [`env.example`](./env.example) still contains many placeholder credentials and duplicate sections; tests that read env may behave as if providers are configured when they are not actually usable.
 - The lint baseline still includes many warnings in legacy files, especially `any` usage and unused locals.
-- Full test runs still include integration-heavy suites that are not appropriate as a default validation step for every small change.
 
 When in doubt, inspect adjacent code and the exact test or route you are touching instead of relying on older documentation.
