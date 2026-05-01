@@ -78,6 +78,9 @@ export function removeTrailingCommas(raw: string): string {
 export function stripJsonComments(raw: string): string {
   // Unified single-pass: track inString/escape state the same way
   // removeTrailingCommas and extractFirstJsonObject do.
+  // Handles escaped quotes, escape sequences, and comment markers outside strings.
+  // Note: Additional test coverage for edge cases (escaped quotes followed by comments,
+  // nested comment-like patterns in strings) is recommended.
   let result = '';
   let i = 0;
   let inString = false;
@@ -184,5 +187,7 @@ export function extractFirstJsonObject(text: string): string | null {
     }
   }
 
+  // No complete JSON object found — either no opening brace, or braces don't close.
+  // Consumers should check for null and handle accordingly (log a diagnostic, use fallback, etc.).
   return null;
 }
