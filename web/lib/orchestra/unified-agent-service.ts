@@ -33,7 +33,6 @@ import {
 import { isDesktopMode } from "@bing/platform/env";
 import { findOpencodeBinarySync } from "@/lib/agent-bins/find-opencode-binary";
 
-
 import {
   StatefulAgent,
   type StatefulAgentOptions,
@@ -59,6 +58,14 @@ import {
   generateTrackerSummary,
 } from '@bing/shared/agent/successive-tracker';
 import {
+  parseFirstResponseRouting,
+  shouldTriggerReview,
+  generateStepReprompt,
+  routingToRoleRedirectSection,
+  type RoutingMetadata,
+  type ParsedRouting,
+} from '@bing/shared/agent/first-response-routing';
+import {
   buildWorkspaceSnapshot,
   normalizeToolArgs,
   createLoopDetectorState,
@@ -72,11 +79,6 @@ import {
   type OrchestratorEvent
 } from '@bing/shared/agent/orchestration/plan-act-verify';
 
-import {
-  createTaskClassifier,
-  type TaskClassification,
-  type ClassificationContext,
-} from '@bing/shared/agent/task-classifier';
 import { getProjectServices, type ProjectContext } from '@/lib/project-context';
 import {
   runDualProcessMode,
@@ -106,7 +108,6 @@ import {
   ingestAntiPattern,
 } from '@/lib/rag/retrieval';
 
-
 // Does the @opencode-ai/sdk package exist in node_modules?
 // Cached at module load so checkStartupCapabilities() can use it cheaply.
 // Uses fs.existsSync on node_modules/@opencode-ai/sdk — simpler and more
@@ -131,19 +132,75 @@ const _hasOpenCodeSDKPackage = _hasOpenCodeSDKPackageCheck();
 const log = createLogger('UnifiedAgentService');
 
 /**
- * Task classifier instance (singleton)
+ * Resolve dynamic default provider/model using model-ranker.
+ * Shared across all execution paths to avoid hardcoding 'mistral'/'mistral-large-latest'.
+ * Falls back to env vars then 'mistral' if model-ranker is unavailable.
  */
-const taskClassifier = createTaskClassifier({
-  simpleThreshold: parseFloat(process.env.TASK_CLASSIFIER_SIMPLE_THRESHOLD || '0.3'),
-  complexThreshold: parseFloat(process.env.TASK_CLASSIFIER_COMPLEX_THRESHOLD || '0.7'),
-  keywordWeight: 0.4,
-  semanticWeight: parseFloat(process.env.TASK_CLASSIFIER_SEMANTIC_WEIGHT || '0.3'),
-  contextWeight: parseFloat(process.env.TASK_CLASSIFIER_CONTEXT_WEIGHT || '0.2'),
-  historicalWeight: parseFloat(process.env.TASK_CLASSIFIER_HISTORY_WEIGHT || '0.1'),
-  enableSemanticAnalysis: process.env.TASK_CLASSIFIER_ENABLE_SEMANTIC !== 'false',
-  enableHistoricalLearning: process.env.TASK_CLASSIFIER_ENABLE_HISTORY !== 'false',
-  enableContextAwareness: process.env.TASK_CLASSIFIER_ENABLE_CONTEXT !== 'false',
-});
+let _cachedDynamicDefaults: { provider: string; model: string } | null = null;
+let _dynamicDefaultsTimestamp = 0;
+const DYNAMIC_DEFAULTS_TTL_MS = 30_000; // Re-check every 30s
+
+async function resolveDynamicDefaults(): Promise<{ provider: string; model: string }> {
+  const now = Date.now();
+  if (_cachedDynamicDefaults && (now - _dynamicDefaultsTimestamp) < DYNAMIC_DEFAULTS_TTL_MS) {
+    return _cachedDynamicDefaults;
+  }
+  let provider = process.env.LLM_PROVIDER || 'mistral';
+  let model = process.env.DEFAULT_MODEL || 'mistral-large-latest';
+  try {
+    const { getModelForRotation, isRateLimited } = await import('../models/model-ranker');
+    const rotation = getModelForRotation();
+    if (rotation && !isRateLimited(rotation.provider, rotation.model)) {
+      // Also verify circuit isn't open for this provider
+      let circuitOpen = false;
+      try {
+        const { circuitBreakerManager } = await import('../middleware/circuit-breaker');
+        const breaker = circuitBreakerManager.getBreaker(rotation.provider);
+        circuitOpen = breaker.getState() === 'OPEN';
+      } catch { /* circuit-breaker unavailable, assume not open */ }
+      if (!circuitOpen) {
+        provider = rotation.provider;
+        model = rotation.model;
+      }
+    }
+  } catch { /* model-ranker unavailable */ }
+  _cachedDynamicDefaults = { provider, model };
+  _dynamicDefaultsTimestamp = now;
+  return { provider, model };
+}
+
+/**
+ * Invalidate the cached dynamic defaults — call when a circuit-breaker trips
+ * so the next resolveDynamicDefaults() call picks a different provider.
+ */
+function invalidateDynamicDefaultsCache(): void {
+  _cachedDynamicDefaults = null;
+  _dynamicDefaultsTimestamp = 0;
+}
+
+/**
+ * Default models for each provider when no specific model is configured.
+ * Module-scoped so all execution paths (runV1ApiWithTools, runV1ApiCompletion)
+ * can share the same mapping.
+ */
+const PROVIDER_DEFAULT_MODELS: Record<string, string> = {
+  openai: 'gpt-4o',
+  anthropic: 'claude-sonnet-4-6-20250514',
+  google: 'gemini-2.5-flash',
+  mistral: 'mistral-large-latest',  // Large supports tools, small doesn't
+  openrouter: 'meta-llama/llama-3.3-70b-instruct',
+  github: 'llama-3.3-70b-instruct',
+  nvidia: 'nvidia/nemotron-4-340b-instruct',
+  groq: 'llama-3.3-70b-versatile',
+  together: 'meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo',
+  zen: 'zen',
+  portkey: 'openrouter/auto',
+  chutes: 'meta-llama/Llama-3.3-70B-Instruct',
+  fireworks: 'accounts/fireworks/models/llama-v3p1-70b-instruct',
+  deepinfra: 'meta-llama/Meta-Llama-3.1-70B-Instruct',
+  anyscale: 'meta-llama/Meta-Llama-3.1-70B-Instruct',
+  lepton: 'llama3-70b',
+};
 
 export interface UnifiedAgentConfig {
   // Core
@@ -240,10 +297,23 @@ export interface UnifiedAgentResult {
     duration?: number;
     workflowId?: string;
     workflowSteps?: Array<{ id: string; name: string; status: string }>;
+    /** Parsed routing metadata from first-response [ROUTING_METADATA] block */
+    routing?: {
+      classification?: string;
+      complexity?: string;
+      suggestedRole?: string;
+      specializationRoute?: string;
+      planSteps?: number;
+      requiresAutoReprompt?: boolean;
+      estimatedSteps?: number;
+      reviewTriggered?: boolean;
+      reviewReason?: string;
+      /** Auto-re-prompt message for the next plan step (consumed by route.ts or client) */
+      stepReprompt?: string;
+    };
     [key: string]: any;
   };
 }
-
 
 export interface StartupCapabilities {
   v2Native: boolean;       // OpenCode CLI available and enabled (desktop-only)
@@ -347,15 +417,14 @@ export function checkStartupCapabilities(): StartupCapabilities {
 const startupCaps = checkStartupCapabilities();
 
 /**
- * Determine which mode to use based on config and task classification.
+ * Determine which mode to use based on config.
  *
  * Uses startup capability flags (checked once at module load) to skip
  * unavailable modes entirely — no retries, no fallback loops.
- * Returns both mode and classification for logging/metrics.
+ * Defaults to v1-agent-loop (PlanActVerify) with dynamic injector always active.
  */
 async function determineMode(config: UnifiedAgentConfig): Promise<{
   mode: 'v1-api' | 'v1-agent-loop' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'opencode-sdk' | 'mastra-workflow' | 'desktop' | 'v1-progressive-build' | 'dual-process' | 'dual-process-fast' | 'dual-process-slow' | 'dual-process-fast-fallback' | 'dual-process-slow-failed' | 'adversarial-verify' | 'adversarial-verify-revised' | 'adversarial-verify-revision-failed' | 'attractor-driven' | 'intent-driven' | 'energy-driven' | 'distributed-cognition' | 'distributed-cognition-no-synthesis' | 'cognitive-resonance' | 'cognitive-resonance-converged' | 'cognitive-resonance-synthesized' | 'cognitive-resonance-single' | 'cognitive-resonance-fallback';
-  classification?: TaskClassification;
 }> {
   // Explicit mode override
   if (config.mode && config.mode !== 'auto') {
@@ -372,19 +441,19 @@ async function determineMode(config: UnifiedAgentConfig): Promise<{
 
   if (engine === 'v1-api') {
     log.info('AGENT_EXECUTION_ENGINE=v1-api, using Vercel AI SDK execution path');
-    return { mode: 'v1-api' as const, classification: null as any };
+    return { mode: 'v1-api' as const };
   }
   if (engine === 'v1-agent-loop') {
     log.info('AGENT_EXECUTION_ENGINE=v1-agent-loop, using direct Mastra/ToolLoopAgent path (route.ts will bypass unified-agent)');
-    return { mode: 'v1-agent-loop' as const, classification: null as any };
+    return { mode: 'v1-agent-loop' as const };
   }
   if (engine === 'progressive-build' || engine === 'v1-progressive-build') {
     log.info('AGENT_EXECUTION_ENGINE=progressive-build, using multi-iteration build loop');
-    return { mode: 'v1-progressive-build' as const, classification: null as any };
+    return { mode: 'v1-progressive-build' as const };
   }
   if (engine === 'agent-loop') {
     log.info('AGENT_EXECUTION_ENGINE=agent-loop, using OpenCode agent loop execution path');
-    return { mode: 'v2-native' as const, classification: null as any };
+    return { mode: 'v2-native' as const };
   }
 
   // Desktop mode takes priority when enabled AND in auto mode
@@ -418,43 +487,13 @@ async function determineMode(config: UnifiedAgentConfig): Promise<{
     return { mode: 'mastra-workflow' };
   }
 
-  // Use task classifier for intelligent routing
-  // IMPORTANT: Only classify the raw user task, NOT the full userMessage
-  // which may include context/workspace/memory prepended (see route.ts buildAgenticContext).
-  // Classifying the full context would inflate sentence counts, technical terms, etc.
-  // and produce bogus complexity scores.
-  try {
-    const rawUserTask = extractRawUserTask(config.userMessage);
-    log.info('[AutoMode] ┌─ TASK CLASSIFIER ─────────────────────');
-    log.info('[AutoMode] │ rawTaskLength:', rawUserTask.length);
-    log.info('[AutoMode] │ rawTaskPreview:', rawUserTask.slice(0, 100));
-    log.info('[AutoMode] └───────────────────────────────────────────');
-
-    const classification = await taskClassifier.classify(rawUserTask, {
-      projectSize: process.env.PROJECT_SIZE as any,
-      userPreference: process.env.AGENT_PREFERENCE as any,
-    });
-
-    log.info('[AutoMode] ┌─ CLASSIFIER RESULT ──────────────────');
-    log.info('[AutoMode] │ complexity:', classification.complexity);
-    log.info('[AutoMode] │ recommendedMode:', classification.recommendedMode);
-    log.info('[AutoMode] │ confidence:', classification.confidence);
-    log.info('[AutoMode] │ factors:', JSON.stringify(classification.factors));
-    log.info('[AutoMode] └───────────────────────────────────────────');
-
-    // Map classifier recommendation to actual mode
-    // For auto rotation: complex/code tasks go to v1-agent-loop, simple tasks go to v1-api
-    const isComplex = classification.complexity === 'complex';
-    if (isComplex) {
-      log.info('[AutoMode] → v1-agent-loop (complex task)');
-      return { mode: 'v1-agent-loop' as const, classification };
-    }
-    log.info('[AutoMode] → v1-api (simple task)');
-    return { mode: 'v1-api' as const, classification };
-  } catch (error) {
-    log.warn('[AutoMode] → v1-api (classifier failed, fallback)', { error: error instanceof Error ? error.message : String(error) });
-    return { mode: 'v1-api' as const };
-  }
+  // Default to PlanActVerify orchestrator for all tasks.
+  // The dynamic injector (injectFeedback + generateTrackerSummary) is always active,
+  // providing self-correction and healing without needing a separate classifier step.
+  // Regex-based complexity detection is retained as a fallback for mode-specific
+  // logic (e.g., StatefulAgent routing in runV2Native/runDesktopMode).
+  log.info('[AutoMode] → v1-agent-loop (PlanActVerify default, dynamic injector always active)');
+  return { mode: 'v1-agent-loop' as const };
 }
 
 /**
@@ -487,7 +526,7 @@ function extractRawUserTask(userMessage: string): string {
  *
  * Routes to OpenCode V2 Engine (primary) or V1 API (fallback) based on configuration.
  * Implements fallback chain for reliability.
- * Uses task classifier for intelligent mode selection.
+ * Defaults to PlanActVerify orchestrator with dynamic injector always active.
  */
 export async function processUnifiedAgentRequest(
   config: UnifiedAgentConfig
@@ -547,8 +586,11 @@ export async function processUnifiedAgentRequest(
 
   log.info('═══════════════════════════════════════════════');
   log.info('[UnifiedAgent] ┌─ REQUEST ENTRY ──────────────────────────');
-  log.info('[UnifiedAgent] │ provider:', config.provider || process.env.LLM_PROVIDER || 'mistral');
-  log.info('[UnifiedAgent] │ model:', config.model || process.env.DEFAULT_MODEL || 'mistral-large-latest');
+  // Use shared dynamic defaults resolver instead of hardcoded mistral
+  const dynamicDefaults = await resolveDynamicDefaults();
+
+  log.info('[UnifiedAgent] │ provider:', config.provider || dynamicDefaults.provider);
+  log.info('[UnifiedAgent] │ model:', config.model || dynamicDefaults.model);
   log.info('[UnifiedAgent] │ mode config:', config.mode || 'auto');
   log.info('[UnifiedAgent] │ AGENT_EXECUTION_ENGINE:', process.env.AGENT_EXECUTION_ENGINE || 'auto');
   log.info('[UnifiedAgent] │ DISABLE_V2_MODE:', process.env.DISABLE_V2_MODE || 'unset');
@@ -556,12 +598,10 @@ export async function processUnifiedAgentRequest(
   log.info('[UnifiedAgent] │ tools:', Array.isArray(config.tools) ? config.tools.length : 0);
   log.info('[UnifiedAgent] └──────────────────────────────────────────');
 
-  const { mode, classification } = await determineMode(config);
+  const { mode } = await determineMode(config);
 
   log.info('[UnifiedAgent] ┌─ MODE SELECTED ──────────────────────────');
   log.info('[UnifiedAgent] │ resolvedMode:', mode);
-  log.info('[UnifiedAgent] │ complexity:', classification?.complexity || 'n/a');
-  log.info('[UnifiedAgent] │ confidence:', classification?.confidence?.toFixed(2) || 'n/a');
   log.info('[UnifiedAgent] │ engine:', process.env.AGENT_EXECUTION_ENGINE || 'auto');
   log.info('[UnifiedAgent] │ disableV2:', process.env.DISABLE_V2_MODE !== 'false');
   log.info('[UnifiedAgent] └──────────────────────────────────────────');
@@ -584,18 +624,19 @@ export async function processUnifiedAgentRequest(
     switch (mode) {
       case 'desktop':
         log.info('[UnifiedAgent] → desktop mode');
-        return await runDesktopMode(config, classification);
+        return await runDesktopMode(config);
 
       case 'v1-agent-loop':
-        log.info('[UnifiedAgent] → v1-agent-loop mode (falling back to v1-api)');
-        // This mode is handled by route.ts (bypasses unified-agent entirely).
-        // Should never reach here via processUnifiedAgentRequest.
-        // Fall back to v1-api if somehow called.
-        return await runV1Api(config);
+        log.info('[UnifiedAgent] → v1-agent-loop mode (PlanActVerify orchestrator)');
+        const orchMessages = [
+          ...(config.conversationHistory || []),
+          { role: 'user', content: config.userMessage },
+        ];
+        return await runV1Orchestrated(config, orchMessages, startTime);
 
       case 'v2-native':
         log.warn('[UnifiedAgent] → v2-native mode (OPENCODE)');
-        return await runV2Native(config, classification);
+        return await runV2Native(config);
 
       case 'v2-containerized':
         log.warn('[UnifiedAgent] → v2-containerized mode (SANDBOX)');
@@ -607,7 +648,7 @@ export async function processUnifiedAgentRequest(
 
       case 'opencode-sdk':
         log.info('[UnifiedAgent] → opencode-sdk mode (OpenCode HTTP API)');
-        return await runOpencodeSDKMode(config, classification);
+        return await runOpencodeSDKMode(config);
 
       case 'mastra-workflow':
         log.info('[UnifiedAgent] → mastra-workflow mode');
@@ -615,7 +656,7 @@ export async function processUnifiedAgentRequest(
 
       case 'v1-progressive-build':
         log.info('[UnifiedAgent] → v1-progressive-build mode (multi-iteration build loop)');
-        return await runProgressiveBuildMode(config, classification);
+        return await runProgressiveBuildMode(config);
 
       case 'dual-process':
         log.info('[UnifiedAgent] → dual-process mode (fast/slow cognition split)');
@@ -674,10 +715,6 @@ export async function processUnifiedAgentRequest(
         metadata: {
           ...fallbackResult.metadata,
           fallbackFrom: mode,
-          classification: classification ? {
-            complexity: classification.complexity,
-            confidence: classification.confidence,
-          } : undefined,
         },
       };
     }
@@ -693,10 +730,6 @@ export async function processUnifiedAgentRequest(
       error: error instanceof Error ? error.message : String(error),
       metadata: {
         duration: Date.now() - startTime,
-        classification: classification ? {
-          complexity: classification.complexity,
-          confidence: classification.confidence,
-        } : undefined,
       },
     };
   }
@@ -708,61 +741,33 @@ export async function processUnifiedAgentRequest(
  */
 async function runV2Native(
   config: UnifiedAgentConfig,
-  classification?: TaskClassification
 ): Promise<UnifiedAgentResult> {
   const startTime = Date.now();
   log.info('Running V2 Native mode', {
     userMessageLength: config.userMessage.length,
     maxSteps: config.maxSteps,
-    classification: classification ? {
-      complexity: classification.complexity,
-      confidence: classification.confidence,
-      recommendedMode: classification.recommendedMode,
-    } : undefined,
   });
 
-  // Use classification to determine if StatefulAgent should be used
-  // Fall back to regex-based detection if classification not provided
-  let shouldUseStatefulAgent = false;
+  // Use regex-based detection for StatefulAgent routing (classifier removed)
+  // IMPORTANT: Only test against the raw user task, not the full context-augmented message
+  const rawTask = extractRawUserTask(config.userMessage);
+  const isComplexTask = /(create|build|implement|refactor|migrate|add feature|new file|multiple files|project structure|full-stack|application|service|api|component|page|dashboard|authentication|database|integration|deployment|setup|initialize|scaffold|generate|boilerplate)/i.test(rawTask);
+  const hasMultipleSteps = /\b(and|then|after|before|first|next|finally|also|plus)\b/i.test(rawTask);
+  const mentionsFiles = /\b(file|files|folder|directory|component|page|module|service|api)\b/i.test(rawTask);
+  const shouldUseStatefulAgent = isComplexTask || (hasMultipleSteps && mentionsFiles);
   
-  if (classification) {
-    // Use classifier recommendation
-    shouldUseStatefulAgent = 
-      classification.complexity === 'complex' ||
-      classification.recommendedMode === 'stateful-agent';
-    
-    log.info('Task classification result', {
-      complexity: classification.complexity,
-      confidence: classification.confidence,
-      reasoning: classification.reasoning?.slice(0, 3),
-    });
-  } else {
-    // Fallback to regex-based detection (backward compatibility)
-    // IMPORTANT: Only test against the raw user task, not the full context-augmented message
-    const rawTask = extractRawUserTask(config.userMessage);
-    const isComplexTask = /(create|build|implement|refactor|migrate|add feature|new file|multiple files|project structure|full-stack|application|service|api|component|page|dashboard|authentication|database|integration|deployment|setup|initialize|scaffold|generate|boilerplate)/i.test(rawTask);
-    const hasMultipleSteps = /\b(and|then|after|before|first|next|finally|also|plus)\b/i.test(rawTask);
-    const mentionsFiles = /\b(file|files|folder|directory|component|page|module|service|api)\b/i.test(rawTask);
-    shouldUseStatefulAgent = isComplexTask || (hasMultipleSteps && mentionsFiles);
-    
-    log.info('Using fallback regex-based task detection', {
-      isComplexTask,
-      hasMultipleSteps,
-      mentionsFiles,
-    });
-  }
+  log.info('Regex-based task detection for StatefulAgent routing', {
+    isComplexTask,
+    hasMultipleSteps,
+    mentionsFiles,
+  });
 
   if (shouldUseStatefulAgent && startupCaps.statefulAgent) {
-    log.info('Complex task detected, using StatefulAgent for Plan-Act-Verify workflow', {
-      classification: classification?.complexity,
-      confidence: classification?.confidence,
-    });
+    log.info('Complex task detected, using StatefulAgent for Plan-Act-Verify workflow');
     return await runStatefulAgentMode(config);
   }
 
-  log.info('Simple task detected, using OpenCode Engine', { 
-    classification: classification?.complexity || 'unknown',
-  });
+  log.info('Simple task detected, using OpenCode Engine');
 
   // Use OpenCode Engine for simpler tasks
   // Prepend auto-inject context to system prompt so the engine knows about
@@ -781,7 +786,6 @@ async function runV2Native(
       config.onToolExecution?.(tool, args, { success: true, output: 'Tool called' });
     },
   };
-
 
   const engine = createOpenCodeEngine(engineConfig);
   const result = await engine.execute(config.userMessage);
@@ -832,21 +836,17 @@ async function runV2Native(
  */
 async function runDesktopMode(
   config: UnifiedAgentConfig,
-  classification?: TaskClassification
 ): Promise<UnifiedAgentResult> {
   const startTime = Date.now();
   log.info('Running Desktop mode (local execution)', {
     userMessageLength: config.userMessage.length,
-    classification: classification?.complexity,
   });
 
   // Desktop mode uses the StatefulAgent with a desktop sandbox provider
   // for complex tasks, or the OpenCode engine for simple tasks
   // IMPORTANT: Only test against the raw user task, not the full context-augmented message
   const desktopRawTask = extractRawUserTask(config.userMessage);
-  const shouldUseStatefulAgent = classification
-    ? classification.complexity === 'complex' || classification.recommendedMode === 'stateful-agent'
-    : /(create|build|implement|refactor|migrate)/i.test(desktopRawTask);
+  const shouldUseStatefulAgent = /(create|build|implement|refactor|migrate)/i.test(desktopRawTask);
 
   if (shouldUseStatefulAgent && process.env.ENABLE_STATEFUL_AGENT !== 'false') {
     log.info('Desktop: Complex task, routing to StatefulAgent with desktop provider');
@@ -1081,7 +1081,6 @@ async function runV2Local(config: UnifiedAgentConfig): Promise<UnifiedAgentResul
   };
 }
 
-
 /**
  * Run OpenCode SDK mode — web-first agentic execution via HTTP API.
  *
@@ -1098,12 +1097,10 @@ async function runV2Local(config: UnifiedAgentConfig): Promise<UnifiedAgentResul
  */
 async function runOpencodeSDKMode(
   config: UnifiedAgentConfig,
-  classification?: TaskClassification,
 ): Promise<UnifiedAgentResult> {
   const startTime = Date.now();
   log.info('Running OpenCode SDK mode', {
     userMessageLength: config.userMessage.length,
-    classification: classification?.complexity,
   });
 
   // Attempt 1: Connect to existing server via HTTP API
@@ -1321,7 +1318,6 @@ async function runV1Api(config: UnifiedAgentConfig): Promise<UnifiedAgentResult>
     { role: 'user', content: config.userMessage },
   ];
 
-
   // Ensure tool system is initialized before using capabilities
   if (!isToolSystemReady()) {
     await initToolSystem({ userId: config.userId || 'system', enableMCP: true, enableSandbox: true });
@@ -1429,7 +1425,6 @@ async function runMastraWorkflow(config: UnifiedAgentConfig): Promise<UnifiedAge
  */
 async function runProgressiveBuildMode(
   config: UnifiedAgentConfig,
-  classification?: TaskClassification,
 ): Promise<UnifiedAgentResult> {
   const startTime = Date.now();
   const buildConfig = config.progressiveBuild || {};
@@ -1449,8 +1444,10 @@ async function runProgressiveBuildMode(
 
   // Build the LLM call wrapper that uses the Vercel AI SDK (same as runV1ApiWithTools)
   const capabilityExecuteTool = createCapabilityToolExecutor(config);
-  const primaryProvider = config.provider || process.env.LLM_PROVIDER || 'mistral';
-  const normalizedModel = config.model || process.env.LLM_MODEL || 'mistral-small-latest';
+  // FIX: Use shared dynamic defaults resolver instead of hardcoded mistral
+  const _progDefaults = await resolveDynamicDefaults();
+  const primaryProvider = config.provider || _progDefaults.provider;
+  const normalizedModel = config.model || process.env.LLM_MODEL || _progDefaults.model;
 
   const llmCall = async (messages: Array<{ role: string; content: string }>): Promise<string> => {
     const { streamText } = await import('ai');
@@ -1626,10 +1623,7 @@ async function runProgressiveBuildMode(
         projectTree: buildResult.projectTree,
         warnings: buildResult.warnings || [],
       },
-      classification: classification ? {
-        complexity: classification.complexity,
-        confidence: classification.confidence,
-      } : undefined,
+
     },
   };
 }
@@ -1710,8 +1704,10 @@ async function runV1ApiWithTools(
 
   // Use the shared capability-based tool executor (avoids code duplication)
   const capabilityExecuteTool = createCapabilityToolExecutor(config);
-  const primaryProvider = config.provider || process.env.LLM_PROVIDER || 'mistral';
-  const primaryModel = config.model || process.env.DEFAULT_MODEL || 'mistral-large-latest';
+  // FIX: Use shared dynamic defaults resolver instead of hardcoded mistral
+  const _dynamicDefaults = await resolveDynamicDefaults();
+  const primaryProvider = config.provider || _dynamicDefaults.provider;
+  const primaryModel = config.model || _dynamicDefaults.model;
   const requestId = `unified-v1-tools-${Date.now()}`;
 
   log.info('[V1-API-WITH-TOOLS] │ primaryProvider:', primaryProvider);
@@ -1727,24 +1723,7 @@ async function runV1ApiWithTools(
   // Check if the model is in the provider's supported models list; if not,
   // use the provider's default instead.
   const { PROVIDERS } = await import('../chat/llm-providers');
-  const PROVIDER_DEFAULT_MODELS: Record<string, string> = {
-    openai: 'gpt-4o',
-    anthropic: 'claude-sonnet-4-6-20250514',
-    google: 'gemini-2.5-flash',
-    mistral: 'mistral-small-latest',
-    openrouter: 'mistralai/mistral-small-latest',
-    github: 'gpt-4o',
-    nvidia: 'meta/llama-3.3-70b-instruct',
-    groq: 'llama-3.3-70b-versatile',
-    together: 'meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo',
-    zen: 'zen',
-    portkey: 'openrouter/auto',
-    chutes: 'deepseek-ai/DeepSeek-R1-0528',
-    fireworks: 'accounts/fireworks/models/llama-v3p1-70b-instruct',
-    deepinfra: 'meta-llama/Meta-Llama-3.1-70B-Instruct',
-    anyscale: 'meta-llama/Meta-Llama-3.1-70B-Instruct',
-    lepton: 'llama3-70b',
-  };
+  // PROVIDER_DEFAULT_MODELS is now module-scoped (shared across all paths)
 
   function getModelForProvider(providerName: string): string {
     // If no explicit model set, use provider default
@@ -1776,14 +1755,50 @@ async function runV1ApiWithTools(
 
   let lastError: Error | null = null;
 
-  // Try each provider in order
+  // FIX: Import circuit-breaker and model-ranker for smart provider selection
+  let circuitBreakerMgr: any = null;
+  let modelRankerFns: { isRateLimited: (p: string, m: string) => boolean; recordRateLimitError: (p: string, m: string) => void; recordModelAttempt: (p: string, m: string, s: boolean) => void } | null = null;
+  try {
+    const cbMod = await import('../middleware/circuit-breaker');
+    circuitBreakerMgr = cbMod.circuitBreakerManager;
+  } catch { /* circuit-breaker unavailable */ }
+  try {
+    const mrMod = await import('../models/model-ranker');
+    modelRankerFns = {
+      isRateLimited: mrMod.isRateLimited,
+      recordRateLimitError: mrMod.recordRateLimitError,
+      recordModelAttempt: mrMod.recordModelAttempt,
+    };
+  } catch { /* model-ranker unavailable */ }
+
+  // Try each provider in order — with circuit-breaker and rate-limit awareness
   for (const providerName of uniqueProviders) {
     const modelForProvider = getModelForProvider(providerName);
+
+    // FIX: Skip providers with open circuit breakers
+    if (circuitBreakerMgr) {
+      const breaker = circuitBreakerMgr.getBreaker(providerName);
+      if (breaker.getState() === 'OPEN' && breaker.getRetryAfter() > 0) {
+        log.warn('[V1-API-WITH-TOOLS] ┌─ CIRCUIT OPEN ─────────────────');
+        log.warn(`[V1-API-WITH-TOOLS] │ provider: ${providerName} (circuit OPEN, retry after ${breaker.getRetryAfter()}ms)`);
+        log.warn('[V1-API-WITH-TOOLS] └────────────────────────────────');
+        continue; // Skip this provider
+      }
+    }
+
+    // FIX: Skip models that are rate-limited per model-ranker
+    if (modelRankerFns?.isRateLimited(providerName, modelForProvider)) {
+      log.warn('[V1-API-WITH-TOOLS] ┌─ RATE LIMITED ────────────────');
+      log.warn(`[V1-API-WITH-TOOLS] │ provider: ${providerName}/${modelForProvider} (rate limited, skipping)`);
+      log.warn('[V1-API-WITH-TOOLS] └────────────────────────────────');
+      continue; // Skip this provider/model
+    }
 
     log.info('[V1-API-WITH-TOOLS] ┌─ ATTEMPT ─────────────────────');
     log.info('[V1-API-WITH-TOOLS] │ provider:', providerName);
     log.info('[V1-API-WITH-TOOLS] │ model:', modelForProvider);
     log.info('[V1-API-WITH-TOOLS] │ isFirst:', providerName === primaryProvider);
+    log.info('[V1-API-WITH-TOOLS] │ circuitState:', circuitBreakerMgr?.getBreaker(providerName)?.getState() || 'N/A');
     log.info('[V1-API-WITH-TOOLS] └────────────────────────────────');
 
     const toolInvocations: Array<{
@@ -1805,7 +1820,7 @@ async function runV1ApiWithTools(
             // Normalize args to fix common LLM mistakes (wrong field names, etc.)
             const args = normalizeToolArgs(toolDef.name, rawArgs) as Record<string, any>;
             const toolResult = await capabilityExecuteTool(toolDef.name, args);
-n            // FIX: Track tool call for successive tracking
+            // FIX: Track tool call for successive tracking
             recordToolCall(sessionId);
             
             // FIX: Check for re-evaluation trigger
@@ -1993,6 +2008,14 @@ n            // FIX: Track tool call for successive tracking
       log.info(`[V1-API-WITH-TOOLS] │ tools: ${toolInvocations.map(t => t.toolName).join(', ') || 'none'}`);
       log.info('[V1-API-WITH-TOOLS] └────────────────────────────────');
 
+      // FIX: Record success in circuit-breaker and model-ranker after stream completion
+      if (circuitBreakerMgr) {
+        try { circuitBreakerMgr.getBreaker(providerName).recordSuccess(); } catch { /* ignore */ }
+      }
+      if (modelRankerFns) {
+        try { modelRankerFns.recordModelAttempt(providerName, modelForProvider, true); } catch { /* ignore */ }
+      }
+
       if (providerName !== primaryProvider) {
         log.info(`V1 API (with tools): Fallback provider succeeded`, {
           primaryProvider,
@@ -2108,10 +2131,35 @@ n            // FIX: Track tool call for successive tracking
       };
     } catch (error: any) {
       lastError = error;
+
+      // FIX: Record failure in circuit-breaker and model-ranker so failing providers
+      // get de-ranked and circuit-breaker trips after repeated failures
+      if (circuitBreakerMgr) {
+        try {
+          const breaker = circuitBreakerMgr.getBreaker(providerName);
+          breaker.recordFailure(error);
+          // Invalidate cached defaults so next request picks a different provider
+          if (breaker.getState() === 'OPEN') {
+            invalidateDynamicDefaultsCache();
+          }
+        } catch { /* ignore circuit-breaker recording errors */ }
+      }
+      if (modelRankerFns) {
+        try {
+          modelRankerFns.recordModelAttempt(providerName, modelForProvider, false);
+          // Record 429 errors specifically for rate-limit tracking
+          const status = error?.status || error?.statusCode || 0;
+          if (status === 429 || (error.message || '').toLowerCase().includes('rate limit')) {
+            modelRankerFns.recordRateLimitError(providerName, modelForProvider);
+          }
+        } catch { /* ignore model-ranker recording errors */ }
+      }
+
       log.warn('[V1-API-WITH-TOOLS] ┌─ ATTEMPT FAILED ────────────');
       log.warn('[V1-API-WITH-TOOLS] │ provider:', providerName);
       log.warn('[V1-API-WITH-TOOLS] │ model:', modelForProvider);
       log.warn('[V1-API-WITH-TOOLS] │ error:', error.message);
+      log.warn('[V1-API-WITH-TOOLS] │ circuitState:', circuitBreakerMgr?.getBreaker(providerName)?.getState() || 'N/A');
       log.warn('[V1-API-WITH-TOOLS] │ will try next:', uniqueProviders.slice(uniqueProviders.indexOf(providerName) + 1).join(', ') || 'NO MORE');
       log.warn('[V1-API-WITH-TOOLS] └───────────────────────────────');
     }
@@ -2120,9 +2168,9 @@ n            // FIX: Track tool call for successive tracking
     // FIX: Track provider failure for feedback injection
   const providerFailureEntry = createFeedbackEntry(
     'failure',
-    `All providers failed: ${lastError?.message || 'Unknown error'}. Tried: ${allErrors.map(e => e.provider).join(', ')}`,
+    `All providers failed: ${lastError?.message || 'Unknown error'}. Tried: ${uniqueProviders.join(', ')}`,
     'llm_response',
-    { errors: allErrors.map(e => ({ provider: e.provider, error: e.error?.message })) },
+    { tried: uniqueProviders },
     'critical'
   );
   feedbackContext.turnNumber++;
@@ -2191,6 +2239,7 @@ async function runV1Orchestrated(
 
   const orchestrator = new PlanActVerifyOrchestrator(orchestratorConfig);
   let content = '';
+  let firstResponseContent: string | null = null; // Capture first LLM response for routing parsing
   let stepsCount = 0;
   const steps: any[] = [];
 
@@ -2210,24 +2259,103 @@ async function runV1Orchestrated(
 
       if (event.type === 'done') {
         content = event.response;
+      // Capture first response for routing parsing (before subsequent phases overwrite it)
+      if (!firstResponseContent && content) {
+        firstResponseContent = content;
+      }
         stepsCount = event.stats?.iterations || 0;
         
-        // FIX: Track response and check for healing trigger
+        // Always inject dynamic feedback and tracker summary (dynamic injector always active)
         const freshTracker = getTracker(sessionId);
         recordResponse(sessionId, content.length, true);
-        const healingTrigger = detectHealingTrigger(feedbackContext, content, freshTracker.consecutiveToolCalls);
-        if (healingTrigger.detected) {
-          log.info('[AutoHealing-Orchestrated] Healing trigger detected', { 
-            reason: healingTrigger.reason,
-            healingMode: healingTrigger.healingMode,
+        
+        // Check for healing trigger for logging purposes
+      // Always inject dynamic feedback (dynamic injector is default)
+      const healingTrigger = detectHealingTrigger(feedbackContext, content, freshTracker.consecutiveToolCalls);
+      if (healingTrigger.detected) {
+        log.info('[AutoHealing-Completion] Healing trigger detected', { 
+          reason: healingTrigger.reason,
+          healingMode: healingTrigger.healingMode,
+        });
+        const healingPrompt = generateHealingPrompt(healingTrigger, content);
+        (config as any)._healingPrompt = healingPrompt;
+      }
+      
+      // Always inject feedback + tracker summary (dynamic injector always active)
+      const injectedFeedback = injectFeedback(feedbackContext);
+      const trackerSummary = generateTrackerSummary(sessionId);
+      (config as any)._injectedFeedback = injectedFeedback;
+      (config as any)._trackerSummary = trackerSummary;
+      log.info('[DynamicInjector-Orchestrated] Feedback injection prepared', { hasFeedback: !!injectedFeedback, hasSummary: !!trackerSummary, healingTriggered: healingTrigger.detected });
+
+      // ─── First-Response Routing Parsing ───
+      // Parse [ROUTING_METADATA] embedded in the LLM's first response.
+      // This replaces the need for a separate TaskClassification step by having
+      // the LLM classify and route itself via prompt engineering.
+      const parsedRouting: ParsedRouting = parseFirstResponseRouting(firstResponseContent || content);
+      if (parsedRouting.found && parsedRouting.routing) {
+        (config as any)._routingMetadata = parsedRouting.routing;
+        log.info('[RoutingParser] Parsed routing from first response', {
+          classification: parsedRouting.routing.classification,
+          complexity: parsedRouting.routing.complexity,
+          suggestedRole: parsedRouting.routing.suggestedRole,
+          specializationRoute: parsedRouting.routing.specializationRoute,
+          planSteps: parsedRouting.routing.planSteps.length,
+          requiresAutoReprompt: parsedRouting.routing.requiresAutoReprompt,
+          estimatedSteps: parsedRouting.routing.estimatedSteps,
+        });
+
+        // If routing specifies auto-re-prompt with plan steps, inject the
+        // first step as a continuation prompt for the orchestrator loop.
+        if (parsedRouting.routing.requiresAutoReprompt && parsedRouting.routing.planSteps.length > 0) {
+          const stepReprompt = generateStepReprompt(parsedRouting.routing, 0);
+          (config as any)._stepReprompt = stepReprompt;
+          log.info('[RoutingParser] Auto-re-prompt enabled', {
+            totalSteps: parsedRouting.routing.planSteps.length,
+            firstStep: parsedRouting.routing.planSteps[0]?.step?.slice(0, 80),
           });
-          // FIX: Inject dynamic feedback and tracker summary for self-routing
-          const injectedFeedback = injectFeedback(feedbackContext);
-          const trackerSummary = generateTrackerSummary(sessionId);
-          (config as any)._injectedFeedback = injectedFeedback;
-          (config as any)._trackerSummary = trackerSummary;
-          log.info('[AutoHealing-Orchestrated] Feedback injection prepared', { hasFeedback: !!injectedFeedback, hasSummary: !!trackerSummary });
         }
+
+        // Enhance roleRedirectSection with routing metadata if not already populated
+        if (!injectedFeedback.roleRedirectSection && parsedRouting.routing.roleOptions.length > 0) {
+          const routingRedirect = routingToRoleRedirectSection(parsedRouting.routing);
+          if (routingRedirect) {
+            (config as any)._routingRoleRedirect = routingRedirect;
+            log.info('[RoutingParser] Injected routing-based role redirect options');
+          }
+        }
+      } else {
+        log.info('[RoutingParser] No routing metadata found in response', {
+          error: parsedRouting.error || 'marker not present',
+        });
+      }
+
+      // ─── Threshold-Based Review Cycle ───
+      // Check if successive re-prompts or tool calls exceed thresholds,
+      // triggering a review cycle that evaluates fulfillment quality.
+      const currentTracker = getTracker(sessionId);
+      const totalSteps = stepsCount || 0;
+      const reviewCheck = shouldTriggerReview(
+        totalSteps,
+        (config as any)._routingMetadata?.estimatedSteps || 1,
+        currentTracker.consecutiveToolCalls,
+        currentTracker.toolCalls,
+        currentTracker.weightedHistory.length > 0
+          ? currentTracker.weightedHistory.filter(h => h.success).length / currentTracker.weightedHistory.length
+          : 1.0,
+      );
+      if (reviewCheck.trigger) {
+        log.warn('[ReviewCycle] Threshold exceeded, triggering review', {
+          reason: reviewCheck.reason,
+          suggestedAction: reviewCheck.suggestedAction,
+          totalSteps,
+          consecutiveToolCalls: currentTracker.consecutiveToolCalls,
+          totalToolCalls: currentTracker.toolCalls,
+        });
+        (config as any)._reviewTriggered = true;
+        (config as any)._reviewReason = reviewCheck.reason;
+        (config as any)._reviewSuggestedAction = reviewCheck.suggestedAction;
+      }
       } else if (event.type === 'tool_result') {
         // FIX: Track tool call for successive tracking
         recordToolCall(sessionId);
@@ -2269,8 +2397,25 @@ async function runV1Orchestrated(
       }
     }
 
-    const provider = config.provider || process.env.LLM_PROVIDER || 'mistral';
-    const model = config.model || process.env.DEFAULT_MODEL || 'mistral-large-latest';
+    // FIX: Use shared dynamic defaults resolver
+    const _orchDefaults = await resolveDynamicDefaults();
+    let provider = config.provider || _orchDefaults.provider;
+    let model = config.model || _orchDefaults.model; 
+
+    // FIX: Check circuit-breaker state before calling the provider
+    try {
+      const { circuitBreakerManager } = await import('../middleware/circuit-breaker');
+      const breaker = circuitBreakerManager.getBreaker(provider);
+      if (breaker.getState() === 'OPEN') {
+        log.warn('[V1-ORCHESTRATOR] Circuit OPEN for provider:', provider, '- switching to fallback');
+        invalidateDynamicDefaultsCache();
+        // Re-resolve with fresh defaults (may pick a different provider)
+        const freshDefaults = await resolveDynamicDefaults();
+        provider = freshDefaults.provider;
+        model = freshDefaults.model;
+        log.info('[V1-ORCHESTRATOR] Switched to fallback provider:', provider, 'model:', model);
+      }
+    } catch { /* circuit-breaker unavailable */ }
     const duration = Date.now() - startTime;
 
     // FIX: Record telemetry for v1-orchestrator path
@@ -2296,11 +2441,27 @@ async function runV1Orchestrated(
         model,
         duration,
         orchestrator: true,
+        routing: (config as any)._routingMetadata ? {
+          classification: (config as any)._routingMetadata.classification,
+          complexity: (config as any)._routingMetadata.complexity,
+          suggestedRole: (config as any)._routingMetadata.suggestedRole,
+          specializationRoute: (config as any)._routingMetadata.specializationRoute,
+          planSteps: (config as any)._routingMetadata.planSteps?.length || 0,
+          requiresAutoReprompt: (config as any)._routingMetadata.requiresAutoReprompt,
+          estimatedSteps: (config as any)._routingMetadata.estimatedSteps,
+          reviewTriggered: (config as any)._reviewTriggered || false,
+          reviewReason: (config as any)._reviewReason || undefined,
+        } : undefined,
       },
     };
   } catch (err: any) {
-    const provider = config.provider || process.env.LLM_PROVIDER || 'mistral';
-    const model = config.model || process.env.DEFAULT_MODEL || 'mistral-large-latest';
+    // FIX: Invalidate cache so subsequent requests don't retry the failed provider
+    invalidateDynamicDefaultsCache();
+
+    // FIX: Use shared dynamic defaults resolver
+    const _orchDefaults = await resolveDynamicDefaults();
+    const provider = config.provider || _orchDefaults.provider;
+    const model = config.model || _orchDefaults.model;
     const duration = Date.now() - startTime;
 
     // FIX: Record failure telemetry for v1-orchestrator path
@@ -2355,8 +2516,10 @@ async function runV1ApiCompletion(
   log.info('[V1-API-COMPLETION] ┌─ ENTRY ──────────────────────────');
 
   // Use config provider/model if specified, otherwise fall back to env defaults
-  const primaryProvider = config.provider || process.env.LLM_PROVIDER || 'mistral';
-  const primaryModel = config.model || process.env.DEFAULT_MODEL || 'mistral-large-latest';
+  // FIX: Use shared dynamic defaults resolver instead of hardcoded mistral
+  const _completionDefaults = await resolveDynamicDefaults();
+  const primaryProvider = config.provider || _completionDefaults.provider;
+  const primaryModel = config.model || _completionDefaults.model;
   const requestId = `unified-v1-${Date.now()}`;
 
   log.info('[V1-API-COMPLETION] │ primaryProvider:', primaryProvider);
@@ -2367,24 +2530,6 @@ async function runV1ApiCompletion(
   // FIX: Map each provider to a model that supports tool calling / function calling.
   // Also: when falling back, check if the model is valid for the target provider.
   const { PROVIDERS } = await import('../chat/llm-providers');
-  const PROVIDER_DEFAULT_MODELS: Record<string, string> = {
-    openai: 'gpt-4o',
-    anthropic: 'claude-sonnet-4-6-20250514',
-    google: 'gemini-2.5-flash',
-    mistral: 'mistral-large-latest',  // Large supports tools, small doesn't
-    openrouter: 'meta-llama/llama-3.3-70b-instruct',
-    github: 'llama-3.3-70b-instruct',
-    nvidia: 'nvidia/nemotron-4-340b-instruct',
-    groq: 'llama-3.3-70b-versatile',
-    together: 'meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo',
-    zen: 'zen',
-    portkey: 'openrouter/auto',
-    chutes: 'meta-llama/Llama-3.3-70B-Instruct',
-    fireworks: 'accounts/fireworks/models/llama-v3p1-70b-instruct',
-    deepinfra: 'meta-llama/Meta-Llama-3.1-70B-Instruct',
-    anyscale: 'meta-llama/Meta-Llama-3.1-70B-Instruct',
-    lepton: 'llama3-70b',
-  };
 
   function getModelForProvider(providerName: string): string {
     // If no explicit model set, use provider default
@@ -2426,6 +2571,23 @@ async function runV1ApiCompletion(
       log.info('[V1-API-COMPLETION] │ model:', modelForProvider);
       log.info('[V1-API-COMPLETION] │ isFirst:', providerName === primaryProvider);
       log.info('[V1-API-COMPLETION] └───────────────────────────────');
+
+      // FIX: Check circuit-breaker and rate-limit state before attempting
+      try {
+        const { circuitBreakerManager: cbMgr } = await import('../middleware/circuit-breaker');
+        const cb = cbMgr.getBreaker(providerName);
+        if (cb.getState() === 'OPEN') {
+          log.warn('[V1-API-COMPLETION] CIRCUIT OPEN - Skipping provider:', providerName);
+          continue;
+        }
+      } catch { /* circuit-breaker unavailable, proceed */ }
+      try {
+        const { isRateLimited } = await import('../models/model-ranker');
+        if (isRateLimited(providerName, modelForProvider)) {
+          log.warn('[V1-API-COMPLETION] RATE LIMITED - Skipping model:', modelForProvider, 'for provider:', providerName);
+          continue;
+        }
+      } catch { /* model-ranker unavailable, proceed */ }
 
       const { streamWithVercelAI } = await import('../chat/vercel-ai-streaming');
 
@@ -2482,6 +2644,16 @@ async function runV1ApiCompletion(
           fallbackModel: modelForProvider,
         });
       }
+
+      // FIX: Record success in circuit-breaker and model-ranker for runV1ApiCompletion
+      try {
+        const { circuitBreakerManager: cbMgrOk } = await import('../middleware/circuit-breaker');
+        cbMgrOk.getBreaker(providerName).recordSuccess();
+      } catch { /* ignore */ }
+      try {
+        const { recordModelAttempt } = await import('../models/model-ranker');
+        recordModelAttempt(providerName, modelForProvider, true);
+      } catch { /* ignore */ }
 
       // FIX: Extract file writes from bash code blocks in the LLM response
       // and actually write them to the VFS. The LLM often outputs bash commands
@@ -2603,6 +2775,16 @@ return {
       };
     } catch (error: any) {
       lastError = error;
+
+      // FIX: Invalidate cache so subsequent requests pick a different provider
+      invalidateDynamicDefaultsCache();
+
+      // Record failure in circuit-breaker
+      try {
+        const { circuitBreakerManager: cbMgrCatch } = await import('../middleware/circuit-breaker');
+        cbMgrCatch.getBreaker(providerName).recordFailure(error);
+      } catch { /* ignore */ }
+
       log.warn('[V1-API-COMPLETION] ┌─ ATTEMPT FAILED ────────────');
       log.warn('[V1-API-COMPLETION] │ provider:', providerName);
       log.warn('[V1-API-COMPLETION] │ model:', modelForProvider);
@@ -2670,22 +2852,12 @@ async function attemptFallback(
   // Use startup capabilities — don't try modes that weren't available at startup
   const caps = startupCaps;
 
-  // Use task classifier for complexity detection (with regex fallback)
-  // IMPORTANT: Only classify the raw user task, not the full context-augmented message
+  // Determine task complexity using regex (TaskClassifier removed)
+  // IMPORTANT: Only analyze the raw user task, not the full context-augmented message
   let isComplexTask = false;
-  try {
-    const rawTask = extractRawUserTask(config.userMessage);
-    const classification = await taskClassifier.classify(rawTask);
-    isComplexTask = classification.complexity === 'complex' || classification.complexity === 'moderate';
-    log.debug('Fallback classification', {
-      complexity: classification.complexity,
-      isComplexTask,
-    });
-  } catch {
-    // Fallback to regex
-    const rawTask = extractRawUserTask(config.userMessage);
-    isComplexTask = /create|build|implement|refactor|migrate|add feature|new file|multiple files|project structure|full-stack|application|service|api|component|page/i.test(rawTask);
-  }
+  const rawTask = extractRawUserTask(config.userMessage);
+  isComplexTask = /create|build|implement|refactor|migrate|add feature|new file|multiple files|project structure|full-stack|application|service|api|component|page/i.test(rawTask);
+  log.debug('Fallback complexity detection', { isComplexTask });
 
   // TEMP: If v2 is disabled globally, skip all v2 fallbacks
   const v2Disabled = process.env.DISABLE_V2_MODE !== 'false';

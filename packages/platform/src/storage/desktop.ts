@@ -18,8 +18,8 @@ export interface StorageAdapter {
 const APP_DATA_DIR = 'storage';
 
 function pathForKey(key: string): string {
-  // Sanitize key to prevent path traversal
-  const safeKey = key.replace(/[/\\]/g, '_');
+  // Use base64url encoding to ensure unique, filesystem-safe keys
+  const safeKey = Buffer.from(key).toString('base64url');
   return `${APP_DATA_DIR}/${safeKey}.json`;
 }
 

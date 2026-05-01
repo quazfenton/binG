@@ -65,10 +65,10 @@ def verify_func(sample: EvaluationSample, timeout_score: float = 0, **kwargs) ->
 
         # Parse the LLM response for a score
         response_lower = response.lower()
-        if "1" in response_lower or "correct" in response_lower or "yes" in response_lower:
-            return {"reward": 1.0, "reasoning": response[:200]}
-        elif "0" in response_lower or "incorrect" in response_lower or "no" in response_lower:
+        if "incorrect" in response_lower or "no" in response_lower or "0" in response_lower:
             return {"reward": 0.0, "reasoning": response[:200]}
+        elif "correct" in response_lower or "yes" in response_lower or "1" in response_lower:
+            return {"reward": 1.0, "reasoning": response[:200]}
         else:
             # Try to extract a numeric score
             import re

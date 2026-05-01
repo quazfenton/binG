@@ -1,0 +1,44 @@
+{
+  "_comment": "Custom intent extensions — add your own intents here without modifying code.",
+  "_usage": "Load JSON, compile pattern strings to RegExp, then merge: const compiled = customIntents.map(i => ({ ...i, patterns: i.patterns.map(p => ({ ...p, regex: new RegExp(p.regex, 'i') })) })); INTENT_SCHEMA.push(...compiled);",
+  "customIntents": [
+    {
+      "id": "docker-deploy",
+      "routingTarget": "opencode",
+      "description": "Docker build, deploy, and container management tasks.",
+      "patterns": [
+        { "regex": "\\b(docker\\s+(build|run|compose|deploy|push|pull))\\b", "weight": 3 },
+        { "regex": "\\b(container|image|registry)\\b", "weight": 2 }
+      ],
+      "keywords": [
+        { "word": "docker", "weight": 3 },
+        { "word": "container", "weight": 2 },
+        { "word": "image", "weight": 2 },
+        { "word": "compose", "weight": 2 },
+        { "word": "deploy", "weight": 2 },
+        { "word": "registry", "weight": 1 }
+      ],
+      "baseConfidence": 0.6
+    },
+    {
+      "id": "database-query",
+      "routingTarget": "opencode",
+      "description": "Database queries, migrations, and schema management.",
+      "patterns": [
+        { "regex": "\\b(SELECT|INSERT|UPDATE|DELETE|CREATE TABLE)\\b", "weight": 3 },
+        { "regex": "\\b(select|insert|update|delete|create table)\\b", "weight": 3 },
+        { "regex": "\\b(migration|schema|prisma|sequelize)\\b", "weight": 2 }
+      ],
+      "keywords": [
+        { "word": "query", "weight": 2 },
+        { "word": "database", "weight": 2 },
+        { "word": "sql", "weight": 2 },
+        { "word": "migration", "weight": 2 },
+        { "word": "schema", "weight": 2 },
+        { "word": "prisma", "weight": 2 },
+        { "word": "table", "weight": 1 }
+      ],
+      "baseConfidence": 0.6
+    }
+  ]
+}

@@ -207,7 +207,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Check provider availability if a preferred provider is specified
-    if (preferredProvider && !availableProviders.includes(preferredProvider)) {
+    if (preferredProvider && !availableProviders.some(p => p.id === preferredProvider)) {
       clearTimeout(timeoutId);
       return NextResponse.json(
         { error: `Requested provider '${preferredProvider}' is not available.` },

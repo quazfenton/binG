@@ -48,7 +48,7 @@ import {
   parseCodeBlocksFromMessages,
   type CodeBlock as ParsedCodeBlock,
 } from "../lib/code-parser";
-import { createDebugLogger } from "../../infra/config/config/features";
+import { createDebugLogger } from "../.bing-infra-config/config/features";
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog";
 import { checkFileConflicts } from "@/lib/session-naming";
 import { buildApiHeaders } from "@/lib/utils";

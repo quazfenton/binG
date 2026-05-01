@@ -1,6 +1,7 @@
 "use client"
 
-import React, { useState, useEffect, useMemo } from 'react'
+import React, { useState, useEffect, useMemo } from 'react';
+import { PluginRegistry } from '@/lib/plugins/plugin-registry';
 import { Card, CardContent } from '../ui/card'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
@@ -67,6 +68,16 @@ export default function PluginMarketplace({ onClose, onInstall }: PluginMarketpl
   const [searchTerm, setSearchTerm] = useState('')
   const [selectedCategory, setSelectedCategory] = useState('all')
   const [installedPlugins, setInstalledPlugins] = useState<Set<string>>(new Set())
+
+  // Sync with registry updates
+  useEffect(() => {
+    const handleUpdate = () => {
+      const installed = PluginRegistry.getInstalled();
+      setInstalledPlugins(new Set(installed.map(p => p.id)));
+    };
+    window.addEventListener('plugin-update', handleUpdate);
+    return () => window.removeEventListener('plugin-update', handleUpdate);
+  }, []);
   const [showOnlyFree, setShowOnlyFree] = useState(false)
   const [showOnlyCompatible, setShowOnlyCompatible] = useState(true)
   const [sortBy, setSortBy] = useState<'rating' | 'downloads' | 'name' | 'updated'>('rating')
@@ -269,58 +280,34 @@ export default function PluginMarketplace({ onClose, onInstall }: PluginMarketpl
     return filtered
   }, [plugins, searchTerm, selectedCategory, showOnlyFree, showOnlyCompatible, sortBy])
 
+// ... (in the component)
+
   const handleInstall = async (plugin: Plugin) => {
     try {
-      // Try API first
-      try {
-        const response = await fetch(`/api/plugins/${plugin.id}/install`, {
-          method: 'POST',
-        })
-        
-        const result = await response.json()
-        
-        if (result.success) {
-          setPlugins(prev => prev.map(p =>
-            p.id === plugin.id ? { ...p, installed: true } : p
-          ))
-          setInstalledPlugins(prev => new Set(prev).add(plugin.id))
-          toast.success(`Installed ${plugin.name}`)
-          onInstall?.(plugin.id)
-          return
-        }
-      } catch (e) {
-        // API not available, simulate installation
-      }
-      
-      // Simulate installation
-      setPlugins(prev => prev.map(p =>
-        p.id === plugin.id ? { ...p, installed: true } : p
-      ))
-      setInstalledPlugins(prev => new Set(prev).add(plugin.id))
-      toast.success(`Installed ${plugin.name}`)
-      onInstall?.(plugin.id)
+      PluginRegistry.install(plugin.id, plugin.name);
+      setPlugins(prev => prev.map(p => p.id === plugin.id ? { ...p, installed: true } : p));
+      setInstalledPlugins(prev => new Set(prev).add(plugin.id));
+      toast.success(`Installed ${plugin.name}`);
+      onInstall?.(plugin.id);
     } catch (err: any) {
-      console.error('Installation failed:', err)
-      toast.error(err.message || 'Installation failed')
+      toast.error('Installation failed');
     }
-  }
+  };
 
   const handleUninstall = async (plugin: Plugin) => {
     try {
-      setPlugins(prev => prev.map(p =>
-        p.id === plugin.id ? { ...p, installed: false } : p
-      ))
+      PluginRegistry.uninstall(plugin.id);
+      setPlugins(prev => prev.map(p => p.id === plugin.id ? { ...p, installed: false } : p));
       setInstalledPlugins(prev => {
-        const next = new Set(prev)
-        next.delete(plugin.id)
-        return next
-      })
-      toast.success(`Uninstalled ${plugin.name}`)
+        const next = new Set(prev);
+        next.delete(plugin.id);
+        return next;
+      });
+      toast.success(`Uninstalled ${plugin.name}`);
     } catch (err: any) {
-      console.error('Uninstallation failed:', err)
-      toast.error(err.message || 'Uninstallation failed')
+      toast.error('Uninstallation failed');
     }
-  }
+  };
 
   // Memoize categories to prevent recomputation on every render
   const categories = useMemo(() => {

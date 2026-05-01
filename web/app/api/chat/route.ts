@@ -15,6 +15,8 @@ import { contextPackService } from '@/lib/virtual-filesystem/context-pack-servic
 import { ShadowCommitManager } from '@/lib/orchestra/stateful-agent/commit/shadow-commit';
 import { extractSessionIdFromPath, resolveScopedPath as resolveScopeUtil, sanitizeScopePath, extractScopePath, normalizeSessionId } from '@/lib/virtual-filesystem/scope-utils';
 import { createNDJSONParser } from '@/lib/utils/ndjson-parser';
+import { streamStateManager } from '@/lib/streaming/stream-state-manager';
+import { notifyStreamComplete } from '@/lib/streaming/stream-control-handler';
 import type { LLMMessage, StreamingResponse } from "@/lib/chat/llm-providers";
 import { checkRateLimit } from '@/lib/middleware/rate-limiter';
 import { createFilesystemTools, createAgentLoop } from '@/lib/orchestra/mastra';
@@ -24,6 +26,7 @@ import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp';
 import { workforceManager } from '@bing/shared/agent/workforce-manager';
 import { createTaskClassifier as createTaskClassifierShared } from '@bing/shared/agent/task-classifier';
 import { VFS_FILE_EDITING_TOOL_PROMPT } from '@bing/shared/agent/system-prompts';
+import { generateDynamicInjection } from '@bing/shared/agent/system-prompts-dynamic';
 import { mem0Search, buildMem0SystemPrompt, isMem0Configured, mem0Add, prewarmMem0Cache } from '@/lib/powers/mem0-power';
 import { createSSEEmitter, SSE_RESPONSE_HEADERS, SSE_EVENT_TYPES } from '@/lib/streaming/sse-event-schema';
 // Lazy imports — avoid 'ws' module resolution during instrumentation context
@@ -1010,6 +1013,13 @@ export async function POST(request: NextRequest) {
     // Build system prompt with optional response style modifiers
     let baseSystemPrompt = process.env.OPENCODE_SYSTEM_PROMPT || '';
 
+// Inject dynamic first-response routing ONLY for code/agentic requests.
+// Simple conversational messages ("hello", "thanks") don't need routing metadata
+// — adding it would waste tokens and degrade response quality.
+if (isCodeRequest || enableFilesystemEdits) {
+  baseSystemPrompt += generateDynamicInjection();
+}
+
     // CRITICAL: Unified tool usage instructions with ENFORCED output formats.
     // The LLM must use ONE consistent format for file operations.
     baseSystemPrompt += `\n\n=== FILE OPERATION INSTRUCTIONS (READ CAREFULLY) ===
@@ -1553,6 +1563,8 @@ const config: UnifiedAgentConfig = {
                   agent: 'unified',
                   mode: result.mode,
                   processingSteps,
+                  // Include routing metadata so client can auto-continue multi-step flows
+                  ...(result.metadata?.routing ? { routing: result.metadata.routing } : {}),
                 },
                 data: result,
               });

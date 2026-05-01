@@ -8,9 +8,10 @@ export const FEATURE_FLAGS = {
   CLOUD_STORAGE_PER_USER_LIMIT_BYTES: 5 * 1024 * 1024 * 1024, // 5GB per user quota
 
   // Nextcloud integration
-  NEXTCLOUD_URL: 'https://your-nextcloud-instance/remote.php/dav/files/username/',
-  NEXTCLOUD_USERNAME: 'admin',
-  NEXTCLOUD_PASSWORD: 'securepassword',
+  NEXTCLOUD_URL: process.env.NEXT_PUBLIC_NEXTCLOUD_URL ||
+    'https://your-nextcloud-instance/remote.php/dav/files/username/',
+  NEXTCLOUD_USERNAME: process.env.NEXTCLOUD_USERNAME || '',
+  NEXTCLOUD_PASSWORD: process.env.NEXTCLOUD_PASSWORD || '',
   
   // VPS Deployment Configuration  
   ENABLE_VPS_DEPLOYMENT: true,
@@ -42,12 +43,34 @@ export const FEATURE_FLAGS = {
   SKIP_AUTH_IN_DEV: process.env.NEXT_PUBLIC_SKIP_AUTH_IN_DEV === 'true',
 } as const;
 
-// Helper functions
-export const isFeatureEnabled = (feature: keyof typeof FEATURE_FLAGS): boolean => {
+// Boolean feature flags only
+const BOOLEAN_FEATURES = [
+  'ENABLE_CLOUD_STORAGE',
+  'ENABLE_VPS_DEPLOYMENT',
+  'IS_DEVELOPMENT',
+  'ENABLE_DEBUG_LOGS',
+  'ENABLE_GITHUB_INTEGRATION',
+  'ENABLE_HUGGINGFACE_SPACES',
+  'ENABLE_ADS',
+  'ENABLE_PREMIUM_THEMES',
+  'ENABLE_UNLIMITED_PROMPTS',
+  'ENABLE_PROMPT_HISTORY',
+  'SKIP_AUTH_IN_DEV',
+] as const;
+
+type BooleanFeatureKey = typeof BOOLEAN_FEATURES[number];
+
+export const isFeatureEnabled = (feature: BooleanFeatureKey): boolean => {
+  if (!(feature in FEATURE_FLAGS)) {
+    throw new Error(`Unknown feature flag: ${feature}`);
+  }
   return FEATURE_FLAGS[feature] as boolean;
 };
 
 export const getFeatureConfig = <T>(feature: keyof typeof FEATURE_FLAGS): T => {
+  if (!(feature in FEATURE_FLAGS)) {
+    throw new Error(`Unknown feature flag: ${feature}`);
+  }
   return FEATURE_FLAGS[feature] as T;
 };
 

@@ -1,0 +1,75 @@
+{
+  "name": "@bing/cli",
+  "version": "1.0.0",
+  "description": "binG - Agentic Workspace CLI",
+  "type": "module",
+  "main": "dist/bin.js",
+  "bin": {
+    "bing": "./dist/bin.js",
+    "kilocode": "./dist/kilocode-cli.js"
+  },
+  "scripts": {
+    "start": "node dist/bin.js",
+    "dev": "tsx bin.ts",
+    "build": "tsc",
+    "test": "vitest run",
+    "lint": "eslint .",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "keywords": [
+    "bing",
+    "ai",
+    "agent",
+    "sandbox",
+    "cli",
+    "llm",
+    "modal",
+    "daytona",
+    "e2b",
+    "opencode"
+  ],
+  "author": "binG Team",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/quazfenton/binG.git",
+    "directory": "cli"
+  },
+  "bugs": {
+    "url": "https://github.com/quazfenton/binG/issues"
+  },
+  "homepage": "https://github.com/quazfenton/binG#readme",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "chalk": "^5.3.0",
+    "commander": "^12.1.0",
+    "dotenv": "^16.3.1",
+    "form-data": "^4.0.0",
+    "fs-extra": "^11.2.0",
+    "gradient-string": "^2.0.2",
+    "ora": "^8.0.1",
+    "simple-git": "^3.25.0",
+    "ws": "^8.14.2"
+  },
+  "devDependencies": {
+    "@types/fs-extra": "^11.0.4",
+    "@types/gradient-string": "^1.1.5",
+    "@types/node": "^20.10.0",
+    "@types/ws": "^8.5.10",
+    "@vercel/ncc": "^0.38.4",
+    "eslint": "^9.0.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.0",
+    "vitest": "^2.0.0"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}

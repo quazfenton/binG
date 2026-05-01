@@ -123,7 +123,7 @@ import {
   Figma,
 } from "lucide-react";
 
-import { createDebugLogger } from "../../infra/config/config/features";
+import { createDebugLogger } from "../.bing-infra-config/config/features";
 import { clipboard } from "@bing/platform/clipboard";
 
 // Use any for VFSProject type since the import path doesn't work well with TypeScript

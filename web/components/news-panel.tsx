@@ -100,7 +100,7 @@ interface LayoutConfig {
   cardStyle: 'minimal' | 'rich' | 'collage';
 }
 
-// Predefined layout templates
+import { cleanNewsString } from '@/lib/utils/string-cleaner';
 const LAYOUT_TEMPLATES: Record<string, LayoutConfig> = {
   default: { id: 'default', name: 'Default', defaultView: 'grid', showImages: true, showMetadata: true, columns: 2, cardStyle: 'rich' },
   minimal: { id: 'minimal', name: 'Minimal', defaultView: 'list', showImages: false, showMetadata: false, columns: 1, cardStyle: 'minimal' },
@@ -201,12 +201,12 @@ async function fetchRSSArticles(source: string, signal?: AbortSignal): Promise<N
     // Transform API response to NewsArticle format
     return data.articles.map((article: any) => ({
       id: article.id,
-      title: article.title,
-      description: article.description,
+      title: cleanNewsString(article.title),
+      description: cleanNewsString(article.description),
       url: article.url,
       imageUrl: article.imageUrl,
       source: data.source,
-      author: article.author,
+      author: cleanNewsString(article.author),
       publishedAt: article.publishedAt || Date.now(),
       category: article.categories?.[0],
       categories: article.categories,

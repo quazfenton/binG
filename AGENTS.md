@@ -1,10 +1,12 @@
 # binG Agent Guidelines
 
 This file is the working contract for agents editing `binG`. Prefer what the repository actually does over older docs.
+  
 
 ## Working Rules
-- Assume the worktree is dirty. Do not revert unrelated user changes.
-- Prefer `rg` / `rg --files` for search.
+- Assume the worktree is dirty. Do not revert unrelated user changes. DO NOT ever use 'git restore' or 'git checkout' to revert a file (to avoid carelessly wiping all unsaved progress beyond your edits) just to fix a small error. This may only be used if NECESSARY and sparingly when a file has been completely corrupted/truncated from a latest bad edit, and even then, only CAREFULLY after you have used 'git diff' to review file history and ensure that you reapply any uncommitted progress that will be lost.
+- Prioritize the use of numbered steps/tasks/planning to complete to avoid skipping or overlook of full completion of the tasks with review, careful tracing of logic & related or preexisting files, and ensure best architectural optimizations or any necessary abstractions/modularity for adaptability, thorough handling, and robustness of implementations.   
+- Adapt to user's OS environment if there are command failures; Prefer `rg` / `rg --files` for search (edit: user currently doesn't have ripgrep but it can be install), or Retry any failures with different a command if user's environment cause an improper command to fail (will likely be Windows Powershell, or you may also use wsl Linux commands. Dont keep reusing the same failing command & skipping when it is fails; you can adapt your methodology when indications show you are clearly assuming the wrong system/format or if you need to install an additional tool that would be optimal and enabling for the use case).
 - Use `pnpm` for project commands.
 - Use `@/` imports for repo-root paths.
 - Default exports are mainly for React components; prefer named exports elsewhere.
@@ -115,8 +117,6 @@ npx vitest run path/to/file.test.ts
 - Did you avoid introducing new secrets or logging existing ones?
 
 ## Known Issues Worth Remembering
-- [`env.example`](./env.example) still contains many placeholder credentials and duplicate sections; tests that read env may behave as if providers are configured when they are not actually usable.
 - The lint baseline still includes many warnings in legacy files, especially `any` usage and unused locals.
-- Full test runs still include integration-heavy suites that are not appropriate as a default validation step for every small change.
 
 When in doubt, inspect adjacent code and the exact test or route you are touching instead of relying on older documentation.

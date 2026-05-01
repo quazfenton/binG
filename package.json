@@ -1,5 +1,8 @@
 {
   "name": "bing",
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "private": true,
   "scripts": {
     "dev": "pnpm --filter web dev",

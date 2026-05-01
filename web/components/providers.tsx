@@ -6,7 +6,6 @@ import { TamboContextProvider } from '@/contexts/tambo-context';
 import { PanelProvider } from '@/contexts/panel-context';
 import { OrchestrationModeProvider } from '@/contexts/orchestration-mode-context';
 import { SpecEnhancementModeProvider } from '@/contexts/spec-enhancement-mode-context';
-import { ThemeProvider } from './theme-provider';
 import { createLogger } from '@/lib/utils/logger';
 import { tauriFetch } from '@/lib/tauri-api-adapter';
 
@@ -42,24 +41,16 @@ export function Providers({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <ThemeProvider
-      attribute="class"
-      defaultTheme="dark"
-      themes={["dark", "light", "ocean", "forest", "sepia", "midnight", "rose", "desert", "lavender", "slate"]}
-      enableSystem={false}
-      disableTransitionOnChange
-    >
-      <AuthProvider>
-        <TamboContextProvider>
-          <PanelProvider>
-            <OrchestrationModeProvider>
-              <SpecEnhancementModeProvider>
-                {children}
-              </SpecEnhancementModeProvider>
-            </OrchestrationModeProvider>
-          </PanelProvider>
-        </TamboContextProvider>
-      </AuthProvider>
-    </ThemeProvider>
+    <AuthProvider>
+      <TamboContextProvider>
+        <PanelProvider>
+          <OrchestrationModeProvider>
+            <SpecEnhancementModeProvider>
+              {children}
+            </SpecEnhancementModeProvider>
+          </OrchestrationModeProvider>
+        </PanelProvider>
+      </TamboContextProvider>
+    </AuthProvider>
   );
 }

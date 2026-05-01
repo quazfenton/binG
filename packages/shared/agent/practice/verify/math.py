@@ -42,9 +42,12 @@ def verify_func(sample: EvaluationSample, timeout_score: float = 0, **kwargs) ->
 
     except ImportError:
         # Fallback to simple string matching
+        import re
         response_clean = sample.response.strip().lower()
         answer_clean = sample.correct_answer.strip().lower()
-        if response_clean == answer_clean or answer_clean in response_clean:
+        # Use word boundaries to avoid partial matches (e.g., '1' matching '10')
+        pattern = r'\b' + re.escape(answer_clean) + r'\b'
+        if response_clean == answer_clean or re.search(pattern, response_clean):
             return {"reward": 1.0, "reasoning": "String match"}
         return {"reward": 0.0, "reasoning": "No match (math_verify not installed)"}
     except TimeoutException:

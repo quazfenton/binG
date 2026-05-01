@@ -37,7 +37,7 @@ import {
   ConfidenceExpression,
   OutputFormat,
   type PromptParameters,
-} from '../../packages/shared/agent/prompt-parameters';
+} from '@bing/shared/agent/prompt-parameters';
 import { useResponseStyle } from '@/contexts/response-style-context';
 import { cn } from '@/lib/utils';
 import {

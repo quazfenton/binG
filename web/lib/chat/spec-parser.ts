@@ -7,6 +7,10 @@
 
 import { Spec } from '@/lib/prompts/spec-generator'
 import { createLogger } from '@/lib/utils/logger'
+import {
+  tryRepairJson,
+  extractFirstJsonObject,
+} from '@bing/shared/agent/spec-parser-utils'
 
 const logger = createLogger('Spec:Parser')
 
@@ -19,91 +23,6 @@ export interface RefinementChunk {
 export interface ExplodedChunk extends RefinementChunk {
   /** Single task for focused refinement */
   tasks: [string]
-}
-
-// ---------------------------------------------------------------------------
-// Lightweight JSON fixup — handles the most common LLM formatting mistakes
-// WITHOUT resorting to a full JSON5 parser.
-// ---------------------------------------------------------------------------
-
-/**
- * Remove trailing commas from JSON-like strings.
- * Handles: [1, 2,] and { "a": 1, } patterns.
- */
-function removeTrailingCommas(raw: string): string {
-  // Trailing comma before ] or }
-  return raw.replace(/,(\s*[}\]])/g, '$1')
-}
-
-/**
- * Strip a single-line or multi-line JavaScript comment from a JSON string.
- * LLMs occasionally emit // and /* comments inside JSON blobs.
- */
-function stripJsonComments(raw: string): string {
-  // Remove single-line // comments (safe outside of strings for LLM outputs)
-  return raw
-    .replace(/\/\/[^\n]*/g, '')
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-}
-
-/**
- * Apply a sequence of cheap fixups that make minor LLM JSON errors parseable.
- * Falls back to the original string if the result is not valid JSON.
- */
-function tryRepairJson(raw: string): string {
-  let s = stripJsonComments(raw)
-  s = removeTrailingCommas(s)
-  return s
-}
-
-// ---------------------------------------------------------------------------
-// Brace-balanced JSON extraction — O(n) single-pass
-// ---------------------------------------------------------------------------
-
-/**
- * Extract the first top-level JSON object from an arbitrary string.
- * Uses a single O(n) pass that correctly handles escaped characters inside
- * string literals, so it won't mistake a { inside "some \"brace\" string"
- * for a real brace.
- */
-function extractFirstJsonObject(text: string): string | null {
-  let depth = 0
-  let inString = false
-  let escape = false
-  let start = -1
-
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i]
-
-    if (escape) {
-      escape = false
-      continue
-    }
-
-    if (ch === '\\' && inString) {
-      escape = true
-      continue
-    }
-
-    if (ch === '"') {
-      inString = !inString
-      continue
-    }
-
-    if (inString) continue
-
-    if (ch === '{') {
-      if (depth === 0) start = i
-      depth++
-    } else if (ch === '}') {
-      if (depth > 0) depth--
-      if (depth === 0 && start !== -1) {
-        return text.slice(start, i + 1)
-      }
-    }
-  }
-
-  return null
 }
 
 // ---------------------------------------------------------------------------
@@ -177,9 +96,11 @@ export function safeParseSpec(raw: string): Spec | null {
       logger.debug('Parsed JSON via brace-balanced extraction')
       return parsed as Spec
     } catch {
-      // 4. Extraction + repair
+      // Extraction succeeded but JSON.parse failed (e.g., trailing commas or
+      // comments). Repair and retry.
       try {
-        const parsed = JSON.parse(tryRepairJson(extracted))
+        const repaired = tryRepairJson(extracted)
+        const parsed = JSON.parse(repaired)
         logger.debug('Parsed JSON via brace-balanced extraction + repair')
         return parsed as Spec
       } catch {

@@ -4,7 +4,7 @@
  * Manages PGP keys and public social discovery.
  */
 
-import { db } from '@/lib/database/db'; // Assuming your standard DB connector
+import { initializeDatabase } from '@/lib/database/db';
 
 export interface MessagingProfile {
   userId: string;
@@ -20,6 +20,7 @@ export class MessagingIdentity {
    * Search for users by email or display name
    */
   static async searchUsers(query: string): Promise<MessagingProfile[]> {
+    const db = await initializeDatabase();
     const stmt = db.prepare(`
       SELECT * FROM user_messaging_profiles 
       WHERE searchable = 1 AND (display_name LIKE ? OR user_id LIKE ?)
@@ -32,6 +33,7 @@ export class MessagingIdentity {
    * Update PGP key for E2EE
    */
   static async updatePGPKey(userId: string, publicKey: string): Promise<void> {
+    const db = await initializeDatabase();
     const stmt = db.prepare(`
       INSERT OR REPLACE INTO user_messaging_profiles (user_id, pgp_public_key)
       VALUES (?, ?)
@@ -43,6 +45,7 @@ export class MessagingIdentity {
    * Get public profile for encryption
    */
   static async getPublicProfile(userId: string): Promise<MessagingProfile | null> {
+    const db = await initializeDatabase();
     const stmt = db.prepare(`SELECT * FROM user_messaging_profiles WHERE user_id = ?`);
     return stmt.get(userId) as MessagingProfile | null;
   }
