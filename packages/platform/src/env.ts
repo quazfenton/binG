@@ -101,17 +101,15 @@ export function getDefaultWorkspaceRoot(): string | null {
     }
   }
   
-import * as path from 'path';
-
   const platform = typeof process !== 'undefined' ? process.platform : 'linux';
-
-// ... (existing code, skipping to getDefaultWorkspaceRoot)
 
   if (platform === 'win32') {
     const userProfile = typeof process !== 'undefined' && process.env ? process.env.USERPROFILE : undefined;
     if (!userProfile || typeof userProfile !== 'string' || userProfile.trim() === '') {
       return null;
     }
+    // Dynamic import to avoid Node.js API usage at module load time
+    const path = require('path');
     return path.join(userProfile, 'workspace');
   }
 
@@ -119,6 +117,8 @@ import * as path from 'path';
   if (!home || typeof home !== 'string' || home.trim() === '') {
     return null;
   }
+  // Dynamic import to avoid Node.js API usage at module load time
+  const path = require('path');
   return path.join(home, 'workspace');
 }
 

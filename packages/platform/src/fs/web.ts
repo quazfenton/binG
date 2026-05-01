@@ -15,7 +15,7 @@ export interface FsAdapter {
   removeFile?(path: string): Promise<void>;
   exists?(path: string): Promise<boolean>;
   copyFile?(src: string, dest: string): Promise<void>;
-  openFileDialog(options?: { accept?: string; multiple?: boolean }): Promise<File[] | string[]>;
+  openFileDialog(options?: { accept?: string; multiple?: boolean }): Promise<string[]>;
   saveFileDialog?(options?: { defaultPath?: string }): Promise<string | null>;
   // Web-only methods (optional for desktop)
   readAsDataURL?(file: File): Promise<string>;

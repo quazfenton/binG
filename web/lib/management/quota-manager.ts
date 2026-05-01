@@ -39,7 +39,7 @@ const DEFAULT_QUOTAS: Record<string, { limit: number, period: 'monthly' | 'daily
   google_imagen: { limit: 500, period: 'daily' },
 };
 
-class QuotaManager {
+export class QuotaManager {
   private quotas: Map<string, ProviderQuota> = new Map();
   private db: any = null;
   private initialized = false;
@@ -273,20 +273,33 @@ class QuotaManager {
     return { allowed, remaining, isDisabled: quota.isDisabled };
   }
 
-  incrementUsage(provider: string, amount: number = 1): void {
+  resetQuota(provider: string): void {
     this.ensureInitialized();
-    
     const quota = this.quotas.get(provider);
     if (!quota) return;
 
-    quota.currentUsage += amount;
-    if (quota.currentUsage >= quota.monthlyLimit) {
-      quota.isDisabled = true;
-    }
+    quota.currentUsage = 0;
+    quota.resetDate = this.getNextResetDate(quota.resetPeriod);
+    quota.isDisabled = false;
 
+    log.info(`[QuotaManager] Manually reset quota for ${provider}`);
     this.saveQuotaToDatabase(quota);
     this.saveAllQuotasToFile();
   }
+
+  enableProvider(provider: string): void {
+    this.ensureInitialized();
+    const quota = this.quotas.get(provider);
+    if (!quota) return;
+
+    quota.isDisabled = false;
+    quota.currentUsage = Math.min(quota.currentUsage, quota.monthlyLimit - 1);
+
+    log.info(`[QuotaManager] Manually enabled provider: ${provider}`);
+    this.saveQuotaToDatabase(quota);
+    this.saveAllQuotasToFile();
+  }
+
 
   getAllQuotas(): ProviderQuota[] {
     this.ensureInitialized();
@@ -294,4 +307,4 @@ class QuotaManager {
   }
 }
 
-export const quotaManager = new QuotaManager();
+export const quotaManager: QuotaManager = new QuotaManager();

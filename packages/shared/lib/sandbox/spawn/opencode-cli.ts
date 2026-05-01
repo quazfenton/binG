@@ -63,8 +63,15 @@ export class OpencodeV2Provider {
         if (event.type === 'text' && typeof event.data?.text === 'string') {
           options.onStreamChunk?.(event.data.text);
         }
+        // Fix: Use the provided executeTool callback if it exists, otherwise fallback to onToolExecution
         if (event.type === 'tool' && event.data?.tool) {
-          options.onToolExecution?.(event.data.tool, event.data.args || {}, event.data.result);
+          if (options.executeTool) {
+             options.executeTool(event.data.tool, event.data.args || {}).then(result => {
+                 options.onToolExecution?.(event.data.tool, event.data.args || {}, result);
+             });
+          } else {
+             options.onToolExecution?.(event.data.tool, event.data.args || {}, event.data.result);
+          }
         }
       },
     })) {
