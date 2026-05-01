@@ -11,7 +11,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getApprovalStep } from '@/lib/orchestra/mastra/workflows/hitl-workflow';
-import { verifyAuth } from '@/lib/auth/jwt';
+import { verifyAuth, getUserEmail } from '@/lib/auth/jwt';
 
 // Lazy load Mastra to avoid build-time initialization
 let _mastra: any = null;
@@ -77,7 +77,7 @@ export async function POST(request: NextRequest) {
 
     // SECURITY: Use authenticated user's identity for audit trail
     const approverId = authResult.userId!;
-    const approverEmail = authResult.email!;
+    const approverEmail = authResult.user?.email || 'unknown@example.com';
 
     // Get Mastra instance (lazy loaded)
     const mastra = await getMastra();

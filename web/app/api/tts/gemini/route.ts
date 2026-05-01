@@ -26,7 +26,7 @@ export async function POST(req: NextRequest) {
             presetVoice: 'Narrator',
           },
         },
-      },
+      } as any,
     });
     
     // Use generateContent to create audio
