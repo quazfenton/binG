@@ -57,13 +57,16 @@ import {
   Plus,
   Check,
   Film,
+  MessageCircle,
+  Copy,
+  Search,
 } from "lucide-react";
 import WorkflowsTab from "./plugins/n8n-workflows-tab";
 import OrchestrationTab from "./plugins/orchestration-tab";
 import ArtGalleryTab from "./plugins/ai-art-gallery-tab";
 import MindMapTab from "./plugins/mind-map-tab";
 import PromptLabTab from "./plugins/prompt-lab-tab";
-import MusicVisualizerTab from "./plugins/music-visualizer-tab";
+import { MatrixChatPlugin } from "./plugins/matrix-chat-plugin";
 import MusicHubTab from "./plugins/music-hub-tab";
 import ImmersiveView from "./plugins/immersive-view";
 import FlowEngine from "./plugins/flow-engine";
@@ -83,9 +86,6 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
-import { Copy } from "lucide-react";
-import { Search } from "lucide-react";
-
 // Helper to ensure image URLs go through the proxy
 function getProxiedImageUrl(url: string | undefined): string | undefined {
   if (!url) return undefined;
@@ -567,6 +567,7 @@ const TAB_DEFS: TabDef[] = [
   { value: "art-gallery", label: "Art Gallery", icon: Image },
   { value: "mind-map", label: "Mind Map", icon: Brain },
   { value: "prompt-lab", label: "Prompt Lab", icon: FlaskConical },
+  { value: "messages", label: "Messages", icon: MessageCircle },
   { value: "music", label: "Music", icon: Music },
   { value: "music-hub", label: "Music Hub", icon: Radio },
   { value: "immersive", label: "Immersive", icon: Aperture },

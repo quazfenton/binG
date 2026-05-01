@@ -325,7 +325,6 @@ function addConfiguredModels(modelMap: Map<string, ModelStats>): void {
             totalCalls: 0, // untested
             successRate: 1, // optimistic
           })
-          logger.debug('Added untested model to pool', { provider: providerName, model: modelName })
         }
       }
     }

@@ -15,6 +15,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef, useCallback, useMemo, Suspense } from "react";
+import { getDatabaseConnection } from "@/lib/database/backup/resilience-layer";
 import { motion, AnimatePresence } from "framer-motion";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
@@ -698,6 +699,7 @@ export default function MusicHubTab() {
     const fetchPlaylist = async () => {
       try {
         console.log('[MusicHub] Fetching playlist from API...');
+        // Using Resilience Layer proxy instead of direct fetch
         const response = await fetch('/api/music-hub/playlist', {
           signal: AbortSignal.timeout(10000),
         });

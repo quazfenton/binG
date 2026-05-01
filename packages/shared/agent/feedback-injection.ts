@@ -12,6 +12,8 @@
  * - Successive re-prompting with accumulated feedback
  */
 
+import { formatRoleRedirectOptions } from './first-response-routing';
+
 export interface FeedbackEntry {
   id: string;
   timestamp: number;
@@ -83,7 +85,7 @@ export function createFeedbackEntry(
  */
 export function addFeedback(context: FeedbackContext, entry: FeedbackEntry): FeedbackContext {
   const entries = [...context.accumulatedFeedback, entry].slice(-MAX_FEEDBACK_ENTRIES);
-  const recentFailures = entries.filter(f => f.type === 'failure' && Date.now() - f.timestamp < FEEDBACK_TTL);
+  const recentFailures = entries.filter(f => f.type === 'failure' && !f.resolved && Date.now() - f.timestamp < FEEDBACK_TTL_MS);
   const corrections = entries.filter(f => f.type === 'correction');
   
   return {
@@ -364,14 +366,20 @@ export function injectFeedback(context: FeedbackContext): InjectedFeedback {
     };
   }
   
+  // Cache analyzeFailure results to avoid redundant computation
+  const failureAnalyses = new Map<FeedbackEntry, FailureAnalysis>();
+  for (const failure of recentFailures) {
+    failureAnalyses.set(failure, analyzeFailure(failure));
+  }
+  
   // Build correction section
   let correctionSection = '';
   if (recentFailures.length > 0) {
     correctionSection += '\n## Feedback & Corrections\n';
     correctionSection += 'Address the following issues from previous attempts:\n\n';
-    
+
     for (const failure of recentFailures.slice(-5)) { // Last 5 failures
-      const analysis = analyzeFailure(failure);
+      const analysis = failureAnalyses.get(failure)!;
       correctionSection += `### ${failure.type.toUpperCase()} (${failure.source})\n`;
       correctionSection += `${analysis.rootCause}\n`;
       correctionSection += `**Fix:** ${analysis.healingApproach}\n\n`;
@@ -381,9 +389,9 @@ export function injectFeedback(context: FeedbackContext): InjectedFeedback {
   // Build healing instructions
   let healingInstructions = '\n## Healing Instructions\n';
   healingInstructions += 'Apply these steps to recover from failures:\n\n';
-  
+
   for (const failure of recentFailures.slice(-3)) {
-    const analysis = analyzeFailure(failure);
+    const analysis = failureAnalyses.get(failure)!;
     healingInstructions += `1. ${analysis.correctionPrompt.instruction}\n`;
     analysis.correctionPrompt.healingSteps.forEach(step => {
       healingInstructions += `   - ${step}\n`;
@@ -392,7 +400,7 @@ export function injectFeedback(context: FeedbackContext): InjectedFeedback {
   
   // Build format guidance
   let formatGuidance = '';
-  const uniqueCategories = [...new Set(recentFailures.map(f => analyzeFailure(f).category))];
+  const uniqueCategories = [...new Set(recentFailures.map(f => failureAnalyses.get(f)!.category))];
   if (uniqueCategories.includes('format_mismatch')) {
     formatGuidance = '\n## Format Requirements\n';
     formatGuidance += 'IMPORTANT: Ensure response matches expected format.\n';
@@ -401,28 +409,31 @@ export function injectFeedback(context: FeedbackContext): InjectedFeedback {
     formatGuidance += '- Match protocol specifications\n';
   }
   
-  // Build role redirect section
+  // Build role redirect section — ALWAYS active (response-embedded routing).
+  // Even without failures, we include default role options so the first response
+  // always contains routing metadata for the dynamic injector to use.
   let roleRedirectSection: string | undefined;
   const allRedirects: RoleRedirect[] = [];
   for (const failure of recentFailures.slice(-3)) {
-    const analysis = analyzeFailure(failure);
+    const analysis = failureAnalyses.get(failure)!;
     allRedirects.push(...(analysis.correctionPrompt.redirectSuggestions || []));
   }
   
-  if (allRedirects.length > 0) {
-    roleRedirectSection = '\n## Role Redirect Options\n';
-    roleRedirectSection += 'Consider these specialized roles for better handling:\n\n';
-    
-    // Sort by weight and deduplicate
-    const sorted = allRedirects
-      .filter((r, i) => allRedirects.findIndex(x => x.role === r.role) === i)
-      .sort((a, b) => b.weight - a.weight)
-      .slice(0, 3);
-    
-    sorted.forEach(redirect => {
-      roleRedirectSection += `- **${redirect.role}** (${(redirect.weight * 100).toFixed(0)}% match): ${redirect.reason}\n`;
-    });
+  // If no failure-based redirects, generate default role options based on context
+  if (allRedirects.length === 0) {
+    allRedirects.push(
+      { role: 'coder', weight: 0.8, reason: 'default primary role for code tasks', triggerCondition: 'always' },
+      { role: 'reviewer', weight: 0.4, reason: 'secondary role for quality checks', triggerCondition: 'always' },
+      { role: 'planner', weight: 0.3, reason: 'decomposition role for complex tasks', triggerCondition: 'complexity > low' },
+    );
   }
+  
+  // Always generate the section (not conditional on allRedirects.length > 0)
+  // Use shared formatting helper (deduplicates, sorts by weight, includes header)
+  // Map RoleRedirect → RoleOption (drop triggerCondition which formatRoleRedirectOptions ignores)
+  const roleOptions: Array<{ role: string; weight: number; reason: string }> =
+    allRedirects.map(({ role, weight, reason }) => ({ role, weight, reason }));
+  roleRedirectSection = formatRoleRedirectOptions(roleOptions);
   
   return {
     correctionSection,

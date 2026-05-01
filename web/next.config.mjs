@@ -1,5 +1,6 @@
 import { fileURLToPath } from 'url';
 import { dirname, resolve } from 'path';
+import fs from 'fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(__dirname);
@@ -7,6 +8,9 @@ const isDesktopBuild = process.env.DESKTOP_MODE === 'true' || process.env.DESKTO
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Vendored workspace packages (web/.bing-platform, web/.bing-shared) ship raw .ts;
+  // tell Next to transpile them during the Vercel build.
+  transpilePackages: ['@bing/platform', '@bing/shared'],
   // Turbopack config - required when using webpack
   turbopack: {},
   onDemandEntries: {
@@ -169,6 +173,9 @@ const nextConfig = {
     '@tursodatabase/sync',
   ],
   webpack: (config, { isServer, dev, webpack }) => {
+    // Let Next.js SWC handle TypeScript/TSX by default (supports generators, JSX, etc.)
+    // Only add custom loaders if SWC fails
+
     if (!isServer) {
       config.resolve.fallback = {
         ...config.resolve.fallback,
@@ -198,29 +205,28 @@ const nextConfig = {
         dns: false,
         'node:fs': false,
         'node:fs/promises': false,
-        'node:child_process': false,
       };
-    }
 
-    if (dev) {
-      const existingIgnoreWarnings = config.ignoreWarnings || [];
-      config.ignoreWarnings = [
-        ...existingIgnoreWarnings,
-        (warning) => {
-          const moduleName = typeof warning.module === 'string'
-            ? warning.module
-            : (warning.module?.resource || '');
-          const message = warning.message || '';
+      if (dev) {
+        const existingIgnoreWarnings = config.ignoreWarnings || [];
+        config.ignoreWarnings = [
+          ...existingIgnoreWarnings,
+          (warning) => {
+            const moduleName = typeof warning.module === 'string'
+              ? warning.module
+              : (warning.module?.resource || '');
+            const message = warning.message || '';
 
-          if (moduleName && moduleName.includes('require-in-the-middle')) {
-            return true;
-          }
-          if (message.includes('Critical dependency: require function is used')) {
-            return true;
-          }
-          return message.includes('viewport');
-        },
-      ];
+            if (moduleName && moduleName.includes('require-in-the-middle')) {
+              return true;
+            }
+            if (message.includes('Critical dependency: require function is used')) {
+              return true;
+            }
+            return message.includes('viewport');
+          },
+        ];
+      }
     }
 
     config.resolve.extensionAlias = {
@@ -276,12 +282,17 @@ const nextConfig = {
       '@bing/shared/agent/services/agent-worker/src': resolve(packagesRoot, 'shared/agent/services/agent-worker/src/index.ts'),
       '@bing/shared/agent/services/agent-gateway/src': resolve(packagesRoot, 'shared/agent/services/agent-gateway/src/index.ts'),
       '@bing/shared/agent/tool-router/tool-router': resolve(packagesRoot, 'shared/agent/tool-router/tool-router.ts'),
-      
+
       // Direct module resolution aliases for Turbopack/Webpack compatibility
       '@bing/shared/agent/cloud-agent-offload': resolve(packagesRoot, 'shared/agent/cloud-agent-offload.ts'),
+      '@bing/shared/agent/system-prompts': resolve(packagesRoot, 'shared/agent/system-prompts.ts'),
+      '@bing/shared/agent/system-prompts-dynamic': resolve(packagesRoot, 'shared/agent/system-prompts-dynamic.ts'),
+      '@bing/shared/agent/task-classifier': resolve(packagesRoot, 'shared/agent/task-classifier.ts'),
+      '@bing/shared/agent/v2-executor': resolve(packagesRoot, 'shared/agent/v2-executor.ts'),
+      '@bing/shared/agent/workforce-manager': resolve(packagesRoot, 'shared/agent/workforce-manager.ts'),
+      '@bing/shared/agent/workforce-state': resolve(packagesRoot, 'shared/agent/workforce-state.ts'),
+      '@bing/shared/lib/workspace-boundary': resolve(packagesRoot, 'shared/lib/workspace-boundary.ts'),
       '@bing/infra/config/config/features': resolve(projectRoot, '..', 'infra', 'config', 'config', 'features.ts'),
-      'packages/shared/agent/cloud-agent-offload': resolve(packagesRoot, 'shared/agent/cloud-agent-offload.ts'),
-      'infra/config/config/features': resolve(projectRoot, '..', 'infra', 'config', 'config', 'features.ts'),
     };
 
     config.resolve.mainFields = ['module', 'main'];

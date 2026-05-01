@@ -23,25 +23,32 @@
         "./*"
       ],
       "@bing/platform": [
-        "../packages/platform/src/env.ts"
+        "../packages/platform/src/env.ts",
+        "./.bing-platform/src/env.ts"
       ],
       "@bing/platform/*": [
-        "../packages/platform/src/*"
+        "../packages/platform/src/*",
+        "./.bing-platform/src/*"
       ],
       "@bing/shared": [
-        "../packages/shared/index.ts"
+        "../packages/shared/index.ts",
+        "./.bing-shared/index.ts"
       ],
       "@bing/shared/*": [
-        "../packages/shared/*"
+        "../packages/shared/*",
+        "./.bing-shared/*"
       ],
       "@bing/shared/agent": [
-        "../packages/shared/agent/index.ts"
+        "../packages/shared/agent/index.ts",
+        "./.bing-shared/agent/index.ts"
       ],
       "@bing/shared/agent/*": [
-        "../packages/shared/agent/*"
+        "../packages/shared/agent/*",
+        "./.bing-shared/agent/*"
       ],
       "@bing/infra/*": [
-        "../infra/*"
+        "../infra/*",
+        "./.bing-infra-config/*"
       ]
     },
     "plugins": [

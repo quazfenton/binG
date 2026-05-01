@@ -534,19 +534,19 @@ export async function* streamWithVercelAI(
     };
   }
 
-  const { provider: providerName } = opts;
+  const providerName = opts.provider;
 
   // CRITICAL: CLI providers must NOT be routed through Vercel AI SDK
   // They spawn local binaries (opencode-cli, pi, kilocode, etc.)
-  if (isCLIProvider(provider)) {
+  if (isCLIProvider(providerName)) {
     chatLogger.error('[CLI-PROVIDER-ERROR] streamWithVercelAI called with CLI provider', {
-      provider,
+      provider: providerName,
       error: 'CLI providers must use their own binary spawn streaming, not streamWithVercelAI',
       solution: 'Route CLI providers to their spawn method in enhanced-llm-service.ts',
     });
     throw new CLIProviderError(
-      provider,
-      `Cannot use streamWithVercelAI for CLI provider "${provider}". ` +
+      providerName,
+      `Cannot use streamWithVercelAI for CLI provider "${providerName}". ` +
       `This provider spawns a local binary and has its own streaming logic. ` +
       `Please route it to the provider's native spawn method instead.`
     );

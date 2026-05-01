@@ -141,8 +141,8 @@ export class MigrationRunner {
         console.log(`Executing migration ${migration.version}: ${migration.filename}`);
 
         // Execute migration in a transaction
-        this.db.transaction(() => {
-          // Double-check if migration was already executed (e.g. by another process)
+        await this.db.transaction(() => {
+          // Check if migration is already executed first, inside transaction
           const alreadyExecuted = this.db.prepare(
             'SELECT 1 FROM schema_migrations WHERE version = ?'
           ).get(migration.version);

@@ -568,7 +568,7 @@ export class EnhancedLLMService {
         model: actualModel,
         // Use user's API key if provided, otherwise the provider config's key will be used
         apiKey: userApiKey,
-      }
+      };
 
       // Log request start for telemetry
       await chatRequestLogger.logRequestStart(
@@ -578,187 +578,23 @@ export class EnhancedLLMService {
         actualModel,
         fullRequest.messages,
         fullRequest.stream || false
-      )
-      
-      const response = await this.callProviderWithEnhancedClient(actualProvider, fullRequest, retryOptions, enableCircuitBreaker, requestId)
-      const latency = Date.now() - requestStartTime
-      chatLogger.info('Provider request completed', { requestId, provider: actualProvider, model: actualModel }, {
-        latencyMs: latency,
-        tokensUsed: response.tokensUsed,
-        finishReason: response.finishReason,
-      })
-
-      // Add metadata about actual provider/model used
-      const enhancedResponse = {
-        ...response,
-        metadata: {
-          ...response.metadata,
-          actualProvider,
-          actualModel,
-          fallbackChain: [],
-        },
-      }
-
-      const result = await postProcessToolCalls(enhancedResponse)
-      
-      // Record telemetry for model ranking — use ACTUAL provider/model (handles fallbacks)
-      await chatRequestLogger.logRequestComplete(
-        requestId || `llm-${Date.now()}`,
-        true,  // success
-        undefined,  // responseSize
-        typeof response.tokensUsed === 'number'
-          ? { prompt: 0, completion: 0, total: response.tokensUsed }
-          : response.tokensUsed,
-        latency,
-        undefined,  // error
-        actualProvider,
-        actualModel,
-      )
-      
-      return result
-    } catch (primaryError: any) {
-      const enhancedError = this.enhanceError(primaryError, actualProvider, actualModel);
-      
-      chatLogger.warn('Primary provider failed', { 
-        requestId, 
-        provider: actualProvider, 
-        model: actualModel,
-        failureType: enhancedError.failureType 
-      }, {
-        latencyMs: Date.now() - requestStartTime,
-        error: enhancedError.message,
-      });
-
-      // MODE SWITCHING LOGIC: If PERMANENT, don't waste time on fallbacks
-      if (enhancedError.failureType === 'PERMANENT') {
-        chatLogger.error('Permanent failure detected, aborting fallback chain', { requestId });
-        throw enhancedError;
-      }
-
-      const fallbacks = fallbackProviders || this.fallbackChains.get(actualProvider) || [];
-
-      // Dynamically select fallback using modelRanker
-      const { getRetryModel } = await import('@/lib/models/model-ranker');
-      const fallbackModelInfo = await getRetryModel({
-        failedModel: actualModel,
-        failedProvider: actualProvider,
-      });
-
-      // Prioritize ModelRanker choice if available, otherwise use existing chain
-      const availableFallbacks = fallbackModelInfo 
-        ? [fallbackModelInfo.provider] 
-        : fallbacks.filter(fp => this.getProviderConfigForRequest(fp, requestId) && this.isProviderHealthy(fp));
-
-      // Track the fallback chain with detailed error information
-      const fallbackChainLog: string[] = [];
-      fallbackChainLog.push(`${actualProvider}/${actualModel} failed: ${primaryError instanceof Error ? primaryError.message : String(primaryError)}`);
-
-      if (availableFallbacks.length === 0) {
-        chatLogger.error('No healthy fallback providers available', { requestId, provider: actualProvider }, {
-          attemptedFallbacks: fallbacks.length,
-        });
-        throw this.createEnhancedError(
-          `No healthy fallback providers available for ${actualProvider}`,
-          'NO_FALLBACKS_AVAILABLE',
-          primaryError as Error
-        );
-      }
-
-      for (let attemptIndex = 0; attemptIndex < availableFallbacks.length; attemptIndex++) {
-        const fallbackProvider = availableFallbacks[attemptIndex];
-        const fallbackStartTime = Date.now();
-        let fallbackModelUsed = actualModel;
-
-        try {
-          chatLogger.info('Trying fallback provider', { requestId, provider: fallbackProvider, model: actualModel }, {
-            attempt: attemptIndex + 1,
-            totalFallbacks: availableFallbacks.length,
-          });
-
-          const fallbackConfig = this.getProviderConfigForRequest(fallbackProvider, requestId)!;
-          const supportedModel = this.findCompatibleModel(actualModel, fallbackConfig.models);
-
-          if (!supportedModel) {
-            const modelError = `Model '${actualModel}' not supported by ${fallbackProvider}`;
-            chatLogger.warn('Model not supported by fallback provider', { requestId, provider: fallbackProvider, model: actualModel });
-            fallbackChainLog.push(`${fallbackProvider}/${actualModel} skipped: ${modelError}`);
-            continue;
-          }
-
-          fallbackModelUsed = supportedModel;
-
-          // Resolve correct API key for this fallback provider
-          const fallbackApiKey = apiKeys?.[fallbackProvider] || fallbackConfig.apiKey || undefined;
-          const fallbackRequest = {
-            ...llmRequest,
-            messages: processedMessages,
-            model: supportedModel,
-            provider: fallbackProvider,
-            apiKey: fallbackApiKey,
-          };
-
-          const response = await this.callProviderWithEnhancedClient(
-            fallbackProvider,
-            fallbackRequest,
-            retryOptions,
-            enableCircuitBreaker,
-            requestId
-          );
-
-          const fallbackLatency = Date.now() - fallbackStartTime;
-          chatLogger.info('Fallback provider succeeded', { requestId, provider: fallbackProvider, model: supportedModel }, {
-            latencyMs: fallbackLatency,
-            attempt: attemptIndex + 1,
-            tokensUsed: response.tokensUsed,
-          });
-
-          // FIX: Record fallback model telemetry under its ACTUAL name
-          await chatRequestLogger.logRequestComplete(
-            requestId || `llm-${Date.now()}`,
-            true,
-            undefined,
-            typeof response.tokensUsed === 'number'
-              ? { prompt: 0, completion: 0, total: response.tokensUsed }
-              : response.tokensUsed,
-            fallbackLatency,
-            undefined,
-            fallbackProvider,
-            supportedModel,
-          ).catch(() => {}); // don't throw on telemetry failure
-
-          // Build successful fallback response with full metadata
-          const fallbackResponse = {
-            ...response,
-            metadata: {
-              ...response.metadata,
-              actualProvider: fallbackProvider,
-              actualModel: supportedModel,
-              fallbackChain: fallbackChainLog,
-            },
-          };
-          return await postProcessToolCalls(fallbackResponse);
-        } catch (fallbackError) {
-          const fallbackLatency = Date.now() - fallbackStartTime;
-          const errorMsg = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
-          chatLogger.warn('Fallback provider failed', { requestId, provider: fallbackProvider, model: fallbackModelUsed }, {
-            latencyMs: fallbackLatency,
-            attempt: attemptIndex + 1,
-            error: errorMsg,
-          });
-          fallbackChainLog.push(`${fallbackProvider}/${fallbackModelUsed} failed: ${errorMsg}`);
-          continue;
-        }
-      }
-
-      throw this.createEnhancedError(
-        'All providers failed to generate response',
-        'ALL_PROVIDERS_FAILED',
-        primaryError as Error
       );
+      
+      // The enhanced-llm-service now returns cleanly on success or throws categorized errors.
+      // The UnifiedAgentService orchestrates fallbacks based on these categorized errors.
+      try {
+        const response = await this.callProviderWithEnhancedClient(actualProvider, fullRequest, retryOptions, enableCircuitBreaker, requestId);
+        return await postProcessToolCalls(response);
+      } catch (primaryError: any) {
+        // Re-throw with categorization so the Orchestrator knows how to handle the retry/fallback
+        throw this.enhanceError(primaryError, actualProvider, actualModel);
+      }
+    } catch (outerError: any) {
+      throw outerError;
     }
   }
 
-  async *generateStreamingResponse(request: EnhancedLLMRequest): AsyncGenerator<StreamingResponse> {
+  async *generateStreamingResponse(request: any) {
     const { provider, fallbackProviders, requestId, apiKeys, contextPack, ...llmRequest } = request;
     const primaryProvider = provider || getProviderForTask('chat');
     const streamStartTime = Date.now();
