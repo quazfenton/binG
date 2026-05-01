@@ -424,7 +424,10 @@ export function injectFeedback(context: FeedbackContext): InjectedFeedback {
   
   // Always generate the section (not conditional on allRedirects.length > 0)
   // Use shared formatting helper (deduplicates, sorts by weight, includes header)
-  roleRedirectSection = formatRoleRedirectOptions(allRedirects);
+  // Map RoleRedirect → RoleOption (drop triggerCondition which formatRoleRedirectOptions ignores)
+  const roleOptions: Array<{ role: string; weight: number; reason: string }> =
+    allRedirects.map(({ role, weight, reason }) => ({ role, weight, reason }));
+  roleRedirectSection = formatRoleRedirectOptions(roleOptions);
   
   return {
     correctionSection,

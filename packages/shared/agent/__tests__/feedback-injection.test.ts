@@ -324,7 +324,10 @@ describe('injectFeedback', () => {
       expect(result.roleRedirectSection).toContain('debugger');
     });
 
-    it('should not include role redirect for low severity failures', () => {
+    it('should include default role redirect section even for low severity failures', () => {
+      // The injectFeedback function always generates a role redirect section
+      // (with default role options) to support dynamic first-response routing,
+      // even when no failure-based redirects are suggested.
       const lowSeverityFailure = createFeedbackEntry(
         'failure',
         'Minor issue with response format',
@@ -343,7 +346,9 @@ describe('injectFeedback', () => {
 
       const result = injectFeedback(context);
 
-      expect(result.roleRedirectSection).toBeUndefined();
+      expect(result.roleRedirectSection).toBeDefined();
+      expect(result.roleRedirectSection).toContain('## Role Redirect Options');
+      expect(result.roleRedirectSection).toContain('coder');
     });
   });
 

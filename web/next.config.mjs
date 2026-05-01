@@ -279,9 +279,14 @@ const nextConfig = {
       
       // Direct module resolution aliases for Turbopack/Webpack compatibility
       '@bing/shared/agent/cloud-agent-offload': resolve(packagesRoot, 'shared/agent/cloud-agent-offload.ts'),
+      '@bing/shared/agent/system-prompts': resolve(packagesRoot, 'shared/agent/system-prompts.ts'),
+      '@bing/shared/agent/system-prompts-dynamic': resolve(packagesRoot, 'shared/agent/system-prompts-dynamic.ts'),
+      '@bing/shared/agent/task-classifier': resolve(packagesRoot, 'shared/agent/task-classifier.ts'),
+      '@bing/shared/agent/v2-executor': resolve(packagesRoot, 'shared/agent/v2-executor.ts'),
+      '@bing/shared/agent/workforce-manager': resolve(packagesRoot, 'shared/agent/workforce-manager.ts'),
+      '@bing/shared/agent/workforce-state': resolve(packagesRoot, 'shared/agent/workforce-state.ts'),
+      '@bing/shared/lib/workspace-boundary': resolve(packagesRoot, 'shared/lib/workspace-boundary.ts'),
       '@bing/infra/config/config/features': resolve(projectRoot, '..', 'infra', 'config', 'config', 'features.ts'),
-      'packages/shared/agent/cloud-agent-offload': resolve(packagesRoot, 'shared/agent/cloud-agent-offload.ts'),
-      'infra/config/config/features': resolve(projectRoot, '..', 'infra', 'config', 'config', 'features.ts'),
     };
 
     config.resolve.mainFields = ['module', 'main'];

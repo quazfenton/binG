@@ -578,19 +578,19 @@ export class EnhancedLLMService {
         actualModel,
         fullRequest.messages,
         fullRequest.stream || false
-      )
+      );
       
-    // The enhanced-llm-service now returns cleanly on success or throws categorized errors.
-    // The UnifiedAgentService orchestrates fallbacks based on these categorized errors.
-    try {
-      return await this.callProviderWithEnhancedClient(actualProvider, fullRequest, retryOptions, enableCircuitBreaker, requestId);
-    } catch (primaryError: any) {
-      // Re-throw with categorization so the Orchestrator knows how to handle the retry/fallback
-      throw this.enhanceError(primaryError, actualProvider, actualModel);
+      // The enhanced-llm-service now returns cleanly on success or throws categorized errors.
+      // The UnifiedAgentService orchestrates fallbacks based on these categorized errors.
+      try {
+        return await this.callProviderWithEnhancedClient(actualProvider, fullRequest, retryOptions, enableCircuitBreaker, requestId);
+      } catch (primaryError: any) {
+        // Re-throw with categorization so the Orchestrator knows how to handle the retry/fallback
+        throw this.enhanceError(primaryError, actualProvider, actualModel);
+      }
     }
-  }
 
-  async *generateStreamingResponse(request: EnhancedLLMRequest): AsyncGenerator<StreamingResponse> {
+    async *generateStreamingResponse(request: EnhancedLLMRequest): AsyncGenerator<StreamingResponse> {
     const { provider, fallbackProviders, requestId, apiKeys, contextPack, ...llmRequest } = request;
     const primaryProvider = provider || getProviderForTask('chat');
     const streamStartTime = Date.now();

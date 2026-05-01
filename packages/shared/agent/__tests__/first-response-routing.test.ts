@@ -12,9 +12,9 @@ import {
   shouldTriggerReview,
   getNextPlanStep,
   generateStepReprompt,
+  routingToRoleRedirectSection,
   type RoleOption,
   type RoutingMetadata,
-  type PlanStep,
 } from '../first-response-routing';
 
 // ─── parseFirstResponseRouting ────────────────────────────────────────
@@ -653,18 +653,18 @@ describe('formatRoleRedirectOptions', () => {
     expect(result).not.toContain('**c**');
   });
 
-  it('should deduplicate options by role (keep first occurrence)', () => {
+  it('should deduplicate options by role (keep highest weight)', () => {
     const options: RoleOption[] = [
-      { role: 'coder', weight: 0.9, reason: 'primary' },
+      { role: 'coder', weight: 0.7, reason: 'lower weight first' },
       { role: 'reviewer', weight: 0.5, reason: 'secondary' },
-      { role: 'coder', weight: 0.7, reason: 'duplicate' },
+      { role: 'coder', weight: 0.9, reason: 'higher weight later' },
     ];
     const result = formatRoleRedirectOptions(options);
 
-    // 'coder' should appear once (first occurrence kept, weight 0.9)
+    // 'coder' should appear once (highest weight 0.9 kept, not first occurrence 0.7)
     const coderCount = (result.match(/\*\*coder\*\*/g) || []).length;
     expect(coderCount).toBe(1);
-    expect(result).toContain('90%'); // First occurrence weight
+    expect(result).toContain('90%'); // Highest weight wins
   });
 
   it('should format weight as percentage', () => {
@@ -1019,7 +1019,7 @@ describe('generateStepReprompt', () => {
     });
 
     it('should return completion message for undefined planSteps', () => {
-           const routing = { ...routingWith3Steps, planSteps: undefined as any };
+      const routing = { ...routingWith3Steps, planSteps: undefined as any };
       const result = generateStepReprompt(routing, 0);
       expect(result).toContain('[ALL_PLAN_STEPS_COMPLETED]');
     });
@@ -1123,12 +1123,10 @@ describe('generateStepReprompt', () => {
       const result = generateStepReprompt(routingWith3Steps, 1, longResult);
       expect(result).toContain('Previous step result:');
       expect(result).toContain('...');
-      // The included portion should be <= 500 chars
-      const resultSection = result.slice(
-        result.indexOf('Previous step result:'),
-      );
+      // The included portion before '...' should be <= 500 chars
+      const resultSection = result.slice(result.indexOf('Previous step result:'));
       const contentAfterLabel = resultSection.slice(resultSection.indexOf('\n') + 1);
-      const trimmedContent = contentAfterLabel.slice(0, contentAfter.indexOf('...'));
+      const trimmedContent = contentAfterLabel.slice(0, contentAfterLabel.indexOf('...'));
       expect(trimmedContent.length).toBeLessThanOrEqual(500);
     });
 
@@ -1191,6 +1189,151 @@ describe('generateStepReprompt', () => {
       const result = generateStepReprompt(routing, 1);
       expect(result).toContain('[PLAN_STEP 2/2]');
       expect(result).toContain('[FULFILLMENT REVIEW]');
+    });
+  });
+});
+
+// ─── routingToRoleRedirectSection ─────────────────────────────────────
+
+describe('routingToRoleRedirectSection', () => {
+  const routingWithRoles: RoutingMetadata = {
+    classification: 'code',
+    complexity: 'high',
+    suggestedRole: 'architect',
+    roleOptions: [
+      { role: 'architect', weight: 0.9, reason: 'system design' },
+      { role: 'coder', weight: 0.6, reason: 'implementation' },
+      { role: 'reviewer', weight: 0.3, reason: 'quality check' },
+    ],
+    toolCallOptions: [],
+    specializationRoute: 'multi-step',
+    planSteps: [],
+    requiresAutoReprompt: true,
+    estimatedSteps: 2,
+  };
+
+  describe('delegates to formatRoleRedirectOptions', () => {
+    it('should return the same result as calling formatRoleRedirectOptions directly', () => {
+      const section = routingToRoleRedirectSection(routingWithRoles);
+      const direct = formatRoleRedirectOptions(routingWithRoles.roleOptions);
+      expect(section).toBe(direct);
+    });
+
+    it('should include the Role Redirect Options header', () => {
+      const result = routingToRoleRedirectSection(routingWithRoles);
+      expect(result).toContain('## Role Redirect Options');
+    });
+
+    it('should include role names from the routing metadata', () => {
+      const result = routingToRoleRedirectSection(routingWithRoles);
+      expect(result).toContain('architect');
+      expect(result).toContain('coder');
+      expect(result).toContain('reviewer');
+    });
+
+    it('should include weight percentages', () => {
+      const result = routingToRoleRedirectSection(routingWithRoles);
+      expect(result).toContain('90%');
+      expect(result).toContain('60%');
+      expect(result).toContain('30%');
+    });
+
+    it('should sort options by weight descending', () => {
+      const result = routingToRoleRedirectSection(routingWithRoles);
+      const architectIdx = result.indexOf('architect');
+      const coderIdx = result.indexOf('coder');
+      const reviewerIdx = result.indexOf('reviewer');
+      expect(architectIdx).toBeLessThan(coderIdx);
+      expect(coderIdx).toBeLessThan(reviewerIdx);
+    });
+  });
+
+  describe('empty or missing roleOptions', () => {
+    it('should return empty string when roleOptions is empty', () => {
+      const routing: RoutingMetadata = { ...routingWithRoles, roleOptions: [] };
+      expect(routingToRoleRedirectSection(routing)).toBe('');
+    });
+
+    it('should return empty string when roleOptions is undefined (falls back to [])', () => {
+      const routing = { ...routingWithRoles, roleOptions: undefined as any };
+      expect(routingToRoleRedirectSection(routing)).toBe('');
+    });
+  });
+
+  describe('single role option', () => {
+    it('should format a single role option', () => {
+      const routing: RoutingMetadata = {
+        ...routingWithRoles,
+        roleOptions: [{ role: 'specialist', weight: 0.85, reason: 'domain expertise' }],
+      };
+      const result = routingToRoleRedirectSection(routing);
+      expect(result).toContain('specialist');
+      expect(result).toContain('85%');
+      expect(result).toContain('domain expertise');
+    });
+  });
+
+  describe('duplicate roles', () => {
+    it('should deduplicate roles keeping highest weight', () => {
+      const routing: RoutingMetadata = {
+        ...routingWithRoles,
+        roleOptions: [
+          { role: 'coder', weight: 0.5, reason: 'lower first' },
+          { role: 'coder', weight: 0.9, reason: 'higher later' },
+        ],
+      };
+      const result = routingToRoleRedirectSection(routing);
+      const coderCount = (result.match(/\*\*coder\*\*/g) || []).length;
+      expect(coderCount).toBe(1);
+      // Highest weight (0.9) wins, not first occurrence (0.5)
+      expect(result).toContain('90%');
+    });
+  });
+
+  describe('respects maxItems limit', () => {
+    it('should only include top 3 options by default', () => {
+      const routing: RoutingMetadata = {
+        ...routingWithRoles,
+        roleOptions: [
+          { role: 'a', weight: 0.9, reason: 'r1' },
+          { role: 'b', weight: 0.8, reason: 'r2' },
+          { role: 'c', weight: 0.7, reason: 'r3' },
+          { role: 'd', weight: 0.6, reason: 'r4' },
+        ],
+      };
+      const result = routingToRoleRedirectSection(routing);
+      expect(result).toContain('**a**');
+      expect(result).toContain('**b**');
+      expect(result).toContain('**c**');
+      expect(result).not.toContain('**d**');
+    });
+  });
+
+  describe('with realistic routing from parseFirstResponseRouting', () => {
+    it('should produce a section from parsed routing metadata', () => {
+      const input = `[ROUTING_METADATA]\n${JSON.stringify({
+        classification: 'code',
+        complexity: 'high',
+        suggestedRole: 'architect',
+        roleOptions: [
+          { role: 'architect', weight: 0.9, reason: 'system design' },
+          { role: 'coder', weight: 0.7, reason: 'implementation' },
+        ],
+        toolCallOptions: [],
+        specializationRoute: 'multi-step',
+        planSteps: [],
+        requiresAutoReprompt: true,
+        estimatedSteps: 2,
+      })}`;
+      const parsed = parseFirstResponseRouting(input);
+      expect(parsed.found).toBe(true);
+      expect(parsed.routing).toBeDefined();
+
+      const section = routingToRoleRedirectSection(parsed.routing!);
+      expect(section).toContain('architect');
+      expect(section).toContain('coder');
+      expect(section).toContain('90%');
+      expect(section).toContain('70%');
     });
   });
 });
