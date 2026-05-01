@@ -15,7 +15,8 @@ import { contextPackService } from '@/lib/virtual-filesystem/context-pack-servic
 import { ShadowCommitManager } from '@/lib/orchestra/stateful-agent/commit/shadow-commit';
 import { extractSessionIdFromPath, resolveScopedPath as resolveScopeUtil, sanitizeScopePath, extractScopePath, normalizeSessionId } from '@/lib/virtual-filesystem/scope-utils';
 import { createNDJSONParser } from '@/lib/utils/ndjson-parser';
-import { streamStateManager, notifyStreamComplete } from '@/lib/streaming/stream-control-handler';
+import { streamStateManager } from '@/lib/streaming/stream-state-manager';
+import { notifyStreamComplete } from '@/lib/streaming/stream-control-handler';
 import type { LLMMessage, StreamingResponse } from "@/lib/chat/llm-providers";
 import { checkRateLimit } from '@/lib/middleware/rate-limiter';
 import { createFilesystemTools, createAgentLoop } from '@/lib/orchestra/mastra';

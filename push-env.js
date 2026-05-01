@@ -1,34 +1,41 @@
 import fs from 'fs';
-import { execSync } from 'child_process';
+import { spawnSync } from 'child_process';
 
 const envPath = fs.existsSync('web/.env') ? 'web/.env' : '.env';
 const envContent = fs.readFileSync(envPath, 'utf8');
 const lines = envContent.split('\n');
 
+const environments = ['development', 'preview', 'production'];
+
 for (let line of lines) {
   line = line.trim();
   if (!line || line.startsWith('#')) continue;
-  
+
   const match = line.match(/^([^=]+)=(.*)$/);
   if (match) {
     const key = match[1].trim();
     let value = match[2].trim();
-    
+
     // Remove quotes if present
     if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
       value = value.substring(1, value.length - 1);
     }
-    
+
     if (key && value) {
-      console.log(`Setting ${key}...`);
-      try {
-        // We use printf to handle special characters in value
-        // vercel env add <key> <environment>
-        // We'll add to development, preview, and production
-        const command = `printf "%s" "${value.replace(/"/g, '\\"')}" | vercel env add ${key} production --force`;
-        execSync(command, { stdio: 'inherit' });
-      } catch (e) {
-        console.error(`Failed to set ${key}: ${e.message}`);
+      for (const env of environments) {
+        console.log(`Setting ${key} in ${env}...`);
+        try {
+          // Use spawnSync with argument array to avoid shell injection
+          const result = spawnSync('vercel', ['env', 'add', key, env, '--force'], {
+            input: value,
+            stdio: 'inherit',
+          });
+          if (result.error) {
+            console.error(`Failed to set ${key} in ${env}: ${result.error.message}`);
+          }
+        } catch (e) {
+          console.error(`Failed to set ${key} in ${env}:`, e);
+        }
       }
     }
   }

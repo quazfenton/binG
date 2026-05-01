@@ -60,11 +60,11 @@ export async function notify(title: string, options?: string | NotifyOptions): P
     } catch (error) {
       console.error('[Notifications] Failed to show desktop notification:', error);
       // Fallback to web notification
-      showWebNotification(title, opts);
+      await showWebNotification(title, opts);
     }
   } else {
     // Web: Browser Notification API
-    showWebNotification(title, opts);
+    await showWebNotification(title, opts);
   }
 }
 

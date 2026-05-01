@@ -328,6 +328,16 @@ If response count > 3 OR tool calls > 5:
  * Always includes first-response routing by default — this ensures
  * the LLM embeds routing metadata in its FIRST response, enabling
  * the system to parse and follow the plan for subsequent auto-re-prompts.
+ *
+ * Section Order (critical for downstream LLM behavior):
+ * 1. First-response routing (embeds plan/routing in response structure)
+ * 2. Feedback injection (corrects previous errors)
+ * 3. Role redirection (suggests specialized roles based on failure analysis)
+ * 4. Tool selection (guides tool choice)
+ * 5. Specifications (defines expected output format)
+ * 6. Fulfillment review (final sanity checks and quality gates)
+ *
+ * Do not change this order without thorough LLM prompt engineering review.
  */
 export function generateDynamicInjection(config?: {
   includeFeedback?: boolean;

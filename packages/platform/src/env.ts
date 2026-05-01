@@ -92,8 +92,12 @@ export function getDefaultWorkspaceRoot(): string | null {
       if (cwd) {
         return cwd;
       }
-    } catch {
-      // process.cwd() may throw in some environments — fall through
+    } catch (err) {
+      // process.cwd() may throw in some environments (e.g., restricted context, permission denied)
+      // Log for debugging but continue to fallback logic
+      if (typeof console !== 'undefined') {
+        console.warn('[env.ts] Failed to get process.cwd():', err);
+      }
     }
   }
   
@@ -101,14 +105,14 @@ export function getDefaultWorkspaceRoot(): string | null {
 
   if (platform === 'win32') {
     const userProfile = typeof process !== 'undefined' && process.env ? process.env.USERPROFILE : undefined;
-    if (!userProfile) {
+    if (!userProfile || typeof userProfile !== 'string' || userProfile.trim() === '') {
       return null;
     }
     return `${userProfile}\\workspace`;
   }
 
   const home = typeof process !== 'undefined' ? process.env.HOME : undefined;
-  if (!home) {
+  if (!home || typeof home !== 'string' || home.trim() === '') {
     return null;
   }
   return `${home}/workspace`;

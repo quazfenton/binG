@@ -85,7 +85,7 @@ export function createFeedbackEntry(
  */
 export function addFeedback(context: FeedbackContext, entry: FeedbackEntry): FeedbackContext {
   const entries = [...context.accumulatedFeedback, entry].slice(-MAX_FEEDBACK_ENTRIES);
-  const recentFailures = entries.filter(f => f.type === 'failure' && Date.now() - f.timestamp < FEEDBACK_TTL_MS);
+  const recentFailures = entries.filter(f => f.type === 'failure' && !f.resolved && Date.now() - f.timestamp < FEEDBACK_TTL_MS);
   const corrections = entries.filter(f => f.type === 'correction');
   
   return {
@@ -366,14 +366,20 @@ export function injectFeedback(context: FeedbackContext): InjectedFeedback {
     };
   }
   
+  // Cache analyzeFailure results to avoid redundant computation
+  const failureAnalyses = new Map<FeedbackEntry, FailureAnalysis>();
+  for (const failure of recentFailures) {
+    failureAnalyses.set(failure, analyzeFailure(failure));
+  }
+  
   // Build correction section
   let correctionSection = '';
   if (recentFailures.length > 0) {
     correctionSection += '\n## Feedback & Corrections\n';
     correctionSection += 'Address the following issues from previous attempts:\n\n';
-    
+
     for (const failure of recentFailures.slice(-5)) { // Last 5 failures
-      const analysis = analyzeFailure(failure);
+      const analysis = failureAnalyses.get(failure)!;
       correctionSection += `### ${failure.type.toUpperCase()} (${failure.source})\n`;
       correctionSection += `${analysis.rootCause}\n`;
       correctionSection += `**Fix:** ${analysis.healingApproach}\n\n`;
@@ -383,9 +389,9 @@ export function injectFeedback(context: FeedbackContext): InjectedFeedback {
   // Build healing instructions
   let healingInstructions = '\n## Healing Instructions\n';
   healingInstructions += 'Apply these steps to recover from failures:\n\n';
-  
+
   for (const failure of recentFailures.slice(-3)) {
-    const analysis = analyzeFailure(failure);
+    const analysis = failureAnalyses.get(failure)!;
     healingInstructions += `1. ${analysis.correctionPrompt.instruction}\n`;
     analysis.correctionPrompt.healingSteps.forEach(step => {
       healingInstructions += `   - ${step}\n`;
@@ -394,7 +400,7 @@ export function injectFeedback(context: FeedbackContext): InjectedFeedback {
   
   // Build format guidance
   let formatGuidance = '';
-  const uniqueCategories = [...new Set(recentFailures.map(f => analyzeFailure(f).category))];
+  const uniqueCategories = [...new Set(recentFailures.map(f => failureAnalyses.get(f)!.category))];
   if (uniqueCategories.includes('format_mismatch')) {
     formatGuidance = '\n## Format Requirements\n';
     formatGuidance += 'IMPORTANT: Ensure response matches expected format.\n';
@@ -409,7 +415,7 @@ export function injectFeedback(context: FeedbackContext): InjectedFeedback {
   let roleRedirectSection: string | undefined;
   const allRedirects: RoleRedirect[] = [];
   for (const failure of recentFailures.slice(-3)) {
-    const analysis = analyzeFailure(failure);
+    const analysis = failureAnalyses.get(failure)!;
     allRedirects.push(...(analysis.correctionPrompt.redirectSuggestions || []));
   }
   

@@ -137,7 +137,7 @@ export function parseFirstResponseRouting(responseText: string): ParsedRouting {
       const parsed = JSON.parse(repaired);
       return validateAndNormalize(parsed, afterMarker.slice(0, 200));
     } catch {
-      return { found: false, rawJson: extracted.slice(0, 200), error: `JSON parse error: ${e.message}` };
+      return { found: false, rawJson: extracted.slice(0, 200), error: `JSON parse error: ${e?.message || String(e) || 'Unknown error'}` };
     }
   }
 }
@@ -201,12 +201,12 @@ function validateAndNormalize(parsed: Record<string, any>, rawJson?: string): Pa
   // Validate planSteps
   const planSteps: PlanStep[] = Array.isArray(parsed.planSteps)
     ? parsed.planSteps
-        .filter((s: any) => s && typeof s.step === 'string')
-        .map((s: any) => ({
-          step: s.step,
-          tool: typeof s.tool === 'string' ? s.tool : '',
-          role: typeof s.role === 'string' ? s.role : '',
-        }))
+    .filter((s: any) => s && typeof s.step === 'string' && typeof s.tool === 'string' && typeof s.role === 'string')
+    .map((s: any) => ({
+      step: s.step,
+      tool: s.tool,
+      role: s.role,
+    }))
     : DEFAULT_ROUTING.planSteps;
 
   // Validate requiresAutoReprompt

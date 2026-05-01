@@ -583,7 +583,8 @@ export class EnhancedLLMService {
       // The enhanced-llm-service now returns cleanly on success or throws categorized errors.
       // The UnifiedAgentService orchestrates fallbacks based on these categorized errors.
       try {
-        return await this.callProviderWithEnhancedClient(actualProvider, fullRequest, retryOptions, enableCircuitBreaker, requestId);
+        const response = await this.callProviderWithEnhancedClient(actualProvider, fullRequest, retryOptions, enableCircuitBreaker, requestId);
+        return await postProcessToolCalls(response);
       } catch (primaryError: any) {
         // Re-throw with categorization so the Orchestrator knows how to handle the retry/fallback
         throw this.enhanceError(primaryError, actualProvider, actualModel);

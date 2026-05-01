@@ -10,6 +10,10 @@ type Task<T> = {
   reject: (reason?: any) => void;
 };
 
+export const notifyStreamComplete = (streamId: string) => {
+  console.log(`Stream complete notification: ${streamId}`);
+};
+
 export class RequestBatcher {
   private queue: Task<any>[] = [];
   private timeout: NodeJS.Timeout | null = null;

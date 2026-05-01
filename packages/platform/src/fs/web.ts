@@ -61,7 +61,8 @@ class WebFs implements FsAdapter {
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    // Defer URL revocation to reduce risk of premature revocation before download starts
+    setTimeout(() => URL.revokeObjectURL(url), 100);
   }
 
   openFileDialog(options?: { accept?: string; multiple?: boolean }): Promise<File[]> {
@@ -72,13 +73,13 @@ class WebFs implements FsAdapter {
       input.multiple = options?.multiple ?? false;
 
       let settled = false;
-      const settle = (files: File[]) => {
+      const settle = (files: File[] | null) => {
         if (settled) return;
         settled = true;
         clearTimeout(timeoutId);
         window.removeEventListener('focus', onWindowFocus);
         input.remove();
-        resolve(files);
+        resolve(files || []);
       };
 
       const timeoutId = setTimeout(() => {
@@ -87,7 +88,12 @@ class WebFs implements FsAdapter {
         }
       }, 60000); // Log warning after 60s, don't cancel
 
-      const onWindowFocus = () => settle(Array.from(input.files || []));
+      const onWindowFocus = () => {
+      // When window regains focus, explicitly check if files were actually selected
+      // (empty result indicates cancellation, not successful empty selection)
+      const files = input.files ? Array.from(input.files) : [];
+      settle(files.length > 0 ? files : null);
+    };
 
       input.onchange = () => settle(Array.from(input.files || []));
 
