@@ -20,8 +20,22 @@
 import { isDesktopMode } from '../env';
 import type { FsAdapter } from './web';
 
+export class UnsupportedOperationError extends Error {
+  constructor(method: string) {
+    super(`${method} is not supported on this platform`);
+    this.name = 'UnsupportedOperationError';
+  }
+}
+
 // Dynamic import to avoid bundling Tauri APIs in web build
 let fsPromise: Promise<FsAdapter> | null = null;
+
+/**
+ * Reset the file system adapter cache (useful for dev/test)
+ */
+export function resetFsCache() {
+  fsPromise = null;
+}
 
 function getFs(): Promise<FsAdapter> {
   if (!fsPromise) {
@@ -35,80 +49,79 @@ function getFs(): Promise<FsAdapter> {
   }
   return fsPromise;
 }
-  return fsPromise;
-}
 
 // Export a proxy that forwards calls to the correct implementation
 export const fs: FsAdapter = {
   readFile: async (input: string | File) => (await getFs()).readFile(input),
   readBinaryFile: async (path: string) => {
     const adapter = await getFs();
-    if (!adapter.readBinaryFile) throw new Error('readBinaryFile is not supported on this platform');
+    if (!adapter.readBinaryFile) throw new UnsupportedOperationError('readBinaryFile');
     return adapter.readBinaryFile(path);
   },
   writeFile: async (path: string, content: string) => {
     const adapter = await getFs();
-    if (!adapter.writeFile) throw new Error('writeFile is not supported on this platform');
+    if (!adapter.writeFile) throw new UnsupportedOperationError('writeFile');
     return adapter.writeFile(path, content);
   },
   writeBinaryFile: async (path: string, data: Uint8Array) => {
     const adapter = await getFs();
-    if (!adapter.writeBinaryFile) throw new Error('writeBinaryFile is not supported on this platform');
+    if (!adapter.writeBinaryFile) throw new UnsupportedOperationError('writeBinaryFile');
     return adapter.writeBinaryFile(path, data);
   },
   readDir: async (path: string) => {
     const adapter = await getFs();
-    if (!adapter.readDir) throw new Error('readDir is not supported on this platform');
+    if (!adapter.readDir) throw new UnsupportedOperationError('readDir');
     return adapter.readDir(path);
   },
   createDir: async (path: string, recursive?: boolean) => {
     const adapter = await getFs();
-    if (!adapter.createDir) throw new Error('createDir is not supported on this platform');
+    if (!adapter.createDir) throw new UnsupportedOperationError('createDir');
     return adapter.createDir(path, recursive);
   },
   removeDir: async (path: string, recursive?: boolean) => {
     const adapter = await getFs();
-    if (!adapter.removeDir) throw new Error('removeDir is not supported on this platform');
+    if (!adapter.removeDir) throw new UnsupportedOperationError('removeDir');
     return adapter.removeDir(path, recursive);
   },
   removeFile: async (path: string) => {
     const adapter = await getFs();
-    if (!adapter.removeFile) throw new Error('removeFile is not supported on this platform');
+    if (!adapter.removeFile) throw new UnsupportedOperationError('removeFile');
     return adapter.removeFile(path);
   },
   exists: async (path: string) => {
     const adapter = await getFs();
-    if (!adapter.exists) throw new Error('exists is not supported on this platform');
+    if (!adapter.exists) throw new UnsupportedOperationError('exists');
     return adapter.exists(path);
   },
   copyFile: async (src: string, dest: string) => {
     const adapter = await getFs();
-    if (!adapter.copyFile) throw new Error('copyFile is not supported on this platform');
+    if (!adapter.copyFile) throw new UnsupportedOperationError('copyFile');
     return adapter.copyFile(src, dest);
   },
   openFileDialog: async (options?: { accept?: string; multiple?: boolean }) => (await getFs()).openFileDialog(options),
   saveFileDialog: async (options?: { defaultPath?: string }) => {
     const adapter = await getFs();
-    if (!adapter.saveFileDialog) throw new Error('saveFileDialog is not supported on this platform');
+    if (!adapter.saveFileDialog) throw new UnsupportedOperationError('saveFileDialog');
     return adapter.saveFileDialog(options);
   },
   // Web-only methods
   readAsDataURL: async (file: File) => {
     const adapter = await getFs();
-    if (!adapter.readAsDataURL) throw new Error('readAsDataURL is not supported on this platform');
+    if (!adapter.readAsDataURL) throw new UnsupportedOperationError('readAsDataURL');
     return adapter.readAsDataURL(file);
   },
   readAsArrayBuffer: async (file: File) => {
     const adapter = await getFs();
-    if (!adapter.readAsArrayBuffer) throw new Error('readAsArrayBuffer is not supported on this platform');
+    if (!adapter.readAsArrayBuffer) throw new UnsupportedOperationError('readAsArrayBuffer');
     return adapter.readAsArrayBuffer(file);
   },
   downloadFile: async (content: string, filename: string, mimeType?: string) => {
     const adapter = await getFs();
-    if (!adapter.downloadFile) throw new Error('downloadFile is not supported on this platform');
+    if (!adapter.downloadFile) throw new UnsupportedOperationError('downloadFile');
     return adapter.downloadFile(content, filename, mimeType);
   },
 };
+
 
 export type { FsAdapter };
 export default fs;

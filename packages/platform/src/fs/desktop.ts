@@ -10,19 +10,23 @@
 import type { FsAdapter } from './web';
 
 class DesktopFs implements FsAdapter {
-  // Desktop uses path strings, web uses File objects
+  private isAbsolute(path: string): boolean {
+    return path.startsWith('/') || /^[a-zA-Z]:\\/.test(path);
+  }
+
+  private getBaseDir(path: string, BaseDirectory: any) {
+    return this.isAbsolute(path) ? undefined : BaseDirectory.Home;
+  }
+
   async readFile(pathOrFile: string | File): Promise<string> {
     if (typeof pathOrFile === 'string') {
       try {
         const { readTextFile, BaseDirectory } = await import('@tauri-apps/plugin-fs');
-        // Handle absolute paths by setting baseDir to None if the path is absolute
-        const isAbsolute = pathOrFile.startsWith('/') || /^[a-zA-Z]:\\/.test(pathOrFile);
-        return await readTextFile(pathOrFile, { baseDir: isAbsolute ? undefined : BaseDirectory.Home });
+        return await readTextFile(pathOrFile, { baseDir: this.getBaseDir(pathOrFile, BaseDirectory) });
       } catch (err) {
         throw new Error(`Failed to read file ${pathOrFile}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
-    // Fallback for File object (drag-and-drop)
     try {
       return await pathOrFile.text();
     } catch (err) {
@@ -32,25 +36,10 @@ class DesktopFs implements FsAdapter {
 
   async readBinaryFile(path: string): Promise<Uint8Array> {
     try {
-      const { readBinaryFile, BaseDirectory } = await import('@tauri-apps/plugin-fs');
-      return await readBinaryFile(path, { baseDir: BaseDirectory.Home });
-    } catch (err) {
-      throw new Error(`Failed to read binary file ${path}: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-    }
-    // Fallback for File object (drag-and-drop)
-    try {
-      return await pathOrFile.text();
-    } catch (err) {
-      throw new Error(`Failed to read File object: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-
-  async readBinaryFile(path: string): Promise<Uint8Array> {
-    try {
-      const { readBinaryFile, BaseDirectory } = await import('@tauri-apps/plugin-fs');
-      return await readBinaryFile(path, { baseDir: BaseDirectory.Home });
+      const { readFile, BaseDirectory } = await import('@tauri-apps/plugin-fs');
+      // Handle absolute paths
+      const isAbsolute = path.startsWith('/') || /^[a-zA-Z]:\\/.test(path);
+      return await readFile(path, { baseDir: isAbsolute ? undefined : BaseDirectory.Home });
     } catch (err) {
       throw new Error(`Failed to read binary file ${path}: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -59,7 +48,7 @@ class DesktopFs implements FsAdapter {
   async writeFile(path: string, content: string): Promise<void> {
     try {
       const { writeTextFile, BaseDirectory } = await import('@tauri-apps/plugin-fs');
-      await writeTextFile(path, content, { baseDir: BaseDirectory.Home });
+      await writeTextFile(path, content, { baseDir: this.getBaseDir(path, BaseDirectory) });
     } catch (err) {
       throw new Error(`Failed to write file ${path}: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -67,18 +56,10 @@ class DesktopFs implements FsAdapter {
 
   async writeBinaryFile(path: string, data: Uint8Array): Promise<void> {
     try {
-      const { writeBinaryFile, BaseDirectory } = await import('@tauri-apps/plugin-fs');
-      await writeBinaryFile(path, data, { baseDir: BaseDirectory.Home });
-    } catch (err) {
-      throw new Error(`Failed to write binary file ${path}: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-  }
-
-  async writeBinaryFile(path: string, data: Uint8Array): Promise<void> {
-    try {
-      const { writeBinaryFile, BaseDirectory } = await import('@tauri-apps/plugin-fs');
-      await writeBinaryFile(path, data, { baseDir: BaseDirectory.Home });
+      const { writeFile, BaseDirectory } = await import('@tauri-apps/plugin-fs');
+      // Handle absolute paths
+      const isAbsolute = path.startsWith('/') || /^[a-zA-Z]:\\/.test(path);
+      await writeFile(path, data, { baseDir: isAbsolute ? undefined : BaseDirectory.Home });
     } catch (err) {
       throw new Error(`Failed to write binary file ${path}: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -87,22 +68,11 @@ class DesktopFs implements FsAdapter {
   async readDir(path: string): Promise<{ name: string; isDirectory: boolean; size?: number }[]> {
     try {
       const { readDir, BaseDirectory } = await import('@tauri-apps/plugin-fs');
-      const entries = await readDir(path, { baseDir: BaseDirectory.Home });
+      const entries = await readDir(path, { baseDir: this.getBaseDir(path, BaseDirectory) });
       return entries.map(e => {
-        // Validate entry structure before accessing properties
         if (!e || typeof e.name !== 'string' || typeof e.isDirectory !== 'boolean') {
           throw new Error(`Invalid directory entry structure: missing required fields`);
         }
-        return {
-          name: e.name,
-          isDirectory: e.isDirectory,
-          size: typeof (e as any).size === 'number' ? (e as any).size : undefined,
-        };
-      });
-    } catch (err) {
-      throw new Error(`Failed to read directory ${path}: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
         return {
           name: e.name,
           isDirectory: e.isDirectory,
@@ -117,7 +87,7 @@ class DesktopFs implements FsAdapter {
   async createDir(path: string, recursive = false): Promise<void> {
     try {
       const { mkdir, BaseDirectory } = await import('@tauri-apps/plugin-fs');
-      await mkdir(path, { baseDir: BaseDirectory.Home, recursive });
+      await mkdir(path, { baseDir: this.getBaseDir(path, BaseDirectory), recursive });
     } catch (err) {
       throw new Error(`Failed to create directory ${path}: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -126,7 +96,7 @@ class DesktopFs implements FsAdapter {
   async removeDir(path: string, recursive = false): Promise<void> {
     try {
       const { remove, BaseDirectory } = await import('@tauri-apps/plugin-fs');
-      await remove(path, { baseDir: BaseDirectory.Home, recursive });
+      await remove(path, { baseDir: this.getBaseDir(path, BaseDirectory), recursive });
     } catch (err) {
       throw new Error(`Failed to remove directory ${path}: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -135,7 +105,7 @@ class DesktopFs implements FsAdapter {
   async removeFile(path: string): Promise<void> {
     try {
       const { remove, BaseDirectory } = await import('@tauri-apps/plugin-fs');
-      await remove(path, { baseDir: BaseDirectory.Home });
+      await remove(path, { baseDir: this.getBaseDir(path, BaseDirectory) });
     } catch (err) {
       throw new Error(`Failed to remove file ${path}: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -144,7 +114,7 @@ class DesktopFs implements FsAdapter {
   async exists(path: string): Promise<boolean> {
     try {
       const { exists, BaseDirectory } = await import('@tauri-apps/plugin-fs');
-      return await exists(path, { baseDir: BaseDirectory.Home });
+      return await exists(path, { baseDir: this.getBaseDir(path, BaseDirectory) });
     } catch (err) {
       throw new Error(`Failed to check if file exists ${path}: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -153,7 +123,12 @@ class DesktopFs implements FsAdapter {
   async copyFile(src: string, dest: string): Promise<void> {
     try {
       const { copyFile, BaseDirectory } = await import('@tauri-apps/plugin-fs');
-      await copyFile(src, dest, { baseDir: BaseDirectory.Home });
+      // For copyFile, we might need a baseDir for both src and dest, assuming Home for now if not absolute
+      const srcBaseDir = this.getBaseDir(src, BaseDirectory);
+      const destBaseDir = this.getBaseDir(dest, BaseDirectory);
+      
+      // Tauri v2 uses fromPathBaseDir and toPathBaseDir
+      await copyFile(src, dest, { fromPathBaseDir: srcBaseDir, toPathBaseDir: destBaseDir });
     } catch (err) {
       throw new Error(`Failed to copy file from ${src} to ${dest}: ${err instanceof Error ? err.message : String(err)}`);
     }

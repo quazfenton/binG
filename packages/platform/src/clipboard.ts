@@ -64,6 +64,7 @@ class WebClipboard implements ClipboardAdapter {
   async writeFiles(paths: string[]): Promise<void> {
     // Web clipboard doesn't support file paths
     console.warn('[Clipboard] writeFiles not supported in web environment');
+    return Promise.reject(new Error('writeFiles is not supported in web environment'));
   }
 
   async clear(): Promise<void> {

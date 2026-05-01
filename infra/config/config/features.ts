@@ -61,10 +61,16 @@ const BOOLEAN_FEATURES = [
 type BooleanFeatureKey = typeof BOOLEAN_FEATURES[number];
 
 export const isFeatureEnabled = (feature: BooleanFeatureKey): boolean => {
+  if (!(feature in FEATURE_FLAGS)) {
+    throw new Error(`Unknown feature flag: ${feature}`);
+  }
   return FEATURE_FLAGS[feature] as boolean;
 };
 
 export const getFeatureConfig = <T>(feature: keyof typeof FEATURE_FLAGS): T => {
+  if (!(feature in FEATURE_FLAGS)) {
+    throw new Error(`Unknown feature flag: ${feature}`);
+  }
   return FEATURE_FLAGS[feature] as T;
 };
 

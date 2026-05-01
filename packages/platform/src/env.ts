@@ -101,21 +101,25 @@ export function getDefaultWorkspaceRoot(): string | null {
     }
   }
   
+import * as path from 'path';
+
   const platform = typeof process !== 'undefined' ? process.platform : 'linux';
+
+// ... (existing code, skipping to getDefaultWorkspaceRoot)
 
   if (platform === 'win32') {
     const userProfile = typeof process !== 'undefined' && process.env ? process.env.USERPROFILE : undefined;
     if (!userProfile || typeof userProfile !== 'string' || userProfile.trim() === '') {
       return null;
     }
-    return `${userProfile}\\workspace`;
+    return path.join(userProfile, 'workspace');
   }
 
   const home = typeof process !== 'undefined' ? process.env.HOME : undefined;
   if (!home || typeof home !== 'string' || home.trim() === '') {
     return null;
   }
-  return `${home}/workspace`;
+  return path.join(home, 'workspace');
 }
 
 export interface DesktopConfig {

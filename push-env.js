@@ -21,7 +21,12 @@ for (let line of lines) {
       value = value.substring(1, value.length - 1);
     }
 
-    if (key && value) {
+    if (key && value && value.trim() !== '') {
+      // Validate key format
+      if (!/^[A-Z0-9_]+$/.test(key)) {
+        console.error(`Invalid environment variable key: ${key}`);
+        continue;
+      }
       for (const env of environments) {
         console.log(`Setting ${key} in ${env}...`);
         try {
