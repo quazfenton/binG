@@ -568,7 +568,7 @@ export class EnhancedLLMService {
         model: actualModel,
         // Use user's API key if provided, otherwise the provider config's key will be used
         apiKey: userApiKey,
-      }
+      };
 
       // Log request start for telemetry
       await chatRequestLogger.logRequestStart(
