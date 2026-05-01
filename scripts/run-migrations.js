@@ -25,9 +25,9 @@ process.chdir(projectRoot);
 console.log('🔧 Running database migrations from:', projectRoot, '\n');
 
 try {
-  // Run migrations using tsx (TypeScript executor) which is already a dependency
+  // Run migrations using tsx to execute the TypeScript migration runner
   execSync(
-    `npx tsx -e "import { migrationRunner } from './web/lib/database/migration-runner'; migrationRunner.runMigrations().then(() => console.log('\\n✅ Migrations complete')).catch(err => { console.error('\\n❌ Migration failed:', err); process.exit(1); })"`,
+    'npx tsx scripts/run-migrations.ts',
     {
       stdio: 'inherit',
       cwd: projectRoot,
