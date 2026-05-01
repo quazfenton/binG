@@ -75,7 +75,8 @@ describe('ripgrep wrapper', () => {
   it('reports whether real ripgrep was used', async () => {
     const r = await ripgrepSearch({ query: 'FOO', path: tmpDir });
     expect(typeof r.usedRipgrep).toBe('boolean');
-    const probe = await isRipgrepAvailable();
+    // isRipgrepAvailable is synchronous in the existing implementation
+    const probe = isRipgrepAvailable();
     expect(typeof probe).toBe('boolean');
   });
 

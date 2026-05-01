@@ -386,7 +386,6 @@ export {
   shouldTriggerReview,
   getNextPlanStep,
   generateStepReprompt,
-  formatRoleRedirectOptions,
   type RoutingMetadata,
   type ParsedRouting,
   type TaskClassification as RoutingClassification,
