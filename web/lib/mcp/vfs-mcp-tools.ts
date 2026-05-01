@@ -1256,6 +1256,113 @@ export const searchFilesTool = (tool as any)({
 });
 
 /**
+ * grep_code - Fast regex search across the real codebase using ripgrep
+ *
+ * Complements `search_files` (which searches the per-user Virtual File System
+ * via semantic/metadata indexing) by giving the LLM a fast, regex-capable
+ * grep over the actual on-disk codebase. Uses the wrapper at
+ * `lib/search/ripgrep.ts` which spawns `rg` when available and falls back to
+ * a JS scanner with glob support.
+ */
+export const grepCodeTool = (tool as any)({
+  description: [
+    'Fast regex search across the codebase using ripgrep.',
+    '',
+    'Use this when you need to find symbols, function definitions, imports,',
+    'TODOs, or any text/regex pattern across many files at once. Much faster',
+    'and more powerful than `search_files` (which searches the per-user VFS).',
+    '',
+    'Arguments:',
+    '   query (string)            - regex pattern, e.g. "useState\\(" or "TODO\\b"',
+    '   path (string, optional)   - root dir to search (default: project root)',
+    '   glob (string, optional)   - file filter, e.g. "*.ts" or "**/*.{ts,tsx}"',
+    '   caseInsensitive (bool)    - default false',
+    '   wordRegexp (bool)         - match whole words only',
+    '   fixedString (bool)        - treat query as literal text (no regex)',
+    '   contextLines (number)     - lines of context before/after each match',
+    '   maxResults (number)       - cap total matches (default 100)',
+    '',
+    'Examples:',
+    '   grep_code(query="export function", glob="*.ts")',
+    '   grep_code(query="TODO|FIXME", caseInsensitive=true)',
+    '   grep_code(query="import.*from", glob="**/*.{ts,tsx}", maxResults=50)',
+  ].join('\n'),
+  parameters: z.object({
+    query: z.string().describe('Regex pattern (or literal text if fixedString=true)'),
+    path: z.string().optional().describe('Root directory to search (default: project root)'),
+    glob: z.union([z.string(), z.array(z.string())]).optional()
+      .describe('File filter glob, e.g. "*.ts" or ["*.ts","*.tsx"]'),
+    caseInsensitive: z.boolean().optional().default(false),
+    wordRegexp: z.boolean().optional().default(false),
+    fixedString: z.boolean().optional().default(false),
+    contextLines: z.number().optional().default(0).describe('Lines of context around each match'),
+    maxResults: z.number().optional().default(100).describe('Max total matches'),
+    maxCountPerFile: z.number().optional().default(50).describe('Max matches per file'),
+  }).passthrough(),
+  execute: async (args: {
+    query: string;
+    path?: string;
+    glob?: string | string[];
+    caseInsensitive?: boolean;
+    wordRegexp?: boolean;
+    fixedString?: boolean;
+    contextLines?: number;
+    maxResults?: number;
+    maxCountPerFile?: number;
+  }) => {
+    try {
+      if (!args.query || typeof args.query !== 'string') {
+        return { success: false, query: args.query, error: 'Query is required', matches: [], total: 0 };
+      }
+      // Lazy import to keep this module client-safe; ripgrep is server-only.
+      const { ripgrepSearch, isRipgrepAvailable } = await import('../search/ripgrep');
+      const result = await ripgrepSearch({
+        query: args.query,
+        path: args.path,
+        glob: args.glob,
+        caseInsensitive: args.caseInsensitive,
+        wordRegexp: args.wordRegexp,
+        fixedString: args.fixedString,
+        contextLines: args.contextLines,
+        maxResults: args.maxResults ?? 100,
+        maxCountPerFile: args.maxCountPerFile ?? 50,
+      });
+      logger.debug('grep_code', {
+        query: args.query,
+        matchCount: result.matches.length,
+        usedRipgrep: result.usedRipgrep,
+        elapsedMs: result.stats?.elapsedMs,
+      });
+      return {
+        success: true,
+        query: args.query,
+        usedRipgrep: result.usedRipgrep,
+        ripgrepAvailable: isRipgrepAvailable(),
+        matches: result.matches.map((m) => ({
+          path: m.path,
+          line: m.line,
+          content: m.content,
+          contextBefore: m.contextBefore,
+          contextAfter: m.contextAfter,
+        })),
+        total: result.matches.length,
+        stats: result.stats,
+        errors: result.errors && result.errors.length > 0 ? result.errors : undefined,
+      };
+    } catch (error: any) {
+      logger.error('grep_code failed', { query: args.query, error: error.message });
+      return {
+        success: false,
+        query: args.query,
+        error: error.message,
+        matches: [],
+        total: 0,
+      };
+    }
+  },
+});
+
+/**
  * batch_write - Write multiple files in one operation
  * Efficient for creating several related files at once
  */
@@ -1680,6 +1787,7 @@ export const vfsTools = {
   read_files: readFilesTool as any as VFSExtendedTool,
   list_files: listFilesTool as any as VFSExtendedTool,
   search_files: searchFilesTool as any as VFSExtendedTool,
+  grep_code: grepCodeTool as any as VFSExtendedTool,
   batch_write: batchWriteTool as any as VFSExtendedTool,
   delete_file: deleteFileTool as any as VFSExtendedTool,
   create_directory: createDirectoryTool as any as VFSExtendedTool,
@@ -1733,6 +1841,20 @@ const TOOL_META: Record<string, { description: string; parameters: z.ZodType }> 
   query: z.string().describe('Search term or natural language description'),
   path: z.string().optional().describe('Optional path to search within (e.g. "src/")'),
   limit: z.number().optional().default(10).describe('Maximum number of results (default: 10)'),
+    }),
+  },
+  grep_code: {
+    description: grepCodeTool.description,
+    parameters: z.object({
+  query: z.string().describe('Regex pattern, e.g. "useState\\(" or "TODO|FIXME"'),
+  path: z.string().optional().describe('Root directory (default: project root)'),
+  glob: z.union([z.string(), z.array(z.string())]).optional().describe('File filter, e.g. "*.ts"'),
+  caseInsensitive: z.boolean().optional().default(false),
+  wordRegexp: z.boolean().optional().default(false),
+  fixedString: z.boolean().optional().default(false),
+  contextLines: z.number().optional().default(0),
+  maxResults: z.number().optional().default(100),
+  maxCountPerFile: z.number().optional().default(50),
     }),
   },
   batch_write: {

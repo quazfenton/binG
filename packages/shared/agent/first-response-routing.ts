@@ -255,8 +255,17 @@ export function formatRoleRedirectOptions(
   section += 'Consider these specialized roles for better handling:\n\n';
 
   // Deduplicate by role (keep highest-weight entry per role)
-  const deduped = options.filter(
-    (r, i) => options.findIndex((x) => x.role === r.role) === i,
+  const deduped = Object.values(
+    options.reduce<Record<string, { role: string; weight: number; reason: string }>>(
+      (acc, r) => {
+        const existing = acc[r.role];
+        if (!existing || r.weight > existing.weight) {
+          acc[r.role] = r;
+        }
+        return acc;
+      },
+      {},
+    ),
   );
   const sorted = [...deduped]
     .sort((a, b) => b.weight - a.weight)
