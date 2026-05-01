@@ -15,6 +15,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef, useCallback, useMemo, Suspense } from "react";
+import { getDatabaseConnection } from "@/lib/database/backup/resilience-layer";
 import { motion, AnimatePresence } from "framer-motion";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
@@ -692,8 +693,6 @@ export default function MusicHubTab() {
       }
     };
   }, [currentAlbumIndex, currentSongIndex, playlist]);
-
-import { getDatabaseConnection } from "@/lib/database/backup/resilience-layer";
 
   // Fetch playlist from API on mount
   useEffect(() => {
