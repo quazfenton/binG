@@ -18,11 +18,11 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "fastify": "^5.8.1",
+    "fastify": "^5.8.5",
     "@fastify/cors": "^11.1.0",
     "bullmq": "^5.0.0",
     "ioredis": "^5.3.2",
-    "uuid": "^9.0.0",
+    "uuid": "^14.0.0",
     "pino": "^8.17.0",
     "zod": "^3.22.0"
   },
