@@ -71,25 +71,21 @@ export async function apiFetch<T = any>(
   const timeoutId = setTimeout(() => controller.abort(), timeout);
 
   // Merge signals if a user-provided signal exists
-  const combinedSignal = fetchOptions.signal
-    ? ((): AbortSignal => {
-        const c = new AbortController();
-        const onAbort = () => {
-          controller.abort();
-          c.abort();
-        };
-        fetchOptions.signal!.addEventListener('abort', onAbort);
-        controller.signal.addEventListener('abort', onAbort);
-        return c.signal;
-      })()
-    : controller.signal;
+  let combinedSignal: AbortSignal = controller.signal;
+  let onAbort: (() => void) | undefined;
+
+  if (fetchOptions.signal) {
+    const c = new AbortController();
+    onAbort = () => {
+      controller.abort();
+      c.abort();
+    };
+    fetchOptions.signal.addEventListener('abort', onAbort);
+    controller.signal.addEventListener('abort', onAbort);
+    combinedSignal = c.signal;
+  }
 
   try {
-    if (isDesktopMode()) {
-      return await executeFetch<T>(fullUrl, { ...fetchOptions, signal: combinedSignal }, parseJson);
-    }
-
-    // Web: Standard fetch
     return await executeFetch<T>(fullUrl, { ...fetchOptions, signal: combinedSignal }, parseJson);
   } catch (error: any) {
     if (error.name === 'AbortError') {
@@ -110,6 +106,10 @@ export async function apiFetch<T = any>(
       headers: {},
     };
   } finally {
+    if (onAbort) {
+      fetchOptions.signal?.removeEventListener('abort', onAbort);
+      controller.signal.removeEventListener('abort', onAbort);
+    }
     clearTimeout(timeoutId);
   }
 }
@@ -147,16 +147,15 @@ async function executeFetch<T>(
     try {
       const errorBody = await response.text();
       try {
-      const errorJson = JSON.parse(errorBody);
-      error = errorJson.error?.message || JSON.stringify(errorJson);
+        const errorJson = JSON.parse(errorBody);
+        error = errorJson.error?.message || JSON.stringify(errorJson);
+      } catch {
+        error = errorBody || `HTTP ${response.status}: ${response.statusText}`;
+      }
     } catch {
-      try {
-      const errorJson = JSON.parse(errorBody);
-      error = errorJson.error?.message || JSON.stringify(errorJson);
-    } catch {
-      error = errorBody || `HTTP ${response.status}: ${response.statusText}`;
+      error = `HTTP ${response.status}: ${response.statusText}`;
     }
-    }
+  }
     } catch {
       error = `HTTP ${response.status}: ${response.statusText}`;
     }

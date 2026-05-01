@@ -62,7 +62,7 @@ class WebFs implements FsAdapter {
     a.click();
     document.body.removeChild(a);
     // Defer URL revocation to reduce risk of premature revocation before download starts
-    setTimeout(() => URL.revokeObjectURL(url), 100);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
   openFileDialog(options?: { accept?: string; multiple?: boolean }): Promise<File[]> {
