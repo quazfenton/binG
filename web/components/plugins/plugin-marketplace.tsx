@@ -1,6 +1,7 @@
 "use client"
 
-import React, { useState, useEffect, useMemo } from 'react'
+import React, { useState, useEffect, useMemo } from 'react';
+import { PluginRegistry } from '@/lib/plugins/plugin-registry';
 import { Card, CardContent } from '../ui/card'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
@@ -278,8 +279,6 @@ export default function PluginMarketplace({ onClose, onInstall }: PluginMarketpl
 
     return filtered
   }, [plugins, searchTerm, selectedCategory, showOnlyFree, showOnlyCompatible, sortBy])
-
-import { PluginRegistry } from '@/lib/plugins/plugin-registry';
 
 // ... (in the component)
 

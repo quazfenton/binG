@@ -57,6 +57,9 @@ import {
   Plus,
   Check,
   Film,
+  MessageCircle,
+  Copy,
+  Search,
 } from "lucide-react";
 import WorkflowsTab from "./plugins/n8n-workflows-tab";
 import OrchestrationTab from "./plugins/orchestration-tab";
@@ -83,9 +86,6 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
-import { Copy } from "lucide-react";
-import { Search } from "lucide-react";
-
 // Helper to ensure image URLs go through the proxy
 function getProxiedImageUrl(url: string | undefined): string | undefined {
   if (!url) return undefined;

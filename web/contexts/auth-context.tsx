@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useState, useContext, useEffect, ReactNode } from 'react';
-import { FEATURE_FLAGS } from '../../infra/config/config/features';
+import { FEATURE_FLAGS } from '../.bing-infra-config/config/features';
 import { isDesktopMode } from '@bing/platform/env';
 
 interface User {

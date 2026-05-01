@@ -34,8 +34,8 @@ import {
   PROMPT_PRESETS,
   generateDebugHeaderValue,
   applyPromptModifiers,
-} from '../../packages/shared/agent/prompt-parameters';
-import { encodeParams, decodeParams } from '../../packages/shared/agent/prompt-parameters.codec';
+} from '@bing/shared/agent/prompt-parameters';
+import { encodeParams, decodeParams } from '@bing/shared/agent/prompt-parameters.codec';
 
 const STORAGE_KEY = 'response_style_params';
 const PRESET_KEY = 'response_style_preset';
