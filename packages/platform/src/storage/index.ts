@@ -22,9 +22,13 @@ let storagePromise: Promise<StorageAdapter> | null = null;
 
 function getStorage(): Promise<StorageAdapter> {
   if (!storagePromise) {
-    storagePromise = isDesktopMode()
+    storagePromise = (isDesktopMode()
       ? import('./desktop').then(m => m.storage)
-      : import('./web').then(m => m.storage);
+      : import('./web').then(m => m.storage)
+    ).catch(err => {
+      storagePromise = null; // Reset on failure so we can retry
+      throw err;
+    });
   }
   return storagePromise;
 }
