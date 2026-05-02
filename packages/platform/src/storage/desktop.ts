@@ -18,7 +18,8 @@ export interface StorageAdapter {
 const APP_DATA_DIR = 'storage';
 
 function pathForKey(key: string): string {
-  // Use base64url encoding to ensure unique, filesystem-safe keys
+  if (!key) throw new Error('Storage key must not be empty');
+  if (key.length > 256) throw new Error('Storage key must be 256 characters or fewer');
   const safeKey = Buffer.from(key).toString('base64url');
   return `${APP_DATA_DIR}/${safeKey}.json`;
 }

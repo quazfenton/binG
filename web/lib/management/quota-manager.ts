@@ -273,6 +273,23 @@ export class QuotaManager {
     return { allowed, remaining, isDisabled: quota.isDisabled };
   }
 
+  isAvailable(provider: string): boolean {
+    return this.checkQuota(provider).allowed;
+  }
+
+  getRemainingCalls(provider: string): number {
+    return this.checkQuota(provider).remaining;
+  }
+
+  recordUsage(provider: string, amount: number = 1): void {
+    this.incrementUsage(provider, amount);
+  }
+
+  findAlternative(type: string, current: string): void {
+    // This method is used in e2b-provider.ts, needs implementation
+    log.warn(`[QuotaManager] findAlternative not fully implemented for ${type}, ${current}`);
+  }
+
   resetQuota(provider: string): void {
     this.ensureInitialized();
     const quota = this.quotas.get(provider);
@@ -300,6 +317,22 @@ export class QuotaManager {
     this.saveAllQuotasToFile();
   }
 
+  incrementUsage(provider: string, amount: number = 1): void {
+    this.ensureInitialized();
+    const quota = this.quotas.get(provider);
+    if (!quota) return;
+
+    this.checkAndResetIfNeeded(quota);
+
+    quota.currentUsage += amount;
+    if (quota.currentUsage >= quota.monthlyLimit) {
+      quota.isDisabled = true;
+      log.warn(`[QuotaManager] Quota reached for ${provider}`);
+    }
+
+    this.saveQuotaToDatabase(quota);
+    this.saveAllQuotasToFile();
+  }
 
   getAllQuotas(): ProviderQuota[] {
     this.ensureInitialized();

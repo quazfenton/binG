@@ -11,7 +11,8 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getApprovalStep } from '@/lib/orchestra/mastra/workflows/hitl-workflow';
-import { verifyAuth, getUserEmail } from '@/lib/auth/jwt';
+import { verifyAuth } from '@/lib/auth/jwt';
+import { authService } from '@/lib/auth/auth-service';
 
 // Lazy load Mastra to avoid build-time initialization
 let _mastra: any = null;
@@ -35,7 +36,7 @@ export async function POST(request: NextRequest) {
   try {
     // SECURITY: Authenticate the caller using JWT
     const authResult = await verifyAuth(request);
-    if (!authResult.success) {
+    if (!authResult.success || !authResult.userId) {
       return NextResponse.json(
         { error: 'Authentication required', requestId },
         { status: 401 }
@@ -76,8 +77,9 @@ export async function POST(request: NextRequest) {
     }
 
     // SECURITY: Use authenticated user's identity for audit trail
-    const approverId = authResult.userId!;
-    const approverEmail = authResult.user?.email || 'unknown@example.com';
+    const approverId = authResult.userId;
+    const user = await authService.getUserById(approverId);
+    const approverEmail = user?.email || 'unknown@example.com';
 
     // Get Mastra instance (lazy loaded)
     const mastra = await getMastra();

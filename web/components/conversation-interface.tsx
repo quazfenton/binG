@@ -1123,7 +1123,7 @@ export default function ConversationInterface() {
           );
           const fromFirst =
             providers.length > 0
-              ? pickValid(providers[0].id, providers[0].models[0])
+              ? pickValid(providers[0].id, providers[0].models[0] as string)
               : undefined;
 
           const selection = fromPersisted || fromServer || fromFirst;
@@ -1302,7 +1302,7 @@ export default function ConversationInterface() {
     const nextProvider = availableProviders[nextIndex];
 
     if (nextProvider && nextProvider.models.length > 0) {
-      const nextModel = nextProvider.models[0]; // Use first model of next provider
+      const nextModel = nextProvider.models[0] as string; // Use first model of next provider
       handleProviderChange(nextProvider.id, nextModel);
     }
   }, [availableProviders, currentProvider, handleProviderChange]);

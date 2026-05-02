@@ -25,7 +25,8 @@ export type TopPanelTab =
   | "model-comparison"
   | "zine-display"
   | "mcp"
-  | "movies";
+  | "movies"
+  | "messages";
 
 interface PanelContextType {
   isOpen: boolean;
