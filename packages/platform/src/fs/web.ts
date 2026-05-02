@@ -65,7 +65,7 @@ class WebFs implements FsAdapter {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
-  openFileDialog(options?: { accept?: string; multiple?: boolean }): Promise<File[]> {
+  openFileDialog(options?: { accept?: string; multiple?: boolean }): Promise<string[]> {
     return new Promise((resolve) => {
       const input = document.createElement('input');
       input.type = 'file';

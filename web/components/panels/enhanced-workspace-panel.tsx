@@ -580,8 +580,8 @@ export function EnhancedWorkspacePanel({
                     .map(provider => (
                       <optgroup key={provider.id} label={provider.name}>
                         {provider.models.map(model => (
-                          <option key={model} value={`${provider.id}:${model}`}>
-                            {model}
+                          <option key={typeof model === 'string' ? model : model.id} value={`${provider.id}:${typeof model === 'string' ? model : model.id}`}>
+                            {typeof model === 'string' ? model : model.id}
                           </option>
                         ))}
                       </optgroup>

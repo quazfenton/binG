@@ -81,8 +81,7 @@ export async function GET() {
     voices: KITTEN_VOICES,
     models: KITTEN_MODELS.map(m => ({
       id: m.id,
-      name: m.name,
-      description: m.description
+      name: m.name
     }))
   });
 }

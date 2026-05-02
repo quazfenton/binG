@@ -19,14 +19,17 @@ import type { StorageAdapter } from './web';
 
 // Dynamic import to avoid bundling Tauri APIs in web build
 let storagePromise: Promise<StorageAdapter> | null = null;
+let importFailure: Error | null = null;
 
 function getStorage(): Promise<StorageAdapter> {
+  if (importFailure) return Promise.reject(importFailure);
   if (!storagePromise) {
     storagePromise = (isDesktopMode()
       ? import('./desktop').then(m => m.storage)
       : import('./web').then(m => m.storage)
     ).catch(err => {
-      storagePromise = null; // Reset on failure so we can retry
+      importFailure = err;
+      storagePromise = null;
       throw err;
     });
   }
