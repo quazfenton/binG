@@ -7,7 +7,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
-import { cloudAgentOffload } from '@bing/shared/agent/cloud-agent-offload';
+import { cloudAgentOffload } from '@bing/shared/agent';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('API:AgentV2:Cloud');

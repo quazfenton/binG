@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
-import { loadState } from '@bing/shared/agent/workforce-state';
-import { workforceManager } from '@bing/shared/agent/workforce-manager';
+import { loadState, workforceManager } from '@bing/shared/agent';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('API:AgentV2:Workforce');
