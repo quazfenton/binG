@@ -20,21 +20,23 @@ import { notifyStreamComplete } from '@/lib/streaming/stream-control-handler';
 import type { LLMMessage, StreamingResponse } from "@/lib/chat/llm-providers";
 import { checkRateLimit } from '@/lib/middleware/rate-limiter';
 import { createFilesystemTools, createAgentLoop } from '@/lib/orchestra/mastra';
-import { executeV2Task, executeV2TaskStreaming } from '@bing/shared/agent/v2-executor';
+import { 
+  executeV2Task, 
+  executeV2TaskStreaming, 
+  workforceManager, 
+  createTaskClassifier as createTaskClassifierShared,
+  SYSTEM_PROMPTS,
+  generateDynamicInjection,
+  getOrchestrationModeFromRequest,
+  executeWithOrchestrationMode
+} from '@bing/shared/agent';
+const { VFS_FILE_EDITING_TOOL_PROMPT } = SYSTEM_PROMPTS;
 import { processUnifiedAgentRequest, type UnifiedAgentConfig } from '@/lib/orchestra/unified-agent-service';
 import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp';
-import { workforceManager } from '@bing/shared/agent/workforce-manager';
-import { createTaskClassifier as createTaskClassifierShared } from '@bing/shared/agent/task-classifier';
-import { VFS_FILE_EDITING_TOOL_PROMPT } from '@bing/shared/agent/system-prompts';
-import { generateDynamicInjection } from '@bing/shared/agent/system-prompts-dynamic';
 import { mem0Search, buildMem0SystemPrompt, isMem0Configured, mem0Add, prewarmMem0Cache } from '@/lib/powers/mem0-power';
 import { createSSEEmitter, SSE_RESPONSE_HEADERS, SSE_EVENT_TYPES } from '@/lib/streaming/sse-event-schema';
-// Lazy imports — avoid 'ws' module resolution during instrumentation context
-// import { streamStateManager } from '@/lib/streaming/stream-state-manager';
-// import { notifyNeedMoreTurns, notifyStreamComplete } from '@/lib/streaming/stream-control-handler';
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import { getRecentMcpFileEdits, clearRecentMcpFileEdits } from '@/lib/virtual-filesystem/file-events';
-import { getOrchestrationModeFromRequest, executeWithOrchestrationMode } from '@bing/shared/agent/modular';
 import {
   parseFilesystemResponse,
   extractAndSanitize,

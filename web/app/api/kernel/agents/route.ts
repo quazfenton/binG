@@ -7,7 +7,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getAgentKernel, type AgentConfig } from '@bing/shared/agent/agent-kernel';
+import { getAgentKernel, type AgentConfig } from '@bing/shared/agent';
 
 // POST /api/kernel/agents - Spawn a new agent
 export async function POST(request: NextRequest) {

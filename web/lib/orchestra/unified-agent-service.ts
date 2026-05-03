@@ -238,7 +238,7 @@ export interface UnifiedAgentConfig {
   model?: string;
 
   // Mode override (optional - auto-detected from env if not specified)
-  mode?: 'v1-api' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'opencode-sdk' | 'mastra-workflow' | 'desktop' | 'v1-progressive-build' | 'dual-process' | 'adversarial-verify' | 'attractor-driven' | 'intent-driven' | 'energy-driven' | 'distributed-cognition' | 'cognitive-resonance' | 'execution-controller' | 'auto';
+  mode?: 'v1-api' | 'v1-agent-loop' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'opencode-sdk' | 'mastra-workflow' | 'desktop' | 'v1-progressive-build' | 'dual-process' | 'adversarial-verify' | 'attractor-driven' | 'intent-driven' | 'energy-driven' | 'distributed-cognition' | 'cognitive-resonance' | 'execution-controller' | 'spec:super' | 'spec:maximal' | 'auto';
 
   // Harness mode options
   dualProcessConfig?: DualProcessConfig;

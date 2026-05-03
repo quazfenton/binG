@@ -2,3 +2,20 @@ packages:
   - "desktop"
   - "packages/*"
   - "web"
+allowBuilds:
+  '@google/genai': true
+  '@matrix-org/matrix-sdk-crypto-nodejs': true
+  '@smithery/cli': true
+  agent-browser: true
+  better-sqlite3: true
+  bufferutil: true
+  cbor-extract: true
+  cpu-features: true
+  es5-ext: true
+  esbuild: true
+  msgpackr-extract: true
+  node-pty: true
+  protobufjs: true
+  sharp: true
+  ssh2: true
+  utf-8-validate: true
