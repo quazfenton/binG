@@ -870,9 +870,10 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
 
                       // Find the last user message content
                       const currentMessages = messagesRef.current;
-                      const lastUserMsg = currentMessages.findLast(
+                      const userMessages = currentMessages.filter(
                         msg => msg.role === 'user' && msg.id !== assistantMessage.id
                       );
+                      const lastUserMsg = userMessages[userMessages.length - 1];
 
                       if (lastUserMsg?.content) {
                         console.warn(`[Chat] Empty response detected, auto-retrying (attempt ${retryCount + 1}/${maxRetries})`);
@@ -2388,9 +2389,8 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
           }
         }
       } finally {
-      enhancedBufferManager.off('render', onRender);
-      reader.releaseLock();
-    }
+        reader.releaseLock();
+      }
     
     // If we reach here without a 'done' event
     clearTimeout(timeoutId);

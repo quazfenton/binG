@@ -37,5 +37,44 @@
     "turbo": "^2.0.0",
     "unified": "^11.0.5",
     "vitest": "^4.0.18"
+  },
+  "pnpm": {
+    "overrides": {
+      "node-forge": ">=1.3.2",
+      "qs": ">=6.14.1",
+      "@modelcontextprotocol/sdk": ">=1.25.2",
+      "form-data": ">=4.0.4",
+      "minimatch": ">=10.2.1",
+      "fast-xml-parser": ">=5.3.6",
+      "tar": ">=7.4.0",
+      "jsondiffpatch": ">=0.6.0",
+      "undici": ">=7.1.0",
+      "glob": ">=11.0.0",
+      "ioredis": "^5.4.1",
+      "bullmq>ioredis": "^5.4.1"
+    },
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "msgpackr-extract"
+    ],
+    "ignoredBuiltDependencies": [
+      "@smithery/cli",
+      "bufferutil",
+      "cpu-features",
+      "es5-ext",
+      "esbuild",
+      "protobufjs",
+      "sharp",
+      "ssh2",
+      "utf-8-validate"
+    ]
+  },
+  "resolutions": {
+    "fast-xml-parser": ">=5.3.6",
+    "next": ">=15.5.10"
+  },
+  "overrides": {
+    "elliptic": "^6.6.1"
   }
 }
+

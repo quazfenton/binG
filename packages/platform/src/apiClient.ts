@@ -156,10 +156,6 @@ async function executeFetch<T>(
       error = `HTTP ${response.status}: ${response.statusText}`;
     }
   }
-    } catch {
-      error = `HTTP ${response.status}: ${response.statusText}`;
-    }
-  }
 
   return {
     ok: response.ok,

@@ -1,7 +1,7 @@
 import { IncomingMessage } from 'node:http';
-import { Socket } from 'node:net';
-import { WebSocketServer, WebSocket } from 'ws';
 import { streamStateManager } from './stream-state-manager';
+import { WebSocketServer } from 'ws';
+import type { Duplex } from 'node:stream';
 
 /**
  * Request Batching Handler
@@ -29,7 +29,7 @@ export const notifyNeedMoreTurns = async (streamId: string, contextHint?: string
 /**
  * Handle WebSocket upgrade for stream control
  */
-export const handleStreamControlUpgrade = async (req: IncomingMessage, socket: Socket, head: Buffer) => {
+export const handleStreamControlUpgrade = async (req: IncomingMessage, socket: Duplex, head: Buffer) => {
   const wss = new WebSocketServer({ noServer: true });
 
   wss.handleUpgrade(req, socket, head, (ws) => {

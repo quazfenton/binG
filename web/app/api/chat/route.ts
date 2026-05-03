@@ -3085,7 +3085,7 @@ const config: UnifiedAgentConfig = {
                   undefined,
                   actualProvider,
                   actualModel,
-                  completedToolCalls.length > 0 ? completedToolCalls : undefined,
+                  (completedToolCalls.length > 0 ? completedToolCalls : undefined) as any,
                   streamingContentBuffer.length,
                 ).catch(() => {});
 
@@ -4693,7 +4693,7 @@ function appendFilesystemContextMessages(
       ...chunks,
       '',
       allowFileEdits
-        ? VFS_FILE_EDITING_TOOL_PROMPT.join('\n')
+        ? VFS_FILE_EDITING_TOOL_PROMPT
         : '',
       workspaceContext ? `Current workspace session context:\n${workspaceContext}` : '',
       hybridContext ? `Codebase retrieval context:\n${hybridContext}` : '',
