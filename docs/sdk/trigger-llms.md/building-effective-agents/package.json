@@ -9,7 +9,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@trigger.dev/sdk": "^3.3.13",
+    "@trigger.dev/sdk": "^4.4.5",
     "typescript": "^5.7.3"
   },
   "description": "",
