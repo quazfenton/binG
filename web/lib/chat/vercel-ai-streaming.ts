@@ -363,7 +363,7 @@ export function getVercelModel(
   }
 
   // Handle OpenAI-compatible providers
-  if (provider !== 'openai' && provider !== 'anthropic' && provider !== 'google' && provider !== 'mistral') {
+  if (provider !== 'openai' && provider !== 'anthropic' && provider !== 'google' && provider !== 'mistral' && provider !== 'vercel') {
     const config = OPENAI_COMPATIBLE_PROVIDERS[provider];
     if (config) {
       const openai = createOpenAI({

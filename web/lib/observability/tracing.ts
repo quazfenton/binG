@@ -7,6 +7,17 @@
  */
 
 /**
+ * Fallback Span interface when OpenTelemetry is not available
+ */
+export interface Span {
+  end: () => void;
+  setAttribute: (key: string, value: any) => void;
+  setStatus: (status: { code: number; message?: string }) => void;
+  addEvent: (name: string, attributes?: Record<string, any>) => void;
+  spanContext?: () => any;
+}
+
+/**
  * Optional OpenTelemetry wrapper
  * Gracefully degrades to no-op stubs if OpenTelemetry is not installed.
  */

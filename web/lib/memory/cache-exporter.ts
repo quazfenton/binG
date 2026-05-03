@@ -99,13 +99,13 @@ export interface CacheAdapter<T = unknown> {
   name: string;
   
   /** Get all current entries from the cache */
-  getEntries(): CacheExportEntry<T>[];
+  getEntries(): CacheExportEntry<T>[] | Promise<CacheExportEntry<T>[]>;
   
   /** Set a single entry in the cache (for restoration) */
-  setEntry(key: string, entry: CacheExportEntry<T>): void;
+  setEntry(key: string, entry: CacheExportEntry<T>): void | Promise<void>;
   
   /** Delete an entry from the cache */
-  deleteEntry(key: string): void;
+  deleteEntry(key: string): void | Promise<void>;
   
   /** Clear all entries in the cache */
   clear(): void;
@@ -116,7 +116,12 @@ export interface CacheAdapter<T = unknown> {
     oldestEntry: number | null;
     newestEntry: number | null;
     hotEntries: number;
-  };
+  } | Promise<{
+    size: number;
+    oldestEntry: number | null;
+    newestEntry: number | null;
+    hotEntries: number;
+  }>;
 }
 
 // ============================================================================
@@ -131,16 +136,16 @@ interface StorageBackend {
   isAvailable(): boolean;
   
   /** Save export data */
-  save(key: string, data: CacheExportMetadata & { entries: CacheExportEntry[] }): Promise<void>;
+  save(key: string, data: CacheExportMetadata & { entries: CacheExportEntry[] }): void | Promise<void>;
   
   /** Load export data */
-  load(key: string): Promise<(CacheExportMetadata & { entries: CacheExportEntry[] }) | null>;
+  load(key: string): (CacheExportMetadata & { entries: CacheExportEntry[] }) | null | Promise<(CacheExportMetadata & { entries: CacheExportEntry[] }) | null>;
   
   /** Delete export data */
-  delete(key: string): Promise<void>;
+  delete(key: string): void | Promise<void>;
   
   /** List all available exports */
-  list(): Promise<string[]>;
+  list(): string[] | Promise<string[]>;
   
   /** Get storage path for display/debugging */
   getStoragePath(): string;
@@ -158,13 +163,13 @@ class FileSystemExportBackend implements StorageBackend {
     this.basePath = `${configDir}/cache-exports`;
   }
 
-  private async ensureFs(): Promise<void> {
+  private ensureFs(): void {
     if (!this.fs) {
-      this.fs = await import('fs');
-      this.path = await import('path');
-      // Ensure directory exists
+      this.fs = require('fs');
+      this.path = require('path');
+      // Ensure directory exists - use sync version
       try {
-        await this.fs.promises.mkdir(this.basePath, { recursive: true });
+        this.fs.mkdirSync(this.basePath, { recursive: true });
       } catch {
         // Directory may already exist
       }
@@ -434,12 +439,12 @@ interface TabMemoryEntry {
 const tabMemoryAdapter: CacheAdapter<TabMemoryEntry> = {
   type: 'tab-memory',
   name: 'Tab Memory',
-  async getEntries(): Promise<CacheExportEntry<TabMemoryEntry>[]> {
+  getEntries(): CacheExportEntry<TabMemoryEntry>[] {
     try {
-      const { getAllTabMemories, getTabMemoryStats } = await import('../retrieval/search');
+      const { getAllTabMemories } = require('../retrieval/search');
       const memories = getAllTabMemories();
       
-      return memories.map(mem => ({
+      return memories.map((mem: TabMemoryEntry) => ({
         key: mem.tabId,
         value: mem,
         createdAt: Date.now(), // Tab memories don't track creation time
@@ -491,14 +496,14 @@ const tabMemoryAdapter: CacheAdapter<TabMemoryEntry> = {
       // Tab memory module may not be available
     }
   },
-  async getStats() {
+  getStats() {
     try {
-      const { getTabMemoryStats } = await import('../retrieval/search');
+      const { getTabMemoryStats } = require('../retrieval/search');
       const stats = getTabMemoryStats();
       return {
         size: stats.count,
-        oldestEntry: stats.oldestEntry,
-        newestEntry: stats.newestEntry,
+        oldestEntry: stats.oldestEntry || null,
+        newestEntry: stats.newestEntry || null,
         hotEntries: stats.count, // All are "hot" if they have recent activity
       };
     } catch {
@@ -511,55 +516,54 @@ const tabMemoryAdapter: CacheAdapter<TabMemoryEntry> = {
 const taskAdapter: CacheAdapter<Task> = {
   type: 'tasks',
   name: 'Task Persistence',
-  async getEntries(): Promise<CacheExportEntry<Task>[]> {
-    try {
-      const { getTaskStore } = await import('./task-persistence');
-      const store = getTaskStore();
-      const tasks = store.getAll();
-      
-      return tasks.map(task => ({
-        key: task.id,
-        value: task,
-        createdAt: task.createdAt,
-        lastAccessedAt: task.lastAccessedAt ?? task.updatedAt,
-        accessCount: task.progress > 0 ? Math.ceil(task.progress / 10) : 1,
-        important: task.retention !== 'scratch' || task.status === 'in_progress',
-        metadata: {
-          retention: task.retention,
-          status: task.status,
-          priority: task.priority,
-          tags: task.tags,
-          progress: task.progress,
-          stepCount: task.steps?.length ?? 0,
-        },
-      }));
-    } catch {
-      return [];
-    }
-  },
-  async setEntry(key: string, entry: CacheExportEntry<Task>): void {
-    try {
-      const { getTaskStore } = await import('./task-persistence');
-      const store = getTaskStore();
-      // Use restoreTask to preserve original ID
-      await store.restoreTask(entry.value);
-    } catch (error: any) {
-      log.warn(`Failed to restore task ${key}: ${error.message}`);
-    }
-  },
-  async deleteEntry(key: string): void {
-    try {
-      const { getTaskStore } = await import('./task-persistence');
-      const store = getTaskStore();
-      await store.delete(key);
-    } catch {
-      // Task may not exist
-    }
-  },
-  clear(): void {
-    // Dangerous - don't clear all tasks
-    log.warn('Clearing all tasks via cache export is not allowed');
-  },
+   getEntries(): CacheExportEntry<Task>[] {
+     try {
+       const { getTaskStore } = require('./task-persistence');
+       const store = getTaskStore();
+       const tasks = store.getAll();
+       
+       return tasks.map(task => ({
+         key: task.id,
+         value: task,
+         createdAt: task.createdAt,
+         lastAccessedAt: task.lastAccessedAt ?? task.updatedAt,
+         accessCount: task.progress > 0 ? Math.ceil(task.progress / 10) : 1,
+         important: task.retention !== 'scratch' || task.status === 'in_progress',
+         metadata: {
+           retention: task.retention,
+           status: task.status,
+           priority: task.priority,
+           tags: task.tags,
+           progress: task.progress,
+           stepCount: task.steps?.length ?? 0,
+         },
+       }));
+     } catch {
+       return [];
+     }
+   },
+   async setEntry(key: string, entry: CacheExportEntry<Task>): Promise<void> {
+     try {
+       const { getTaskStore } = require('./task-persistence');
+       const store = getTaskStore();
+       await store.restoreTask(entry.value);
+     } catch (error: any) {
+       log.warn(`Failed to restore task ${key}: ${error.message}`);
+     }
+   },
+   async deleteEntry(key: string): Promise<void> {
+     try {
+       const { getTaskStore } = require('./task-persistence');
+       const store = getTaskStore();
+       await store.delete(key);
+     } catch {
+       // Task may not exist
+     }
+   },
+   clear(): void {
+     // Dangerous - don't clear all tasks
+     log.warn('Clearing all tasks via cache export is not allowed');
+   },
   getStats() {
     try {
       const { getTaskStore } = require('./task-persistence');
@@ -581,36 +585,36 @@ const taskAdapter: CacheAdapter<Task> = {
 const powersAdapter: CacheAdapter = {
   type: 'powers-registry',
   name: 'Powers Registry',
-  async getEntries(): Promise<CacheExportEntry[]> {
-    try {
-      const { powersRegistry } = await import('../powers');
-      const powers = powersRegistry.getActive();
-      
-      return powers.map(power => ({
-        key: power.id,
-        value: {
-          id: power.id,
-          name: power.name,
-          version: power.version,
-          description: power.description,
-          actions: power.actions.length,
-          enabled: power.enabled,
-          source: power.source,
-        },
-        createdAt: power.installedAt ?? Date.now(),
-        lastAccessedAt: Date.now(),
-        accessCount: 1,
-        important: power.source === 'core',
-        metadata: {
-          source: power.source,
-          actionCount: power.actions.length,
-          triggers: power.triggers,
-        },
-      }));
-    } catch {
-      return [];
-    }
-  },
+   getEntries(): CacheExportEntry[] {
+     try {
+       const { powersRegistry } = require('../powers');
+       const powers = powersRegistry.getActive();
+       
+       return powers.map(power => ({
+         key: power.id,
+         value: {
+           id: power.id,
+           name: power.name,
+           version: power.version,
+           description: power.description,
+           actions: power.actions.length,
+           enabled: power.enabled,
+           source: power.source,
+         },
+         createdAt: power.installedAt ?? Date.now(),
+         lastAccessedAt: Date.now(),
+         accessCount: 1,
+         important: power.source === 'core',
+         metadata: {
+           source: power.source,
+           actionCount: power.actions.length,
+           triggers: power.triggers,
+         },
+       }));
+     } catch {
+       return [];
+     }
+   },
   setEntry(): void {
     // Powers are registered, not set - skip
     log.debug('Powers adapter: skipping setEntry (use register instead)');
@@ -706,15 +710,17 @@ export class CacheExportManager {
   /**
    * Export a specific cache type to persistent storage
    */
-  async export(cacheType: CacheType, options?: ExportOptions): Promise<CacheExportMetadata | null> {
-    const adapter = this.adapters.get(cacheType);
-    if (!adapter) {
-      log.warn(`No adapter registered for cache type: ${cacheType}`);
-      return null;
-    }
+   async export(cacheType: CacheType, options?: ExportOptions): Promise<CacheExportMetadata | null> {
+     const adapter = this.adapters.get(cacheType);
+     if (!adapter) {
+       log.warn(`No adapter registered for cache type: ${cacheType}`);
+       return null;
+     }
 
-    try {
-      const entries = adapter.getEntries();
+     try {
+       const entriesResult = adapter.getEntries();
+       // Handle both sync and async getEntries
+       const entries = entriesResult instanceof Promise ? await entriesResult : entriesResult;
       const now = Date.now();
 
       // Filter entries based on options
@@ -777,21 +783,22 @@ export class CacheExportManager {
       const mergeStrategy = options?.mergeStrategy ?? 'keep-newer';
       let restored = 0;
 
-      for (const entry of data.entries) {
-        // Apply merge strategy
-        if (mergeStrategy === 'keep-newer') {
-          // Only restore if the cached entry is newer than any existing
-          const existingEntries = adapter.getEntries();
-          const existing = existingEntries.find(e => e.key === entry.key);
-          if (existing && existing.lastAccessedAt > entry.lastAccessedAt) {
-            continue; // Skip, existing is newer
-          }
-        }
+       for (const entry of data.entries) {
+         // Apply merge strategy
+         if (mergeStrategy === 'keep-newer') {
+           // Only restore if the cached entry is newer than any existing
+           const existingEntriesResult = adapter.getEntries();
+           const existingEntries = existingEntriesResult instanceof Promise ? await existingEntriesResult : existingEntriesResult;
+           const existing = existingEntries.find(e => e.key === entry.key);
+           if (existing && existing.lastAccessedAt > entry.lastAccessedAt) {
+             continue; // Skip, existing is newer
+           }
+         }
 
-        // Set the entry (may be merged or replaced based on adapter)
-        adapter.setEntry(entry.key, entry);
-        restored++;
-      }
+         // Set the entry (may be merged or replaced based on adapter)
+         adapter.setEntry(entry.key, entry);
+         restored++;
+       }
 
       log.info(`Cache restored: ${cacheType}`, {
         entryCount: data.entries.length,
@@ -809,15 +816,15 @@ export class CacheExportManager {
   /**
    * Export all registered cache types
    */
-  async exportAll(options?: ExportOptions): Promise<Record<CacheType, CacheExportMetadata | null>> {
-    const results: Record<string, CacheExportMetadata | null> = {};
+   async exportAll(options?: ExportOptions): Promise<Record<CacheType, CacheExportMetadata | null>> {
+     const results: Record<string, CacheExportMetadata | null> = {};
 
-    for (const [cacheType] of this.adapters) {
-      results[cacheType] = await this.export(cacheType as CacheType, options);
-    }
+     for (const [cacheType] of this.adapters) {
+       results[cacheType] = await this.export(cacheType as CacheType, options);
+     }
 
-    return results as Record<CacheType, CacheExportMetadata | null>;
-  }
+     return results as Record<CacheType, CacheExportMetadata | null>;
+   }
 
   /**
    * Restore all cached exports
@@ -999,8 +1006,8 @@ export async function exportAllCaches(options?: ExportOptions): Promise<void> {
 /**
  * Restore all caches (good for startup)
  */
-export async function restoreAllCaches(options?: ExportOptions): Promise<void> {
-  await getCacheExportManager().restoreAll(options);
+export async function restoreAllCaches(options?: ExportOptions): Promise<Record<CacheType, number>> {
+  return getCacheExportManager().restoreAll(options);
 }
 
 /**
@@ -1013,14 +1020,14 @@ export async function exportTasks(options?: ExportOptions): Promise<CacheExportM
 /**
  * Export powers registry specifically
  */
-export async function exportPowers(options?: ExportOptions): Promise<CacheExportMetadata | null> {
+export async function exportPowers(options?: ExportOptions): CacheExportMetadata | null {
   return getCacheExportManager().export('powers-registry', options);
 }
 
 /**
  * Export response cache specifically
  */
-export async function exportResponseCache(options?: ExportOptions): Promise<CacheExportMetadata | null> {
+export async function exportResponseCache(options?: ExportOptions): CacheExportMetadata | null {
   return getCacheExportManager().export('response', options);
 }
 
@@ -1042,7 +1049,7 @@ let shutdownHookRegistered = false;
  */
 export function registerShutdownHook(
   options?: ExportOptions,
-  signals: NodeJS.Signals[] = ['SIGTERM', 'SIGINT', 'beforeExit']
+  signals: (NodeJS.Signals | 'beforeExit')[] = ['SIGTERM', 'SIGINT', 'beforeExit']
 ): void {
   // Prevent duplicate registration
   if (shutdownHookRegistered) {
@@ -1098,7 +1105,7 @@ export function unregisterShutdownHook(): void {
 /**
  * Perform a manual shutdown export (for testing or manual trigger)
  */
-export async function manualShutdownExport(options?: ExportOptions): Promise<void> {
+export async function manualShutdownExport(options?: ExportOptions): void {
   const manager = getCacheExportManager();
   await manager.exportAll(options);
   await manager.shutdown();

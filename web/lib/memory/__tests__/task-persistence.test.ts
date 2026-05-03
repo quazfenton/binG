@@ -28,14 +28,13 @@ describe('TaskStore', () => {
   beforeEach(async () => {
     vi.resetModules();
     
-    const module = await import('../task-persistence');
-    TaskStore = module.TaskStore;
-    getTaskStore = module.getTaskStore;
-    resetTaskStore = module.resetTaskStore;
-    RetentionLevel = module.RetentionLevel;
-    
-    // Reset the singleton
-    resetTaskStore();
+     const module = await import('../task-persistence');
+     TaskStore = module.TaskStore;
+     getTaskStore = module.getTaskStore;
+     resetTaskStore = module.resetTaskStore;
+     
+     // Reset the singleton
+     resetTaskStore();
   });
 
   describe('create()', () => {
