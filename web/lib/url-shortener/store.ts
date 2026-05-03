@@ -20,7 +20,7 @@ const MAX_STORE_SIZE = (() => {
 })();
 
 declare global {
-  // eslint-disable-next-line no-var
+   
   var __urlShortenerStore: Map<string, StoredUrl> | undefined;
 }
 

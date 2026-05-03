@@ -26,7 +26,7 @@ const MAX_SYNC_FILE_SIZE = 5 * 1024 * 1024;
 
 // Database access — uses the same SQLite connection as the VFS service
 function getDb() {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
+   
   const { getDatabase } = require('@/lib/database/connection');
   return getDatabase();
 }

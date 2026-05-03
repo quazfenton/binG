@@ -135,7 +135,7 @@ export interface TaskStep {
   description: string;
   
   /** Step status */
-  status: 'pending' | 'completed' | 'skipped' | 'failed';
+  status: 'pending' | 'completed' | 'skipped' | 'failed' | 'blocked' | 'cancelled' | 'in_progress';
   
   /** When completed */
   completedAt?: number;
@@ -1980,7 +1980,7 @@ export function segmentStepHierarchically(
 ): MicroStep[] {
   // This is a synchronous wrapper - the actual logic is in segmentIntoMicroSteps
   // Future: could support async with LLM-based segmentation for more complex steps
-  return segmentIntoMicroSteps(step, options?.includeDependencies);
+  return segmentIntoMicroSteps(step);
 }
 
 /**

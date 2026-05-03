@@ -39,7 +39,7 @@ const logger = createLogger('FileEvents');
  * CRITICAL FIX: Use globalThis to survive Next.js hot-reloading
  */
 declare global {
-  // eslint-disable-next-line no-var
+   
   var __recentMcpFileEdits__: Map<string, { paths: Set<string>; timestamp: number }> | undefined;
 }
 

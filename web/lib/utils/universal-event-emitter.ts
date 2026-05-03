@@ -82,7 +82,7 @@ function getNodeEventEmitter(): EventEmitterLike {
   try {
     // Check if we're in a Node.js environment
     if (typeof process !== 'undefined' && process.versions?.node) {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
+       
       const { EventEmitter } = require('events');
       return new EventEmitter();
     }

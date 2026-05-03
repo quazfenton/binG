@@ -67,9 +67,9 @@ export function getRateLimitTier(userId?: string, apiKey?: string): RateLimitTie
 // CRITICAL FIX: Use globalThis to survive Next.js hot-reloading
 // Without this, rate limits are bypassed after every hot-reload (security vulnerability)
 declare global {
-  // eslint-disable-next-line no-var
+   
   var __rateLimitStore__: Map<string, RateLimitEntry> | undefined;
-  // eslint-disable-next-line no-var
+   
   var __rateLimitCleanupRegistered__: boolean | undefined;
 }
 

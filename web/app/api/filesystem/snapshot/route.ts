@@ -10,7 +10,7 @@ export const runtime = 'nodejs';
 // Server-side LRU cache for snapshots
 // CRITICAL FIX: Use globalThis to survive Next.js hot-reloading
 declare global {
-  // eslint-disable-next-line no-var
+   
   var __snapshotCache__: Map<string, {
     data: any;
     timestamp: number;
@@ -86,9 +86,9 @@ startPeriodicCleanup();
 // CRITICAL FIX: Use globalThis to survive Next.js hot-reloading
 // Without this, latestSeenVersion resets on hot-reload and cache validation breaks
 declare global {
-  // eslint-disable-next-line no-var
+   
   var __snapshotLatestVersion__: Map<string, number> | undefined;
-  // eslint-disable-next-line no-var
+   
   var __snapshotListenerRegistered__: boolean | undefined;
 }
 
@@ -115,7 +115,7 @@ if (!globalThis.__snapshotListenerRegistered__) {
 
 // Request tracking for detecting polling loops
 declare global {
-  // eslint-disable-next-line no-var
+   
   var __snapshotRequestTracker__: Map<string, { count: number; lastRequest: number; firstRequest: number }> | undefined;
 }
 

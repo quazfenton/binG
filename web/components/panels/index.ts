@@ -23,10 +23,8 @@ export {
 } from "./resizable-panel-group";
 
 // Enhanced panel implementations
-// Note: EnhancedWorkspacePanel exists but is not currently imported anywhere in the codebase
-// export {
-//   EnhancedWorkspacePanel,
-// } from "./enhanced-workspace-panel";
+export { WorkspacePanel as EnhancedWorkspacePanel } from "../workspace-panel";
+
 
 // ============================================================================
 // Usage Examples

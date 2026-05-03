@@ -1330,7 +1330,8 @@ export function WorkspacePanel() {
             if (available.length > 0 && !chatProvider) {
               setChatProvider(available[0].id);
               if (available[0].models?.[0]) {
-                setChatModel(available[0].models[0]);
+                const firstModel = available[0].models[0];
+                setChatModel(typeof firstModel === 'string' ? firstModel : firstModel.id);
               }
             }
           }

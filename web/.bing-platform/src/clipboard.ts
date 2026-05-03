@@ -95,7 +95,7 @@ class DesktopClipboard implements ClipboardAdapter {
 
   async readFiles(): Promise<string[]> {
     try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
+       
       const clipboardModule = await import('@tauri-apps/plugin-clipboard-manager') as any;
       if (typeof clipboardModule.readFiles !== 'function') {
         return [];
@@ -109,7 +109,7 @@ class DesktopClipboard implements ClipboardAdapter {
 
   async writeFiles(paths: string[]): Promise<void> {
     try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
+       
       const clipboardModule = await import('@tauri-apps/plugin-clipboard-manager') as any;
       if (typeof clipboardModule.writeFiles !== 'function') {
         console.warn('[Clipboard] writeFiles is not supported by this Tauri clipboard plugin version');

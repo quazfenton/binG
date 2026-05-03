@@ -406,7 +406,7 @@ export class FilesystemDiffTracker {
 // CRITICAL FIX: Use globalThis to survive Next.js hot-reloading
 // Without this, all diff/rollback history is lost on hot-reload
 declare global {
-  // eslint-disable-next-line no-var
+   
   var __diffTracker__: FilesystemDiffTracker | undefined;
 }
 

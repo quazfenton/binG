@@ -2809,7 +2809,7 @@ function formatRefinementsAsList(spec: any, refinedOutput: string, chunks: any[]
 // Without this, circuit breaker states reset and failing providers resume receiving traffic
 // ============================================================================
 declare global {
-  // eslint-disable-next-line no-var
+   
   var __responseRouter__: ResponseRouter | undefined;
 }
 
