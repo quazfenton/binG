@@ -32,11 +32,26 @@
 import { createLogger } from '@/lib/utils/logger';
 import {
   processUnifiedAgentRequest,
-  checkProviderHealth,
   type UnifiedAgentConfig,
   type UnifiedAgentResult,
-  type ProviderHealth,
 } from '@/lib/orchestra/unified-agent-service';
+
+// Local types: upstream `unified-agent-service` no longer exports these.
+export interface ProviderHealth {
+  preferredMode: string;
+  v2Native: boolean;
+  v1Api: boolean;
+}
+
+// Local stub: upstream `checkProviderHealth` was removed from unified-agent-service.
+// Provide a permissive default so unified-router compiles and routing falls back gracefully.
+function checkProviderHealth(): ProviderHealth {
+  return {
+    preferredMode: 'v1-api',
+    v2Native: false,
+    v1Api: true,
+  };
+}
 import {
   createTaskClassifier,
   type TaskClassification,
@@ -449,8 +464,6 @@ export {
 // ============================================================================
 
 export {
-  checkProviderHealth,
-  type ProviderHealth,
   type UnifiedAgentResult,
 } from '@/lib/orchestra/unified-agent-service';
 

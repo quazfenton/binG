@@ -16,7 +16,7 @@ import { ShadowCommitManager } from '@/lib/orchestra/stateful-agent/commit/shado
 import { extractSessionIdFromPath, resolveScopedPath as resolveScopeUtil, sanitizeScopePath, extractScopePath, normalizeSessionId } from '@/lib/virtual-filesystem/scope-utils';
 import { createNDJSONParser } from '@/lib/utils/ndjson-parser';
 import { streamStateManager } from '@/lib/streaming/stream-state-manager';
-import { notifyStreamComplete } from '@/lib/streaming/stream-control-handler';
+import { notifyStreamComplete, notifyNeedMoreTurns } from '@/lib/streaming/stream-control-handler';
 import type { LLMMessage, StreamingResponse } from "@/lib/chat/llm-providers";
 import { checkRateLimit } from '@/lib/middleware/rate-limiter';
 import { createFilesystemTools, createAgentLoop } from '@/lib/orchestra/mastra';
@@ -26,11 +26,11 @@ import {
   workforceManager, 
   createTaskClassifier as createTaskClassifierShared,
   SYSTEM_PROMPTS,
+  VFS_FILE_EDITING_TOOL_PROMPT,
   generateDynamicInjection,
   getOrchestrationModeFromRequest,
   executeWithOrchestrationMode
 } from '@bing/shared/agent';
-const { VFS_FILE_EDITING_TOOL_PROMPT } = SYSTEM_PROMPTS;
 import { processUnifiedAgentRequest, type UnifiedAgentConfig } from '@/lib/orchestra/unified-agent-service';
 import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp';
 import { mem0Search, buildMem0SystemPrompt, isMem0Configured, mem0Add, prewarmMem0Cache } from '@/lib/powers/mem0-power';
@@ -2448,7 +2448,7 @@ const config: UnifiedAgentConfig = {
                 let lastTokenEmitTime = Date.now();
                 const TOKEN_EMIT_INTERVAL_MS = 50;  // Batch tokens for 50ms before emitting
 
-                const emitBufferedTokens = () => {
+                const emitBufferedTokens = async () => {
                   if (tokenBuffer.length > 0) {
                     realEmit('token', {
                       content: tokenBuffer,
@@ -2457,7 +2457,14 @@ const config: UnifiedAgentConfig = {
                     });
                     // Track tokens in stream state (non-fatal if it fails)
                     try {
-                      if (ssm) ssm.appendToken(streamRequestId, tokenBuffer);
+                      if (ssm) {
+                        ssm.appendToken(streamRequestId, tokenBuffer);
+                        // If we hit max tokens, signal need more turns (auto-continue)
+                        const state = ssm.get(streamRequestId);
+                        if (state && state.tokenCount >= state.maxTokens && !state.needsMoreTurns) {
+                          await ssm.signalNeedMoreTurns(streamRequestId, "Max tokens reached, auto-continuing...");
+                        }
+                      }
                     } catch (e: unknown) {
                       // Non-fatal - stream state tracking shouldn't break the main stream
                     }
@@ -4686,7 +4693,7 @@ function appendFilesystemContextMessages(
       ...chunks,
       '',
       allowFileEdits
-        ? VFS_FILE_EDITING_TOOL_PROMPT
+        ? VFS_FILE_EDITING_TOOL_PROMPT.join('\n')
         : '',
       workspaceContext ? `Current workspace session context:\n${workspaceContext}` : '',
       hybridContext ? `Codebase retrieval context:\n${hybridContext}` : '',

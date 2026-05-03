@@ -32,10 +32,8 @@
 import { createLogger } from '@/lib/utils/logger';
 import {
   processUnifiedAgentRequest,
-  checkProviderHealth,
   type UnifiedAgentConfig,
   type UnifiedAgentResult,
-  type ProviderHealth,
 } from '@/lib/orchestra/unified-agent-service';
 import {
   createTaskClassifier,
@@ -93,6 +91,14 @@ export interface ChatRequest {
   enableMastraWorkflows?: boolean;
   /** Specific workflow ID */
   workflowId?: string;
+}
+
+export interface ProviderHealth {
+  provider: string;
+  status: 'healthy' | 'unhealthy' | 'degraded' | 'unknown';
+  latency?: number;
+  lastChecked?: string;
+  error?: string;
 }
 
 export interface ChatResponse {
@@ -191,6 +197,10 @@ export async function classifyTask(
  */
 export async function routeChatRequest(request: ChatRequest): Promise<ChatResponse> {
   const startTime = Date.now();
+  const health: ProviderHealth = {
+    provider: request.provider,
+    status: 'healthy',
+  };
 
   // 0. Check circuit breaker - skip if provider is in open circuit state
   if (!circuitBreaker.isAvailable(request.provider)) {
@@ -203,7 +213,11 @@ export async function routeChatRequest(request: ChatRequest): Promise<ChatRespon
       mode: 'circuit-open',
       error: `Provider ${request.provider} is temporarily unavailable (circuit open after ${stats.failures} failures)`,
       classification: {} as TaskClassification,
-      health: {} as any,
+      health: {
+        provider: request.provider,
+        status: 'unhealthy',
+        error: 'Circuit breaker open',
+      },
       metadata: {
         duration: Date.now() - startTime,
         circuitBreaker: {
@@ -226,16 +240,7 @@ export async function routeChatRequest(request: ChatRequest): Promise<ChatRespon
     confidence: classification.confidence,
   });
 
-  // 2. Check provider health
-  const health = checkProviderHealth();
-
-  log.debug('Provider health check', {
-    preferredMode: health.preferredMode,
-    v2Native: health.v2Native,
-    v1Api: health.v1Api,
-  });
-
-  // 3. Build unified agent config
+  // 2. Build unified agent config (provider health check removed - not available)
   const config: UnifiedAgentConfig = {
     userMessage: request.userMessage,
     // FIX: Pass userId and conversationId for proper VFS session scoping
@@ -449,8 +454,6 @@ export {
 // ============================================================================
 
 export {
-  checkProviderHealth,
-  type ProviderHealth,
   type UnifiedAgentResult,
 } from '@/lib/orchestra/unified-agent-service';
 

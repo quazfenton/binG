@@ -1,3 +1,8 @@
+import { IncomingMessage } from 'node:http';
+import { Socket } from 'node:net';
+import { WebSocketServer, WebSocket } from 'ws';
+import { streamStateManager } from './stream-state-manager';
+
 /**
  * Request Batching Handler
  * 
@@ -12,6 +17,55 @@ type Task<T> = {
 
 export const notifyStreamComplete = (streamId: string) => {
   console.log(`Stream complete notification: ${streamId}`);
+};
+
+/**
+ * Notify that the stream needs more turns (auto-continue)
+ */
+export const notifyNeedMoreTurns = async (streamId: string, contextHint?: string) => {
+  return streamStateManager.signalNeedMoreTurns(streamId, contextHint);
+};
+
+/**
+ * Handle WebSocket upgrade for stream control
+ */
+export const handleStreamControlUpgrade = async (req: IncomingMessage, socket: Socket, head: Buffer) => {
+  const wss = new WebSocketServer({ noServer: true });
+
+  wss.handleUpgrade(req, socket, head, (ws) => {
+    ws.on('message', async (message) => {
+      try {
+        const payload = JSON.parse(message.toString());
+        const { type, streamId, data } = payload;
+
+        if (!streamId) return;
+
+        switch (type) {
+          case 'pause':
+            streamStateManager.pause(streamId);
+            ws.send(JSON.stringify({ type: 'paused', streamId }));
+            break;
+          case 'resume':
+            const chunks = streamStateManager.resume(streamId);
+            ws.send(JSON.stringify({ type: 'resumed', streamId, chunks }));
+            break;
+          case 'abort':
+            streamStateManager.abort(streamId);
+            ws.send(JSON.stringify({ type: 'aborted', streamId }));
+            break;
+          case 'continue':
+            await streamStateManager.triggerContinue(streamId, data);
+            ws.send(JSON.stringify({ type: 'continued', streamId }));
+            break;
+          case 'ping':
+            ws.send(JSON.stringify({ type: 'pong', timestamp: Date.now() }));
+            break;
+        }
+      } catch (err) {
+        console.error('Stream control message error:', err);
+      }
+    });
+  });
 };
 
 export class RequestBatcher {
