@@ -182,19 +182,19 @@ export class ChatRequestLogger {
   /**
    * Log a chat request completion with comprehensive telemetry
    */
-  async logRequestComplete(
-    requestId: string,
-    success: boolean,
-    responseSize?: number,
-    tokenUsage?: { prompt: number; completion: number; total: number },
-    latencyMs?: number,
-    error?: string,
-    actualProvider?: string,
-    actualModel?: string,
-    // Tool execution telemetry
-    toolCalls?: ToolCallTelemetry[],
-    contentLength?: number,
-  ): Promise<void> {
+   async logRequestComplete(
+     requestId: string,
+     success: boolean,
+     responseSize?: number,
+     tokenUsage?: { prompt: number; completion: number; total: number },
+     latencyMs?: number,
+     error?: string,
+     actualProvider?: string,
+     actualModel?: string,
+     // Tool execution telemetry
+     toolCalls?: ToolCallTelemetry[],
+     contentLength?: number,
+   ): Promise<void> {
     await this.initialize();
     if (!this.db) return;
 
@@ -205,9 +205,9 @@ export class ChatRequestLogger {
     // FIX: Detect rate limit errors (429) and track them immediately
     // This ensures the circuit breaker and rotation tracking are updated
     // even for streaming requests that fail before completion
-    const isRateLimitError = error && /429|rate.?limit|too many requests|quota exceeded/i.test(error);
-    const finalProvider = actualProvider || provider;
-    const finalModel = actualModel || model;
+     const isRateLimitError = error && /429|rate.?limit|too many requests|quota exceeded/i.test(error);
+     const finalProvider = actualProvider;
+     const finalModel = actualModel;
 
     // FIX: Track rate limit errors immediately (before the DB write)
     // This ensures rotation tracking and circuit breaker are updated
@@ -304,16 +304,16 @@ export class ChatRequestLogger {
         );
       }
 
-      // CRITICAL: Record model attempt for rotation tracking
-      // This allows the model-ranker to prefer untested models over stuck ones
-      // Using dynamic import to avoid circular dependency with model-ranker
-      const finalProvider = actualProvider || provider;
-      const finalModel = actualModel || model;
-      if (finalProvider && finalModel && finalModel !== 'unknown') {
-        // Dynamic import to avoid circular dependency
-        recordModelAttemptAsync(finalProvider, finalModel, success).catch(() => {
-          // Non-fatal - don't fail logging due to rotation tracking
-        });
+       // CRITICAL: Record model attempt for rotation tracking
+       // This allows the model-ranker to prefer untested models over stuck ones
+       // Using dynamic import to avoid circular dependency with model-ranker
+       const finalProvider = actualProvider;
+       const finalModel = actualModel;
+       if (finalProvider && finalModel && finalModel !== 'unknown') {
+         // Dynamic import to avoid circular dependency
+         recordModelAttemptAsync(finalProvider, finalModel, success).catch(() => {
+           // Non-fatal - don't fail logging due to rotation tracking
+         });
       }
     } catch (error) {
       console.error('[ChatRequestLogger] Failed to log request complete:', error);

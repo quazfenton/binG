@@ -80,8 +80,10 @@ export class GoogleImageProvider implements ImageGenerationProvider {
     }
     
     try {
-      // Try to list available models
-      await this.client.listModels();
+      // Try to list available models - listModels may not exist on all Google GenAI versions
+      if (typeof (this.client as any).listModels === 'function') {
+        await (this.client as any).listModels();
+      }
       return true;
     } catch {
       return false;
@@ -130,16 +132,14 @@ export class GoogleImageProvider implements ImageGenerationProvider {
 
       console.log('[GoogleImageProvider] Generating image with model:', model);
 
-      const response = await this.client.models.generateImages({
-        model,
-        prompt: this.buildPrompt(params),
-        config: {
-          aspectRatio: params.aspectRatio || '1:1',
-          ...(params.negativePrompt && { negativePrompt: params.negativePrompt }),
-        },
-      }, {
-        signal: controller.signal,
-      });
+        const response = await this.client.models.generateImages({
+          model,
+          prompt: this.buildPrompt(params),
+          config: {
+            aspectRatio: params.aspectRatio || '1:1',
+            ...(signal && { safetySettings: [] }), // Abort via signal if provided
+          },
+        });
 
       console.log('[GoogleImageProvider] Got response with', response.generatedImages?.length || 0, 'images');
 

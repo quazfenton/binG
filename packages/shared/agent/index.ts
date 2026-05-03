@@ -209,6 +209,7 @@ export {
 // System Prompts - Role-based agent prompts for multi-agent workflows
 export {
   SYSTEM_PROMPTS,
+  VFS_FILE_EDITING_TOOL_PROMPT,
   AGENT_ROLE_CONFIGS,
   ROLE_COMPATIBILITY,
   getSystemPrompt,

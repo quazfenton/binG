@@ -2542,7 +2542,7 @@ const config: UnifiedAgentConfig = {
                     // Emit buffered tokens if interval has passed
                     const now = Date.now();
                     if (now - lastTokenEmitTime >= TOKEN_EMIT_INTERVAL_MS) {
-                      emitBufferedTokens();
+                      await emitBufferedTokens();
                     }
                   }
 
@@ -2947,7 +2947,7 @@ const config: UnifiedAgentConfig = {
                     }
 
                     // Emit any remaining buffered tokens before done event
-                    emitBufferedTokens();
+                    await emitBufferedTokens();
 
                     // Update stream state and notify WebSocket control channel (non-fatal)
                     try {
@@ -2981,7 +2981,7 @@ const config: UnifiedAgentConfig = {
                 }
 
                 // Emit any remaining buffered tokens (in case loop exited without hitting isComplete)
-                emitBufferedTokens();
+                await emitBufferedTokens();
 
                 // SPEC AMPLIFICATION: Trigger after regular LLM streaming completes
                 // Runs AFTER final parse (line ~1684) and FILE_EDIT events (line ~1715)

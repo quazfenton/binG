@@ -224,6 +224,8 @@ export interface FallbackChainConfig {
  * Error types for image generation
  */
 export enum ImageGenerationErrorType {
+  /** Invalid model specified */
+  INVALID_MODEL = 'INVALID_MODEL',
   /** Provider not configured (missing API key) */
   NOT_CONFIGURED = 'NOT_CONFIGURED',
   /** Provider unavailable (rate limit, down, etc.) */

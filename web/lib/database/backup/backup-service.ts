@@ -35,10 +35,10 @@ export class DatabaseBackupService {
     // Write IV to start of file
     output.write(iv);
 
-    // Stream encryption
-    await new Promise((resolve, reject) => {
-      input.pipe(cipher).pipe(output).on('finish', resolve).on('error', reject);
-    });
+     // Stream encryption
+     await new Promise<void>((resolve, reject) => {
+       input.pipe(cipher).pipe(output).on('finish', () => resolve()).on('error', reject);
+     });
 
     // 3. Upload
     const encryptedData = fs.readFileSync(`${backupPath}.enc`);

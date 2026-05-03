@@ -51,7 +51,7 @@ export interface ToolExecutionContext {
 /**
  * Provider types supported by Vercel AI SDK
  */
-export type VercelProvider = 'openai' | 'anthropic' | 'google' | 'mistral' | 'openrouter';
+export type VercelProvider = 'openai' | 'anthropic' | 'google' | 'mistral' | 'openrouter' | 'vercel';
 
 /**
  * CLI providers that spawn local binaries instead of using API calls.
