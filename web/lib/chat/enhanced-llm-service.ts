@@ -1456,7 +1456,7 @@ export class EnhancedLLMService {
                return {
                  name: v.name || 'unknown',
                  description: v.description || '',
-                 parameters: { type: 'object', properties: {} },
+                  parameters: { type: 'object', properties: {}, required: [] },
                };
              });
              chatLogger.debug('[CLI-PROVIDER] Built tools for opencode-cli', {

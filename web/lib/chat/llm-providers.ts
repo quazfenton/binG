@@ -114,6 +114,7 @@ export interface LLMProvider {
   maxTokens: number
   description: string
   isAvailable?: boolean
+  modelConfigs?: Array<{ id: string; tags?: string[] }>
 }
 
 export interface LLMMessage {
@@ -2642,10 +2643,10 @@ class LLMService {
     return this.getAvailableProviders().some(p => p.id === providerId)
   }
 
-  getProviderModels(providerId: string): string[] {
-    const provider = PROVIDERS[providerId]
-    return provider ? provider.models : []
-  }
+   getProviderModels(providerId: string): string[] {
+     const provider = PROVIDERS[providerId]
+     return provider ? provider.models.map(m => typeof m === 'string' ? m : m.id) : []
+   }
 
   // =========================================================================
   // Antigravity Provider — Google OAuth-based access to Gemini 3 & Claude 4.6
