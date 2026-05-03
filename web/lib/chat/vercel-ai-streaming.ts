@@ -269,6 +269,10 @@ const OPENAI_COMPATIBLE_PROVIDERS: Record<string, OpenAICompatibleConfig> = {
     apiKeyEnv: 'OPENROUTER_API_KEY',
     useChatEndpoint: true,  // OpenRouter needs Chat Completions format for most models
   },
+  livekit: {
+    baseURL: process.env.LIVEKIT_BASE_URL || 'https://inference.livekit.io',
+    apiKeyEnv: 'LIVEKIT_API_KEY',
+  },
 };
 
 /**

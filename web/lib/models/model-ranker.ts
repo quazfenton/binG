@@ -307,7 +307,8 @@ function addConfiguredModels(modelMap: Map<string, ModelStats>): void {
     if (!providerConfig?.models || !Array.isArray(providerConfig.models)) continue
     
     for (const modelName of providerConfig.models) {
-      const key = `${providerName}:${modelName}`
+      const modelId = typeof modelName === 'string' ? modelName : modelName.id;
+      const key = `${providerName}:${modelId}`
       
       // Only add if not already in the map (telemetry data takes precedence)
       if (!modelMap.has(key)) {
@@ -318,7 +319,7 @@ function addConfiguredModels(modelMap: Map<string, ModelStats>): void {
           // Add untested model with neutral stats (gives it a chance)
           modelMap.set(key, {
             provider: providerName,
-            model: modelName,
+            model: modelId,
             avgLatency: 2000, // neutral latency estimate
             failureRate: 0, // optimistic default
             lastUpdated: Date.now(),
@@ -404,11 +405,12 @@ export function getModelForRotation(excludeProvider?: string): { provider: strin
     if (!isProviderConfiguredForTelemetry(providerName)) continue
     
     for (const modelName of providerConfig.models) {
-      const key = `${providerName}:${modelName}`
+      const modelId = typeof modelName === 'string' ? modelName : modelName.id;
+      const key = `${providerName}:${modelId}`
       
       // FIX: Check rate limit circuit breaker before including this model
-      if (isRateLimited(providerName, modelName)) {
-        logger.debug('Skipping rate-limited model in rotation', { provider: providerName, model: modelName })
+      if (isRateLimited(providerName, modelId)) {
+        logger.debug('Skipping rate-limited model in rotation', { provider: providerName, model: modelId })
         continue
       }
       
@@ -427,7 +429,7 @@ export function getModelForRotation(excludeProvider?: string): { provider: strin
         }
       }
       
-      candidates.push({ key, provider: providerName, model: modelName, priority })
+      candidates.push({ key, provider: providerName, model: modelId, priority })
     }
   }
   

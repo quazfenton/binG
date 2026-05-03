@@ -850,7 +850,7 @@ export async function runExecutionControllerMode(
     cumulativeOutput += '\n' + result.response;
 
     // Track tool activity from result with proper followedByAction detection
-    const resultToolActivity = result.steps?.map(s => ({ type: s.toolName })) || [];
+    const resultToolActivity = result.steps?.map(s => ({ type: s.toolName, followedByAction: false })) || [];
     if (resultToolActivity.length > 0) {
       // Mark read operations without immediate follow-up within this cycle
       for (let i = 0; i < resultToolActivity.length - 1; i++) {
@@ -942,7 +942,7 @@ export async function runExecutionControllerMode(
           toolActivity,
           filesGenerated,
           progress: cycleCount / maxCycles,
-          originalTask: baseConfig.userMessage,
+          originalTask: baseConfig.userMessage || 'System-initiated task',
         });
       }
     } else {

@@ -338,6 +338,35 @@ export class QuotaManager {
     this.ensureInitialized();
     return Array.from(this.quotas.values());
   }
+
+  /**
+   * Get the preferred order of providers based on quota availability
+   */
+  getSandboxProviderChain(primary: string): string[] {
+    this.ensureInitialized();
+    
+    // In current impl, we just return the primary if it has quota,
+    // or a list of all others that have quota.
+    const chain: string[] = [];
+    if (this.isAvailable(primary)) {
+      chain.push(primary);
+    }
+
+    // Add others that have remaining quota
+    const others = Array.from(this.quotas.keys())
+      .filter(p => p !== primary && this.isAvailable(p))
+      .sort((a, b) => this.getRemainingCalls(b) - this.getRemainingCalls(a));
+
+    return [...chain, ...others];
+  }
+
+  /**
+   * Pick the first available provider from the chain
+   */
+  pickAvailableSandboxProvider(primary: string): string | null {
+    const chain = this.getSandboxProviderChain(primary);
+    return chain.length > 0 ? chain[0] : null;
+  }
 }
 
 export const quotaManager: QuotaManager = new QuotaManager();

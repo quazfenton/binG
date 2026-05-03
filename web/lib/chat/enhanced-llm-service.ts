@@ -2214,7 +2214,7 @@ export function validateSandboxCommand(command: string): { isValid: boolean; com
 // CRITICAL FIX: Use globalThis to survive Next.js hot-reloading
 // Without this, dynamically registered user-provider configs are lost
 declare global {
-  // eslint-disable-next-line no-var
+   
   var __enhancedLLMService__: EnhancedLLMService | undefined;
 }
 

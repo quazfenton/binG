@@ -283,7 +283,7 @@ export interface UnifiedAgentResult {
     result: ToolResult;
   }>;
   totalSteps?: number;
-  mode: 'v1-api' | 'v1-agent-loop' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'opencode-sdk' | 'mastra-workflow' | 'desktop' | 'v1-progressive-build' | 'dual-process' | 'dual-process-fast' | 'dual-process-slow' | 'dual-process-fast-fallback' | 'dual-process-slow-failed' | 'adversarial-verify' | 'adversarial-verify-revised' | 'adversarial-verify-revision-failed' | 'attractor-driven' | 'intent-driven' | 'energy-driven' | 'distributed-cognition' | 'distributed-cognition-no-synthesis' | 'cognitive-resonance' | 'cognitive-resonance-converged' | 'cognitive-resonance-synthesized' | 'cognitive-resonance-single' | 'cognitive-resonance-fallback';
+  mode: 'v1-api' | 'v1-agent-loop' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'opencode-sdk' | 'mastra-workflow' | 'desktop' | 'v1-progressive-build' | 'dual-process' | 'dual-process-fast' | 'dual-process-slow' | 'dual-process-fast-fallback' | 'dual-process-slow-failed' | 'adversarial-verify' | 'adversarial-verify-revised' | 'adversarial-verify-revision-failed' | 'attractor-driven' | 'intent-driven' | 'energy-driven' | 'distributed-cognition' | 'distributed-cognition-no-synthesis' | 'cognitive-resonance' | 'cognitive-resonance-converged' | 'cognitive-resonance-synthesized' | 'cognitive-resonance-single' | 'cognitive-resonance-fallback' | 'execution-controller';
   error?: string;
   fileEdits?: Array<{
     path: string;
@@ -424,7 +424,7 @@ const startupCaps = checkStartupCapabilities();
  * Defaults to v1-agent-loop (PlanActVerify) with dynamic injector always active.
  */
 async function determineMode(config: UnifiedAgentConfig): Promise<{
-  mode: 'v1-api' | 'v1-agent-loop' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'opencode-sdk' | 'mastra-workflow' | 'desktop' | 'v1-progressive-build' | 'dual-process' | 'dual-process-fast' | 'dual-process-slow' | 'dual-process-fast-fallback' | 'dual-process-slow-failed' | 'adversarial-verify' | 'adversarial-verify-revised' | 'adversarial-verify-revision-failed' | 'attractor-driven' | 'intent-driven' | 'energy-driven' | 'distributed-cognition' | 'distributed-cognition-no-synthesis' | 'cognitive-resonance' | 'cognitive-resonance-converged' | 'cognitive-resonance-synthesized' | 'cognitive-resonance-single' | 'cognitive-resonance-fallback';
+  mode: 'v1-api' | 'v1-agent-loop' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'opencode-sdk' | 'mastra-workflow' | 'desktop' | 'v1-progressive-build' | 'dual-process' | 'dual-process-fast' | 'dual-process-slow' | 'dual-process-fast-fallback' | 'dual-process-slow-failed' | 'adversarial-verify' | 'adversarial-verify-revised' | 'adversarial-verify-revision-failed' | 'attractor-driven' | 'intent-driven' | 'energy-driven' | 'distributed-cognition' | 'distributed-cognition-no-synthesis' | 'cognitive-resonance' | 'cognitive-resonance-converged' | 'cognitive-resonance-synthesized' | 'cognitive-resonance-single' | 'cognitive-resonance-fallback' | 'execution-controller';
 }> {
   // Explicit mode override
   if (config.mode && config.mode !== 'auto') {

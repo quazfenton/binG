@@ -13,7 +13,7 @@ export const NotionConnector: React.FC<{ onClose?: () => void }> = ({ onClose })
     setLoading(true)
     try {
       // If Composio provides OAuth helper:
-      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+       
       // @ts-ignore
       const composio = typeof window !== 'undefined' ? (window as any).Composio : undefined
       if (composio && typeof composio.openOAuth === 'function') {

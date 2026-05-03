@@ -1727,7 +1727,7 @@ class GitBackedVFSProxy {
 // CRITICAL FIX: Use globalThis to survive Next.js hot-reloading in dev mode
 // Without this, each module reload creates a new instance with empty workspaces
 declare global {
-  // eslint-disable-next-line no-var
+   
   var __vfsSingleton__: GitBackedVFSProxy | undefined;
 }
 

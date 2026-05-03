@@ -1020,14 +1020,14 @@ export async function exportTasks(options?: ExportOptions): Promise<CacheExportM
 /**
  * Export powers registry specifically
  */
-export async function exportPowers(options?: ExportOptions): CacheExportMetadata | null {
+export async function exportPowers(options?: ExportOptions): Promise<CacheExportMetadata | null> {
   return getCacheExportManager().export('powers-registry', options);
 }
 
 /**
  * Export response cache specifically
  */
-export async function exportResponseCache(options?: ExportOptions): CacheExportMetadata | null {
+export async function exportResponseCache(options?: ExportOptions): Promise<CacheExportMetadata | null> {
   return getCacheExportManager().export('response', options);
 }
 
@@ -1105,7 +1105,7 @@ export function unregisterShutdownHook(): void {
 /**
  * Perform a manual shutdown export (for testing or manual trigger)
  */
-export async function manualShutdownExport(options?: ExportOptions): void {
+export async function manualShutdownExport(options?: ExportOptions): Promise<void> {
   const manager = getCacheExportManager();
   await manager.exportAll(options);
   await manager.shutdown();

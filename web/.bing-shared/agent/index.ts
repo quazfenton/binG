@@ -104,16 +104,12 @@ export {
 
 // Nullclaw integration helpers (sandbox/desktop runtime)
 export {
-  nullclawIntegration,
   initializeNullclaw,
   isNullclawAvailable,
   getNullclawStatus,
   getNullclawConfig,
   getNullclawMode,
-  type NullclawConfig,
   type NullclawContainer,
-  type NullclawTask,
-  type NullclawStatus,
 } from './nullclaw-integration';
 
 // V2 Executor
@@ -223,6 +219,7 @@ export {
   SYSTEM_PROMPTS,
   AGENT_ROLE_CONFIGS,
   ROLE_COMPATIBILITY,
+  VFS_FILE_EDITING_TOOL_PROMPT,
   getSystemPrompt,
   getMinimalPrompt,
   getRoleConfig,
