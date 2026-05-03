@@ -246,11 +246,11 @@ export async function executeWithOrchestrationMode(
 
         // ownerId and sessionId already validated at function entry
         const taskResult = await taskRouter.executeTask({
-        id: request.sessionId,
-        userId: request.ownerId,
-        conversationId: request.sessionId,
-        userMessage: request.task,
-        stream: request.stream,
+          task: request.task,
+          id: request.sessionId,
+          userId: request.ownerId,
+          conversationId: request.sessionId,
+          
         });
 
         result = {
@@ -795,11 +795,11 @@ export async function executeWithOrchestrationMode(
 
         // ownerId and sessionId already validated at function entry
         const v2Result = await executeV2Task({
-        userId: request.ownerId,
-        conversationId: request.sessionId,
-        userMessage: request.task,
-        stream: request.stream,
-        preferredAgent: 'opencode', // Default to OpenCode for v2
+          userId: request.ownerId,
+          conversationId: request.sessionId,
+          task: request.task,
+          
+          preferredAgent: 'opencode', // Default to OpenCode for v2
         });
 
         result = {
@@ -978,11 +978,10 @@ export async function executeWithOrchestrationMode(
       case 'v1-api': {
         const { processUnifiedAgentRequest } = await import('@/lib/orchestra/unified-agent-service');
         const unifiedResult = await processUnifiedAgentRequest({
-        userMessage: request.task,
-        userId: request.ownerId,
-        sandboxId: request.sessionId,
-        stream: request.stream,
-        mode: 'v1-api',
+          userMessage: request.task,
+          userId: request.ownerId,
+          sandboxId: request.sessionId,
+          mode: 'v1-api',
         });
         result = {
         success: unifiedResult.success,
@@ -1003,7 +1002,7 @@ export async function executeWithOrchestrationMode(
         userMessage: request.task,
         userId: request.ownerId,
         sandboxId: request.sessionId,
-        stream: request.stream,
+        
         mode: 'v1-agent-loop',
         });
         result = {
@@ -1025,7 +1024,7 @@ export async function executeWithOrchestrationMode(
         userMessage: request.task,
         userId: request.ownerId,
         sandboxId: request.sessionId,
-        stream: request.stream,
+        
         mode: 'v1-progressive-build',
         });
         result = {
@@ -1047,7 +1046,7 @@ export async function executeWithOrchestrationMode(
           userId: request.ownerId,
           conversationId: request.sessionId,
           task: request.task,
-          stream: request.stream,
+          
           preferredAgent: 'opencode',
         });
         result = {
@@ -1067,7 +1066,7 @@ export async function executeWithOrchestrationMode(
           userId: request.ownerId,
           conversationId: request.sessionId,
           task: request.task,
-          stream: request.stream,
+          
           preferredAgent: 'opencode',
         });
         result = {
@@ -1087,7 +1086,7 @@ export async function executeWithOrchestrationMode(
           userId: request.ownerId,
           conversationId: request.sessionId,
           task: request.task,
-          stream: request.stream,
+          
           preferredAgent: 'opencode',
         });
         result = {
@@ -1107,7 +1106,7 @@ export async function executeWithOrchestrationMode(
         userMessage: request.task,
         userId: request.ownerId,
         sandboxId: request.sessionId,
-        stream: request.stream,
+        
         mode: 'desktop',
         });
         result = {
@@ -1138,12 +1137,10 @@ export async function executeWithOrchestrationMode(
         const { processUnifiedAgentRequest } = await import('@/lib/orchestra/unified-agent-service');
         const modeVariant = mode.replace('dual-process:', '');
         const unifiedResult = await processUnifiedAgentRequest({
-        userMessage: request.task,
-        userId: request.ownerId,
-        sandboxId: request.sessionId,
-        stream: request.stream,
-        mode: (modeVariant ? `dual-process-${modeVariant}` : 'dual-process') as any,
-        _taskClassification: classification,
+          userMessage: request.task,
+          userId: request.ownerId,
+          sandboxId: request.sessionId,
+          mode: (modeVariant ? `dual-process-${modeVariant}` : 'dual-process') as any,
         });
         result = {
         success: unifiedResult.success,
@@ -1167,7 +1164,7 @@ export async function executeWithOrchestrationMode(
         userMessage: request.task,
         userId: request.ownerId,
         sandboxId: request.sessionId,
-        stream: request.stream,
+        
         mode: (modeVariant ? `adversarial-verify-${modeVariant}` : 'adversarial-verify') as any,
         });
         result = {
@@ -1194,7 +1191,7 @@ export async function executeWithOrchestrationMode(
         userMessage: request.task,
         userId: request.ownerId,
         sandboxId: request.sessionId,
-        stream: request.stream,
+        
         mode: (modeVariant ? `cognitive-resonance-${modeVariant}` : 'cognitive-resonance') as any,
         });
         result = {
@@ -1218,7 +1215,7 @@ export async function executeWithOrchestrationMode(
         userMessage: request.task,
         userId: request.ownerId,
         sandboxId: request.sessionId,
-        stream: request.stream,
+        
         mode: (modeVariant ? `distributed-cognition-${modeVariant}` : 'distributed-cognition') as any,
         });
         result = {
@@ -1242,7 +1239,7 @@ export async function executeWithOrchestrationMode(
         userMessage: request.task,
         userId: request.ownerId,
         sandboxId: request.sessionId,
-        stream: false,
+        
         mode: 'v1-api',
         });
 
@@ -1258,7 +1255,7 @@ export async function executeWithOrchestrationMode(
         userMessage: `[SPEC_AMPLIFY] Review and enhance: ${currentResponse}`,
         userId: request.ownerId,
         sandboxId: request.sessionId,
-        stream: false,
+        
         mode: 'v1-api',
         });
 
@@ -1292,7 +1289,7 @@ export async function executeWithOrchestrationMode(
         userMessage: request.task,
         userId: request.ownerId,
         sandboxId: request.sessionId,
-        stream: false,
+        
         mode: 'v1-agent-loop',
         });
 
@@ -1301,7 +1298,7 @@ export async function executeWithOrchestrationMode(
         userMessage: `[SPEC_MAXIMAL] Enhance: ${preSpecResult.response}`,
         userId: request.ownerId,
         sandboxId: request.sessionId,
-        stream: false,
+        
         mode: 'v1-api',
         });
 
@@ -1310,21 +1307,22 @@ export async function executeWithOrchestrationMode(
         userMessage: specResult.response,
         userId: request.ownerId,
         sandboxId: request.sessionId,
-        stream: request.stream,
+        
         mode: 'v1-agent-loop',
         });
 
         result = {
-        success: postSpecResult.success,
-        response: postSpecResult.response,
-        steps: [
-        ...(preSpecResult.steps || []),
-        { step: 'spec-amplification', type: 'middle' },
-        ...(postSpecResult.steps || [])
-        ],
-        error: postSpecResult.error,
-        metadata: { agentType: 'spec:maximal', duration: Date.now() - startTime },
+          success: postSpecResult.success,
+          response: postSpecResult.response,
+          steps: [
+            ...(preSpecResult.steps || []),
+            { step: 'spec-amplification', type: 'middle' },
+            ...(postSpecResult.steps || [])
+          ],
+          error: postSpecResult.error,
+          metadata: { agentType: 'spec:maximal', duration: Date.now() - startTime },
         };
+        break;
       }
 
       // ========================================================================

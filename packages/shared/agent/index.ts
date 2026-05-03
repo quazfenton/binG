@@ -34,6 +34,13 @@ export {
 // Nullclaw Integration
 export {
   nullclawIntegration,
+  initializeNullclaw,
+  isNullclawAvailable,
+  getNullclawStatus,
+  getNullclawConfig,
+  getNullclawMode,
+  executeNullclawTask,
+  shutdownNullclaw,
   type NullclawConfig,
   type NullclawTask,
   type NullclawStatus,
@@ -79,12 +86,23 @@ export {
 export {
   routeChatRequest,
   classifyTask as unifiedClassifyTask,
-  checkProviderHealth,
   type ChatRequest,
   type ChatResponse,
-  type ProviderHealth,
   type UnifiedAgentResult,
 } from './unified-router';
+
+// Agent Kernel
+export {
+  getAgentKernel,
+  createAgentKernel,
+  startAgentKernel,
+  stopAgentKernel,
+  type AgentConfig,
+  type Agent,
+  type AgentType,
+  type AgentStatus,
+  type KernelStats,
+} from './agent-kernel';
 
 // V2 Executor
 export {

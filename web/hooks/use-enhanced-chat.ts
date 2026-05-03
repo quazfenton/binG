@@ -3,6 +3,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { streamingErrorHandler } from '@/lib/streaming/streaming-error-handler';
 import { createNDJSONParser } from '@/lib/utils/ndjson-parser';
+import { enhancedBufferManager } from '@/lib/streaming/enhanced-buffer-manager';
 import type { Message } from '@/types';
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import { buildApiHeaders } from '@/lib/utils';
@@ -588,6 +589,29 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
       }
     }, 180000); // 3 minute timeout
 
+    // Set up enhanced buffer manager for smooth rendering
+    const sessionId = assistantMessage.id;
+    enhancedBufferManager.createSession(sessionId);
+
+    // Listen for render frames from buffer manager
+    const onRender = (frame: { sessionId: string; content: string; isComplete: boolean }) => {
+      if (frame.sessionId !== sessionId) return;
+      
+      accumulatedContent += frame.content;
+      setMessages(prev => prev.map(msg =>
+        msg.id === assistantMessage.id
+          ? { ...msg, content: accumulatedContent }
+          : msg
+      ));
+
+      // Feed to streaming speaker if enabled
+      if (voiceService.getSettings().autoSpeakStream) {
+        streamingSpeaker.feed(frame.content);
+      }
+    };
+
+    enhancedBufferManager.on('render', onRender);
+
     // Buffer for accumulating partial SSE chunks across boundaries
     let sseBuffer = '';
 
@@ -598,10 +622,12 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
         const { done, value } = await reader.read();
 
         if (done) {
+          enhancedBufferManager.completeSession(sessionId);
           break;
         }
 
         if (abortController.signal.aborted) {
+          enhancedBufferManager.destroySession(sessionId);
           break;
         }
 
@@ -683,19 +709,8 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                 case 'token':
                 case 'data':
                   if (eventData.content) {
-                    accumulatedContent += eventData.content;
-
-                    // Update the assistant message in real-time
-                    setMessages(prev => prev.map(msg =>
-                      msg.id === assistantMessage.id
-                        ? { ...msg, content: accumulatedContent }
-                        : msg
-                    ));
-
-                    // Feed to streaming speaker if enabled
-                    if (voiceService.getSettings().autoSpeakStream) {
-                      streamingSpeaker.feed(accumulatedContent);
-                    }
+                    // Feed to enhanced buffer manager instead of direct state update
+                    enhancedBufferManager.processChunk(sessionId, eventData.content);
                   }
                   // Update agent status to executing if we're receiving tokens
                   // Use functional update to avoid stale closure
@@ -727,19 +742,8 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   // Note: File edits in primary response are handled server-side via applyFilesystemEditsFromResponse
                   // Client just displays the content - filesystem edits come via separate 'filesystem' event
                   if (eventData.content) {
-                    accumulatedContent += eventData.content;
-
-                    // Update the assistant message in real-time
-                    setMessages(prev => prev.map(msg =>
-                      msg.id === assistantMessage.id
-                        ? { ...msg, content: accumulatedContent }
-                        : msg
-                    ));
-
-                    // Feed to streaming speaker if enabled
-                    if (voiceService.getSettings().autoSpeakStream) {
-                      streamingSpeaker.feed(accumulatedContent);
-                    }
+                    // Feed to enhanced buffer manager
+                    enhancedBufferManager.processChunk(sessionId, eventData.content);
                   }
                   // Update agent status to executing if we're receiving content
                   if (agentStatus === 'thinking') {
@@ -748,6 +752,9 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   break;
 
                 case 'done':
+                  // Force a final buffer flush to ensure accumulatedContent is complete
+                  enhancedBufferManager.completeSession(sessionId);
+
                   // Update message with metadata and content from done event
                   // CRITICAL FIX: Use done event content as PRIMARY (it has the complete content)
                   // accumulatedContent may be incomplete if stream parsing got stuck
@@ -2381,6 +2388,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
           }
         }
       } finally {
+      enhancedBufferManager.off('render', onRender);
       reader.releaseLock();
     }
     

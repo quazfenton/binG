@@ -79,12 +79,42 @@ export {
 export {
   routeChatRequest,
   classifyTask as unifiedClassifyTask,
-  checkProviderHealth,
   type ChatRequest,
   type ChatResponse,
   type ProviderHealth,
   type UnifiedAgentResult,
 } from './unified-router';
+
+// Agent Kernel — process-level scheduler for spawning/managing agents
+export {
+  AgentKernel,
+  getAgentKernel,
+  createAgentKernel,
+  startAgentKernel,
+  type AgentType,
+  type AgentPriority,
+  type AgentStatus,
+  type AgentResources,
+  type AgentQuota,
+  type AgentConfig,
+  type Agent,
+  type WorkItem,
+  type KernelStats,
+} from './agent-kernel';
+
+// Nullclaw integration helpers (sandbox/desktop runtime)
+export {
+  nullclawIntegration,
+  initializeNullclaw,
+  isNullclawAvailable,
+  getNullclawStatus,
+  getNullclawConfig,
+  getNullclawMode,
+  type NullclawConfig,
+  type NullclawContainer,
+  type NullclawTask,
+  type NullclawStatus,
+} from './nullclaw-integration';
 
 // V2 Executor
 export {

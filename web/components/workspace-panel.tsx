@@ -3237,13 +3237,13 @@ export function WorkspacePanel() {
                       <div className="flex items-center gap-1 ml-2">
                         <select
                           value={chatProvider}
-                          onChange={(e) => {
-                            setChatProvider(e.target.value);
-                            const provider = availableProviders.find(p => p.id === e.target.value);
-                            if (provider?.models?.[0]) {
-                              setChatModel(provider.models[0]);
-                            }
-                          }}
+                           onChange={(e) => {
+                             setChatProvider(e.target.value);
+                             const provider = availableProviders.find(p => p.id === e.target.value);
+                             if (provider?.models?.[0]) {
+                               setChatModel(typeof provider.models[0] === 'string' ? provider.models[0] : provider.models[0].id);
+                             }
+                           }}
                           className="text-xs bg-white/5 border border-white/10 rounded px-1.5 py-0.5 text-white/80 focus:outline-none focus:border-blue-500/50 cursor-pointer"
                           title="Select provider"
                         >
@@ -3253,18 +3253,21 @@ export function WorkspacePanel() {
                             </option>
                           ))}
                         </select>
-                        <select
-                          value={chatModel}
-                          onChange={(e) => setChatModel(e.target.value)}
-                          className="text-xs bg-white/5 border border-white/10 rounded px-1.5 py-0.5 text-white/80 focus:outline-none focus:border-blue-500/50 max-w-[120px] cursor-pointer"
-                          title="Select model"
-                        >
-                          {(availableProviders.find(p => p.id === chatProvider)?.models || []).slice(0, 8).map(model => (
-                            <option key={model} value={model} className="bg-gray-900">
-                              {model.length > 25 ? model.slice(0, 25) + '...' : model}
-                            </option>
-                          ))}
-                        </select>
+                         <select
+                           value={chatModel}
+                           onChange={(e) => setChatModel(e.target.value)}
+                           className="text-xs bg-white/5 border border-white/10 rounded px-1.5 py-0.5 text-white/80 focus:outline-none focus:border-blue-500/50 max-w-[120px] cursor-pointer"
+                           title="Select model"
+                         >
+                           {(availableProviders.find(p => p.id === chatProvider)?.models || []).slice(0, 8).map(model => {
+                             const modelStr = typeof model === 'string' ? model : model.id;
+                             return (
+                               <option key={modelStr} value={modelStr} className="bg-gray-900">
+                                 {modelStr.length > 25 ? modelStr.slice(0, 25) + '...' : modelStr}
+                               </option>
+                             );
+                           })}
+                         </select>
                       </div>
                       )}
 

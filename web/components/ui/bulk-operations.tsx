@@ -33,7 +33,7 @@ export function useBulkSelection<T extends BulkItem>() {
 
 interface BulkOperationsBarProps { selectedCount: number; config: BulkOperationConfig; onClear: () => void; className?: string }
 
-export const BulkOperationsBar: React.FC<BulkOperationsBarProps> = ({ selectedCount, config, onClear, className }) => {
+export function BulkOperationsBar({ selectedCount, selectedIds, config, onClear, className }: BulkOperationsBarProps & { selectedIds: Set<string> }) {
   if (selectedCount === 0) return null
   return (
     <div className={cn("flex items-center gap-2 p-3 bg-secondary rounded-lg", className)}>

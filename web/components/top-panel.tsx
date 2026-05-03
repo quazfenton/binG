@@ -72,6 +72,7 @@ import ImmersiveView from "./plugins/immersive-view";
 import FlowEngine from "./plugins/flow-engine";
 import EventsPanel from "./plugins/events-panel";
 import WorkflowVisualizer from "./plugins/workflow-visualizer";
+import MusicVisualizerTab from "./plugins/music-visualizer-tab";
 import BroadwayDealHunterTab from "./top-panel/plugins/broadway-deal-hunter-tab";
 import ModelComparisonTab from "./top-panel/plugins/model-comparison-tab";
 import ZineDisplayTab from "./top-panel/plugins/zine-display-tab";

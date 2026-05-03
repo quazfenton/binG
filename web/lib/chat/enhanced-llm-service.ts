@@ -17,6 +17,7 @@ import { PROVIDER_FALLBACK_CHAINS } from './provider-fallback-chains';
 import { toolContextManager } from '../tools/tool-context-manager';
 import { getToolManager, TOOL_REGISTRY } from '../tools';
 import { sandboxBridge } from '../sandbox';
+import { type LLMToolDefinition } from '../sandbox/providers/llm-provider';
 import { getProviderForTask, getModelForTask } from '../config/task-providers';
 import { normalizeSessionId } from '../virtual-filesystem/scope-utils';
 import { advancedToolCallDispatcher } from '../tools/tool-integration/parsers/dispatcher';
@@ -143,91 +144,91 @@ export class EnhancedLLMService {
         provider: 'openrouter',
         baseUrl: process.env.OPENROUTER_BASE_URL || process.env.OPENAI_BASE_URL || 'https://openrouter.ai/api/v1',
         apiKey: process.env.OPENROUTER_API_KEY || '',
-        models: PROVIDERS.openrouter.models,
+         models: PROVIDERS.openrouter.models.map(m => typeof m === 'string' ? m : m.id),
         priority: 1
       },
       {
         provider: 'chutes',
         baseUrl: 'https://llm.chutes.ai/v1',
         apiKey: process.env.CHUTES_API_KEY || '',
-        models: PROVIDERS.chutes.models,
+         models: PROVIDERS.chutes.models.map(m => typeof m === 'string' ? m : m.id),
         priority: 2
       },
       {
         provider: 'anthropic',
         baseUrl: 'https://api.anthropic.com/v1',
         apiKey: process.env.ANTHROPIC_API_KEY || '',
-        models: PROVIDERS.anthropic.models,
+         models: PROVIDERS.anthropic.models.map(m => typeof m === 'string' ? m : m.id),
         priority: 3
       },
       {
         provider: 'google',
         baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
         apiKey: process.env.GOOGLE_API_KEY || '',
-        models: PROVIDERS.google.models,
+         models: PROVIDERS.google.models.map(m => typeof m === 'string' ? m : m.id),
         priority: 4
       },
       {
         provider: 'mistral',
         baseUrl: process.env.MISTRAL_BASE_URL || 'https://api.mistral.ai/v1',
         apiKey: process.env.MISTRAL_API_KEY || '',
-        models: PROVIDERS.mistral.models,
+         models: PROVIDERS.mistral.models.map(m => typeof m === 'string' ? m : m.id),
         priority: 5
       },
       {
         provider: 'github',
         baseUrl: process.env.GITHUB_MODELS_BASE_URL || 'https://models.inference.ai.azure.com',
         apiKey: process.env.GITHUB_MODELS_API_KEY || process.env.AZURE_OPENAI_API_KEY || '',
-        models: PROVIDERS.github.models,
+         models: PROVIDERS.github.models.map(m => typeof m === 'string' ? m : m.id),
         priority: 6
       },
       {
         provider: 'portkey',
         baseUrl: 'https://api.portkey.ai/v1',
         apiKey: process.env.PORTKEY_API_KEY || '',
-        models: PROVIDERS.portkey.models,
+         models: PROVIDERS.portkey.models.map(m => typeof m === 'string' ? m : m.id),
         priority: 7
       },
       {
         provider: 'zen',
         baseUrl: process.env.ZEN_BASE_URL || 'https://api.zen.ai/v1',
         apiKey: process.env.ZEN_API_KEY || '',
-        models: PROVIDERS.zen.models,
+         models: PROVIDERS.zen.models.map(m => typeof m === 'string' ? m : m.id),
         priority: 8
       },
       {
         provider: 'nvidia',
         baseUrl: process.env.NVIDIA_BASE_URL || 'https://integrate.api.nvidia.com/v1',
         apiKey: process.env.NVIDIA_API_KEY || '',
-        models: PROVIDERS.nvidia.models,
+         models: PROVIDERS.nvidia.models.map(m => typeof m === 'string' ? m : m.id),
         priority: 9
       },
       {
         provider: 'groq',
         baseUrl: process.env.GROQ_BASE_URL || 'https://api.groq.com/openai/v1',
         apiKey: process.env.GROQ_API_KEY || '',
-        models: PROVIDERS.groq?.models || [],
+         models: (PROVIDERS.groq?.models || []).map(m => typeof m === 'string' ? m : m.id),
         priority: 10
       },
       {
         provider: 'together',
         baseUrl: process.env.TOGETHER_BASE_URL || 'https://api.together.xyz/v1',
         apiKey: process.env.TOGETHER_API_KEY || '',
-        models: PROVIDERS.together?.models || [],
+         models: (PROVIDERS.together?.models || []).map(m => typeof m === 'string' ? m : m.id),
         priority: 11
       },
       {
         provider: 'deepinfra',
         baseUrl: process.env.DEEPINFRA_BASE_URL || 'https://api.deepinfra.com/v1/openai',
         apiKey: process.env.DEEPINFRA_API_KEY || '',
-        models: PROVIDERS.deepinfra?.models || [],
+         models: (PROVIDERS.deepinfra?.models || []).map(m => typeof m === 'string' ? m : m.id),
         priority: 12
       },
       {
         provider: 'fireworks',
         baseUrl: process.env.FIREWORKS_BASE_URL || 'https://api.fireworks.ai/inference/v1',
         apiKey: process.env.FIREWORKS_API_KEY || '',
-        models: PROVIDERS.fireworks?.models || [],
+         models: (PROVIDERS.fireworks?.models || []).map(m => typeof m === 'string' ? m : m.id),
         priority: 13
       },
     ];
@@ -272,7 +273,7 @@ export class EnhancedLLMService {
       provider,
       baseUrl,
       apiKey: userApiKey,
-      models: providerDef.models || [],
+       models: (providerDef.models || []).map(m => typeof m === 'string' ? m : m.id),
       priority: 99 // Low priority for user-provided configs
     };
 
@@ -1433,62 +1434,74 @@ export class EnhancedLLMService {
           },
         });
 
-        // Build tools if needed - getAllTools returns Record<string, Tool>
-        let tools: Record<string, any> = {};
-        if (request.enableTools !== false) {
-          try {
-            const { getAllTools } = await import('./vercel-ai-tools');
-            tools = await getAllTools({
-              userId,
-              conversationId,
-              sessionId,
-              requestId,
-              scopePath: request.scopePath || `project/sessions/${sessionId}`,
-              lastUserMessage: userMessage,
-            });
-            chatLogger.debug('[CLI-PROVIDER] Built tools for opencode-cli', {
-              requestId,
-              toolCount: Object.keys(tools).length,
-            });
-          } catch (toolErr: any) {
-            chatLogger.warn('[CLI-PROVIDER] Failed to build tools for opencode-cli', {
-              requestId,
-              error: toolErr.message,
-            });
-          }
-        }
-
-        // Get system prompt from messages
-        const systemMessage = messages.find((m: any) => m.role === 'system');
-        const systemPrompt = typeof systemMessage?.content === 'string'
-          ? systemMessage.content
-          : '';
-
-        const toolManager = getToolManager();
-        result = await providerInstance.runAgentLoop({
-          userMessage,
-          tools,
-          systemPrompt,
-          maxSteps: 15,
-          cwd: request.scopePath || `project/sessions/${sessionId}`,
-          executeTool: async (toolName: string, args: Record<string, any>) => {
-            try {
-              return await toolManager.executeTool(toolName, args, {
-                userId,
-                conversationId,
-                metadata: { source: 'cli_provider', provider },
+         // Build tools if needed - getAllTools returns Record<string, Tool>
+         // For CLI provider, we need LLMToolDefinition[] with raw JSON schema.
+         // The OpenCode CLI provider can handle tool execution through the executeTool callback,
+         // but requires tool definitions. We'll provide minimal stub definitions.
+         let tools: LLMToolDefinition[] = [];
+         if (request.enableTools !== false) {
+           try {
+             const { getAllTools } = await import('./vercel-ai-tools');
+             const vercelTools = await getAllTools({
+               userId,
+               conversationId,
+               sessionId,
+               requestId,
+               scopePath: request.scopePath || `project/sessions/${sessionId}`,
+               lastUserMessage: userMessage,
+             });
+             // Convert to minimal LLMToolDefinition format
+             tools = Object.values(vercelTools).map(t => {
+               const v = t as any;
+               return {
+                 name: v.name || 'unknown',
+                 description: v.description || '',
+                 parameters: { type: 'object', properties: {} },
+               };
+             });
+             chatLogger.debug('[CLI-PROVIDER] Built tools for opencode-cli', {
+               requestId,
+               toolCount: tools.length,
+             });
+           } catch (toolErr: any) {
+              chatLogger.warn('[CLI-PROVIDER] Failed to build tools for opencode-cli', {
+                requestId,
+                error: toolErr.message,
               });
-            } catch (err: any) {
-              return { success: false, output: `Tool execution failed: ${err.message}`, exitCode: 1 };
             }
-          },
-          onToolExecution: (toolName: string, args: any, toolResult: any) => {
-            chatLogger.debug('[CLI-PROVIDER] Tool execution', { requestId, provider, toolName, success: toolResult.success });
-          },
-          onStreamChunk: () => {},
-        });
+          }
 
-      } else if (provider === 'pi') {
+          // Get system prompt from messages
+          const systemMessage = messages.find((m: any) => m.role === 'system');
+          const systemPrompt = typeof systemMessage?.content === 'string'
+            ? systemMessage.content
+            : '';
+
+          const toolManager = getToolManager();
+          result = await providerInstance.runAgentLoop({
+            userMessage,
+            tools,
+            systemPrompt,
+            maxSteps: 15,
+            cwd: request.scopePath || `project/sessions/${sessionId}`,
+            executeTool: async (toolName: string, args: Record<string, any>) => {
+              try {
+                return await toolManager.executeTool(toolName, args, {
+                  userId,
+                  conversationId,
+                  metadata: { source: 'cli_provider', provider },
+                });
+              } catch (err: any) {
+                return { success: false, output: `Tool execution failed: ${err.message}`, exitCode: 1 };
+              }
+            },
+            onToolExecution: (toolName: string, args: any, toolResult: any) => {
+              chatLogger.debug('[CLI-PROVIDER] Tool execution', { requestId, provider, toolName, success: toolResult.success });
+            },
+            onStreamChunk: () => {},
+          });
+        } else if (provider === 'pi') {
+
         // Check if pi binary is available
         const { findPiBinarySync } = await import('../agent-bins/find-pi-binary');
         const binaryPath = findPiBinarySync();

@@ -138,11 +138,11 @@ app.prepare().then(startup).then(() => {
       // Guard: socket may have been destroyed by a concurrent handler or timeout
       if (socket.destroyed) return;
       try {
-        const { handleStreamControlUpgrade } = await import('@/lib/streaming/stream-control-handler');
-        // Re-check socket after dynamic import
-        if (!socket.destroyed) {
-          await handleStreamControlUpgrade(req, socket, head);
-        }
+         const { handleStreamControlUpgrade } = await import('@/lib/streaming/stream-control-handler');
+         // Re-check socket after dynamic import
+         if (!socket.destroyed) {
+           await handleStreamControlUpgrade(req, socket, head);
+         }
       } catch (err: any) {
         logger.error('Stream control WebSocket upgrade failed', err);
         if (!socket.destroyed) socket.destroy();

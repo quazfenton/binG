@@ -84,7 +84,7 @@ export async function POST(request: NextRequest) {
     // Initialize Nullclaw if enabled
     let nullclawAvailable = false;
     if (enableNullclaw) {
-      const { initializeNullclaw, isNullclawAvailable } = await import('@bing/shared/agent');
+      const { initializeNullclaw, isNullclawAvailable } = await import('@bing/shared/agent/nullclaw-integration');
       await initializeNullclaw();
       nullclawAvailable = isNullclawAvailable();
     }
