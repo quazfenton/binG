@@ -346,20 +346,18 @@ export class OpencodeV2Provider implements LLMProvider {
                   exitCode: nullclawResult.success ? 0 : 1,
                 };
               } else {
-                // Standard tool execution
-                try {
-                  toolResult = await executeTool(toolName, safeArgs);
-                } catch (err) {
-                  toolResult = {
-                    success: false,
-                    output: `Tool execution failed: ${err instanceof Error ? err.message : String(err)}`,
-                    exitCode: 1,
-                  };
-                }
+              // Standard tool execution
+              try {
+                toolResult = await executeTool(toolName, safeArgs);
+                // Ensure the callback is awaited if it returns a promise, or just called
+                await Promise.resolve(onToolExecution?.(toolName, safeArgs, toolResult));
+              } catch (err) {
+                toolResult = {
+                  success: false,
+                  output: `Tool execution failed: ${err instanceof Error ? err.message : String(err)}`,
+                  exitCode: 1,
+                };
               }
-
-              steps.push({ toolName, args: safeArgs, result: toolResult });
-              onToolExecution?.(toolName, safeArgs, toolResult);
 
               console.log('[OpencodeV2Provider] === TOOL RESULT ===');
               console.log('[OpencodeV2Provider] Tool:', toolName, '- Success:', toolResult.success);
@@ -382,9 +380,11 @@ export class OpencodeV2Provider implements LLMProvider {
             // Completion
             if (parsed.done || parsed.complete) {
               finalResponse = parsed.response ?? parsed.text ?? finalResponse;
+              // Return early to end this turn and allow frontend to render this as a distinct bubble
+              break;
             }
           } catch {
-            // Non-JSON line
+            // Non-JSON line — treat as incremental response chunk
             finalResponse += line + '\n';
             onStreamChunk?.(line + '\n');
           }

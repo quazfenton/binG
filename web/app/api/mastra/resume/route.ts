@@ -79,7 +79,15 @@ export async function POST(request: NextRequest) {
     // SECURITY: Use authenticated user's identity for audit trail
     const approverId = authResult.userId;
     const user = await authService.getUserById(approverId);
-    const approverEmail = user?.email || 'unknown@example.com';
+    
+    // SECURITY: Ensure we have a valid user record with email for audit integrity
+    if (!user || !user.email) {
+      return NextResponse.json(
+        { error: 'Authenticated user record not found or missing email', requestId },
+        { status: 401 }
+      );
+    }
+    const approverEmail = user.email;
 
     // Get Mastra instance (lazy loaded)
     const mastra = await getMastra();

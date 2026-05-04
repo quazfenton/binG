@@ -278,11 +278,13 @@ export async function executeWithOrchestrationMode(
         const systemPrompt = baseSystemPrompt + await applyPromptModifiers(promptParams ?? {});
 
         const unifiedResult = await processUnifiedAgentRequest({
-        userMessage: request.task,
-        sandboxId: request.sessionId,
-        systemPrompt,
-        maxSteps: parseInt(process.env.AI_SDK_MAX_STEPS || '15', 10),
-        mode: 'auto', // Let unified agent auto-select best execution mode
+          userMessage: request.task,
+          userId: request.ownerId,
+          conversationId: request.sessionId,
+          sandboxId: request.sessionId,
+          systemPrompt,
+          maxSteps: parseInt(process.env.AI_SDK_MAX_STEPS || '15', 10),
+          mode: 'auto', // Let unified agent auto-select best execution mode
         });
 
         result = {
@@ -653,8 +655,8 @@ export async function executeWithOrchestrationMode(
         // Fallback to mastra workflow integration
         const { mastraWorkflowIntegration } = await import('@bing/shared/agent/mastra-workflow-integration');
         const workflowResult = await mastraWorkflowIntegration.executeWorkflow('code-agent', {
-        userMessage: request.task,
-        ownerId: request.ownerId,
+          task: request.task,
+          ownerId: request.ownerId,
         });
         result = {
         success: workflowResult.success,
@@ -670,8 +672,8 @@ export async function executeWithOrchestrationMode(
       case 'mastra:research': {
         const { mastraWorkflowIntegration } = await import('@bing/shared/agent/mastra-workflow-integration');
         const workflowResult = await mastraWorkflowIntegration.executeWorkflow('research', {
-        userMessage: request.task,
-        ownerId: request.ownerId,
+          task: request.task,
+          ownerId: request.ownerId,
         });
         result = {
         success: workflowResult.success,
@@ -780,7 +782,7 @@ export async function executeWithOrchestrationMode(
         userMessage: request.task,
         });
         result = {
-        success: true,
+        success: streamResult.success,
         response: streamResult.response,
         metadata: { agentType: 'crewai:streaming', streaming: true, duration: Date.now() - startTime },
         };
@@ -980,6 +982,7 @@ export async function executeWithOrchestrationMode(
         const unifiedResult = await processUnifiedAgentRequest({
           userMessage: request.task,
           userId: request.ownerId,
+          conversationId: request.sessionId,
           sandboxId: request.sessionId,
           mode: 'v1-api',
         });
@@ -999,11 +1002,11 @@ export async function executeWithOrchestrationMode(
       case 'v1-agent-loop': {
         const { processUnifiedAgentRequest } = await import('@/lib/orchestra/unified-agent-service');
         const unifiedResult = await processUnifiedAgentRequest({
-        userMessage: request.task,
-        userId: request.ownerId,
-        sandboxId: request.sessionId,
-        
-        mode: 'v1-agent-loop',
+          userMessage: request.task,
+          userId: request.ownerId,
+          conversationId: request.sessionId,
+          sandboxId: request.sessionId,
+          mode: 'v1-agent-loop',
         });
         result = {
         success: unifiedResult.success,
@@ -1021,11 +1024,11 @@ export async function executeWithOrchestrationMode(
       case 'v1-progressive-build': {
         const { processUnifiedAgentRequest } = await import('@/lib/orchestra/unified-agent-service');
         const unifiedResult = await processUnifiedAgentRequest({
-        userMessage: request.task,
-        userId: request.ownerId,
-        sandboxId: request.sessionId,
-        
-        mode: 'v1-progressive-build',
+          userMessage: request.task,
+          userId: request.ownerId,
+          conversationId: request.sessionId,
+          sandboxId: request.sessionId,
+          mode: 'v1-progressive-build',
         });
         result = {
         success: unifiedResult.success,
@@ -1103,11 +1106,11 @@ export async function executeWithOrchestrationMode(
       case 'desktop': {
         const { processUnifiedAgentRequest } = await import('@/lib/orchestra/unified-agent-service');
         const unifiedResult = await processUnifiedAgentRequest({
-        userMessage: request.task,
-        userId: request.ownerId,
-        sandboxId: request.sessionId,
-        
-        mode: 'desktop',
+          userMessage: request.task,
+          userId: request.ownerId,
+          conversationId: request.sessionId,
+          sandboxId: request.sessionId,
+          mode: 'desktop',
         });
         result = {
         success: unifiedResult.success,
@@ -1135,10 +1138,11 @@ export async function executeWithOrchestrationMode(
 
         // Then run dual-process mode with classification context
         const { processUnifiedAgentRequest } = await import('@/lib/orchestra/unified-agent-service');
-        const modeVariant = mode.replace('dual-process:', '');
+        const modeVariant = mode.includes(':') ? mode.split(':')[1] : '';
         const unifiedResult = await processUnifiedAgentRequest({
           userMessage: request.task,
           userId: request.ownerId,
+          conversationId: request.sessionId,
           sandboxId: request.sessionId,
           mode: (modeVariant ? `dual-process-${modeVariant}` : 'dual-process') as any,
         });
@@ -1159,13 +1163,13 @@ export async function executeWithOrchestrationMode(
       case 'adversarial:revised':
       case 'adversarial:revision-failed': {
         const { processUnifiedAgentRequest } = await import('@/lib/orchestra/unified-agent-service');
-        const modeVariant = mode.replace('adversarial:', '');
+        const modeVariant = mode.includes(':') ? mode.split(':')[1] : '';
         const unifiedResult = await processUnifiedAgentRequest({
-        userMessage: request.task,
-        userId: request.ownerId,
-        sandboxId: request.sessionId,
-        
-        mode: (modeVariant ? `adversarial-verify-${modeVariant}` : 'adversarial-verify') as any,
+          userMessage: request.task,
+          userId: request.ownerId,
+          conversationId: request.sessionId,
+          sandboxId: request.sessionId,
+          mode: (modeVariant ? `adversarial-verify-${modeVariant}` : 'adversarial-verify') as any,
         });
         result = {
         success: unifiedResult.success,
@@ -1186,13 +1190,13 @@ export async function executeWithOrchestrationMode(
       case 'cognitive:single':
       case 'cognitive:fallback': {
         const { processUnifiedAgentRequest } = await import('@/lib/orchestra/unified-agent-service');
-        const modeVariant = mode.replace('cognitive:', '');
+        const modeVariant = mode.includes(':') ? mode.split(':')[1] : '';
         const unifiedResult = await processUnifiedAgentRequest({
-        userMessage: request.task,
-        userId: request.ownerId,
-        sandboxId: request.sessionId,
-        
-        mode: (modeVariant ? `cognitive-resonance-${modeVariant}` : 'cognitive-resonance') as any,
+          userMessage: request.task,
+          userId: request.ownerId,
+          conversationId: request.sessionId,
+          sandboxId: request.sessionId,
+          mode: (modeVariant ? `cognitive-resonance-${modeVariant}` : 'cognitive-resonance') as any,
         });
         result = {
         success: unifiedResult.success,
@@ -1210,13 +1214,13 @@ export async function executeWithOrchestrationMode(
       case 'distributed-cognition':
       case 'distributed:no-synthesis': {
         const { processUnifiedAgentRequest } = await import('@/lib/orchestra/unified-agent-service');
-        const modeVariant = mode.replace('distributed:', '');
+        const modeVariant = mode.includes(':') ? mode.split(':')[1] : '';
         const unifiedResult = await processUnifiedAgentRequest({
-        userMessage: request.task,
-        userId: request.ownerId,
-        sandboxId: request.sessionId,
-        
-        mode: (modeVariant ? `distributed-cognition-${modeVariant}` : 'distributed-cognition') as any,
+          userMessage: request.task,
+          userId: request.ownerId,
+          conversationId: request.sessionId,
+          sandboxId: request.sessionId,
+          mode: (modeVariant ? `distributed-cognition-${modeVariant}` : 'distributed-cognition') as any,
         });
         result = {
         success: unifiedResult.success,
@@ -1236,11 +1240,11 @@ export async function executeWithOrchestrationMode(
         // First: run v1-api to get initial response
         const { processUnifiedAgentRequest } = await import('@/lib/orchestra/unified-agent-service');
         const initialResult = await processUnifiedAgentRequest({
-        userMessage: request.task,
-        userId: request.ownerId,
-        sandboxId: request.sessionId,
-        
-        mode: 'v1-api',
+          userMessage: request.task,
+          userId: request.ownerId,
+          conversationId: request.sessionId,
+          sandboxId: request.sessionId,
+          mode: 'v1-api',
         });
 
         // Then: run spec amplification loop (up to 100 iterations)
@@ -1252,11 +1256,11 @@ export async function executeWithOrchestrationMode(
         while (iterations < maxIterations && specAmplified) {
         // Run spec amplification step
         const amplifyResult = await processUnifiedAgentRequest({
-        userMessage: `[SPEC_AMPLIFY] Review and enhance: ${currentResponse}`,
-        userId: request.ownerId,
-        sandboxId: request.sessionId,
-        
-        mode: 'v1-api',
+          userMessage: `[SPEC_AMPLIFY] Review and enhance: ${currentResponse}`,
+          userId: request.ownerId,
+          conversationId: request.sessionId,
+          sandboxId: request.sessionId,
+          mode: 'v1-api',
         });
 
         if (amplifyResult.response && amplifyResult.response !== currentResponse) {

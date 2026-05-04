@@ -32,6 +32,7 @@ import {
   executeWithOrchestrationMode
 } from '@bing/shared/agent';
 import { processUnifiedAgentRequest, type UnifiedAgentConfig } from '@/lib/orchestra/unified-agent-service';
+import { checkProviderHealth } from '@/lib/orchestra/provider-health';
 import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp';
 import { mem0Search, buildMem0SystemPrompt, isMem0Configured, mem0Add, prewarmMem0Cache } from '@/lib/powers/mem0-power';
 import { createSSEEmitter, SSE_RESPONSE_HEADERS, SSE_EVENT_TYPES } from '@/lib/streaming/sse-event-schema';

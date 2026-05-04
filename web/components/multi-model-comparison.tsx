@@ -624,7 +624,7 @@ export default function MultiModelComparison({
                   return (
                     <button
                       key={`${provider.id}-${model}`}
-                      onClick={() => handleModelToggle(provider.id, model as string)}
+                      onClick={() => handleModelToggle(provider.id, typeof model === 'string' ? model : model.id)}
                       disabled={isDisabled}
                       className="px-3 py-1 rounded-full text-xs font-medium transition-all"
                       style={{
@@ -638,7 +638,7 @@ export default function MultiModelComparison({
                         cursor: isDisabled ? 'not-allowed' : 'pointer'
                       }}
                     >
-                      {typeof model === 'string' ? model : model.id}
+                      {typeof model === 'string' ? model : (model as any).name || model.id}
                     </button>
                   );
                 })}

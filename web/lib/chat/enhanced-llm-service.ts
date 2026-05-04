@@ -1450,13 +1450,48 @@ export class EnhancedLLMService {
                scopePath: request.scopePath || `project/sessions/${sessionId}`,
                lastUserMessage: userMessage,
              });
-             // Convert to minimal LLMToolDefinition format
-             tools = Object.values(vercelTools).map(t => {
+             // Convert to LLMToolDefinition format for opencode-cli
+             // We use Object.entries to preserve the tool names which are the keys
+             tools = Object.entries(vercelTools).map(([name, t]) => {
                const v = t as any;
+               const description = v.description || '';
+               
+               // Heuristic extraction of parameters for the CLI provider
+               let parameters: any = { type: 'object', properties: {}, required: [] };
+               
+               try {
+                 const schema = v.parameters || v.inputSchema;
+                 if (schema && typeof schema === 'object' && schema._def) {
+                   // Extract basic shape if it's a ZodObject
+                   if (schema._def.typeName === 'ZodObject') {
+                     const shape = schema._def.shape?.() || {};
+                     for (const [key, field] of Object.entries(shape)) {
+                       const typeName = (field as any)._def?.typeName;
+                       let type = 'string';
+                       if (typeName === 'ZodNumber') type = 'number';
+                       else if (typeName === 'ZodBoolean') type = 'boolean';
+                       else if (typeName === 'ZodArray') type = 'array';
+                       else if (typeName === 'ZodObject') type = 'object';
+                       
+                       parameters.properties[key] = { type };
+                       // Basic check for required fields (not ZodOptional/ZodNullable)
+                       if (typeName !== 'ZodOptional' && typeName !== 'ZodNullable') {
+                         parameters.required.push(key);
+                       }
+                     }
+                   }
+                 } else if (schema && (schema.type === 'object' || schema.properties)) {
+                   // Already looks like a JSON schema
+                   parameters = schema;
+                 }
+               } catch (e) {
+                 // Fallback to empty object on error
+               }
+
                return {
-                 name: v.name || 'unknown',
-                 description: v.description || '',
-                  parameters: { type: 'object', properties: {}, required: [] },
+                 name,
+                 description,
+                 parameters,
                };
              });
              chatLogger.debug('[CLI-PROVIDER] Built tools for opencode-cli', {

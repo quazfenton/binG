@@ -148,8 +148,17 @@ export class MigrationRunner {
         if (alreadyExecuted) {
           console.log(`Migration ${migration.version} already executed, skipping`);
         } else {
-          // Execute migration SQL directly (migrations typically contain their own transaction control)
-          this.db.exec(migration.sql);
+          // Wrap migration execution in a transaction to ensure atomicity
+          const transaction = this.db.transaction((sql: string) => {
+            this.db.exec(sql);
+          });
+
+          try {
+            transaction(migration.sql);
+          } catch (err: any) {
+            // Re-throw if transaction fails so outer loop catches and stops
+            throw new Error(`Transaction failed: ${err.message}`);
+          }
 
           // Record migration as executed
           const stmt = this.db.prepare(`

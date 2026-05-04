@@ -79,16 +79,53 @@ export function stripRoutingMarkers(responseText: string): string {
 
   let cleaned = responseText;
 
-  // Remove [ROLE_SELECT] or legacy [ROUTING_METADATA] block
-  cleaned = cleaned.replace(/^###?\s*\[(?:ROUTING_METADATA|ROLE_SELECT)\]\s*```?json?\s*[\s\S]*?```?\s*/g, '');
+  // 1. Remove [ROLE_SELECT] or legacy [ROUTING_METADATA] blocks with balanced JSON
+  const markers = ['[ROLE_SELECT]', '[ROUTING_METADATA]'];
+  for (const marker of markers) {
+    const markerIndex = cleaned.indexOf(marker);
+    if (markerIndex !== -1) {
+      // Find start of JSON object following the marker
+      const afterMarker = cleaned.slice(markerIndex + marker.length);
+      const startBrace = afterMarker.indexOf('{');
+      
+      if (startBrace !== -1) {
+        let depth = 0;
+        let endBraceIndex = -1;
+        // Search for balanced closing brace
+        for (let i = startBrace; i < afterMarker.length; i++) {
+          if (afterMarker[i] === '{') depth++;
+          else if (afterMarker[i] === '}') {
+            depth--;
+            if (depth === 0) {
+              endBraceIndex = i;
+              break;
+            }
+          }
+        }
+        
+        if (endBraceIndex !== -1) {
+          // Found a complete JSON block
+          const before = cleaned.slice(0, markerIndex);
+          const after = afterMarker.slice(endBraceIndex + 1);
+          
+          // Check if there was a ### header before the marker and remove it too
+          const headerRegex = /###?\s*$/;
+          const cleanedBefore = before.replace(headerRegex, '');
+          
+          cleaned = cleanedBefore + after;
+        }
+      }
+    }
+  }
 
-  // Remove stand-alone markers
+  // 2. Fallback: Remove stand-alone markers and simple JSON blocks if balanced search failed
+  cleaned = cleaned.replace(/^###?\s*\[(?:ROUTING_METADATA|ROLE_SELECT)\]\s*```?json?\s*[\s\S]*?```?\s*/gm, '');
   cleaned = cleaned.replace(/\[(?:ROUTING_METADATA|ROLE_SELECT)\][\s\S]*?}(?:\s*```)?/g, '');
 
-  // Remove ### Initial Response section
+  // 3. Remove ### Initial Response section
   cleaned = cleaned.replace(/^###?\s*Initial Response[\s\S]*?^---/gm, '');
 
-  // Clean up extra newlines
+  // 4. Clean up extra newlines and formatting artifacts
   cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
 
   return cleaned.trim();
@@ -160,6 +197,7 @@ function validateAndNormalize(parsed: Record<string, any>, rawJson?: string): Pa
   } catch (err: any) {
     return { found: false, error: `Validation error: ${err.message}`, rawJson };
   }
+}
 }
 
 /**
