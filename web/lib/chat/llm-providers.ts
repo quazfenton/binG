@@ -2666,6 +2666,8 @@ class LLMService {
             return !!process.env.COMPOSIO_API_KEY;
           case 'vercel':
             return !!process.env.VERCEL_API_KEY;
+          case 'livekit':
+            return !!process.env.LIVEKIT_API_KEY;
           case 'cloudflare':
           case 'zo':
             // Providers with env vars configured but no request/stream handlers yet
@@ -2957,14 +2959,19 @@ class LLMService {
       throw new Error('LiveKit API key not configured. Please set LIVEKIT_API_KEY in your environment variables.');
     }
 
+    const livekitBaseURL =
+      this.config.livekit?.baseURL ||
+      (typeof process !== 'undefined' ? process.env.LIVEKIT_BASE_URL : undefined) ||
+      'https://inference.livekit.io';
+
     // Create request-scoped client to avoid race conditions with concurrent requests
     let livekitClient = this.livekit;
     if (apiKeyOverride && apiKey !== this.config.livekit?.apiKey) {
       const OpenAIClass = await getOpenAI();
-      livekitClient = new OpenAIClass({ apiKey, baseURL: this.config.livekit?.baseURL });
+      livekitClient = new OpenAIClass({ apiKey, baseURL: livekitBaseURL });
     } else if (!livekitClient) {
       const OpenAIClass = await getOpenAI();
-      livekitClient = new OpenAIClass({ apiKey, baseURL: this.config.livekit?.baseURL });
+      livekitClient = new OpenAIClass({ apiKey, baseURL: livekitBaseURL });
       this.livekit = livekitClient; // Only cache when using default key
     }
 
@@ -2997,11 +3004,15 @@ class LLMService {
       throw new Error('LiveKit API key not configured. Please set LIVEKIT_API_KEY in your environment variables.');
     }
 
-    // Create request-scoped client to avoid race conditions with concurrent requests
+    const livekitBaseURL =
+      this.config.livekit?.baseURL ||
+      (typeof process !== 'undefined' ? process.env.LIVEKIT_BASE_URL : undefined) ||
+      'https://inference.livekit.io';
+
     let livekitClient = this.livekit;
     if (!livekitClient) {
       const OpenAIClass = await getOpenAI();
-      livekitClient = new OpenAIClass({ apiKey, baseURL: this.config.livekit?.baseURL });
+      livekitClient = new OpenAIClass({ apiKey, baseURL: livekitBaseURL });
       this.livekit = livekitClient;
     }
 

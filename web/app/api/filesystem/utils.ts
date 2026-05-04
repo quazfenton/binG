@@ -7,7 +7,7 @@
 import { NextRequest } from 'next/server';
 import { resolveFilesystemOwner, type FilesystemOwnerResolution } from '@/lib/virtual-filesystem/resolve-filesystem-owner';
 import { secureRandomId } from '@/lib/utils/crypto-random';
-import { normalizeSessionPath } from '@/lib/virtual-filesystem/scope-utils';
+import { normalizeSessionPath, normalizeSessionId } from '@/lib/virtual-filesystem/scope-utils';
 
 /**
  * Resolve filesystem owner with graceful fallback

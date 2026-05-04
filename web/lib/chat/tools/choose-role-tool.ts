@@ -1,6 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { analyzeContextAndSuggestRoles, Role } from '@/packages/shared/agent/role-redirector';
+import { analyzeContextAndSuggestRoles, Role, REDIRECTABLE_ROLES } from '@/packages/shared/agent/role-redirector';
 
 /**
  * choose_role Capability
@@ -11,7 +11,7 @@ import { analyzeContextAndSuggestRoles, Role } from '@/packages/shared/agent/rol
 export const chooseRoleCapability = tool({
   description: 'Switch the current expert role/persona to better handle task complexity, domain, or failure recovery.',
   inputSchema: z.object({
-    role: z.enum(['coder', 'reviewer', 'planner', 'architect', 'researcher', 'debugger', 'specialist', 'orchestrator'])
+    role: z.enum(REDIRECTABLE_ROLES as any)
       .describe('The target expert role to adopt.'),
     reason: z.string().describe('Reasoning for the role switch (e.g., handling high-complexity refactor, debugging error loops).'),
   }),

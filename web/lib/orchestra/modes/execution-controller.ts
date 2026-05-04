@@ -302,11 +302,15 @@ function heuristicEvaluate(
     filesGenerated?: number;
     progress?: number;
     originalTask: string;
+    errorContext?: string;
   }
 ): Evaluation {
-  const { lastOutput, cumulativeOutput, toolActivity, filesGenerated, progress = 0, originalTask } = context;
+  const { lastOutput, cumulativeOutput, toolActivity, filesGenerated, progress = 0, originalTask, errorContext } = context;
 
   const issues: string[] = [];
+  if (errorContext) {
+    issues.push(`LLM evaluation failed: ${errorContext}`);
+  }
   let completeness = 0.5;
   let continuity = 0.5;
   let quality = 0.5;
@@ -593,10 +597,8 @@ function generateStructuredReview(
   }
 
   // Generate expansion plan based on task type
-  // Fallback to regex-based classification to avoid redundant overhead of the full classifier
-  const taskType = originalTask.match(/test|spec/i) ? 'test' : 
-                   originalTask.match(/fix/i) ? 'fix' : 
-                   originalTask.match(/refactor/i) ? 'refactor' : 'general';
+  // Use the robust classifier instead of regex fallback
+  const taskType = classifyTask(originalTask);
   
   const expansionPlan = generateExpansionPlan(taskType, cumulativeOutput);
 
@@ -854,20 +856,22 @@ export async function runExecutionControllerMode(
     cumulativeOutput += '\n' + result.response;
 
     // Track tool activity from result with proper followedByAction detection
-    const resultToolActivity = result.steps?.map(s => ({ type: s.toolName, followedByAction: false })) || [];
+    const resultToolActivity = result.steps?.map(s => ({ 
+      type: s.toolName, 
+      followedByAction: false 
+    })) || [];
+
     if (resultToolActivity.length > 0) {
-      // Mark read operations without immediate follow-up within this cycle
-      for (let i = 0; i < resultToolActivity.length - 1; i++) {
-        if (/read|get|list/i.test(resultToolActivity[i].type)) {
-          const nextTool = resultToolActivity[i + 1].type;
-          resultToolActivity[i].followedByAction = !/read|get|list/i.test(nextTool);
+      // Robust marking: A 'read' is followed by action if a 'write' or 'execute'
+      // happens later in the same cycle OR if a non-read follows it.
+      for (let i = 0; i < resultToolActivity.length; i++) {
+        if (/read|get|list|search|scan/i.test(resultToolActivity[i].type)) {
+          const remainingTools = resultToolActivity.slice(i + 1);
+          const hasFollowupAction = remainingTools.some(t => !/read|get|list|search|scan/i.test(t.type));
+          resultToolActivity[i].followedByAction = hasFollowupAction;
         }
       }
-      // Last tool in cycle - check against first tool of next cycle later
-      if (resultToolActivity.length > 0) {
-        const lastTool = resultToolActivity[resultToolActivity.length - 1];
-        lastTool.followedByAction = false; // Will be updated in next cycle if there's a follow-up
-      }
+      
       toolActivity.push(...resultToolActivity);
       
       // Update previous cycle's last tool if current cycle has a tool
@@ -876,9 +880,9 @@ export async function runExecutionControllerMode(
         const prevLastIndex = toolActivity.length - resultToolActivity.length - 1;
         if (prevLastIndex >= 0) {
           const prevLastTool = toolActivity[prevLastIndex];
-          if (/read|get|list/i.test(prevLastTool.type)) {
+          if (/read|get|list|search|scan/i.test(prevLastTool.type)) {
             const firstCurrentTool = resultToolActivity[0].type;
-            prevLastTool.followedByAction = !/read|get|list/i.test(firstCurrentTool);
+            prevLastTool.followedByAction = !/read|get|list|search|scan/i.test(firstCurrentTool);
           }
         }
       }
@@ -938,8 +942,8 @@ export async function runExecutionControllerMode(
         for (const pr of llmResult.perspectiveResults) {
           log.info(`[ExecutionController] │   ${pr.role}: ${(pr.score * 100).toFixed(0)}%`);
         }
-      } catch (error) {
-        log.info(`[ExecutionController] │ LLM eval failed, using heuristic fallback`);
+      } catch (error: any) {
+        log.info(`[ExecutionController] │ LLM eval failed, using heuristic fallback`, { error: error.message });
         evaluation = heuristicEvaluate({
           lastOutput: result.response,
           cumulativeOutput,
@@ -947,6 +951,7 @@ export async function runExecutionControllerMode(
           filesGenerated,
           progress: cycleCount / maxCycles,
           originalTask: baseConfig.userMessage || 'System-initiated task',
+          errorContext: error.message,
         });
       }
     } else {

@@ -198,7 +198,7 @@ AND include routing metadata in the same response.
 ## Required First-Response Format
 After your normal response, include this structured block:
 
-[ROUTING_METADATA]
+[ROLE_SELECT]
 {
   "classification": "(one of: code, research, planning, debugging, review, multi-step)",
   "complexity": "(one of: low, medium, high)",
@@ -216,8 +216,7 @@ After your normal response, include this structured block:
     { "step": "string", "tool": "string", "role": "string" },
     { "step": "string", "tool": "string", "role": "string" }
   ],
-  "requiresAutoReprompt": false,
-  "estimatedSteps": 1
+  "continue": false
 }
 
 ## Routing Decision Logic
@@ -252,9 +251,9 @@ After your normal response, include this structured block:
 
 ## Response Flow
 1. Answer the user's question normally (always, without exception)
-2. Append [ROUTING_METADATA] block at the end
+2. Append [ROLE_SELECT] block at the end
 3. The system will parse this and auto-re-prompt if needed
-4. If requiresAutoReprompt=true, subsequent steps follow the planSteps
+4. If continue=true, subsequent steps follow the planSteps
 5. After N successive re-prompts, a review cycle triggers automatically
 `;
 
@@ -351,7 +350,7 @@ You have the ability to switch your expert role to better suit the task.
 3. **WAIT**: Once called, the system will inject the new persona and prompt for your next turn.
 
 Available roles:
-- coder, reviewer, planner, architect, researcher, debugger, specialist, orchestrator
+- coder, reviewer, planner, architect, researcher, debugger, specialist, orchestrator, simplifier
 `;
 
 export function generateDynamicInjection(config?: {
