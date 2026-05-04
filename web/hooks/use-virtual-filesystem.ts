@@ -353,11 +353,15 @@ export function useVirtualFilesystem(
         localStorage.clear();
         sessionStorage.clear();
         // Clear IndexedDB fallback data for previous user
-        try {
-          await indexedDBBackend.clear(lastOwnerId);
-          log('OPFS: Cleared IndexedDB data for previous owner:', lastOwnerId);
-        } catch (e) {
-          logWarn('OPFS: Failed to clear IndexedDB:', e);
+        if (typeof window !== 'undefined') {
+          (async () => {
+            try {
+              await indexedDBBackend.clear(lastOwnerId);
+              log('OPFS: Cleared IndexedDB data for previous owner:', lastOwnerId);
+            } catch (e) {
+              logWarn('OPFS: Failed to clear IndexedDB:', e);
+            }
+          })();
         }
       }
       localStorage.setItem(LAST_OPFS_KEY, opfsOwnerId);

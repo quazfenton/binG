@@ -1472,38 +1472,35 @@ export async function* streamWithVercelAI(
       const currentEnv: any = typeof process !== 'undefined' ? process.env : {};
       const fallbackProviderName = currentEnv.DEFAULT_FALLBACK_PROVIDER || 'mistral';
       const fallbackModelName = currentEnv.FAST_MODEL || currentEnv.DEFAULT_MODEL || 'mistral-small-latest';
-      chatLogger.info('Streaming fallback activated. [EDIT] this may be FLAWED and may not pass matching provider model combo or or a similarly nonmatching DEFAULT_FALLBACK_PROVIDER and FAST_MODEL combo defaults to mistral-small always if these arent set', { fallbackProvider: fallbackProviderName, fallbackModel: fallbackModelName });
+
+      chatLogger.info('Streaming fallback activated. Using dynamic provider registry.', { 
+        fallbackProvider: fallbackProviderName, 
+        fallbackModel: fallbackModelName 
+      });
 
       let fallbackModel: any;
       try {
-        const { createMistral } = await import('@ai-sdk/mistral');
-        const { createGoogleGenerativeAI } = await import('@ai-sdk/google');
-        const { createAnthropic } = await import('@ai-sdk/anthropic');
-        const { createOpenAI } = await import('@ai-sdk/openai');
+        // Use the centralized provider registry instead of hardcoded factory calls
+        const { getVercelModel } = await import('./vercel-ai-streaming');
 
-        const providerFactories: Record<string, () => any> = {
-          mistral: () => createMistral({ apiKey: currentEnv.MISTRAL_API_KEY })(fallbackModelName),
-          google: () => createGoogleGenerativeAI({ apiKey: currentEnv.GOOGLE_API_KEY })(fallbackModelName),
-          anthropic: () => createAnthropic({ apiKey: currentEnv.ANTHROPIC_API_KEY })(fallbackModelName),
-          openai: () => createOpenAI({ apiKey: currentEnv.OPENAI_API_KEY })(fallbackModelName), //[EDIT] Possibly WRONG if this case matches for the entire @ai-sdk/openai which may include other providers that happen to support openai format ie. trace if this may include all OPENAI_COMPATIBLE providers, ie. possible wrong assumption that this is matching only Openai as literal provider. createOpenAI sdk format includes OpenAI compatible providers with their own URL and key, shouldnt default to OPENAI_API_KEY
-        };
+        // Construct the key/URL dynamically using the same logic as the primary request
+        const apiKey = currentEnv[`${fallbackProviderName.toUpperCase()}_API_KEY`];
+        const baseURL = currentEnv[`${fallbackProviderName.toUpperCase()}_BASE_URL`];
 
-        const factory = providerFactories[fallbackProviderName];
-        if (factory) {
-          fallbackModel = factory();
-        } else {
-          // Unknown provider — try OpenAI-compatible format
-	  //[EDIT] Possibly WRONG if it sends OPENAI_COMPATIBLE to this route, but DEFINITELY wrong since it defaults to literal OpenAI key and URL call which possibly isnt set, rather than just falling back to regular non-AI SDK call if it doesnt support any of the 5 AI
-          fallbackModel = createOpenAI({
-            apiKey: currentEnv.OPENAI_API_KEY,
-            baseURL: currentEnv.OPENAI_BASE_URL,
-          })(fallbackModelName);
+        fallbackModel = await getVercelModel(
+          fallbackProviderName, 
+          fallbackModelName, 
+          apiKey, 
+          baseURL
+        );
+
+        if (!fallbackModel) {
+          throw new Error(`Failed to initialize fallback provider: ${fallbackProviderName}`);
         }
       } catch (fallbackInitError: any) {
         chatLogger.error('All fallback provider initializations failed', { error: fallbackInitError.message });
         throw error; // Re-throw original error — no viable fallback
       }
-
       // Retry the stream with fallback model
       try {
         // Convert messages for fallback (need to extract system prompt)

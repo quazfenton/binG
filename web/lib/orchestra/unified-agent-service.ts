@@ -1727,28 +1727,31 @@ async function runV1ApiWithTools(
   // Check if the model is in the provider's supported models list; if not,
   // use the provider's default instead.
   const { PROVIDERS } = await import('../chat/llm-providers');
-  // PROVIDER_DEFAULT_MODELS is now module-scoped (shared across all paths)
 
+  // FIX: Normalize model name for Vercel provider by stripping 'vercel:' prefix if present
   function getModelForProvider(providerName: string): string {
+    let model = config.model || primaryModel;
+
+
     // If no explicit model set, use provider default
     if (!config.model) return PROVIDER_DEFAULT_MODELS[providerName] || primaryModel;
 
     // Check if the model is valid for this provider
     const provider = PROVIDERS[providerName.toLowerCase()];
-    if (provider?.models && provider.models.length > 0) {
-      if (provider.models.includes(config.model)) return config.model;
+    if (provider?.models && Array.isArray(provider.models) && provider.models.length > 0) {
+      if (provider.models.includes(model)) return model;
       // Model not in provider's list — use provider default
-      log.debug(`Model "${config.model}" not in ${providerName} models list, using default`);
+      log.debug(`Model "${model}" not in ${providerName} models list, using default`);
       return PROVIDER_DEFAULT_MODELS[providerName] || primaryModel;
     }
 
     // Unknown provider — trust the config model
-    return config.model;
+    return model;
   }
 
   // Build provider fallback chain — only include providers with API keys set
   const fallbackChain = getConfiguredFallbackChain(primaryProvider);
-  const providersToTry = [primaryProvider, ...fallbackChain];
+  const providersToTry = [primaryProvider, ...(Array.isArray(fallbackChain) ? fallbackChain : [])];
   const uniqueProviders = [...new Set(providersToTry)];
 
   log.info('[V1-API-WITH-TOOLS] ┌─ PROVIDER FALLBACK CHAIN ────────');
