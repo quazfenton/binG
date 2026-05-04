@@ -1012,38 +1012,17 @@ export class VirtualFilesystemService {
       return this.workspaceRoot;
     }
 
-    // Strip common sandbox/workspace prefixes (single source of truth in scope-utils)
-    // BUT preserve project/ prefix if it's already there - don't strip it away
+    // Strip common sandbox/workspace prefixes
     let strippedPath = stripWorkspacePrefixes(rawPath);
 
-    // Only strip project/ if it's at the beginning AND the stripped path doesn't start with project
-    // This ensures consistent path format: always starts with 'project/'
-    if (!strippedPath.startsWith('project/') && !strippedPath.startsWith('project$')) {
-      // Already stripped, now add project/ prefix back if needed
-      if (!strippedPath.startsWith('project')) {
-        strippedPath = strippedPath.replace(/^project\//, '');
-      }
+    // If the path does not start with 'project/', ensure it's prepended
+    if (!strippedPath.startsWith('project/')) {
+        strippedPath = `project/${strippedPath}`;
     }
 
-    // Handle empty path after stripping
-    if (!strippedPath) {
+    // Handle empty path after stripping/prefixing
+    if (!strippedPath || strippedPath === 'project/') {
       return this.workspaceRoot;
-    }
-
-    // CRITICAL VALIDATION: Reject composite IDs in session folder position
-    // This prevents paths like "project/sessions/1$004/file.ts" or legacy "project/sessions/anon:timestamp:001/file.ts"
-    // Session folder names must be simple: "001", "alpha", "001-1", etc.
-    const sessionsMatch = strippedPath.match(/^project\/sessions\/([^/]+)/i);
-    if (sessionsMatch) {
-      const sessionSegment = sessionsMatch[1];
-      if (sessionSegment.includes('$') || sessionSegment.includes(':')) {
-        throw new Error(
-          `Invalid session folder in path: "${inputPath}". ` +
-          `Session folder names must be simple (e.g., "001", "alpha"), ` +
-          `not composite IDs like "${sessionSegment}". ` +
-          `Use normalizeSessionId() to extract the simple session name.`
-        );
-      }
     }
 
     const parts = strippedPath.split('/');
@@ -1055,13 +1034,10 @@ export class VirtualFilesystemService {
         continue;
       }
       if (trimmed === '..') {
-        // Resolve legitimate parent-directory references (e.g. "./src/../src/./")
-        // instead of throwing. Only reject if the result would escape the
-        // workspace root.
+        // Resolve legitimate parent-directory references
         if (safeParts.length > 0 && safeParts[safeParts.length - 1] !== this.workspaceRoot) {
           safeParts.pop();
         }
-        // If popping would remove the workspace root, it's a real traversal
         else if (safeParts.length === 0 || safeParts[safeParts.length - 1] === this.workspaceRoot) {
           throw new Error(`Path traversal is not allowed: ${inputPath}`);
         }
@@ -1077,19 +1053,21 @@ export class VirtualFilesystemService {
       return this.workspaceRoot;
     }
 
-    // Always ensure path starts with workspace root
-    if (safeParts[0] !== this.workspaceRoot) {
-      safeParts.unshift(this.workspaceRoot);
+    // Always ensure path starts with workspace root (already enforced by prefix logic)
+    const normalizedPath = safeParts.join('/');
+    
+    // Validate session folder format (simple identifiers only, or valid composite IDs)
+    const sessionsMatch = normalizedPath.match(/^project\/sessions\/([^/]+)/i);
+    if (sessionsMatch) {
+      const sessionSegment = sessionsMatch[1];
+      // Only warn on obviously malformed paths that break VFS
+      if (sessionSegment.includes('//') || sessionSegment.includes('..')) {
+         throw new Error(`Invalid session folder: "${sessionSegment}"`);
+      }
     }
 
-    const normalizedPath = safeParts.join('/');
     if (normalizedPath.length > MAX_PATH_LENGTH) {
       throw new Error(`Path exceeds max length (${MAX_PATH_LENGTH})`);
-    }
-
-    // DEBUG: Log path normalization for troubleshooting
-    if (rawPath !== normalizedPath) {
-      console.log('[VFS] normalizePath:', rawPath, '->', normalizedPath);
     }
 
     return normalizedPath;

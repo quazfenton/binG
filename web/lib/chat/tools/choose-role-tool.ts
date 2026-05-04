@@ -1,6 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { analyzeContextAndSuggestRoles, Role, REDIRECTABLE_ROLES } from '@/packages/shared/agent/role-redirector';
+import { analyzeContextAndSuggestRoles, Role, REDIRECTABLE_ROLES } from '@bing/shared/agent/role-redirector';
 
 /**
  * choose_role Capability

@@ -2454,7 +2454,7 @@ const config: UnifiedAgentConfig = {
                 // Token batching: accumulate tokens and emit every ~50ms to reduce SSE overhead
                 let tokenBuffer = '';
                 let lastTokenEmitTime = Date.now();
-                const TOKEN_EMIT_INTERVAL_MS = 50;  // Batch tokens for 50ms before emitting
+                const TOKEN_EMIT_INTERVAL_MS = 16;  // Reduced to 16ms (~60fps) for smoother streaming
 
                 const emitBufferedTokens = async () => {
                   if (tokenBuffer.length > 0) {
@@ -3717,6 +3717,10 @@ const config: UnifiedAgentConfig = {
             // Keep reference for background refinement to use
             const realEmit = (eventType: string, data: any) => {
               if (request.signal?.aborted || streamClosed) return;
+              
+              // Update activity timestamp on any emission
+              updateActivity();
+              
               const eventStr = `event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`;
               controller.enqueue(encoderRef.encode(eventStr));
               chunkCount++;
@@ -3924,16 +3928,33 @@ const config: UnifiedAgentConfig = {
               // Stream stays open for background refinement events
               // The emit function will close the stream when refinement completes
               // Add timeout fallback in case refinement never completes
-              refinementTimeoutId = setTimeout(() => {
-                if (!streamClosed) {
-                  chatLogger.warn('Background refinement timeout, closing stream', {
-                    requestId: streamRequestId
+              // EXTENDED: 30 minutes to allow long file editing sessions (87 tool calls for 27 files)
+              // Activity-based: timeout only triggers if no activity for 30 minutes
+              let lastActivityTime = Date.now();
+              const ACTIVITY_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes of inactivity
+              
+              // Track activity to extend timeout
+              const updateActivity = () => {
+                lastActivityTime = Date.now();
+              };
+              
+              // Periodic check for inactivity (every 30 seconds)
+              const activityCheckInterval = setInterval(() => {
+                const inactiveTime = Date.now() - lastActivityTime;
+                if (inactiveTime >= ACTIVITY_TIMEOUT_MS && !streamClosed) {
+                  chatLogger.warn('Background refinement timeout due to inactivity', {
+                    requestId: streamRequestId,
+                    inactiveTimeMs: inactiveTime
                   });
                   streamClosed = true;
                   controller.close();
                   cleanup();
+                  clearInterval(activityCheckInterval);
                 }
-              }, 180000); // 180 second timeout for refinement (matches DAG time budget)
+              }, 30000); // Check every 30 seconds
+              
+              // Store interval ID for cleanup
+              refinementTimeoutId = activityCheckInterval as any;
 
             } catch (error) {
               const streamDuration = Date.now() - streamStartTime;

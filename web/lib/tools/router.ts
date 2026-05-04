@@ -681,7 +681,40 @@ class NullclawProvider implements CapabilityProvider {
           if (!input.query) {
             return { success: false, error: 'Missing required field: query' };
           }
-          // Use DuckDuckGo HTML for web search
+          
+          // Try SearXNG first if configured
+          if (process.env.SEARXNG_BASE_URL) {
+            try {
+              const searxngUrl = process.env.SEARXNG_BASE_URL.replace(/\/$/, '');
+              const searchUrl = `${searxngUrl}/search?q=${encodeURIComponent(input.query)}&format=json&language=en`;
+              
+              const headers: Record<string, string> = {
+                'Accept': 'application/json',
+              };
+              if (process.env.SEARXNG_API_KEY) {
+                headers['Authorization'] = `Bearer ${process.env.SEARXNG_API_KEY}`;
+              }
+
+              const response = await fetch(searchUrl, { headers });
+              if (response.ok) {
+                const data = await response.json();
+                const results = (data.results || []).slice(0, input.limit || 10).map((r: any) => ({
+                  title: r.title || 'No title',
+                  url: r.url || '',
+                  snippet: r.content || r.snippet || '',
+                }));
+                return {
+                  success: true,
+                  output: { results, query: input.query, source: 'searxng' },
+                };
+              }
+            } catch (error: any) {
+              // Fall through to DuckDuckGo fallback
+              console.warn('[web.search] SearXNG failed, falling back to DuckDuckGo:', error.message);
+            }
+          }
+
+          // Fallback to DuckDuckGo HTML for web search
           const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(input.query)}`;
           const result = await browseNullclawUrl(searchUrl, 'extract', context.userId, context.conversationId);
           return {
@@ -693,6 +726,7 @@ class NullclawProvider implements CapabilityProvider {
                 snippet: r.snippet || r.text || '',
               })),
               query: input.query,
+              source: 'duckduckgo',
             },
             error: result.error,
           };

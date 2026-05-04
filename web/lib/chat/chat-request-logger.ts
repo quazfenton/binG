@@ -205,9 +205,9 @@ export class ChatRequestLogger {
     // FIX: Detect rate limit errors (429) and track them immediately
     // This ensures the circuit breaker and rotation tracking are updated
     // even for streaming requests that fail before completion
-     const isRateLimitError = error && /429|rate.limit|too many requests|quota exceeded/i.test(error);
-     const finalProvider = actualProvider || provider;
-     const finalModel = actualModel || model;
+      const isRateLimitError = error && /429|rate.limit|too many requests|quota exceeded/i.test(error);
+      const finalProvider = actualProvider;
+      const finalModel = actualModel;
 
     // FIX: Track rate limit errors immediately (before the DB write)
     // This ensures rotation tracking and circuit breaker are updated
