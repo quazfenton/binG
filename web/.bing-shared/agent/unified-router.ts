@@ -45,7 +45,7 @@ export interface ProviderHealth {
 
 // Local stub: upstream `checkProviderHealth` was removed from unified-agent-service.
 // Provide a permissive default so unified-router compiles and routing falls back gracefully.
-function checkProviderHealth(): ProviderHealth {
+export function checkProviderHealth(): ProviderHealth {
   return {
     preferredMode: 'v1-api',
     v2Native: false,

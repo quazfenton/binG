@@ -8,8 +8,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { ImageProviderRegistry } from '../../lib/image-generation/provider-registry';
 import { MistralImageProvider } from '../../lib/image-generation/providers/mistral-provider';
 import { ReplicateImageProvider } from '../../lib/image-generation/providers/replicate-provider';
-import { ImageGenerationErrorType as ErrorType } from '../lib/image-generation/types';
-import { ASPECT_RATIO_DIMENSIONS, QUALITY_PRESETS, STYLE_PRESETS } from '../lib/image-generation/types';
+import { ImageGenerationErrorType as ErrorType } from '../../lib/image-generation/types';
+import { ASPECT_RATIO_DIMENSIONS, QUALITY_PRESETS, STYLE_PRESETS } from '../../lib/image-generation/types';
 
 // Mock environment variables
 vi.stubGlobal('process', {

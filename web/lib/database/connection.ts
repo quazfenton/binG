@@ -785,10 +785,10 @@ async function initializeSchemaSync(): Promise<void> {
   // Only run schema initialization in Node.js runtime
   if (typeof process === 'undefined' || process.env.NEXT_RUNTIME !== 'nodejs') return;
 
-  const maxRetries = 3;
-  const retryDelayMs = 1000;
+  const maxRetries = 5;
+  let attempt = 1;
 
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+  while (attempt <= maxRetries) {
     try {
       // Execute base schema to ensure required tables exist
       const schemaSql = getSchemaSql();
@@ -798,20 +798,16 @@ async function initializeSchemaSync(): Promise<void> {
 
       console.log('Database base schema initialized');
       return;
-    } catch (error: unknown) {
-      const errMsg = error instanceof Error ? error.message : String(error);
-      const isLocked = errMsg.includes('database is locked');
-
-      if (isLocked && attempt < maxRetries) {
-        console.warn(`Database locked, retrying in ${retryDelayMs}ms (attempt ${attempt}/${maxRetries})`);
-        await new Promise(r => setTimeout(r, retryDelayMs));
-      } else if (!isLocked) {
-        console.error('Failed to initialize base schema:', error);
-        throw error;
-      } else {
-        console.error('Failed to initialize base schema after max retries:', error);
-        throw error;
+    } catch (error: any) {
+      if (error.code === 'SQLITE_BUSY' && attempt < maxRetries) {
+        const delay = Math.pow(2, attempt) * 100; // Exponential backoff
+        console.warn(`Database is locked (SQLITE_BUSY), retrying in ${delay}ms... (Attempt ${attempt}/${maxRetries})`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        attempt++;
+        continue;
       }
+      console.error('Failed to initialize database schema after retries', error);
+      throw error;
     }
   }
 }

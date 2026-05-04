@@ -344,6 +344,11 @@ export class PlanActVerifyOrchestrator {
       // 2. ACT PHASE (Multi-step Tool Loop)
       yield { type: 'phase_change', phase: 'acting' };
 
+      let consecutiveVerificationFailures = 0;
+      const MAX_VERIFICATION_FAILURES = 3;
+      const recentToolCalls: string[] = [];
+      const MAX_RECENT_TOOLS = 6;
+
       while (true) {
         const check = controller.canContinue();
         if (!check.allowed) {
@@ -366,6 +371,15 @@ export class PlanActVerifyOrchestrator {
         // Execute tools with Self-Healing middleware
         let modifiedFiles: string[] = [];
         for (const call of llmResponse.toolCalls) {
+          // Loop safety: Detect repeated identical calls within recent window
+          const callHash = `${call.name}:${JSON.stringify(call.arguments)}`;
+          if (recentToolCalls.filter(h => h === callHash).length >= 3) {
+            yield { type: 'warning', message: `Detected repeated identical tool call: ${call.name}. Aborting loop to prevent infinite cycle.` };
+            break;
+          }
+          recentToolCalls.push(callHash);
+          if (recentToolCalls.length > MAX_RECENT_TOOLS) recentToolCalls.shift();
+
           yield { type: 'tool_call', tool: call.name, args: call.arguments };
 
           let structuredResult: ToolResult;
@@ -401,15 +415,29 @@ export class PlanActVerifyOrchestrator {
           const verificationResult = await this.runVerification(modifiedFiles);
 
           if (!verificationResult.passed) {
-            yield { type: 'verification_failed', errors: verificationResult.errors.map(e => ({ file: (e as any).path || 'unknown', message: (e as any).error || String(e), suggestion: undefined })) };
+            consecutiveVerificationFailures++;
+            yield { 
+              type: 'verification_failed', 
+              errors: verificationResult.errors.map(e => ({ 
+                file: (e as any).path || 'unknown', 
+                message: (e as any).error || String(e), 
+                suggestion: undefined 
+              })) 
+            };
+
+            if (consecutiveVerificationFailures >= MAX_VERIFICATION_FAILURES) {
+              yield { type: 'warning', message: `Aborting due to ${MAX_VERIFICATION_FAILURES} consecutive verification failures.` };
+              break;
+            }
+
             // Feed errors back to the ACT loop for self-healing
-            // P2 #7: Use structured error context
             conversationHistory.push({
               role: 'system',
               content: `Verification failed. Please fix these errors in the next step: ${JSON.stringify(verificationResult.errors)}`
             });
             continue;
           }
+          consecutiveVerificationFailures = 0; // Reset on success
           yield { type: 'verification_passed' };
         }
       }

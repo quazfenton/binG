@@ -17,10 +17,35 @@ export interface StorageAdapter {
 
 const APP_DATA_DIR = 'storage';
 
+/**
+ * Portable base64url encoding that doesn't rely on Node.js Buffer.
+ * Compatible with both browser and Node.js environments.
+ */
+function base64urlEncode(str: string): string {
+  if (typeof btoa === 'undefined') {
+    // Fallback for older Node.js versions without global btoa
+    return Buffer.from(str).toString('base64url');
+  }
+  
+  // Standard btoa-based base64url encoding
+  const base64 = btoa(str);
+  return base64
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+}
+
 function pathForKey(key: string): string {
   if (!key) throw new Error('Storage key must not be empty');
-  if (key.length > 256) throw new Error('Storage key must be 256 characters or fewer');
-  const safeKey = Buffer.from(key).toString('base64url');
+  
+  const safeKey = base64urlEncode(key);
+  
+  // CRITICAL: Check encoded filename length. Most modern filesystems (NTFS, APFS, ext4)
+  // have a 255-byte limit for individual filenames.
+  if (safeKey.length + '.json'.length > 255) {
+    throw new Error('Storage key is too long after encoding');
+  }
+  
   return `${APP_DATA_DIR}/${safeKey}.json`;
 }
 

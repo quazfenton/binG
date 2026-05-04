@@ -773,7 +773,8 @@ export async function* streamWithVercelAI(
       ];
 
       // Check if current model IS in the known good list (not just substring match)
-      const isKnownGoodFC = knownGoodFCModels.some(m => modelName.toLowerCase().includes(m.toLowerCase()));
+      const modelLower = modelName.toLowerCase();
+      const isKnownGoodFC = knownGoodFCModels.some(m => modelLower.includes(m.toLowerCase()));
       chatLogger.info('[FC-KNOWN] Checking function calling support', {
         provider,
         model: modelName,
@@ -782,11 +783,6 @@ export async function* streamWithVercelAI(
         knownGoodFCModels,
       });
 
-      // If tool was passed BUT model is known good but SDK says unknown, force tools ON
-      if (tools && Object.keys(tools).length > 0 && isKnownGoodFC && supportsFC === undefined) {
-        chatLogger.info('[FC-FORCE] Model known to support FC, forcing tools ON despite SDK unknown');
-        // Don't set skipTools - keep tools enabled
-      }
       if (isKnownGoodFC) {
         chatLogger.info('[FC-KNOWN] Model is known to support function calling', {
           provider,

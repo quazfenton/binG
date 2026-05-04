@@ -310,11 +310,54 @@ export class QuotaManager {
     if (!quota) return;
 
     quota.isDisabled = false;
-    quota.currentUsage = Math.min(quota.currentUsage, quota.monthlyLimit - 1);
+    // P2: Clamp to non-negative value; monthlyLimit-1 ensures we don't immediately hit the limit again
+    quota.currentUsage = Math.max(0, Math.min(quota.currentUsage, quota.monthlyLimit - 1));
 
     log.info(`[QuotaManager] Manually enabled provider: ${provider}`);
     this.saveQuotaToDatabase(quota);
     this.saveAllQuotasToFile();
+  }
+
+  incrementUsage(provider: string, amount: number = 1): void {
+    this.ensureInitialized();
+    const quota = this.quotas.get(provider);
+    if (!quota) return;
+
+    this.checkAndResetIfNeeded(quota);
+
+    quota.currentUsage += amount;
+    if (quota.currentUsage >= quota.monthlyLimit) {
+      quota.isDisabled = true;
+      log.warn(`[QuotaManager] Quota reached for ${provider}`);
+    }
+
+    this.saveQuotaToDatabase(quota);
+    this.saveAllQuotasToFile();
+  }
+
+  findAlternative(type: string, current: string): string | null {
+    // Implementation for e2b-provider fallback
+    log.info(`[QuotaManager] Finding alternative for ${type} provider: ${current}`);
+    
+    // Disable the failing provider first to prevent it being picked as an "alternative"
+    const failingQuota = this.quotas.get(current);
+    if (failingQuota && !failingQuota.isDisabled) {
+      failingQuota.isDisabled = true;
+      this.saveQuotaToDatabase(failingQuota);
+    }
+
+    // Pick best available alternative (highest remaining quota)
+    const alternatives = Array.from(this.quotas.values())
+      .filter(q => q.provider !== current && !q.isDisabled && q.currentUsage < q.monthlyLimit)
+      .sort((a, b) => (b.monthlyLimit - b.currentUsage) - (a.monthlyLimit - a.currentUsage));
+
+    if (alternatives.length > 0) {
+      log.info(`[QuotaManager] Selected alternative for ${current}: ${alternatives[0].provider}`);
+      return alternatives[0].provider;
+    }
+
+    log.warn(`[QuotaManager] No alternative found for ${type} provider: ${current}`);
+    return null;
   }
 
   incrementUsage(provider: string, amount: number = 1): void {

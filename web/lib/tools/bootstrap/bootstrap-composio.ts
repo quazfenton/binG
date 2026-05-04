@@ -50,6 +50,7 @@ export async function registerComposioTools(registry: ToolRegistry, config: Boot
     for (const toolkit of toolkits) {
       try {
         // Register toolkit tools
+        // Optimization: Use tools already fetched in getAvailableToolkits if present
         const toolkitCount = await registerComposioToolkit(registry, toolkit.name, composioService, toolkit.tools);
         count += toolkitCount;
         logger.debug(`Registered ${toolkitCount} tools from Composio toolkit: ${toolkit.name}`);
@@ -72,13 +73,14 @@ export async function registerComposioTools(registry: ToolRegistry, config: Boot
 async function registerComposioToolkit(
   registry: ToolRegistry,
   toolkitName: string,
-  composioService: ComposioService
+  composioService: ComposioService,
+  preFetchedTools?: any[]
 ): Promise<number> {
   let count = 0;
 
   try {
-    // Get tools for this toolkit
-    const tools = await composioService.getToolsForToolkit(toolkitName);
+    // Use pre-fetched tools if available, otherwise fetch them
+    const tools = preFetchedTools || await composioService.getToolsForToolkit(toolkitName);
 
     for (const tool of tools) {
       // Map Composio tool to capability

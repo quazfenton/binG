@@ -349,9 +349,28 @@ export function useVirtualFilesystem(
       const LAST_OPFS_KEY = 'opfs:lastOwnerId';
       const lastOwnerId = localStorage.getItem(LAST_OPFS_KEY);
       if (lastOwnerId && lastOwnerId !== opfsOwnerId) {
-        log('OPFS: User changed from', lastOwnerId, 'to', opfsOwnerId, '- clearing local data for security');
-        localStorage.clear();
-        sessionStorage.clear();
+        log('OPFS: User changed from', lastOwnerId, 'to', opfsOwnerId, '- clearing local VFS data for security');
+        
+        // Targeted clear of VFS and session-related data to avoid destroying 
+        // unrelated state like auth tokens or UI preferences.
+        const vfsPrefixes = ['opfs:', 'vfs:', 'session:', 'experimental-'];
+        const vfsKeys = ['anonymous_session_id', 'current_composite_session_id', 'current_conversation_id'];
+
+        Object.keys(localStorage).forEach(key => {
+          if (vfsPrefixes.some(p => key.startsWith(p)) || vfsKeys.includes(key)) {
+            // Don't remove the tracker key itself yet
+            if (key !== LAST_OPFS_KEY) {
+              localStorage.removeItem(key);
+            }
+          }
+        });
+
+        Object.keys(sessionStorage).forEach(key => {
+          if (vfsPrefixes.some(p => key.startsWith(p)) || vfsKeys.includes(key)) {
+            sessionStorage.removeItem(key);
+          }
+        });
+
         // Clear IndexedDB fallback data for previous user
         if (typeof window !== 'undefined') {
           (async () => {

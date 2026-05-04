@@ -309,7 +309,6 @@ export interface UnifiedAgentResult {
       specializationRoute?: string;
       planSteps?: number;
       continue?: boolean;
-      estimatedSteps?: number;
       reviewTriggered?: boolean;
       reviewReason?: string;
       /** Auto-re-prompt message for the next plan step (consumed by route.ts or client) */
@@ -625,79 +624,107 @@ export async function processUnifiedAgentRequest(
     log.info('[UnifiedAgent] │ switching on:', mode);
     log.info('[UnifiedAgent] └──────────────────────────────────────────');
 
-    switch (mode) {
-      case 'desktop':
-        log.info('[UnifiedAgent] → desktop mode');
-        return await runDesktopMode(config);
+    const executeInMode = async (targetMode: string): Promise<UnifiedAgentResult> => {
+      switch (targetMode) {
+        case 'desktop':
+          log.info('[UnifiedAgent] → desktop mode');
+          return await runDesktopMode(config);
 
-      case 'v1-agent-loop':
-        log.info('[UnifiedAgent] → v1-agent-loop mode (PlanActVerify orchestrator)');
-        const orchMessages = [
-          ...(config.conversationHistory || []),
-          { role: 'user', content: config.userMessage },
-        ];
-        return await runV1Orchestrated(config, orchMessages, startTime);
+        case 'v1-agent-loop':
+          log.info('[UnifiedAgent] → v1-agent-loop mode (PlanActVerify orchestrator)');
+          const orchMessages = [
+            ...(config.conversationHistory || []),
+            { role: 'user', content: config.userMessage },
+          ];
+          return await runV1Orchestrated(config, orchMessages, startTime);
 
-      case 'v2-native':
-        log.warn('[UnifiedAgent] → v2-native mode (OPENCODE)');
-        return await runV2Native(config);
+        case 'v2-native':
+          log.warn('[UnifiedAgent] → v2-native mode (OPENCODE)');
+          return await runV2Native(config);
 
-      case 'v2-containerized':
-        log.warn('[UnifiedAgent] → v2-containerized mode (SANDBOX)');
-        return await runV2Containerized(config);
+        case 'v2-containerized':
+          log.warn('[UnifiedAgent] → v2-containerized mode (SANDBOX)');
+          return await runV2Containerized(config);
 
-      case 'v2-local':
-        log.warn('[UnifiedAgent] → v2-local mode (LOCAL OPENCODE)');
-        return await runV2Local(config);
+        case 'v2-local':
+          log.warn('[UnifiedAgent] → v2-local mode (LOCAL OPENCODE)');
+          return await runV2Local(config);
 
-      case 'opencode-sdk':
-        log.info('[UnifiedAgent] → opencode-sdk mode (OpenCode HTTP API)');
-        return await runOpencodeSDKMode(config);
+        case 'opencode-sdk':
+          log.info('[UnifiedAgent] → opencode-sdk mode (OpenCode HTTP API)');
+          return await runOpencodeSDKMode(config);
 
-      case 'mastra-workflow':
-        log.info('[UnifiedAgent] → mastra-workflow mode');
-        return await runMastraWorkflow(config);
+        case 'mastra-workflow':
+          log.info('[UnifiedAgent] → mastra-workflow mode');
+          return await runMastraWorkflow(config);
 
-      case 'v1-progressive-build':
-        log.info('[UnifiedAgent] → v1-progressive-build mode (multi-iteration build loop)');
-        return await runProgressiveBuildMode(config);
+        case 'v1-progressive-build':
+          log.info('[UnifiedAgent] → v1-progressive-build mode (multi-iteration build loop)');
+          return await runProgressiveBuildMode(config);
 
-      case 'dual-process':
-        log.info('[UnifiedAgent] → dual-process mode (fast/slow cognition split)');
-        return await runDualProcessMode(config, config.dualProcessConfig);
+        case 'dual-process':
+          log.info('[UnifiedAgent] → dual-process mode (fast/slow cognition split)');
+          return await runDualProcessMode(config, config.dualProcessConfig);
 
-      case 'adversarial-verify':
-        log.info('[UnifiedAgent] → adversarial-verify mode (counterfactual critics)');
-        return await runAdversarialVerifyMode(config, config.adversarialConfig);
+        case 'adversarial-verify':
+          log.info('[UnifiedAgent] → adversarial-verify mode (counterfactual critics)');
+          return await runAdversarialVerifyMode(config, config.adversarialConfig);
 
-      case 'attractor-driven':
-        log.info('[UnifiedAgent] → attractor-driven mode (goal-convergent iteration)');
-        return await runAttractorDrivenMode(config, config.attractorConfig);
+        case 'attractor-driven':
+          log.info('[UnifiedAgent] → attractor-driven mode (goal-convergent iteration)');
+          return await runAttractorDrivenMode(config, config.attractorConfig);
 
-      case 'intent-driven':
-        log.info('[UnifiedAgent] → intent-driven mode (latent intent field)');
-        return await runIntentDrivenMode(config, config.intentConfig);
+        case 'intent-driven':
+          log.info('[UnifiedAgent] → intent-driven mode (latent intent field)');
+          return await runIntentDrivenMode(config, config.intentConfig);
 
-      case 'energy-driven':
-        log.info('[UnifiedAgent] → energy-driven mode (unified objective function)');
-        return await runEnergyDrivenMode(config, config.energyConfig);
+        case 'energy-driven':
+          log.info('[UnifiedAgent] → energy-driven mode (unified objective function)');
+          return await runEnergyDrivenMode(config, config.energyConfig);
 
-      case 'distributed-cognition':
-        log.info('[UnifiedAgent] → distributed-cognition mode (multi-model roles)');
-        return await runDistributedCognitionMode(config, config.distributedConfig);
+        case 'distributed-cognition':
+          log.info('[UnifiedAgent] → distributed-cognition mode (multi-model roles)');
+          return await runDistributedCognitionMode(config, config.distributedConfig);
 
-      case 'cognitive-resonance':
-        log.info('[UnifiedAgent] → cognitive-resonance mode (independent agreement)');
-        return await runCognitiveResonanceMode(config, config.resonanceConfig);
-      case 'execution-controller':
-        log.info('[UnifiedAgent] → execution-controller mode (self-correcting execution loop)');
-        return await runExecutionControllerMode(config, config.executionControllerConfig);
+        case 'cognitive-resonance':
+          log.info('[UnifiedAgent] → cognitive-resonance mode (independent agreement)');
+          return await runCognitiveResonanceMode(config, config.resonanceConfig);
+          
+        case 'execution-controller':
+          log.info('[UnifiedAgent] → execution-controller mode (self-correcting execution loop)');
+          return await runExecutionControllerMode(config, config.executionControllerConfig);
 
-      case 'v1-api':
-      default:
-        log.info('[UnifiedAgent] → v1-api mode (VERCEL AI SDK)');
-        return await runV1Api(config);
+        case 'v1-api':
+        default:
+          log.info('[UnifiedAgent] → v1-api mode (VERCEL AI SDK)');
+          return await runV1Api(config);
+      }
+    };
+
+    // PHASE 1: Execution with tools (Primary attempt)
+    let result = await executeInMode(mode);
+
+    // PHASE 2 Transition: If Phase 1 produced no tool calls and we are in auto mode,
+    // fallback to a text-mode completion to provide a more helpful response.
+    if (config.mode === 'auto' && result.success && result.steps.length === 0 && !result.response.includes('[ROLE_SELECT]')) {
+      log.info('[PhaseTransition] No tools used in Phase 1, entering Phase 2 fallback (text-mode)');
+      
+      // For orchestrated modes, retry with text-only fallback
+      if (mode === 'v1-agent-loop' || mode === 'execution-controller') {
+        const fallbackResult = await runV1Api(config);
+        log.info('[UnifiedAgent] Phase 2 fallback (text-mode) completed');
+        return {
+          ...fallbackResult,
+          metadata: {
+            ...fallbackResult.metadata,
+            phase1Result: 'no-tools',
+            originalMode: mode,
+          }
+        };
+      }
     }
+
+    return result;
   } catch (error) {
     log.error('[UnifiedAgent] ✗ EXECUTION FAILED', {
       mode,
@@ -2294,8 +2321,8 @@ async function runV1Orchestrated(
     // ─── First-Response Routing Parsing ───
     const parsedRouting: ParsedRouting = parseFirstResponseRouting(firstResponseContent || content);
     if (parsedRouting.found && parsedRouting.routing) {
-      (config as any)._routingMetadata = parsedRouting.routing;
-      log.info('[RoutingParser] Parsed routing', {
+      (config as any)._roleSelectMetadata = parsedRouting.routing;
+      log.info('[RoleSelectParser] Parsed routing', {
         classification: parsedRouting.routing.classification,
         role: parsedRouting.routing.suggestedRole,
         continue: parsedRouting.routing.continue,
@@ -2358,13 +2385,13 @@ async function runV1Orchestrated(
         model,
         duration,
         orchestrator: true,
-        routing: (config as any)._routingMetadata ? {
-          classification: (config as any)._routingMetadata.classification,
-          complexity: (config as any)._routingMetadata.complexity,
-          suggestedRole: (config as any)._routingMetadata.suggestedRole,
-          specializationRoute: (config as any)._routingMetadata.specializationRoute,
-          planSteps: (config as any)._routingMetadata.planSteps?.length || 0,
-          continue: (config as any)._routingMetadata.continue,
+        roleSelection: (config as any)._roleSelectMetadata ? {
+          classification: (config as any)._roleSelectMetadata.classification,
+          complexity: (config as any)._roleSelectMetadata.complexity,
+          suggestedRole: (config as any)._roleSelectMetadata.suggestedRole,
+          specializationRoute: (config as any)._roleSelectMetadata.specializationRoute,
+          planSteps: (config as any)._roleSelectMetadata.planSteps?.length || 0,
+          continue: (config as any)._roleSelectMetadata.continue,
           reviewTriggered: (config as any)._reviewTriggered || false,
           reviewReason: (config as any)._reviewReason || undefined,
         } : undefined,
