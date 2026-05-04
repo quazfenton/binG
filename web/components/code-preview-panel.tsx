@@ -1594,7 +1594,10 @@ export default function CodePreviewPanel({
       setFilesystemCurrentPath(filesystemScopePath);
       if (initialNodes.length > 0) return;
 
-      const sessionsRoot = "project/sessions";
+      // Determine root directory dynamically for desktop vs web
+      const isDesktop = typeof window !== 'undefined' && (window as any).__SIDECAR_CONFIG__;
+      const sessionsRoot = isDesktop ? "" : "project/sessions";
+      
       const sessionDirectories = (await listFilesystemDirectory(sessionsRoot))
         .filter((node) => node.type === "directory");
       if (cancelled) return;
