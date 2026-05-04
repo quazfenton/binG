@@ -92,8 +92,8 @@ export function normalizeFilesystemPath(path: string): string {
   if (sessionsMatch) {
     const sessionSegment = sessionsMatch[1];
     if (sessionSegment.includes('$') || sessionSegment.includes(':')) {
-      const normalized = normalizeSessionPath(sessionSegment);
-      return path.replace(`project/sessions/${sessionSegment}`, normalized);
+      const normalizedSimpleId = normalizeSessionId(sessionSegment);
+      return path.replace(`project/sessions/${sessionSegment}`, `project/sessions/${normalizedSimpleId}`);
     }
   }
   return path;

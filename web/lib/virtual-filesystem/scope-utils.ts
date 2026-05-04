@@ -238,13 +238,10 @@ export function normalizeSessionId(sessionId: string): string {
     return ''; // Return empty for whitespace-only input
   }
 
-  // If contains $ (composite ID), extract the last segment
-  // This handles formats like:
-  // - "1$004" -> "004"
-  // - "anon$004" -> "004"
-  if (trimmed.includes('$')) {
-    const dollarIndex = trimmed.lastIndexOf('$');
-    return trimmed.slice(dollarIndex + 1).trim();
+  // If contains $ or : (composite ID), extract the last segment
+  if (trimmed.includes('$') || trimmed.includes(':')) {
+    const separatorIndex = Math.max(trimmed.lastIndexOf('$'), trimmed.lastIndexOf(':'));
+    return trimmed.slice(separatorIndex + 1).trim();
   }
 
   // Already a simple ID - return as-is

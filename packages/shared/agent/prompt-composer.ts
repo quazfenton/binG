@@ -252,82 +252,75 @@ export function generateToolHints(toolIds: string[]): string {
 
 /**
  * Split a monolithic role prompt into structured sections.
- * Uses the existing `={20,}` separator convention.
- *
- * Automatically detects section type from heading:
- *   `# IDENTITY`       → identity
- *   `# PRIME DIRECTIVES`, `# DIRECTIVES`, `# GUIDELINES` → directives
- *   `# TOOL STRATEGY`, `# TOOLS`, `# AVAILABLE CAPABILITIES` → toolStrategy
- *   `# OUTPUT FORMAT`, `# OUTPUT` → outputFormat
- *   `# ANTI-PATTERNS`, `# ANTI_PATTERNS`, `# WHAT NOT TO DO` → antiPatterns
- *   `# EXAMPLES`, `# FEW-SHOT` → examples
+ * Robustly scans line-by-line to detect headings and handle variations in whitespace/formatting.
  */
 export function parseSections(prompt: string): RoleSections | null {
-  const parts = prompt.split(SECTION_SEPARATOR_PATTERN);
-  if (parts.length < 2) return null;
-
   const sections: Partial<RoleSections> = {};
   const extras: PromptSection[] = [];
+  
+  const lines = prompt.split('\n');
+  let currentKey: keyof RoleSections | null = null;
+  let currentBuffer: string[] = [];
+  let currentHeading: string | null = null;
 
-  for (let i = 0; i < parts.length; i++) {
-    const part = parts[i].trim();
-    if (!part) continue;
-
-    // Extract section type from first heading
-    const headingMatch = part.match(/^#\s+(.+)$/m);
-    if (!headingMatch) {
-      // No heading — treat as extra
-      extras.push({ id: `section.${i}`, template: part });
-      continue;
+  const flush = () => {
+    if (currentKey && currentBuffer.length > 0) {
+      const content = currentBuffer.join('\n').trim();
+      if (content) {
+        const id = `section.${currentHeading!.toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
+        const section: PromptSection = { id, template: content };
+        
+        // Enhance tool strategy if needed
+        if (currentKey === 'toolStrategy') {
+          const toolRefs = extractToolReferences(content);
+          if (toolRefs.length > 0) section.requiredTools = toolRefs;
+        }
+        
+        sections[currentKey] = section;
+      }
     }
+    currentBuffer = [];
+  };
 
-    const heading = headingMatch[1].trim().toUpperCase();
-    const section = determineSectionType(heading, part);
-
-    if (!section) {
-      extras.push({ id: `section.${i}`, template: part });
-      continue;
+  for (const line of lines) {
+    const headingMatch = line.match(/^#\s+(.+)$/);
+    if (headingMatch) {
+      flush();
+      currentHeading = headingMatch[1].trim();
+      const type = mapHeadingToSection(currentHeading.toUpperCase());
+      currentKey = type;
+    } else if (line.trim() === '============================================') {
+      flush();
+      currentKey = null;
+    } else if (currentKey) {
+      currentBuffer.push(line);
     }
+  }
+  flush();
 
-    if (section.key === 'identity') sections.identity = section.promptSection;
-    else if (section.key === 'directives') sections.directives = section.promptSection;
-    else if (section.key === 'toolStrategy') sections.toolStrategy = section.promptSection;
-    else if (section.key === 'outputFormat') sections.outputFormat = section.promptSection;
-    else if (section.key === 'antiPatterns') sections.antiPatterns = section.promptSection;
-    else if (section.key === 'examples') sections.examples = section.promptSection;
-    else extras.push(section.promptSection);
+  if (!sections.identity || !sections.directives) {
+    chatLogger.error('Prompt parsing failed: Missing required IDENTITY or DIRECTIVES section', { 
+      hasIdentity: !!sections.identity, 
+      hasDirectives: !!sections.directives 
+    });
+    return null;
   }
 
-  if (!sections.identity || !sections.directives) return null;
-
   return {
-    identity: sections.identity!,
-    directives: sections.directives!,
+    identity: sections.identity,
+    directives: sections.directives,
     toolStrategy: sections.toolStrategy || { id: 'toolStrategy.default', template: '' },
     ...sections,
-    extras: extras.length > 0 ? extras : undefined,
   };
 }
 
-function determineSectionType(
-  heading: string,
-  content: string
-): { key: keyof RoleSections; promptSection: PromptSection } | null {
-  const id = `section.${heading.toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
-  const section: PromptSection = { id, template: content };
-
-  if (heading === 'IDENTITY') return { key: 'identity', promptSection: section };
-  if (['PRIME DIRECTIVES', 'DIRECTIVES', 'GUIDELINES', 'CORE DIRECTIVES'].includes(heading)) return { key: 'directives', promptSection: section };
-  if (['TOOL STRATEGY', 'TOOLS', 'AVAILABLE CAPABILITIES', 'CAPABILITIES', 'TOOL USAGE'].includes(heading)) {
-    // Extract tool references from content for availability filtering
-    const toolRefs = extractToolReferences(content);
-    if (toolRefs.length > 0) section.requiredTools = toolRefs;
-    return { key: 'toolStrategy', promptSection: section };
-  }
-  if (['OUTPUT FORMAT', 'OUTPUT', 'RESPONSE FORMAT'].includes(heading)) return { key: 'outputFormat', promptSection: section };
-  if (['ANTI-PATTERNS', 'ANTI_PATTERNS', 'WHAT NOT TO DO', 'AVOID', 'ANTI-PATTERNS TO AVOID'].includes(heading)) return { key: 'antiPatterns', promptSection: section };
-  if (['EXAMPLES', 'FEW-SHOT', 'FEW SHOT', 'INLINE EXAMPLES'].includes(heading)) return { key: 'examples', promptSection: section };
-
+function mapHeadingToSection(heading: string): keyof RoleSections | null {
+  if (heading === 'IDENTITY') return 'identity';
+  if (['PRIME DIRECTIVES', 'DIRECTIVES', 'GUIDELINES', 'CORE DIRECTIVES'].includes(heading)) return 'directives';
+  if (['TOOL STRATEGY', 'TOOLS', 'AVAILABLE CAPABILITIES', 'CAPABILITIES', 'TOOL USAGE'].includes(heading)) return 'toolStrategy';
+  if (['OUTPUT FORMAT', 'OUTPUT', 'RESPONSE FORMAT'].includes(heading)) return 'outputFormat';
+  if (['ANTI-PATTERNS', 'ANTI_PATTERNS', 'WHAT NOT TO DO', 'AVOID', 'ANTI-PATTERNS TO AVOID'].includes(heading)) return 'antiPatterns';
+  if (['EXAMPLES', 'FEW-SHOT', 'FEW SHOT', 'INLINE EXAMPLES'].includes(heading)) return 'examples';
   return null;
 }
 
