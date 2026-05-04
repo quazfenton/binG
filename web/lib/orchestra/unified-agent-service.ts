@@ -308,7 +308,7 @@ export interface UnifiedAgentResult {
       suggestedRole?: string;
       specializationRoute?: string;
       planSteps?: number;
-      requiresAutoReprompt?: boolean;
+      continue?: boolean;
       estimatedSteps?: number;
       reviewTriggered?: boolean;
       reviewReason?: string;
@@ -482,7 +482,7 @@ async function determineMode(config: UnifiedAgentConfig): Promise<{
   log.info('[AutoMode] ┌─ AUTO ROTATION ──────────────────────────');
   log.info('[AutoMode] │ engine:', engine);
   log.info('[AutoMode] │ disableV2:', process.env.DISABLE_V2_MODE !== 'false');
-  log.info('[AutoMode] │ userMessageLength:', config.userMessage?.length || 0);
+  log.info('[AutoMode] │ userMessageLength:', (config.userMessage || '').length);
   log.info('[AutoMode] └────────────────────────────────────────────');
 
   // Mastra workflow: only if explicitly requested AND available
@@ -598,7 +598,7 @@ export async function processUnifiedAgentRequest(
   log.info('[UnifiedAgent] │ mode config:', config.mode || 'auto');
   log.info('[UnifiedAgent] │ AGENT_EXECUTION_ENGINE:', process.env.AGENT_EXECUTION_ENGINE || 'auto');
   log.info('[UnifiedAgent] │ DISABLE_V2_MODE:', process.env.DISABLE_V2_MODE || 'unset');
-  log.info('[UnifiedAgent] │ messageLength:', config.userMessage?.length || 0);
+  log.info('[UnifiedAgent] │ messageLength:', (config.userMessage || '').length);
   log.info('[UnifiedAgent] │ tools:', Array.isArray(config.tools) ? config.tools.length : 0);
   log.info('[UnifiedAgent] └──────────────────────────────────────────');
 
@@ -748,7 +748,7 @@ async function runV2Native(
 ): Promise<UnifiedAgentResult> {
   const startTime = Date.now();
   log.info('Running V2 Native mode', {
-    userMessageLength: config.userMessage?.length || 0,
+    userMessageLength: (config.userMessage || '').length,
     maxSteps: config.maxSteps,
   });
 
@@ -843,7 +843,7 @@ async function runDesktopMode(
 ): Promise<UnifiedAgentResult> {
   const startTime = Date.now();
   log.info('Running Desktop mode (local execution)', {
-    userMessageLength: config.userMessage?.length || 0,
+    userMessageLength: (config.userMessage || '').length,
   });
 
   // Desktop mode uses the StatefulAgent with a desktop sandbox provider
@@ -1104,7 +1104,7 @@ async function runOpencodeSDKMode(
 ): Promise<UnifiedAgentResult> {
   const startTime = Date.now();
   log.info('Running OpenCode SDK mode', {
-    userMessageLength: config.userMessage?.length || 0,
+    userMessageLength: (config.userMessage || '').length,
   });
 
   // Attempt 1: Connect to existing server via HTTP API
@@ -2221,20 +2221,18 @@ async function runV1Orchestrated(
     recentFailures: [],
     corrections: [],
   };
-  // @ts-ignore - tracker API may vary
-  // === END SESSION TRACKING ===
 
   // Ensure tool system is initialized
   if (!isToolSystemReady()) {
     await initToolSystem({ userId: config.userId || 'system', enableMCP: true, enableSandbox: true });
   }
 
-  // Use shared capability-based tool executor (avoids code duplication)
+  // Use shared capability-based tool executor
   const capabilityExecuteTool = createCapabilityToolExecutor(config);
 
   const orchestratorConfig: OrchestratorConfig = {
     iterationConfig: {
-      maxIterations: config.maxSteps || parseInt(process.env.LLM_AGENT_TOOLS_MAX_ITERATIONS || '10', 10),
+      maxIterations: config.maxSteps || parseInt(process.env.LLM_AGENT_TOOLS_MAX_ITERATIONS || '15', 10),
       maxTokens: config.maxTokens || 32000,
       maxDurationMs: parseInt(process.env.LLM_AGENT_TOOLS_TIMEOUT_MS || '60000', 10),
     },
@@ -2244,135 +2242,33 @@ async function runV1Orchestrated(
 
   const orchestrator = new PlanActVerifyOrchestrator(orchestratorConfig);
   let content = '';
-  let firstResponseContent: string | null = null; // Capture first LLM response for routing parsing
+  let firstResponseContent: string | null = null; 
   let stepsCount = 0;
   const steps: any[] = [];
 
   try {
     for await (const event of orchestrator.execute(config.userMessage, messages)) {
-      if (config.onStreamChunk) {
-        if (event.type === 'token') {
-          config.onStreamChunk((event as any).content);
-        } else if (event.type === 'phase_change') {
-          // Log phase change but don't stream technical markers to user chat
-          log.info(`[Orchestrator] Phase change: ${event.phase}`);
-        } else if (event.type === 'tool_result') {
-          // Don't stream internal tool results to user bubble
-          log.debug(`[Orchestrator] Tool result: ${event.tool}`);
-        } else if (event.type === 'verification_failed') {
-          // Log verification failure but don't stream technical markers
-          log.warn(`[Orchestrator] Verification failed for tool execution`);
-        }
+      if (config.onStreamChunk && event.type === 'token') {
+        config.onStreamChunk(event.content);
       }
 
       if (event.type === 'done') {
         content = event.response;
-      // Capture first response for routing parsing (before subsequent phases overwrite it)
-      if (!firstResponseContent && content) {
-        firstResponseContent = content;
-      }
         stepsCount = event.stats?.iterations || 0;
         
-        // Always inject dynamic feedback and tracker summary (dynamic injector always active)
-        const freshTracker = getTracker(sessionId);
-        recordResponse(sessionId, content.length, true);
-        
-        // Check for healing trigger for logging purposes
-      // Always inject dynamic feedback (dynamic injector is default)
-      const healingTrigger = detectHealingTrigger(feedbackContext, content, freshTracker.consecutiveToolCalls);
-      if (healingTrigger.detected) {
-        log.info('[AutoHealing-Completion] Healing trigger detected', { 
-          reason: healingTrigger.reason,
-          healingMode: healingTrigger.healingMode,
-        });
-        // @ts-ignore - originalTask not available in this context
-        const healingPrompt = generateHealingPrompt(healingTrigger, feedbackContext, '');
-        (config as any)._healingPrompt = healingPrompt;
-      }
-      
-      // Always inject feedback + tracker summary (dynamic injector always active)
-      const injectedFeedback = injectFeedback(feedbackContext);
-      const trackerSummary = generateTrackerSummary(sessionId);
-      (config as any)._injectedFeedback = injectedFeedback;
-      (config as any)._trackerSummary = trackerSummary;
-      log.info('[DynamicInjector-Orchestrated] Feedback injection prepared', { hasFeedback: !!injectedFeedback, hasSummary: !!trackerSummary, healingTriggered: healingTrigger.detected });
-
-      // ─── First-Response Routing Parsing ───
-      // Parse [ROUTING_METADATA] embedded in the LLM's first response.
-      // This replaces the need for a separate TaskClassification step by having
-      // the LLM classify and route itself via prompt engineering.
-      const parsedRouting: ParsedRouting = parseFirstResponseRouting(firstResponseContent || content);
-      if (parsedRouting.found && parsedRouting.routing) {
-        (config as any)._routingMetadata = parsedRouting.routing;
-        log.info('[RoutingParser] Parsed routing from first response', {
-          classification: parsedRouting.routing.classification,
-          complexity: parsedRouting.routing.complexity,
-          suggestedRole: parsedRouting.routing.suggestedRole,
-          specializationRoute: parsedRouting.routing.specializationRoute,
-          planSteps: parsedRouting.routing.planSteps.length,
-          requiresAutoReprompt: parsedRouting.routing.requiresAutoReprompt,
-          estimatedSteps: parsedRouting.routing.estimatedSteps,
-        });
-
-        // If routing specifies auto-re-prompt with plan steps, inject the
-        // first step as a continuation prompt for the orchestrator loop.
-        if (parsedRouting.routing.requiresAutoReprompt && parsedRouting.routing.planSteps.length > 0) {
-          const stepReprompt = generateStepReprompt(parsedRouting.routing, 0);
-          (config as any)._stepReprompt = stepReprompt;
-          log.info('[RoutingParser] Auto-re-prompt enabled', {
-            totalSteps: parsedRouting.routing.planSteps.length,
-            firstStep: parsedRouting.routing.planSteps[0]?.step?.slice(0, 80),
-          });
+        if (!firstResponseContent && content) {
+          firstResponseContent = content;
         }
-
-        // Enhance roleRedirectSection with routing metadata if not already populated
-        if (!injectedFeedback.roleRedirectSection && parsedRouting.routing.roleOptions.length > 0) {
-          const routingRedirect = routingToRoleRedirectSection(parsedRouting.routing);
-          if (routingRedirect) {
-            (config as any)._routingRoleRedirect = routingRedirect;
-            log.info('[RoutingParser] Injected routing-based role redirect options');
-          }
-        }
-      } else {
-        log.info('[RoutingParser] No routing metadata found in response', {
-          error: parsedRouting.error || 'marker not present',
-        });
-      }
-
-      // ─── Threshold-Based Review Cycle ───
-      // Check if successive re-prompts or tool calls exceed thresholds,
-      // triggering a review cycle that evaluates fulfillment quality.
-      const currentTracker = getTracker(sessionId);
-      const totalSteps = stepsCount || 0;
-      const reviewCheck = shouldTriggerReview(
-        totalSteps,
-        (config as any)._routingMetadata?.estimatedSteps || 1,
-        // @ts-ignore - SuccessiveTracker API may vary
-        currentTracker.consecutiveToolCalls,
-        // @ts-ignore - SuccessiveTracker API may vary
-        currentTracker.toolCalls,
-        currentTracker.weightedHistory.length > 0
-          ? currentTracker.weightedHistory.filter(h => h.success).length / currentTracker.weightedHistory.length
-          : 1.0,
-      );
-      if (reviewCheck.trigger) {
-        log.warn('[ReviewCycle] Threshold exceeded, triggering review', {
-          reason: reviewCheck.reason,
-          suggestedAction: reviewCheck.suggestedAction,
-          totalSteps,
-          consecutiveToolCalls: currentTracker.consecutiveToolCalls,
-          // @ts-ignore - SuccessiveTracker API may vary
-          totalToolCalls: (currentTracker as any).toolCalls,
-        });
-        (config as any)._reviewTriggered = true;
-        (config as any)._reviewReason = reviewCheck.reason;
-        (config as any)._reviewSuggestedAction = reviewCheck.suggestedAction;
-      }
       } else if (event.type === 'tool_result') {
-        // FIX: Track tool call for successive tracking
         recordToolCall(sessionId);
         
-        // FIX: Check for re-evaluation trigger
+        steps.push({
+          toolName: event.tool,
+          args: {},
+          result: { success: true, output: JSON.stringify(event.result), exitCode: 0 },
+        });
+
+        // Check for re-evaluation trigger
         const reEvalTrigger = checkReEvalTrigger(sessionId);
         if (reEvalTrigger.triggered) {
           log.info('[ReEval-Orchestrated] Trigger detected', { 
@@ -2381,60 +2277,66 @@ async function runV1Orchestrated(
           });
           recordReEval(sessionId);
         }
-        
-        const toolResult = event.result;
-        
-        // FIX: Track tool result for feedback injection
-        if (toolResult && typeof toolResult === 'object' && 'success' in toolResult && !toolResult.success) {
-          const failureEntry = createFeedbackEntry(
-            'failure',
-            `Tool ${event.tool} failed in orchestrator: ${JSON.stringify(toolResult).slice(0, 200)}`,
-            'tool_execution',
-            { toolName: event.tool, result: toolResult },
-            'medium'
-          );
-          feedbackContext.turnNumber++;
-          addFeedback(feedbackContext, failureEntry);
-          log.info('[Feedback-Orchestrated] Tool failure tracked', {
-            toolName: event.tool,
-            severity: failureEntry.severity,
-          });
-        }
-
-        steps.push({
-          toolName: event.tool,
-          args: {},
-          result: { success: true, output: JSON.stringify(event.result), exitCode: 0 },
-        });
       }
     }
 
-    // FIX: Use shared dynamic defaults resolver
-    const _orchDefaults = await resolveDynamicDefaults();
-    let provider = config.provider || _orchDefaults.provider;
-    let model = config.model || _orchDefaults.model; 
+    // Successive tracking and feedback
+    const freshTracker = getTracker(sessionId);
+    recordResponse(sessionId, content.length, true);
+    
+    const healingTrigger = detectHealingTrigger(feedbackContext, content, freshTracker.consecutiveToolCalls);
+    const injectedFeedback = injectFeedback(feedbackContext);
+    const trackerSummary = generateTrackerSummary(sessionId);
 
-    // FIX: Check circuit-breaker state before calling the provider
-    try {
-      const { circuitBreakerManager } = await import('../middleware/circuit-breaker');
-      const breaker = circuitBreakerManager.getBreaker(provider);
-      if (breaker.getState() === 'OPEN') {
-        log.warn(`[V1-ORCHESTRATOR] Circuit OPEN for provider: ${provider} - switching to fallback`);
-        invalidateDynamicDefaultsCache();
-        // Re-resolve with fresh defaults (may pick a different provider)
-        const freshDefaults = await resolveDynamicDefaults();
-        provider = freshDefaults.provider;
-        model = freshDefaults.model;
-        log.info(`[V1-ORCHESTRATOR] Switched to fallback provider: ${provider} model: ${model}`);
+    (config as any)._injectedFeedback = injectedFeedback;
+    (config as any)._trackerSummary = trackerSummary;
+
+    // ─── First-Response Routing Parsing ───
+    const parsedRouting: ParsedRouting = parseFirstResponseRouting(firstResponseContent || content);
+    if (parsedRouting.found && parsedRouting.routing) {
+      (config as any)._routingMetadata = parsedRouting.routing;
+      log.info('[RoutingParser] Parsed routing', {
+        classification: parsedRouting.routing.classification,
+        role: parsedRouting.routing.suggestedRole,
+        continue: parsedRouting.routing.continue,
+      });
+
+      if (parsedRouting.routing.continue && parsedRouting.routing.planSteps.length > 0) {
+        (config as any)._stepReprompt = generateStepReprompt(parsedRouting.routing, 0);
       }
-    } catch { /* circuit-breaker unavailable */ }
+      
+      if (!injectedFeedback.roleRedirectSection && parsedRouting.routing.roleOptions.length > 0) {
+        const routingRedirect = routingToRoleRedirectSection(parsedRouting.routing);
+        if (routingRedirect) {
+          (config as any)._routingRoleRedirect = routingRedirect;
+        }
+      }
+    }
+
+    // Review cycle check
+    const reviewCheck = shouldTriggerReview(
+      stepsCount,
+      freshTracker.consecutiveToolCalls,
+      (freshTracker as any).toolCalls || 0,
+      1.0 
+    );
+
+    if (reviewCheck.trigger) {
+      log.warn('[ReviewCycle] Threshold exceeded, triggering review', { reason: reviewCheck.reason });
+      (config as any)._reviewTriggered = true;
+      (config as any)._reviewReason = reviewCheck.reason;
+      (config as any)._reviewSuggestedAction = reviewCheck.suggestedAction;
+    }
+
+    // Telemetry and results
+    const _orchDefaults = await resolveDynamicDefaults();
+    const provider = config.provider || _orchDefaults.provider;
+    const model = config.model || _orchDefaults.model;
     const duration = Date.now() - startTime;
 
-    // FIX: Record telemetry for v1-orchestrator path
     chatRequestLogger.logRequestComplete(
       `unified-v1-orch-${Date.now()}`,
       true,
-      undefined,
       undefined,
       duration,
       undefined,
@@ -2462,28 +2364,22 @@ async function runV1Orchestrated(
           suggestedRole: (config as any)._routingMetadata.suggestedRole,
           specializationRoute: (config as any)._routingMetadata.specializationRoute,
           planSteps: (config as any)._routingMetadata.planSteps?.length || 0,
-          requiresAutoReprompt: (config as any)._routingMetadata.requiresAutoReprompt,
-          estimatedSteps: (config as any)._routingMetadata.estimatedSteps,
+          continue: (config as any)._routingMetadata.continue,
           reviewTriggered: (config as any)._reviewTriggered || false,
           reviewReason: (config as any)._reviewReason || undefined,
         } : undefined,
       },
     };
   } catch (err: any) {
-    // FIX: Invalidate cache so subsequent requests don't retry the failed provider
     invalidateDynamicDefaultsCache();
-
-    // FIX: Use shared dynamic defaults resolver
     const _orchDefaults = await resolveDynamicDefaults();
     const provider = config.provider || _orchDefaults.provider;
     const model = config.model || _orchDefaults.model;
     const duration = Date.now() - startTime;
 
-    // FIX: Record failure telemetry for v1-orchestrator path
     chatRequestLogger.logRequestComplete(
       `unified-v1-orch-${Date.now()}`,
       false,
-      undefined,
       undefined,
       duration,
       err.message,
@@ -2491,7 +2387,6 @@ async function runV1Orchestrated(
       model,
     ).catch(() => {});
 
-    // Re-throw to trigger high-level fallback in processUnifiedAgentRequest
     throw err;
   }
 }

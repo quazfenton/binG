@@ -15,6 +15,7 @@ import { ALL_CAPABILITIES, type CapabilityDefinition } from '@/lib/tools/capabil
 import { normalizeSessionId } from '@/lib/virtual-filesystem/scope-utils';
 import { getCapabilityRouter } from '@/lib/tools/router';
 import { createWebFetchTool } from '@/lib/tools/web-fetch-tool';
+import { chooseRoleCapability } from './tools/choose-role-tool';
 
 // ============================================================================
 // Types
@@ -98,161 +99,107 @@ function createCapabilityTool(
   context: ToolExecutionContext
 ): Tool {
   const toolName = capability.id.replace(/\./g, '_');
-  const parameters = toToolParameters(capability.inputSchema);
-  const router = getCapabilityRouter();
-
+  
   return tool({
     description: capability.description,
-    inputSchema: parameters,
-    execute: async (args, execOptions: ToolCallOptions) => {
+    parameters: toToolParameters(capability.inputSchema),
+    execute: async (args: any) => {
+      const startTime = Date.now();
+      chatLogger.info(`[Tool:${toolName}] Executing`, { args: sanitizeArgs(args) });
+
       try {
-        chatLogger.debug('Capability tool executing', { tool: capability.id, args: sanitizeArgs(args) });
-        const routerContext: RouterToolContext = {
-          userId: context.userId || 'system',
+        const router = getCapabilityRouter();
+        const result = await router.execute(capability.id, args, {
+          userId: context.userId,
           conversationId: context.conversationId,
+          sessionId: context.sessionId,
           scopePath: context.scopePath,
-        };
-        const result = await router.execute(capability.id, args as Record<string, unknown>, routerContext);
-        if (result.success) return result.output;
-        throw new Error(result.error || `${capability.id} execution failed`);
-      } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : String(error);
-        chatLogger.error('Capability tool failed', { tool: capability.id, error: message });
-        throw error;
+        } as any);
+
+        const duration = Date.now() - startTime;
+        chatLogger.info(`[Tool:${toolName}] Success`, { duration });
+
+        return result;
+      } catch (err: any) {
+        chatLogger.error(`[Tool:${toolName}] Failed`, { error: err.message });
+        throw err;
       }
     },
   });
 }
 
 function createVFSToolSet(context: ToolExecutionContext): Record<string, Tool> {
-  const userId = context.userId || 'default';
-  const sessionId = context.sessionId || normalizeSessionId(context.conversationId || '');
-  const scopePath = context.scopePath || 'project/sessions/000';
   const tools: Record<string, Tool> = {};
-
-  for (const [name, vfsTool] of Object.entries(mcpVFSTools)) {
-    const baseTool = vfsTool as unknown as Tool;
-    const originalExecute = (baseTool as any).execute as ((args: unknown, opts?: ToolCallOptions) => Promise<unknown>) | undefined;
-
-    tools[name] = {
-      ...baseTool,
-      execute: async (args: unknown, opts?: ToolCallOptions) => {
-        return toolContextStore.run(
-          { userId, sessionId, scopePath },
-          () => originalExecute?.(args, opts)
-        );
+  
+  for (const [name, mcpTool] of Object.entries(mcpVFSTools)) {
+    tools[name] = tool({
+      description: (mcpTool as any).description,
+      parameters: (mcpTool as any).parameters,
+      execute: async (args: any) => {
+        return await callMCPToolFromAI_SDK(name, args, context.userId, context.scopePath);
       },
-    };
+    });
   }
-
+  
   return tools;
 }
 
 async function createMCPToolSet(context: ToolExecutionContext): Promise<Record<string, Tool>> {
   const tools: Record<string, Tool> = {};
-  if (!isMCPAvailable()) return tools;
-
+  
   try {
-    const mcpToolDefs = await getMCPToolsForAI_SDK(context.userId);
-
-    for (const toolDef of mcpToolDefs) {
-      const { name, description, parameters } = toolDef.function;
-
-      let toolParams: z.ZodType<unknown>;
-      if (parameters && typeof parameters === 'object' && '_def' in parameters && 'parse' in parameters) {
-        toolParams = parameters as z.ZodType<unknown>;
-      } else {
-        toolParams = z.object({}).describe(description || `MCP tool: ${name}`);
-      }
-
-      const isVFSTool = name.startsWith('write_') || name.startsWith('read_') || name.startsWith('list_') ||
-        name.startsWith('search_') || name.startsWith('apply_') || name.startsWith('batch_') ||
-        name.startsWith('delete_') || name.startsWith('create_') || name.startsWith('get_workspace');
-
+    const mcpTools = await getMCPToolsForAI_SDK(context.userId, '');
+    for (const mcpTool of mcpTools) {
+      const name = mcpTool.function.name;
       tools[name] = tool({
-        description: description || `MCP tool: ${name}`,
-        inputSchema: toolParams,
-        execute: async (args: unknown) => {
-          if (isVFSTool) {
-            chatLogger.info('[VFS MCP] Tool invoked', { tool: name, userId: context.userId, args: typeof args === 'object' && args ? Object.keys(args as Record<string, unknown>) : [] });
-          }
-          try {
-            const result = await callMCPToolFromAI_SDK(name, args as Record<string, unknown>, context.userId || '');
-            if (result.success) {
-              if (isVFSTool) chatLogger.info('[VFS MCP] Tool completed', { tool: name, userId: context.userId });
-              return result.output;
-            }
-            return { success: false, error: result.error || 'Tool execution failed' };
-          } catch (error: unknown) {
-            const message = error instanceof Error ? error.message : String(error);
-            chatLogger.error('MCP tool failed', { tool: name, error: message });
-            return { success: false, error: message };
-          }
+        description: mcpTool.function.description,
+        parameters: mcpTool.function.parameters as any,
+        execute: async (args: any) => {
+          return await callMCPToolFromAI_SDK(name, args, context.userId, context.scopePath);
         },
       });
     }
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    chatLogger.warn('Failed to create MCP tools', { error: message });
+  } catch (err: any) {
+    chatLogger.warn('Failed to load MCP tools', { error: err.message });
   }
-
+  
   return tools;
 }
 
 function createCapabilityChainTool(context: ToolExecutionContext): Record<string, Tool> {
-  const router = getCapabilityRouter();
-  const availableCaps = ALL_CAPABILITIES.map(c => c.id).join(', ');
-
-  return {
-    run_capability_chain: tool({
-      description: `Execute a chain of capabilities in sequence. Available: ${availableCaps}`,
-      inputSchema: z.object({
-        name: z.string().describe('Chain name/description'),
-        steps: z.array(z.object({
-          capability: z.string().describe('Capability ID'),
-          args: z.record(z.unknown()).describe('Arguments for this step'),
-        })).describe('Ordered capabilities to execute'),
-        stop_on_failure: z.boolean().optional().default(false).describe('Stop chain on first failure'),
-      }),
-      execute: async (args) => {
-        try {
-          const { createCapabilityChain } = await import('@bing/shared/agent/capability-chain');
-          const chain = createCapabilityChain({
-            name: args.name,
-            enableParallel: false,
-            stopOnFailure: args.stop_on_failure ?? false,
-          });
-          for (const step of args.steps) {
-            chain.addStep(step.capability, step.args);
-          }
-          const result = await chain.execute({
-            execute: async (capName: string, config: unknown) => {
-              return router.execute(capName, config as Record<string, unknown>, {
-                userId: context.userId || 'system',
-                conversationId: context.conversationId,
-                scopePath: context.scopePath,
-              });
-            },
-          });
-          return {
-            success: result.success,
-            results: Object.fromEntries(result.results.entries()),
-            errors: result.errors,
-            steps: result.steps,
-            duration: result.duration,
-          };
-        } catch (error: unknown) {
-          const message = error instanceof Error ? error.message : String(error);
-          chatLogger.error('Capability chain failed', { error: message });
-          throw error;
-        }
-      },
+  const tools: Record<string, Tool> = {};
+  
+  tools['capability_chain'] = tool({
+    description: 'Execute a sequence of capabilities in a single step (e.g., search -> read -> analyze).',
+    parameters: z.object({
+      steps: z.array(z.object({
+        capabilityId: z.string().describe('The ID of the capability to execute (e.g., "file.read")'),
+        args: z.record(z.any()).describe('Arguments for the capability'),
+      })),
     }),
-  };
+    execute: async ({ steps }) => {
+      const results = [];
+      const router = getCapabilityRouter();
+      
+      for (const step of steps) {
+        const result = await router.execute(step.capabilityId, step.args, {
+          userId: context.userId,
+          conversationId: context.conversationId,
+          sessionId: context.sessionId,
+          scopePath: context.scopePath,
+        } as any);
+        results.push({ capabilityId: step.capabilityId, result });
+      }
+      
+      return results;
+    },
+  });
+  
+  return tools;
 }
 
 // ============================================================================
-// Priority-Based Tool Set Builder
+// Main Entry Points
 // ============================================================================
 
 export function createToolSet(
@@ -347,13 +294,18 @@ export async function getAllTools(
   try {
     const webFetchTools = await createWebFetchTool({
       userId: context.userId,
-      conversationId: context.conversationId,
+      conversationId: context.userId ? `${context.userId}\$${context.sessionId || '001'}` : (context.conversationId || '001'),
     });
     if (!result['web_fetch']) {
       result['web_fetch'] = webFetchTools.web_fetch;
     }
   } catch (err: any) {
     chatLogger.warn('Failed to create web_fetch tool', { error: err.message });
+  }
+
+  // Add choose_role capability - enables dynamic role redirection
+  if (!result['choose_role'] && !excludedTools.includes('choose_role')) {
+    result['choose_role'] = chooseRoleCapability;
   }
 
   // Add power tools (lazy-loaded — only action-tools for trigger-matched powers)
@@ -374,8 +326,6 @@ export async function getAllTools(
   }
 
   chatLogger.info('Tool set created', { total: Object.keys(result).length, priority, stats: syncSet.stats });
+
   return result;
 }
-
-export { sanitizeArgs };
-export type { ToolExecutionContext } from './vercel-ai-streaming';

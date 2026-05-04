@@ -9,8 +9,10 @@ export interface ComposioService {
   healthCheck(): Promise<boolean>;
   processToolRequest(request: ComposioToolRequest): Promise<ComposioToolResponse>;
   getAvailableToolkits(): Promise<any[]>;
+  getToolsForToolkit(toolkit: string): Promise<any[]>;
   getConnectedAccounts(userId: string): Promise<any[]>;
   getAuthUrl(toolkit: string, userId: string): Promise<string>;
+  executeTool(toolName: string, params: any, userId: string): Promise<any>;
 }
 
 export interface ComposioToolRequest {
@@ -114,12 +116,27 @@ class ComposioServiceImpl implements ComposioService {
   /**
    * Execute tool with session context
    */
-  async executeTool(userId: string, toolName: string, params: any): Promise<any> {
+  async executeTool(toolName: string, params: any, userId: string): Promise<any> {
     const session = await this.getSession(userId);
     if (!session) {
       throw new Error('Session not created for user');
     }
     return session.execute(toolName, params);
+  }
+
+  /**
+   * Get tools for toolkit
+   */
+  async getToolsForToolkit(toolkit: string): Promise<any[]> {
+    await this.ensureComposio();
+    // This implementation is a bit different from the factory one but serves the same purpose
+    const session = await this.createSession('default');
+    const tools = await session.tools();
+    return tools.filter((t: any) => 
+      t.toolkit === toolkit || 
+      t.appName === toolkit || 
+      t.name?.startsWith(toolkit)
+    );
   }
 
   /**
@@ -271,6 +288,9 @@ export function initializeComposioService(
  * Get existing Composio service instance
  */
 export function getComposioService(): ComposioService | null {
+  if (!composioServiceInstance) {
+    return getOrCreateComposioServiceFromEnv();
+  }
   return composioServiceInstance;
 }
 
@@ -871,6 +891,43 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
         }
 
         // For other errors, log and rethrow
+        throw error;
+      }
+    },
+
+    async getToolsForToolkit(toolkit: string): Promise<any[]> {
+      try {
+        const { Composio } = await import('@composio/core');
+        const composio = new Composio({ apiKey: config.apiKey });
+        return await loadToolsForRequest(composio, 'default', [toolkit]);
+      } catch (error: any) {
+        console.error('[ComposioService] Failed to get tools for toolkit:', toolkit, error.message);
+        return [];
+      }
+    },
+
+    async executeTool(toolName: string, params: any, userId: string): Promise<any> {
+      try {
+        const { Composio } = await import('@composio/core');
+        const composio = new Composio({ apiKey: config.apiKey });
+        
+        let result: any;
+        try {
+          result = await (composio as any).tools.execute(toolName, {
+            userId: userId,
+            arguments: params,
+            dangerouslySkipVersionCheck: true,
+          });
+        } catch {
+          // Fallback for older SDK versions
+          result = await (composio as any).tools.execute(toolName, {
+            connectedAccountId: userId,
+            input: params,
+          });
+        }
+        return result;
+      } catch (error) {
+        console.error('[ComposioService] Execute tool failed:', error);
         throw error;
       }
     },

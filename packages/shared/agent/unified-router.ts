@@ -199,7 +199,7 @@ export async function routeChatRequest(request: ChatRequest): Promise<ChatRespon
   const startTime = Date.now();
   const health: ProviderHealth = {
     provider: request.provider,
-    status: 'healthy',
+    status: 'unknown',
   };
 
   // 0. Check circuit breaker - skip if provider is in open circuit state
@@ -276,36 +276,53 @@ export async function routeChatRequest(request: ChatRequest): Promise<ChatRespon
   try {
     const result = await processUnifiedAgentRequest(config);
 
+    // Update health status based on result
+    if (result.success) {
+      health.status = 'healthy';
+      health.latency = Date.now() - startTime;
+    } else {
+      health.status = 'unhealthy';
+      health.error = result.error;
+    }
+
     return {
-      ...result,
-      classification,
+      success: result.success,
+      response: result.response,
+      mode: result.mode,
+      classification: {
+        complexity: classification.complexity,
+        confidence: classification.confidence,
+        recommendedMode: classification.recommendedMode,
+      },
       health,
       metadata: {
-        ...result.metadata,
-        classification: {
-          complexity: classification.complexity,
-          confidence: classification.confidence,
-          recommendedMode: classification.recommendedMode,
-        },
         duration: Date.now() - startTime,
+        ...result.metadata,
       },
     };
   } catch (error: any) {
-    log.error('Unified routing failed', { error: error.message });
+    log.error('Routing failed', { error: error.message });
+
+    health.status = 'unhealthy';
+    health.error = error.message;
 
     return {
       success: false,
       response: '',
       mode: 'error',
       error: error.message,
-      classification,
+      classification: classification ? {
+        complexity: (classification as any).complexity,
+        confidence: (classification as any).confidence,
+        recommendedMode: (classification as any).recommendedMode,
+      } : {
+        complexity: 'simple',
+        confidence: 0,
+        recommendedMode: 'general',
+      } as any,
       health,
       metadata: {
         duration: Date.now() - startTime,
-        classification: {
-          complexity: classification.complexity,
-          confidence: classification.confidence,
-        },
       },
     };
   }

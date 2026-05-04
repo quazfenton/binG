@@ -12,6 +12,7 @@
 import type { ToolRegistry } from '../registry';
 import type { BootstrapConfig } from '../bootstrap';
 import { createLogger } from '../../utils/logger';
+import type { ComposioService } from '../../integrations/composio-service';
 
 const logger = createLogger('Tools:Composio-Bootstrap');
 
@@ -49,7 +50,7 @@ export async function registerComposioTools(registry: ToolRegistry, config: Boot
     for (const toolkit of toolkits) {
       try {
         // Register toolkit tools
-        const toolkitCount = await registerComposioToolkit(registry, toolkit.name, composioService);
+        const toolkitCount = await registerComposioToolkit(registry, toolkit.name, composioService, toolkit.tools);
         count += toolkitCount;
         logger.debug(`Registered ${toolkitCount} tools from Composio toolkit: ${toolkit.name}`);
       } catch (error: any) {
@@ -71,7 +72,7 @@ export async function registerComposioTools(registry: ToolRegistry, config: Boot
 async function registerComposioToolkit(
   registry: ToolRegistry,
   toolkitName: string,
-  composioService: any
+  composioService: ComposioService
 ): Promise<number> {
   let count = 0;
 
