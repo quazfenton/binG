@@ -183,6 +183,13 @@ export class OpencodeV2Provider implements LLMProvider {
             localWorkspaceDir = sanitized;
           }
         }
+      } else {
+        // On Linux, convert /workspace/... to /home/user/workspace/...
+        // SECURITY: Sanitize workspace directory path
+        const sanitizedWorkspace = this.sanitizePath(workspaceDir);
+        localWorkspaceDir = sanitizedWorkspace && sanitizedWorkspace.startsWith('/workspace/')
+          ? sanitizedWorkspace.replace('/workspace/', '/home/user/workspace/')
+          : (sanitizedWorkspace || '');
       }
 
       if (!localWorkspaceDir) {
@@ -195,13 +202,6 @@ export class OpencodeV2Provider implements LLMProvider {
         // Build path safely using path.join instead of string interpolation
         const path = await import('path');
         localWorkspaceDir = path.join(tempDir, 'workspace', 'users', userId || 'guest', 'sessions', convId || 'default');
-      } else {
-        // On Linux, convert /workspace/... to /home/user/workspace/...
-        // SECURITY: Sanitize workspace directory path
-        const sanitizedWorkspace = this.sanitizePath(workspaceDir);
-        localWorkspaceDir = sanitizedWorkspace && sanitizedWorkspace.startsWith('/workspace/')
-          ? sanitizedWorkspace.replace('/workspace/', '/home/user/workspace/')
-          : (sanitizedWorkspace || '/tmp/workspace');
       }
 
       // Write the prompt to a temp file (use OS-appropriate temp directory)
@@ -305,9 +305,6 @@ export class OpencodeV2Provider implements LLMProvider {
           try {
             const parsed = JSON.parse(line);
             
-            // Debug: Log each parsed line
-            console.log('[OpencodeV2Provider] JSON line keys:', Object.keys(parsed).join(', '));
-            
             // Text response
             if (parsed.text) {
               console.log('[OpencodeV2Provider] Got text response:', parsed.text.substring(0, 100) + '...');
@@ -346,35 +343,42 @@ export class OpencodeV2Provider implements LLMProvider {
                   exitCode: nullclawResult.success ? 0 : 1,
                 };
               } else {
-              // Standard tool execution
-              try {
-                toolResult = await executeTool(toolName, safeArgs);
-                // Ensure the callback is awaited if it returns a promise, or just called
-                await Promise.resolve(onToolExecution?.(toolName, safeArgs, toolResult));
-              } catch (err) {
-                toolResult = {
-                  success: false,
-                  output: `Tool execution failed: ${err instanceof Error ? err.message : String(err)}`,
-                  exitCode: 1,
-                };
+                // Standard tool execution
+                try {
+                  toolResult = await executeTool(toolName, safeArgs);
+                  // Ensure the callback is awaited if it returns a promise, or just called
+                  await Promise.resolve(onToolExecution?.(toolName, safeArgs, toolResult));
+                } catch (err) {
+                  toolResult = {
+                    success: false,
+                    output: `Tool execution failed: ${err instanceof Error ? err.message : String(err)}`,
+                    exitCode: 1,
+                  };
+                }
+
+                console.log('[OpencodeV2Provider] === TOOL RESULT ===');
+                console.log('[OpencodeV2Provider] Tool:', toolName, '- Success:', toolResult.success);
+                console.log('[OpencodeV2Provider] Output:', toolResult.output?.substring(0, 200));
+                console.log('[OpencodeV2Provider] Exit code:', toolResult.exitCode);
+                console.log('[OpencodeV2Provider] ===================');
+
+                // Record metrics
+                openCodeV2SessionManager.recordMetrics(
+                  this.currentSession.id,
+                  1,
+                  0,
+                  0,
+                  Date.now() - toolStartTime,
+                  0,
+                  1
+                );
               }
 
-              console.log('[OpencodeV2Provider] === TOOL RESULT ===');
-              console.log('[OpencodeV2Provider] Tool:', toolName, '- Success:', toolResult.success);
-              console.log('[OpencodeV2Provider] Output:', toolResult.output?.substring(0, 200));
-              console.log('[OpencodeV2Provider] Exit code:', toolResult.exitCode);
-              console.log('[OpencodeV2Provider] ===================');
-
-              // Record metrics
-              openCodeV2SessionManager.recordMetrics(
-                this.currentSession.id,
-                1,
-                0,
-                0,
-                Date.now() - toolStartTime,
-                0,
-                1
-              );
+              steps.push({
+                toolName,
+                args: safeArgs,
+                result: toolResult,
+              });
             }
 
             // Completion

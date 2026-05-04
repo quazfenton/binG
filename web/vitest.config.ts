@@ -169,4 +169,6 @@ export default defineConfig({
       '@': path.resolve(__dirname, './'),
       '@/app': path.resolve(__dirname, './app'),
       '@bing/platform/env': path.resolve(__dirname, '../packages/platform/src/env.ts'),
-    '@': path.resolve(__dirname, './'),
+    },
+  },
+});

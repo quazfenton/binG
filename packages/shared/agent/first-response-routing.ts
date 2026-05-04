@@ -198,26 +198,48 @@ function validateAndNormalize(parsed: Record<string, any>, rawJson?: string): Pa
     return { found: false, error: `Validation error: ${err.message}`, rawJson };
   }
 }
+
+/**
+ * Format a list of role options into a human-readable role redirect section.
+ * Deduplicates by role name (keeping the highest-weighted entry), sorts by
+ * weight descending, and includes a section header. Returns '' when there are
+ * no options to render.
+ */
+export function formatRoleRedirectOptions(
+  roleOptions: Array<{ role: string; weight: number; reason: string }> | undefined | null,
+): string {
+  if (!roleOptions || roleOptions.length === 0) return '';
+
+  // Deduplicate: keep the highest-weighted entry per role
+  const dedup = new Map<string, { role: string; weight: number; reason: string }>();
+  for (const opt of roleOptions) {
+    if (!opt || !opt.role) continue;
+    const existing = dedup.get(opt.role);
+    if (!existing || opt.weight > existing.weight) {
+      dedup.set(opt.role, { role: opt.role, weight: opt.weight, reason: opt.reason });
+    }
+  }
+
+  if (dedup.size === 0) return '';
+
+  const sorted = Array.from(dedup.values())
+    .sort((a, b) => b.weight - a.weight)
+    .slice(0, 3);
+
+  let section = '\n## Role Redirect Options\n';
+  section += 'Consider these specialized roles for better handling:\n\n';
+  for (const opt of sorted) {
+    section += `- **${opt.role}** (${(opt.weight * 100).toFixed(0)}% match): ${opt.reason}\n`;
+  }
+
+  return section;
 }
 
 /**
  * Generate a role redirect string from parsed routing metadata.
  */
 export function routingToRoleRedirectSection(routing: RoutingMetadata): string {
-  if (!routing.roleOptions || routing.roleOptions.length === 0) return '';
-  
-  let section = '\n## Role Redirect Options\n';
-  section += 'Consider these specialized roles for better handling:\n\n';
-  
-  const sorted = [...routing.roleOptions]
-    .sort((a, b) => b.weight - a.weight)
-    .slice(0, 3);
-    
-  for (const opt of sorted) {
-    section += `- **${opt.role}** (${(opt.weight * 100).toFixed(0)}% match): ${opt.reason}\n`;
-  }
-  
-  return section;
+  return formatRoleRedirectOptions(routing.roleOptions);
 }
 
 /**

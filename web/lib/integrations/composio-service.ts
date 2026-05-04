@@ -68,6 +68,16 @@ class ComposioServiceImpl implements ComposioService {
   }
 
   /**
+   * Check if toolkit is allowed based on restrictedToolkits config
+   */
+  private isAllowedToolkit(toolkit: string): boolean {
+    if (!this.config.restrictedToolkits?.length) return true;
+    return this.config.restrictedToolkits
+      .map((value) => value.toLowerCase())
+      .includes(toolkit.toLowerCase());
+  }
+
+  /**
    * Initialize Composio client
    */
   private async ensureComposio(): Promise<void> {
@@ -896,9 +906,12 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
     },
 
     async getToolsForToolkit(toolkit: string): Promise<any[]> {
+      if (!this.isAllowedToolkit(toolkit)) {
+        return [];
+      }
       try {
         const { Composio } = await import('@composio/core');
-        const composio = new Composio({ apiKey: config.apiKey });
+        const composio = new Composio({ apiKey: this.config.apiKey });
         return await loadToolsForRequest(composio, 'default', [toolkit]);
       } catch (error: any) {
         console.error('[ComposioService] Failed to get tools for toolkit:', toolkit, error.message);
@@ -907,9 +920,14 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
     },
 
     async executeTool(toolName: string, params: any, userId: string): Promise<any> {
+      const toolkit = String(toolName).split('_')[0] || '';
+      if (toolkit && !this.isAllowedToolkit(toolkit)) {
+        throw new Error(`Composio toolkit "${toolkit}" is not allowed`);
+      }
+      
       try {
         const { Composio } = await import('@composio/core');
-        const composio = new Composio({ apiKey: config.apiKey });
+        const composio = new Composio({ apiKey: this.config.apiKey });
         
         let result: any;
         try {
@@ -918,7 +936,20 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
             arguments: params,
             dangerouslySkipVersionCheck: true,
           });
-        } catch {
+        } catch (error: any) {
+          // Only retry on SDK validation errors or API 400 validation failures
+          const isValidationError =
+            error?.name === 'ValidationError' ||
+            error?.code === 400 ||
+            (String(error?.message || '').toLowerCase().includes('invalid') &&
+             (error?.message?.includes('payload') ||
+              error?.message?.includes('arguments') ||
+              error?.message?.includes('connectedAccountId')));
+          
+          if (!isValidationError) {
+            throw error;
+          }
+          
           // Fallback for older SDK versions
           result = await (composio as any).tools.execute(toolName, {
             connectedAccountId: userId,

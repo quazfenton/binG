@@ -328,9 +328,38 @@ export const PROVIDERS: Record<string, LLMProviderConfig> = {
     supportsStreaming: true,
     supportsFunctionCalling: true,
   },
+  ollama: {
+    id: 'ollama',
+    name: 'Ollama',
+    models: [
+      'minimax-m2.5',
+      'gpt-oss:120b',
+      'kimi-k2.5',
+      'qwen3.5',
+    ],
+    apiKeyEnv: 'QUAZ_API_KEY',
+    description: 'Ollama local LLM server via 9router proxy',
+    supportsStreaming: true,
+    supportsFunctionCalling: true,
+  },
+  kiro: {
+    id: 'kiro',
+    name: 'Kiro',
+    models: [
+      'kr/claude-sonnet-4.5',
+      'kr/claude-haiku-4.5',
+      'kr/glm-5',
+      'kr/deepseek-3.2',
+      'kr/MiniMax-M2.5',
+    ],
+    apiKeyEnv: 'QUAZ_API_KEY',
+    description: 'Kiro LLM provider via 9router proxy',
+    supportsStreaming: true,
+    supportsFunctionCalling: true,
+  },
 };
 
-export type VercelProvider = 'openai' | 'anthropic' | 'google' | 'mistral' | 'openrouter' | 'github' | 'nvidia' | 'groq' | 'together' | 'chutes' | 'zo' | 'zen' | 'cloudflare' | 'antigravity' | 'cohere' | 'replicate' | 'portkey' | 'azure' | 'vertex';
+export type VercelProvider = 'openai' | 'anthropic' | 'google' | 'mistral' | 'openrouter' | 'github' | 'nvidia' | 'groq' | 'together' | 'chutes' | 'zo' | 'zen' | 'cloudflare' | 'antigravity' | 'cohere' | 'replicate' | 'portkey' | 'azure' | 'vertex' | 'ollama' | 'kiro';
 
 /**
  * Get provider config by ID — safe for client use, no SDK imports.

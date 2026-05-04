@@ -1828,6 +1828,27 @@ async function runV1ApiWithTools(
       continue; // Skip this provider/model
     }
 
+    // FIX: Skip models with insufficient token limits (from previous 413 errors)
+    if (modelRankerFns?.hasInsufficientTokenLimit) {
+      // Estimate token count (rough approximation: 1 token ≈ 4 chars)
+      const estimatedTokens = Math.ceil(
+        (JSON.stringify(messages).length + 
+         JSON.stringify(config.tools || []).length + 
+         (config.systemPrompt?.length || 0)) / 4
+      );
+      
+      if (modelRankerFns.hasInsufficientTokenLimit(providerName, modelForProvider, estimatedTokens)) {
+        const tokenLimit = modelRankerFns.getModelTokenLimit?.(providerName, modelForProvider);
+        log.warn('[V1-API-WITH-TOOLS] ┌─ TOKEN LIMIT EXCEEDED ────────');
+        log.warn(`[V1-API-WITH-TOOLS] │ provider: ${providerName}/${modelForProvider}`);
+        log.warn(`[V1-API-WITH-TOOLS] │ estimated: ${estimatedTokens} tokens`);
+        log.warn(`[V1-API-WITH-TOOLS] │ limit: ${tokenLimit} tokens`);
+        log.warn('[V1-API-WITH-TOOLS] │ skipping (would result in 413)');
+        log.warn('[V1-API-WITH-TOOLS] └────────────────────────────────');
+        continue; // Skip this provider/model
+      }
+    }
+
     log.info('[V1-API-WITH-TOOLS] ┌─ ATTEMPT ─────────────────────');
     log.info('[V1-API-WITH-TOOLS] │ provider:', providerName);
     log.info('[V1-API-WITH-TOOLS] │ model:', modelForProvider);
@@ -2178,11 +2199,58 @@ async function runV1ApiWithTools(
       }
       if (modelRankerFns) {
         try {
-          modelRankerFns.recordModelAttempt(providerName, modelForProvider, false);
-          // Record 429 errors specifically for rate-limit tracking
           const status = error?.status || error?.statusCode || 0;
-          if (status === 429 || (error.message || '').toLowerCase().includes('rate limit')) {
-            modelRankerFns.recordRateLimitError(providerName, modelForProvider);
+          const errorMessage = (error.message || '').toLowerCase();
+          
+          // DON'T derank for client timeout/stream errors - these are not model failures
+          // "Controller is already closed" = client disconnected (3min timeout, user action, etc.)
+          const isClientError = 
+            errorMessage.includes('controller is already closed') ||
+            errorMessage.includes('aborted') ||
+            errorMessage.includes('cancelled') ||
+            errorMessage.includes('client disconnected') ||
+            error.name === 'AbortError';
+          
+          if (isClientError) {
+            log.warn('[V1-API-WITH-TOOLS] Client timeout/disconnect - NOT deranking model', {
+              provider: providerName,
+              model: modelForProvider,
+              error: error.message
+            });
+            // Skip recording as failure - this wasn't the model's fault
+          } else {
+            // Only record actual model failures
+            modelRankerFns.recordModelAttempt(providerName, modelForProvider, false);
+            
+            // Record 429 errors specifically for rate-limit tracking
+            if (status === 429 || errorMessage.includes('rate limit')) {
+              modelRankerFns.recordRateLimitError(providerName, modelForProvider);
+            }
+            
+            // Record 413 errors (Request Too Large) with token limit tracking
+            if (status === 413 || errorMessage.includes('request body too large') || 
+                errorMessage.includes('tokens_limit_reached')) {
+              // Extract token limit from error message if available
+              const tokenLimitMatch = error.message?.match(/max size:\s*(\d+)\s*tokens?/i);
+              const tokenLimit = tokenLimitMatch ? parseInt(tokenLimitMatch[1], 10) : null;
+              
+              log.warn('[V1-API-WITH-TOOLS] 413 Request Too Large detected', {
+                provider: providerName,
+                model: modelForProvider,
+                tokenLimit,
+                errorMessage: error.message
+              });
+              
+              // Record token limit for this model to avoid future oversized requests
+              if (tokenLimit && modelRankerFns.recordModelTokenLimit) {
+                modelRankerFns.recordModelTokenLimit(providerName, modelForProvider, tokenLimit);
+              }
+              
+              // Mark this model as unsuitable for large context requests
+              if (modelRankerFns.recordModelContextLimitError) {
+                modelRankerFns.recordModelContextLimitError(providerName, modelForProvider, tokenLimit || 8000);
+              }
+            }
           }
         } catch { /* ignore model-ranker recording errors */ }
       }
@@ -2191,18 +2259,58 @@ async function runV1ApiWithTools(
       log.warn('[V1-API-WITH-TOOLS] │ provider:', providerName);
       log.warn('[V1-API-WITH-TOOLS] │ model:', modelForProvider);
       log.warn('[V1-API-WITH-TOOLS] │ error:', error.message);
+      log.warn('[V1-API-WITH-TOOLS] │ statusCode:', error?.status || error?.statusCode || 'unknown');
+      
+      // Better error details logging - serialize objects properly
+      if (error?.requestBodyValues) {
+        const bodyValues = error.requestBodyValues;
+        log.warn('[V1-API-WITH-TOOLS] │ requestBody:', {
+          model: bodyValues.model,
+          inputMessages: Array.isArray(bodyValues.input) ? bodyValues.input.length : 'unknown',
+          temperature: bodyValues.temperature,
+          maxTokens: bodyValues.max_output_tokens,
+          toolsCount: Array.isArray(bodyValues.tools) ? bodyValues.tools.length : 0,
+          toolNames: Array.isArray(bodyValues.tools) 
+            ? bodyValues.tools.map((t: any) => t?.function?.name || t?.name || 'unknown').slice(0, 5)
+            : []
+        });
+      }
+      
       log.warn('[V1-API-WITH-TOOLS] │ circuitState:', getCircuitStateName(circuitBreakerMgr?.getBreaker(providerName)?.getState() || 'HEALTHY') as any);
       log.warn('[V1-API-WITH-TOOLS] │ will try next:', uniqueProviders.slice(uniqueProviders.indexOf(providerName) + 1).join(', ') || 'NO MORE');
       log.warn('[V1-API-WITH-TOOLS] └───────────────────────────────');
     }
   }
 
-    // FIX: Track provider failure for feedback injection
+    // FIX: Track provider failure for feedback injection with detailed error context
+  const status = lastError?.status || lastError?.statusCode || 0;
+  let failureMessage = `All providers failed: ${lastError?.message || 'Unknown error'}. Tried: ${uniqueProviders.join(', ')}`;
+  let feedbackContext413: Record<string, any> = { tried: uniqueProviders };
+  
+  // Add specific guidance for 413 errors
+  if (status === 413 || (lastError?.message || '').toLowerCase().includes('request body too large')) {
+    const tokenLimitMatch = lastError?.message?.match(/max size:\s*(\d+)\s*tokens?/i);
+    const tokenLimit = tokenLimitMatch ? parseInt(tokenLimitMatch[1], 10) : null;
+    
+    failureMessage = `Request too large for available models. ${lastError?.message || ''}. Consider: 1) Reducing conversation history, 2) Simplifying the request, 3) Using a model with larger context window.`;
+    feedbackContext413 = {
+      tried: uniqueProviders,
+      errorType: '413_request_too_large',
+      tokenLimit,
+      suggestion: 'Reduce context size or use larger-context model',
+      estimatedTokens: Math.ceil(
+        (JSON.stringify(messages).length + 
+         JSON.stringify(config.tools || []).length + 
+         (config.systemPrompt?.length || 0)) / 4
+      )
+    };
+  }
+  
   const providerFailureEntry = createFeedbackEntry(
     'failure',
-    `All providers failed: ${lastError?.message || 'Unknown error'}. Tried: ${uniqueProviders.join(', ')}`,
+    failureMessage,
     'llm_response',
-    { tried: uniqueProviders },
+    feedbackContext413,
     'critical'
   );
   feedbackContext.turnNumber++;

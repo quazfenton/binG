@@ -293,6 +293,14 @@ export interface ProviderConfig {
     apiKey?: string
     baseURL?: string
   }
+  ollama?: {
+    apiKey?: string
+    baseURL?: string
+  }
+  kiro?: {
+    apiKey?: string
+    baseURL?: string
+  }
 }
 
 export const PROVIDERS: Record<string, LLMProvider> = {
@@ -700,6 +708,33 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     supportsStreaming: true,
     maxTokens: 128000,
     description: 'LiveKit - Conversational intelligence for voice agents with low-latency inference'
+  },
+  ollama: {
+    id: 'ollama',
+    name: 'Ollama',
+    models: [
+      'ollama/minimax-m2.5',
+      'ollama/gpt-oss:120b',
+      'ollama/kimi-k2.5',
+      'ollama/qwen3.5'
+    ],
+    supportsStreaming: true,
+    maxTokens: 128000,
+    description: 'Ollama - Local LLM inference via 9router proxy (default: localhost:20128)'
+  },
+  kiro: {
+    id: 'kiro',
+    name: 'Kiro',
+    models: [
+      'kr/claude-sonnet-4.5',
+      'kr/claude-haiku-4.5',
+      'kr/glm-5',
+      'kr/deepseek-3.2',
+      'kr/MiniMax-M2.5'
+    ],
+    supportsStreaming: true,
+    maxTokens: 128000,
+    description: 'Kiro - AI assistant via 9router proxy (default: localhost:20128)'
   },
   openrouter: {
     id: 'openrouter',

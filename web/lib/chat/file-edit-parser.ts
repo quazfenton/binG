@@ -3281,6 +3281,7 @@ export function sanitizeFileEditTags(content: string): string {
 
 /**
  * Sanitize assistant display content while preserving visible prose and reasoning.
+ * FIXED: Preserve whitespace between words to prevent text squishing during streaming
  */
 export function sanitizeAssistantDisplayContent(content: string): string {
   if (!content) return '';
@@ -3292,7 +3293,13 @@ export function sanitizeAssistantDisplayContent(content: string): string {
   }
 
   next = next.replace(/(?:^|\n)\s*<<<[\s\S]{0,5000}?>>>\s*(?=\n|$)/gim, '\n');
-  next = next.replace(/\n{3,}/g, '\n\n').trim();
+  
+  // FIXED: Only collapse excessive newlines (3+), but preserve single spaces between words
+  // Don't use trim() which removes all leading/trailing whitespace
+  next = next.replace(/\n{3,}/g, '\n\n');
+  
+  // Only trim leading/trailing newlines, not spaces within text
+  next = next.replace(/^\n+/, '').replace(/\n+$/, '');
 
   return next;
 }

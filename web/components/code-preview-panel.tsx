@@ -2972,6 +2972,9 @@ export default app;`,
           const normalized: Record<string, { code: string }> = {};
           const buildDirs = ['dist', 'build', '.next', '.nuxt', '.output', 'public'];
           
+          // Collect all available file paths for reference checking
+          const availableFiles = new Set(Object.keys(files).map(p => p.replace(/^\/+/, '')));
+          
           for (const [path, fileObj] of Object.entries(files)) {
             let content = fileObj?.code || '';
             
@@ -2991,6 +2994,36 @@ export default app;`,
             if (typeof content === 'string' && content.trim()) {
               // Strip leaked heredoc markers (<<<, >>>) from WRITE command artifacts
               content = content.replace(/^\s*<<<\s*\n?/, '').replace(/\n?\s*>>>\s*$/, '');
+              
+              // For HTML files, remove references to missing assets (favicon, etc.)
+              if (path.endsWith('.html')) {
+                // Remove favicon links that reference missing files
+                content = content.replace(
+                  /<link[^>]*rel=["'](?:icon|shortcut icon)["'][^>]*href=["']([^"']+)["'][^>]*>/gi,
+                  (match, href) => {
+                    // Check if the referenced file exists
+                    const cleanHref = href.replace(/^\/+/, '');
+                    if (!availableFiles.has(cleanHref) && !href.startsWith('http') && !href.startsWith('data:')) {
+                      log(`[normalizeFilesForSandpack] Removing missing favicon reference: ${href}`);
+                      return ''; // Remove the link tag
+                    }
+                    return match; // Keep the link if file exists or is external
+                  }
+                );
+                
+                // Also handle <link> tags without quotes (less common but possible)
+                content = content.replace(
+                  /<link[^>]*rel=(icon|shortcut icon)[^>]*href=([^\s>]+)[^>]*>/gi,
+                  (match, rel, href) => {
+                    const cleanHref = href.replace(/^\/+/, '').replace(/["']/g, '');
+                    if (!availableFiles.has(cleanHref) && !href.startsWith('http') && !href.startsWith('data:')) {
+                      log(`[normalizeFilesForSandpack] Removing missing favicon reference: ${href}`);
+                      return '';
+                    }
+                    return match;
+                  }
+                );
+              }
               
               // For JSON files, validate and fix content to prevent Sandpack parse errors
               if (path.endsWith('.json') || path.endsWith('.json5')) {
@@ -3421,32 +3454,39 @@ root.render(<App />);` };
                   </div>
                   <div className="flex-1 overflow-hidden">
                     {Object.keys(sandpackFiles).length > 0 ? (
-                      <Sandpack
-                        template={activeTemplate as any}
-                        theme="dark"
-                        options={{
-                          showTabs: true,
-                          showLineNumbers: false,
-                          showNavigator: true,
-                          showConsole: true,
-                          showRefreshButton: true,
-                          autorun: true,
-                          recompileMode: "delayed",
-                          recompileDelay: 500,
-                          // CORS fix: Use configurable CDN source for bundler resources
-                          // Sandpack loads bundler from CDN, which may be blocked by CORS/firewalls
-                          // Can be overridden via NEXT_PUBLIC_SANDBPACK_BUNDLER_URL env variable
-                          bundlerURL: process.env.NEXT_PUBLIC_SANDBPACK_BUNDLER_URL || 'https://sandpack-bundler.codeSandbox.io',
-                        }}
-                        files={augmentSandpackFiles(sandpackFiles)}
-                        customSetup={{
-                          dependencies: (projectDetection as any)?.dependencies?.reduce(
+                    <Sandpack
+                      template={activeTemplate as any}
+                      theme="dark"
+                      options={{
+                        showTabs: true,
+                        showLineNumbers: false,
+                        showNavigator: true,
+                        showConsole: true,
+                        showRefreshButton: true,
+                        autorun: true,
+                        recompileMode: "delayed",
+                        recompileDelay: 500,
+                        // CORS fix: Use configurable CDN source for bundler resources
+                        // Sandpack loads bundler from CDN, which may be blocked by CORS/firewalls
+                        // Can be overridden via NEXT_PUBLIC_SANDBPACK_BUNDLER_URL env variable
+                        bundlerURL: process.env.NEXT_PUBLIC_SANDBPACK_BUNDLER_URL || 'https://sandpack-bundler.codesandbox.io',
+                      }}
+                      files={augmentSandpackFiles(sandpackFiles)}
+                      customSetup={{
+                        dependencies: {
+                          // Add dependencies from projectDetection
+                          ...((projectDetection as any)?.dependencies?.reduce(
                             (acc: Record<string, string>, dep: string) => { acc[dep] = "latest"; return acc; },
                             {} as Record<string, string>
-                          ) || {},
-                        }}
+                          ) || {}),
+                          // Add @emotion/is-prop-valid if framer-motion is present
+                          ...(Object.keys(sandpackFiles).some(f => 
+                            sandpackFiles[f]?.code?.includes('framer-motion')
+                          ) ? { '@emotion/is-prop-valid': 'latest', '@emotion/styled': 'latest' } : {}),
+                        },
+                      }}
 
-                      />
+                    />
                     ) : (
                       <div className="h-full flex items-center justify-center text-gray-400">
                         <div className="text-center">
