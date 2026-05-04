@@ -672,12 +672,13 @@ class VideoGenerationService {
   }
 }
 
+
 // Export provider classes
 export { VercelVideoProvider } from './providers/vercel-provider';
 export { GoogleVideoProvider } from './providers/google-provider';
 
-// Singleton registry instance
-export const videoGenerationRegistry = new VideoGenerationRegistry();
+// Singleton registry instance (initialized with default providers and environment variables)
+const videoGenerationRegistry = new VideoGenerationRegistry();
 
 // Initialize registry with available providers
 videoGenerationRegistry.register(new VercelVideoProvider());
@@ -696,6 +697,7 @@ if (typeof process !== 'undefined') {
     }
   });
 }
+
 
 // Export utility functions for convenience
 export function getVideoProviderModels(providerId: string): Array<{ 
@@ -751,6 +753,3 @@ export function getVideoAspectRatios(): typeof VIDEO_ASPECT_RATIOS {
 export function getVideoQualityPresets(): typeof VIDEO_QUALITY_PRESETS {
   return VIDEO_QUALITY_PRESETS;
 }
-
-// Export registry for advanced usage
-export { videoGenerationRegistry };

@@ -7,7 +7,7 @@
  */
 
 import { GoogleGenAI } from '@google/genai';
-import type {
+import {
   ImageGenerationProvider,
   ImageGenerationParams,
   ImageGenerationResponse,
@@ -15,9 +15,8 @@ import type {
   ProviderConfig,
   ProviderCapabilities,
   ImageGenerationError,
-  ImageGenerationErrorType,
+  ImageGenerationErrorType as ErrorType,
 } from '../types';
-import { ImageGenerationErrorType as ErrorType } from '../types';
 
 export class GoogleImageProvider implements ImageGenerationProvider {
   readonly id = 'google';
@@ -95,9 +94,8 @@ export class GoogleImageProvider implements ImageGenerationProvider {
     signal?: AbortSignal
   ): Promise<ImageGenerationResponse> {
     if (!this.client) {
-      throw this.createError(
-        'Google Imagen provider not initialized. Please check your GEMINI_API_KEY environment variable.',
-        ErrorType.NOT_CONFIGURED
+      throw new Error(
+        'Google Imagen provider not initialized. Please check your GEMINI_API_KEY environment variable.'
       );
     }
 
@@ -116,9 +114,8 @@ export class GoogleImageProvider implements ImageGenerationProvider {
       
       // Validate model
       if (!this.models.includes(model)) {
-        throw this.createError(
-          `Model ${model} is not supported by Google Imagen.`,
-          ErrorType.INVALID_MODEL
+        throw new Error(
+          `Model ${model} is not supported by Google Imagen.`
         );
       }
       

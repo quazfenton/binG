@@ -169,7 +169,7 @@ export async function POST(req: NextRequest) {
       aspectRatio,
       style,
       motionStrength,
-      cameraMovement,
+      cameraMovement: (cameraMovement || 'none') as 'none' | 'slight' | 'moderate' | 'strong',
       provider: selectedProvider,
       apiKey: process.env.VERCEL_API_KEY,
     }

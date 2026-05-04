@@ -14,6 +14,7 @@ export interface VideoGenerationRequest {
   model: string
   provider?: string
   apiKey?: string
+  negativePrompt?: string
   
   // Video generation parameters
   duration?: number // desired duration in seconds
