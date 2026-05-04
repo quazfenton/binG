@@ -4,7 +4,7 @@
  */
 
 import OpenAI from 'openai';
-import type {
+import {
   ImageGenerationProvider,
   ImageGenerationParams,
   ImageGenerationResponse,
@@ -12,9 +12,8 @@ import type {
   ProviderConfig,
   ProviderCapabilities,
   ImageGenerationError,
-  ImageGenerationErrorType,
+  ImageGenerationErrorType as ErrorType,
 } from '../types';
-import { ImageGenerationErrorType as ErrorType, ImageGenerationError } from '../types';
 
 export class VercelImageProvider implements ImageGenerationProvider {
   readonly id = 'vercel';

@@ -6,6 +6,7 @@ export * from './types';
 export * from './provider-registry';
 
 import { getVideoGenerationRegistry, VIDEO_STYLES, VIDEO_ASPECT_RATIOS, VIDEO_QUALITY_PRESETS } from './provider-registry';
+import { VideoGenerationRequest } from './types';
 
 // Initialize with environment variables
 if (typeof process !== 'undefined') {
@@ -61,18 +62,15 @@ export function getVideoQualityPresets() {
   return VIDEO_QUALITY_PRESETS;
 }
 
-// Export singleton instance for direct access if needed
-export const videoGenerationRegistry = getVideoGenerationRegistry();
-
 /**
  * Service wrapper for backward compatibility
  */
 export const videoGenerationService = {
   generateVideo: (request: VideoGenerationRequest) => {
     const provider = request.provider || 'vercel';
-    return videoGenerationRegistry.generateWithProvider(provider, request);
+    return getVideoGenerationRegistry().generateWithProvider(provider, request);
   },
-  getAvailableProviders: () => videoGenerationRegistry.getAvailableProviders(),
+  getAvailableProviders: () => getVideoGenerationRegistry().getAvailableProviders(),
   getProviderModels: (providerId: string) => getVideoProviderModels(providerId),
   getAllModels: () => getAllVideoModels(),
 };

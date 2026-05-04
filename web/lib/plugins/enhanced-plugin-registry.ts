@@ -6,48 +6,34 @@ import { EnhancedPlugin } from './enhanced-plugin-manager';
 import { PluginDependency } from './plugin-dependency-manager';
 import { pluginRegistry } from './plugin-registry';
 
+// Helper to create enhanced plugins from basic registry entries
+function createEnhancedPlugin(baseId: string, version: string, deps: PluginDependency[] = [], options: Partial<EnhancedPlugin> = {}): EnhancedPlugin {
+  const base = pluginRegistry.find(p => p.id === baseId);
+  if (!base) throw new Error(`Plugin not found: ${baseId}`);
+  return {
+    ...base,
+    ...options,
+    version,
+    dependencies: deps,
+    defaultSize: options.defaultSize || { width: 320, height: 400 },
+    minSize: options.minSize || { width: 280, height: 300 },
+  } as EnhancedPlugin;
+}
+
 // Convert basic plugins to enhanced plugins with dependency information
 export const enhancedPluginRegistry: EnhancedPlugin[] = [
-  {
-    ...pluginRegistry.find(p => p.id === 'calculator')!,
-    version: '1.0.0',
-    dependencies: [], // No dependencies
-  },
-  {
-    ...pluginRegistry.find(p => p.id === 'simple-calculator')!,
-    version: '1.0.0',
-    dependencies: [], // No dependencies
-  },
-  {
-    ...pluginRegistry.find(p => p.id === 'code-formatter')!,
-    version: '1.2.0',
-    dependencies: [], // No dependencies for basic formatter
-  },
-  {
-    ...pluginRegistry.find(p => p.id === 'note-taker')!,
-    version: '2.1.0',
-    dependencies: [], // No dependencies
-  },
-  {
-    ...pluginRegistry.find(p => p.id === 'advanced-calculator')!,
-    version: '2.0.0',
-    dependencies: [
-      {
-        pluginId: 'calculator',
-        version: '1.0.0',
-        optional: false,
-        fallback: 'simple-calculator'
-      }
-    ] as PluginDependency[],
-  },
-  // Example of a plugin with multiple dependencies
+  createEnhancedPlugin('calculator', '1.0.0', []),
+  createEnhancedPlugin('simple-calculator', '1.0.0', []),
+  createEnhancedPlugin('code-formatter', '1.2.0', [], { category: 'code', defaultSize: { width: 400, height: 300 }, minSize: { width: 300, height: 200 } }),
+  createEnhancedPlugin('note-taker', '2.1.0', [], { defaultSize: { width: 350, height: 450 }, minSize: { width: 280, height: 350 } }),
+  createEnhancedPlugin('advanced-calculator', '2.0.0', [
+    { pluginId: 'calculator', version: '1.0.0', optional: false, fallback: 'simple-calculator' }
+  ], { defaultSize: { width: 400, height: 500 }, minSize: { width: 320, height: 400 } }),
   {
     id: 'data-analyzer',
     name: 'Data Analyzer',
     version: '1.5.0',
     description: 'Analyze and visualize data with advanced tools',
-    icon: pluginRegistry[0].icon, // Reusing icon for demo
-    component: pluginRegistry[0].component, // Reusing component for demo
     category: 'data',
     defaultSize: { width: 800, height: 600 },
     minSize: { width: 600, height: 400 },
@@ -60,32 +46,16 @@ export const enhancedPluginRegistry: EnhancedPlugin[] = [
       timeoutMs: 30000
     },
     dependencies: [
-      {
-        pluginId: 'calculator',
-        version: '1.0.0',
-        optional: false,
-        fallback: 'simple-calculator'
-      },
-      {
-        pluginId: 'note-taker',
-        version: '2.0.0',
-        optional: true // Optional dependency
-      },
-      {
-        pluginId: 'code-formatter',
-        version: '1.0.0',
-        optional: true
-      }
-    ] as PluginDependency[],
+      { pluginId: 'calculator', version: '1.0.0', optional: false, fallback: 'simple-calculator' },
+      { pluginId: 'note-taker', version: '2.0.0', optional: true },
+      { pluginId: 'code-formatter', version: '1.0.0', optional: true }
+    ],
   },
-  // Example of a plugin with version-specific dependencies
   {
     id: 'advanced-code-editor',
     name: 'Advanced Code Editor',
     version: '3.0.0',
     description: 'Full-featured code editor with syntax highlighting',
-    icon: pluginRegistry[1].icon, // Reusing icon for demo
-    component: pluginRegistry[1].component, // Reusing component for demo
     category: 'code',
     defaultSize: { width: 900, height: 700 },
     minSize: { width: 700, height: 500 },
@@ -99,21 +69,14 @@ export const enhancedPluginRegistry: EnhancedPlugin[] = [
       timeoutMs: 45000
     },
     dependencies: [
-      {
-        pluginId: 'code-formatter',
-        version: '1.2.0', // Requires specific version
-        optional: false
-      }
-    ] as PluginDependency[],
+      { pluginId: 'code-formatter', version: '1.2.0', optional: false }
+    ],
   },
-  // Example of a plugin that provides fallback functionality
   {
     id: 'basic-text-editor',
     name: 'Basic Text Editor',
     version: '1.0.0',
     description: 'Simple text editor for basic editing tasks',
-    icon: pluginRegistry[2].icon, // Reusing icon for demo
-    component: pluginRegistry[2].component, // Reusing component for demo
     category: 'utility',
     defaultSize: { width: 500, height: 400 },
     minSize: { width: 400, height: 300 },
@@ -126,19 +89,10 @@ export const enhancedPluginRegistry: EnhancedPlugin[] = [
       maxStorageKB: 256,
       timeoutMs: 10000
     },
-    dependencies: [], // No dependencies - can serve as fallback
+    dependencies: [],
   },
-  // New utility plugins
-  {
-    ...pluginRegistry.find(p => p.id === 'json-validator')!,
-    version: '1.0.0',
-    dependencies: [], // No dependencies
-  },
-  {
-    ...pluginRegistry.find(p => p.id === 'url-utilities')!,
-    version: '1.0.0',
-    dependencies: [], // No dependencies
-  }
+  createEnhancedPlugin('json-validator', '1.0.0', []),
+  createEnhancedPlugin('url-utilities', '1.0.0', []),
 ];
 
 // Dependency mapping for fallback resolution

@@ -161,9 +161,6 @@ export async function runContextPipeline(
   // ── Source 1: Hybrid retrieval ──────────────────────────────────────────
   if (hybridResult.succeeded) {
     results.push(hybridResult);
-  } else if (hybridResult.error) {
-    // Keep failed result for telemetry if it was actually attempted
-    results.push(hybridResult);
   }
 
   // ── Source 2: Workspace session context (context-pack / file listing) ─────
@@ -196,9 +193,6 @@ export async function runContextPipeline(
       succeeded: true,
       durationMs: 0,
     });
-  } else if (memoryResult.error && shouldRunMemorySearch) {
-    // Keep failed result for telemetry
-    results.push(memoryResult);
   }
 
   // ── Source 5: Minimal fallback ────────────────────────────────────────────

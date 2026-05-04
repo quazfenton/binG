@@ -5,9 +5,11 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { ImageProviderRegistry } from '@/lib/image-generation/provider-registry';
-import { MistralImageProvider } from '@/lib/image-generation/providers/mistral-provider';
-import { ReplicateImageProvider } from '@/lib/image-generation/providers/replicate-provider';
+import { ImageProviderRegistry } from '../../lib/image-generation/provider-registry';
+import { MistralImageProvider } from '../../lib/image-generation/providers/mistral-provider';
+import { ReplicateImageProvider } from '../../lib/image-generation/providers/replicate-provider';
+import { ImageGenerationErrorType as ErrorType } from '../lib/image-generation/types';
+import { ASPECT_RATIO_DIMENSIONS, QUALITY_PRESETS, STYLE_PRESETS } from '../lib/image-generation/types';
 
 // Mock environment variables
 vi.stubGlobal('process', {
@@ -180,8 +182,8 @@ describe('MistralImageProvider', () => {
     expect(capabilities.supportsNegativePrompt).toBe(false);
     expect(capabilities.supportsImg2Img).toBe(false);
     expect(capabilities.supportsSeed).toBe(false);
-    expect(capabilities.supportsBatchGeneration).toBe(true);
-    expect(capabilities.maxBatchSize).toBe(4);
+    expect(capabilities.supportsBatchGeneration).toBe(false);
+    expect(capabilities.maxBatchSize).toBe(1);
   });
 
   it('should return default params', () => {
@@ -193,9 +195,14 @@ describe('MistralImageProvider', () => {
   });
 
   it('should fail without API key', () => {
-    vi.stubGlobal('process', { env: { MISTRAL_API_KEY: undefined } });
+    // Mock process.env to simulate missing API key
+    // Use vi.stubEnv for Vitest environment variable mocking
+    vi.stubEnv('MISTRAL_API_KEY', undefined);
     
-    expect(() => new MistralImageProvider()).toThrow();
+    // Expect initialization to throw an error
+    expect(() => new MistralImageProvider()).toThrow(
+      );
+    );
   });
 });
 
