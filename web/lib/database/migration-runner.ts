@@ -153,11 +153,27 @@ export class MigrationRunner {
             this.db.exec(sql);
           });
 
+          let alreadyApplied = false;
           try {
             transaction(migration.sql);
           } catch (err: any) {
-            // Re-throw if transaction fails so outer loop catches and stops
-            throw new Error(`Transaction failed: ${err.message}`);
+            // Treat schema-already-present errors as idempotent success.
+            // This covers cases where a column/table/index was added by a fresh
+            // schema initialization or a previous partial run, so the migration's
+            // effect is already in place. We mark it as executed and continue.
+            const msg = String(err?.message ?? '');
+            if (
+              /duplicate column name/i.test(msg) ||
+              /already exists/i.test(msg)
+            ) {
+              console.warn(
+                `Migration ${migration.version} already applied (schema present): ${msg}. Marking as executed.`
+              );
+              alreadyApplied = true;
+            } else {
+              // Re-throw if transaction fails so outer loop catches and stops
+              throw new Error(`Transaction failed: ${err.message}`);
+            }
           }
 
           // Record migration as executed
@@ -167,7 +183,11 @@ export class MigrationRunner {
           `);
           stmt.run(migration.version, migration.filename);
 
-          console.log(`Migration ${migration.version} completed successfully`);
+          console.log(
+            alreadyApplied
+              ? `Migration ${migration.version} recorded (schema already present)`
+              : `Migration ${migration.version} completed successfully`
+          );
         }
       } catch (error) {
         console.error(`Migration ${migration.version} failed:`, error);

@@ -1290,11 +1290,29 @@ export async function executeWithOrchestrationMode(
 
         // Run initial agent loop (pre-spec phase)
         const preSpecResult = await processUnifiedAgentRequest({
-        userMessage: request.task,
-        userId: request.ownerId,
-        sandboxId: request.sessionId,
-        
-        mode: 'v1-agent-loop',
+          userMessage: request.task,
+          userId: request.ownerId,
+          conversationId: request.sessionId,
+          sandboxId: request.sessionId,
+          mode: 'v1-agent-loop',
+        });
+
+        // Run spec amplification in the middle
+        const specResult = await processUnifiedAgentRequest({
+          userMessage: `[SPEC_MAXIMAL] Enhance: ${preSpecResult.response}`,
+          userId: request.ownerId,
+          conversationId: request.sessionId,
+          sandboxId: request.sessionId,
+          mode: 'v1-api',
+        });
+
+        // Run final agent loop (post-spec phase)
+        const postSpecResult = await processUnifiedAgentRequest({
+          userMessage: `[POST_SPEC_MAXIMAL] Proceed with: ${specResult.response}`,
+          userId: request.ownerId,
+          conversationId: request.sessionId,
+          sandboxId: request.sessionId,
+          mode: 'v1-agent-loop',
         });
 
         // Run spec amplification in the middle
