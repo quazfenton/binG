@@ -123,6 +123,8 @@ const WEAK_CODE_PATTERNS = WEAK_CODE_KEYWORDS.map(
 let _taskClassifierCache: ReturnType<typeof createTaskClassifierShared> | null = null;
 
 function getTaskClassifier(requestBody: any) {
+  if (process.env.ENABLE_TASK_CLASSIFIER !== 'true') return null;
+
   // Use current request's provider to avoid defaulting to OpenAI
   const provider = requestBody?.provider || process.env.DEFAULT_PROVIDER || 'mistral';
   

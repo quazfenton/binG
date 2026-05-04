@@ -339,6 +339,21 @@ If response count > 3 OR tool calls > 5:
  *
  * Do not change this order without thorough LLM prompt engineering review.
  */
+export const CHOOSE_ROLE_DIRECTIVE = `
+============================================
+# DYNAMIC ROLE REDIRECTION
+============================================
+
+You have the ability to switch your expert role to better suit the task.
+
+1. **ASSESS**: Monitor task complexity, domain, or failure recovery needs.
+2. **SELECT**: If a better role exists (e.g., 'debugger' for failures, 'architect' for high-complexity design), call 'choose_role(role="...", reason="...")'.
+3. **WAIT**: Once called, the system will inject the new persona and prompt for your next turn.
+
+Available roles:
+- coder, reviewer, planner, architect, researcher, debugger, specialist, orchestrator
+`;
+
 export function generateDynamicInjection(config?: {
   includeFeedback?: boolean;
   includeRoleRedirect?: boolean;
@@ -346,6 +361,7 @@ export function generateDynamicInjection(config?: {
   includeSpecs?: boolean;
   includeFulfillmentReview?: boolean;
   includeFirstResponseRouting?: boolean;
+  includeRoleRedirectionDirective?: boolean;
 }): string {
   const {
     includeFeedback = true,
@@ -354,10 +370,12 @@ export function generateDynamicInjection(config?: {
     includeSpecs = true,
     includeFulfillmentReview = true,
     includeFirstResponseRouting = true,
+    includeRoleRedirectionDirective = true,
   } = config || {};
 
   let injection = '';
 
+  if (includeRoleRedirectionDirective) injection += CHOOSE_ROLE_DIRECTIVE + '\n';
   // First-response routing is always included by default — it supersedes
   // the need for a separate TaskClassification step by embedding routing
   // metadata directly in the LLM's first response via prompt engineering.

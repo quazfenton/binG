@@ -230,9 +230,14 @@ export async function routeChatRequest(request: ChatRequest): Promise<ChatRespon
   }
 
   // 1. Classify the task
-  const classification = await classifyTask(request.userMessage, {
-    projectSize: request.projectContext?.size,
-  });
+  let classification;
+  if (process.env.ENABLE_TASK_CLASSIFIER === 'true') {
+    classification = await classifyTask(request.userMessage, {
+      projectSize: request.projectContext?.size,
+    });
+  } else {
+    classification = { complexity: 'simple', recommendedMode: 'general', confidence: 1.0 };
+  }
 
   log.info('Task classified', {
     complexity: classification.complexity,

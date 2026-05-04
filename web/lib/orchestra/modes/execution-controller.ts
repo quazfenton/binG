@@ -593,7 +593,11 @@ function generateStructuredReview(
   }
 
   // Generate expansion plan based on task type
-  const taskType = classifyTask(originalTask);
+  // Fallback to regex-based classification to avoid redundant overhead of the full classifier
+  const taskType = originalTask.match(/test|spec/i) ? 'test' : 
+                   originalTask.match(/fix/i) ? 'fix' : 
+                   originalTask.match(/refactor/i) ? 'refactor' : 'general';
+  
   const expansionPlan = generateExpansionPlan(taskType, cumulativeOutput);
 
   return `[AUTO-REVIEW OVERRIDE — EXECUTION MUST CONTINUE]
