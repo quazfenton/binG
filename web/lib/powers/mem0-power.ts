@@ -397,7 +397,7 @@ function recordMem0Failure(reason: string): void {
     _circuitOpenUntil = now + CIRCUIT_COOLDOWN_MS;
     _circuitFailures.splice(0, _circuitFailures.length);
     _circuitProbeInFlight = false;
-    log.warn('Mem0 circuit breaker OPEN', {
+    log.warn('Mem0 circuit breaker BLOCKED', {
       reason,
       cooldownMs: CIRCUIT_COOLDOWN_MS,
       reopensAt: new Date(_circuitOpenUntil).toISOString(),
@@ -407,7 +407,7 @@ function recordMem0Failure(reason: string): void {
   if (_circuitProbeInFlight) {
     _circuitProbeInFlight = false;
     _circuitOpenUntil = now + CIRCUIT_COOLDOWN_MS;
-    log.warn('Mem0 probe failed — circuit re-opened', {
+    log.warn('Mem0 probe failed — circuit re-BLOCKED', {
       reason,
       reopensAt: new Date(_circuitOpenUntil).toISOString(),
     });
@@ -418,7 +418,7 @@ function recordMem0Failure(reason: string): void {
 function recordMem0Success(): void {
   if (_circuitFailures.length > 0) _circuitFailures.splice(0, _circuitFailures.length);
   if (_circuitOpenUntil !== 0 || _circuitProbeInFlight) {
-    log.info('Mem0 circuit breaker CLOSED');
+    log.info('Mem0 circuit breaker HEALTHY');
   }
   _circuitOpenUntil = 0;
   _circuitProbeInFlight = false;
@@ -426,22 +426,22 @@ function recordMem0Success(): void {
 
 /** Inspect circuit state (for diagnostics / health endpoints). */
 export function getMem0CircuitState(): {
-  state: 'CLOSED' | 'OPEN' | 'HALF_OPEN';
+  state: 'HEALTHY' | 'BLOCKED' | 'TESTING';
   recentFailures: number;
   reopensAt: string | null;
 } {
   const now = Date.now();
   if (_circuitOpenUntil > now) {
     return {
-      state: 'OPEN',
+      state: 'BLOCKED',
       recentFailures: _circuitFailures.length,
       reopensAt: new Date(_circuitOpenUntil).toISOString(),
     };
   }
   if (_circuitOpenUntil !== 0 && _circuitProbeInFlight) {
-    return { state: 'HALF_OPEN', recentFailures: _circuitFailures.length, reopensAt: null };
+    return { state: 'TESTING', recentFailures: _circuitFailures.length, reopensAt: null };
   }
-  return { state: 'CLOSED', recentFailures: _circuitFailures.length, reopensAt: null };
+  return { state: 'HEALTHY', recentFailures: _circuitFailures.length, reopensAt: null };
 }
 
 /** Test/diagnostic helper — force-close the breaker. */

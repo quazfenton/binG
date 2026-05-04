@@ -113,7 +113,7 @@ describe('Mem0 Circuit Breaker', () => {
     const { getMem0CircuitState, resetMem0CircuitBreaker } = await import('../mem0-power');
     resetMem0CircuitBreaker();
     const state = getMem0CircuitState();
-    expect(state.state).toBe('CLOSED');
+    expect(state.state).toBe('HEALTHY');
     expect(state.recentFailures).toBe(0);
     expect(state.reopensAt).toBeNull();
   });

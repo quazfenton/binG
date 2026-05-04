@@ -13,10 +13,19 @@
  * 6. Rate-limit errors (429) treated differently from hard failures (500)
  *
  * Safety invariant: if opening a circuit would leave ZERO available
- * providers, the circuit stays CLOSED (degraded mode) instead.
+ * providers, the circuit stays HEALTHY (degraded mode) instead.
  */
 
-export type CircuitState = 'CLOSED' | 'OPEN' | 'HALF-OPEN';
+export type CircuitState = 'HEALTHY' | 'OPEN' | 'HALF-OPEN';
+
+/** Human-readable state names */
+export function getCircuitStateName(state: CircuitState): string {
+  switch (state) {
+    case 'HEALTHY': return 'HEALTHY';  // Requests allowed, no issues
+    case 'HALF-OPEN': return 'TESTING'; // Testing if recovered
+    case 'OPEN': return 'BLOCKED';      // Too many failures, skipping
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Provider reliability tiers
@@ -153,7 +162,7 @@ interface FailureRecord {
 // ---------------------------------------------------------------------------
 
 export class CircuitBreaker {
-  private state: CircuitState = 'CLOSED';
+  private state: CircuitState = 'HEALTHY';
   private failures: FailureRecord[] = [];
   private successCount = 0;
   private lastFailureTime?: number;
@@ -240,7 +249,7 @@ export class CircuitBreaker {
   }
 
   reset(): void {
-    this.state = 'CLOSED';
+    this.state = 'HEALTHY';
     this.failures = [];
     this.successCount = 0;
     this.halfOpenRequests = 0;
@@ -261,7 +270,7 @@ export class CircuitBreaker {
 
   private canExecute(): boolean {
     switch (this.state) {
-      case 'CLOSED':
+      case 'HEALTHY':
         return true;
       case 'OPEN':
         if (this.nextAttemptTime && Date.now() >= this.nextAttemptTime) {
@@ -300,9 +309,9 @@ export class CircuitBreaker {
     if (this.state === 'HALF-OPEN') {
       this.successCount++;
       if (this.successCount >= this.config.successThreshold) {
-        this.transitionTo('CLOSED');
+        this.transitionTo('HEALTHY');
       }
-    } else if (this.state === 'CLOSED') {
+    } else if (this.state === 'HEALTHY') {
       // Successful call reduces weighted score (recovery credit)
       if (this.failures.length > 0) {
         this.failures.shift(); // remove oldest failure
@@ -330,7 +339,7 @@ export class CircuitBreaker {
       if (kind === 'hard') {
         this.transitionTo('OPEN');
       }
-    } else if (this.state === 'CLOSED') {
+    } else if (this.state === 'HEALTHY') {
       if (weightedScore >= this.config.failureThreshold) {
         this.transitionTo('OPEN');
       }
@@ -352,7 +361,7 @@ export class CircuitBreaker {
     this.stats.stateChanges++;
 
     switch (newState) {
-      case 'CLOSED':
+      case 'HEALTHY':
         this.failures = [];
         this.successCount = 0;
         this.halfOpenRequests = 0;

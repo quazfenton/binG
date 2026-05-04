@@ -77,11 +77,19 @@ export interface EndpointHealth {
 
 export interface CircuitBreakerState {
   endpoint: string;
-  state: 'CLOSED' | 'OPEN' | 'HALF_OPEN';
+  state: 'HEALTHY' | 'OPEN' | 'HALF_OPEN';
   failureCount: number;
   lastFailureTime: number;
   nextAttemptTime: number;
-  failureTimestamps?: number[]; // Track timestamps for time-windowed failure counting
+  failureTimestamps?: number[];
+}
+
+export function getCircuitStateName(state: CircuitBreakerState['state']): string {
+  switch (state) {
+    case 'HEALTHY': return 'HEALTHY';
+    case 'HALF_OPEN': return 'TESTING';
+    case 'OPEN': return 'BLOCKED';
+  }
 }
 
 class CircuitBreaker {
@@ -96,7 +104,7 @@ class CircuitBreaker {
     const state = this.getState(endpoint);
 
     switch (state.state) {
-      case 'CLOSED':
+      case 'HEALTHY':
         return true;
       case 'OPEN':
         if (Date.now() >= state.nextAttemptTime) {
@@ -115,7 +123,7 @@ class CircuitBreaker {
     const state = this.getState(endpoint);
     this.setState(endpoint, {
       ...state,
-      state: 'CLOSED',
+      state: 'HEALTHY',
       failureCount: 0,
       lastFailureTime: 0,
       nextAttemptTime: 0,
@@ -163,7 +171,7 @@ class CircuitBreaker {
     if (!this.states.has(endpoint)) {
       this.states.set(endpoint, {
         endpoint,
-        state: 'CLOSED',
+        state: 'HEALTHY',
         failureCount: 0,
         lastFailureTime: 0,
         nextAttemptTime: 0,

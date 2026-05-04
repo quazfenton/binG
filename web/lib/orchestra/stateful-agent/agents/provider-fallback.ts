@@ -66,7 +66,7 @@ class ProviderCircuitBreaker {
         state.state = 'closed';
         state.failures = 0;
         state.successCount = 0;
-        console.log(`[CircuitBreaker] Provider ${provider} circuit CLOSED (recovered)`);
+        console.log(`[CircuitBreaker] Provider ${provider} circuit HEALTHY (recovered)`);
       }
     } else if (state.state === 'closed') {
       // Reset failure count on success
@@ -96,7 +96,7 @@ class ProviderCircuitBreaker {
     if (state.failures >= this.config.failureThreshold) {
       state.state = 'open';
       state.successCount = 0;
-      console.warn(`[CircuitBreaker] Provider ${provider} circuit OPEN (${state.failures} failures)`);
+      console.warn(`[CircuitBreaker] Provider ${provider} circuit BLOCKED (${state.failures} failures)`);
     }
   }
 
@@ -116,7 +116,7 @@ class ProviderCircuitBreaker {
       if (timeSinceFailure >= this.config.timeout) {
         state.state = 'half-open';
         state.successCount = 0;
-        console.log(`[CircuitBreaker] Provider ${provider} circuit HALF-OPEN (testing)`);
+        console.log(`[CircuitBreaker] Provider ${provider} circuit TESTING (checking if recovered)`);
         return true; // Allow one request through to test
       }
       return false; // Circuit is open, don't try
@@ -298,7 +298,7 @@ async function getAvailableProviders(): Promise<ProviderConfig[]> {
   for (const provider of providers) {
     // Check circuit breaker first
     if (!circuitBreaker.isAvailable(provider.name)) {
-      console.log(`[ProviderFallback] Skipping ${provider.name} (circuit open)`);
+      console.log(`[ProviderFallback] Skipping ${provider.name} (circuit BLOCKED)`);
       continue;
     }
 

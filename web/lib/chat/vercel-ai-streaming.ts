@@ -385,9 +385,9 @@ export function getVercelModel(
       baseURL: baseURL || currentEnv.OPENAI_BASE_URL,
     });
     return openai(model);
-  }
+    }
 
-  // Direct Vercel AI SDK providers
+    // Direct Vercel AI SDK providers
   switch (provider) {
     case 'openai': {
       const openai = createOpenAI({
@@ -421,11 +421,13 @@ export function getVercelModel(
     }
 
     case 'vercel': {
+      // CRITICAL: Strip 'vercel:' prefix from model ID — Vercel AI SDK expects just 'xai/grok-3', not 'vercel:xai/grok-3'
+      const cleanModel = model.startsWith('vercel:') ? model.slice(7) : model;
       const openai = createOpenAI({
         apiKey: apiKey || currentEnv.VERCEL_API_KEY,
         baseURL: baseURL || currentEnv.VERCEL_BASE_URL || 'https://api.vercel.com/v1',
       });
-      return openai(model);
+      return openai(cleanModel);
     }
 
     default:
@@ -770,14 +772,8 @@ export async function* streamWithVercelAI(
         'gemini-2.0',
       ];
 
-      // Check if current model matches any non-FC model
-      const modelLower = modelName.toLowerCase();
-      if (nonFCModels.some(m => modelLower.includes(m.toLowerCase()) || m.toLowerCase().includes(modelLower))) {
-        skipTools = true;
-      }
-
-      // CRITICAL FIX: If model is known to support FC, don't strip tools even if SDK reports false
-      const isKnownGoodFC = knownGoodFCModels.some(m => modelLower.includes(m.toLowerCase()));
+      // Check if current model IS in the known good list (not just substring match)
+      const isKnownGoodFC = knownGoodFCModels.some(m => modelName.toLowerCase().includes(m.toLowerCase()));
       chatLogger.info('[FC-KNOWN] Checking function calling support', {
         provider,
         model: modelName,
@@ -785,6 +781,12 @@ export async function* streamWithVercelAI(
         isKnownGoodFC,
         knownGoodFCModels,
       });
+
+      // If tool was passed BUT model is known good but SDK says unknown, force tools ON
+      if (tools && Object.keys(tools).length > 0 && isKnownGoodFC && supportsFC === undefined) {
+        chatLogger.info('[FC-FORCE] Model known to support FC, forcing tools ON despite SDK unknown');
+        // Don't set skipTools - keep tools enabled
+      }
       if (isKnownGoodFC) {
         chatLogger.info('[FC-KNOWN] Model is known to support function calling', {
           provider,
@@ -810,6 +812,11 @@ export async function* streamWithVercelAI(
           model: modelName,
           action: 'Stripping tools and using text-mode fallback',
         });
+      }
+
+      // CRITICAL: If model is known good for FC, never skip tools regardless of SDK
+      if (isKnownGoodFC) {
+        skipTools = false;
       }
     }
 
@@ -1465,7 +1472,7 @@ export async function* streamWithVercelAI(
       const currentEnv: any = typeof process !== 'undefined' ? process.env : {};
       const fallbackProviderName = currentEnv.DEFAULT_FALLBACK_PROVIDER || 'mistral';
       const fallbackModelName = currentEnv.FAST_MODEL || currentEnv.DEFAULT_MODEL || 'mistral-small-latest';
-      chatLogger.info('Streaming fallback activated', { fallbackProvider: fallbackProviderName, fallbackModel: fallbackModelName });
+      chatLogger.info('Streaming fallback activated. [EDIT] this may be FLAWED and may not pass matching provider model combo or or a similarly nonmatching DEFAULT_FALLBACK_PROVIDER and FAST_MODEL combo defaults to mistral-small always if these arent set', { fallbackProvider: fallbackProviderName, fallbackModel: fallbackModelName });
 
       let fallbackModel: any;
       try {
@@ -1478,7 +1485,7 @@ export async function* streamWithVercelAI(
           mistral: () => createMistral({ apiKey: currentEnv.MISTRAL_API_KEY })(fallbackModelName),
           google: () => createGoogleGenerativeAI({ apiKey: currentEnv.GOOGLE_API_KEY })(fallbackModelName),
           anthropic: () => createAnthropic({ apiKey: currentEnv.ANTHROPIC_API_KEY })(fallbackModelName),
-          openai: () => createOpenAI({ apiKey: currentEnv.OPENAI_API_KEY })(fallbackModelName),
+          openai: () => createOpenAI({ apiKey: currentEnv.OPENAI_API_KEY })(fallbackModelName), //[EDIT] Possibly WRONG if this case matches for the entire @ai-sdk/openai which may include other providers that happen to support openai format ie. trace if this may include all OPENAI_COMPATIBLE providers, ie. possible wrong assumption that this is matching only Openai as literal provider. createOpenAI sdk format includes OpenAI compatible providers with their own URL and key, shouldnt default to OPENAI_API_KEY
         };
 
         const factory = providerFactories[fallbackProviderName];
@@ -1486,6 +1493,7 @@ export async function* streamWithVercelAI(
           fallbackModel = factory();
         } else {
           // Unknown provider — try OpenAI-compatible format
+	  //[EDIT] Possibly WRONG if it sends OPENAI_COMPATIBLE to this route, but DEFINITELY wrong since it defaults to literal OpenAI key and URL call which possibly isnt set, rather than just falling back to regular non-AI SDK call if it doesnt support any of the 5 AI
           fallbackModel = createOpenAI({
             apiKey: currentEnv.OPENAI_API_KEY,
             baseURL: currentEnv.OPENAI_BASE_URL,
