@@ -10,7 +10,18 @@ import type {
   VideoGenerationResponse,
   VideoProviderConfig,
 } from '../types';
-import { VIDEO_QUALITY_PRESETS } from '../provider-registry';
+
+// Quality presets for video generation
+const VIDEO_QUALITY_PRESETS: Record<string, { 
+  resolution: string; 
+  bitrate?: string; 
+  fps?: number 
+}> = {
+  low: { resolution: '512x512', bitrate: '4M', fps: 24 },
+  medium: { resolution: '768x768', bitrate: '8M', fps: 30 },
+  high: { resolution: '1024x1024', bitrate: '16M', fps: 30 },
+  ultra: { resolution: '1792x1024', bitrate: '32M', fps: 60 }
+};
 
 export class VercelVideoProvider implements VideoGenerationProvider {
   readonly id = 'vercel';

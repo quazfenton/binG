@@ -16,6 +16,7 @@
 import type { ToolResult } from '../sandbox/types';
 import type { LLMProvider } from '../sandbox/providers/llm-provider';
 import { getLLMProvider } from '../sandbox/providers/llm-factory';
+import { getCircuitStateName } from '../middleware/circuit-breaker';
 
 // Wire in centralized tool system for all execution paths (v1, v2, streaming, non-Mastra)
 import { initToolSystem, executeToolCapability, hasToolCapability, isToolSystemReady } from '@/lib/tools';
@@ -59,6 +60,7 @@ import {
 } from '@bing/shared/agent/successive-tracker';
 import {
   parseFirstResponseRouting,
+  stripRoutingMarkers,
   shouldTriggerReview,
   generateStepReprompt,
   routingToRoleRedirectSection,
@@ -746,13 +748,13 @@ async function runV2Native(
 ): Promise<UnifiedAgentResult> {
   const startTime = Date.now();
   log.info('Running V2 Native mode', {
-    userMessageLength: config.userMessage.length,
+    userMessageLength: config.userMessage?.length || 0,
     maxSteps: config.maxSteps,
   });
 
   // Use regex-based detection for StatefulAgent routing (classifier removed)
   // IMPORTANT: Only test against the raw user task, not the full context-augmented message
-  const rawTask = extractRawUserTask(config.userMessage);
+  const rawTask = extractRawUserTask(config.userMessage || '');
   const isComplexTask = /(create|build|implement|refactor|migrate|add feature|new file|multiple files|project structure|full-stack|application|service|api|component|page|dashboard|authentication|database|integration|deployment|setup|initialize|scaffold|generate|boilerplate)/i.test(rawTask);
   const hasMultipleSteps = /\b(and|then|after|before|first|next|finally|also|plus)\b/i.test(rawTask);
   const mentionsFiles = /\b(file|files|folder|directory|component|page|module|service|api)\b/i.test(rawTask);
@@ -841,7 +843,7 @@ async function runDesktopMode(
 ): Promise<UnifiedAgentResult> {
   const startTime = Date.now();
   log.info('Running Desktop mode (local execution)', {
-    userMessageLength: config.userMessage.length,
+    userMessageLength: config.userMessage?.length || 0,
   });
 
   // Desktop mode uses the StatefulAgent with a desktop sandbox provider
@@ -1102,7 +1104,7 @@ async function runOpencodeSDKMode(
 ): Promise<UnifiedAgentResult> {
   const startTime = Date.now();
   log.info('Running OpenCode SDK mode', {
-    userMessageLength: config.userMessage.length,
+    userMessageLength: config.userMessage?.length || 0,
   });
 
   // Attempt 1: Connect to existing server via HTTP API
@@ -1782,7 +1784,7 @@ async function runV1ApiWithTools(
       const breaker = circuitBreakerMgr.getBreaker(providerName);
       if (breaker.getState() === 'OPEN' && breaker.getRetryAfter() > 0) {
         log.warn('[V1-API-WITH-TOOLS] ┌─ CIRCUIT OPEN ─────────────────');
-        log.warn(`[V1-API-WITH-TOOLS] │ provider: ${providerName} (circuit OPEN, retry after ${breaker.getRetryAfter()}ms)`);
+        log.warn(`[V1-API-WITH-TOOLS] │ provider: ${providerName} (circuit BLOCKED, retry after ${breaker.getRetryAfter()}ms)`);
         log.warn('[V1-API-WITH-TOOLS] └────────────────────────────────');
         continue; // Skip this provider
       }
@@ -1800,7 +1802,7 @@ async function runV1ApiWithTools(
     log.info('[V1-API-WITH-TOOLS] │ provider:', providerName);
     log.info('[V1-API-WITH-TOOLS] │ model:', modelForProvider);
     log.info('[V1-API-WITH-TOOLS] │ isFirst:', providerName === primaryProvider);
-    log.info('[V1-API-WITH-TOOLS] │ circuitState:', circuitBreakerMgr?.getBreaker(providerName)?.getState() || 'N/A');
+    log.info('[V1-API-WITH-TOOLS] │ circuitState:', getCircuitStateName(circuitBreakerMgr?.getBreaker(providerName)?.getState() || 'HEALTHY') as any);
     log.info('[V1-API-WITH-TOOLS] └────────────────────────────────');
 
     const toolInvocations: Array<{
@@ -1978,9 +1980,8 @@ async function runV1ApiWithTools(
               toolCallId: invocation.toolCallId,
               toolName: invocation.toolName,
               args: (invocation.args as Record<string, any>) || {},
-              result: invocation.result,
-            });
-          }
+              result: invocation.result ?? { success: false, error: 'Tool result was undefined' }, // Ensure result is not undefined
+            });          }
         }
       }
 
@@ -2160,7 +2161,7 @@ async function runV1ApiWithTools(
       log.warn('[V1-API-WITH-TOOLS] │ provider:', providerName);
       log.warn('[V1-API-WITH-TOOLS] │ model:', modelForProvider);
       log.warn('[V1-API-WITH-TOOLS] │ error:', error.message);
-      log.warn('[V1-API-WITH-TOOLS] │ circuitState:', circuitBreakerMgr?.getBreaker(providerName)?.getState() || 'N/A');
+      log.warn('[V1-API-WITH-TOOLS] │ circuitState:', getCircuitStateName(circuitBreakerMgr?.getBreaker(providerName)?.getState() || 'HEALTHY') as any);
       log.warn('[V1-API-WITH-TOOLS] │ will try next:', uniqueProviders.slice(uniqueProviders.indexOf(providerName) + 1).join(', ') || 'NO MORE');
       log.warn('[V1-API-WITH-TOOLS] └───────────────────────────────');
     }
@@ -2438,9 +2439,12 @@ async function runV1Orchestrated(
       model,
     ).catch(() => {});
 
+    // Strip routing markers before returning to client
+    const cleanedResponse = stripRoutingMarkers(content);
+
     return {
       success: true,
-      response: content,
+      response: cleanedResponse,
       steps,
       totalSteps: stepsCount,
       mode: 'v1-api',
@@ -2762,9 +2766,12 @@ async function runV1ApiCompletion(
         }
       }
 
+      // Strip routing markers before returning to client
+      const cleanedResponse = stripRoutingMarkers(content);
+
 return {
         success: true,
-        response: content || 'No response generated',
+        response: cleanedResponse || 'No response generated',
         mode: 'v1-api',
         metadata: {
           provider: providerName,
@@ -2858,7 +2865,7 @@ async function attemptFallback(
   // Determine task complexity using regex (TaskClassifier removed)
   // IMPORTANT: Only analyze the raw user task, not the full context-augmented message
   let isComplexTask = false;
-  const rawTask = extractRawUserTask(config.userMessage);
+  const rawTask = extractRawUserTask(config.userMessage || '');
   isComplexTask = /create|build|implement|refactor|migrate|add feature|new file|multiple files|project structure|full-stack|application|service|api|component|page/i.test(rawTask);
   log.debug('Fallback complexity detection', { isComplexTask });
 

@@ -10,6 +10,7 @@ import type {
   VirtualWorkspaceSnapshot,
 } from '@/lib/virtual-filesystem/filesystem-types';
 import { opfsAdapter, OPFSAdapter } from '@/lib/virtual-filesystem/opfs/opfs-adapter';
+import { indexedDBBackend } from '@/lib/virtual-filesystem/indexeddb-backend';
 import { opfsCore } from '@/lib/virtual-filesystem/opfs/opfs-core';
 import { onFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import { sanitizeExtractedPath } from '@/lib/chat/file-edit-parser';
@@ -343,6 +344,25 @@ export function useVirtualFilesystem(
         return;
       }
 
+      // CRITICAL: Check if user/account changed since last OPFS init.
+      // If new user, clear localStorage + IndexedDB to prevent data leakage between users on shared browser.
+      const LAST_OPFS_KEY = 'opfs:lastOwnerId';
+      const lastOwnerId = localStorage.getItem(LAST_OPFS_KEY);
+      if (lastOwnerId && lastOwnerId !== opfsOwnerId) {
+        log('OPFS: User changed from', lastOwnerId, 'to', opfsOwnerId, '- clearing local data for security');
+        localStorage.clear();
+        sessionStorage.clear();
+        // Clear IndexedDB fallback data for previous user
+        try {
+          await indexedDBBackend.clear(lastOwnerId);
+          log('OPFS: Cleared IndexedDB data for previous owner:', lastOwnerId);
+        } catch (e) {
+          logWarn('OPFS: Failed to clear IndexedDB:', e);
+        }
+      }
+      localStorage.setItem(LAST_OPFS_KEY, opfsOwnerId);
+
+      // Enable OPFS - will sync from server for the new user's workspace
       opfsAdapter.enable(opfsOwnerId).then(() => {
         log('OPFS enabled successfully for owner:', opfsOwnerId);
       }).catch(err => {

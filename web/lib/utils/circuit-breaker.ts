@@ -12,7 +12,17 @@
  * @see https://martinfowler.com/bliki/CircuitBreaker.html
  */
 
-export type CircuitState = 'CLOSED' | 'OPEN' | 'HALF_OPEN';
+export type CircuitState = 'HEALTHY' | 'OPEN' | 'HALF_OPEN' | 'TESTING';
+
+/** Human-readable state names */
+export function getCircuitStateName(state: CircuitState): string {
+  switch (state) {
+    case 'HEALTHY': return 'HEALTHY';
+    case 'HALF_OPEN':
+    case 'TESTING': return 'TESTING';
+    case 'OPEN': return 'BLOCKED';
+  }
+}
 
 export interface CircuitBreakerOptions {
   /** Number of failures before opening circuit */
@@ -44,7 +54,7 @@ export class CircuitBreakerError extends Error {
 }
 
 export class CircuitBreaker extends EventEmitter {
-  private state: CircuitState = 'CLOSED';
+  private state: CircuitState = 'HEALTHY';
   private failureCount = 0;
   private successCount = 0;
   private lastFailureTime: number | null = null;
@@ -98,7 +108,7 @@ export class CircuitBreaker extends EventEmitter {
    */
   canExecute(): boolean {
     switch (this.state) {
-      case 'CLOSED':
+      case 'HEALTHY':
         return true;
 
       case 'OPEN':
@@ -151,7 +161,7 @@ export class CircuitBreaker extends EventEmitter {
    * Reset circuit breaker to initial state
    */
   reset(): void {
-    this.state = 'CLOSED';
+    this.state = 'HEALTHY';
     this.failureCount = 0;
     this.successCount = 0;
     this.lastFailureTime = null;
@@ -165,9 +175,9 @@ export class CircuitBreaker extends EventEmitter {
 
     if (this.state === 'HALF_OPEN') {
       if (this.successCount >= this.options.successThreshold) {
-        this.transitionTo('CLOSED');
+        this.transitionTo('HEALTHY');
       }
-    } else if (this.state === 'CLOSED') {
+    } else if (this.state === 'HEALTHY') {
       // Reset failure count on success in CLOSED state
       this.failureCount = 0;
     }
@@ -181,7 +191,7 @@ export class CircuitBreaker extends EventEmitter {
     if (this.state === 'HALF_OPEN') {
       // Any failure in HALF_OPEN immediately opens circuit
       this.transitionTo('OPEN');
-    } else if (this.state === 'CLOSED') {
+    } else if (this.state === 'HEALTHY') {
       if (this.failureCount >= this.options.failureThreshold) {
         this.transitionTo('OPEN');
       }
@@ -212,7 +222,7 @@ export class CircuitBreaker extends EventEmitter {
         this.successCount = 0;
         break;
 
-      case 'CLOSED':
+      case 'HEALTHY':
         this.failureCount = 0;
         this.successCount = 0;
         this.nextAttemptTime = null;

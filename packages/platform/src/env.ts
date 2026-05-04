@@ -83,7 +83,14 @@ export function getDefaultWorkspaceRoot(): string | null {
     }
   }
 
-  // Priority 2: CLI/standalone mode — use the process's actual working directory.
+  // Priority 2: Web mode - don't use process.cwd() as it incorrectly
+  // uses the server's cwd (where pnpm dev was run). Use 'project/sessions'
+  // as base - user separation is handled by VFS via userID/compositeID.
+  if (!isDesktopMode() && !isTauriRuntime()) {
+    return 'project/sessions';
+  }
+
+  // Priority 3: CLI/standalone mode — use the process's actual working directory.
   // The parent process's cwd is the directory from which the CLI was invoked,
   // which is the correct workspace root (not the bundled binary's location).
   if (typeof process !== 'undefined' && process.cwd) {

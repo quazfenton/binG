@@ -3,9 +3,15 @@
  */
 
 export * from './types';
-export * from './provider-registry';
+export * from './video-generation';
 
-import { getVideoGenerationRegistry, VIDEO_STYLES, VIDEO_ASPECT_RATIOS, VIDEO_QUALITY_PRESETS } from './provider-registry';
+import { 
+  getVideoGenerationRegistry, 
+  VIDEO_STYLES, 
+  VIDEO_ASPECT_RATIOS, 
+  VIDEO_QUALITY_PRESETS,
+  videoGenerationRegistry
+} from './video-generation';
 import { VideoGenerationRequest } from './types';
 
 // Initialize with environment variables

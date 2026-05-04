@@ -785,17 +785,34 @@ async function initializeSchemaSync(): Promise<void> {
   // Only run schema initialization in Node.js runtime
   if (typeof process === 'undefined' || process.env.NEXT_RUNTIME !== 'nodejs') return;
 
-  try {
-    // Execute base schema to ensure required tables exist
-    const schemaSql = getSchemaSql();
-    if (schemaSql) {
-      db.exec(schemaSql);
-    }
+  const maxRetries = 3;
+  const retryDelayMs = 1000;
 
-    console.log('Database base schema initialized');
-  } catch (error: unknown) {
-    console.error('Failed to initialize base schema:', error);
-    throw error;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      // Execute base schema to ensure required tables exist
+      const schemaSql = getSchemaSql();
+      if (schemaSql) {
+        db.exec(schemaSql);
+      }
+
+      console.log('Database base schema initialized');
+      return;
+    } catch (error: unknown) {
+      const errMsg = error instanceof Error ? error.message : String(error);
+      const isLocked = errMsg.includes('database is locked');
+
+      if (isLocked && attempt < maxRetries) {
+        console.warn(`Database locked, retrying in ${retryDelayMs}ms (attempt ${attempt}/${maxRetries})`);
+        await new Promise(r => setTimeout(r, retryDelayMs));
+      } else if (!isLocked) {
+        console.error('Failed to initialize base schema:', error);
+        throw error;
+      } else {
+        console.error('Failed to initialize base schema after max retries:', error);
+        throw error;
+      }
+    }
   }
 }
 

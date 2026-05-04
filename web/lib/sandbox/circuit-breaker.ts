@@ -9,7 +9,17 @@ import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('Sandbox:CircuitBreaker');
 
-export type CircuitState = 'CLOSED' | 'OPEN' | 'HALF_OPEN';
+export type CircuitState = 'HEALTHY' | 'OPEN' | 'HALF_OPEN' | 'TESTING';
+
+/** Convert internal state to human-readable name */
+export function getCircuitStateName(state: CircuitState): string {
+  switch (state) {
+    case 'HEALTHY': return 'HEALTHY';
+    case 'HALF_OPEN': return 'TESTING';
+    case 'TESTING': return 'TESTING';
+    case 'OPEN': return 'BLOCKED';
+  }
+}
 
 export interface CircuitBreakerConfig {
   failureThreshold: number;
@@ -55,7 +65,7 @@ export class ProviderCircuitBreaker {
   private readonly providerId: string;
   private readonly config: CircuitBreakerConfig;
   
-  private state: CircuitState = 'CLOSED';
+  private state: CircuitState = 'HEALTHY';
   private failureCount = 0;
   private successCount = 0;
   private halfOpenRequests = 0;
@@ -166,7 +176,7 @@ export class ProviderCircuitBreaker {
   reset(): void {
     const oldState = this.state;
     
-    this.state = 'CLOSED';
+    this.state = 'HEALTHY';
     this.failureCount = 0;
     this.successCount = 0;
     this.halfOpenRequests = 0;
@@ -175,7 +185,7 @@ export class ProviderCircuitBreaker {
     this.emitEvent({
       type: 'state_change',
       fromState: oldState,
-      toState: 'CLOSED',
+      toState: 'HEALTHY',
       timestamp: Date.now(),
     });
     
@@ -211,7 +221,7 @@ export class ProviderCircuitBreaker {
     const currentState = this.getState();
     
     switch (currentState) {
-      case 'CLOSED':
+      case 'HEALTHY':
         return true;
       
       case 'OPEN':
@@ -264,13 +274,13 @@ export class ProviderCircuitBreaker {
 
     if (this.state === 'HALF_OPEN') {
       if (this.successCount >= this.config.successThreshold) {
-        this.transitionTo('CLOSED');
+        this.transitionTo('HEALTHY');
         logger.info('Circuit breaker closed after successful recovery', {
           providerId: this.providerId,
           successCount: this.successCount,
         });
       }
-    } else if (this.state === 'CLOSED') {
+    } else if (this.state === 'HEALTHY') {
       // Reset failure count on success in closed state
       this.failureCount = 0;
     }
@@ -303,7 +313,7 @@ export class ProviderCircuitBreaker {
       logger.warn('Circuit breaker opened after failure in half-open state', {
         providerId: this.providerId,
       });
-    } else if (this.state === 'CLOSED') {
+    } else if (this.state === 'HEALTHY') {
       if (this.failureCount >= this.config.failureThreshold) {
         this.transitionTo('OPEN');
         logger.error('Circuit breaker opened after threshold failures', {
@@ -332,7 +342,7 @@ export class ProviderCircuitBreaker {
     } else if (newState === 'HALF_OPEN') {
       this.halfOpenRequests = 0;
       this.successCount = 0;
-    } else if (newState === 'CLOSED') {
+    } else if (newState === 'HEALTHY') {
       this.failureCount = 0;
       this.successCount = 0;
       this.halfOpenRequests = 0;
@@ -426,7 +436,7 @@ class CircuitBreakerRegistry {
     
     for (const [providerId, breaker] of this.breakers.entries()) {
       const state = breaker.getState();
-      if (state === 'CLOSED' || state === 'HALF_OPEN') {
+      if (state === 'HEALTHY' || state === 'HALF_OPEN') {
         healthy.push(providerId);
       }
     }

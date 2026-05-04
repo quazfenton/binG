@@ -66,6 +66,35 @@ export interface ParsedRouting {
 /** Marker tag that the LLM uses to denote routing metadata */
 const ROUTING_MARKER = '[ROUTING_METADATA]';
 
+/** Initial response marker */
+const INITIAL_RESPONSE_MARKER = '### Initial Response';
+
+/**
+ * Strip routing metadata and initial response markers from response text.
+ * Used to clean LLM responses before sending to client.
+ */
+export function stripRoutingMarkers(responseText: string): string {
+  if (!responseText || typeof responseText !== 'string') {
+    return responseText;
+  }
+
+  let cleaned = responseText;
+
+  // Remove [ROUTING_METADATA] block (with optional ### heading and code fences)
+  cleaned = cleaned.replace(/^###?\s*\[ROUTING_METADATA\]\s*```?json?\s*[\s\S]*?```?\s*/g, '');
+
+  // Remove [ROUTING_METADATA] stand-alone (JSON block)
+  cleaned = cleaned.replace(/\[ROUTING_METADATA\][\s\S]*?}(?:\s*```)?/g, '');
+
+  // Remove ### Initial Response section
+  cleaned = cleaned.replace(/^###?\s*Initial Response[\s\S]*?^---/gm, '');
+
+  // Clean up extra newlines
+  cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
+
+  return cleaned.trim();
+}
+
 /** Default routing for when parsing fails — safe conservative defaults */
 const DEFAULT_ROUTING: RoutingMetadata = {
   classification: 'multi-step',

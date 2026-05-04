@@ -122,7 +122,10 @@ const WEAK_CODE_PATTERNS = WEAK_CODE_KEYWORDS.map(
 // Task classifier cache — initialized lazily to avoid blocking module load
 let _taskClassifierCache: ReturnType<typeof createTaskClassifierShared> | null = null;
 
-function getTaskClassifier() {
+function getTaskClassifier(requestBody: any) {
+  // Use current request's provider to avoid defaulting to OpenAI
+  const provider = requestBody?.provider || process.env.DEFAULT_PROVIDER || 'mistral';
+  
   if (!_taskClassifierCache) {
     _taskClassifierCache = createTaskClassifierShared({
       simpleThreshold: parseFloat(process.env.TASK_CLASSIFIER_SIMPLE_THRESHOLD || '0.3'),
@@ -134,6 +137,8 @@ function getTaskClassifier() {
       enableSemanticAnalysis: process.env.TASK_CLASSIFIER_ENABLE_SEMANTIC !== 'false',
       enableHistoricalLearning: process.env.TASK_CLASSIFIER_ENABLE_HISTORY !== 'false',
       enableContextAwareness: process.env.TASK_CLASSIFIER_ENABLE_CONTEXT !== 'false',
+      // Inject current provider to help classifier choose the right model/fallback
+      provider: provider,
     });
   }
   return _taskClassifierCache;
