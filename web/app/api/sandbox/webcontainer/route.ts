@@ -18,7 +18,7 @@ import { generateSecureId } from '@/lib/utils';
 
 const logger = createLogger('WebContainerAPI');
 
-export const runtime = 'nodejs';
+export const runtime = 'edge';
 
 // SECURITY: O(1) body size guard — checked BEFORE req.json() buffers into memory
 const MAX_WEBCONTAINER_BODY_BYTES = 120 * 1024 * 1024; // 120MB

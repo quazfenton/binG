@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge';
 import { verifyAuth } from '@/lib/auth/jwt';
 
-export const runtime = 'nodejs';
+export const runtime = 'edge';
 export const maxDuration = 120;
 
 export async function POST(req: NextRequest) {

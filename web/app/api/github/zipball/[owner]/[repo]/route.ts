@@ -7,6 +7,9 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
+export const runtime = 'edge';
+
+
 // Validate GitHub owner/repo format (alphanumeric, dashes, underscores, dots)
 function isValidOwnerOrRepo(value: string): boolean {
   return /^[\w.-]+$/.test(value);

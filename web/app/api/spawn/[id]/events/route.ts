@@ -6,6 +6,9 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+
+export const runtime = 'edge';
+
 import { createLogger } from '@/lib/utils/logger';
 import { getAgentServiceManager } from '@/lib/spawn';
 import { auth0 } from '@/lib/auth0';

@@ -1,4 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
+
+export const runtime = 'edge';
+
 import { resolveFilesystemOwner } from '@/lib/virtual-filesystem/resolve-filesystem-owner';
 
 // Scheduler service connection

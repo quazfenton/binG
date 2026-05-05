@@ -8,6 +8,9 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+
+export const runtime = 'edge';
+
 import { getPrometheusMetrics } from '@/lib/observability';
 
 /**

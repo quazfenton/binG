@@ -7,7 +7,7 @@ import {
 import { resolveFilesystemOwnerWithFallback } from '../../utils';
 import { transactionIdSchema } from '@/lib/validation/schemas';
 
-export const runtime = 'nodejs';
+export const runtime = 'edge';
 
 const acceptEditRequestSchema = z.object({
   transactionId: transactionIdSchema,

@@ -13,6 +13,9 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+
+export const runtime = 'edge';
+
 import ipaddr from 'ipaddr.js';
 import { validateImageUrl, isHostnameSafe } from '@/lib/utils/image-loader';
 import { sanitizeUrlInput } from '@/lib/utils/sanitize';

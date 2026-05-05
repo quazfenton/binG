@@ -5,7 +5,7 @@ import { resolveFilesystemOwnerWithFallback } from '../utils';
 import { contextPackService, type ContextPackFormat } from '@/lib/virtual-filesystem/context-pack-service';
 import { absolutePathSchema, contextPackOptionsSchema } from '@/lib/validation/schemas';
 
-export const runtime = 'nodejs';
+export const runtime = 'edge';
 
 /**
  * GET /api/filesystem/context-pack?path=/src&format=markdown&includeContents=true

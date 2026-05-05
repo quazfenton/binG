@@ -1,4 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
+
+export const runtime = 'edge';
+
 import { MessagingIdentity } from '@/lib/messaging/identity';
 
 export async function GET(req: NextRequest) {

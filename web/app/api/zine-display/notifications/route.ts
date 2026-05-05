@@ -1,4 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
+
+export const runtime = 'edge';
+
 import { toolAuthManager } from '@/lib/tools/tool-authorization-manager';
 import { getAccessTokenForConnection, AUTH0_CONNECTIONS } from '@/lib/auth0';
 

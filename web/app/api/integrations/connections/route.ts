@@ -1,4 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
+
+export const runtime = 'edge';
+
 import { getDatabase } from '@/lib/database/connection';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { createLogger } from '@/lib/utils/logger';

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { authService } from '@/lib/auth/auth-service';
 import { verifyAuth } from '@/lib/auth/jwt';
 
-export const runtime = 'nodejs';
+export const runtime = 'edge';
 
 /**
  * GET /api/auth/session

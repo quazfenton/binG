@@ -1,4 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
+
+export const runtime = 'edge';
+
 import { oauthService } from '@/lib/auth/oauth-service';
 
 const TOKEN_ENDPOINTS: Record<string, string> = {

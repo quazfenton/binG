@@ -25,7 +25,7 @@ import type { FilesystemOwnerResolution } from '@/lib/virtual-filesystem/resolve
 
 const logger = createLogger('API:Filesystem:Rename');
 
-export const runtime = 'nodejs';
+export const runtime = 'edge';
 
 const renameRequestSchema = z.object({
   oldPath: z.string().min(1, 'Source path is required'),

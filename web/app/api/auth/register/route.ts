@@ -1,4 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
+
+export const runtime = 'edge';
+
 import { authService } from '@/lib/auth/auth-service';
 import { rateLimiters } from '@/lib/middleware/rate-limit';
 import { validateRequest, schemas } from '@/lib/middleware/validate';

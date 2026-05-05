@@ -1028,12 +1028,13 @@ export class VirtualFilesystemService {
         continue;
       }
       if (trimmed === '..') {
+        // Reject .. if safeParts is empty (would escape root)
         if (safeParts.length === 0) {
           throw new Error(`Path traversal is not allowed: ${inputPath}`);
         }
-        const currentPath = safeParts.join('/');
-        const workspacePrefix = workspaceRootParts.join('/');
-        if (currentPath === workspacePrefix || currentPath.length <= workspacePrefix.length) {
+        // Check if popping would escape workspace root
+        // safeParts must always have at least as many segments as workspaceRootParts
+        if (safeParts.length <= workspaceRootParts.length) {
           throw new Error(`Path traversal beyond workspace root: ${inputPath}`);
         }
         safeParts.pop();
@@ -1050,6 +1051,12 @@ export class VirtualFilesystemService {
     }
 
     const normalizedPath = safeParts.join('/');
+    
+    // Verify the normalized path still starts with workspace root
+    const workspacePrefix = workspaceRootParts.join('/');
+    if (!normalizedPath.startsWith(workspacePrefix + '/') && normalizedPath !== workspacePrefix) {
+      throw new Error(`Path traversal beyond workspace root: ${inputPath}`);
+    }
     
     const sessionsMatch = normalizedPath.match(/^project\/sessions\/([^/]+)/i);
     if (sessionsMatch) {

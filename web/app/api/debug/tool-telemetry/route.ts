@@ -8,6 +8,9 @@
  */
 
 import { NextResponse } from 'next/server';
+
+export const runtime = 'edge';
+
 import { getToolCallTelemetrySummary, logTelemetrySummary } from '@/lib/chat/tool-call-telemetry';
 
 export async function GET() {

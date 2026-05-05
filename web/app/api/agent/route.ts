@@ -1,4 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+
+export const runtime = 'edge';
+
 import { fastAgentService, type FastAgentRequest } from "@/lib/chat/fast-agent-service";
 import type { LLMMessage } from "@/lib/chat/llm-providers";
 import { generateSecureId } from '@/lib/utils';

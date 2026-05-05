@@ -9,6 +9,9 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
+export const runtime = 'edge';
+
+
 // Valid workflow types
 const VALID_WORKFLOWS = ['code-agent', 'hitl-code-review'];
 

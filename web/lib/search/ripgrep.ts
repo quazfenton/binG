@@ -80,12 +80,35 @@ function getRgBin(): string | null {
   // Use __dirname equivalent for CommonJS or process.cwd() fallback
   const baseDir = typeof __dirname !== 'undefined' ? __dirname : process.cwd();
   const binDir = path.join(baseDir, '..', '..', 'tools', 'bin');
+  
+  // Determine the correct binary name based on platform
+  let binaryName: string;
+  if (process.platform === 'win32') {
+    binaryName = 'rg.exe';
+  } else if (process.platform === 'darwin') {
+    binaryName = 'rg-macos';
+  } else {
+    // Linux and other Unix-like systems
+    binaryName = 'rg-linux';
+  }
+  
   const candidates = [
-    path.join(binDir, process.platform === 'win32' ? 'rg.exe' : 'rg'),
+    path.join(binDir, binaryName),
     path.join(binDir, 'ripgrep', 'rg'),
+    path.join(binDir, process.platform === 'win32' ? 'rg.exe' : 'rg'),
   ];
   for (const candidate of candidates) {
-    try { fs.accessSync(candidate, fs.constants.X_OK); cachedRgBin = candidate; return cachedRgBin; } catch {}
+    try { 
+      fs.accessSync(candidate, fs.constants.F_OK);
+      // Make executable on Unix systems
+      if (process.platform !== 'win32') {
+        try {
+          fs.chmodSync(candidate, 0o755);
+        } catch {}
+      }
+      cachedRgBin = candidate; 
+      return cachedRgBin; 
+    } catch {}
   }
   // Fall back to system rg
   cachedRgBin = 'rg';

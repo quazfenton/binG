@@ -1,4 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
+
+export const runtime = 'edge';
+
 import Arcade from '@arcadeai/arcadejs';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { authService } from '@/lib/auth/auth-service';

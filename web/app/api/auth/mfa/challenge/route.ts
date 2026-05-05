@@ -10,6 +10,9 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+
+export const runtime = 'edge';
+
 import { generateToken, verifyMfaToken } from '@/lib/auth/jwt';
 import { verifyTotpCode, decryptTotpSecret, verifyBackupCode } from '@/lib/auth/totp';
 import { csrfCheckOrReject } from '@/lib/auth/csrf';

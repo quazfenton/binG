@@ -6,6 +6,9 @@
 
 import { NextRequest, NextResponse } from "next/server";
 
+export const runtime = 'edge';
+
+
 // GET - Serve YouTube embed page
 export async function GET(
   request: NextRequest,

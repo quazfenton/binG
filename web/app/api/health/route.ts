@@ -1,4 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+
+export const runtime = 'edge';
+
 import { enhancedLLMService } from "@/lib/chat/enhanced-llm-service";
 import { enhancedAPIClient } from "@/lib/chat/enhanced-api-client";
 import { errorHandler } from "@/lib/chat/error-handler";

@@ -15,19 +15,23 @@ import {
 import { VideoGenerationRequest } from './types';
 
 // Initialize with environment variables
-if (typeof process !== 'undefined') {
-  const registry = getVideoGenerationRegistry();
-  registry.initialize({
-    vercel: {
-      apiKey: process.env.VERCEL_API_KEY,
-      baseURL: process.env.VERCEL_BASE_URL
-    },
-    google: {
-      apiKey: process.env.GEMINI_API_KEY,
-      baseURL: process.env.GEMINI_BASE_URL
-    }
-  });
-}
+  if (typeof process !== 'undefined') {
+    const registry = getVideoGenerationRegistry();
+    registry.initialize({
+      vercel: {
+        apiKey: process.env.VERCEL_API_KEY,
+        baseURL: process.env.VERCEL_BASE_URL
+      },
+      google: {
+        apiKey: process.env.GEMINI_API_KEY,
+        baseURL: process.env.GEMINI_BASE_URL
+      },
+      pollinations: {
+        apiKey: process.env.POLLINATIONS_API_KEY,
+        baseURL: process.env.POLLINATIONS_BASE_URL
+      }
+    });
+  }
 
 /**
  * Utility functions for convenience

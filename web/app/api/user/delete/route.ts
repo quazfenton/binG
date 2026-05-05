@@ -10,6 +10,9 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+
+export const runtime = 'edge';
+
 import { requireAdminApiOrForbidden } from '@/lib/auth/admin';
 import { getDatabase } from '@/lib/database/connection';
 import { constraintMonitor } from '@/lib/observability/constraint-violation-monitor';

@@ -5,7 +5,7 @@ import { resolveFilesystemOwnerWithFallback } from '../utils';
 import { ShadowCommitManager } from '@/lib/orchestra/stateful-agent/commit/shadow-commit';
 import { sessionIdSchema, commitIdSchema } from '@/lib/validation/schemas';
 
-export const runtime = 'nodejs';
+export const runtime = 'edge';
 
 /**
  * POST /api/filesystem/rollback

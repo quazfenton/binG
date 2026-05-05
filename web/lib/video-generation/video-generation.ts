@@ -15,6 +15,7 @@
 
 import { VercelVideoProvider } from './providers/vercel-provider';
 import { GoogleVideoProvider } from './providers/google-provider';
+import { PollinationsVideoProvider } from './providers/pollinations-provider';
 import type {
   VideoProvider,
   VideoGenerationRequest,
@@ -610,26 +611,31 @@ export { GoogleVideoProvider } from './providers/google-provider';
 // Singleton registry instance and getter function
 let defaultRegistry: VideoGenerationRegistry | null = null;
 
-export function getVideoGenerationRegistry(): VideoGenerationRegistry {
-  if (!defaultRegistry) {
-    defaultRegistry = new VideoGenerationRegistry();
-    // Initialize registry with available providers
-    defaultRegistry.register(new VercelVideoProvider());
-    defaultRegistry.register(new GoogleVideoProvider());
-    
-    // Initialize with environment variables
-    if (typeof process !== 'undefined') {
-      defaultRegistry.initialize({
-        vercel: {
-          apiKey: process.env.VERCEL_API_KEY,
-          baseURL: process.env.VERCEL_BASE_URL
-        },
-        google: {
-          apiKey: process.env.GEMINI_API_KEY,
-          baseURL: process.env.GEMINI_BASE_URL
-        }
-      });
-    }
+  export function getVideoGenerationRegistry(): VideoGenerationRegistry {
+    if (!defaultRegistry) {
+      defaultRegistry = new VideoGenerationRegistry();
+      // Initialize registry with available providers
+      defaultRegistry.register(new VercelVideoProvider());
+      defaultRegistry.register(new GoogleVideoProvider());
+      defaultRegistry.register(new PollinationsVideoProvider());
+      
+      // Initialize with environment variables
+      if (typeof process !== 'undefined') {
+        defaultRegistry.initialize({
+          vercel: {
+            apiKey: process.env.VERCEL_API_KEY,
+            baseURL: process.env.VERCEL_BASE_URL
+          },
+          google: {
+            apiKey: process.env.GEMINI_API_KEY,
+            baseURL: process.env.GEMINI_BASE_URL
+          },
+          pollinations: {
+            apiKey: process.env.POLLINATIONS_API_KEY,
+            baseURL: process.env.POLLINATIONS_BASE_URL
+          }
+        });
+      }
   }
   return defaultRegistry;
 }

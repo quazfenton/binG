@@ -5,7 +5,7 @@ import { getSandboxProvider } from '@/lib/sandbox/providers';
 import { checkUserRateLimit } from '@/lib/middleware/rate-limiter';
 
 // Force Node.js runtime for Daytona SDK compatibility
-export const runtime = 'nodejs';
+export const runtime = 'edge';
 
 export async function POST(req: NextRequest) {
   try {

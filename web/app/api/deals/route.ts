@@ -7,6 +7,9 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
+export const runtime = 'edge';
+
+
 interface Deal {
   id: string;
   title: string;

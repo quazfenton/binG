@@ -7,6 +7,9 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+
+export const runtime = 'edge';
+
 import { getTracks, getVisualizerModes, getVisualizerStats } from '@/lib/music/music-visualizer';
 import { createLogger } from '@/lib/utils/logger';
 

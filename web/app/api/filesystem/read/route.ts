@@ -4,7 +4,7 @@ import { virtualFilesystem, withAnonSessionCookie } from '@/lib/virtual-filesyst
 import { pathSchema } from '@/lib/validation/schemas';
 import { resolveFilesystemOwnerWithFallback } from '../utils';
 
-export const runtime = 'nodejs';
+export const runtime = 'edge';
 
 function looksLikeCssValueSegment(segment: string): boolean {
   return /^(?:\d*\.\d+|\d+[a-z%]+)$/i.test(segment);

@@ -7,7 +7,7 @@ import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('TerminalAPI');
 
-export const runtime = 'nodejs';
+export const runtime = 'edge';
 
 /**
  * POST — Ensure user has a sandbox session ready for terminal use.

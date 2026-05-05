@@ -1,4 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
+
+export const runtime = 'edge';
+
 import { authService } from '@/lib/auth/auth-service';
 import { rateLimitMiddleware } from '@/lib/middleware/rate-limiter';
 import { generateCsrfToken, setCsrfCookie } from '@/lib/auth/csrf';

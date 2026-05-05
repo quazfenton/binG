@@ -9,7 +9,7 @@ import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('TerminalInputAPI');
 
-export const runtime = 'nodejs';
+export const runtime = 'edge';
 
 /**
  * Command buffer for assembling multi-chunk commands

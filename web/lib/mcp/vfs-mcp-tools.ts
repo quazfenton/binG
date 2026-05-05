@@ -1314,10 +1314,15 @@ export const grepCodeTool = (tool as any)({
       if (!args.query || typeof args.query !== 'string') {
         return { success: false, query: args.query, error: 'Query is required', matches: [], total: 0 };
       }
-      // Lazy import to keep this module client-safe; ripgrep is server-only.
-      const { ripgrepSearch, isRipgrepAvailable } = await import('../search/ripgrep');
-      const result = await ripgrepSearch({
+      
+      // Get ownerId from tool context
+      const ownerId = toolContextStore.get('ownerId') || 'anon:public';
+      
+      // Use VFS adapter that handles both desktop (native ripgrep) and web (VFS search)
+      const { ripgrepVFS } = await import('../search/ripgrep-vfs-adapter');
+      const result = await ripgrepVFS({
         query: args.query,
+        ownerId,
         path: args.path,
         glob: args.glob,
         caseInsensitive: args.caseInsensitive,
@@ -1326,21 +1331,25 @@ export const grepCodeTool = (tool as any)({
         contextLines: args.contextLines,
         maxResults: args.maxResults ?? 100,
         maxCountPerFile: args.maxCountPerFile ?? 50,
+        timeoutMs: 30000,
       });
+      
       logger.debug('grep_code', {
         query: args.query,
         matchCount: result.matches.length,
         usedRipgrep: result.usedRipgrep,
+        usedVFS: result.usedVFS,
         elapsedMs: result.stats?.elapsedMs,
       });
+      
       return {
         success: true,
         query: args.query,
         usedRipgrep: result.usedRipgrep,
-        ripgrepAvailable: isRipgrepAvailable(),
+        usedVFS: result.usedVFS,
         matches: result.matches.map((m) => ({
           path: m.path,
-          line: m.line,
+          line: m.lineNumber,
           content: m.content,
           contextBefore: m.contextBefore,
           contextAfter: m.contextAfter,

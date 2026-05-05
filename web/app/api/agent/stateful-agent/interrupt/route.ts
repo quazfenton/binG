@@ -1,4 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
+
+export const runtime = 'edge';
+
 import { hitlManager, requireApproval } from '@/lib/orchestra/stateful-agent';
 import { verifyAuth } from '@/lib/auth/verify-auth';
 
