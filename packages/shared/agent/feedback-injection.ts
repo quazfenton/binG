@@ -505,15 +505,17 @@ export function detectIncompleteResponse(response: string): IncompleteDetection 
   const reasons: string[] = [];
 
   // 1. Mid-sentence detection (ends without terminal punctuation) - O(1)
-  // Check last 50 chars for sentence ending, but be less aggressive
+  // Check last 50 chars for sentence ending
   const last50 = trimmed.slice(-50);
+  // Check if last line is a list item (starts with number or bullet)
+  const isListItem = /^[\s]*\d+\./.test(lastLine) || /^[\s]*[-*+]/.test(lastLine);
   const endsMidSentence = /[a-zA-Z0-9]$/.test(last50) && 
     !/[.!?。！？]$/.test(last50) &&
     last50.length > 10 &&
-    !/\n\n/.test(last50); // Don't trigger if there are multiple newlines (likely end of section)
+    !isListItem; // Don't trigger if last line is a list item
   
   if (endsMidSentence) {
-    confidence += 0.25; // Reduced from 0.3
+    confidence += 0.3;
     reasons.push('mid-sentence');
   }
 
@@ -534,7 +536,7 @@ export function detectIncompleteResponse(response: string): IncompleteDetection 
     /^[\s]*\d+\.$/.test(lastLine);
   
   if (endsWithListMarker) {
-    confidence += 0.3; // Increased from 0.2
+    confidence += 0.35;
     reasons.push('incomplete list item');
   }
 
@@ -548,12 +550,12 @@ export function detectIncompleteResponse(response: string): IncompleteDetection 
     else if (char === '[') openBrackets++;
     else if (char === ']') closeBrackets++;
   }
-  // Only trigger if there's a clear imbalance (more than 1 difference)
-  const hasUnclosedJSON = (openBraces - closeBraces) > 1 || (closeBraces - openBraces) > 1 ||
-                          (openBrackets - closeBrackets) > 1 || (closeBrackets - openBrackets) > 1;
+  // Trigger if there's any imbalance (lowered threshold from >1 to >=1)
+  const hasUnclosedJSON = (openBraces - closeBraces) >= 1 || (closeBraces - openBraces) >= 1 ||
+                          (openBrackets - closeBrackets) >= 1 || (closeBrackets - openBrackets) >= 1;
   
   if (hasUnclosedJSON) {
-    confidence += 0.35; // Increased from 0.3
+    confidence += 0.4;
     reasons.push('unclosed JSON/braces');
   }
 
@@ -562,23 +564,25 @@ export function detectIncompleteResponse(response: string): IncompleteDetection 
     lastLine.length < 100;
   
   if (endsWithIncompleteHeader) {
-    confidence += 0.2;
+    confidence += 0.35;
     reasons.push('incomplete header');
   }
 
   // 6. Abrupt cutoff detection (ends mid-word) - O(1)
   // Only trigger if the last line is very short and ends mid-word
+  // Increased threshold from <30 to <20 to avoid false positives on complete list items
   const endsAbruptly = /[a-zA-Z]{3,}$/.test(lastLine) && 
     !/[.!?，。！？\s]$/.test(lastLine) &&
-    lastLine.length < 30; // Only trigger for short lines
+    lastLine.length < 20;
   
   if (endsAbruptly) {
-    confidence += 0.2; // Reduced from 0.25
+    confidence += 0.25;
     reasons.push('abrupt cutoff');
   }
 
   // Only trigger if confidence is high enough
-  if (confidence >= 0.4) {
+  // Lowered threshold from 0.4 to 0.3 to catch more incomplete responses
+  if (confidence >= 0.3) {
     return {
       detected: true,
       reason: `Response appears incomplete: ${reasons.join(', ')}`,
