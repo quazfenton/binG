@@ -801,23 +801,31 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   ));
                   
                   // CRITICAL FIX: Detect empty responses and trigger re-request
-                  // Empty = no text content AND no tool invocations AND no filesystem edits
+                  // Empty = no text content AND no SUCCESSFUL tool invocations AND no filesystem edits
                   // CRITICAL: Use streamingToolInvocations (local) instead of messagesRef.current
                   // because messagesRef is stale (useEffect hasn't synced when done fires)
-                  const hasToolInvocations = eventData.toolInvocations?.length > 0 ||
-                    eventData.toolCalls?.length > 0 ||
-                    (eventData.messageMetadata?.toolInvocations?.length > 0) ||
-                    streamingToolInvocations.length > 0;  // ← Local tracking, always up-to-date
+                  // FIX: Count only SUCCESSFUL tool invocations - failed ones should trigger retry
+                  const successfulToolInvocations = (eventData.toolInvocations || eventData.toolCalls || eventData.messageMetadata?.toolInvocations || streamingToolInvocations || []).filter(
+                    (inv: any) => inv.result?.success !== false
+                  );
+                  const failedToolInvocations = (eventData.toolInvocations || eventData.toolCalls || eventData.messageMetadata?.toolInvocations || streamingToolInvocations || []).filter(
+                    (inv: any) => inv.result?.success === false
+                  );
+                  const hasSuccessfulToolInvocations = successfulToolInvocations.length > 0;
+                  const hasFailedToolInvocations = failedToolInvocations.length > 0;
                   const hasFileSystemEdits = eventData.filesystem?.applied?.length > 0 ||
                     eventData.fileEdits?.length > 0;
-                  const isEmptyResponse = !doneContent.trim() && !hasToolInvocations && !hasFileSystemEdits;
+                  const isEmptyResponse = !doneContent.trim() && !hasSuccessfulToolInvocations && !hasFileSystemEdits;
 
                   if (isEmptyResponse) {
                     console.warn('[Chat] Empty response detected - content, tools, and filesystem edits all missing:', {
                       messageId: assistantMessage.id,
                       doneContentLength: doneContent?.length,
-                      streamingToolInvocationCount: streamingToolInvocations.length,  // ← Log local count
-                      hasToolInvocations,
+                      streamingToolInvocationCount: streamingToolInvocations.length,
+                      successfulToolInvocationCount: successfulToolInvocations.length,
+                      failedToolInvocationCount: failedToolInvocations.length,
+                      hasSuccessfulToolInvocations,
+                      hasFailedToolInvocations,
                       hasFileSystemEdits,
                       provider: eventData.provider || doneMetadata.provider || 'unknown',
                       model: eventData.model || doneMetadata.model || 'unknown',
@@ -1219,6 +1227,35 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                         } as React.FormEvent<HTMLFormElement>
                       );
                     }, 150);
+                  }
+                  
+                  // Role Redirect: Handle continue=false with planSteps (role handoff)
+                  // When LLM finishes planning and wants to hand off to another role
+                  if (!stepReprompt && doneMetadata?.routing && !doneMetadata.routing.continue) {
+                    const { suggestedRole, planSteps, classification } = doneMetadata.routing;
+                    
+                    if (planSteps && planSteps.length > 0 && suggestedRole && stepRepromptCount < MAX_STEP_REPROMPTS) {
+                      console.log('[RoleRedirect] Role handoff detected', {
+                        suggestedRole,
+                        planStepsCount: planSteps.length,
+                        classification,
+                        primaryRole: doneMetadata.routing.primaryRole,
+                      });
+                      
+                      const rolePrompt = `[ROLE_REDIRECT]\nTarget Role: ${suggestedRole}\nClassification: ${classification}\n\nYour task: Execute the following planned steps.\n\nAvailable steps:\n${planSteps.map((s: any, i: number) => `${i+1}. ${s.step || s} (${s.tool || 'unspecified'})`).join('\n')}\n\nBegin execution with step 1. Use the appropriate tools for each step.`;
+                      
+                      stepRepromptCountRef.current++;
+                      setInput(rolePrompt);
+                      setTimeout(() => {
+                        if (!isMountedRef.current) return;
+                        handleSubmit(
+                          {
+                            preventDefault: () => {},
+                            currentTarget: { reset: () => {} },
+                          } as React.FormEvent<HTMLFormElement>
+                        );
+                      }, 150);
+                    }
                   }
                   
                   return;

@@ -170,7 +170,12 @@ export function parseFirstResponseRouting(responseText: string): ParsedRouting {
     return { found: false, error: 'Could not extract JSON after marker', rawJson: afterMarker.slice(0, 500) };
   }
 
-  return validateAndNormalize(jsonObject, afterMarker.slice(0, 500));
+  try {
+    const parsed = JSON.parse(jsonObject);
+    return validateAndNormalize(parsed, afterMarker.slice(0, 500));
+  } catch {
+    return { found: false, error: 'Invalid JSON after marker', rawJson: afterMarker.slice(0, 500) };
+  }
 }
 
 /**

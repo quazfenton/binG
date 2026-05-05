@@ -140,8 +140,6 @@ function getTaskClassifier(requestBody: any) {
       enableSemanticAnalysis: process.env.TASK_CLASSIFIER_ENABLE_SEMANTIC !== 'false',
       enableHistoricalLearning: process.env.TASK_CLASSIFIER_ENABLE_HISTORY !== 'false',
       enableContextAwareness: process.env.TASK_CLASSIFIER_ENABLE_CONTEXT !== 'false',
-      // Inject current provider to help classifier choose the right model/fallback
-      provider: provider,
     });
   }
   return _taskClassifierCache;
@@ -174,7 +172,7 @@ async function classifyRequest(
   }
 
   try {
-    const classifier = getTaskClassifier();
+    const classifier = getTaskClassifier({});
     const result = await classifier.classify(content, {
       projectSize: process.env.PROJECT_SIZE as any,
     });
@@ -3769,6 +3767,13 @@ const config: UnifiedAgentConfig = {
           }
         };
 
+        // Activity tracking for timeout management
+        let lastActivityTime = Date.now();
+        const ACTIVITY_TIMEOUT_MS = 30 * 60 * 1000;
+        const updateActivity = () => {
+          lastActivityTime = Date.now();
+        };
+
         const readableStream = new ReadableStream({
           async start(controller) {
             // Set up real emit that writes directly to stream controller
@@ -3988,14 +3993,6 @@ const config: UnifiedAgentConfig = {
               // Add timeout fallback in case refinement never completes
               // EXTENDED: 30 minutes to allow long file editing sessions (87 tool calls for 27 files)
               // Activity-based: timeout only triggers if no activity for 30 minutes
-              let lastActivityTime = Date.now();
-              const ACTIVITY_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes of inactivity
-              
-              // Track activity to extend timeout
-              const updateActivity = () => {
-                lastActivityTime = Date.now();
-              };
-              
               // Periodic check for inactivity (every 30 seconds)
               const activityCheckInterval = setInterval(() => {
                 const inactiveTime = Date.now() - lastActivityTime;

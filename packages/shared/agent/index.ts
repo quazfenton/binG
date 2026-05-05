@@ -236,22 +236,14 @@ export {
   // Composition API
   composeRole,
   composeRoleWithTools,
-  composeMultiRole,
   // Section management
   getRoleSections,
   parseSections,
-  registerSection,
-  getSectionTemplate,
-  invalidateSectionCache,
   // Dynamic tool generation
-  generateDynamicToolBlock,
-  generateToolHints,
+  generateToolBlock,
   // Types
-  type PromptSection,
   type RoleSections,
-  type PromptContext,
   type ComposeRoleOptions,
-  type DynamicToolBlockOptions,
 } from './prompt-composer';
 
 // Supplementary System Prompts — Specialized roles
@@ -403,7 +395,6 @@ export {
   parseFirstResponseRouting,
   routingToRoleRedirectSection,
   shouldTriggerReview,
-  getNextPlanStep,
   generateStepReprompt,
   type RoutingMetadata,
   type ParsedRouting,
