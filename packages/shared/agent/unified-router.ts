@@ -236,7 +236,18 @@ export async function routeChatRequest(request: ChatRequest): Promise<ChatRespon
       projectSize: request.projectContext?.size,
     });
   } else {
-    classification = { complexity: 'simple', recommendedMode: 'general', confidence: 1.0 };
+    classification = {
+      complexity: 'simple',
+      recommendedMode: 'v2-native' as const,
+      confidence: 1.0,
+      factors: {
+        keywordScore: 0.5,
+        semanticScore: 0.5,
+        contextScore: 0.5,
+        historicalScore: 0.5,
+      },
+      reasoning: ['Using default fallback classification'],
+    };
   }
 
   log.info('Task classified', {
@@ -293,6 +304,8 @@ export async function routeChatRequest(request: ChatRequest): Promise<ChatRespon
         complexity: classification.complexity,
         confidence: classification.confidence,
         recommendedMode: classification.recommendedMode,
+        factors: classification.factors,
+        reasoning: classification.reasoning,
       },
       health,
       metadata: {

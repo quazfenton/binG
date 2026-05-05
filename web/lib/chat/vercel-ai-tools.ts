@@ -102,8 +102,8 @@ function createCapabilityTool(
   
   return tool({
     description: capability.description,
-    parameters: toToolParameters(capability.inputSchema),
-    execute: async (args: any) => {
+    inputSchema: capability.inputSchema ? capability.inputSchema as any : z.object({}),
+    execute: async (args: any): Promise<any> => {
       const startTime = Date.now();
       chatLogger.info(`[Tool:${toolName}] Executing`, { args: sanitizeArgs(args) });
 
@@ -125,7 +125,7 @@ function createCapabilityTool(
         throw err;
       }
     },
-  });
+  }) as any;
 }
 
 function createVFSToolSet(context: ToolExecutionContext): Record<string, Tool> {

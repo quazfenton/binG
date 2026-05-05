@@ -348,7 +348,7 @@ export function useVirtualFilesystem(
       // If new user, clear localStorage + IndexedDB to prevent data leakage between users on shared browser.
       const LAST_OPFS_KEY = 'opfs:lastOwnerId';
       const lastOwnerId = localStorage.getItem(LAST_OPFS_KEY);
-      if (lastOwnerId && lastOwnerId !== opfsOwnerId) {
+      if (lastOwnerId && lastOwnerId !== opfsOwnerId && lastOwnerId !== 'anonymous' && lastOwnerId !== 'anon') {
         log('OPFS: User changed from', lastOwnerId, 'to', opfsOwnerId, '- clearing local VFS data for security');
         
         // Targeted clear of VFS and session-related data to avoid destroying 
@@ -372,13 +372,20 @@ export function useVirtualFilesystem(
         });
 
         // Clear IndexedDB fallback data for previous user
+        // FIX: Only clear if backend is initialized and owner is valid
         if (typeof window !== 'undefined') {
           (async () => {
             try {
+              // Check if backend is initialized before clearing
+              const isInitialized = indexedDBBackend.isInitialized?.() || false;
+              if (!isInitialized) {
+                log('OPFS: Skipping IndexedDB clear - backend not initialized yet');
+                return;
+              }
               await indexedDBBackend.clear(lastOwnerId);
               log('OPFS: Cleared IndexedDB data for previous owner:', lastOwnerId);
             } catch (e) {
-              logWarn('OPFS: Failed to clear IndexedDB:', e);
+              logWarn('OPFS: Failed to clear IndexedDB (this is OK if backend not initialized):', e);
             }
           })();
         }
