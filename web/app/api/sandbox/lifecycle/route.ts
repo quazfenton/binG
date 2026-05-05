@@ -21,7 +21,7 @@ import { verifyAuth } from '@/lib/auth/jwt'
 import { checkUserRateLimit } from '@/lib/middleware/rate-limiter'
 import { z } from 'zod'
 
-export const runtime = 'edge'
+export const runtime = 'nodejs'
 
 const lifecycleSchema = z.object({
   action: z.enum(['cleanup', 'suspend', 'resume', 'verify']),

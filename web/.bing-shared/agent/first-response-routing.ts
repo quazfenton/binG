@@ -201,13 +201,39 @@ function validateAndNormalize(parsed: Record<string, any>, rawJson?: string): Pa
       return undefined;
     };
 
+    // Validate classification
+    const validClassifications: TaskClassification[] = ['code', 'research', 'planning', 'debugging', 'review', 'multi-step'];
+    const classification = validClassifications.includes(parsed.classification)
+      ? (parsed.classification as TaskClassification)
+      : DEFAULT_ROUTING.classification;
+
+    // Validate complexity
+    const validComplexities: TaskComplexity[] = ['low', 'medium', 'high'];
+    const complexity = validComplexities.includes(parsed.complexity)
+      ? (parsed.complexity as TaskComplexity)
+      : DEFAULT_ROUTING.complexity;
+
+    // Validate suggestedRole
+    const validRoles: AgentRoleName[] = ['coder', 'reviewer', 'planner', 'architect', 'debugger', 'researcher', 'specialist'];
+    const suggestedRole = validRoles.includes(parsed.suggestedRole)
+      ? (parsed.suggestedRole as AgentRoleName)
+      : validRoles.includes(parsed.role)
+      ? (parsed.role as AgentRoleName)
+      : DEFAULT_ROUTING.suggestedRole;
+
+    // Validate specializationRoute
+    const validRoutes: SpecializationRoute[] = ['direct', 'skill', 'action', 'search', 'sub-agent', 'multi-step'];
+    const specializationRoute = validRoutes.includes(parsed.specializationRoute)
+      ? (parsed.specializationRoute as SpecializationRoute)
+      : DEFAULT_ROUTING.specializationRoute;
+
     const routing: RoutingMetadata = {
-      classification: parsed.classification || DEFAULT_ROUTING.classification,
-      complexity: parsed.complexity || DEFAULT_ROUTING.complexity,
-      suggestedRole: parsed.suggestedRole || parsed.role || DEFAULT_ROUTING.suggestedRole,
+      classification,
+      complexity,
+      suggestedRole,
       roleOptions: Array.isArray(parsed.roleOptions) ? parsed.roleOptions : DEFAULT_ROUTING.roleOptions,
       toolCallOptions: Array.isArray(parsed.toolCallOptions) ? parsed.toolCallOptions : DEFAULT_ROUTING.toolCallOptions,
-      specializationRoute: parsed.specializationRoute || DEFAULT_ROUTING.specializationRoute,
+      specializationRoute,
       planSteps: Array.isArray(parsed.planSteps) ? parsed.planSteps : DEFAULT_ROUTING.planSteps,
       continue:
         normalizeBoolean(parsed.continue) ??

@@ -385,9 +385,6 @@ class McpAgentFs implements AgentFilesystem {
       return [];
     }
   }
-      return [];
-    }
-  }
 }
 
 // ────────────────────────────────────────────────────────────────────────────

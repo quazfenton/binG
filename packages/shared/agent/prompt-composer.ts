@@ -124,7 +124,7 @@ export function composeRole(role: AgentRole, options: ComposeRoleOptions = {}): 
 
   const ctx: PromptContext = {
     roleName: String(role),
-    availableTools: (options.context?.availableTools as string[]) || [],
+    availableTools: options.context?.availableTools ? options.context.availableTools as string[] : [],
     ...options.context,
   };
 

@@ -17,6 +17,7 @@ export interface Message {
   timestamp?: string; // ISO format date string
   isComplete?: boolean; // For streaming messages
   isStreaming?: boolean; // Currently streaming content
+  modelName?: string; // Model used to generate this message (for display in UI)
   metadata?: {
     requiresAuth?: boolean;
     authUrl?: string;

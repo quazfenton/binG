@@ -1,0 +1,839 @@
+{
+  "filesystem": {
+    "read": {
+      "GET": false,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "write": {
+      "GET": false,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "delete": {
+      "GET": false,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "list": {
+      "GET": true,
+      "POST": false,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "mkdir": {
+      "GET": false,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "move": {
+      "GET": false,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "rename": {
+      "GET": false,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "create-file": {
+      "GET": false,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "search": {
+      "GET": true,
+      "POST": false,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "rollback": {
+      "GET": false,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "snapshot": {
+      "GET": true,
+      "POST": false,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "snapshot/restore": {
+      "GET": false,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "diffs": {
+      "GET": true,
+      "POST": false,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "diffs/apply": {
+      "GET": false,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "edits/accept": {
+      "GET": false,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "edits/deny": {
+      "GET": false,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "events/push": {
+      "GET": true,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "import": {
+      "GET": true,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "commits": {
+      "GET": true,
+      "POST": false,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "context-pack": {
+      "GET": true,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    }
+  },
+  "storage": {
+    "usage": {
+      "GET": true,
+      "POST": false,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "upload": {
+      "GET": false,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "signed-url": {
+      "GET": true,
+      "POST": false,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "list": {
+      "GET": true,
+      "POST": false,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "download": {
+      "GET": true,
+      "POST": false,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "delete": {
+      "GET": false,
+      "POST": false,
+      "PUT": false,
+      "DELETE": true,
+      "PATCH": false
+    }
+  },
+  "sandbox": {
+    "agent": {
+      "GET": false,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "clear-sessions": {
+      "GET": true,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "daemon": {
+      "GET": true,
+      "POST": true,
+      "PUT": false,
+      "DELETE": true,
+      "PATCH": false
+    },
+    "devbox": {
+      "GET": true,
+      "POST": true,
+      "PUT": false,
+      "DELETE": true,
+      "PATCH": false
+    },
+    "execute": {
+      "GET": false,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "files": {
+      "GET": true,
+      "POST": false,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "lifecycle": {
+      "GET": false,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "provider/pty": {
+      "GET": true,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "session": {
+      "GET": true,
+      "POST": true,
+      "PUT": false,
+      "DELETE": true,
+      "PATCH": true
+    },
+    "sync": {
+      "GET": true,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "terminal": {
+      "GET": false,
+      "POST": true,
+      "PUT": false,
+      "DELETE": true,
+      "PATCH": false
+    },
+    "terminal/input": {
+      "GET": false,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "terminal/resize": {
+      "GET": false,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "terminal/stream": {
+      "GET": true,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "terminal/ws": {
+      "GET": true,
+      "POST": false,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "terminaluse": {
+      "GET": true,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "webcontainer": {
+      "GET": false,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    }
+  },
+  "user": {
+    "api-keys": {
+      "GET": true,
+      "POST": true,
+      "PUT": false,
+      "DELETE": true,
+      "PATCH": false
+    },
+    "delete": {
+      "GET": true,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "integrations/status": {
+      "GET": true,
+      "POST": false,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "keys": {
+      "GET": true,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "preferences": {
+      "GET": false,
+      "POST": false,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "profile": {
+      "GET": true,
+      "POST": false,
+      "PUT": true,
+      "DELETE": false,
+      "PATCH": false
+    }
+  },
+  "docker": {
+    "compose": {
+      "GET": false,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "containers": {
+      "GET": true,
+      "POST": false,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "exec": {
+      "GET": false,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "remove/[id]": {
+      "GET": false,
+      "POST": false,
+      "PUT": false,
+      "DELETE": true,
+      "PATCH": false
+    },
+    "start/[id]": {
+      "GET": false,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "stop/[id]": {
+      "GET": false,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    }
+  },
+  "terminal": {
+    "local-pty": {
+      "GET": true,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "local-pty/input": {
+      "GET": false,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "local-pty/resize": {
+      "GET": false,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    }
+  },
+  "auth": {
+    "arcade/authorize": {
+      "GET": true,
+      "POST": false,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "arcade/custom-verifier": {
+      "GET": true,
+      "POST": false,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "check-auth0-session": {
+      "GET": false,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "check-email": {
+      "GET": false,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "confirm-reset": {
+      "GET": true,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "login": {
+      "GET": false,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "logout": {
+      "GET": false,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "me": {
+      "GET": true,
+      "POST": false,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "mfa/challenge": {
+      "GET": false,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "mfa/disable": {
+      "GET": false,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "mfa/setup": {
+      "GET": false,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "mfa/verify": {
+      "GET": false,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "nango/authorize": {
+      "GET": true,
+      "POST": false,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "oauth/callback": {
+      "GET": true,
+      "POST": false,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "oauth/error": {
+      "GET": true,
+      "POST": false,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "oauth/initiate": {
+      "GET": true,
+      "POST": false,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "oauth/success": {
+      "GET": true,
+      "POST": false,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "refresh": {
+      "GET": false,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "register": {
+      "GET": false,
+      "POST": false,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "reset-password": {
+      "GET": false,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "send-verification": {
+      "GET": false,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "session": {
+      "GET": true,
+      "POST": false,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "validate": {
+      "GET": true,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "verify-email": {
+      "GET": true,
+      "POST": false,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    }
+  },
+  "agent": {
+    "health": {
+      "GET": true,
+      "POST": false,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "route": {
+      "GET": true,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "stateful-agent": {
+      "GET": true,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "stateful-agent/interrupt": {
+      "GET": true,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "unified-agent": {
+      "GET": true,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "v2/cloud/offload": {
+      "GET": true,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "v2/cloud/[agentId]": {
+      "GET": true,
+      "POST": true,
+      "PUT": false,
+      "DELETE": true,
+      "PATCH": false
+    },
+    "v2/execute": {
+      "GET": false,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "v2/session": {
+      "GET": true,
+      "POST": true,
+      "PUT": false,
+      "DELETE": true,
+      "PATCH": false
+    },
+    "v2/sync": {
+      "GET": false,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "v2/workforce": {
+      "GET": true,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "workflows": {
+      "GET": true,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    }
+  },
+  "integrations": {
+    "arcade/auth": {
+      "GET": true,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "arcade/token": {
+      "GET": false,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "audit": {
+      "GET": true,
+      "POST": false,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "connections": {
+      "GET": true,
+      "POST": false,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "execute": {
+      "GET": true,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "figma": {
+      "GET": true,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "figma/callback": {
+      "GET": true,
+      "POST": false,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "github": {
+      "GET": true,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "github/oauth/authorize": {
+      "GET": true,
+      "POST": false,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "github/oauth/callback": {
+      "GET": true,
+      "POST": false,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "github/oauth/disconnect": {
+      "GET": false,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "github/oauth/status": {
+      "GET": true,
+      "POST": false,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "github/source-control/branch": {
+      "GET": false,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "github/source-control/branches": {
+      "GET": true,
+      "POST": false,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "github/source-control/commit": {
+      "GET": false,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "github/source-control/commits": {
+      "GET": true,
+      "POST": false,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "github/source-control/import-repo": {
+      "GET": false,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "github/source-control/pr": {
+      "GET": false,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "github/source-control/pull": {
+      "GET": false,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "github/source-control/push": {
+      "GET": false,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "google": {
+      "GET": true,
+      "POST": false,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "linkedin": {
+      "GET": true,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    },
+    "twitter": {
+      "GET": true,
+      "POST": true,
+      "PUT": false,
+      "DELETE": false,
+      "PATCH": false
+    }
+  }
+}

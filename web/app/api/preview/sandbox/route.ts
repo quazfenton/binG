@@ -11,7 +11,7 @@ import {
   type PreviewDeployRequest,
 } from '@/lib/sandbox/local/opensandbox-preview-service'
 
-export const runtime = 'edge'
+export const runtime = 'nodejs'
 export const maxDuration = 120 // 2 minutes for install + start
 
 /**

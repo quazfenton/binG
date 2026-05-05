@@ -34,6 +34,7 @@ import {
   Save,
   Eye,
   EyeOff,
+  Copy,
 } from "lucide-react";
 import ModalLoginForm from "@/components/auth/modal-login-form";
 import ModalSignupForm from "@/components/auth/modal-signup-form";
@@ -577,6 +578,27 @@ export default function Settings({
       }
     }
   }, [messages, screenReader, speechRate, speechVolume]);
+
+  // Copy entire transcript to clipboard
+  const copyTranscript = () => {
+    if (!messages || messages.length === 0) {
+      toast.info('No messages to copy');
+      return;
+    }
+
+    const transcriptText = messages
+      .map((msg) => {
+        const sender = msg.role === 'user' ? 'You' : (msg.modelName || 'AI');
+        return `${sender}: ${msg.content}`;
+      })
+      .join('\n\n');
+
+    navigator.clipboard.writeText(transcriptText).then(() => {
+      toast.success('Transcript copied');
+    }).catch(() => {
+      toast.error('Failed to copy transcript');
+    });
+  };
 
   // Function to handle switching between login and signup forms
   const handleAuthSwitch = (mode: 'login' | 'signup') => {
@@ -1596,13 +1618,24 @@ export default function Settings({
         </div>
 
         <div className="mt-8">
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center justify-between mb-4 group/transcript">
             <h3 className="text-lg font-medium">Text Transcript</h3>
             {voiceEnabled && (
               <div className="flex items-center gap-2 text-sm text-green-400">
                 <Volume2 className="h-4 w-4" />
                 <span>Voice Active</span>
               </div>
+            )}
+            {(messages?.length ?? 0) > 0 && (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={copyTranscript}
+                className="opacity-0 group-hover/transcript:opacity-100 transition-opacity p-1 h-6 w-6"
+                title="Copy entire transcript"
+              >
+                <Copy className="w-3 h-3" />
+              </Button>
             )}
           </div>
           <div className="bg-black/40 rounded-lg p-4 max-h-96 overflow-y-auto custom-scrollbar">
@@ -1613,7 +1646,7 @@ export default function Settings({
                 <div key={index} className="mb-4 group">
                   <div className="flex items-center justify-between">
                     <p className="font-bold">
-                      {message.role === "user" ? "You" : "AI"}
+                      {message.role === "user" ? "You" : (message.modelName || "AI")}
                     </p>
                     {screenReader && (
                       <Button

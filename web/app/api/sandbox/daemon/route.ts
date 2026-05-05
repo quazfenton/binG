@@ -12,7 +12,7 @@ import { verifyAuth } from '@/lib/auth/jwt'
 import { checkUserRateLimit } from '@/lib/middleware/rate-limiter'
 import { z } from 'zod'
 
-export const runtime = 'edge'
+export const runtime = 'nodejs'
 
 const startDaemonSchema = z.object({
   sandboxId: z.string().min(1),
