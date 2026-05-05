@@ -402,7 +402,10 @@ export function injectFeedback(context: FeedbackContext): InjectedFeedback {
   
   // Build format guidance
   let formatGuidance = '';
-  const uniqueCategories = [...new Set(recentFailures.map(f => failureAnalyses.get(f)!.category))];
+  const uniqueCategories = [...new Set(recentFailures.map(f => {
+    const analysis = failureAnalyses.get(f);
+    return analysis?.category;
+  }).filter(Boolean))];
   if (uniqueCategories.includes('format_mismatch')) {
     formatGuidance = '\n## Format Requirements\n';
     formatGuidance += 'IMPORTANT: Ensure response matches expected format.\n';
@@ -417,7 +420,8 @@ export function injectFeedback(context: FeedbackContext): InjectedFeedback {
   let roleRedirectSection: string | undefined;
   const allRedirects: RoleRedirect[] = [];
   for (const failure of recentFailures.slice(-3)) {
-    const analysis = failureAnalyses.get(failure)!;
+    const analysis = failureAnalyses.get(failure);
+    if (!analysis) continue;
     allRedirects.push(...(analysis.correctionPrompt.redirectSuggestions || []));
   }
   

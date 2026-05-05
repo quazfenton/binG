@@ -1,18 +1,18 @@
 import { NextRequest } from 'next/server';
 
 // Import all existing handlers
-import { POST as arcadeAuthPOST } from './arcade/auth/route';
+import { GET as arcadeAuthGET, POST as arcadeAuthPOST } from './arcade/auth/route';
 import { POST as arcadeTokenPOST } from './arcade/token/route';
 import { GET as auditGET } from './audit/route';
-import { GET as connectionsGET, POST as connectionsPOST, DELETE as connectionsDELETE } from './connections/route';
-import { POST as executePOST } from './execute/route';
+import { GET as connectionsGET } from './connections/route';
+import { GET as executeGET, POST as executePOST } from './execute/route';
 import { GET as figmaCallbackGET } from './figma/callback/route';
 import { GET as figmaGET, POST as figmaPOST } from './figma/route';
 import { GET as githubOauthAuthorizeGET } from './github/oauth/authorize/route';
 import { GET as githubOauthCallbackGET } from './github/oauth/callback/route';
 import { POST as githubOauthDisconnectPOST } from './github/oauth/disconnect/route';
 import { GET as githubOauthStatusGET } from './github/oauth/status/route';
-import { GET as githubGET } from './github/route';
+import { GET as githubGET, POST as githubPOST } from './github/route';
 import { POST as githubBranchPOST } from './github/source-control/branch/route';
 import { GET as githubBranchesGET } from './github/source-control/branches/route';
 import { POST as githubCommitPOST } from './github/source-control/commit/route';
@@ -22,8 +22,8 @@ import { POST as githubPrPOST } from './github/source-control/pr/route';
 import { POST as githubPullPOST } from './github/source-control/pull/route';
 import { POST as githubPushPOST } from './github/source-control/push/route';
 import { GET as googleGET } from './google/route';
-import { GET as linkedinGET } from './linkedin/route';
-import { GET as twitterGET } from './twitter/route';
+import { GET as linkedinGET, POST as linkedinPOST } from './linkedin/route';
+import { GET as twitterGET, POST as twitterPOST } from './twitter/route';
 
 /**
  * Consolidated integrations route
@@ -34,10 +34,14 @@ export async function GET(request: NextRequest) {
   const action = searchParams.get('action');
 
   switch (action) {
+    case 'arcade-auth':
+      return arcadeAuthGET(request);
     case 'audit':
       return auditGET(request);
     case 'connections':
       return connectionsGET(request);
+    case 'execute':
+      return executeGET(request);
     case 'figma':
       return figmaGET(request);
     case 'figma-callback':
@@ -62,7 +66,7 @@ export async function GET(request: NextRequest) {
       return twitterGET(request);
     default:
       return new Response(
-        JSON.stringify({ error: 'Invalid action. Use ?action=audit|connections|figma|figma-callback|github|github-oauth-authorize|github-oauth-callback|github-oauth-status|github-branches|github-commits|google|linkedin|twitter' }),
+        JSON.stringify({ error: 'Invalid action. Use ?action=arcade-auth|audit|connections|execute|figma|figma-callback|github|github-oauth-authorize|github-oauth-callback|github-oauth-status|github-branches|github-commits|google|linkedin|twitter' }),
         { status: 400, headers: { 'Content-Type': 'application/json' } }
       );
   }
@@ -77,12 +81,12 @@ export async function POST(request: NextRequest) {
       return arcadeAuthPOST(request);
     case 'arcade-token':
       return arcadeTokenPOST(request);
-    case 'connections':
-      return connectionsPOST(request);
     case 'execute':
       return executePOST(request);
     case 'figma':
       return figmaPOST(request);
+    case 'github':
+      return githubPOST(request);
     case 'github-oauth-disconnect':
       return githubOauthDisconnectPOST(request);
     case 'github-branch':
@@ -97,24 +101,13 @@ export async function POST(request: NextRequest) {
       return githubPullPOST(request);
     case 'github-push':
       return githubPushPOST(request);
+    case 'linkedin':
+      return linkedinPOST(request);
+    case 'twitter':
+      return twitterPOST(request);
     default:
       return new Response(
-        JSON.stringify({ error: 'Invalid action. Use ?action=arcade-auth|arcade-token|connections|execute|figma|github-oauth-disconnect|github-branch|github-commit|github-import-repo|github-pr|github-pull|github-push' }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
-      );
-  }
-}
-
-export async function DELETE(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const action = searchParams.get('action');
-
-  switch (action) {
-    case 'connections':
-      return connectionsDELETE(request);
-    default:
-      return new Response(
-        JSON.stringify({ error: 'Invalid action. Use ?action=connections' }),
+        JSON.stringify({ error: 'Invalid action. Use ?action=arcade-auth|arcade-token|execute|figma|github|github-oauth-disconnect|github-branch|github-commit|github-import-repo|github-pr|github-pull|github-push|linkedin|twitter' }),
         { status: 400, headers: { 'Content-Type': 'application/json' } }
       );
   }
