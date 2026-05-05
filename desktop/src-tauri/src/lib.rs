@@ -1,4 +1,5 @@
 mod commands;
+mod desktop_automation;
 mod log;
 mod settings;
 use commands::{PtySessions, CheckpointManager, WatcherRegistry};
@@ -57,6 +58,28 @@ fn register_invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Syn
         // Workspace management
         commands::set_workspace_root,
         commands::open_directory_dialog,
+        // Desktop automation (agent-desktop integration)
+        desktop_automation::desktop_automation_status,
+        desktop_automation::desktop_automation_request_permissions,
+        desktop_automation::desktop_automation_list_windows,
+        desktop_automation::desktop_automation_list_apps,
+        desktop_automation::desktop_automation_snapshot,
+        desktop_automation::desktop_automation_screenshot,
+        desktop_automation::desktop_automation_click,
+        desktop_automation::desktop_automation_type,
+        desktop_automation::desktop_automation_press_key,
+        desktop_automation::desktop_automation_launch_app,
+        desktop_automation::desktop_automation_close_app,
+        desktop_automation::desktop_automation_get_clipboard,
+        desktop_automation::desktop_automation_set_clipboard,
+        desktop_automation::desktop_automation_focus_window,
+        desktop_automation::desktop_automation_resize_window,
+        desktop_automation::desktop_automation_move_window,
+        desktop_automation::desktop_automation_find,
+        desktop_automation::desktop_automation_wait,
+        desktop_automation::desktop_automation_hover,
+        desktop_automation::desktop_automation_drag,
+        desktop_automation::desktop_automation_scroll,
     ]
 }
 

@@ -362,6 +362,7 @@ export {
   injectFeedback,
   analyzeFailure,
   detectHealingTrigger,
+  detectIncompleteResponse,
   generateHealingPrompt,
   generateCorrectionPrompt,
   resolveFeedback,
@@ -371,6 +372,7 @@ export {
   type FeedbackContext,
   type CorrectionPrompt,
   type HealingTrigger,
+  type IncompleteDetection,
   type RoleRedirect,
 } from './feedback-injection';
 

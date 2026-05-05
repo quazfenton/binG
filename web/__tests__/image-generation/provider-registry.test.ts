@@ -200,9 +200,7 @@ describe('MistralImageProvider', () => {
     vi.stubEnv('MISTRAL_API_KEY', undefined);
     
     // Expect initialization to throw an error
-    expect(() => new MistralImageProvider()).toThrow(
-      );
-    );
+    expect(() => new MistralImageProvider()).toThrow();
   });
 });
 

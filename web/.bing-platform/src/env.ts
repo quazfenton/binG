@@ -83,7 +83,14 @@ export function getDefaultWorkspaceRoot(): string | null {
     }
   }
 
-  // Priority 2: CLI/standalone mode — use the process's actual working directory.
+  // Priority 2: Web mode - don't use process.cwd() as it incorrectly
+  // uses the server's cwd (where pnpm dev was run). Use 'project/sessions'
+  // as base - user separation is handled by VFS via userID/compositeID.
+  if (!isDesktopMode() && !isTauriRuntime()) {
+    return 'project/sessions';
+  }
+
+  // Priority 3: CLI/standalone mode — use the process's actual working directory.
   // The parent process's cwd is the directory from which the CLI was invoked,
   // which is the correct workspace root (not the bundled binary's location).
   if (typeof process !== 'undefined' && process.cwd) {
@@ -92,8 +99,12 @@ export function getDefaultWorkspaceRoot(): string | null {
       if (cwd) {
         return cwd;
       }
-    } catch {
-      // process.cwd() may throw in some environments — fall through
+    } catch (err) {
+      // process.cwd() may throw in some environments (e.g., restricted context, permission denied)
+      // Log for debugging but continue to fallback logic
+      if (typeof console !== 'undefined') {
+        console.warn('[env.ts] Failed to get process.cwd():', err);
+      }
     }
   }
   
@@ -101,17 +112,19 @@ export function getDefaultWorkspaceRoot(): string | null {
 
   if (platform === 'win32') {
     const userProfile = typeof process !== 'undefined' && process.env ? process.env.USERPROFILE : undefined;
-    if (!userProfile) {
+    if (!userProfile || typeof userProfile !== 'string' || userProfile.trim() === '') {
       return null;
     }
-    return `${userProfile}\\workspace`;
+    // Manual join to avoid Node.js 'path' dependency in environment-agnostic module
+    return userProfile.replace(/[\\/]+$/, '') + '\\workspace';
   }
 
   const home = typeof process !== 'undefined' ? process.env.HOME : undefined;
-  if (!home) {
+  if (!home || typeof home !== 'string' || home.trim() === '') {
     return null;
   }
-  return `${home}/workspace`;
+  // Manual join to avoid Node.js 'path' dependency in environment-agnostic module
+  return home.replace(/\/+$/, '') + '/workspace';
 }
 
 export interface DesktopConfig {

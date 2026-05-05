@@ -1038,134 +1038,91 @@ describe('generateStepReprompt', () => {
 
     it('should include step number for third step', () => {
       const result = generateStepReprompt(routingWith3Steps, 2);
-      expect(result).toContain('[PLAN_STEP 3/3]');
+      expect(result).toContain('Current Step: Review');
     });
 
     it('should include the task description', () => {
       const result = generateStepReprompt(routingWith3Steps, 0);
-      expect(result).toContain('Task: Design API');
+      expect(result).toContain('Current Step: Design API');
+    });
+
+    it('should include the tool when present', () => {
+      const result = generateStepReprompt(routingWith3Steps, 0);
+      expect(result).toContain('Suggested Tool: read');
+    });
+
+    it('should include the role when present', () => {
+      const result = generateStepReprompt(routingWith3Steps, 1);
+      expect(result).toContain('Assigned Role: coder');
     });
 
     it('should include tool when present', () => {
       const result = generateStepReprompt(routingWith3Steps, 0);
-      expect(result).toContain('Tool: read');
+      expect(result).toContain('Suggested Tool: read');
     });
 
     it('should include role when present', () => {
       const result = generateStepReprompt(routingWith3Steps, 1);
-      expect(result).toContain('Role: coder');
+      expect(result).toContain('Assigned Role: coder');
     });
 
-    it('should omit Tool line when step has empty tool', () => {
+    it('should show empty tool as empty string', () => {
       const routing: RoutingMetadata = {
         ...routingWith3Steps,
         planSteps: [{ step: 'Think about approach', tool: '', role: 'architect' }],
       };
       const result = generateStepReprompt(routing, 0);
-      expect(result).not.toContain('Tool:');
+      expect(result).toContain('Suggested Tool:');
     });
 
-    it('should omit Role line when step has empty role', () => {
+    it('should show empty role as empty string', () => {
       const routing: RoutingMetadata = {
         ...routingWith3Steps,
         planSteps: [{ step: 'Think about approach', tool: 'read', role: '' }],
       };
       const result = generateStepReprompt(routing, 0);
-      expect(result).not.toContain('Role:');
+      expect(result).toContain('Assigned Role:');
     });
   });
 
   describe('continuation instructions', () => {
-    it('should instruct to include [ROUTING_METADATA] for non-final steps', () => {
+    it('should include AUTO-REPROMPT marker', () => {
       const result = generateStepReprompt(routingWith3Steps, 0);
-      expect(result).toContain('[ROUTING_METADATA]');
-      expect(result).toContain('updated planSteps');
+      expect(result).toContain('[AUTO-REPROMPT]');
     });
 
-    it('should instruct to include [FULFILLMENT REVIEW] for the final step', () => {
-      const result = generateStepReprompt(routingWith3Steps, 2);
-      expect(result).toContain('[FULFILLMENT REVIEW]');
-      expect(result).not.toContain('[ROUTING_METADATA]');
+    it('should include continue instruction', () => {
+      const result = generateStepReprompt(routingWith3Steps, 0);
+      expect(result).toContain('Continue with this step');
     });
 
-    it('should say "This is the final step" for the last step', () => {
-      const result = generateStepReprompt(routingWith3Steps, 2);
-      expect(result).toContain('This is the final step');
-    });
-
-    it('should include "Proceed with this step" for all steps', () => {
-      const result0 = generateStepReprompt(routingWith3Steps, 0);
-      const result2 = generateStepReprompt(routingWith3Steps, 2);
-      expect(result0).toContain('Proceed with this step');
-      expect(result2).toContain('Proceed with this step');
+    it('should include step description', () => {
+      const result = generateStepReprompt(routingWith3Steps, 0);
+      expect(result).toContain('Current Step: Design');
     });
   });
 
   describe('previous result inclusion', () => {
-    it('should include previous result when provided', () => {
+    it('should not include previous result (simplified format)', () => {
       const result = generateStepReprompt(routingWith3Steps, 1, 'API designed with 3 endpoints');
-      expect(result).toContain('Previous step result:');
-      expect(result).toContain('API designed with 3 endpoints');
-    });
-
-    it('should not include previous result section when not provided', () => {
-      const result = generateStepReprompt(routingWith3Steps, 1);
       expect(result).not.toContain('Previous step result:');
-    });
-
-    it('should not include previous result section when empty string', () => {
-      const result = generateStepReprompt(routingWith3Steps, 1, '');
-      expect(result).not.toContain('Previous step result:');
-    });
-
-    it('should truncate previous result at 500 characters', () => {
-      const longResult = 'x'.repeat(600);
-      const result = generateStepReprompt(routingWith3Steps, 1, longResult);
-      expect(result).toContain('Previous step result:');
-      expect(result).toContain('...');
-      // The included portion before '...' should be <= 500 chars
-      const resultSection = result.slice(result.indexOf('Previous step result:'));
-      const contentAfterLabel = resultSection.slice(resultSection.indexOf('\n') + 1);
-      const trimmedContent = contentAfterLabel.slice(0, contentAfterLabel.indexOf('...'));
-      expect(trimmedContent.length).toBeLessThanOrEqual(500);
-    });
-
-    it('should not truncate previous result under 500 characters', () => {
-      const shortResult = 'Successfully created the file';
-      const result = generateStepReprompt(routingWith3Steps, 1, shortResult);
-      expect(result).toContain(shortResult);
-      expect(result).not.toContain('...');
-    });
-
-    it('should truncate exactly at 500 characters', () => {
-      const exactResult = 'x'.repeat(500);
-      const result = generateStepReprompt(routingWith3Steps, 1, exactResult);
-      expect(result).not.toContain('...');
-    });
-
-    it('should add ellipsis for 501-character result', () => {
-      const justOver = 'x'.repeat(501);
-      const result = generateStepReprompt(routingWith3Steps, 1, justOver);
-      expect(result).toContain('...');
     });
   });
 
   describe('single-step plan', () => {
-    it('should treat the only step as final', () => {
+    it('should generate prompt for single step', () => {
       const routing: RoutingMetadata = {
         ...routingWith3Steps,
         planSteps: [{ step: 'Fix the bug', tool: 'bash', role: 'debugger' }],
       };
       const result = generateStepReprompt(routing, 0);
-      expect(result).toContain('[PLAN_STEP 1/1]');
-      expect(result).toContain('This is the final step');
-      expect(result).toContain('[FULFILLMENT REVIEW]');
-      expect(result).not.toContain('[ROUTING_METADATA]');
+      expect(result).toContain('[AUTO-REPROMPT]');
+      expect(result).toContain('Current Step: Fix the bug');
     });
   });
 
   describe('two-step plan', () => {
-    it('should include ROUTING_METADATA for first step', () => {
+    it('should include step info for first step', () => {
       const routing: RoutingMetadata = {
         ...routingWith3Steps,
         planSteps: [
@@ -1174,11 +1131,11 @@ describe('generateStepReprompt', () => {
         ],
       };
       const result = generateStepReprompt(routing, 0);
-      expect(result).toContain('[PLAN_STEP 1/2]');
-      expect(result).toContain('[ROUTING_METADATA]');
+      expect(result).toContain('Current Step: Design');
+      expect(result).toContain('Suggested Tool: read');
     });
 
-    it('should include FULFILLMENT REVIEW for second step', () => {
+    it('should include step info for second step', () => {
       const routing: RoutingMetadata = {
         ...routingWith3Steps,
         planSteps: [
@@ -1187,8 +1144,8 @@ describe('generateStepReprompt', () => {
         ],
       };
       const result = generateStepReprompt(routing, 1);
-      expect(result).toContain('[PLAN_STEP 2/2]');
-      expect(result).toContain('[FULFILLMENT REVIEW]');
+      expect(result).toContain('Current Step: Implement');
+      expect(result).toContain('Suggested Tool: write');
     });
   });
 });

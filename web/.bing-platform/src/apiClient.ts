@@ -70,15 +70,23 @@ export async function apiFetch<T = any>(
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
 
-  try {
-    if (isDesktopMode()) {
-      // Desktop: Can customize here if needed (e.g., use Tauri HTTP client)
-      // For now, use standard fetch (works in Tauri)
-      return await executeFetch<T>(fullUrl, { ...fetchOptions, signal: controller.signal }, parseJson);
-    }
+  // Merge signals if a user-provided signal exists
+  let combinedSignal: AbortSignal = controller.signal;
+  let onAbort: (() => void) | undefined;
 
-    // Web: Standard fetch
-    return await executeFetch<T>(fullUrl, { ...fetchOptions, signal: controller.signal }, parseJson);
+  if (fetchOptions.signal) {
+    const c = new AbortController();
+    onAbort = () => {
+      controller.abort();
+      c.abort();
+    };
+    fetchOptions.signal.addEventListener('abort', onAbort);
+    controller.signal.addEventListener('abort', onAbort);
+    combinedSignal = c.signal;
+  }
+
+  try {
+    return await executeFetch<T>(fullUrl, { ...fetchOptions, signal: combinedSignal }, parseJson);
   } catch (error: any) {
     if (error.name === 'AbortError') {
       return {
@@ -98,6 +106,10 @@ export async function apiFetch<T = any>(
       headers: {},
     };
   } finally {
+    if (onAbort) {
+      fetchOptions.signal?.removeEventListener('abort', onAbort);
+      controller.signal.removeEventListener('abort', onAbort);
+    }
     clearTimeout(timeoutId);
   }
 }
@@ -128,10 +140,18 @@ async function executeFetch<T>(
     } catch (e: any) {
       error = `Failed to parse JSON response: ${e.message}`;
     }
+  } else if (response.ok) {
+    // parseJson is false, but response is successful — return text
+    data = (await response.text()) as T;
   } else if (!response.ok) {
     try {
       const errorBody = await response.text();
-      error = errorBody || `HTTP ${response.status}: ${response.statusText}`;
+      try {
+        const errorJson = JSON.parse(errorBody);
+        error = errorJson.error?.message || JSON.stringify(errorJson);
+      } catch {
+        error = errorBody || `HTTP ${response.status}: ${response.statusText}`;
+      }
     } catch {
       error = `HTTP ${response.status}: ${response.statusText}`;
     }

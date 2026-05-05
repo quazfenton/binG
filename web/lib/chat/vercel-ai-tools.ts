@@ -134,11 +134,11 @@ function createVFSToolSet(context: ToolExecutionContext): Record<string, Tool> {
   for (const [name, mcpTool] of Object.entries(mcpVFSTools)) {
     tools[name] = tool({
       description: (mcpTool as any).description,
-      parameters: (mcpTool as any).parameters,
+      inputSchema: (mcpTool as any).inputSchema || (mcpTool as any).parameters || z.object({}),
       execute: async (args: any) => {
         return await callMCPToolFromAI_SDK(name, args, context.userId, context.scopePath);
       },
-    });
+    } as any);
   }
   
   return tools;
@@ -153,11 +153,11 @@ async function createMCPToolSet(context: ToolExecutionContext): Promise<Record<s
       const name = mcpTool.function.name;
       tools[name] = tool({
         description: mcpTool.function.description,
-        parameters: mcpTool.function.parameters as any,
+        inputSchema: mcpTool.function.parameters || z.object({}),
         execute: async (args: any) => {
           return await callMCPToolFromAI_SDK(name, args, context.userId, context.scopePath);
         },
-      });
+      } as any);
     }
   } catch (err: any) {
     chatLogger.warn('Failed to load MCP tools', { error: err.message });
@@ -171,13 +171,13 @@ function createCapabilityChainTool(context: ToolExecutionContext): Record<string
   
   tools['capability_chain'] = tool({
     description: 'Execute a sequence of capabilities in a single step (e.g., search -> read -> analyze).',
-    parameters: z.object({
+    inputSchema: z.object({
       steps: z.array(z.object({
         capabilityId: z.string().describe('The ID of the capability to execute (e.g., "file.read")'),
         args: z.record(z.any()).describe('Arguments for the capability'),
       })),
     }),
-    execute: async ({ steps }) => {
+    execute: async ({ steps }: any) => {
       const results = [];
       const router = getCapabilityRouter();
       

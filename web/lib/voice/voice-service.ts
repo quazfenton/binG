@@ -265,7 +265,7 @@ class VoiceService {
       const breaker = providerCircuitBreakers.get(`tts:${provider}` as any);
       const startTime = Date.now();
       try {
-        await breaker.execute(async () => { await this.speakWithProvider(text, provider, settings); });
+        await breaker.execute(async () => { await this.speakWithProvider(text, provider as TTSProvider, settings); });
         resourceTelemetry.recordProviderCall(`tts:${provider}`, Date.now() - startTime, true);
         this.emitEvent({ type: "synthesis", data: { text, completed: true, provider }, timestamp: Date.now() }); return;
       } catch (e) {

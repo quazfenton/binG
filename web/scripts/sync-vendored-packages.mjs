@@ -16,20 +16,17 @@ const rootDir = path.resolve(webDir, '..');
 
 const MAPPINGS = [
   {
-    sourceRoot: path.join(rootDir, 'packages/platform/src'),
-    destRoot: path.join(webDir, '.bing-platform/src'),
-    includePattern: '**/*.{ts,tsx,js,jsx,json,d.ts}',
-  },
-  {
     sourceRoot: path.join(rootDir, 'packages/platform'),
     destRoot: path.join(webDir, '.bing-platform'),
-    includePattern: 'package.json',
+    includePattern: '**/*.{ts,tsx,js,jsx,json,d.ts}',
+    excludePattern: ['**/__tests__/**', '**/__mocks__/**', '**/node_modules/**', '**/.git/**'],
     transform: 'platform-package',
   },
   {
     sourceRoot: path.join(rootDir, 'packages/shared'),
     destRoot: path.join(webDir, '.bing-shared'),
-    includePattern: '**/*.{ts,tsx}',
+    includePattern: '**/*.{ts,tsx,d.ts}',
+    excludePattern: ['**/__tests__/**', '**/__mocks__/**', '**/node_modules/**', '**/.git/**'],
   },
   {
     sourceRoot: path.join(rootDir, 'packages/shared'),
@@ -42,7 +39,9 @@ const MAPPINGS = [
 async function rimraf(dir) {
   try {
     await fs.rm(dir, { recursive: true, force: true });
-  } catch (err) {}
+  } catch (err) {
+    // Ignore errors
+  }
 }
 
 async function ensureDir(dir) {
@@ -51,8 +50,8 @@ async function ensureDir(dir) {
 
 async function copyFile(src, dest, options = {}) {
   await ensureDir(path.dirname(dest));
-  
-  if (options.transform === 'platform-package') {
+
+  if (options.transform === 'platform-package' && path.basename(src) === 'package.json') {
     const fresh = JSON.parse(await fs.readFile(src, 'utf8'));
     const output = {
       name: fresh.name,
@@ -62,64 +61,82 @@ async function copyFile(src, dest, options = {}) {
       exports: fresh.exports,
       dependencies: fresh.dependencies || {},
       devDependencies: fresh.devDependencies || {},
+      peerDependencies: fresh.peerDependencies || {},
     };
     await fs.writeFile(dest, JSON.stringify(output, null, 2) + '\n');
+    console.log(`    📦 Transformed package.json -> ${path.relative(dest, dest)}`);
     return;
   }
-  
-  if (options.transform === 'shared-package') {
+
+  if (options.transform === 'shared-package' && path.basename(src) === 'package.json') {
     const fresh = JSON.parse(await fs.readFile(src, 'utf8'));
     const output = {
       name: fresh.name,
       version: fresh.version,
       type: fresh.type,
       exports: fresh.exports || {},
+      dependencies: fresh.dependencies || {},
       peerDependencies: fresh.peerDependencies || {},
     };
     await fs.writeFile(dest, JSON.stringify(output, null, 2) + '\n');
+    console.log(`    📦 Transformed package.json -> ${path.relative(dest, dest)}`);
     return;
   }
-  
-  // Use copyFileSync for more reliable behavior
+
   await fs.copyFile(src, dest);
 }
 
 async function sync() {
-  console.log('🔄 Syncing monorepo packages to vendored folders...');
-  
+  console.log('🔄 Syncing monorepo packages to vendored folders...\n');
+
   for (const mapping of MAPPINGS) {
-    const { sourceRoot, destRoot, includePattern, transform } = mapping;
-    
-    console.log(`  Syncing ${path.relative(webDir, destRoot)}...`);
-    
+    const { sourceRoot, destRoot, includePattern, excludePattern, transform } = mapping;
+
+    console.log(`📁 Syncing: ${path.relative(rootDir, sourceRoot)} -> ${path.relative(webDir, destRoot)}`);
+
+    // Check if source exists
+    try {
+      await fs.access(sourceRoot);
+    } catch {
+      console.log(`    ⚠️  Source not found, skipping...`);
+      continue;
+    }
+
+    // Clean destination
     await rimraf(destRoot);
     await ensureDir(destRoot);
-    
-    const forwardPattern = sourceRoot.replace(/\\/g, '/') + '/' + includePattern;
-    const files = await glob(forwardPattern, {
+
+    // Build glob pattern
+    const searchPattern = sourceRoot.replace(/\\/g, '/') + '/' + includePattern;
+
+    // Build ignore patterns
+    const ignorePatterns = (excludePattern || []).map(p => sourceRoot.replace(/\\/g, '/') + '/' + p);
+
+    const files = await glob(searchPattern, {
       nodir: true,
-      ignore: [
-        '**/__tests__/**',
-        '**/__mocks__/**',
-        '**/node_modules/**',
-        '**/.git/**',
-      ].map(p => sourceRoot.replace(/\\/g, '/') + '/' + p),
+      ignore: ignorePatterns,
     });
-    
+
+    console.log(`    Found ${files.length} files to copy`);
+
+    let copied = 0;
     for (const file of files) {
       const relative = path.relative(sourceRoot, file);
       const target = path.join(destRoot, relative);
       try {
         await copyFile(file, target, { transform });
+        copied++;
+        if (copied % 50 === 0) {
+          console.log(`    Copied ${copied}/${files.length}...`);
+        }
       } catch (err) {
-        console.error(`    ❌ ${target}: ${err.message}`);
-        throw err;
+        console.error(`    ❌ ${relative}: ${err.message}`);
       }
     }
-    
-    console.log(`    ✅ Copied ${files.length} files`);
+
+    console.log(`    ✅ Copied ${copied} files\n`);
   }
-  
+
   console.log('✅ Vendored packages synced successfully!');
 }
 
