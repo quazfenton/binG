@@ -11,7 +11,6 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
-export const runtime = 'edge';
 
 import { exchangeCodeForTokens } from '@/lib/llm/antigravity-provider';
 import { requireAdminApiOrForbidden } from '@/lib/auth/admin';

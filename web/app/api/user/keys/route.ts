@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 
-export const runtime = 'edge';
 
 import { initializeDatabase, BetterSqlite3Database } from '@/lib/database/db';
 import jwt from 'jsonwebtoken';

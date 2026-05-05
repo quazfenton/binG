@@ -13,7 +13,6 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
-export const runtime = 'edge';
 
 import { sandboxMetrics } from '@/lib/backend';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';

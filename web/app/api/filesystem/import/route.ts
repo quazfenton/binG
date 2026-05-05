@@ -37,7 +37,7 @@ import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events
 import { extractScopePath } from '@/lib/virtual-filesystem/scope-utils';
 import type { FilesystemOwnerResolution } from '@/lib/virtual-filesystem/resolve-filesystem-owner';
 
-export const runtime = 'edge';
+
 
 // SECURITY: O(1) body size guard — checked BEFORE buffering files into memory
 // Lower than FileImportService.MAX_TOTAL_SIZE (500MB) to prevent OOM from in-memory buffering

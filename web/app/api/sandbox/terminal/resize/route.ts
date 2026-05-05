@@ -3,7 +3,7 @@ import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge';
 import { terminalManager } from '@/lib/terminal/terminal-manager';
 
-export const runtime = 'edge';
+
 
 export async function POST(req: NextRequest) {
   try {

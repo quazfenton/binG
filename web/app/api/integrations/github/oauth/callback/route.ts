@@ -7,7 +7,6 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
-export const runtime = 'edge';
 
 import { exchangeCodeForToken, getGitHubUser, saveGitHubToken } from '@/lib/github/github-oauth';
 import { auth0 } from '@/lib/auth0';

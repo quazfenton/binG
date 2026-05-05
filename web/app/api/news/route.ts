@@ -7,7 +7,6 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
-export const runtime = 'edge';
 
 import { parseRSSFeed, type NewsArticle } from '@/lib/news/rss-parser';
 

@@ -6,7 +6,7 @@ import type { FilesystemOwnerResolution } from '@/lib/virtual-filesystem/resolve
 import { absolutePathSchema } from '@/lib/validation/schemas';
 import { isOutsideWorkspace } from '@/lib/agent-bins/workspace-boundary';
 
-export const runtime = 'edge';
+
 
 /**
  * Schema for filesystem delete requests

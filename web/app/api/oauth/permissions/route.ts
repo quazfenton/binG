@@ -9,7 +9,6 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
-export const runtime = 'edge';
 
 import { auth0 } from '@/lib/auth0';
 import {

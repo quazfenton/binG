@@ -5,7 +5,7 @@ import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('ClearSessionsAPI');
 
-export const runtime = 'edge';
+
 
 /**
  * POST /api/sandbox/clear-sessions

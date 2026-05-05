@@ -9,7 +9,7 @@ import {
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { createSSEEmitter, SSE_RESPONSE_HEADERS, SSE_EVENT_TYPES } from '@/lib/streaming/sse-event-schema';
 
-export const runtime = 'edge';
+
 export const maxDuration = 300; // 5 minutes for agent tasks
 
 /**

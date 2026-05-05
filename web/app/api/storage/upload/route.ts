@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-export const runtime = 'edge';
 
 import { createCloudStorageService } from '@/lib/storage/cloud-storage';
 import { verifyAuth } from '@/lib/auth/jwt';

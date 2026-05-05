@@ -23,7 +23,7 @@ import { resolveFilesystemOwnerWithFallback } from '@/app/api/filesystem/utils';
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import crypto from 'crypto';
 
-export const runtime = 'edge';
+
 
 const GITHUB_API = 'https://api.github.com';
 

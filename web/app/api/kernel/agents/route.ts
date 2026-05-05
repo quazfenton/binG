@@ -8,7 +8,6 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
-export const runtime = 'edge';
 
 import { getAgentKernel, type AgentConfig } from '@bing/shared/agent';
 

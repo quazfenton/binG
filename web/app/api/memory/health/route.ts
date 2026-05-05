@@ -14,7 +14,6 @@
 
 import { NextRequest, NextResponse } from "next/server";
 
-export const runtime = 'edge';
 
 import { getMetricsSummary } from "@/lib/agent/metrics";
 import { listProjects, getProjectSymbols } from "@/lib/memory/vectorStore";

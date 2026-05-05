@@ -6,7 +6,6 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
-export const runtime = 'edge';
 
 import { getAntigravityOAuthUrl } from '@/lib/llm/antigravity-provider';
 import { verifyAuth } from '@/lib/auth/jwt';

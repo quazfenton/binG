@@ -7,7 +7,6 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
-export const runtime = 'edge';
 
 import { readdir, readFile } from 'fs/promises';
 import { join } from 'path';

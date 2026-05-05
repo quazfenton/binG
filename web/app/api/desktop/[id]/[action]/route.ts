@@ -9,7 +9,6 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
-export const runtime = 'edge';
 
 import { e2bDesktopProvider, type DesktopAction } from '@/lib/computer/e2b-desktop-provider-enhanced';
 import { verifyToken } from '@/lib/security/jwt-auth';

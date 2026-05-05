@@ -18,7 +18,7 @@ import { isFigmaConfigured, getFigmaRedirectUri } from '@/lib/figma/config';
 import { generateCodeVerifier, generateCodeChallenge, generateState, generateAuthUrl } from '@/lib/figma/oauth';
 import { oauthStateStore } from './oauth-state-store';
 
-export const runtime = 'edge';
+
 
 // ============================================================================
 // Database Helpers

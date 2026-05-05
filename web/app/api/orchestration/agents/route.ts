@@ -16,7 +16,6 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
-export const runtime = 'edge';
 
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { generateSecureId } from '@/lib/utils';

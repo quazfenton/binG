@@ -8,7 +8,6 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 
-export const runtime = 'edge';
 
 import { authenticateRequest } from '@/lib/security/jwt-auth'
 import { RateLimiter } from '@/lib/utils/rate-limiter'

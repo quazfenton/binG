@@ -11,7 +11,6 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
-export const runtime = 'edge';
 
 import { requireAdminApiOrForbidden } from '@/lib/auth/admin';
 import { getDatabase } from '@/lib/database/connection';

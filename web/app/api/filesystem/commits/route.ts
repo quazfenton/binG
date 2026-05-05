@@ -5,7 +5,7 @@ import { resolveFilesystemOwnerWithFallback } from '../utils';
 import { ShadowCommitManager } from '@/lib/orchestra/stateful-agent/commit/shadow-commit';
 import { sessionIdSchema } from '@/lib/validation/schemas';
 
-export const runtime = 'edge';
+
 
 /**
  * GET /api/filesystem/commits?sessionId=...&limit=20

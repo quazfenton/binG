@@ -4,7 +4,7 @@ import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('API:VFS:Snapshot:Restore');
 
-export const runtime = 'edge';
+
 
 /**
  * POST /api/filesystem/snapshot/restore

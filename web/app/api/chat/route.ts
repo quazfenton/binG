@@ -63,7 +63,6 @@ import {
 import { applyPromptModifiers, getPreset, PROMPT_PRESETS, generateDebugHeaderValue, emitTelemetryEvent, type PromptParameters } from '@bing/shared/agent/prompt-parameters';
 
 // Force Node.js runtime for Daytona SDK compatibility
-export const runtime = 'edge';
 
 // Build-time compilation for faster cold starts
 // Route code is pre-compiled at build time, but executes dynamically per-request

@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-export const runtime = 'edge';
 
 import { getToolManager } from '@/lib/tools';
 import { toolAuthManager } from '@/lib/tools/tool-authorization-manager';

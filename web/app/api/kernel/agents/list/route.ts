@@ -7,7 +7,6 @@
 
 import { NextResponse } from 'next/server';
 
-export const runtime = 'edge';
 
 import { getAgentKernel } from '@bing/shared/agent';
 

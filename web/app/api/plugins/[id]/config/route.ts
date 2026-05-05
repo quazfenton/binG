@@ -7,7 +7,6 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
-export const runtime = 'edge';
 
 import { updatePluginConfig, executePlugin } from '@/lib/plugins/plugin-system';
 import { createLogger } from '@/lib/utils/logger';

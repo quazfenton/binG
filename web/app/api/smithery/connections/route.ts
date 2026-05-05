@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-export const runtime = 'edge';
 
 import { getSmitheryService } from '@/lib/mcp/smithery-service';
 import { verifyAuth } from '@/lib/auth/verify-auth';
