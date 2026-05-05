@@ -10,6 +10,9 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+
+export const runtime = 'edge';
+
 import { requireAdminApiOrForbidden } from '@/lib/auth/admin';
 import { getAntigravityOAuthUrl } from '@/lib/llm/antigravity-provider';
 

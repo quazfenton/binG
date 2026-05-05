@@ -1,4 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+
+export const runtime = 'edge';
+
 import { fastAgentService } from "@/lib/chat/fast-agent-service";
 
 /**

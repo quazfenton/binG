@@ -3,7 +3,7 @@ import { authService } from '@/lib/auth/auth-service';
 import { verifyAuth } from '@/lib/auth/jwt';
 
 // Force Node.js runtime for jsonwebtoken compatibility
-export const runtime = 'nodejs';
+export const runtime = 'edge';
 
 export async function POST(request: NextRequest) {
   try {

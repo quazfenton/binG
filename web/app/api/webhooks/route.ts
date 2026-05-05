@@ -1,4 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
+
+export const runtime = 'edge';
+
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { oauthService } from '@/lib/auth/oauth-service';
 import { getDatabase } from '@/lib/database/connection';

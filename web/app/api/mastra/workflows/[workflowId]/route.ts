@@ -9,6 +9,9 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
+export const runtime = 'edge';
+
+
 // Lazy load Mastra to avoid build-time initialization
 let _mastra: any = null;
 

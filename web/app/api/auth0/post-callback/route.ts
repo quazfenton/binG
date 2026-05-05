@@ -1,4 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
+
+export const runtime = 'edge';
+
 import { getLocalUserIdFromAuth0, mapAuth0UserId } from '@/lib/oauth/connections';
 import { saveConnectedAccount } from '@/lib/auth0';
 

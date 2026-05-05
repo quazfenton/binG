@@ -1,4 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
+
+export const runtime = 'edge';
+
 import { z } from 'zod';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { loadState, workforceManager } from '@bing/shared/agent';

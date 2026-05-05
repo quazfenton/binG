@@ -5,7 +5,7 @@ import { terminalManager } from '@/lib/terminal/terminal-manager';
 import { sandboxEvents } from '@/lib/sandbox/sandbox-events';
 import { randomUUID } from 'crypto';
 
-export const runtime = 'nodejs';
+export const runtime = 'edge';
 
 // Use globalThis to prevent HMR leaks in development
 // Without this, each hot-reload would create a new Map and interval timer

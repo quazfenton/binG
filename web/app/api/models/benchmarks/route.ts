@@ -5,6 +5,9 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+
+export const runtime = 'edge';
+
 import { getModelBenchmarks } from '@/lib/model-comparison/model-comparison';
 import { createLogger } from '@/lib/utils/logger';
 

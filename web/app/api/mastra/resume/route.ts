@@ -10,6 +10,9 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+
+export const runtime = 'edge';
+
 import { getApprovalStep } from '@/lib/orchestra/mastra/workflows/hitl-workflow';
 import { verifyAuth } from '@/lib/auth/jwt';
 import { authService } from '@/lib/auth/auth-service';

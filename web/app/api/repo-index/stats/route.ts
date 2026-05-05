@@ -5,6 +5,9 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+
+export const runtime = 'edge';
+
 import { repoIndexer } from '@/lib/repo-index/indexer';
 
 /**

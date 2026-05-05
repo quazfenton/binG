@@ -5,6 +5,9 @@
  * Rate limited by session (input is passed directly to PTY).
  */
 import { NextRequest, NextResponse } from 'next/server';
+
+export const runtime = 'edge';
+
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 
 declare global {

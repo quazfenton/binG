@@ -5,6 +5,9 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+
+export const runtime = 'edge';
+
 import { getReasoningChain } from '@/lib/mind-map/mind-map-service';
 import { createLogger } from '@/lib/utils/logger';
 

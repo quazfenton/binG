@@ -10,6 +10,9 @@
 
 import { NextRequest, NextResponse } from "next/server";
 
+export const runtime = 'edge';
+
+
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const MISTRAL_API_KEY = process.env.MISTRAL_API_KEY;
 const EMBED_PROVIDER = process.env.EMBED_PROVIDER ?? "mistral";

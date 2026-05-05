@@ -6,6 +6,9 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+
+export const runtime = 'edge';
+
 import { exchangeCodeForTokens } from '@/lib/llm/antigravity-provider';
 import { saveAntigravityAccount } from '@/lib/database/antigravity-accounts';
 import { verifyAuth } from '@/lib/auth/jwt';

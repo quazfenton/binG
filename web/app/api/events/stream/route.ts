@@ -8,6 +8,9 @@
  */
 
 import { NextRequest } from 'next/server';
+
+export const runtime = 'edge';
+
 import { auth0 } from '@/lib/auth0';
 import { getDatabase } from '@/lib/database/connection';
 import { createLogger } from '@/lib/utils/logger';

@@ -5,6 +5,9 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+
+export const runtime = 'edge';
+
 import { getZineStats } from '@/lib/zine/zine-display-service';
 import { createLogger } from '@/lib/utils/logger';
 

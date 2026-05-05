@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+export const runtime = 'edge';
+
+
 /**
  * OAuth Success Page for Popup Flows
  *

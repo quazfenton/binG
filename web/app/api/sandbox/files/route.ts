@@ -1,4 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
+
+export const runtime = 'edge';
+
 import { z } from 'zod';
 import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge';
 import { verifyAuth } from '@/lib/auth/jwt';

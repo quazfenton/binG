@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 
+export const runtime = 'edge';
+
+
 // Use dynamic import to avoid pulling AWS SDK into client bundle
 // The PROVIDERS constant and llmService are server-only
 let _providersCache: any = null;

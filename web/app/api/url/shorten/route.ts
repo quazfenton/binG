@@ -1,4 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
+
+export const runtime = 'edge';
+
 import { secureRandomString } from '@/lib/utils';
 import { setUrl } from '@/lib/url-shortener/store';
 

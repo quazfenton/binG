@@ -7,6 +7,9 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+
+export const runtime = 'edge';
+
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 
 // Valid workflow types - allowlist for security

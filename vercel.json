@@ -1,5 +1,6 @@
 {
+  "name": "bing",
   "installCommand": "pnpm install",
-  "buildCommand": "node web/scripts/sync-vendored-packages.mjs && pnpm --filter web build",
+  "buildCommand": "node web/scripts/sync-vendored-packages.mjs && pnpm --filter web build && cp -r web/.next .",
   "framework": "nextjs"
 }

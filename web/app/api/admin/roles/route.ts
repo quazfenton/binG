@@ -7,6 +7,9 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+
+export const runtime = 'edge';
+
 import { requireAdminApiOrForbidden, grantRole, revokeRole, getUserRoles, logAdminAction } from '@/lib/auth/admin';
 import { csrfCheckOrReject } from '@/lib/auth/csrf';
 

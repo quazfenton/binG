@@ -23,6 +23,9 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+
+export const runtime = 'edge';
+
 import { UniversalVfsSync, type VfsFile, type SyncOptions } from '@/lib/virtual-filesystem/sync/universal-vfs-sync';
 import { getSandboxProvider } from '@/lib/sandbox/providers';
 import type { SandboxProviderType } from '@/lib/sandbox/providers';

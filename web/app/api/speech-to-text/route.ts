@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+export const runtime = 'edge';
+
+
 const MISTRAL_API_KEY = process.env.MISTRAL_API_KEY;
 const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY;
 const ASSEMBLYAI_API_KEY = process.env.ASSEMBLYAI_API_KEY;

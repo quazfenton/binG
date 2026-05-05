@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 
+export const runtime = 'edge';
+
+
 interface WorkflowExecutor {
   execute(workflow: string, input: any, config?: any): Promise<any>;
 }

@@ -1,4 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
+
+export const runtime = 'edge';
+
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { actionRegistry, type HandlerContext } from '@/lib/integrations/action-registry';
 import { initializeAuditTable, getUserAuditTrail, getUserExecutionStats } from '@/lib/integrations/execution-audit';

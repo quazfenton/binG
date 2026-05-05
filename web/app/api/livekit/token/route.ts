@@ -1,4 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
+
+export const runtime = 'edge';
+
 import { AccessToken } from 'livekit-server-sdk';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { voiceServerManager } from '@/lib/voice/server-control';

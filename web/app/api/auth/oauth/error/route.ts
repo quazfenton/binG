@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+export const runtime = 'edge';
+
+
 /**
  * OAuth Error/Cancel Page for Popup Flows
  *

@@ -1,4 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
+
+export const runtime = 'edge';
+
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { verifyContainerOwnership, validateContainerId } from '@/lib/docker/docker-security';
 import { loadDocker, validateCommand } from '@/lib/docker/docker-commands';

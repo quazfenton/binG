@@ -22,7 +22,7 @@ const log = (...args: any[]) => DEBUG && console.log(`${COLORS.bright}${COLORS.c
 const logWarn = (...args: any[]) => console.warn(`${COLORS.bright}${COLORS.yellow}[VFS MKDIR WARN]${COLORS.reset}`, ...args);
 const logError = (...args: any[]) => console.error(`${COLORS.bright}${COLORS.red}[VFS MKDIR ERROR]${COLORS.reset}`, ...args);
 
-export const runtime = 'nodejs';
+export const runtime = 'edge';
 
 /**
  * Schema for filesystem mkdir requests

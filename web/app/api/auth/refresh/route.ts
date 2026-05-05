@@ -1,4 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
+
+export const runtime = 'edge';
+
 import { authService } from '@/lib/auth/auth-service';
 import { generateToken } from '@/lib/auth/jwt';
 import { RateLimiter } from '@/lib/security';

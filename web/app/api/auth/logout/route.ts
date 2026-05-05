@@ -1,4 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
+
+export const runtime = 'edge';
+
 import { authService } from '@/lib/auth/auth-service';
 import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge';
 import { deleteSessionsByUserId } from '@/lib/storage/session-store';

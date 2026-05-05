@@ -304,7 +304,14 @@ export async function getAllTools(
       result['web_fetch'] = webFetchTools.web_fetch;
     }
   } catch (err: any) {
-    chatLogger.warn('Failed to create web_fetch tool', { error: err.message });
+    chatLogger.error('Failed to create web_fetch tool - URL content extraction unavailable', { 
+      error: err.message,
+      stack: err.stack,
+      userId: context.userId,
+      sessionId: context.sessionId
+    });
+    // web_fetch is core functionality - surface the error prominently
+    console.error('[VERCEL-AI-TOOLS] web_fetch tool creation failed:', err.message);
   }
 
   // Add choose_role capability - enables dynamic role redirection

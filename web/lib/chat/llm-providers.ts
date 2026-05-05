@@ -1025,46 +1025,29 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     id: 'pollinations',
     name: 'Pollinations AI',
     models: [
-      'claude-fast',
-      'claude-large',
-      'claude-opus-4.7',
-      'claude',
-      'deepseek',
-      'deepseek-pro',
-      'gemini-fast',
-      'gemini',
-      'gemini-flash-lite-3.1',
-      'gemini-large',
-      'gemini-search',
-      'openai-audio-large',
-      'openai-audio',
-      'openai-fast',
-      'openai-large',
-      'openai',
-      'gpt-5.5',
-      'grok',
-      'grok-large',
-      'llama',
-      'llama-maverick',
-      'llama-scout',
-      'midijourney',
-      'midijourney-large',
-      'minimax',
-      'mistral-large',
-      'mistral',
-      'kimi',
-      'kimi-k2.6',
-      'nova',
-      'nova-fast',
-      'perplexity-fast',
-      'perplexity-reasoning',
-      'polly',
-      'qwen-coder',
-      'qwen-coder-large',
-      'qwen-vision',
-      'qwen-large',
       'qwen-safety',
+      'nova-fast',
+      'nova',
+      'mistral',
+      'qwen-coder',
+      'llama-scout',
+      'openai',
+      'gemini-fast',
+      'perplexity-fast',
+      'qwen-vision',
+      'openai-fast',
+      'llama',
+      'minimax',
+      'kimi',
+      'claude-fast',
+      'perplexity-reasoning',
+      'qwen-large',
+      'gemini',
       'glm',
+      'qwen-coder-large',
+      'kimi-k2.6',
+      'openai-large',
+      'grok',
     ],
     supportsStreaming: true,
     maxTokens: 128000,
@@ -1420,7 +1403,7 @@ class LLMService {
     chatLogger.info('OpenCode SDK client initialized')
   }
 
-  private normalizeOpenAIToolCalls(toolCalls: any[] | undefined): Array<{ id?: string; name: string; arguments: Record<string, any> }> {
+  private normalizeOpenAIToolCalls(toolCalls: any[] | undefined): Array<{ id: string; name: string; arguments: Record<string, any> }> {
     if (!Array.isArray(toolCalls)) return []
     return toolCalls
       .map((call: any) => {
@@ -1436,12 +1419,12 @@ class LLMService {
         }
         if (!args || typeof args !== 'object') args = {}
         return {
-          id: call?.id,
+          id: call?.id ?? `call_${Date.now()}_${Math.random().toString(36).slice(2)}`,
           name: String(name),
           arguments: args as Record<string, any>,
         }
       })
-      .filter(Boolean) as Array<{ id?: string; name: string; arguments: Record<string, any> }>
+      .filter((c): c is { id: string; name: string; arguments: Record<string, any> } => c !== null)
   }
 
   private extractAnthropicToolCalls(contentBlocks: any[] | undefined): Array<{ id?: string; name: string; arguments: Record<string, any> }> {
@@ -2291,7 +2274,8 @@ class LLMService {
       content: response.choices[0]?.message?.content || '',
       tokensUsed: response.usage?.total_tokens || 0,
       toolCalls,
-      finishReason: response.choices[0]?.finish_reason || 'stop'
+      finishReason: response.choices[0]?.finish_reason || 'stop',
+      timestamp: new Date(),
     }
   }
 
@@ -2500,7 +2484,8 @@ class LLMService {
       
       yield {
         content,
-        toolCalls: toolCalls.length > 0 ? toolCalls : undefined
+        toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+        isComplete: false
       }
     }
   }

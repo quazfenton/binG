@@ -5,6 +5,9 @@
  * Validates dimensions to prevent abuse.
  */
 import { NextRequest, NextResponse } from 'next/server';
+
+export const runtime = 'edge';
+
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 
 declare global {

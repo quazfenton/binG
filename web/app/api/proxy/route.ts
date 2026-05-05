@@ -16,6 +16,9 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+
+export const runtime = 'edge';
+
 import { sanitizeUrlInput } from '@/lib/utils/sanitize';
 
 // Configuration

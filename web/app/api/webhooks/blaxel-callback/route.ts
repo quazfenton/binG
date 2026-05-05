@@ -8,6 +8,9 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+
+export const runtime = 'edge';
+
 import { verifyBlaxelCallbackFromRequest } from '@/lib/sandbox/providers';
 
 const CALLBACK_SECRET = process.env.BLAXEL_CALLBACK_SECRET;

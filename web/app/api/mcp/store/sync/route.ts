@@ -3,6 +3,9 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+
+export const runtime = 'edge';
+
 import { auth0 } from '@/lib/auth0';
 import { mcpStoreService } from '@/lib/mcp/mcp-store-service';
 import { createLogger } from '@/lib/utils/logger';

@@ -6,6 +6,9 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+
+export const runtime = 'edge';
+
 import { getGitHubOAuthUrl } from '@/lib/github/github-oauth';
 
 export const dynamic = 'force-dynamic';

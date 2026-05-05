@@ -1,4 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
+
+export const runtime = 'edge';
+
 import { z } from 'zod';
 
 // Image search API - uses multiple strategies to find relevant images

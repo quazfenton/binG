@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+export const runtime = 'edge';
+
+
 /**
  * Validates HuggingFace model identifier format.
  * Prevents path traversal and SSRF attacks.

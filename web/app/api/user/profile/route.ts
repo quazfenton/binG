@@ -1,4 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
+
+export const runtime = 'edge';
+
 import { verifyAuth } from '@/lib/auth/jwt';
 import { initializeDatabase, hashPassword, comparePassword } from '@/lib/database/db';
 import { csrfCheckOrReject } from '@/lib/auth/csrf';

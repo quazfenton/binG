@@ -7,6 +7,8 @@
  * Common image generation parameters (ComfyUI-inspired)
  */
 export interface ImageGenerationParams {
+  /** Model to use for generation */
+  model?: string;
   /** Primary text prompt describing the desired image */
   prompt: string;
   /** Negative prompt - what to avoid in the image */
