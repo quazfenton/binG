@@ -281,7 +281,13 @@ export class IndexedDBBackend {
   }
 
   async clear(ownerId: string): Promise<void> {
-    await this.ensureInitialized();
+    // If the IndexedDB hasn't been opened yet, there's nothing to clear — this
+    // is a benign no-op (e.g. user-changed handler firing before init()).
+    // Throwing here used to spam "[useVFS WARN] OPFS: Failed to clear IndexedDB"
+    // on every fresh anonymous session.
+    if (!this.db) {
+      return;
+    }
 
     return new Promise((resolve, reject) => {
       const tx = this.db!.transaction(STORE_NAME, 'readwrite');

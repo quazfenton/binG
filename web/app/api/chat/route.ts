@@ -1192,12 +1192,54 @@ const config: UnifiedAgentConfig = {
 
             try {
               sendStep('Start agentic pipeline', 'started');
-              config.onStreamChunk = (chunk: string) => {
-                // Emit token as before
-                emit(SSE_EVENT_TYPES.TOKEN, { content: chunk, timestamp: Date.now() });
+              // Track whether we've crossed into a [ROLE_SELECT] marker block.
+              // Once we have, suppress further token emissions so the user
+              // never sees the raw routing JSON (or any simulated multi-turn
+              // content the model emits after it). The full content is still
+              // captured server-side for parsing in unified-agent-service.
+              let roleSelectMarkerSeen = false;
+              let charsEmittedSafely = 0; // count of bytes from buffer already emitted
+              const ROLE_SELECT_MARKERS = ['[ROLE_SELECT]', '[ROUTING_METADATA]'];
 
-                // Progressive file edit detection
+              config.onStreamChunk = (chunk: string) => {
+                const previousLen = streamingContentBuffer.length;
                 streamingContentBuffer += chunk;
+
+                if (!roleSelectMarkerSeen) {
+                  // Search for marker in the full buffer (it may straddle chunk boundaries)
+                  let markerIdx = -1;
+                  for (const m of ROLE_SELECT_MARKERS) {
+                    const idx = streamingContentBuffer.indexOf(m);
+                    if (idx !== -1 && (markerIdx === -1 || idx < markerIdx)) markerIdx = idx;
+                  }
+
+                  if (markerIdx !== -1) {
+                    // Emit only the safe portion (before the marker), then suppress
+                    if (markerIdx > charsEmittedSafely) {
+                      const safe = streamingContentBuffer.slice(charsEmittedSafely, markerIdx);
+                      if (safe) emit(SSE_EVENT_TYPES.TOKEN, { content: safe, timestamp: Date.now() });
+                    }
+                    charsEmittedSafely = streamingContentBuffer.length; // skip everything beyond
+                    roleSelectMarkerSeen = true;
+                    chatLogger.debug('[StreamFilter] [ROLE_SELECT] detected, suppressing further tokens', {
+                      markerIdx,
+                      previousLen,
+                    });
+                  } else {
+                    // No marker yet — but the marker could be split across chunks.
+                    // Hold back the trailing N chars in case they form a partial marker.
+                    const HOLDBACK = 16; // longer than '[ROUTING_METADATA]'
+                    const safeUpto = Math.max(charsEmittedSafely, streamingContentBuffer.length - HOLDBACK);
+                    if (safeUpto > charsEmittedSafely) {
+                      const safe = streamingContentBuffer.slice(charsEmittedSafely, safeUpto);
+                      if (safe) emit(SSE_EVENT_TYPES.TOKEN, { content: safe, timestamp: Date.now() });
+                      charsEmittedSafely = safeUpto;
+                    }
+                  }
+                }
+                // else: marker already seen — silently buffer; do not emit tokens
+
+                // Progressive file edit detection (still over full buffer)
                 const newFileEdits = extractIncrementalFileEdits(streamingContentBuffer, fileEditParserState);
 
                 // Filter out invalid paths and empty content to prevent UI polling loops
@@ -1269,6 +1311,15 @@ const config: UnifiedAgentConfig = {
 
               const result = await processUnifiedAgentRequest(config);
               sendStep('Start agentic pipeline', result.success ? 'completed' : 'failed');
+
+              // Flush any holdback chars that were withheld for partial-marker detection
+              // (only when no [ROLE_SELECT] marker was seen). Without this, the last
+              // ~16 chars of a clean response would be silently dropped from the UI.
+              if (!roleSelectMarkerSeen && charsEmittedSafely < streamingContentBuffer.length) {
+                const flush = streamingContentBuffer.slice(charsEmittedSafely);
+                if (flush) emit(SSE_EVENT_TYPES.TOKEN, { content: flush, timestamp: Date.now() });
+                charsEmittedSafely = streamingContentBuffer.length;
+              }
 
               // FIX: Final parse after stream completes to catch any remaining edits
               // The closing >>> may have arrived in the last chunk
@@ -1566,9 +1617,16 @@ const config: UnifiedAgentConfig = {
                 }
               }
 
+              // Prefer the server-cleaned response (markers stripped, simulated-turn
+                // truncation applied) over the raw streaming buffer. Falls back to the
+                // buffer only if the server didn't return text (shouldn't happen).
+              const finalContent = (typeof result.response === 'string' && result.response.trim())
+                ? result.response
+                : streamingContentBuffer;
+
               emit(SSE_EVENT_TYPES.DONE, {
                 success: result.success,
-                content: streamingContentBuffer || (typeof result.response === 'string' ? result.response : ''),
+                content: finalContent,
                 messageMetadata: {
                   agent: 'unified',
                   mode: result.mode,

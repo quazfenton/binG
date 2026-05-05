@@ -64,6 +64,8 @@ import {
   shouldTriggerReview,
   generateStepReprompt,
   routingToRoleRedirectSection,
+  truncateAtFirstRouting,
+  buildRoutingMetadataForClient,
   type RoutingMetadata,
   type ParsedRouting,
 } from '@bing/shared/agent/first-response-routing';
@@ -301,13 +303,19 @@ export interface UnifiedAgentResult {
     duration?: number;
     workflowId?: string;
     workflowSteps?: Array<{ id: string; name: string; status: string }>;
-    /** Parsed routing metadata from first-response [ROUTING_METADATA] block */
+    /** Parsed routing metadata from first-response [ROLE_SELECT] block.
+     * Shape matches buildRoutingMetadataForClient() — the client (use-enhanced-chat.ts)
+     * reads `stepReprompt`, `primaryRole`, `estimatedSteps`, and `continue`. */
     routing?: {
       classification?: string;
       complexity?: string;
       suggestedRole?: string;
+      primaryRole?: string;
       specializationRoute?: string;
-      planSteps?: number;
+      /** Full ordered list of planned steps (each with role + suggested tool) */
+      planSteps?: any[];
+      /** Convenience count, mirrors planSteps.length */
+      estimatedSteps?: number;
       continue?: boolean;
       reviewTriggered?: boolean;
       reviewReason?: string;
@@ -2166,9 +2174,94 @@ async function runV1ApiWithTools(
         }
       }
 
+      // ─── First-Response Routing Parsing ───
+      // Parse [ROLE_SELECT] block from response (if present), build a client-friendly
+      // routing payload (with stepReprompt) so the chat UI can auto-continue multi-step
+      // flows, and clean the response so the marker isn't shown to the user.
+      let routingForClient: ReturnType<typeof buildRoutingMetadataForClient> | undefined;
+      try {
+        const parsedRouting = parseFirstResponseRouting(response);
+        if (parsedRouting.found && parsedRouting.routing) {
+          routingForClient = buildRoutingMetadataForClient(parsedRouting.routing);
+          log.info('[V1-API-WITH-TOOLS] [RoleSelect] Parsed routing', {
+            classification: parsedRouting.routing.classification,
+            role: parsedRouting.routing.suggestedRole,
+            continue: parsedRouting.routing.continue,
+            planSteps: parsedRouting.routing.planSteps?.length || 0,
+            willAutoContinue: routingForClient.continue,
+          });
+        }
+      } catch (err: any) {
+        log.warn('[V1-API-WITH-TOOLS] [RoleSelect] Parse failed', { error: err?.message });
+      }
+
+      // Truncate at first [ROLE_SELECT] (drops simulated multi-turn output) and strip
+      // any remaining marker blocks for safety. This is the user-visible response.
+      const truncated = truncateAtFirstRouting(response);
+      const cleanedResponse = stripRoutingMarkers(truncated);
+
+      // ─── Tool-failure auto-retry with feedback injection ───
+      // If the model invoked tools but they all failed validation (or returned
+      // retryable errors) AND the cleaned response is empty, the user sees
+      // "no response generated" with no recovery. Self-heal by re-prompting
+      // the model with the validation error appended to messages so it can fix
+      // the call. Bounded by config._toolFailureRetryCount to prevent infinite loops.
+      const allToolsFailed =
+        toolInvocations.length > 0 &&
+        toolInvocations.every((inv) => inv.result?.success === false);
+      const responseEmpty = !cleanedResponse || cleanedResponse.trim().length === 0;
+      const retryCount = ((config as any)._toolFailureRetryCount as number) || 0;
+      const MAX_TOOL_FAILURE_RETRIES = 1;
+      if (allToolsFailed && responseEmpty && retryCount < MAX_TOOL_FAILURE_RETRIES) {
+        const failureSummaries = toolInvocations.map((inv) => {
+          const err = inv.result?.error;
+          const errMsg = typeof err === 'string'
+            ? err
+            : (err?.message || JSON.stringify(err) || 'unknown error');
+          const suggestion = (typeof err === 'object' && err?.suggestedNextAction) || '';
+          return `- Tool "${inv.toolName}" called with args ${JSON.stringify(inv.args).slice(0, 300)} failed: ${errMsg}. ${suggestion}`;
+        });
+
+        const feedbackMsg = `[TOOL-FAILURE-FEEDBACK] Your previous tool call(s) failed validation. Fix and retry:\n${failureSummaries.join('\n')}\n\nIMPORTANT: Provide ALL required arguments for each tool. For batch_write specifically, you MUST include the "files" array (e.g., [{ "path": "...", "content": "..." }, ...]).`;
+
+        log.warn('[V1-API-WITH-TOOLS] [SelfHeal] Auto-retrying after tool-failure(s)', {
+          failedToolCount: toolInvocations.length,
+          retryCount: retryCount + 1,
+        });
+
+        // Track retries so we don't loop forever
+        (config as any)._toolFailureRetryCount = retryCount + 1;
+
+        // Append assistant ack + system feedback so the next call retries the tool
+        const retryMessages = [
+          ...messages,
+          {
+            role: 'assistant' as const,
+            content: '',
+          },
+          {
+            role: 'system' as const,
+            content: feedbackMsg,
+          },
+          {
+            role: 'user' as const,
+            content: 'Please retry the failed tool call(s) above with the correct arguments now.',
+          },
+        ];
+
+        try {
+          return await runV1ApiWithTools(config, retryMessages, startTime);
+        } catch (retryErr: any) {
+          log.warn('[V1-API-WITH-TOOLS] [SelfHeal] Retry failed, returning original result', {
+            error: retryErr?.message,
+          });
+          // Fall through to return original failed result (don't loop)
+        }
+      }
+
       return {
         success: true,
-        response: response || 'No response generated',
+        response: cleanedResponse || response || 'No response generated',
         steps,
         totalSteps: steps.length,
         mode: 'v1-api',
@@ -2180,6 +2273,7 @@ async function runV1ApiWithTools(
           fallbackChain: providerName !== primaryProvider
             ? uniqueProviders.slice(0, uniqueProviders.indexOf(providerName) + 1)
             : [],
+          ...(routingForClient ? { routing: routingForClient } : {}),
         },
       };
     } catch (error: any) {
@@ -2479,8 +2573,16 @@ async function runV1Orchestrated(
       model,
     ).catch(() => {});
 
-    // Strip routing markers before returning to client
-    const cleanedResponse = stripRoutingMarkers(content);
+    // Truncate at first [ROLE_SELECT] (drops simulated multi-turn) and strip
+    // any remaining markers so the client never sees the raw routing JSON.
+    const truncatedContent = truncateAtFirstRouting(content);
+    const cleanedResponse = stripRoutingMarkers(truncatedContent);
+
+    // Build the client-facing routing metadata (with stepReprompt) so the chat
+    // UI can auto-continue multi-step plans. Falls back to undefined when no
+    // routing block was parsed.
+    const roleSelectMeta = (config as any)._roleSelectMetadata as RoutingMetadata | undefined;
+    const routingForClient = roleSelectMeta ? buildRoutingMetadataForClient(roleSelectMeta) : undefined;
 
     return {
       success: true,
@@ -2493,13 +2595,14 @@ async function runV1Orchestrated(
         model,
         duration,
         orchestrator: true,
-        roleSelection: (config as any)._roleSelectMetadata ? {
-          classification: (config as any)._roleSelectMetadata.classification,
-          complexity: (config as any)._roleSelectMetadata.complexity,
-          suggestedRole: (config as any)._roleSelectMetadata.suggestedRole,
-          specializationRoute: (config as any)._roleSelectMetadata.specializationRoute,
-          planSteps: (config as any)._roleSelectMetadata.planSteps?.length || 0,
-          continue: (config as any)._roleSelectMetadata.continue,
+        ...(routingForClient ? { routing: routingForClient } : {}),
+        roleSelection: roleSelectMeta ? {
+          classification: roleSelectMeta.classification,
+          complexity: roleSelectMeta.complexity,
+          suggestedRole: roleSelectMeta.suggestedRole,
+          specializationRoute: roleSelectMeta.specializationRoute,
+          planSteps: roleSelectMeta.planSteps?.length || 0,
+          continue: roleSelectMeta.continue,
           reviewTriggered: (config as any)._reviewTriggered || false,
           reviewReason: (config as any)._reviewReason || undefined,
         } : undefined,
@@ -2799,8 +2902,27 @@ async function runV1ApiCompletion(
         }
       }
 
-      // Strip routing markers before returning to client
-      const cleanedResponse = stripRoutingMarkers(content);
+      // Parse [ROLE_SELECT] (text-mode routing), truncate at the first marker
+      // so simulated continuation turns are dropped, and strip any remaining
+      // marker blocks for safety. Build routing metadata for client auto-continue.
+      let routingForClientCompletion: ReturnType<typeof buildRoutingMetadataForClient> | undefined;
+      try {
+        const parsedCompletionRouting = parseFirstResponseRouting(content);
+        if (parsedCompletionRouting.found && parsedCompletionRouting.routing) {
+          routingForClientCompletion = buildRoutingMetadataForClient(parsedCompletionRouting.routing);
+          log.info('[V1-API-COMPLETION] [RoleSelect] Parsed routing', {
+            classification: parsedCompletionRouting.routing.classification,
+            role: parsedCompletionRouting.routing.suggestedRole,
+            continue: parsedCompletionRouting.routing.continue,
+            planSteps: parsedCompletionRouting.routing.planSteps?.length || 0,
+            willAutoContinue: routingForClientCompletion.continue,
+          });
+        }
+      } catch (err: any) {
+        log.warn('[V1-API-COMPLETION] [RoleSelect] Parse failed', { error: err?.message });
+      }
+      const truncatedCompletion = truncateAtFirstRouting(content);
+      const cleanedResponse = stripRoutingMarkers(truncatedCompletion);
 
 return {
         success: true,
@@ -2814,6 +2936,7 @@ return {
           // CRITICAL FIX: Include collected file edits and tool calls
           fileEdits: fileEdits.length > 0 ? fileEdits : undefined,
           toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+          ...(routingForClientCompletion ? { routing: routingForClientCompletion } : {}),
         },
       };
     } catch (error: any) {
