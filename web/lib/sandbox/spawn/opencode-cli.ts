@@ -184,12 +184,24 @@ export class OpencodeV2Provider implements LLMProvider {
           }
         }
       } else {
-        // On Linux, convert /workspace/... to /home/user/workspace/...
-        // SECURITY: Sanitize workspace directory path
+        const path = await import('path');
         const sanitizedWorkspace = this.sanitizePath(workspaceDir);
-        localWorkspaceDir = sanitizedWorkspace && sanitizedWorkspace.startsWith('/workspace/')
-          ? sanitizedWorkspace.replace('/workspace/', '/home/user/workspace/')
-          : (sanitizedWorkspace || '');
+
+        if (sanitizedWorkspace?.startsWith('project/')) {
+          const relativePart = sanitizedWorkspace.replace(/^project\//, '');
+          localWorkspaceDir = isWindows
+            ? path.join(process.env.TEMP || process.env.TMP || 'C:\\temp', 'workspace', relativePart)
+            : path.join('/tmp/workspace', relativePart);
+        } else if (sanitizedWorkspace?.startsWith('/workspace/')) {
+          localWorkspaceDir = sanitizedWorkspace.replace(
+            '/workspace/',
+            isWindows
+              ? `${process.env.TEMP || process.env.TMP || 'C:\\temp'}\\workspace\\`
+              : '/home/user/workspace/'
+          );
+        } else {
+          localWorkspaceDir = '';
+        }
       }
 
       if (!localWorkspaceDir) {
@@ -346,8 +358,6 @@ export class OpencodeV2Provider implements LLMProvider {
                 // Standard tool execution
                 try {
                   toolResult = await executeTool(toolName, safeArgs);
-                  // Ensure the callback is awaited if it returns a promise, or just called
-                  await Promise.resolve(onToolExecution?.(toolName, safeArgs, toolResult));
                 } catch (err) {
                   toolResult = {
                     success: false,
@@ -356,9 +366,15 @@ export class OpencodeV2Provider implements LLMProvider {
                   };
                 }
 
+                try {
+                  await Promise.resolve(onToolExecution?.(toolName, safeArgs, toolResult));
+                } catch (callbackError) {
+                  logger.error(`onToolExecution failed for ${toolName}`, callbackError);
+                }
+
                 console.log('[OpencodeV2Provider] === TOOL RESULT ===');
                 console.log('[OpencodeV2Provider] Tool:', toolName, '- Success:', toolResult.success);
-                console.log('[OpencodeV2Provider] Output:', toolResult.output?.substring(0, 200));
+                console.log('[OpencodeV2Provider] Output length:', toolResult.output?.length ?? 0);
                 console.log('[OpencodeV2Provider] Exit code:', toolResult.exitCode);
                 console.log('[OpencodeV2Provider] ===================');
 

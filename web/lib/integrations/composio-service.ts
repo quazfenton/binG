@@ -906,12 +906,12 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
     },
 
     async getToolsForToolkit(toolkit: string): Promise<any[]> {
-      if (!this.isAllowedToolkit(toolkit)) {
+      if (!isAllowedToolkit(toolkit, config)) {
         return [];
       }
       try {
         const { Composio } = await import('@composio/core');
-        const composio = new Composio({ apiKey: this.config.apiKey });
+        const composio = new Composio({ apiKey: config.apiKey });
         return await loadToolsForRequest(composio, 'default', [toolkit]);
       } catch (error: any) {
         console.error('[ComposioService] Failed to get tools for toolkit:', toolkit, error.message);
@@ -921,13 +921,13 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
 
     async executeTool(toolName: string, params: any, userId: string): Promise<any> {
       const toolkit = String(toolName).split('_')[0] || '';
-      if (toolkit && !this.isAllowedToolkit(toolkit)) {
+      if (toolkit && !isAllowedToolkit(toolkit, config)) {
         throw new Error(`Composio toolkit "${toolkit}" is not allowed`);
       }
-      
+
       try {
         const { Composio } = await import('@composio/core');
-        const composio = new Composio({ apiKey: this.config.apiKey });
+        const composio = new Composio({ apiKey: config.apiKey });
         
         let result: any;
         try {
@@ -1031,6 +1031,16 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
       }
     },
   };
+}
+
+/**
+ * Helper function to check if a toolkit is allowed based on restricted toolkits config
+ */
+function isAllowedToolkit(toolkit: string, config: ComposioServiceConfig): boolean {
+  if (!config.restrictedToolkits?.length) return true;
+  return config.restrictedToolkits
+    .map((value) => value.toLowerCase())
+    .includes(toolkit.toLowerCase());
 }
 
 /**

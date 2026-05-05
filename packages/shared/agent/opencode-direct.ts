@@ -119,7 +119,7 @@ export async function runOpenCodeDirect(options: OpenCodeDirectOptions): Promise
   );
 
   // Use OpencodeV2Provider directly
-  const { OpencodeV2Provider } = await import('../lib/sandbox/spawn/opencode-cli');
+  const { OpencodeV2Provider } = await import('@/lib/sandbox/spawn/opencode-cli');
   const { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } = await import('@/lib/mcp');
 
   const provider = new OpencodeV2Provider({

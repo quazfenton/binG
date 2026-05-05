@@ -123,9 +123,21 @@ class DesktopFs implements FsAdapter {
   async copyFile(src: string, dest: string): Promise<void> {
     try {
       const { copyFile, BaseDirectory } = await import('@tauri-apps/plugin-fs');
-      // For copyFile, we might need a baseDir for both src and dest, assuming Home for now if not absolute
+      
+      // Determine base directories for source and destination
       const srcBaseDir = this.getBaseDir(src, BaseDirectory);
       const destBaseDir = this.getBaseDir(dest, BaseDirectory);
+      
+      // Validate that both paths are either absolute or relative
+      // Tauri requires consistent base directory handling
+      const srcIsAbsolute = this.isAbsolute(src);
+      const destIsAbsolute = this.isAbsolute(dest);
+      
+      if (srcIsAbsolute !== destIsAbsolute) {
+        throw new Error(
+          `Cannot copy between absolute and relative paths: src="${src}" (${srcIsAbsolute ? 'absolute' : 'relative'}), dest="${dest}" (${destIsAbsolute ? 'absolute' : 'relative'})`
+        );
+      }
       
       // Tauri v2 uses fromPathBaseDir and toPathBaseDir
       await copyFile(src, dest, { fromPathBaseDir: srcBaseDir, toPathBaseDir: destBaseDir });
@@ -137,7 +149,53 @@ class DesktopFs implements FsAdapter {
   async openFileDialog(options?: { accept?: string; multiple?: boolean }): Promise<File[] | string[]> {
     try {
       const { open } = await import('@tauri-apps/plugin-dialog');
-      const filters = options?.accept ? [{ name: 'File', extensions: [options.accept.replace('.', '')] }] : undefined;
+      
+      // Parse accept string to support multiple extensions and MIME types
+      // Examples: '.png,.jpg', 'image/*', '.txt,.md,.json'
+      let filters = undefined;
+      if (options?.accept) {
+        const extensions: string[] = [];
+        const acceptParts = options.accept.split(',').map(part => part.trim());
+        
+        for (const part of acceptParts) {
+          if (part.startsWith('.')) {
+            // Extension: .png, .jpg
+            extensions.push(part.replace(/^\./, ''));
+          } else if (part.includes('/')) {
+            // MIME type: image/*, application/json
+            // Map common MIME types to extensions
+            const mimeToExt: Record<string, string[]> = {
+              'image/*': ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'svg', 'webp'],
+              'image/png': ['png'],
+              'image/jpeg': ['jpg', 'jpeg'],
+              'image/gif': ['gif'],
+              'image/svg+xml': ['svg'],
+              'image/webp': ['webp'],
+              'text/*': ['txt', 'md', 'csv', 'json', 'xml', 'html', 'css', 'js', 'ts'],
+              'text/plain': ['txt'],
+              'text/markdown': ['md'],
+              'application/json': ['json'],
+              'application/xml': ['xml'],
+              'text/html': ['html', 'htm'],
+              'text/css': ['css'],
+              'application/pdf': ['pdf'],
+              'application/zip': ['zip'],
+            };
+            
+          const exts = mimeToExt[part.toLowerCase()];
+            if (exts) {
+              extensions.push(...exts);
+            }
+          }
+        }
+        
+        if (extensions.length > 0) {
+          // Remove duplicates
+          const uniqueExtensions = [...new Set(extensions)];
+          filters = [{ name: 'Files', extensions: uniqueExtensions }];
+        }
+      }
+      
       const result = await open({
         multiple: options?.multiple ?? false,
         directory: false,

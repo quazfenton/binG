@@ -151,17 +151,24 @@ export function parseFirstResponseRouting(responseText: string): ParsedRouting {
     return { found: false, error: 'Empty response' };
   }
 
-  // Support both new and legacy markers
-  const markerIndex = responseText.indexOf('[ROLE_SELECT]') !== -1 
-    ? responseText.indexOf('[ROLE_SELECT]')
-    : responseText.indexOf('[ROUTING_METADATA]');
-
-  if (markerIndex === -1) {
-    return { found: false, error: 'No [ROLE_SELECT] marker found in response' };
+  // Support both new and legacy markers; pick the earliest occurrence
+  const roleSelectIdx = responseText.indexOf('[ROLE_SELECT]');
+  const legacyIdx = responseText.indexOf('[ROUTING_METADATA]');
+  let markerIndex = -1;
+  let markerText = '[ROLE_SELECT]';
+  
+  if (roleSelectIdx !== -1 && (legacyIdx === -1 || roleSelectIdx <= legacyIdx)) {
+    markerIndex = roleSelectIdx;
+    markerText = '[ROLE_SELECT]';
+  } else if (legacyIdx !== -1) {
+    markerIndex = legacyIdx;
+    markerText = '[ROUTING_METADATA]';
   }
 
-  // Find where the marker ends to start looking for JSON
-  const markerText = responseText.includes('[ROLE_SELECT]') ? '[ROLE_SELECT]' : '[ROUTING_METADATA]';
+  if (markerIndex === -1) {
+    return { found: false, error: 'No [ROLE_SELECT] or [ROUTING_METADATA] marker found in response' };
+  }
+
   const afterMarker = responseText.slice(markerIndex + markerText.length).trim();
   
   const jsonObject = extractFirstJsonObject(afterMarker);
@@ -183,6 +190,17 @@ export function parseFirstResponseRouting(responseText: string): ParsedRouting {
  */
 function validateAndNormalize(parsed: Record<string, any>, rawJson?: string): ParsedRouting {
   try {
+    // Helper to normalize boolean values from LLM output
+    const normalizeBoolean = (value: unknown): boolean | undefined => {
+      if (typeof value === 'boolean') return value;
+      if (typeof value === 'string') {
+        const normalized = value.trim().toLowerCase();
+        if (normalized === 'true') return true;
+        if (normalized === 'false') return false;
+      }
+      return undefined;
+    };
+
     const routing: RoutingMetadata = {
       classification: parsed.classification || DEFAULT_ROUTING.classification,
       complexity: parsed.complexity || DEFAULT_ROUTING.complexity,
@@ -191,7 +209,10 @@ function validateAndNormalize(parsed: Record<string, any>, rawJson?: string): Pa
       toolCallOptions: Array.isArray(parsed.toolCallOptions) ? parsed.toolCallOptions : DEFAULT_ROUTING.toolCallOptions,
       specializationRoute: parsed.specializationRoute || DEFAULT_ROUTING.specializationRoute,
       planSteps: Array.isArray(parsed.planSteps) ? parsed.planSteps : DEFAULT_ROUTING.planSteps,
-      continue: parsed.continue !== undefined ? !!parsed.continue : (parsed.requiresAutoReprompt !== undefined ? !!parsed.requiresAutoReprompt : false),
+      continue:
+        normalizeBoolean(parsed.continue) ??
+        normalizeBoolean(parsed.requiresAutoReprompt) ??
+        false,
     };
 
     return {

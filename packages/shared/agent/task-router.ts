@@ -743,7 +743,7 @@ class TaskRouter {
       };
     }
 
-    const { OpencodeV2Provider } = await import('../lib/sandbox/spawn/opencode-cli');
+    const { OpencodeV2Provider } = await import('@/lib/sandbox/spawn/opencode-cli');
     const { agentSessionManager } = await import('@/lib/session/agent/agent-session-manager');
     const { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } = await import('@/lib/mcp');
 

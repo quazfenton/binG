@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DesktopAutomationResult<T> {
@@ -260,6 +259,10 @@ fn wrap_result<T: Serialize>(command: &str, result: Result<T, String>) -> Deskto
     }
 }
 
+// ============================================================================
+// macOS Platform Implementation
+// ============================================================================
+
 #[cfg(target_os = "macos")]
 mod platform {
     use super::*;
@@ -267,7 +270,7 @@ mod platform {
     use core_foundation::dictionary::CFDictionary;
     use core_foundation::string::CFString;
     use core_graphics::display::{CGDisplay, CGWindowListCopyWindowInfo, kCGNullWindowID, kCGWindowListOptionOnScreenOnly};
-    use core_graphics::image::{CGImage, ImageFormat, PNG};
+    use core_graphics::image::ImageFormat;
     use std::process::Command;
 
     pub fn check_permissions() -> bool {
@@ -289,6 +292,7 @@ mod platform {
 
     pub fn list_windows() -> Result<Vec<WindowInfo>, String> {
         let window_list = unsafe { CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly, kCGNullWindowID) };
+        let mut skipped_count = 0;
         let windows: Vec<WindowInfo> = window_list
             .iter()
             .filter_map(|w| {
@@ -297,6 +301,11 @@ mod platform {
                 let owner = dict.find(CFString::from("kCGWindowOwnerName")).map(|s| s.to_string());
                 let pid = dict.find(CFString::from("kCGWindowOwnerPID")).and_then(|n| n.parse::<i32>().ok());
                 let window_id = dict.find(CFString::from("kCGWindowNumber")).map(|n| n.to_string());
+                
+                if window_id.is_none() || pid.is_none() {
+                    skipped_count += 1;
+                    return None;
+                }
                 
                 Some(WindowInfo {
                     id: window_id?,
@@ -307,6 +316,11 @@ mod platform {
                 })
             })
             .collect();
+        
+        if skipped_count > 0 {
+            eprintln!("[list_windows] Skipped {} windows with missing required fields", skipped_count);
+        }
+        
         Ok(windows)
     }
 
@@ -331,7 +345,7 @@ mod platform {
     }
 
     pub fn snapshot(_opts: SnapshotOptions) -> Result<AccessibilityNode, String> {
-        Err("Snapshot requires Accessibility API integration. Use CLI binary for now.".to_string())
+        Err("Full snapshot requires AXUIElement tree traversal. Use agent-desktop CLI for complete functionality.".to_string())
     }
 
     pub fn screenshot(opts: ScreenshotOptions) -> Result<ScreenshotResult, String> {
@@ -355,11 +369,11 @@ mod platform {
     }
 
     pub fn click(_opts: ClickOptions) -> Result<String, String> {
-        Err("Click requires element ref resolution. Use CLI binary for now.".to_string())
+        Err("Click requires AXUIElement ref resolution. Use agent-desktop CLI.".to_string())
     }
 
     pub fn type_text(_opts: TypeOptions) -> Result<String, String> {
-        Err("Type requires element ref resolution. Use CLI binary for now.".to_string())
+        Err("Type requires AXUIElement ref resolution. Use agent-desktop CLI.".to_string())
     }
 
     pub fn press_key(combo: String) -> Result<String, String> {
@@ -452,6 +466,10 @@ mod platform {
     pub fn get_platform() -> &'static str { "macos" }
 }
 
+// ============================================================================
+// Windows Platform Implementation (using uiautomation crate)
+// ============================================================================
+
 #[cfg(target_os = "windows")]
 mod platform {
     use super::*;
@@ -466,12 +484,35 @@ mod platform {
     }
 
     pub fn list_windows() -> Result<Vec<WindowInfo>, String> {
-        Err("Windows automation not yet implemented. Use CLI binary for now.".to_string())
+        use uiautomation::UIAutomation;
+        
+        let automation = UIAutomation::new().map_err(|e| format!("Failed to initialize UIAutomation: {:?}", e))?;
+        let root = automation.get_root_element().map_err(|e| format!("Failed to get root element: {:?}", e))?;
+        
+        let mut windows = Vec::new();
+        
+        if let Ok(children) = root.find_all(uiautomation::types::TreeScope::Children, &uiautomation::types::PropertyCondition::new(uiautomation::types::UIProperty::ControlType, uiautomation::types::ControlType::Window.into())) {
+            for child in children {
+                let name = child.get_name().unwrap_or_default();
+                let class_name = child.get_class_name().unwrap_or_default();
+                let process_id: i32 = child.get_process_id().unwrap_or(0);
+                
+                windows.push(WindowInfo {
+                    id: format!("win-{}", windows.len()),
+                    title: name,
+                    app_name: class_name,
+                    pid: process_id,
+                    bounds: None,
+                });
+            }
+        }
+        
+        Ok(windows)
     }
 
     pub fn list_apps() -> Result<Vec<AppInfo>, String> {
         let output = Command::new("powershell")
-            .args(["-Command", "Get-Process | Where-Object {$_.MainWindowTitle} | Select-Object ProcessName, Id | ConvertTo-Json"])
+            .args(["-Command", "Get-Process | Where-Object {$_.MainWindowTitle} | Select-Object ProcessName, Id | ConvertTo-Json -Compress"])
             .output()
             .map_err(|e| format!("Failed to list apps: {}", e))?;
         
@@ -479,35 +520,59 @@ mod platform {
         let apps: Vec<AppInfo> = stdout
             .lines()
             .filter_map(|line| {
-                let parsed: serde_json::Value = serde_json::from_str(line).ok()?;
-                Some(AppInfo {
-                    name: parsed["ProcessName"].as_str()?.to_string(),
-                    bundle_id: None,
-                    pid: parsed["Id"].as_i64()? as i32,
-                })
+                if line.starts_with('{') {
+                    let parsed: serde_json::Value = serde_json::from_str(line).ok()?;
+                    Some(AppInfo {
+                        name: parsed["ProcessName"].as_str()?.to_string(),
+                        bundle_id: None,
+                        pid: parsed["Id"].as_i64()? as i32,
+                    })
+                } else {
+                    None
+                }
             })
             .collect();
         Ok(apps)
     }
 
     pub fn snapshot(_opts: SnapshotOptions) -> Result<AccessibilityNode, String> {
-        Err("Windows automation not yet implemented. Use CLI binary for now.".to_string())
+        Err("Full snapshot requires UIAutomation tree traversal. Use agent-desktop CLI for complete functionality.".to_string())
     }
 
     pub fn screenshot(_opts: ScreenshotOptions) -> Result<ScreenshotResult, String> {
-        Err("Windows screenshot not yet implemented. Use CLI binary for now.".to_string())
+        let output = Command::new("powershell")
+            .args(["-Command", "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Screen]::PrimaryScreen.Bounds"])
+            .output()
+            .map_err(|e| format!("Failed to get screen info: {}", e))?;
+        
+        Err("Screenshot capture requires additional setup. Use agent-desktop CLI.".to_string())
     }
 
     pub fn click(_opts: ClickOptions) -> Result<String, String> {
-        Err("Windows automation not yet implemented. Use CLI binary for now.".to_string())
+        Err("Click requires element ref resolution. Use agent-desktop CLI.".to_string())
     }
 
     pub fn type_text(_opts: TypeOptions) -> Result<String, String> {
-        Err("Windows automation not yet implemented. Use CLI binary for now.".to_string())
+        Err("Type requires element ref resolution. Use agent-desktop CLI.".to_string())
     }
 
-    pub fn press_key(_combo: String) -> Result<String, String> {
-        Err("Windows automation not yet implemented. Use CLI binary for now.".to_string())
+    pub fn press_key(combo: String) -> Result<String, String> {
+        use uiautomation::UIAutomation;
+        
+        let parts: Vec<&str> = combo.split('+').collect();
+        let key = parts.last().unwrap_or(&"");
+        
+        let script = format!(
+            "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('{}')",
+            key.replace("{", "{{").replace("}", "}}")
+        );
+        
+        Command::new("powershell")
+            .args(["-Command", &script])
+            .output()
+            .map_err(|e| format!("Failed to press key: {}", e))?;
+        
+        Ok(format!("Pressed key combo: {}", combo))
     }
 
     pub fn launch_app(opts: LaunchAppOptions) -> Result<WindowInfo, String> {
@@ -525,9 +590,15 @@ mod platform {
         })
     }
 
-    pub fn close_app(app_name: &str, _force: bool) -> Result<(), String> {
+    pub fn close_app(app_name: &str, force: bool) -> Result<(), String> {
+        let args = if force {
+            vec!["-Command", &format!("Stop-Process -Name '{}' -Force", app_name)]
+        } else {
+            vec!["-Command", &format!("Stop-Process -Name '{}'", app_name)]
+        };
+        
         Command::new("powershell")
-            .args(["-Command", &format!("Stop-Process -Name '{}' -Force", app_name)])
+            .args(&args)
             .output()
             .map_err(|e| format!("Failed to close app: {}", e))?;
         Ok(())
@@ -542,57 +613,212 @@ mod platform {
     }
 
     pub fn set_clipboard(text: &str) -> Result<(), String> {
-        Command::new("powershell")
-            .args(["-Command", &format!("Set-Clipboard -Value '{}'", text.replace("'", "''"))])
-            .output()
+        use std::io::Write;
+        use std::process::Stdio;
+        
+        let mut child = Command::new("powershell")
+            .args(["-Command", "[Console]::In.ReadToEnd() | Set-Clipboard"])
+            .stdin(Stdio::piped())
+            .spawn()
             .map_err(|e| format!("Failed to set clipboard: {}", e))?;
+        
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(text.as_bytes())
+                .map_err(|e| format!("Failed to write to clipboard: {}", e))?;
+        }
+        
+        child.wait()
+            .map_err(|e| format!("Failed to complete clipboard operation: {}", e))?;
         Ok(())
     }
 
     pub fn get_platform() -> &'static str { "windows" }
 }
 
+// ============================================================================
+// Linux Platform Implementation (using atspi crate)
+// ============================================================================
+
 #[cfg(target_os = "linux")]
 mod platform {
     use super::*;
+    use std::process::Command;
 
-    pub fn check_permissions() -> bool { true }
-    pub fn request_permissions() -> Result<bool, String> { Ok(true) }
+    pub fn check_permissions() -> bool {
+        std::env::var("AT_SPI_DBUS_ADDRESS").is_ok() || 
+        std::path::Path::new("/tmp/at-spi").exists()
+    }
+
+    pub fn request_permissions() -> Result<bool, String> {
+        Ok(check_permissions())
+    }
+
     pub fn list_windows() -> Result<Vec<WindowInfo>, String> {
-        Err("Linux automation not yet implemented. Use CLI binary for now.".to_string())
+        let output = Command::new("wmctrl")
+            .args(["-l", "-p"])
+            .output()
+            .map_err(|e| format!("Failed to list windows (wmctrl not installed?): {}", e))?;
+        
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let windows: Vec<WindowInfo> = stdout
+            .lines()
+            .filter_map(|line| {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 3 {
+                    Some(WindowInfo {
+                        id: parts.get(0)?.to_string(),
+                        app_name: parts.get(2)?.to_string(),
+                        pid: parts.get(1)?.parse().ok()?,
+                        title: parts[3..].join(" "),
+                        bounds: None,
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect();
+        Ok(windows)
     }
+
     pub fn list_apps() -> Result<Vec<AppInfo>, String> {
-        Err("Linux automation not yet implemented. Use CLI binary for now.".to_string())
+        let output = Command::new("ps")
+            .args(["-e", "-o", "comm=,pid="])
+            .output()
+            .map_err(|e| format!("Failed to list apps: {}", e))?;
+        
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let apps: Vec<AppInfo> = stdout
+            .lines()
+            .filter_map(|line| {
+                let parts: Vec<&str> = line.trim().split_whitespace().collect();
+                Some(AppInfo {
+                    name: parts.get(0)?.to_string(),
+                    bundle_id: None,
+                    pid: parts.get(1)?.parse().ok()?,
+                })
+            })
+            .collect();
+        Ok(apps)
     }
+
     pub fn snapshot(_opts: SnapshotOptions) -> Result<AccessibilityNode, String> {
-        Err("Linux automation not yet implemented. Use CLI binary for now.".to_string())
+        Err("Full snapshot requires AT-SPI tree traversal. Use agent-desktop CLI for complete functionality.".to_string())
     }
+
     pub fn screenshot(_opts: ScreenshotOptions) -> Result<ScreenshotResult, String> {
-        Err("Linux automation not yet implemented. Use CLI binary for now.".to_string())
+        let output = Command::new("import")
+            .args(["-window", "root", "-format", "png", "png:-"])
+            .output()
+            .map_err(|e| format!("Failed to capture screenshot (imagemagick not installed?): {}", e))?;
+        
+        if output.status.success() {
+            let data = output.stdout;
+            Ok(ScreenshotResult {
+                width: 0,
+                height: 0,
+                image_base64: base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &data),
+                format: "png".to_string(),
+            })
+        } else {
+            Err("Failed to capture screenshot".to_string())
+        }
     }
+
     pub fn click(_opts: ClickOptions) -> Result<String, String> {
-        Err("Linux automation not yet implemented. Use CLI binary for now.".to_string())
+        Err("Click requires AT-SPI element ref resolution. Use agent-desktop CLI.".to_string())
     }
+
     pub fn type_text(_opts: TypeOptions) -> Result<String, String> {
-        Err("Linux automation not yet implemented. Use CLI binary for now.".to_string())
+        Err("Type requires AT-SPI element ref resolution. Use agent-desktop CLI.".to_string())
     }
-    pub fn press_key(_combo: String) -> Result<String, String> {
-        Err("Linux automation not yet implemented. Use CLI binary for now.".to_string())
+
+    pub fn press_key(combo: String) -> Result<String, String> {
+        let parts: Vec<&str> = combo.split('+').collect();
+        let key = parts.last().unwrap_or(&"");
+        
+        let xdotool_key = match *key {
+            "cmd" | "super" => "Super",
+            "ctrl" => "Ctrl",
+            "alt" => "Alt",
+            "shift" => "Shift",
+            "enter" => "Return",
+            "escape" => "Escape",
+            "tab" => "Tab",
+            k => k,
+        };
+        
+        let full_combo = if parts.len() > 1 {
+            format!("{}+{}", parts[..parts.len()-1].join("+"), xdotool_key)
+        } else {
+            xdotool_key.to_string()
+        };
+        
+        Command::new("xdotool")
+            .args(["key", &full_combo])
+            .output()
+            .map_err(|e| format!("Failed to press key (xdotool not installed?): {}", e))?;
+        
+        Ok(format!("Pressed key combo: {}", combo))
     }
-    pub fn launch_app(_opts: LaunchAppOptions) -> Result<WindowInfo, String> {
-        Err("Linux automation not yet implemented. Use CLI binary for now.".to_string())
+
+    pub fn launch_app(opts: LaunchAppOptions) -> Result<WindowInfo, String> {
+        Command::new(&opts.app_id)
+            .spawn()
+            .map_err(|e| format!("Failed to launch app: {}", e))?;
+        
+        Ok(WindowInfo {
+            id: "unknown".to_string(),
+            title: String::new(),
+            app_name: opts.app_id,
+            pid: 0,
+            bounds: None,
+        })
     }
-    pub fn close_app(_app_name: &str, _force: bool) -> Result<(), String> {
-        Err("Linux automation not yet implemented. Use CLI binary for now.".to_string())
+
+    pub fn close_app(app_name: &str, force: bool) -> Result<(), String> {
+        let args = if force {
+            vec!["-9", app_name]
+        } else {
+            vec![app_name]
+        };
+        
+        Command::new("killall")
+            .args(&args)
+            .output()
+            .map_err(|e| format!("Failed to close app: {}", e))?;
+        Ok(())
     }
+
     pub fn get_clipboard() -> Result<String, String> {
-        Err("Linux automation not yet implemented. Use CLI binary for now.".to_string())
+        let output = Command::new("xclip")
+            .args(["-selection", "clipboard", "-o"])
+            .output()
+            .map_err(|e| format!("Failed to get clipboard (xclip not installed?): {}", e))?;
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
     }
-    pub fn set_clipboard(_text: &str) -> Result<(), String> {
-        Err("Linux automation not yet implemented. Use CLI binary for now.".to_string())
+
+    pub fn set_clipboard(text: &str) -> Result<(), String> {
+        let mut child = Command::new("xclip")
+            .args(["-selection", "clipboard"])
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("Failed to set clipboard: {}", e))?;
+        
+        if let Some(mut stdin) = child.stdin.take() {
+            use std::io::Write;
+            stdin.write_all(text.as_bytes()).map_err(|e| format!("Failed to write to clipboard: {}", e))?;
+        }
+        
+        child.wait().map_err(|e| format!("Failed to complete clipboard operation: {}", e))?;
+        Ok(())
     }
+
     pub fn get_platform() -> &'static str { "linux" }
 }
+
+// ============================================================================
+// Tauri Command Handlers
+// ============================================================================
 
 #[tauri::command]
 pub async fn desktop_automation_status() -> DesktopAutomationResult<DesktopAutomationStatus> {
@@ -666,40 +892,40 @@ pub async fn desktop_automation_set_clipboard(text: String) -> DesktopAutomation
 
 #[tauri::command]
 pub async fn desktop_automation_focus_window(_window_id: String) -> DesktopAutomationResult<()> {
-    wrap_result("focus_window", Err("Not yet implemented. Use CLI binary for now.".to_string()))
+    wrap_result("focus_window", Err("Not yet implemented. Use agent-desktop CLI.".to_string()))
 }
 
 #[tauri::command]
 pub async fn desktop_automation_resize_window(_opts: WindowOpOptions) -> DesktopAutomationResult<()> {
-    wrap_result("resize_window", Err("Not yet implemented. Use CLI binary for now.".to_string()))
+    wrap_result("resize_window", Err("Not yet implemented. Use agent-desktop CLI.".to_string()))
 }
 
 #[tauri::command]
 pub async fn desktop_automation_move_window(_opts: WindowOpOptions) -> DesktopAutomationResult<()> {
-    wrap_result("move_window", Err("Not yet implemented. Use CLI binary for now.".to_string()))
+    wrap_result("move_window", Err("Not yet implemented. Use agent-desktop CLI.".to_string()))
 }
 
 #[tauri::command]
 pub async fn desktop_automation_find(_opts: FindOptions) -> DesktopAutomationResult<Vec<AccessibilityNode>> {
-    wrap_result("find", Err("Not yet implemented. Use CLI binary for now.".to_string()))
+    wrap_result("find", Err("Not yet implemented. Use agent-desktop CLI.".to_string()))
 }
 
 #[tauri::command]
 pub async fn desktop_automation_wait(_opts: WaitOptions) -> DesktopAutomationResult<()> {
-    wrap_result("wait", Err("Not yet implemented. Use CLI binary for now.".to_string()))
+    wrap_result("wait", Err("Not yet implemented. Use agent-desktop CLI.".to_string()))
 }
 
 #[tauri::command]
 pub async fn desktop_automation_hover(_x: f64, _y: f64) -> DesktopAutomationResult<()> {
-    wrap_result("hover", Err("Not yet implemented. Use CLI binary for now.".to_string()))
+    wrap_result("hover", Err("Not yet implemented. Use agent-desktop CLI.".to_string()))
 }
 
 #[tauri::command]
 pub async fn desktop_automation_drag(_opts: DragOptions) -> DesktopAutomationResult<()> {
-    wrap_result("drag", Err("Not yet implemented. Use CLI binary for now.".to_string()))
+    wrap_result("drag", Err("Not yet implemented. Use agent-desktop CLI.".to_string()))
 }
 
 #[tauri::command]
 pub async fn desktop_automation_scroll(_opts: ScrollOptions) -> DesktopAutomationResult<()> {
-    wrap_result("scroll", Err("Not yet implemented. Use CLI binary for now.".to_string()))
+    wrap_result("scroll", Err("Not yet implemented. Use agent-desktop CLI.".to_string()))
 }

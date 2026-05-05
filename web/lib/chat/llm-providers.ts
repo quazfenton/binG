@@ -270,6 +270,10 @@ export interface ProviderConfig {
     apiKey?: string
     baseURL?: string
   }
+  pollinations?: {
+    apiKey?: string
+    baseURL?: string
+  }
   opencode?: {
     hostname?: string
     port?: number
@@ -1017,6 +1021,55 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     maxTokens: 128000,
     description: 'zen API - Access to Zen and Kimi 2.5 models with extended context windows'
   },
+  pollinations: {
+    id: 'pollinations',
+    name: 'Pollinations AI',
+    models: [
+      'claude-fast',
+      'claude-large',
+      'claude-opus-4.7',
+      'claude',
+      'deepseek',
+      'deepseek-pro',
+      'gemini-fast',
+      'gemini',
+      'gemini-flash-lite-3.1',
+      'gemini-large',
+      'gemini-search',
+      'openai-audio-large',
+      'openai-audio',
+      'openai-fast',
+      'openai-large',
+      'openai',
+      'gpt-5.5',
+      'grok',
+      'grok-large',
+      'llama',
+      'llama-maverick',
+      'llama-scout',
+      'midijourney',
+      'midijourney-large',
+      'minimax',
+      'mistral-large',
+      'mistral',
+      'kimi',
+      'kimi-k2.6',
+      'nova',
+      'nova-fast',
+      'perplexity-fast',
+      'perplexity-reasoning',
+      'polly',
+      'qwen-coder',
+      'qwen-coder-large',
+      'qwen-vision',
+      'qwen-large',
+      'qwen-safety',
+      'glm',
+    ],
+    supportsStreaming: true,
+    maxTokens: 128000,
+    description: 'Pollinations AI Free LLM API'
+  },
   aihubmix: {
     id: 'aihubmix',
     name: 'AIHubMix',
@@ -1473,6 +1526,9 @@ class LLMService {
           case 'aihubmix':
             response = await this.generateAihubmixResponse(model, messages, temperature, maxTokens, requestId, apiKey)
             break;
+          case 'pollinations':
+            response = await this.generatePollinationsResponse(model, messages, temperature, maxTokens, requestId, apiKey)
+            break;
           case 'opencode':
             await this.initOpencodeClient()
             response = await this.opencodeClient.provider.generateResponse(request)
@@ -1634,6 +1690,12 @@ class LLMService {
             yield chunk;
           }
           break
+        case 'pollinations':
+          for await (const chunk of this.streamPollinationsResponse(model, messages, temperature, maxTokens)) {
+            chunkCount++;
+            yield chunk;
+          }
+          break
         case 'opencode':
           await this.initOpencodeClient()
           for await (const chunk of this.opencodeClient.provider.generateStreamingResponse(request)) {
@@ -1735,6 +1797,9 @@ class LLMService {
         return currentEnv.ZEN_API_KEY || this.config.zen?.apiKey || '';
       case 'aihubmix':
         return currentEnv.AIHUBMIX_API_KEY || this.config.aihubmix?.apiKey || '';
+      case 'pollinations':
+        // Pollinations text generation technically works without API keys, but we allow an optional key
+        return currentEnv.POLLINATIONS_API_KEY || this.config.pollinations?.apiKey || 'optional';
       case 'vercel':
         return currentEnv.VERCEL_API_KEY || this.config.vercel?.apiKey || '';
       case 'livekit':
@@ -2198,6 +2263,38 @@ class LLMService {
     }
   }
 
+  private async generatePollinationsResponse(
+    model: string,
+    messages: LLMMessage[],
+    temperature: number,
+    maxTokens: number,
+    requestId?: string,
+    apiKeyOverride?: string
+  ): Promise<LLMResponse> {
+    const apiKey = this.getApiKey('pollinations', apiKeyOverride) || 'optional';
+
+    const OpenAIClass = await getOpenAI();
+    const pollinations = new OpenAIClass({
+      apiKey,
+      baseURL: this.config.pollinations?.baseURL || 'https://text.pollinations.ai/openai',
+    });
+
+    const response = await pollinations.chat.completions.create({
+      model,
+      messages: messages as any,
+      temperature,
+      max_tokens: maxTokens,
+    });
+    const toolCalls = this.normalizeOpenAIToolCalls(response.choices[0]?.message?.tool_calls as any[])
+
+    return {
+      content: response.choices[0]?.message?.content || '',
+      tokensUsed: response.usage?.total_tokens || 0,
+      toolCalls,
+      finishReason: response.choices[0]?.finish_reason || 'stop'
+    }
+  }
+
   private async generateAihubmixResponse(
     model: string,
     messages: LLMMessage[],
@@ -2373,6 +2470,39 @@ class LLMService {
       }
     }
     yield { content: '', isComplete: true }
+  }
+
+  private async *streamPollinationsResponse(
+    model: string,
+    messages: LLMMessage[],
+    temperature: number,
+    maxTokens: number
+  ): AsyncGenerator<StreamingResponse> {
+    const apiKey = this.getApiKey('pollinations') || 'optional';
+
+    const OpenAIClass = await getOpenAI();
+    const pollinations = new OpenAIClass({
+      apiKey,
+      baseURL: this.config.pollinations?.baseURL || 'https://text.pollinations.ai/openai',
+    });
+
+    const stream = await pollinations.chat.completions.create({
+      model,
+      messages: messages as any,
+      temperature,
+      max_tokens: maxTokens,
+      stream: true,
+    })
+
+    for await (const chunk of stream) {
+      const content = chunk.choices[0]?.delta?.content || '';
+      const toolCalls = this.normalizeOpenAIToolCalls(chunk.choices[0]?.delta?.tool_calls as any[])
+      
+      yield {
+        content,
+        toolCalls: toolCalls.length > 0 ? toolCalls : undefined
+      }
+    }
   }
 
   private async *streamAihubmixResponse(
@@ -2715,6 +2845,8 @@ class LLMService {
             return !!process.env.ZEN_API_KEY;
           case 'aihubmix':
             return !!process.env.AIHUBMIX_API_KEY;
+          case 'pollinations':
+            return true; // Pollinations API is free and doesn't explicitly strictly require a key
           case 'openrouter':
             return !!process.env.OPENROUTER_API_KEY;
           case 'chutes':
@@ -2780,10 +2912,10 @@ class LLMService {
     return this.getAvailableProviders().some(p => p.id === providerId)
   }
 
-   getProviderModels(providerId: string): string[] {
-     const provider = PROVIDERS[providerId]
-     return provider ? provider.models.map(m => typeof m === 'string' ? m : m.id) : []
-   }
+  getProviderModels(providerId: string): string[] {
+    const provider = PROVIDERS[providerId]
+    return provider ? provider.models.map(m => typeof m === 'string' ? m : m.id) : []
+  }
 
   // =========================================================================
   // Antigravity Provider — Google OAuth-based access to Gemini 3 & Claude 4.6
@@ -3346,6 +3478,10 @@ export const llmService = new LLMService({
   zen: {
     apiKey: process.env.ZEN_API_KEY,
     baseURL: process.env.ZEN_BASE_URL
+  },
+  pollinations: {
+    apiKey: process.env.POLLINATIONS_API_KEY,
+    baseURL: process.env.POLLINATIONS_BASE_URL || 'https://text.pollinations.ai/openai'
   },
   aihubmix: {
     apiKey: process.env.AIHUBMIX_API_KEY,

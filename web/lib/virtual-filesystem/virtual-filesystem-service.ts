@@ -1012,21 +1012,15 @@ export class VirtualFilesystemService {
       return this.workspaceRoot;
     }
 
-    // Strip common sandbox/workspace prefixes
     let strippedPath = stripWorkspacePrefixes(rawPath);
 
-    // If the path does not start with 'project/', ensure it's prepended
-    if (!strippedPath.startsWith('project/')) {
-        strippedPath = `project/${strippedPath}`;
-    }
-
-    // Handle empty path after stripping/prefixing
-    if (!strippedPath || strippedPath === 'project/') {
+    if (!strippedPath || strippedPath === '/') {
       return this.workspaceRoot;
     }
 
     const parts = strippedPath.split('/');
     const safeParts: string[] = [];
+    const workspaceRootParts = this.workspaceRoot.split('/').filter(Boolean);
 
     for (const part of parts) {
       const trimmed = part.trim();
@@ -1034,13 +1028,15 @@ export class VirtualFilesystemService {
         continue;
       }
       if (trimmed === '..') {
-        // Resolve legitimate parent-directory references
-        if (safeParts.length > 0 && safeParts[safeParts.length - 1] !== this.workspaceRoot) {
-          safeParts.pop();
-        }
-        else if (safeParts.length === 0 || safeParts[safeParts.length - 1] === this.workspaceRoot) {
+        if (safeParts.length === 0) {
           throw new Error(`Path traversal is not allowed: ${inputPath}`);
         }
+        const currentPath = safeParts.join('/');
+        const workspacePrefix = workspaceRootParts.join('/');
+        if (currentPath === workspacePrefix || currentPath.length <= workspacePrefix.length) {
+          throw new Error(`Path traversal beyond workspace root: ${inputPath}`);
+        }
+        safeParts.pop();
         continue;
       }
       if (trimmed.includes('\0')) {
@@ -1053,14 +1049,11 @@ export class VirtualFilesystemService {
       return this.workspaceRoot;
     }
 
-    // Always ensure path starts with workspace root (already enforced by prefix logic)
     const normalizedPath = safeParts.join('/');
     
-    // Validate session folder format (simple identifiers only, or valid composite IDs)
     const sessionsMatch = normalizedPath.match(/^project\/sessions\/([^/]+)/i);
     if (sessionsMatch) {
       const sessionSegment = sessionsMatch[1];
-      // Only warn on obviously malformed paths that break VFS
       if (sessionSegment.includes('//') || sessionSegment.includes('..')) {
          throw new Error(`Invalid session folder: "${sessionSegment}"`);
       }

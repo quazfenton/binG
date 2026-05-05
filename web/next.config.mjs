@@ -109,7 +109,9 @@ const nextConfig = {
   // Use standalone output for production builds
   // Note: Desktop env vars (DESKTOP_MODE, DESKTOP_LOCAL_EXECUTION) should be set
   // at RUNTIME, not during build, to avoid prerender errors with _global-error
-  output: 'standalone',
+  // output: 'standalone', // Temporarily disabled for Vercel testing
+  // Output to .next at project root for Vercel
+  distDir: '.next',
 
   // For the desktop bundle we ship the standalone server unchanged. Strict
   // type-checking is still enforced when building the web app on its own

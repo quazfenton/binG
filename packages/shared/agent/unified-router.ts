@@ -289,9 +289,11 @@ export async function routeChatRequest(request: ChatRequest): Promise<ChatRespon
 
     // Update health status based on result
     if (result.success) {
+      circuitBreaker.recordSuccess(request.provider);
       health.status = 'healthy';
       health.latency = Date.now() - startTime;
     } else {
+      circuitBreaker.recordFailure(request.provider);
       health.status = 'unhealthy';
       health.error = result.error;
     }
@@ -299,7 +301,10 @@ export async function routeChatRequest(request: ChatRequest): Promise<ChatRespon
     return {
       success: result.success,
       response: result.response,
+      steps: result.steps,
+      totalSteps: result.totalSteps,
       mode: result.mode,
+      error: result.error,
       classification: {
         complexity: classification.complexity,
         confidence: classification.confidence,
@@ -321,13 +326,17 @@ export async function routeChatRequest(request: ChatRequest): Promise<ChatRespon
 
     return {
       success: false,
-      response: '',
-      mode: 'error',
+      response: error.partialResult?.response || '',
+      steps: error.partialResult?.steps || [],
+      totalSteps: error.partialResult?.totalSteps || 0,
+      mode: error.partialResult?.mode || 'error',
       error: error.message,
       classification: classification ? {
         complexity: (classification as any).complexity,
         confidence: (classification as any).confidence,
         recommendedMode: (classification as any).recommendedMode,
+        factors: (classification as any).factors,
+        reasoning: (classification as any).reasoning,
       } : {
         complexity: 'simple',
         confidence: 0,
@@ -336,6 +345,7 @@ export async function routeChatRequest(request: ChatRequest): Promise<ChatRespon
       health,
       metadata: {
         duration: Date.now() - startTime,
+        ...(error.partialResult?.metadata || {}),
       },
     };
   }

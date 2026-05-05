@@ -1247,13 +1247,14 @@ export async function executeWithOrchestrationMode(
           mode: 'v1-api',
         });
 
-        // Then: run spec amplification loop (up to 100 iterations)
+        // Then: run spec amplification loop (up to 20 iterations with 2-minute timeout)
         let iterations = 0;
-        const maxIterations = 100;
+        const maxIterations = 20; // Reduced from 100 to limit cost/time
+        const maxLoopDurationMs = 120_000; // 2 minute cap for amplification phase
         let currentResponse = initialResult.response;
         let specAmplified = true;
 
-        while (iterations < maxIterations && specAmplified) {
+        while (iterations < maxIterations && specAmplified && (Date.now() - startTime) < maxLoopDurationMs) {
         // Run spec amplification step
         const amplifyResult = await processUnifiedAgentRequest({
           userMessage: `[SPEC_AMPLIFY] Review and enhance: ${currentResponse}`,
@@ -1264,11 +1265,11 @@ export async function executeWithOrchestrationMode(
         });
 
         if (amplifyResult.response && amplifyResult.response !== currentResponse) {
-        currentResponse = amplifyResult.response;
-        iterations++;
+          currentResponse = amplifyResult.response;
+          iterations++;
         } else {
-        specAmplified = false;
-      }
+          specAmplified = false;
+        }
       }
 
         result = {

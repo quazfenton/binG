@@ -52,6 +52,28 @@ class WebFs implements FsAdapter {
     return await file.arrayBuffer();
   }
 
+  /**
+   * Download content as a file.
+   * 
+   * @param content - The file content to download
+   * @param filename - The name of the file to save
+   * @param mimeType - The MIME type of the file (default: 'text/plain')
+   * 
+   * @remarks
+   * **Browser Limitation**: This method uses a fixed 1000ms timeout for URL revocation.
+   * On slow devices or with large files, the download may not have started before the URL is revoked,
+   * potentially causing the download to fail. Conversely, if users download many files, this could
+   * lead to memory leaks if URLs are not revoked promptly.
+   * 
+   * The timeout is a trade-off between:
+   * - Too short: Download may fail on slow connections
+   * - Too long: Memory leaks from unreleased URLs
+   * 
+   * For production use, consider:
+   * - Monitoring download completion via browser APIs (limited support)
+   - Using a download manager library for better control
+   - Adjusting the timeout based on expected file sizes
+   */
   downloadFile(content: string, filename: string, mimeType = 'text/plain'): void {
     const blob = new Blob([content], { type: mimeType });
     const url = URL.createObjectURL(blob);
@@ -62,6 +84,7 @@ class WebFs implements FsAdapter {
     a.click();
     document.body.removeChild(a);
     // Defer URL revocation to reduce risk of premature revocation before download starts
+    // Fixed 1000ms timeout is a compromise between reliability and memory management
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 

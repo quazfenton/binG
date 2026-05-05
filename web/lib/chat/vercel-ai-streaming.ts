@@ -264,6 +264,31 @@ const OPENAI_COMPATIBLE_PROVIDERS: Record<string, OpenAICompatibleConfig> = {
     apiKeyEnv: 'LEPTON_API_KEY',
     useChatEndpoint: true,
   },
+  ollama: {
+    baseURL: process.env.OLLAMA_BASE_URL || 'http://localhost:20128/v1',
+    apiKeyEnv: 'QUAZ_API_KEY',
+    useChatEndpoint: true,
+  },
+  kiro: {
+    baseURL: process.env.KIRO_BASE_URL || 'https://kiro.ai/v1',
+    apiKeyEnv: 'QUAZ_API_KEY',
+    useChatEndpoint: true,
+  },
+  aihubmix: {
+    baseURL: process.env.AIHUBMIX_BASE_URL || 'https://aihubmix.com/v1',
+    apiKeyEnv: 'AIHUBMIX_API_KEY',
+    useChatEndpoint: true,
+  },
+  pollinations: {
+    baseURL: process.env.POLLINATIONS_BASE_URL || 'https://text.pollinations.ai/openai',
+    apiKeyEnv: 'POLLINATIONS_API_KEY',
+    useChatEndpoint: true,
+  },
+  zo: {
+    baseURL: process.env.ZO_BASE_URL || 'https://api.zo.ai/v1',
+    apiKeyEnv: 'ZO_API_KEY',
+    useChatEndpoint: true,
+  },
   openrouter: {
     baseURL: process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1',
     apiKeyEnv: 'OPENROUTER_API_KEY',
@@ -421,13 +446,14 @@ export function getVercelModel(
     }
 
     case 'vercel': {
-      // CRITICAL: Strip 'vercel:' prefix from model ID — Vercel AI SDK expects just 'xai/grok-3', not 'vercel:xai/grok-3'
+      // CRITICAL: Strip 'vercel:' prefix from model ID - Vercel AI SDK expects just 'xai/grok-3', not 'vercel:xai/grok-3'
       const cleanModel = model.startsWith('vercel:') ? model.slice(7) : model;
       const openai = createOpenAI({
         apiKey: apiKey || currentEnv.VERCEL_API_KEY,
         baseURL: baseURL || currentEnv.VERCEL_BASE_URL || 'https://api.vercel.com/v1',
       });
-      return openai(cleanModel);
+      // Always use chat endpoint for OpenAI-compatible proxies
+      return openai.chat(cleanModel);
     }
 
     default:
