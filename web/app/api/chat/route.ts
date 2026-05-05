@@ -2415,6 +2415,11 @@ const config: UnifiedAgentConfig = {
           let streamingContentBuffer = '';
           const fileEditParserState = createIncrementalParser();
 
+          // Track whether we've crossed into a [ROLE_SELECT] marker block
+          // This is the second streaming path (unifiedResponse.stream generator)
+          let roleSelectMarkerSeen = false;
+          let charsEmittedSafely = 0; // count of bytes from buffer already emitted
+
           // Track tool invocations for telemetry
           const toolCallTracker = new Map<string, { toolName: string; args?: Record<string, any>; startTime: number }>();
           const completedToolCalls: Array<{
@@ -2564,11 +2569,48 @@ const config: UnifiedAgentConfig = {
 
                   // Accumulate token content
                   if (streamChunk.content) {
-                    tokenBuffer += streamChunk.content;
-
                     // Progressive file edit detection from streaming content
                     streamingContentBuffer += streamChunk.content;
                     const newFileEdits = extractIncrementalFileEdits(streamingContentBuffer, fileEditParserState);
+
+                    // Track whether we've crossed into a [ROLE_SELECT] marker block
+                    // This is the second streaming path (unifiedResponse.stream generator)
+                    // and needs the same filtering as the first path (config.onStreamChunk)
+                    if (!roleSelectMarkerSeen) {
+                      const ROLE_SELECT_MARKERS = ['[ROLE_SELECT]', '[ROUTING_METADATA]'];
+                      let markerIdx = -1;
+                      for (const m of ROLE_SELECT_MARKERS) {
+                        const idx = streamingContentBuffer.indexOf(m);
+                        if (idx !== -1 && (markerIdx === -1 || idx < markerIdx)) markerIdx = idx;
+                      }
+
+                      if (markerIdx !== -1) {
+                        // Emit only the safe portion (before the marker), then suppress
+                        if (markerIdx > charsEmittedSafely) {
+                          const safe = streamingContentBuffer.slice(charsEmittedSafely, markerIdx);
+                          if (safe) realEmit('token', { content: safe, timestamp: Date.now() });
+                        }
+                        charsEmittedSafely = streamingContentBuffer.length;
+                        roleSelectMarkerSeen = true;
+                        chatLogger.debug('[StreamFilter-LLM-Stream] [ROLE_SELECT] detected, suppressing further tokens', {
+                          markerIdx,
+                        });
+                      } else {
+                        // No marker yet — hold back trailing chars for partial marker detection
+                        const HOLDBACK = 16;
+                        const safeUpto = Math.max(charsEmittedSafely, streamingContentBuffer.length - HOLDBACK);
+                        if (safeUpto > charsEmittedSafely) {
+                          const safe = streamingContentBuffer.slice(charsEmittedSafely, safeUpto);
+                          if (safe) realEmit('token', { content: safe, timestamp: Date.now() });
+                          charsEmittedSafely = safeUpto;
+                        }
+                      }
+                    }
+
+                    // Only add to tokenBuffer if we haven't seen the marker yet
+                    if (!roleSelectMarkerSeen) {
+                      tokenBuffer += streamChunk.content;
+                    }
 
                     // Filter out invalid paths and empty content to prevent UI polling loops
                     for (const edit of newFileEdits) {
@@ -3042,6 +3084,15 @@ const config: UnifiedAgentConfig = {
 
                     break; // Exit loop when complete
                   }
+                }
+
+                // Flush any holdback chars that were withheld for partial-marker detection
+                // (only when no [ROLE_SELECT] marker was seen). Without this, the last
+                // ~16 chars of a clean response would be silently dropped from the UI.
+                if (!roleSelectMarkerSeen && charsEmittedSafely < streamingContentBuffer.length) {
+                  const flush = streamingContentBuffer.slice(charsEmittedSafely);
+                  if (flush) realEmit('token', { content: flush, timestamp: Date.now() });
+                  charsEmittedSafely = streamingContentBuffer.length;
                 }
 
                 // Emit any remaining buffered tokens (in case loop exited without hitting isComplete)

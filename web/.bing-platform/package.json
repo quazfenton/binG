@@ -14,9 +14,7 @@
     "./clipboard": "./src/clipboard.ts",
     "./notifications": "./src/notifications.ts",
     "./apiClient": "./src/apiClient.ts",
-    "./jobs": "./src/jobs.ts",
-    "./shell": "./src/shell/index.ts",
-    "./shell/*": "./src/shell/*"
+    "./jobs": "./src/jobs.ts"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
@@ -28,5 +26,6 @@
   },
   "devDependencies": {
     "typescript": "^5.8.0"
-  }
+  },
+  "peerDependencies": {}
 }

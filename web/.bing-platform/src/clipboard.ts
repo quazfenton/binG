@@ -64,10 +64,14 @@ class WebClipboard implements ClipboardAdapter {
   async writeFiles(paths: string[]): Promise<void> {
     // Web clipboard doesn't support file paths
     console.warn('[Clipboard] writeFiles not supported in web environment');
+    return Promise.reject(new Error('writeFiles is not supported in web environment'));
   }
 
   async clear(): Promise<void> {
-    // Web doesn't have a clear clipboard API
+    // Web doesn't have a clear clipboard API. Writing empty string only clears text,
+    // not other data types (images, files). This behavior is less comprehensive than
+    // the desktop implementation which uses Tauri's dedicated clear method.
+    // This limitation should be documented when choosing clipboard clearing behavior.
     await this.writeText('');
   }
 }
@@ -95,7 +99,7 @@ class DesktopClipboard implements ClipboardAdapter {
 
   async readFiles(): Promise<string[]> {
     try {
-       
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
       const clipboardModule = await import('@tauri-apps/plugin-clipboard-manager') as any;
       if (typeof clipboardModule.readFiles !== 'function') {
         return [];
@@ -109,7 +113,7 @@ class DesktopClipboard implements ClipboardAdapter {
 
   async writeFiles(paths: string[]): Promise<void> {
     try {
-       
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
       const clipboardModule = await import('@tauri-apps/plugin-clipboard-manager') as any;
       if (typeof clipboardModule.writeFiles !== 'function') {
         console.warn('[Clipboard] writeFiles is not supported by this Tauri clipboard plugin version');
@@ -137,6 +141,10 @@ let clipboardInstance: ClipboardAdapter | null = null;
 
 function getClipboard(): ClipboardAdapter {
   if (!clipboardInstance) {
+    // Note: This lazy initialization is not thread-safe. In a multi-threaded or
+    // async environment with rapid concurrent calls before first initialization,
+    // multiple instances could be created. For most web use cases this is acceptable,
+    // but consider using a lock mechanism or initializing at module load time if needed.
     clipboardInstance = isDesktopMode()
       ? new DesktopClipboard()
       : new WebClipboard();

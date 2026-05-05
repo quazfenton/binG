@@ -747,6 +747,20 @@ export const tauriInvoke = {
       return { success: false, error: error.message };
     }
   },
+
+  // ============================================================================
+  // Desktop Automation (agent-desktop integration)
+  // ============================================================================
+
+  /**
+   * Generic invoke helper for desktop automation commands
+   */
+  invoke: async <T>(command: string, args?: Record<string, unknown>): Promise<T> => {
+    if (!isTauriAvailable()) {
+      throw new Error('Tauri runtime not available');
+    }
+    return invoke<T>(command, args);
+  },
 };
 
 export default tauriInvoke;

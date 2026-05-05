@@ -12,15 +12,16 @@ import type {
 } from '../types';
 
 // Quality presets for video generation
-const VIDEO_QUALITY_PRESETS: Record<string, { 
-  resolution: string; 
-  bitrate?: string; 
-  fps?: number 
+const VIDEO_QUALITY_PRESETS: Record<string, {
+  resolution: string;
+  bitrate?: string;
+  fps?: number;
+  duration?: number;
 }> = {
-  low: { resolution: '512x512', bitrate: '4M', fps: 24 },
-  medium: { resolution: '768x768', bitrate: '8M', fps: 30 },
-  high: { resolution: '1024x1024', bitrate: '16M', fps: 30 },
-  ultra: { resolution: '1792x1024', bitrate: '32M', fps: 60 }
+  low: { resolution: '512x512', bitrate: '4M', fps: 24, duration: 5 },
+  medium: { resolution: '768x768', bitrate: '8M', fps: 30, duration: 10 },
+  high: { resolution: '1024x1024', bitrate: '16M', fps: 30, duration: 15 },
+  ultra: { resolution: '1792x1024', bitrate: '32M', fps: 60, duration: 20 }
 };
 
 export class VercelVideoProvider implements VideoGenerationProvider {

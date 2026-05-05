@@ -1799,7 +1799,7 @@ async function runV1ApiWithTools(
 
   // FIX: Import circuit-breaker and model-ranker for smart provider selection
   let circuitBreakerMgr: any = null;
-  let modelRankerFns: { isRateLimited: (p: string, m: string) => boolean; recordRateLimitError: (p: string, m: string) => void; recordModelAttempt: (p: string, m: string, s: boolean) => void } | null = null;
+  let modelRankerFns: { isRateLimited: (p: string, m: string) => boolean; recordRateLimitError: (p: string, m: string) => void; recordModelAttempt: (p: string, m: string, s: boolean) => void; hasInsufficientTokenLimit?: (p: string, m: string, tokens: number) => boolean; getModelTokenLimit?: (p: string, m: string) => number | undefined; recordModelTokenLimit?: (p: string, m: string, limit: number) => void; recordModelContextLimitError?: (p: string, m: string, limit: number) => void } | null = null;
   try {
     const cbMod = await import('../middleware/circuit-breaker');
     circuitBreakerMgr = cbMod.circuitBreakerManager;
@@ -2377,7 +2377,8 @@ async function runV1ApiWithTools(
   }
 
     // FIX: Track provider failure for feedback injection with detailed error context
-  const status = lastError?.status || lastError?.statusCode || 0;
+  const err = lastError as any;
+  const status = err?.status || err?.statusCode || 0;
   let failureMessage = `All providers failed: ${lastError?.message || 'Unknown error'}. Tried: ${uniqueProviders.join(', ')}`;
   let feedbackContext413: Record<string, any> = { tried: uniqueProviders };
   
@@ -2567,6 +2568,7 @@ async function runV1Orchestrated(
       `unified-v1-orch-${Date.now()}`,
       true,
       undefined,
+      undefined,
       duration,
       undefined,
       provider,
@@ -2618,6 +2620,7 @@ async function runV1Orchestrated(
     chatRequestLogger.logRequestComplete(
       `unified-v1-orch-${Date.now()}`,
       false,
+      undefined,
       undefined,
       duration,
       err.message,

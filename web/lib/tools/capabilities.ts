@@ -27,7 +27,7 @@ import { z } from 'zod';
 // Capability Definitions
 // ============================================================================
 
-export type CapabilityCategory = 'file' | 'sandbox' | 'web' | 'repo' | 'memory' | 'automation';
+export type CapabilityCategory = 'file' | 'sandbox' | 'web' | 'repo' | 'memory' | 'automation' | 'desktop';
 
 export type ToolLatency = 'low' | 'medium' | 'high';
 export type ToolCost = 'low' | 'medium' | 'high';
@@ -2046,6 +2046,237 @@ export const PROJECT_STRUCTURE_CAPABILITY: CapabilityDefinition = {
   tags: ['project', 'structure', 'tree', 'files'],
 };
 
+// ============================================================================
+// Desktop Automation Capabilities (agent-desktop integration)
+// ============================================================================
+
+export const DESKTOP_SNAPSHOT_CAPABILITY: CapabilityDefinition = {
+  id: 'desktop.snapshot',
+  name: 'Desktop Snapshot',
+  category: 'desktop',
+  description: 'Capture accessibility tree snapshot of a desktop application. Returns structured UI elements with refs for interaction.',
+  inputSchema: z.object({
+    app: z.string().optional().describe('Application name to snapshot'),
+    windowId: z.string().optional().describe('Specific window ID'),
+    interactiveOnly: z.boolean().optional().default(false).describe('Only include interactive elements'),
+    compact: z.boolean().optional().default(false).describe('Omit empty structural nodes'),
+    includeBounds: z.boolean().optional().default(false).describe('Include pixel bounds'),
+    maxDepth: z.number().optional().default(10).describe('Maximum tree depth'),
+    skeleton: z.boolean().optional().default(false).describe('Shallow 3-level overview'),
+    root: z.string().optional().describe('Start from ref for drill-down'),
+  }),
+  outputSchema: z.object({
+    ok: z.boolean(),
+    command: z.string(),
+    data: z.any().optional(),
+    error: z.any().optional(),
+  }),
+  providerPriority: ['tauri-desktop'],
+  tags: ['desktop', 'snapshot', 'accessibility', 'ui', 'automation'],
+  permissions: ['desktop:accessibility'],
+};
+
+export const DESKTOP_CLICK_CAPABILITY: CapabilityDefinition = {
+  id: 'desktop.click',
+  name: 'Desktop Click',
+  category: 'desktop',
+  description: 'Click on a UI element by ref ID. Supports single, double, and triple clicks.',
+  inputSchema: z.object({
+    refId: z.string().describe('Element ref ID from snapshot (e.g., @e1)'),
+    clicks: z.number().optional().default(1).describe('Number of clicks (1, 2, or 3)'),
+  }),
+  outputSchema: z.object({
+    ok: z.boolean(),
+    command: z.string(),
+    data: z.any().optional(),
+    error: z.any().optional(),
+  }),
+  providerPriority: ['tauri-desktop'],
+  tags: ['desktop', 'click', 'interaction', 'automation'],
+  permissions: ['desktop:accessibility'],
+};
+
+export const DESKTOP_TYPE_CAPABILITY: CapabilityDefinition = {
+  id: 'desktop.type',
+  name: 'Desktop Type Text',
+  category: 'desktop',
+  description: 'Type text into a UI element by ref ID.',
+  inputSchema: z.object({
+    refId: z.string().describe('Element ref ID from snapshot'),
+    text: z.string().describe('Text to type'),
+  }),
+  outputSchema: z.object({
+    ok: z.boolean(),
+    command: z.string(),
+    data: z.any().optional(),
+    error: z.any().optional(),
+  }),
+  providerPriority: ['tauri-desktop'],
+  tags: ['desktop', 'type', 'keyboard', 'automation'],
+  permissions: ['desktop:accessibility'],
+};
+
+export const DESKTOP_SCREENSHOT_CAPABILITY: CapabilityDefinition = {
+  id: 'desktop.screenshot',
+  name: 'Desktop Screenshot',
+  category: 'desktop',
+  description: 'Capture a screenshot of the desktop or a specific window.',
+  inputSchema: z.object({
+    windowId: z.string().optional().describe('Window ID to capture (omit for full screen)'),
+    quality: z.number().min(1).max(100).optional().default(80).describe('Image quality 1-100'),
+  }),
+  outputSchema: z.object({
+    ok: z.boolean(),
+    command: z.string(),
+    data: z.object({
+      width: z.number(),
+      height: z.number(),
+      imageBase64: z.string(),
+      format: z.string(),
+    }).optional(),
+    error: z.any().optional(),
+  }),
+  providerPriority: ['tauri-desktop'],
+  tags: ['desktop', 'screenshot', 'capture', 'automation'],
+  permissions: ['desktop:screen-capture'],
+};
+
+export const DESKTOP_CLIPBOARD_GET_CAPABILITY: CapabilityDefinition = {
+  id: 'desktop.clipboard_get',
+  name: 'Get Clipboard',
+  category: 'desktop',
+  description: 'Get text content from the system clipboard.',
+  inputSchema: z.object({}),
+  outputSchema: z.object({
+    ok: z.boolean(),
+    command: z.string(),
+    data: z.string().optional(),
+    error: z.any().optional(),
+  }),
+  providerPriority: ['tauri-desktop'],
+  tags: ['desktop', 'clipboard', 'get', 'automation'],
+  permissions: ['desktop:clipboard'],
+};
+
+export const DESKTOP_CLIPBOARD_SET_CAPABILITY: CapabilityDefinition = {
+  id: 'desktop.clipboard_set',
+  name: 'Set Clipboard',
+  category: 'desktop',
+  description: 'Set text content to the system clipboard.',
+  inputSchema: z.object({
+    text: z.string().describe('Text to copy to clipboard'),
+  }),
+  outputSchema: z.object({
+    ok: z.boolean(),
+    command: z.string(),
+    error: z.any().optional(),
+  }),
+  providerPriority: ['tauri-desktop'],
+  tags: ['desktop', 'clipboard', 'set', 'automation'],
+  permissions: ['desktop:clipboard'],
+};
+
+export const DESKTOP_KEY_PRESS_CAPABILITY: CapabilityDefinition = {
+  id: 'desktop.key_press',
+  name: 'Press Key Combo',
+  category: 'desktop',
+  description: 'Press a keyboard shortcut/key combination. Examples: "cmd+s", "ctrl+shift+z", "escape".',
+  inputSchema: z.object({
+    combo: z.string().describe('Key combination (e.g., "cmd+s", "ctrl+c", "escape")'),
+  }),
+  outputSchema: z.object({
+    ok: z.boolean(),
+    command: z.string(),
+    data: z.string().optional(),
+    error: z.any().optional(),
+  }),
+  providerPriority: ['tauri-desktop'],
+  tags: ['desktop', 'keyboard', 'shortcut', 'automation'],
+  permissions: ['desktop:accessibility'],
+};
+
+export const DESKTOP_LAUNCH_APP_CAPABILITY: CapabilityDefinition = {
+  id: 'desktop.launch_app',
+  name: 'Launch Application',
+  category: 'desktop',
+  description: 'Launch a desktop application by name or bundle ID.',
+  inputSchema: z.object({
+    appId: z.string().describe('Application name or bundle ID (e.g., "Safari", "com.apple.Safari")'),
+    wait: z.boolean().optional().default(true).describe('Wait for app to launch'),
+  }),
+  outputSchema: z.object({
+    ok: z.boolean(),
+    command: z.string(),
+    data: z.any().optional(),
+    error: z.any().optional(),
+  }),
+  providerPriority: ['tauri-desktop'],
+  tags: ['desktop', 'launch', 'app', 'automation'],
+  permissions: ['desktop:app-management'],
+};
+
+export const DESKTOP_CLOSE_APP_CAPABILITY: CapabilityDefinition = {
+  id: 'desktop.close_app',
+  name: 'Close Application',
+  category: 'desktop',
+  description: 'Close/quit a desktop application.',
+  inputSchema: z.object({
+    appName: z.string().describe('Application name'),
+    force: z.boolean().optional().default(false).describe('Force quit if app is unresponsive'),
+  }),
+  outputSchema: z.object({
+    ok: z.boolean(),
+    command: z.string(),
+    error: z.any().optional(),
+  }),
+  providerPriority: ['tauri-desktop'],
+  tags: ['desktop', 'close', 'quit', 'app', 'automation'],
+  permissions: ['desktop:app-management'],
+};
+
+export const DESKTOP_LIST_WINDOWS_CAPABILITY: CapabilityDefinition = {
+  id: 'desktop.list_windows',
+  name: 'List Windows',
+  category: 'desktop',
+  description: 'List all visible windows on the desktop.',
+  inputSchema: z.object({}),
+  outputSchema: z.object({
+    ok: z.boolean(),
+    command: z.string(),
+    data: z.array(z.object({
+      id: z.string(),
+      title: z.string(),
+      appName: z.string(),
+      pid: z.number(),
+    })).optional(),
+    error: z.any().optional(),
+  }),
+  providerPriority: ['tauri-desktop'],
+  tags: ['desktop', 'windows', 'list', 'automation'],
+  permissions: ['desktop:accessibility'],
+};
+
+export const DESKTOP_LIST_APPS_CAPABILITY: CapabilityDefinition = {
+  id: 'desktop.list_apps',
+  name: 'List Applications',
+  category: 'desktop',
+  description: 'List all running GUI applications.',
+  inputSchema: z.object({}),
+  outputSchema: z.object({
+    ok: z.boolean(),
+    command: z.string(),
+    data: z.array(z.object({
+      name: z.string(),
+      bundleId: z.string().optional(),
+      pid: z.number(),
+    })).optional(),
+    error: z.any().optional(),
+  }),
+  providerPriority: ['tauri-desktop'],
+  tags: ['desktop', 'apps', 'list', 'automation'],
+  permissions: ['desktop:accessibility'],
+};
+
 export const ALL_CAPABILITIES: CapabilityDefinition[] = [
   // File
   FILE_READ_CAPABILITY,
@@ -2144,6 +2375,18 @@ export const ALL_CAPABILITIES: CapabilityDefinition[] = [
   PROJECT_LIST_SCRIPTS_CAPABILITY,
   PROJECT_DEPENDENCIES_CAPABILITY,
   PROJECT_STRUCTURE_CAPABILITY,
+  // Desktop Automation (agent-desktop integration)
+  DESKTOP_SNAPSHOT_CAPABILITY,
+  DESKTOP_CLICK_CAPABILITY,
+  DESKTOP_TYPE_CAPABILITY,
+  DESKTOP_SCREENSHOT_CAPABILITY,
+  DESKTOP_CLIPBOARD_GET_CAPABILITY,
+  DESKTOP_CLIPBOARD_SET_CAPABILITY,
+  DESKTOP_KEY_PRESS_CAPABILITY,
+  DESKTOP_LAUNCH_APP_CAPABILITY,
+  DESKTOP_CLOSE_APP_CAPABILITY,
+  DESKTOP_LIST_WINDOWS_CAPABILITY,
+  DESKTOP_LIST_APPS_CAPABILITY,
 ];
 
 // ============================================================================
