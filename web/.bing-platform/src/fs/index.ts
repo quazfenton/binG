@@ -37,15 +37,40 @@ export function resetFsCache() {
   fsPromise = null;
 }
 
+/**
+ * Validate that the adapter implements required methods
+ * Throws immediately if any required methods are missing
+ */
+function validateAdapter(adapter: FsAdapter): void {
+  const requiredMethods: (keyof FsAdapter)[] = [
+    'readFile',
+    'openFileDialog',
+  ];
+  
+  const missingMethods = requiredMethods.filter(method => typeof adapter[method] !== 'function');
+  
+  if (missingMethods.length > 0) {
+    throw new Error(
+      `File system adapter is missing required methods: ${missingMethods.join(', ')}. ` +
+      `This indicates an incomplete adapter implementation.`
+    );
+  }
+}
+
 function getFs(): Promise<FsAdapter> {
   if (!fsPromise) {
     // Note: This caches the adapter based on isDesktopMode() at first call.
     // If the platform environment changes at runtime (e.g., hot module replacement),
     // the cached adapter will NOT reflect the new environment.
     // This is acceptable for most production scenarios where platform is static.
-    fsPromise = isDesktopMode()
+    fsPromise = (isDesktopMode()
       ? import('./desktop').then(m => m.fs as unknown as FsAdapter)
-      : import('./web').then(m => m.fs);
+      : import('./web').then(m => m.fs)
+    ).then(adapter => {
+      // Validate adapter immediately after loading
+      validateAdapter(adapter);
+      return adapter;
+    });
   }
   return fsPromise;
 }

@@ -20,15 +20,22 @@ const APP_DATA_DIR = 'storage';
 /**
  * Portable base64url encoding that doesn't rely on Node.js Buffer.
  * Compatible with both browser and Node.js environments.
+ * Handles Unicode characters correctly by encoding to UTF-8 first.
  */
 function base64urlEncode(str: string): string {
+  // Convert string to UTF-8 byte array for proper Unicode handling
+  const utf8 = new TextEncoder().encode(str);
+  let base64: string;
+  
   if (typeof btoa === 'undefined') {
     // Fallback for older Node.js versions without global btoa
-    return Buffer.from(str).toString('base64url');
+    base64 = Buffer.from(utf8).toString('base64');
+  } else {
+    // Standard btoa-based base64url encoding
+    // Convert Uint8Array to string for btoa
+    base64 = btoa(String.fromCharCode(...utf8));
   }
   
-  // Standard btoa-based base64url encoding
-  const base64 = btoa(str);
   return base64
     .replace(/\+/g, '-')
     .replace(/\//g, '_')

@@ -67,11 +67,23 @@ class WebClipboard implements ClipboardAdapter {
     return Promise.reject(new Error('writeFiles is not supported in web environment'));
   }
 
+  /**
+   * Clear the clipboard.
+   * 
+   * @throws {Error} If clipboard write fails
+   * 
+   * @remarks
+   * **Web Limitation**: In web environments, this only clears text content by writing an empty string.
+   * Other clipboard data types (images, files, rich text) are NOT cleared due to browser security restrictions.
+   * The desktop implementation uses Tauri's dedicated clear method which clears all data types.
+   * 
+   * If you need to clear all clipboard data in web mode, you may need to inform users to manually clear it
+   * or use a different approach (e.g., overwrite with specific content).
+   */
   async clear(): Promise<void> {
     // Web doesn't have a clear clipboard API. Writing empty string only clears text,
     // not other data types (images, files). This behavior is less comprehensive than
     // the desktop implementation which uses Tauri's dedicated clear method.
-    // This limitation should be documented when choosing clipboard clearing behavior.
     await this.writeText('');
   }
 }
@@ -136,19 +148,20 @@ class DesktopClipboard implements ClipboardAdapter {
   }
 }
 
-// Lazy initialization to avoid bundling Tauri APIs in web build
-let clipboardInstance: ClipboardAdapter | null = null;
+// Eagerly initialize at module load time to avoid race conditions
+// This is safe because isDesktopMode() is synchronous and doesn't depend on async state
+let clipboardInstance: ClipboardAdapter;
+
+function initClipboard(): ClipboardAdapter {
+  return isDesktopMode()
+    ? new DesktopClipboard()
+    : new WebClipboard();
+}
+
+// Initialize immediately at module load
+clipboardInstance = initClipboard();
 
 function getClipboard(): ClipboardAdapter {
-  if (!clipboardInstance) {
-    // Note: This lazy initialization is not thread-safe. In a multi-threaded or
-    // async environment with rapid concurrent calls before first initialization,
-    // multiple instances could be created. For most web use cases this is acceptable,
-    // but consider using a lock mechanism or initializing at module load time if needed.
-    clipboardInstance = isDesktopMode()
-      ? new DesktopClipboard()
-      : new WebClipboard();
-  }
   return clipboardInstance;
 }
 

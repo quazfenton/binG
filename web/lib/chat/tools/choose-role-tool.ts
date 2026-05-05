@@ -16,13 +16,17 @@ export const chooseRoleCapability = tool({
     reason: z.string().describe('Reasoning for the role switch (e.g., handling high-complexity refactor, debugging error loops).'),
   }),
   execute: async ({ role, reason }) => {
-    // This tool is an orchestration directive. The system's routing layer 
-    // monitors the tool history, detects this call, and re-injects the 
-    // appropriate system prompt for the next turn.
-    return {
-      success: true,
-      roleAdopted: role,
-      message: `Role switched to ${role} for: ${reason}. System prompt will be updated for the next interaction.`,
-    };
+    try {
+      // This tool is an orchestration directive. The system's routing layer 
+      // monitors the tool history, detects this call, and re-injects the 
+      // appropriate system prompt for the next turn.
+      return {
+        success: true,
+        roleAdopted: role,
+        message: `Role switched to ${role} for: ${reason}. System prompt will be updated for the next interaction.`,
+      };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
   },
 });

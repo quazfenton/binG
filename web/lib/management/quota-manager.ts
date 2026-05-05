@@ -314,6 +314,8 @@ export class QuotaManager {
   }
 
   findAlternative(type: string, current: string): string | null {
+    this.ensureInitialized();
+
     // Implementation for e2b-provider fallback
     log.info(`[QuotaManager] Finding alternative for ${type} provider: ${current}`);
     
@@ -325,8 +327,14 @@ export class QuotaManager {
     }
 
     // Pick best available alternative (highest remaining quota)
+    // IMPORTANT: In QuotaManager, "sandbox" providers are expected to be the alternative.
+    // However, QuotaManager doesn't natively know which providers are sandbox vs tool.
+    // We filter by checking if the provider is a known sandbox provider.
+    const knownSandboxProviders = new Set(['e2b', 'daytona', 'runloop', 'microsandbox']);
+    
     const alternatives = Array.from(this.quotas.values())
       .filter(q => q.provider !== current && !q.isDisabled && q.currentUsage < q.monthlyLimit)
+      .filter(q => type !== 'sandbox' || knownSandboxProviders.has(q.provider))
       .sort((a, b) => (b.monthlyLimit - b.currentUsage) - (a.monthlyLimit - a.currentUsage));
 
     if (alternatives.length > 0) {
@@ -373,9 +381,11 @@ export class QuotaManager {
       chain.push(primary);
     }
 
+    const knownSandboxProviders = new Set(['e2b', 'daytona', 'runloop', 'microsandbox']);
+
     // Add others that have remaining quota
     const others = Array.from(this.quotas.keys())
-      .filter(p => p !== primary && this.isAvailable(p))
+      .filter(p => p !== primary && this.isAvailable(p) && knownSandboxProviders.has(p))
       .sort((a, b) => this.getRemainingCalls(b) - this.getRemainingCalls(a));
 
     return [...chain, ...others];

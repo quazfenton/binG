@@ -71,7 +71,9 @@
   "exclude": [
     "node_modules",
     "deprecated",
-    "__tests__",
+    "**/__tests__",
+    "**/*.test.ts",
+    "**/*.test.tsx",
     "docs",
     "examples",
     "scripts",

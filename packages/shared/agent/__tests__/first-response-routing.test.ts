@@ -1038,7 +1038,7 @@ describe('generateStepReprompt', () => {
 
     it('should include step number for third step', () => {
       const result = generateStepReprompt(routingWith3Steps, 2);
-      expect(result).toContain('Current Step: Review');
+      expect(result).toContain('Current Step: Write tests');
     });
 
     it('should include the task description', () => {

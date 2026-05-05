@@ -638,13 +638,14 @@ export async function processUnifiedAgentRequest(
           log.info('[UnifiedAgent] → desktop mode');
           return await runDesktopMode(config);
 
-        case 'v1-agent-loop':
+        case 'v1-agent-loop': {
           log.info('[UnifiedAgent] → v1-agent-loop mode (PlanActVerify orchestrator)');
           const orchMessages = [
             ...(config.conversationHistory || []),
             { role: 'user', content: config.userMessage },
           ];
           return await runV1Orchestrated(config, orchMessages, startTime);
+        }
 
         case 'v2-native':
           log.warn('[UnifiedAgent] → v2-native mode (OPENCODE)');
@@ -714,7 +715,9 @@ export async function processUnifiedAgentRequest(
 
     // PHASE 2 Transition: If Phase 1 produced no tool calls and we are in auto mode,
     // fallback to a text-mode completion to provide a more helpful response.
-    if (config.mode === 'auto' && result.success && result.steps.length === 0 && !result.response.includes('[ROLE_SELECT]')) {
+    const isAutoMode = !config.mode || config.mode === 'auto';
+    const roleSelection = result.metadata?.roleSelection;
+    if (isAutoMode && result.success && (result.steps?.length ?? 0) === 0 && !roleSelection?.continue) {
       log.info('[PhaseTransition] No tools used in Phase 1, entering Phase 2 fallback (text-mode)');
       
       // For orchestrated modes, retry with text-only fallback
@@ -1774,7 +1777,12 @@ async function runV1ApiWithTools(
     // Check if the model is valid for this provider
     const provider = PROVIDERS[providerName.toLowerCase()];
     if (provider?.models && Array.isArray(provider.models) && provider.models.length > 0) {
-      if (provider.models.includes(model)) return model;
+      // Normalize models to handle both string and object formats
+      const supportedModels = provider.models.map((entry: any) =>
+        typeof entry === 'string' ? entry : entry?.id
+      ).filter(Boolean);
+      
+      if (supportedModels.includes(model)) return model;
       // Model not in provider's list — use provider default
       log.debug(`Model "${model}" not in ${providerName} models list, using default`);
       return PROVIDER_DEFAULT_MODELS[providerName] || primaryModel;
@@ -1810,6 +1818,10 @@ async function runV1ApiWithTools(
       isRateLimited: mrMod.isRateLimited,
       recordRateLimitError: mrMod.recordRateLimitError,
       recordModelAttempt: mrMod.recordModelAttempt,
+      hasInsufficientTokenLimit: mrMod.hasInsufficientTokenLimit,
+      getModelTokenLimit: mrMod.getModelTokenLimit,
+      recordModelTokenLimit: mrMod.recordModelTokenLimit,
+      recordModelContextLimitError: mrMod.recordModelContextLimitError,
     };
   } catch { /* model-ranker unavailable */ }
 
@@ -2591,7 +2603,7 @@ async function runV1Orchestrated(
       response: cleanedResponse,
       steps,
       totalSteps: stepsCount,
-      mode: 'v1-api',
+      mode: 'v1-agent-loop',
       metadata: {
         provider,
         model,
@@ -2684,7 +2696,12 @@ async function runV1ApiCompletion(
     // Check if the model is valid for this provider
     const provider = PROVIDERS[providerName.toLowerCase()];
     if (provider?.models && provider.models.length > 0) {
-      if (provider.models.includes(config.model)) return config.model;
+      // Normalize models to handle both string and object formats
+      const supportedModels = provider.models.map((entry: any) =>
+        typeof entry === 'string' ? entry : entry?.id
+      ).filter(Boolean);
+      
+      if (supportedModels.includes(config.model)) return config.model;
       // Model not in provider's list — use provider default
       log.debug(`Model "${config.model}" not in ${providerName} models list, using default`);
       return PROVIDER_DEFAULT_MODELS[providerName] || primaryModel;

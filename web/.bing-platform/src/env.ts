@@ -115,16 +115,30 @@ export function getDefaultWorkspaceRoot(): string | null {
     if (!userProfile || typeof userProfile !== 'string' || userProfile.trim() === '') {
       return null;
     }
+    // Sanitize and validate the path
+    const sanitized = userProfile.trim();
+    // Check for invalid characters that could cause issues
+    if (/[<>:"|?*]/.test(sanitized)) {
+      console.warn('[env.ts] USERPROFILE contains invalid characters, using fallback');
+      return null;
+    }
     // Manual join to avoid Node.js 'path' dependency in environment-agnostic module
-    return userProfile.replace(/[\\/]+$/, '') + '\\workspace';
+    return sanitized.replace(/[\\/]+$/, '') + '\\workspace';
   }
 
   const home = typeof process !== 'undefined' ? process.env.HOME : undefined;
   if (!home || typeof home !== 'string' || home.trim() === '') {
     return null;
   }
+  // Sanitize and validate the path
+  const sanitized = home.trim();
+  // Check for invalid characters that could cause issues
+  if (/[<>:"|?*\0]/.test(sanitized)) {
+    console.warn('[env.ts] HOME contains invalid characters, using fallback');
+    return null;
+  }
   // Manual join to avoid Node.js 'path' dependency in environment-agnostic module
-  return home.replace(/\/+$/, '') + '/workspace';
+  return sanitized.replace(/\/+$/, '') + '/workspace';
 }
 
 export interface DesktopConfig {

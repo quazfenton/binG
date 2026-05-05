@@ -71,18 +71,33 @@ export async function apiFetch<T = any>(
   const timeoutId = setTimeout(() => controller.abort(), timeout);
 
   // Merge signals if a user-provided signal exists
-  let combinedSignal: AbortSignal = controller.signal;
-  let onAbort: (() => void) | undefined;
+  // Use AbortSignal.any() if available (Node 20+), otherwise fall back to manual merging
+  let combinedSignal: AbortSignal;
+  let cleanup: (() => void) | undefined;
 
   if (fetchOptions.signal) {
-    const c = new AbortController();
-    onAbort = () => {
-      controller.abort();
-      c.abort();
-    };
-    fetchOptions.signal.addEventListener('abort', onAbort);
-    controller.signal.addEventListener('abort', onAbort);
-    combinedSignal = c.signal;
+    // Modern approach: use AbortSignal.any if available
+    if (typeof AbortSignal.any === 'function') {
+      combinedSignal = AbortSignal.any([controller.signal, fetchOptions.signal]);
+    } else {
+      // Fallback: manual signal merging with proper cleanup
+      const combinedController = new AbortController();
+      const abortHandler = () => {
+        controller.abort();
+        combinedController.abort();
+      };
+      
+      fetchOptions.signal.addEventListener('abort', abortHandler);
+      controller.signal.addEventListener('abort', abortHandler);
+      combinedSignal = combinedController.signal;
+      
+      cleanup = () => {
+        fetchOptions.signal?.removeEventListener('abort', abortHandler);
+        controller.signal.removeEventListener('abort', abortHandler);
+      };
+    }
+  } else {
+    combinedSignal = controller.signal;
   }
 
   try {
@@ -106,9 +121,8 @@ export async function apiFetch<T = any>(
       headers: {},
     };
   } finally {
-    if (onAbort) {
-      fetchOptions.signal?.removeEventListener('abort', onAbort);
-      controller.signal.removeEventListener('abort', onAbort);
+    if (cleanup) {
+      cleanup();
     }
     clearTimeout(timeoutId);
   }
@@ -145,12 +159,42 @@ async function executeFetch<T>(
     data = (await response.text()) as T;
   } else if (!response.ok) {
     try {
-      const errorBody = await response.text();
-      try {
-        const errorJson = JSON.parse(errorBody);
-        error = errorJson.error?.message || JSON.stringify(errorJson);
-      } catch {
-        error = errorBody || `HTTP ${response.status}: ${response.statusText}`;
+      // Limit error body size to prevent memory issues (max 64KB)
+      const contentLength = response.headers.get('content-length');
+      const maxSize = 64 * 1024; // 64KB
+      
+      if (contentLength && parseInt(contentLength, 10) > maxSize) {
+        error = `HTTP ${response.status}: ${response.statusText} (response too large to read)`;
+      } else {
+        const reader = response.body?.getReader();
+        let errorBody = '';
+        
+        if (reader) {
+          const decoder = new TextDecoder();
+          let bytesRead = 0;
+          
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            
+            bytesRead += value.length;
+            if (bytesRead > maxSize) {
+              errorBody += decoder.decode(value.slice(0, maxSize - bytesRead + value.length));
+              break;
+            }
+            errorBody += decoder.decode(value);
+          }
+        } else {
+          // Fallback if no reader available
+          errorBody = await response.text().then(t => t.slice(0, maxSize));
+        }
+        
+        try {
+          const errorJson = JSON.parse(errorBody);
+          error = errorJson.error?.message || JSON.stringify(errorJson);
+        } catch {
+          error = errorBody || `HTTP ${response.status}: ${response.statusText}`;
+        }
       }
     } catch {
       error = `HTTP ${response.status}: ${response.statusText}`;

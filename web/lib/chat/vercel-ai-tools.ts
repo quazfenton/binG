@@ -182,13 +182,17 @@ function createCapabilityChainTool(context: ToolExecutionContext): Record<string
       const router = getCapabilityRouter();
       
       for (const step of steps) {
-        const result = await router.execute(step.capabilityId, step.args, {
-          userId: context.userId,
-          conversationId: context.conversationId,
-          sessionId: context.sessionId,
-          scopePath: context.scopePath,
-        } as any);
-        results.push({ capabilityId: step.capabilityId, result });
+        try {
+          const result = await router.execute(step.capabilityId, step.args, {
+            userId: context.userId,
+            conversationId: context.conversationId,
+            sessionId: context.sessionId,
+            scopePath: context.scopePath,
+          } as any);
+          results.push({ capabilityId: step.capabilityId, result });
+        } catch (err: any) {
+          results.push({ capabilityId: step.capabilityId, error: err.message });
+        }
       }
       
       return results;

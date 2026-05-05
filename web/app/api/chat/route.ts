@@ -172,7 +172,10 @@ async function classifyRequest(
   }
 
   try {
-    const classifier = getTaskClassifier({});
+    const classifier = getTaskClassifier({ provider: process.env.DEFAULT_PROVIDER || 'mistral' });
+    if (!classifier) {
+      throw new Error('Task classifier disabled');
+    }
     const result = await classifier.classify(content, {
       projectSize: process.env.PROJECT_SIZE as any,
     });
@@ -1226,7 +1229,8 @@ const config: UnifiedAgentConfig = {
                   } else {
                     // No marker yet — but the marker could be split across chunks.
                     // Hold back the trailing N chars in case they form a partial marker.
-                    const HOLDBACK = 16; // longer than '[ROUTING_METADATA]'
+                    const ROLE_SELECT_MARKERS = ['[ROLE_SELECT]', '[ROUTING_METADATA]'];
+                    const HOLDBACK = Math.max(...ROLE_SELECT_MARKERS.map((m) => m.length));
                     const safeUpto = Math.max(charsEmittedSafely, streamingContentBuffer.length - HOLDBACK);
                     if (safeUpto > charsEmittedSafely) {
                       const safe = streamingContentBuffer.slice(charsEmittedSafely, safeUpto);

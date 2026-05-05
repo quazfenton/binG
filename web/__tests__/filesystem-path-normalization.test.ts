@@ -21,4 +21,12 @@ describe('normalizeFilesystemPath', () => {
     expect(normalizeFilesystemPath('project/other/file.ts'))
       .toBe('project/other/file.ts');
   });
+
+  test('should handle edge cases and malformed input gracefully', () => {
+    expect(normalizeFilesystemPath('')).toBe('');
+    expect(() => normalizeFilesystemPath(null as any)).toThrow();
+    expect(() => normalizeFilesystemPath(undefined as any)).toThrow();
+    expect(normalizeFilesystemPath('project/sessions/anon$006$extra/file.ts'))
+      .toBe('project/sessions/006$extra/file.ts');
+  });
 });

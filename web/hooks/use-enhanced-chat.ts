@@ -307,6 +307,72 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
     }, 50);
   }, [inputQueue]);
 
+  // Helper function to submit with a specific prompt (avoids race condition with setInput)
+  const submitWithPrompt = useCallback(async (prompt: string) => {
+    if (!prompt.trim()) {
+      return;
+    }
+
+    // Reset streaming speaker if enabled
+    if (voiceService.getSettings().autoSpeakStream) {
+      streamingSpeaker.reset();
+    }
+
+    // Queue input if already loading (streaming response in progress)
+    if (isLoading) {
+      const queuedInput = prompt.trim();
+      console.log('[InputQueue] Queueing input (stream in progress):', {
+        queueLength: inputQueue.length + 1,
+        inputPreview: queuedInput.substring(0, 50),
+      });
+      setInputQueue(prev => [...prev, queuedInput]);
+      return;
+    }
+
+    const userMessage: Message = {
+      id: `user-${Date.now()}`,
+      role: 'user',
+      content: prompt.trim(),
+    };
+
+    const assistantMessage: Message = {
+      id: `assistant-${Date.now()}`,
+      role: 'assistant',
+      content: '',
+    };
+
+    // Add user message and prepare assistant message
+    setMessages(prev => [...prev, userMessage, assistantMessage]);
+    setIsLoading(true);
+    setError(undefined);
+
+    // Store reference to current assistant message
+    currentMessageRef.current = assistantMessage;
+
+    // Create abort controller for this request
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+
+    // Call the streaming handler with the prompt
+    const response = await fetch(options.api, {
+      method: 'POST',
+      headers: buildRequestHeaders(),
+      credentials: 'include',
+      body: JSON.stringify({
+        messages: [...messagesRef.current, userMessage],
+        ...(typeof options.body === 'function' ? options.body() : options.body || {}),
+      }),
+      signal: abortController.signal,
+    });
+
+    if (!response.ok || !response.body) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    // Call handleStreamingResponse with the response body
+    await handleStreamingResponse(response.body, assistantMessage, abortController);
+  }, [isLoading, inputQueue, messagesRef, options, voiceService, setError, setMessages, setIsLoading, buildRequestHeaders]);
+
   const handleSubmit = useCallback(async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
 
@@ -550,11 +616,11 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
     }
   }, [buildRequestHeaders, input, isLoading, options]);
 
-  const handleStreamingResponse = async (
+  async function handleStreamingResponse(
     body: ReadableStream<Uint8Array>,
     assistantMessage: Message,
     abortController: AbortController
-  ): Promise<void> => {
+  ): Promise<void> {
     const reader = body.getReader();
     const decoder = new TextDecoder();
     let accumulatedContent = '';
@@ -806,7 +872,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   // because messagesRef is stale (useEffect hasn't synced when done fires)
                   // FIX: Count only SUCCESSFUL tool invocations - failed ones should trigger retry
                   const successfulToolInvocations = (eventData.toolInvocations || eventData.toolCalls || eventData.messageMetadata?.toolInvocations || streamingToolInvocations || []).filter(
-                    (inv: any) => inv.result?.success !== false
+                    (inv: any) => inv.result?.success === true
                   );
                   const failedToolInvocations = (eventData.toolInvocations || eventData.toolCalls || eventData.messageMetadata?.toolInvocations || streamingToolInvocations || []).filter(
                     (inv: any) => inv.result?.success === false
@@ -1245,15 +1311,9 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                       const rolePrompt = `[ROLE_REDIRECT]\nTarget Role: ${suggestedRole}\nClassification: ${classification}\n\nYour task: Execute the following planned steps.\n\nAvailable steps:\n${planSteps.map((s: any, i: number) => `${i+1}. ${s.step || s} (${s.tool || 'unspecified'})`).join('\n')}\n\nBegin execution with step 1. Use the appropriate tools for each step.`;
                       
                       stepRepromptCountRef.current++;
-                      setInput(rolePrompt);
                       setTimeout(() => {
                         if (!isMountedRef.current) return;
-                        handleSubmit(
-                          {
-                            preventDefault: () => {},
-                            currentTarget: { reset: () => {} },
-                          } as React.FormEvent<HTMLFormElement>
-                        );
+                        submitWithPrompt(rolePrompt);
                       }, 150);
                     }
                   }
@@ -2236,6 +2296,8 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
         throw streamError;
       }
     } finally {
+      // Clean up buffer-manager listener to prevent duplicate registrations
+      enhancedBufferManager.off('render', onRender);
       reader.releaseLock();
       abortControllerRef.current = null;
     }
