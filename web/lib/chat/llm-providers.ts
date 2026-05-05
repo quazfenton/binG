@@ -1205,6 +1205,8 @@ class LLMService {
   private zenClient: any = null
   private vercel: any = null
   private livekit: any = null
+  private ollama: any = null
+  private kiro: any = null
   private composioService: ComposioService | null = null
   private opencodeClient: any = null
   private config: ProviderConfig = {}
@@ -1484,6 +1486,12 @@ class LLMService {
           case 'livekit':
             response = await this.generateLivekitResponse(model, messages, temperature, maxTokens, requestId, apiKey)
             break;
+          case 'ollama':
+            response = await this.generateOllamaResponse(model, messages, temperature, maxTokens, requestId, apiKey)
+            break;
+          case 'kiro':
+            response = await this.generateKiroResponse(model, messages, temperature, maxTokens, requestId, apiKey)
+            break;
           default:
             throw createLLMError(`Unsupported provider: ${provider}`, {
               code: ERROR_CODES.LLM.UNSUPPORTED_PROVIDER,
@@ -1651,6 +1659,18 @@ class LLMService {
             yield chunk;
           }
           break
+        case 'ollama':
+          for await (const chunk of this.streamOllamaResponse(model, messages, temperature, maxTokens)) {
+            chunkCount++;
+            yield chunk;
+          }
+          break
+        case 'kiro':
+          for await (const chunk of this.streamKiroResponse(model, messages, temperature, maxTokens)) {
+            chunkCount++;
+            yield chunk;
+          }
+          break
         default:
           throw new Error(`Streaming is not supported for provider: ${provider}`);
       }
@@ -1719,6 +1739,10 @@ class LLMService {
         return currentEnv.VERCEL_API_KEY || this.config.vercel?.apiKey || '';
       case 'livekit':
         return currentEnv.LIVEKIT_API_KEY || this.config.livekit?.apiKey || '';
+      case 'ollama':
+        return currentEnv.QUAZ_API_KEY || this.config.ollama?.apiKey || '';
+      case 'kiro':
+        return currentEnv.QUAZ_API_KEY || this.config.kiro?.apiKey || '';
       case 'nvidia':
         return currentEnv.NVIDIA_API_KEY || '';
       case 'groq':
@@ -2703,6 +2727,10 @@ class LLMService {
             return !!process.env.VERCEL_API_KEY;
           case 'livekit':
             return !!process.env.LIVEKIT_API_KEY;
+          case 'ollama':
+            return !!process.env.QUAZ_API_KEY;
+          case 'kiro':
+            return !!process.env.QUAZ_API_KEY;
           case 'cloudflare':
           case 'zo':
             // Providers with env vars configured but no request/stream handlers yet
@@ -3079,6 +3107,204 @@ class LLMService {
       finishReason: 'stop',
     };
   }
+
+  private async generateOllamaResponse(
+    model: string,
+    messages: LLMMessage[],
+    temperature: number,
+    maxTokens: number,
+    requestId?: string,
+    apiKeyOverride?: string
+  ): Promise<LLMResponse> {
+    const apiKey = this.getApiKey('ollama', apiKeyOverride);
+    if (!apiKey) {
+      throw new Error('Ollama API key not configured. Please set QUAZ_API_KEY in your environment variables.');
+    }
+
+    // Use custom base URL if provided (BYOK), otherwise default to local 9router proxy
+    const ollamaBaseURL =
+      this.config.ollama?.baseURL ||
+      (typeof process !== 'undefined' ? process.env.OLLAMA_BASE_URL : undefined) ||
+      'http://localhost:20128/v1';
+
+    let ollamaClient = this.ollama;
+    if (apiKeyOverride && apiKey !== this.config.ollama?.apiKey) {
+      const OpenAIClass = await getOpenAI();
+      ollamaClient = new OpenAIClass({ apiKey, baseURL: ollamaBaseURL });
+    } else if (!ollamaClient) {
+      const OpenAIClass = await getOpenAI();
+      ollamaClient = new OpenAIClass({ apiKey, baseURL: ollamaBaseURL });
+      this.ollama = ollamaClient;
+    }
+
+    const response = await ollamaClient.chat.completions.create({
+      model,
+      messages: messages as any,
+      temperature,
+      max_tokens: maxTokens,
+    })
+    const toolCalls = this.normalizeOpenAIToolCalls(response.choices[0]?.message?.tool_calls as any[])
+
+    return {
+      content: response.choices[0]?.message?.content || '',
+      tokensUsed: response.usage?.total_tokens || 0,
+      finishReason: response.choices[0]?.finish_reason || 'stop',
+      timestamp: new Date(),
+      metadata: toolCalls.length ? { toolCalls } : undefined,
+      usage: response.usage
+    }
+  }
+
+  private async *streamOllamaResponse(
+    model: string,
+    messages: LLMMessage[],
+    temperature: number,
+    maxTokens: number
+  ): AsyncGenerator<StreamingResponse> {
+    const apiKey = this.getApiKey('ollama');
+    if (!apiKey) {
+      throw new Error('Ollama API key not configured. Please set QUAZ_API_KEY in your environment variables.');
+    }
+
+    const ollamaBaseURL =
+      this.config.ollama?.baseURL ||
+      (typeof process !== 'undefined' ? process.env.OLLAMA_BASE_URL : undefined) ||
+      'http://localhost:20128/v1';
+
+    let ollamaClient = this.ollama;
+    if (!ollamaClient) {
+      const OpenAIClass = await getOpenAI();
+      ollamaClient = new OpenAIClass({ apiKey, baseURL: ollamaBaseURL });
+      this.ollama = ollamaClient;
+    }
+
+    const response = await ollamaClient.chat.completions.create({
+      model,
+      messages: messages as any,
+      temperature,
+      max_tokens: maxTokens,
+      stream: true,
+    })
+
+    for await (const chunk of response) {
+      const content = chunk.choices[0]?.delta?.content || '';
+      const toolCalls = this.normalizeOpenAIToolCalls(chunk.choices[0]?.delta?.tool_calls as any[])
+
+      yield {
+        content,
+        isComplete: false,
+        tokensUsed: chunk.usage?.total_tokens || 0,
+        finishReason: chunk.choices[0]?.finish_reason || undefined,
+        metadata: toolCalls.length ? { toolCalls } : undefined,
+        usage: chunk.usage
+      };
+    }
+
+    yield {
+      content: '',
+      isComplete: true,
+      finishReason: 'stop',
+    };
+  }
+
+  private async generateKiroResponse(
+    model: string,
+    messages: LLMMessage[],
+    temperature: number,
+    maxTokens: number,
+    requestId?: string,
+    apiKeyOverride?: string
+  ): Promise<LLMResponse> {
+    const apiKey = this.getApiKey('kiro', apiKeyOverride);
+    if (!apiKey) {
+      throw new Error('Kiro API key not configured. Please set QUAZ_API_KEY in your environment variables.');
+    }
+
+    // Use custom base URL if provided (BYOK), otherwise default to local 9router proxy
+    const kiroBaseURL =
+      this.config.kiro?.baseURL ||
+      (typeof process !== 'undefined' ? process.env.KIRO_BASE_URL : undefined) ||
+      'http://localhost:20128/v1';
+
+    let kiroClient = this.kiro;
+    if (apiKeyOverride && apiKey !== this.config.kiro?.apiKey) {
+      const OpenAIClass = await getOpenAI();
+      kiroClient = new OpenAIClass({ apiKey, baseURL: kiroBaseURL });
+    } else if (!kiroClient) {
+      const OpenAIClass = await getOpenAI();
+      kiroClient = new OpenAIClass({ apiKey, baseURL: kiroBaseURL });
+      this.kiro = kiroClient;
+    }
+
+    const response = await kiroClient.chat.completions.create({
+      model,
+      messages: messages as any,
+      temperature,
+      max_tokens: maxTokens,
+    })
+    const toolCalls = this.normalizeOpenAIToolCalls(response.choices[0]?.message?.tool_calls as any[])
+
+    return {
+      content: response.choices[0]?.message?.content || '',
+      tokensUsed: response.usage?.total_tokens || 0,
+      finishReason: response.choices[0]?.finish_reason || 'stop',
+      timestamp: new Date(),
+      metadata: toolCalls.length ? { toolCalls } : undefined,
+      usage: response.usage
+    }
+  }
+
+  private async *streamKiroResponse(
+    model: string,
+    messages: LLMMessage[],
+    temperature: number,
+    maxTokens: number
+  ): AsyncGenerator<StreamingResponse> {
+    const apiKey = this.getApiKey('kiro');
+    if (!apiKey) {
+      throw new Error('Kiro API key not configured. Please set QUAZ_API_KEY in your environment variables.');
+    }
+
+    const kiroBaseURL =
+      this.config.kiro?.baseURL ||
+      (typeof process !== 'undefined' ? process.env.KIRO_BASE_URL : undefined) ||
+      'http://localhost:20128/v1';
+
+    let kiroClient = this.kiro;
+    if (!kiroClient) {
+      const OpenAIClass = await getOpenAI();
+      kiroClient = new OpenAIClass({ apiKey, baseURL: kiroBaseURL });
+      this.kiro = kiroClient;
+    }
+
+    const response = await kiroClient.chat.completions.create({
+      model,
+      messages: messages as any,
+      temperature,
+      max_tokens: maxTokens,
+      stream: true,
+    })
+
+    for await (const chunk of response) {
+      const content = chunk.choices[0]?.delta?.content || '';
+      const toolCalls = this.normalizeOpenAIToolCalls(chunk.choices[0]?.delta?.tool_calls as any[])
+
+      yield {
+        content,
+        isComplete: false,
+        tokensUsed: chunk.usage?.total_tokens || 0,
+        finishReason: chunk.choices[0]?.finish_reason || undefined,
+        metadata: toolCalls.length ? { toolCalls } : undefined,
+        usage: chunk.usage
+      };
+    }
+
+    yield {
+      content: '',
+      isComplete: true,
+      finishReason: 'stop',
+    };
+  }
 }
 
 export const llmService = new LLMService({
@@ -3133,6 +3359,14 @@ export const llmService = new LLMService({
     hostname: process.env.OPENCODE_HOSTNAME || '127.0.0.1',
     port: parseInt(process.env.OPENCODE_PORT || '4096'),
     model: process.env.OPENCODE_MODEL || 'anthropic/claude-3-5-sonnet-20241022',
+  },
+  ollama: {
+    apiKey: process.env.QUAZ_API_KEY,
+    baseURL: process.env.OLLAMA_BASE_URL || 'http://localhost:20128/v1'
+  },
+  kiro: {
+    apiKey: process.env.QUAZ_API_KEY,
+    baseURL: process.env.KIRO_BASE_URL || 'http://localhost:20128/v1'
   },
   antigravity: {
     enabled: process.env.ANTIGRAVITY_ENABLED !== 'false',

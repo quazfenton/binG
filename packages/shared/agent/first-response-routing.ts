@@ -259,6 +259,62 @@ Continue with this step. If completed, proceed to next steps or conclude.
 }
 
 /**
+ * Truncate response at the first [ROLE_SELECT] (or legacy [ROUTING_METADATA]) marker.
+ * 
+ * Some LLMs (especially text-mode fallback like gpt-oss) keep generating content after
+ * emitting their [ROLE_SELECT] block — e.g. they "simulate" the next turn or repeat the
+ * plan in a different format. We only want the prose BEFORE the first marker; everything
+ * after (including the marker JSON and any subsequent simulated turns) is discarded for
+ * the user-visible message.
+ */
+export function truncateAtFirstRouting(responseText: string): string {
+  if (!responseText || typeof responseText !== 'string') return responseText;
+
+  let earliestIdx = -1;
+  for (const marker of ['[ROLE_SELECT]', '[ROUTING_METADATA]']) {
+    const idx = responseText.indexOf(marker);
+    if (idx !== -1 && (earliestIdx === -1 || idx < earliestIdx)) {
+      earliestIdx = idx;
+    }
+  }
+
+  if (earliestIdx === -1) return responseText;
+
+  // Trim trailing whitespace/separators (e.g., "---\n\n") right before the marker
+  let truncated = responseText.slice(0, earliestIdx);
+  truncated = truncated.replace(/[\s\-_=*]+$/, '').trim();
+  return truncated;
+}
+
+/**
+ * Build a chat-route-friendly routing metadata payload that includes a
+ * `stepReprompt` string. This is the contract the client (use-enhanced-chat.ts)
+ * expects on `done.messageMetadata.routing` to auto-continue multi-step flows.
+ */
+export function buildRoutingMetadataForClient(routing: RoutingMetadata): {
+  stepReprompt: string;
+  primaryRole: string;
+  estimatedSteps: number;
+  classification: TaskClassification;
+  complexity: TaskComplexity;
+  specializationRoute: SpecializationRoute;
+  planSteps: PlanStep[];
+  continue: boolean;
+} {
+  const shouldContinue = !!routing.continue && Array.isArray(routing.planSteps) && routing.planSteps.length > 0;
+  return {
+    stepReprompt: shouldContinue ? generateStepReprompt(routing, 0) : '',
+    primaryRole: routing.suggestedRole,
+    estimatedSteps: routing.planSteps?.length || 0,
+    classification: routing.classification,
+    complexity: routing.complexity,
+    specializationRoute: routing.specializationRoute,
+    planSteps: routing.planSteps || [],
+    continue: shouldContinue,
+  };
+}
+
+/**
  * Determine if a review cycle should trigger.
  */
 export function shouldTriggerReview(
