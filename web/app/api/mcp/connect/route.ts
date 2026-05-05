@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server'
 
-export const runtime = 'edge';
 
 import { isDesktopMode } from '@bing/platform/env'
 import { createLogger } from '@/lib/utils/logger'

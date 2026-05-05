@@ -13,7 +13,6 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
-export const runtime = 'edge';
 
 import { z } from 'zod';
 import { pluginRegistry, type DataSourcePlugin, createFragment as engineCreateFragment } from '@/components/top-panel/plugins/zine-engine';

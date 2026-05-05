@@ -21,7 +21,7 @@ const log = (...args: any[]) => DEBUG && console.log(`${COLORS.bright}${COLORS.g
 const logWarn = (...args: any[]) => console.warn(`${COLORS.bright}${COLORS.yellow}[VFS CREATE FILE WARN]${COLORS.reset}`, ...args);
 const logError = (...args: any[]) => console.error(`${COLORS.bright}${COLORS.red}[VFS CREATE FILE ERROR]${COLORS.reset}`, ...args);
 
-export const runtime = 'edge';
+
 
 /**
  * Schema for filesystem create file requests

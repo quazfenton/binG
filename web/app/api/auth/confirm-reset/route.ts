@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-export const runtime = 'edge';
 
 import { getDatabase } from '@/lib/database/connection';
 import { z } from 'zod';

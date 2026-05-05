@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-export const runtime = 'edge';
 
 import { virtualFilesystem } from '@/lib/virtual-filesystem/index.server';
 import { resolveScopedPath, normalizeSessionId } from '@/lib/virtual-filesystem/scope-utils';

@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server'
 
-export const runtime = 'edge';
 
 import { initializeMCPForArchitecture1 } from '@/lib/mcp/architecture-integration'
 import { isDesktopMode } from '@bing/platform/env'

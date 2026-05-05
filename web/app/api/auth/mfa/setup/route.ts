@@ -10,7 +10,6 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
-export const runtime = 'edge';
 
 import { verifyAuth } from '@/lib/auth/jwt';
 import { generateTotpSecret, generateTotpUri, encryptTotpSecret, generateBackupCodes, hashBackupCodes } from '@/lib/auth/totp';

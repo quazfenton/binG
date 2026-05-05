@@ -4,7 +4,7 @@ import { virtualFilesystem, withAnonSessionCookie } from '@/lib/virtual-filesyst
 import { resolveFilesystemOwnerWithFallback } from '../utils';
 import { searchQuerySchema, pathSchema } from '@/lib/validation/schemas';
 
-export const runtime = 'edge';
+
 
 /**
  * Schema for filesystem search requests

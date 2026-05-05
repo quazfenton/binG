@@ -18,7 +18,7 @@ import { exchangeCodeForToken, calculateExpiryDate } from '@/lib/figma/oauth';
 import { getFigmaRedirectUri } from '@/lib/figma/config';
 import { oauthStateStore } from '../oauth-state-store';
 
-export const runtime = 'edge';
+
 
 /**
  * GET /api/integrations/figma/callback

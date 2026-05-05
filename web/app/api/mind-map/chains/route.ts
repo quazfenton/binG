@@ -8,7 +8,6 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
-export const runtime = 'edge';
 
 import { getReasoningChains, getReasoningChain, getMindMapStats } from '@/lib/mind-map/mind-map-service';
 import { createLogger } from '@/lib/utils/logger';

@@ -379,7 +379,8 @@ export function injectFeedback(context: FeedbackContext): InjectedFeedback {
     correctionSection += 'Address the following issues from previous attempts:\n\n';
 
     for (const failure of recentFailures.slice(-5)) { // Last 5 failures
-      const analysis = failureAnalyses.get(failure)!;
+      const analysis = failureAnalyses.get(failure);
+      if (!analysis) continue;
       correctionSection += `### ${failure.type.toUpperCase()} (${failure.source})\n`;
       correctionSection += `${analysis.rootCause}\n`;
       correctionSection += `**Fix:** ${analysis.healingApproach}\n\n`;
@@ -391,7 +392,8 @@ export function injectFeedback(context: FeedbackContext): InjectedFeedback {
   healingInstructions += 'Apply these steps to recover from failures:\n\n';
 
   for (const failure of recentFailures.slice(-3)) {
-    const analysis = failureAnalyses.get(failure)!;
+    const analysis = failureAnalyses.get(failure);
+    if (!analysis) continue;
     healingInstructions += `1. ${analysis.correctionPrompt.instruction}\n`;
     analysis.correctionPrompt.healingSteps.forEach(step => {
       healingInstructions += `   - ${step}\n`;

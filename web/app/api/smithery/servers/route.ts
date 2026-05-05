@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-export const runtime = 'edge';
 
 import { getSmitheryService } from '@/lib/mcp/smithery-service';
 import type { SmitheryServer } from '@/lib/tools/tool-integration/providers/smithery-client';

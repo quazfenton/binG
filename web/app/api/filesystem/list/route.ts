@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { virtualFilesystem, withAnonSessionCookie } from '@/lib/virtual-filesystem/index.server';
 import { resolveFilesystemOwnerWithFallback, normalizeFilesystemPath } from '../utils';
 
-export const runtime = 'edge';
+
 
 // Request tracking for detecting polling loops
 const requestTracker = new Map<string, { count: number; lastRequest: number; firstRequest: number }>();

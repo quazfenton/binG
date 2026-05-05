@@ -10,7 +10,7 @@ import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events
 import type { FilesystemOwnerResolution } from '@/lib/virtual-filesystem/resolve-filesystem-owner';
 import type { ResolvedRequestAuth } from '@/lib/auth/auth-cache';
 
-export const runtime = 'edge';
+
 
 /**
  * Schema for filesystem write requests

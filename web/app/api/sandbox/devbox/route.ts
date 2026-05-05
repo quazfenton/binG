@@ -20,7 +20,7 @@ import { SandboxSecurityManager } from '@/lib/sandbox/security-manager';
 
 const logger = createLogger('DevBoxAPI');
 
-export const runtime = 'edge';
+
 
 // SECURITY: O(1) body size guard — checked BEFORE req.json() buffers into memory
 const MAX_DEVBOX_BODY_BYTES = 120 * 1024 * 1024; // 120MB

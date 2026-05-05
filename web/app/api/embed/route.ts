@@ -10,7 +10,6 @@
 
 import { NextRequest, NextResponse } from "next/server";
 
-export const runtime = 'edge';
 
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;

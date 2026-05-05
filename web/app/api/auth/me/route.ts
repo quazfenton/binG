@@ -13,7 +13,6 @@
  */
 import { NextResponse } from 'next/server';
 
-export const runtime = 'edge';
 
 import { auth0, AUTH0_CONNECTIONS, getConnectedAccountsByUser } from '@/lib/auth0';
 import { getLocalUserIdFromAuth0 } from '@/lib/oauth/connections';

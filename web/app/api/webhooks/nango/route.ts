@@ -14,7 +14,6 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
-export const runtime = 'edge';
 
 import { getNangoService } from '@/lib/integrations/nango-service';
 

@@ -7,7 +7,6 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
-export const runtime = 'edge';
 
 
 // Validate GitHub owner/repo format (alphanumeric, dashes, underscores, dots)

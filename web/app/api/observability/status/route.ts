@@ -6,7 +6,6 @@
 
 import { NextResponse } from 'next/server';
 
-export const runtime = 'edge';
 
 import { getObservabilityStatus } from '@/lib/observability';
 

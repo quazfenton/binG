@@ -12,7 +12,6 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
-export const runtime = 'edge';
 
 import { createLogger } from '@/lib/utils/logger';
 

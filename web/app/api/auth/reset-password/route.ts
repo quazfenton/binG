@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-export const runtime = 'edge';
 
 import { initializeDatabase } from '@/lib/database/db';
 import { generateToken } from '@/lib/auth/jwt';

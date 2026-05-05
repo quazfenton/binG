@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 
-export const runtime = 'edge';
 
 
 // Pre-warm endpoint to initialize LLM service and avoid cold starts

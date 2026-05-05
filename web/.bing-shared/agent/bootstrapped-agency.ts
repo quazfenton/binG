@@ -330,7 +330,7 @@ export class BootstrappedAgency {
           const { getCapabilityRouter } = await import('../../../web/lib/tools/router');
           const router = getCapabilityRouter();
           const context = { 
-            userId: this.config.userId || this.config.sessionId,
+            ...(this.config.userId && { userId: this.config.userId }),
             sessionId: this.config.sessionId,
           };
 

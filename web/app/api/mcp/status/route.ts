@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server'
 
-export const runtime = 'edge';
 
 import { getMCPToolCount } from '@/lib/mcp/config'
 import { isDesktopMode } from '@bing/platform/env'

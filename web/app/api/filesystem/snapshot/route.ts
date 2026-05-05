@@ -5,7 +5,7 @@ import { fsBridge, isUsingLocalFS } from '@bing/shared/FS/fs-bridge';
 import { resolveFilesystemOwner, virtualFilesystem, withAnonSessionCookie } from '@/lib/virtual-filesystem/index.server';
 import type { FilesystemOwnerResolution } from '@/lib/virtual-filesystem/resolve-filesystem-owner';
 
-export const runtime = 'edge';
+
 
 // Server-side LRU cache for snapshots
 // CRITICAL FIX: Use globalThis to survive Next.js hot-reloading

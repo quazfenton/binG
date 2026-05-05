@@ -32,7 +32,6 @@
 
 import { spawn } from "child_process";
 
-export const runtime = 'edge';
 
 import path from "path";
 import { promises as fs } from "fs";

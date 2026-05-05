@@ -35,7 +35,7 @@ import { getDatabase } from '@/lib/database/connection';
 
 const logger = createLogger('LocalPTY');
 
-export const runtime = 'edge';
+
 
 // ============================================================
 // Path Traversal Prevention

@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 
-export const runtime = 'edge';
 
 import { createClient } from 'webdav';
 import { diffLines } from 'diff';

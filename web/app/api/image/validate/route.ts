@@ -13,7 +13,6 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
-export const runtime = 'edge';
 
 import { validateImageUrl } from '@/lib/utils/image-loader';
 import { sanitizeUrlInput } from '@/lib/utils/sanitize';
