@@ -34,25 +34,12 @@ export {
 // Nullclaw Integration
 export {
   nullclawIntegration,
-  initializeNullclaw,
-  isNullclawAvailable,
-  getNullclawStatus,
-  getNullclawConfig,
-  getNullclawMode,
-  executeNullclawTask,
-  shutdownNullclaw,
-  type NullclawConfig,
   type NullclawTask,
-  type NullclawStatus,
+  type NullclawResult,
 } from './nullclaw-integration';
 
-// Cloud Offload
 export {
   cloudAgentOffload,
-  CloudAgentOffload,
-  type CloudAgentConfig,
-  type CloudAgentInstance,
-  type CloudAgentResult,
 } from './cloud-agent-offload';
 
 // Orchestration Mode Handler - Multi-framework routing

@@ -16,34 +16,43 @@ import React, { createContext, useContext, useState, useEffect, useCallback } fr
  * - 'v2-executor': V2 containerized execution (lib/agent/v2-executor.ts)
  */
 export type OrchestrationMode =
-  | 'task-router'           // Default - current behavior
-  | 'unified-agent'         // lib/orchestra/unified-agent-service.ts
-  | 'stateful-agent'        // lib/orchestra/stateful-agent (direct with ToolExecutor)
-  | 'agent-kernel'          // packages/shared/agent/agent-kernel (priority scheduler)
-  | 'agent-loop'            // lib/orchestra/mastra/agent-loop (ToolLoopAgent)
-  | 'execution-graph'       // packages/shared/agent/execution-graph (DAG engine)
-  | 'nullclaw'              // packages/shared/agent/nullclaw-integration (external server)
-  | 'opencode-sdk'          // lib/chat/opencode-sdk-provider (SDK → local server)
-  | 'mastra-workflow'       // lib/orchestra/mastra/
-  | 'crewai'                // lib/crewai/
-  | 'v2-executor'           // lib/agent/v2-executor.ts
-  | 'agent-team'            // lib/spawn/orchestration/agent-team (multi-agent)
-  | 'auto'                  // Auto-select mode
-  | 'v1-api'                // V1 API mode
-  | 'v1-agent-loop'         // V1 agent loop
-  | 'v1-progressive-build'  // V1 progressive build
-  | 'dual-process'          // Dual process mode
-  | 'execution-controller'  // Execution controller
-  | 'spec:super'            // Spec super mode
-  | 'v2-native'             // V2 native mode
-  | 'v2-containerized'       // V2 containerized mode
-  | 'v2-local'              // V2 local mode
-  | 'attractor-driven'      // Attractor-driven mode
-  | 'intent-driven'        // Intent-driven mode
-  | 'energy-driven'        // Energy-driven mode
-  | 'cognitive-resonance'  // Cognitive resonance mode
-  | 'adversarial-verify'   // Adversarial verification mode
-  | 'distributed-cognition'; // Distributed cognition mode
+  | 'auto'
+  | 'v1-api'
+  | 'v1-agent-loop'
+  | 'v1-progressive-build'
+  | 'dual-process'
+  | 'execution-controller'
+  | 'spec:super'
+  | 'spec:maximal'
+  | 'v2-native'
+  | 'v2-containerized'
+  | 'v2-local'
+  | 'unified-agent'
+  | 'stateful-agent'
+  | 'mastra-workflow'
+  | 'mastra:code-agent'
+  | 'mastra:research'
+  | 'mastra:parallel'
+  | 'mastra:data-analysis'
+  | 'mastra:hitl'
+  | 'agent-loop'
+  | 'task-router'
+  | 'opencode-sdk'
+  | 'crewai'
+  | 'crewai:role-agent'
+  | 'crewai:swarm'
+  | 'crewai:streaming'
+  | 'v2-executor'
+  | 'agent-team'
+  | 'attractor-driven'
+  | 'intent-driven'
+  | 'energy-driven'
+  | 'cognitive-resonance'
+  | 'cognitive:converged'
+  | 'adversarial-verify'
+  | 'adversarial:revised'
+  | 'distributed-cognition'
+  | 'distributed:no-synthesis';
 
 export interface OrchestrationModeConfig {
   mode: OrchestrationMode;
@@ -70,18 +79,6 @@ const STORAGE_KEY = 'orchestration_mode_config';
 
 // Valid modes set for validation
 const VALID_MODES = new Set<OrchestrationMode>([
-  'task-router',
-  'unified-agent',
-  'stateful-agent',
-  'agent-kernel',
-  'agent-loop',
-  'execution-graph',
-  'nullclaw',
-  'opencode-sdk',
-  'mastra-workflow',
-  'crewai',
-  'v2-executor',
-  'agent-team',
   'auto',
   'v1-api',
   'v1-agent-loop',
@@ -89,15 +86,36 @@ const VALID_MODES = new Set<OrchestrationMode>([
   'dual-process',
   'execution-controller',
   'spec:super',
+  'spec:maximal',
   'v2-native',
   'v2-containerized',
   'v2-local',
+  'unified-agent',
+  'stateful-agent',
+  'mastra-workflow',
+  'mastra:code-agent',
+  'mastra:research',
+  'mastra:parallel',
+  'mastra:data-analysis',
+  'mastra:hitl',
+  'agent-loop',
+  'task-router',
+  'opencode-sdk',
+  'crewai',
+  'crewai:role-agent',
+  'crewai:swarm',
+  'crewai:streaming',
+  'v2-executor',
+  'agent-team',
   'attractor-driven',
   'intent-driven',
   'energy-driven',
   'cognitive-resonance',
+  'cognitive:converged',
   'adversarial-verify',
+  'adversarial:revised',
   'distributed-cognition',
+  'distributed:no-synthesis',
 ]);
 
 /**

@@ -35,6 +35,11 @@ import {
   type UnifiedAgentConfig,
   type UnifiedAgentResult,
 } from '../unified-agent-service';
+import {
+  emitStepProgress,
+  emitNodeStatus,
+  emitRetryError,
+} from '@bing/shared/agent/progress-emitter';
 
 const log = createLogger('ExecutionControllerMode');
 
@@ -839,6 +844,25 @@ export async function runExecutionControllerMode(
     cycleCount++;
     log.info(`[ExecutionController] ┌─ Cycle ${cycleCount}/${maxCycles} ──────────────`);
 
+    // Emit step progress for current cycle
+    await emitStepProgress(
+      baseConfig.userId || 'system',
+      baseConfig.sessionId,
+      {
+        mode: 'execution-controller',
+        correlationId: baseConfig.conversationId,
+        steps: Array.from({ length: maxCycles }, (_, i) => ({
+          id: `cycle-${i + 1}`,
+          title: `Execution Cycle ${i + 1}`,
+          description: i === 0 ? 'Initial execution' : 'Refinement iteration',
+          status: i < cycleCount ? 'completed' : 'running',
+        })),
+        currentStepIndex: cycleCount - 1,
+        currentAction: `Executing cycle ${cycleCount} of ${maxCycles}`,
+        phase: 'acting',
+      }
+    );
+
     // ── Worker: Execute LLM ──────────────────────────────────────────────
     const result = await processUnifiedAgentRequest({
       ...baseConfig,
@@ -848,6 +872,21 @@ export async function runExecutionControllerMode(
     if (!result.success) {
       log.info(`[ExecutionController] ✗ Cycle ${cycleCount} failed`, { error: result.error });
       cycleHistory.push(`Cycle ${cycleCount}: FAILED — ${result.error}`);
+      
+      // Emit error event
+      await emitRetryError(
+        baseConfig.userId || 'system',
+        baseConfig.sessionId,
+        {
+          mode: 'execution-controller',
+          correlationId: baseConfig.conversationId,
+          nodeId: `cycle-${cycleCount}`,
+          message: result.error || 'Execution failed',
+          retryCount: cycleCount,
+          recovered: false,
+        }
+      );
+      
       if (bestResult) continue;
       return result;
     }
@@ -979,6 +1018,22 @@ export async function runExecutionControllerMode(
       bestResult = result;
       bestScore = currentScore;
       log.info(`[ExecutionController] │   → New best score: ${(currentScore * 100).toFixed(1)}%`);
+      
+      // Emit node status for new best result
+      await emitNodeStatus(
+        baseConfig.userId || 'system',
+        baseConfig.sessionId,
+        {
+          mode: 'execution-controller',
+          correlationId: baseConfig.conversationId,
+          nodeId: `cycle-${cycleCount}`,
+          nodeRole: 'worker',
+          nodeModel: baseConfig.model,
+          nodeProvider: baseConfig.provider,
+          status: 'working',
+          currentAction: `New best result (score: ${(currentScore * 100).toFixed(1)}%)`,
+        }
+      );
     }
 
     // Check for improvement (for anti-stagnation)

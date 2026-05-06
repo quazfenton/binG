@@ -6,11 +6,10 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
-
 import { z } from 'zod';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { agentSessionManager } from '@/lib/session/agent/agent-session-manager';
-import { agentFSBridge } from '@bing/shared/agent';
+import { sandboxFilesystemSync } from '@/lib/virtual-filesystem/sync/sandbox-filesystem-sync';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('API:AgentV2:Sync');
@@ -63,36 +62,28 @@ export async function POST(request: NextRequest) {
 
     logger.info(`Syncing session ${session.id} (direction: ${direction})`);
 
-    let result;
-    
-    if (direction === 'bidirectional') {
-      result = await agentFSBridge.syncBidirectional(userId, resolvedConversationId, {
-        includePatterns,
-        excludePatterns,
-      });
-    } else if (direction === 'to-sandbox') {
-      result = await agentFSBridge.syncToSandbox(userId, resolvedConversationId, {
-        direction: 'to-sandbox',
-        includePatterns,
-        excludePatterns,
-      });
-    } else {
-      result = await agentFSBridge.syncFromSandbox(userId, resolvedConversationId, {
-        direction: 'from-sandbox',
-        includePatterns,
-        excludePatterns,
-      });
+    const sandboxId = session.sandboxHandle?.id;
+    if (!sandboxId) {
+      return NextResponse.json({ error: 'Session has no sandbox handle' }, { status: 400 });
     }
 
-    const success =
-      direction === 'bidirectional'
-        ? result.toSandbox.success && result.fromSandbox.success
-        : result.success;
+    try {
+      if (direction === 'bidirectional') {
+        await sandboxFilesystemSync.syncSandboxToVFS(sandboxId, userId);
+        await sandboxFilesystemSync.syncVFSToSandbox(sandboxId, userId);
+      } else if (direction === 'to-sandbox') {
+        await sandboxFilesystemSync.syncVFSToSandbox(sandboxId, userId);
+      } else {
+        await sandboxFilesystemSync.syncSandboxToVFS(sandboxId, userId);
+      }
 
-    return NextResponse.json({
-      success,
-      data: result,
-    });
+      return NextResponse.json({
+        success: true,
+        data: { message: 'Sync completed successfully' },
+      });
+    } catch (err: any) {
+      throw new Error(`Sync failed: ${err.message}`);
+    }
 
   } catch (error: any) {
     logger.error('Sync failed', error);
