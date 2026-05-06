@@ -1,23 +1,23 @@
 import { NextRequest } from 'next/server';
 
 // Import all existing handlers
-import { POST as agentPOST } from './agent/gateway';
-import { GET as clearSessionsGET, POST as clearSessionsPOST } from './clear-sessions/gateway';
-import { GET as daemonGET, POST as daemonPOST, DELETE as daemonDELETE } from './daemon/gateway';
-import { GET as devboxGET, POST as devboxPOST, DELETE as devboxDELETE } from './devbox/gateway';
-import { POST as executePOST } from './execute/gateway';
-import { GET as filesGET } from './files/gateway';
-import { POST as lifecyclePOST } from './lifecycle/gateway';
-import { GET as ptyGET, POST as ptyPOST } from './provider/pty/gateway';
-import { GET as sessionGET, POST as sessionPOST, DELETE as sessionDELETE, PATCH as sessionPATCH } from './session/gateway';
-import { GET as syncGET, POST as syncPOST } from './sync/gateway';
-import { POST as terminalInputPOST } from './terminal/input/gateway';
-import { POST as terminalResizePOST } from './terminal/resize/gateway';
-import { POST as terminalPOST, DELETE as terminalDELETE } from './terminal/gateway';
-import { GET as terminalStreamGET, POST as terminalStreamPOST } from './terminal/stream/gateway';
-import { GET as terminalWsGET } from './terminal/ws/gateway';
-import { GET as terminaluseGET, POST as terminalusePOST } from './terminaluse/gateway';
-import { POST as webcontainerPOST } from './webcontainer/gateway';
+import { POST as agentPOST } from './agent/route';
+import { GET as clearSessionsGET, POST as clearSessionsPOST } from './clear-sessions/route';
+import { GET as daemonGET, POST as daemonPOST, DELETE as daemonDELETE } from './daemon/route';
+import { GET as devboxGET, POST as devboxPOST, DELETE as devboxDELETE } from './devbox/route';
+import { POST as executePOST } from './execute/route';
+import { GET as filesGET } from './files/route';
+import { POST as lifecyclePOST } from './lifecycle/route';
+import { GET as ptyGET, POST as ptyPOST } from './provider/pty/route';
+import { GET as sessionGET, POST as sessionPOST, DELETE as sessionDELETE, PATCH as sessionPATCH } from './session/route';
+import { GET as syncGET, POST as syncPOST } from './sync/route';
+import { POST as terminalInputPOST } from './terminal/input/route';
+import { POST as terminalResizePOST } from './terminal/resize/route';
+import { POST as terminalPOST, DELETE as terminalDELETE } from './terminal/route';
+import { GET as terminalStreamGET, POST as terminalStreamPOST } from './terminal/stream/route';
+import { GET as terminalWsGET } from './terminal/ws/route';
+import { GET as terminaluseGET, POST as terminalusePOST } from './terminaluse/route';
+import { POST as webcontainerPOST } from './webcontainer/route';
 
 /**
  * Consolidated sandbox route

@@ -1,18 +1,18 @@
 import { NextRequest } from 'next/server';
 
 // Import all existing handlers
-import { GET as healthGET } from './health/route';
+import { GET as healthGET } from './health/gateway';
 import { POST as agentPOST } from './main';
-import { POST as statefulAgentPOST } from './stateful-agent/route';
-import { POST as interruptPOST } from './stateful-agent/interrupt/route';
-import { POST as unifiedAgentPOST } from './unified-agent/route';
-import { POST as cloudOffloadPOST } from './v2/cloud/offload/route';
-import { GET as cloudAgentGET, POST as cloudAgentPOST, DELETE as cloudAgentDELETE } from './v2/cloud/[agentId]/route';
-import { POST as v2ExecutePOST } from './v2/execute/route';
-import { GET as v2SessionGET, POST as v2SessionPOST, DELETE as v2SessionDELETE } from './v2/session/route';
-import { POST as v2SyncPOST } from './v2/sync/route';
-import { POST as v2WorkforcePOST } from './v2/workforce/route';
-import { GET as workflowsGET, POST as workflowsPOST } from './workflows/route';
+import { POST as statefulAgentPOST } from './stateful-agent/gateway';
+import { POST as interruptPOST } from './stateful-agent/interrupt/gateway';
+import { POST as unifiedAgentPOST } from './unified-agent/gateway';
+import { POST as cloudOffloadPOST } from './v2/cloud/offload/gateway';
+import { GET as cloudAgentGET, POST as cloudAgentPOST, DELETE as cloudAgentDELETE } from './v2/cloud/[agentId]/gateway';
+import { POST as v2ExecutePOST } from './v2/execute/gateway';
+import { GET as v2SessionGET, POST as v2SessionPOST, DELETE as v2SessionDELETE } from './v2/session/gateway';
+import { POST as v2SyncPOST } from './v2/sync/gateway';
+import { POST as v2WorkforcePOST } from './v2/workforce/gateway';
+import { GET as workflowsGET, POST as workflowsPOST } from './workflows/gateway';
 
 /**
  * Consolidated agent route
