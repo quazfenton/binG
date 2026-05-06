@@ -13,7 +13,8 @@ export async function GET(request: NextRequest) {
 
   // /api/mastra/workflows/:workflowId
   if (pathParts.includes('workflows')) {
-    return workflowsIdGET(request);
+    const workflowId = pathParts[3] || '';
+    return workflowsIdGET(request, { params: Promise.resolve({ workflowId }) });
   }
 
   // /api/mastra/status
@@ -25,7 +26,8 @@ export async function POST(request: NextRequest) {
 
   // /api/mastra/workflows/:workflowId
   if (pathParts.includes('workflows')) {
-    return workflowsIdPOST(request);
+    const workflowId = pathParts[3] || '';
+    return workflowsIdPOST(request, { params: Promise.resolve({ workflowId }) });
   }
 
   // /api/mastra/resume - HITL resume

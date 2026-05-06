@@ -17,7 +17,7 @@ export async function GET(request: NextRequest) {
     case 'playlist':
       return playlistGET(request);
     case 'webhook':
-      return webhookGET(request);
+      return webhookGET();
     case 'embed': {
       const videoId = searchParams.get('videoId');
       if (!videoId) {

@@ -7,5 +7,8 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  return restartPOST(request);
+  const pathParts = request.nextUrl.pathname.split('/').filter(Boolean);
+  // /api/cicd/restart/:id
+  const id = pathParts[3] || '';
+  return restartPOST(request, { params: Promise.resolve({ id }) });
 }
