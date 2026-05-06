@@ -94,7 +94,12 @@ export type OrchestrationMode =
   | 'crewai:streaming'
   | 'v2-executor'
   | 'agent-team'
-  | 'multi-agent';
+  | 'multi-agent'
+  // Advanced modes
+  | 'attractor-driven'
+  | 'intent-driven'
+  | 'energy-driven'
+  | 'execution-controller';
 
 export interface OrchestrationRequest {
   task: string;
@@ -174,6 +179,7 @@ export function getOrchestrationModeFromRequest(req: NextRequest): Orchestration
     'spec:super', 'spec:maximal',
     'mastra:code-agent', 'mastra:research', 'mastra:parallel', 'mastra:data-analysis', 'mastra:hitl',
     'crewai:role-agent', 'crewai:swarm', 'crewai:streaming',
+    'attractor-driven', 'intent-driven', 'energy-driven', 'execution-controller',
   ];
 
   allModes.forEach(mode => knownModes.add(mode));
@@ -1019,6 +1025,7 @@ export async function executeWithOrchestrationMode(
       // ========================================================================
       case 'multi-agent': {
         const { MultiAgentCollaboration } = await import('@bing/shared/agent/multi-agent-collaboration');
+        type AgentRole = 'planner' | 'researcher' | 'coder' | 'reviewer' | 'tester' | 'executor' | 'coordinator';
 
         const roles = (request as any).roles || ['planner', 'coder', 'reviewer'];
         const strategy = (request as any).strategy || 'parallel';

@@ -23,23 +23,28 @@ export {
   type AgentSessionConfig,
 } from '@/lib/session/agent/agent-session-manager';
 
-// Filesystem Bridge
-export {
-  agentFSBridge,
-  AgentFSBridge,
-  type SyncResult,
-  type SyncOptions,
-} from './agent-fs-bridge';
-
 // Nullclaw Integration
 export {
+  initializeNullclaw,
+  isNullclawAvailable,
+  getNullclawStatus,
+  getNullclawConfig,
+  getNullclawMode,
+  executeNullclawTask,
+  shutdownNullclaw,
   nullclawIntegration,
+  type NullclawConfig,
   type NullclawTask,
-  type NullclawResult,
+  type NullclawStatus,
+  // type NullclawResult, // Does not exist in source
 } from './nullclaw-integration';
 
 export {
   cloudAgentOffload,
+  CloudAgentOffload,
+  type CloudAgentConfig,
+  type CloudAgentInstance,
+  type CloudAgentResult,
 } from './cloud-agent-offload';
 
 // Orchestration Mode Handler - Multi-framework routing

@@ -11,7 +11,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { agentSessionManager } from '@/lib/session/agent/agent-session-manager';
-import { nullclawIntegration, type NullclawTask, cloudAgentOffload } from '@bing/shared/agent';
+import { initializeNullclaw, isNullclawAvailable, nullclawIntegration, type NullclawTask, cloudAgentOffload } from '@bing/shared/agent';
 import { sandboxFilesystemSync } from '@/lib/virtual-filesystem/sync/sandbox-filesystem-sync';
 import { createOpenCodeEngine } from '@/lib/session/agent/opencode-engine-service';
 import { createLogger } from '@/lib/utils/logger';

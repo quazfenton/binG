@@ -34,6 +34,11 @@ import {
 import { isDesktopMode } from "@bing/platform/env";
 import { findOpencodeBinarySync } from "@/lib/agent-bins/find-opencode-binary";
 
+// Centralized agent logging, startup capabilities, and health tracking
+import { createAgentLogger, agentLog } from './agent-logger';
+import { getStartupCapabilities, type StartupCapabilities } from './startup-capabilities';
+import { recordSuccess, recordFailure, isModeHealthy, type Architecture } from './model-health';
+
 import {
   StatefulAgent,
   type StatefulAgentOptions,
@@ -69,6 +74,7 @@ import {
   type RoutingMetadata,
   type ParsedRouting,
 } from '@bing/shared/agent/first-response-routing';
+import { resolveV2Model } from '@/lib/chat/v2-model-config';
 import {
   buildWorkspaceSnapshot,
   normalizeToolArgs,
@@ -246,6 +252,21 @@ export interface UnifiedAgentConfig {
   // Mode override (optional - auto-detected from env if not specified)
   mode?: 'v1-api' | 'v1-agent-loop' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'opencode-sdk' | 'mastra-workflow' | 'desktop' | 'v1-progressive-build' | 'dual-process' | 'adversarial-verify' | 'attractor-driven' | 'intent-driven' | 'energy-driven' | 'distributed-cognition' | 'cognitive-resonance' | 'execution-controller' | 'spec:super' | 'spec:maximal' | 'auto';
 
+  /**
+   * Architecture/engine choice — decouples HOW the LLM is invoked from WHAT
+   * orchestration mode wraps it. This is the v1/v2 axis from v1v2.md:
+   *   - 'v1-api'        → standard LLM API call (Vercel AI SDK + llm-providers.ts)
+   *   - 'v2-cli'        → spawn an agentic CLI binary (opencode/codex/nullclaw)
+   *   - 'v2-http-sdk'   → talk to a remote/local agentic engine via SDK/HTTP
+   *   - 'v2-container'  → run agentic engine inside a container with mounted workspace
+   *
+   * Orchestration modes (dual-process / intent-driven / etc.) thread this through
+   * to their sub-calls so the same orchestration shape can run on either V1 or V2.
+   * When unset, falls back to env (AGENT_EXECUTION_ENGINE) and then to the
+   * mode's default architecture.
+   */
+  engine?: 'v1-api' | 'v2-cli' | 'v2-http-sdk' | 'v2-container';
+
   // Harness mode options
   dualProcessConfig?: DualProcessConfig;
   adversarialConfig?: AdversarialConfig;
@@ -326,106 +347,20 @@ export interface UnifiedAgentResult {
   };
 }
 
-export interface StartupCapabilities {
-  v2Native: boolean;       // OpenCode CLI available and enabled (desktop-only)
-  v2Containerized: boolean; // Container sandbox configured (desktop-only)
-  v2Local: boolean;         // Local OpenCode with LLM_PROVIDER=opencode (desktop-only)
-  opencodeSdk: boolean;     // OpenCode SDK HTTP API available (web + desktop)
-  statefulAgent: boolean;   // StatefulAgent enabled
-  mastraWorkflows: boolean; // Mastra workflow engine configured
-  desktop: boolean;         // Tauri desktop mode enabled
-  v1Api: boolean;           // At least one LLM provider API key configured
-}
+// Note: StartupCapabilities is imported from ./startup-capabilities
+// Re-export for backward compatibility
+export type { StartupCapabilities } from './startup-capabilities';
 
 /**
  * Startup health check — determines which agent modes are actually available.
  * Called once at module load; result is cached.
- *
- * This prevents the system from attempting v2-native, containerized, or
- * remote agent modes when they're not even set up (causing 12-15 retries
- * before finally falling back to v1-api).
+ * Now imported from ./startup-capabilities
  */
-export function checkStartupCapabilities(): StartupCapabilities {
-  const llmProvider = process.env.LLM_PROVIDER || '';
-  const sandboxProvider = process.env.SANDBOX_PROVIDER || '';
-  const containerized = process.env.OPENCODE_CONTAINERIZED === 'true';
-  const opencodeEnabled = llmProvider === 'opencode';
-
-  // V2 Native: only if explicitly enabled (LLM_PROVIDER=opencode)
-  // RESTRICTED to desktop-only — CLI binary required on the host
-  const isDesktop = isDesktopMode();
-  const _hasOpencodeBinary = !!findOpencodeBinarySync();
-  const v2Native = opencodeEnabled && isDesktop && _hasOpencodeBinary;
-
-  // V2 Containerized: requires containerized flag + sandbox provider + API key
-  // RESTRICTED to desktop-only — sandbox runs locally
-  const v2Containerized = containerized
-    && !!sandboxProvider
-    && !!process.env[`${sandboxProvider.toUpperCase()}_API_KEY`]
-    && isDesktop;
-
-  // V2 Local: only if LLM_PROVIDER=opencode and not containerized
-  // RESTRICTED to desktop-only — CLI binary required on the host
-  const v2Local = opencodeEnabled && !containerized && isDesktop && _hasOpencodeBinary;
-
-  // OpenCode SDK: HTTP API to an OpenCode server — works on both web and desktop.
-  // Available if OPENCODE_HOSTNAME or OPENCODE_PORT is set (server already running)
-  // OR if @opencode-ai/sdk can be loaded (will try to start server as fallback).
-  const opencodeSdk = !!(
-    process.env.OPENCODE_HOSTNAME
-    || process.env.OPENCODE_PORT
-    || process.env.OPENCODE_SDK_URL
-    // Also detect @opencode-ai/sdk package: if installed, runOpencodeSDKMode
-    // can attempt to start a server even without explicit env vars.
-    // We check package.json deps rather than require.resolve() because
-    // require.resolve is unreliable in Next.js bundled/ESM contexts.
-    || _hasOpenCodeSDKPackage
-  );
-
-  // StatefulAgent: enabled unless explicitly disabled
-  const statefulAgent = process.env.ENABLE_STATEFUL_AGENT !== 'false'
-    && process.env.STATEFUL_AGENT_DISABLED !== 'true';
-
-  // Mastra workflows: explicitly enabled
-  const mastraWorkflows = process.env.MASTRA_ENABLED === 'true'
-    || !!process.env.DEFAULT_WORKFLOW_ID;
-
-  // Desktop mode
-  const desktop = isDesktop;
-
-  // V1 API: at least one provider has an API key
-  const providerKey = llmProvider ? process.env[`${llmProvider.toUpperCase()}_API_KEY`] : undefined;
-  const v1Api = !!providerKey || !!process.env.OPENROUTER_API_KEY;
-
-  // Log startup capabilities for observability
-  log.info('Agent mode capabilities at startup', {
-    v2Native,
-    v2Containerized,
-    v2Local,
-    opencodeSdk,
-    statefulAgent,
-    mastraWorkflows,
-    desktop,
-    v1Api,
-    llmProvider: llmProvider || '(none)',
-    sandboxProvider: sandboxProvider || '(none)',
-    containerized,
-  });
-
-  return {
-    v2Native,
-    v2Containerized,
-    v2Local,
-    opencodeSdk,
-    statefulAgent,
-    mastraWorkflows,
-    desktop,
-    v1Api,
-  };
-}
+export { checkStartupCapabilities } from './startup-capabilities';
 
 // Cache at module load — these don't change at runtime
-const startupCaps = checkStartupCapabilities();
+// Note: getStartupCapabilities is already imported at line 39
+const startupCaps = getStartupCapabilities();
 
 /**
  * Determine which mode to use based on config.
@@ -440,6 +375,17 @@ async function determineMode(config: UnifiedAgentConfig): Promise<{
   // Explicit mode override
   if (config.mode && config.mode !== 'auto') {
     return { mode: config.mode };
+  }
+
+  // Engine override (v1/v2 architecture choice — see UnifiedAgentConfig.engine).
+  // The orchestration mode is auto-derived to the matching architecture so the
+  // same dropdown can drive either engine type without forcing the user to know
+  // the v1/v2 mode-name catalogue.
+  if (config.engine) {
+    const { modeForEngine } = await import('./execution-engines');
+    const engineMode = modeForEngine(config.engine);
+    log.info('[determineMode] engine override → mode', { engine: config.engine, mode: engineMode });
+    return { mode: engineMode as any };
   }
 
   // AGENT_EXECUTION_ENGINE: Explicit control over which execution engine to use.
@@ -815,8 +761,9 @@ async function runV2Native(
   // Prepend auto-inject context to system prompt so the engine knows about
   // proactive powers (web-search, code-search) when triggers match.
   const autoInjectSuffix = config._autoInjectContext ? `\n\n${config._autoInjectContext}` : '';
+  const v2NativeModel = resolveV2Model('v2-cli', config.model).model;
   const engineConfig: OpenCodeEngineConfig = {
-    model: process.env.OPENCODE_MODEL,
+    model: v2NativeModel,
     systemPrompt: (config.systemPrompt || 'You are an expert software engineer with full bash and file system access. Use tools to complete tasks efficiently.') + autoInjectSuffix,
     maxSteps: config.maxSteps || 20,
     timeout: 300000,
@@ -830,10 +777,20 @@ async function runV2Native(
   };
 
   const engine = createOpenCodeEngine(engineConfig);
-  const result = await engine.execute(config.userMessage);
-
-  if (!result.success) {
-    throw new Error(result.error || 'OpenCode engine failed');
+  let result: OpenCodeEngineResult;
+  
+  try {
+    result = await engine.execute(config.userMessage);
+    
+    if (!result.success) {
+      recordFailure('v2-cli', 'opencode-engine', result.error);
+      throw new Error(result.error || 'OpenCode engine failed');
+    }
+    
+    recordSuccess('v2-cli', 'opencode-engine');
+  } catch (err) {
+    recordFailure('v2-cli', 'opencode-engine', err instanceof Error ? err.message : undefined);
+    throw err;
   }
 
   // Convert OpenCode result to unified format
@@ -897,8 +854,9 @@ async function runDesktopMode(
 
   // For simple tasks, use the OpenCode engine with desktop sandbox
   try {
+    const desktopV2Model = resolveV2Model('v2-cli', config.model).model;
     const engineConfig: OpenCodeEngineConfig = {
-      model: process.env.OPENCODE_MODEL,
+      model: desktopV2Model,
       systemPrompt: (config.systemPrompt || 'You are an expert software engineer running on the user\'s desktop. You have direct access to the local filesystem and shell. Execute commands freely to complete tasks.') + (config._autoInjectContext ? `\n\n${config._autoInjectContext}` : ''),
       maxSteps: config.maxSteps || 25,
       timeout: 300000,
@@ -1041,9 +999,10 @@ async function runV2Containerized(config: UnifiedAgentConfig): Promise<UnifiedAg
   
   // Use OpenCode Engine as primary agentic engine
   const autoInjectSuffix = config._autoInjectContext ? `\n\n${config._autoInjectContext}` : '';
+  const containerModel = resolveV2Model('v2-container', config.model).model;
   const engineConfig: OpenCodeEngineConfig = {
     systemPrompt: (config.systemPrompt || '') + autoInjectSuffix,
-    model: process.env.OPENCODE_MODEL,
+    model: containerModel,
 
     maxSteps: config.maxSteps,
     timeout: 300000,
@@ -1088,9 +1047,10 @@ async function runV2Local(config: UnifiedAgentConfig): Promise<UnifiedAgentResul
   
   // Use OpenCode Engine as primary agentic engine
   const autoInjectSuffix = config._autoInjectContext ? `\n\n${config._autoInjectContext}` : '';
+  const localModel = resolveV2Model('v2-cli', config.model).model;
   const engineConfig: OpenCodeEngineConfig = {
     systemPrompt: (config.systemPrompt || '') + autoInjectSuffix,
-    model: process.env.OPENCODE_MODEL,
+    model: localModel,
     maxSteps: config.maxSteps,
     timeout: 300000,
   } as any;
@@ -1201,7 +1161,7 @@ async function runOpencodeSDKMode(
     }
 
     // Send the user prompt
-    const modelStr = config.model || process.env.OPENCODE_MODEL;
+    const modelStr = resolveV2Model('v2-http-sdk', config.model).model;
     const promptOpts: Record<string, any> = {};
     if (modelStr && modelStr.includes('/')) {
       const [providerID, modelID] = modelStr.split('/');
@@ -1254,6 +1214,7 @@ async function runOpencodeSDKMode(
       duration: Date.now() - startTime,
     });
 
+    recordSuccess('v2-http-sdk', 'opencode-sdk');
     return {
       success: true,
       response: responseText || 'No response generated',
@@ -1269,6 +1230,7 @@ async function runOpencodeSDKMode(
       },
     };
   } catch (httpError: any) {
+    recordFailure('v2-http-sdk', 'opencode-sdk', httpError.message);
     log.warn('OpenCode SDK HTTP API failed, trying @opencode-ai/sdk fallback', {
       error: httpError.message,
     });
@@ -1279,7 +1241,7 @@ async function runOpencodeSDKMode(
       const sdkProvider = createOpenCodeSDKProvider({
         hostname: process.env.OPENCODE_HOSTNAME || '127.0.0.1',
         port: parseInt(process.env.OPENCODE_PORT || '4096'),
-        model: config.model || process.env.OPENCODE_MODEL || 'anthropic/claude-3-5-sonnet-20241022',
+        model: resolveV2Model('v2-http-sdk', config.model).model,
         timeout: 30000,
       });
 
@@ -1302,7 +1264,7 @@ async function runOpencodeSDKMode(
 
       for await (const chunk of sdkProvider.generateStreamingResponse({
         messages,
-        model: config.model || process.env.OPENCODE_MODEL || 'opencode/local',
+        model: resolveV2Model('v2-http-sdk', config.model).model,
         temperature: config.temperature || 0.7,
         maxTokens: config.maxTokens || 32000,
       } as any)) {

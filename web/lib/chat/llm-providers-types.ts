@@ -431,9 +431,23 @@ export const PROVIDERS: Record<string, LLMProviderConfig> = {
     supportsStreaming: true,
     supportsFunctionCalling: true,
   },
+  chatanywhere: {
+    id: 'chatanywhere',
+    name: 'ChatAnywhere',
+    models: [
+      'gpt-5.5',
+      'gpt-5.4',
+      'gpt-5.4-mini',
+    ],
+    apiKeyEnv: 'CHATANYWHERE_API_KEY',
+    endpoint: 'https://api.chatanywhere.org',
+    description: 'ChatAnywhere — OpenAI models via ChatAnywhere API with GPT-5.5, GPT-5.4, and GPT-5.4-mini',
+    supportsStreaming: true,
+    supportsFunctionCalling: true,
+  },
 };
 
-export type VercelProvider = 'openai' | 'anthropic' | 'google' | 'mistral' | 'openrouter' | 'github' | 'nvidia' | 'groq' | 'together' | 'chutes' | 'zo' | 'zen' | 'cloudflare' | 'antigravity' | 'cohere' | 'replicate' | 'portkey' | 'azure' | 'vertex' | 'ollama' | 'kiro' | 'aihubmix' | 'livekit' | 'pollinations';
+export type VercelProvider = 'openai' | 'anthropic' | 'google' | 'mistral' | 'openrouter' | 'github' | 'nvidia' | 'groq' | 'together' | 'chutes' | 'zo' | 'zen' | 'cloudflare' | 'antigravity' | 'cohere' | 'replicate' | 'portkey' | 'azure' | 'vertex' | 'ollama' | 'kiro' | 'aihubmix' | 'livekit' | 'pollinations' | 'chatanywhere';
 
 /**
  * Get provider config by ID — safe for client use, no SDK imports.
