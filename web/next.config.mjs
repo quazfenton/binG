@@ -10,7 +10,7 @@ const isDesktopBuild = process.env.DESKTOP_MODE === 'true' || process.env.DESKTO
 const nextConfig = {
   // Vendored workspace packages (web/.bing-platform, web/.bing-shared) ship raw .ts;
   // tell Next to transpile them during the Vercel build.
-  transpilePackages: ['@bing/platform', '@bing/shared'],
+  transpilePackages: ['@bing/platform', '@bing/shared', '@opencode-ai/sdk'],
   // Turbopack config - required when using webpack
   turbopack: {},
   onDemandEntries: {
