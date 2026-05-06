@@ -305,6 +305,10 @@ export interface ProviderConfig {
     apiKey?: string
     baseURL?: string
   }
+  chatanywhere?: {
+    apiKey?: string
+    baseURL?: string
+  }
 }
 
 export const PROVIDERS: Record<string, LLMProvider> = {
@@ -1226,6 +1230,18 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     supportsStreaming: true,
     maxTokens: 1048576,
     description: 'Google Antigravity — Gemini 3 & Claude 4.6 via Google OAuth quota'
+  },
+  chatanywhere: {
+    id: 'chatanywhere',
+    name: 'ChatAnywhere',
+    models: [
+      'gpt-5.5',
+      'gpt-5.4',
+      'gpt-5.4-mini',
+    ],
+    supportsStreaming: true,
+    maxTokens: 128000,
+    description: 'ChatAnywhere — OpenAI models via ChatAnywhere API with GPT-5.5, GPT-5.4, and GPT-5.4-mini'
   }
 }
 
@@ -1243,6 +1259,7 @@ class LLMService {
   private livekit: any = null
   private ollama: any = null
   private kiro: any = null
+  private chatanywhere: any = null
   private composioService: ComposioService | null = null
   private opencodeClient: any = null
   private config: ProviderConfig = {}
@@ -1284,6 +1301,7 @@ class LLMService {
       zen: { ...this.config.zen, apiKey: currentEnv.ZEN_API_KEY || this.config.zen?.apiKey },
       vercel: { ...this.config.vercel, apiKey: currentEnv.VERCEL_API_KEY || this.config.vercel?.apiKey, baseURL: currentEnv.VERCEL_BASE_URL || this.config.vercel?.baseURL },
       livekit: { ...this.config.livekit, apiKey: currentEnv.LIVEKIT_API_KEY || this.config.livekit?.apiKey, baseURL: currentEnv.LIVEKIT_BASE_URL || this.config.livekit?.baseURL },
+      chatanywhere: { ...this.config.chatanywhere, apiKey: currentEnv.CHATANYWHERE_API_KEY || this.config.chatanywhere?.apiKey, baseURL: currentEnv.CHATANYWHERE_BASE_URL || this.config.chatanywhere?.baseURL || 'https://api.chatanywhere.org' },
     };
     
     // Initialize OpenAI
@@ -1375,6 +1393,15 @@ class LLMService {
       this.livekit = new OpenAIClass({
         apiKey: config.livekit.apiKey,
         baseURL: config.livekit.baseURL || 'https://inference.livekit.io'
+      })
+    }
+
+    // Initialize ChatAnywhere (uses OpenAI client)
+    if (config.chatanywhere?.apiKey && !this.chatanywhere) {
+      const OpenAIClass = await getOpenAI()
+      this.chatanywhere = new OpenAIClass({
+        apiKey: config.chatanywhere.apiKey,
+        baseURL: config.chatanywhere.baseURL || 'https://api.chatanywhere.org'
       })
     }
   }
@@ -1530,6 +1557,9 @@ class LLMService {
             break;
           case 'kiro':
             response = await this.generateKiroResponse(model, messages, temperature, maxTokens, requestId, apiKey)
+            break;
+          case 'chatanywhere':
+            response = await this.generateChatanywhereResponse(model, messages, temperature, maxTokens, requestId, apiKey)
             break;
           default:
             throw createLLMError(`Unsupported provider: ${provider}`, {
@@ -1716,6 +1746,12 @@ class LLMService {
             yield chunk;
           }
           break
+        case 'chatanywhere':
+          for await (const chunk of this.streamOpenAIResponse(model, messages, temperature, maxTokens)) {
+            chunkCount++;
+            yield chunk;
+          }
+          break
         default:
           throw new Error(`Streaming is not supported for provider: ${provider}`);
       }
@@ -1791,6 +1827,8 @@ class LLMService {
         return currentEnv.QUAZ_API_KEY || this.config.ollama?.apiKey || '';
       case 'kiro':
         return currentEnv.QUAZ_API_KEY || this.config.kiro?.apiKey || '';
+      case 'chatanywhere':
+        return currentEnv.CHATANYWHERE_API_KEY || this.config.chatanywhere?.apiKey || '';
       case 'nvidia':
         return currentEnv.NVIDIA_API_KEY || '';
       case 'groq':
@@ -2848,6 +2886,8 @@ class LLMService {
             return !!process.env.QUAZ_API_KEY;
           case 'kiro':
             return !!process.env.QUAZ_API_KEY;
+          case 'chatanywhere':
+            return !!process.env.CHATANYWHERE_API_KEY;
           case 'cloudflare':
           case 'zo':
             // Providers with env vars configured but no request/stream handlers yet
@@ -3354,6 +3394,34 @@ class LLMService {
     }
 
     const response = await kiroClient.chat.completions.create({
+      model,
+      messages: messages as any,
+      temperature,
+      max_tokens: maxTokens,
+    })
+    const toolCalls = this.normalizeOpenAIToolCalls(response.choices[0]?.message?.tool_calls as any[])
+
+    return {
+      content: response.choices[0]?.message?.content || '',
+      tokensUsed: response.usage?.total_tokens || 0,
+      finishReason: response.choices[0]?.finish_reason || 'stop',
+      timestamp: new Date(),
+      metadata: toolCalls.length ? { toolCalls } : undefined,
+      usage: response.usage
+    }
+  }
+
+  private async generateChatanywhereResponse(
+    model: string,
+    messages: LLMMessage[],
+    temperature: number,
+    maxTokens: number,
+    requestId?: string,
+    apiKeyOverride?: string
+  ): Promise<LLMResponse> {
+    if (!this.chatanywhere) throw new Error('ChatAnywhere API not initialized');
+
+    const response = await this.chatanywhere.chat.completions.create({
       model,
       messages: messages as any,
       temperature,

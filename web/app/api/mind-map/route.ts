@@ -1,92 +1,78 @@
 /**
- * Mind Map API
- *
- * Create, edit, and manage mind maps
- * Supports real-time collaboration and export
+ * Consolidated Mind Map API
+ * 
+ * Routes:
+ * - GET /api/mind-map?action=list - List mind maps
+ * - POST /api/mind-map?action=create - Create mind map
+ * - GET /api/mind-map?action=stats - Get stats
+ * - GET /api/mind-map?action=chains - List reasoning chains
+ * - GET /api/mind-map?action=chain - Get single chain by ID
+ * - GET /api/mind-map?action=get - Get single mind map by ID
+ * - PUT /api/mind-map?action=update - Update mind map
+ * - DELETE /api/mind-map?action=delete - Delete mind map
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 
+// Import handlers from existing route files
+import { GET as listGET, POST as createPOST } from './list';
+import { GET as statsGET } from './stats/route';
+import { GET as chainsGET } from './chains/route';
+import { GET as chainByIdGET } from './chains/[id]/route';
+import { GET as getMindMapGET, PUT as updateMindMapPUT, DELETE as deleteMindMapDELETE } from './[id]/route';
 
-import { mindMaps, type MindMap, type MindMapNode } from './store';
-
-/**
- * GET /api/mind-map - List mind maps
- * 
- * Query parameters:
- * - public: Only public mind maps (default: true)
- * - search: Search in title
- */
 export async function GET(request: NextRequest) {
-  try {
-    const searchParams = request.nextUrl.searchParams;
-    const isPublic = searchParams.get('public') !== 'false';
-    const search = searchParams.get('search');
+  const { searchParams } = new URL(request.url);
+  const action = searchParams.get('action') || 'list';
 
-    let maps = Array.from(mindMaps.values());
-
-    // Filter by public
-    if (isPublic) {
-      maps = maps.filter(m => m.isPublic);
-    }
-
-    // Search in title
-    if (search) {
-      const searchLower = search.toLowerCase();
-      maps = maps.filter(m => m.title.toLowerCase().includes(searchLower));
-    }
-
-    return NextResponse.json({
-      success: true,
-      mindMaps: maps,
-      total: maps.length,
-    });
-  } catch (error: any) {
-    console.error('[Mind Map API] GET error:', error);
-    return NextResponse.json(
-      { error: 'Failed to load mind maps' },
-      { status: 500 }
-    );
+  switch (action) {
+    case 'list':
+      return listGET(request);
+    case 'stats':
+      return statsGET();
+    case 'chains':
+      return chainsGET(request);
+    case 'chain':
+      return chainByIdGET(request, { params: Promise.resolve({ id: searchParams.get('id') || '' }) });
+    case 'get':
+      return getMindMapGET(request, { params: Promise.resolve({ id: searchParams.get('id') || '' }) });
+    default:
+      return listGET(request);
   }
 }
 
-/**
- * POST /api/mind-map - Create new mind map
- */
 export async function POST(request: NextRequest) {
-  try {
-    const body = await request.json();
-    const { title, nodes = [] } = body;
+  const { searchParams } = new URL(request.url);
+  const action = searchParams.get('action') || 'create';
 
-    if (!title) {
-      return NextResponse.json(
-        { error: 'Title is required' },
-        { status: 400 }
-      );
-    }
+  switch (action) {
+    case 'create':
+      return createPOST(request);
+    default:
+      return createPOST(request);
+  }
+}
 
-    const newMap: MindMap = {
-      id: `mindmap-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-      title,
-      nodes: nodes.length > 0 ? nodes : [
-        { id: 'root', text: 'Central Idea', x: 400, y: 300, color: '#8B5CF6' }
-      ],
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      isPublic: body.isPublic ?? false,
-    };
+export async function PUT(request: NextRequest) {
+  const { searchParams } = new URL(request.url);
+  const action = searchParams.get('action') || 'update';
 
-    mindMaps.set(newMap.id, newMap);
+  switch (action) {
+    case 'update':
+      return updateMindMapPUT(request, { params: Promise.resolve({ id: searchParams.get('id') || '' }) });
+    default:
+      return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
+  }
+}
 
-    return NextResponse.json({
-      success: true,
-      mindMap: newMap,
-    }, { status: 201 });
-  } catch (error: any) {
-    console.error('[Mind Map API] POST error:', error);
-    return NextResponse.json(
-      { error: 'Failed to create mind map' },
-      { status: 500 }
-    );
+export async function DELETE(request: NextRequest) {
+  const { searchParams } = new URL(request.url);
+  const action = searchParams.get('action') || 'delete';
+
+  switch (action) {
+    case 'delete':
+      return deleteMindMapDELETE(request, { params: Promise.resolve({ id: searchParams.get('id') || '' }) });
+    default:
+      return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
   }
 }

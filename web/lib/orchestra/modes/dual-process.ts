@@ -20,6 +20,7 @@ import {
   type UnifiedAgentConfig,
   type UnifiedAgentResult,
 } from '../unified-agent-service';
+import { configureSubCall, resolveEngine, type EngineArchitecture } from '../execution-engines';
 
 const log = createLogger('DualProcessMode');
 
@@ -44,6 +45,19 @@ export interface DualProcessConfig {
   fastTemperature?: number;
   /** Temperature for slow path (default: 0.3) */
   slowTemperature?: number;
+
+  /**
+   * Architecture/engine for both fast and slow sub-calls. Defaults to the
+   * parent baseConfig.engine (or env, or v1-api). Setting this lets dual-process
+   * run on a v2 CLI/SDK/container engine without any other change.
+   * Can be overridden per-path with `fastEngine` / `slowEngine` if you want a
+   * v1-api fast path and v2-cli slow path, etc.
+   */
+  engine?: EngineArchitecture;
+  /** Override engine for the fast path only */
+  fastEngine?: EngineArchitecture;
+  /** Override engine for the slow path only */
+  slowEngine?: EngineArchitecture;
 }
 
 // ─── Instability Detection ─────────────────────────────────────────────────
