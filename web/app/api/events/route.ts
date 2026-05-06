@@ -13,7 +13,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 // Import handlers from existing route files
-import { GET as listGET, POST as emitPOST } from './route';
+import { GET as listGET, POST as emitPOST } from './main';
 import { GET as streamGET } from './stream/route';
 
 export async function GET(request: NextRequest) {

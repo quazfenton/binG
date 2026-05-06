@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
 
 // Import all existing handlers
-import { GET as rootGET } from './route-original';
+import { GET as rootGET } from './main';
 import { GET as installedGET } from './installed/route';
 import { GET as marketplaceGET } from './marketplace/route';
 import { GET as marketplaceSearchGET } from './marketplace/search/route';
