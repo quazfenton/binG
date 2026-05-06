@@ -6,8 +6,6 @@
 
 import { NextRequest, NextResponse } from "next/server";
 
-
-
 // GET - Serve YouTube embed page
 export async function GET(
   request: NextRequest,

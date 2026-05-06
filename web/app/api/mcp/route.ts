@@ -1,12 +1,12 @@
 import { NextRequest } from 'next/server';
 
 // Import all existing handlers
-import { GET as rootGET, POST as rootPOST } from './route-original';
-import { POST as connectPOST } from './connect/route';
-import { POST as initPOST } from './init/route';
-import { GET as statusGET } from './status/route';
-import { GET as storeGET, POST as storePOST, DELETE as storeDELETE } from './store/route';
-import { POST as storeSyncPOST } from './store/sync/route';
+import { GET as rootGET, POST as rootPOST } from './main';
+import { POST as connectPOST } from './connect/gateway';
+import { POST as initPOST } from './init/gateway';
+import { GET as statusGET } from './status/gateway';
+import { GET as storeGET, POST as storePOST, DELETE as storeDELETE } from './store/gateway';
+import { POST as storeSyncPOST } from './store/sync/gateway';
 
 /**
  * Consolidated mcp route

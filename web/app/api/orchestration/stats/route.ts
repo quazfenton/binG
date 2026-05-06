@@ -6,20 +6,22 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { createLogger } from '@/lib/utils/logger';
-import { getAgentKernel } from '@bing/shared/agent/agent-kernel';
 
 const logger = createLogger('API:Orchestration:Stats');
 
 export async function GET() {
   try {
-    const kernel = getAgentKernel();
-    const stats = kernel.getStats();
+    // TODO: Re-implement when agent orchestrator is available
+    /*
+    const stats = await getStats();
 
     return NextResponse.json({
       success: true,
       stats,
-      timestamp: Date.now(),
     });
+    */
+
+    return NextResponse.json({ error: 'This endpoint is not implemented' }, { status: 501 });
   } catch (error: any) {
     logger.error('Failed to get stats:', error);
     return NextResponse.json(

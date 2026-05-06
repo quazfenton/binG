@@ -7,8 +7,6 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-
-
 import { requireAdminApiOrForbidden } from '@/lib/auth/admin';
 import { isMasterAccountConfigured, getMasterAccountInfo } from '@/lib/database/antigravity-accounts';
 

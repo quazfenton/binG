@@ -5,8 +5,6 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-
-
 import { getGalleryStats } from '@/lib/ai-art/ai-art-gallery';
 import { createLogger } from '@/lib/utils/logger';
 

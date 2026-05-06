@@ -7,8 +7,6 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-
-
 import { requireAdminApiOrForbidden, grantRole, revokeRole, getUserRoles, logAdminAction } from '@/lib/auth/admin';
 import { csrfCheckOrReject } from '@/lib/auth/csrf';
 

@@ -1,16 +1,16 @@
 import { NextRequest } from 'next/server';
 
 // Import all existing handlers
-import { GET as rootGET, POST as rootPOST } from './route-original';
-import { GET as contentGET } from './content/route';
-import { POST as discoverPOST, GET as discoverGET } from './discover/route';
-import { GET as feedGET, POST as feedPOST } from './feed/route';
-import { GET as notificationsGET, POST as notificationsPOST } from './notifications/route';
-import { GET as pluginsGET, POST as pluginsPOST, PUT as pluginsPUT, DELETE as pluginsDELETE } from './plugins/route';
-import { POST as ssePOST, GET as sseGET } from './sse/route';
-import { GET as statsGET } from './stats/route';
-import { GET as triggerGET, POST as triggerPOST } from './trigger/route';
-import { POST as webhookPOST, GET as webhookGET } from './webhook/route';
+import { GET as rootGET, POST as rootPOST } from './main';
+import { GET as contentGET } from './content/gateway';
+import { POST as discoverPOST, GET as discoverGET } from './discover/gateway';
+import { GET as feedGET, POST as feedPOST } from './feed/gateway';
+import { GET as notificationsGET, POST as notificationsPOST } from './notifications/gateway';
+import { GET as pluginsGET, POST as pluginsPOST, PUT as pluginsPUT, DELETE as pluginsDELETE } from './plugins/gateway';
+import { POST as ssePOST, GET as sseGET } from './sse/gateway';
+import { GET as statsGET } from './stats/gateway';
+import { GET as triggerGET, POST as triggerPOST } from './trigger/gateway';
+import { POST as webhookPOST, GET as webhookGET } from './webhook/gateway';
 
 /**
  * Consolidated zine-display route

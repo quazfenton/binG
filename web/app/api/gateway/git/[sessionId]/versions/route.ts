@@ -1,6 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-
-
 import { getDatabase } from '@/lib/database/connection';
 import { resolveFilesystemOwnerWithFallback } from '@/app/api/filesystem/utils';
 import { withAnonSessionCookie } from '@/lib/virtual-filesystem/index.server';

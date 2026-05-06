@@ -10,8 +10,6 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-
-
 import { executeCode, getCodeTemplate, type CodeLanguage } from '@/lib/code-executor/code-executor';
 import { withAuth, logSecurityEvent, type EnhancedAuthResult } from '@/lib/auth/enhanced-middleware';
 import { createLogger } from '@/lib/utils/logger';

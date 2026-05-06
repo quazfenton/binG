@@ -11,8 +11,6 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-
-
 import {
   getImages,
   getImageById,

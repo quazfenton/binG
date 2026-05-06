@@ -7,8 +7,6 @@
 
 import { NextRequest, NextResponse } from "next/server";
 
-
-
 // Ticketmaster API configuration
 // Get free API key from https://developer.ticketmaster.com/
 const TICKETMASTER_API = 'https://app.ticketmaster.com/discovery/v2';

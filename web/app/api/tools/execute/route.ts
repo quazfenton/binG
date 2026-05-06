@@ -1,6 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-
-
 import { getToolManager } from '@/lib/tools';
 import { toolAuthManager } from '@/lib/tools/tool-authorization-manager';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';

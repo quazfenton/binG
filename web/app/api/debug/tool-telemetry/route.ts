@@ -8,8 +8,6 @@
  */
 
 import { NextResponse } from 'next/server';
-
-
 import { getToolCallTelemetrySummary, logTelemetrySummary } from '@/lib/chat/tool-call-telemetry';
 
 export async function GET() {

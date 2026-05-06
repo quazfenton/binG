@@ -18,33 +18,27 @@ import { NextRequest, NextResponse } from 'next/server';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { generateSecureId } from '@/lib/utils';
 import { createLogger } from '@/lib/utils/logger';
-import { getAgentKernel, type AgentConfig, type AgentType, type AgentPriority } from '@bing/shared/agent/agent-kernel';
 
 const logger = createLogger('API:Orchestration');
 
 // GET - List all agents
 export async function GET(request: NextRequest) {
   try {
+    // TODO: Re-implement when agent orchestrator is available
+    /*
     const { searchParams } = new URL(request.url);
-    const userId = searchParams.get('userId') || undefined;
-    const status = searchParams.get('status') as any;
-    const priority = searchParams.get('priority') as AgentPriority | undefined;
-    const type = searchParams.get('type') as AgentType | undefined;
+    const stream = searchParams.get('stream') === 'true';
 
-    const kernel = getAgentKernel();
-    
-    const agents = kernel.listAgents({
-      userId,
-      status,
-      priority,
-      type,
-    });
+    const agents = await getAgents();
 
     return NextResponse.json({
       success: true,
       agents,
       count: agents.length,
     });
+    */
+
+    return NextResponse.json({ error: 'This endpoint is not implemented' }, { status: 501 });
   } catch (error: any) {
     logger.error('Failed to get agents:', error);
     return NextResponse.json(
@@ -65,63 +59,85 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  // TODO: Re-implement when agent orchestrator is available
+  /*
   const userId = authResult.userId;
   const requestId = generateSecureId('orch');
 
   try {
     const body = await request.json();
     const {
-      goal,
-      type = 'ephemeral' as AgentType,
-      priority = 'normal' as AgentPriority,
-      name,
-      resources,
-      schedule,
-      maxIterations,
-      tools,
-      context,
-      metadata,
+      task,
+      sessionId,
+      stream = false,
+      maxSteps = 10,
+      model = 'gpt-4o',
     } = body;
 
-    if (!goal) {
+    if (!task) {
       return NextResponse.json(
-        { error: 'Goal is required' },
+        { error: 'Task is required' },
         { status: 400 }
       );
     }
 
-    logger.info('[Orchestration] Creating agent:', { requestId, type, priority });
+    logger.info('[Orchestration] Creating agent task:', { requestId, stream });
 
-    const kernel = getAgentKernel();
-    
-    // Ensure kernel is running
-    if (!kernel.isRunning()) {
-      kernel.start();
+    // If streaming requested, use runStatefulAgentStreaming
+    if (stream) {
+      const encoder = new TextEncoder();
+      const readableStream = new ReadableStream({
+        async start(controller) {
+          try {
+            for await (const chunk of runStatefulAgentStreaming(task, {
+              sessionId: sessionId || requestId,
+              userId,
+              maxSteps,
+              onChunk: (text) => {
+                const data = JSON.stringify({ type: 'chunk', content: text }) + '\n';
+                controller.enqueue(encoder.encode(data));
+              },
+              onToolExecution: (toolName, args, result) => {
+                const data = JSON.stringify({
+                  type: 'tool',
+                  tool: toolName,
+                  args,
+                  result
+                }) + '\n';
+                controller.enqueue(encoder.encode(data));
+              },
+            })) {
+              // Chunk already sent via onChunk callback
+            }
+            controller.close();
+          } catch (error: any) {
+            const errorData = JSON.stringify({
+              type: 'error',
+              error: error.message
+            }) + '\n';
+            controller.enqueue(encoder.encode(errorData));
+            controller.close();
+          }
+        },
+      });
+
+      return new Response(readableStream, {
+        headers: {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+        },
+      });
     }
 
-    const agentConfig: AgentConfig = {
-      id: requestId,
-      type,
-      name,
-      userId,
-      goal,
-      priority,
-      resources,
-      schedule,
-      maxIterations,
-      tools,
-      context,
-      metadata,
-    };
-
-    const agentId = await kernel.spawnAgent(agentConfig);
-    const agent = kernel.getAgentStatus(agentId);
+    // Non-streaming: Create agent via orchestrator
+    const agent = await startAgent(requestId, task);
 
     return NextResponse.json({
       success: true,
-      agentId,
-      agent,
-      message: 'Agent created and spawned',
+      agentId: requestId,
+      task,
+      message: 'Agent created and started',
     });
   } catch (error: any) {
     logger.error('Failed to create agent:', error);
@@ -130,4 +146,7 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   }
+  */
+
+  return NextResponse.json({ error: 'This endpoint is not implemented' }, { status: 501 });
 }

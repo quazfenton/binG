@@ -7,8 +7,6 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-
-
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('API:Workflows:Visualizer');

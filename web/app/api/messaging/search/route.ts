@@ -1,6 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-
-
 import { MessagingIdentity } from '@/lib/messaging/identity';
 
 export async function GET(req: NextRequest) {

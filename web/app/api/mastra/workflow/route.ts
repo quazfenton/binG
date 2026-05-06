@@ -9,8 +9,6 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
-
-
 // Valid workflow types
 const VALID_WORKFLOWS = ['code-agent', 'hitl-code-review'];
 
