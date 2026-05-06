@@ -13,38 +13,38 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { GET as rootGET, POST as rootPOST } from './main';
-import { GET as idGET, PUT as idPUT, DELETE as idDELETE } from './[id]/gateway';
+import { PUT as idPUT, DELETE as idDELETE } from './[id]/gateway';
 import { POST as triggerPOST } from './[id]/trigger/gateway';
 
 export async function GET(request: NextRequest) {
-  const path = request.nextUrl.pathname;
-
-  // /api/cron-jobs/:id -> [id] gateway
-  const segments = path.split('/').filter(Boolean);
-  if (segments.length >= 4) {
-    return idGET(request);
-  }
-
-  // /api/cron-jobs -> main handler
   return rootGET(request);
 }
 
-export async function POST(request: NextRequest) {
+export async function POST(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
   const path = request.nextUrl.pathname;
 
   // /api/cron-jobs/:id/trigger -> trigger gateway
   if (path.includes('/trigger')) {
-    return triggerPOST(request);
+    return triggerPOST(request, { params });
   }
 
   // /api/cron-jobs -> main handler
   return rootPOST(request);
 }
 
-export async function PUT(request: NextRequest) {
-  return idPUT(request);
+export async function PUT(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  return idPUT(request, { params });
 }
 
-export async function DELETE(request: NextRequest) {
-  return idDELETE(request);
+export async function DELETE(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  return idDELETE(request, { params });
 }

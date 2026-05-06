@@ -20,23 +20,23 @@ import { GET as nangoGET, POST as nangoPOST } from './nango/gateway';
 export async function GET(request: NextRequest) {
   const path = request.nextUrl.pathname;
 
-  // /api/webhooks/blaxel-callback -> blaxel route
+  // /api/webhooks/blaxel-callback -> blaxel gateway
   if (path.endsWith('/blaxel-callback')) {
-    return blaxelGET(request);
+    return blaxelGET();
   }
 
-  // /api/webhooks/composio -> composio route
+  // /api/webhooks/composio -> composio gateway
   if (path.endsWith('/composio')) {
-    return composioGET(request);
+    return composioGET();
   }
 
-  // /api/webhooks/nango -> nango route
+  // /api/webhooks/nango -> nango gateway
   if (path.endsWith('/nango')) {
-    return nangoGET(request);
+    return nangoGET();
   }
 
   // /api/webhooks -> main handler
-  return rootGET(request);
+  return rootGET();
 }
 
 export async function POST(request: NextRequest) {
@@ -64,7 +64,7 @@ export async function POST(request: NextRequest) {
 export async function OPTIONS(request: NextRequest) {
   const path = request.nextUrl.pathname;
 
-  // /api/webhooks/composio -> composio route
+  // /api/webhooks/composio -> composio gateway
   if (path.endsWith('/composio')) {
     return composioOPTIONS(request);
   }

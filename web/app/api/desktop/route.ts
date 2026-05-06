@@ -15,26 +15,33 @@ import { POST as rootPOST } from './main';
 import { GET as idGET, DELETE as idDELETE } from './[id]/gateway';
 import { POST as actionPOST } from './[id]/[action]/gateway';
 
-export async function POST(request: NextRequest) {
+type Params = { params: Promise<{ id?: string; action?: string }> };
+
+export async function POST(request: NextRequest, { params }: Params) {
   const path = request.nextUrl.pathname;
+  const segments = path.split('/').filter(Boolean);
 
   // /api/desktop/:id/:action -> action gateway
-  // Action paths have more segments after the area prefix
-  const segments = path.split('/').filter(Boolean);
-  // segments: ['', 'api', 'desktop', id, action]
-  // If there are 5+ segments, it's a dynamic action path
   if (segments.length >= 5) {
-    return actionPOST(request);
+    return actionPOST(request, { params: params as Promise<{ id: string; action: string }> });
   }
 
   // /api/desktop -> main handler (create)
   return rootPOST(request);
 }
 
-export async function GET(request: NextRequest) {
-  return idGET(request);
+export async function GET(request: NextRequest, { params }: Params) {
+  const segments = request.nextUrl.pathname.split('/').filter(Boolean);
+  if (segments.length < 4) {
+    return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  }
+  return idGET(request, { params: params as Promise<{ id: string }> });
 }
 
-export async function DELETE(request: NextRequest) {
-  return idDELETE(request);
+export async function DELETE(request: NextRequest, { params }: Params) {
+  const segments = request.nextUrl.pathname.split('/').filter(Boolean);
+  if (segments.length < 4) {
+    return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  }
+  return idDELETE(request, { params: params as Promise<{ id: string }> });
 }

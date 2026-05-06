@@ -19,7 +19,7 @@ export async function GET(request: NextRequest) {
 
   // /api/repo-index/stats -> stats gateway
   if (path.endsWith('/stats')) {
-    return statsGET(request);
+    return statsGET();
   }
 
   // /api/repo-index -> main handler

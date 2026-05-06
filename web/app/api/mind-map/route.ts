@@ -1,78 +1,58 @@
-/**
- * Consolidated Mind Map API
- * 
- * Routes:
- * - GET /api/mind-map?action=list - List mind maps
- * - POST /api/mind-map?action=create - Create mind map
- * - GET /api/mind-map?action=stats - Get stats
- * - GET /api/mind-map?action=chains - List reasoning chains
- * - GET /api/mind-map?action=chain - Get single chain by ID
- * - GET /api/mind-map?action=get - Get single mind map by ID
- * - PUT /api/mind-map?action=update - Update mind map
- * - DELETE /api/mind-map?action=delete - Delete mind map
- */
-
 import { NextRequest, NextResponse } from 'next/server';
 
-// Import handlers from existing route files
 import { GET as rootGET, POST as rootPOST } from './main';
 import { GET as statsGET } from './stats/gateway';
 import { GET as chainsGET } from './chains/gateway';
 import { GET as chainByIdGET } from './chains/[id]/gateway';
 import { GET as getMindMapGET, PUT as updateMindMapPUT, DELETE as deleteMindMapDELETE } from './[id]/gateway';
 
-export async function GET(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const action = searchParams.get('action') || 'list';
+type IdParams = { params: Promise<{ id: string }> };
 
-  switch (action) {
-    case 'list':
-      return rootGET(request);
-    case 'stats':
-      return statsGET();
-    case 'chains':
-      return chainsGET(request);
-    case 'chain':
-      return chainByIdGET(request, { params: Promise.resolve({ id: searchParams.get('id') || '' }) });
-    case 'get':
-      return getMindMapGET(request, { params: Promise.resolve({ id: searchParams.get('id') || '' }) });
-    default:
-      return rootGET(request);
+// GET /api/mind-map | /api/mind-map/stats | /api/mind-map/chains | /api/mind-map/chains/:id | /api/mind-map/:id
+export async function GET(request: NextRequest, { params }: IdParams) {
+  const path = request.nextUrl.pathname;
+  const segments = path.split('/').filter(Boolean);
+
+  if (segments.length === 5 && segments[3] === 'chains') {
+    return chainByIdGET(request, { params });
   }
+
+  if (path.endsWith('/chains')) {
+    return chainsGET(request);
+  }
+
+  if (path.endsWith('/stats')) {
+    return statsGET();
+  }
+
+  if (segments.length === 4) {
+    return getMindMapGET(request, { params });
+  }
+
+  return rootGET(request);
 }
 
+// POST /api/mind-map
 export async function POST(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const action = searchParams.get('action') || 'create';
-
-  switch (action) {
-    case 'create':
-      return rootPOST(request);
-    default:
-      return rootPOST(request);
-  }
+  return rootPOST(request);
 }
 
-export async function PUT(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const action = searchParams.get('action') || 'update';
-
-  switch (action) {
-    case 'update':
-      return updateMindMapPUT(request, { params: Promise.resolve({ id: searchParams.get('id') || '' }) });
-    default:
-      return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
+// PUT /api/mind-map/:id
+export async function PUT(request: NextRequest, { params }: IdParams) {
+  const path = request.nextUrl.pathname;
+  const segments = path.split('/').filter(Boolean);
+  if (segments.length === 4) {
+    return updateMindMapPUT(request, { params });
   }
+  return NextResponse.json({ error: 'Not found' }, { status: 404 });
 }
 
-export async function DELETE(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const action = searchParams.get('action') || 'delete';
-
-  switch (action) {
-    case 'delete':
-      return deleteMindMapDELETE(request, { params: Promise.resolve({ id: searchParams.get('id') || '' }) });
-    default:
-      return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
+// DELETE /api/mind-map/:id
+export async function DELETE(request: NextRequest, { params }: IdParams) {
+  const path = request.nextUrl.pathname;
+  const segments = path.split('/').filter(Boolean);
+  if (segments.length === 4) {
+    return deleteMindMapDELETE(request, { params });
   }
+  return NextResponse.json({ error: 'Not found' }, { status: 404 });
 }
