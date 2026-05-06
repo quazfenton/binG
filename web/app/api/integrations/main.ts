@@ -1,6 +1,5 @@
-import { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 
-// Import all existing handlers
 import { GET as arcadeAuthGET, POST as arcadeAuthPOST } from './arcade/auth/gateway';
 import { POST as arcadeTokenPOST } from './arcade/token/gateway';
 import { GET as auditGET } from './audit/gateway';
@@ -25,15 +24,18 @@ import { GET as googleGET } from './google/gateway';
 import { GET as linkedinGET, POST as linkedinPOST } from './linkedin/gateway';
 import { GET as twitterGET, POST as twitterPOST } from './twitter/gateway';
 
-/**
- * Consolidated integrations route
- * Dispatches to individual handlers based on action query param
- */
 export async function GET(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const action = searchParams.get('action');
+  const path = request.nextUrl.pathname;
+  const segments = path.split('/').filter(Boolean);
 
-  switch (action) {
+  if (segments.length !== 3) {
+    return NextResponse.json(
+      { error: 'Not found. Use /integrations/arcade-auth|...' },
+      { status: 404 }
+    );
+  }
+
+  switch (segments[2]) {
     case 'arcade-auth':
       return arcadeAuthGET(request);
     case 'audit':
@@ -65,18 +67,25 @@ export async function GET(request: NextRequest) {
     case 'twitter':
       return twitterGET(request);
     default:
-      return new Response(
-        JSON.stringify({ error: 'Invalid action. Use ?action=arcade-auth|audit|connections|execute|figma|figma-callback|github|github-oauth-authorize|github-oauth-callback|github-oauth-status|github-branches|github-commits|google|linkedin|twitter' }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
+      return NextResponse.json(
+        { error: 'Not found. Use /integrations/arcade-auth|...' },
+        { status: 404 }
       );
   }
 }
 
 export async function POST(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const action = searchParams.get('action');
+  const path = request.nextUrl.pathname;
+  const segments = path.split('/').filter(Boolean);
 
-  switch (action) {
+  if (segments.length !== 3) {
+    return NextResponse.json(
+      { error: 'Not found. Use /integrations/arcade-auth|...' },
+      { status: 404 }
+    );
+  }
+
+  switch (segments[2]) {
     case 'arcade-auth':
       return arcadeAuthPOST(request);
     case 'arcade-token':
@@ -106,9 +115,9 @@ export async function POST(request: NextRequest) {
     case 'twitter':
       return twitterPOST(request);
     default:
-      return new Response(
-        JSON.stringify({ error: 'Invalid action. Use ?action=arcade-auth|arcade-token|execute|figma|github|github-oauth-disconnect|github-branch|github-commit|github-import-repo|github-pr|github-pull|github-push|linkedin|twitter' }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
+      return NextResponse.json(
+        { error: 'Not found. Use /integrations/arcade-auth|...' },
+        { status: 404 }
       );
   }
 }

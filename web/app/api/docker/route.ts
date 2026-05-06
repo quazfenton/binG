@@ -7,8 +7,6 @@ import { POST as startPOST } from './start/[id]/gateway';
 import { POST as stopPOST } from './stop/[id]/gateway';
 import { DELETE as removeDELETE } from './remove/[id]/gateway';
 
-type Params = { params: Promise<{ id: string }> };
-
 // GET /api/docker/containers
 export async function GET(request: NextRequest) {
   const path = request.nextUrl.pathname;
@@ -19,7 +17,10 @@ export async function GET(request: NextRequest) {
 }
 
 // POST /api/docker/compose | /api/docker/exec | /api/docker/start/:id | /api/docker/stop/:id
-export async function POST(request: NextRequest, { params }: Params) {
+export async function POST(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
   const path = request.nextUrl.pathname;
   const segments = path.split('/').filter(Boolean);
 
@@ -47,7 +48,10 @@ export async function POST(request: NextRequest, { params }: Params) {
 }
 
 // DELETE /api/docker/remove/:id
-export async function DELETE(request: NextRequest, { params }: Params) {
+export async function DELETE(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
   const path = request.nextUrl.pathname;
   const segments = path.split('/').filter(Boolean);
 

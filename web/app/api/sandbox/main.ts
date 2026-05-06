@@ -1,6 +1,5 @@
-import { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 
-// Import all existing handlers
 import { POST as agentPOST } from './agent/gateway';
 import { GET as clearSessionsGET, POST as clearSessionsPOST } from './clear-sessions/gateway';
 import { GET as daemonGET, POST as daemonPOST, DELETE as daemonDELETE } from './daemon/gateway';
@@ -19,15 +18,15 @@ import { GET as terminalWsGET } from './terminal/ws/gateway';
 import { GET as terminaluseGET, POST as terminalusePOST } from './terminaluse/gateway';
 import { POST as webcontainerPOST } from './webcontainer/gateway';
 
-/**
- * Consolidated sandbox route
- * Dispatches to individual handlers based on action query param
- */
 export async function GET(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const action = searchParams.get('action');
+  const path = request.nextUrl.pathname;
+  const segments = path.split('/').filter(Boolean);
 
-  switch (action) {
+  if (segments.length !== 3) {
+    return NextResponse.json({ error: 'Not found. Use /sandbox/...' }, { status: 404 });
+  }
+
+  switch (segments[2]) {
     case 'clear-sessions':
       return clearSessionsGET(request);
     case 'daemon':
@@ -49,18 +48,19 @@ export async function GET(request: NextRequest) {
     case 'terminaluse':
       return terminaluseGET(request);
     default:
-      return new Response(
-        JSON.stringify({ error: 'Invalid action. Use ?action=clear-sessions|daemon|devbox|files|pty|session|sync|terminal-stream|terminal-ws|terminaluse' }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
-      );
+      return NextResponse.json({ error: 'Not found. Use /sandbox/...' }, { status: 404 });
   }
 }
 
 export async function POST(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const action = searchParams.get('action');
+  const path = request.nextUrl.pathname;
+  const segments = path.split('/').filter(Boolean);
 
-  switch (action) {
+  if (segments.length !== 3) {
+    return NextResponse.json({ error: 'Not found. Use /sandbox/...' }, { status: 404 });
+  }
+
+  switch (segments[2]) {
     case 'agent':
       return agentPOST(request);
     case 'clear-sessions':
@@ -92,18 +92,19 @@ export async function POST(request: NextRequest) {
     case 'webcontainer':
       return webcontainerPOST(request);
     default:
-      return new Response(
-        JSON.stringify({ error: 'Invalid action. Use ?action=agent|clear-sessions|daemon|devbox|execute|lifecycle|pty|session|sync|terminal|terminal-input|terminal-resize|terminal-stream|terminaluse|webcontainer' }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
-      );
+      return NextResponse.json({ error: 'Not found. Use /sandbox/...' }, { status: 404 });
   }
 }
 
 export async function DELETE(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const action = searchParams.get('action');
+  const path = request.nextUrl.pathname;
+  const segments = path.split('/').filter(Boolean);
 
-  switch (action) {
+  if (segments.length !== 3) {
+    return NextResponse.json({ error: 'Not found. Use /sandbox/daemon|/sandbox/devbox|/sandbox/session|/sandbox/terminal' }, { status: 404 });
+  }
+
+  switch (segments[2]) {
     case 'daemon':
       return daemonDELETE(request);
     case 'devbox':
@@ -113,24 +114,22 @@ export async function DELETE(request: NextRequest) {
     case 'terminal':
       return terminalDELETE(request);
     default:
-      return new Response(
-        JSON.stringify({ error: 'Invalid action. Use ?action=daemon|devbox|session|terminal' }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
-      );
+      return NextResponse.json({ error: 'Not found. Use /sandbox/daemon|/sandbox/devbox|/sandbox/session|/sandbox/terminal' }, { status: 404 });
   }
 }
 
 export async function PATCH(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const action = searchParams.get('action');
+  const path = request.nextUrl.pathname;
+  const segments = path.split('/').filter(Boolean);
 
-  switch (action) {
+  if (segments.length !== 3) {
+    return NextResponse.json({ error: 'Not found. Use /sandbox/session' }, { status: 404 });
+  }
+
+  switch (segments[2]) {
     case 'session':
       return sessionPATCH(request);
     default:
-      return new Response(
-        JSON.stringify({ error: 'Invalid action. Use ?action=session' }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
-      );
+      return NextResponse.json({ error: 'Not found. Use /sandbox/session' }, { status: 404 });
   }
 }

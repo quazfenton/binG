@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-// Import all existing handlers
 import { POST as readPOST } from './read/gateway';
 import { POST as writePOST } from './write/gateway';
 import { POST as deletePOST } from './delete/gateway';
@@ -22,15 +21,15 @@ import { GET as importGET, POST as importPOST } from './import/gateway';
 import { GET as commitsGET } from './commits/gateway';
 import { GET as contextPackGET, POST as contextPackPOST } from './context-pack/gateway';
 
-/**
- * Consolidated filesystem route
- * Dispatches to individual handlers based on action query param
- */
 export async function GET(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const action = searchParams.get('action');
+  const path = request.nextUrl.pathname;
+  const segments = path.split('/').filter(Boolean);
 
-  switch (action) {
+  if (segments.length !== 3) {
+    return NextResponse.json({ error: 'Not found. Use /filesystem/list|...' }, { status: 404 });
+  }
+
+  switch (segments[2]) {
     case 'list':
       return listGET(request);
     case 'search':
@@ -48,18 +47,19 @@ export async function GET(request: NextRequest) {
     case 'context-pack':
       return contextPackGET(request);
     default:
-      return NextResponse.json(
-        { error: 'Invalid action. Use ?action=list|search|snapshot|diffs|commits|events-push|import|context-pack' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'Not found. Use /filesystem/list|...' }, { status: 404 });
   }
 }
 
 export async function POST(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const action = searchParams.get('action');
+  const path = request.nextUrl.pathname;
+  const segments = path.split('/').filter(Boolean);
 
-  switch (action) {
+  if (segments.length !== 3) {
+    return NextResponse.json({ error: 'Not found. Use /filesystem/read|...' }, { status: 404 });
+  }
+
+  switch (segments[2]) {
     case 'read':
       return readPOST(request);
     case 'write':
@@ -91,9 +91,6 @@ export async function POST(request: NextRequest) {
     case 'context-pack':
       return contextPackPOST(request);
     default:
-      return NextResponse.json(
-        { error: 'Invalid action. Use ?action=read|write|delete|mkdir|move|rename|create-file|rollback|snapshot-restore|diffs-apply|edits-accept|edits-deny|events-push|import|context-pack' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'Not found. Use /filesystem/read|...' }, { status: 404 });
   }
 }

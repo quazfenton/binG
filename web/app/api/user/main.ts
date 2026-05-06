@@ -1,21 +1,20 @@
-import { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 
-// Import all existing handlers
 import { GET as apiKeysGET, POST as apiKeysPOST, DELETE as apiKeysDELETE } from './api-keys/gateway';
 import { GET as deleteGET, POST as deletePOST } from './delete/gateway';
 import { GET as integrationsStatusGET } from './integrations/status/gateway';
 import { GET as keysGET, POST as keysPOST } from './keys/gateway';
 import { GET as profileGET, PUT as profilePUT } from './profile/gateway';
 
-/**
- * Consolidated user route
- * Dispatches to individual handlers based on action query param
- */
 export async function GET(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const action = searchParams.get('action');
+  const path = request.nextUrl.pathname;
+  const segments = path.split('/').filter(Boolean);
 
-  switch (action) {
+  if (segments.length !== 3) {
+    return NextResponse.json({ error: 'Not found. Use /user/api-keys|/user/delete|/user/integrations-status|/user/keys|/user/profile' }, { status: 404 });
+  }
+
+  switch (segments[2]) {
     case 'api-keys':
       return apiKeysGET(request);
     case 'delete':
@@ -27,18 +26,19 @@ export async function GET(request: NextRequest) {
     case 'profile':
       return profileGET(request);
     default:
-      return new Response(
-        JSON.stringify({ error: 'Invalid action. Use ?action=api-keys|delete|integrations-status|keys|profile' }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
-      );
+      return NextResponse.json({ error: 'Not found. Use /user/api-keys|/user/delete|/user/integrations-status|/user/keys|/user/profile' }, { status: 404 });
   }
 }
 
 export async function POST(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const action = searchParams.get('action');
+  const path = request.nextUrl.pathname;
+  const segments = path.split('/').filter(Boolean);
 
-  switch (action) {
+  if (segments.length !== 3) {
+    return NextResponse.json({ error: 'Not found. Use /user/api-keys|/user/delete|/user/keys' }, { status: 404 });
+  }
+
+  switch (segments[2]) {
     case 'api-keys':
       return apiKeysPOST(request);
     case 'delete':
@@ -46,39 +46,38 @@ export async function POST(request: NextRequest) {
     case 'keys':
       return keysPOST(request);
     default:
-      return new Response(
-        JSON.stringify({ error: 'Invalid action. Use ?action=api-keys|delete|keys' }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
-      );
+      return NextResponse.json({ error: 'Not found. Use /user/api-keys|/user/delete|/user/keys' }, { status: 404 });
   }
 }
 
 export async function PUT(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const action = searchParams.get('action');
+  const path = request.nextUrl.pathname;
+  const segments = path.split('/').filter(Boolean);
 
-  switch (action) {
+  if (segments.length !== 3) {
+    return NextResponse.json({ error: 'Not found. Use /user/profile' }, { status: 404 });
+  }
+
+  switch (segments[2]) {
     case 'profile':
       return profilePUT(request);
     default:
-      return new Response(
-        JSON.stringify({ error: 'Invalid action. Use ?action=profile' }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
-      );
+      return NextResponse.json({ error: 'Not found. Use /user/profile' }, { status: 404 });
   }
 }
 
 export async function DELETE(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const action = searchParams.get('action');
+  const path = request.nextUrl.pathname;
+  const segments = path.split('/').filter(Boolean);
 
-  switch (action) {
+  if (segments.length !== 3) {
+    return NextResponse.json({ error: 'Not found. Use /user/api-keys' }, { status: 404 });
+  }
+
+  switch (segments[2]) {
     case 'api-keys':
       return apiKeysDELETE(request);
     default:
-      return new Response(
-        JSON.stringify({ error: 'Invalid action. Use ?action=api-keys' }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
-      );
+      return NextResponse.json({ error: 'Not found. Use /user/api-keys' }, { status: 404 });
   }
 }

@@ -1,22 +1,34 @@
-import { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
+
 import { GET as searchGET } from './search/gateway';
 import { POST as sendPOST } from './send/gateway';
 import { GET as streamGET } from './stream/gateway';
 
+// GET /api/messaging/search | /api/messaging/stream
 export async function GET(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const action = searchParams.get('action');
+  const path = request.nextUrl.pathname;
+  const segments = path.split('/').filter(Boolean);
 
-  switch (action) {
-    case 'search':
-      return searchGET(request);
-    case 'stream':
-      return streamGET(request);
-    default:
-      return searchGET(request);
+  if (segments.length === 3) {
+    if (segments[2] === 'stream') return streamGET(request);
+    // 'search' and default → search
+    return searchGET(request);
   }
+
+  return searchGET(request);
 }
 
+// POST /api/messaging/send
 export async function POST(request: NextRequest) {
-  return sendPOST(request);
+  const path = request.nextUrl.pathname;
+  const segments = path.split('/').filter(Boolean);
+
+  if (segments.length === 3 && segments[2] === 'send') {
+    return sendPOST(request);
+  }
+
+  return NextResponse.json(
+    { error: 'Not found. Use /messaging/send' },
+    { status: 404 }
+  );
 }
