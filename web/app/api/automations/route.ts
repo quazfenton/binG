@@ -13,7 +13,8 @@ export async function GET(request: NextRequest) {
 
   // /api/automations/n8n/workflows/:id/executions
   if (pathParts.includes('executions')) {
-    return executionsGET(request);
+    const id = pathParts[4] || '';
+    return executionsGET(request, { params: Promise.resolve({ id }) });
   }
 
   // /api/automations/n8n/workflows - List workflows
@@ -25,7 +26,8 @@ export async function POST(request: NextRequest) {
 
   // /api/automations/n8n/workflows/:id/execute
   if (pathParts.includes('execute')) {
-    return executePOST(request);
+    const id = pathParts[4] || '';
+    return executePOST(request, { params: Promise.resolve({ id }) });
   }
 
   return new NextResponse(

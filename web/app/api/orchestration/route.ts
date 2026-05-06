@@ -26,7 +26,10 @@ export async function POST(request: NextRequest) {
 
   // Check if this is an agent action (has id and action params)
   if (searchParams.get('id') && searchParams.get('action')) {
-    return agentActionPOST(request);
+    const pathParts = request.nextUrl.pathname.split('/').filter(Boolean);
+    const id = pathParts[4] || searchParams.get('id') || '';
+    const action = pathParts[5] || searchParams.get('action') || '';
+    return agentActionPOST(request, { params: Promise.resolve({ id, action }) });
   }
 
   switch (resource) {
@@ -38,8 +41,11 @@ export async function POST(request: NextRequest) {
     case 'work':
       return agentsPOST(request);
     case 'workflows':
-    case 'workflow':
-      return workflowPOST(request);
+    case 'workflow': {
+      const pathParts = request.nextUrl.pathname.split('/').filter(Boolean);
+      const id = pathParts[3] || '';
+      return workflowPOST(request, { params: Promise.resolve({ id }) });
+    }
     default:
       return agentsPOST(request);
   }

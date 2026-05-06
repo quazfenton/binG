@@ -1,26 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 // Import all existing handlers
-import { POST as readPOST } from './read/route';
-import { POST as writePOST } from './write/route';
-import { POST as deletePOST } from './delete/route';
-import { GET as listGET } from './list/route';
-import { POST as mkdirPOST } from './mkdir/route';
-import { POST as movePOST } from './move/route';
-import { POST as renamePOST } from './rename/route';
-import { POST as createFilePOST } from './create-file/route';
-import { GET as searchGET } from './search/route';
-import { POST as rollbackPOST } from './rollback/route';
-import { GET as snapshotGET } from './snapshot/route';
-import { POST as snapshotRestorePOST } from './snapshot/restore/route';
-import { GET as diffsGET } from './diffs/route';
-import { POST as diffsApplyPOST } from './diffs/apply/route';
-import { POST as editsAcceptPOST } from './edits/accept/route';
-import { POST as editsDenyPOST } from './edits/deny/route';
-import { GET as eventsPushGET, POST as eventsPushPOST } from './events/push/route';
-import { GET as importGET, POST as importPOST } from './import/route';
-import { GET as commitsGET } from './commits/route';
-import { GET as contextPackGET, POST as contextPackPOST } from './context-pack/route';
+import { POST as readPOST } from './read/gateway';
+import { POST as writePOST } from './write/gateway';
+import { POST as deletePOST } from './delete/gateway';
+import { GET as listGET } from './list/gateway';
+import { POST as mkdirPOST } from './mkdir/gateway';
+import { POST as movePOST } from './move/gateway';
+import { POST as renamePOST } from './rename/gateway';
+import { POST as createFilePOST } from './create-file/gateway';
+import { GET as searchGET } from './search/gateway';
+import { POST as rollbackPOST } from './rollback/gateway';
+import { GET as snapshotGET } from './snapshot/gateway';
+import { POST as snapshotRestorePOST } from './snapshot/restore/gateway';
+import { GET as diffsGET } from './diffs/gateway';
+import { POST as diffsApplyPOST } from './diffs/apply/gateway';
+import { POST as editsAcceptPOST } from './edits/accept/gateway';
+import { POST as editsDenyPOST } from './edits/deny/gateway';
+import { GET as eventsPushGET, POST as eventsPushPOST } from './events/push/gateway';
+import { GET as importGET, POST as importPOST } from './import/gateway';
+import { GET as commitsGET } from './commits/gateway';
+import { GET as contextPackGET, POST as contextPackPOST } from './context-pack/gateway';
 
 /**
  * Consolidated filesystem route
