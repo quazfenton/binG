@@ -1,7 +1,7 @@
 /**
  * VFS ↔ Sandbox Bridge
  *
- * Bidirectional synchronization between Virtual Filesystem and OpenSandbox workspace.
+ * Bidirectional synchronization between Virtual Filesystem and Sandbox workspace.
  * Ensures user's VFS files are available in sandbox and changes are synced back.
  */
 

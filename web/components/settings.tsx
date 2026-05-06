@@ -44,6 +44,7 @@ import { toast } from "sonner";
 import Image from "next/image";
 import { isBackgroundUrlAllowed } from "@/lib/utils/url-validation";
 import { useSpecEnhancementMode, getSpecEnhancementModeInfo, type SpecEnhancementMode } from "@/contexts/spec-enhancement-mode-context";
+import { useOrchestrationMode, type OrchestrationMode } from "@/contexts/orchestration-mode-context";
 
 interface SettingsProps {
   onClose: () => void;
@@ -129,6 +130,7 @@ export default function Settings({
 }: SettingsProps) {
   const { isAuthenticated, user, login, logout, register, getApiKeys, setApiKeys, isLoading } = useAuth();
   const { config: specConfig, setMode: setSpecMode, setChain, isOverridden } = useSpecEnhancementMode();
+  const { config: orchestConfig, setMode: setOrchestrationMode } = useOrchestrationMode();
   const [textSize, setTextSize] = useState(100);
   const [highContrast, setHighContrast] = useState(false);
   const [screenReader, setScreenReader] = useState(false);
@@ -1440,17 +1442,31 @@ export default function Settings({
             Override environment variables for your session. Settings sync to your account and persist across devices.
           </p>
           <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="flex-1">
-                <Label htmlFor="opencode-enabled" className="text-sm">OpenCode</Label>
-                <p className="text-xs text-gray-500">OpenCode AI integration (alternative to default LLM)</p>
+            {/* Orchestration Mode Selector */}
+            <div className="p-3 bg-black/20 rounded-lg border border-white/10">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex-1">
+                  <Label className="text-sm">Orchestration Mode</Label>
+                  <p className="text-xs text-gray-500">Agent execution framework</p>
+                </div>
               </div>
-              <div
-                className={`custom-toggle ${envVars.OPENCODE_ENABLED ? 'active' : ''}`}
-                onClick={() => toggleEnvVar('OPENCODE_ENABLED')}
-                title={envVars.OPENCODE_ENABLED ? 'Enabled' : 'Disabled'}
-              >
-                <div className="custom-toggle-slider" />
+              
+              <div className="grid grid-cols-3 gap-1 mb-2">
+                {(['auto', 'v1-api', 'v1-agent-loop', 'v1-progressive-build', 'dual-process', 'execution-controller', 'spec:super', 'v2-native', 'v2-containerized', 'v2-local', 'unified-agent', 'stateful-agent', 'mastra-workflow', 'agent-loop', 'task-router', 'opencode-sdk', 'crewai', 'v2-executor', 'agent-team', 'attractor-driven', 'intent-driven', 'energy-driven', 'cognitive-resonance', 'adversarial-verify', 'distributed-cognition'] as const).map((mode) => {
+                  return (
+                    <button
+                      key={mode}
+                      onClick={() => setOrchestrationMode(mode)}
+                      className={`p-2 rounded-lg border text-left text-xs transition-all ${
+                        orchestConfig.mode === mode
+                          ? 'border-purple-500 bg-purple-500/20 text-purple-300'
+                          : 'border-white/10 bg-white/5 text-white/60 hover:border-white/30'
+                      }`}
+                    >
+                      {mode}
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
@@ -1508,20 +1524,6 @@ export default function Settings({
                   </div>
                 </div>
               )}
-            </div>
-
-            <div className="flex items-center justify-between">
-              <div className="flex-1">
-                <Label htmlFor="nullclaw-enabled" className="text-sm">Nullclaw</Label>
-                <p className="text-xs text-gray-500">Nullclaw integration for advanced agent capabilities</p>
-              </div>
-              <div
-                className={`custom-toggle ${envVars.NULLCLAW_ENABLED ? 'active' : ''}`}
-                onClick={() => toggleEnvVar('NULLCLAW_ENABLED')}
-                title={envVars.NULLCLAW_ENABLED ? 'Enabled' : 'Disabled'}
-              >
-                <div className="custom-toggle-slider" />
-              </div>
             </div>
           </div>
 

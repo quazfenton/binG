@@ -34,6 +34,7 @@ export interface ToolExecutionResult {
   authUrl?: string;
   provider?: IntegrationProvider;
   fallbackChain?: IntegrationProvider[];
+  metadata?: Record<string, any>;
 }
 
 export interface IntegrationConfig {

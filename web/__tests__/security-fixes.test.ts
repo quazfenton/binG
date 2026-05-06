@@ -312,7 +312,7 @@ describe('Circuit Breaker', () => {
 
   it('should start in CLOSED state', () => {
     const breaker = new ProviderCircuitBreaker('test-provider');
-    expect(breaker.getState()).toBe('CLOSED');
+    expect(breaker.getState()).toBe('HEALTHY');
   });
 
   it('should open after threshold failures', async () => {
@@ -402,7 +402,7 @@ describe('Circuit Breaker', () => {
     await breaker.execute(async () => 'success');
     await breaker.execute(async () => 'success');
 
-    expect(breaker.getState()).toBe('CLOSED');
+    expect(breaker.getState()).toBe('HEALTHY');
   });
 
   it('should track statistics', () => {
