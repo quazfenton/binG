@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
+
+
 import { getSmitheryService } from '@/lib/mcp/smithery-service';
 import { verifyAuth } from '@/lib/auth/verify-auth';
 

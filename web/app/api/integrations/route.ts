@@ -1,29 +1,29 @@
 import { NextRequest } from 'next/server';
 
 // Import all existing handlers
-import { GET as arcadeAuthGET, POST as arcadeAuthPOST } from './arcade/auth/gateway';
-import { POST as arcadeTokenPOST } from './arcade/token/gateway';
-import { GET as auditGET } from './audit/gateway';
-import { GET as connectionsGET } from './connections/gateway';
-import { GET as executeGET, POST as executePOST } from './execute/gateway';
-import { GET as figmaCallbackGET } from './figma/callback/gateway';
-import { GET as figmaGET, POST as figmaPOST } from './figma/gateway';
-import { GET as githubOauthAuthorizeGET } from './github/oauth/authorize/gateway';
-import { GET as githubOauthCallbackGET } from './github/oauth/callback/gateway';
-import { POST as githubOauthDisconnectPOST } from './github/oauth/disconnect/gateway';
-import { GET as githubOauthStatusGET } from './github/oauth/status/gateway';
-import { GET as githubGET, POST as githubPOST } from './github/gateway';
-import { POST as githubBranchPOST } from './github/source-control/branch/gateway';
-import { GET as githubBranchesGET } from './github/source-control/branches/gateway';
-import { POST as githubCommitPOST } from './github/source-control/commit/gateway';
-import { GET as githubCommitsGET } from './github/source-control/commits/gateway';
-import { POST as githubImportRepoPOST } from './github/source-control/import-repo/gateway';
-import { POST as githubPrPOST } from './github/source-control/pr/gateway';
-import { POST as githubPullPOST } from './github/source-control/pull/gateway';
-import { POST as githubPushPOST } from './github/source-control/push/gateway';
-import { GET as googleGET } from './google/gateway';
-import { GET as linkedinGET, POST as linkedinPOST } from './linkedin/gateway';
-import { GET as twitterGET, POST as twitterPOST } from './twitter/gateway';
+import { GET as arcadeAuthGET, POST as arcadeAuthPOST } from './arcade/auth/route';
+import { POST as arcadeTokenPOST } from './arcade/token/route';
+import { GET as auditGET } from './audit/route';
+import { GET as connectionsGET } from './connections/route';
+import { GET as executeGET, POST as executePOST } from './execute/route';
+import { GET as figmaCallbackGET } from './figma/callback/route';
+import { GET as figmaGET, POST as figmaPOST } from './figma/route';
+import { GET as githubOauthAuthorizeGET } from './github/oauth/authorize/route';
+import { GET as githubOauthCallbackGET } from './github/oauth/callback/route';
+import { POST as githubOauthDisconnectPOST } from './github/oauth/disconnect/route';
+import { GET as githubOauthStatusGET } from './github/oauth/status/route';
+import { GET as githubGET, POST as githubPOST } from './github/route';
+import { POST as githubBranchPOST } from './github/source-control/branch/route';
+import { GET as githubBranchesGET } from './github/source-control/branches/route';
+import { POST as githubCommitPOST } from './github/source-control/commit/route';
+import { GET as githubCommitsGET } from './github/source-control/commits/route';
+import { POST as githubImportRepoPOST } from './github/source-control/import-repo/route';
+import { POST as githubPrPOST } from './github/source-control/pr/route';
+import { POST as githubPullPOST } from './github/source-control/pull/route';
+import { POST as githubPushPOST } from './github/source-control/push/route';
+import { GET as googleGET } from './google/route';
+import { GET as linkedinGET, POST as linkedinPOST } from './linkedin/route';
+import { GET as twitterGET, POST as twitterPOST } from './twitter/route';
 
 /**
  * Consolidated integrations route

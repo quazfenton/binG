@@ -1,12 +1,12 @@
 import { NextRequest } from 'next/server';
 
 // Import all existing handlers
-import { GET as rootGET } from './main';
-import { GET as installedGET } from './installed/gateway';
-import { GET as marketplaceGET } from './marketplace/gateway';
-import { GET as marketplaceSearchGET } from './marketplace/search/gateway';
-import { PUT as configPUT, POST as configPOST } from './[id]/config/gateway';
-import { POST as actionPOST } from './[id]/[action]/gateway';
+import { GET as rootGET } from './route-original';
+import { GET as installedGET } from './installed/route';
+import { GET as marketplaceGET } from './marketplace/route';
+import { GET as marketplaceSearchGET } from './marketplace/search/route';
+import { PUT as configPUT, POST as configPOST } from './[id]/config/route';
+import { POST as actionPOST } from './[id]/[action]/route';
 
 /**
  * Consolidated plugins route

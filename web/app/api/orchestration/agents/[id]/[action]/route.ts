@@ -9,6 +9,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { createLogger } from '@/lib/utils/logger';
+import { getAgentKernel } from '@bing/shared/agent/agent-kernel';
 
 const logger = createLogger('API:Orchestration:Control');
 
@@ -18,38 +19,70 @@ export async function POST(
 ) {
   try {
     const { id, action } = await params;
-
-    // TODO: Re-implement when agent orchestrator is available
-    /*
     const body = await request.json().catch(() => ({}));
-    const { task } = body;
+    const { reason } = body;
 
+    const kernel = getAgentKernel();
     let success: boolean;
 
     switch (action) {
-      case 'start':
-        await startAgent(id, task);
-        success = true;
-        logger.info('Agent started:', { agentId: id, task });
-        break;
-
       case 'stop':
-        await stopAgent(id);
-        success = true;
-        logger.info('Agent stopped:', { agentId: id });
+      case 'terminate':
+        success = await kernel.terminateAgent(id, reason || 'Manual stop');
+        logger.info('Agent stopped:', { agentId: id, reason });
         break;
 
       case 'pause':
-        await pauseAgent(id);
-        success = true;
-        logger.info('Agent paused:', { agentId: id });
+      case 'suspend':
+        success = await kernel.suspendAgent(id, reason || 'Manual pause');
+        logger.info('Agent paused:', { agentId: id, reason });
         break;
 
       case 'resume':
-        await resumeAgent(id);
-        success = true;
+        success = await kernel.resumeAgent(id);
         logger.info('Agent resumed:', { agentId: id });
         break;
+
+      case 'checkpoint':
+        const checkpointId = await kernel.checkpointAgent(id);
+        logger.info('Agent checkpointed:', { agentId: id, checkpointId });
+        return NextResponse.json({
+          success: true,
+          action,
+          agentId: id,
+          checkpointId,
+        });
+
+      case 'status':
+        const agent = kernel.getAgentStatus(id);
+        if (!agent) {
+          return NextResponse.json(
+            { error: 'Agent not found' },
+            { status: 404 }
+          );
+        }
+        return NextResponse.json({
+          success: true,
+          agent,
+        });
+
+      case 'work':
+        // Submit work to agent queue
+        const { payload, priority = 'normal' } = body;
+        if (!payload) {
+          return NextResponse.json(
+            { error: 'Payload is required for work submission' },
+            { status: 400 }
+          );
+        }
+        const workId = await kernel.submitWork(id, payload, priority as any);
+        logger.info('Work submitted to agent:', { agentId: id, workId });
+        return NextResponse.json({
+          success: true,
+          action,
+          agentId: id,
+          workId,
+        });
 
       default:
         return NextResponse.json(
@@ -70,9 +103,6 @@ export async function POST(
       action,
       agentId: id,
     });
-    */
-
-    return NextResponse.json({ error: 'This endpoint is not implemented' }, { status: 501 });
   } catch (error: any) {
     logger.error('Agent control failed:', error);
     return NextResponse.json(
