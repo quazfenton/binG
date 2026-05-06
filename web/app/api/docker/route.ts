@@ -1,88 +1,60 @@
-import { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 
-// Import all existing handlers
-import { POST as composePOST } from './compose/gateway';
 import { GET as containersGET } from './containers/gateway';
+import { POST as composePOST } from './compose/gateway';
 import { POST as execPOST } from './exec/gateway';
-import { DELETE as removeDELETE } from './remove/[id]/gateway';
 import { POST as startPOST } from './start/[id]/gateway';
 import { POST as stopPOST } from './stop/[id]/gateway';
+import { DELETE as removeDELETE } from './remove/[id]/gateway';
 
-/**
- * Consolidated docker route
- * Dispatches to individual handlers based on action query param
- */
+type Params = { params: Promise<{ id: string }> };
+
+// GET /api/docker/containers
 export async function GET(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const action = searchParams.get('action');
-
-  switch (action) {
-    case 'containers':
-      return containersGET(request);
-    default:
-      return new Response(
-        JSON.stringify({ error: 'Invalid action. Use ?action=containers' }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
-      );
+  const path = request.nextUrl.pathname;
+  if (path.endsWith('/containers')) {
+    return containersGET(request);
   }
+  return NextResponse.json({ error: 'Not found' }, { status: 404 });
 }
 
-export async function POST(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const action = searchParams.get('action');
+// POST /api/docker/compose | /api/docker/exec | /api/docker/start/:id | /api/docker/stop/:id
+export async function POST(request: NextRequest, { params }: Params) {
+  const path = request.nextUrl.pathname;
+  const segments = path.split('/').filter(Boolean);
 
-  switch (action) {
-    case 'compose':
-      return composePOST(request);
-    case 'exec':
-      return execPOST(request);
-    case 'start': {
-      const id = searchParams.get('id');
-      if (!id) {
-        return new Response(
-          JSON.stringify({ error: 'id query parameter is required' }),
-          { status: 400, headers: { 'Content-Type': 'application/json' } }
-        );
-      }
-      return startPOST(request, { params: Promise.resolve({ id }) });
-    }
-    case 'stop': {
-      const id = searchParams.get('id');
-      if (!id) {
-        return new Response(
-          JSON.stringify({ error: 'id query parameter is required' }),
-          { status: 400, headers: { 'Content-Type': 'application/json' } }
-        );
-      }
-      return stopPOST(request, { params: Promise.resolve({ id }) });
-    }
-    default:
-      return new Response(
-        JSON.stringify({ error: 'Invalid action. Use ?action=compose|exec|start|stop' }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
-      );
+  // /api/docker/compose — 4 segments: [api, docker, compose]
+  if (segments.length === 3 && segments[2] === 'compose') {
+    return composePOST(request);
   }
+
+  // /api/docker/exec — 4 segments: [api, docker, exec]
+  if (segments.length === 3 && segments[2] === 'exec') {
+    return execPOST(request);
+  }
+
+  // /api/docker/start/:id — 5 segments: [api, docker, start, id]
+  if (segments.length === 4 && segments[2] === 'start') {
+    return startPOST(request, { params });
+  }
+
+  // /api/docker/stop/:id — 5 segments: [api, docker, stop, id]
+  if (segments.length === 4 && segments[2] === 'stop') {
+    return stopPOST(request, { params });
+  }
+
+  return NextResponse.json({ error: 'Not found' }, { status: 404 });
 }
 
-export async function DELETE(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const action = searchParams.get('action');
+// DELETE /api/docker/remove/:id
+export async function DELETE(request: NextRequest, { params }: Params) {
+  const path = request.nextUrl.pathname;
+  const segments = path.split('/').filter(Boolean);
 
-  switch (action) {
-    case 'remove': {
-      const id = searchParams.get('id');
-      if (!id) {
-        return new Response(
-          JSON.stringify({ error: 'id query parameter is required' }),
-          { status: 400, headers: { 'Content-Type': 'application/json' } }
-        );
-      }
-      return removeDELETE(request, { params: Promise.resolve({ id }) });
-    }
-    default:
-      return new Response(
-        JSON.stringify({ error: 'Invalid action. Use ?action=remove' }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
-      );
+  // /api/docker/remove/:id — 5 segments: [api, docker, remove, id]
+  if (segments.length === 4 && segments[2] === 'remove') {
+    return removeDELETE(request, { params });
   }
+
+  return NextResponse.json({ error: 'Not found' }, { status: 404 });
 }

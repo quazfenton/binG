@@ -1,37 +1,33 @@
 import { NextRequest, NextResponse } from 'next/server';
+
 import { GET as workflowsGET } from './n8n/workflows/gateway';
 import { POST as executePOST } from './n8n/workflows/[id]/execute/gateway';
 import { GET as executionsGET } from './n8n/workflows/[id]/executions/gateway';
 
-/**
- * Consolidated automations route
- * Preserved original at ./main.ts
- */
-export async function GET(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const pathParts = request.nextUrl.pathname.split('/').filter(Boolean);
+type IdParams = { params: Promise<{ id: string }> };
+
+// GET /api/automations/n8n/workflows | /api/automations/n8n/workflows/:id/executions
+export async function GET(request: NextRequest, { params }: IdParams) {
+  const path = request.nextUrl.pathname;
+  const segments = path.split('/').filter(Boolean);
 
   // /api/automations/n8n/workflows/:id/executions
-  if (pathParts.includes('executions')) {
-    const id = pathParts[4] || '';
-    return executionsGET(request, { params: Promise.resolve({ id }) });
+  if (segments.length === 6 && segments[5] === 'executions') {
+    return executionsGET(request, { params });
   }
 
-  // /api/automations/n8n/workflows - List workflows
+  // /api/automations/n8n/workflows
   return workflowsGET(request);
 }
 
-export async function POST(request: NextRequest) {
-  const pathParts = request.nextUrl.pathname.split('/').filter(Boolean);
+// POST /api/automations/n8n/workflows/:id/execute
+export async function POST(request: NextRequest, { params }: IdParams) {
+  const path = request.nextUrl.pathname;
+  const segments = path.split('/').filter(Boolean);
 
-  // /api/automations/n8n/workflows/:id/execute
-  if (pathParts.includes('execute')) {
-    const id = pathParts[4] || '';
-    return executePOST(request, { params: Promise.resolve({ id }) });
+  if (segments.length === 5 && segments[4] === 'execute') {
+    return executePOST(request, { params });
   }
 
-  return new NextResponse(
-    JSON.stringify({ error: 'POST not available at this path' }),
-    { status: 404, headers: { 'Content-Type': 'application/json' } }
-  );
+  return NextResponse.json({ error: 'Not found' }, { status: 404 });
 }

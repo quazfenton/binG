@@ -71,7 +71,7 @@ export function recordSuccess(architecture: Architecture, provider?: string): vo
 
   if (architecture === 'v1-api' && provider) {
     try {
-      circuitBreakerManager?.recordAttempt(provider, true);
+      circuitBreakerManager?.getBreaker(provider).recordSuccess();
     } catch { /* ignore */ }
     return;
   }
@@ -108,11 +108,7 @@ export function recordFailure(
 
   if (architecture === 'v1-api' && provider) {
     try {
-      circuitBreakerManager?.recordAttempt(provider, false);
-      // Record rate limit errors specially
-      if (error?.includes('429') || error?.includes('rate limit')) {
-        circuitBreakerManager?.recordRateLimit(provider);
-      }
+      circuitBreakerManager?.getBreaker(provider).recordFailure(error);
     } catch { /* ignore */ }
     return;
   }
@@ -170,7 +166,7 @@ export function getHealthSummary(): Record<string, {
 
   // V1: from circuit-breaker
   try {
-    const providers = circuitBreakerManager?.getProviders?.() || [];
+    const providers = circuitBreakerManager ? Array.from((circuitBreakerManager as any).breakers?.keys?.() || []) as string[] : [];
     for (const provider of providers) {
       const breaker = circuitBreakerManager?.getBreaker(provider);
       if (!breaker) continue;
@@ -208,7 +204,7 @@ export function resetHealth(architecture: Architecture, provider?: string): void
   
   if (architecture === 'v1-api' && provider) {
     try {
-      circuitBreakerManager?.reset?.(provider);
+      circuitBreakerManager?.getBreaker(provider).reset();
     } catch { /* ignore */ }
     return;
   }

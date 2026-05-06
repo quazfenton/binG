@@ -1,54 +1,40 @@
-import { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 
-// Import all existing handlers
 import { GET as playlistGET, POST as playlistPOST } from './playlist/gateway';
-import { POST as webhookPOST, GET as webhookGET } from './webhook/gateway';
+import { GET as webhookGET, POST as webhookPOST } from './webhook/gateway';
 import { GET as embedGET } from './embed/[videoId]/gateway';
 
-/**
- * Consolidated music-hub route
- * Dispatches to individual handlers based on action query param
- */
+type VideoIdParams = { params: Promise<{ videoId: string }> };
+
+// GET /api/music-hub/playlist | /api/music-hub/webhook | /api/music-hub/embed/:videoId
 export async function GET(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const action = searchParams.get('action');
+  const path = request.nextUrl.pathname;
 
-  switch (action) {
-    case 'playlist':
-      return playlistGET(request);
-    case 'webhook':
-      return webhookGET();
-    case 'embed': {
-      const videoId = searchParams.get('videoId');
-      if (!videoId) {
-        return new Response(
-          JSON.stringify({ error: 'videoId query parameter is required' }),
-          { status: 400, headers: { 'Content-Type': 'application/json' } }
-        );
-      }
-      return embedGET(request, { params: Promise.resolve({ videoId }) });
-    }
-    default:
-      return new Response(
-        JSON.stringify({ error: 'Invalid action. Use ?action=playlist|webhook|embed' }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
-      );
+  if (path.endsWith('/playlist')) {
+    return playlistGET(request);
   }
+  if (path.endsWith('/webhook')) {
+    return webhookGET();
+  }
+  // /api/music-hub/embed/:videoId — segments: ['', 'api', 'music-hub', 'embed', videoId]
+  const segments = path.split('/').filter(Boolean);
+  if (segments.length === 5 && segments[3] === 'embed') {
+    return embedGET(request, { params: Promise.resolve({ videoId: segments[4] }) });
+  }
+
+  return NextResponse.json({ error: 'Not found' }, { status: 404 });
 }
 
+// POST /api/music-hub/playlist | /api/music-hub/webhook
 export async function POST(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const action = searchParams.get('action');
+  const path = request.nextUrl.pathname;
 
-  switch (action) {
-    case 'playlist':
-      return playlistPOST(request);
-    case 'webhook':
-      return webhookPOST(request);
-    default:
-      return new Response(
-        JSON.stringify({ error: 'Invalid action. Use ?action=playlist|webhook' }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
-      );
+  if (path.endsWith('/playlist')) {
+    return playlistPOST(request);
   }
-}
+  if (path.endsWith('/webhook')) {
+    return webhookPOST(request);
+  }
+
+  return NextResponse.json({ error: 'Not found' }, { status: 404 });
+}

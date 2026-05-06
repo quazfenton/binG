@@ -17,35 +17,41 @@ import { GET as rootGET, POST as rootPOST } from './main';
 import { GET as idGET, POST as idPOST, DELETE as idDELETE } from './[id]/gateway';
 import { GET as eventsGET } from './[id]/events/gateway';
 
-export async function GET(request: NextRequest) {
+type Params = { params: Promise<{ id?: string; action?: string }> };
+
+export async function GET(request: NextRequest, { params }: Params) {
   const path = request.nextUrl.pathname;
 
   // /api/spawn/:id/events -> events gateway
   if (path.includes('/events')) {
-    return eventsGET(request);
+    return eventsGET(request, { params: params as Promise<{ id: string }> });
   }
 
   // /api/spawn/:id -> [id] gateway
   const segments = path.split('/').filter(Boolean);
   if (segments.length >= 4) {
-    return idGET(request);
+    return idGET(request, { params: params as Promise<{ id: string }> });
   }
 
   // /api/spawn -> main handler
   return rootGET(request);
 }
 
-export async function POST(request: NextRequest) {
+export async function POST(request: NextRequest, { params }: Params) {
   const path = request.nextUrl.pathname;
-
   const segments = path.split('/').filter(Boolean);
+
   if (segments.length >= 4) {
-    return idPOST(request);
+    return idPOST(request, { params: params as Promise<{ id: string }> });
   }
 
   return rootPOST(request);
 }
 
-export async function DELETE(request: NextRequest) {
-  return idDELETE(request);
+export async function DELETE(request: NextRequest, { params }: Params) {
+  const segments = request.nextUrl.pathname.split('/').filter(Boolean);
+  if (segments.length < 4) {
+    return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  }
+  return idDELETE(request, { params: params as Promise<{ id: string }> });
 }

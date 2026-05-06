@@ -98,7 +98,7 @@ export function configureSubCall<T extends { engine?: EngineArchitecture; mode?:
 ): T {
   const resolvedModel = engine === 'v1-api'
     ? (modelOverride || baseConfig.model)
-    : resolveV2Model(engine === 'v1-api' ? 'v2-cli' : engine, modelOverride || baseConfig.model).model;
+    : resolveV2Model(engine, modelOverride || baseConfig.model).model;
 
   log.debug('Configuring sub-call', { engine, mode: modeForEngine(engine), model: resolvedModel });
 
