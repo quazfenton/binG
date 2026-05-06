@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server';
 
 // Import all existing handlers
 import { GET as healthGET } from './health/route';
-import { POST as agentPOST } from './route';
+import { POST as agentPOST } from './main';
 import { POST as statefulAgentPOST } from './stateful-agent/route';
 import { POST as interruptPOST } from './stateful-agent/interrupt/route';
 import { POST as unifiedAgentPOST } from './unified-agent/route';

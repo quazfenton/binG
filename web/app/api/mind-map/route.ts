@@ -15,7 +15,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 // Import handlers from existing route files
-import { GET as listGET, POST as createPOST } from './list';
+import { GET as rootGET, POST as rootPOST } from './main';
 import { GET as statsGET } from './stats/route';
 import { GET as chainsGET } from './chains/route';
 import { GET as chainByIdGET } from './chains/[id]/route';
@@ -27,7 +27,7 @@ export async function GET(request: NextRequest) {
 
   switch (action) {
     case 'list':
-      return listGET(request);
+      return rootGET(request);
     case 'stats':
       return statsGET();
     case 'chains':
@@ -37,7 +37,7 @@ export async function GET(request: NextRequest) {
     case 'get':
       return getMindMapGET(request, { params: Promise.resolve({ id: searchParams.get('id') || '' }) });
     default:
-      return listGET(request);
+      return rootGET(request);
   }
 }
 
@@ -47,9 +47,9 @@ export async function POST(request: NextRequest) {
 
   switch (action) {
     case 'create':
-      return createPOST(request);
+      return rootPOST(request);
     default:
-      return createPOST(request);
+      return rootPOST(request);
   }
 }
 

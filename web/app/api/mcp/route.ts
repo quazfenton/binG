@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
 
 // Import all existing handlers
-import { GET as rootGET, POST as rootPOST } from './route-original';
+import { GET as rootGET, POST as rootPOST } from './main';
 import { POST as connectPOST } from './connect/route';
 import { POST as initPOST } from './init/route';
 import { GET as statusGET } from './status/route';

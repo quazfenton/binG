@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
 
 // Import all existing handlers
-import { GET as rootGET, POST as rootPOST } from './route-original';
+import { GET as rootGET, POST as rootPOST } from './main';
 import { GET as contentGET } from './content/route';
 import { POST as discoverPOST, GET as discoverGET } from './discover/route';
 import { GET as feedGET, POST as feedPOST } from './feed/route';
