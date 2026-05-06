@@ -16,7 +16,7 @@
  */
 
 import { createLogger } from '@/lib/utils/logger';
-import { getHealthState, type Architecture } from './model-health';
+import { getHealthState, type Architecture } from '@/lib/orchestra/model-health';
 
 const log = createLogger('V2:ModelConfig');
 
