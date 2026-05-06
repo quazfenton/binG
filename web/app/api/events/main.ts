@@ -145,10 +145,20 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 
+    const path = request.nextUrl.pathname;
+    const segments = path.split('/').filter(Boolean);
     const { searchParams } = new URL(request.url);
-    const action = searchParams.get('action');
 
-    if (action === 'replay') {
+    if (segments.length !== 3) {
+      return NextResponse.json(
+        { error: 'Not found. Use /events/replay|/events/purge' },
+        { status: 404 }
+      );
+    }
+
+    const action = segments[2];
+
+  if (action === 'replay') {
       // Admin-only: require admin role
       const roles = session.user['https://binG.com/roles'] || [];
       if (!roles.includes('admin')) {

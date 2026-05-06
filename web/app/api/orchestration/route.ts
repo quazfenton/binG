@@ -1,52 +1,26 @@
-import { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { GET as agentsGET, POST as agentsPOST } from './agents/gateway';
 import { POST as agentActionPOST } from './agents/[id]/[action]/gateway';
 import { GET as statsGET } from './stats/gateway';
 import { GET as workflowsGET, POST as workflowPOST } from './workflows/gateway';
 
 export async function GET(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const resource = searchParams.get('resource');
-
-  switch (resource) {
-    case 'agents':
-      return agentsGET(request);
-    case 'stats':
-      return statsGET();
-    case 'workflows':
-      return workflowsGET(request);
-    default:
-      return agentsGET(request);
-  }
+  const path = request.nextUrl.pathname;
+  const segments = path.split('/').filter(Boolean);
+  if (segments.length === 3 && segments[2] === 'agents') return agentsGET(request);
+  if (segments.length === 3 && segments[2] === 'stats') return statsGET();
+  if (segments.length === 3 && segments[2] === 'workflows') return workflowsGET(request);
+  return agentsGET(request);
 }
 
 export async function POST(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const resource = searchParams.get('resource');
-
-  // Check if this is an agent action (has id and action params)
-  if (searchParams.get('id') && searchParams.get('action')) {
-    const pathParts = request.nextUrl.pathname.split('/').filter(Boolean);
-    const id = pathParts[4] || searchParams.get('id') || '';
-    const action = pathParts[5] || searchParams.get('action') || '';
-    return agentActionPOST(request, { params: Promise.resolve({ id, action }) });
+  const path = request.nextUrl.pathname;
+  const segments = path.split('/').filter(Boolean);
+  if (segments.length === 5 && segments[2] === 'agents') {
+    return agentActionPOST(request, { params: Promise.resolve({ id: segments[3], action: segments[4] }) });
   }
-
-  switch (resource) {
-    case 'agents':
-    case 'start':
-    case 'stop':
-    case 'pause':
-    case 'resume':
-    case 'work':
-      return agentsPOST(request);
-    case 'workflows':
-    case 'workflow': {
-      const pathParts = request.nextUrl.pathname.split('/').filter(Boolean);
-      const id = pathParts[3] || '';
-      return workflowPOST(request, { params: Promise.resolve({ id }) });
-    }
-    default:
-      return agentsPOST(request);
+  if (segments.length === 4 && segments[2] === 'workflows') {
+    return workflowPOST(request, { params: Promise.resolve({ id: segments[3] }) });
   }
+  return agentsPOST(request);
 }

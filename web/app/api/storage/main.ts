@@ -1,6 +1,5 @@
-import { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 
-// Import all existing handlers
 import { GET as usageGET } from './usage/gateway';
 import { POST as uploadPOST } from './upload/gateway';
 import { GET as signedUrlGET } from './signed-url/gateway';
@@ -8,15 +7,15 @@ import { GET as listGET } from './list/gateway';
 import { GET as downloadGET } from './download/gateway';
 import { DELETE as deleteDELETE } from './delete/gateway';
 
-/**
- * Consolidated storage route
- * Dispatches to individual handlers based on action query param
- */
 export async function GET(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const action = searchParams.get('action');
+  const path = request.nextUrl.pathname;
+  const segments = path.split('/').filter(Boolean);
 
-  switch (action) {
+  if (segments.length !== 3) {
+    return NextResponse.json({ error: 'Not found. Use /storage/usage|/storage/signed-url|/storage/list|/storage/download' }, { status: 404 });
+  }
+
+  switch (segments[2]) {
     case 'usage':
       return usageGET(request);
     case 'signed-url':
@@ -26,25 +25,23 @@ export async function GET(request: NextRequest) {
     case 'download':
       return downloadGET(request);
     default:
-      return new Response(
-        JSON.stringify({ error: 'Invalid action. Use ?action=usage|signed-url|list|download' }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
-      );
+      return NextResponse.json({ error: 'Not found. Use /storage/usage|/storage/signed-url|/storage/list|/storage/download' }, { status: 404 });
   }
 }
 
 export async function POST(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const action = searchParams.get('action');
+  const path = request.nextUrl.pathname;
+  const segments = path.split('/').filter(Boolean);
 
-  switch (action) {
+  if (segments.length !== 3) {
+    return NextResponse.json({ error: 'Not found. Use /storage/upload' }, { status: 404 });
+  }
+
+  switch (segments[2]) {
     case 'upload':
       return uploadPOST(request);
     default:
-      return new Response(
-        JSON.stringify({ error: 'Invalid action. Use ?action=upload' }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
-      );
+      return NextResponse.json({ error: 'Not found. Use /storage/upload' }, { status: 404 });
   }
 }
 

@@ -1,6 +1,5 @@
-import { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 
-// Import all existing handlers
 import { POST as agentPOST } from './agent/gateway';
 import { GET as clearSessionsGET, POST as clearSessionsPOST } from './clear-sessions/gateway';
 import { GET as daemonGET, POST as daemonPOST, DELETE as daemonDELETE } from './daemon/gateway';
@@ -19,118 +18,88 @@ import { GET as terminalWsGET } from './terminal/ws/gateway';
 import { GET as terminaluseGET, POST as terminalusePOST } from './terminaluse/gateway';
 import { POST as webcontainerPOST } from './webcontainer/gateway';
 
-/**
- * Consolidated sandbox route
- * Dispatches to individual handlers based on action query param
- */
+// GET /api/sandbox/[section]
 export async function GET(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const action = searchParams.get('action');
+  const path = request.nextUrl.pathname;
+  const segments = path.split('/').filter(Boolean);
 
-  switch (action) {
-    case 'clear-sessions':
-      return clearSessionsGET(request);
-    case 'daemon':
-      return daemonGET(request);
-    case 'devbox':
-      return devboxGET(request);
-    case 'files':
-      return filesGET(request);
-    case 'pty':
-      return ptyGET();
-    case 'session':
-      return sessionGET(request);
-    case 'sync':
-      return syncGET(request);
-    case 'terminal-stream':
-      return terminalStreamGET(request);
-    case 'terminal-ws':
-      return terminalWsGET(request);
-    case 'terminaluse':
-      return terminaluseGET(request);
+  if (segments.length !== 3) {
+    return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  }
+
+  switch (segments[2]) {
+    case 'clear-sessions': return clearSessionsGET(request);
+    case 'daemon': return daemonGET(request);
+    case 'devbox': return devboxGET(request);
+    case 'files': return filesGET(request);
+    case 'pty': return ptyGET();
+    case 'session': return sessionGET(request);
+    case 'sync': return syncGET(request);
+    case 'terminal-stream': return terminalStreamGET(request);
+    case 'terminal-ws': return terminalWsGET(request);
+    case 'terminaluse': return terminaluseGET(request);
     default:
-      return new Response(
-        JSON.stringify({ error: 'Invalid action. Use ?action=clear-sessions|daemon|devbox|files|pty|session|sync|terminal-stream|terminal-ws|terminaluse' }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
-      );
+      return NextResponse.json({ error: 'Not found. Use /sandbox/clear-sessions|daemon|devbox|files|pty|session|sync|terminal-stream|terminal-ws|terminaluse' }, { status: 404 });
   }
 }
 
+// POST /api/sandbox/[section]
 export async function POST(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const action = searchParams.get('action');
+  const path = request.nextUrl.pathname;
+  const segments = path.split('/').filter(Boolean);
 
-  switch (action) {
-    case 'agent':
-      return agentPOST(request);
-    case 'clear-sessions':
-      return clearSessionsPOST(request);
-    case 'daemon':
-      return daemonPOST(request);
-    case 'devbox':
-      return devboxPOST(request);
-    case 'execute':
-      return executePOST(request);
-    case 'lifecycle':
-      return lifecyclePOST(request);
-    case 'pty':
-      return ptyPOST(request);
-    case 'session':
-      return sessionPOST(request);
-    case 'sync':
-      return syncPOST(request);
-    case 'terminal':
-      return terminalPOST(request);
-    case 'terminal-input':
-      return terminalInputPOST(request);
-    case 'terminal-resize':
-      return terminalResizePOST(request);
-    case 'terminal-stream':
-      return terminalStreamPOST(request);
-    case 'terminaluse':
-      return terminalusePOST(request);
-    case 'webcontainer':
-      return webcontainerPOST(request);
+  if (segments.length !== 3) {
+    return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  }
+
+  switch (segments[2]) {
+    case 'agent': return agentPOST(request);
+    case 'clear-sessions': return clearSessionsPOST(request);
+    case 'daemon': return daemonPOST(request);
+    case 'devbox': return devboxPOST(request);
+    case 'execute': return executePOST(request);
+    case 'lifecycle': return lifecyclePOST(request);
+    case 'pty': return ptyPOST(request);
+    case 'session': return sessionPOST(request);
+    case 'sync': return syncPOST(request);
+    case 'terminal': return terminalPOST(request);
+    case 'terminal-input': return terminalInputPOST(request);
+    case 'terminal-resize': return terminalResizePOST(request);
+    case 'terminal-stream': return terminalStreamPOST(request);
+    case 'terminaluse': return terminalusePOST(request);
+    case 'webcontainer': return webcontainerPOST(request);
     default:
-      return new Response(
-        JSON.stringify({ error: 'Invalid action. Use ?action=agent|clear-sessions|daemon|devbox|execute|lifecycle|pty|session|sync|terminal|terminal-input|terminal-resize|terminal-stream|terminaluse|webcontainer' }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
-      );
+      return NextResponse.json({ error: 'Not found. Use /sandbox/agent|clear-sessions|daemon|devbox|execute|lifecycle|pty|session|sync|terminal|terminal-input|terminal-resize|terminal-stream|terminaluse|webcontainer' }, { status: 404 });
   }
 }
 
+// DELETE /api/sandbox/[section]
 export async function DELETE(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const action = searchParams.get('action');
+  const path = request.nextUrl.pathname;
+  const segments = path.split('/').filter(Boolean);
 
-  switch (action) {
-    case 'daemon':
-      return daemonDELETE(request);
-    case 'devbox':
-      return devboxDELETE(request);
-    case 'session':
-      return sessionDELETE(request);
-    case 'terminal':
-      return terminalDELETE(request);
+  if (segments.length !== 3) {
+    return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  }
+
+  switch (segments[2]) {
+    case 'daemon': return daemonDELETE(request);
+    case 'devbox': return devboxDELETE(request);
+    case 'session': return sessionDELETE(request);
+    case 'terminal': return terminalDELETE(request);
     default:
-      return new Response(
-        JSON.stringify({ error: 'Invalid action. Use ?action=daemon|devbox|session|terminal' }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
-      );
+      return NextResponse.json({ error: 'Not found. Use /sandbox/daemon|devbox|session|terminal' }, { status: 404 });
   }
 }
 
+// PATCH /api/sandbox/session
 export async function PATCH(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const action = searchParams.get('action');
+  const path = request.nextUrl.pathname;
+  const segments = path.split('/').filter(Boolean);
 
-  switch (action) {
-    case 'session':
-      return sessionPATCH(request);
-    default:
-      return new Response(
-        JSON.stringify({ error: 'Invalid action. Use ?action=session' }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
-      );
+  if (segments.length === 3 && segments[2] === 'session') {
+    return sessionPATCH(request);
   }
+
+  return NextResponse.json({ error: 'Not found. Use /sandbox/session' }, { status: 404 });
 }

@@ -1,41 +1,32 @@
 import { NextRequest, NextResponse } from 'next/server';
+
 import { GET as rolesGET, POST as rolesPOST, DELETE as rolesDELETE } from './roles/gateway';
 
-/**
- * Consolidated admin route
- * @deprecated Use subdirectory endpoints directly
- * Preserved original at ./main.ts
- */
+// GET /api/admin/roles
 export async function GET(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const action = searchParams.get('action');
+  const path = request.nextUrl.pathname;
+  const segments = path.split('/').filter(Boolean);
 
-  switch (action) {
-    case 'roles':
-      return rolesGET(request);
-    default:
-      return new NextResponse(JSON.stringify({ error: 'Unknown action', available: ['roles'] }), {
-        status: 400,
-        headers: { 'Content-Type': 'application/json' },
-      });
+  if (segments.length === 3 && segments[2] === 'roles') {
+    return rolesGET(request);
   }
+
+  return NextResponse.json({ error: 'Not found' }, { status: 404 });
 }
 
+// POST /api/admin/roles
 export async function POST(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const action = searchParams.get('action');
+  const path = request.nextUrl.pathname;
+  const segments = path.split('/').filter(Boolean);
 
-  switch (action) {
-    case 'roles':
-      return rolesPOST(request);
-    default:
-      return new NextResponse(JSON.stringify({ error: 'Unknown action' }), {
-        status: 400,
-        headers: { 'Content-Type': 'application/json' },
-      });
+  if (segments.length === 3 && segments[2] === 'roles') {
+    return rolesPOST(request);
   }
+
+  return NextResponse.json({ error: 'Not found' }, { status: 404 });
 }
 
+// DELETE /api/admin/roles
 export async function DELETE(request: NextRequest) {
   return rolesDELETE(request);
 }
