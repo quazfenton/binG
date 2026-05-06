@@ -14,7 +14,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 // Import handlers from existing route files
 import { GET as listGET, POST as emitPOST } from './main';
-import { GET as streamGET } from './stream/route';
+import { GET as streamGET } from './stream/gateway';
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
