@@ -19,6 +19,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import type { UIMessage } from 'ai';
 import { tokenTracker } from './ai-caching';
 import type { StreamingResponse } from './llm-providers';
+import { getOrchestrationModeHeaders } from '@/contexts/orchestration-mode-context';
 
 // Type alias for Message (using UIMessage from AI SDK)
 export type Message = UIMessage;
@@ -169,7 +170,10 @@ export function useChatEnhanced(options: UseChatOptions = {}): ChatState {
       // Make API call
       const response = await fetch(api, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          ...getOrchestrationModeHeaders(),
+        },
         body: JSON.stringify({
           messages: [...messages, newMessage],
           provider,

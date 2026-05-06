@@ -27,7 +27,23 @@ export type OrchestrationMode =
   | 'mastra-workflow'       // lib/orchestra/mastra/
   | 'crewai'                // lib/crewai/
   | 'v2-executor'           // lib/agent/v2-executor.ts
-  | 'agent-team';           // lib/spawn/orchestration/agent-team (multi-agent)
+  | 'agent-team'            // lib/spawn/orchestration/agent-team (multi-agent)
+  | 'auto'                  // Auto-select mode
+  | 'v1-api'                // V1 API mode
+  | 'v1-agent-loop'         // V1 agent loop
+  | 'v1-progressive-build'  // V1 progressive build
+  | 'dual-process'          // Dual process mode
+  | 'execution-controller'  // Execution controller
+  | 'spec:super'            // Spec super mode
+  | 'v2-native'             // V2 native mode
+  | 'v2-containerized'       // V2 containerized mode
+  | 'v2-local'              // V2 local mode
+  | 'attractor-driven'      // Attractor-driven mode
+  | 'intent-driven'        // Intent-driven mode
+  | 'energy-driven'        // Energy-driven mode
+  | 'cognitive-resonance'  // Cognitive resonance mode
+  | 'adversarial-verify'   // Adversarial verification mode
+  | 'distributed-cognition'; // Distributed cognition mode
 
 export interface OrchestrationModeConfig {
   mode: OrchestrationMode;
@@ -45,7 +61,7 @@ interface OrchestrationModeContextType {
 }
 
 const DEFAULT_CONFIG: OrchestrationModeConfig = {
-  mode: 'task-router',  // Keep current default
+  mode: 'auto',  // Uses unified-agent-service.ts AGENT_EXECUTION_ENGINE default
   autoApply: false,
   streamEnabled: true,
 };
@@ -66,6 +82,22 @@ const VALID_MODES = new Set<OrchestrationMode>([
   'crewai',
   'v2-executor',
   'agent-team',
+  'auto',
+  'v1-api',
+  'v1-agent-loop',
+  'v1-progressive-build',
+  'dual-process',
+  'execution-controller',
+  'spec:super',
+  'v2-native',
+  'v2-containerized',
+  'v2-local',
+  'attractor-driven',
+  'intent-driven',
+  'energy-driven',
+  'cognitive-resonance',
+  'adversarial-verify',
+  'distributed-cognition',
 ]);
 
 /**

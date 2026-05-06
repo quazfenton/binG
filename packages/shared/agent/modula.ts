@@ -41,6 +41,7 @@ async function hashTask(content: string): Promise<string> {
 }
 
 export type OrchestrationMode =
+  | 'auto'
   | 'task-router'
   | 'unified-agent'
   | 'stateful-agent'
@@ -239,37 +240,62 @@ export async function executeWithOrchestrationMode(
 
     switch (mode) {
       // ========================================================================
-      // TASK ROUTER (Default)
+      // AUTO MODE - Uses unified-agent-service.ts AGENT_EXECUTION_ENGINE auto-detection
       // ========================================================================
-      case 'task-router': {
-        const { taskRouter } = await import('@bing/shared/agent/task-router');
+      case 'auto':
+      {
+        const { processUnifiedAgentRequest } = await import('@/lib/orchestra/unified-agent-service');
 
-        // ownerId and sessionId already validated at function entry
-        const taskResult = await taskRouter.executeTask({
-          task: request.task,
-          id: request.sessionId,
+        const autoResult = await processUnifiedAgentRequest({
+          userMessage: request.task,
           userId: request.ownerId,
           conversationId: request.sessionId,
-          
+          mode: 'auto', // Uses AGENT_EXECUTION_ENGINE auto-detection
         });
 
         result = {
-        success: taskResult.success,
-        response: taskResult.response,
-        steps: taskResult.steps,
-        metadata: {
-        agentType: 'task-router',
-        routingTarget: taskResult.target,
-        duration: Date.now() - startTime,
-        },
+          success: autoResult.success,
+          response: autoResult.response,
+          steps: autoResult.steps,
+          metadata: {
+            agentType: 'unified-agent',
+            mode: autoResult.mode,
+            duration: Date.now() - startTime,
+          },
         };
         break;
       }
 
       // ========================================================================
-      // UNIFIED AGENT SERVICE
+      // UNIFIED AGENT SERVICE (explicit)
       // ========================================================================
       case 'unified-agent': {
+        const { processUnifiedAgentRequest } = await import('@/lib/orchestra/unified-agent-service');
+
+        const unifiedResult = await processUnifiedAgentRequest({
+          userMessage: request.task,
+          userId: request.ownerId,
+          conversationId: request.sessionId,
+          mode: 'auto', // Uses AGENT_EXECUTION_ENGINE auto-detection
+        });
+
+        result = {
+          success: unifiedResult.success,
+          response: unifiedResult.response,
+          steps: unifiedResult.steps,
+          metadata: {
+            agentType: 'unified-agent',
+            mode: unifiedResult.mode,
+            duration: Date.now() - startTime,
+          },
+        };
+        break;
+      }
+
+      // ========================================================================
+      // TASK ROUTER (Default)
+      // ========================================================================
+      case 'task-router': {
         const { processUnifiedAgentRequest } = await import('@/lib/orchestra/unified-agent-service');
 
         const modeConfig = (request as any).modeConfig as ModeConfig | undefined;
@@ -1228,6 +1254,49 @@ export async function executeWithOrchestrationMode(
         steps: unifiedResult.steps,
         error: unifiedResult.error,
         metadata: { agentType: mode, duration: Date.now() - startTime },
+        };
+        break;
+      }
+
+      // ========================================================================
+      // ADVANCED MODES - delegate to unified-agent-service.ts
+      // ========================================================================
+      case 'attractor-driven':
+      case 'intent-driven':
+      case 'energy-driven': {
+        const { processUnifiedAgentRequest } = await import('@/lib/orchestra/unified-agent-service');
+        const unifiedResult = await processUnifiedAgentRequest({
+          userMessage: request.task,
+          userId: request.ownerId,
+          conversationId: request.sessionId,
+          sandboxId: request.sessionId,
+          mode: mode as any,
+        });
+        result = {
+          success: unifiedResult.success,
+          response: unifiedResult.response,
+          steps: unifiedResult.steps,
+          error: unifiedResult.error,
+          metadata: { agentType: mode, duration: Date.now() - startTime },
+        };
+        break;
+      }
+
+      case 'execution-controller': {
+        const { processUnifiedAgentRequest } = await import('@/lib/orchestra/unified-agent-service');
+        const unifiedResult = await processUnifiedAgentRequest({
+          userMessage: request.task,
+          userId: request.ownerId,
+          conversationId: request.sessionId,
+          sandboxId: request.sessionId,
+          mode: 'execution-controller',
+        });
+        result = {
+          success: unifiedResult.success,
+          response: unifiedResult.response,
+          steps: unifiedResult.steps,
+          error: unifiedResult.error,
+          metadata: { agentType: mode, duration: Date.now() - startTime },
         };
         break;
       }

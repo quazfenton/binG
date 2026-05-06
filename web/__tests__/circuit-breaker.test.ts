@@ -27,17 +27,17 @@ describe('CircuitBreaker', () => {
   describe('execute', () => {
     it('should execute successful operation in CLOSED state', async () => {
       const result = await breaker.execute(async () => 'success');
-      
+
       expect(result).toBe('success');
-      expect(breaker.getState()).toBe('CLOSED');
+      expect(breaker.getState()).toBe('HEALTHY');
     });
 
     it('should handle failed operation', async () => {
       await expect(
         breaker.execute(async () => { throw new Error('Test error'); })
       ).rejects.toThrow('Test error');
-      
-      expect(breaker.getState()).toBe('CLOSED');
+
+      expect(breaker.getState()).toBe('HEALTHY');
     });
 
     it('should open circuit after threshold failures', async () => {
@@ -96,7 +96,7 @@ describe('CircuitBreaker', () => {
       await breaker.execute(async () => 'success 1');
       await breaker.execute(async () => 'success 2');
       
-      expect(breaker.getState()).toBe('CLOSED');
+      expect(breaker.getState()).toBe('HEALTHY');
     });
 
     it('should reopen circuit on failure in HALF-OPEN', async () => {
@@ -150,7 +150,7 @@ describe('CircuitBreaker', () => {
       // Reset
       breaker.reset();
 
-      expect(breaker.getState()).toBe('CLOSED');
+      expect(breaker.getState()).toBe('HEALTHY');
       // Note: reset() clears state but may not reset stats
       expect(breaker.getStats().failedRequests).toBeGreaterThanOrEqual(0);
     });
@@ -287,7 +287,7 @@ describe('CircuitBreakerManager', () => {
       manager.remove('provider-1');
       
       const breaker = manager.getBreaker('provider-1');
-      expect(breaker.getState()).toBe('CLOSED'); // New breaker
+      expect(breaker.getState()).toBe('HEALTHY'); // New breaker
     });
   });
 });
