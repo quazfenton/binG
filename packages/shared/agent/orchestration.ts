@@ -279,6 +279,20 @@ export {
 } from '@/lib/orchestra/reflection-engine';
 
 // ============================================================================
+// Progress Emitter
+// ============================================================================
+
+export {
+  emitOrchestrationProgress,
+  emitStepProgress,
+  emitNodeStatus,
+  emitRetryError,
+  emitHITLRequest,
+  emitNodeCommunication,
+  type OrchestrationProgressUpdate,
+} from './progress-emitter';
+
+// ============================================================================
 // Simulated Orchestration (Deprecated)
 // ============================================================================
 

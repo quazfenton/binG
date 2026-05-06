@@ -1452,7 +1452,7 @@ export default function Settings({
               </div>
               
               <div className="grid grid-cols-3 gap-1 mb-2">
-                {(['auto', 'v1-api', 'v1-agent-loop', 'v1-progressive-build', 'dual-process', 'execution-controller', 'spec:super', 'v2-native', 'v2-containerized', 'v2-local', 'unified-agent', 'stateful-agent', 'mastra-workflow', 'agent-loop', 'task-router', 'opencode-sdk', 'crewai', 'v2-executor', 'agent-team', 'attractor-driven', 'intent-driven', 'energy-driven', 'cognitive-resonance', 'adversarial-verify', 'distributed-cognition'] as const).map((mode) => {
+                {(['auto', 'v1-api', 'v1-agent-loop', 'v1-progressive-build', 'dual-process', 'execution-controller', 'spec:super', 'spec:maximal', 'v2-native', 'v2-containerized', 'v2-local', 'unified-agent', 'stateful-agent', 'mastra-workflow', 'mastra:code-agent', 'mastra:research', 'mastra:parallel', 'mastra:data-analysis', 'mastra:hitl', 'agent-loop', 'task-router', 'opencode-sdk', 'crewai', 'crewai:role-agent', 'crewai:swarm', 'crewai:streaming', 'v2-executor', 'agent-team', 'attractor-driven', 'intent-driven', 'energy-driven', 'cognitive-resonance', 'cognitive:converged', 'adversarial-verify', 'adversarial:revised', 'distributed-cognition', 'distributed:no-synthesis'] as const).map((mode) => {
                   return (
                     <button
                       key={mode}

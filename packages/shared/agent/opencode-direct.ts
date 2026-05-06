@@ -196,8 +196,10 @@ export async function runOpenCodeDirect(options: OpenCodeDirectOptions): Promise
 
   // Sync from sandbox to VFS
   try {
-    const { agentFSBridge } = await import('./agent-fs-bridge');
-    await agentFSBridge.syncFromSandbox(userId, conversationId);
+    if (session.sandboxHandle?.id) {
+      const { sandboxFilesystemSync } = await import('@/lib/virtual-filesystem/sync/sandbox-filesystem-sync');
+      await sandboxFilesystemSync.syncSandboxToVFS(session.sandboxHandle.id, userId);
+    }
   } catch (syncError) {
     logger.warn('Sync from sandbox failed', { error: syncError });
   }
