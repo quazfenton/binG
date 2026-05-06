@@ -1,29 +1,29 @@
 import { NextRequest } from 'next/server';
 
 // Import all existing handlers
-import { GET as arcadeAuthorizeGET } from './arcade/authorize/gateway';
-import { GET as arcadeVerifierGET } from './arcade/custom-verifier/gateway';
-import { POST as checkAuth0POST } from './check-auth0-session/gateway';
-import { POST as checkEmailPOST } from './check-email/gateway';
-import { GET as confirmResetGET, POST as confirmResetPOST } from './confirm-reset/gateway';
-import { POST as loginPOST } from './login/gateway';
-import { POST as logoutPOST } from './logout/gateway';
-import { GET as meGET } from './me/gateway';
-import { POST as mfaChallengePOST } from './mfa/challenge/gateway';
-import { POST as mfaDisablePOST } from './mfa/disable/gateway';
-import { POST as mfaSetupPOST } from './mfa/setup/gateway';
-import { POST as mfaVerifyPOST } from './mfa/verify/gateway';
-import { GET as nangoAuthorizeGET } from './nango/authorize/gateway';
-import { GET as oauthCallbackGET } from './oauth/callback/gateway';
-import { GET as oauthErrorGET } from './oauth/error/gateway';
-import { GET as oauthInitiateGET } from './oauth/initiate/gateway';
-import { GET as oauthSuccessGET } from './oauth/success/gateway';
-import { POST as refreshPOST } from './refresh/gateway';
-import { POST as resetPasswordPOST } from './reset-password/gateway';
-import { POST as sendVerificationPOST } from './send-verification/gateway';
-import { GET as sessionGET } from './session/gateway';
-import { GET as validateGET, POST as validatePOST } from './validate/gateway';
-import { GET as verifyEmailGET } from './verify-email/gateway';
+import { GET as arcadeAuthorizeGET } from './arcade/authorize/route';
+import { GET as arcadeVerifierGET } from './arcade/custom-verifier/route';
+import { POST as checkAuth0POST } from './check-auth0-session/route';
+import { POST as checkEmailPOST } from './check-email/route';
+import { GET as confirmResetGET, POST as confirmResetPOST } from './confirm-reset/route';
+import { POST as loginPOST } from './login/route';
+import { POST as logoutPOST } from './logout/route';
+import { GET as meGET } from './me/route';
+import { POST as mfaChallengePOST } from './mfa/challenge/route';
+import { POST as mfaDisablePOST } from './mfa/disable/route';
+import { POST as mfaSetupPOST } from './mfa/setup/route';
+import { POST as mfaVerifyPOST } from './mfa/verify/route';
+import { GET as nangoAuthorizeGET } from './nango/authorize/route';
+import { GET as oauthCallbackGET } from './oauth/callback/route';
+import { GET as oauthErrorGET } from './oauth/error/route';
+import { GET as oauthInitiateGET } from './oauth/initiate/route';
+import { GET as oauthSuccessGET } from './oauth/success/route';
+import { POST as refreshPOST } from './refresh/route';
+import { POST as resetPasswordPOST } from './reset-password/route';
+import { POST as sendVerificationPOST } from './send-verification/route';
+import { GET as sessionGET } from './session/route';
+import { GET as validateGET, POST as validatePOST } from './validate/route';
+import { GET as verifyEmailGET } from './verify-email/route';
 
 /**
  * Consolidated auth route

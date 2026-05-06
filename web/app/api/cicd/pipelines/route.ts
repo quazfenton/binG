@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
+
+
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 
 export async function GET(req: NextRequest) {

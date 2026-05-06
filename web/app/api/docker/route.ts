@@ -1,12 +1,12 @@
 import { NextRequest } from 'next/server';
 
 // Import all existing handlers
-import { POST as composePOST } from './compose/gateway';
-import { GET as containersGET } from './containers/gateway';
-import { POST as execPOST } from './exec/gateway';
-import { DELETE as removeDELETE } from './remove/[id]/gateway';
-import { POST as startPOST } from './start/[id]/gateway';
-import { POST as stopPOST } from './stop/[id]/gateway';
+import { POST as composePOST } from './compose/route';
+import { GET as containersGET } from './containers/route';
+import { POST as execPOST } from './exec/route';
+import { DELETE as removeDELETE } from './remove/[id]/route';
+import { POST as startPOST } from './start/[id]/route';
+import { POST as stopPOST } from './stop/[id]/route';
 
 /**
  * Consolidated docker route

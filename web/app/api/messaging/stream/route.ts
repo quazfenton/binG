@@ -1,5 +1,7 @@
 import { NextRequest } from 'next/server';
 
+
+
 export async function GET(req: NextRequest) {
   const email = req.nextUrl.searchParams.get('email');
   if (!email) return new Response("Missing email", { status: 400 });

@@ -13,9 +13,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 // Import handlers from existing route files
-import { GET as feedGET, POST as feedPOST } from './main';
-import { GET as rssGET, POST as rssPOST } from './rss/gateway';
-import { GET as imageSearchGET, POST as imageSearchPOST } from './image-search/gateway';
+import { GET as feedGET, POST as feedPOST } from './route';
+import { GET as rssGET, POST as rssPOST } from './rss/route';
+import { GET as imageSearchGET, POST as imageSearchPOST } from './image-search/route';
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
