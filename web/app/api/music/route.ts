@@ -49,3 +49,4 @@ export async function GET(request: NextRequest) {
   // /api/music — root handler
   return rootGET(request);
 }
+
