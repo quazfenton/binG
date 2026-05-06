@@ -1,6 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-
-
 import { getLocalUserIdFromAuth0, mapAuth0UserId } from '@/lib/oauth/connections';
 import { saveConnectedAccount } from '@/lib/auth0';
 

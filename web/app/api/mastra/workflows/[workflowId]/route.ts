@@ -9,8 +9,6 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
-
-
 // Lazy load Mastra to avoid build-time initialization
 let _mastra: any = null;
 

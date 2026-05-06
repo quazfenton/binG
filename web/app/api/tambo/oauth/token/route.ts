@@ -9,8 +9,6 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-
-
 import { verify } from 'jsonwebtoken';
 
 interface TokenExchangeRequest {

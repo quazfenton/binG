@@ -8,8 +8,6 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-
-
 import { e2bDesktopProvider } from '@/lib/computer/e2b-desktop-provider-enhanced';
 import { verifyToken } from '@/lib/security/jwt-auth';
 import { activeDesktops } from '../active-desktops';

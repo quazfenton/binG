@@ -15,11 +15,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 // Import handlers from existing route files
-import { GET as listGET, POST as createPOST } from './list';
-import { GET as statsGET } from './stats/route';
-import { GET as chainsGET } from './chains/route';
-import { GET as chainByIdGET } from './chains/[id]/route';
-import { GET as getMindMapGET, PUT as updateMindMapPUT, DELETE as deleteMindMapDELETE } from './[id]/route';
+import { GET as listGET, POST as createPOST } from './main';
+import { GET as statsGET } from './stats/gateway';
+import { GET as chainsGET } from './chains/gateway';
+import { GET as chainByIdGET } from './chains/[id]/gateway';
+import { GET as getMindMapGET, PUT as updateMindMapPUT, DELETE as deleteMindMapDELETE } from './[id]/gateway';
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);

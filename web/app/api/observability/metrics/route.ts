@@ -8,8 +8,6 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-
-
 import { getPrometheusMetrics } from '@/lib/observability';
 
 /**

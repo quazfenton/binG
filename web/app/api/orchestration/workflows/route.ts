@@ -7,30 +7,24 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { createLogger } from '@/lib/utils/logger';
-import { mastraWorkflowIntegration } from '@bing/shared/agent/mastra-workflow-integration';
 
 const logger = createLogger('API:Orchestration:Workflows');
 
 // GET - List workflows
-export async function GET(request: NextRequest) {
+export async function GET() {
   try {
-    const { searchParams } = new URL(request.url);
-    const status = searchParams.get('status');
-    
-    const proposals = mastraWorkflowIntegration.listProposals({ status: status as any });
-    const workflows = proposals.map(p => ({
-      id: p.id,
-      title: p.title,
-      description: p.description,
-      status: p.status,
-      createdAt: p.createdAt,
-    }));
+    // TODO: Re-implement when agent orchestrator is available
+    /*
+    const workflows = await getWorkflows();
 
     return NextResponse.json({
       success: true,
       workflows,
       count: workflows.length,
     });
+    */
+
+    return NextResponse.json({ error: 'This endpoint is not implemented' }, { status: 501 });
   } catch (error: any) {
     logger.error('Failed to get workflows:', error);
     return NextResponse.json(
@@ -48,27 +42,21 @@ export async function POST(
   try {
     const { id } = await params;
     const body = await request.json().catch(() => ({}));
-    const { task, ownerId } = body;
+    const { params: workflowParams } = body;
 
-    if (!task) {
-      return NextResponse.json(
-        { error: 'Task is required' },
-        { status: 400 }
-      );
-    }
+    // TODO: Re-implement when agent orchestrator is available
+    /*
+    const result = await executeWorkflow(id) as any;
 
-    const result = await mastraWorkflowIntegration.executeWorkflow('code-agent', {
-      task,
-      ownerId: ownerId || 'unknown',
-    });
-
-    logger.info('Workflow executed:', { workflowId: id, success: result.success });
+    logger.info('Workflow executed:', { workflowId: id, executionId: result.executionId });
 
     return NextResponse.json({
-      success: result.success,
-      result: result.result,
-      workflowId: id,
+      success: true,
+      ...result,
     });
+    */
+
+    return NextResponse.json({ error: 'This endpoint is not implemented' }, { status: 501 });
   } catch (error: any) {
     logger.error('Failed to execute workflow:', error);
     return NextResponse.json(

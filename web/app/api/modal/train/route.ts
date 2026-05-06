@@ -1,6 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-
-
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 
 type TrainBody = {

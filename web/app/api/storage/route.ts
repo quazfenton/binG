@@ -1,12 +1,12 @@
 import { NextRequest } from 'next/server';
 
 // Import all existing handlers
-import { GET as usageGET } from './usage/route';
-import { POST as uploadPOST } from './upload/route';
-import { GET as signedUrlGET } from './signed-url/route';
-import { GET as listGET } from './list/route';
-import { GET as downloadGET } from './download/route';
-import { DELETE as deleteDELETE } from './delete/route';
+import { GET as usageGET } from './usage/gateway';
+import { POST as uploadPOST } from './upload/gateway';
+import { GET as signedUrlGET } from './signed-url/gateway';
+import { GET as listGET } from './list/gateway';
+import { GET as downloadGET } from './download/gateway';
+import { DELETE as deleteDELETE } from './delete/gateway';
 
 /**
  * Consolidated storage route

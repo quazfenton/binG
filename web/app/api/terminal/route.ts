@@ -1,9 +1,9 @@
 import { NextRequest } from 'next/server';
 
 // Import all existing handlers
-import { POST as inputPOST } from './local-pty/input/route';
-import { POST as resizePOST } from './local-pty/resize/route';
-import { GET as ptyGET, POST as ptyPOST } from './local-pty/route';
+import { POST as inputPOST } from './local-pty/input/gateway';
+import { POST as resizePOST } from './local-pty/resize/gateway';
+import { GET as ptyGET, POST as ptyPOST } from './local-pty/gateway';
 
 /**
  * Consolidated terminal route
