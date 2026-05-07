@@ -33,6 +33,25 @@ The file `web/lib/orchestra/v2-model-config.ts` provides:
 
 **Status: EXISTS BUT NOT INTEGRATED** - needs to be wired into V2 execution paths.
 
+## Engine Integration Complete
+
+All 8 orchestration modes now support engine specification via `execution-engines.ts`:
+
+| Mode | Config Field | Location |
+|------|-------------|-----------|
+| dual-process | `engine`, `fastEngine`, `slowEngine` | ✅ Already done |
+| intent-driven | `engine` | ✅ Done |
+| energy-driven | `engine` | ✅ Done |
+| attractor-driven | `engine` | ✅ Done |
+| cognitive-resonance | `engine` | ✅ Done |
+| distributed-cognition | `engine` | ✅ Done |
+| execution-controller | `engine` | ✅ Done |
+| adversarial-verify | `engine` | ✅ Done |
+
+Each mode now uses:
+- `configureSubCall()` to build sub-call config with engine + matching model
+- `resolveEngine()` to pick engine (override → parent config → env → default)
+
 ### Core Modes (dispatched from unified-agent-service.ts)
 
 | Mode | V1 | V2-CLI | V2-HTTP | V2-Container | Notes |

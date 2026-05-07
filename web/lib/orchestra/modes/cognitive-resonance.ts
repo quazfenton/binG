@@ -28,6 +28,7 @@ import {
   type UnifiedAgentConfig,
   type UnifiedAgentResult,
 } from '../unified-agent-service';
+import { configureSubCall, resolveEngine, type EngineArchitecture } from '../execution-engines';
 
 const log = createLogger('CognitiveResonanceMode');
 
@@ -52,6 +53,8 @@ export interface ResonanceConfig {
   temperatures?: number[];
   /** Max tokens per agent (default: 8192) */
   maxTokens?: number;
+  /** Architecture/engine for agent calls (default: from baseConfig.engine or env) */
+  engine?: EngineArchitecture;
 }
 
 // ─── Diverse System Prompts ────────────────────────────────────────────────
@@ -289,7 +292,8 @@ export async function runCognitiveResonanceMode(
     const temp = temperatures[i % temperatures.length];
     log.info(`[CognitiveResonance] │ Agent ${i}: temp=${temp}`);
 
-    const result = await processUnifiedAgentRequest({
+    const engine = resolveEngine(options.engine, baseConfig.engine);
+    const subCall = configureSubCall({
       ...baseConfig,
       provider: agentProvider,
       model: agentModel,
@@ -297,7 +301,8 @@ export async function runCognitiveResonanceMode(
       temperature: temp,
       maxTokens,
       mode: 'v1-api',
-    });
+    }, engine);
+    const result = await processUnifiedAgentRequest(subCall);
 
     return {
       index: i,
@@ -426,7 +431,8 @@ export async function runCognitiveResonanceMode(
     synthesisContext.slice(0, 12000),
   ].join('\n');
 
-  const synthesisResult = await processUnifiedAgentRequest({
+  const engine = resolveEngine(options.engine, baseConfig.engine);
+  const synthCall = configureSubCall({
     ...baseConfig,
     provider: synthesizerProvider,
     model: synthesizerModel,
@@ -434,7 +440,8 @@ export async function runCognitiveResonanceMode(
     temperature: 0.4,
     maxTokens: maxTokens * 2,
     mode: 'v1-api',
-  });
+  }, engine);
+  const synthesisResult = await processUnifiedAgentRequest(synthCall);
 
   if (synthesisResult.success) {
     log.info('[CognitiveResonance] ✓ Synthesis succeeded');

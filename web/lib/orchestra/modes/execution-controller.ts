@@ -35,6 +35,7 @@ import {
   type UnifiedAgentConfig,
   type UnifiedAgentResult,
 } from '../unified-agent-service';
+import { configureSubCall, resolveEngine, type EngineArchitecture } from '../execution-engines';
 import {
   emitStepProgress,
   emitNodeStatus,
@@ -265,6 +266,8 @@ export interface ExecutionControllerConfig {
   multiPerspectiveEval?: boolean;
   /** Enable final gate check before termination */
   enableFinalGate?: boolean;
+  /** Architecture/engine for LLM calls (default: from baseConfig.engine or env) */
+  engine?: EngineArchitecture;
 }
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -864,10 +867,12 @@ export async function runExecutionControllerMode(
     );
 
     // ── Worker: Execute LLM ──────────────────────────────────────────────
-    const result = await processUnifiedAgentRequest({
+    const engine = resolveEngine(options.engine, baseConfig.engine);
+    const subCall = configureSubCall({
       ...baseConfig,
       mode: 'v1-api',
-    });
+    }, engine);
+    const result = await processUnifiedAgentRequest(subCall);
 
     if (!result.success) {
       log.info(`[ExecutionController] ✗ Cycle ${cycleCount} failed`, { error: result.error });

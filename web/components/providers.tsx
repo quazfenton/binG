@@ -5,6 +5,7 @@ import { AuthProvider } from '@/contexts/auth-context';
 import { TamboContextProvider } from '@/contexts/tambo-context';
 import { PanelProvider } from '@/contexts/panel-context';
 import { OrchestrationModeProvider } from '@/contexts/orchestration-mode-context';
+import { AgentEngineProvider } from '@/contexts/agent-engine-context';
 import { SpecEnhancementModeProvider } from '@/contexts/spec-enhancement-mode-context';
 import { createLogger } from '@/lib/utils/logger';
 import { tauriFetch } from '@/lib/tauri-api-adapter';
@@ -45,9 +46,11 @@ export function Providers({ children }: { children: React.ReactNode }) {
       <TamboContextProvider>
         <PanelProvider>
           <OrchestrationModeProvider>
-            <SpecEnhancementModeProvider>
-              {children}
-            </SpecEnhancementModeProvider>
+            <AgentEngineProvider>
+              <SpecEnhancementModeProvider>
+                {children}
+              </SpecEnhancementModeProvider>
+            </AgentEngineProvider>
           </OrchestrationModeProvider>
         </PanelProvider>
       </TamboContextProvider>

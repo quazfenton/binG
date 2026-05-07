@@ -1,6 +1,6 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 import { GET as prewarmGET } from './gateway';
 
-export async function GET(request: NextRequest) {
-  return prewarmGET(request);
+export async function GET() {
+  return prewarmGET();
 }

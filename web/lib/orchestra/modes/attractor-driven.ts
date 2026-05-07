@@ -245,12 +245,14 @@ export async function runAttractorDrivenMode(
       attractors,
     );
 
-    // Run LLM
-    const result = await processUnifiedAgentRequest({
+    // Run LLM with engine override
+    const engine = resolveEngine(options.engine, baseConfig.engine);
+    const subCall = configureSubCall({
       ...baseConfig,
       systemPrompt,
       mode: 'v1-api',
-    });
+    }, engine);
+    const result = await processUnifiedAgentRequest(subCall);
 
     if (!result.success) {
       log.info(`[AttractorDriven] ✗ Iteration ${iter} failed`, { error: result.error });
