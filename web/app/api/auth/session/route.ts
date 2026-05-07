@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { GET as prewarmGET } from './gateway';
+import { GET as sessionGET } from './gateway';
 
 export async function GET(request: NextRequest) {
-  return prewarmGET(request);
+  return sessionGET(request);
 }

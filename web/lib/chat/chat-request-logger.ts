@@ -154,8 +154,10 @@ export class ChatRequestLogger {
     if (!this.db) return;
 
     try {
+      // Use INSERT OR REPLACE so that re-logging the same requestId updates the row
+      // (id is the PRIMARY KEY, so OR REPLACE correctly handles re-runs)
       const stmt = this.db.prepare(`
-        INSERT OR IGNORE INTO chat_request_logs
+        INSERT OR REPLACE INTO chat_request_logs
         (id, user_id, provider, model, message_count, request_size, streaming, created_at, metadata)
         VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
       `);
@@ -173,9 +175,7 @@ export class ChatRequestLogger {
         metadata ? JSON.stringify(metadata) : null
       );
     } catch (error: any) {
-      if (error?.code !== 'SQLITE_CONSTRAINT_PRIMARYKEY') {
-        console.error('[ChatRequestLogger] Failed to log request start:', error);
-      }
+      console.error('[ChatRequestLogger] Failed to log request start:', error);
     }
   }
 
@@ -206,13 +206,11 @@ export class ChatRequestLogger {
     // This ensures the circuit breaker and rotation tracking are updated
     // even for streaming requests that fail before completion
       const isRateLimitError = error && /429|rate.limit|too many requests|quota exceeded/i.test(error);
-      const finalProvider = actualProvider;
-      const finalModel = actualModel;
 
     // FIX: Track rate limit errors immediately (before the DB write)
     // This ensures rotation tracking and circuit breaker are updated
-    if (isRateLimitError && finalProvider && finalModel && finalModel !== 'unknown') {
-      recordRateLimitErrorAsync(finalProvider, finalModel).catch(() => {
+    if (isRateLimitError && actualProvider && actualModel && actualModel !== 'unknown') {
+      recordRateLimitErrorAsync(actualProvider, actualModel).catch(() => {
         // Non-fatal - don't fail logging due to rate limit tracking
       });
     }
@@ -307,11 +305,9 @@ export class ChatRequestLogger {
        // CRITICAL: Record model attempt for rotation tracking
        // This allows the model-ranker to prefer untested models over stuck ones
        // Using dynamic import to avoid circular dependency with model-ranker
-       const finalProvider = actualProvider;
-       const finalModel = actualModel;
-       if (finalProvider && finalModel && finalModel !== 'unknown') {
+       if (actualProvider && actualModel && actualModel !== 'unknown') {
          // Dynamic import to avoid circular dependency
-         recordModelAttemptAsync(finalProvider, finalModel, success).catch(() => {
+         recordModelAttemptAsync(actualProvider, actualModel, success).catch(() => {
            // Non-fatal - don't fail logging due to rotation tracking
          });
       }

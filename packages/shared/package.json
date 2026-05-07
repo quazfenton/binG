@@ -3,7 +3,9 @@
   "version": "1.0.0",
   "exports": {
     "./agent": "./agent/index.ts",
-    "./agent/*": "./agent/*"
+    "./agent/*": "./agent/*",
+    "./FS": "./FS/index.ts",
+    "./FS/*": "./FS/*"
   },
   "peerDependencies": {
     "typescript": "^5.0.0"

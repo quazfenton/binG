@@ -46,17 +46,27 @@ The file `web/lib/orchestra/v2-model-config.ts` provides:
 ### Extended Modes 
 (all currently use processUnifiedAgentRequest from unified-agent-service.ts internally but this may possibly be abstracted to enable v2)
 
+> **Update (now implemented for `dual-process`)**: extended/orchestration modes now accept an
+> `engine` field (or `fastEngine`/`slowEngine` for split-path modes) that decouples
+> orchestration from architecture. Sub-calls go through `configureSubCall()` in
+> [`web/lib/orchestra/execution-engines.ts`](../../web/lib/orchestra/execution-engines.ts), so the same orchestration shape
+> can run on V1 LLM API calls or any V2 engine (CLI / HTTP-SDK / container). The other
+> orchestration modes (intent-driven, energy-driven, attractor-driven,
+> cognitive-resonance, distributed-cognition, execution-controller, adversarial-verify)
+> follow the exact same wiring pattern — replace each `processUnifiedAgentRequest({...,
+> mode: 'v1-api'})` call with `configureSubCall(...)`.
+
 | Mode | V1 | V2 | Notes |
 |------|:--:|:--:|-------|
 | `stateful-agent` | ✅ | ❌ | Via V1 pipeline internally |
-| `dual-process` | ✅ | ❌ | Fast/slow split via V1 |
-| `intent-driven` | ✅ | ❌ | Intent field via V1 |
-| `energy-driven` | ✅ | ❌ | Energy function via V1 |
-| `attractor-driven` | ✅ | ❌ | Attractor field via V1 |
-| `cognitive-resonance` | ✅ | ❌ | Multi-model agreement via V1 |
-| `distributed-cognition` | ✅ | ❌ | Role-based via V1 |
-| `execution-controller` | ✅ | ❌ | Self-correcting loop via V1 |
-| `adversarial-verify` | ✅ | ❌ | Critic spawning via V1 |
+| `dual-process` | ✅ | ✅ | Pass `engine`/`fastEngine`/`slowEngine` in `dualProcessConfig` |
+| `intent-driven` | ✅ | ⚠️ | Same pattern available, not yet wired |
+| `energy-driven` | ✅ | ⚠️ | Same pattern available, not yet wired |
+| `attractor-driven` | ✅ | ⚠️ | Same pattern available, not yet wired |
+| `cognitive-resonance` | ✅ | ⚠️ | Same pattern available, not yet wired |
+| `distributed-cognition` | ✅ | ⚠️ | Same pattern available, not yet wired |
+| `execution-controller` | ✅ | ⚠️ | Same pattern available, not yet wired |
+| `adversarial-verify` | ✅ | ⚠️ | Same pattern available, not yet wired |
 | `mastra-workflow` | ✅ | ❌ | Config-based models |
 
 ## Mode Selection Guidance

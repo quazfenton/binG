@@ -32,6 +32,7 @@ import {
   type UnifiedAgentConfig,
   type UnifiedAgentResult,
 } from '../unified-agent-service';
+import { configureSubCall, resolveEngine, type EngineArchitecture } from '../execution-engines';
 
 const log = createLogger('AttractorDrivenMode');
 
@@ -61,6 +62,8 @@ export interface AttractorConfig {
   lowThreshold?: number;
   /** Maximum iterations before forced stop (default: 6) */
   maxIterations?: number;
+  /** Architecture/engine for LLM calls (default: from baseConfig.engine or env) */
+  engine?: EngineArchitecture;
 }
 
 // ─── Attractor Definition ──────────────────────────────────────────────────

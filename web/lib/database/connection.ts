@@ -183,7 +183,7 @@ export function resetMockDatabase(): void {
 }
 
 // In-memory schema for mock database (split into individual CREATE statements for reliable parsing)
-const MOCK_SCHEMA = `CREATE TABLE IF NOT EXISTS vfs_workspace_meta (id INTEGER PRIMARY KEY AUTOINCREMENT, owner_id TEXT UNIQUE NOT NULL, version INTEGER DEFAULT 1, root TEXT NOT NULL DEFAULT '/', created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP, last_accessed_at TEXT); CREATE TABLE IF NOT EXISTS vfs_workspace_files (id INTEGER PRIMARY KEY AUTOINCREMENT, owner_id TEXT NOT NULL, path TEXT NOT NULL, content TEXT, content_hash TEXT, size INTEGER DEFAULT 0, is_directory INTEGER DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP, UNIQUE(owner_id, path)); CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL, username TEXT, password_hash TEXT, is_active INTEGER DEFAULT 1, created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP, email_verified INTEGER DEFAULT 0, email_verification_token_hash TEXT, email_verification_expires TEXT, subscription_tier TEXT DEFAULT 'free', token_version INTEGER DEFAULT 1); CREATE TABLE IF NOT EXISTS user_sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT UNIQUE NOT NULL, user_id TEXT NOT NULL, expires_at TEXT NOT NULL, ip_address TEXT, user_agent TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE); CREATE TABLE IF NOT EXISTS api_credentials (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, provider TEXT NOT NULL, api_key_encrypted TEXT NOT NULL, api_key_hash TEXT, is_active INTEGER DEFAULT 1, updated_at TEXT DEFAULT CURRENT_TIMESTAMP, created_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE, UNIQUE(user_id, provider)); CREATE TABLE IF NOT EXISTS external_connections (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, provider TEXT NOT NULL, access_token_encrypted TEXT NOT NULL, refresh_token_encrypted TEXT, token_expires_at TEXT, is_active INTEGER DEFAULT 1, updated_at TEXT DEFAULT CURRENT_TIMESTAMP, created_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE, UNIQUE(user_id, provider)); CREATE TABLE IF NOT EXISTS conversations (id TEXT PRIMARY KEY, user_id TEXT, title TEXT, is_archived INTEGER DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL); CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, provider TEXT, model TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE); CREATE TABLE IF NOT EXISTS user_preferences (user_id TEXT NOT NULL, preference_key TEXT NOT NULL, preference_value TEXT, updated_at TEXT DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (user_id, preference_key), FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE); CREATE TABLE IF NOT EXISTS usage_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, provider TEXT NOT NULL, model TEXT NOT NULL, tokens_used INTEGER DEFAULT 0, cost_usd REAL DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL); CREATE TABLE IF NOT EXISTS oauth_sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT UNIQUE NOT NULL, user_id TEXT NOT NULL, provider TEXT NOT NULL, redirect_uri TEXT, state TEXT, expires_at TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE); CREATE TABLE IF NOT EXISTS service_permissions (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, service TEXT NOT NULL, permission TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE, UNIQUE(user_id, service, permission)); CREATE TABLE IF NOT EXISTS token_refresh_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, provider TEXT NOT NULL, success INTEGER DEFAULT 0, error_message TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE); CREATE TABLE IF NOT EXISTS sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT UNIQUE NOT NULL, user_id TEXT, workspace_path TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, expires_at TEXT); CREATE TABLE IF NOT EXISTS shadow_commits (id INTEGER PRIMARY KEY AUTOINCREMENT, file_path TEXT NOT NULL, content TEXT, commit_hash TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP); CREATE TABLE IF NOT EXISTS skills (id INTEGER PRIMARY KEY AUTOINCREMENT, skill_name TEXT UNIQUE NOT NULL, enabled INTEGER DEFAULT 1, config TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP); CREATE TABLE IF NOT EXISTS email_provider_quotas (id INTEGER PRIMARY KEY AUTOINCREMENT, provider TEXT NOT NULL, daily_limit INTEGER DEFAULT 100, used_today INTEGER DEFAULT 0, reset_date TEXT, UNIQUE(provider)); CREATE TABLE IF NOT EXISTS fs_edit_transactions (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, conversation_id TEXT NOT NULL, request_id TEXT NOT NULL, created_at TEXT NOT NULL, status TEXT NOT NULL, operations_json TEXT, errors_json TEXT, denied_reason TEXT, updated_at TEXT DEFAULT CURRENT_TIMESTAMP); CREATE TABLE IF NOT EXISTS fs_edit_denials (id INTEGER PRIMARY KEY AUTOINCREMENT, transaction_id TEXT NOT NULL, conversation_id TEXT NOT NULL, reason TEXT NOT NULL, paths_json TEXT NOT NULL);`;
+const MOCK_SCHEMA = `CREATE TABLE IF NOT EXISTS vfs_workspace_meta (id INTEGER PRIMARY KEY AUTOINCREMENT, owner_id TEXT UNIQUE NOT NULL, version INTEGER DEFAULT 1, root TEXT NOT NULL DEFAULT '/', created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP, last_accessed_at TEXT); CREATE TABLE IF NOT EXISTS vfs_workspace_files (id INTEGER PRIMARY KEY AUTOINCREMENT, owner_id TEXT NOT NULL, path TEXT NOT NULL, content TEXT, content_hash TEXT, size INTEGER DEFAULT 0, is_directory INTEGER DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP, UNIQUE(owner_id, path)); CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL, username TEXT, password_hash TEXT, is_active INTEGER DEFAULT 1, created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP, email_verified INTEGER DEFAULT 0, email_verification_token_hash TEXT, email_verification_expires TEXT, subscription_tier TEXT DEFAULT 'free', token_version INTEGER DEFAULT 1); CREATE TABLE IF NOT EXISTS user_sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT UNIQUE NOT NULL, user_id TEXT NOT NULL, expires_at TEXT NOT NULL, ip_address TEXT, user_agent TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE); CREATE TABLE IF NOT EXISTS api_credentials (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, provider TEXT NOT NULL, api_key_encrypted TEXT NOT NULL, api_key_hash TEXT, is_active INTEGER DEFAULT 1, updated_at TEXT DEFAULT CURRENT_TIMESTAMP, created_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE, UNIQUE(user_id, provider)); CREATE TABLE IF NOT EXISTS external_connections (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, provider TEXT NOT NULL, access_token_encrypted TEXT NOT NULL, refresh_token_encrypted TEXT, token_expires_at TEXT, is_active INTEGER DEFAULT 1, updated_at TEXT DEFAULT CURRENT_TIMESTAMP, created_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE, UNIQUE(user_id, provider)); CREATE TABLE IF NOT EXISTS conversations (id TEXT PRIMARY KEY, user_id TEXT, title TEXT, is_archived INTEGER DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL); CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, provider TEXT, model TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE); CREATE TABLE IF NOT EXISTS user_preferences (user_id TEXT NOT NULL, preference_key TEXT NOT NULL, preference_value TEXT, updated_at TEXT DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (user_id, preference_key), FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE); CREATE TABLE IF NOT EXISTS usage_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, provider TEXT NOT NULL, model TEXT NOT NULL, tokens_used INTEGER DEFAULT 0, cost_usd REAL DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL); CREATE TABLE IF NOT EXISTS oauth_sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT UNIQUE NOT NULL, user_id TEXT NOT NULL, provider TEXT NOT NULL, redirect_uri TEXT, state TEXT, expires_at TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE); CREATE TABLE IF NOT EXISTS service_permissions (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, service TEXT NOT NULL, permission TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE, UNIQUE(user_id, service, permission)); CREATE TABLE IF NOT EXISTS token_refresh_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, provider TEXT NOT NULL, success INTEGER DEFAULT 0, error_message TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE); CREATE TABLE IF NOT EXISTS sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT UNIQUE NOT NULL, user_id TEXT, workspace_path TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, expires_at TEXT); CREATE TABLE IF NOT EXISTS shadow_commits (id INTEGER PRIMARY KEY AUTOINCREMENT, file_path TEXT NOT NULL, content TEXT, commit_hash TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP); CREATE TABLE IF NOT EXISTS skills (id INTEGER PRIMARY KEY AUTOINCREMENT, skill_name TEXT UNIQUE NOT NULL, enabled INTEGER DEFAULT 1, config TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP); CREATE TABLE IF NOT EXISTS email_provider_quotas (id INTEGER PRIMARY KEY AUTOINCREMENT, provider TEXT NOT NULL, daily_limit INTEGER DEFAULT 100, used_today INTEGER DEFAULT 0, reset_date TEXT, UNIQUE(provider)); CREATE TABLE IF NOT EXISTS fs_edit_transactions (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, conversation_id TEXT NOT NULL, request_id TEXT NOT NULL, created_at TEXT NOT NULL, status TEXT NOT NULL, operations_json TEXT, errors_json TEXT, denied_reason TEXT, updated_at TEXT DEFAULT CURRENT_TIMESTAMP); CREATE TABLE IF NOT EXISTS fs_edit_denials (id INTEGER PRIMARY KEY AUTOINCREMENT, transaction_id TEXT NOT NULL, conversation_id TEXT NOT NULL, reason TEXT NOT NULL, paths_json TEXT NOT NULL); CREATE TABLE IF NOT EXISTS chat_request_logs (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL, message_count INTEGER NOT NULL, request_size INTEGER NOT NULL, response_size INTEGER, token_usage_prompt INTEGER, token_usage_completion INTEGER, token_usage_total INTEGER, latency_ms INTEGER, streaming BOOLEAN NOT NULL DEFAULT 0, success BOOLEAN NOT NULL DEFAULT 0, error TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, metadata TEXT); CREATE TABLE IF NOT EXISTS tool_calls (id INTEGER PRIMARY KEY AUTOINCREMENT, model TEXT NOT NULL, provider TEXT NOT NULL, tool_name TEXT NOT NULL, success INTEGER NOT NULL, error TEXT, timestamp INTEGER NOT NULL, conversation_id TEXT, tool_call_id TEXT); CREATE TABLE IF NOT EXISTS hitl_audit_logs (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, action TEXT NOT NULL, target TEXT NOT NULL, reason TEXT NOT NULL, approved BOOLEAN NOT NULL, feedback TEXT, modified_value TEXT, response_time_ms INTEGER, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, metadata TEXT);`;
 
 function getMockDatabase() {
   if (!_mockDatabase) {
@@ -209,6 +209,10 @@ function getMockDatabase() {
         shadow_commits: [],
         skills: [],
         email_provider_quotas: [],
+        // Logging tables (for chat-request-logger tests)
+        chat_request_logs: [],
+        tool_calls: [],
+        hitl_audit_logs: [],
       };
 
       // Initialize tables from schema immediately
@@ -240,14 +244,20 @@ function getMockDatabase() {
        *   - '__EXPR__' for complex expressions like REPLACE(path, ...)
        *   - the literal value for simple literals (numbers, strings)
        */
-      function parseSetPair(pair: string): { col: string; value: any } {
+      // Attach raw SQL value to the result so the caller (UPDATE handler) can inspect it.
+      function parseSetPair(pair: string): { col: string; value: any; rawValue?: string } {
         const eqIdx = pair.indexOf('=');
         if (eqIdx < 0) return { col: pair.trim(), value: null };
         const col = pair.slice(0, eqIdx).trim();
         const valRaw = pair.slice(eqIdx + 1).trim();
 
-        if (valRaw === '?') {
-          return { col, value: '__PLACEHOLDER__' };
+        // Count all ? placeholders in the value — handles simple ? and function calls
+        // like COALESCE(?, x), json(?), json_patch(a, json(?)), REPLACE(?, ...) etc.
+        const placeholderCount = (valRaw.match(/\?/g) || []).length;
+        if (placeholderCount > 0) {
+          // Return special marker so the caller counts all placeholders correctly
+          // value = placeholderCount lets caller do setPlaceholderCount += count
+          return { col, value: '__PLACEHOLDER__', rawValue: valRaw };
         }
         // CURRENT_TIMESTAMP, datetime('now'), strftime('%s', 'now') — all produce current time
         if (/^CURRENT_TIMESTAMP$/i.test(valRaw) || /^datetime\s*\(/i.test(valRaw) || /^strftime\s*\(/i.test(valRaw)) {
@@ -326,7 +336,11 @@ function getMockDatabase() {
                   const cols = colMatch[1].split(',').map((c: string) => c.trim());
                   cols.forEach((col: string, idx: number) => {
                     const colName = col.split('.').pop()?.trim();
-                    mockRow[colName] = params[idx] ?? null;
+                    // Convert undefined to null for proper SQL NULL semantics.
+                    // This matters for COALESCE(?, col) — undefined params should behave
+                    // like SQL NULL, falling back to the existing column value.
+                    const val = params[idx];
+                    mockRow[colName] = val === undefined ? null : (val ?? null);
                   });
                 }
                 
@@ -340,23 +354,45 @@ function getMockDatabase() {
               }
 
               // Handle UPDATE statements
-              if (isUpdate) {
-                // Parse SET clause — extract all column=value pairs
-                // Handles: SET col1 = ?, col2 = CURRENT_TIMESTAMP, col3 = datetime('now'), col4 = 0
-                const setClauseMatch = sql.match(/SET\s+([\s\S]+?)(?:\s+WHERE\s+|$)/i);
+              if (isUpdate) {                  // Parse SET clause — extract all column=value pairs
+                  // Handles: SET col1 = ?, col2 = CURRENT_TIMESTAMP, col3 = datetime('now'), col4 = 0
+                  const setClauseMatch = sql.match(/SET\s+([\s\S]+?)(?:\s+WHERE\s+|$)/i);
                 if (setClauseMatch) {
                   const setClause = setClauseMatch[1];
-                  // Split by comma, but be careful of function calls like datetime('now')
-                  // Strategy: split on commas that are NOT inside parentheses
+                  // Split by comma, but be careful of function calls like COALESCE(a, b), datetime('now'), etc.
+                  // Strategy: split on commas that are at depth 0 AND NOT directly after a '(' (i.e., not
+                  // commas that are function-argument separators). A comma at depth 0 that follows a '('
+                  // means we're inside a function call — keep going.
+                  // Split SET clause into (column, value) pairs, respecting parenthesis nesting
+                  // and not splitting commas that are function-argument separators (comma followed by ')').
                   const setPairs: Array<{ col: string; value: any }> = [];
                   let depth = 0;
                   let segmentStart = 0;
-                  for (let i = 0; i < setClause.length; i++) {
-                    if (setClause[i] === '(') depth++;
-                    else if (setClause[i] === ')') depth--;
-                    else if (setClause[i] === ',' && depth === 0) {
-                      setPairs.push(parseSetPair(setClause.slice(segmentStart, i).trim()));
-                      segmentStart = i + 1;
+                  let idx = 0;
+                  while (idx < setClause.length) {
+                    const ch = setClause[idx];
+                    if (ch === '(') {
+                      depth++;
+                      idx++;
+                    } else if (ch === ')') {
+                      depth--;
+                      idx++;
+                    } else if (ch === ',' && depth === 0) {
+                      // Skip commas that are function-argument separators: look ahead to the
+                      // next non-space character. If it's ')', this comma is inside a function
+                      // call (e.g., COALESCE(?, x) or json_patch(a, b) or COALESCE(a, '{}')).
+                      let aheadIdx = idx + 1;
+                      while (aheadIdx < setClause.length && setClause[aheadIdx] === ' ') aheadIdx++;
+                      const nextChar = setClause[aheadIdx];
+                      if (nextChar === ')') {
+                        idx++;
+                        continue;
+                      }
+                      setPairs.push(parseSetPair(setClause.slice(segmentStart, idx).trim()));
+                      segmentStart = idx + 1;
+                      idx++;
+                    } else {
+                      idx++;
                     }
                   }
                   // Don't forget the last segment
@@ -364,24 +400,67 @@ function getMockDatabase() {
                     setPairs.push(parseSetPair(setClause.slice(segmentStart).trim()));
                   }
 
-                  // Count ? placeholders in SET clause to know how many params belong to SET vs WHERE
+                  // Count ? placeholders in SET clause — needed to know WHERE param indices.
+                  // Scan the raw setClause string and count '?' at depth 0, skipping string literals.
                   let setPlaceholderCount = 0;
-                  for (const pair of setPairs) {
-                    if (pair.value === '__PLACEHOLDER__') setPlaceholderCount++;
+                  let scanDepth = 0;
+                  let inString = false;
+                  for (let scanIdx = 0; scanIdx < setClause.length; scanIdx++) {
+                    const sc = setClause[scanIdx];
+                    if (inString) {
+                      // Track string end: next unescaped single quote ends the string
+                      if (sc === "'") {
+                        // Check if it's escaped (previous char is \)
+                        const prev = setClause[scanIdx - 1];
+                        if (prev !== '\\') {
+                          inString = false;
+                        }
+                      }
+                      continue;
+                    }
+                    if (sc === "'") {
+                      inString = true;
+                    } else if (sc === '(') {
+                      scanDepth++;
+                    } else if (sc === ')') {
+                      scanDepth--;
+                    } else if (sc === '?' && scanDepth === 0) {
+                      setPlaceholderCount++;
+                    } else if (sc === '?') {
+                      // Also count ? inside functions (depth > 0)
+                      setPlaceholderCount++;
+                    }
                   }
 
                   // Parse WHERE clause — support AND conditions
                   // e.g. WHERE id = ?  OR  WHERE sandbox_id = ? AND agent = ?
-                  const whereClauseMatch = sql.match(/WHERE\s+(.+?)$/i);
+                  // Strategy: find the last/top-level WHERE by scanning right-to-left and
+                  // tracking parenthesis depth. This avoids matching WHERE inside COALESCE(...).
+                  let realWhereStart = -1;
+                  let parenDepth = 0;
+                  for (let i = sql.length - 1; i >= 0; i--) {
+                    const ch = sql[i];
+                    if (ch === ')') parenDepth++;
+                    else if (ch === '(') parenDepth--;
+                    else if (parenDepth === 0 && sql.substring(i, i + 5).toUpperCase() === 'WHERE') {
+                      realWhereStart = i + 5;
+                      break;
+                    }
+                  }
+
                   const whereConditions: Array<{ col: string; paramIdx: number }> = [];
                   let whereParamIdx = setPlaceholderCount; // WHERE params start after SET params
-                  if (whereClauseMatch) {
-                    const whereClause = whereClauseMatch[1];
+                  if (realWhereStart > 0) {
+                    const whereClause = sql.slice(realWhereStart).trim();
                     // Split on AND/OR at depth 0
                     const andParts = whereClause.split(/\s+AND\s+/i);
                     for (const part of andParts) {
                       const trimmed = part.trim();
-                      // Match: column = ?  or  column LIKE '...'
+                      // Skip tautological conditions — these have no params and always match
+                      // e.g. "created_at IS NOT NULL" is always true for existing rows
+                      if (/^\w+\s+IS\s+NOT\s+NULL$/i.test(trimmed)) continue;
+                      if (/^\w+\s+IS\s+NULL$/i.test(trimmed)) continue;
+                      // Match: column = ?
                       const condMatch = trimmed.match(/(\w+)\s*=\s*\?/i);
                       if (condMatch) {
                         whereConditions.push({ col: condMatch[1].toLowerCase(), paramIdx: whereParamIdx });
@@ -408,7 +487,19 @@ function getMockDatabase() {
                       for (const pair of setPairs) {
                         const colName = pair.col.toLowerCase();
                         if (pair.value === '__PLACEHOLDER__') {
-                          tables[actualTable][ri][colName] = params[paramIdx];
+                          const newVal = params[paramIdx];
+                          // COALESCE(a, b) semantics: if a is null/undefined, keep existing row value.
+                          // The SET clause for chat_request_logs often uses COALESCE(actualParam, col)
+                          // meaning "only update if actualParam was provided; otherwise preserve".
+                          // Detect this pattern so the mock behaves like real SQLite.
+                          const setVal = (pair as any).rawValue || '';
+                          const coalesceMatch = setVal.match(/^COALESCE\s*\(\s*\?\s*,/i);
+                          if (coalesceMatch && (newVal === null || newVal === undefined)) {
+                            // null/undefined first arg → COALESCE falls back to existing column value
+                            paramIdx++;
+                            continue;
+                          }
+                          tables[actualTable][ri][colName] = newVal;
                           paramIdx++;
                         } else if (pair.value === '__CURRENT_TIMESTAMP__') {
                           tables[actualTable][ri][colName] = new Date().toISOString();
@@ -434,8 +525,21 @@ function getMockDatabase() {
                   return { lastInsertRowid: 0, changes: 0 };
                 }
 
-                const whereClauseMatch = sql.match(/WHERE\s+(.+?)$/i);
-                if (!whereClauseMatch) {
+                // Find the last/top-level WHERE by scanning right-to-left with paren depth tracking.
+                // This avoids matching WHERE inside COALESCE(...) in the SQL.
+                let realWhereStart = -1;
+                let parenDepth = 0;
+                for (let i = sql.length - 1; i >= 0; i--) {
+                  const ch = sql[i];
+                  if (ch === ')') parenDepth++;
+                  else if (ch === '(') parenDepth--;
+                  else if (parenDepth === 0 && sql.substring(i, i + 5).toUpperCase() === 'WHERE') {
+                    realWhereStart = i + 5;
+                    break;
+                  }
+                }
+
+                if (realWhereStart < 0) {
                   // DELETE FROM table (no WHERE) — delete all rows
                   const count = tables[actualTable].length;
                   tables[actualTable] = [];
@@ -443,7 +547,7 @@ function getMockDatabase() {
                 }
 
                 // Parse WHERE conditions
-                const whereClause = whereClauseMatch[1];
+                const whereClause = sql.slice(realWhereStart).trim();
                 const whereConditions: Array<{ col: string; paramIdx: number; op: string }> = [];
                 let paramIdx = 0;
                 const andParts = whereClause.split(/\s+AND\s+/i);
@@ -498,9 +602,22 @@ function getMockDatabase() {
               if (rows.length === 0) return null;
 
               // Parse WHERE clause — support AND conditions
-              const whereClauseMatch = sql.match(/WHERE\s+([\s\S]+?)$/i);
-              if (whereClauseMatch && params.length > 0) {
-                const whereClause = whereClauseMatch[1];
+              // Find the last/top-level WHERE by scanning right-to-left with paren depth.
+              // This avoids matching WHERE inside COALESCE(...) in the SQL.
+              let realWhereStart = -1;
+              let parenDepth = 0;
+              for (let i = sql.length - 1; i >= 0; i--) {
+                const ch = sql[i];
+                if (ch === ')') parenDepth++;
+                else if (ch === '(') parenDepth--;
+                else if (parenDepth === 0 && sql.substring(i, i + 5).toUpperCase() === 'WHERE') {
+                  realWhereStart = i + 5;
+                  break;
+                }
+              }
+
+              if (realWhereStart > 0 && params.length > 0) {
+                const whereClause = sql.slice(realWhereStart).trim();
                 const andParts = whereClause.split(/\s+AND\s+/i);
                 const conditions: Array<{ col: string; paramIdx: number }> = [];
                 let pIdx = 0;
@@ -540,10 +657,25 @@ function getMockDatabase() {
 
               // Parse WHERE clause properly — support AND conditions
               // SECURITY: Apply all WHERE filters for workspace isolation
-              const whereClauseMatch = sql.match(/WHERE\s+([\s\S]+?)(?:\s+ORDER\s+BY\s+|\s+LIMIT\s+|\s+GROUP\s+BY\s+|$)/i);
-              if (whereClauseMatch && params.length > 0) {
-                const whereClause = whereClauseMatch[1];
-                const andParts = whereClause.split(/\s+AND\s+/i);
+              // Find the last/top-level WHERE by scanning right-to-left with paren depth.
+              // This avoids matching WHERE inside COALESCE(...) in the SQL.
+              let realWhereStart = -1;
+              let parenDepth = 0;
+              for (let i = sql.length - 1; i >= 0; i--) {
+                const ch = sql[i];
+                if (ch === ')') parenDepth++;
+                else if (ch === '(') parenDepth--;
+                else if (parenDepth === 0 && sql.substring(i, i + 5).toUpperCase() === 'WHERE') {
+                  realWhereStart = i + 5;
+                  break;
+                }
+              }
+
+              if (realWhereStart > 0 && params.length > 0) {
+                const whereClause = sql.slice(realWhereStart).trim();
+                // Strip ORDER BY / LIMIT / GROUP BY suffix to get clean WHERE clause
+                const cleanClause = whereClause.replace(/\s+ORDER\s+BY\s+[\s\S]+$/i, '').replace(/\s+LIMIT\s+[\s\S]+$/i, '').replace(/\s+GROUP\s+BY\s+[\s\S]+$/i, '');
+                const andParts = cleanClause.split(/\s+AND\s+/i);
                 const conditions: Array<{ col: string; paramIdx: number }> = [];
                 let pIdx = 0;
                 for (const part of andParts) {
