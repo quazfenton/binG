@@ -28,6 +28,7 @@ import {
   type UnifiedAgentConfig,
   type UnifiedAgentResult,
 } from '../unified-agent-service';
+import { configureSubCall, resolveEngine, type EngineArchitecture } from '../execution-engines';
 
 const log = createLogger('AdversarialVerifyMode');
 
@@ -48,6 +49,8 @@ export interface AdversarialConfig {
   criticMaxTokens?: number;
   /** Max tokens for revision call (default: from primary config) */
   revisionMaxTokens?: number;
+  /** Architecture/engine for all LLM calls (default: from baseConfig.engine or env) */
+  engine?: EngineArchitecture;
 }
 
 // ─── Critic System Prompts ─────────────────────────────────────────────────
@@ -204,7 +207,8 @@ async function runCritic(
   ].join('\n');
 
   try {
-    const result = await processUnifiedAgentRequest({
+    const engine = resolveEngine(options.engine, baseConfig.engine);
+    const subCall = configureSubCall({
       ...baseConfig,
       userMessage,
       systemPrompt,
@@ -213,9 +217,10 @@ async function runCritic(
       temperature,
       maxTokens,
       tools: readOnlyTools,
-      // Critics are read-only — no executeTool callback needed
+      // Critics are read_only — no executeTool callback needed
       mode: 'v1-api',
-    });
+    }, engine);
+    const result = await processUnifiedAgentRequest(subCall);
 
     const rawResponse = result.response || '';
     const issues = parseCriticIssues(rawResponse);
@@ -385,10 +390,11 @@ export async function runAdversarialVerifyMode(
 
   // ── Primary Execution ─────────────────────────────────────────────────────
   log.info('[AdversarialVerify] → Primary execution');
-  const primaryResult = await processUnifiedAgentRequest({
+  const primaryCall = configureSubCall({
     ...baseConfig,
     mode: 'v1-api',
-  });
+  }, resolveEngine(options.engine, baseConfig.engine));
+  const primaryResult = await processUnifiedAgentRequest(primaryCall);
 
   if (!primaryResult.success) {
     log.info('[AdversarialVerify] ✗ Primary execution failed', { error: primaryResult.error });
@@ -477,12 +483,13 @@ export async function runAdversarialVerifyMode(
     'Output the complete corrected result.',
   ].join('\n');
 
-  const revisionResult = await processUnifiedAgentRequest({
+  const revisionCall = configureSubCall({
     ...baseConfig,
     systemPrompt: revisionSystemPrompt,
     maxTokens: options.revisionMaxTokens || baseConfig.maxTokens,
     mode: 'v1-api',
-  });
+  }, resolveEngine(options.engine, baseConfig.engine));
+  const revisionResult = await processUnifiedAgentRequest(revisionCall);
 
   if (revisionResult.success) {
     log.info('[AdversarialVerify] ✓ Revision succeeded');

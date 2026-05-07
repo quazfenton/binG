@@ -45,6 +45,7 @@ import Image from "next/image";
 import { isBackgroundUrlAllowed } from "@/lib/utils/url-validation";
 import { useSpecEnhancementMode, getSpecEnhancementModeInfo, type SpecEnhancementMode } from "@/contexts/spec-enhancement-mode-context";
 import { useOrchestrationMode, type OrchestrationMode } from "@/contexts/orchestration-mode-context";
+import { useAgentEngine, type AgentEngine } from "@/contexts/agent-engine-context";
 
 interface SettingsProps {
   onClose: () => void;
@@ -131,6 +132,7 @@ export default function Settings({
   const { isAuthenticated, user, login, logout, register, getApiKeys, setApiKeys, isLoading } = useAuth();
   const { config: specConfig, setMode: setSpecMode, setChain, isOverridden } = useSpecEnhancementMode();
   const { config: orchestConfig, setMode: setOrchestrationMode } = useOrchestrationMode();
+  const { config: engineConfig, setEngine: setAgentEngine, resetToDefault: resetEngineToDefault, isOverridden: engineIsOverridden } = useAgentEngine();
   const [textSize, setTextSize] = useState(100);
   const [highContrast, setHighContrast] = useState(false);
   const [screenReader, setScreenReader] = useState(false);
@@ -1470,8 +1472,59 @@ export default function Settings({
               </div>
             </div>
 
-            {/* Spec Enhancement Mode Selector */}
+            {/* Agent Engine Selector */}
             <div className="p-3 bg-black/20 rounded-lg border border-white/10">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex-1">
+                  <Label className="text-sm">Agent Engine</Label>
+                  <p className="text-xs text-gray-500">Execution engine (CLI/program)</p>
+                </div>
+                {engineIsOverridden && (
+                  <span className="text-[10px] px-2 py-0.5 bg-purple-500/20 text-purple-400 rounded">Custom</span>
+                )}
+              </div>
+              
+              <div className="grid grid-cols-2 gap-2 mb-2">
+                {(['auto', 'v1-api', 'v2-cli', 'v2-http-sdk', 'v2-container'] as const).map((engine) => {
+                  const engineInfo = {
+                    'auto': { label: 'Auto', desc: 'Use best available' },
+                    'v1-api': { label: 'V1 (API)', desc: 'Standard API calls' },
+                    'v2-cli': { label: 'V2 (CLI)', desc: 'Local CLI binary' },
+                    'v2-http-sdk': { label: 'V2 (SDK)', desc: 'HTTP SDK server' },
+                    'v2-container': { label: 'V2 (Container)', desc: 'Docker container' },
+                  };
+                  const isActive = engineConfig.engine === engine;
+                  return (
+                    <button
+                      key={engine}
+                      onClick={() => setAgentEngine(engine)}
+                      className={`p-2 rounded-lg border text-left text-xs transition-all ${
+                        isActive
+                          ? 'border-purple-500 bg-purple-500/20 text-purple-300'
+                          : 'border-white/10 bg-white/5 text-white/60 hover:border-white/30'
+                      }`}
+                    >
+                      <div className="font-medium">{engineInfo[engine].label}</div>
+                      <div className="text-white/40">{engineInfo[engine].desc}</div>
+                    </button>
+                  );
+                })}
+              </div>
+              
+              {engineConfig.engine !== 'auto' && (
+                <button
+                  onClick={resetEngineToDefault}
+                  className="text-xs text-purple-400 hover:text-purple-300"
+                >
+                  ← Reset to Auto
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Spec Enhancement Mode Selector */}
+        <div className="p-3 bg-black/20 rounded-lg border border-white/10">
               <div className="flex items-center justify-between mb-3">
                 <div className="flex-1">
                   <Label className="text-sm">Spec Enhancement Mode</Label>

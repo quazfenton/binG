@@ -245,7 +245,28 @@ function getMockDatabase() {
        *   - the literal value for simple literals (numbers, strings)
        */
       // Attach raw SQL value to the result so the caller (UPDATE handler) can inspect it.
-      function parseSetPair(pair: string): { col: string; value: any; rawValue?: string } {
+      /**
+ * Find the position of the top-level WHERE keyword in a SQL statement by scanning
+ * right-to-left and tracking parenthesis depth. This avoids matching WHERE inside
+ * function calls like COALESCE(... WHERE ...) or json_patch(...).
+ *
+ * @param sql - The full SQL statement
+ * @returns The index AFTER the WHERE keyword (realWhereStart), or -1 if not found
+ */
+function findTopLevelWherePos(sql: string): number {
+  let depth = 0;
+  for (let i = sql.length - 1; i >= 0; i--) {
+    const ch = sql[i];
+    if (ch === ')') depth++;
+    else if (ch === '(') depth--;
+    else if (depth === 0 && sql.substring(i, i + 5).toUpperCase() === 'WHERE') {
+      return i + 5;
+    }
+  }
+  return -1;
+}
+
+function parseSetPair(pair: string): { col: string; value: any; rawValue?: string } {
         const eqIdx = pair.indexOf('=');
         if (eqIdx < 0) return { col: pair.trim(), value: null };
         const col = pair.slice(0, eqIdx).trim();
@@ -434,19 +455,8 @@ function getMockDatabase() {
 
                   // Parse WHERE clause — support AND conditions
                   // e.g. WHERE id = ?  OR  WHERE sandbox_id = ? AND agent = ?
-                  // Strategy: find the last/top-level WHERE by scanning right-to-left and
-                  // tracking parenthesis depth. This avoids matching WHERE inside COALESCE(...).
-                  let realWhereStart = -1;
-                  let parenDepth = 0;
-                  for (let i = sql.length - 1; i >= 0; i--) {
-                    const ch = sql[i];
-                    if (ch === ')') parenDepth++;
-                    else if (ch === '(') parenDepth--;
-                    else if (parenDepth === 0 && sql.substring(i, i + 5).toUpperCase() === 'WHERE') {
-                      realWhereStart = i + 5;
-                      break;
-                    }
-                  }
+                  // findTopLevelWherePos scans right-to-left to avoid matching WHERE inside COALESCE(...).
+                  const realWhereStart = findTopLevelWherePos(sql);
 
                   const whereConditions: Array<{ col: string; paramIdx: number }> = [];
                   let whereParamIdx = setPlaceholderCount; // WHERE params start after SET params
@@ -525,19 +535,8 @@ function getMockDatabase() {
                   return { lastInsertRowid: 0, changes: 0 };
                 }
 
-                // Find the last/top-level WHERE by scanning right-to-left with paren depth tracking.
-                // This avoids matching WHERE inside COALESCE(...) in the SQL.
-                let realWhereStart = -1;
-                let parenDepth = 0;
-                for (let i = sql.length - 1; i >= 0; i--) {
-                  const ch = sql[i];
-                  if (ch === ')') parenDepth++;
-                  else if (ch === '(') parenDepth--;
-                  else if (parenDepth === 0 && sql.substring(i, i + 5).toUpperCase() === 'WHERE') {
-                    realWhereStart = i + 5;
-                    break;
-                  }
-                }
+                // findTopLevelWherePos scans right-to-left to avoid matching WHERE inside COALESCE(...).
+                const realWhereStart = findTopLevelWherePos(sql);
 
                 if (realWhereStart < 0) {
                   // DELETE FROM table (no WHERE) — delete all rows
@@ -601,20 +600,8 @@ function getMockDatabase() {
               const rows = tables[actualTable];
               if (rows.length === 0) return null;
 
-              // Parse WHERE clause — support AND conditions
-              // Find the last/top-level WHERE by scanning right-to-left with paren depth.
-              // This avoids matching WHERE inside COALESCE(...) in the SQL.
-              let realWhereStart = -1;
-              let parenDepth = 0;
-              for (let i = sql.length - 1; i >= 0; i--) {
-                const ch = sql[i];
-                if (ch === ')') parenDepth++;
-                else if (ch === '(') parenDepth--;
-                else if (parenDepth === 0 && sql.substring(i, i + 5).toUpperCase() === 'WHERE') {
-                  realWhereStart = i + 5;
-                  break;
-                }
-              }
+              // findTopLevelWherePos scans right-to-left to avoid matching WHERE inside COALESCE(...).
+              const realWhereStart = findTopLevelWherePos(sql);
 
               if (realWhereStart > 0 && params.length > 0) {
                 const whereClause = sql.slice(realWhereStart).trim();
