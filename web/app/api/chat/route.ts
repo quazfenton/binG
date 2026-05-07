@@ -1139,6 +1139,19 @@ const config: UnifiedAgentConfig = {
       // Pass user-selected provider and model to unified agent
       provider,
       model: normalizedModel,
+      // Engine override: lets the user pick v1-api vs v2-cli/http-sdk/container
+      // independently of orchestration mode. Same model name (e.g.
+      // 'google/gemini-3-flash-preview') is honored on both sides — V1 routes
+      // through llm-providers; V2 passes it as `--model` / SDK init / env.
+      engine: (() => {
+        const headerEngine = request.headers.get('x-agent-engine');
+        const bodyEngine = (body as any)?.engine || (body as any)?.architecture;
+        const candidate = (headerEngine || bodyEngine || '').toString().trim();
+        if (candidate === 'v1-api' || candidate === 'v2-cli' || candidate === 'v2-http-sdk' || candidate === 'v2-container') {
+          return candidate;
+        }
+        return undefined;
+      })(),
     };
 
     const tools = await getMCPToolsForAI_SDK(authenticatedUserId, task);
@@ -5991,35 +6004,3 @@ export async function OPTIONS(request: NextRequest) {
   });
 }
 
-// === Segment-based dispatch for sub-routes ===
-const segment2 = segments[2];
-if (segment2 === 'history') {
-  const { GET as historyGET, POST as historyPOST, DELETE as historyDELETE } = await import('./history/gateway');
-  switch (method) {
-    case 'GET': return historyGET(request);
-    case 'POST': return historyPOST(request);
-    case 'DELETE': return historyDELETE(request);
-  }
-}
-if (segment2 === 'modes') {
-  const { GET as modesGET, POST as modesPOST, DELETE as modesDELETE } = await import('./modes/gateway');
-  switch (method) {
-    case 'GET': return modesGET(request);
-    case 'POST': return modesPOST(request);
-    case 'DELETE': return modesDELETE(request);
-  }
-}
-if (segment2 === 'spec-mode') {
-  const { GET as specModeGET, POST as specModePOST, DELETE as specModeDELETE } = await import('./spec-mode/gateway');
-  switch (method) {
-    case 'GET': return specModeGET(request);
-    case 'POST': return specModePOST(request);
-    case 'DELETE': return specModeDELETE(request);
-  }
-}
-if (segment2 === 'prewarm') {
-  const { GET as prewarmGET } = await import('./prewarm/gateway');
-  if (method === 'GET') return prewarmGET();
-}
-
-return NextResponse.json({ error: 'Not found' }, { status: 404 });

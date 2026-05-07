@@ -30,7 +30,10 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Not found' }, { status: 404 });
   }
 
-  switch (segments[2]) {
+  // Strip query string from last segment (e.g. "list?path=project" → "list")
+  const action = segments[2]?.split('?')[0] ?? '';
+
+  switch (action) {
     case 'list': return listGET(request);
     case 'search': return searchGET(request);
     case 'snapshot': return snapshotGET(request);
@@ -53,7 +56,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Not found' }, { status: 404 });
   }
 
-  switch (segments[2]) {
+  // Strip query string from last segment
+  const action = segments[2]?.split('?')[0] ?? '';
+
+  switch (action) {
     case 'read': return readPOST(request);
     case 'write': return writePOST(request);
     case 'delete': return deletePOST(request);

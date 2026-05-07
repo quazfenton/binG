@@ -9,18 +9,22 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { chatRequestLogger } from '@/lib/chat/chat-request-logger';
 
 describe('ChatRequestLogger — Telemetry Tracking', () => {
-  const testPrefix = `telemetry-${Date.now()}`;
+  // Use a unique prefix per test run to avoid stale data from singleton state
+  const testPrefix = `telemetry-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
   beforeEach(async () => {
     await chatRequestLogger.initialize();
   });
 
   afterEach(() => {
-    // Clean up test rows
+    // Clean up test rows using exact prefix match (not LIKE, since mock doesn't support LIKE)
+    // Delete rows by prefix using a prepared statement instead
     try {
       const db = (chatRequestLogger as any).db;
-      if (db) {
-        db.exec(`DELETE FROM chat_request_logs WHERE id LIKE '${testPrefix}%'`);
+      if (db && db._tables?.chat_request_logs) {
+        db._tables.chat_request_logs = db._tables.chat_request_logs.filter(
+          (row: any) => !String(row.id || '').startsWith(testPrefix)
+        );
       }
     } catch {}
   });
@@ -154,6 +158,7 @@ describe('ChatRequestLogger — Telemetry Tracking', () => {
 
       const db = (chatRequestLogger as any).db;
       const row = db.prepare('SELECT provider, model, latency_ms FROM chat_request_logs WHERE id = ?').get(requestId);
+      // When actualProvider/actualModel are undefined, provider/model stay as originally logged
       expect(row.provider).toBe('openai');
       expect(row.model).toBe('gpt-4o');
       expect(row.latency_ms).toBe(2100);
@@ -164,13 +169,13 @@ describe('ChatRequestLogger — Telemetry Tracking', () => {
       await chatRequestLogger.logRequestStart(
         requestId,
         'user-123',
-        'mistral',
-        'mistral-large-latest',
+        'openai',
+        'gpt-4o',
         [],
         true
       );
 
-      // First fallback fails
+      // First fallback fails — logs as mistral (the actual provider used)
       await chatRequestLogger.logRequestComplete(
         requestId,
         false,
@@ -178,18 +183,19 @@ describe('ChatRequestLogger — Telemetry Tracking', () => {
         undefined,
         5000,
         'Rate limited',
-        'openai',
-        'gpt-4o-mini'
+        'mistral',
+        'mistral-small-latest'
       );
 
       const db = (chatRequestLogger as any).db;
       let row = db.prepare('SELECT provider, model, latency_ms, error FROM chat_request_logs WHERE id = ?').get(requestId);
-      expect(row.provider).toBe('openai');
-      expect(row.model).toBe('gpt-4o-mini');
+      // The first fallback (mistral) became the recorded provider/model
+      expect(row.provider).toBe('mistral');
+      expect(row.model).toBe('mistral-small-latest');
       expect(row.latency_ms).toBe(5000);
       expect(row.error).toBe('Rate limited');
 
-      // Second fallback succeeds
+      // Second fallback succeeds — logs as google
       await chatRequestLogger.logRequestComplete(
         requestId,
         true,
@@ -202,6 +208,7 @@ describe('ChatRequestLogger — Telemetry Tracking', () => {
       );
 
       row = db.prepare('SELECT provider, model, latency_ms, error, success FROM chat_request_logs WHERE id = ?').get(requestId);
+      // The second fallback (google) became the final recorded provider/model
       expect(row.provider).toBe('google');
       expect(row.model).toBe('gemini-1.5-flash');
       expect(row.latency_ms).toBe(8000);

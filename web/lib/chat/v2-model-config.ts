@@ -117,8 +117,13 @@ export function getV2ModelConfig(architecture: Architecture): V2ModelConfig {
 /**
  * Get model config suitable for UI display
  * Used by settings UI to show available models
+ * @param architecture - Optional filter to return only models for a specific architecture.
+ *                       Pass 'v2-cli', 'v2-http-sdk', or 'v2-container' to filter.
+ *                       Omit to return models for all V2 architectures.
  */
-export function getV2ModelsForUI(): Array<{
+export function getV2ModelsForUI(
+  architecture?: 'v2-cli' | 'v2-http-sdk' | 'v2-container'
+): Array<{
   value: string;
   label: string;
   architecture: Architecture;
@@ -126,7 +131,6 @@ export function getV2ModelsForUI(): Array<{
 }> {
   const models: Array<any> = [];
 
-  // CLI models
   const cliModels = [
     'anthropic/claude-3-5-sonnet-20241022',
     'anthropic/claude-3-7-sonnet-20250514',
@@ -135,33 +139,25 @@ export function getV2ModelsForUI(): Array<{
     'google/gemini-2.5-pro',
   ];
 
-  for (const model of cliModels) {
-    models.push({
-      value: model,
-      label: model.replace('/', ': '),
-      architecture: 'v2-cli' as Architecture,
-      healthy: getHealthState('v2-cli', model) !== 'unhealthy',
-    });
-  }
+  const addModels = (arch: 'v2-cli' | 'v2-http-sdk' | 'v2-container') => {
+    for (const model of cliModels) {
+      models.push({
+        value: model,
+        label: model.replace('/', ': '),
+        architecture: arch as Architecture,
+        healthy: getHealthState(arch, model) !== 'unhealthy',
+      });
+    }
+  };
 
-  // HTTP SDK models (same as CLI in most cases)
-  for (const model of cliModels) {
-    models.push({
-      value: model,
-      label: model.replace('/', ': '),
-      architecture: 'v2-http-sdk' as Architecture,
-      healthy: getHealthState('v2-http-sdk', model) !== 'unhealthy',
-    });
-  }
-
-  // Container models
-  for (const model of cliModels) {
-    models.push({
-      value: model,
-      label: model.replace('/', ': '),
-      architecture: 'v2-container' as Architecture,
-      healthy: getHealthState('v2-container', model) !== 'unhealthy',
-    });
+  // If architecture filter specified, only add models for that type
+  if (architecture) {
+    addModels(architecture);
+  } else {
+    // No filter — add all V2 architecture models
+    addModels('v2-cli');
+    addModels('v2-http-sdk');
+    addModels('v2-container');
   }
 
   return models;

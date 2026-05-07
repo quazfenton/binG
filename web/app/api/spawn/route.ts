@@ -17,40 +17,42 @@ import { GET as rootGET, POST as rootPOST } from './main';
 import { GET as idGET, POST as idPOST, DELETE as idDELETE } from './[id]/gateway';
 import { GET as eventsGET } from './[id]/events/gateway';
 
-type Params = { params: Promise<{ id?: string; action?: string }> };
+type Params = { params?: Promise<{ id?: string; action?: string }> };
 
-export async function GET(request: NextRequest, { params }: Params) {
-  const path = request.nextUrl.pathname;
+export async function GET(request: NextRequest, { params }: Params = {}) {
+  const path = request.nextUrl?.pathname ?? request.url ?? '';
+  const resolvedParams = params ? await params : {};
 
   // /api/spawn/:id/events -> events gateway
   if (path.includes('/events')) {
-    return eventsGET(request, { params: params as Promise<{ id: string }> });
+    return eventsGET(request, { params: resolvedParams as Promise<{ id: string }> });
   }
 
   // /api/spawn/:id -> [id] gateway
   const segments = path.split('/').filter(Boolean);
   if (segments.length >= 4) {
-    return idGET(request, { params: params as Promise<{ id: string }> });
+    return idGET(request, { params: resolvedParams as Promise<{ id: string }> });
   }
 
   // /api/spawn -> main handler
   return rootGET(request);
 }
 
-export async function POST(request: NextRequest, { params }: Params) {
-  const path = request.nextUrl.pathname;
+export async function POST(request: NextRequest, { params }: Params = {}) {
+  const path = request.nextUrl?.pathname ?? request.url ?? '';
   const segments = path.split('/').filter(Boolean);
 
-  if (segments.length >= 4) {
+  if (segments.length >= 4 && params) {
     return idPOST(request, { params: params as Promise<{ id: string }> });
   }
 
   return rootPOST(request);
 }
 
-export async function DELETE(request: NextRequest, { params }: Params) {
-  const segments = request.nextUrl.pathname.split('/').filter(Boolean);
-  if (segments.length < 4) {
+export async function DELETE(request: NextRequest, { params }: Params = {}) {
+  const path = request.nextUrl?.pathname ?? request.url ?? '';
+  const segments = path.split('/').filter(Boolean);
+  if (segments.length < 4 || !params) {
     return NextResponse.json({ error: 'Not found' }, { status: 404 });
   }
   return idDELETE(request, { params: params as Promise<{ id: string }> });
