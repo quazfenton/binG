@@ -67,7 +67,7 @@ export async function proxy(request: NextRequest) {
   // Rate limiting for API routes
   if (request.nextUrl.pathname.startsWith('/api/')) {
     // Authentication routes: strict rate limiting to prevent brute-force attacks
-    if (request.nextUrl.pathname.startsWith('/api/auth/')) {
+    if (request.nextUrl.pathname.startsWith('/api/auth/') && process.env.NODE_ENV !== 'development') {
       const authPath = request.nextUrl.pathname;
 
       // Determine auth operation for appropriate rate limit config

@@ -1032,10 +1032,10 @@ export class VirtualFilesystemService {
         if (safeParts.length === 0) {
           throw new Error(`Path traversal is not allowed: ${inputPath}`);
         }
-        // Check if popping would escape workspace root
-        // safeParts must always have at least as many segments as workspaceRootParts
-        if (safeParts.length <= workspaceRootParts.length) {
-          throw new Error(`Path traversal beyond workspace root: ${inputPath}`);
+        // Allow .. to navigate above workspace root (e.g. project/sessions/001 -> project)
+        // but prevent escaping project root entirely
+        if (safeParts.length <= 1) {
+          throw new Error(`Path traversal is not allowed: ${inputPath}`);
         }
         safeParts.pop();
         continue;
@@ -1051,10 +1051,12 @@ export class VirtualFilesystemService {
     }
 
     const normalizedPath = safeParts.join('/');
-    
-    // Verify the normalized path still starts with workspace root
     const workspacePrefix = workspaceRootParts.join('/');
-    if (!normalizedPath.startsWith(workspacePrefix + '/') && normalizedPath !== workspacePrefix) {
+    
+    // Verify the normalized path is within or an ancestor of the workspace root
+    const isWithin = normalizedPath.startsWith(workspacePrefix + '/') || normalizedPath === workspacePrefix;
+    const isAncestor = workspacePrefix.startsWith(normalizedPath + '/');
+    if (!isWithin && !isAncestor) {
       throw new Error(`Path traversal beyond workspace root: ${inputPath}`);
     }
     

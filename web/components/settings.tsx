@@ -1577,8 +1577,6 @@ export default function Settings({
                   </div>
                 </div>
               )}
-            </div>
-          </div>
 
           <div className="mt-4 space-y-2">
             <div className="p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg">

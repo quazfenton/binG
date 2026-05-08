@@ -26,12 +26,15 @@ export async function GET(request: NextRequest) {
   const path = request.nextUrl.pathname;
   const segments = path.split('/').filter(Boolean);
 
-  if (segments.length !== 3) {
+  if (segments.length < 3 || segments.length > 4) {
     return NextResponse.json({ error: 'Not found' }, { status: 404 });
   }
 
   // Strip query string from last segment (e.g. "list?path=project" → "list")
-  const action = segments[2]?.split('?')[0] ?? '';
+  // 4-segment paths like /api/filesystem/events/push → action = "events-push"
+  const action = segments.length === 4
+    ? `${segments[2]}-${segments[3]?.split('?')[0] ?? ''}`
+    : segments[2]?.split('?')[0] ?? '';
 
   switch (action) {
     case 'list': return listGET(request);
@@ -52,12 +55,15 @@ export async function POST(request: NextRequest) {
   const path = request.nextUrl.pathname;
   const segments = path.split('/').filter(Boolean);
 
-  if (segments.length !== 3) {
+  if (segments.length < 3 || segments.length > 4) {
     return NextResponse.json({ error: 'Not found' }, { status: 404 });
   }
 
   // Strip query string from last segment
-  const action = segments[2]?.split('?')[0] ?? '';
+  // 4-segment paths like /api/filesystem/diffs/apply → action = "diffs-apply"
+  const action = segments.length === 4
+    ? `${segments[2]}-${segments[3]?.split('?')[0] ?? ''}`
+    : segments[2]?.split('?')[0] ?? '';
 
   switch (action) {
     case 'read': return readPOST(request);
