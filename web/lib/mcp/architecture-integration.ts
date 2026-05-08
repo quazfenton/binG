@@ -582,7 +582,7 @@ export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string)
       const needsCodeSearch = taskLower.includes('search') || taskLower.includes('find') || taskLower.includes('codebase');
       const needsCodegen = taskLower.includes('generate') || taskLower.includes('create') || taskLower.includes('implement');
       blaxelTools = allBlaxelTools.filter(tool => {
-        const name = tool.function.name.toLowerCase();
+        const name = (tool.function?.name || '').toLowerCase();
         if (name.includes('search') || name.includes('grep')) return needsCodeSearch;
         if (name.includes('codegen') || name.includes('apply') || name.includes('reapply')) return needsCodegen;
         return true;
@@ -609,7 +609,7 @@ export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string)
       const needsWebAutomation = taskLower.includes('browse') || taskLower.includes('web') || taskLower.includes('automation');
       arcadeTools = allArcadeTools.filter(tool => {
         // Keep tools relevant to web automation
-        const name = tool.function.name.toLowerCase();
+        const name = (tool.function?.name || '').toLowerCase();
         return needsWebAutomation || name.includes('browse') || name.includes('web');
       });
     } else {
@@ -632,7 +632,7 @@ export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string)
 
     // Filter out tools not relevant to the task
     providerTools = providerTools.filter(tool => {
-      const name = tool.function.name.toLowerCase()
+      const name = (tool.function?.name || '').toLowerCase()
       // Daytona screenshot/recording tools - only include for computer use tasks
       if (name.startsWith('daytona_')) return needsComputerUse
       // E2B agent offload tools - only include for agent/complex tasks
@@ -660,7 +660,7 @@ export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string)
     const allNullclawTools = nullclawMCPBridge.getToolDefinitions();
     // Filter out internal/status tools that shouldn't be exposed to the LLM
     const filteredTools = allNullclawTools.filter(tool => {
-      const name = tool.function.name.toLowerCase();
+      const name = (tool.function?.name || '').toLowerCase();
       // Exclude status/check tools - they are internal utilities
       return name !== 'nullclaw_status';
     });
@@ -669,7 +669,7 @@ export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string)
       const needsMessaging = taskLower.includes('send') || taskLower.includes('message') || taskLower.includes('discord') || taskLower.includes('telegram');
       const needsBrowse = taskLower.includes('browse') || taskLower.includes('web_automation');
       nullclawTools = filteredTools.filter(tool => {
-        const name = tool.function.name.toLowerCase();
+        const name = (tool.function?.name || '').toLowerCase();
         if (name.includes('discord') || name.includes('telegram') || name.includes('send')) return needsMessaging;
         if (name.includes('browse') || name.includes('automate')) return needsBrowse;
         return true;
@@ -701,7 +701,7 @@ export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string)
       const needsNotion = taskLower.includes('notion') || taskLower.includes('page') || taskLower.includes('workspace');
 
       composioTools = allComposioTools.filter(tool => {
-        const name = tool.function.name.toLowerCase();
+        const name = (tool.function?.name || '').toLowerCase();
         if (name.includes('gmail') || name.includes('email')) return needsGmail;
         if (name.includes('slack') || name.includes('message')) return needsSlack;
         if (name.includes('drive') || name.includes('google')) return needsGoogleDrive;

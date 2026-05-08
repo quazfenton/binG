@@ -920,6 +920,13 @@ export default function MessageBubble({
           {isUser ? message.content : mainContent}
         </ReactMarkdown>
 
+        {/* Model Used - shown below assistant messages */}
+        {!isUser && message.modelName && (
+          <div className="text-[10px] text-white/40 mt-1 ml-1">
+            via {message.modelName}
+          </div>
+        )}
+
         {/* Tool Invocations Display - Enhanced with new component */}
         {!isUser && toolInvocations.length > 0 && (
           <ToolInvocationsList toolInvocations={toolInvocations} />
