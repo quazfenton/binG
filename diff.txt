@@ -1,0 +1,3249 @@
+diff --git a/web/.bing-shared/FS/index.ts b/web/.bing-shared/FS/index.ts
+index d6b61f0b..0933f039 100644
+--- a/web/.bing-shared/FS/index.ts
++++ b/web/.bing-shared/FS/index.ts
+@@ -727,6 +727,16 @@ export class DesktopFileSystem implements IFileSystem {
+   async search(query: string, options?: { path?: string; limit?: number }): Promise<FSSearchResult[]> {
+     if (!this.tauriFs) throw new Error('Tauri FS not initialized');
+     
++    // DEPRECATED: This simple string-matching search is slow and limited.
++    // For better performance and features (regex, glob patterns, context lines),
++    // use the grep_code tool instead, which uses ripgrep on desktop and optimized
++    // VFS search on web.
++    console.warn(
++      '[FS] search() is deprecated and will be removed in a future version. ' +
++      'Use grep_code tool for better performance (10-100x faster) and features ' +
++      '(regex, glob patterns, context lines). See docs/file-search-tools-comparison.md'
++    );
++    
+     const results: FSSearchResult[] = [];
+     const searchPath = options?.path ? this.resolvePath(options.path) : (this.boundaryPath || this.workspaceRoot);
+     const limit = Math.min(options?.limit || 25, 100);
+diff --git a/web/app/api/admin/roles/route.ts b/web/app/api/admin/roles/route.ts
+index 3ede560b..bad002b7 100644
+--- a/web/app/api/admin/roles/route.ts
++++ b/web/app/api/admin/roles/route.ts
+@@ -8,7 +8,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { requireAdminApiOrForbidden, grantRole, revokeRole, getUserRoles, logAdminAction } from '@/lib/auth/admin';
+ import { csrfCheckOrReject } from '@/lib/auth/csrf';
+diff --git a/web/app/api/agent/health/route.ts b/web/app/api/agent/health/route.ts
+index f4f48d69..5119cb57 100644
+--- a/web/app/api/agent/health/route.ts
++++ b/web/app/api/agent/health/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from "next/server";
+ 
+-export const runtime = 'edge';
+ 
+ import { fastAgentService } from "@/lib/chat/fast-agent-service";
+ 
+diff --git a/web/app/api/agent/route.ts b/web/app/api/agent/route.ts
+index 785a3f85..7f139ff7 100644
+--- a/web/app/api/agent/route.ts
++++ b/web/app/api/agent/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from "next/server";
+ 
+-export const runtime = 'edge';
+ 
+ import { fastAgentService, type FastAgentRequest } from "@/lib/chat/fast-agent-service";
+ import type { LLMMessage } from "@/lib/chat/llm-providers";
+diff --git a/web/app/api/agent/stateful-agent/interrupt/route.ts b/web/app/api/agent/stateful-agent/interrupt/route.ts
+index 4e3ac0ee..35260972 100644
+--- a/web/app/api/agent/stateful-agent/interrupt/route.ts
++++ b/web/app/api/agent/stateful-agent/interrupt/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { hitlManager, requireApproval } from '@/lib/orchestra/stateful-agent';
+ import { verifyAuth } from '@/lib/auth/verify-auth';
+diff --git a/web/app/api/agent/stateful-agent/route.ts b/web/app/api/agent/stateful-agent/route.ts
+index 43861448..3f570079 100644
+--- a/web/app/api/agent/stateful-agent/route.ts
++++ b/web/app/api/agent/stateful-agent/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { resolveRequestAuth } from '@/lib/auth/request-auth';
+ import { streamText, generateText } from 'ai';
+diff --git a/web/app/api/agent/unified-agent/route.ts b/web/app/api/agent/unified-agent/route.ts
+index e5160d77..8d902eef 100644
+--- a/web/app/api/agent/unified-agent/route.ts
++++ b/web/app/api/agent/unified-agent/route.ts
+@@ -9,7 +9,7 @@ import {
+ import { resolveRequestAuth } from '@/lib/auth/request-auth';
+ import { createSSEEmitter, SSE_RESPONSE_HEADERS, SSE_EVENT_TYPES } from '@/lib/streaming/sse-event-schema';
+ 
+-export const runtime = 'edge';
++
+ export const maxDuration = 300; // 5 minutes for agent tasks
+ 
+ /**
+diff --git a/web/app/api/agent/v2/cloud/[agentId]/route.ts b/web/app/api/agent/v2/cloud/[agentId]/route.ts
+index 2ca4e565..0b60be21 100644
+--- a/web/app/api/agent/v2/cloud/[agentId]/route.ts
++++ b/web/app/api/agent/v2/cloud/[agentId]/route.ts
+@@ -6,7 +6,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { z } from 'zod';
+ import { cloudAgentOffload } from '@bing/shared/agent';
+diff --git a/web/app/api/agent/v2/cloud/offload/route.ts b/web/app/api/agent/v2/cloud/offload/route.ts
+index bf47dede..ad2f2eb0 100644
+--- a/web/app/api/agent/v2/cloud/offload/route.ts
++++ b/web/app/api/agent/v2/cloud/offload/route.ts
+@@ -6,7 +6,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { z } from 'zod';
+ import { resolveRequestAuth } from '@/lib/auth/request-auth';
+diff --git a/web/app/api/agent/v2/execute/route.ts b/web/app/api/agent/v2/execute/route.ts
+index 2fa73f28..e7142139 100644
+--- a/web/app/api/agent/v2/execute/route.ts
++++ b/web/app/api/agent/v2/execute/route.ts
+@@ -8,7 +8,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { z } from 'zod';
+ import { resolveRequestAuth } from '@/lib/auth/request-auth';
+diff --git a/web/app/api/agent/v2/session/route.ts b/web/app/api/agent/v2/session/route.ts
+index 58c2e27c..332b76ad 100644
+--- a/web/app/api/agent/v2/session/route.ts
++++ b/web/app/api/agent/v2/session/route.ts
+@@ -7,7 +7,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { z } from 'zod';
+ import { resolveRequestAuth } from '@/lib/auth/request-auth';
+diff --git a/web/app/api/agent/v2/sync/route.ts b/web/app/api/agent/v2/sync/route.ts
+index e1dc4342..7cd029c5 100644
+--- a/web/app/api/agent/v2/sync/route.ts
++++ b/web/app/api/agent/v2/sync/route.ts
+@@ -6,7 +6,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { z } from 'zod';
+ import { resolveRequestAuth } from '@/lib/auth/request-auth';
+diff --git a/web/app/api/agent/v2/workforce/route.ts b/web/app/api/agent/v2/workforce/route.ts
+index 20d3ee4b..4833e9a1 100644
+--- a/web/app/api/agent/v2/workforce/route.ts
++++ b/web/app/api/agent/v2/workforce/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { z } from 'zod';
+ import { resolveRequestAuth } from '@/lib/auth/request-auth';
+diff --git a/web/app/api/agent/workflows/route.ts b/web/app/api/agent/workflows/route.ts
+index e54d28bd..b8472c72 100644
+--- a/web/app/api/agent/workflows/route.ts
++++ b/web/app/api/agent/workflows/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from "next/server";
+ 
+-export const runtime = 'edge';
+ 
+ 
+ interface WorkflowExecutor {
+diff --git a/web/app/api/ai-art/images/route.ts b/web/app/api/ai-art/images/route.ts
+index b70c4b10..55a40625 100644
+--- a/web/app/api/ai-art/images/route.ts
++++ b/web/app/api/ai-art/images/route.ts
+@@ -12,7 +12,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import {
+   getImages,
+diff --git a/web/app/api/ai-art/stats/route.ts b/web/app/api/ai-art/stats/route.ts
+index f806d9c0..b7e9f534 100644
+--- a/web/app/api/ai-art/stats/route.ts
++++ b/web/app/api/ai-art/stats/route.ts
+@@ -6,7 +6,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { getGalleryStats } from '@/lib/ai-art/ai-art-gallery';
+ import { createLogger } from '@/lib/utils/logger';
+diff --git a/web/app/api/antigravity/admin/callback/route.ts b/web/app/api/antigravity/admin/callback/route.ts
+index a28e4a03..cadf7022 100644
+--- a/web/app/api/antigravity/admin/callback/route.ts
++++ b/web/app/api/antigravity/admin/callback/route.ts
+@@ -11,7 +11,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { exchangeCodeForTokens } from '@/lib/llm/antigravity-provider';
+ import { requireAdminApiOrForbidden } from '@/lib/auth/admin';
+diff --git a/web/app/api/antigravity/admin/connect/route.ts b/web/app/api/antigravity/admin/connect/route.ts
+index 2dbc3d09..4c87a44b 100644
+--- a/web/app/api/antigravity/admin/connect/route.ts
++++ b/web/app/api/antigravity/admin/connect/route.ts
+@@ -11,7 +11,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { requireAdminApiOrForbidden } from '@/lib/auth/admin';
+ import { getAntigravityOAuthUrl } from '@/lib/llm/antigravity-provider';
+diff --git a/web/app/api/antigravity/admin/status/route.ts b/web/app/api/antigravity/admin/status/route.ts
+index 7b35e316..c8ad58e7 100644
+--- a/web/app/api/antigravity/admin/status/route.ts
++++ b/web/app/api/antigravity/admin/status/route.ts
+@@ -8,7 +8,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { requireAdminApiOrForbidden } from '@/lib/auth/admin';
+ import { isMasterAccountConfigured, getMasterAccountInfo } from '@/lib/database/antigravity-accounts';
+diff --git a/web/app/api/antigravity/callback/route.ts b/web/app/api/antigravity/callback/route.ts
+index 54ee13f6..0edd746b 100644
+--- a/web/app/api/antigravity/callback/route.ts
++++ b/web/app/api/antigravity/callback/route.ts
+@@ -7,7 +7,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { exchangeCodeForTokens } from '@/lib/llm/antigravity-provider';
+ import { saveAntigravityAccount } from '@/lib/database/antigravity-accounts';
+diff --git a/web/app/api/antigravity/chat/route.ts b/web/app/api/antigravity/chat/route.ts
+index 929c6c54..8b61e2b6 100644
+--- a/web/app/api/antigravity/chat/route.ts
++++ b/web/app/api/antigravity/chat/route.ts
+@@ -12,7 +12,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { sendAntigravityChat, ANTIGRAVITY_MODELS } from '@/lib/llm/antigravity-provider';
+ import { getAntigravityAccounts, isMasterAccountConfigured } from '@/lib/database/antigravity-accounts';
+diff --git a/web/app/api/antigravity/login/route.ts b/web/app/api/antigravity/login/route.ts
+index 89ab35ee..223fadc0 100644
+--- a/web/app/api/antigravity/login/route.ts
++++ b/web/app/api/antigravity/login/route.ts
+@@ -6,7 +6,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { getAntigravityOAuthUrl } from '@/lib/llm/antigravity-provider';
+ import { verifyAuth } from '@/lib/auth/jwt';
+diff --git a/web/app/api/art-gallery/images/route.ts b/web/app/api/art-gallery/images/route.ts
+index 9eb61f79..0e2987aa 100644
+--- a/web/app/api/art-gallery/images/route.ts
++++ b/web/app/api/art-gallery/images/route.ts
+@@ -8,7 +8,6 @@
+ 
+ import { NextRequest, NextResponse } from "next/server";
+ 
+-export const runtime = 'edge';
+ 
+ import { readFile, writeFile, mkdir } from "fs/promises";
+ import { join } from "path";
+diff --git a/web/app/api/art-gallery/route.ts b/web/app/api/art-gallery/route.ts
+index 8fa807e1..0f361136 100644
+--- a/web/app/api/art-gallery/route.ts
++++ b/web/app/api/art-gallery/route.ts
+@@ -7,7 +7,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ 
+ interface Artwork {
+diff --git a/web/app/api/auth/arcade/authorize/route.ts b/web/app/api/auth/arcade/authorize/route.ts
+index 94220f1c..e780b0c8 100644
+--- a/web/app/api/auth/arcade/authorize/route.ts
++++ b/web/app/api/auth/arcade/authorize/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { resolveRequestAuth } from '@/lib/auth/request-auth';
+ import { oauthIntegration } from '@/lib/oauth';
+diff --git a/web/app/api/auth/arcade/custom-verifier/route.ts b/web/app/api/auth/arcade/custom-verifier/route.ts
+index 41b93f00..ffc40df1 100644
+--- a/web/app/api/auth/arcade/custom-verifier/route.ts
++++ b/web/app/api/auth/arcade/custom-verifier/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import Arcade from '@arcadeai/arcadejs';
+ import { resolveRequestAuth } from '@/lib/auth/request-auth';
+diff --git a/web/app/api/auth/check-auth0-session/route.ts b/web/app/api/auth/check-auth0-session/route.ts
+index f3143fc7..76eb9ed9 100644
+--- a/web/app/api/auth/check-auth0-session/route.ts
++++ b/web/app/api/auth/check-auth0-session/route.ts
+@@ -8,7 +8,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { auth0 } from '@/lib/auth0';
+ import { getLocalUserIdFromAuth0, mapAuth0UserId } from '@/lib/oauth/connections';
+diff --git a/web/app/api/auth/check-email/route.ts b/web/app/api/auth/check-email/route.ts
+index ae240c11..d1eef8a3 100644
+--- a/web/app/api/auth/check-email/route.ts
++++ b/web/app/api/auth/check-email/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { authService } from '@/lib/auth/auth-service';
+ 
+diff --git a/web/app/api/auth/confirm-reset/route.ts b/web/app/api/auth/confirm-reset/route.ts
+index dea7f059..1b272527 100644
+--- a/web/app/api/auth/confirm-reset/route.ts
++++ b/web/app/api/auth/confirm-reset/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { getDatabase } from '@/lib/database/connection';
+ import { z } from 'zod';
+diff --git a/web/app/api/auth/login/route.ts b/web/app/api/auth/login/route.ts
+index 95f1e3dc..ab2e9e8a 100644
+--- a/web/app/api/auth/login/route.ts
++++ b/web/app/api/auth/login/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { authService } from '@/lib/auth/auth-service';
+ import { rateLimitMiddleware } from '@/lib/middleware/rate-limiter';
+diff --git a/web/app/api/auth/logout/route.ts b/web/app/api/auth/logout/route.ts
+index 02468871..c7f292eb 100644
+--- a/web/app/api/auth/logout/route.ts
++++ b/web/app/api/auth/logout/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { authService } from '@/lib/auth/auth-service';
+ import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge';
+diff --git a/web/app/api/auth/me/route.ts b/web/app/api/auth/me/route.ts
+index 1282dda6..6de5ba8f 100644
+--- a/web/app/api/auth/me/route.ts
++++ b/web/app/api/auth/me/route.ts
+@@ -13,7 +13,6 @@
+  */
+ import { NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { auth0, AUTH0_CONNECTIONS, getConnectedAccountsByUser } from '@/lib/auth0';
+ import { getLocalUserIdFromAuth0 } from '@/lib/oauth/connections';
+diff --git a/web/app/api/auth/mfa/challenge/route.ts b/web/app/api/auth/mfa/challenge/route.ts
+index a7cad303..3290cf77 100644
+--- a/web/app/api/auth/mfa/challenge/route.ts
++++ b/web/app/api/auth/mfa/challenge/route.ts
+@@ -11,7 +11,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { generateToken, verifyMfaToken } from '@/lib/auth/jwt';
+ import { verifyTotpCode, decryptTotpSecret, verifyBackupCode } from '@/lib/auth/totp';
+diff --git a/web/app/api/auth/mfa/disable/route.ts b/web/app/api/auth/mfa/disable/route.ts
+index e3e69d0b..2eec4071 100644
+--- a/web/app/api/auth/mfa/disable/route.ts
++++ b/web/app/api/auth/mfa/disable/route.ts
+@@ -7,7 +7,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { verifyAuth } from '@/lib/auth/jwt';
+ import { verifyTotpCode, decryptTotpSecret, verifyBackupCode } from '@/lib/auth/totp';
+diff --git a/web/app/api/auth/mfa/setup/route.ts b/web/app/api/auth/mfa/setup/route.ts
+index a6d802f0..534b4996 100644
+--- a/web/app/api/auth/mfa/setup/route.ts
++++ b/web/app/api/auth/mfa/setup/route.ts
+@@ -10,7 +10,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { verifyAuth } from '@/lib/auth/jwt';
+ import { generateTotpSecret, generateTotpUri, encryptTotpSecret, generateBackupCodes, hashBackupCodes } from '@/lib/auth/totp';
+diff --git a/web/app/api/auth/mfa/verify/route.ts b/web/app/api/auth/mfa/verify/route.ts
+index 5905fe8c..ef95ca8d 100644
+--- a/web/app/api/auth/mfa/verify/route.ts
++++ b/web/app/api/auth/mfa/verify/route.ts
+@@ -8,7 +8,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { verifyAuth } from '@/lib/auth/jwt';
+ import { verifyTotpCode, decryptTotpSecret } from '@/lib/auth/totp';
+diff --git a/web/app/api/auth/nango/authorize/route.ts b/web/app/api/auth/nango/authorize/route.ts
+index a87c3718..7b7da056 100644
+--- a/web/app/api/auth/nango/authorize/route.ts
++++ b/web/app/api/auth/nango/authorize/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { resolveRequestAuth } from '@/lib/auth/request-auth';
+ import { oauthIntegration } from '@/lib/oauth';
+diff --git a/web/app/api/auth/oauth/callback/route.ts b/web/app/api/auth/oauth/callback/route.ts
+index a4a91aa6..3b6ad096 100644
+--- a/web/app/api/auth/oauth/callback/route.ts
++++ b/web/app/api/auth/oauth/callback/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { oauthService } from '@/lib/auth/oauth-service';
+ 
+diff --git a/web/app/api/auth/oauth/error/route.ts b/web/app/api/auth/oauth/error/route.ts
+index fe659db2..0976559b 100644
+--- a/web/app/api/auth/oauth/error/route.ts
++++ b/web/app/api/auth/oauth/error/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ 
+ /**
+diff --git a/web/app/api/auth/oauth/initiate/route.ts b/web/app/api/auth/oauth/initiate/route.ts
+index cc9e0d95..b293846e 100644
+--- a/web/app/api/auth/oauth/initiate/route.ts
++++ b/web/app/api/auth/oauth/initiate/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { oauthService } from '@/lib/auth/oauth-service';
+ import { resolveRequestAuth } from '@/lib/auth/request-auth';
+diff --git a/web/app/api/auth/oauth/success/route.ts b/web/app/api/auth/oauth/success/route.ts
+index 1cdffc63..9a292aba 100644
+--- a/web/app/api/auth/oauth/success/route.ts
++++ b/web/app/api/auth/oauth/success/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ 
+ /**
+diff --git a/web/app/api/auth/refresh/route.ts b/web/app/api/auth/refresh/route.ts
+index 540d3a5a..9fa0acab 100644
+--- a/web/app/api/auth/refresh/route.ts
++++ b/web/app/api/auth/refresh/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { authService } from '@/lib/auth/auth-service';
+ import { generateToken } from '@/lib/auth/jwt';
+diff --git a/web/app/api/auth/register/route.ts b/web/app/api/auth/register/route.ts
+index 82b96b05..9bc2baec 100644
+--- a/web/app/api/auth/register/route.ts
++++ b/web/app/api/auth/register/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { authService } from '@/lib/auth/auth-service';
+ import { rateLimiters } from '@/lib/middleware/rate-limit';
+diff --git a/web/app/api/auth/reset-password/route.ts b/web/app/api/auth/reset-password/route.ts
+index cfab73c4..b0d33690 100644
+--- a/web/app/api/auth/reset-password/route.ts
++++ b/web/app/api/auth/reset-password/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { initializeDatabase } from '@/lib/database/db';
+ import { generateToken } from '@/lib/auth/jwt';
+diff --git a/web/app/api/auth/send-verification/route.ts b/web/app/api/auth/send-verification/route.ts
+index 78c55cfb..6685e7c1 100644
+--- a/web/app/api/auth/send-verification/route.ts
++++ b/web/app/api/auth/send-verification/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { getDatabase } from '@/lib/database/connection';
+ import { rateLimitMiddleware } from '@/lib/middleware/rate-limiter';
+diff --git a/web/app/api/auth/session/route.ts b/web/app/api/auth/session/route.ts
+index d5b46a54..31129560 100644
+--- a/web/app/api/auth/session/route.ts
++++ b/web/app/api/auth/session/route.ts
+@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
+ import { authService } from '@/lib/auth/auth-service';
+ import { verifyAuth } from '@/lib/auth/jwt';
+ 
+-export const runtime = 'edge';
++
+ 
+ /**
+  * GET /api/auth/session
+diff --git a/web/app/api/auth/validate/route.ts b/web/app/api/auth/validate/route.ts
+index 04e81e03..92799bd6 100644
+--- a/web/app/api/auth/validate/route.ts
++++ b/web/app/api/auth/validate/route.ts
+@@ -3,7 +3,7 @@ import { authService } from '@/lib/auth/auth-service';
+ import { verifyAuth } from '@/lib/auth/jwt';
+ 
+ // Force Node.js runtime for jsonwebtoken compatibility
+-export const runtime = 'edge';
++
+ 
+ export async function POST(request: NextRequest) {
+   try {
+diff --git a/web/app/api/auth/verify-email/route.ts b/web/app/api/auth/verify-email/route.ts
+index 387b9dc2..c2703abf 100644
+--- a/web/app/api/auth/verify-email/route.ts
++++ b/web/app/api/auth/verify-email/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { getDatabase } from '@/lib/database/connection';
+ import { rateLimitMiddleware } from '@/lib/middleware/rate-limiter';
+diff --git a/web/app/api/auth0/post-callback/route.ts b/web/app/api/auth0/post-callback/route.ts
+index 0cf5a2c9..c8a596d3 100644
+--- a/web/app/api/auth0/post-callback/route.ts
++++ b/web/app/api/auth0/post-callback/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { getLocalUserIdFromAuth0, mapAuth0UserId } from '@/lib/oauth/connections';
+ import { saveConnectedAccount } from '@/lib/auth0';
+diff --git a/web/app/api/automations/n8n/workflows/[id]/execute/route.ts b/web/app/api/automations/n8n/workflows/[id]/execute/route.ts
+index 4dbd9433..126360dd 100644
+--- a/web/app/api/automations/n8n/workflows/[id]/execute/route.ts
++++ b/web/app/api/automations/n8n/workflows/[id]/execute/route.ts
+@@ -8,7 +8,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { n8nClient } from '@/lib/automations/n8n-client';
+ import { createLogger } from '@/lib/utils/logger';
+diff --git a/web/app/api/automations/n8n/workflows/[id]/executions/route.ts b/web/app/api/automations/n8n/workflows/[id]/executions/route.ts
+index 5355b0ff..b02a9500 100644
+--- a/web/app/api/automations/n8n/workflows/[id]/executions/route.ts
++++ b/web/app/api/automations/n8n/workflows/[id]/executions/route.ts
+@@ -8,7 +8,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { n8nClient } from '@/lib/automations/n8n-client';
+ import { createLogger } from '@/lib/utils/logger';
+diff --git a/web/app/api/automations/n8n/workflows/route.ts b/web/app/api/automations/n8n/workflows/route.ts
+index 830df254..b15a1be4 100644
+--- a/web/app/api/automations/n8n/workflows/route.ts
++++ b/web/app/api/automations/n8n/workflows/route.ts
+@@ -11,7 +11,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { n8nClient } from '@/lib/automations/n8n-client';
+ import { createLogger } from '@/lib/utils/logger';
+diff --git a/web/app/api/backend/health/route.ts b/web/app/api/backend/health/route.ts
+index 1e3b1ae7..b4504131 100644
+--- a/web/app/api/backend/health/route.ts
++++ b/web/app/api/backend/health/route.ts
+@@ -1,6 +1,6 @@
+ import { NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
++
+ 
+ export async function GET() {
+   try {
+diff --git a/web/app/api/backend/route.ts b/web/app/api/backend/route.ts
+index 8758f32b..8c69fa1b 100644
+--- a/web/app/api/backend/route.ts
++++ b/web/app/api/backend/route.ts
+@@ -6,7 +6,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import {
+   sandboxManager,
+diff --git a/web/app/api/backend/terminal/route.ts b/web/app/api/backend/terminal/route.ts
+index db170487..263a6446 100644
+--- a/web/app/api/backend/terminal/route.ts
++++ b/web/app/api/backend/terminal/route.ts
+@@ -17,7 +17,7 @@
+ // or deploy the WebSocket server separately.
+ 
+ // Runtime configuration
+-export const runtime = 'edge';
++
+ export const dynamic = 'force-dynamic';
+ 
+ export async function GET() {
+diff --git a/web/app/api/blaxel/callback/route.ts b/web/app/api/blaxel/callback/route.ts
+index 7c74f2b2..58070a04 100644
+--- a/web/app/api/blaxel/callback/route.ts
++++ b/web/app/api/blaxel/callback/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import {
+   verifyBlaxelCallbackFromRequest,
+diff --git a/web/app/api/blaxel/mcp/route.ts b/web/app/api/blaxel/mcp/route.ts
+index 9a6d4b00..53857ecb 100644
+--- a/web/app/api/blaxel/mcp/route.ts
++++ b/web/app/api/blaxel/mcp/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { resolveRequestAuth } from '@/lib/auth/request-auth';
+ import { getBlaxelMcpService, type BlaxelDeploymentConfig } from '@/lib/mcp/blaxel-mcp-service';
+diff --git a/web/app/api/bookmarks/metadata/route.ts b/web/app/api/bookmarks/metadata/route.ts
+index fa81cc5c..aab1a621 100644
+--- a/web/app/api/bookmarks/metadata/route.ts
++++ b/web/app/api/bookmarks/metadata/route.ts
+@@ -6,7 +6,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ 
+ export const dynamic = 'force-dynamic';
+diff --git a/web/app/api/bookmarks/route.ts b/web/app/api/bookmarks/route.ts
+index 8f286ff0..13089cc3 100644
+--- a/web/app/api/bookmarks/route.ts
++++ b/web/app/api/bookmarks/route.ts
+@@ -6,7 +6,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { readFile, writeFile, mkdir } from 'fs/promises';
+ import { join } from 'path';
+diff --git a/web/app/api/broadway/deals/route.ts b/web/app/api/broadway/deals/route.ts
+index 597078c4..aac02509 100644
+--- a/web/app/api/broadway/deals/route.ts
++++ b/web/app/api/broadway/deals/route.ts
+@@ -7,7 +7,6 @@
+ 
+ import { NextRequest, NextResponse } from "next/server";
+ 
+-export const runtime = 'edge';
+ 
+ 
+ // Ticketmaster API configuration
+diff --git a/web/app/api/chat-with-context/route.ts b/web/app/api/chat-with-context/route.ts
+index 278d0213..e8fa7c20 100644
+--- a/web/app/api/chat-with-context/route.ts
++++ b/web/app/api/chat-with-context/route.ts
+@@ -1,6 +1,5 @@
+ import { NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { createClient } from 'webdav';
+ import { diffLines } from 'diff';
+diff --git a/web/app/api/chat/history/route.ts b/web/app/api/chat/history/route.ts
+index 0cc3762e..f89de6bc 100644
+--- a/web/app/api/chat/history/route.ts
++++ b/web/app/api/chat/history/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { getDatabase, DatabaseOperations } from '@/lib/database/connection';
+ import { resolveRequestAuth } from '@/lib/auth/request-auth';
+diff --git a/web/app/api/chat/modes/route.ts b/web/app/api/chat/modes/route.ts
+index e4dcfc11..8c915763 100644
+--- a/web/app/api/chat/modes/route.ts
++++ b/web/app/api/chat/modes/route.ts
+@@ -16,7 +16,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { getDatabase } from '@/lib/database/connection';
+ import { createLogger } from '@/lib/utils/logger';
+diff --git a/web/app/api/chat/prewarm/route.ts b/web/app/api/chat/prewarm/route.ts
+index beed340d..b61ff5ac 100644
+--- a/web/app/api/chat/prewarm/route.ts
++++ b/web/app/api/chat/prewarm/route.ts
+@@ -1,6 +1,5 @@
+ import { NextResponse } from "next/server";
+ 
+-export const runtime = 'edge';
+ 
+ 
+ // Pre-warm endpoint to initialize LLM service and avoid cold starts
+diff --git a/web/app/api/chat/route.ts b/web/app/api/chat/route.ts
+index 39ba14e4..dbb97106 100644
+--- a/web/app/api/chat/route.ts
++++ b/web/app/api/chat/route.ts
+@@ -63,7 +63,6 @@ import {
+ import { applyPromptModifiers, getPreset, PROMPT_PRESETS, generateDebugHeaderValue, emitTelemetryEvent, type PromptParameters } from '@bing/shared/agent/prompt-parameters';
+ 
+ // Force Node.js runtime for Daytona SDK compatibility
+-export const runtime = 'edge';
+ 
+ // Build-time compilation for faster cold starts
+ // Route code is pre-compiled at build time, but executes dynamically per-request
+diff --git a/web/app/api/chat/spec-mode/route.ts b/web/app/api/chat/spec-mode/route.ts
+index 986bec0e..e9e9554d 100644
+--- a/web/app/api/chat/spec-mode/route.ts
++++ b/web/app/api/chat/spec-mode/route.ts
+@@ -17,7 +17,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { getDatabase } from '@/lib/database/connection';
+ import { createLogger } from '@/lib/utils/logger';
+diff --git a/web/app/api/cicd/pipelines/route.ts b/web/app/api/cicd/pipelines/route.ts
+index 0ca96147..3d5435ce 100644
+--- a/web/app/api/cicd/pipelines/route.ts
++++ b/web/app/api/cicd/pipelines/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { resolveRequestAuth } from '@/lib/auth/request-auth';
+ 
+diff --git a/web/app/api/cicd/restart/[id]/route.ts b/web/app/api/cicd/restart/[id]/route.ts
+index 4f3c92b3..44b76f52 100644
+--- a/web/app/api/cicd/restart/[id]/route.ts
++++ b/web/app/api/cicd/restart/[id]/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { resolveRequestAuth } from '@/lib/auth/request-auth';
+ import { createAuditLogger, type AuditLogger } from '@/lib/audit/audit-logger';
+diff --git a/web/app/api/cli-install/route.ts b/web/app/api/cli-install/route.ts
+index bcc31a37..96dfb517 100644
+--- a/web/app/api/cli-install/route.ts
++++ b/web/app/api/cli-install/route.ts
+@@ -32,7 +32,6 @@
+ 
+ import { spawn } from "child_process";
+ 
+-export const runtime = 'edge';
+ 
+ import path from "path";
+ import { promises as fs } from "fs";
+diff --git a/web/app/api/cloud/resources/route.ts b/web/app/api/cloud/resources/route.ts
+index c2f8448f..6bac3367 100644
+--- a/web/app/api/cloud/resources/route.ts
++++ b/web/app/api/cloud/resources/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { resolveRequestAuth } from '@/lib/auth/request-auth';
+ 
+diff --git a/web/app/api/code/execute/route.ts b/web/app/api/code/execute/route.ts
+index 950421ce..8c562388 100644
+--- a/web/app/api/code/execute/route.ts
++++ b/web/app/api/code/execute/route.ts
+@@ -11,7 +11,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { executeCode, getCodeTemplate, type CodeLanguage } from '@/lib/code-executor/code-executor';
+ import { withAuth, logSecurityEvent, type EnhancedAuthResult } from '@/lib/auth/enhanced-middleware';
+diff --git a/web/app/api/code/snippets/route.ts b/web/app/api/code/snippets/route.ts
+index 7bd28e77..e5a79038 100644
+--- a/web/app/api/code/snippets/route.ts
++++ b/web/app/api/code/snippets/route.ts
+@@ -8,7 +8,6 @@
+ 
+ import { NextRequest, NextResponse } from "next/server";
+ 
+-export const runtime = 'edge';
+ 
+ import { readFile, writeFile, mkdir, rename, unlink } from "fs/promises";
+ import { join } from "path";
+diff --git a/web/app/api/cron-jobs/[id]/route.ts b/web/app/api/cron-jobs/[id]/route.ts
+index edfb3329..5f52382a 100644
+--- a/web/app/api/cron-jobs/[id]/route.ts
++++ b/web/app/api/cron-jobs/[id]/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { resolveFilesystemOwner } from '@/lib/virtual-filesystem/resolve-filesystem-owner';
+ import { z } from 'zod';
+diff --git a/web/app/api/cron-jobs/[id]/trigger/route.ts b/web/app/api/cron-jobs/[id]/trigger/route.ts
+index 73f561f6..8b04adde 100644
+--- a/web/app/api/cron-jobs/[id]/trigger/route.ts
++++ b/web/app/api/cron-jobs/[id]/trigger/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { resolveFilesystemOwner } from '@/lib/virtual-filesystem/resolve-filesystem-owner';
+ 
+diff --git a/web/app/api/cron-jobs/route.ts b/web/app/api/cron-jobs/route.ts
+index df444a04..b488a681 100644
+--- a/web/app/api/cron-jobs/route.ts
++++ b/web/app/api/cron-jobs/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { resolveFilesystemOwner } from '@/lib/virtual-filesystem/resolve-filesystem-owner';
+ import { z } from 'zod';
+diff --git a/web/app/api/csp-report/route.ts b/web/app/api/csp-report/route.ts
+index 75bab247..2e3bc7d3 100644
+--- a/web/app/api/csp-report/route.ts
++++ b/web/app/api/csp-report/route.ts
+@@ -10,7 +10,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ 
+ interface CSPReport {
+diff --git a/web/app/api/deals/route.ts b/web/app/api/deals/route.ts
+index 3af00abb..c1afb722 100644
+--- a/web/app/api/deals/route.ts
++++ b/web/app/api/deals/route.ts
+@@ -7,7 +7,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ 
+ interface Deal {
+diff --git a/web/app/api/debug/tool-telemetry/route.ts b/web/app/api/debug/tool-telemetry/route.ts
+index 39cc65a8..1228a604 100644
+--- a/web/app/api/debug/tool-telemetry/route.ts
++++ b/web/app/api/debug/tool-telemetry/route.ts
+@@ -9,7 +9,6 @@
+ 
+ import { NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { getToolCallTelemetrySummary, logTelemetrySummary } from '@/lib/chat/tool-call-telemetry';
+ 
+diff --git a/web/app/api/desktop/[id]/[action]/route.ts b/web/app/api/desktop/[id]/[action]/route.ts
+index 5157d987..69a04d51 100644
+--- a/web/app/api/desktop/[id]/[action]/route.ts
++++ b/web/app/api/desktop/[id]/[action]/route.ts
+@@ -9,7 +9,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { e2bDesktopProvider, type DesktopAction } from '@/lib/computer/e2b-desktop-provider-enhanced';
+ import { verifyToken } from '@/lib/security/jwt-auth';
+diff --git a/web/app/api/desktop/[id]/route.ts b/web/app/api/desktop/[id]/route.ts
+index 307f1626..a5968274 100644
+--- a/web/app/api/desktop/[id]/route.ts
++++ b/web/app/api/desktop/[id]/route.ts
+@@ -9,7 +9,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { e2bDesktopProvider } from '@/lib/computer/e2b-desktop-provider-enhanced';
+ import { verifyToken } from '@/lib/security/jwt-auth';
+diff --git a/web/app/api/desktop/route.ts b/web/app/api/desktop/route.ts
+index 70072cdf..3265b44c 100644
+--- a/web/app/api/desktop/route.ts
++++ b/web/app/api/desktop/route.ts
+@@ -21,7 +21,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { e2bDesktopProvider } from '@/lib/computer/e2b-desktop-provider-enhanced';
+ import { verifyToken } from '@/lib/security/jwt-auth';
+diff --git a/web/app/api/docker/compose/route.ts b/web/app/api/docker/compose/route.ts
+index 12f7304a..e35a7692 100644
+--- a/web/app/api/docker/compose/route.ts
++++ b/web/app/api/docker/compose/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { resolveRequestAuth } from '@/lib/auth/request-auth';
+ 
+diff --git a/web/app/api/docker/containers/route.ts b/web/app/api/docker/containers/route.ts
+index 3166daf3..e58bb902 100644
+--- a/web/app/api/docker/containers/route.ts
++++ b/web/app/api/docker/containers/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { resolveRequestAuth } from '@/lib/auth/request-auth';
+ 
+diff --git a/web/app/api/docker/exec/route.ts b/web/app/api/docker/exec/route.ts
+index d2ab7d52..9d8b0f98 100644
+--- a/web/app/api/docker/exec/route.ts
++++ b/web/app/api/docker/exec/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { resolveRequestAuth } from '@/lib/auth/request-auth';
+ import { verifyContainerOwnership, validateContainerId } from '@/lib/docker/docker-security';
+diff --git a/web/app/api/docker/remove/[id]/route.ts b/web/app/api/docker/remove/[id]/route.ts
+index f3e143df..21a1fe09 100644
+--- a/web/app/api/docker/remove/[id]/route.ts
++++ b/web/app/api/docker/remove/[id]/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { resolveRequestAuth } from '@/lib/auth/request-auth';
+ 
+diff --git a/web/app/api/docker/start/[id]/route.ts b/web/app/api/docker/start/[id]/route.ts
+index 850b32ba..f5af483e 100644
+--- a/web/app/api/docker/start/[id]/route.ts
++++ b/web/app/api/docker/start/[id]/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { resolveRequestAuth } from '@/lib/auth/request-auth';
+ 
+diff --git a/web/app/api/docker/stop/[id]/route.ts b/web/app/api/docker/stop/[id]/route.ts
+index b82ba445..21d805b5 100644
+--- a/web/app/api/docker/stop/[id]/route.ts
++++ b/web/app/api/docker/stop/[id]/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { resolveRequestAuth } from '@/lib/auth/request-auth';
+ 
+diff --git a/web/app/api/embed/route.ts b/web/app/api/embed/route.ts
+index 3782bbbc..87d540fb 100644
+--- a/web/app/api/embed/route.ts
++++ b/web/app/api/embed/route.ts
+@@ -10,7 +10,6 @@
+ 
+ import { NextRequest, NextResponse } from "next/server";
+ 
+-export const runtime = 'edge';
+ 
+ 
+ const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+diff --git a/web/app/api/events/route.ts b/web/app/api/events/route.ts
+index 7a918a46..859bd19a 100644
+--- a/web/app/api/events/route.ts
++++ b/web/app/api/events/route.ts
+@@ -12,7 +12,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { auth0 } from '@/lib/auth0';
+ import { emitEvent } from '@/lib/events/bus';
+diff --git a/web/app/api/events/stream/route.ts b/web/app/api/events/stream/route.ts
+index 7ef05b2b..1209bd0f 100644
+--- a/web/app/api/events/stream/route.ts
++++ b/web/app/api/events/stream/route.ts
+@@ -9,7 +9,6 @@
+ 
+ import { NextRequest } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { auth0 } from '@/lib/auth0';
+ import { getDatabase } from '@/lib/database/connection';
+diff --git a/web/app/api/filesystem/commits/route.ts b/web/app/api/filesystem/commits/route.ts
+index e71f0439..c6275700 100644
+--- a/web/app/api/filesystem/commits/route.ts
++++ b/web/app/api/filesystem/commits/route.ts
+@@ -5,7 +5,7 @@ import { resolveFilesystemOwnerWithFallback } from '../utils';
+ import { ShadowCommitManager } from '@/lib/orchestra/stateful-agent/commit/shadow-commit';
+ import { sessionIdSchema } from '@/lib/validation/schemas';
+ 
+-export const runtime = 'edge';
++
+ 
+ /**
+  * GET /api/filesystem/commits?sessionId=...&limit=20
+diff --git a/web/app/api/filesystem/context-pack/route.ts b/web/app/api/filesystem/context-pack/route.ts
+index 0c1d2201..dc049415 100644
+--- a/web/app/api/filesystem/context-pack/route.ts
++++ b/web/app/api/filesystem/context-pack/route.ts
+@@ -5,7 +5,7 @@ import { resolveFilesystemOwnerWithFallback } from '../utils';
+ import { contextPackService, type ContextPackFormat } from '@/lib/virtual-filesystem/context-pack-service';
+ import { absolutePathSchema, contextPackOptionsSchema } from '@/lib/validation/schemas';
+ 
+-export const runtime = 'edge';
++
+ 
+ /**
+  * GET /api/filesystem/context-pack?path=/src&format=markdown&includeContents=true
+diff --git a/web/app/api/filesystem/create-file/route.ts b/web/app/api/filesystem/create-file/route.ts
+index 0d8d228c..ef5c2e30 100644
+--- a/web/app/api/filesystem/create-file/route.ts
++++ b/web/app/api/filesystem/create-file/route.ts
+@@ -21,7 +21,7 @@ const log = (...args: any[]) => DEBUG && console.log(`${COLORS.bright}${COLORS.g
+ const logWarn = (...args: any[]) => console.warn(`${COLORS.bright}${COLORS.yellow}[VFS CREATE FILE WARN]${COLORS.reset}`, ...args);
+ const logError = (...args: any[]) => console.error(`${COLORS.bright}${COLORS.red}[VFS CREATE FILE ERROR]${COLORS.reset}`, ...args);
+ 
+-export const runtime = 'edge';
++
+ 
+ /**
+  * Schema for filesystem create file requests
+diff --git a/web/app/api/filesystem/delete/route.ts b/web/app/api/filesystem/delete/route.ts
+index e6c7008c..f869a1c6 100644
+--- a/web/app/api/filesystem/delete/route.ts
++++ b/web/app/api/filesystem/delete/route.ts
+@@ -6,7 +6,7 @@ import type { FilesystemOwnerResolution } from '@/lib/virtual-filesystem/resolve
+ import { absolutePathSchema } from '@/lib/validation/schemas';
+ import { isOutsideWorkspace } from '@/lib/agent-bins/workspace-boundary';
+ 
+-export const runtime = 'edge';
++
+ 
+ /**
+  * Schema for filesystem delete requests
+diff --git a/web/app/api/filesystem/diffs/apply/route.ts b/web/app/api/filesystem/diffs/apply/route.ts
+index 1a2ef6a9..497eaf0d 100644
+--- a/web/app/api/filesystem/diffs/apply/route.ts
++++ b/web/app/api/filesystem/diffs/apply/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { virtualFilesystem } from '@/lib/virtual-filesystem/index.server';
+ import { resolveScopedPath, normalizeSessionId } from '@/lib/virtual-filesystem/scope-utils';
+diff --git a/web/app/api/filesystem/diffs/route.ts b/web/app/api/filesystem/diffs/route.ts
+index e6892cab..af83b574 100644
+--- a/web/app/api/filesystem/diffs/route.ts
++++ b/web/app/api/filesystem/diffs/route.ts
+@@ -7,7 +7,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { z } from 'zod';
+ import { withAnonSessionCookie } from '@/lib/virtual-filesystem/index.server';
+diff --git a/web/app/api/filesystem/edits/accept/route.ts b/web/app/api/filesystem/edits/accept/route.ts
+index b1109b01..9bbc1495 100644
+--- a/web/app/api/filesystem/edits/accept/route.ts
++++ b/web/app/api/filesystem/edits/accept/route.ts
+@@ -7,7 +7,7 @@ import {
+ import { resolveFilesystemOwnerWithFallback } from '../../utils';
+ import { transactionIdSchema } from '@/lib/validation/schemas';
+ 
+-export const runtime = 'edge';
++
+ 
+ const acceptEditRequestSchema = z.object({
+   transactionId: transactionIdSchema,
+diff --git a/web/app/api/filesystem/edits/deny/route.ts b/web/app/api/filesystem/edits/deny/route.ts
+index a059278d..cb581051 100644
+--- a/web/app/api/filesystem/edits/deny/route.ts
++++ b/web/app/api/filesystem/edits/deny/route.ts
+@@ -7,7 +7,7 @@ import {
+ import { resolveFilesystemOwnerWithFallback } from '../../utils';
+ import { transactionIdSchema } from '@/lib/validation/schemas';
+ 
+-export const runtime = 'edge';
++
+ 
+ const denyEditRequestSchema = z.object({
+   transactionId: transactionIdSchema,
+diff --git a/web/app/api/filesystem/events/push/route.ts b/web/app/api/filesystem/events/push/route.ts
+index d41c12b3..3e41559d 100644
+--- a/web/app/api/filesystem/events/push/route.ts
++++ b/web/app/api/filesystem/events/push/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { z } from 'zod';
+ import { resolveFilesystemOwner } from '@/lib/virtual-filesystem/resolve-filesystem-owner';
+diff --git a/web/app/api/filesystem/import/route.ts b/web/app/api/filesystem/import/route.ts
+index ba65aae8..08ba404d 100644
+--- a/web/app/api/filesystem/import/route.ts
++++ b/web/app/api/filesystem/import/route.ts
+@@ -37,7 +37,7 @@ import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events
+ import { extractScopePath } from '@/lib/virtual-filesystem/scope-utils';
+ import type { FilesystemOwnerResolution } from '@/lib/virtual-filesystem/resolve-filesystem-owner';
+ 
+-export const runtime = 'edge';
++
+ 
+ // SECURITY: O(1) body size guard — checked BEFORE buffering files into memory
+ // Lower than FileImportService.MAX_TOTAL_SIZE (500MB) to prevent OOM from in-memory buffering
+diff --git a/web/app/api/filesystem/list/route.ts b/web/app/api/filesystem/list/route.ts
+index cbde4881..ff58cd1a 100644
+--- a/web/app/api/filesystem/list/route.ts
++++ b/web/app/api/filesystem/list/route.ts
+@@ -3,7 +3,7 @@ import { z } from 'zod';
+ import { virtualFilesystem, withAnonSessionCookie } from '@/lib/virtual-filesystem/index.server';
+ import { resolveFilesystemOwnerWithFallback, normalizeFilesystemPath } from '../utils';
+ 
+-export const runtime = 'edge';
++
+ 
+ // Request tracking for detecting polling loops
+ const requestTracker = new Map<string, { count: number; lastRequest: number; firstRequest: number }>();
+diff --git a/web/app/api/filesystem/mkdir/route.ts b/web/app/api/filesystem/mkdir/route.ts
+index 2ba49d99..d535c0f7 100644
+--- a/web/app/api/filesystem/mkdir/route.ts
++++ b/web/app/api/filesystem/mkdir/route.ts
+@@ -22,7 +22,7 @@ const log = (...args: any[]) => DEBUG && console.log(`${COLORS.bright}${COLORS.c
+ const logWarn = (...args: any[]) => console.warn(`${COLORS.bright}${COLORS.yellow}[VFS MKDIR WARN]${COLORS.reset}`, ...args);
+ const logError = (...args: any[]) => console.error(`${COLORS.bright}${COLORS.red}[VFS MKDIR ERROR]${COLORS.reset}`, ...args);
+ 
+-export const runtime = 'edge';
++
+ 
+ /**
+  * Schema for filesystem mkdir requests
+diff --git a/web/app/api/filesystem/move/route.ts b/web/app/api/filesystem/move/route.ts
+index 0bd4ebec..a4fbe767 100644
+--- a/web/app/api/filesystem/move/route.ts
++++ b/web/app/api/filesystem/move/route.ts
+@@ -25,7 +25,7 @@ import type { FilesystemOwnerResolution } from '@/lib/virtual-filesystem/resolve
+ 
+ const logger = createLogger('API:Filesystem:Move');
+ 
+-export const runtime = 'edge';
++
+ 
+ const moveRequestSchema = z.object({
+   sourcePath: z.string().min(1, 'Source path is required'),
+diff --git a/web/app/api/filesystem/read/route.ts b/web/app/api/filesystem/read/route.ts
+index 961a478e..9fa9d33d 100644
+--- a/web/app/api/filesystem/read/route.ts
++++ b/web/app/api/filesystem/read/route.ts
+@@ -4,7 +4,7 @@ import { virtualFilesystem, withAnonSessionCookie } from '@/lib/virtual-filesyst
+ import { pathSchema } from '@/lib/validation/schemas';
+ import { resolveFilesystemOwnerWithFallback } from '../utils';
+ 
+-export const runtime = 'edge';
++
+ 
+ function looksLikeCssValueSegment(segment: string): boolean {
+   return /^(?:\d*\.\d+|\d+[a-z%]+)$/i.test(segment);
+diff --git a/web/app/api/filesystem/rename/route.ts b/web/app/api/filesystem/rename/route.ts
+index 7b4e9112..a0aa002c 100644
+--- a/web/app/api/filesystem/rename/route.ts
++++ b/web/app/api/filesystem/rename/route.ts
+@@ -25,7 +25,7 @@ import type { FilesystemOwnerResolution } from '@/lib/virtual-filesystem/resolve
+ 
+ const logger = createLogger('API:Filesystem:Rename');
+ 
+-export const runtime = 'edge';
++
+ 
+ const renameRequestSchema = z.object({
+   oldPath: z.string().min(1, 'Source path is required'),
+diff --git a/web/app/api/filesystem/rollback/route.ts b/web/app/api/filesystem/rollback/route.ts
+index fb7e9818..ab867ff3 100644
+--- a/web/app/api/filesystem/rollback/route.ts
++++ b/web/app/api/filesystem/rollback/route.ts
+@@ -5,7 +5,7 @@ import { resolveFilesystemOwnerWithFallback } from '../utils';
+ import { ShadowCommitManager } from '@/lib/orchestra/stateful-agent/commit/shadow-commit';
+ import { sessionIdSchema, commitIdSchema } from '@/lib/validation/schemas';
+ 
+-export const runtime = 'edge';
++
+ 
+ /**
+  * POST /api/filesystem/rollback
+diff --git a/web/app/api/filesystem/search/route.ts b/web/app/api/filesystem/search/route.ts
+index ba8712b7..74420875 100644
+--- a/web/app/api/filesystem/search/route.ts
++++ b/web/app/api/filesystem/search/route.ts
+@@ -4,7 +4,7 @@ import { virtualFilesystem, withAnonSessionCookie } from '@/lib/virtual-filesyst
+ import { resolveFilesystemOwnerWithFallback } from '../utils';
+ import { searchQuerySchema, pathSchema } from '@/lib/validation/schemas';
+ 
+-export const runtime = 'edge';
++
+ 
+ /**
+  * Schema for filesystem search requests
+diff --git a/web/app/api/filesystem/snapshot/restore/route.ts b/web/app/api/filesystem/snapshot/restore/route.ts
+index 12546670..56a170b0 100644
+--- a/web/app/api/filesystem/snapshot/restore/route.ts
++++ b/web/app/api/filesystem/snapshot/restore/route.ts
+@@ -4,7 +4,7 @@ import { createLogger } from '@/lib/utils/logger';
+ 
+ const logger = createLogger('API:VFS:Snapshot:Restore');
+ 
+-export const runtime = 'edge';
++
+ 
+ /**
+  * POST /api/filesystem/snapshot/restore
+diff --git a/web/app/api/filesystem/snapshot/route.ts b/web/app/api/filesystem/snapshot/route.ts
+index 8e80d9c5..59740b09 100644
+--- a/web/app/api/filesystem/snapshot/route.ts
++++ b/web/app/api/filesystem/snapshot/route.ts
+@@ -5,7 +5,7 @@ import { fsBridge, isUsingLocalFS } from '@bing/shared/FS/fs-bridge';
+ import { resolveFilesystemOwner, virtualFilesystem, withAnonSessionCookie } from '@/lib/virtual-filesystem/index.server';
+ import type { FilesystemOwnerResolution } from '@/lib/virtual-filesystem/resolve-filesystem-owner';
+ 
+-export const runtime = 'edge';
++
+ 
+ // Server-side LRU cache for snapshots
+ // CRITICAL FIX: Use globalThis to survive Next.js hot-reloading
+diff --git a/web/app/api/filesystem/write/route.ts b/web/app/api/filesystem/write/route.ts
+index d4708d94..3cc193eb 100644
+--- a/web/app/api/filesystem/write/route.ts
++++ b/web/app/api/filesystem/write/route.ts
+@@ -10,7 +10,7 @@ import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events
+ import type { FilesystemOwnerResolution } from '@/lib/virtual-filesystem/resolve-filesystem-owner';
+ import type { ResolvedRequestAuth } from '@/lib/auth/auth-cache';
+ 
+-export const runtime = 'edge';
++
+ 
+ /**
+  * Schema for filesystem write requests
+diff --git a/web/app/api/gateway/git/[sessionId]/rollback/route.ts b/web/app/api/gateway/git/[sessionId]/rollback/route.ts
+index 067672c9..404ec539 100644
+--- a/web/app/api/gateway/git/[sessionId]/rollback/route.ts
++++ b/web/app/api/gateway/git/[sessionId]/rollback/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { getDatabase } from '@/lib/database/connection';
+ import { resolveFilesystemOwnerWithFallback } from '@/app/api/filesystem/utils';
+diff --git a/web/app/api/gateway/git/[sessionId]/versions/route.ts b/web/app/api/gateway/git/[sessionId]/versions/route.ts
+index 286a1192..511da4dc 100644
+--- a/web/app/api/gateway/git/[sessionId]/versions/route.ts
++++ b/web/app/api/gateway/git/[sessionId]/versions/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { getDatabase } from '@/lib/database/connection';
+ import { resolveFilesystemOwnerWithFallback } from '@/app/api/filesystem/utils';
+diff --git a/web/app/api/github/zipball/[owner]/[repo]/route.ts b/web/app/api/github/zipball/[owner]/[repo]/route.ts
+index fe0107f8..57fffb31 100644
+--- a/web/app/api/github/zipball/[owner]/[repo]/route.ts
++++ b/web/app/api/github/zipball/[owner]/[repo]/route.ts
+@@ -7,7 +7,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ 
+ // Validate GitHub owner/repo format (alphanumeric, dashes, underscores, dots)
+diff --git a/web/app/api/health/route.ts b/web/app/api/health/route.ts
+index 7b2b99cf..1bc3646a 100644
+--- a/web/app/api/health/route.ts
++++ b/web/app/api/health/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from "next/server";
+ 
+-export const runtime = 'edge';
+ 
+ import { enhancedLLMService } from "@/lib/chat/enhanced-llm-service";
+ import { enhancedAPIClient } from "@/lib/chat/enhanced-api-client";
+diff --git a/web/app/api/huggingface/audio/route.ts b/web/app/api/huggingface/audio/route.ts
+index 0e7cac22..97b04dc5 100644
+--- a/web/app/api/huggingface/audio/route.ts
++++ b/web/app/api/huggingface/audio/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ 
+ /**
+diff --git a/web/app/api/huggingface/inference/route.ts b/web/app/api/huggingface/inference/route.ts
+index aeafd675..f24d3136 100644
+--- a/web/app/api/huggingface/inference/route.ts
++++ b/web/app/api/huggingface/inference/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ 
+ /**
+diff --git a/web/app/api/image-proxy/route.ts b/web/app/api/image-proxy/route.ts
+index d605ef15..7acc1af2 100644
+--- a/web/app/api/image-proxy/route.ts
++++ b/web/app/api/image-proxy/route.ts
+@@ -14,7 +14,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import ipaddr from 'ipaddr.js';
+ import { validateImageUrl, isHostnameSafe } from '@/lib/utils/image-loader';
+diff --git a/web/app/api/image/generate/route.ts b/web/app/api/image/generate/route.ts
+index 403cc064..184055cd 100644
+--- a/web/app/api/image/generate/route.ts
++++ b/web/app/api/image/generate/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server'
+ 
+-export const runtime = 'edge';
+ 
+ import {
+   getDefaultRegistry,
+diff --git a/web/app/api/image/validate/route.ts b/web/app/api/image/validate/route.ts
+index 502dea46..9b9733fe 100644
+--- a/web/app/api/image/validate/route.ts
++++ b/web/app/api/image/validate/route.ts
+@@ -13,7 +13,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { validateImageUrl } from '@/lib/utils/image-loader';
+ import { sanitizeUrlInput } from '@/lib/utils/sanitize';
+diff --git a/web/app/api/immersive/content/[url]/route.ts b/web/app/api/immersive/content/[url]/route.ts
+index 5657eafe..79639897 100644
+--- a/web/app/api/immersive/content/[url]/route.ts
++++ b/web/app/api/immersive/content/[url]/route.ts
+@@ -12,7 +12,6 @@
+ 
+ import { NextRequest, NextResponse } from "next/server";
+ 
+-export const runtime = 'edge';
+ 
+ import { auth0 } from "@/lib/auth0";
+ import { readFile, writeFile, mkdir } from "fs/promises";
+diff --git a/web/app/api/integrations/arcade/auth/route.ts b/web/app/api/integrations/arcade/auth/route.ts
+index 3c03aadc..2a537d78 100644
+--- a/web/app/api/integrations/arcade/auth/route.ts
++++ b/web/app/api/integrations/arcade/auth/route.ts
+@@ -23,7 +23,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { resolveRequestAuth } from '@/lib/auth/request-auth';
+ import { authService } from '@/lib/auth/auth-service';
+diff --git a/web/app/api/integrations/arcade/token/route.ts b/web/app/api/integrations/arcade/token/route.ts
+index 41ea2619..a47eb826 100644
+--- a/web/app/api/integrations/arcade/token/route.ts
++++ b/web/app/api/integrations/arcade/token/route.ts
+@@ -10,7 +10,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { resolveRequestAuth } from '@/lib/auth/request-auth';
+ import { authService } from '@/lib/auth/auth-service';
+diff --git a/web/app/api/integrations/audit/route.ts b/web/app/api/integrations/audit/route.ts
+index 72efa40c..36e2852a 100644
+--- a/web/app/api/integrations/audit/route.ts
++++ b/web/app/api/integrations/audit/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { resolveRequestAuth } from '@/lib/auth/request-auth';
+ import { getUserAuditTrail, getUserExecutionStats } from '@/lib/integrations/execution-audit';
+diff --git a/web/app/api/integrations/connections/route.ts b/web/app/api/integrations/connections/route.ts
+index 0e12fd87..7641175d 100644
+--- a/web/app/api/integrations/connections/route.ts
++++ b/web/app/api/integrations/connections/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { getDatabase } from '@/lib/database/connection';
+ import { resolveRequestAuth } from '@/lib/auth/request-auth';
+diff --git a/web/app/api/integrations/execute/route.ts b/web/app/api/integrations/execute/route.ts
+index 39511a05..825284f3 100644
+--- a/web/app/api/integrations/execute/route.ts
++++ b/web/app/api/integrations/execute/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { resolveRequestAuth } from '@/lib/auth/request-auth';
+ import { actionRegistry, type HandlerContext } from '@/lib/integrations/action-registry';
+diff --git a/web/app/api/integrations/figma/callback/route.ts b/web/app/api/integrations/figma/callback/route.ts
+index d4ded535..d7e36424 100644
+--- a/web/app/api/integrations/figma/callback/route.ts
++++ b/web/app/api/integrations/figma/callback/route.ts
+@@ -18,7 +18,7 @@ import { exchangeCodeForToken, calculateExpiryDate } from '@/lib/figma/oauth';
+ import { getFigmaRedirectUri } from '@/lib/figma/config';
+ import { oauthStateStore } from '../oauth-state-store';
+ 
+-export const runtime = 'edge';
++
+ 
+ /**
+  * GET /api/integrations/figma/callback
+diff --git a/web/app/api/integrations/figma/route.ts b/web/app/api/integrations/figma/route.ts
+index aa7dc231..6899ba89 100644
+--- a/web/app/api/integrations/figma/route.ts
++++ b/web/app/api/integrations/figma/route.ts
+@@ -18,7 +18,7 @@ import { isFigmaConfigured, getFigmaRedirectUri } from '@/lib/figma/config';
+ import { generateCodeVerifier, generateCodeChallenge, generateState, generateAuthUrl } from '@/lib/figma/oauth';
+ import { oauthStateStore } from './oauth-state-store';
+ 
+-export const runtime = 'edge';
++
+ 
+ // ============================================================================
+ // Database Helpers
+diff --git a/web/app/api/integrations/github/oauth/authorize/route.ts b/web/app/api/integrations/github/oauth/authorize/route.ts
+index 3b0c77cf..216c2776 100644
+--- a/web/app/api/integrations/github/oauth/authorize/route.ts
++++ b/web/app/api/integrations/github/oauth/authorize/route.ts
+@@ -7,7 +7,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { getGitHubOAuthUrl } from '@/lib/github/github-oauth';
+ 
+diff --git a/web/app/api/integrations/github/oauth/callback/route.ts b/web/app/api/integrations/github/oauth/callback/route.ts
+index 5ae91595..221ecbea 100644
+--- a/web/app/api/integrations/github/oauth/callback/route.ts
++++ b/web/app/api/integrations/github/oauth/callback/route.ts
+@@ -7,7 +7,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { exchangeCodeForToken, getGitHubUser, saveGitHubToken } from '@/lib/github/github-oauth';
+ import { auth0 } from '@/lib/auth0';
+diff --git a/web/app/api/integrations/github/oauth/disconnect/route.ts b/web/app/api/integrations/github/oauth/disconnect/route.ts
+index c33e657c..21720e6c 100644
+--- a/web/app/api/integrations/github/oauth/disconnect/route.ts
++++ b/web/app/api/integrations/github/oauth/disconnect/route.ts
+@@ -6,7 +6,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { auth0 } from '@/lib/auth0';
+ import { disconnectGitHub } from '@/lib/github/github-oauth';
+diff --git a/web/app/api/integrations/github/oauth/status/route.ts b/web/app/api/integrations/github/oauth/status/route.ts
+index 2cb08237..80166522 100644
+--- a/web/app/api/integrations/github/oauth/status/route.ts
++++ b/web/app/api/integrations/github/oauth/status/route.ts
+@@ -6,7 +6,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { auth0 } from '@/lib/auth0';
+ import { getGitHubToken, isGitHubConnected, getGitHubUser } from '@/lib/github/github-oauth';
+diff --git a/web/app/api/integrations/github/route.ts b/web/app/api/integrations/github/route.ts
+index 28bc15fd..289d1c95 100644
+--- a/web/app/api/integrations/github/route.ts
++++ b/web/app/api/integrations/github/route.ts
+@@ -23,7 +23,7 @@ import { resolveFilesystemOwnerWithFallback } from '@/app/api/filesystem/utils';
+ import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
+ import crypto from 'crypto';
+ 
+-export const runtime = 'edge';
++
+ 
+ const GITHUB_API = 'https://api.github.com';
+ 
+diff --git a/web/app/api/integrations/github/source-control/branch/route.ts b/web/app/api/integrations/github/source-control/branch/route.ts
+index 92147b62..1b8b1ca4 100644
+--- a/web/app/api/integrations/github/source-control/branch/route.ts
++++ b/web/app/api/integrations/github/source-control/branch/route.ts
+@@ -6,7 +6,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { auth0 } from '@/lib/auth0';
+ import { getGitHubToken, githubApi } from '@/lib/github/github-oauth';
+diff --git a/web/app/api/integrations/github/source-control/branches/route.ts b/web/app/api/integrations/github/source-control/branches/route.ts
+index da3bc00e..a6b81d13 100644
+--- a/web/app/api/integrations/github/source-control/branches/route.ts
++++ b/web/app/api/integrations/github/source-control/branches/route.ts
+@@ -6,7 +6,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { auth0 } from '@/lib/auth0';
+ import { getGitHubToken } from '@/lib/github/github-oauth';
+diff --git a/web/app/api/integrations/github/source-control/commit/route.ts b/web/app/api/integrations/github/source-control/commit/route.ts
+index 9e9a4ae0..271f87b5 100644
+--- a/web/app/api/integrations/github/source-control/commit/route.ts
++++ b/web/app/api/integrations/github/source-control/commit/route.ts
+@@ -6,7 +6,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { auth0 } from '@/lib/auth0';
+ import { getGitHubToken, githubApi } from '@/lib/github/github-oauth';
+diff --git a/web/app/api/integrations/github/source-control/commits/route.ts b/web/app/api/integrations/github/source-control/commits/route.ts
+index ba883f6b..d9f418aa 100644
+--- a/web/app/api/integrations/github/source-control/commits/route.ts
++++ b/web/app/api/integrations/github/source-control/commits/route.ts
+@@ -6,7 +6,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { auth0 } from '@/lib/auth0';
+ import { getGitHubToken } from '@/lib/github/github-oauth';
+diff --git a/web/app/api/integrations/github/source-control/import-repo/route.ts b/web/app/api/integrations/github/source-control/import-repo/route.ts
+index 05bb0eb3..8a688dcf 100644
+--- a/web/app/api/integrations/github/source-control/import-repo/route.ts
++++ b/web/app/api/integrations/github/source-control/import-repo/route.ts
+@@ -7,7 +7,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { auth0 } from '@/lib/auth0';
+ import { getGitHubToken } from '@/lib/github/github-oauth';
+diff --git a/web/app/api/integrations/github/source-control/pr/route.ts b/web/app/api/integrations/github/source-control/pr/route.ts
+index f43344a2..224a2698 100644
+--- a/web/app/api/integrations/github/source-control/pr/route.ts
++++ b/web/app/api/integrations/github/source-control/pr/route.ts
+@@ -6,7 +6,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { auth0 } from '@/lib/auth0';
+ import { getGitHubToken, githubApi } from '@/lib/github/github-oauth';
+diff --git a/web/app/api/integrations/github/source-control/pull/route.ts b/web/app/api/integrations/github/source-control/pull/route.ts
+index 2aaae532..656aba7d 100644
+--- a/web/app/api/integrations/github/source-control/pull/route.ts
++++ b/web/app/api/integrations/github/source-control/pull/route.ts
+@@ -6,7 +6,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { auth0 } from '@/lib/auth0';
+ import { getGitHubToken, githubApi } from '@/lib/github/github-oauth';
+diff --git a/web/app/api/integrations/github/source-control/push/route.ts b/web/app/api/integrations/github/source-control/push/route.ts
+index 0509ac69..715528ba 100644
+--- a/web/app/api/integrations/github/source-control/push/route.ts
++++ b/web/app/api/integrations/github/source-control/push/route.ts
+@@ -7,7 +7,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { auth0 } from '@/lib/auth0';
+ import { getGitHubToken, githubApi, pushToGitHub } from '@/lib/github/github-oauth';
+diff --git a/web/app/api/integrations/google/route.ts b/web/app/api/integrations/google/route.ts
+index 70aa53c3..a2ab5a1d 100644
+--- a/web/app/api/integrations/google/route.ts
++++ b/web/app/api/integrations/google/route.ts
+@@ -18,7 +18,7 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ import { getAccessTokenForConnection, AUTH0_CONNECTIONS } from '@/lib/auth0';
+ 
+-export const runtime = 'edge';
++
+ 
+ /**
+  * Google API base URLs
+diff --git a/web/app/api/integrations/linkedin/route.ts b/web/app/api/integrations/linkedin/route.ts
+index 9084789e..f70236a4 100644
+--- a/web/app/api/integrations/linkedin/route.ts
++++ b/web/app/api/integrations/linkedin/route.ts
+@@ -17,7 +17,7 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ import { getAccessTokenForConnection, AUTH0_CONNECTIONS } from '@/lib/auth0';
+ 
+-export const runtime = 'edge';
++
+ 
+ /**
+  * LinkedIn API base URL
+diff --git a/web/app/api/integrations/twitter/route.ts b/web/app/api/integrations/twitter/route.ts
+index 7f0f6543..d6fe9ac4 100644
+--- a/web/app/api/integrations/twitter/route.ts
++++ b/web/app/api/integrations/twitter/route.ts
+@@ -17,7 +17,7 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ import { getAccessTokenForConnection, AUTH0_CONNECTIONS } from '@/lib/auth0';
+ 
+-export const runtime = 'edge';
++
+ 
+ /**
+  * Twitter API v2 base URL
+diff --git a/web/app/api/kernel/agents/list/route.ts b/web/app/api/kernel/agents/list/route.ts
+index c461fe7a..94ec4195 100644
+--- a/web/app/api/kernel/agents/list/route.ts
++++ b/web/app/api/kernel/agents/list/route.ts
+@@ -7,7 +7,6 @@
+ 
+ import { NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { getAgentKernel } from '@bing/shared/agent';
+ 
+diff --git a/web/app/api/kernel/agents/route.ts b/web/app/api/kernel/agents/route.ts
+index f8e9d947..cf31ae71 100644
+--- a/web/app/api/kernel/agents/route.ts
++++ b/web/app/api/kernel/agents/route.ts
+@@ -8,7 +8,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { getAgentKernel, type AgentConfig } from '@bing/shared/agent';
+ 
+diff --git a/web/app/api/kernel/stats/route.ts b/web/app/api/kernel/stats/route.ts
+index 1ae1d52b..5fb1f90e 100644
+--- a/web/app/api/kernel/stats/route.ts
++++ b/web/app/api/kernel/stats/route.ts
+@@ -7,7 +7,6 @@
+ 
+ import { NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { getAgentKernel } from '@bing/shared/agent';
+ 
+diff --git a/web/app/api/livekit/token/route.ts b/web/app/api/livekit/token/route.ts
+index 8cb6f4a4..71d2470c 100644
+--- a/web/app/api/livekit/token/route.ts
++++ b/web/app/api/livekit/token/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { AccessToken } from 'livekit-server-sdk';
+ import { resolveRequestAuth } from '@/lib/auth/request-auth';
+diff --git a/web/app/api/mastra/resume/route.ts b/web/app/api/mastra/resume/route.ts
+index eeb661a2..7f22f23f 100644
+--- a/web/app/api/mastra/resume/route.ts
++++ b/web/app/api/mastra/resume/route.ts
+@@ -11,7 +11,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { getApprovalStep } from '@/lib/orchestra/mastra/workflows/hitl-workflow';
+ import { verifyAuth } from '@/lib/auth/jwt';
+diff --git a/web/app/api/mastra/status/route.ts b/web/app/api/mastra/status/route.ts
+index 51e587e9..5a95a452 100644
+--- a/web/app/api/mastra/status/route.ts
++++ b/web/app/api/mastra/status/route.ts
+@@ -8,7 +8,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { resolveRequestAuth } from '@/lib/auth/request-auth';
+ 
+diff --git a/web/app/api/mastra/workflow/route.ts b/web/app/api/mastra/workflow/route.ts
+index c7a5cbf7..c1a941a8 100644
+--- a/web/app/api/mastra/workflow/route.ts
++++ b/web/app/api/mastra/workflow/route.ts
+@@ -9,7 +9,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ 
+ // Valid workflow types
+diff --git a/web/app/api/mastra/workflows/[workflowId]/route.ts b/web/app/api/mastra/workflows/[workflowId]/route.ts
+index 6602f52a..4ffa8f8d 100644
+--- a/web/app/api/mastra/workflows/[workflowId]/route.ts
++++ b/web/app/api/mastra/workflows/[workflowId]/route.ts
+@@ -9,7 +9,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ 
+ // Lazy load Mastra to avoid build-time initialization
+diff --git a/web/app/api/mcp/connect/route.ts b/web/app/api/mcp/connect/route.ts
+index 5880f399..7927dd7d 100644
+--- a/web/app/api/mcp/connect/route.ts
++++ b/web/app/api/mcp/connect/route.ts
+@@ -1,6 +1,5 @@
+ import { NextResponse } from 'next/server'
+ 
+-export const runtime = 'edge';
+ 
+ import { isDesktopMode } from '@bing/platform/env'
+ import { createLogger } from '@/lib/utils/logger'
+diff --git a/web/app/api/mcp/init/route.ts b/web/app/api/mcp/init/route.ts
+index a783acc6..62b24095 100644
+--- a/web/app/api/mcp/init/route.ts
++++ b/web/app/api/mcp/init/route.ts
+@@ -1,6 +1,5 @@
+ import { NextResponse } from 'next/server'
+ 
+-export const runtime = 'edge';
+ 
+ import { initializeMCPForArchitecture1 } from '@/lib/mcp/architecture-integration'
+ import { isDesktopMode } from '@bing/platform/env'
+diff --git a/web/app/api/mcp/route.ts b/web/app/api/mcp/route.ts
+index 2f579c57..797e4bc5 100644
+--- a/web/app/api/mcp/route.ts
++++ b/web/app/api/mcp/route.ts
+@@ -14,7 +14,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+diff --git a/web/app/api/mcp/status/route.ts b/web/app/api/mcp/status/route.ts
+index 40a968dd..b79000ce 100644
+--- a/web/app/api/mcp/status/route.ts
++++ b/web/app/api/mcp/status/route.ts
+@@ -1,6 +1,5 @@
+ import { NextResponse } from 'next/server'
+ 
+-export const runtime = 'edge';
+ 
+ import { getMCPToolCount } from '@/lib/mcp/config'
+ import { isDesktopMode } from '@bing/platform/env'
+diff --git a/web/app/api/mcp/store/route.ts b/web/app/api/mcp/store/route.ts
+index e681e78d..4d288a2b 100644
+--- a/web/app/api/mcp/store/route.ts
++++ b/web/app/api/mcp/store/route.ts
+@@ -11,7 +11,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { auth0 } from '@/lib/auth0';
+ import { mcpStoreService } from '@/lib/mcp/mcp-store-service';
+diff --git a/web/app/api/mcp/store/sync/route.ts b/web/app/api/mcp/store/sync/route.ts
+index d9e035a8..b1acf5bf 100644
+--- a/web/app/api/mcp/store/sync/route.ts
++++ b/web/app/api/mcp/store/sync/route.ts
+@@ -4,7 +4,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { auth0 } from '@/lib/auth0';
+ import { mcpStoreService } from '@/lib/mcp/mcp-store-service';
+diff --git a/web/app/api/memory/experiences/route.ts b/web/app/api/memory/experiences/route.ts
+index 16d4af06..99f6b5c6 100644
+--- a/web/app/api/memory/experiences/route.ts
++++ b/web/app/api/memory/experiences/route.ts
+@@ -12,7 +12,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { createLogger } from '@/lib/utils/logger';
+ import {
+diff --git a/web/app/api/memory/health/route.ts b/web/app/api/memory/health/route.ts
+index bfc26832..30c1582f 100644
+--- a/web/app/api/memory/health/route.ts
++++ b/web/app/api/memory/health/route.ts
+@@ -14,7 +14,6 @@
+ 
+ import { NextRequest, NextResponse } from "next/server";
+ 
+-export const runtime = 'edge';
+ 
+ import { getMetricsSummary } from "@/lib/agent/metrics";
+ import { listProjects, getProjectSymbols } from "@/lib/memory/vectorStore";
+diff --git a/web/app/api/messaging/search/route.ts b/web/app/api/messaging/search/route.ts
+index 4ac67a54..754eeb14 100644
+--- a/web/app/api/messaging/search/route.ts
++++ b/web/app/api/messaging/search/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { MessagingIdentity } from '@/lib/messaging/identity';
+ 
+diff --git a/web/app/api/messaging/send/route.ts b/web/app/api/messaging/send/route.ts
+index 1a33a79b..2197e5ff 100644
+--- a/web/app/api/messaging/send/route.ts
++++ b/web/app/api/messaging/send/route.ts
+@@ -1,6 +1,5 @@
+ import { NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ 
+ export async function POST(req: Request) {
+diff --git a/web/app/api/messaging/stream/route.ts b/web/app/api/messaging/stream/route.ts
+index 1be17a3b..0616d2d7 100644
+--- a/web/app/api/messaging/stream/route.ts
++++ b/web/app/api/messaging/stream/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ 
+ export async function GET(req: NextRequest) {
+diff --git a/web/app/api/metrics/route.ts b/web/app/api/metrics/route.ts
+index a61eed91..a1f02b69 100644
+--- a/web/app/api/metrics/route.ts
++++ b/web/app/api/metrics/route.ts
+@@ -13,7 +13,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { sandboxMetrics } from '@/lib/backend';
+ import { resolveRequestAuth } from '@/lib/auth/request-auth';
+diff --git a/web/app/api/mind-map/[id]/route.ts b/web/app/api/mind-map/[id]/route.ts
+index 04742a3c..1e7e4c40 100644
+--- a/web/app/api/mind-map/[id]/route.ts
++++ b/web/app/api/mind-map/[id]/route.ts
+@@ -12,7 +12,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { mindMaps, type MindMap, type MindMapNode } from '../store';
+ 
+diff --git a/web/app/api/mind-map/chains/[id]/route.ts b/web/app/api/mind-map/chains/[id]/route.ts
+index 649fd82c..6a9ea331 100644
+--- a/web/app/api/mind-map/chains/[id]/route.ts
++++ b/web/app/api/mind-map/chains/[id]/route.ts
+@@ -6,7 +6,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { getReasoningChain } from '@/lib/mind-map/mind-map-service';
+ import { createLogger } from '@/lib/utils/logger';
+diff --git a/web/app/api/mind-map/chains/route.ts b/web/app/api/mind-map/chains/route.ts
+index f3c3ae0c..ea3bf94a 100644
+--- a/web/app/api/mind-map/chains/route.ts
++++ b/web/app/api/mind-map/chains/route.ts
+@@ -8,7 +8,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { getReasoningChains, getReasoningChain, getMindMapStats } from '@/lib/mind-map/mind-map-service';
+ import { createLogger } from '@/lib/utils/logger';
+diff --git a/web/app/api/mind-map/route.ts b/web/app/api/mind-map/route.ts
+index 11be827c..1ab1925d 100644
+--- a/web/app/api/mind-map/route.ts
++++ b/web/app/api/mind-map/route.ts
+@@ -7,7 +7,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { mindMaps, type MindMap, type MindMapNode } from './store';
+ 
+diff --git a/web/app/api/mind-map/stats/route.ts b/web/app/api/mind-map/stats/route.ts
+index 8af7e771..0e906da1 100644
+--- a/web/app/api/mind-map/stats/route.ts
++++ b/web/app/api/mind-map/stats/route.ts
+@@ -6,7 +6,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { getMindMapStats } from '@/lib/mind-map/mind-map-service';
+ import { createLogger } from '@/lib/utils/logger';
+diff --git a/web/app/api/modal/train/route.ts b/web/app/api/modal/train/route.ts
+index 93b7223f..2d1fefe9 100644
+--- a/web/app/api/modal/train/route.ts
++++ b/web/app/api/modal/train/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { resolveRequestAuth } from '@/lib/auth/request-auth';
+ 
+diff --git a/web/app/api/models/benchmarks/route.ts b/web/app/api/models/benchmarks/route.ts
+index 1c4a54e5..8c9b471d 100644
+--- a/web/app/api/models/benchmarks/route.ts
++++ b/web/app/api/models/benchmarks/route.ts
+@@ -6,7 +6,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { getModelBenchmarks } from '@/lib/model-comparison/model-comparison';
+ import { createLogger } from '@/lib/utils/logger';
+diff --git a/web/app/api/models/compare/route.ts b/web/app/api/models/compare/route.ts
+index eff6694b..24054a14 100644
+--- a/web/app/api/models/compare/route.ts
++++ b/web/app/api/models/compare/route.ts
+@@ -9,7 +9,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import {
+   getAvailableModels,
+diff --git a/web/app/api/music-hub/embed/[videoId]/route.ts b/web/app/api/music-hub/embed/[videoId]/route.ts
+index bf58255f..008b6fed 100644
+--- a/web/app/api/music-hub/embed/[videoId]/route.ts
++++ b/web/app/api/music-hub/embed/[videoId]/route.ts
+@@ -6,7 +6,6 @@
+ 
+ import { NextRequest, NextResponse } from "next/server";
+ 
+-export const runtime = 'edge';
+ 
+ 
+ // GET - Serve YouTube embed page
+diff --git a/web/app/api/music-hub/playlist/route.ts b/web/app/api/music-hub/playlist/route.ts
+index 9e8b1ae1..dc1facd8 100644
+--- a/web/app/api/music-hub/playlist/route.ts
++++ b/web/app/api/music-hub/playlist/route.ts
+@@ -14,7 +14,6 @@
+ 
+ import { NextRequest, NextResponse } from "next/server";
+ 
+-export const runtime = 'edge';
+ 
+ import { readFile, writeFile, mkdir } from "fs/promises";
+ import { join } from "path";
+diff --git a/web/app/api/music-hub/webhook/route.ts b/web/app/api/music-hub/webhook/route.ts
+index 3ba6d695..be6c91df 100644
+--- a/web/app/api/music-hub/webhook/route.ts
++++ b/web/app/api/music-hub/webhook/route.ts
+@@ -13,7 +13,6 @@
+ 
+ import { NextRequest, NextResponse } from "next/server";
+ 
+-export const runtime = 'edge';
+ 
+ import { readFile, writeFile, mkdir } from "fs/promises";
+ import { join } from "path";
+diff --git a/web/app/api/music/route.ts b/web/app/api/music/route.ts
+index c34a5283..cabe2c24 100644
+--- a/web/app/api/music/route.ts
++++ b/web/app/api/music/route.ts
+@@ -7,7 +7,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ 
+ interface Track {
+diff --git a/web/app/api/music/visualizer/modes/route.ts b/web/app/api/music/visualizer/modes/route.ts
+index 71b31a84..e43548c6 100644
+--- a/web/app/api/music/visualizer/modes/route.ts
++++ b/web/app/api/music/visualizer/modes/route.ts
+@@ -6,7 +6,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { getVisualizerModes } from '@/lib/music/music-visualizer';
+ import { createLogger } from '@/lib/utils/logger';
+diff --git a/web/app/api/music/visualizer/stats/route.ts b/web/app/api/music/visualizer/stats/route.ts
+index 845a5006..edb11132 100644
+--- a/web/app/api/music/visualizer/stats/route.ts
++++ b/web/app/api/music/visualizer/stats/route.ts
+@@ -6,7 +6,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { getVisualizerStats } from '@/lib/music/music-visualizer';
+ import { createLogger } from '@/lib/utils/logger';
+diff --git a/web/app/api/music/visualizer/tracks/route.ts b/web/app/api/music/visualizer/tracks/route.ts
+index deb5d7b2..c16e18f0 100644
+--- a/web/app/api/music/visualizer/tracks/route.ts
++++ b/web/app/api/music/visualizer/tracks/route.ts
+@@ -8,7 +8,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { getTracks, getVisualizerModes, getVisualizerStats } from '@/lib/music/music-visualizer';
+ import { createLogger } from '@/lib/utils/logger';
+diff --git a/web/app/api/news/image-search/route.ts b/web/app/api/news/image-search/route.ts
+index ee4966cf..a1f8cfc1 100644
+--- a/web/app/api/news/image-search/route.ts
++++ b/web/app/api/news/image-search/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { z } from 'zod';
+ 
+diff --git a/web/app/api/news/route.ts b/web/app/api/news/route.ts
+index 65102682..bb9c1a96 100644
+--- a/web/app/api/news/route.ts
++++ b/web/app/api/news/route.ts
+@@ -7,7 +7,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { parseRSSFeed, type NewsArticle } from '@/lib/news/rss-parser';
+ 
+diff --git a/web/app/api/news/rss/route.ts b/web/app/api/news/rss/route.ts
+index 18e918c4..d71bdca1 100644
+--- a/web/app/api/news/rss/route.ts
++++ b/web/app/api/news/rss/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { z } from 'zod';
+ 
+diff --git a/web/app/api/oauth/notion/callback/route.ts b/web/app/api/oauth/notion/callback/route.ts
+index eb302029..c9e28bd0 100644
+--- a/web/app/api/oauth/notion/callback/route.ts
++++ b/web/app/api/oauth/notion/callback/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ 
+ export async function GET(req: NextRequest) {
+diff --git a/web/app/api/oauth/notion/start/route.ts b/web/app/api/oauth/notion/start/route.ts
+index da6de6f5..0c31743b 100644
+--- a/web/app/api/oauth/notion/start/route.ts
++++ b/web/app/api/oauth/notion/start/route.ts
+@@ -1,6 +1,5 @@
+ import { NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ 
+ export async function GET() {
+diff --git a/web/app/api/oauth/permissions/route.ts b/web/app/api/oauth/permissions/route.ts
+index fe644963..c1e18e5a 100644
+--- a/web/app/api/oauth/permissions/route.ts
++++ b/web/app/api/oauth/permissions/route.ts
+@@ -9,7 +9,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { auth0 } from '@/lib/auth0';
+ import {
+diff --git a/web/app/api/observability/metrics/route.ts b/web/app/api/observability/metrics/route.ts
+index 7b4b20a4..26c30fd2 100644
+--- a/web/app/api/observability/metrics/route.ts
++++ b/web/app/api/observability/metrics/route.ts
+@@ -9,7 +9,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { getPrometheusMetrics } from '@/lib/observability';
+ 
+diff --git a/web/app/api/observability/status/route.ts b/web/app/api/observability/status/route.ts
+index e9b67108..4a6ae61f 100644
+--- a/web/app/api/observability/status/route.ts
++++ b/web/app/api/observability/status/route.ts
+@@ -6,7 +6,6 @@
+ 
+ import { NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { getObservabilityStatus } from '@/lib/observability';
+ 
+diff --git a/web/app/api/orchestration/agents/[id]/[action]/route.ts b/web/app/api/orchestration/agents/[id]/[action]/route.ts
+index db44b4c1..31831a27 100644
+--- a/web/app/api/orchestration/agents/[id]/[action]/route.ts
++++ b/web/app/api/orchestration/agents/[id]/[action]/route.ts
+@@ -9,7 +9,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { createLogger } from '@/lib/utils/logger';
+ 
+diff --git a/web/app/api/orchestration/agents/route.ts b/web/app/api/orchestration/agents/route.ts
+index a0bb418a..b56dd56d 100644
+--- a/web/app/api/orchestration/agents/route.ts
++++ b/web/app/api/orchestration/agents/route.ts
+@@ -16,7 +16,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { resolveRequestAuth } from '@/lib/auth/request-auth';
+ import { generateSecureId } from '@/lib/utils';
+diff --git a/web/app/api/orchestration/stats/route.ts b/web/app/api/orchestration/stats/route.ts
+index 6d1d5da5..b8adb7b3 100644
+--- a/web/app/api/orchestration/stats/route.ts
++++ b/web/app/api/orchestration/stats/route.ts
+@@ -6,7 +6,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { createLogger } from '@/lib/utils/logger';
+ 
+diff --git a/web/app/api/orchestration/workflows/route.ts b/web/app/api/orchestration/workflows/route.ts
+index a397b99e..e1b849a7 100644
+--- a/web/app/api/orchestration/workflows/route.ts
++++ b/web/app/api/orchestration/workflows/route.ts
+@@ -7,7 +7,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { createLogger } from '@/lib/utils/logger';
+ 
+diff --git a/web/app/api/plugins/[id]/[action]/route.ts b/web/app/api/plugins/[id]/[action]/route.ts
+index 697c3a70..90b4a34f 100644
+--- a/web/app/api/plugins/[id]/[action]/route.ts
++++ b/web/app/api/plugins/[id]/[action]/route.ts
+@@ -9,7 +9,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import {
+   installPlugin,
+diff --git a/web/app/api/plugins/[id]/config/route.ts b/web/app/api/plugins/[id]/config/route.ts
+index 16d6e26a..7bcb2773 100644
+--- a/web/app/api/plugins/[id]/config/route.ts
++++ b/web/app/api/plugins/[id]/config/route.ts
+@@ -7,7 +7,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { updatePluginConfig, executePlugin } from '@/lib/plugins/plugin-system';
+ import { createLogger } from '@/lib/utils/logger';
+diff --git a/web/app/api/plugins/installed/route.ts b/web/app/api/plugins/installed/route.ts
+index ef7267ff..a0cc052c 100644
+--- a/web/app/api/plugins/installed/route.ts
++++ b/web/app/api/plugins/installed/route.ts
+@@ -6,7 +6,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { getInstalledPlugins } from '@/lib/plugins/plugin-system';
+ import { createLogger } from '@/lib/utils/logger';
+diff --git a/web/app/api/plugins/marketplace/route.ts b/web/app/api/plugins/marketplace/route.ts
+index 1c5116fa..c1cb0010 100644
+--- a/web/app/api/plugins/marketplace/route.ts
++++ b/web/app/api/plugins/marketplace/route.ts
+@@ -14,7 +14,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import {
+   getMarketplacePlugins,
+diff --git a/web/app/api/plugins/marketplace/search/route.ts b/web/app/api/plugins/marketplace/search/route.ts
+index 9a074b9e..10a340f9 100644
+--- a/web/app/api/plugins/marketplace/search/route.ts
++++ b/web/app/api/plugins/marketplace/search/route.ts
+@@ -6,7 +6,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { searchPlugins, type PluginCategory } from '@/lib/plugins/plugin-system';
+ import { createLogger } from '@/lib/utils/logger';
+diff --git a/web/app/api/plugins/route.ts b/web/app/api/plugins/route.ts
+index 1a640ba8..a136c41d 100644
+--- a/web/app/api/plugins/route.ts
++++ b/web/app/api/plugins/route.ts
+@@ -7,7 +7,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { readdir, readFile } from 'fs/promises';
+ import { join } from 'path';
+diff --git a/web/app/api/powers/route.ts b/web/app/api/powers/route.ts
+index 53303ebd..6acdea43 100644
+--- a/web/app/api/powers/route.ts
++++ b/web/app/api/powers/route.ts
+@@ -9,7 +9,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { createLogger } from '@/lib/utils/logger';
+ import { ToolRegistry } from '@/lib/tools/registry';
+diff --git a/web/app/api/practice/results/route.ts b/web/app/api/practice/results/route.ts
+index 581b4c6b..160c88d9 100644
+--- a/web/app/api/practice/results/route.ts
++++ b/web/app/api/practice/results/route.ts
+@@ -14,7 +14,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { createHmac, timingSafeEqual } from 'node:crypto';
+ import { createLogger } from '@/lib/utils/logger';
+diff --git a/web/app/api/prompts/compare/route.ts b/web/app/api/prompts/compare/route.ts
+index 6a876e89..1733bc7f 100644
+--- a/web/app/api/prompts/compare/route.ts
++++ b/web/app/api/prompts/compare/route.ts
+@@ -6,7 +6,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { createLogger } from '@/lib/utils/logger';
+ 
+diff --git a/web/app/api/prompts/route.ts b/web/app/api/prompts/route.ts
+index 7ed83731..9aaa3eaf 100644
+--- a/web/app/api/prompts/route.ts
++++ b/web/app/api/prompts/route.ts
+@@ -7,7 +7,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { readFile, writeFile, mkdir } from 'fs/promises';
+ import { join } from 'path';
+diff --git a/web/app/api/prompts/templates/[id]/route.ts b/web/app/api/prompts/templates/[id]/route.ts
+index 23013ed5..d7df7467 100644
+--- a/web/app/api/prompts/templates/[id]/route.ts
++++ b/web/app/api/prompts/templates/[id]/route.ts
+@@ -7,7 +7,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { createLogger } from '@/lib/utils/logger';
+ 
+diff --git a/web/app/api/prompts/templates/route.ts b/web/app/api/prompts/templates/route.ts
+index ab637f6d..117a2b5e 100644
+--- a/web/app/api/prompts/templates/route.ts
++++ b/web/app/api/prompts/templates/route.ts
+@@ -12,7 +12,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { createLogger } from '@/lib/utils/logger';
+ 
+diff --git a/web/app/api/prompts/test/route.ts b/web/app/api/prompts/test/route.ts
+index 32cd3327..962a417f 100644
+--- a/web/app/api/prompts/test/route.ts
++++ b/web/app/api/prompts/test/route.ts
+@@ -7,7 +7,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { createLogger } from '@/lib/utils/logger';
+ 
+diff --git a/web/app/api/providers/route.ts b/web/app/api/providers/route.ts
+index f65d0ba8..c08ac81a 100644
+--- a/web/app/api/providers/route.ts
++++ b/web/app/api/providers/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from "next/server";
+ 
+-export const runtime = 'edge';
+ 
+ 
+ // Use dynamic import to avoid pulling AWS SDK into client bundle
+diff --git a/web/app/api/proxy/route.ts b/web/app/api/proxy/route.ts
+index 29687c63..d684c513 100644
+--- a/web/app/api/proxy/route.ts
++++ b/web/app/api/proxy/route.ts
+@@ -17,7 +17,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { sanitizeUrlInput } from '@/lib/utils/sanitize';
+ 
+diff --git a/web/app/api/quota/route.ts b/web/app/api/quota/route.ts
+index cc92532a..c661528b 100644
+--- a/web/app/api/quota/route.ts
++++ b/web/app/api/quota/route.ts
+@@ -9,7 +9,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { resolveRequestAuth } from '@/lib/auth/request-auth';
+ import { quotaManager } from '@/lib/management/quota-manager';
+diff --git a/web/app/api/repo-index/route.ts b/web/app/api/repo-index/route.ts
+index 2c033abc..9ce34e8d 100644
+--- a/web/app/api/repo-index/route.ts
++++ b/web/app/api/repo-index/route.ts
+@@ -11,7 +11,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { auth0 } from '@/lib/auth0';
+ import { repoIndexer } from '@/lib/repo-index/indexer';
+diff --git a/web/app/api/repo-index/stats/route.ts b/web/app/api/repo-index/stats/route.ts
+index 58b7faf7..a13c9402 100644
+--- a/web/app/api/repo-index/stats/route.ts
++++ b/web/app/api/repo-index/stats/route.ts
+@@ -6,7 +6,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { repoIndexer } from '@/lib/repo-index/indexer';
+ 
+diff --git a/web/app/api/sandbox/agent/route.ts b/web/app/api/sandbox/agent/route.ts
+index cf1c2449..7f08c823 100644
+--- a/web/app/api/sandbox/agent/route.ts
++++ b/web/app/api/sandbox/agent/route.ts
+@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
+ import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge';
+ import { verifyAuth } from '@/lib/auth/jwt';
+ 
+-export const runtime = 'edge';
++
+ export const maxDuration = 120;
+ 
+ export async function POST(req: NextRequest) {
+diff --git a/web/app/api/sandbox/clear-sessions/route.ts b/web/app/api/sandbox/clear-sessions/route.ts
+index f9f49aeb..9953e791 100644
+--- a/web/app/api/sandbox/clear-sessions/route.ts
++++ b/web/app/api/sandbox/clear-sessions/route.ts
+@@ -5,7 +5,7 @@ import { createLogger } from '@/lib/utils/logger';
+ 
+ const logger = createLogger('ClearSessionsAPI');
+ 
+-export const runtime = 'edge';
++
+ 
+ /**
+  * POST /api/sandbox/clear-sessions
+diff --git a/web/app/api/sandbox/devbox/route.ts b/web/app/api/sandbox/devbox/route.ts
+index 33cdb670..377d2e54 100644
+--- a/web/app/api/sandbox/devbox/route.ts
++++ b/web/app/api/sandbox/devbox/route.ts
+@@ -20,7 +20,7 @@ import { SandboxSecurityManager } from '@/lib/sandbox/security-manager';
+ 
+ const logger = createLogger('DevBoxAPI');
+ 
+-export const runtime = 'edge';
++
+ 
+ // SECURITY: O(1) body size guard — checked BEFORE req.json() buffers into memory
+ const MAX_DEVBOX_BODY_BYTES = 120 * 1024 * 1024; // 120MB
+diff --git a/web/app/api/sandbox/execute/route.ts b/web/app/api/sandbox/execute/route.ts
+index fb86a221..b636c2cd 100644
+--- a/web/app/api/sandbox/execute/route.ts
++++ b/web/app/api/sandbox/execute/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { z } from 'zod';
+ import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge';
+diff --git a/web/app/api/sandbox/files/route.ts b/web/app/api/sandbox/files/route.ts
+index 06b43c36..dd6fce16 100644
+--- a/web/app/api/sandbox/files/route.ts
++++ b/web/app/api/sandbox/files/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { z } from 'zod';
+ import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge';
+diff --git a/web/app/api/sandbox/provider/pty/route.ts b/web/app/api/sandbox/provider/pty/route.ts
+index f696656f..775bde1f 100644
+--- a/web/app/api/sandbox/provider/pty/route.ts
++++ b/web/app/api/sandbox/provider/pty/route.ts
+@@ -7,7 +7,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { resolveRequestAuth } from '@/lib/auth/request-auth';
+ import { getSandboxProvider } from '@/lib/sandbox/providers';
+diff --git a/web/app/api/sandbox/session/route.ts b/web/app/api/sandbox/session/route.ts
+index 77d86ca5..e31d264a 100644
+--- a/web/app/api/sandbox/session/route.ts
++++ b/web/app/api/sandbox/session/route.ts
+@@ -5,7 +5,7 @@ import { getSandboxProvider } from '@/lib/sandbox/providers';
+ import { checkUserRateLimit } from '@/lib/middleware/rate-limiter';
+ 
+ // Force Node.js runtime for Daytona SDK compatibility
+-export const runtime = 'edge';
++
+ 
+ export async function POST(req: NextRequest) {
+   try {
+diff --git a/web/app/api/sandbox/sync/route.ts b/web/app/api/sandbox/sync/route.ts
+index c433e4a2..9a665ea8 100644
+--- a/web/app/api/sandbox/sync/route.ts
++++ b/web/app/api/sandbox/sync/route.ts
+@@ -24,7 +24,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { UniversalVfsSync, type VfsFile, type SyncOptions } from '@/lib/virtual-filesystem/sync/universal-vfs-sync';
+ import { getSandboxProvider } from '@/lib/sandbox/providers';
+diff --git a/web/app/api/sandbox/terminal/input/route.ts b/web/app/api/sandbox/terminal/input/route.ts
+index 77d1681d..247458de 100644
+--- a/web/app/api/sandbox/terminal/input/route.ts
++++ b/web/app/api/sandbox/terminal/input/route.ts
+@@ -9,7 +9,7 @@ import { createLogger } from '@/lib/utils/logger';
+ 
+ const logger = createLogger('TerminalInputAPI');
+ 
+-export const runtime = 'edge';
++
+ 
+ /**
+  * Command buffer for assembling multi-chunk commands
+diff --git a/web/app/api/sandbox/terminal/resize/route.ts b/web/app/api/sandbox/terminal/resize/route.ts
+index 2a46b329..6ab0bb15 100644
+--- a/web/app/api/sandbox/terminal/resize/route.ts
++++ b/web/app/api/sandbox/terminal/resize/route.ts
+@@ -3,7 +3,7 @@ import { resolveRequestAuth } from '@/lib/auth/request-auth';
+ import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge';
+ import { terminalManager } from '@/lib/terminal/terminal-manager';
+ 
+-export const runtime = 'edge';
++
+ 
+ export async function POST(req: NextRequest) {
+   try {
+diff --git a/web/app/api/sandbox/terminal/route.ts b/web/app/api/sandbox/terminal/route.ts
+index 30aeaeda..d4b02112 100644
+--- a/web/app/api/sandbox/terminal/route.ts
++++ b/web/app/api/sandbox/terminal/route.ts
+@@ -7,7 +7,7 @@ import { createLogger } from '@/lib/utils/logger';
+ 
+ const logger = createLogger('TerminalAPI');
+ 
+-export const runtime = 'edge';
++
+ 
+ /**
+  * POST — Ensure user has a sandbox session ready for terminal use.
+diff --git a/web/app/api/sandbox/terminal/stream/route.ts b/web/app/api/sandbox/terminal/stream/route.ts
+index d0548fdf..6b39ada7 100644
+--- a/web/app/api/sandbox/terminal/stream/route.ts
++++ b/web/app/api/sandbox/terminal/stream/route.ts
+@@ -5,7 +5,7 @@ import { terminalManager } from '@/lib/terminal/terminal-manager';
+ import { sandboxEvents } from '@/lib/sandbox/sandbox-events';
+ import { randomUUID } from 'crypto';
+ 
+-export const runtime = 'edge';
++
+ 
+ // Use globalThis to prevent HMR leaks in development
+ // Without this, each hot-reload would create a new Map and interval timer
+diff --git a/web/app/api/sandbox/terminal/ws/route.ts b/web/app/api/sandbox/terminal/ws/route.ts
+index 968e4450..27805334 100644
+--- a/web/app/api/sandbox/terminal/ws/route.ts
++++ b/web/app/api/sandbox/terminal/ws/route.ts
+@@ -1,6 +1,6 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
++
+ export const dynamic = 'force-dynamic';
+ 
+ /**
+diff --git a/web/app/api/sandbox/terminaluse/route.ts b/web/app/api/sandbox/terminaluse/route.ts
+index 69fc7567..4ed15307 100644
+--- a/web/app/api/sandbox/terminaluse/route.ts
++++ b/web/app/api/sandbox/terminaluse/route.ts
+@@ -14,7 +14,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server'
+ 
+-export const runtime = 'edge';
+ 
+ import { z } from 'zod'
+ import { verifyAuth } from '@/lib/auth/jwt'
+diff --git a/web/app/api/sandbox/webcontainer/route.ts b/web/app/api/sandbox/webcontainer/route.ts
+index d258cd31..e7ec56b3 100644
+--- a/web/app/api/sandbox/webcontainer/route.ts
++++ b/web/app/api/sandbox/webcontainer/route.ts
+@@ -18,7 +18,7 @@ import { generateSecureId } from '@/lib/utils';
+ 
+ const logger = createLogger('WebContainerAPI');
+ 
+-export const runtime = 'edge';
++
+ 
+ // SECURITY: O(1) body size guard — checked BEFORE req.json() buffers into memory
+ const MAX_WEBCONTAINER_BODY_BYTES = 120 * 1024 * 1024; // 120MB
+diff --git a/web/app/api/smithery/connections/route.ts b/web/app/api/smithery/connections/route.ts
+index c734bc72..e6a5ae99 100644
+--- a/web/app/api/smithery/connections/route.ts
++++ b/web/app/api/smithery/connections/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { getSmitheryService } from '@/lib/mcp/smithery-service';
+ import { verifyAuth } from '@/lib/auth/verify-auth';
+diff --git a/web/app/api/smithery/servers/route.ts b/web/app/api/smithery/servers/route.ts
+index f43cfa46..66e7cee6 100644
+--- a/web/app/api/smithery/servers/route.ts
++++ b/web/app/api/smithery/servers/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { getSmitheryService } from '@/lib/mcp/smithery-service';
+ import type { SmitheryServer } from '@/lib/tools/tool-integration/providers/smithery-client';
+diff --git a/web/app/api/spawn/[id]/events/route.ts b/web/app/api/spawn/[id]/events/route.ts
+index 06f5a825..1b45ce5f 100644
+--- a/web/app/api/spawn/[id]/events/route.ts
++++ b/web/app/api/spawn/[id]/events/route.ts
+@@ -7,7 +7,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { createLogger } from '@/lib/utils/logger';
+ import { getAgentServiceManager } from '@/lib/spawn';
+diff --git a/web/app/api/spawn/[id]/route.ts b/web/app/api/spawn/[id]/route.ts
+index da1b468c..4422a69c 100644
+--- a/web/app/api/spawn/[id]/route.ts
++++ b/web/app/api/spawn/[id]/route.ts
+@@ -10,7 +10,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { z } from 'zod';
+ import { createLogger } from '@/lib/utils/logger';
+diff --git a/web/app/api/spawn/route.ts b/web/app/api/spawn/route.ts
+index 0c783880..57944482 100644
+--- a/web/app/api/spawn/route.ts
++++ b/web/app/api/spawn/route.ts
+@@ -17,7 +17,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { z } from 'zod';
+ import { createLogger } from '@/lib/utils/logger';
+diff --git a/web/app/api/speech-to-text/route.ts b/web/app/api/speech-to-text/route.ts
+index fb800025..59701b41 100644
+--- a/web/app/api/speech-to-text/route.ts
++++ b/web/app/api/speech-to-text/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ 
+ const MISTRAL_API_KEY = process.env.MISTRAL_API_KEY;
+diff --git a/web/app/api/storage/delete/route.ts b/web/app/api/storage/delete/route.ts
+index 86aa6eca..e3a27f0c 100644
+--- a/web/app/api/storage/delete/route.ts
++++ b/web/app/api/storage/delete/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { createCloudStorageService } from '@/lib/storage/cloud-storage';
+ import { verifyAuth } from '@/lib/auth/jwt';
+diff --git a/web/app/api/storage/download/route.ts b/web/app/api/storage/download/route.ts
+index 9ff43d06..3d6bd145 100644
+--- a/web/app/api/storage/download/route.ts
++++ b/web/app/api/storage/download/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { createCloudStorageService } from '@/lib/storage/cloud-storage';
+ import { verifyAuth } from '@/lib/auth/jwt';
+diff --git a/web/app/api/storage/list/route.ts b/web/app/api/storage/list/route.ts
+index 812dc2d2..a7eab047 100644
+--- a/web/app/api/storage/list/route.ts
++++ b/web/app/api/storage/list/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { createCloudStorageService } from '@/lib/storage/cloud-storage';
+ import { verifyAuth } from '@/lib/auth/jwt';
+diff --git a/web/app/api/storage/signed-url/route.ts b/web/app/api/storage/signed-url/route.ts
+index 2304a911..63b05057 100644
+--- a/web/app/api/storage/signed-url/route.ts
++++ b/web/app/api/storage/signed-url/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { createCloudStorageService } from '@/lib/storage/cloud-storage';
+ import { verifyAuth } from '@/lib/auth/jwt';
+diff --git a/web/app/api/storage/upload/route.ts b/web/app/api/storage/upload/route.ts
+index 38178d84..392ec643 100644
+--- a/web/app/api/storage/upload/route.ts
++++ b/web/app/api/storage/upload/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { createCloudStorageService } from '@/lib/storage/cloud-storage';
+ import { verifyAuth } from '@/lib/auth/jwt';
+diff --git a/web/app/api/storage/usage/route.ts b/web/app/api/storage/usage/route.ts
+index 0d270bea..74f84776 100644
+--- a/web/app/api/storage/usage/route.ts
++++ b/web/app/api/storage/usage/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { createCloudStorageService } from '@/lib/storage/cloud-storage';
+ import { verifyAuth } from '@/lib/auth/jwt';
+diff --git a/web/app/api/tambo/oauth/token/route.ts b/web/app/api/tambo/oauth/token/route.ts
+index efe299a7..fc0e9c96 100644
+--- a/web/app/api/tambo/oauth/token/route.ts
++++ b/web/app/api/tambo/oauth/token/route.ts
+@@ -10,7 +10,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { verify } from 'jsonwebtoken';
+ 
+diff --git a/web/app/api/terminal/local-pty/input/route.ts b/web/app/api/terminal/local-pty/input/route.ts
+index 8dc42614..31c9f9b1 100644
+--- a/web/app/api/terminal/local-pty/input/route.ts
++++ b/web/app/api/terminal/local-pty/input/route.ts
+@@ -6,7 +6,6 @@
+  */
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { resolveRequestAuth } from '@/lib/auth/request-auth';
+ 
+diff --git a/web/app/api/terminal/local-pty/resize/route.ts b/web/app/api/terminal/local-pty/resize/route.ts
+index 7240f7bd..e1bf2e59 100644
+--- a/web/app/api/terminal/local-pty/resize/route.ts
++++ b/web/app/api/terminal/local-pty/resize/route.ts
+@@ -6,7 +6,6 @@
+  */
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { resolveRequestAuth } from '@/lib/auth/request-auth';
+ 
+diff --git a/web/app/api/terminal/local-pty/route.ts b/web/app/api/terminal/local-pty/route.ts
+index dd7e7815..1fde1605 100644
+--- a/web/app/api/terminal/local-pty/route.ts
++++ b/web/app/api/terminal/local-pty/route.ts
+@@ -35,7 +35,7 @@ import { getDatabase } from '@/lib/database/connection';
+ 
+ const logger = createLogger('LocalPTY');
+ 
+-export const runtime = 'edge';
++
+ 
+ // ============================================================
+ // Path Traversal Prevention
+diff --git a/web/app/api/test/vfs-parse-edits/route.ts b/web/app/api/test/vfs-parse-edits/route.ts
+index 5caa83a3..cfa27949 100644
+--- a/web/app/api/test/vfs-parse-edits/route.ts
++++ b/web/app/api/test/vfs-parse-edits/route.ts
+@@ -10,7 +10,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ 
+ export async function POST(req: NextRequest) {
+diff --git a/web/app/api/test/vfs-read-file/route.ts b/web/app/api/test/vfs-read-file/route.ts
+index fba68415..11a457dc 100644
+--- a/web/app/api/test/vfs-read-file/route.ts
++++ b/web/app/api/test/vfs-read-file/route.ts
+@@ -7,7 +7,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ 
+ export async function GET(req: NextRequest) {
+diff --git a/web/app/api/tools/execute/route.ts b/web/app/api/tools/execute/route.ts
+index 37b9bece..fb9d8c6b 100644
+--- a/web/app/api/tools/execute/route.ts
++++ b/web/app/api/tools/execute/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { getToolManager } from '@/lib/tools';
+ import { toolAuthManager } from '@/lib/tools/tool-authorization-manager';
+diff --git a/web/app/api/top-panel/route.ts b/web/app/api/top-panel/route.ts
+index 4f4375de..8006ea85 100644
+--- a/web/app/api/top-panel/route.ts
++++ b/web/app/api/top-panel/route.ts
+@@ -7,7 +7,6 @@
+ 
+ import { NextRequest, NextResponse } from "next/server";
+ 
+-export const runtime = 'edge';
+ 
+ import { z } from "zod";
+ import { createLogger } from "@/lib/utils/logger";
+diff --git a/web/app/api/tts/gemini/route.ts b/web/app/api/tts/gemini/route.ts
+index 280fc66f..709aa67b 100644
+--- a/web/app/api/tts/gemini/route.ts
++++ b/web/app/api/tts/gemini/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { GoogleGenerativeAI } from '@google/generative-ai';
+ 
+diff --git a/web/app/api/tts/route.ts b/web/app/api/tts/route.ts
+index 7a9f9df1..9cd3be14 100644
+--- a/web/app/api/tts/route.ts
++++ b/web/app/api/tts/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { generateSpeech, checkKittenTTSAvailability, KITTEN_VOICES, KITTEN_MODELS } from '@/lib/voice/kitten-tts-server';
+ import { voiceServerManager } from '@/lib/voice/server-control';
+diff --git a/web/app/api/url/redirect/[id]/route.ts b/web/app/api/url/redirect/[id]/route.ts
+index 430ec1f6..5656db2b 100644
+--- a/web/app/api/url/redirect/[id]/route.ts
++++ b/web/app/api/url/redirect/[id]/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { getUrl, incrementClicks } from '@/lib/url-shortener/store';
+ 
+diff --git a/web/app/api/url/shorten/route.ts b/web/app/api/url/shorten/route.ts
+index c1a1fc1c..198944b8 100644
+--- a/web/app/api/url/shorten/route.ts
++++ b/web/app/api/url/shorten/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { secureRandomString } from '@/lib/utils';
+ import { setUrl } from '@/lib/url-shortener/store';
+diff --git a/web/app/api/user/api-keys/route.ts b/web/app/api/user/api-keys/route.ts
+index ce797c9b..c8815116 100644
+--- a/web/app/api/user/api-keys/route.ts
++++ b/web/app/api/user/api-keys/route.ts
+@@ -8,7 +8,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { getDatabase } from '@/lib/database/connection';
+ import { authManager } from '@/lib/backend/auth';
+diff --git a/web/app/api/user/delete/route.ts b/web/app/api/user/delete/route.ts
+index fc714345..308541cb 100644
+--- a/web/app/api/user/delete/route.ts
++++ b/web/app/api/user/delete/route.ts
+@@ -11,7 +11,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { requireAdminApiOrForbidden } from '@/lib/auth/admin';
+ import { getDatabase } from '@/lib/database/connection';
+diff --git a/web/app/api/user/integrations/[provider]/route.ts b/web/app/api/user/integrations/[provider]/route.ts
+index cd552dec..512341ce 100644
+--- a/web/app/api/user/integrations/[provider]/route.ts
++++ b/web/app/api/user/integrations/[provider]/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { resolveRequestAuth } from '@/lib/auth/request-auth';
+ import { disconnectProviderAll } from '@/lib/oauth/connections';
+diff --git a/web/app/api/user/integrations/status/route.ts b/web/app/api/user/integrations/status/route.ts
+index ec26aec6..f93f1d69 100644
+--- a/web/app/api/user/integrations/status/route.ts
++++ b/web/app/api/user/integrations/status/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { getDatabase } from '@/lib/database/connection';
+ import { getToolServiceForPlatform } from '@/lib/oauth/provider-map';
+diff --git a/web/app/api/user/keys/route.ts b/web/app/api/user/keys/route.ts
+index bb2f1309..d31a7499 100644
+--- a/web/app/api/user/keys/route.ts
++++ b/web/app/api/user/keys/route.ts
+@@ -1,6 +1,5 @@
+ import { NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { initializeDatabase, BetterSqlite3Database } from '@/lib/database/db';
+ import jwt from 'jsonwebtoken';
+diff --git a/web/app/api/user/preferences/route.ts b/web/app/api/user/preferences/route.ts
+index 058a7e54..02aa91e4 100644
+--- a/web/app/api/user/preferences/route.ts
++++ b/web/app/api/user/preferences/route.ts
+@@ -10,7 +10,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { getDatabase } from '@/lib/database/connection';
+ import { withAuth } from '@/lib/auth/enhanced-middleware';
+diff --git a/web/app/api/user/profile/route.ts b/web/app/api/user/profile/route.ts
+index 8f559a31..9a705bd2 100644
+--- a/web/app/api/user/profile/route.ts
++++ b/web/app/api/user/profile/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { verifyAuth } from '@/lib/auth/jwt';
+ import { initializeDatabase, hashPassword, comparePassword } from '@/lib/database/db';
+diff --git a/web/app/api/video/generate/route.ts b/web/app/api/video/generate/route.ts
+index 283a90f3..20c49f58 100644
+--- a/web/app/api/video/generate/route.ts
++++ b/web/app/api/video/generate/route.ts
+@@ -8,7 +8,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server'
+ 
+-export const runtime = 'edge';
+ 
+ import { authenticateRequest } from '@/lib/security/jwt-auth'
+ import { RateLimiter } from '@/lib/utils/rate-limiter'
+diff --git a/web/app/api/webhooks/blaxel-callback/route.ts b/web/app/api/webhooks/blaxel-callback/route.ts
+index c060e5b5..7f4cf105 100644
+--- a/web/app/api/webhooks/blaxel-callback/route.ts
++++ b/web/app/api/webhooks/blaxel-callback/route.ts
+@@ -9,7 +9,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { verifyBlaxelCallbackFromRequest } from '@/lib/sandbox/providers';
+ 
+diff --git a/web/app/api/webhooks/composio/route.ts b/web/app/api/webhooks/composio/route.ts
+index 8cf15c77..b37c18e7 100644
+--- a/web/app/api/webhooks/composio/route.ts
++++ b/web/app/api/webhooks/composio/route.ts
+@@ -9,7 +9,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import {
+   handleComposioWebhookWithPayload,
+diff --git a/web/app/api/webhooks/nango/route.ts b/web/app/api/webhooks/nango/route.ts
+index 1fd8c0d6..95e6f3ee 100644
+--- a/web/app/api/webhooks/nango/route.ts
++++ b/web/app/api/webhooks/nango/route.ts
+@@ -14,7 +14,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { getNangoService } from '@/lib/integrations/nango-service';
+ 
+diff --git a/web/app/api/webhooks/route.ts b/web/app/api/webhooks/route.ts
+index 03258521..454ea0af 100644
+--- a/web/app/api/webhooks/route.ts
++++ b/web/app/api/webhooks/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { createHmac, timingSafeEqual } from 'node:crypto';
+ import { oauthService } from '@/lib/auth/oauth-service';
+diff --git a/web/app/api/workflows/visualizer/route.ts b/web/app/api/workflows/visualizer/route.ts
+index ee23d516..339576db 100644
+--- a/web/app/api/workflows/visualizer/route.ts
++++ b/web/app/api/workflows/visualizer/route.ts
+@@ -8,7 +8,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { createLogger } from '@/lib/utils/logger';
+ 
+diff --git a/web/app/api/zine-display/content/route.ts b/web/app/api/zine-display/content/route.ts
+index 75da1d77..6ff5634d 100644
+--- a/web/app/api/zine-display/content/route.ts
++++ b/web/app/api/zine-display/content/route.ts
+@@ -11,7 +11,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import {
+   getContent,
+diff --git a/web/app/api/zine-display/discover/route.ts b/web/app/api/zine-display/discover/route.ts
+index c268c167..6183e9a3 100644
+--- a/web/app/api/zine-display/discover/route.ts
++++ b/web/app/api/zine-display/discover/route.ts
+@@ -10,7 +10,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { z } from 'zod';
+ import { 
+diff --git a/web/app/api/zine-display/feed/route.ts b/web/app/api/zine-display/feed/route.ts
+index 473b9c18..f6bc4129 100644
+--- a/web/app/api/zine-display/feed/route.ts
++++ b/web/app/api/zine-display/feed/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { z } from 'zod';
+ import { sanitizeUrlInput } from '@/lib/utils/sanitize';
+diff --git a/web/app/api/zine-display/notifications/route.ts b/web/app/api/zine-display/notifications/route.ts
+index 8c66aefa..8e3fec57 100644
+--- a/web/app/api/zine-display/notifications/route.ts
++++ b/web/app/api/zine-display/notifications/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { toolAuthManager } from '@/lib/tools/tool-authorization-manager';
+ import { getAccessTokenForConnection, AUTH0_CONNECTIONS } from '@/lib/auth0';
+diff --git a/web/app/api/zine-display/plugins/route.ts b/web/app/api/zine-display/plugins/route.ts
+index 3b4c4b3f..96dd6d6e 100644
+--- a/web/app/api/zine-display/plugins/route.ts
++++ b/web/app/api/zine-display/plugins/route.ts
+@@ -13,7 +13,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { z } from 'zod';
+ import { pluginRegistry, type DataSourcePlugin, createFragment as engineCreateFragment } from '@/components/top-panel/plugins/zine-engine';
+diff --git a/web/app/api/zine-display/route.ts b/web/app/api/zine-display/route.ts
+index be7d41a1..570db572 100644
+--- a/web/app/api/zine-display/route.ts
++++ b/web/app/api/zine-display/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { z } from 'zod';
+ 
+diff --git a/web/app/api/zine-display/sse/route.ts b/web/app/api/zine-display/sse/route.ts
+index 8b39c45f..17cc9f68 100644
+--- a/web/app/api/zine-display/sse/route.ts
++++ b/web/app/api/zine-display/sse/route.ts
+@@ -11,7 +11,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ 
+ // ---------------------------------------------------------------------
+diff --git a/web/app/api/zine-display/stats/route.ts b/web/app/api/zine-display/stats/route.ts
+index 3edf4ce1..fc501dfc 100644
+--- a/web/app/api/zine-display/stats/route.ts
++++ b/web/app/api/zine-display/stats/route.ts
+@@ -6,7 +6,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { getZineStats } from '@/lib/zine/zine-display-service';
+ import { createLogger } from '@/lib/utils/logger';
+diff --git a/web/app/api/zine-display/trigger/route.ts b/web/app/api/zine-display/trigger/route.ts
+index f77c2b7b..3afa12ac 100644
+--- a/web/app/api/zine-display/trigger/route.ts
++++ b/web/app/api/zine-display/trigger/route.ts
+@@ -10,7 +10,6 @@
+ 
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { z } from 'zod';
+ import { getTriggerTask, ALL_TRIGGER_TASKS } from '@/lib/events/trigger-dev-tasks';
+diff --git a/web/app/api/zine-display/webhook/route.ts b/web/app/api/zine-display/webhook/route.ts
+index cfae8fe5..74c17264 100644
+--- a/web/app/api/zine-display/webhook/route.ts
++++ b/web/app/api/zine-display/webhook/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ 
+-export const runtime = 'edge';
+ 
+ import { z } from 'zod';
+ 
+diff --git a/web/app/api/zine/config/route.ts b/web/app/api/zine/config/route.ts
+index ec4998e6..8b51173f 100644
+--- a/web/app/api/zine/config/route.ts
++++ b/web/app/api/zine/config/route.ts
+@@ -6,7 +6,6 @@
+ 
+ import { NextRequest, NextResponse } from "next/server";
+ 
+-export const runtime = 'edge';
+ 
+ 
+ // ============================================================================
+diff --git a/web/app/api/zine/content/route.ts b/web/app/api/zine/content/route.ts
+index 100d06fb..36a85803 100644
+--- a/web/app/api/zine/content/route.ts
++++ b/web/app/api/zine/content/route.ts
+@@ -7,7 +7,6 @@
+ 
+ import { NextRequest, NextResponse } from "next/server";
+ 
+-export const runtime = 'edge';
+ 
+ import { z } from "zod";
+ 
+diff --git a/web/app/api/zine/rss-proxy/route.ts b/web/app/api/zine/rss-proxy/route.ts
+index 1e344062..1c9549ef 100644
+--- a/web/app/api/zine/rss-proxy/route.ts
++++ b/web/app/api/zine/rss-proxy/route.ts
+@@ -5,7 +5,6 @@
+ 
+ import { NextRequest, NextResponse } from "next/server";
+ 
+-export const runtime = 'edge';
+ 
+ import { sanitizeUrlInput } from "@/lib/utils/sanitize";
+ 
+diff --git a/web/app/api/zine/webhook/route.ts b/web/app/api/zine/webhook/route.ts
+index 6baa8a7d..4c724d82 100644
+--- a/web/app/api/zine/webhook/route.ts
++++ b/web/app/api/zine/webhook/route.ts
+@@ -5,7 +5,6 @@
+ 
+ import { NextRequest, NextResponse } from "next/server";
+ 
+-export const runtime = 'edge';
+ 
+ import { z } from "zod";
+ import { createHmac } from "crypto";
+diff --git a/web/lib/search/rg.exe b/web/lib/search/rg.exe
+deleted file mode 100644
+index 1c6cc8cb..00000000
+Binary files a/web/lib/search/rg.exe and /dev/null differ

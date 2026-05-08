@@ -14,16 +14,16 @@ export interface LogLevel {
 }
 
 function createLogger(prefix: string): LogLevel {
-  const format = (level: string, consoleMethod: 'log' | 'warn' | 'error', ...args: any[]) => {
+  const format = (level: string, ...args: any[]) => {
     const timestamp = new Date().toISOString();
-    console[consoleMethod](`[${timestamp}] [${level}] [${prefix}]`, ...args);
+    console.log(`[${timestamp}] [${level}] [${prefix}]`, ...args);
   };
 
   return {
-    debug: (...args: any[]) => format('DEBUG', 'log', ...args),
-    info: (...args: any[]) => format('INFO', 'log', ...args),
-    warn: (...args: any[]) => format('WARN', 'warn', ...args),
-    error: (...args: any[]) => format('ERROR', 'error', ...args),
+    debug: (...args: any[]) => format('DEBUG', ...args),
+    info: (...args: any[]) => format('INFO', ...args),
+    warn: (...args: any[]) => format('WARN', ...args),
+    error: (...args: any[]) => format('ERROR', ...args),
   };
 }
 

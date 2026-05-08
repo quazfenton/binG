@@ -327,10 +327,10 @@ export class BootstrappedAgency {
         try {
           // Use relative path — the @/ alias only works in web/ directory
           // packages/shared/agent → web/lib/tools/router
-          const { getCapabilityRouter } = await import('../../lib/tools/router');
+          const { getCapabilityRouter } = await import('../../../web/lib/tools/router');
           const router = getCapabilityRouter();
           const context = { 
-            userId: this.config.userId || this.config.sessionId,
+            ...(this.config.userId && { userId: this.config.userId }),
             sessionId: this.config.sessionId,
           };
 
@@ -419,7 +419,10 @@ export class BootstrappedAgency {
         try {
           const { getCapabilityRouter } = await import('@/lib/tools/router');
           const router = getCapabilityRouter();
-          const context = { userId: this.config.userId || this.config.sessionId, sessionId: this.config.sessionId };
+          const context = { 
+            userId: this.config.userId, 
+            sessionId: this.config.sessionId,
+          };
           // Build structured input from the task description
           const input = await this.buildCapabilityInput(capability, task);
           const result = await router.execute(capability, input, context);

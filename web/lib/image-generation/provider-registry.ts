@@ -19,6 +19,7 @@ import { ReplicateImageProvider } from './providers/replicate-provider';
 import { CloudflareImageProvider } from './providers/cloudflare-provider';
 import { VercelImageProvider } from './providers/vercel-provider';
 import { GoogleImageProvider } from './providers/google-provider';
+import { PollinationsImageProvider } from './providers/pollinations-provider';
 
 const DEFAULT_TIMEOUT = parseInt(process.env.IMAGE_GENERATION_TIMEOUT_MS || '120000', 10);
 
@@ -308,11 +309,12 @@ export function createDefaultRegistry(): ImageProviderRegistry {
   const registry = new ImageProviderRegistry();
 
   // Register built-in providers
-  registry.register(new MistralImageProvider(), 1, true); // Priority 1 (highest)
-  registry.register(new GoogleImageProvider(), 2, true); // Priority 2 (free tier models)
-  registry.register(new VercelImageProvider(), 3, true); // Priority 3 (after Mistral, before Replicate)
-  registry.register(new ReplicateImageProvider(), 4, true); // Priority 4
-  registry.register(new CloudflareImageProvider(), 5, true); // Priority 5
+    registry.register(new MistralImageProvider(), 1, true); // Priority 1 (highest)
+    registry.register(new GoogleImageProvider(), 2, true); // Priority 2 (free tier models)
+    registry.register(new VercelImageProvider(), 3, true); // Priority 3 (after Mistral, before Replicate)
+    registry.register(new ReplicateImageProvider(), 4, true); // Priority 4
+    registry.register(new CloudflareImageProvider(), 5, true); // Priority 5
+    registry.register(new PollinationsImageProvider(), 6, true); // Priority 6
 
   return registry;
 }

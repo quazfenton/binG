@@ -13,7 +13,19 @@
 
 import type { RoleRedirect } from './feedback-injection';
 
-export type Role = 'coder' | 'reviewer' | 'planner' | 'architect' | 'researcher' | 'debugger' | 'specialist' | 'orchestrator';
+export const REDIRECTABLE_ROLES = [
+  'coder',
+  'reviewer',
+  'planner',
+  'architect',
+  'researcher',
+  'debugger',
+  'specialist',
+  'orchestrator',
+  'simplifier'
+] as const;
+
+export type Role = typeof REDIRECTABLE_ROLES[number];
 
 export interface RoleCapability {
   strengths: string[];
@@ -72,6 +84,11 @@ const ROLE_CAPABILITIES: Record<Role, RoleCapability> = {
     strengths: ['coordination', 'task routing', 'workflow management', 'multi-agent coordination'],
     weaknesses: ['detailed implementation'],
     bestFor: ['coordinate complex tasks', 'route to specialists', 'manage workflows'],
+  },
+  simplifier: {
+    strengths: ['simplification', 'explanation', 'summarization', 'clarity'],
+    weaknesses: ['complex implementation', 'detailed research'],
+    bestFor: ['simplify complex topics', 'explain code', 'summarize information'],
   },
 };
 
@@ -453,6 +470,10 @@ export function suggestToolsForRole(
       'list_directory': 0.9,
       'search_files': 0.7,
       'read_file': 0.6,
+    },
+    simplifier: {
+      'read_file': 0.7,
+      'list_directory': 0.6,
     },
   };
   

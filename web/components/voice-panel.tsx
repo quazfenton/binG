@@ -228,7 +228,6 @@ export function VoicePanel({ onClose, onTextSubmit }: VoicePanelProps) {
                 // Clear all voice-related UI state
                 setAudioLevel(0);
                 setVoiceMessages([]);
-                setIsListening(false);
                 // Note: For full LiveKit disconnect, the useVoiceSettings hook needs to expose
                 // a disconnect method that cleans up the LiveKit room connection.
                 // For now, we stop listening and clear state which provides basic cleanup.

@@ -53,31 +53,31 @@ export class MistralImageProvider implements ImageGenerationProvider {
     stylePresets: [],
     qualityPresets: ['medium', 'high', 'ultra'],
   };
+initialize(config: ProviderConfig): void {
+  this.apiKey = config.apiKey;
+  this.baseURL = config.baseURL;
 
-  initialize(config: ProviderConfig): void {
-    this.apiKey = config.apiKey;
-    this.baseURL = config.baseURL;
-    
-    if (this.apiKey) {
-      this.client = new Mistral({
-        apiKey: this.apiKey,
-        ...(this.baseURL && { baseURL: this.baseURL }),
-      });
-    }
+  if (this.apiKey) {
+    this.client = new Mistral({
+      apiKey: this.apiKey,
+      ...(this.baseURL && { baseURL: this.baseURL }),
+    });
+  }
+}
+
+async isAvailable(): Promise<boolean> {
+  if (!this.client || !this.apiKey) {
+    return false;
   }
 
-  async isAvailable(): Promise<boolean> {
-    if (!this.client || !this.apiKey) {
-      return false;
-    }
-    
-    try {
-      await this.client.models.list();
-      return true;
-    } catch {
-      return false;
-    }
+  try {
+    // Basic API call to check availability
+    await this.client.models.list();
+    return true;
+  } catch {
+    return false;
   }
+}
 
   async generate(
     params: ImageGenerationParams,

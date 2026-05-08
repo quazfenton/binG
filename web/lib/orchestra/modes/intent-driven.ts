@@ -23,13 +23,12 @@
  */
 
 import { createLogger } from '@/lib/utils/logger';
-import { embed, embedBatch } from '@/lib/memory/embeddings';
-import { cosineSimilarity } from '@/lib/retrieval/similarity';
 import {
   processUnifiedAgentRequest,
   type UnifiedAgentConfig,
   type UnifiedAgentResult,
 } from '../unified-agent-service';
+import { configureSubCall, resolveEngine, type EngineArchitecture } from '../execution-engines';
 
 const log = createLogger('IntentDrivenMode');
 
@@ -56,6 +55,8 @@ export interface IntentFieldConfig {
   maxIterations?: number;
   /** Custom intents (auto-extracted from task if not provided) */
   customIntents?: Array<{ description: string; priority: number }>;
+  /** Architecture/engine for LLM calls (default: from baseConfig.engine or env) */
+  engine?: EngineArchitecture;
 }
 
 // ─── Intent Field ──────────────────────────────────────────────────────────
@@ -379,12 +380,14 @@ export async function runIntentDrivenMode(
       iter,
     );
 
-    // Run LLM
-    const result = await processUnifiedAgentRequest({
+    // Run LLM with engine override
+    const engine = resolveEngine(options.engine, baseConfig.engine);
+    const subCall = configureSubCall({
       ...baseConfig,
       systemPrompt,
       mode: 'v1-api',
-    });
+    }, engine);
+    const result = await processUnifiedAgentRequest(subCall);
 
     if (!result.success) {
       log.info(`[IntentDriven] ✗ Iteration ${iter} failed`, { error: result.error });

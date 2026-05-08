@@ -11,7 +11,7 @@ import type { Message, CodeArtifact } from "@/types"
 import { useEnhancedStreamingDisplay } from "@/hooks/use-enhanced-streaming-display"
 import { useResponsiveLayout, calculateDynamicWidth, getOverflowStrategy } from "@/hooks/use-responsive-layout"
 import { analyzeMessageContent, getContentBasedStyling, shouldUseCompactLayout } from "@/lib/message-content-analyzer"
-import { useTouchHandler, useKeyboardHandler } from "@/hooks/use-touch-handler"
+import { useKeyboardHandler } from "@/hooks/use-touch-handler"
 import IntegrationAuthPrompt from "@/components/integrations/IntegrationAuthPrompt"
 import { isEmbeddableUrl, transformToEmbed, getSuggestedPlugin } from "@/lib/utils/iframe-helper"
 import { ReasoningDisplay, ReasoningSummary } from "@/components/reasoning-display"
@@ -474,15 +474,6 @@ export default function MessageBubble({
     }
   }
 
-  const { touchHandlers } = useTouchHandler({
-    onTap: handleCopy,
-    onLongPress: () => {
-      if (layout.isMobile) {
-        setShowStreamingControls(!showStreamingControls)
-      }
-    }
-  })
-  
   const { handleKeyDown } = useKeyboardHandler()
 
   // Check for integration OAuth auth_required in message metadata
@@ -694,8 +685,6 @@ export default function MessageBubble({
             setShowStreamingControls(false)
           }
         }}
-        {...(touchHandlers as any)}
-        onKeyDown={(e) => handleKeyDown(e.nativeEvent as KeyboardEvent, handleCopy)}
         tabIndex={0}
         role="article"
         aria-label={`${isUser ? 'User' : 'Assistant'} message`}
@@ -930,6 +919,13 @@ export default function MessageBubble({
           {/* Main content */}
           {isUser ? message.content : mainContent}
         </ReactMarkdown>
+
+        {/* Model Used - shown below assistant messages */}
+        {!isUser && message.modelName && (
+          <div className="text-[10px] text-white/40 mt-1 ml-1">
+            via {message.modelName}
+          </div>
+        )}
 
         {/* Tool Invocations Display - Enhanced with new component */}
         {!isUser && toolInvocations.length > 0 && (
@@ -1465,7 +1461,6 @@ export default function MessageBubble({
             minWidth: layout.isMobile ? dynamicStyles.touchTargetSize : 'auto'
           }}
           onClick={handleCopy}
-                      onKeyDown={(e) => handleKeyDown(e.nativeEvent as KeyboardEvent, handleCopy)}
           aria-label="Copy message content"
           title="Copy message"
         >
@@ -1475,6 +1470,12 @@ export default function MessageBubble({
             <Copy className={`${layout.isMobile ? 'h-5 w-5' : 'h-3 w-3'} text-white/70`} />
           )}
         </Button>
+        {/* Model annotation - shows which model generated this response */}
+        {!isUser && message.modelName && (
+          <div className="absolute -bottom-5 left-0 text-[10px] text-white/30">
+            {message.modelName}
+          </div>
+        )}
       </div>
     </div>
   )

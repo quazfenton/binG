@@ -158,6 +158,18 @@ export async function bootstrapToolSystem(config: BootstrapConfig): Promise<Boot
     logger.debug('Tauri invoke tools not available (expected in web mode)', error.message);
   }
 
+  // Register desktop automation tools (desktop mode only)
+  try {
+    const { registerDesktopAutomationTools } = await import('./bootstrap/bootstrap-desktop-automation');
+    const count = await registerDesktopAutomationTools(registry);
+    if (count > 0) {
+      toolCount += count;
+      logger.info(`Registered ${count} desktop automation tools`);
+    }
+  } catch (error: any) {
+    logger.debug('Desktop automation tools not available (expected in web mode)', error.message);
+  }
+
   // Register sandbox tools (if enabled)
   if (config.enableSandbox !== false) {
     try {

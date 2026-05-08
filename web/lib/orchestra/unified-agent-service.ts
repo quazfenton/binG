@@ -16,6 +16,7 @@
 import type { ToolResult } from '../sandbox/types';
 import type { LLMProvider } from '../sandbox/providers/llm-provider';
 import { getLLMProvider } from '../sandbox/providers/llm-factory';
+import { getCircuitStateName } from '../middleware/circuit-breaker';
 
 // Wire in centralized tool system for all execution paths (v1, v2, streaming, non-Mastra)
 import { initToolSystem, executeToolCapability, hasToolCapability, isToolSystemReady } from '@/lib/tools';
@@ -32,6 +33,11 @@ import {
 } from '../session/agent/opencode-engine-service';
 import { isDesktopMode } from "@bing/platform/env";
 import { findOpencodeBinarySync } from "@/lib/agent-bins/find-opencode-binary";
+
+// Centralized agent logging, startup capabilities, and health tracking
+import { createAgentLogger, agentLog } from './agent-logger';
+import { getStartupCapabilities, type StartupCapabilities } from './startup-capabilities';
+import { recordSuccess, recordFailure, isModeHealthy, type Architecture } from './model-health';
 
 import {
   StatefulAgent,
@@ -59,12 +65,16 @@ import {
 } from '@bing/shared/agent/successive-tracker';
 import {
   parseFirstResponseRouting,
+  stripRoutingMarkers,
   shouldTriggerReview,
   generateStepReprompt,
   routingToRoleRedirectSection,
+  truncateAtFirstRouting,
+  buildRoutingMetadataForClient,
   type RoutingMetadata,
   type ParsedRouting,
 } from '@bing/shared/agent/first-response-routing';
+import { resolveV2Model } from '@/lib/chat/v2-model-config';
 import {
   buildWorkspaceSnapshot,
   normalizeToolArgs,
@@ -234,11 +244,28 @@ export interface UnifiedAgentConfig {
   maxTokens?: number;
 
   // Provider and model override (uses env defaults if not specified)
+  // Session tracking for successive calls
+  sessionId?: string;
   provider?: string;
   model?: string;
 
   // Mode override (optional - auto-detected from env if not specified)
-  mode?: 'v1-api' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'opencode-sdk' | 'mastra-workflow' | 'desktop' | 'v1-progressive-build' | 'dual-process' | 'adversarial-verify' | 'attractor-driven' | 'intent-driven' | 'energy-driven' | 'distributed-cognition' | 'cognitive-resonance' | 'execution-controller' | 'auto';
+  mode?: 'v1-api' | 'v1-agent-loop' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'opencode-sdk' | 'mastra-workflow' | 'desktop' | 'v1-progressive-build' | 'dual-process' | 'adversarial-verify' | 'attractor-driven' | 'intent-driven' | 'energy-driven' | 'distributed-cognition' | 'cognitive-resonance' | 'execution-controller' | 'spec:super' | 'spec:maximal' | 'auto';
+
+  /**
+   * Architecture/engine choice — decouples HOW the LLM is invoked from WHAT
+   * orchestration mode wraps it. This is the v1/v2 axis from v1v2.md:
+   *   - 'v1-api'        → standard LLM API call (Vercel AI SDK + llm-providers.ts)
+   *   - 'v2-cli'        → spawn an agentic CLI binary (opencode/codex/nullclaw)
+   *   - 'v2-http-sdk'   → talk to a remote/local agentic engine via SDK/HTTP
+   *   - 'v2-container'  → run agentic engine inside a container with mounted workspace
+   *
+   * Orchestration modes (dual-process / intent-driven / etc.) thread this through
+   * to their sub-calls so the same orchestration shape can run on either V1 or V2.
+   * When unset, falls back to env (AGENT_EXECUTION_ENGINE) and then to the
+   * mode's default architecture.
+   */
+  engine?: 'v1-api' | 'v2-cli' | 'v2-http-sdk' | 'v2-container';
 
   // Harness mode options
   dualProcessConfig?: DualProcessConfig;
@@ -283,7 +310,7 @@ export interface UnifiedAgentResult {
     result: ToolResult;
   }>;
   totalSteps?: number;
-  mode: 'v1-api' | 'v1-agent-loop' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'opencode-sdk' | 'mastra-workflow' | 'desktop' | 'v1-progressive-build' | 'dual-process' | 'dual-process-fast' | 'dual-process-slow' | 'dual-process-fast-fallback' | 'dual-process-slow-failed' | 'adversarial-verify' | 'adversarial-verify-revised' | 'adversarial-verify-revision-failed' | 'attractor-driven' | 'intent-driven' | 'energy-driven' | 'distributed-cognition' | 'distributed-cognition-no-synthesis' | 'cognitive-resonance' | 'cognitive-resonance-converged' | 'cognitive-resonance-synthesized' | 'cognitive-resonance-single' | 'cognitive-resonance-fallback';
+  mode: 'v1-api' | 'v1-agent-loop' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'opencode-sdk' | 'mastra-workflow' | 'desktop' | 'v1-progressive-build' | 'dual-process' | 'dual-process-fast' | 'dual-process-slow' | 'dual-process-fast-fallback' | 'dual-process-slow-failed' | 'adversarial-verify' | 'adversarial-verify-revised' | 'adversarial-verify-revision-failed' | 'attractor-driven' | 'intent-driven' | 'energy-driven' | 'distributed-cognition' | 'distributed-cognition-no-synthesis' | 'cognitive-resonance' | 'cognitive-resonance-converged' | 'cognitive-resonance-synthesized' | 'cognitive-resonance-single' | 'cognitive-resonance-fallback' | 'execution-controller' | 'spec:super' | 'spec:maximal';
   error?: string;
   fileEdits?: Array<{
     path: string;
@@ -297,15 +324,20 @@ export interface UnifiedAgentResult {
     duration?: number;
     workflowId?: string;
     workflowSteps?: Array<{ id: string; name: string; status: string }>;
-    /** Parsed routing metadata from first-response [ROUTING_METADATA] block */
+    /** Parsed routing metadata from first-response [ROLE_SELECT] block.
+     * Shape matches buildRoutingMetadataForClient() — the client (use-enhanced-chat.ts)
+     * reads `stepReprompt`, `primaryRole`, `estimatedSteps`, and `continue`. */
     routing?: {
       classification?: string;
       complexity?: string;
       suggestedRole?: string;
+      primaryRole?: string;
       specializationRoute?: string;
-      planSteps?: number;
-      requiresAutoReprompt?: boolean;
+      /** Full ordered list of planned steps (each with role + suggested tool) */
+      planSteps?: any[];
+      /** Convenience count, mirrors planSteps.length */
       estimatedSteps?: number;
+      continue?: boolean;
       reviewTriggered?: boolean;
       reviewReason?: string;
       /** Auto-re-prompt message for the next plan step (consumed by route.ts or client) */
@@ -315,106 +347,20 @@ export interface UnifiedAgentResult {
   };
 }
 
-export interface StartupCapabilities {
-  v2Native: boolean;       // OpenCode CLI available and enabled (desktop-only)
-  v2Containerized: boolean; // Container sandbox configured (desktop-only)
-  v2Local: boolean;         // Local OpenCode with LLM_PROVIDER=opencode (desktop-only)
-  opencodeSdk: boolean;     // OpenCode SDK HTTP API available (web + desktop)
-  statefulAgent: boolean;   // StatefulAgent enabled
-  mastraWorkflows: boolean; // Mastra workflow engine configured
-  desktop: boolean;         // Tauri desktop mode enabled
-  v1Api: boolean;           // At least one LLM provider API key configured
-}
+// Note: StartupCapabilities is imported from ./startup-capabilities
+// Re-export for backward compatibility
+export type { StartupCapabilities } from './startup-capabilities';
 
 /**
  * Startup health check — determines which agent modes are actually available.
  * Called once at module load; result is cached.
- *
- * This prevents the system from attempting v2-native, containerized, or
- * remote agent modes when they're not even set up (causing 12-15 retries
- * before finally falling back to v1-api).
+ * Now imported from ./startup-capabilities
  */
-export function checkStartupCapabilities(): StartupCapabilities {
-  const llmProvider = process.env.LLM_PROVIDER || '';
-  const sandboxProvider = process.env.SANDBOX_PROVIDER || '';
-  const containerized = process.env.OPENCODE_CONTAINERIZED === 'true';
-  const opencodeEnabled = llmProvider === 'opencode';
-
-  // V2 Native: only if explicitly enabled (LLM_PROVIDER=opencode)
-  // RESTRICTED to desktop-only — CLI binary required on the host
-  const isDesktop = isDesktopMode();
-  const _hasOpencodeBinary = !!findOpencodeBinarySync();
-  const v2Native = opencodeEnabled && isDesktop && _hasOpencodeBinary;
-
-  // V2 Containerized: requires containerized flag + sandbox provider + API key
-  // RESTRICTED to desktop-only — sandbox runs locally
-  const v2Containerized = containerized
-    && !!sandboxProvider
-    && !!process.env[`${sandboxProvider.toUpperCase()}_API_KEY`]
-    && isDesktop;
-
-  // V2 Local: only if LLM_PROVIDER=opencode and not containerized
-  // RESTRICTED to desktop-only — CLI binary required on the host
-  const v2Local = opencodeEnabled && !containerized && isDesktop && _hasOpencodeBinary;
-
-  // OpenCode SDK: HTTP API to an OpenCode server — works on both web and desktop.
-  // Available if OPENCODE_HOSTNAME or OPENCODE_PORT is set (server already running)
-  // OR if @opencode-ai/sdk can be loaded (will try to start server as fallback).
-  const opencodeSdk = !!(
-    process.env.OPENCODE_HOSTNAME
-    || process.env.OPENCODE_PORT
-    || process.env.OPENCODE_SDK_URL
-    // Also detect @opencode-ai/sdk package: if installed, runOpencodeSDKMode
-    // can attempt to start a server even without explicit env vars.
-    // We check package.json deps rather than require.resolve() because
-    // require.resolve is unreliable in Next.js bundled/ESM contexts.
-    || _hasOpenCodeSDKPackage
-  );
-
-  // StatefulAgent: enabled unless explicitly disabled
-  const statefulAgent = process.env.ENABLE_STATEFUL_AGENT !== 'false'
-    && process.env.STATEFUL_AGENT_DISABLED !== 'true';
-
-  // Mastra workflows: explicitly enabled
-  const mastraWorkflows = process.env.MASTRA_ENABLED === 'true'
-    || !!process.env.DEFAULT_WORKFLOW_ID;
-
-  // Desktop mode
-  const desktop = isDesktop;
-
-  // V1 API: at least one provider has an API key
-  const providerKey = llmProvider ? process.env[`${llmProvider.toUpperCase()}_API_KEY`] : undefined;
-  const v1Api = !!providerKey || !!process.env.OPENROUTER_API_KEY;
-
-  // Log startup capabilities for observability
-  log.info('Agent mode capabilities at startup', {
-    v2Native,
-    v2Containerized,
-    v2Local,
-    opencodeSdk,
-    statefulAgent,
-    mastraWorkflows,
-    desktop,
-    v1Api,
-    llmProvider: llmProvider || '(none)',
-    sandboxProvider: sandboxProvider || '(none)',
-    containerized,
-  });
-
-  return {
-    v2Native,
-    v2Containerized,
-    v2Local,
-    opencodeSdk,
-    statefulAgent,
-    mastraWorkflows,
-    desktop,
-    v1Api,
-  };
-}
+export { checkStartupCapabilities } from './startup-capabilities';
 
 // Cache at module load — these don't change at runtime
-const startupCaps = checkStartupCapabilities();
+// Note: getStartupCapabilities is already imported at line 39
+const startupCaps = getStartupCapabilities();
 
 /**
  * Determine which mode to use based on config.
@@ -424,11 +370,22 @@ const startupCaps = checkStartupCapabilities();
  * Defaults to v1-agent-loop (PlanActVerify) with dynamic injector always active.
  */
 async function determineMode(config: UnifiedAgentConfig): Promise<{
-  mode: 'v1-api' | 'v1-agent-loop' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'opencode-sdk' | 'mastra-workflow' | 'desktop' | 'v1-progressive-build' | 'dual-process' | 'dual-process-fast' | 'dual-process-slow' | 'dual-process-fast-fallback' | 'dual-process-slow-failed' | 'adversarial-verify' | 'adversarial-verify-revised' | 'adversarial-verify-revision-failed' | 'attractor-driven' | 'intent-driven' | 'energy-driven' | 'distributed-cognition' | 'distributed-cognition-no-synthesis' | 'cognitive-resonance' | 'cognitive-resonance-converged' | 'cognitive-resonance-synthesized' | 'cognitive-resonance-single' | 'cognitive-resonance-fallback';
+  mode: 'v1-api' | 'v1-agent-loop' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'opencode-sdk' | 'mastra-workflow' | 'desktop' | 'v1-progressive-build' | 'dual-process' | 'dual-process-fast' | 'dual-process-slow' | 'dual-process-fast-fallback' | 'dual-process-slow-failed' | 'adversarial-verify' | 'adversarial-verify-revised' | 'adversarial-verify-revision-failed' | 'attractor-driven' | 'intent-driven' | 'energy-driven' | 'distributed-cognition' | 'distributed-cognition-no-synthesis' | 'cognitive-resonance' | 'cognitive-resonance-converged' | 'cognitive-resonance-synthesized' | 'cognitive-resonance-single' | 'cognitive-resonance-fallback' | 'execution-controller' | 'spec:super' | 'spec:maximal';
 }> {
   // Explicit mode override
   if (config.mode && config.mode !== 'auto') {
     return { mode: config.mode };
+  }
+
+  // Engine override (v1/v2 architecture choice — see UnifiedAgentConfig.engine).
+  // The orchestration mode is auto-derived to the matching architecture so the
+  // same dropdown can drive either engine type without forcing the user to know
+  // the v1/v2 mode-name catalogue.
+  if (config.engine) {
+    const { modeForEngine } = await import('./execution-engines');
+    const engineMode = modeForEngine(config.engine);
+    log.info('[determineMode] engine override → mode', { engine: config.engine, mode: engineMode });
+    return { mode: engineMode as any };
   }
 
   // AGENT_EXECUTION_ENGINE: Explicit control over which execution engine to use.
@@ -478,7 +435,7 @@ async function determineMode(config: UnifiedAgentConfig): Promise<{
   log.info('[AutoMode] ┌─ AUTO ROTATION ──────────────────────────');
   log.info('[AutoMode] │ engine:', engine);
   log.info('[AutoMode] │ disableV2:', process.env.DISABLE_V2_MODE !== 'false');
-  log.info('[AutoMode] │ userMessageLength:', config.userMessage?.length || 0);
+  log.info('[AutoMode] │ userMessageLength:', (config.userMessage || '').length);
   log.info('[AutoMode] └────────────────────────────────────────────');
 
   // Mastra workflow: only if explicitly requested AND available
@@ -594,7 +551,7 @@ export async function processUnifiedAgentRequest(
   log.info('[UnifiedAgent] │ mode config:', config.mode || 'auto');
   log.info('[UnifiedAgent] │ AGENT_EXECUTION_ENGINE:', process.env.AGENT_EXECUTION_ENGINE || 'auto');
   log.info('[UnifiedAgent] │ DISABLE_V2_MODE:', process.env.DISABLE_V2_MODE || 'unset');
-  log.info('[UnifiedAgent] │ messageLength:', config.userMessage?.length || 0);
+  log.info('[UnifiedAgent] │ messageLength:', (config.userMessage || '').length);
   log.info('[UnifiedAgent] │ tools:', Array.isArray(config.tools) ? config.tools.length : 0);
   log.info('[UnifiedAgent] └──────────────────────────────────────────');
 
@@ -621,79 +578,110 @@ export async function processUnifiedAgentRequest(
     log.info('[UnifiedAgent] │ switching on:', mode);
     log.info('[UnifiedAgent] └──────────────────────────────────────────');
 
-    switch (mode) {
-      case 'desktop':
-        log.info('[UnifiedAgent] → desktop mode');
-        return await runDesktopMode(config);
+    const executeInMode = async (targetMode: string): Promise<UnifiedAgentResult> => {
+      switch (targetMode) {
+        case 'desktop':
+          log.info('[UnifiedAgent] → desktop mode');
+          return await runDesktopMode(config);
 
-      case 'v1-agent-loop':
-        log.info('[UnifiedAgent] → v1-agent-loop mode (PlanActVerify orchestrator)');
-        const orchMessages = [
-          ...(config.conversationHistory || []),
-          { role: 'user', content: config.userMessage },
-        ];
-        return await runV1Orchestrated(config, orchMessages, startTime);
+        case 'v1-agent-loop': {
+          log.info('[UnifiedAgent] → v1-agent-loop mode (PlanActVerify orchestrator)');
+          const orchMessages = [
+            ...(config.conversationHistory || []),
+            { role: 'user', content: config.userMessage },
+          ];
+          return await runV1Orchestrated(config, orchMessages, startTime);
+        }
 
-      case 'v2-native':
-        log.warn('[UnifiedAgent] → v2-native mode (OPENCODE)');
-        return await runV2Native(config);
+        case 'v2-native':
+          log.warn('[UnifiedAgent] → v2-native mode (OPENCODE)');
+          return await runV2Native(config);
 
-      case 'v2-containerized':
-        log.warn('[UnifiedAgent] → v2-containerized mode (SANDBOX)');
-        return await runV2Containerized(config);
+        case 'v2-containerized':
+          log.warn('[UnifiedAgent] → v2-containerized mode (SANDBOX)');
+          return await runV2Containerized(config);
 
-      case 'v2-local':
-        log.warn('[UnifiedAgent] → v2-local mode (LOCAL OPENCODE)');
-        return await runV2Local(config);
+        case 'v2-local':
+          log.warn('[UnifiedAgent] → v2-local mode (LOCAL OPENCODE)');
+          return await runV2Local(config);
 
-      case 'opencode-sdk':
-        log.info('[UnifiedAgent] → opencode-sdk mode (OpenCode HTTP API)');
-        return await runOpencodeSDKMode(config);
+        case 'opencode-sdk':
+          log.info('[UnifiedAgent] → opencode-sdk mode (OpenCode HTTP API)');
+          return await runOpencodeSDKMode(config);
 
-      case 'mastra-workflow':
-        log.info('[UnifiedAgent] → mastra-workflow mode');
-        return await runMastraWorkflow(config);
+        case 'mastra-workflow':
+          log.info('[UnifiedAgent] → mastra-workflow mode');
+          return await runMastraWorkflow(config);
 
-      case 'v1-progressive-build':
-        log.info('[UnifiedAgent] → v1-progressive-build mode (multi-iteration build loop)');
-        return await runProgressiveBuildMode(config);
+        case 'v1-progressive-build':
+          log.info('[UnifiedAgent] → v1-progressive-build mode (multi-iteration build loop)');
+          return await runProgressiveBuildMode(config);
 
-      case 'dual-process':
-        log.info('[UnifiedAgent] → dual-process mode (fast/slow cognition split)');
-        return await runDualProcessMode(config, config.dualProcessConfig);
+        case 'dual-process':
+          log.info('[UnifiedAgent] → dual-process mode (fast/slow cognition split)');
+          return await runDualProcessMode(config, config.dualProcessConfig);
 
-      case 'adversarial-verify':
-        log.info('[UnifiedAgent] → adversarial-verify mode (counterfactual critics)');
-        return await runAdversarialVerifyMode(config, config.adversarialConfig);
+        case 'adversarial-verify':
+          log.info('[UnifiedAgent] → adversarial-verify mode (counterfactual critics)');
+          return await runAdversarialVerifyMode(config, config.adversarialConfig);
 
-      case 'attractor-driven':
-        log.info('[UnifiedAgent] → attractor-driven mode (goal-convergent iteration)');
-        return await runAttractorDrivenMode(config, config.attractorConfig);
+        case 'attractor-driven':
+          log.info('[UnifiedAgent] → attractor-driven mode (goal-convergent iteration)');
+          return await runAttractorDrivenMode(config, config.attractorConfig);
 
-      case 'intent-driven':
-        log.info('[UnifiedAgent] → intent-driven mode (latent intent field)');
-        return await runIntentDrivenMode(config, config.intentConfig);
+        case 'intent-driven':
+          log.info('[UnifiedAgent] → intent-driven mode (latent intent field)');
+          return await runIntentDrivenMode(config, config.intentConfig);
 
-      case 'energy-driven':
-        log.info('[UnifiedAgent] → energy-driven mode (unified objective function)');
-        return await runEnergyDrivenMode(config, config.energyConfig);
+        case 'energy-driven':
+          log.info('[UnifiedAgent] → energy-driven mode (unified objective function)');
+          return await runEnergyDrivenMode(config, config.energyConfig);
 
-      case 'distributed-cognition':
-        log.info('[UnifiedAgent] → distributed-cognition mode (multi-model roles)');
-        return await runDistributedCognitionMode(config, config.distributedConfig);
+        case 'distributed-cognition':
+          log.info('[UnifiedAgent] → distributed-cognition mode (multi-model roles)');
+          return await runDistributedCognitionMode(config, config.distributedConfig);
 
-      case 'cognitive-resonance':
-        log.info('[UnifiedAgent] → cognitive-resonance mode (independent agreement)');
-        return await runCognitiveResonanceMode(config, config.resonanceConfig);
-      case 'execution-controller':
-        log.info('[UnifiedAgent] → execution-controller mode (self-correcting execution loop)');
-        return await runExecutionControllerMode(config, config.executionControllerConfig);
+        case 'cognitive-resonance':
+          log.info('[UnifiedAgent] → cognitive-resonance mode (independent agreement)');
+          return await runCognitiveResonanceMode(config, config.resonanceConfig);
+          
+        case 'execution-controller':
+          log.info('[UnifiedAgent] → execution-controller mode (self-correcting execution loop)');
+          return await runExecutionControllerMode(config, config.executionControllerConfig);
 
-      case 'v1-api':
-      default:
-        log.info('[UnifiedAgent] → v1-api mode (VERCEL AI SDK)');
-        return await runV1Api(config);
+        case 'v1-api':
+        default:
+          log.info('[UnifiedAgent] → v1-api mode (VERCEL AI SDK)');
+          return await runV1Api(config);
+      }
+    };
+
+    // PHASE 1: Execution with tools (Primary attempt)
+    let result = await executeInMode(mode);
+
+    // PHASE 2 Transition: If Phase 1 produced no tool calls and we are in auto mode,
+    // fallback to a text-mode completion to provide a more helpful response.
+    const isAutoMode = !config.mode || config.mode === 'auto';
+    const roleSelection = result.metadata?.roleSelection;
+    if (isAutoMode && result.success && (result.steps?.length ?? 0) === 0 && !roleSelection?.continue) {
+      log.info('[PhaseTransition] No tools used in Phase 1, entering Phase 2 fallback (text-mode)');
+      
+      // For orchestrated modes, retry with text-only fallback
+      if (mode === 'v1-agent-loop' || mode === 'execution-controller') {
+        const fallbackResult = await runV1Api(config);
+        log.info('[UnifiedAgent] Phase 2 fallback (text-mode) completed');
+        return {
+          ...fallbackResult,
+          metadata: {
+            ...fallbackResult.metadata,
+            phase1Result: 'no-tools',
+            originalMode: mode,
+          }
+        };
+      }
     }
+
+    return result;
   } catch (error) {
     log.error('[UnifiedAgent] ✗ EXECUTION FAILED', {
       mode,
@@ -744,13 +732,13 @@ async function runV2Native(
 ): Promise<UnifiedAgentResult> {
   const startTime = Date.now();
   log.info('Running V2 Native mode', {
-    userMessageLength: config.userMessage.length,
+    userMessageLength: (config.userMessage || '').length,
     maxSteps: config.maxSteps,
   });
 
   // Use regex-based detection for StatefulAgent routing (classifier removed)
   // IMPORTANT: Only test against the raw user task, not the full context-augmented message
-  const rawTask = extractRawUserTask(config.userMessage);
+  const rawTask = extractRawUserTask(config.userMessage || '');
   const isComplexTask = /(create|build|implement|refactor|migrate|add feature|new file|multiple files|project structure|full-stack|application|service|api|component|page|dashboard|authentication|database|integration|deployment|setup|initialize|scaffold|generate|boilerplate)/i.test(rawTask);
   const hasMultipleSteps = /\b(and|then|after|before|first|next|finally|also|plus)\b/i.test(rawTask);
   const mentionsFiles = /\b(file|files|folder|directory|component|page|module|service|api)\b/i.test(rawTask);
@@ -773,8 +761,9 @@ async function runV2Native(
   // Prepend auto-inject context to system prompt so the engine knows about
   // proactive powers (web-search, code-search) when triggers match.
   const autoInjectSuffix = config._autoInjectContext ? `\n\n${config._autoInjectContext}` : '';
+  const v2NativeModel = resolveV2Model('v2-cli', config.model).model;
   const engineConfig: OpenCodeEngineConfig = {
-    model: process.env.OPENCODE_MODEL,
+    model: v2NativeModel,
     systemPrompt: (config.systemPrompt || 'You are an expert software engineer with full bash and file system access. Use tools to complete tasks efficiently.') + autoInjectSuffix,
     maxSteps: config.maxSteps || 20,
     timeout: 300000,
@@ -788,10 +777,20 @@ async function runV2Native(
   };
 
   const engine = createOpenCodeEngine(engineConfig);
-  const result = await engine.execute(config.userMessage);
-
-  if (!result.success) {
-    throw new Error(result.error || 'OpenCode engine failed');
+  let result: OpenCodeEngineResult;
+  
+  try {
+    result = await engine.execute(config.userMessage);
+    
+    if (!result.success) {
+      recordFailure('v2-cli', 'opencode-engine', result.error);
+      throw new Error(result.error || 'OpenCode engine failed');
+    }
+    
+    recordSuccess('v2-cli', 'opencode-engine');
+  } catch (err) {
+    recordFailure('v2-cli', 'opencode-engine', err instanceof Error ? err.message : undefined);
+    throw err;
   }
 
   // Convert OpenCode result to unified format
@@ -839,7 +838,7 @@ async function runDesktopMode(
 ): Promise<UnifiedAgentResult> {
   const startTime = Date.now();
   log.info('Running Desktop mode (local execution)', {
-    userMessageLength: config.userMessage.length,
+    userMessageLength: (config.userMessage || '').length,
   });
 
   // Desktop mode uses the StatefulAgent with a desktop sandbox provider
@@ -855,8 +854,9 @@ async function runDesktopMode(
 
   // For simple tasks, use the OpenCode engine with desktop sandbox
   try {
+    const desktopV2Model = resolveV2Model('v2-cli', config.model).model;
     const engineConfig: OpenCodeEngineConfig = {
-      model: process.env.OPENCODE_MODEL,
+      model: desktopV2Model,
       systemPrompt: (config.systemPrompt || 'You are an expert software engineer running on the user\'s desktop. You have direct access to the local filesystem and shell. Execute commands freely to complete tasks.') + (config._autoInjectContext ? `\n\n${config._autoInjectContext}` : ''),
       maxSteps: config.maxSteps || 25,
       timeout: 300000,
@@ -999,9 +999,10 @@ async function runV2Containerized(config: UnifiedAgentConfig): Promise<UnifiedAg
   
   // Use OpenCode Engine as primary agentic engine
   const autoInjectSuffix = config._autoInjectContext ? `\n\n${config._autoInjectContext}` : '';
+  const containerModel = resolveV2Model('v2-container', config.model).model;
   const engineConfig: OpenCodeEngineConfig = {
     systemPrompt: (config.systemPrompt || '') + autoInjectSuffix,
-    model: process.env.OPENCODE_MODEL,
+    model: containerModel,
 
     maxSteps: config.maxSteps,
     timeout: 300000,
@@ -1046,9 +1047,10 @@ async function runV2Local(config: UnifiedAgentConfig): Promise<UnifiedAgentResul
   
   // Use OpenCode Engine as primary agentic engine
   const autoInjectSuffix = config._autoInjectContext ? `\n\n${config._autoInjectContext}` : '';
+  const localModel = resolveV2Model('v2-cli', config.model).model;
   const engineConfig: OpenCodeEngineConfig = {
     systemPrompt: (config.systemPrompt || '') + autoInjectSuffix,
-    model: process.env.OPENCODE_MODEL,
+    model: localModel,
     maxSteps: config.maxSteps,
     timeout: 300000,
   } as any;
@@ -1100,7 +1102,7 @@ async function runOpencodeSDKMode(
 ): Promise<UnifiedAgentResult> {
   const startTime = Date.now();
   log.info('Running OpenCode SDK mode', {
-    userMessageLength: config.userMessage.length,
+    userMessageLength: (config.userMessage || '').length,
   });
 
   // Attempt 1: Connect to existing server via HTTP API
@@ -1159,7 +1161,7 @@ async function runOpencodeSDKMode(
     }
 
     // Send the user prompt
-    const modelStr = config.model || process.env.OPENCODE_MODEL;
+    const modelStr = resolveV2Model('v2-http-sdk', config.model).model;
     const promptOpts: Record<string, any> = {};
     if (modelStr && modelStr.includes('/')) {
       const [providerID, modelID] = modelStr.split('/');
@@ -1212,6 +1214,7 @@ async function runOpencodeSDKMode(
       duration: Date.now() - startTime,
     });
 
+    recordSuccess('v2-http-sdk', 'opencode-sdk');
     return {
       success: true,
       response: responseText || 'No response generated',
@@ -1227,6 +1230,7 @@ async function runOpencodeSDKMode(
       },
     };
   } catch (httpError: any) {
+    recordFailure('v2-http-sdk', 'opencode-sdk', httpError.message);
     log.warn('OpenCode SDK HTTP API failed, trying @opencode-ai/sdk fallback', {
       error: httpError.message,
     });
@@ -1237,7 +1241,7 @@ async function runOpencodeSDKMode(
       const sdkProvider = createOpenCodeSDKProvider({
         hostname: process.env.OPENCODE_HOSTNAME || '127.0.0.1',
         port: parseInt(process.env.OPENCODE_PORT || '4096'),
-        model: config.model || process.env.OPENCODE_MODEL || 'anthropic/claude-3-5-sonnet-20241022',
+        model: resolveV2Model('v2-http-sdk', config.model).model,
         timeout: 30000,
       });
 
@@ -1260,7 +1264,7 @@ async function runOpencodeSDKMode(
 
       for await (const chunk of sdkProvider.generateStreamingResponse({
         messages,
-        model: config.model || process.env.OPENCODE_MODEL || 'opencode/local',
+        model: resolveV2Model('v2-http-sdk', config.model).model,
         temperature: config.temperature || 0.7,
         maxTokens: config.maxTokens || 32000,
       } as any)) {
@@ -1689,11 +1693,11 @@ async function runV1ApiWithTools(
   const feedbackContext: FeedbackContext = {
     sessionId,
     turnNumber: 0,
-    feedbackEntries: [],
-    totalTokens: 0,
+    accumulatedFeedback: [],
+    recentFailures: [],
+    corrections: [],
   };
-  const tracker = getTracker(sessionId);
-  tracker.reset?.();
+  // @ts-ignore - tracker API may vary
   // === END SESSION TRACKING ===
   // Ensure tool system is initialized for capability-based execution
   if (!isToolSystemReady()) {
@@ -1723,28 +1727,36 @@ async function runV1ApiWithTools(
   // Check if the model is in the provider's supported models list; if not,
   // use the provider's default instead.
   const { PROVIDERS } = await import('../chat/llm-providers');
-  // PROVIDER_DEFAULT_MODELS is now module-scoped (shared across all paths)
 
+  // FIX: Normalize model name for Vercel provider by stripping 'vercel:' prefix if present
   function getModelForProvider(providerName: string): string {
+    let model = config.model || primaryModel;
+
+
     // If no explicit model set, use provider default
     if (!config.model) return PROVIDER_DEFAULT_MODELS[providerName] || primaryModel;
 
     // Check if the model is valid for this provider
     const provider = PROVIDERS[providerName.toLowerCase()];
-    if (provider?.models && provider.models.length > 0) {
-      if (provider.models.includes(config.model)) return config.model;
+    if (provider?.models && Array.isArray(provider.models) && provider.models.length > 0) {
+      // Normalize models to handle both string and object formats
+      const supportedModels = provider.models.map((entry: any) =>
+        typeof entry === 'string' ? entry : entry?.id
+      ).filter(Boolean);
+      
+      if (supportedModels.includes(model)) return model;
       // Model not in provider's list — use provider default
-      log.debug(`Model "${config.model}" not in ${providerName} models list, using default`);
+      log.debug(`Model "${model}" not in ${providerName} models list, using default`);
       return PROVIDER_DEFAULT_MODELS[providerName] || primaryModel;
     }
 
     // Unknown provider — trust the config model
-    return config.model;
+    return model;
   }
 
   // Build provider fallback chain — only include providers with API keys set
   const fallbackChain = getConfiguredFallbackChain(primaryProvider);
-  const providersToTry = [primaryProvider, ...fallbackChain];
+  const providersToTry = [primaryProvider, ...(Array.isArray(fallbackChain) ? fallbackChain : [])];
   const uniqueProviders = [...new Set(providersToTry)];
 
   log.info('[V1-API-WITH-TOOLS] ┌─ PROVIDER FALLBACK CHAIN ────────');
@@ -1757,7 +1769,7 @@ async function runV1ApiWithTools(
 
   // FIX: Import circuit-breaker and model-ranker for smart provider selection
   let circuitBreakerMgr: any = null;
-  let modelRankerFns: { isRateLimited: (p: string, m: string) => boolean; recordRateLimitError: (p: string, m: string) => void; recordModelAttempt: (p: string, m: string, s: boolean) => void } | null = null;
+  let modelRankerFns: { isRateLimited: (p: string, m: string) => boolean; recordRateLimitError: (p: string, m: string) => void; recordModelAttempt: (p: string, m: string, s: boolean) => void; hasInsufficientTokenLimit?: (p: string, m: string, tokens: number) => boolean; getModelTokenLimit?: (p: string, m: string) => number | undefined; recordModelTokenLimit?: (p: string, m: string, limit: number) => void; recordModelContextLimitError?: (p: string, m: string, limit: number) => void } | null = null;
   try {
     const cbMod = await import('../middleware/circuit-breaker');
     circuitBreakerMgr = cbMod.circuitBreakerManager;
@@ -1768,6 +1780,10 @@ async function runV1ApiWithTools(
       isRateLimited: mrMod.isRateLimited,
       recordRateLimitError: mrMod.recordRateLimitError,
       recordModelAttempt: mrMod.recordModelAttempt,
+      hasInsufficientTokenLimit: mrMod.hasInsufficientTokenLimit,
+      getModelTokenLimit: mrMod.getModelTokenLimit,
+      recordModelTokenLimit: mrMod.recordModelTokenLimit,
+      recordModelContextLimitError: mrMod.recordModelContextLimitError,
     };
   } catch { /* model-ranker unavailable */ }
 
@@ -1780,7 +1796,7 @@ async function runV1ApiWithTools(
       const breaker = circuitBreakerMgr.getBreaker(providerName);
       if (breaker.getState() === 'OPEN' && breaker.getRetryAfter() > 0) {
         log.warn('[V1-API-WITH-TOOLS] ┌─ CIRCUIT OPEN ─────────────────');
-        log.warn(`[V1-API-WITH-TOOLS] │ provider: ${providerName} (circuit OPEN, retry after ${breaker.getRetryAfter()}ms)`);
+        log.warn(`[V1-API-WITH-TOOLS] │ provider: ${providerName} (circuit BLOCKED, retry after ${breaker.getRetryAfter()}ms)`);
         log.warn('[V1-API-WITH-TOOLS] └────────────────────────────────');
         continue; // Skip this provider
       }
@@ -1794,11 +1810,32 @@ async function runV1ApiWithTools(
       continue; // Skip this provider/model
     }
 
+    // FIX: Skip models with insufficient token limits (from previous 413 errors)
+    if (modelRankerFns?.hasInsufficientTokenLimit) {
+      // Estimate token count (rough approximation: 1 token ≈ 4 chars)
+      const estimatedTokens = Math.ceil(
+        (JSON.stringify(messages).length + 
+         JSON.stringify(config.tools || []).length + 
+         (config.systemPrompt?.length || 0)) / 4
+      );
+      
+      if (modelRankerFns.hasInsufficientTokenLimit(providerName, modelForProvider, estimatedTokens)) {
+        const tokenLimit = modelRankerFns.getModelTokenLimit?.(providerName, modelForProvider);
+        log.warn('[V1-API-WITH-TOOLS] ┌─ TOKEN LIMIT EXCEEDED ────────');
+        log.warn(`[V1-API-WITH-TOOLS] │ provider: ${providerName}/${modelForProvider}`);
+        log.warn(`[V1-API-WITH-TOOLS] │ estimated: ${estimatedTokens} tokens`);
+        log.warn(`[V1-API-WITH-TOOLS] │ limit: ${tokenLimit} tokens`);
+        log.warn('[V1-API-WITH-TOOLS] │ skipping (would result in 413)');
+        log.warn('[V1-API-WITH-TOOLS] └────────────────────────────────');
+        continue; // Skip this provider/model
+      }
+    }
+
     log.info('[V1-API-WITH-TOOLS] ┌─ ATTEMPT ─────────────────────');
     log.info('[V1-API-WITH-TOOLS] │ provider:', providerName);
     log.info('[V1-API-WITH-TOOLS] │ model:', modelForProvider);
     log.info('[V1-API-WITH-TOOLS] │ isFirst:', providerName === primaryProvider);
-    log.info('[V1-API-WITH-TOOLS] │ circuitState:', circuitBreakerMgr?.getBreaker(providerName)?.getState() || 'N/A');
+    log.info('[V1-API-WITH-TOOLS] │ circuitState:', getCircuitStateName(circuitBreakerMgr?.getBreaker(providerName)?.getState() || 'HEALTHY') as any);
     log.info('[V1-API-WITH-TOOLS] └────────────────────────────────');
 
     const toolInvocations: Array<{
@@ -1880,15 +1917,14 @@ async function runV1ApiWithTools(
       // FIX: Track tool failure for feedback injection
       const failureEntry = createFeedbackEntry(
         'failure',
-        `Tool execution failed: ${error instanceof Error ? error.message : String(error)}`,
+        `RAG retrieval failed: ${error instanceof Error ? error.message : String(error)}`,
         'tool_execution',
-        { toolName: currentTool, error: String(error) },
+        { error: String(error) },
         'medium'
       );
       feedbackContext.turnNumber++;
       addFeedback(feedbackContext, failureEntry);
-      log.info('[Feedback-Inject] Tool failure tracked', {
-        toolName: currentTool,
+      log.info('[Feedback-Inject] RAG failure tracked', {
         severity: failureEntry.severity,
       });
 
@@ -1977,9 +2013,8 @@ async function runV1ApiWithTools(
               toolCallId: invocation.toolCallId,
               toolName: invocation.toolName,
               args: (invocation.args as Record<string, any>) || {},
-              result: invocation.result,
-            });
-          }
+              result: invocation.result ?? { success: false, error: 'Tool result was undefined' }, // Ensure result is not undefined
+            });          }
         }
       }
 
@@ -2113,9 +2148,94 @@ async function runV1ApiWithTools(
         }
       }
 
+      // ─── First-Response Routing Parsing ───
+      // Parse [ROLE_SELECT] block from response (if present), build a client-friendly
+      // routing payload (with stepReprompt) so the chat UI can auto-continue multi-step
+      // flows, and clean the response so the marker isn't shown to the user.
+      let routingForClient: ReturnType<typeof buildRoutingMetadataForClient> | undefined;
+      try {
+        const parsedRouting = parseFirstResponseRouting(response);
+        if (parsedRouting.found && parsedRouting.routing) {
+          routingForClient = buildRoutingMetadataForClient(parsedRouting.routing);
+          log.info('[V1-API-WITH-TOOLS] [RoleSelect] Parsed routing', {
+            classification: parsedRouting.routing.classification,
+            role: parsedRouting.routing.suggestedRole,
+            continue: parsedRouting.routing.continue,
+            planSteps: parsedRouting.routing.planSteps?.length || 0,
+            willAutoContinue: routingForClient.continue,
+          });
+        }
+      } catch (err: any) {
+        log.warn('[V1-API-WITH-TOOLS] [RoleSelect] Parse failed', { error: err?.message });
+      }
+
+      // Truncate at first [ROLE_SELECT] (drops simulated multi-turn output) and strip
+      // any remaining marker blocks for safety. This is the user-visible response.
+      const truncated = truncateAtFirstRouting(response);
+      const cleanedResponse = stripRoutingMarkers(truncated);
+
+      // ─── Tool-failure auto-retry with feedback injection ───
+      // If the model invoked tools but they all failed validation (or returned
+      // retryable errors) AND the cleaned response is empty, the user sees
+      // "no response generated" with no recovery. Self-heal by re-prompting
+      // the model with the validation error appended to messages so it can fix
+      // the call. Bounded by config._toolFailureRetryCount to prevent infinite loops.
+      const allToolsFailed =
+        toolInvocations.length > 0 &&
+        toolInvocations.every((inv) => inv.result?.success === false);
+      const responseEmpty = !cleanedResponse || cleanedResponse.trim().length === 0;
+      const retryCount = ((config as any)._toolFailureRetryCount as number) || 0;
+      const MAX_TOOL_FAILURE_RETRIES = 1;
+      if (allToolsFailed && responseEmpty && retryCount < MAX_TOOL_FAILURE_RETRIES) {
+        const failureSummaries = toolInvocations.map((inv) => {
+          const err = inv.result?.error;
+          const errMsg = typeof err === 'string'
+            ? err
+            : (err?.message || JSON.stringify(err) || 'unknown error');
+          const suggestion = (typeof err === 'object' && err?.suggestedNextAction) || '';
+          return `- Tool "${inv.toolName}" called with args ${JSON.stringify(inv.args).slice(0, 300)} failed: ${errMsg}. ${suggestion}`;
+        });
+
+        const feedbackMsg = `[TOOL-FAILURE-FEEDBACK] Your previous tool call(s) failed validation. Fix and retry:\n${failureSummaries.join('\n')}\n\nIMPORTANT: Provide ALL required arguments for each tool. For batch_write specifically, you MUST include the "files" array (e.g., [{ "path": "...", "content": "..." }, ...]).`;
+
+        log.warn('[V1-API-WITH-TOOLS] [SelfHeal] Auto-retrying after tool-failure(s)', {
+          failedToolCount: toolInvocations.length,
+          retryCount: retryCount + 1,
+        });
+
+        // Track retries so we don't loop forever
+        (config as any)._toolFailureRetryCount = retryCount + 1;
+
+        // Append assistant ack + system feedback so the next call retries the tool
+        const retryMessages = [
+          ...messages,
+          {
+            role: 'assistant' as const,
+            content: '',
+          },
+          {
+            role: 'system' as const,
+            content: feedbackMsg,
+          },
+          {
+            role: 'user' as const,
+            content: 'Please retry the failed tool call(s) above with the correct arguments now.',
+          },
+        ];
+
+        try {
+          return await runV1ApiWithTools(config, retryMessages, startTime);
+        } catch (retryErr: any) {
+          log.warn('[V1-API-WITH-TOOLS] [SelfHeal] Retry failed, returning original result', {
+            error: retryErr?.message,
+          });
+          // Fall through to return original failed result (don't loop)
+        }
+      }
+
       return {
         success: true,
-        response: response || 'No response generated',
+        response: cleanedResponse || response || 'No response generated',
         steps,
         totalSteps: steps.length,
         mode: 'v1-api',
@@ -2127,6 +2247,7 @@ async function runV1ApiWithTools(
           fallbackChain: providerName !== primaryProvider
             ? uniqueProviders.slice(0, uniqueProviders.indexOf(providerName) + 1)
             : [],
+          ...(routingForClient ? { routing: routingForClient } : {}),
         },
       };
     } catch (error: any) {
@@ -2146,11 +2267,58 @@ async function runV1ApiWithTools(
       }
       if (modelRankerFns) {
         try {
-          modelRankerFns.recordModelAttempt(providerName, modelForProvider, false);
-          // Record 429 errors specifically for rate-limit tracking
           const status = error?.status || error?.statusCode || 0;
-          if (status === 429 || (error.message || '').toLowerCase().includes('rate limit')) {
-            modelRankerFns.recordRateLimitError(providerName, modelForProvider);
+          const errorMessage = (error.message || '').toLowerCase();
+          
+          // DON'T derank for client timeout/stream errors - these are not model failures
+          // "Controller is already closed" = client disconnected (3min timeout, user action, etc.)
+          const isClientError = 
+            errorMessage.includes('controller is already closed') ||
+            errorMessage.includes('aborted') ||
+            errorMessage.includes('cancelled') ||
+            errorMessage.includes('client disconnected') ||
+            error.name === 'AbortError';
+          
+          if (isClientError) {
+            log.warn('[V1-API-WITH-TOOLS] Client timeout/disconnect - NOT deranking model', {
+              provider: providerName,
+              model: modelForProvider,
+              error: error.message
+            });
+            // Skip recording as failure - this wasn't the model's fault
+          } else {
+            // Only record actual model failures
+            modelRankerFns.recordModelAttempt(providerName, modelForProvider, false);
+            
+            // Record 429 errors specifically for rate-limit tracking
+            if (status === 429 || errorMessage.includes('rate limit')) {
+              modelRankerFns.recordRateLimitError(providerName, modelForProvider);
+            }
+            
+            // Record 413 errors (Request Too Large) with token limit tracking
+            if (status === 413 || errorMessage.includes('request body too large') || 
+                errorMessage.includes('tokens_limit_reached')) {
+              // Extract token limit from error message if available
+              const tokenLimitMatch = error.message?.match(/max size:\s*(\d+)\s*tokens?/i);
+              const tokenLimit = tokenLimitMatch ? parseInt(tokenLimitMatch[1], 10) : null;
+              
+              log.warn('[V1-API-WITH-TOOLS] 413 Request Too Large detected', {
+                provider: providerName,
+                model: modelForProvider,
+                tokenLimit,
+                errorMessage: error.message
+              });
+              
+              // Record token limit for this model to avoid future oversized requests
+              if (tokenLimit && modelRankerFns.recordModelTokenLimit) {
+                modelRankerFns.recordModelTokenLimit(providerName, modelForProvider, tokenLimit);
+              }
+              
+              // Mark this model as unsuitable for large context requests
+              if (modelRankerFns.recordModelContextLimitError) {
+                modelRankerFns.recordModelContextLimitError(providerName, modelForProvider, tokenLimit || 8000);
+              }
+            }
           }
         } catch { /* ignore model-ranker recording errors */ }
       }
@@ -2159,18 +2327,59 @@ async function runV1ApiWithTools(
       log.warn('[V1-API-WITH-TOOLS] │ provider:', providerName);
       log.warn('[V1-API-WITH-TOOLS] │ model:', modelForProvider);
       log.warn('[V1-API-WITH-TOOLS] │ error:', error.message);
-      log.warn('[V1-API-WITH-TOOLS] │ circuitState:', circuitBreakerMgr?.getBreaker(providerName)?.getState() || 'N/A');
+      log.warn('[V1-API-WITH-TOOLS] │ statusCode:', error?.status || error?.statusCode || 'unknown');
+      
+      // Better error details logging - serialize objects properly
+      if (error?.requestBodyValues) {
+        const bodyValues = error.requestBodyValues;
+        log.warn('[V1-API-WITH-TOOLS] │ requestBody:', {
+          model: bodyValues.model,
+          inputMessages: Array.isArray(bodyValues.input) ? bodyValues.input.length : 'unknown',
+          temperature: bodyValues.temperature,
+          maxTokens: bodyValues.max_output_tokens,
+          toolsCount: Array.isArray(bodyValues.tools) ? bodyValues.tools.length : 0,
+          toolNames: Array.isArray(bodyValues.tools) 
+            ? bodyValues.tools.map((t: any) => t?.function?.name || t?.name || 'unknown').slice(0, 5)
+            : []
+        });
+      }
+      
+      log.warn('[V1-API-WITH-TOOLS] │ circuitState:', getCircuitStateName(circuitBreakerMgr?.getBreaker(providerName)?.getState() || 'HEALTHY') as any);
       log.warn('[V1-API-WITH-TOOLS] │ will try next:', uniqueProviders.slice(uniqueProviders.indexOf(providerName) + 1).join(', ') || 'NO MORE');
       log.warn('[V1-API-WITH-TOOLS] └───────────────────────────────');
     }
   }
 
-    // FIX: Track provider failure for feedback injection
+    // FIX: Track provider failure for feedback injection with detailed error context
+  const err = lastError as any;
+  const status = err?.status || err?.statusCode || 0;
+  let failureMessage = `All providers failed: ${lastError?.message || 'Unknown error'}. Tried: ${uniqueProviders.join(', ')}`;
+  let feedbackContext413: Record<string, any> = { tried: uniqueProviders };
+  
+  // Add specific guidance for 413 errors
+  if (status === 413 || (lastError?.message || '').toLowerCase().includes('request body too large')) {
+    const tokenLimitMatch = lastError?.message?.match(/max size:\s*(\d+)\s*tokens?/i);
+    const tokenLimit = tokenLimitMatch ? parseInt(tokenLimitMatch[1], 10) : null;
+    
+    failureMessage = `Request too large for available models. ${lastError?.message || ''}. Consider: 1) Reducing conversation history, 2) Simplifying the request, 3) Using a model with larger context window.`;
+    feedbackContext413 = {
+      tried: uniqueProviders,
+      errorType: '413_request_too_large',
+      tokenLimit,
+      suggestion: 'Reduce context size or use larger-context model',
+      estimatedTokens: Math.ceil(
+        (JSON.stringify(messages).length + 
+         JSON.stringify(config.tools || []).length + 
+         (config.systemPrompt?.length || 0)) / 4
+      )
+    };
+  }
+  
   const providerFailureEntry = createFeedbackEntry(
     'failure',
-    `All providers failed: ${lastError?.message || 'Unknown error'}. Tried: ${uniqueProviders.join(', ')}`,
+    failureMessage,
     'llm_response',
-    { tried: uniqueProviders },
+    feedbackContext413,
     'critical'
   );
   feedbackContext.turnNumber++;
@@ -2212,24 +2421,22 @@ async function runV1Orchestrated(
   const feedbackContext: FeedbackContext = {
     sessionId,
     turnNumber: 0,
-    feedbackEntries: [],
-    totalTokens: 0,
+    accumulatedFeedback: [],
+    recentFailures: [],
+    corrections: [],
   };
-  const tracker = getTracker(sessionId);
-  tracker.reset?.();
-  // === END SESSION TRACKING ===
 
   // Ensure tool system is initialized
   if (!isToolSystemReady()) {
     await initToolSystem({ userId: config.userId || 'system', enableMCP: true, enableSandbox: true });
   }
 
-  // Use shared capability-based tool executor (avoids code duplication)
+  // Use shared capability-based tool executor
   const capabilityExecuteTool = createCapabilityToolExecutor(config);
 
   const orchestratorConfig: OrchestratorConfig = {
     iterationConfig: {
-      maxIterations: config.maxSteps || parseInt(process.env.LLM_AGENT_TOOLS_MAX_ITERATIONS || '10', 10),
+      maxIterations: config.maxSteps || parseInt(process.env.LLM_AGENT_TOOLS_MAX_ITERATIONS || '15', 10),
       maxTokens: config.maxTokens || 32000,
       maxDurationMs: parseInt(process.env.LLM_AGENT_TOOLS_TIMEOUT_MS || '60000', 10),
     },
@@ -2239,128 +2446,33 @@ async function runV1Orchestrated(
 
   const orchestrator = new PlanActVerifyOrchestrator(orchestratorConfig);
   let content = '';
-  let firstResponseContent: string | null = null; // Capture first LLM response for routing parsing
+  let firstResponseContent: string | null = null; 
   let stepsCount = 0;
   const steps: any[] = [];
 
   try {
     for await (const event of orchestrator.execute(config.userMessage, messages)) {
-      if (config.onStreamChunk) {
-        if (event.type === 'token') {
-          config.onStreamChunk((event as any).content);
-        } else if (event.type === 'phase_change') {
-          config.onStreamChunk(`\n[Phase: ${event.phase}]\n`);
-        } else if (event.type === 'tool_result') {
-          config.onStreamChunk(`\n[Tool Result: ${event.tool}]\n`);
-        } else if (event.type === 'verification_failed') {
-          config.onStreamChunk(`\n[Verification Failed: retrying...]\n`);
-        }
+      if (config.onStreamChunk && event.type === 'token') {
+        config.onStreamChunk(event.content);
       }
 
       if (event.type === 'done') {
         content = event.response;
-      // Capture first response for routing parsing (before subsequent phases overwrite it)
-      if (!firstResponseContent && content) {
-        firstResponseContent = content;
-      }
         stepsCount = event.stats?.iterations || 0;
         
-        // Always inject dynamic feedback and tracker summary (dynamic injector always active)
-        const freshTracker = getTracker(sessionId);
-        recordResponse(sessionId, content.length, true);
-        
-        // Check for healing trigger for logging purposes
-      // Always inject dynamic feedback (dynamic injector is default)
-      const healingTrigger = detectHealingTrigger(feedbackContext, content, freshTracker.consecutiveToolCalls);
-      if (healingTrigger.detected) {
-        log.info('[AutoHealing-Completion] Healing trigger detected', { 
-          reason: healingTrigger.reason,
-          healingMode: healingTrigger.healingMode,
-        });
-        const healingPrompt = generateHealingPrompt(healingTrigger, content);
-        (config as any)._healingPrompt = healingPrompt;
-      }
-      
-      // Always inject feedback + tracker summary (dynamic injector always active)
-      const injectedFeedback = injectFeedback(feedbackContext);
-      const trackerSummary = generateTrackerSummary(sessionId);
-      (config as any)._injectedFeedback = injectedFeedback;
-      (config as any)._trackerSummary = trackerSummary;
-      log.info('[DynamicInjector-Orchestrated] Feedback injection prepared', { hasFeedback: !!injectedFeedback, hasSummary: !!trackerSummary, healingTriggered: healingTrigger.detected });
-
-      // ─── First-Response Routing Parsing ───
-      // Parse [ROUTING_METADATA] embedded in the LLM's first response.
-      // This replaces the need for a separate TaskClassification step by having
-      // the LLM classify and route itself via prompt engineering.
-      const parsedRouting: ParsedRouting = parseFirstResponseRouting(firstResponseContent || content);
-      if (parsedRouting.found && parsedRouting.routing) {
-        (config as any)._routingMetadata = parsedRouting.routing;
-        log.info('[RoutingParser] Parsed routing from first response', {
-          classification: parsedRouting.routing.classification,
-          complexity: parsedRouting.routing.complexity,
-          suggestedRole: parsedRouting.routing.suggestedRole,
-          specializationRoute: parsedRouting.routing.specializationRoute,
-          planSteps: parsedRouting.routing.planSteps.length,
-          requiresAutoReprompt: parsedRouting.routing.requiresAutoReprompt,
-          estimatedSteps: parsedRouting.routing.estimatedSteps,
-        });
-
-        // If routing specifies auto-re-prompt with plan steps, inject the
-        // first step as a continuation prompt for the orchestrator loop.
-        if (parsedRouting.routing.requiresAutoReprompt && parsedRouting.routing.planSteps.length > 0) {
-          const stepReprompt = generateStepReprompt(parsedRouting.routing, 0);
-          (config as any)._stepReprompt = stepReprompt;
-          log.info('[RoutingParser] Auto-re-prompt enabled', {
-            totalSteps: parsedRouting.routing.planSteps.length,
-            firstStep: parsedRouting.routing.planSteps[0]?.step?.slice(0, 80),
-          });
+        if (!firstResponseContent && content) {
+          firstResponseContent = content;
         }
-
-        // Enhance roleRedirectSection with routing metadata if not already populated
-        if (!injectedFeedback.roleRedirectSection && parsedRouting.routing.roleOptions.length > 0) {
-          const routingRedirect = routingToRoleRedirectSection(parsedRouting.routing);
-          if (routingRedirect) {
-            (config as any)._routingRoleRedirect = routingRedirect;
-            log.info('[RoutingParser] Injected routing-based role redirect options');
-          }
-        }
-      } else {
-        log.info('[RoutingParser] No routing metadata found in response', {
-          error: parsedRouting.error || 'marker not present',
-        });
-      }
-
-      // ─── Threshold-Based Review Cycle ───
-      // Check if successive re-prompts or tool calls exceed thresholds,
-      // triggering a review cycle that evaluates fulfillment quality.
-      const currentTracker = getTracker(sessionId);
-      const totalSteps = stepsCount || 0;
-      const reviewCheck = shouldTriggerReview(
-        totalSteps,
-        (config as any)._routingMetadata?.estimatedSteps || 1,
-        currentTracker.consecutiveToolCalls,
-        currentTracker.toolCalls,
-        currentTracker.weightedHistory.length > 0
-          ? currentTracker.weightedHistory.filter(h => h.success).length / currentTracker.weightedHistory.length
-          : 1.0,
-      );
-      if (reviewCheck.trigger) {
-        log.warn('[ReviewCycle] Threshold exceeded, triggering review', {
-          reason: reviewCheck.reason,
-          suggestedAction: reviewCheck.suggestedAction,
-          totalSteps,
-          consecutiveToolCalls: currentTracker.consecutiveToolCalls,
-          totalToolCalls: currentTracker.toolCalls,
-        });
-        (config as any)._reviewTriggered = true;
-        (config as any)._reviewReason = reviewCheck.reason;
-        (config as any)._reviewSuggestedAction = reviewCheck.suggestedAction;
-      }
       } else if (event.type === 'tool_result') {
-        // FIX: Track tool call for successive tracking
         recordToolCall(sessionId);
         
-        // FIX: Check for re-evaluation trigger
+        steps.push({
+          toolName: event.tool,
+          args: {},
+          result: { success: true, output: JSON.stringify(event.result), exitCode: 0 },
+        });
+
+        // Check for re-evaluation trigger
         const reEvalTrigger = checkReEvalTrigger(sessionId);
         if (reEvalTrigger.triggered) {
           log.info('[ReEval-Orchestrated] Trigger detected', { 
@@ -2369,56 +2481,63 @@ async function runV1Orchestrated(
           });
           recordReEval(sessionId);
         }
-        
-        const toolResult = event.result;
-        
-        // FIX: Track tool result for feedback injection
-        if (toolResult && typeof toolResult === 'object' && 'success' in toolResult && !toolResult.success) {
-          const failureEntry = createFeedbackEntry(
-            'failure',
-            `Tool ${event.tool} failed in orchestrator: ${JSON.stringify(toolResult).slice(0, 200)}`,
-            'tool_execution',
-            { toolName: event.tool, result: toolResult },
-            'medium'
-          );
-          feedbackContext.turnNumber++;
-          addFeedback(feedbackContext, failureEntry);
-          log.info('[Feedback-Orchestrated] Tool failure tracked', {
-            toolName: event.tool,
-            severity: failureEntry.severity,
-          });
-        }
-
-        steps.push({
-          toolName: event.tool,
-          args: {},
-          result: { success: true, output: JSON.stringify(event.result), exitCode: 0 },
-        });
       }
     }
 
-    // FIX: Use shared dynamic defaults resolver
-    const _orchDefaults = await resolveDynamicDefaults();
-    let provider = config.provider || _orchDefaults.provider;
-    let model = config.model || _orchDefaults.model; 
+    // Successive tracking and feedback
+    const freshTracker = getTracker(sessionId);
+    recordResponse(sessionId, content.length, true);
+    
+    const healingTrigger = detectHealingTrigger(feedbackContext, content, freshTracker.consecutiveToolCalls);
+    const injectedFeedback = injectFeedback(feedbackContext);
+    const trackerSummary = generateTrackerSummary(sessionId);
 
-    // FIX: Check circuit-breaker state before calling the provider
-    try {
-      const { circuitBreakerManager } = await import('../middleware/circuit-breaker');
-      const breaker = circuitBreakerManager.getBreaker(provider);
-      if (breaker.getState() === 'OPEN') {
-        log.warn('[V1-ORCHESTRATOR] Circuit OPEN for provider:', provider, '- switching to fallback');
-        invalidateDynamicDefaultsCache();
-        // Re-resolve with fresh defaults (may pick a different provider)
-        const freshDefaults = await resolveDynamicDefaults();
-        provider = freshDefaults.provider;
-        model = freshDefaults.model;
-        log.info('[V1-ORCHESTRATOR] Switched to fallback provider:', provider, 'model:', model);
+    (config as any)._injectedFeedback = injectedFeedback;
+    (config as any)._trackerSummary = trackerSummary;
+
+    // ─── First-Response Routing Parsing ───
+    const parsedRouting: ParsedRouting = parseFirstResponseRouting(firstResponseContent || content);
+    if (parsedRouting.found && parsedRouting.routing) {
+      (config as any)._roleSelectMetadata = parsedRouting.routing;
+      log.info('[RoleSelectParser] Parsed routing', {
+        classification: parsedRouting.routing.classification,
+        role: parsedRouting.routing.suggestedRole,
+        continue: parsedRouting.routing.continue,
+      });
+
+      if (parsedRouting.routing.continue && parsedRouting.routing.planSteps.length > 0) {
+        (config as any)._stepReprompt = generateStepReprompt(parsedRouting.routing, 0);
       }
-    } catch { /* circuit-breaker unavailable */ }
+      
+      if (!injectedFeedback.roleRedirectSection && parsedRouting.routing.roleOptions.length > 0) {
+        const routingRedirect = routingToRoleRedirectSection(parsedRouting.routing);
+        if (routingRedirect) {
+          (config as any)._routingRoleRedirect = routingRedirect;
+        }
+      }
+    }
+
+    // Review cycle check
+    const reviewCheck = shouldTriggerReview(
+      stepsCount,
+      freshTracker.consecutiveToolCalls,
+      (freshTracker as any).toolCalls || 0,
+      1.0 
+    );
+
+    if (reviewCheck.trigger) {
+      log.warn('[ReviewCycle] Threshold exceeded, triggering review', { reason: reviewCheck.reason });
+      (config as any)._reviewTriggered = true;
+      (config as any)._reviewReason = reviewCheck.reason;
+      (config as any)._reviewSuggestedAction = reviewCheck.suggestedAction;
+    }
+
+    // Telemetry and results
+    const _orchDefaults = await resolveDynamicDefaults();
+    const provider = config.provider || _orchDefaults.provider;
+    const model = config.model || _orchDefaults.model;
     const duration = Date.now() - startTime;
 
-    // FIX: Record telemetry for v1-orchestrator path
     chatRequestLogger.logRequestComplete(
       `unified-v1-orch-${Date.now()}`,
       true,
@@ -2430,41 +2549,48 @@ async function runV1Orchestrated(
       model,
     ).catch(() => {});
 
+    // Truncate at first [ROLE_SELECT] (drops simulated multi-turn) and strip
+    // any remaining markers so the client never sees the raw routing JSON.
+    const truncatedContent = truncateAtFirstRouting(content);
+    const cleanedResponse = stripRoutingMarkers(truncatedContent);
+
+    // Build the client-facing routing metadata (with stepReprompt) so the chat
+    // UI can auto-continue multi-step plans. Falls back to undefined when no
+    // routing block was parsed.
+    const roleSelectMeta = (config as any)._roleSelectMetadata as RoutingMetadata | undefined;
+    const routingForClient = roleSelectMeta ? buildRoutingMetadataForClient(roleSelectMeta) : undefined;
+
     return {
       success: true,
-      response: content,
+      response: cleanedResponse,
       steps,
       totalSteps: stepsCount,
-      mode: 'v1-api',
+      mode: 'v1-agent-loop',
       metadata: {
         provider,
         model,
         duration,
         orchestrator: true,
-        routing: (config as any)._routingMetadata ? {
-          classification: (config as any)._routingMetadata.classification,
-          complexity: (config as any)._routingMetadata.complexity,
-          suggestedRole: (config as any)._routingMetadata.suggestedRole,
-          specializationRoute: (config as any)._routingMetadata.specializationRoute,
-          planSteps: (config as any)._routingMetadata.planSteps?.length || 0,
-          requiresAutoReprompt: (config as any)._routingMetadata.requiresAutoReprompt,
-          estimatedSteps: (config as any)._routingMetadata.estimatedSteps,
+        ...(routingForClient ? { routing: routingForClient } : {}),
+        roleSelection: roleSelectMeta ? {
+          classification: roleSelectMeta.classification,
+          complexity: roleSelectMeta.complexity,
+          suggestedRole: roleSelectMeta.suggestedRole,
+          specializationRoute: roleSelectMeta.specializationRoute,
+          planSteps: roleSelectMeta.planSteps?.length || 0,
+          continue: roleSelectMeta.continue,
           reviewTriggered: (config as any)._reviewTriggered || false,
           reviewReason: (config as any)._reviewReason || undefined,
         } : undefined,
       },
     };
   } catch (err: any) {
-    // FIX: Invalidate cache so subsequent requests don't retry the failed provider
     invalidateDynamicDefaultsCache();
-
-    // FIX: Use shared dynamic defaults resolver
     const _orchDefaults = await resolveDynamicDefaults();
     const provider = config.provider || _orchDefaults.provider;
     const model = config.model || _orchDefaults.model;
     const duration = Date.now() - startTime;
 
-    // FIX: Record failure telemetry for v1-orchestrator path
     chatRequestLogger.logRequestComplete(
       `unified-v1-orch-${Date.now()}`,
       false,
@@ -2476,13 +2602,7 @@ async function runV1Orchestrated(
       model,
     ).catch(() => {});
 
-    return {
-      success: false,
-      response: content || 'Orchestration failed',
-      mode: 'v1-api',
-      error: err.message,
-      metadata: { duration, provider, model },
-    };
+    throw err;
   }
 }
 
@@ -2497,11 +2617,11 @@ async function runV1ApiCompletion(
   const feedbackContext: FeedbackContext = {
     sessionId,
     turnNumber: 0,
-    feedbackEntries: [],
-    totalTokens: 0,
+    accumulatedFeedback: [],
+    recentFailures: [],
+    corrections: [],
   };
-  const tracker = getTracker(sessionId);
-  tracker.reset?.();
+  // @ts-ignore - tracker API may vary
   // === END SESSION TRACKING ===
 
   if (process.env.ENABLE_V1_ORCHESTRATOR === 'true') {
@@ -2538,7 +2658,12 @@ async function runV1ApiCompletion(
     // Check if the model is valid for this provider
     const provider = PROVIDERS[providerName.toLowerCase()];
     if (provider?.models && provider.models.length > 0) {
-      if (provider.models.includes(config.model)) return config.model;
+      // Normalize models to handle both string and object formats
+      const supportedModels = provider.models.map((entry: any) =>
+        typeof entry === 'string' ? entry : entry?.id
+      ).filter(Boolean);
+      
+      if (supportedModels.includes(config.model)) return config.model;
       // Model not in provider's list — use provider default
       log.debug(`Model "${config.model}" not in ${providerName} models list, using default`);
       return PROVIDER_DEFAULT_MODELS[providerName] || primaryModel;
@@ -2584,7 +2709,7 @@ async function runV1ApiCompletion(
       try {
         const { isRateLimited } = await import('../models/model-ranker');
         if (isRateLimited(providerName, modelForProvider)) {
-          log.warn('[V1-API-COMPLETION] RATE LIMITED - Skipping model:', modelForProvider, 'for provider:', providerName);
+          log.warn(`[V1-API-COMPLETION] RATE LIMITED - Skipping model: ${modelForProvider} for provider: ${providerName}`);
           continue;
         }
       } catch { /* model-ranker unavailable, proceed */ }
@@ -2759,9 +2884,31 @@ async function runV1ApiCompletion(
         }
       }
 
+      // Parse [ROLE_SELECT] (text-mode routing), truncate at the first marker
+      // so simulated continuation turns are dropped, and strip any remaining
+      // marker blocks for safety. Build routing metadata for client auto-continue.
+      let routingForClientCompletion: ReturnType<typeof buildRoutingMetadataForClient> | undefined;
+      try {
+        const parsedCompletionRouting = parseFirstResponseRouting(content);
+        if (parsedCompletionRouting.found && parsedCompletionRouting.routing) {
+          routingForClientCompletion = buildRoutingMetadataForClient(parsedCompletionRouting.routing);
+          log.info('[V1-API-COMPLETION] [RoleSelect] Parsed routing', {
+            classification: parsedCompletionRouting.routing.classification,
+            role: parsedCompletionRouting.routing.suggestedRole,
+            continue: parsedCompletionRouting.routing.continue,
+            planSteps: parsedCompletionRouting.routing.planSteps?.length || 0,
+            willAutoContinue: routingForClientCompletion.continue,
+          });
+        }
+      } catch (err: any) {
+        log.warn('[V1-API-COMPLETION] [RoleSelect] Parse failed', { error: err?.message });
+      }
+      const truncatedCompletion = truncateAtFirstRouting(content);
+      const cleanedResponse = stripRoutingMarkers(truncatedCompletion);
+
 return {
         success: true,
-        response: content || 'No response generated',
+        response: cleanedResponse || 'No response generated',
         mode: 'v1-api',
         metadata: {
           provider: providerName,
@@ -2771,6 +2918,7 @@ return {
           // CRITICAL FIX: Include collected file edits and tool calls
           fileEdits: fileEdits.length > 0 ? fileEdits : undefined,
           toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+          ...(routingForClientCompletion ? { routing: routingForClientCompletion } : {}),
         },
       };
     } catch (error: any) {
@@ -2855,7 +3003,7 @@ async function attemptFallback(
   // Determine task complexity using regex (TaskClassifier removed)
   // IMPORTANT: Only analyze the raw user task, not the full context-augmented message
   let isComplexTask = false;
-  const rawTask = extractRawUserTask(config.userMessage);
+  const rawTask = extractRawUserTask(config.userMessage || '');
   isComplexTask = /create|build|implement|refactor|migrate|add feature|new file|multiple files|project structure|full-stack|application|service|api|component|page/i.test(rawTask);
   log.debug('Fallback complexity detection', { isComplexTask });
 

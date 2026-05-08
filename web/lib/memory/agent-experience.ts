@@ -18,6 +18,7 @@ import {
   getLocalExperienceStorage, 
   initLocalExperiencePersistence,
   persistCacheToLocalStorage,
+  type LocalStorageOptions,
 } from './local-experience-storage';
 // Re-export LocalStorageOptions for public API
 export type { LocalStorageOptions } from './local-experience-storage';

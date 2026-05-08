@@ -38,7 +38,7 @@ content = content.replace(
 
 // Remove the function call
 content = content.replace(
-  /\n  if \(content\.includes\('<function='\)\)\s*\{\s*\n\s*allEdits\.push\(\.\.\.extractFunctionCallEdits\(content\)\);\s*\n\s*\}/g,
+  /\n {2}if \(content\.includes\('<function='\)\)\s*\{\s*\n\s*allEdits\.push\(\.\.\.extractFunctionCallEdits\(content\)\);\s*\n\s*\}/g,
   ''
 );
 

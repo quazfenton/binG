@@ -23,23 +23,22 @@ export {
   type AgentSessionConfig,
 } from '@/lib/session/agent/agent-session-manager';
 
-// Filesystem Bridge
-export {
-  agentFSBridge,
-  AgentFSBridge,
-  type SyncResult,
-  type SyncOptions,
-} from './agent-fs-bridge';
-
 // Nullclaw Integration
 export {
+  initializeNullclaw,
+  isNullclawAvailable,
+  getNullclawStatus,
+  getNullclawConfig,
+  getNullclawMode,
+  executeNullclawTask,
+  shutdownNullclaw,
   nullclawIntegration,
   type NullclawConfig,
   type NullclawTask,
   type NullclawStatus,
+  // type NullclawResult, // Does not exist in source
 } from './nullclaw-integration';
 
-// Cloud Offload
 export {
   cloudAgentOffload,
   CloudAgentOffload,
@@ -79,12 +78,23 @@ export {
 export {
   routeChatRequest,
   classifyTask as unifiedClassifyTask,
-  checkProviderHealth,
   type ChatRequest,
   type ChatResponse,
-  type ProviderHealth,
   type UnifiedAgentResult,
 } from './unified-router';
+
+// Agent Kernel
+export {
+  getAgentKernel,
+  createAgentKernel,
+  startAgentKernel,
+  stopAgentKernel,
+  type AgentConfig,
+  type Agent,
+  type AgentType,
+  type AgentStatus,
+  type KernelStats,
+} from './agent-kernel';
 
 // V2 Executor
 export {
@@ -191,6 +201,7 @@ export {
 // System Prompts - Role-based agent prompts for multi-agent workflows
 export {
   SYSTEM_PROMPTS,
+  VFS_FILE_EDITING_TOOL_PROMPT,
   AGENT_ROLE_CONFIGS,
   ROLE_COMPATIBILITY,
   getSystemPrompt,
@@ -217,22 +228,14 @@ export {
   // Composition API
   composeRole,
   composeRoleWithTools,
-  composeMultiRole,
   // Section management
   getRoleSections,
   parseSections,
-  registerSection,
-  getSectionTemplate,
-  invalidateSectionCache,
   // Dynamic tool generation
-  generateDynamicToolBlock,
-  generateToolHints,
+  generateToolBlock,
   // Types
-  type PromptSection,
   type RoleSections,
-  type PromptContext,
   type ComposeRoleOptions,
-  type DynamicToolBlockOptions,
 } from './prompt-composer';
 
 // Supplementary System Prompts — Specialized roles
@@ -351,6 +354,7 @@ export {
   injectFeedback,
   analyzeFailure,
   detectHealingTrigger,
+  detectIncompleteResponse,
   generateHealingPrompt,
   generateCorrectionPrompt,
   resolveFeedback,
@@ -360,6 +364,7 @@ export {
   type FeedbackContext,
   type CorrectionPrompt,
   type HealingTrigger,
+  type IncompleteDetection,
   type RoleRedirect,
 } from './feedback-injection';
 
@@ -384,7 +389,6 @@ export {
   parseFirstResponseRouting,
   routingToRoleRedirectSection,
   shouldTriggerReview,
-  getNextPlanStep,
   generateStepReprompt,
   type RoutingMetadata,
   type ParsedRouting,

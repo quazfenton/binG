@@ -35,9 +35,9 @@ export class GoogleVideoProvider implements VideoGenerationProvider {
     }
     
     try {
-      // Try to list available models
-      await this.client.listModels();
-      return true;
+      // Check availability by attempting to access the models
+      const models = this.getModels();
+      return models && models.length > 0;
     } catch {
       return false;
     }

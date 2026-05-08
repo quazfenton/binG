@@ -599,7 +599,7 @@ async function processSSEStream(response: AsyncIterable<any>): Promise<string> {
               pendingFileEdits.splice(0, pendingFileEdits.length);
             }
             return fullResponse;
-          }
+        
         case 'token':
           process.stdout.write(event.data);
           fullResponse += event.data;
@@ -650,6 +650,7 @@ async function processSSEStream(response: AsyncIterable<any>): Promise<string> {
           break;
       }
     }
+
   } catch (err: unknown) {
     // Stream errored — return what we have
     console.log(`\n${COLORS.error('Stream error:')} ${err instanceof Error ? err.message : err}`);
@@ -1497,18 +1498,12 @@ async function getTaskContextForChat(): Promise<string> {
       const steps = t.steps || [];
       const completed = steps.filter((s) => s.status === 'completed').length;
       return '- ' + t.title + ' [' + t.status + '] ' + progress + '% (' + completed + '/' + steps.length + ')';
-    }).join('
-');
+    }).join('\n');
     
-    return '
-
-' +
-      '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-' +
-      '📋 PENDING TASKS (for re-context):
-' +
-      taskList + '
-' +
+    return '\n\n' +
+      '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n' +
+      '📋 PENDING TASKS (for re-context):\n' +
+      taskList + '\n' +
       '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━';
   } catch (err) {
     return '';

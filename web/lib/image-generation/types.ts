@@ -7,6 +7,8 @@
  * Common image generation parameters (ComfyUI-inspired)
  */
 export interface ImageGenerationParams {
+  /** Model to use for generation */
+  model?: string;
   /** Primary text prompt describing the desired image */
   prompt: string;
   /** Negative prompt - what to avoid in the image */
@@ -224,6 +226,8 @@ export interface FallbackChainConfig {
  * Error types for image generation
  */
 export enum ImageGenerationErrorType {
+  /** Invalid model specified */
+  INVALID_MODEL = 'INVALID_MODEL',
   /** Provider not configured (missing API key) */
   NOT_CONFIGURED = 'NOT_CONFIGURED',
   /** Provider unavailable (rate limit, down, etc.) */

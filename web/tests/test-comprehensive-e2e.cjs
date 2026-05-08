@@ -152,7 +152,7 @@ async function test1_FileCreationBasic(token) {
   );
   
   log('Response success:', result.success === true ? 'green' : 'red', result.success ? 'green' : 'red');
-  log('Has content:', !!result.content ? 'green' : 'red', !!result.content ? 'green' : 'red');
+  log('Has content:', result.content ? 'green' : 'red', result.content ? 'green' : 'red');
   
   // Check if file was actually created in VFS
   const file = await vfsRead('test-e2e-1.js', token);
@@ -183,7 +183,7 @@ async function test2_FileEditExisting(token) {
   
   // Check the file was modified
   const file = await vfsRead('test-e2e-2.js', token);
-  log('File exists:', !!file ? 'green' : 'red');
+  log('File exists:', file ? 'green' : 'red');
   
   if (file && file.content) {
     const hasWorld = file.content.includes('world');
@@ -213,7 +213,7 @@ async function test3_MultiFileWorkspace(token) {
   
   // Check the new file was created
   const outputFile = await vfsRead('test-e2e-3-output.txt', token);
-  log('Output file created:', !!outputFile ? 'green' : 'red');
+  log('Output file created:', outputFile ? 'green' : 'red');
   
   if (outputFile && outputFile.content) {
     log(`  Output content: ${outputFile.content.substring(0, 100)}`, 'cyan');
@@ -236,7 +236,7 @@ async function test4_ContextBundling(token) {
   );
   
   log('Response success:', result.success === true ? 'green' : 'red');
-  log('Response has content:', !!result.content ? 'green' : 'red');
+  log('Response has content:', result.content ? 'green' : 'red');
   
   if (result.content) {
     const hasMarker = result.content.includes('UNIQUE_MARKER_12345') || result.content.includes('12345');
@@ -293,9 +293,9 @@ async function test6_ToolCallDetection(token) {
   const fileB = await vfsRead('test-e2e-6b.txt', token);
   const fileC = await vfsRead('test-e2e-6c.txt', token);
   
-  log('File A created:', !!fileA ? 'green' : 'red');
-  log('File B created:', !!fileB ? 'green' : 'red');
-  log('File C created:', !!fileC ? 'green' : 'red');
+  log('File A created:', fileA ? 'green' : 'red');
+  log('File B created:', fileB ? 'green' : 'red');
+  log('File C created:', fileC ? 'green' : 'red');
   
   return successCount > 0;
 }
@@ -305,7 +305,7 @@ async function test7_AutoContinueDetection(token) {
   
   // First create a conversation
   const conv = await createConversation(token, 'E2E Auto-Continue Test');
-  log('Conversation created:', !!conv ? 'green' : 'red');
+  log('Conversation created:', conv ? 'green' : 'red');
   
   // Ask a question that should trigger auto-continue
   const result = await chat(
@@ -317,7 +317,7 @@ async function test7_AutoContinueDetection(token) {
   
   // Check if the file was created
   const file = await vfsRead('test-e2e-7.txt', token);
-  log('File created:', !!file ? 'green' : 'red');
+  log('File created:', file ? 'green' : 'red');
   
   // Check response for any auto-continue indicators
   if (result.content) {
@@ -343,7 +343,7 @@ async function test8_VFSMCPIntegration(token) {
   
   // Verify exact content
   const file = await vfsRead('test-e2e-8.txt', token);
-  log('File exists:', !!file ? 'green' : 'red');
+  log('File exists:', file ? 'green' : 'red');
   
   if (file && file.content) {
     const exactMatch = file.content === 'MCP Test Content 12345';
@@ -361,7 +361,7 @@ async function test9_DeleteOperation(token) {
   await vfsWrite('test-e2e-9-to-delete.txt', 'This will be deleted', token);
   
   const fileBefore = await vfsRead('test-e2e-9-to-delete.txt', token);
-  log('File created before delete:', !!fileBefore ? 'green' : 'red');
+  log('File created before delete:', fileBefore ? 'green' : 'red');
   
   // Ask LLM to delete it
   const result = await chat(
@@ -405,7 +405,7 @@ async function test10_InfiniteLoopPrevention(token) {
   
   // Check final file state
   const file = await vfsRead('test-e2e-10a.txt', token);
-  log('Final file state:', !!file ? 'green' : 'red');
+  log('Final file state:', file ? 'green' : 'red');
   if (file && file.content) {
     log(`  Content: "${file.content}"`, 'cyan');
   }
@@ -433,8 +433,8 @@ async function test11_ComplexWorkflow(token) {
   const helper = await vfsRead('test-e2e-11-helper.js', token);
   const resultFile = await vfsRead('test-e2e-11-result.js', token);
   
-  log('Helper file created:', !!helper ? 'green' : 'red');
-  log('Result file created:', !!resultFile ? 'green' : 'red');
+  log('Helper file created:', helper ? 'green' : 'red');
+  log('Result file created:', resultFile ? 'green' : 'red');
   
   if (helper && helper.content) {
     log(`  Helper: ${helper.content.substring(0, 80)}`, 'cyan');
@@ -459,7 +459,7 @@ async function test12_ErrorRecovery(token) {
   
   // Check if recovery file was created
   const recoveryFile = await vfsRead('test-e2e-12-recovered.txt', token);
-  log('Recovery file created:', !!recoveryFile ? 'green' : 'yellow');
+  log('Recovery file created:', recoveryFile ? 'green' : 'yellow');
   
   if (recoveryFile && recoveryFile.content) {
     log(`  Content: "${recoveryFile.content}"`, 'cyan');

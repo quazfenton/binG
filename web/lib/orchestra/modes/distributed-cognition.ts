@@ -26,6 +26,7 @@ import {
   type UnifiedAgentConfig,
   type UnifiedAgentResult,
 } from '../unified-agent-service';
+import { configureSubCall, resolveEngine, type EngineArchitecture } from '../execution-engines';
 
 const log = createLogger('DistributedCognitionMode');
 
@@ -59,6 +60,8 @@ export interface DistributedConfig {
     critic?: number;
     synthesizer?: number;
   };
+  /** Architecture/engine for role calls (default: from baseConfig.engine or env) */
+  engine?: EngineArchitecture;
 }
 
 // ─── Role System Prompts ───────────────────────────────────────────────────
@@ -144,7 +147,8 @@ async function runRole(
     context ? `\n## Context from previous roles:\n${context.slice(0, 6000)}` : '',
   ].join('\n');
 
-  const result = await processUnifiedAgentRequest({
+  const engine = resolveEngine(options.engine, baseConfig.engine);
+  const subCall = configureSubCall({
     ...baseConfig,
     provider,
     model,
@@ -152,7 +156,8 @@ async function runRole(
     temperature,
     maxTokens,
     mode: 'v1-api',
-  });
+  }, engine);
+  const result = await processUnifiedAgentRequest(subCall);
 
   return { role: roleName, result, provider, model };
 }

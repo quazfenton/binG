@@ -119,7 +119,7 @@ export async function runOpenCodeDirect(options: OpenCodeDirectOptions): Promise
   );
 
   // Use OpencodeV2Provider directly
-  const { OpencodeV2Provider } = await import('../lib/sandbox/spawn/opencode-cli');
+  const { OpencodeV2Provider } = await import('@/lib/sandbox/spawn/opencode-cli');
   const { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } = await import('@/lib/mcp');
 
   const provider = new OpencodeV2Provider({
@@ -196,8 +196,10 @@ export async function runOpenCodeDirect(options: OpenCodeDirectOptions): Promise
 
   // Sync from sandbox to VFS
   try {
-    const { agentFSBridge } = await import('./agent-fs-bridge');
-    await agentFSBridge.syncFromSandbox(userId, conversationId);
+    if (session.sandboxHandle?.id) {
+      const { sandboxFilesystemSync } = await import('@/lib/virtual-filesystem/sync/sandbox-filesystem-sync');
+      await sandboxFilesystemSync.syncSandboxToVFS(session.sandboxHandle.id, userId);
+    }
   } catch (syncError) {
     logger.warn('Sync from sandbox failed', { error: syncError });
   }

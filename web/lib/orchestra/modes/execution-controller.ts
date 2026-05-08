@@ -35,6 +35,12 @@ import {
   type UnifiedAgentConfig,
   type UnifiedAgentResult,
 } from '../unified-agent-service';
+import { configureSubCall, resolveEngine, type EngineArchitecture } from '../execution-engines';
+import {
+  emitStepProgress,
+  emitNodeStatus,
+  emitRetryError,
+} from '@bing/shared/agent/progress-emitter';
 
 const log = createLogger('ExecutionControllerMode');
 
@@ -260,6 +266,8 @@ export interface ExecutionControllerConfig {
   multiPerspectiveEval?: boolean;
   /** Enable final gate check before termination */
   enableFinalGate?: boolean;
+  /** Architecture/engine for LLM calls (default: from baseConfig.engine or env) */
+  engine?: EngineArchitecture;
 }
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -302,11 +310,15 @@ function heuristicEvaluate(
     filesGenerated?: number;
     progress?: number;
     originalTask: string;
+    errorContext?: string;
   }
 ): Evaluation {
-  const { lastOutput, cumulativeOutput, toolActivity, filesGenerated, progress = 0, originalTask } = context;
+  const { lastOutput, cumulativeOutput, toolActivity, filesGenerated, progress = 0, originalTask, errorContext } = context;
 
   const issues: string[] = [];
+  if (errorContext) {
+    issues.push(`LLM evaluation failed: ${errorContext}`);
+  }
   let completeness = 0.5;
   let continuity = 0.5;
   let quality = 0.5;
@@ -593,7 +605,9 @@ function generateStructuredReview(
   }
 
   // Generate expansion plan based on task type
+  // Use the robust classifier instead of regex fallback
   const taskType = classifyTask(originalTask);
+  
   const expansionPlan = generateExpansionPlan(taskType, cumulativeOutput);
 
   return `[AUTO-REVIEW OVERRIDE — EXECUTION MUST CONTINUE]
@@ -833,15 +847,51 @@ export async function runExecutionControllerMode(
     cycleCount++;
     log.info(`[ExecutionController] ┌─ Cycle ${cycleCount}/${maxCycles} ──────────────`);
 
+    // Emit step progress for current cycle
+    await emitStepProgress(
+      baseConfig.userId || 'system',
+      baseConfig.sessionId,
+      {
+        mode: 'execution-controller',
+        correlationId: baseConfig.conversationId,
+        steps: Array.from({ length: maxCycles }, (_, i) => ({
+          id: `cycle-${i + 1}`,
+          title: `Execution Cycle ${i + 1}`,
+          description: i === 0 ? 'Initial execution' : 'Refinement iteration',
+          status: i < cycleCount ? 'completed' : 'running',
+        })),
+        currentStepIndex: cycleCount - 1,
+        currentAction: `Executing cycle ${cycleCount} of ${maxCycles}`,
+        phase: 'acting',
+      }
+    );
+
     // ── Worker: Execute LLM ──────────────────────────────────────────────
-    const result = await processUnifiedAgentRequest({
+    const engine = resolveEngine(options.engine, baseConfig.engine);
+    const subCall = configureSubCall({
       ...baseConfig,
       mode: 'v1-api',
-    });
+    }, engine);
+    const result = await processUnifiedAgentRequest(subCall);
 
     if (!result.success) {
       log.info(`[ExecutionController] ✗ Cycle ${cycleCount} failed`, { error: result.error });
       cycleHistory.push(`Cycle ${cycleCount}: FAILED — ${result.error}`);
+      
+      // Emit error event
+      await emitRetryError(
+        baseConfig.userId || 'system',
+        baseConfig.sessionId,
+        {
+          mode: 'execution-controller',
+          correlationId: baseConfig.conversationId,
+          nodeId: `cycle-${cycleCount}`,
+          message: result.error || 'Execution failed',
+          retryCount: cycleCount,
+          recovered: false,
+        }
+      );
+      
       if (bestResult) continue;
       return result;
     }
@@ -850,20 +900,22 @@ export async function runExecutionControllerMode(
     cumulativeOutput += '\n' + result.response;
 
     // Track tool activity from result with proper followedByAction detection
-    const resultToolActivity = result.steps?.map(s => ({ type: s.toolName })) || [];
+    const resultToolActivity = result.steps?.map(s => ({ 
+      type: s.toolName, 
+      followedByAction: false 
+    })) || [];
+
     if (resultToolActivity.length > 0) {
-      // Mark read operations without immediate follow-up within this cycle
-      for (let i = 0; i < resultToolActivity.length - 1; i++) {
-        if (/read|get|list/i.test(resultToolActivity[i].type)) {
-          const nextTool = resultToolActivity[i + 1].type;
-          resultToolActivity[i].followedByAction = !/read|get|list/i.test(nextTool);
+      // Robust marking: A 'read' is followed by action if a 'write' or 'execute'
+      // happens later in the same cycle OR if a non-read follows it.
+      for (let i = 0; i < resultToolActivity.length; i++) {
+        if (/read|get|list|search|scan/i.test(resultToolActivity[i].type)) {
+          const remainingTools = resultToolActivity.slice(i + 1);
+          const hasFollowupAction = remainingTools.some(t => !/read|get|list|search|scan/i.test(t.type));
+          resultToolActivity[i].followedByAction = hasFollowupAction;
         }
       }
-      // Last tool in cycle - check against first tool of next cycle later
-      if (resultToolActivity.length > 0) {
-        const lastTool = resultToolActivity[resultToolActivity.length - 1];
-        lastTool.followedByAction = false; // Will be updated in next cycle if there's a follow-up
-      }
+      
       toolActivity.push(...resultToolActivity);
       
       // Update previous cycle's last tool if current cycle has a tool
@@ -872,9 +924,9 @@ export async function runExecutionControllerMode(
         const prevLastIndex = toolActivity.length - resultToolActivity.length - 1;
         if (prevLastIndex >= 0) {
           const prevLastTool = toolActivity[prevLastIndex];
-          if (/read|get|list/i.test(prevLastTool.type)) {
+          if (/read|get|list|search|scan/i.test(prevLastTool.type)) {
             const firstCurrentTool = resultToolActivity[0].type;
-            prevLastTool.followedByAction = !/read|get|list/i.test(firstCurrentTool);
+            prevLastTool.followedByAction = !/read|get|list|search|scan/i.test(firstCurrentTool);
           }
         }
       }
@@ -934,15 +986,16 @@ export async function runExecutionControllerMode(
         for (const pr of llmResult.perspectiveResults) {
           log.info(`[ExecutionController] │   ${pr.role}: ${(pr.score * 100).toFixed(0)}%`);
         }
-      } catch (error) {
-        log.info(`[ExecutionController] │ LLM eval failed, using heuristic fallback`);
+      } catch (error: any) {
+        log.info(`[ExecutionController] │ LLM eval failed, using heuristic fallback`, { error: error.message });
         evaluation = heuristicEvaluate({
           lastOutput: result.response,
           cumulativeOutput,
           toolActivity,
           filesGenerated,
           progress: cycleCount / maxCycles,
-          originalTask: baseConfig.userMessage,
+          originalTask: baseConfig.userMessage || 'System-initiated task',
+          errorContext: error.message,
         });
       }
     } else {
@@ -970,6 +1023,22 @@ export async function runExecutionControllerMode(
       bestResult = result;
       bestScore = currentScore;
       log.info(`[ExecutionController] │   → New best score: ${(currentScore * 100).toFixed(1)}%`);
+      
+      // Emit node status for new best result
+      await emitNodeStatus(
+        baseConfig.userId || 'system',
+        baseConfig.sessionId,
+        {
+          mode: 'execution-controller',
+          correlationId: baseConfig.conversationId,
+          nodeId: `cycle-${cycleCount}`,
+          nodeRole: 'worker',
+          nodeModel: baseConfig.model,
+          nodeProvider: baseConfig.provider,
+          status: 'working',
+          currentAction: `New best result (score: ${(currentScore * 100).toFixed(1)}%)`,
+        }
+      );
     }
 
     // Check for improvement (for anti-stagnation)

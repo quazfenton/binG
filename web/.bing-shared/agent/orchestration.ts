@@ -162,10 +162,8 @@ export {
 export {
   routeChatRequest,
   classifyTask,
-  checkProviderHealth,
   type ChatRequest,
   type ChatResponse,
-  type ProviderHealth,
   type UnifiedAgentResult,
   type TaskClassification,
   type ClassificationContext,

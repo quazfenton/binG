@@ -20,6 +20,7 @@ import {
   type UnifiedAgentConfig,
   type UnifiedAgentResult,
 } from '../unified-agent-service';
+import { configureSubCall, resolveEngine, type EngineArchitecture } from '../execution-engines';
 
 const log = createLogger('DualProcessMode');
 
@@ -44,6 +45,19 @@ export interface DualProcessConfig {
   fastTemperature?: number;
   /** Temperature for slow path (default: 0.3) */
   slowTemperature?: number;
+
+  /**
+   * Architecture/engine for both fast and slow sub-calls. Defaults to the
+   * parent baseConfig.engine (or env, or v1-api). Setting this lets dual-process
+   * run on a v2 CLI/SDK/container engine without any other change.
+   * Can be overridden per-path with `fastEngine` / `slowEngine` if you want a
+   * v1-api fast path and v2-cli slow path, etc.
+   */
+  engine?: EngineArchitecture;
+  /** Override engine for the fast path only */
+  fastEngine?: EngineArchitecture;
+  /** Override engine for the slow path only */
+  slowEngine?: EngineArchitecture;
 }
 
 // ─── Instability Detection ─────────────────────────────────────────────────
@@ -138,15 +152,22 @@ export async function runDualProcessMode(
 
   // ── Fast Path ───────────────────────────────────────────────────────────
   log.info('[DualProcess] → Fast path started');
-  const fastResult = await processUnifiedAgentRequest({
+  // Resolve which architecture to use for this sub-call. Honors per-path
+  // override → orchestration-mode-wide engine → parent config.engine → env.
+  const fastEngine = resolveEngine(options.fastEngine || options.engine, baseConfig.engine);
+  const fastSubCall = configureSubCall(
+    {
     ...baseConfig,
     provider: fastProvider,
     model: fastModel,
     maxTokens: options.fastMaxTokens || 4096,
     temperature: options.fastTemperature ?? 0.7,
     systemPrompt: baseConfig.systemPrompt,
-    mode: 'v1-api',
-  });
+        },
+    fastEngine,
+    fastModel,
+  );
+  const fastResult = await processUnifiedAgentRequest(fastSubCall);
 
   if (!fastResult.success) {
     log.info('[DualProcess] → Fast path failed, escalating to slow path', {
@@ -223,15 +244,18 @@ async function runSlowPath(
     hasFastContext: !!fastResult,
   });
 
-  const slowResult = await processUnifiedAgentRequest({
+  const slowEngine = resolveEngine(options.slowEngine || options.engine, baseConfig.engine);
+  const slowSubCall = configureSubCall({
     ...baseConfig,
     provider: slowProvider,
-    model: slowModel,
     maxTokens: options.slowMaxTokens || 16384,
     temperature: options.slowTemperature ?? 0.3,
     systemPrompt: slowSystemPrompt,
-    mode: 'v1-api',
-  });
+    },
+    slowEngine,
+    slowModel,
+  );
+  const slowResult = await processUnifiedAgentRequest(slowSubCall);
 
   if (slowResult.success) {
     log.info('[DualProcess] ✓ Slow path succeeded');

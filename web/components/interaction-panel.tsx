@@ -86,7 +86,8 @@ import BookOpen from "lucide-react/dist/esm/icons/book-open";
 import Archive from "lucide-react/dist/esm/icons/archive";
 import Monitor from "lucide-react/dist/esm/icons/monitor";
 import VNCConnectionTab from "./vnc-connection-tab";
-import type { LLMProviderConfig } from "../lib/chat/llm-providers-types";
+import type { LLMProviderConfig } from "@/lib/chat/llm-providers-types";
+import type { ModelConfig } from "@/lib/chat/llm-providers-types";
 import MultiModelComparison from "./multi-model-comparison";
 import PluginManager, { type Plugin } from "./plugins/plugin-manager";
 import AIEnhancerPlugin from "./plugins/ai-enhancer-plugin";
@@ -134,6 +135,7 @@ import JsonValidatorPlugin from "./plugins/json-validator-plugin";
 import UrlUtilitiesPlugin from "./plugins/url-utilities-plugin";
 import WikiKnowledgeBasePlugin from "./plugins/wiki-knowledge-base-plugin";
 import ImageGenerationTab from "./image-generation-tab";
+import VideoGenerationTab from "./video-generation-tab";
 import SquareSplitHorizontal from "lucide-react/dist/esm/icons/square-split-horizontal";
 import Bell from "lucide-react/dist/esm/icons/bell";
 import { ImportDialog } from "./file-import/import-dialog";
@@ -1875,10 +1877,10 @@ export default function InteractionPanel({
                       <MessageSquare className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
                       <span className="hidden sm:inline">Chat</span>
                     </TabsTrigger>
-                    <TabsTrigger value="images" className="text-xs sm:text-sm">
-                      <ImageIcon className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
-                      <span className="hidden sm:inline">Images</span>
-                    </TabsTrigger>
+                      <TabsTrigger value="images" className="text-xs sm:text-sm">
+                        <ImageIcon className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
+                        <span className="hidden sm:inline">Media</span>
+                      </TabsTrigger>
                     <TabsTrigger value="extras" className="text-xs sm:text-sm">
                       <ImageIcon className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
                       <span className="hidden sm:inline">Extra</span>
@@ -2328,21 +2330,36 @@ export default function InteractionPanel({
                 </form>
               </TabsContent>
 
-              {/* Images Tab Content - Taller height for image generation */}
-              <TabsContent 
-                value="images" 
-                className={`m-0 flex-1 min-h-0 flex flex-col overflow-hidden ${activeTab === 'images' ? TALL_TAB_HEIGHT : DEFAULT_TAB_HEIGHT} ${EXPAND_TRANSITION}`}
-              >
-                <Card className="bg-black/40 border-white/10 flex-1 min-h-0">
-                  <CardContent className="pt-0 h-full flex flex-col min-h-0 overflow-hidden">
-                    <ImageGenerationTab 
-                      onImageGenerated={(imageUrl) => {
-                        toast.success("Image generated successfully!");
-                      }}
-                    />
-                  </CardContent>
-                </Card>
-              </TabsContent>
+                {/* Media Tab Content - Taller height for image/video generation */}
+                <TabsContent 
+                  value="images" 
+                  className={`m-0 flex-1 min-h-0 flex flex-col overflow-hidden ${activeTab === 'images' ? TALL_TAB_HEIGHT : DEFAULT_TAB_HEIGHT} ${EXPAND_TRANSITION}`}
+                >
+                  <Card className="bg-black/40 border-white/10 flex-1 min-h-0">
+                    <CardContent className="p-0 h-full flex flex-col min-h-0 overflow-hidden">
+                      <Tabs defaultValue="image" className="w-full h-full flex flex-col min-h-0">
+                        <div className="border-b border-white/10 p-2 flex justify-center bg-black/20">
+                          <TabsList className="bg-black/40">
+                            <TabsTrigger value="image" className="text-xs">Image Generation</TabsTrigger>
+                            <TabsTrigger value="video" className="text-xs">Video Generation</TabsTrigger>
+                          </TabsList>
+                        </div>
+                        <TabsContent value="image" className="m-0 flex-1 min-h-0 h-full overflow-hidden data-[state=active]:flex flex-col">
+                          <ImageGenerationTab 
+                            onImageGenerated={(imageUrl) => {
+                              toast.success("Image generated successfully!");
+                            }}
+                          />
+                        </TabsContent>
+                        <TabsContent value="video" className="m-0 flex-1 min-h-0 h-full overflow-hidden data-[state=active]:flex flex-col">
+                          <div className="p-4 h-full overflow-y-auto">
+                            <VideoGenerationTab />
+                          </div>
+                        </TabsContent>
+                      </Tabs>
+                    </CardContent>
+                  </Card>
+                </TabsContent>
 
               {/* Extras Tab Content - Taller height for prompt templates */}
               <TabsContent 

@@ -39,7 +39,7 @@ const DEFAULT_QUOTAS: Record<string, { limit: number, period: 'monthly' | 'daily
   google_imagen: { limit: 500, period: 'daily' },
 };
 
-class QuotaManager {
+export class QuotaManager {
   private quotas: Map<string, ProviderQuota> = new Map();
   private db: any = null;
   private initialized = false;
@@ -273,15 +273,90 @@ class QuotaManager {
     return { allowed, remaining, isDisabled: quota.isDisabled };
   }
 
-  incrementUsage(provider: string, amount: number = 1): void {
+  isAvailable(provider: string): boolean {
+    return this.checkQuota(provider).allowed;
+  }
+
+  getRemainingCalls(provider: string): number {
+    return this.checkQuota(provider).remaining;
+  }
+
+  recordUsage(provider: string, amount: number = 1): void {
+    this.incrementUsage(provider, amount);
+  }
+
+  resetQuota(provider: string): void {
     this.ensureInitialized();
-    
     const quota = this.quotas.get(provider);
     if (!quota) return;
+
+    quota.currentUsage = 0;
+    quota.resetDate = this.getNextResetDate(quota.resetPeriod);
+    quota.isDisabled = false;
+
+    log.info(`[QuotaManager] Manually reset quota for ${provider}`);
+    this.saveQuotaToDatabase(quota);
+    this.saveAllQuotasToFile();
+  }
+
+  enableProvider(provider: string): void {
+    this.ensureInitialized();
+    const quota = this.quotas.get(provider);
+    if (!quota) return;
+
+    quota.isDisabled = false;
+    // P2: Clamp to non-negative value; monthlyLimit-1 ensures we don't immediately hit the limit again
+    quota.currentUsage = Math.max(0, Math.min(quota.currentUsage, quota.monthlyLimit - 1));
+
+    log.info(`[QuotaManager] Manually enabled provider: ${provider}`);
+    this.saveQuotaToDatabase(quota);
+    this.saveAllQuotasToFile();
+  }
+
+  findAlternative(type: string, current: string): string | null {
+    this.ensureInitialized();
+
+    // Implementation for e2b-provider fallback
+    log.info(`[QuotaManager] Finding alternative for ${type} provider: ${current}`);
+    
+    // Disable the failing provider first to prevent it being picked as an "alternative"
+    const failingQuota = this.quotas.get(current);
+    if (failingQuota && !failingQuota.isDisabled) {
+      failingQuota.isDisabled = true;
+      this.saveQuotaToDatabase(failingQuota);
+    }
+
+    // Pick best available alternative (highest remaining quota)
+    // IMPORTANT: In QuotaManager, "sandbox" providers are expected to be the alternative.
+    // However, QuotaManager doesn't natively know which providers are sandbox vs tool.
+    // We filter by checking if the provider is a known sandbox provider.
+    const knownSandboxProviders = new Set(['e2b', 'daytona', 'runloop', 'microsandbox']);
+    
+    const alternatives = Array.from(this.quotas.values())
+      .filter(q => q.provider !== current && !q.isDisabled && q.currentUsage < q.monthlyLimit)
+      .filter(q => type !== 'sandbox' || knownSandboxProviders.has(q.provider))
+      .sort((a, b) => (b.monthlyLimit - b.currentUsage) - (a.monthlyLimit - a.currentUsage));
+
+    if (alternatives.length > 0) {
+      log.info(`[QuotaManager] Selected alternative for ${current}: ${alternatives[0].provider}`);
+      return alternatives[0].provider;
+    }
+
+    log.warn(`[QuotaManager] No alternative found for ${type} provider: ${current}`);
+    return null;
+  }
+
+  incrementUsage(provider: string, amount: number = 1): void {
+    this.ensureInitialized();
+    const quota = this.quotas.get(provider);
+    if (!quota) return;
+
+    this.checkAndResetIfNeeded(quota);
 
     quota.currentUsage += amount;
     if (quota.currentUsage >= quota.monthlyLimit) {
       quota.isDisabled = true;
+      log.warn(`[QuotaManager] Quota reached for ${provider}`);
     }
 
     this.saveQuotaToDatabase(quota);
@@ -292,6 +367,37 @@ class QuotaManager {
     this.ensureInitialized();
     return Array.from(this.quotas.values());
   }
+
+  /**
+   * Get the preferred order of providers based on quota availability
+   */
+  getSandboxProviderChain(primary: string): string[] {
+    this.ensureInitialized();
+    
+    // In current impl, we just return the primary if it has quota,
+    // or a list of all others that have quota.
+    const chain: string[] = [];
+    if (this.isAvailable(primary)) {
+      chain.push(primary);
+    }
+
+    const knownSandboxProviders = new Set(['e2b', 'daytona', 'runloop', 'microsandbox']);
+
+    // Add others that have remaining quota
+    const others = Array.from(this.quotas.keys())
+      .filter(p => p !== primary && this.isAvailable(p) && knownSandboxProviders.has(p))
+      .sort((a, b) => this.getRemainingCalls(b) - this.getRemainingCalls(a));
+
+    return [...chain, ...others];
+  }
+
+  /**
+   * Pick the first available provider from the chain
+   */
+  pickAvailableSandboxProvider(primary: string): string | null {
+    const chain = this.getSandboxProviderChain(primary);
+    return chain.length > 0 ? chain[0] : null;
+  }
 }
 
-export const quotaManager = new QuotaManager();
+export const quotaManager: QuotaManager = new QuotaManager();

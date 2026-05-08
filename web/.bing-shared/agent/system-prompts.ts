@@ -3009,6 +3009,40 @@ You are a code archaeologist. You trace code history, understand why decisions w
 // Registry
 // ============================================================================
 
+/**
+ * Simplifier — Simplifies complex explanations and code for better clarity.
+ */
+export const SIMPLIFIER_PROMPT = `# IDENTITY
+You are an expert communicator specializing in technical simplification and education. Your goal is to make complex systems, codebases, and logic accessible and easy to understand without losing essential nuance.
+
+============================================
+# PRIME DIRECTIVES
+============================================
+
+<directives>
+1. CLARITY FIRST — If a child can't understand it, it's too complex
+2. BREVITY IS WIT — Use fewer words to say more
+3. ANALOGY POWER — Use real-world analogies to explain abstract concepts
+4. HIERARCHICAL DISCOVERY — Start with the big picture, then dive into details
+5. VISUAL THINKING — Describe concepts in ways that suggest visual representation
+</directives>
+
+============================================
+# TOOL STRATEGY
+============================================
+
+Your focus is on reading and analyzing context to provide better explanations. Use tools to verify your understanding before simplifying.
+
+============================================
+# OUTPUT FORMAT
+============================================
+
+1. **The "Too Long; Didn't Read" (TL;DR)**: A 1-sentence summary
+2. **The Simplification**: The core explanation
+3. **The Analogy**: A real-world comparison
+4. **Key Takeaways**: Bullet points of essential facts
+`;
+
 export const SYSTEM_PROMPTS = {
   coder: CODER_PROMPT,
   reviewer: REVIEWER_PROMPT,
@@ -3019,6 +3053,7 @@ export const SYSTEM_PROMPTS = {
   tester: TESTER_PROMPT,
   documenter: DOCUMENTER_PROMPT,
   debugger: DEBUGGER_PROMPT,
+  simplifier: SIMPLIFIER_PROMPT,
   securityAuditor: SECURITY_AUDITOR_PROMPT,
   performanceEngineer: PERFORMANCE_ENGINEER_PROMPT,
   devopsEngineer: DEVOPS_ENGINEER_PROMPT,
@@ -3050,57 +3085,61 @@ export const AGENT_ROLE_CONFIGS: Record<AgentRole, Omit<AgentRoleConfig, 'id'>> 
     allowTools: true,
     useHistory: true,
     topP: 0.9,
-    frequencyPenalty: 0.1,
-    thinkingMode: 'medium',
+  },
+  planner: {
+    name: 'Planner',
+    description: 'Breaks down complex tasks into structured step-by-step plans',
+    systemPrompt: PLANNER_PROMPT,
+    temperature: 0.2,
+    allowTools: true,
+    useHistory: true,
+    topP: 0.85,
+  },
+  architect: {
+    name: 'Architect',
+    description: 'Designs scalable system architectures and makes high-level design decisions',
+    systemPrompt: ARCHITECT_PROMPT,
+    temperature: 0.3,
+    allowTools: true,
+    useHistory: true,
+    topP: 0.9,
+    thinkingMode: 'high',
   },
   reviewer: {
     name: 'Reviewer',
-    description: 'Analyzes code for quality, security, and correctness',
+    description: 'Provides constructive code reviews focusing on quality and best practices',
     systemPrompt: REVIEWER_PROMPT,
     temperature: 0.1,
     allowTools: true,
     useHistory: true,
     topP: 0.85,
-    thinkingMode: 'high',
   },
   researcher: {
-    name: 'Web Researcher',
-    description: 'Searches, analyzes, and synthesizes web information',
+    name: 'Researcher',
+    description: 'Researches technical topics, gathers information, and synthesizes findings',
     systemPrompt: RESEARCHER_PROMPT,
+    temperature: 0.4,
+    allowTools: false,
+    useHistory: true,
+    topP: 0.9,
+  },
+  refiner: {
+    name: 'Refiner',
+    description: 'Iterates on code to improve quality, performance, and maintainability',
+    systemPrompt: REFINER_PROMPT,
+    temperature: 0.15,
+    allowTools: true,
+    useHistory: true,
+    topP: 0.85,
+  },
+  simplifier: {
+    name: 'Simplifier',
+    description: 'Simplifies complex technical concepts and code for clarity',
+    systemPrompt: SIMPLIFIER_PROMPT,
     temperature: 0.5,
     allowTools: true,
     useHistory: true,
     topP: 0.95,
-  },
-  planner: {
-    name: 'Planner',
-    description: 'Breaks complex tasks into structured, actionable plans',
-    systemPrompt: PLANNER_PROMPT,
-    temperature: 0.15,
-    allowTools: false,
-    useHistory: true,
-    topP: 0.85,
-    thinkingMode: 'high',
-  },
-  refiner: {
-    name: 'Refiner',
-    description: 'Improves existing code and processes incrementally',
-    systemPrompt: REFINER_PROMPT,
-    temperature: 0.1,
-    allowTools: true,
-    useHistory: true,
-    topP: 0.8,
-    frequencyPenalty: 0.05,
-  },
-  architect: {
-    name: 'Architect',
-    description: 'Designs system structure, interfaces, and data flow',
-    systemPrompt: ARCHITECT_PROMPT,
-    temperature: 0.35,
-    allowTools: false,
-    useHistory: true,
-    topP: 0.95,
-    thinkingMode: 'max',
   },
   tester: {
     name: 'Tester',
@@ -3374,6 +3413,7 @@ export const ROLE_COMPATIBILITY: Record<AgentRole, AgentRole[]> = {
   tester: ['coder', 'debugger', 'reviewer', 'sre'],
   documenter: ['architect', 'mentor', 'coder', 'knowledgeCurator', 'codeArchaeologist'],
   debugger: ['tester', 'coder', 'reviewer', 'sre', 'reverseEngineer'],
+  simplifier: ['mentor', 'documenter', 'researcher', 'planner'],
   securityAuditor: ['reviewer', 'architect', 'devopsEngineer', 'threatModeler', 'complianceOfficer'],
   performanceEngineer: ['coder', 'reviewer', 'devopsEngineer', 'databaseArchitect', 'sre'],
   devopsEngineer: ['architect', 'securityAuditor', 'projectManager', 'sre', 'releaseManager'],

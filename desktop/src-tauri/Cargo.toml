@@ -34,12 +34,27 @@ reqwest = { version = "0.12", features = ["blocking"] }
 portpicker = "0.1"
 dirs = "6"
 notify = "7"
+base64 = "0.22"
 
-[target.'cfg(windows)'.dependencies]
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+core-graphics = "0.24"
+cocoa = "0.26"
+accessibility-sys = "0.1"
+
+[target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.58", features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_Security_Authentication",
     "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",
+    "Win32_UI_Accessibility",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_Com",
 ] }
+uiautomation = "0.16"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+atspi = "0.19"
+zbus = "3"

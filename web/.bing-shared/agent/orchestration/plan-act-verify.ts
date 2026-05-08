@@ -333,109 +333,149 @@ export class PlanActVerifyOrchestrator {
     const controller = new IterationController(this.validatedConfig);
     const conversationHistory = [...initialContext];
 
-    yield { type: 'phase_change', phase: 'planning' };
+    try {
+      yield { type: 'phase_change', phase: 'planning' };
 
-    // 1. PLANNING PHASE (CrewAI-inspired Planner Agent)
-    const plan = await this.generatePlan(task, conversationHistory);
-    yield { type: 'plan_created', plan };
-    conversationHistory.push({ role: 'assistant', content: `Plan:\n${JSON.stringify(plan)}` });
+      // 1. PLANNING PHASE (CrewAI-inspired Planner Agent)
+      const plan = await this.generatePlan(task, conversationHistory);
+      yield { type: 'plan_created', plan };
+      conversationHistory.push({ role: 'assistant', content: `Plan:\n${JSON.stringify(plan)}` });
 
-    // 2. ACT PHASE (Multi-step Tool Loop)
-    yield { type: 'phase_change', phase: 'acting' };
+      // 2. ACT PHASE (Multi-step Tool Loop)
+      yield { type: 'phase_change', phase: 'acting' };
 
-    while (true) {
-      const check = controller.canContinue();
-      if (!check.allowed) {
-        yield { type: 'warning', message: `Execution stopped: ${check.reason}` };
-        break;
-      }
+      let consecutiveVerificationFailures = 0;
+      const MAX_VERIFICATION_FAILURES = 3;
+      const recentToolCalls: string[] = [];
+      const MAX_RECENT_TOOLS = 6;
 
-      controller.recordStep();
-      yield { type: 'iteration_start', iteration: controller.getStats().iterations };
-
-      // Call LLM for next action (Coder Agent) using Vercel AI SDK
-      const llmResponse = await this.callLLM(task, conversationHistory);
-      controller.recordTokens(llmResponse.usage?.totalTokens || 0);
-
-      if (llmResponse.done || !llmResponse.toolCalls?.length) {
-        conversationHistory.push({ role: 'assistant', content: llmResponse.text });
-        break; // Task complete or no tools to call
-      }
-
-      // Execute tools with Self-Healing middleware
-      let modifiedFiles: string[] = [];
-      for (const call of llmResponse.toolCalls) {
-        yield { type: 'tool_call', tool: call.name, args: call.arguments };
-
-        let structuredResult: ToolResult;
-        try {
-          const rawResult = await this.executeToolWithHealing(call.name, call.arguments);
-          // P2 #7: Build structured ToolResult instead of JSON.stringify blob
-          structuredResult = buildToolResult(call.name, call.arguments, rawResult);
-          yield { type: 'tool_result', tool: call.name, result: structuredResult };
-
-          if (call.name === 'writeFile' || call.name === 'applyDiff') {
-            modifiedFiles.push(call.arguments.path || call.arguments.file);
-          }
-        } catch (error: any) {
-          // P2 #7: Build structured ToolResult for errors too
-          structuredResult = buildToolResult(call.name, call.arguments, undefined, error);
-          yield { type: 'tool_error', tool: call.name, error: structuredResult.error! };
+      while (true) {
+        const check = controller.canContinue();
+        if (!check.allowed) {
+          yield { type: 'warning', message: `Execution stopped: ${check.reason}` };
+          break;
         }
 
-        // P2 #7: Pass structured ToolResult into conversation history
-        // The LLM gets structured fields (success, output, error.type, suggestions, etc.)
-        // instead of a raw JSON string blob
-        conversationHistory.push({
-          role: 'tool',
-          content: JSON.stringify(structuredResult),
-          toolCallId: call.id,
-          toolName: call.name,
-        } as AgentMessage);
+        controller.recordStep();
+        yield { type: 'iteration_start', iteration: controller.getStats().iterations };
+
+        // Call LLM for next action (Coder Agent) using Vercel AI SDK
+        const llmResponse = await this.callLLM(task, conversationHistory);
+        controller.recordTokens(llmResponse.usage?.totalTokens || 0);
+
+        if (llmResponse.done || !llmResponse.toolCalls?.length) {
+          conversationHistory.push({ role: 'assistant', content: llmResponse.text });
+          break; // Task complete or no tools to call
+        }
+
+        // Execute tools with Self-Healing middleware
+        let modifiedFiles: string[] = [];
+        for (const call of llmResponse.toolCalls) {
+          // Loop safety: Detect repeated identical calls within recent window
+          const callHash = `${call.name}:${JSON.stringify(call.arguments)}`;
+          if (recentToolCalls.filter(h => h === callHash).length >= 3) {
+            yield { type: 'warning', message: `Detected repeated identical tool call: ${call.name}. Aborting loop to prevent infinite cycle.` };
+            break;
+          }
+          recentToolCalls.push(callHash);
+          if (recentToolCalls.length > MAX_RECENT_TOOLS) recentToolCalls.shift();
+
+          yield { type: 'tool_call', tool: call.name, args: call.arguments };
+
+          let structuredResult: ToolResult;
+          try {
+            const rawResult = await this.executeToolWithHealing(call.name, call.arguments);
+            // P2 #7: Build structured ToolResult instead of JSON.stringify blob
+            structuredResult = buildToolResult(call.name, call.arguments, rawResult);
+            yield { type: 'tool_result', tool: call.name, result: structuredResult };
+
+            if (call.name === 'writeFile' || call.name === 'applyDiff') {
+              modifiedFiles.push(call.arguments.path || call.arguments.file);
+            }
+          } catch (error: any) {
+            // P2 #7: Build structured ToolResult for errors too
+            structuredResult = buildToolResult(call.name, call.arguments, undefined, error);
+            yield { type: 'tool_error', tool: call.name, error: structuredResult.error! };
+          }
+
+          // P2 #7: Pass structured ToolResult into conversation history
+          // The LLM gets structured fields (success, output, error.type, suggestions, etc.)
+          // instead of a raw JSON string blob
+          conversationHistory.push({
+            role: 'tool',
+            content: JSON.stringify(structuredResult),
+            toolCallId: call.id,
+            toolName: call.name,
+          } as AgentMessage);
+        }
+
+        // 3. VERIFICATION PHASE (Critic/Verifier Agent)
+        if (modifiedFiles.length > 0) {
+          yield { type: 'phase_change', phase: 'verifying' };
+          const verificationResult = await this.runVerification(modifiedFiles);
+
+          if (!verificationResult.passed) {
+            consecutiveVerificationFailures++;
+            yield { 
+              type: 'verification_failed', 
+              errors: verificationResult.errors.map(e => ({ 
+                file: (e as any).path || 'unknown', 
+                message: (e as any).error || String(e), 
+                suggestion: undefined 
+              })) 
+            };
+
+            if (consecutiveVerificationFailures >= MAX_VERIFICATION_FAILURES) {
+              yield { type: 'warning', message: `Aborting due to ${MAX_VERIFICATION_FAILURES} consecutive verification failures.` };
+              break;
+            }
+
+            // Feed errors back to the ACT loop for self-healing
+            conversationHistory.push({
+              role: 'system',
+              content: `Verification failed. Please fix these errors in the next step: ${JSON.stringify(verificationResult.errors)}`
+            });
+            continue;
+          }
+          consecutiveVerificationFailures = 0; // Reset on success
+          yield { type: 'verification_passed' };
+        }
       }
 
-      // 3. VERIFICATION PHASE (Critic/Verifier Agent)
-      if (modifiedFiles.length > 0) {
-         yield { type: 'phase_change', phase: 'verifying' };
-         const verificationResult = await this.runVerification(modifiedFiles);
+      // 4. RESPOND PHASE (with budget check - do not exceed budget even for summarization)
+      yield { type: 'phase_change', phase: 'responding' };
 
-         if (!verificationResult.passed) {
-           yield { type: 'verification_failed', errors: verificationResult.errors.map(e => ({ file: (e as any).path || 'unknown', message: (e as any).error || String(e), suggestion: undefined })) };
-           // Feed errors back to the ACT loop for self-healing
-           // P2 #7: Use structured error context
-           conversationHistory.push({
-             role: 'system',
-             content: `Verification failed. Please fix these errors in the next step: ${JSON.stringify(verificationResult.errors)}`
-           });
-           continue;
-         }
-         yield { type: 'verification_passed' };
+      // Check budgets before final summarization call to prevent budget bypass
+      const finalCheck = controller.canContinue();
+      if (!finalCheck.allowed) {
+        // Budgets exhausted - return partial result without final summarization
+        yield {
+          type: 'warning',
+          message: `Final summarization skipped: ${finalCheck.reason}. Returning partial results.`
+        };
+        yield {
+          type: 'done',
+          response: 'Execution completed with partial results due to budget constraints.',
+          stats: controller.getStats()
+        };
+        return;
       }
-    }
 
-    // 4. RESPOND PHASE (with budget check - do not exceed budget even for summarization)
-    yield { type: 'phase_change', phase: 'responding' };
+      const finalResponse = await this.callLLM("Summarize the final outcome based on the execution history.", conversationHistory);
+      controller.recordTokens(finalResponse.usage?.totalTokens || 0);
+      yield { type: 'done', response: finalResponse.text, stats: controller.getStats() };
 
-    // Check budgets before final summarization call to prevent budget bypass
-    const finalCheck = controller.canContinue();
-    if (!finalCheck.allowed) {
-      // Budgets exhausted - return partial result without final summarization
-      yield {
-        type: 'warning',
-        message: `Final summarization skipped: ${finalCheck.reason}. Returning partial results.`
-      };
-      yield {
-        type: 'done',
-        response: 'Execution completed with partial results due to budget constraints.',
+    } catch (error: any) {
+      log.error('Orchestrator execution fatal error', { error: error.message });
+      yield { type: 'warning', message: `Orchestration failed: ${error.message}` };
+      yield { 
+        type: 'done', 
+        response: `I encountered an error during orchestration: ${error.message}. Please try again or switch to a different model.`,
         stats: controller.getStats()
       };
-      return;
     }
-
-    const finalResponse = await this.callLLM("Summarize the final outcome based on the execution history.", conversationHistory);
-    controller.recordTokens(finalResponse.usage?.totalTokens || 0);
-    yield { type: 'done', response: finalResponse.text, stats: controller.getStats() };
   }
+
 
   // ==========================================
   // Private Helper Methods

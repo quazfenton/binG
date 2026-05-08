@@ -10,6 +10,8 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
+
+
 interface CSPReport {
   'csp-report': {
     'blocked-uri': string;

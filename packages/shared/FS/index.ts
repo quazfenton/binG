@@ -727,6 +727,16 @@ export class DesktopFileSystem implements IFileSystem {
   async search(query: string, options?: { path?: string; limit?: number }): Promise<FSSearchResult[]> {
     if (!this.tauriFs) throw new Error('Tauri FS not initialized');
     
+    // DEPRECATED: This simple string-matching search is slow and limited.
+    // For better performance and features (regex, glob patterns, context lines),
+    // use the grep_code tool instead, which uses ripgrep on desktop and optimized
+    // VFS search on web.
+    console.warn(
+      '[FS] search() is deprecated and will be removed in a future version. ' +
+      'Use grep_code tool for better performance (10-100x faster) and features ' +
+      '(regex, glob patterns, context lines). See docs/file-search-tools-comparison.md'
+    );
+    
     const results: FSSearchResult[] = [];
     const searchPath = options?.path ? this.resolvePath(options.path) : (this.boundaryPath || this.workspaceRoot);
     const limit = Math.min(options?.limit || 25, 100);

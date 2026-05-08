@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
+
+
 import { generateSpeech, checkKittenTTSAvailability, KITTEN_VOICES, KITTEN_MODELS } from '@/lib/voice/kitten-tts-server';
 import { voiceServerManager } from '@/lib/voice/server-control';
 import { auth0 } from '@/lib/auth0';
@@ -81,8 +83,7 @@ export async function GET() {
     voices: KITTEN_VOICES,
     models: KITTEN_MODELS.map(m => ({
       id: m.id,
-      name: m.name,
-      description: m.description
+      name: m.name
     }))
   });
 }

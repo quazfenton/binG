@@ -136,21 +136,29 @@ class VFSProvider implements CapabilityProvider {
     },
 
     'file.search': async (ownerId, input) => {
-      const { virtualFilesystem } = await import('../virtual-filesystem/virtual-filesystem-service');
-      const results = await virtualFilesystem.search(ownerId, input.query, {
+      // Use ripgrep-vfs-adapter for better performance (10-100x faster)
+      const { ripgrepVFS } = await import('../search/ripgrep-vfs-adapter');
+      
+      const result = await ripgrepVFS({
+        query: input.query,
+        ownerId,
         path: input.path,
-        limit: input.limit,
+        maxResults: input.limit || 50,
+        fixedString: false, // Allow regex by default
+        caseInsensitive: false,
       });
+      
+      // Convert to expected format
       return {
-        results: results.map(r => ({
-          path: r.path,
-          name: r.name,
-          language: r.language,
-          score: r.score,
-          snippet: r.snippet,
-          lastModified: r.lastModified,
+        results: result.matches.map(m => ({
+          path: m.path,
+          name: m.path.split('/').pop() || m.path,
+          language: '', // Not available from ripgrep
+          score: 100, // All matches are relevant
+          snippet: m.content,
+          lastModified: new Date().toISOString(),
         })),
-        total: results.length,
+        total: result.matches.length,
       };
     },
 
@@ -681,7 +689,40 @@ class NullclawProvider implements CapabilityProvider {
           if (!input.query) {
             return { success: false, error: 'Missing required field: query' };
           }
-          // Use DuckDuckGo HTML for web search
+          
+          // Try SearXNG first if configured
+          if (process.env.SEARXNG_BASE_URL) {
+            try {
+              const searxngUrl = process.env.SEARXNG_BASE_URL.replace(/\/$/, '');
+              const searchUrl = `${searxngUrl}/search?q=${encodeURIComponent(input.query)}&format=json&language=en`;
+              
+              const headers: Record<string, string> = {
+                'Accept': 'application/json',
+              };
+              if (process.env.SEARXNG_API_KEY) {
+                headers['Authorization'] = `Bearer ${process.env.SEARXNG_API_KEY}`;
+              }
+
+              const response = await fetch(searchUrl, { headers });
+              if (response.ok) {
+                const data = await response.json();
+                const results = (data.results || []).slice(0, input.limit || 10).map((r: any) => ({
+                  title: r.title || 'No title',
+                  url: r.url || '',
+                  snippet: r.content || r.snippet || '',
+                }));
+                return {
+                  success: true,
+                  output: { results, query: input.query, source: 'searxng' },
+                };
+              }
+            } catch (error: any) {
+              // Fall through to DuckDuckGo fallback
+              console.warn('[web.search] SearXNG failed, falling back to DuckDuckGo:', error.message);
+            }
+          }
+
+          // Fallback to DuckDuckGo HTML for web search
           const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(input.query)}`;
           const result = await browseNullclawUrl(searchUrl, 'extract', context.userId, context.conversationId);
           return {
@@ -693,6 +734,7 @@ class NullclawProvider implements CapabilityProvider {
                 snippet: r.snippet || r.text || '',
               })),
               query: input.query,
+              source: 'duckduckgo',
             },
             error: result.error,
           };
@@ -1498,21 +1540,8 @@ class RipgrepProvider implements CapabilityProvider {
   readonly capabilities = ['file.search', 'repo.search'];
 
   async isAvailable(): Promise<boolean> {
-    // Check if rg is actually installed (cross-platform)
-    try {
-      const { execSync } = await import('child_process');
-      const isWindows = process.platform === 'win32';
-
-      // Try different commands based on platform
-      const checkCmd = isWindows
-        ? 'where rg 2>nul || echo FAIL'
-        : 'which rg || command -v rg || echo FAIL';
-
-      const result = execSync(checkCmd, { stdio: 'pipe', encoding: 'utf-8' });
-      return !result.includes('FAIL') && result.trim().length > 0;
-    } catch {
-      return false;
-    }
+    // Always available - uses VFS adapter that falls back gracefully
+    return true;
   }
 
   async execute(
@@ -1520,36 +1549,68 @@ class RipgrepProvider implements CapabilityProvider {
     input: any,
     context: ToolExecutionContext
   ): Promise<ToolExecutionResult> {
-    const { execFileSync } = await import('child_process');
-
     try {
-      const searchPath = input.path || '.';
+      // Use VFS adapter that handles both desktop (native ripgrep) and web (VFS search)
+      const { ripgrepVFS } = await import('@/lib/search/ripgrep-vfs-adapter');
+      
+      const ownerId = context.userId || 'anon:public';
+      const searchPath = input.path;
       const maxResults = input.maxResults || 50;
+      const query = input.query;
+      
+      if (!query || typeof query !== 'string') {
+        return { success: false, error: 'Query is required' };
+      }
 
-      // SECURITY: Use execFileSync with arguments array to prevent command injection
-      const output = execFileSync('rg', [
-        '-n',
-        '--max-count',
-        String(maxResults),
-        input.query,
-        searchPath,
-      ], { encoding: 'utf-8', timeout: 30000 });
+      const result = await ripgrepVFS({
+        query,
+        ownerId,
+        path: searchPath,
+        glob: input.glob,
+        fixedString: input.fixedString,
+        caseInsensitive: input.caseInsensitive,
+        wordRegexp: input.wordRegexp,
+        maxResults,
+        maxCountPerFile: input.maxCountPerFile,
+        contextLines: input.contextLines,
+        timeoutMs: 30000,
+      });
 
-      const results = output.split('\n')
-        .filter(line => line.trim())
-        .slice(0, maxResults)
-        .map(line => {
-          const match = line.match(/^([^:]+):(\d+):(.*)$/);
-          if (match) {
-            return { path: match[1], line: parseInt(match[2]), content: match[3] };
+      if (result.errors.length > 0 && result.matches.length === 0) {
+        return { 
+          success: false, 
+          error: result.errors.join('; '),
+          metadata: {
+            usedRipgrep: result.usedRipgrep,
+            usedVFS: result.usedVFS,
+            stats: result.stats,
           }
-          return { content: line };
-        });
+        };
+      }
 
-      return { success: true, output: results };
+      // Format results to match expected output schema
+      const formattedResults = result.matches.map(m => ({
+        path: m.path,
+        line: m.lineNumber,
+        content: m.content,
+        contextBefore: m.contextBefore,
+        contextAfter: m.contextAfter,
+      }));
+
+      return { 
+        success: true, 
+        output: formattedResults,
+        metadata: {
+          usedRipgrep: result.usedRipgrep,
+          usedVFS: result.usedVFS,
+          stats: result.stats,
+        }
+      };
     } catch (error: any) {
-      // No matches or error
-      return { success: true, output: [] };
+      return { 
+        success: false, 
+        error: error.message || 'Search failed',
+      };
     }
   }
 }

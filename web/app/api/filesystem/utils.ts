@@ -7,7 +7,7 @@
 import { NextRequest } from 'next/server';
 import { resolveFilesystemOwner, type FilesystemOwnerResolution } from '@/lib/virtual-filesystem/resolve-filesystem-owner';
 import { secureRandomId } from '@/lib/utils/crypto-random';
-import { normalizeSessionPath } from '@/lib/virtual-filesystem/scope-utils';
+import { normalizeSessionPath, normalizeSessionId } from '@/lib/virtual-filesystem/scope-utils';
 
 /**
  * Resolve filesystem owner with graceful fallback
@@ -92,8 +92,8 @@ export function normalizeFilesystemPath(path: string): string {
   if (sessionsMatch) {
     const sessionSegment = sessionsMatch[1];
     if (sessionSegment.includes('$') || sessionSegment.includes(':')) {
-      const normalized = normalizeSessionPath(sessionSegment);
-      return path.replace(`project/sessions/${sessionSegment}`, normalized);
+      const normalizedSimpleId = normalizeSessionId(sessionSegment);
+      return path.replace(`project/sessions/${sessionSegment}`, `project/sessions/${normalizedSimpleId}`);
     }
   }
   return path;

@@ -14,45 +14,22 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const webDir = path.resolve(__dirname, '..');
 const rootDir = path.resolve(webDir, '..');
 
-const MAPPINGS = [
-  {
-    sourceRoot: path.join(rootDir, 'packages/platform/src'),
-    destRoot: path.join(webDir, '.bing-platform/src'),
-    includePattern: '**/*.{ts,tsx,js,jsx,json,d.ts}',
-  },
-  {
-    sourceRoot: path.join(rootDir, 'packages/platform'),
-    destRoot: path.join(webDir, '.bing-platform'),
-    includePattern: 'package.json',
-    transform: 'platform-package',
-  },
-  {
-    sourceRoot: path.join(rootDir, 'packages/shared'),
-    destRoot: path.join(webDir, '.bing-shared'),
-    includePattern: '**/*.{ts,tsx}',
-  },
-  {
-    sourceRoot: path.join(rootDir, 'packages/shared'),
-    destRoot: path.join(webDir, '.bing-shared'),
-    includePattern: 'package.json',
-    transform: 'shared-package',
-  },
-];
-
 async function rimraf(dir) {
   try {
     await fs.rm(dir, { recursive: true, force: true });
-  } catch (err) {}
+  } catch (err) {
+    // Ignore errors
+  }
 }
 
 async function ensureDir(dir) {
   await fs.mkdir(dir, { recursive: true });
 }
 
-async function copyFile(src, dest, options = {}) {
+async function copyWithTransform(src, dest, transform) {
   await ensureDir(path.dirname(dest));
-  
-  if (options.transform === 'platform-package') {
+
+  if (transform === 'platform-package' && path.basename(src) === 'package.json') {
     const fresh = JSON.parse(await fs.readFile(src, 'utf8'));
     const output = {
       name: fresh.name,
@@ -62,65 +39,103 @@ async function copyFile(src, dest, options = {}) {
       exports: fresh.exports,
       dependencies: fresh.dependencies || {},
       devDependencies: fresh.devDependencies || {},
+      peerDependencies: fresh.peerDependencies || {},
     };
     await fs.writeFile(dest, JSON.stringify(output, null, 2) + '\n');
+    console.log(`    📦 Transformed package.json`);
     return;
   }
-  
-  if (options.transform === 'shared-package') {
+
+  if (transform === 'shared-package' && path.basename(src) === 'package.json') {
     const fresh = JSON.parse(await fs.readFile(src, 'utf8'));
     const output = {
       name: fresh.name,
       version: fresh.version,
       type: fresh.type,
       exports: fresh.exports || {},
+      dependencies: fresh.dependencies || {},
       peerDependencies: fresh.peerDependencies || {},
     };
     await fs.writeFile(dest, JSON.stringify(output, null, 2) + '\n');
+    console.log(`    📦 Transformed package.json`);
     return;
   }
-  
-  // Use copyFileSync for more reliable behavior
+
   await fs.copyFile(src, dest);
 }
 
-async function sync() {
-  console.log('🔄 Syncing monorepo packages to vendored folders...');
-  
-  for (const mapping of MAPPINGS) {
-    const { sourceRoot, destRoot, includePattern, transform } = mapping;
-    
-    console.log(`  Syncing ${path.relative(webDir, destRoot)}...`);
-    
-    await rimraf(destRoot);
-    await ensureDir(destRoot);
-    
-    const forwardPattern = sourceRoot.replace(/\\/g, '/') + '/' + includePattern;
-    const files = await glob(forwardPattern, {
-      nodir: true,
-      ignore: [
-        '**/__tests__/**',
-        '**/__mocks__/**',
-        '**/node_modules/**',
-        '**/.git/**',
-      ].map(p => sourceRoot.replace(/\\/g, '/') + '/' + p),
-    });
-    
-    for (const file of files) {
-      const relative = path.relative(sourceRoot, file);
-      const target = path.join(destRoot, relative);
-      try {
-        await copyFile(file, target, { transform });
-      } catch (err) {
-        console.error(`    ❌ ${target}: ${err.message}`);
-        throw err;
-      }
-    }
-    
-    console.log(`    ✅ Copied ${files.length} files`);
+async function syncPackage(sourceRoot, destRoot, packageName) {
+  console.log(`📁 Syncing: ${path.relative(rootDir, sourceRoot)} -> ${path.relative(webDir, destRoot)}`);
+
+  // Check if source exists
+  try {
+    await fs.access(sourceRoot);
+  } catch {
+    console.log(`    ⚠️  Source not found, skipping...`);
+    return;
   }
-  
-  console.log('✅ Vendored packages synced successfully!');
+
+  // Clean destination
+  await rimraf(destRoot);
+  await ensureDir(destRoot);
+
+  // Copy TypeScript files
+  const tsPattern = sourceRoot.replace(/\\/g, '/') + '/**/*.{ts,tsx,d.ts}';
+  const tsFiles = await glob(tsPattern, {
+    nodir: true,
+    ignore: [
+      sourceRoot.replace(/\\/g, '/') + '/**/__tests__/**',
+      sourceRoot.replace(/\\/g, '/') + '/**/node_modules/**',
+    ],
+  });
+
+  console.log(`    Found ${tsFiles.length} TypeScript files`);
+
+  let copied = 0;
+  for (const file of tsFiles) {
+    const relative = path.relative(sourceRoot, file);
+    const target = path.join(destRoot, relative);
+    try {
+      await copyWithTransform(file, target, null);
+      copied++;
+      if (copied % 50 === 0) {
+        console.log(`    Copied ${copied}/${tsFiles.length}...`);
+      }
+    } catch (err) {
+      console.error(`    ❌ ${relative}: ${err.message}`);
+    }
+  }
+  console.log(`    ✅ Copied ${copied} TypeScript files`);
+
+  // Copy and transform package.json
+  const pkgPath = path.join(sourceRoot, 'package.json');
+  const destPkgPath = path.join(destRoot, 'package.json');
+  const transform = packageName === 'platform' ? 'platform-package' : 'shared-package';
+  try {
+    await copyWithTransform(pkgPath, destPkgPath, transform);
+  } catch (err) {
+    console.error(`    ❌ package.json: ${err.message}`);
+  }
+}
+
+async function sync() {
+  console.log('🔄 Syncing monorepo packages to vendored folders...\n');
+
+  // Sync platform
+  await syncPackage(
+    path.join(rootDir, 'packages/platform'),
+    path.join(webDir, '.bing-platform'),
+    'platform'
+  );
+
+  // Sync shared
+  await syncPackage(
+    path.join(rootDir, 'packages/shared'),
+    path.join(webDir, '.bing-shared'),
+    'shared'
+  );
+
+  console.log('\n✅ Vendored packages synced successfully!');
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

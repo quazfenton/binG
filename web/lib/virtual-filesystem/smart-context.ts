@@ -26,6 +26,7 @@ import type { VirtualFile, VirtualFilesystemNode } from './filesystem-types';
 import { createLogger } from '@/lib/utils/logger';
 import { estimateTokens } from '@/lib/context/contextBuilder';
 import { stripScopePrefixForDisplay } from './path-normalizer';
+import { detectIncompleteResponse } from '@bing/shared/agent/feedback-injection';
 
 const logger = createLogger('SmartContext');
 
@@ -2081,6 +2082,40 @@ export async function* streamWithAutoContinue(
             autoContinue: true,
             reason: 'read_file_completed',
             readPath,
+            continuationCount: continuationCount + 1,
+            maxContinuations,
+          },
+        };
+        return;
+      }
+
+      // Auto-continue for incomplete responses
+      // Detect when LLM stopped mid-sentence, mid-code-block, or mid-structure
+      const incompleteDetection = detectIncompleteResponse(fullResponse);
+
+      if (incompleteDetection.detected && incompleteDetection.confidence >= 0.5) {
+        logger.info('Auto-continuing: detected incomplete response', {
+          reason: incompleteDetection.reason,
+          confidence: incompleteDetection.confidence,
+          responseLength: fullResponse.length,
+          continuationCount: continuationCount + 1,
+          maxContinuations,
+          conversationId,
+        });
+
+        if (conversationId) {
+          trackConversation(conversationId, continuationCount + 1);
+        }
+
+        yield {
+          content: `\n\n[CONTINUE] Your previous response appears incomplete (${incompleteDetection.reason}). Please complete it.\n\nLast 200 characters of your response:\n${fullResponse.slice(-200)}`,
+          isComplete: false,
+          timestamp: new Date(),
+          metadata: {
+            autoContinue: true,
+            reason: 'incomplete_response',
+            incompleteReason: incompleteDetection.reason,
+            confidence: incompleteDetection.confidence,
             continuationCount: continuationCount + 1,
             maxContinuations,
           },

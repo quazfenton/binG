@@ -183,6 +183,25 @@ export class OpencodeV2Provider implements LLMProvider {
             localWorkspaceDir = sanitized;
           }
         }
+      } else {
+        const path = await import('path');
+        const sanitizedWorkspace = this.sanitizePath(workspaceDir);
+
+        if (sanitizedWorkspace?.startsWith('project/')) {
+          const relativePart = sanitizedWorkspace.replace(/^project\//, '');
+          localWorkspaceDir = isWindows
+            ? path.join(process.env.TEMP || process.env.TMP || 'C:\\temp', 'workspace', relativePart)
+            : path.join('/tmp/workspace', relativePart);
+        } else if (sanitizedWorkspace?.startsWith('/workspace/')) {
+          localWorkspaceDir = sanitizedWorkspace.replace(
+            '/workspace/',
+            isWindows
+              ? `${process.env.TEMP || process.env.TMP || 'C:\\temp'}\\workspace\\`
+              : '/home/user/workspace/'
+          );
+        } else {
+          localWorkspaceDir = '';
+        }
       }
 
       if (!localWorkspaceDir) {
@@ -195,13 +214,6 @@ export class OpencodeV2Provider implements LLMProvider {
         // Build path safely using path.join instead of string interpolation
         const path = await import('path');
         localWorkspaceDir = path.join(tempDir, 'workspace', 'users', userId || 'guest', 'sessions', convId || 'default');
-      } else {
-        // On Linux, convert /workspace/... to /home/user/workspace/...
-        // SECURITY: Sanitize workspace directory path
-        const sanitizedWorkspace = this.sanitizePath(workspaceDir);
-        localWorkspaceDir = sanitizedWorkspace && sanitizedWorkspace.startsWith('/workspace/')
-          ? sanitizedWorkspace.replace('/workspace/', '/home/user/workspace/')
-          : (sanitizedWorkspace || '/tmp/workspace');
       }
 
       // Write the prompt to a temp file (use OS-appropriate temp directory)
@@ -305,9 +317,6 @@ export class OpencodeV2Provider implements LLMProvider {
           try {
             const parsed = JSON.parse(line);
             
-            // Debug: Log each parsed line
-            console.log('[OpencodeV2Provider] JSON line keys:', Object.keys(parsed).join(', '));
-            
             // Text response
             if (parsed.text) {
               console.log('[OpencodeV2Provider] Got text response:', parsed.text.substring(0, 100) + '...');
@@ -356,35 +365,46 @@ export class OpencodeV2Provider implements LLMProvider {
                     exitCode: 1,
                   };
                 }
+
+                try {
+                  await Promise.resolve(onToolExecution?.(toolName, safeArgs, toolResult));
+                } catch (callbackError) {
+                  logger.error(`onToolExecution failed for ${toolName}`, callbackError);
+                }
+
+                console.log('[OpencodeV2Provider] === TOOL RESULT ===');
+                console.log('[OpencodeV2Provider] Tool:', toolName, '- Success:', toolResult.success);
+                console.log('[OpencodeV2Provider] Output length:', toolResult.output?.length ?? 0);
+                console.log('[OpencodeV2Provider] Exit code:', toolResult.exitCode);
+                console.log('[OpencodeV2Provider] ===================');
+
+                // Record metrics
+                openCodeV2SessionManager.recordMetrics(
+                  this.currentSession.id,
+                  1,
+                  0,
+                  0,
+                  Date.now() - toolStartTime,
+                  0,
+                  1
+                );
               }
 
-              steps.push({ toolName, args: safeArgs, result: toolResult });
-              onToolExecution?.(toolName, safeArgs, toolResult);
-
-              console.log('[OpencodeV2Provider] === TOOL RESULT ===');
-              console.log('[OpencodeV2Provider] Tool:', toolName, '- Success:', toolResult.success);
-              console.log('[OpencodeV2Provider] Output:', toolResult.output?.substring(0, 200));
-              console.log('[OpencodeV2Provider] Exit code:', toolResult.exitCode);
-              console.log('[OpencodeV2Provider] ===================');
-
-              // Record metrics
-              openCodeV2SessionManager.recordMetrics(
-                this.currentSession.id,
-                1,
-                0,
-                0,
-                Date.now() - toolStartTime,
-                0,
-                1
-              );
+              steps.push({
+                toolName,
+                args: safeArgs,
+                result: toolResult,
+              });
             }
 
             // Completion
             if (parsed.done || parsed.complete) {
               finalResponse = parsed.response ?? parsed.text ?? finalResponse;
+              // Return early to end this turn and allow frontend to render this as a distinct bubble
+              break;
             }
           } catch {
-            // Non-JSON line
+            // Non-JSON line — treat as incremental response chunk
             finalResponse += line + '\n';
             onStreamChunk?.(line + '\n');
           }

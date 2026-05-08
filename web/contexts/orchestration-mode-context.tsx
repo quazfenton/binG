@@ -16,18 +16,43 @@ import React, { createContext, useContext, useState, useEffect, useCallback } fr
  * - 'v2-executor': V2 containerized execution (lib/agent/v2-executor.ts)
  */
 export type OrchestrationMode =
-  | 'task-router'           // Default - current behavior
-  | 'unified-agent'         // lib/orchestra/unified-agent-service.ts
-  | 'stateful-agent'        // lib/orchestra/stateful-agent (direct with ToolExecutor)
-  | 'agent-kernel'          // packages/shared/agent/agent-kernel (priority scheduler)
-  | 'agent-loop'            // lib/orchestra/mastra/agent-loop (ToolLoopAgent)
-  | 'execution-graph'       // packages/shared/agent/execution-graph (DAG engine)
-  | 'nullclaw'              // packages/shared/agent/nullclaw-integration (external server)
-  | 'opencode-sdk'          // lib/chat/opencode-sdk-provider (SDK → local server)
-  | 'mastra-workflow'       // lib/orchestra/mastra/
-  | 'crewai'                // lib/crewai/
-  | 'v2-executor'           // lib/agent/v2-executor.ts
-  | 'agent-team';           // lib/spawn/orchestration/agent-team (multi-agent)
+  | 'auto'
+  | 'v1-api'
+  | 'v1-agent-loop'
+  | 'v1-progressive-build'
+  | 'dual-process'
+  | 'execution-controller'
+  | 'spec:super'
+  | 'spec:maximal'
+  | 'v2-native'
+  | 'v2-containerized'
+  | 'v2-local'
+  | 'unified-agent'
+  | 'stateful-agent'
+  | 'mastra-workflow'
+  | 'mastra:code-agent'
+  | 'mastra:research'
+  | 'mastra:parallel'
+  | 'mastra:data-analysis'
+  | 'mastra:hitl'
+  | 'agent-loop'
+  | 'task-router'
+  | 'opencode-sdk'
+  | 'crewai'
+  | 'crewai:role-agent'
+  | 'crewai:swarm'
+  | 'crewai:streaming'
+  | 'v2-executor'
+  | 'agent-team'
+  | 'attractor-driven'
+  | 'intent-driven'
+  | 'energy-driven'
+  | 'cognitive-resonance'
+  | 'cognitive:converged'
+  | 'adversarial-verify'
+  | 'adversarial:revised'
+  | 'distributed-cognition'
+  | 'distributed:no-synthesis';
 
 export interface OrchestrationModeConfig {
   mode: OrchestrationMode;
@@ -45,7 +70,7 @@ interface OrchestrationModeContextType {
 }
 
 const DEFAULT_CONFIG: OrchestrationModeConfig = {
-  mode: 'task-router',  // Keep current default
+  mode: 'auto',  // Uses unified-agent-service.ts AGENT_EXECUTION_ENGINE default
   autoApply: false,
   streamEnabled: true,
 };
@@ -54,18 +79,43 @@ const STORAGE_KEY = 'orchestration_mode_config';
 
 // Valid modes set for validation
 const VALID_MODES = new Set<OrchestrationMode>([
-  'task-router',
+  'auto',
+  'v1-api',
+  'v1-agent-loop',
+  'v1-progressive-build',
+  'dual-process',
+  'execution-controller',
+  'spec:super',
+  'spec:maximal',
+  'v2-native',
+  'v2-containerized',
+  'v2-local',
   'unified-agent',
   'stateful-agent',
-  'agent-kernel',
-  'agent-loop',
-  'execution-graph',
-  'nullclaw',
-  'opencode-sdk',
   'mastra-workflow',
+  'mastra:code-agent',
+  'mastra:research',
+  'mastra:parallel',
+  'mastra:data-analysis',
+  'mastra:hitl',
+  'agent-loop',
+  'task-router',
+  'opencode-sdk',
   'crewai',
+  'crewai:role-agent',
+  'crewai:swarm',
+  'crewai:streaming',
   'v2-executor',
   'agent-team',
+  'attractor-driven',
+  'intent-driven',
+  'energy-driven',
+  'cognitive-resonance',
+  'cognitive:converged',
+  'adversarial-verify',
+  'adversarial:revised',
+  'distributed-cognition',
+  'distributed:no-synthesis',
 ]);
 
 /**

@@ -54,12 +54,22 @@ export async function notify(title: string, options?: string | NotifyOptions): P
       });
     } catch (error) {
       console.error('[Notifications] Failed to show desktop notification:', error);
-      // Fallback to web notification
-      try {
-        await showWebNotification(title, opts);
-      } catch (webError) {
-        console.error('[Notifications] Web notification fallback failed:', webError);
-        throw webError;
+      // Fallback to web notification (only if supported)
+      if (isSupported()) {
+        try {
+          await showWebNotification(title, opts);
+        } catch (webError) {
+          console.error('[Notifications] Web notification fallback failed:', webError);
+          // Chain errors to preserve context of original desktop failure
+          const combinedError = new Error(
+            `Desktop notification failed: ${error instanceof Error ? error.message : String(error)}; Web notification fallback failed: ${webError instanceof Error ? webError.message : String(webError)}`,
+            { cause: { desktopError: error, webError } }
+          );
+          throw combinedError;
+        }
+      } else {
+        // Web notifications not supported, throw original desktop error
+        throw error;
       }
     }
   } else {

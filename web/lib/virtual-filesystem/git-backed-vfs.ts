@@ -688,7 +688,7 @@ export function createGitBackedVFS(
 // Key format: ownerId$sessionId for proper commit tracking
 // CRITICAL FIX: Use globalThis to survive Next.js hot-reloading in dev mode
 declare global {
-  // eslint-disable-next-line no-var
+   
   var __gitVFSInstances__: Map<string, GitBackedVFS> | undefined;
 }
 

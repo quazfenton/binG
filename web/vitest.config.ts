@@ -124,8 +124,6 @@ export const UNIMPLEMENTED_MODULE_TEST_PATTERNS = [
   '**/__tests__/e2e/workflow-integration.test.ts',
   // LLM tool integration — requires LLM API keys
   '**/__tests__/integration/llm-tool-integration.test.ts',
-  // Image generation provider registry — missing module
-  '**/__tests__/image-generation/provider-registry.test.ts',
   // MCP VFS tools — requires MCP server
   '**/__tests__/mcp/vfs-mcp-tools.test.ts',
   // Bash self-heal terminal — requires node-pty
@@ -171,9 +169,6 @@ export default defineConfig({
       '@': path.resolve(__dirname, './'),
       '@/app': path.resolve(__dirname, './app'),
       '@bing/platform/env': path.resolve(__dirname, '../packages/platform/src/env.ts'),
-      '@bing/platform': path.resolve(__dirname, '../packages/platform/src'),
-      '@bing/shared': path.resolve(__dirname, '../packages/shared'),
-      '@bing/shared/agent': path.resolve(__dirname, '../packages/shared/agent'),
     },
   },
 });

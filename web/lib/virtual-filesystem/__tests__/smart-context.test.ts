@@ -6,13 +6,39 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
+// Mock @bing/shared/FS/fs-bridge for tests that import virtual-filesystem-service
+vi.mock('@bing/shared/FS/fs-bridge', () => ({
+  fsBridge: { readFile: vi.fn(), writeFile: vi.fn(), exists: vi.fn(() => false) },
+  isUsingLocalFS: false,
+  initializeFSBridge: vi.fn(async () => {}),
+}));
+
+vi.mock('@bing/shared/FS/index', () => ({
+  FileSystemWatchEvent: { Created: 'created', Modified: 'modified', Deleted: 'deleted' },
+}));
+
 // =============================================================================
 // Session File Tracker Tests
 // =============================================================================
 
+// Re-register @bing/shared/FS mocks in beforeEach so they survive vi.resetModules()
+// (vi.resetModules() clears the mock registry, so we must re-register)
+const registerFSMocks = () => {
+  vi.mock('@bing/shared/FS/fs-bridge', () => ({
+    fsBridge: { readFile: vi.fn(), writeFile: vi.fn(), exists: vi.fn(() => false), mkdir: vi.fn(), readdir: vi.fn() },
+    isUsingLocalFS: false,
+    initializeFSBridge: vi.fn(async () => {}),
+  }));
+  vi.mock('@bing/shared/FS/index', () => ({
+    FileSystemWatchEvent: { Created: 'created', Modified: 'modified', Deleted: 'deleted' },
+  }));
+};
+
 describe('Session File Tracker', () => {
   beforeEach(() => {
+    // Re-register mocks AFTER resetModules so they persist for dynamic imports
     vi.resetModules();
+    registerFSMocks();
   });
 
   afterEach(() => {
@@ -131,6 +157,9 @@ describe('File Request Detection', () => {
   let detectFileReadRequest: (text: string) => { files: string[]; confidence: string };
 
   beforeEach(async () => {
+    // Re-register mocks after resetModules so they survive the dynamic import
+    vi.resetModules();
+    registerFSMocks();
     const mod = await import('@/lib/virtual-filesystem/smart-context');
     detectFileReadRequest = mod.detectFileReadRequest;
   });
@@ -251,6 +280,11 @@ describe('@mention Extraction', () => {
 // =============================================================================
 
 describe('Smart Context Integration', () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    registerFSMocks();
+  });
+
   it('should handle missing userId gracefully', async () => {
     const { generateSmartContext } = await import('@/lib/virtual-filesystem/smart-context');
     const result = await generateSmartContext({
@@ -350,6 +384,11 @@ describe('Import Resolution', () => {
 // =============================================================================
 
 describe('Context Mode', () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    registerFSMocks();
+  });
+
   it('should default to read mode when not specified', async () => {
     const { generateSmartContext } = await import('@/lib/virtual-filesystem/smart-context');
     const result = await generateSmartContext({
@@ -384,6 +423,11 @@ describe('Context Mode', () => {
 });
 
 describe('Unified Diff Generation', () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    registerFSMocks();
+  });
+
   it('should detect file creation', async () => {
     const { generateUnifiedDiffs } = await import('@/lib/virtual-filesystem/smart-context');
     const before = new Map<string, string>();

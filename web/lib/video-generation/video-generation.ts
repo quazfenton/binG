@@ -13,86 +13,16 @@
  * - Provider fallback chain
  */
 
-export interface VideoProvider {
-  id: string
-  name: string
-  models: Array<{ 
-    id: string; 
-    tags?: string[]; 
-    type?: 'text-to-video' | 'image-to-video' | 'video-to-video';
-    capabilities?: {
-      maxDuration?: number; // in seconds
-      resolutions?: Array<{ width: number; height: number }>;
-      styles?: string[];
-    }
-  } | string>
-  supportsStreaming: boolean
-  description: string
-  isAvailable?: boolean
-}
-
-export interface VideoGenerationRequest {
-  prompt: string
-  model: string
-  provider?: string
-  apiKey?: string
-  
-  // Video generation parameters
-  duration?: number // desired duration in seconds
-  aspectRatio?: string // e.g., '16:9', '9:16', '1:1'
-  width?: number
-  height?: number
-  quality?: 'low' | 'medium' | 'high' | 'ultra'
-  style?: string
-  seed?: number | 'random'
-  
-  // Input media (for image-to-video or video-to-video)
-  initImageUrl?: string
-  initVideoUrl?: string
-  
-  // Advanced options
-  motionStrength?: number // 0-100
-  cameraMovement?: 'none' | 'slight' | 'moderate' | 'strong'
-  interpolationFrames?: number
-}
-
-export interface VideoGenerationResponse {
-  videoUrl: string
-  thumbnailUrl?: string
-  provider: string
-  model: string
-  duration: number // actual duration in seconds
-  width: number
-  height: number
-  metadata?: {
-    seed?: number
-    style?: string
-    quality?: string
-    framesGenerated?: number
-    [key: string]: any
-  }
-}
-
-export interface VideoProviderConfig {
-  apiKey?: string
-  baseURL?: string
-  // Provider-specific configuration
-  [key: string]: any
-}
-
-export interface VideoGenerationProvider {
-  id: string
-  name: string
-  initialize(config: VideoProviderConfig): void
-  isAvailable(): Promise<boolean>
-  generateVideo(request: VideoGenerationRequest): Promise<VideoGenerationResponse>
-  getModels(): Array<{ 
-    id: string; 
-    tags?: string[]; 
-    type?: string;
-    capabilities?: any
-  }>
-}
+import { VercelVideoProvider } from './providers/vercel-provider';
+import { GoogleVideoProvider } from './providers/google-provider';
+import { PollinationsVideoProvider } from './providers/pollinations-provider';
+import type {
+  VideoProvider,
+  VideoGenerationRequest,
+  VideoGenerationResponse,
+  VideoProviderConfig,
+  VideoGenerationProvider,
+} from './types';
 
 export class VideoGenerationRegistry {
   private providers: Map<string, VideoGenerationProvider> = new Map()
@@ -167,15 +97,16 @@ export class VideoGenerationRegistry {
 }
 
 // Video generation capabilities and presets
-export const VIDEO_QUALITY_PRESETS: Record<string, { 
-  resolution: string; 
-  bitrate?: string; 
-  fps?: number 
+export const VIDEO_QUALITY_PRESETS: Record<string, {
+  resolution: string;
+  bitrate?: string;
+  fps?: number;
+  duration?: number;
 }> = {
-  low: { resolution: '512x512', bitrate: '4M', fps: 24 },
-  medium: { resolution: '768x768', bitrate: '8M', fps: 30 },
-  high: { resolution: '1024x1024', bitrate: '16M', fps: 30 },
-  ultra: { resolution: '1792x1024', bitrate: '32M', fps: 60 }
+  low: { resolution: '512x512', bitrate: '4M', fps: 24, duration: 5 },
+  medium: { resolution: '768x768', bitrate: '8M', fps: 30, duration: 10 },
+  high: { resolution: '1024x1024', bitrate: '16M', fps: 30, duration: 15 },
+  ultra: { resolution: '1792x1024', bitrate: '32M', fps: 60, duration: 20 }
 }
 
 export const VIDEO_ASPECT_RATIOS = [
@@ -672,30 +603,47 @@ class VideoGenerationService {
   }
 }
 
+
 // Export provider classes
 export { VercelVideoProvider } from './providers/vercel-provider';
 export { GoogleVideoProvider } from './providers/google-provider';
 
-// Singleton registry instance
-export const videoGenerationRegistry = new VideoGenerationRegistry();
+// Singleton registry instance and getter function
+let defaultRegistry: VideoGenerationRegistry | null = null;
 
-// Initialize registry with available providers
-videoGenerationRegistry.register(new VercelVideoProvider());
-videoGenerationRegistry.register(new GoogleVideoProvider());
-
-// Initialize with environment variables
-if (typeof process !== 'undefined') {
-  videoGenerationRegistry.initialize({
-    vercel: {
-      apiKey: process.env.VERCEL_API_KEY,
-      baseURL: process.env.VERCEL_BASE_URL
-    },
-    google: {
-      apiKey: process.env.GEMINI_API_KEY,
-      baseURL: process.env.GEMINI_BASE_URL
-    }
-  });
+  export function getVideoGenerationRegistry(): VideoGenerationRegistry {
+    if (!defaultRegistry) {
+      defaultRegistry = new VideoGenerationRegistry();
+      // Initialize registry with available providers
+      defaultRegistry.register(new VercelVideoProvider());
+      defaultRegistry.register(new GoogleVideoProvider());
+      defaultRegistry.register(new PollinationsVideoProvider());
+      
+      // Initialize with environment variables
+      if (typeof process !== 'undefined') {
+        defaultRegistry.initialize({
+          vercel: {
+            apiKey: process.env.VERCEL_API_KEY,
+            baseURL: process.env.VERCEL_BASE_URL
+          },
+          google: {
+            apiKey: process.env.GEMINI_API_KEY,
+            baseURL: process.env.GEMINI_BASE_URL
+          },
+          pollinations: {
+            apiKey: process.env.POLLINATIONS_API_KEY,
+            baseURL: process.env.POLLINATIONS_BASE_URL
+          }
+        });
+      }
+  }
+  return defaultRegistry;
 }
+
+// Export singleton instance for convenience
+export const videoGenerationRegistry = getVideoGenerationRegistry();
+
+
 
 // Export utility functions for convenience
 export function getVideoProviderModels(providerId: string): Array<{ 
@@ -751,6 +699,3 @@ export function getVideoAspectRatios(): typeof VIDEO_ASPECT_RATIOS {
 export function getVideoQualityPresets(): typeof VIDEO_QUALITY_PRESETS {
   return VIDEO_QUALITY_PRESETS;
 }
-
-// Export registry for advanced usage
-export { videoGenerationRegistry };

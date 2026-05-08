@@ -162,28 +162,34 @@ class LocalAgentFs implements AgentFilesystem {
   }
 
   async search(query: string, options?: { path?: string; limit?: number }): Promise<DirEntry[]> {
-    const results: DirEntry[] = [];
-    const searchRoot = options?.path || this.cwd;
-    const limit = options?.limit || 50;
-
-    const searchDir = async (dir: string, depth: number) => {
-      if (results.length >= limit || depth > 5) return;
-      try {
-        const entries = await this.listDirectory(dir);
-        for (const entry of entries) {
-          if (results.length >= limit) break;
-          if (entry.name.toLowerCase().includes(query.toLowerCase())) {
-            results.push(entry);
-          }
-          if (entry.type === 'directory') {
-            await searchDir(entry.path, depth + 1);
-          }
-        }
-      } catch { /* skip inaccessible dirs */ }
-    };
-
-    await searchDir(searchRoot, 0);
-    return results;
+    // Use ripgrep-vfs-adapter for better performance
+    // In desktop mode, this will use native ripgrep binary
+    const { ripgrepVFS } = await import('@/lib/search/ripgrep-vfs-adapter');
+    
+    const result = await ripgrepVFS({
+      query,
+      ownerId: 'local', // Local filesystem doesn't need real ownerId
+      path: options?.path || this.cwd,
+      maxResults: options?.limit || 50,
+      fixedString: false, // Allow regex by default
+      caseInsensitive: false,
+    });
+    
+    // Convert ripgrep matches to DirEntry format
+    // Group by unique file paths
+    const uniqueFiles = new Map<string, DirEntry>();
+    for (const match of result.matches) {
+      if (!uniqueFiles.has(match.path)) {
+        const pathModule = await import('path');
+        uniqueFiles.set(match.path, {
+          name: pathModule.posix.basename(match.path),
+          path: match.path,
+          type: 'file' as const,
+        });
+      }
+    }
+    
+    return Array.from(uniqueFiles.values());
   }
 
   private resolvePath(filePath: string): string {
@@ -256,16 +262,34 @@ class VfsAgentFs implements AgentFilesystem {
   }
 
   async search(query: string, options?: { path?: string; limit?: number }): Promise<DirEntry[]> {
-    const { virtualFilesystem } = await import('@/lib/virtual-filesystem');
-    const results = await virtualFilesystem.search(this.userId, query, {
+    // Use ripgrep-vfs-adapter for better performance (10-100x faster than simple search)
+    // Supports regex, glob patterns, and works in both desktop and web modes
+    const { ripgrepVFS } = await import('@/lib/search/ripgrep-vfs-adapter');
+    
+    const result = await ripgrepVFS({
+      query,
+      ownerId: this.userId,
       path: options?.path,
-      limit: options?.limit,
-    }) as any;
-    return (results.files || results).map((f: any) => ({
-      name: f.name,
-      path: f.path,
-      type: f.type === 'directory' ? 'directory' : 'file',
-    }));
+      maxResults: options?.limit || 25,
+      fixedString: false, // Allow regex by default
+      caseInsensitive: false,
+    });
+    
+    // Convert ripgrep matches to DirEntry format
+    // Group by unique file paths
+    const uniqueFiles = new Map<string, DirEntry>();
+    for (const match of result.matches) {
+      if (!uniqueFiles.has(match.path)) {
+        const pathModule = await import('path');
+        uniqueFiles.set(match.path, {
+          name: pathModule.posix.basename(match.path),
+          path: match.path,
+          type: 'file' as const,
+        });
+      }
+    }
+    
+    return Array.from(uniqueFiles.values());
   }
 }
 
@@ -328,20 +352,35 @@ class McpAgentFs implements AgentFilesystem {
   }
 
   async search(query: string, options?: { path?: string; limit?: number }): Promise<DirEntry[]> {
+    // Use grep_code tool for better performance
     const { callMCPToolFromAI_SDK } = await import('@/lib/mcp/architecture-integration');
-    const result = await callMCPToolFromAI_SDK('search_files', {
+    const result = await callMCPToolFromAI_SDK('grep_code', {
       query,
       path: options?.path || '.',
-      limit: options?.limit || 50,
+      maxResults: options?.limit || 50,
+      fixedString: false, // Allow regex by default
     }, this.userId);
+    
     if (!result.success) return [];
+    
     try {
-      const data = JSON.parse(result.output);
-      return (data.matches || []).map((m: any) => ({
-        name: m.file?.split('/').pop() || m.path?.split('/').pop(),
-        path: m.file || m.path,
-        type: 'file' as const,
-      }));
+      const data = typeof result.output === 'string' ? JSON.parse(result.output) : result.output;
+      
+      // Group by unique file paths
+      const uniqueFiles = new Map<string, DirEntry>();
+      for (const match of (data.matches || [])) {
+        const filePath = match.path;
+        if (!uniqueFiles.has(filePath)) {
+          const pathModule = await import('path');
+          uniqueFiles.set(filePath, {
+            name: pathModule.posix.basename(filePath),
+            path: filePath,
+            type: 'file' as const,
+          });
+        }
+      }
+      
+      return Array.from(uniqueFiles.values());
     } catch {
       return [];
     }

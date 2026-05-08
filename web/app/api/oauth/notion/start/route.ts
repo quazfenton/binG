@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 
+
+
 export async function GET() {
   const clientId = process.env.NOTION_CLIENT_ID;
   const redirectUri = process.env.NOTION_REDIRECT_URI;

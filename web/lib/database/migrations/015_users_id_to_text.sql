@@ -12,6 +12,10 @@ PRAGMA foreign_keys = OFF;
 
 BEGIN TRANSACTION;
 
+-- 0. Drop dependent views BEFORE table swap (SQLite blocks DROP TABLE
+--    when a view references its columns; we recreate the view at the end).
+DROP VIEW IF EXISTS user_stats;
+
 -- 1. Create new table with TEXT primary key
 CREATE TABLE users_new (
     id TEXT PRIMARY KEY,
@@ -69,6 +73,20 @@ CREATE INDEX idx_users_email ON users(email);
 CREATE INDEX idx_users_username ON users(username);
 CREATE INDEX idx_users_active ON users(is_active);
 CREATE INDEX idx_users_email_verification_token_hash ON users(email_verification_token_hash);
+
+-- 5. Recreate dependent views after the swap so they bind to the new users table.
+CREATE VIEW IF NOT EXISTS user_stats AS
+SELECT
+    u.id,
+    u.email,
+    u.username,
+    u.subscription_tier,
+    (SELECT COUNT(DISTINCT c2.id) FROM conversations c2 WHERE c2.user_id = u.id) AS total_conversations,
+    (SELECT COUNT(*) FROM conversations c2 JOIN messages m2 ON c2.id = m2.conversation_id WHERE c2.user_id = u.id) AS total_messages,
+    COALESCE((SELECT SUM(ul2.tokens_used) FROM usage_logs ul2 WHERE ul2.user_id = u.id), 0) AS total_tokens_used,
+    COALESCE((SELECT SUM(ul2.cost_usd) FROM usage_logs ul2 WHERE ul2.user_id = u.id), 0) AS total_cost_usd,
+    u.created_at AS user_created_at
+FROM users u;
 
 COMMIT;
 

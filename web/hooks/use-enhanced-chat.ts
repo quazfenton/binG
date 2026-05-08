@@ -3,6 +3,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { streamingErrorHandler } from '@/lib/streaming/streaming-error-handler';
 import { createNDJSONParser } from '@/lib/utils/ndjson-parser';
+import { enhancedBufferManager } from '@/lib/streaming/enhanced-buffer-manager';
 import type { Message } from '@/types';
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import { buildApiHeaders } from '@/lib/utils';
@@ -306,6 +307,72 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
     }, 50);
   }, [inputQueue]);
 
+  // Helper function to submit with a specific prompt (avoids race condition with setInput)
+  const submitWithPrompt = useCallback(async (prompt: string) => {
+    if (!prompt.trim()) {
+      return;
+    }
+
+    // Reset streaming speaker if enabled
+    if (voiceService.getSettings().autoSpeakStream) {
+      streamingSpeaker.reset();
+    }
+
+    // Queue input if already loading (streaming response in progress)
+    if (isLoading) {
+      const queuedInput = prompt.trim();
+      console.log('[InputQueue] Queueing input (stream in progress):', {
+        queueLength: inputQueue.length + 1,
+        inputPreview: queuedInput.substring(0, 50),
+      });
+      setInputQueue(prev => [...prev, queuedInput]);
+      return;
+    }
+
+    const userMessage: Message = {
+      id: `user-${Date.now()}`,
+      role: 'user',
+      content: prompt.trim(),
+    };
+
+    const assistantMessage: Message = {
+      id: `assistant-${Date.now()}`,
+      role: 'assistant',
+      content: '',
+    };
+
+    // Add user message and prepare assistant message
+    setMessages(prev => [...prev, userMessage, assistantMessage]);
+    setIsLoading(true);
+    setError(undefined);
+
+    // Store reference to current assistant message
+    currentMessageRef.current = assistantMessage;
+
+    // Create abort controller for this request
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+
+    // Call the streaming handler with the prompt
+    const response = await fetch(options.api, {
+      method: 'POST',
+      headers: buildRequestHeaders(),
+      credentials: 'include',
+      body: JSON.stringify({
+        messages: [...messagesRef.current, userMessage],
+        ...(typeof options.body === 'function' ? options.body() : options.body || {}),
+      }),
+      signal: abortController.signal,
+    });
+
+    if (!response.ok || !response.body) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    // Call handleStreamingResponse with the response body
+    await handleStreamingResponse(response.body, assistantMessage, abortController);
+  }, [isLoading, inputQueue, messagesRef, options, voiceService, setError, setMessages, setIsLoading, buildRequestHeaders]);
+
   const handleSubmit = useCallback(async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
 
@@ -549,11 +616,11 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
     }
   }, [buildRequestHeaders, input, isLoading, options]);
 
-  const handleStreamingResponse = async (
+  async function handleStreamingResponse(
     body: ReadableStream<Uint8Array>,
     assistantMessage: Message,
     abortController: AbortController
-  ): Promise<void> => {
+  ): Promise<void> {
     const reader = body.getReader();
     const decoder = new TextDecoder();
     let accumulatedContent = '';
@@ -588,6 +655,29 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
       }
     }, 180000); // 3 minute timeout
 
+    // Set up enhanced buffer manager for smooth rendering
+    const sessionId = assistantMessage.id;
+    enhancedBufferManager.createSession(sessionId);
+
+    // Listen for render frames from buffer manager
+    const onRender = (frame: { sessionId: string; content: string; isComplete: boolean }) => {
+      if (frame.sessionId !== sessionId) return;
+      
+      accumulatedContent += frame.content;
+      setMessages(prev => prev.map(msg =>
+        msg.id === assistantMessage.id
+          ? { ...msg, content: accumulatedContent }
+          : msg
+      ));
+
+      // Feed to streaming speaker if enabled
+      if (voiceService.getSettings().autoSpeakStream) {
+        streamingSpeaker.feed(frame.content);
+      }
+    };
+
+    enhancedBufferManager.on('render', onRender);
+
     // Buffer for accumulating partial SSE chunks across boundaries
     let sseBuffer = '';
 
@@ -598,10 +688,12 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
         const { done, value } = await reader.read();
 
         if (done) {
+          enhancedBufferManager.completeSession(sessionId);
           break;
         }
 
         if (abortController.signal.aborted) {
+          enhancedBufferManager.destroySession(sessionId);
           break;
         }
 
@@ -683,19 +775,8 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                 case 'token':
                 case 'data':
                   if (eventData.content) {
-                    accumulatedContent += eventData.content;
-
-                    // Update the assistant message in real-time
-                    setMessages(prev => prev.map(msg =>
-                      msg.id === assistantMessage.id
-                        ? { ...msg, content: accumulatedContent }
-                        : msg
-                    ));
-
-                    // Feed to streaming speaker if enabled
-                    if (voiceService.getSettings().autoSpeakStream) {
-                      streamingSpeaker.feed(accumulatedContent);
-                    }
+                    // Feed to enhanced buffer manager instead of direct state update
+                    enhancedBufferManager.processChunk(sessionId, eventData.content);
                   }
                   // Update agent status to executing if we're receiving tokens
                   // Use functional update to avoid stale closure
@@ -727,19 +808,8 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   // Note: File edits in primary response are handled server-side via applyFilesystemEditsFromResponse
                   // Client just displays the content - filesystem edits come via separate 'filesystem' event
                   if (eventData.content) {
-                    accumulatedContent += eventData.content;
-
-                    // Update the assistant message in real-time
-                    setMessages(prev => prev.map(msg =>
-                      msg.id === assistantMessage.id
-                        ? { ...msg, content: accumulatedContent }
-                        : msg
-                    ));
-
-                    // Feed to streaming speaker if enabled
-                    if (voiceService.getSettings().autoSpeakStream) {
-                      streamingSpeaker.feed(accumulatedContent);
-                    }
+                    // Feed to enhanced buffer manager
+                    enhancedBufferManager.processChunk(sessionId, eventData.content);
                   }
                   // Update agent status to executing if we're receiving content
                   if (agentStatus === 'thinking') {
@@ -748,6 +818,9 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   break;
 
                 case 'done':
+                  // Force a final buffer flush to ensure accumulatedContent is complete
+                  enhancedBufferManager.completeSession(sessionId);
+
                   // Update message with metadata and content from done event
                   // CRITICAL FIX: Use done event content as PRIMARY (it has the complete content)
                   // accumulatedContent may be incomplete if stream parsing got stuck
@@ -794,23 +867,31 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   ));
                   
                   // CRITICAL FIX: Detect empty responses and trigger re-request
-                  // Empty = no text content AND no tool invocations AND no filesystem edits
+                  // Empty = no text content AND no SUCCESSFUL tool invocations AND no filesystem edits
                   // CRITICAL: Use streamingToolInvocations (local) instead of messagesRef.current
                   // because messagesRef is stale (useEffect hasn't synced when done fires)
-                  const hasToolInvocations = eventData.toolInvocations?.length > 0 ||
-                    eventData.toolCalls?.length > 0 ||
-                    (eventData.messageMetadata?.toolInvocations?.length > 0) ||
-                    streamingToolInvocations.length > 0;  // ← Local tracking, always up-to-date
+                  // FIX: Count only SUCCESSFUL tool invocations - failed ones should trigger retry
+                  const successfulToolInvocations = (eventData.toolInvocations || eventData.toolCalls || eventData.messageMetadata?.toolInvocations || streamingToolInvocations || []).filter(
+                    (inv: any) => inv.result?.success === true
+                  );
+                  const failedToolInvocations = (eventData.toolInvocations || eventData.toolCalls || eventData.messageMetadata?.toolInvocations || streamingToolInvocations || []).filter(
+                    (inv: any) => inv.result?.success === false
+                  );
+                  const hasSuccessfulToolInvocations = successfulToolInvocations.length > 0;
+                  const hasFailedToolInvocations = failedToolInvocations.length > 0;
                   const hasFileSystemEdits = eventData.filesystem?.applied?.length > 0 ||
                     eventData.fileEdits?.length > 0;
-                  const isEmptyResponse = !doneContent.trim() && !hasToolInvocations && !hasFileSystemEdits;
+                  const isEmptyResponse = !doneContent.trim() && !hasSuccessfulToolInvocations && !hasFileSystemEdits;
 
                   if (isEmptyResponse) {
                     console.warn('[Chat] Empty response detected - content, tools, and filesystem edits all missing:', {
                       messageId: assistantMessage.id,
                       doneContentLength: doneContent?.length,
-                      streamingToolInvocationCount: streamingToolInvocations.length,  // ← Log local count
-                      hasToolInvocations,
+                      streamingToolInvocationCount: streamingToolInvocations.length,
+                      successfulToolInvocationCount: successfulToolInvocations.length,
+                      failedToolInvocationCount: failedToolInvocations.length,
+                      hasSuccessfulToolInvocations,
+                      hasFailedToolInvocations,
                       hasFileSystemEdits,
                       provider: eventData.provider || doneMetadata.provider || 'unknown',
                       model: eventData.model || doneMetadata.model || 'unknown',
@@ -863,9 +944,10 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
 
                       // Find the last user message content
                       const currentMessages = messagesRef.current;
-                      const lastUserMsg = currentMessages.findLast(
+                      const userMessages = currentMessages.filter(
                         msg => msg.role === 'user' && msg.id !== assistantMessage.id
                       );
+                      const lastUserMsg = userMessages[userMessages.length - 1];
 
                       if (lastUserMsg?.content) {
                         console.warn(`[Chat] Empty response detected, auto-retrying (attempt ${retryCount + 1}/${maxRetries})`);
@@ -1211,6 +1293,29 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                         } as React.FormEvent<HTMLFormElement>
                       );
                     }, 150);
+                  }
+                  
+                  // Role Redirect: Handle continue=false with planSteps (role handoff)
+                  // When LLM finishes planning and wants to hand off to another role
+                  if (!stepReprompt && doneMetadata?.routing && !doneMetadata.routing.continue) {
+                    const { suggestedRole, planSteps, classification } = doneMetadata.routing;
+                    
+                    if (planSteps && planSteps.length > 0 && suggestedRole && stepRepromptCount < MAX_STEP_REPROMPTS) {
+                      console.log('[RoleRedirect] Role handoff detected', {
+                        suggestedRole,
+                        planStepsCount: planSteps.length,
+                        classification,
+                        primaryRole: doneMetadata.routing.primaryRole,
+                      });
+                      
+                      const rolePrompt = `[ROLE_REDIRECT]\nTarget Role: ${suggestedRole}\nClassification: ${classification}\n\nYour task: Execute the following planned steps.\n\nAvailable steps:\n${planSteps.map((s: any, i: number) => `${i+1}. ${s.step || s} (${s.tool || 'unspecified'})`).join('\n')}\n\nBegin execution with step 1. Use the appropriate tools for each step.`;
+                      
+                      stepRepromptCountRef.current++;
+                      setTimeout(() => {
+                        if (!isMountedRef.current) return;
+                        submitWithPrompt(rolePrompt);
+                      }, 150);
+                    }
                   }
                   
                   return;
@@ -2191,6 +2296,8 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
         throw streamError;
       }
     } finally {
+      // Clean up buffer-manager listener to prevent duplicate registrations
+      enhancedBufferManager.off('render', onRender);
       reader.releaseLock();
       abortControllerRef.current = null;
     }
@@ -2381,8 +2488,8 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
           }
         }
       } finally {
-      reader.releaseLock();
-    }
+        reader.releaseLock();
+      }
     
     // If we reach here without a 'done' event
     clearTimeout(timeoutId);

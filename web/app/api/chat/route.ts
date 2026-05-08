@@ -16,25 +16,28 @@ import { ShadowCommitManager } from '@/lib/orchestra/stateful-agent/commit/shado
 import { extractSessionIdFromPath, resolveScopedPath as resolveScopeUtil, sanitizeScopePath, extractScopePath, normalizeSessionId } from '@/lib/virtual-filesystem/scope-utils';
 import { createNDJSONParser } from '@/lib/utils/ndjson-parser';
 import { streamStateManager } from '@/lib/streaming/stream-state-manager';
-import { notifyStreamComplete } from '@/lib/streaming/stream-control-handler';
+import { notifyStreamComplete, notifyNeedMoreTurns } from '@/lib/streaming/stream-control-handler';
 import type { LLMMessage, StreamingResponse } from "@/lib/chat/llm-providers";
 import { checkRateLimit } from '@/lib/middleware/rate-limiter';
 import { createFilesystemTools, createAgentLoop } from '@/lib/orchestra/mastra';
-import { executeV2Task, executeV2TaskStreaming } from '@bing/shared/agent/v2-executor';
+import { 
+  executeV2Task, 
+  executeV2TaskStreaming, 
+  workforceManager, 
+  createTaskClassifier as createTaskClassifierShared,
+  SYSTEM_PROMPTS,
+  VFS_FILE_EDITING_TOOL_PROMPT,
+  generateDynamicInjection,
+  getOrchestrationModeFromRequest,
+  executeWithOrchestrationMode
+} from '@bing/shared/agent';
 import { processUnifiedAgentRequest, type UnifiedAgentConfig } from '@/lib/orchestra/unified-agent-service';
+import { checkProviderHealth } from '@/lib/orchestra/provider-health';
 import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp';
-import { workforceManager } from '@bing/shared/agent/workforce-manager';
-import { createTaskClassifier as createTaskClassifierShared } from '@bing/shared/agent/task-classifier';
-import { VFS_FILE_EDITING_TOOL_PROMPT } from '@bing/shared/agent/system-prompts';
-import { generateDynamicInjection } from '@bing/shared/agent/system-prompts-dynamic';
 import { mem0Search, buildMem0SystemPrompt, isMem0Configured, mem0Add, prewarmMem0Cache } from '@/lib/powers/mem0-power';
 import { createSSEEmitter, SSE_RESPONSE_HEADERS, SSE_EVENT_TYPES } from '@/lib/streaming/sse-event-schema';
-// Lazy imports — avoid 'ws' module resolution during instrumentation context
-// import { streamStateManager } from '@/lib/streaming/stream-state-manager';
-// import { notifyNeedMoreTurns, notifyStreamComplete } from '@/lib/streaming/stream-control-handler';
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import { getRecentMcpFileEdits, clearRecentMcpFileEdits } from '@/lib/virtual-filesystem/file-events';
-import { getOrchestrationModeFromRequest, executeWithOrchestrationMode } from '@bing/shared/agent/modular';
 import {
   parseFilesystemResponse,
   extractAndSanitize,
@@ -60,7 +63,6 @@ import {
 import { applyPromptModifiers, getPreset, PROMPT_PRESETS, generateDebugHeaderValue, emitTelemetryEvent, type PromptParameters } from '@bing/shared/agent/prompt-parameters';
 
 // Force Node.js runtime for Daytona SDK compatibility
-export const runtime = 'nodejs';
 
 // Build-time compilation for faster cold starts
 // Route code is pre-compiled at build time, but executes dynamically per-request
@@ -120,7 +122,12 @@ const WEAK_CODE_PATTERNS = WEAK_CODE_KEYWORDS.map(
 // Task classifier cache — initialized lazily to avoid blocking module load
 let _taskClassifierCache: ReturnType<typeof createTaskClassifierShared> | null = null;
 
-function getTaskClassifier() {
+function getTaskClassifier(requestBody: any) {
+  if (process.env.ENABLE_TASK_CLASSIFIER !== 'true') return null;
+
+  // Use current request's provider to avoid defaulting to OpenAI
+  const provider = requestBody?.provider || process.env.DEFAULT_PROVIDER || 'mistral';
+  
   if (!_taskClassifierCache) {
     _taskClassifierCache = createTaskClassifierShared({
       simpleThreshold: parseFloat(process.env.TASK_CLASSIFIER_SIMPLE_THRESHOLD || '0.3'),
@@ -164,7 +171,10 @@ async function classifyRequest(
   }
 
   try {
-    const classifier = getTaskClassifier();
+    const classifier = getTaskClassifier({ provider: process.env.DEFAULT_PROVIDER || 'mistral' });
+    if (!classifier) {
+      throw new Error('Task classifier disabled');
+    }
     const result = await classifier.classify(content, {
       projectSize: process.env.PROJECT_SIZE as any,
     });
@@ -1129,6 +1139,19 @@ const config: UnifiedAgentConfig = {
       // Pass user-selected provider and model to unified agent
       provider,
       model: normalizedModel,
+      // Engine override: lets the user pick v1-api vs v2-cli/http-sdk/container
+      // independently of orchestration mode. Same model name (e.g.
+      // 'google/gemini-3-flash-preview') is honored on both sides — V1 routes
+      // through llm-providers; V2 passes it as `--model` / SDK init / env.
+      engine: (() => {
+        const headerEngine = request.headers.get('x-agent-engine');
+        const bodyEngine = (body as any)?.engine || (body as any)?.architecture;
+        const candidate = (headerEngine || bodyEngine || '').toString().trim();
+        if (candidate === 'v1-api' || candidate === 'v2-cli' || candidate === 'v2-http-sdk' || candidate === 'v2-container') {
+          return candidate;
+        }
+        return undefined;
+      })(),
     };
 
     const tools = await getMCPToolsForAI_SDK(authenticatedUserId, task);
@@ -1182,12 +1205,55 @@ const config: UnifiedAgentConfig = {
 
             try {
               sendStep('Start agentic pipeline', 'started');
-              config.onStreamChunk = (chunk: string) => {
-                // Emit token as before
-                emit(SSE_EVENT_TYPES.TOKEN, { content: chunk, timestamp: Date.now() });
+              // Track whether we've crossed into a [ROLE_SELECT] marker block.
+              // Once we have, suppress further token emissions so the user
+              // never sees the raw routing JSON (or any simulated multi-turn
+              // content the model emits after it). The full content is still
+              // captured server-side for parsing in unified-agent-service.
+              let roleSelectMarkerSeen = false;
+              let charsEmittedSafely = 0; // count of bytes from buffer already emitted
+              const ROLE_SELECT_MARKERS = ['[ROLE_SELECT]', '[ROUTING_METADATA]'];
 
-                // Progressive file edit detection
+              config.onStreamChunk = (chunk: string) => {
+                const previousLen = streamingContentBuffer.length;
                 streamingContentBuffer += chunk;
+
+                if (!roleSelectMarkerSeen) {
+                  // Search for marker in the full buffer (it may straddle chunk boundaries)
+                  let markerIdx = -1;
+                  for (const m of ROLE_SELECT_MARKERS) {
+                    const idx = streamingContentBuffer.indexOf(m);
+                    if (idx !== -1 && (markerIdx === -1 || idx < markerIdx)) markerIdx = idx;
+                  }
+
+                  if (markerIdx !== -1) {
+                    // Emit only the safe portion (before the marker), then suppress
+                    if (markerIdx > charsEmittedSafely) {
+                      const safe = streamingContentBuffer.slice(charsEmittedSafely, markerIdx);
+                      if (safe) emit(SSE_EVENT_TYPES.TOKEN, { content: safe, timestamp: Date.now() });
+                    }
+                    charsEmittedSafely = streamingContentBuffer.length; // skip everything beyond
+                    roleSelectMarkerSeen = true;
+                    chatLogger.debug('[StreamFilter] [ROLE_SELECT] detected, suppressing further tokens', {
+                      markerIdx,
+                      previousLen,
+                    });
+                  } else {
+                    // No marker yet — but the marker could be split across chunks.
+                    // Hold back the trailing N chars in case they form a partial marker.
+                    const ROLE_SELECT_MARKERS = ['[ROLE_SELECT]', '[ROUTING_METADATA]'];
+                    const HOLDBACK = Math.max(...ROLE_SELECT_MARKERS.map((m) => m.length));
+                    const safeUpto = Math.max(charsEmittedSafely, streamingContentBuffer.length - HOLDBACK);
+                    if (safeUpto > charsEmittedSafely) {
+                      const safe = streamingContentBuffer.slice(charsEmittedSafely, safeUpto);
+                      if (safe) emit(SSE_EVENT_TYPES.TOKEN, { content: safe, timestamp: Date.now() });
+                      charsEmittedSafely = safeUpto;
+                    }
+                  }
+                }
+                // else: marker already seen — silently buffer; do not emit tokens
+
+                // Progressive file edit detection (still over full buffer)
                 const newFileEdits = extractIncrementalFileEdits(streamingContentBuffer, fileEditParserState);
 
                 // Filter out invalid paths and empty content to prevent UI polling loops
@@ -1259,6 +1325,15 @@ const config: UnifiedAgentConfig = {
 
               const result = await processUnifiedAgentRequest(config);
               sendStep('Start agentic pipeline', result.success ? 'completed' : 'failed');
+
+              // Flush any holdback chars that were withheld for partial-marker detection
+              // (only when no [ROLE_SELECT] marker was seen). Without this, the last
+              // ~16 chars of a clean response would be silently dropped from the UI.
+              if (!roleSelectMarkerSeen && charsEmittedSafely < streamingContentBuffer.length) {
+                const flush = streamingContentBuffer.slice(charsEmittedSafely);
+                if (flush) emit(SSE_EVENT_TYPES.TOKEN, { content: flush, timestamp: Date.now() });
+                charsEmittedSafely = streamingContentBuffer.length;
+              }
 
               // FIX: Final parse after stream completes to catch any remaining edits
               // The closing >>> may have arrived in the last chunk
@@ -1556,9 +1631,16 @@ const config: UnifiedAgentConfig = {
                 }
               }
 
+              // Prefer the server-cleaned response (markers stripped, simulated-turn
+                // truncation applied) over the raw streaming buffer. Falls back to the
+                // buffer only if the server didn't return text (shouldn't happen).
+              const finalContent = (typeof result.response === 'string' && result.response.trim())
+                ? result.response
+                : streamingContentBuffer;
+
               emit(SSE_EVENT_TYPES.DONE, {
                 success: result.success,
-                content: streamingContentBuffer || (typeof result.response === 'string' ? result.response : ''),
+                content: finalContent,
                 messageMetadata: {
                   agent: 'unified',
                   mode: result.mode,
@@ -2349,6 +2431,11 @@ const config: UnifiedAgentConfig = {
           let streamingContentBuffer = '';
           const fileEditParserState = createIncrementalParser();
 
+          // Track whether we've crossed into a [ROLE_SELECT] marker block
+          // This is the second streaming path (unifiedResponse.stream generator)
+          let roleSelectMarkerSeen = false;
+          let charsEmittedSafely = 0; // count of bytes from buffer already emitted
+
           // Track tool invocations for telemetry
           const toolCallTracker = new Map<string, { toolName: string; args?: Record<string, any>; startTime: number }>();
           const completedToolCalls: Array<{
@@ -2444,9 +2531,9 @@ const config: UnifiedAgentConfig = {
                 // Token batching: accumulate tokens and emit every ~50ms to reduce SSE overhead
                 let tokenBuffer = '';
                 let lastTokenEmitTime = Date.now();
-                const TOKEN_EMIT_INTERVAL_MS = 50;  // Batch tokens for 50ms before emitting
+                const TOKEN_EMIT_INTERVAL_MS = 16;  // Reduced to 16ms (~60fps) for smoother streaming
 
-                const emitBufferedTokens = () => {
+                const emitBufferedTokens = async () => {
                   if (tokenBuffer.length > 0) {
                     realEmit('token', {
                       content: tokenBuffer,
@@ -2455,7 +2542,14 @@ const config: UnifiedAgentConfig = {
                     });
                     // Track tokens in stream state (non-fatal if it fails)
                     try {
-                      if (ssm) ssm.appendToken(streamRequestId, tokenBuffer);
+                      if (ssm) {
+                        ssm.appendToken(streamRequestId, tokenBuffer);
+                        // If we hit max tokens, signal need more turns (auto-continue)
+                        const state = ssm.get(streamRequestId);
+                        if (state && state.tokenCount >= state.maxTokens && !state.needsMoreTurns) {
+                          await ssm.signalNeedMoreTurns(streamRequestId, "Max tokens reached, auto-continuing...");
+                        }
+                      }
                     } catch (e: unknown) {
                       // Non-fatal - stream state tracking shouldn't break the main stream
                     }
@@ -2491,11 +2585,48 @@ const config: UnifiedAgentConfig = {
 
                   // Accumulate token content
                   if (streamChunk.content) {
-                    tokenBuffer += streamChunk.content;
-
                     // Progressive file edit detection from streaming content
                     streamingContentBuffer += streamChunk.content;
                     const newFileEdits = extractIncrementalFileEdits(streamingContentBuffer, fileEditParserState);
+
+                    // Track whether we've crossed into a [ROLE_SELECT] marker block
+                    // This is the second streaming path (unifiedResponse.stream generator)
+                    // and needs the same filtering as the first path (config.onStreamChunk)
+                    if (!roleSelectMarkerSeen) {
+                      const ROLE_SELECT_MARKERS = ['[ROLE_SELECT]', '[ROUTING_METADATA]'];
+                      let markerIdx = -1;
+                      for (const m of ROLE_SELECT_MARKERS) {
+                        const idx = streamingContentBuffer.indexOf(m);
+                        if (idx !== -1 && (markerIdx === -1 || idx < markerIdx)) markerIdx = idx;
+                      }
+
+                      if (markerIdx !== -1) {
+                        // Emit only the safe portion (before the marker), then suppress
+                        if (markerIdx > charsEmittedSafely) {
+                          const safe = streamingContentBuffer.slice(charsEmittedSafely, markerIdx);
+                          if (safe) realEmit('token', { content: safe, timestamp: Date.now() });
+                        }
+                        charsEmittedSafely = streamingContentBuffer.length;
+                        roleSelectMarkerSeen = true;
+                        chatLogger.debug('[StreamFilter-LLM-Stream] [ROLE_SELECT] detected, suppressing further tokens', {
+                          markerIdx,
+                        });
+                      } else {
+                        // No marker yet — hold back trailing chars for partial marker detection
+                        const HOLDBACK = 16;
+                        const safeUpto = Math.max(charsEmittedSafely, streamingContentBuffer.length - HOLDBACK);
+                        if (safeUpto > charsEmittedSafely) {
+                          const safe = streamingContentBuffer.slice(charsEmittedSafely, safeUpto);
+                          if (safe) realEmit('token', { content: safe, timestamp: Date.now() });
+                          charsEmittedSafely = safeUpto;
+                        }
+                      }
+                    }
+
+                    // Only add to tokenBuffer if we haven't seen the marker yet
+                    if (!roleSelectMarkerSeen) {
+                      tokenBuffer += streamChunk.content;
+                    }
 
                     // Filter out invalid paths and empty content to prevent UI polling loops
                     for (const edit of newFileEdits) {
@@ -2533,7 +2664,7 @@ const config: UnifiedAgentConfig = {
                     // Emit buffered tokens if interval has passed
                     const now = Date.now();
                     if (now - lastTokenEmitTime >= TOKEN_EMIT_INTERVAL_MS) {
-                      emitBufferedTokens();
+                      await emitBufferedTokens();
                     }
                   }
 
@@ -2938,7 +3069,7 @@ const config: UnifiedAgentConfig = {
                     }
 
                     // Emit any remaining buffered tokens before done event
-                    emitBufferedTokens();
+                    await emitBufferedTokens();
 
                     // Update stream state and notify WebSocket control channel (non-fatal)
                     try {
@@ -2971,8 +3102,17 @@ const config: UnifiedAgentConfig = {
                   }
                 }
 
+                // Flush any holdback chars that were withheld for partial-marker detection
+                // (only when no [ROLE_SELECT] marker was seen). Without this, the last
+                // ~16 chars of a clean response would be silently dropped from the UI.
+                if (!roleSelectMarkerSeen && charsEmittedSafely < streamingContentBuffer.length) {
+                  const flush = streamingContentBuffer.slice(charsEmittedSafely);
+                  if (flush) realEmit('token', { content: flush, timestamp: Date.now() });
+                  charsEmittedSafely = streamingContentBuffer.length;
+                }
+
                 // Emit any remaining buffered tokens (in case loop exited without hitting isComplete)
-                emitBufferedTokens();
+                await emitBufferedTokens();
 
                 // SPEC AMPLIFICATION: Trigger after regular LLM streaming completes
                 // Runs AFTER final parse (line ~1684) and FILE_EDIT events (line ~1715)
@@ -3076,7 +3216,7 @@ const config: UnifiedAgentConfig = {
                   undefined,
                   actualProvider,
                   actualModel,
-                  completedToolCalls.length > 0 ? completedToolCalls : undefined,
+                  (completedToolCalls.length > 0 ? completedToolCalls : undefined) as any,
                   streamingContentBuffer.length,
                 ).catch(() => {});
 
@@ -3694,12 +3834,23 @@ const config: UnifiedAgentConfig = {
           }
         };
 
+        // Activity tracking for timeout management
+        let lastActivityTime = Date.now();
+        const ACTIVITY_TIMEOUT_MS = 30 * 60 * 1000;
+        const updateActivity = () => {
+          lastActivityTime = Date.now();
+        };
+
         const readableStream = new ReadableStream({
           async start(controller) {
             // Set up real emit that writes directly to stream controller
             // Keep reference for background refinement to use
             const realEmit = (eventType: string, data: any) => {
               if (request.signal?.aborted || streamClosed) return;
+              
+              // Update activity timestamp on any emission
+              updateActivity();
+              
               const eventStr = `event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`;
               controller.enqueue(encoderRef.encode(eventStr));
               chunkCount++;
@@ -3907,16 +4058,25 @@ const config: UnifiedAgentConfig = {
               // Stream stays open for background refinement events
               // The emit function will close the stream when refinement completes
               // Add timeout fallback in case refinement never completes
-              refinementTimeoutId = setTimeout(() => {
-                if (!streamClosed) {
-                  chatLogger.warn('Background refinement timeout, closing stream', {
-                    requestId: streamRequestId
+              // EXTENDED: 30 minutes to allow long file editing sessions (87 tool calls for 27 files)
+              // Activity-based: timeout only triggers if no activity for 30 minutes
+              // Periodic check for inactivity (every 30 seconds)
+              const activityCheckInterval = setInterval(() => {
+                const inactiveTime = Date.now() - lastActivityTime;
+                if (inactiveTime >= ACTIVITY_TIMEOUT_MS && !streamClosed) {
+                  chatLogger.warn('Background refinement timeout due to inactivity', {
+                    requestId: streamRequestId,
+                    inactiveTimeMs: inactiveTime
                   });
                   streamClosed = true;
                   controller.close();
                   cleanup();
+                  clearInterval(activityCheckInterval);
                 }
-              }, 180000); // 180 second timeout for refinement (matches DAG time budget)
+              }, 30000); // Check every 30 seconds
+              
+              // Store interval ID for cleanup
+              refinementTimeoutId = activityCheckInterval as any;
 
             } catch (error) {
               const streamDuration = Date.now() - streamStartTime;
@@ -5843,3 +6003,4 @@ export async function OPTIONS(request: NextRequest) {
     },
   });
 }
+

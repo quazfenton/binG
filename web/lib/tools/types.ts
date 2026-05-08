@@ -18,7 +18,7 @@
 import { z } from 'zod';
 
 // Re-use existing category types from capabilities.ts for compatibility
-export type CapabilityCategory = 'file' | 'sandbox' | 'web' | 'repo' | 'memory' | 'automation';
+export type CapabilityCategory = 'file' | 'sandbox' | 'web' | 'repo' | 'memory' | 'automation' | 'desktop';
 export type ToolLatency = 'low' | 'medium' | 'high';
 export type ToolCost = 'low' | 'medium' | 'high';
 
@@ -90,7 +90,7 @@ export const PowerDefinitionSchema = z.object({
   /** Detailed description */
   description: z.string().min(1),
   /** Category for grouping */
-  category: z.enum(['file', 'sandbox', 'web', 'repo', 'memory', 'automation']).optional(),
+  category: z.enum(['file', 'sandbox', 'web', 'repo', 'memory', 'automation', 'desktop']).optional(),
   /** Source of the power */
   source: z.enum(['core', 'local', 'user', 'marketplace']),
   /** Runtime environment + routing info */

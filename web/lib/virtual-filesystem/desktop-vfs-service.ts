@@ -78,6 +78,8 @@ export class DesktopVFSService {
   private pendingFileChanges: Map<string, { content: string; timestamp: number }> = new Map<string, { content: string; timestamp: number }>();  // path -> {content, timestamp}
   private coalescingTimer: NodeJS.Timeout | null = null;
   private readonly COALESCING_WINDOW_MS = 500;  // Window to coalesce changes
+  private readonly DELETE_DEDUP_WINDOW_MS = 1000; // Window to dedup duplicate delete events
+  private readonly DEBOUNCE_DELAY_MS = 300; // Delay for per-session debounce sync
 
   constructor(vfs: VirtualFilesystemService, config: DesktopVFSConfig) {
     this.vfs = vfs;

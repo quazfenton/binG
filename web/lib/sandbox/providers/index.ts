@@ -14,7 +14,7 @@ import { E2BProvider } from './e2b-provider'
 import { DaytonaProvider } from './daytona-provider'
 import { RunloopProvider } from './runloop-provider'
 import { E2BDesktopProvider, desktopSessionManager, type DesktopSandboxHandle as DesktopHandle } from '../../computer/e2b-desktop-provider-enhanced'
-import { CircuitBreaker, providerCircuitBreakers, createCircuitBreakerWithMetrics } from '@/lib/utils/circuit-breaker'
+import { CircuitBreaker, providerCircuitBreakers, createCircuitBreakerWithMetrics, getCircuitStateName } from '@/lib/utils/circuit-breaker'
 import { sandboxMetrics } from '@/lib/backend/metrics'
 import { createLogger } from '@/lib/utils/logger'
 import { isDesktopMode } from '@bing/platform/env'
@@ -542,7 +542,7 @@ export async function getSandboxProvider(type?: SandboxProviderType): Promise<Sa
   // Check circuit breaker before attempting initialization
   if (!circuitBreaker.canExecute()) {
     const stats = circuitBreaker.getStats();
-    log.warn(`Provider ${providerType} circuit breaker ${stats.state}`)
+    log.warn(`Provider ${providerType} circuit breaker ${getCircuitStateName(stats.state)}`)
     sandboxMetrics.providerInitTotal.inc({ provider: providerType, status: 'circuit_open' });
     throw new Error(
       `Provider ${providerType} is unavailable (circuit breaker ${stats.state}). ` +

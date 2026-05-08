@@ -113,7 +113,7 @@ describe('Mem0 Circuit Breaker', () => {
     const { getMem0CircuitState, resetMem0CircuitBreaker } = await import('../mem0-power');
     resetMem0CircuitBreaker();
     const state = getMem0CircuitState();
-    expect(state.state).toBe('CLOSED');
+    expect(state.state).toBe('HEALTHY');
     expect(state.recentFailures).toBe(0);
     expect(state.reopensAt).toBeNull();
   });
@@ -121,7 +121,7 @@ describe('Mem0 Circuit Breaker', () => {
   it('closes the breaker after reset', async () => {
     const { getMem0CircuitState, resetMem0CircuitBreaker } = await import('../mem0-power');
     resetMem0CircuitBreaker();
-    expect(getMem0CircuitState().state).toBe('CLOSED');
+    expect(getMem0CircuitState().state).toBe('HEALTHY');
   });
 
   it('isMem0Configured returns false when API key missing', async () => {

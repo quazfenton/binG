@@ -1,170 +1,96 @@
-import { NextRequest, NextResponse } from "next/server";
-import { fastAgentService, type FastAgentRequest } from "@/lib/chat/fast-agent-service";
-import type { LLMMessage } from "@/lib/chat/llm-providers";
-import { generateSecureId } from '@/lib/utils';
-import { resolveRequestAuth } from "@/lib/auth/request-auth";
+import { NextRequest, NextResponse } from 'next/server';
 
-/**
- * Dedicated Fast-Agent endpoint
- * Separate from main chat for direct Fast-Agent access
- * 
- * SECURITY FIX: Added authentication requirement
- */
+import { GET as healthGET } from './health/gateway';
+import { POST as statefulAgentPOST } from './stateful-agent/gateway';
+import { POST as interruptPOST } from './stateful-agent/interrupt/gateway';
+import { POST as unifiedAgentPOST } from './unified-agent/gateway';
+import { POST as cloudOffloadPOST } from './v2/cloud/offload/gateway';
+import { GET as cloudAgentGET, POST as cloudAgentPOST, DELETE as cloudAgentDELETE } from './v2/cloud/[agentId]/gateway';
+import { POST as v2ExecutePOST } from './v2/execute/gateway';
+import { GET as v2SessionGET, POST as v2SessionPOST, DELETE as v2SessionDELETE } from './v2/session/gateway';
+import { POST as v2SyncPOST } from './v2/sync/gateway';
+import { POST as v2WorkforcePOST } from './v2/workforce/gateway';
+import { GET as workflowsGET, POST as workflowsPOST } from './workflows/gateway';
 
-export async function POST(request: NextRequest) {
-  try {
-    console.log('[Agent API] Fast-Agent direct endpoint called');
-
-    // CRITICAL FIX: Add authentication requirement
-    const authResult = await resolveRequestAuth(request, { allowAnonymous: false });
-    if (!authResult.success || !authResult.userId) {
-      console.warn('[Agent API] Unauthorized access attempt');
-      return NextResponse.json(
-        { error: 'Authentication required. Please log in to use Fast-Agent.' },
-        { status: 401 }
-      );
-    }
-
-    const authenticatedUserId = authResult.userId;
-
-    const body = await request.json();
-    const {
-      messages,
-      provider = 'openrouter',
-      model = 'deepseek/deepseek-r1',
-      temperature = 0.7,
-      maxTokens = 100000,
-      stream = false,
-      apiKeys = {},
-      requestId = generateSecureId('agent')
-    } = body;
-
-    // Validate messages
-    if (!messages || !Array.isArray(messages) || messages.length === 0) {
-      return NextResponse.json(
-        { error: 'Messages array is required and cannot be empty' },
-        { status: 400 }
-      );
-    }
-
-    // Check if Fast-Agent is enabled
-    if (!fastAgentService.isEnabled()) {
-      return NextResponse.json(
-        { error: 'Fast-Agent service is not enabled' },
-        { status: 503 }
-      );
-    }
-
-    // Build request for Fast-Agent - filter out tool messages that Fast-Agent doesn't support
-    const filteredMessages = (messages as LLMMessage[])
-      .filter((m) => m.role === 'user' || m.role === 'assistant' || m.role === 'system')
-      .map((m) => ({
-        role: m.role as 'user' | 'assistant' | 'system',
-        content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
-      }));
-    
-    const fastAgentRequest: FastAgentRequest = {
-      messages: filteredMessages,
-      provider,
-      model,
-      temperature,
-      maxTokens,
-      stream,
-      apiKeys,
-      requestId,
-      userId: authenticatedUserId,
-    };
-
-    console.log('[Agent API] Sending request to Fast-Agent');
-
-    // Check if Fast-Agent can handle this request
-    if (!fastAgentService.shouldHandle(fastAgentRequest)) {
-      return NextResponse.json(
-        { error: 'Fast-Agent cannot handle this request type' },
-        { status: 400 }
-      );
-    }
-
-    // Process request through Fast-Agent
-    const response = await fastAgentService.processRequest(fastAgentRequest);
-
-    // Handle streaming response
-    if (stream) {
-      const streamResponse = fastAgentService.createStreamingResponse(
-        response,
-        requestId
-      );
-
-      return new Response(streamResponse, {
-        headers: {
-          "Content-Type": "text/event-stream",
-          "Cache-Control": "no-cache, no-store, must-revalidate",
-          Pragma: "no-cache",
-          Expires: "0",
-          Connection: "keep-alive",
-          "X-Accel-Buffering": "no",
-          "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type, Authorization",
-        },
-      });
-    }
-
-    // Handle non-streaming response
-    const formattedResponse = fastAgentService.formatResponse(response, requestId);
-
-    return NextResponse.json({
-      success: true,
-      data: formattedResponse,
-      source: 'fast-agent',
-      userId: authenticatedUserId, // Include userId in response for auditing
-      timestamp: new Date().toISOString()
-    });
-
-  } catch (error) {
-    console.error('[Agent API] Error:', error);
-
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-
-    return NextResponse.json(
-      {
-        success: false,
-        error: 'Fast-Agent request failed',
-        details: errorMessage,
-        timestamp: new Date().toISOString()
-      },
-      { status: 500 }
-    );
-  }
-}
-
+// GET /api/agent/health | /api/agent/[agentId] | /api/agent/v2-session | /api/agent/workflows
 export async function GET(request: NextRequest) {
-  try {
-    const isEnabled = fastAgentService.isEnabled();
-    const config = fastAgentService.getConfig();
+  const path = request.nextUrl.pathname;
+  const segments = path.split('/').filter(Boolean);
 
-    return NextResponse.json({
-      enabled: isEnabled,
-      endpoint: config.endpoint,
-      supportedProviders: config.supportedProviders,
-      status: isEnabled ? 'available' : 'disabled',
-      timestamp: new Date().toISOString()
-    });
-  } catch (error) {
-    return NextResponse.json(
-      { error: 'Failed to get Fast-Agent status' },
-      { status: 500 }
-    );
+  if (segments.length === 4 && segments[2] === 'cloud') {
+    return cloudAgentGET(request, { params: Promise.resolve({ agentId: segments[3] }) });
   }
+
+  if (segments.length === 3) {
+    switch (segments[2]) {
+      case 'health': return healthGET(request);
+      case 'v2-session': return v2SessionGET(request);
+      case 'workflows': return workflowsGET(request);
+      default:
+        return NextResponse.json(
+          { error: 'Not found. Use /agent/health|/agent/v2-session|/agent/workflows|/agent/cloud/[agentId]' },
+          { status: 404 }
+        );
+    }
+  }
+
+  return NextResponse.json(
+    { error: 'Not found. Use /agent/health|/agent/v2-session|/agent/workflows|/agent/cloud/[agentId]' },
+    { status: 404 }
+  );
 }
 
-export async function OPTIONS(request: NextRequest) {
-  return new NextResponse(null, {
-    status: 200,
-    headers: {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type, Authorization",
-    },
-  });
+// POST /api/agent/agent | /api/agent/stateful-agent | /api/agent/cloud/offload | /api/agent/cloud/[agentId] | /api/agent/v2-execute | /api/agent/v2-session | /api/agent/v2-sync | /api/agent/v2-workforce | /api/agent/workflows | /api/agent/interrupt | /api/agent/unified-agent
+export async function POST(request: NextRequest) {
+  const path = request.nextUrl.pathname;
+  const segments = path.split('/').filter(Boolean);
+
+  if (segments.length === 4 && segments[2] === 'cloud') {
+    // POST /api/agent/cloud/[agentId]
+    return cloudAgentPOST(request, { params: Promise.resolve({ agentId: segments[3] }) });
+  }
+
+  if (segments.length === 3) {
+    switch (segments[2]) {
+      case 'stateful-agent': return statefulAgentPOST(request);
+      case 'interrupt': return interruptPOST(request);
+      case 'unified-agent': return unifiedAgentPOST(request);
+      case 'cloud-offload': return cloudOffloadPOST(request);
+      case 'v2-execute': return v2ExecutePOST(request);
+      case 'v2-session': return v2SessionPOST(request);
+      case 'v2-sync': return v2SyncPOST(request);
+      case 'v2-workforce': return v2WorkforcePOST(request);
+      case 'workflows': return workflowsPOST(request);
+      default:
+        return NextResponse.json(
+          { error: 'Not found. Use /agent/agent|/agent/stateful-agent|/agent/cloud-offload|/agent/cloud/[agentId]|/agent/v2-execute|/agent/v2-session|/agent/v2-sync|/agent/v2-workforce|/agent/workflows|/agent/interrupt|/agent/unified-agent' },
+          { status: 404 }
+        );
+    }
+  }
+
+  return NextResponse.json(
+    { error: 'Not found. Use /agent/agent|/agent/stateful-agent|/agent/cloud-offload|/agent/cloud/[agentId]|/agent/v2-execute|/agent/v2-session|/agent/v2-sync|/agent/v2-workforce|/agent/workflows|/agent/interrupt|/agent/unified-agent' },
+    { status: 404 }
+  );
+}
+
+// DELETE /api/agent/cloud/[agentId] | /api/agent/v2-session
+export async function DELETE(request: NextRequest) {
+  const path = request.nextUrl.pathname;
+  const segments = path.split('/').filter(Boolean);
+
+  if (segments.length === 4 && segments[2] === 'cloud') {
+    // DELETE /api/agent/cloud/[agentId]
+    return cloudAgentDELETE(request, { params: Promise.resolve({ agentId: segments[3] }) });
+  }
+
+  if (segments.length === 3 && segments[2] === 'v2-session') {
+    return v2SessionDELETE(request);
+  }
+
+  return NextResponse.json(
+    { error: 'Not found. Use /agent/cloud/[agentId]|/agent/v2-session' },
+    { status: 404 }
+  );
 }

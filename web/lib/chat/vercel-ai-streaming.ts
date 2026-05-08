@@ -51,7 +51,7 @@ export interface ToolExecutionContext {
 /**
  * Provider types supported by Vercel AI SDK
  */
-export type VercelProvider = 'openai' | 'anthropic' | 'google' | 'mistral' | 'openrouter';
+export type VercelProvider = 'openai' | 'anthropic' | 'google' | 'mistral' | 'openrouter' | 'vercel';
 
 /**
  * CLI providers that spawn local binaries instead of using API calls.
@@ -264,10 +264,39 @@ const OPENAI_COMPATIBLE_PROVIDERS: Record<string, OpenAICompatibleConfig> = {
     apiKeyEnv: 'LEPTON_API_KEY',
     useChatEndpoint: true,
   },
+  ollama: {
+    baseURL: process.env.OLLAMA_BASE_URL || 'http://localhost:20128/v1',
+    apiKeyEnv: 'QUAZ_API_KEY',
+    useChatEndpoint: true,
+  },
+  kiro: {
+    baseURL: process.env.KIRO_BASE_URL || 'https://kiro.ai/v1',
+    apiKeyEnv: 'QUAZ_API_KEY',
+    useChatEndpoint: true,
+  },
+  aihubmix: {
+    baseURL: process.env.AIHUBMIX_BASE_URL || 'https://aihubmix.com/v1',
+    apiKeyEnv: 'AIHUBMIX_API_KEY',
+    useChatEndpoint: true,
+  },
+  pollinations: {
+    baseURL: process.env.POLLINATIONS_BASE_URL || 'https://text.pollinations.ai/openai',
+    apiKeyEnv: 'POLLINATIONS_API_KEY',
+    useChatEndpoint: true,
+  },
+  zo: {
+    baseURL: process.env.ZO_BASE_URL || 'https://api.zo.ai/v1',
+    apiKeyEnv: 'ZO_API_KEY',
+    useChatEndpoint: true,
+  },
   openrouter: {
     baseURL: process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1',
     apiKeyEnv: 'OPENROUTER_API_KEY',
     useChatEndpoint: true,  // OpenRouter needs Chat Completions format for most models
+  },
+  livekit: {
+    baseURL: process.env.LIVEKIT_BASE_URL || 'https://inference.livekit.io',
+    apiKeyEnv: 'LIVEKIT_API_KEY',
   },
 };
 
@@ -363,7 +392,7 @@ export function getVercelModel(
   }
 
   // Handle OpenAI-compatible providers
-  if (provider !== 'openai' && provider !== 'anthropic' && provider !== 'google' && provider !== 'mistral') {
+  if (provider !== 'openai' && provider !== 'anthropic' && provider !== 'google' && provider !== 'mistral' && provider !== 'vercel') {
     const config = OPENAI_COMPATIBLE_PROVIDERS[provider];
     if (config) {
       const openai = createOpenAI({
@@ -381,9 +410,9 @@ export function getVercelModel(
       baseURL: baseURL || currentEnv.OPENAI_BASE_URL,
     });
     return openai(model);
-  }
+    }
 
-  // Direct Vercel AI SDK providers
+    // Direct Vercel AI SDK providers
   switch (provider) {
     case 'openai': {
       const openai = createOpenAI({
@@ -417,11 +446,14 @@ export function getVercelModel(
     }
 
     case 'vercel': {
+      // CRITICAL: Strip 'vercel:' prefix from model ID - Vercel AI SDK expects just 'xai/grok-3', not 'vercel:xai/grok-3'
+      const cleanModel = model.startsWith('vercel:') ? model.slice(7) : model;
       const openai = createOpenAI({
         apiKey: apiKey || currentEnv.VERCEL_API_KEY,
         baseURL: baseURL || currentEnv.VERCEL_BASE_URL || 'https://api.vercel.com/v1',
       });
-      return openai(model);
+      // Always use chat endpoint for OpenAI-compatible proxies
+      return openai.chat(cleanModel);
     }
 
     default:
@@ -766,13 +798,8 @@ export async function* streamWithVercelAI(
         'gemini-2.0',
       ];
 
-      // Check if current model matches any non-FC model
+      // Check if current model IS in the known good list (not just substring match)
       const modelLower = modelName.toLowerCase();
-      if (nonFCModels.some(m => modelLower.includes(m.toLowerCase()) || m.toLowerCase().includes(modelLower))) {
-        skipTools = true;
-      }
-
-      // CRITICAL FIX: If model is known to support FC, don't strip tools even if SDK reports false
       const isKnownGoodFC = knownGoodFCModels.some(m => modelLower.includes(m.toLowerCase()));
       chatLogger.info('[FC-KNOWN] Checking function calling support', {
         provider,
@@ -781,6 +808,7 @@ export async function* streamWithVercelAI(
         isKnownGoodFC,
         knownGoodFCModels,
       });
+
       if (isKnownGoodFC) {
         chatLogger.info('[FC-KNOWN] Model is known to support function calling', {
           provider,
@@ -806,6 +834,11 @@ export async function* streamWithVercelAI(
           model: modelName,
           action: 'Stripping tools and using text-mode fallback',
         });
+      }
+
+      // CRITICAL: If model is known good for FC, never skip tools regardless of SDK
+      if (isKnownGoodFC) {
+        skipTools = false;
       }
     }
 
@@ -1461,37 +1494,35 @@ export async function* streamWithVercelAI(
       const currentEnv: any = typeof process !== 'undefined' ? process.env : {};
       const fallbackProviderName = currentEnv.DEFAULT_FALLBACK_PROVIDER || 'mistral';
       const fallbackModelName = currentEnv.FAST_MODEL || currentEnv.DEFAULT_MODEL || 'mistral-small-latest';
-      chatLogger.info('Streaming fallback activated', { fallbackProvider: fallbackProviderName, fallbackModel: fallbackModelName });
+
+      chatLogger.info('Streaming fallback activated. Using dynamic provider registry.', { 
+        fallbackProvider: fallbackProviderName, 
+        fallbackModel: fallbackModelName 
+      });
 
       let fallbackModel: any;
       try {
-        const { createMistral } = await import('@ai-sdk/mistral');
-        const { createGoogleGenerativeAI } = await import('@ai-sdk/google');
-        const { createAnthropic } = await import('@ai-sdk/anthropic');
-        const { createOpenAI } = await import('@ai-sdk/openai');
+        // Use the centralized provider registry instead of hardcoded factory calls
+        const { getVercelModel } = await import('./vercel-ai-streaming');
 
-        const providerFactories: Record<string, () => any> = {
-          mistral: () => createMistral({ apiKey: currentEnv.MISTRAL_API_KEY })(fallbackModelName),
-          google: () => createGoogleGenerativeAI({ apiKey: currentEnv.GOOGLE_API_KEY })(fallbackModelName),
-          anthropic: () => createAnthropic({ apiKey: currentEnv.ANTHROPIC_API_KEY })(fallbackModelName),
-          openai: () => createOpenAI({ apiKey: currentEnv.OPENAI_API_KEY })(fallbackModelName),
-        };
+        // Construct the key/URL dynamically using the same logic as the primary request
+        const apiKey = currentEnv[`${fallbackProviderName.toUpperCase()}_API_KEY`];
+        const baseURL = currentEnv[`${fallbackProviderName.toUpperCase()}_BASE_URL`];
 
-        const factory = providerFactories[fallbackProviderName];
-        if (factory) {
-          fallbackModel = factory();
-        } else {
-          // Unknown provider — try OpenAI-compatible format
-          fallbackModel = createOpenAI({
-            apiKey: currentEnv.OPENAI_API_KEY,
-            baseURL: currentEnv.OPENAI_BASE_URL,
-          })(fallbackModelName);
+        fallbackModel = await getVercelModel(
+          fallbackProviderName, 
+          fallbackModelName, 
+          apiKey, 
+          baseURL
+        );
+
+        if (!fallbackModel) {
+          throw new Error(`Failed to initialize fallback provider: ${fallbackProviderName}`);
         }
       } catch (fallbackInitError: any) {
         chatLogger.error('All fallback provider initializations failed', { error: fallbackInitError.message });
         throw error; // Re-throw original error — no viable fallback
       }
-
       // Retry the stream with fallback model
       try {
         // Convert messages for fallback (need to extract system prompt)

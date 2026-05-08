@@ -124,8 +124,8 @@ export function createCompatProvider(providerName: string) {
 
   // Create OpenAI-compatible client with custom baseURL
   const openai = createOpenAI({
-    apiKey: apiKey || 'dummy-key',
-    baseURL: config.baseURL,
+    apiKey: apiKey || currentEnv.OPENAI_API_KEY,
+    baseURL: config.baseURL || currentEnv.OPENAI_BASE_URL,
   });
 
   // Return provider function that handles transformation
@@ -410,12 +410,9 @@ export function getProviderForModel(providerName: string, model: string) {
     };
   }
 
-  // For unknown providers, try OpenAI as fallback
-  const openai = createOpenAI({
-    apiKey: currentEnv.OPENAI_API_KEY,
-    baseURL: currentEnv.OPENAI_BASE_URL,
-  });
-  return openai(model);
+  // Unknown provider
+  chatLogger.error('Unknown provider, no configuration found', { provider: providerName, model });
+  throw new Error(`Unsupported or unknown provider: ${providerName}`);
 }
 
 /**

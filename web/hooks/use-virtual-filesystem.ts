@@ -10,6 +10,7 @@ import type {
   VirtualWorkspaceSnapshot,
 } from '@/lib/virtual-filesystem/filesystem-types';
 import { opfsAdapter, OPFSAdapter } from '@/lib/virtual-filesystem/opfs/opfs-adapter';
+import { indexedDBBackend } from '@/lib/virtual-filesystem/indexeddb-backend';
 import { opfsCore } from '@/lib/virtual-filesystem/opfs/opfs-core';
 import { onFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import { sanitizeExtractedPath } from '@/lib/chat/file-edit-parser';
@@ -343,6 +344,55 @@ export function useVirtualFilesystem(
         return;
       }
 
+      // CRITICAL: Check if user/account changed since last OPFS init.
+      // If new user, clear localStorage + IndexedDB to prevent data leakage between users on shared browser.
+      const LAST_OPFS_KEY = 'opfs:lastOwnerId';
+      const lastOwnerId = localStorage.getItem(LAST_OPFS_KEY);
+      if (lastOwnerId && lastOwnerId !== opfsOwnerId && lastOwnerId !== 'anonymous' && lastOwnerId !== 'anon') {
+        log('OPFS: User changed from', lastOwnerId, 'to', opfsOwnerId, '- clearing local VFS data for security');
+        
+        // Targeted clear of VFS and session-related data to avoid destroying 
+        // unrelated state like auth tokens or UI preferences.
+        const vfsPrefixes = ['opfs:', 'vfs:', 'session:', 'experimental-'];
+        const vfsKeys = ['anonymous_session_id', 'current_composite_session_id', 'current_conversation_id'];
+
+        Object.keys(localStorage).forEach(key => {
+          if (vfsPrefixes.some(p => key.startsWith(p)) || vfsKeys.includes(key)) {
+            // Don't remove the tracker key itself yet
+            if (key !== LAST_OPFS_KEY) {
+              localStorage.removeItem(key);
+            }
+          }
+        });
+
+        Object.keys(sessionStorage).forEach(key => {
+          if (vfsPrefixes.some(p => key.startsWith(p)) || vfsKeys.includes(key)) {
+            sessionStorage.removeItem(key);
+          }
+        });
+
+        // Clear IndexedDB fallback data for previous user
+        // FIX: Only clear if backend is initialized and owner is valid
+        if (typeof window !== 'undefined') {
+          (async () => {
+            try {
+              // Check if backend is initialized before clearing
+              const isInitialized = indexedDBBackend.isInitialized?.() || false;
+              if (!isInitialized) {
+                log('OPFS: Skipping IndexedDB clear - backend not initialized yet');
+                return;
+              }
+              await indexedDBBackend.clear(lastOwnerId);
+              log('OPFS: Cleared IndexedDB data for previous owner:', lastOwnerId);
+            } catch (e) {
+              logWarn('OPFS: Failed to clear IndexedDB (this is OK if backend not initialized):', e);
+            }
+          })();
+        }
+      }
+      localStorage.setItem(LAST_OPFS_KEY, opfsOwnerId);
+
+      // Enable OPFS - will sync from server for the new user's workspace
       opfsAdapter.enable(opfsOwnerId).then(() => {
         log('OPFS enabled successfully for owner:', opfsOwnerId);
       }).catch(err => {

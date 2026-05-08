@@ -52,19 +52,34 @@ export async function notify(title: string, options?: string | NotifyOptions): P
         body: opts.body || '',
         icon: opts.icon,
       });
-
-      if (opts.onClick) {
-        // Tauri notifications don't support click handlers directly
-        // You'd need to set up a Tauri event listener
-      }
     } catch (error) {
       console.error('[Notifications] Failed to show desktop notification:', error);
-      // Fallback to web notification
-      showWebNotification(title, opts);
+      // Fallback to web notification (only if supported)
+      if (isSupported()) {
+        try {
+          await showWebNotification(title, opts);
+        } catch (webError) {
+          console.error('[Notifications] Web notification fallback failed:', webError);
+          // Chain errors to preserve context of original desktop failure
+          const combinedError = new Error(
+            `Desktop notification failed: ${error instanceof Error ? error.message : String(error)}; Web notification fallback failed: ${webError instanceof Error ? webError.message : String(webError)}`,
+            { cause: { desktopError: error, webError } }
+          );
+          throw combinedError;
+        }
+      } else {
+        // Web notifications not supported, throw original desktop error
+        throw error;
+      }
     }
   } else {
     // Web: Browser Notification API
-    showWebNotification(title, opts);
+    try {
+      await showWebNotification(title, opts);
+    } catch (webError) {
+      console.error('[Notifications] Web notification failed:', webError);
+      throw webError;
+    }
   }
 }
 

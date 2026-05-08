@@ -582,7 +582,7 @@ export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string)
       const needsCodeSearch = taskLower.includes('search') || taskLower.includes('find') || taskLower.includes('codebase');
       const needsCodegen = taskLower.includes('generate') || taskLower.includes('create') || taskLower.includes('implement');
       blaxelTools = allBlaxelTools.filter(tool => {
-        const name = tool.function.name.toLowerCase();
+        const name = (tool.function?.name || '').toLowerCase();
         if (name.includes('search') || name.includes('grep')) return needsCodeSearch;
         if (name.includes('codegen') || name.includes('apply') || name.includes('reapply')) return needsCodegen;
         return true;
@@ -609,7 +609,7 @@ export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string)
       const needsWebAutomation = taskLower.includes('browse') || taskLower.includes('web') || taskLower.includes('automation');
       arcadeTools = allArcadeTools.filter(tool => {
         // Keep tools relevant to web automation
-        const name = tool.function.name.toLowerCase();
+        const name = (tool.function?.name || '').toLowerCase();
         return needsWebAutomation || name.includes('browse') || name.includes('web');
       });
     } else {
@@ -632,7 +632,7 @@ export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string)
 
     // Filter out tools not relevant to the task
     providerTools = providerTools.filter(tool => {
-      const name = tool.function.name.toLowerCase()
+      const name = (tool.function?.name || '').toLowerCase()
       // Daytona screenshot/recording tools - only include for computer use tasks
       if (name.startsWith('daytona_')) return needsComputerUse
       // E2B agent offload tools - only include for agent/complex tasks
@@ -660,7 +660,7 @@ export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string)
     const allNullclawTools = nullclawMCPBridge.getToolDefinitions();
     // Filter out internal/status tools that shouldn't be exposed to the LLM
     const filteredTools = allNullclawTools.filter(tool => {
-      const name = tool.function.name.toLowerCase();
+      const name = (tool.function?.name || '').toLowerCase();
       // Exclude status/check tools - they are internal utilities
       return name !== 'nullclaw_status';
     });
@@ -669,7 +669,7 @@ export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string)
       const needsMessaging = taskLower.includes('send') || taskLower.includes('message') || taskLower.includes('discord') || taskLower.includes('telegram');
       const needsBrowse = taskLower.includes('browse') || taskLower.includes('web_automation');
       nullclawTools = filteredTools.filter(tool => {
-        const name = tool.function.name.toLowerCase();
+        const name = (tool.function?.name || '').toLowerCase();
         if (name.includes('discord') || name.includes('telegram') || name.includes('send')) return needsMessaging;
         if (name.includes('browse') || name.includes('automate')) return needsBrowse;
         return true;
@@ -701,7 +701,7 @@ export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string)
       const needsNotion = taskLower.includes('notion') || taskLower.includes('page') || taskLower.includes('workspace');
 
       composioTools = allComposioTools.filter(tool => {
-        const name = tool.function.name.toLowerCase();
+        const name = (tool.function?.name || '').toLowerCase();
         if (name.includes('gmail') || name.includes('email')) return needsGmail;
         if (name.includes('slack') || name.includes('message')) return needsSlack;
         if (name.includes('drive') || name.includes('google')) return needsGoogleDrive;
@@ -714,8 +714,11 @@ export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string)
     }
   }
 
-  // NEW: Include Git tools (shadow commits, VFS sync)
-  const { standaloneGitTools } = await import('../tools/git-tools')
+  // Git shadow-commit is omitted from the default tool list: the VFS layer
+  // handles shadow commits automatically whenever files are written. Exposing
+  // git_shadow_commit as an LLM-callable tool adds no value and was previously
+  // shown to the model as the confusingly-named "git_git_shadow_commit" due to
+  // the `git_${name}` prefix being applied to an already-prefixed key.
   const gitTools: Array<{
     type: 'function'
     function: {
@@ -723,14 +726,7 @@ export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string)
       description?: string
       parameters: any
     }
-  }> = Object.entries(standaloneGitTools).map(([name, toolDef]) => ({
-    type: 'function' as const,
-    function: {
-      name: `git_${name}`,
-      description: toolDef.description || `Git operation: ${name}`,
-      parameters: (toolDef as any).parameters || (toolDef as any).inputSchema || {} as any,
-    },
-  }))
+  }> = []
 
   // NEW: Include VFS filesystem tools (write_file, read_file, apply_diff, etc.)
   // These let the LLM use function calling instead of tag-based parsing.
@@ -775,7 +771,7 @@ export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string)
     bashTools = Object.entries(bashToolMap).map(([name, toolDef]: [string, any]) => ({
       type: 'function' as const,
       function: {
-        name: `bash_${name}`,
+        name: name, // Use name directly (already prefixed as bash_execute)
         description: toolDef.description,
         parameters: toolDef.parameters || (toolDef as any).inputSchema || {},
       },
@@ -834,7 +830,68 @@ export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string)
     logger.debug('Mem0 tools not available:', error.message);
   }
 
-  const tools = [...nativeTools, ...cachedMCPorterTools, ...blaxelTools, ...arcadeTools, ...providerTools, ...nullclawTools, ...composioTools, ...gitTools, ...vfsTools, ...bashTools, ...mem0Tools, ...remoteTools]
+  // NEW: Include role_selection tool — enables dynamic role switching for task complexity
+  const roleSelectionTools: Array<{
+    type: 'function'
+    function: {
+      name: string
+      description?: string
+      parameters: any
+    }
+  }> = [{
+    type: 'function' as const,
+    function: {
+      name: 'role_selection',
+      description: 'Switch the current expert role/persona to better handle task complexity, domain, or failure recovery.',
+      parameters: {
+        type: 'object',
+        properties: {
+          role: {
+            type: 'string',
+            enum: ['architect', 'debugger', 'refactorer', 'implementer', 'reviewer', 'researcher'],
+            description: 'The target expert role to adopt.',
+          },
+          reason: {
+            type: 'string',
+            description: 'Reasoning for the role switch (e.g., handling high-complexity refactor, debugging error loops).',
+          },
+        },
+        required: ['role', 'reason'],
+      },
+    },
+  }];
+
+  // NEW: Include web_search tool — enables web search via SearXNG or DuckDuckGo
+  const webSearchTools: Array<{
+    type: 'function'
+    function: {
+      name: string
+      description?: string
+      parameters: any
+    }
+  }> = [{
+    type: 'function' as const,
+    function: {
+      name: 'web_search',
+      description: 'Search the web for information. Returns titles, URLs, and snippets from search results.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: {
+            type: 'string',
+            description: 'Search query',
+          },
+          limit: {
+            type: 'number',
+            description: 'Maximum number of results to return (default: 10)',
+          },
+        },
+        required: ['query'],
+      },
+    },
+  }];
+
+  const tools = [...nativeTools, ...cachedMCPorterTools, ...blaxelTools, ...arcadeTools, ...providerTools, ...nullclawTools, ...composioTools, ...gitTools, ...vfsTools, ...bashTools, ...mem0Tools, ...remoteTools, ...roleSelectionTools, ...webSearchTools]
 
   const elapsed = Date.now() - callStart;
 
@@ -856,6 +913,8 @@ export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string)
     bash: bashTools.length,
     mem0: mem0Tools.length,
     remote: remoteTools.length,
+    roleSelection: roleSelectionTools.length,
+    webSearch: webSearchTools.length,
   })
 
   return tools
@@ -1313,8 +1372,74 @@ export async function callMCPToolFromAI_SDK(
       };
     }
 
+    // NEW: Check if it's the role_selection tool
+    if (toolName === 'role_selection') {
+      logger.info('[RoleSelection] Tool invoked', { role: args.role, reason: args.reason });
+      return {
+        success: true,
+        output: JSON.stringify({
+          success: true,
+          roleAdopted: args.role,
+          message: `Role switched to ${args.role} for: ${args.reason}. System prompt will be updated for the next interaction.`,
+        }),
+      };
+    }
+
+    // NEW: Check if it's the web_search tool
+    if (toolName === 'web_search') {
+      logger.info('[WebSearch] Tool invoked', { query: args.query, limit: args.limit });
+      try {
+        // Try SearXNG first if configured
+        if (process.env.SEARXNG_BASE_URL) {
+          const searxngUrl = process.env.SEARXNG_BASE_URL.replace(/\/$/, '');
+          const searchUrl = `${searxngUrl}/search?q=${encodeURIComponent(args.query)}&format=json&language=en`;
+          
+          const headers: Record<string, string> = {
+            'Accept': 'application/json',
+          };
+          if (process.env.SEARXNG_API_KEY) {
+            headers['Authorization'] = `Bearer ${process.env.SEARXNG_API_KEY}`;
+          }
+
+          const response = await fetch(searchUrl, { headers });
+          if (response.ok) {
+            const data = await response.json();
+            const results = (data.results || []).slice(0, args.limit || 10).map((r: any) => ({
+              title: r.title || 'No title',
+              url: r.url || '',
+              snippet: r.content || r.snippet || '',
+            }));
+            return {
+              success: true,
+              output: JSON.stringify({ results, query: args.query, source: 'searxng' }),
+            };
+          }
+        }
+
+        // Fallback to DuckDuckGo via web.search capability
+        const { getCapabilityRouter } = await import('../tools/router');
+        const router = getCapabilityRouter();
+        const result = await router.execute('web.search', { query: args.query, limit: args.limit }, {
+          userId,
+          conversationId: args.conversationId,
+        } as any);
+
+        return {
+          success: true,
+          output: JSON.stringify({ ...result, source: 'duckduckgo' }),
+        };
+      } catch (error: any) {
+        logger.error('[WebSearch] Failed', { error: error.message });
+        return {
+          success: false,
+          output: '',
+          error: error.message || 'Web search failed',
+        };
+      }
+    }
+
     // NEW: Check if it's a bash/stdio shell tool (bash_execute)
-    if (toolName.startsWith('bash_')) {
+    if (toolName === 'bash_execute') {
       const { createBashTool } = await import('../bash/bash-tool');
       const sessionId = normalizeSessionId(args.conversationId || userId || '000');
       const scopePath = `project/sessions/${sessionId}`;
@@ -1345,8 +1470,7 @@ export async function callMCPToolFromAI_SDK(
         // onTerminalOutput would be wired from TerminalPanel context
       });
 
-      const bashToolName = toolName.replace('bash_', '');
-      const bashTool = bashToolMap[bashToolName as keyof typeof bashToolMap];
+      const bashTool = bashToolMap['bash_execute' as keyof typeof bashToolMap];
 
       if (bashTool) {
         logger.info('[Bash] Tool invoked (AI_SDK path)', {

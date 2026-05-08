@@ -162,10 +162,8 @@ export {
 export {
   routeChatRequest,
   classifyTask,
-  checkProviderHealth,
   type ChatRequest,
   type ChatResponse,
-  type ProviderHealth,
   type UnifiedAgentResult,
   type TaskClassification,
   type ClassificationContext,
@@ -279,6 +277,20 @@ export {
   type ReflectionResult,
   type ReflectionConfig,
 } from '@/lib/orchestra/reflection-engine';
+
+// ============================================================================
+// Progress Emitter
+// ============================================================================
+
+export {
+  emitOrchestrationProgress,
+  emitStepProgress,
+  emitNodeStatus,
+  emitRetryError,
+  emitHITLRequest,
+  emitNodeCommunication,
+  type OrchestrationProgressUpdate,
+} from './progress-emitter';
 
 // ============================================================================
 // Simulated Orchestration (Deprecated)

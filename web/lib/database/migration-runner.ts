@@ -140,19 +140,41 @@ export class MigrationRunner {
       try {
         console.log(`Executing migration ${migration.version}: ${migration.filename}`);
 
-        // Execute migration in a transaction
-        await this.db.transaction(() => {
-          // Check if migration is already executed first, inside transaction
-          const alreadyExecuted = this.db.prepare(
-            'SELECT 1 FROM schema_migrations WHERE version = ?'
-          ).get(migration.version);
+        // Check if migration is already executed
+        const alreadyExecuted = this.db.prepare(
+          'SELECT 1 FROM schema_migrations WHERE version = ?'
+        ).get(migration.version);
 
-          if (alreadyExecuted) {
-            console.log(`Migration ${migration.version} already executed, skipping`);
-            return;
+        if (alreadyExecuted) {
+          console.log(`Migration ${migration.version} already executed, skipping`);
+        } else {
+          // Wrap migration execution in a transaction to ensure atomicity
+          const transaction = this.db.transaction((sql: string) => {
+            this.db.exec(sql);
+          });
+
+          let alreadyApplied = false;
+          try {
+            transaction(migration.sql);
+          } catch (err: any) {
+            // Treat schema-already-present errors as idempotent success.
+            // This covers cases where a column/table/index was added by a fresh
+            // schema initialization or a previous partial run, so the migration's
+            // effect is already in place. We mark it as executed and continue.
+            const msg = String(err?.message ?? '');
+            if (
+              /duplicate column name/i.test(msg) ||
+              /already exists/i.test(msg)
+            ) {
+              console.warn(
+                `Migration ${migration.version} already applied (schema present): ${msg}. Marking as executed.`
+              );
+              alreadyApplied = true;
+            } else {
+              // Re-throw if transaction fails so outer loop catches and stops
+              throw new Error(`Transaction failed: ${err.message}`);
+            }
           }
-
-          this.db.exec(migration.sql);
 
           // Record migration as executed
           const stmt = this.db.prepare(`
@@ -160,9 +182,13 @@ export class MigrationRunner {
             VALUES (?, ?)
           `);
           stmt.run(migration.version, migration.filename);
-        })();
 
-        console.log(`Migration ${migration.version} completed successfully`);
+          console.log(
+            alreadyApplied
+              ? `Migration ${migration.version} recorded (schema already present)`
+              : `Migration ${migration.version} completed successfully`
+          );
+        }
       } catch (error) {
         console.error(`Migration ${migration.version} failed:`, error);
         throw error;

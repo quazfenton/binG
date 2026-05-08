@@ -238,13 +238,19 @@ export function normalizeSessionId(sessionId: string): string {
     return ''; // Return empty for whitespace-only input
   }
 
-  // If contains $ (composite ID), extract the last segment
-  // This handles formats like:
-  // - "1$004" -> "004"
-  // - "anon$004" -> "004"
-  if (trimmed.includes('$')) {
-    const dollarIndex = trimmed.lastIndexOf('$');
+  // Handle composite IDs: owner$session or anon:session
+  if (trimmed.startsWith('anon:')) {
+    return trimmed.slice('anon:'.length).trim();
+  }
+
+  const dollarIndex = trimmed.indexOf('$');
+  if (dollarIndex !== -1) {
     return trimmed.slice(dollarIndex + 1).trim();
+  }
+
+  const colonIndex = trimmed.indexOf(':');
+  if (colonIndex !== -1) {
+    return trimmed.slice(colonIndex + 1).trim();
   }
 
   // Already a simple ID - return as-is

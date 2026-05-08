@@ -7,6 +7,8 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
+
+
 import { authenticateRequest } from '@/lib/security/jwt-auth'
 import { RateLimiter } from '@/lib/utils/rate-limiter'
 import { secureRandomSeed } from '@/lib/utils/crypto-random'
@@ -169,7 +171,7 @@ export async function POST(req: NextRequest) {
       aspectRatio,
       style,
       motionStrength,
-      cameraMovement,
+      cameraMovement: (cameraMovement || 'none') as 'none' | 'slight' | 'moderate' | 'strong',
       provider: selectedProvider,
       apiKey: process.env.VERCEL_API_KEY,
     }

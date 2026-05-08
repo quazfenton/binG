@@ -14,10 +14,9 @@
  */
 
 import { MastraMemory } from '@mastra/core/memory';
-// @ts-ignore - Message type may vary across Mastra versions
-import type { Message } from '@mastra/core/memory';
 
 // Concrete implementation of MastraMemory since standalone @mastra/memory is missing
+// @ts-ignore - Type signature mismatch for stub implementation
 class Memory extends MastraMemory {
   constructor(config: any) {
     super({
@@ -27,20 +26,36 @@ class Memory extends MastraMemory {
     });
   }
 
+  // @ts-ignore - Type signature mismatch for stub implementation
   async getThreadById({ threadId }: { threadId: string }) { return null; }
-  // @ts-ignore - listThreads return type may vary
+  // @ts-ignore - Type signature mismatch for stub implementation
   async listThreads(args: any) { return { threads: [], metadata: { total: 0, page: 0, perPage: 10, hasMore: false } }; }
   async saveThread(args: any) { return args.thread; }
   async saveMessages(args: any) { return { messages: args.messages }; }
-  async recall(args: any) { return { messages: [] }; }
+  async recall(args: any): Promise<{
+    messages: any[];
+    usage?: { tokens: number };
+    total: number;
+    page: number;
+    perPage: number | false;
+    hasMore: boolean;
+  }> {
+    return {
+      messages: [],
+      total: 0,
+      page: 0,
+      perPage: false,
+      hasMore: false
+    };
+  }
   async deleteThread(threadId: string) { }
   async deleteMessages(args: any) { }
   async getWorkingMemory(args: any) { return null; }
   async getWorkingMemoryTemplate(args: any) { return null; }
   async updateWorkingMemory(args: any) { }
   async __experimental_updateWorkingMemoryVNext(args: any) { return { success: true, reason: '' }; }
-  // @ts-ignore - cloneThread return type may vary
-  async cloneThread(args: any) { return { thread: args.thread, messages: [] }; }
+  // @ts-ignore - Type signature mismatch for stub implementation
+  async cloneThread(args: any) { return { thread: args.thread, messages: [], clonedMessages: [] }; }
 }
 
 // Memory configuration options
@@ -120,9 +135,10 @@ export function getMemory(): Memory | null {
  * @param message - Message to add
  * @param metadata - Optional metadata
  */
+// @ts-ignore - Message type from mastra may not export
 export async function addMessage(
   threadId: string,
-  message: Omit<Message, 'id' | 'createdAt'>,
+  message: { role: string; content: string; type?: string },
   metadata?: Record<string, any>
 ): Promise<void> {
   const memory = getMemory();
@@ -146,10 +162,11 @@ export async function addMessage(
  * @param limit - Max messages to retrieve
  * @returns Array of messages
  */
+// @ts-ignore - Message type from mastra may not export
 export async function getHistory(
   threadId: string,
   limit?: number
-): Promise<Message[]> {
+): Promise<any[]> {
   const memory = getMemory();
   if (!memory) return [];
 
@@ -211,11 +228,12 @@ export async function setWorkingMemory(
  * @param limit - Max results
  * @returns Matching messages
  */
+// @ts-ignore - Message type from mastra may not export
 export async function searchMemory(
   threadId: string,
   query: string,
   limit?: number
-): Promise<Message[]> {
+): Promise<any[]> {
   const memory = getMemory();
   // @ts-ignore - searchMessages API may vary
   if (!memory || !memory.searchMessages) return [];

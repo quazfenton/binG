@@ -87,6 +87,77 @@ export function clearRateLimitState(provider: string, model: string): void {
   rateLimitedModels.delete(`${provider}:${model}`)
 }
 
+// Token limit tracking for 413 errors
+interface TokenLimitState {
+  maxTokens: number
+  lastErrorTime: number
+  errorCount: number
+}
+const modelTokenLimits = new Map<string, TokenLimitState>()
+
+/**
+ * Record token limit for a model (from 413 errors)
+ */
+export function recordModelTokenLimit(provider: string, model: string, tokenLimit: number): void {
+  const key = `${provider}:${model}`
+  const now = Date.now()
+  const existing = modelTokenLimits.get(key)
+  
+  if (existing) {
+    // Update with the most restrictive limit
+    existing.maxTokens = Math.min(existing.maxTokens, tokenLimit)
+    existing.lastErrorTime = now
+    existing.errorCount++
+  } else {
+    modelTokenLimits.set(key, { maxTokens: tokenLimit, lastErrorTime: now, errorCount: 1 })
+  }
+  
+  logger.warn('[TokenLimit] Recorded token limit for model', {
+    provider,
+    model,
+    tokenLimit,
+    errorCount: modelTokenLimits.get(key)?.errorCount,
+  })
+}
+
+/**
+ * Get token limit for a model (returns null if unknown)
+ */
+export function getModelTokenLimit(provider: string, model: string): number | null {
+  const key = `${provider}:${model}`
+  const state = modelTokenLimits.get(key)
+  return state ? state.maxTokens : null
+}
+
+/**
+ * Check if a model has insufficient token limit for the request
+ */
+export function hasInsufficientTokenLimit(provider: string, model: string, estimatedTokens: number): boolean {
+  const limit = getModelTokenLimit(provider, model)
+  if (!limit) return false
+  
+  // Add 10% buffer for safety
+  const safeLimit = limit * 0.9
+  return estimatedTokens > safeLimit
+}
+
+/**
+ * Record context limit error for model classification
+ */
+export function recordModelContextLimitError(provider: string, model: string, tokenLimit: number): void {
+  recordModelTokenLimit(provider, model, tokenLimit)
+  
+  // Also record as a failure for ranking purposes
+  recordModelAttempt(provider, model, false)
+  
+  logger.info('[ModelClassification] Model marked as small-context', {
+    provider,
+    model,
+    tokenLimit,
+    classification: tokenLimit < 16000 ? 'small-context' : 'medium-context'
+  })
+}
+
 export interface ModelStats {
   provider: string
   model: string
@@ -103,6 +174,10 @@ export interface ModelStats {
   avgToolScore?: number
   /** Total tool call attempts (distinct from LLM totalCalls) */
   toolCallTotalCalls?: number
+  /** Maximum token limit (from 413 errors) */
+  maxTokens?: number
+  /** Model classification for use case selection */
+  classification?: 'small-context' | 'medium-context' | 'large-context' | 'fast' | 'reliable' | 'planner'
 }
 
 export interface RankedModel extends ModelStats {
@@ -307,7 +382,8 @@ function addConfiguredModels(modelMap: Map<string, ModelStats>): void {
     if (!providerConfig?.models || !Array.isArray(providerConfig.models)) continue
     
     for (const modelName of providerConfig.models) {
-      const key = `${providerName}:${modelName}`
+      const modelId = typeof modelName === 'string' ? modelName : modelName.id;
+      const key = `${providerName}:${modelId}`
       
       // Only add if not already in the map (telemetry data takes precedence)
       if (!modelMap.has(key)) {
@@ -318,7 +394,7 @@ function addConfiguredModels(modelMap: Map<string, ModelStats>): void {
           // Add untested model with neutral stats (gives it a chance)
           modelMap.set(key, {
             provider: providerName,
-            model: modelName,
+            model: modelId,
             avgLatency: 2000, // neutral latency estimate
             failureRate: 0, // optimistic default
             lastUpdated: Date.now(),
@@ -404,11 +480,12 @@ export function getModelForRotation(excludeProvider?: string): { provider: strin
     if (!isProviderConfiguredForTelemetry(providerName)) continue
     
     for (const modelName of providerConfig.models) {
-      const key = `${providerName}:${modelName}`
+      const modelId = typeof modelName === 'string' ? modelName : modelName.id;
+      const key = `${providerName}:${modelId}`
       
       // FIX: Check rate limit circuit breaker before including this model
-      if (isRateLimited(providerName, modelName)) {
-        logger.debug('Skipping rate-limited model in rotation', { provider: providerName, model: modelName })
+      if (isRateLimited(providerName, modelId)) {
+        logger.debug('Skipping rate-limited model in rotation', { provider: providerName, model: modelId })
         continue
       }
       
@@ -427,7 +504,7 @@ export function getModelForRotation(excludeProvider?: string): { provider: strin
         }
       }
       
-      candidates.push({ key, provider: providerName, model: modelName, priority })
+      candidates.push({ key, provider: providerName, model: modelId, priority })
     }
   }
   

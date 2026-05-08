@@ -32,10 +32,8 @@
 import { createLogger } from '@/lib/utils/logger';
 import {
   processUnifiedAgentRequest,
-  checkProviderHealth,
   type UnifiedAgentConfig,
   type UnifiedAgentResult,
-  type ProviderHealth,
 } from '@/lib/orchestra/unified-agent-service';
 import {
   createTaskClassifier,
@@ -93,6 +91,14 @@ export interface ChatRequest {
   enableMastraWorkflows?: boolean;
   /** Specific workflow ID */
   workflowId?: string;
+}
+
+export interface ProviderHealth {
+  provider: string;
+  status: 'healthy' | 'unhealthy' | 'degraded' | 'unknown';
+  latency?: number;
+  lastChecked?: string;
+  error?: string;
 }
 
 export interface ChatResponse {
@@ -191,6 +197,10 @@ export async function classifyTask(
  */
 export async function routeChatRequest(request: ChatRequest): Promise<ChatResponse> {
   const startTime = Date.now();
+  const health: ProviderHealth = {
+    provider: request.provider,
+    status: 'unknown',
+  };
 
   // 0. Check circuit breaker - skip if provider is in open circuit state
   if (!circuitBreaker.isAvailable(request.provider)) {
@@ -203,7 +213,11 @@ export async function routeChatRequest(request: ChatRequest): Promise<ChatRespon
       mode: 'circuit-open',
       error: `Provider ${request.provider} is temporarily unavailable (circuit open after ${stats.failures} failures)`,
       classification: {} as TaskClassification,
-      health: {} as any,
+      health: {
+        provider: request.provider,
+        status: 'unhealthy',
+        error: 'Circuit breaker open',
+      },
       metadata: {
         duration: Date.now() - startTime,
         circuitBreaker: {
@@ -216,9 +230,25 @@ export async function routeChatRequest(request: ChatRequest): Promise<ChatRespon
   }
 
   // 1. Classify the task
-  const classification = await classifyTask(request.userMessage, {
-    projectSize: request.projectContext?.size,
-  });
+  let classification;
+  if (process.env.ENABLE_TASK_CLASSIFIER === 'true') {
+    classification = await classifyTask(request.userMessage, {
+      projectSize: request.projectContext?.size,
+    });
+  } else {
+    classification = {
+      complexity: 'simple',
+      recommendedMode: 'v2-native' as const,
+      confidence: 1.0,
+      factors: {
+        keywordScore: 0.5,
+        semanticScore: 0.5,
+        contextScore: 0.5,
+        historicalScore: 0.5,
+      },
+      reasoning: ['Using default fallback classification'],
+    };
+  }
 
   log.info('Task classified', {
     complexity: classification.complexity,
@@ -226,16 +256,7 @@ export async function routeChatRequest(request: ChatRequest): Promise<ChatRespon
     confidence: classification.confidence,
   });
 
-  // 2. Check provider health
-  const health = checkProviderHealth();
-
-  log.debug('Provider health check', {
-    preferredMode: health.preferredMode,
-    v2Native: health.v2Native,
-    v1Api: health.v1Api,
-  });
-
-  // 3. Build unified agent config
+  // 2. Build unified agent config (provider health check removed - not available)
   const config: UnifiedAgentConfig = {
     userMessage: request.userMessage,
     // FIX: Pass userId and conversationId for proper VFS session scoping
@@ -266,36 +287,65 @@ export async function routeChatRequest(request: ChatRequest): Promise<ChatRespon
   try {
     const result = await processUnifiedAgentRequest(config);
 
+    // Update health status based on result
+    if (result.success) {
+      circuitBreaker.recordSuccess(request.provider);
+      health.status = 'healthy';
+      health.latency = Date.now() - startTime;
+    } else {
+      circuitBreaker.recordFailure(request.provider);
+      health.status = 'unhealthy';
+      health.error = result.error;
+    }
+
     return {
-      ...result,
-      classification,
+      success: result.success,
+      response: result.response,
+      steps: result.steps,
+      totalSteps: result.totalSteps,
+      mode: result.mode,
+      error: result.error,
+      classification: {
+        complexity: classification.complexity,
+        confidence: classification.confidence,
+        recommendedMode: classification.recommendedMode,
+        factors: classification.factors,
+        reasoning: classification.reasoning,
+      },
       health,
       metadata: {
-        ...result.metadata,
-        classification: {
-          complexity: classification.complexity,
-          confidence: classification.confidence,
-          recommendedMode: classification.recommendedMode,
-        },
         duration: Date.now() - startTime,
+        ...result.metadata,
       },
     };
   } catch (error: any) {
-    log.error('Unified routing failed', { error: error.message });
+    log.error('Routing failed', { error: error.message });
+
+    health.status = 'unhealthy';
+    health.error = error.message;
 
     return {
       success: false,
-      response: '',
-      mode: 'error',
+      response: error.partialResult?.response || '',
+      steps: error.partialResult?.steps || [],
+      totalSteps: error.partialResult?.totalSteps || 0,
+      mode: error.partialResult?.mode || 'error',
       error: error.message,
-      classification,
+      classification: classification ? {
+        complexity: (classification as any).complexity,
+        confidence: (classification as any).confidence,
+        recommendedMode: (classification as any).recommendedMode,
+        factors: (classification as any).factors,
+        reasoning: (classification as any).reasoning,
+      } : {
+        complexity: 'simple',
+        confidence: 0,
+        recommendedMode: 'general',
+      } as any,
       health,
       metadata: {
         duration: Date.now() - startTime,
-        classification: {
-          complexity: classification.complexity,
-          confidence: classification.confidence,
-        },
+        ...(error.partialResult?.metadata || {}),
       },
     };
   }
@@ -449,8 +499,6 @@ export {
 // ============================================================================
 
 export {
-  checkProviderHealth,
-  type ProviderHealth,
   type UnifiedAgentResult,
 } from '@/lib/orchestra/unified-agent-service';
 

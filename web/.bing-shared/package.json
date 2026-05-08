@@ -1,18 +1,13 @@
 {
   "name": "@bing/shared",
   "version": "1.0.0",
-  "type": "module",
   "exports": {
     "./agent": "./agent/index.ts",
     "./agent/*": "./agent/*",
-    "./FS/*": "./FS/*",
-    "./lib/*": "./lib/*",
-    "./mcp/*": "./mcp/*",
-    "./services/*": "./services/*",
-    "./cli/*": "./cli/*",
-    "./worker/*": "./worker/*",
-    "./trigger/*": "./trigger/*"
+    "./FS": "./FS/index.ts",
+    "./FS/*": "./FS/*"
   },
+  "dependencies": {},
   "peerDependencies": {
     "typescript": "^5.0.0"
   }

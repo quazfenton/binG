@@ -57,9 +57,9 @@ const CONFIG = {
  * CRITICAL FIX: Use globalThis to survive Next.js hot-reloading
  */
 declare global {
-  // eslint-disable-next-line no-var
+   
   var __sessionFileTrackerStore__: Map<string, SessionEntry> | undefined;
-  // eslint-disable-next-line no-var
+   
   var __sessionFileTrackerCleanup__: boolean | undefined;
 }
 

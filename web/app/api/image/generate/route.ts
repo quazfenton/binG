@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
+
+
 import {
   getDefaultRegistry,
   type ImageGenerationParams,
@@ -250,7 +252,7 @@ export async function POST(req: NextRequest) {
     // Increment quota usage for Google Imagen free tier
     if (result.provider === 'google' && result.model === 'google:gemini-2.5-flash-image-preview') {
       try {
-        const { quotaManager } = await import('@/lib/management/quota-manager');
+        const { quotaManager } = await import('@/lib/management/quota-manager') as any;
         quotaManager.incrementUsage('google_imagen', result.images?.length || 1);
       } catch (quotaError) {
         console.error('Failed to increment quota:', quotaError);

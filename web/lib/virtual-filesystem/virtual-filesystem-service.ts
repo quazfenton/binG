@@ -1012,42 +1012,15 @@ export class VirtualFilesystemService {
       return this.workspaceRoot;
     }
 
-    // Strip common sandbox/workspace prefixes (single source of truth in scope-utils)
-    // BUT preserve project/ prefix if it's already there - don't strip it away
     let strippedPath = stripWorkspacePrefixes(rawPath);
 
-    // Only strip project/ if it's at the beginning AND the stripped path doesn't start with project
-    // This ensures consistent path format: always starts with 'project/'
-    if (!strippedPath.startsWith('project/') && !strippedPath.startsWith('project$')) {
-      // Already stripped, now add project/ prefix back if needed
-      if (!strippedPath.startsWith('project')) {
-        strippedPath = strippedPath.replace(/^project\//, '');
-      }
-    }
-
-    // Handle empty path after stripping
-    if (!strippedPath) {
+    if (!strippedPath || strippedPath === '/') {
       return this.workspaceRoot;
-    }
-
-    // CRITICAL VALIDATION: Reject composite IDs in session folder position
-    // This prevents paths like "project/sessions/1$004/file.ts" or legacy "project/sessions/anon:timestamp:001/file.ts"
-    // Session folder names must be simple: "001", "alpha", "001-1", etc.
-    const sessionsMatch = strippedPath.match(/^project\/sessions\/([^/]+)/i);
-    if (sessionsMatch) {
-      const sessionSegment = sessionsMatch[1];
-      if (sessionSegment.includes('$') || sessionSegment.includes(':')) {
-        throw new Error(
-          `Invalid session folder in path: "${inputPath}". ` +
-          `Session folder names must be simple (e.g., "001", "alpha"), ` +
-          `not composite IDs like "${sessionSegment}". ` +
-          `Use normalizeSessionId() to extract the simple session name.`
-        );
-      }
     }
 
     const parts = strippedPath.split('/');
     const safeParts: string[] = [];
+    const workspaceRootParts = this.workspaceRoot.split('/').filter(Boolean);
 
     for (const part of parts) {
       const trimmed = part.trim();
@@ -1055,16 +1028,16 @@ export class VirtualFilesystemService {
         continue;
       }
       if (trimmed === '..') {
-        // Resolve legitimate parent-directory references (e.g. "./src/../src/./")
-        // instead of throwing. Only reject if the result would escape the
-        // workspace root.
-        if (safeParts.length > 0 && safeParts[safeParts.length - 1] !== this.workspaceRoot) {
-          safeParts.pop();
-        }
-        // If popping would remove the workspace root, it's a real traversal
-        else if (safeParts.length === 0 || safeParts[safeParts.length - 1] === this.workspaceRoot) {
+        // Reject .. if safeParts is empty (would escape root)
+        if (safeParts.length === 0) {
           throw new Error(`Path traversal is not allowed: ${inputPath}`);
         }
+        // Allow .. to navigate above workspace root (e.g. project/sessions/001 -> project)
+        // but prevent escaping project root entirely
+        if (safeParts.length <= 1) {
+          throw new Error(`Path traversal is not allowed: ${inputPath}`);
+        }
+        safeParts.pop();
         continue;
       }
       if (trimmed.includes('\0')) {
@@ -1077,19 +1050,26 @@ export class VirtualFilesystemService {
       return this.workspaceRoot;
     }
 
-    // Always ensure path starts with workspace root
-    if (safeParts[0] !== this.workspaceRoot) {
-      safeParts.unshift(this.workspaceRoot);
+    const normalizedPath = safeParts.join('/');
+    const workspacePrefix = workspaceRootParts.join('/');
+    
+    // Verify the normalized path is within or an ancestor of the workspace root
+    const isWithin = normalizedPath.startsWith(workspacePrefix + '/') || normalizedPath === workspacePrefix;
+    const isAncestor = workspacePrefix.startsWith(normalizedPath + '/');
+    if (!isWithin && !isAncestor) {
+      throw new Error(`Path traversal beyond workspace root: ${inputPath}`);
+    }
+    
+    const sessionsMatch = normalizedPath.match(/^project\/sessions\/([^/]+)/i);
+    if (sessionsMatch) {
+      const sessionSegment = sessionsMatch[1];
+      if (sessionSegment.includes('//') || sessionSegment.includes('..')) {
+         throw new Error(`Invalid session folder: "${sessionSegment}"`);
+      }
     }
 
-    const normalizedPath = safeParts.join('/');
     if (normalizedPath.length > MAX_PATH_LENGTH) {
       throw new Error(`Path exceeds max length (${MAX_PATH_LENGTH})`);
-    }
-
-    // DEBUG: Log path normalization for troubleshooting
-    if (rawPath !== normalizedPath) {
-      console.log('[VFS] normalizePath:', rawPath, '->', normalizedPath);
     }
 
     return normalizedPath;
@@ -1727,7 +1707,7 @@ class GitBackedVFSProxy {
 // CRITICAL FIX: Use globalThis to survive Next.js hot-reloading in dev mode
 // Without this, each module reload creates a new instance with empty workspaces
 declare global {
-  // eslint-disable-next-line no-var
+   
   var __vfsSingleton__: GitBackedVFSProxy | undefined;
 }
 

@@ -379,7 +379,8 @@ export function injectFeedback(context: FeedbackContext): InjectedFeedback {
     correctionSection += 'Address the following issues from previous attempts:\n\n';
 
     for (const failure of recentFailures.slice(-5)) { // Last 5 failures
-      const analysis = failureAnalyses.get(failure)!;
+      const analysis = failureAnalyses.get(failure);
+      if (!analysis) continue;
       correctionSection += `### ${failure.type.toUpperCase()} (${failure.source})\n`;
       correctionSection += `${analysis.rootCause}\n`;
       correctionSection += `**Fix:** ${analysis.healingApproach}\n\n`;
@@ -391,7 +392,8 @@ export function injectFeedback(context: FeedbackContext): InjectedFeedback {
   healingInstructions += 'Apply these steps to recover from failures:\n\n';
 
   for (const failure of recentFailures.slice(-3)) {
-    const analysis = failureAnalyses.get(failure)!;
+    const analysis = failureAnalyses.get(failure);
+    if (!analysis) continue;
     healingInstructions += `1. ${analysis.correctionPrompt.instruction}\n`;
     analysis.correctionPrompt.healingSteps.forEach(step => {
       healingInstructions += `   - ${step}\n`;
@@ -400,7 +402,10 @@ export function injectFeedback(context: FeedbackContext): InjectedFeedback {
   
   // Build format guidance
   let formatGuidance = '';
-  const uniqueCategories = [...new Set(recentFailures.map(f => failureAnalyses.get(f)!.category))];
+  const uniqueCategories = [...new Set(recentFailures.map(f => {
+    const analysis = failureAnalyses.get(f);
+    return analysis?.category;
+  }).filter(Boolean))];
   if (uniqueCategories.includes('format_mismatch')) {
     formatGuidance = '\n## Format Requirements\n';
     formatGuidance += 'IMPORTANT: Ensure response matches expected format.\n';
@@ -415,7 +420,8 @@ export function injectFeedback(context: FeedbackContext): InjectedFeedback {
   let roleRedirectSection: string | undefined;
   const allRedirects: RoleRedirect[] = [];
   for (const failure of recentFailures.slice(-3)) {
-    const analysis = failureAnalyses.get(failure)!;
+    const analysis = failureAnalyses.get(failure);
+    if (!analysis) continue;
     allRedirects.push(...(analysis.correctionPrompt.redirectSuggestions || []));
   }
   
@@ -476,6 +482,124 @@ export interface HealingTrigger {
   prompt: string;
 }
 
+export interface IncompleteDetection {
+  detected: boolean;
+  reason: string;
+  prompt: string;
+  confidence: number;
+}
+
+/**
+ * Detect incomplete responses with O(1) overhead for most checks.
+ * Only scans the last 500 characters for efficiency.
+ */
+export function detectIncompleteResponse(response: string): IncompleteDetection {
+  const trimmed = response.trim();
+  
+  // Early exit for very short responses
+  if (trimmed.length < 20) {
+    return { detected: false, reason: '', prompt: '', confidence: 0 };
+  }
+
+  // Only scan the last 500 characters for most checks (O(1) for fixed window)
+  const tailLength = Math.min(500, trimmed.length);
+  const tail = trimmed.slice(-tailLength);
+  const lines = tail.split('\n');
+  const lastLine = lines[lines.length - 1] || '';
+  
+  let confidence = 0;
+  const reasons: string[] = [];
+
+  // 1. Mid-sentence detection (ends without terminal punctuation) - O(1)
+  // Check last 50 chars for sentence ending
+  const last50 = trimmed.slice(-50);
+  // Check if last line is a list item (starts with number or bullet)
+  const isListItem = /^[\s]*\d+\./.test(lastLine) || /^[\s]*[-*+]/.test(lastLine);
+  const endsMidSentence = /[a-zA-Z0-9]$/.test(last50) && 
+    !/[.!?。！？]$/.test(last50) &&
+    last50.length > 10 &&
+    !isListItem; // Don't trigger if last line is a list item
+  
+  if (endsMidSentence) {
+    confidence += 0.3;
+    reasons.push('mid-sentence');
+  }
+
+  // 2. Mid-code-block detection (unclosed backticks) - O(1) for tail
+  // Count backticks in tail only
+  const backtickCount = (tail.match(/`/g) || []).length;
+  const hasUnclosedCodeBlock = backtickCount % 2 !== 0;
+  
+  if (hasUnclosedCodeBlock) {
+    confidence += 0.4;
+    reasons.push('unclosed code block');
+  }
+
+  // 3. Mid-list detection (ends with list marker but no content) - O(1)
+  // Fixed pattern to match "3." without requiring whitespace
+  const endsWithListMarker = /^[\s]*[-*+]\s*$/.test(lastLine) ||
+    /^[\s]*\d+\.\s*$/.test(lastLine) ||
+    /^[\s]*\d+\.$/.test(lastLine);
+  
+  if (endsWithListMarker) {
+    confidence += 0.35;
+    reasons.push('incomplete list item');
+  }
+
+  // 4. Mid-JSON detection (unclosed braces/brackets) - O(1) for tail
+  // Single pass through tail to count braces/brackets
+  let openBraces = 0, closeBraces = 0, openBrackets = 0, closeBrackets = 0;
+  for (let i = 0; i < tail.length; i++) {
+    const char = tail[i];
+    if (char === '{') openBraces++;
+    else if (char === '}') closeBraces++;
+    else if (char === '[') openBrackets++;
+    else if (char === ']') closeBrackets++;
+  }
+  // Trigger if there's any imbalance (lowered threshold from >1 to >=1)
+  const hasUnclosedJSON = (openBraces - closeBraces) >= 1 || (closeBraces - openBraces) >= 1 ||
+                          (openBrackets - closeBrackets) >= 1 || (closeBrackets - openBrackets) >= 1;
+  
+  if (hasUnclosedJSON) {
+    confidence += 0.4;
+    reasons.push('unclosed JSON/braces');
+  }
+
+  // 5. Mid-header detection (incomplete markdown header) - O(1)
+  const endsWithIncompleteHeader = /^#{1,6}\s[^#\n]*$/.test(lastLine) && 
+    lastLine.length < 100;
+  
+  if (endsWithIncompleteHeader) {
+    confidence += 0.35;
+    reasons.push('incomplete header');
+  }
+
+  // 6. Abrupt cutoff detection (ends mid-word) - O(1)
+  // Only trigger if the last line is very short and ends mid-word
+  // Increased threshold from <30 to <20 to avoid false positives on complete list items
+  const endsAbruptly = /[a-zA-Z]{3,}$/.test(lastLine) && 
+    !/[.!?，。！？\s]$/.test(lastLine) &&
+    lastLine.length < 20;
+  
+  if (endsAbruptly) {
+    confidence += 0.25;
+    reasons.push('abrupt cutoff');
+  }
+
+  // Only trigger if confidence is high enough
+  // Lowered threshold from 0.4 to 0.3 to catch more incomplete responses
+  if (confidence >= 0.3) {
+    return {
+      detected: true,
+      reason: `Response appears incomplete: ${reasons.join(', ')}`,
+      prompt: `Your response appears to be incomplete (${reasons.join(', ')}). Please complete your thought or indicate what remains.`,
+      confidence,
+    };
+  }
+
+  return { detected: false, reason: '', prompt: '', confidence: 0 };
+}
+
 /**
  * Detect when auto-healing should be triggered
  */
@@ -510,13 +634,14 @@ export function detectHealingTrigger(
     };
   }
   
-  // Detect incomplete response
-  if (lastResponse.length > 0 && !lastResponse.includes('```') && !lastResponse.includes('\n')) {
+  // Detect incomplete response - use enhanced detection
+  const incompleteDetection = detectIncompleteResponse(lastResponse);
+  if (incompleteDetection.detected) {
     return {
       detected: true,
-      reason: 'Response appears truncated or incomplete',
+      reason: incompleteDetection.reason,
       healingMode: 'retry',
-      prompt: 'Your response appears incomplete. Complete the thought or indicate what is remaining.',
+      prompt: incompleteDetection.prompt,
     };
   }
   

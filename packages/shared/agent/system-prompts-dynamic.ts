@@ -198,7 +198,7 @@ AND include routing metadata in the same response.
 ## Required First-Response Format
 After your normal response, include this structured block:
 
-[ROUTING_METADATA]
+[ROLE_SELECT]
 {
   "classification": "(one of: code, research, planning, debugging, review, multi-step)",
   "complexity": "(one of: low, medium, high)",
@@ -216,8 +216,7 @@ After your normal response, include this structured block:
     { "step": "string", "tool": "string", "role": "string" },
     { "step": "string", "tool": "string", "role": "string" }
   ],
-  "requiresAutoReprompt": false,
-  "estimatedSteps": 1
+  "continue": false
 }
 
 ## Routing Decision Logic
@@ -252,9 +251,9 @@ After your normal response, include this structured block:
 
 ## Response Flow
 1. Answer the user's question normally (always, without exception)
-2. Append [ROUTING_METADATA] block at the end
+2. Append [ROLE_SELECT] block at the end
 3. The system will parse this and auto-re-prompt if needed
-4. If requiresAutoReprompt=true, subsequent steps follow the planSteps
+4. If continue=true, subsequent steps follow the planSteps
 5. After N successive re-prompts, a review cycle triggers automatically
 `;
 
@@ -339,6 +338,21 @@ If response count > 3 OR tool calls > 5:
  *
  * Do not change this order without thorough LLM prompt engineering review.
  */
+export const CHOOSE_ROLE_DIRECTIVE = `
+============================================
+# DYNAMIC ROLE REDIRECTION
+============================================
+
+You have the ability to switch your expert role to better suit the task.
+
+1. **ASSESS**: Monitor task complexity, domain, or failure recovery needs.
+2. **SELECT**: If a better role exists (e.g., 'debugger' for failures, 'architect' for high-complexity design), call 'choose_role(role="...", reason="...")'.
+3. **WAIT**: Once called, the system will inject the new persona and prompt for your next turn.
+
+Available roles:
+- coder, reviewer, planner, architect, researcher, debugger, specialist, orchestrator, simplifier
+`;
+
 export function generateDynamicInjection(config?: {
   includeFeedback?: boolean;
   includeRoleRedirect?: boolean;
@@ -346,6 +360,7 @@ export function generateDynamicInjection(config?: {
   includeSpecs?: boolean;
   includeFulfillmentReview?: boolean;
   includeFirstResponseRouting?: boolean;
+  includeRoleRedirectionDirective?: boolean;
 }): string {
   const {
     includeFeedback = true,
@@ -354,10 +369,12 @@ export function generateDynamicInjection(config?: {
     includeSpecs = true,
     includeFulfillmentReview = true,
     includeFirstResponseRouting = true,
+    includeRoleRedirectionDirective = true,
   } = config || {};
 
   let injection = '';
 
+  if (includeRoleRedirectionDirective) injection += CHOOSE_ROLE_DIRECTIVE + '\n';
   // First-response routing is always included by default — it supersedes
   // the need for a separate TaskClassification step by embedding routing
   // metadata directly in the LLM's first response via prompt engineering.
