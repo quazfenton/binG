@@ -764,9 +764,10 @@ function parseSetPair(pair: string): { col: string; value: any; rawValue?: strin
 }
 
 // Initialize database
-let db: any = null;
-
-let dbInitialized = false;
+// Persist db instance and init flag on globalThis so they survive Next.js
+// HMR cycles in dev mode (module-level variables reset on re-evaluation).
+let db: any = (globalThis as any).__binG_dbInstance || null;
+let dbInitialized: boolean = (globalThis as any).__binG_dbInitialized || false;
 // Single-flight promise guard (Bug 3 fix): prevents concurrent callers getting null
 let dbInitPromise: Promise<void> | null = null;
 
@@ -886,7 +887,11 @@ function initializeDatabaseSync(): void {
     }
 
     dbInitialized = true;
+    (globalThis as any).__binG_dbInitialized = true;
   }
+
+  // Persist db on globalThis so it survives HMR re-evaluations
+  (globalThis as any).__binG_dbInstance = db;
 
   console.log('[DB] Database initialized successfully (synchronous)');
 }

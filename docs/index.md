@@ -29,6 +29,7 @@ Machine-readable index for agent retrieval: `manifest.jsonl`
 ### Agent System
 - [binG Agent Guidelines](bing-agent-guidelines.md) — Working contract for agents
 - [StatefulAgent Architecture](v2-agent-gateway.md) — Agent gateway
+- [LSP Service](lsp-service.md) — Language Server Protocol integration, diagnostics, LLM feedback
 - [Autonomous Agent Enhancements](autonomous-agent-enhancements-implementation-complete.md)
 - [Capability Chaining](capability-chaining-and-bootstrapped-agency.md)
 
