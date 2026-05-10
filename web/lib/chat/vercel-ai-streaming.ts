@@ -32,6 +32,7 @@ import { getProviderForModel } from './openai-compat-wrapper';
 import { tokenTracker } from './ai-caching';
 import { createReasoningMiddleware, withRetry, createSmoothStream, isTokenLimitError, handleTokenLimitError } from './ai-middleware';
 import { recordToolCall, shouldForceTextMode } from './tool-call-telemetry';
+import { getModelsForPurpose } from './model-capability-registry';
 
 /**
  * Tool execution context for Vercel AI SDK tools
@@ -128,6 +129,31 @@ export class CLIProviderError extends Error {
  * Instructions for models that don't support function calling.
  * Tells the model to use text-based formats for file operations.
  */
+// ─── Healing instruction builder ───────────────────────────────────────────────
+
+/**
+ * Build a healing context string to inject into retry system prompts.
+ * Provides the new model with diagnostic information about what failed
+ * and what it should do differently.
+ */
+function buildHealingInstructions(consecutiveFailures: number): string {
+  // Only inject context when there were actual failures
+  if (consecutiveFailures < 1) return '';
+
+  return `You are being asked to retry a task that failed ${consecutiveFailures} time${consecutiveFailures > 1 ? 's' : ''} previously due to tool-call errors.
+
+CRITICAL INSTRUCTIONS FOR THIS RETRY:
+- Use function calling tools EXACTLY as specified — follow the tool parameter schemas precisely
+- For file operations: provide complete paths, non-empty content, and valid JSON arguments
+- If a tool returns an error, diagnose it and retry with corrected arguments — do NOT give up
+- Do NOT output tool calls as text — use the tool call format exclusively
+- Always call at least one relevant tool if the user's request requires action
+
+The previous attempt(s) may have failed due to: malformed arguments, missing required fields, wrong parameter types, or the model attempting text-output instead of tool calls.`;
+}
+
+// ─── Text-mode tool instructions (for models without native FC) ─────────────
+
 const TEXT_MODE_TOOL_INSTRUCTIONS = `
 ## FILE OPERATIONS (REQUIRED FORMAT)
 
@@ -986,6 +1012,8 @@ export async function* streamWithVercelAI(
     // Stream events including text, reasoning, and tool calls
     let reasoningContent = '';
     let textContent = ''; // Track text for two-phase FC fallback
+    let consecutiveToolFailures = 0; // Track consecutive tool call failures for Phase 3 model-capability fallback
+    const FC_MODEL_FALLBACK_THRESHOLD = 2; // Trigger Phase 3 reliable-model retry after this many consecutive failures
 
     for await (const chunk of result.fullStream) {
       if (effectiveSignal?.aborted) return;
@@ -1242,8 +1270,9 @@ export async function* streamWithVercelAI(
           // Declared here so it's in scope for the yield below.
           let enhancedResult: unknown = toolResult;
 
-          // ENHANCED: Log tool result with detailed info
+          // PHASE 3: Track consecutive tool call failures
           if (resultSuccess) {
+            consecutiveToolFailures = 0; // Reset on success
             chatLogger.info('[TOOL-RESULT] ✓ Tool succeeded', {
               toolCallId: resultToolCallId,
               toolName,
@@ -1263,7 +1292,9 @@ export async function* streamWithVercelAI(
               error: errorMsg,
               argsUsed: Object.keys(finalArgs),
               isEmptyArgs,
+              consecutiveFailures: consecutiveToolFailures + 1,
             });
+            consecutiveToolFailures++;
 
             // SELF-HEALING: Enhance error message with retry guidance for validation-like errors.
             // Common validation failures: missing required fields, wrong types, empty args.
@@ -1389,10 +1420,24 @@ export async function* streamWithVercelAI(
         });
 
         // TWO-PHASE FC FALLBACK (Phase 2):
-        // If supportsFC was undefined, zero tool calls were produced, and the
-        // response text contains tool-call-like patterns, issue a second completion
-        // with text-mode instructions.
+        // Text-mode fallback ONLY makes sense for FILE-EDIT tools — those have a
+        // parseable text equivalent (```file:/```diff:/```mkdir:/```delete:).
+        // Other tools (web_search, bash_execute, read_file, search_files, …) have
+        // no text representation: stripping them and "retrying in text-mode" cannot
+        // recover the call. So we only trigger Phase 2 when at least one available
+        // (or attempted) tool is in the file-edit set; otherwise we leave Phase 1's
+        // result alone and let the upper-layer SelfHeal retry with feedback instead.
         const supportsFC = (vercelModel as any)?.supports?.functionCalling;
+        const FILE_EDIT_TOOLS = new Set([
+          'write_file', 'batch_write', 'apply_diff', 'create_directory', 'delete_file',
+        ]);
+        const availableToolNames = Object.keys(tools);
+        const failedToolNames = allToolCalls
+          .filter((tc: any) => tc?.result && (tc.result.success === false || tc.result.error != null))
+          .map((tc: any) => tc.name);
+        const fileEditToolFailed = failedToolNames.some((n: string) => FILE_EDIT_TOOLS.has(n));
+        const fileEditToolAvailable = availableToolNames.some((n) => FILE_EDIT_TOOLS.has(n));
+
         if (supportsFC === undefined) {
           const allToolCallsFailed = allToolCalls.length > 0 && allToolCalls.every((tc: any) => {
             const r = tc?.result;
@@ -1411,19 +1456,27 @@ export async function* streamWithVercelAI(
             /```(?:file|diff|mkdir|delete):/i.test(textContent)
           );
           const noOutputAtAll = !textContent && allToolCalls.length === 0;
+
+          // Gate: text-mode can only substitute when a file-edit tool was actually
+          // attempted-and-failed, OR (in the silent-output case) when at least one
+          // file-edit tool was available so the model has *something* to express in text.
           const triggerFallback = hasToolCallPattern
-            || (allToolCallsFailed && (!textContent || textContent.length < 20))
-            || noOutputAtAll;
+            || (allToolCallsFailed && (!textContent || textContent.length < 20) && fileEditToolFailed)
+            || (noOutputAtAll && fileEditToolAvailable);
 
           if (triggerFallback) {
-            chatLogger.warn('[FC-GATE] Phase 2: Retrying in text-mode', {
+            chatLogger.warn('[FC-GATE] Phase 2: Retrying in text-mode (file-edit tools only)', {
               provider,
               model: modelName,
               reason: hasToolCallPattern
                 ? 'tool-call patterns in text'
-                : (allToolCallsFailed ? 'all tool calls failed with empty response' : 'no output at all'),
+                : (allToolCallsFailed
+                  ? 'file-edit tool failed with empty response'
+                  : 'silent output and file-edit tools available'),
               textContentLength: textContent?.length || 0,
               toolCallCount: allToolCalls.length,
+              failedToolNames,
+              fileEditToolAvailable,
             });
 
             // Issue second completion with text-mode instructions
@@ -1460,6 +1513,156 @@ export async function* streamWithVercelAI(
               });
             }
           }
+        }
+      }
+
+      // ── PHASE 3: After ≥2 consecutive tool call failures, retry with a telemetry-derived
+      // reliable tool-calling model — independent of whether Phase 2 text-mode ran.
+      // This surfaces models that have demonstrated >65% tool-call success rate
+      // in the rolling 30-min window (from tool-call-telemetry).
+      if (consecutiveToolFailures >= 2 && allToolCalls.length > 0 && (toolCallStreaming ?? true)) {
+        const capableModels = getModelsForPurpose('tool-calling', { maxModels: 3 });
+        const currentModelKey = `${provider}:${modelName}`;
+        const betterModel = capableModels.find(
+          m => `${m.provider}:${m.model}` !== currentModelKey && m.provider !== provider
+        );
+
+        if (betterModel) {
+          chatLogger.warn('[FC-GATE] Phase 3: Retrying with telemetry-derived reliable FC model', {
+            provider,
+            model: modelName,
+            consecutiveToolFailures,
+            retryProvider: betterModel.provider,
+            retryModel: betterModel.model,
+            retryScore: betterModel.score,
+            retryToolSuccessRate: betterModel.toolSuccessRate,
+          });
+
+          try {
+            const { getVercelModel } = await import('./vercel-ai-streaming');
+            const currentEnv: any = typeof process !== 'undefined' ? process.env : {};
+            const apiKey = currentEnv[`${betterModel.provider.toUpperCase()}_API_KEY`];
+            const baseURL = currentEnv[`${betterModel.provider.toUpperCase()}_BASE_URL`];
+            const retryVercelModel = getVercelModel(
+              betterModel.provider,
+              betterModel.model,
+              apiKey,
+              baseURL,
+            );
+
+            if (!retryVercelModel) {
+              chatLogger.warn('[FC-GATE] Phase 3: getVercelModel returned null — falling through to final chunk', {
+                retryProvider: betterModel.provider,
+                retryModel: betterModel.model,
+                consecutiveToolFailures,
+              });
+              // Do NOT fall through — continue to Phase 4 final chunk which will use the
+              // original stream's finishReason (may be 'stop' if original stream completed)
+            } else {
+              // Build clean retry options: same base, different model, tools stripped.
+              // Inject healing context so the new model understands what failed and why.
+              const healingInstructions = buildHealingInstructions(consecutiveToolFailures);
+              const retrySystem = healingInstructions
+                ? (systemPrompt ? `${systemPrompt}
+
+${healingInstructions}` : healingInstructions)
+                : systemPrompt;
+
+              const retryOptions: any = {
+                model: retryVercelModel,
+                messages: chatMessages,
+                temperature: temp,
+                maxOutputTokens: maxT,
+                maxRetries: 0,
+                maxSteps,
+                abortSignal: effectiveSignal,
+                experimental_telemetry: {
+                  isEnabled: false,
+                  functionId: 'llm-stream-fallback',
+                  metadata: {
+                    provider,
+                    model: modelName,
+                    fallback: 'model-capability',
+                    retryProvider: betterModel.provider,
+                    retryModel: betterModel.model,
+                    consecutiveToolFailures,
+                    healingContext: !!healingInstructions,
+                  },
+                },
+              };
+              if (retrySystem) retryOptions.system = retrySystem;
+
+              let phase3Yielded = false;
+              let retryFinishReason: string | undefined = 'stop';
+              const retryResult = streamText(retryOptions);
+              for await (const retryChunk of retryResult.fullStream) {
+                if (effectiveSignal?.aborted) break;
+                if (retryChunk.type === 'finish') {
+                  retryFinishReason = (retryChunk as any).finishReason ?? 'stop';
+                }
+                if (retryChunk.type === 'text-delta') {
+                  phase3Yielded = true;
+                  yield {
+                    content: (retryChunk as any).text ?? '',
+                    isComplete: false,
+                    timestamp: new Date(),
+                    metadata: {
+                      fcFallback: 'model-capability',
+                      originalProvider: provider,
+                      originalModel: modelName,
+                      retryProvider: betterModel.provider,
+                      retryModel: betterModel.model,
+                    },
+                  };
+                }
+              }
+              if (phase3Yielded) {
+                // Phase 3 produced output — yield proper completion chunk so caller
+                // receives finishReason + usage without waiting for a timeout.
+                const retryUsage = await retryResult.usage;
+                chatLogger.info('[FC-GATE] Phase 3 model-capability fallback completed', {
+                  retryProvider: betterModel.provider,
+                  retryModel: betterModel.model,
+                  retryFinishReason,
+                });
+                yield {
+                  content: '',
+                  isComplete: true,
+                  finishReason: retryFinishReason,
+                  tokensUsed: retryUsage?.totalTokens || 0,
+                  usage: {
+                    promptTokens: (retryUsage as any)?.inputTokens || (retryUsage as any)?.promptTokens || 0,
+                    completionTokens: (retryUsage as any)?.outputTokens || (retryUsage as any)?.completionTokens || 0,
+                    totalTokens: retryUsage?.totalTokens || 0,
+                  },
+                  timestamp: new Date(),
+                  metadata: {
+                    vercelAI: true,
+                    provider: betterModel.provider,
+                    model: betterModel.model,
+                    fcFallback: 'model-capability',
+                    originalProvider: provider,
+                    originalModel: modelName,
+                    latencyMs: Date.now() - startTime,
+                  },
+                };
+                return; // Phase 3 fully handled — done with this stream
+              }
+            }
+          } catch (phase3Error) {
+            chatLogger.error('[FC-GATE] Phase 3 fallback also failed', {
+              retryProvider: betterModel.provider,
+              retryModel: betterModel.model,
+              error: phase3Error.message,
+            });
+          }
+        } else {
+          chatLogger.warn('[FC-GATE] Phase 3: No better model found in capability registry', {
+            provider,
+            model: modelName,
+            consecutiveToolFailures,
+            capableModelsCount: capableModels.length,
+          });
         }
       }
     }

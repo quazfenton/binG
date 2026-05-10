@@ -66,6 +66,8 @@ const ArchiveOrgEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
     handleRetry,
     handleReset,
     handleFallback,
+    handleLoadSuccess,
+    handleIframeError,
     triggerReload,
   } = useIframeLoader({
     url: iframeUrl,

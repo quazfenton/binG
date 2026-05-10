@@ -78,6 +78,7 @@ const DuckDuckGoEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
     handleFallback,
     handleLoadSuccess,
     handleIframeError,
+    triggerReload,
   } = useIframeLoader({
     url: iframeUrl,
     timeout: 30000,
