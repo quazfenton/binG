@@ -86,6 +86,7 @@ interface OpenCodeDirectResult {
   agent: string;
   fileChanges: FileChange[];
   steps?: any[];
+  error?: string;
 }
 
 /**
