@@ -63,7 +63,7 @@ export interface CapabilityProvider {
 class VFSProvider implements CapabilityProvider {
   readonly id = 'vfs';
   readonly name = 'Virtual Filesystem';
-  readonly capabilities = ['file.read', 'file.write', 'file.append', 'file.delete', 'file.list', 'file.search', 'file.batch_write', 'memory.context', 'workspace.getChanges'];
+  readonly capabilities = ['file.read', 'file.write', 'file.append', 'file.delete', 'file.list', 'file.search', 'file.batch_write', 'file.create_directory', 'memory.context', 'workspace.getChanges'];
 
   isAvailable(): boolean {
     return true;
@@ -101,16 +101,28 @@ class VFSProvider implements CapabilityProvider {
       return { success: true, path: file.path, bytesWritten: file.size };
     },
 
-    'file.batch_write': async (ownerId, input) => {
+    'file.batch_write': async (ownerId, input, context) => {
       // Delegate to the MCP batch_write tool which handles per-file validation,
       // scope path resolution, and event emission atomically
       const { callMCPToolFromAI_SDK } = await import('../mcp');
-      const result = await callMCPToolFromAI_SDK('batch_write', input, ownerId);
-      return {
-        success: result.success,
-        output: result.output,
-        error: result.error,
-      };
+      const scopePath = (context as any)?.scopePath || input.scopePath;
+      const result = await callMCPToolFromAI_SDK('batch_write', input, ownerId, scopePath);
+      if (!result.success) {
+        throw new Error(result.error || 'batch_write failed');
+      }
+      return result.output;
+    },
+
+    'file.create_directory': async (ownerId, input, context) => {
+      // Delegate to the MCP create_directory tool which handles scope path
+      // resolution and event emission — avoids the file.write schema mismatch
+      const { callMCPToolFromAI_SDK } = await import('../mcp');
+      const scopePath = (context as any)?.scopePath || input.scopePath;
+      const result = await callMCPToolFromAI_SDK('create_directory', { path: input.path }, ownerId, scopePath);
+      if (!result.success) {
+        throw new Error(result.error || 'create_directory failed');
+      }
+      return result.output;
     },
 
     'file.append': async (ownerId, input) => {
@@ -2041,6 +2053,9 @@ export class CapabilityRouter {
    * Used by execute-capability.ts hasToolCapability for routing decisions.
    */
   hasCapability(capabilityId: string): boolean {
+    if (!this.initialized) {
+      this.initialize();
+    }
     for (const provider of this.providers.values()) {
       if (provider.capabilities.includes(capabilityId)) {
         return true;

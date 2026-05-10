@@ -846,14 +846,11 @@ function initializeDatabaseSync(): void {
   db.pragma('temp_store = memory');
   db.pragma('foreign_keys = ON');
 
-  // Persist db on globalThis BEFORE schema init so Next.js HMR can find
-  // the existing connection even if schema init or migrations fail later.
-  (globalThis as any).__binG_dbInstance = db;
-
   // CRITICAL FIX: Check globalThis for dbInitialized flag - module variable may be reset
   const isAlreadyInitialized = dbInitialized || (globalThis as any).__binG_dbInitialized;
 
-  // Initialize schema synchronously (only if not already initialized)
+  // Only persist to globalThis AFTER checking if already initialized to avoid
+  // reusing a partially initialized database after a failed init
   if (!isAlreadyInitialized) {
     try {
       initializeSchemaSync();

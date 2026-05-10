@@ -86,11 +86,16 @@ export async function apiFetch<T = any>(
         controller.abort();
         combinedController.abort();
       };
-      
-      fetchOptions.signal.addEventListener('abort', abortHandler);
-      controller.signal.addEventListener('abort', abortHandler);
+
+      // Handle already-aborted signals before attaching listeners
+      if (fetchOptions.signal.aborted || controller.signal.aborted) {
+        abortHandler();
+      } else {
+        fetchOptions.signal.addEventListener('abort', abortHandler);
+        controller.signal.addEventListener('abort', abortHandler);
+      }
       combinedSignal = combinedController.signal;
-      
+
       cleanup = () => {
         fetchOptions.signal?.removeEventListener('abort', abortHandler);
         controller.signal.removeEventListener('abort', abortHandler);
@@ -104,11 +109,15 @@ export async function apiFetch<T = any>(
     return await executeFetch<T>(fullUrl, { ...fetchOptions, signal: combinedSignal }, parseJson);
   } catch (error: any) {
     if (error.name === 'AbortError') {
+      // Distinguish user-initiated abort from timeout
+      const isUserAbort = fetchOptions.signal?.aborted;
       return {
         ok: false,
-        status: 408,
-        statusText: 'Request Timeout',
-        error: `Request timed out after ${timeout}ms`,
+        status: isUserAbort ? 499 : 408,
+        statusText: isUserAbort ? 'Client Cancelled' : 'Request Timeout',
+        error: isUserAbort
+          ? 'Request was cancelled by the caller'
+          : `Request timed out after ${timeout}ms`,
         headers: {},
       };
     }
@@ -172,18 +181,21 @@ async function executeFetch<T>(
         if (reader) {
           const decoder = new TextDecoder();
           let bytesRead = 0;
-          
+
           while (true) {
             const { done, value } = await reader.read();
             if (done) break;
-            
+
             bytesRead += value.length;
             if (bytesRead > maxSize) {
               errorBody += decoder.decode(value.slice(0, maxSize - bytesRead + value.length));
               break;
             }
-            errorBody += decoder.decode(value);
+            // Use stream: true for intermediate chunks to handle multi-byte UTF-8 correctly
+            errorBody += decoder.decode(value, { stream: true });
           }
+          // Final decode to flush any pending surrogate pairs
+          errorBody += decoder.decode(new Uint8Array(0), { stream: false });
         } else {
           // Fallback if no reader available
           errorBody = await response.text().then(t => t.slice(0, maxSize));
