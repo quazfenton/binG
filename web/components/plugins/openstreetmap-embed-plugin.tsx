@@ -53,7 +53,7 @@ const OpenStreetMapEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [bookmarks, setBookmarks] = useState<BookmarkEntry[]>([]);
   const [isReloading, setIsReloading] = useState(false);
-  const [iframeKey, setIframeKey] = useState(0);
+  // Use iframeKey from hook
   const [activeTab, setActiveTab] = useState<'map' | 'bookmarks' | 'locations'>('map');
   const [coordinates, setCoordinates] = useState({ lat: 51.505, lon: -0.09, zoom: 12 });
 
@@ -177,14 +177,14 @@ const OpenStreetMapEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }
     const newZoom = Math.max(1, Math.min(19, coordinates.zoom + delta));
     updateMapUrl(coordinates.lat, coordinates.lon, newZoom);
     setIsReloading(true);
-    setIframeKey(prev => prev + 1);
+    triggerReload();
     setTimeout(() => setIsReloading(false), 500);
   };
 
   const handleReload = () => {
     setIframeError(null);
     setIsReloading(true);
-    setIframeKey(prev => prev + 1);
+    triggerReload();
     setTimeout(() => setIsReloading(false), 1000);
   };
 
@@ -232,14 +232,14 @@ const OpenStreetMapEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }
     }
     setActiveTab('map');
     setIsReloading(true);
-    setIframeKey(prev => prev + 1);
+    triggerReload();
     setTimeout(() => setIsReloading(false), 1000);
   };
 
   const loadLocation = (location: LocationEntry) => {
     updateMapUrl(location.lat, location.lon, location.zoom);
     setIsReloading(true);
-    setIframeKey(prev => prev + 1);
+    triggerReload();
     setTimeout(() => setIsReloading(false), 500);
   };
 

@@ -115,7 +115,7 @@ export default function VercelMediaEmbedPlugin({ onClose, initialUrl }: VercelMe
   const [newSiteUrl, setNewSiteUrl] = useState('');
   const [newSiteCategory, setNewSiteCategory] = useState<SiteEntry['category']>('other');
   const [copied, setCopied] = useState(false);
-  const [iframeKey, setIframeKey] = useState(0);
+  // Use iframeKey from hook
 
   // Load sites from localStorage
   useEffect(() => {
@@ -161,7 +161,7 @@ export default function VercelMediaEmbedPlugin({ onClose, initialUrl }: VercelMe
     setInputUrl(cleanUrl);
     setIsLoading(true);
     setIframeError(null);
-    setIframeKey(prev => prev + 1);
+    triggerReload();
 
     // Update last visited for existing site
     setSites(prev => prev.map(site => 
@@ -174,7 +174,7 @@ export default function VercelMediaEmbedPlugin({ onClose, initialUrl }: VercelMe
   }, []);
 
   const handleReload = () => {
-    setIframeKey(prev => prev + 1);
+    triggerReload();
     setIsLoading(true);
     setIframeError(null);
     toast.info('Reloading...');
@@ -460,8 +460,9 @@ export default function VercelMediaEmbedPlugin({ onClose, initialUrl }: VercelMe
                   title="Vercel Media Site"
                   onLoad={() => setIsLoading(false)}
                   onError={() => {
-                    setIframeError('Failed to load site. The site may not allow embedding.');
+                    setIframeError('Failed to load site. The site may not allow embedding. Trying fallback...');
                     setIsLoading(false);
+                    // For now, just show error - could add fallback mechanism here
                   }}
                   sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-presentation"
                   allow="autoplay; encrypted-media; fullscreen"

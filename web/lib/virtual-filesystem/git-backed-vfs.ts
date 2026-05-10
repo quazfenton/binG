@@ -100,8 +100,8 @@ export class GitBackedVFS {
     // 2. This instance is for that root owner
     // 3. Delimiter immediately follows
     const isRootToComposite = () => {
-      if (event.ownerId.includes('$') || event.ownerId.includes(':')) return false;
-      if (!this.ownerId.includes('$') && !this.ownerId.includes(':')) return false;
+      if (!event.ownerId || event.ownerId.includes('$') || event.ownerId.includes(':')) return false;
+      if (!this.ownerId || (!this.ownerId.includes('$') && !this.ownerId.includes(':'))) return false;
       
       const delim = this.ownerId.includes('$') ? '$' : ':';
       const expectedPrefix = event.ownerId + delim;

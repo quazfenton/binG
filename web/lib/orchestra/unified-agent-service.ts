@@ -1654,6 +1654,11 @@ function createCapabilityToolExecutor(config: UnifiedAgentConfig) {
       'mcp_tool': 'mcp.execute', 'mcp_execute': 'mcp.execute',
       'git': 'repo.git', 'git_clone': 'repo.clone', 'git_search': 'repo.search',
       'web_search': 'web.search', 'web_fetch': 'web.fetch',
+      // VFS batch/file tools — route through capability system so userId/scopePath are threaded
+      'batch_write': 'file.batch_write', 'write_files': 'file.batch_write',
+      'batchwrite': 'file.batch_write', 'writefiles': 'file.batch_write',
+      'create_directory': 'file.write', 'mkdir': 'file.write',
+      'search_code': 'file.search', 'grep_code': 'file.search',
     };
 
     const capabilityId = capabilityMap[name] || name;

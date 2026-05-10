@@ -86,7 +86,7 @@ const ArchiveOrgEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
   const [savedUrls, setSavedUrls] = useState<SavedUrlEntry[]>([]);
   const [mediaType, setMediaType] = useState<'all' | 'web' | 'texts' | 'video' | 'audio' | 'image'>('all');
   const [isReloading, setIsReloading] = useState(false);
-  const [iframeKey, setIframeKey] = useState(0);
+  // Use iframeKey from hook
   const [activeTab, setActiveTab] = useState<'browse' | 'wayback' | 'bookmarks' | 'saved'>('browse');
 
   useEffect(() => {
@@ -121,7 +121,7 @@ const ArchiveOrgEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
     setActiveTab('wayback');
 
     setIsReloading(true);
-    setIframeKey(prev => prev + 1);
+    triggerReload();
     setTimeout(() => setIsReloading(false), 1000);
   };
 
@@ -129,7 +129,7 @@ const ArchiveOrgEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
     setIframeError(null);
     setIsLoading(true);
     setIsReloading(true);
-    setIframeKey(prev => prev + 1);
+    triggerReload();
     setTimeout(() => setIsReloading(false), 1000);
   };
 
@@ -173,7 +173,7 @@ const ArchiveOrgEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
     };
     setIframeUrl(typeUrls[type] || 'https://archive.org');
     setIsReloading(true);
-    setIframeKey(prev => prev + 1);
+    triggerReload();
     setTimeout(() => setIsReloading(false), 1000);
   };
 
@@ -204,7 +204,7 @@ const ArchiveOrgEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
     setIframeUrl(bookmark.url);
     setActiveTab('browse');
     setIsReloading(true);
-    setIframeKey(prev => prev + 1);
+    triggerReload();
     setTimeout(() => setIsReloading(false), 1000);
   };
 
@@ -525,7 +525,7 @@ const ArchiveOrgEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
                               setIframeUrl(waybackUrl);
                               setActiveTab('wayback');
                               setIsReloading(true);
-                              setIframeKey(prev => prev + 1);
+                              triggerReload();
                               setTimeout(() => setIsReloading(false), 1000);
                             }}
                             className="hover:bg-indigo-800/50"

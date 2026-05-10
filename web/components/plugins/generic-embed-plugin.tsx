@@ -119,7 +119,7 @@ const GenericEmbedPlugin: React.FC<{ onClose: () => void, initialUrl?: string }>
   const [bookmarks, setBookmarks] = useState<BookmarkEntry[]>([]);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [isReloading, setIsReloading] = useState(false);
-  const [iframeKey, setIframeKey] = useState(0);
+  // Use iframeKey from hook
   const [activeTab, setActiveTab] = useState<'embed' | 'bookmarks' | 'history'>('embed');
   const [copied, setCopied] = useState(false);
   const [detectedLinks, setDetectedLinks] = useState<Array<{ url: string; provider: string; embedUrl: string }>>([]);
@@ -142,6 +142,8 @@ const GenericEmbedPlugin: React.FC<{ onClose: () => void, initialUrl?: string }>
     handleReset,
     handleFallback,
     handleLoadSuccess,
+    handleIframeError,
+    triggerReload,
   } = useIframeLoader({
     url: currentUrl,
     timeout: 30000,
@@ -212,7 +214,7 @@ const GenericEmbedPlugin: React.FC<{ onClose: () => void, initialUrl?: string }>
     setDetectedLinks(links);
 
     setIsReloading(true);
-    setIframeKey(prev => prev + 1);
+    triggerReload();
     setTimeout(() => setIsReloading(false), 1000);
   }, [history]);
 
@@ -224,7 +226,7 @@ const GenericEmbedPlugin: React.FC<{ onClose: () => void, initialUrl?: string }>
   const handleReload = () => {
     setIframeError(null);
     setIsReloading(true);
-    setIframeKey(prev => prev + 1);
+    triggerReload();
     setTimeout(() => setIsReloading(false), 1000);
   };
 
@@ -268,7 +270,7 @@ const GenericEmbedPlugin: React.FC<{ onClose: () => void, initialUrl?: string }>
       const fallback = getSecondaryFallbackUrl(info.embedUrl);
       setCurrentUrl(fallback);
       setIsReloading(true);
-      setIframeKey(prev => prev + 1);
+      triggerReload();
       setTimeout(() => setIsReloading(false), 1000);
       toast.info('Using fallback service', { duration: 3000 });
     }
@@ -291,7 +293,7 @@ const GenericEmbedPlugin: React.FC<{ onClose: () => void, initialUrl?: string }>
     });
     setActiveTab('embed');
     setIsReloading(true);
-    setIframeKey(prev => prev + 1);
+    triggerReload();
     setTimeout(() => setIsReloading(false), 1000);
   };
 
@@ -472,11 +474,7 @@ const GenericEmbedPlugin: React.FC<{ onClose: () => void, initialUrl?: string }>
                         handleLoadSuccess();
                       }}
                       onError={() => {
-                        setIframeError('Failed to load content. This site may block embedding.');
-                        // Auto-trigger cascading fallback on error (proxy → webfuse)
-                        setTimeout(() => {
-                          handleFallback();
-                        }, 500);
+                        handleIframeError('Content loading failed');
                       }}
                       sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-presentation allow-autoplay allow-top-navigation allow-top-navigation-by-user-activation"
                       allow="autoplay; encrypted-media; fullscreen; picture-in-picture"

@@ -48,7 +48,7 @@ const WikipediaEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =>
   const [searchHistory, setSearchHistory] = useState<SearchHistoryEntry[]>([]);
   const [language, setLanguage] = useState('en');
   const [isReloading, setIsReloading] = useState(false);
-  const [iframeKey, setIframeKey] = useState(0);
+  // Use iframeKey from hook
   const [activeTab, setActiveTab] = useState<'browse' | 'bookmarks' | 'history'>('browse');
 
   // Use iframe loader hook with fallback
@@ -71,6 +71,7 @@ const WikipediaEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =>
     handleFallback,
     handleLoadSuccess,
     handleIframeError,
+    triggerReload,
   } = useIframeLoader({
     url: iframeUrl,
     timeout: 30000,
@@ -136,14 +137,14 @@ const WikipediaEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =>
     localStorage.setItem('wikipedia-search-history', JSON.stringify(newHistory));
 
     setIsReloading(true);
-    setIframeKey(prev => prev + 1);
+    triggerReload();
     setTimeout(() => setIsReloading(false), 1000);
   };
 
   const handleReload = () => {
     setIframeError(null);
     setIsReloading(true);
-    setIframeKey(prev => prev + 1);
+    triggerReload();
     setTimeout(() => setIsReloading(false), 1000);
   };
 
@@ -177,7 +178,7 @@ const WikipediaEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =>
     const newUrl = `https://${newLang}.wikipedia.org/wiki/Main_Page`;
     setIframeUrl(newUrl);
     setIsReloading(true);
-    setIframeKey(prev => prev + 1);
+    triggerReload();
     setTimeout(() => setIsReloading(false), 1000);
   };
 
@@ -185,7 +186,7 @@ const WikipediaEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =>
     setIframeUrl(bookmark.url);
     setActiveTab('browse');
     setIsReloading(true);
-    setIframeKey(prev => prev + 1);
+    triggerReload();
     setTimeout(() => setIsReloading(false), 1000);
   };
 
@@ -195,7 +196,7 @@ const WikipediaEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =>
     setIframeUrl(searchUrl);
     setActiveTab('browse');
     setIsReloading(true);
-    setIframeKey(prev => prev + 1);
+    triggerReload();
     setTimeout(() => setIsReloading(false), 1000);
   };
 

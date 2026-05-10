@@ -67,6 +67,7 @@ const GlitchEmbedPlugin: React.FC<GlitchEmbedPluginProps> = ({ onOpenWindow }) =
     handleFallback,
     handleLoadSuccess,
     handleIframeError,
+    triggerReload,
   } = useIframeLoader({
     url: currentProject?.embedUrl || '',
     timeout: 30000,
