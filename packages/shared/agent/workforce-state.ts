@@ -48,10 +48,15 @@ export async function loadState(userId: string, conversationId: string): Promise
       return { ...DEFAULT_STATE, updatedAt: new Date().toISOString() };
     }
     return parsed;
-  } catch {
-    logger.debug('STATE.yaml not found, initializing new state');
-    await saveState(userId, conversationId, DEFAULT_STATE);
-    return { ...DEFAULT_STATE };
+  } catch (err: any) {
+    const isNotFound = err?.code === 'ENOENT' || err?.message?.includes('not found') || err?.message?.includes('ENOENT');
+    if (isNotFound) {
+      logger.debug('STATE.yaml not found, initializing new state');
+      await saveState(userId, conversationId, DEFAULT_STATE);
+      return { ...DEFAULT_STATE };
+    }
+    logger.error('Failed to load state:', err);
+    throw err;
   }
 }
 

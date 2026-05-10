@@ -86,7 +86,9 @@ export function getDefaultWorkspaceRoot(): string | null {
   // Priority 2: Web mode - don't use process.cwd() as it incorrectly
   // uses the server's cwd (where pnpm dev was run). Use 'project/sessions'
   // as base - user separation is handled by VFS via userID/compositeID.
-  if (!isDesktopMode() && !isTauriRuntime()) {
+  // Check for browser environment explicitly - CLI/standalone runs in Node.js
+  // where window is undefined, so it should fall through to process.cwd()
+  if (typeof window !== 'undefined' && !isDesktopMode() && !isTauriRuntime()) {
     return 'project/sessions';
   }
 

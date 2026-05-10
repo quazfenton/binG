@@ -202,6 +202,14 @@ export async function runOpenCodeDirect(options: OpenCodeDirectOptions): Promise
     }
   } catch (syncError) {
     logger.warn('Sync from sandbox failed', { error: syncError });
+    return {
+      success: false,
+      response: result.response || '',
+      agent: 'opencode',
+      fileChanges,
+      steps: result.steps,
+      error: `Sandbox sync failed: ${syncError instanceof Error ? syncError.message : String(syncError)}`,
+    };
   }
 
   return {

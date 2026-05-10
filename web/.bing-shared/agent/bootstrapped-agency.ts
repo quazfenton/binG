@@ -329,8 +329,8 @@ export class BootstrappedAgency {
           // packages/shared/agent → web/lib/tools/router
           const { getCapabilityRouter } = await import('../../../web/lib/tools/router');
           const router = getCapabilityRouter();
-          const context = { 
-            ...(this.config.userId && { userId: this.config.userId }),
+          const context = {
+            userId: this.config.userId || this.config.sessionId,
             sessionId: this.config.sessionId,
           };
 
@@ -419,8 +419,8 @@ export class BootstrappedAgency {
         try {
           const { getCapabilityRouter } = await import('@/lib/tools/router');
           const router = getCapabilityRouter();
-          const context = { 
-            userId: this.config.userId, 
+          const context = {
+            userId: this.config.userId || this.config.sessionId,
             sessionId: this.config.sessionId,
           };
           // Build structured input from the task description

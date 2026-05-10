@@ -23,7 +23,12 @@ let _emitEventPromise: Promise<typeof import('@/lib/events/bus').emitEvent> | nu
 
 function getEmitEvent(): Promise<typeof import('@/lib/events/bus').emitEvent> {
   if (!_emitEventPromise) {
-    _emitEventPromise = import('@/lib/events/bus').then(mod => mod.emitEvent);
+    _emitEventPromise = import('@/lib/events/bus')
+      .then(mod => mod.emitEvent)
+      .catch(err => {
+        _emitEventPromise = null; // Allow retry on next call — transient module errors shouldn't permanently poison the cache
+        throw err;
+      });
   }
   return _emitEventPromise;
 }
@@ -95,10 +100,10 @@ export async function emitOrchestrationProgress(
 ): Promise<void> {
   const timestamp = Date.now();
   const payload: OrchestrationProgressEvent = {
+    ...update,
     type: 'ORCHESTRATION_PROGRESS',
     userId,
     sessionId,
-    ...update,
     timestamp,
   };
 
