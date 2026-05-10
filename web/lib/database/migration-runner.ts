@@ -22,6 +22,8 @@ function stripTransactionStatements(sql: string): string {
     .replace(/\/\*[\s\S]*?\*\//g, '')        // Strip /* multi-line */ comments
     .split('\n')
     .filter(line => !/^\s*--/.test(line))   // Strip -- single-line comments
+    .map(line => line.replace(/--.*$/, ''))   // Strip inline and full-line -- comments
+    .filter(line => line.trim().length > 0)
     .join('\n');
 
   return withoutComments
