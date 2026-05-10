@@ -52,6 +52,7 @@ import {
   addFeedback,
   injectFeedback,
   detectHealingTrigger,
+  detectIncompleteResponse,
   generateHealingPrompt,
   type FeedbackContext,
 } from '@bing/shared/agent/feedback-injection';
@@ -2195,7 +2196,38 @@ async function runV1ApiWithTools(
       const retryCount = ((config as any)._toolFailureRetryCount as number) || 0;
       const MAX_TOOL_FAILURE_RETRIES = 1;
 
-      if (responseEmpty && retryCount < MAX_TOOL_FAILURE_RETRIES && (anyToolFailed || noToolCalls)) {
+      // Detect incomplete (truncated) responses -- non-empty but cut off mid-stream.
+      // Catches mid-sentence cutoffs, unclosed code blocks, unclosed JSON, etc.
+      const incompleteDetection = !responseEmpty && cleanedResponse
+        ? detectIncompleteResponse(cleanedResponse)
+        : { detected: false, reason: '', prompt: '', confidence: 0 as number };
+      const responseIncomplete = incompleteDetection.detected;
+
+      const shouldRetry = (responseEmpty || responseIncomplete) && retryCount < MAX_TOOL_FAILURE_RETRIES && (anyToolFailed || noToolCalls);
+
+      if (shouldRetry) {
+        // Build FeedbackEntry objects from tool failures and accumulate into
+        // feedbackContext so injectFeedback() can provide richer healing context
+        // (healingSteps, formatGuidance, roleRedirectSection) on retries.
+        let enrichedContext = feedbackContext;
+        if (anyToolFailed) {
+          for (const inv of toolInvocations.filter(i => i.result?.success === false)) {
+            const err = inv.result?.error;
+            const errMsg = typeof err === 'string' ? err : ((err as any)?.message || String(err));
+            const entry = createFeedbackEntry(
+              'failure',
+              `Tool "${inv.toolName}" failed: ${errMsg}`,
+              'tool_execution',
+              { toolName: inv.toolName, error: inv.result?.error },
+              'high'
+            );
+            enrichedContext = addFeedback(enrichedContext, entry);
+          }
+        }
+
+        // Use full feedback injection module for richer healing context
+        const injectedFeedback = injectFeedback(enrichedContext);
+
         // Build feedback that depends on what went wrong
         let feedbackMsg: string;
         let userPrompt: string;
@@ -2207,20 +2239,48 @@ async function runV1ApiWithTools(
               const errMsg = typeof err === 'string'
                 ? err
                 : (err?.message || JSON.stringify(err) || 'unknown error');
-              const suggestion = (typeof err === 'object' && err?.suggestedNextAction) || '';
-              return `- Tool "${inv.toolName}" called with args ${JSON.stringify(inv.args).slice(0, 300)} failed: ${errMsg}. ${suggestion}`;
+              const errCode = (typeof err === 'object' && (err as any)?.code) || '';
+              const expectedFields = (typeof err === 'object' && Array.isArray((err as any)?.expectedFields))
+                ? (err as any).expectedFields
+                : [];
+              const suggestion = (typeof err === 'object' && (err as any)?.suggestedNextAction) || '';
+              const missingFields = expectedFields.length > 0
+                ? ` (missing: ${expectedFields.join(', ')})`
+                : '';
+              return `- Tool "${inv.toolName}"${missingFields} failed [${errCode}]: ${errMsg}. ${suggestion}`;
             });
-          feedbackMsg = `[TOOL-FAILURE-FEEDBACK] Your previous tool call(s) failed validation. Fix and retry:\n${failureSummaries.join('\n')}\n\nIMPORTANT: Provide ALL required arguments for each tool. For batch_write you MUST include the "files" array; for web_search you MUST include the "query" string; for write_file you MUST include both "path" and "content".`;
+          const allMissingFields = new Set<string>();
+          toolInvocations
+            .filter((inv) => inv.result?.success === false)
+            .forEach((inv) => {
+              const fields = (typeof inv.result?.error === 'object' && Array.isArray((inv.result.error as any)?.expectedFields))
+                ? (inv.result.error as any).expectedFields
+                : [];
+              fields.forEach((f: string) => allMissingFields.add(f));
+            });
+          const fieldsReminder = allMissingFields.size > 0
+            ? `\n\nMISSING REQUIRED FIELDS: ${[...allMissingFields].join(', ')}. You MUST provide every one of these fields in your next tool call.`
+            : '\n\nIMPORTANT: Provide ALL required arguments for each tool. For batch_write you MUST include the "files" array; for web_search you MUST include the "query" string; for write_file you MUST include both "path" and "content".';
+          feedbackMsg = `[TOOL-FAILURE-FEEDBACK] Your previous tool call(s) failed validation. Fix and retry:\n${failureSummaries.join('\n')}${fieldsReminder}${injectedFeedback.correctionSection}${injectedFeedback.healingInstructions}${injectedFeedback.formatGuidance}`;
           userPrompt = 'Please retry the failed tool call(s) above with the correct arguments AND then provide a final text answer to me.';
+        } else if (responseIncomplete) {
+          // Response was non-empty but truncated -- model got cut off mid-stream.
+          // Give specific correction prompt based on what detectIncompleteResponse found.
+          // NOTE: injectedFeedback sections are empty here (no entries when anyToolFailed is false),
+          // but included for future-proofing when both conditions may coexist.
+          feedbackMsg = `[INCOMPLETE-RESPONSE-FEEDBACK] ${incompleteDetection.prompt}\n\nYour response was truncated or cut off. Please complete your thought and provide a full answer.${injectedFeedback.correctionSection}${injectedFeedback.formatGuidance}`;
+          userPrompt = 'Please complete your previous response. Start from where you left off or restate your answer clearly.';
         } else {
-          // No tool calls and no text — model went silent. Force a text-mode response.
+          // No tool calls and no text -- model went silent. Force a text-mode response.
           feedbackMsg = '[EMPTY-RESPONSE-FEEDBACK] You produced no text and no tool calls. Respond directly to the user in plain text now. If a tool was needed, describe what you would have done.';
           userPrompt = 'Please respond directly with a complete answer.';
         }
 
-        log.warn('[V1-API-WITH-TOOLS] [SelfHeal] Auto-retrying empty response', {
+        log.warn('[V1-API-WITH-TOOLS] [SelfHeal] Auto-retrying response', {
           anyToolFailed,
           noToolCalls,
+          responseIncomplete,
+          incompleteConfidence: incompleteDetection.confidence,
           toolCount: toolInvocations.length,
           retryCount: retryCount + 1,
         });
