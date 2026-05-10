@@ -77,13 +77,21 @@ export function VoiceToggleButton({ className }: { className?: string }) {
                   onTouchEnd={isPressing ? () => { endPress(); handleToggle(); } : endPress}
                   whileTap={{ scale: 0.9 }}
                   className="relative"
+                  onClick={(e) => {
+                    // Prevent the trigger from opening on click
+                    if (!showMenu) {
+                      e.preventDefault();
+                      e.stopPropagation();
+                    }
+                  }}
                 >
                   <Button
                     size="icon"
                     variant={isListening ? "default" : "outline"}
                     onClick={(e) => {
-                      if (!showMenu) handleToggle();
                       e.preventDefault();
+                      e.stopPropagation();
+                      if (!showMenu) handleToggle();
                     }}
                     className={cn(
                       "rounded-full w-9 h-9 transition-all duration-300 border-white/10 shadow-lg",

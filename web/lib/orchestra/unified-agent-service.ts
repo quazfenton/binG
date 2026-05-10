@@ -2234,7 +2234,7 @@ async function runV1ApiWithTools(
           healingLen: injectedFeedback.healingInstructions?.length || 0,
           hasFormatGuidance: !!injectedFeedback.formatGuidance,
           formatLen: injectedFeedback.formatGuidance?.length || 0,
-          feedbackEntryCount: enrichedContext.failures?.length || 0,
+          failureCount: enrichedContext.failures?.length || 0,
         });
 
         // Build feedback that depends on what went wrong
@@ -2284,6 +2284,17 @@ async function runV1ApiWithTools(
           feedbackMsg = '[EMPTY-RESPONSE-FEEDBACK] You produced no text and no tool calls. Respond directly to the user in plain text now. If a tool was needed, describe what you would have done.';
           userPrompt = 'Please respond directly with a complete answer.';
         }
+
+        // Log a truncated preview of the assembled feedback so we can see
+        // what the LLM is actually receiving without flooding logs.
+        const feedbackPreview = feedbackMsg.length > 200
+          ? feedbackMsg.slice(0, 200).replace(/\n/g, '\\n') + '...'
+          : feedbackMsg.replace(/\n/g, '\\n');
+        log.debug('[V1-API-WITH-TOOLS] [SelfHeal] Assembled feedback for LLM', {
+          feedbackLength: feedbackMsg.length,
+          feedbackPreview,
+          branch: anyToolFailed ? 'tool-failure' : responseIncomplete ? 'incomplete-response' : 'empty-response',
+        });
 
         log.warn('[V1-API-WITH-TOOLS] [SelfHeal] Auto-retrying response', {
           anyToolFailed,

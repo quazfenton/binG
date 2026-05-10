@@ -453,10 +453,11 @@ export class PlanActVerifyOrchestrator {
           type: 'warning',
           message: `Final summarization skipped: ${finalCheck.reason}. Returning partial results.`
         };
-        yield {
+        const stats = controller.getStats();
+      yield {
           type: 'done',
-          response: 'Execution completed with partial results due to budget constraints.',
-          stats: controller.getStats()
+          response: `Execution halted: ${finalCheck.reason || 'budget exhausted'}. Consumed ${stats.iterations ?? 0} iterations, ${stats.tokensUsed ?? 0} tokens, ${Math.round((stats.durationMs ?? 0) / 1000)}s. Partial results returned.`,
+          stats
         };
         return;
       }

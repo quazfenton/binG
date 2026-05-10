@@ -131,11 +131,11 @@ export default function ConversationInterface() {
   const [embedMode, setEmbedMode] = useState(false);
 
   // Chat panel horizontal resizing state
-  const [chatPanelWidth, setChatPanelWidth] = useState(450); // Default width
+  const [chatPanelWidth, setChatPanelWidth] = useState(560); // Default width
   const [isDesktop, setIsDesktop] = useState(false); // Track if we're on desktop
   const [isChatResizing, setIsChatResizing] = useState(false);
   const chatResizeStartX = useRef(0);
-  const chatResizeStartWidth = useRef(450);
+  const chatResizeStartWidth = useRef(560);
   const chatSnapThreshold = useRef(false); // Use ref to avoid effect re-runs during drag
 
   // Detect desktop viewport
@@ -2111,7 +2111,7 @@ export default function ConversationInterface() {
           className="relative z-10 flex flex-col min-h-0 w-full md:border-l md:border-white/10"
           style={{ 
             width: isDesktop ? chatPanelWidth : '100%',
-            minWidth: '300px',
+            minWidth: '400px',
             maxWidth: '1200px',
           } as React.CSSProperties}
         >

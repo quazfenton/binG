@@ -250,7 +250,7 @@ class MCPFilesystemProvider implements CapabilityProvider {
     }
 
     try {
-      const result = await callMCPToolFromAI_SDK(toolName, input, context.userId);
+      const result = await callMCPToolFromAI_SDK(toolName, input, context.userId, context.scopePath);
       return {
         success: result.success,
         output: result.output,

@@ -198,6 +198,7 @@ class VoiceService {
   async disconnectFromLivekit() { if (this.room) { await this.room.disconnect(); this.room = null; this.isConnected = false; } }
 
   private async speakWithProvider(text: string, provider: TTSProvider, options: VoiceSettings): Promise<void> {
+    console.log(`[VoiceService] Synthesis started | Provider: ${provider} | Text: "${text.substring(0, 50)}${text.length > 50 ? '...' : ''}"`);
     switch (provider) {
       case 'web': return this.speakWeb(text, options);
       case 'kittentts': return this.speakKitten(text, options);
@@ -300,7 +301,12 @@ class VoiceService {
         if (!breaker.canExecute()) continue;
         let started = false;
         await breaker.execute(async () => {
-          if (provider === 'browser') { this.recognition.start(); this.isListening = true; started = true; }
+          if (provider === 'browser') { 
+            console.log(`[VoiceService] Transcription started | Provider: browser`);
+            this.recognition.start(); 
+            this.isListening = true; 
+            started = true; 
+          }
           else started = await this.startChunkedListening(provider);
         });
         if (started) {
@@ -317,6 +323,7 @@ class VoiceService {
 
   private async startChunkedListening(provider: STTProvider): Promise<boolean> {
     if (!navigator.mediaDevices?.getUserMedia) return false;
+    console.log(`[VoiceService] Transcription started | Provider: ${provider}`);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000, echoCancellation: true, noiseSuppression: true } });
       this.mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });

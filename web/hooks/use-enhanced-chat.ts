@@ -854,12 +854,17 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   if (eventData.fileEdits && Array.isArray(eventData.fileEdits)) {
                     doneMetadata.fileEdits = eventData.fileEdits;
                   }
+                  // Also include modelName from done event (top-level, not in messageMetadata)
+                  if (eventData.modelName) {
+                    doneMetadata.modelName = eventData.modelName;
+                  }
                   // ALWAYS update message with done content and metadata
                   // This ensures complete content even if streaming accumulation got stuck
                   setMessages(prev => prev.map(msg =>
                     msg.id === assistantMessage.id
                       ? {
                           ...msg,
+                          modelName: eventData.modelName || msg.modelName,
                           metadata: { ...(msg.metadata || {}), ...doneMetadata },
                           content: doneContent // CRITICAL: Always use complete done content
                         }

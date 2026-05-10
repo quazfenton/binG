@@ -1081,7 +1081,7 @@ export class VirtualFilesystemService {
       // WARNING: Empty ownerId should never happen if callers use resolveFilesystemOwner()
       // Using generateSecureId would cause inconsistent workspace per-request
       // Caller MUST provide a valid ownerId via resolveFilesystemOwner()
-      console.warn('[VFS] Empty ownerId - callers should use resolveFilesystemOwner()');
+      console.warn('[VFS] Empty ownerId — files will be written to anon:public workspace. Callers should use resolveFilesystemOwner() at the API route level to resolve the proper owner.');
       return 'anon:public';
     }
     if (trimmed.length > 256) return trimmed.slice(0, 256);
