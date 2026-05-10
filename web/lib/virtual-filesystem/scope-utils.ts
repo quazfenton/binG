@@ -1,4 +1,5 @@
 import { normalizeLLMPath } from './path-normalizer';
+import { isDesktopMode } from '@bing/platform/env';
 
 /**
  * Strip common sandbox/workspace prefixes from a path.
@@ -287,4 +288,48 @@ export function normalizeSessionPath(sessionId: string, subPath?: string): strin
     .replace(/\/+/g, '/');
 
   return `${basePath}/${normalizedSubPath}`;
+}
+
+/**
+ * Get the VFS scope base path for the current execution mode.
+ * In desktop/CLI mode, users can choose arbitrary workspace directories,
+ * so we use 'project' as the VFS root namespace.
+ * In web mode, we use 'project/sessions/{sessionId}' for session isolation.
+ * 
+ * @param sessionId - Optional session ID for web mode
+ * @returns The appropriate VFS scope base path
+ */
+export function getVfsScopeBasePath(sessionId?: string): string {
+  if (isDesktopMode()) {
+    // Desktop/CLI mode: use 'project' as VFS root - users choose their own workspace
+    return 'project';
+  }
+  // Web mode: use session-scoped path
+  if (sessionId) {
+    const simpleSessionId = normalizeSessionId(sessionId);
+    return `project/sessions/${simpleSessionId}`;
+  }
+  return 'project/sessions/000'; // Default fallback for web mode without session
+}
+
+/**
+ * Get the VFS scope path, preferring explicit sessionId over inferred.
+ * This is the recommended function for getting scopePath in MCP tools.
+ * 
+ * @param options - Object with sessionId and optional override scopePath
+ * @returns The appropriate VFS scope path
+ */
+export function getVfsScopePath(options: { sessionId?: string; scopePath?: string }): string {
+  const { sessionId, scopePath } = options;
+  // If explicitly passed scopePath and it's the session-scoped form, use it
+  if (scopePath && scopePath.startsWith('project/sessions/')) {
+    return scopePath;
+  }
+  // If scopePath is explicitly 'project' (no session context), preserve it as-is
+  // This preserves the web fallback behavior when sessionId is empty
+  if (scopePath === 'project') {
+    return 'project';
+  }
+  // Otherwise derive from sessionId with mode awareness
+  return getVfsScopeBasePath(sessionId);
 }

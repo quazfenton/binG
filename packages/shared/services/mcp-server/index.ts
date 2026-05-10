@@ -16,7 +16,7 @@ import { createServer } from 'http';
 // Dynamic import of MCP tools — avoids @/ path alias issues in shared package
 // The web layer re-exports these, so we import from the web module at runtime
 let getMCPToolsForAI_SDK: ((userId: string) => Promise<any[]>) | undefined;
-let callMCPToolFromAI_SDK: ((name: string, args: Record<string, any>, userId: string) => Promise<any>) | undefined;
+let callMCPToolFromAI_SDK: ((name: string, args: Record<string, any>, userId: string, scopePath?: string) => Promise<any>) | undefined;
 
 async function ensureMCPFunctions() {
   if (!getMCPToolsForAI_SDK || !callMCPToolFromAI_SDK) {
@@ -31,7 +31,7 @@ async function ensureMCPFunctions() {
   }
 }
 
-const PORT = parseInt(process.env.MCP_PORT || '8888', 10);
+const PORT = parseInt(process.env.MCP_PORT || '8888', 10); // MCP server port (default 8888)
 const WORKSPACE_ROOT = process.env.WORKSPACE_ROOT || '/workspace';
 const VFS_ROOT = process.env.VFS_ROOT || '/workspace/vfs';
 

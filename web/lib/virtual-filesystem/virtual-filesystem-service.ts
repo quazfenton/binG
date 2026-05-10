@@ -1048,11 +1048,16 @@ export class VirtualFilesystemService {
 
     if (safeParts.length === 0) {
       return this.workspaceRoot;
+    }    const normalizedPath = safeParts.join('/');
+
+    // VFS scoped paths (project/...) bypass workspaceRoot validation
+    // These are virtual session namespaces, not filesystem paths relative to workspaceRoot
+    if (normalizedPath.startsWith('project/')) {
+      return normalizedPath;
     }
 
-const normalizedPath = safeParts.join('/');
     const workspacePrefix = workspaceRootParts.join('/');
-    
+
     console.log('[VFS normalizePath] inputPath:', inputPath, 'workspaceRoot:', this.workspaceRoot, 'normalizedPath:', normalizedPath, 'workspacePrefix:', workspacePrefix);
     
     // Verify the normalized path is within or an ancestor of the workspace root

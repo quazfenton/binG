@@ -81,11 +81,17 @@ function sanitizeArgs(args: unknown): unknown {
   const sensitiveKeys = ['apikey', 'password', 'secret', 'token', 'authorization', 'credential'];
   const sanitized: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(args as Record<string, unknown>)) {
-    if (sensitiveKeys.some(s => key.toLowerCase().includes(s))) {
+    const k = String(key || '');
+    if (sensitiveKeys.some(s => k.toLowerCase().includes(s))) {
       sanitized[key] = '[REDACTED]';
-    } else {
-      sanitized[key] = value;
+      continue;
     }
+    // Special-case files arrays to avoid huge payloads in logs
+    if (k === 'files' && Array.isArray(value)) {
+      sanitized[key] = (value as any[]).map(f => ({ path: f?.path, name: f?.name }));
+      continue;
+    }
+    sanitized[key] = value;
   }
   return sanitized;
 }

@@ -778,7 +778,7 @@ class TaskRouter {
       onStreamChunk: request.onStreamChunk,
       onToolExecution: request.onToolExecution,
       executeTool: async (name, args) => {
-        const toolResult = await callMCPToolFromAI_SDK(name, args, request.userId);
+        const toolResult = await callMCPToolFromAI_SDK(name, args, request.userId, session.id);
         return { success: toolResult.success, output: toolResult.output, exitCode: toolResult.success ? 0 : 1 };
       },
     });

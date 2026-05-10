@@ -83,10 +83,12 @@ export async function createMCPToolServer(options: MCPServerOptions = {}) {
         description: 'Explain WHY this change is needed',
       },
     },
-    async (params) => {
+    async (params, context?: { scopePath?: string; sessionId?: string }) => {
       try {
+        const effectiveScopePath = context?.scopePath || 'project';
+        const effectiveSessionId = context?.sessionId;
         const result = await toolContextStore.run(
-          { userId: 'mcp-server', sessionId: undefined, scopePath: 'project' },
+          { userId: 'mcp-server', sessionId: effectiveSessionId, scopePath: effectiveScopePath },
           async () => applyDiffTool.execute(params, {
             messages: [],
             toolCallId: crypto.randomUUID(),

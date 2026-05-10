@@ -744,6 +744,15 @@ export class EnhancedLLMService {
       const vercelProvider = vercelProviderMap[primaryProvider];
 
       if (vercelProvider) {
+        // Sanitize streaming messages as well to avoid provider schema rejections
+        try {
+          const { sanitizeMessages } = await import('./message-sanitizer');
+          processedMessages = sanitizeMessages(processedMessages || []);
+        } catch (err: any) {
+          chatLogger.debug('Streaming message sanitization failed, continuing with coercion', { requestId, error: err?.message });
+          processedMessages = (processedMessages || []).map((m: any) => ({ role: m?.role || 'user', content: typeof m?.content === 'string' ? m.content : JSON.stringify(m?.content || '') }));
+        }
+
         // Build tools if enabled — Vercel AI SDK handles tool calling natively
         let vercelTools: Record<string, any> | undefined;
         
@@ -1742,6 +1751,30 @@ export class EnhancedLLMService {
     }
   }
 
+  // Redact sensitive/large fields from tool args for orchestrator logging
+  private redactArgsForOrchestrator(args: any) {
+    if (!args || typeof args !== 'object') return args;
+    const out: Record<string, any> = {};
+    for (const [k, v] of Object.entries(args)) {
+      const key = String(k || '');
+      const lower = key.toLowerCase();
+      if (['content', 'body', 'file'].some(s => lower.includes(s))) {
+        out[key] = '[REDACTED]';
+        continue;
+      }
+      if (key === 'files' && Array.isArray(v)) {
+        out[key] = v.map((f: any) => ({ path: f?.path, name: f?.name }));
+        continue;
+      }
+      if (typeof v === 'string' && v.length > 200) {
+        out[key] = v.slice(0, 200) + '...[TRUNCATED]';
+      } else {
+        out[key] = v;
+      }
+    }
+    return out;
+  }
+
   private async executeModelToolCallsFromResponse(
     response: LLMResponse,
     userId: string,
@@ -1794,6 +1827,14 @@ export class EnhancedLLMService {
         args: call.arguments,
       });
       reasoningTrace.push(`Selected tool '${selectedTool}' with parsed arguments.`);
+
+      // Orchestrator instrumentation: redacted dump of constructed tool call
+      try {
+        const redacted = this.redactArgsForOrchestrator(call.arguments || {});
+        chatLogger.info('[Orchestrator] Executing tool', { tool: selectedTool, userId, conversationId, args: redacted });
+      } catch (e) {
+        chatLogger.debug('[Orchestrator] Failed to redact tool args', { error: (e as any)?.message || String(e) });
+      }
 
       const result = resolvedTool
         ? await toolManager.executeTool(

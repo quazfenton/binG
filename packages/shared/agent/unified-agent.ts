@@ -661,7 +661,7 @@ export class UnifiedAgent {
 
     log.debug(`Calling MCP tool: ${toolName}`)
     const userId = this.config.userId || 'anonymous-agent'
-    return callMCPToolFromAI_SDK(toolName, args, userId)
+    return callMCPToolFromAI_SDK(toolName, args, userId, this.session?.sessionId);
   }
 
   /**

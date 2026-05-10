@@ -186,7 +186,7 @@ export async function runOpenCodeDirect(options: OpenCodeDirectOptions): Promise
       onTool?.(toolName, args, toolResult);
     },
     executeTool: async (name, args) => {
-      const toolResult = await callMCPToolFromAI_SDK(name, args, userId);
+      const toolResult = await callMCPToolFromAI_SDK(name, args, userId, session.id);
       return {
         success: toolResult.success,
         output: toolResult.output,
