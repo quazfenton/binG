@@ -622,13 +622,20 @@ export default function ConversationInterface() {
 
   const { 
     showBYOKInput, 
-    byokError, 
+    byokError: byokTriggerContext, 
     setShowBYOKInput, 
     recordTotalFailure,
     resetFailureCount,
     handleApiKeySave,
     handleRetry,
   } = useBYOKFallback();
+
+  // Debug BYOK trigger state
+  useEffect(() => {
+    if (showBYOKInput) {
+      console.log('[BYOK] Triggered visible with context:', byokTriggerContext);
+    }
+  }, [showBYOKInput, byokTriggerContext]);
 
   const { getApiKey } = useApiKeys();
 
@@ -2054,15 +2061,15 @@ export default function ConversationInterface() {
   return (
     <>
       <BYOKFadeInWrapper isVisible={showBYOKInput} onDismiss={() => setShowBYOKInput(false)}>
-        {byokError && (
+        {byokTriggerContext && (
           <BYOKFadeInInput
-            providerId={byokError.providerId}
-            providerName={byokError.providerName}
-            errorMessage={byokError.errorMessage}
+            providerId={byokTriggerContext.providerId}
+            providerName={byokTriggerContext.providerName}
+            errorMessage={byokTriggerContext.errorMessage}
             onSave={handleApiKeySave}
             onRetry={handleBYOKRetry}
             onDismiss={() => setShowBYOKInput(false)}
-            initialApiKey={getApiKey(byokError.providerId)}
+            initialApiKey={getApiKey(byokTriggerContext.providerId)}
           />
         )}
       </BYOKFadeInWrapper>

@@ -178,7 +178,7 @@ export async function executeToolCapability(
  */
 export function hasToolCapability(capabilityId: string): boolean {
   if (!routerInstance) return false;
-  return (routerInstance as any).hasCapability(capabilityId);
+  return routerInstance.hasCapability(capabilityId);
 }
 
 /**

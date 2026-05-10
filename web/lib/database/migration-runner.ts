@@ -15,7 +15,16 @@ export const runtime = 'nodejs';
  * transactions; the PRAGMAs are applied at connection-open time instead.
  */
 function stripTransactionStatements(sql: string): string {
-  return sql
+  // Strip SQL comments BEFORE splitting on ';' to prevent semicolons
+  // inside comments from producing invalid SQL fragments.
+  // Handles: -- single-line comments and /* multi-line */ comments.
+  const withoutComments = sql
+    .replace(/\/\*[\s\S]*?\*\//g, '')        // Strip /* multi-line */ comments
+    .split('\n')
+    .filter(line => !/^\s*--/.test(line))   // Strip -- single-line comments
+    .join('\n');
+
+  return withoutComments
     .split(';')
     .map(stmt => stmt.trim())
     .filter(stmt => {
@@ -30,7 +39,6 @@ function stripTransactionStatements(sql: string): string {
     })
     .join(';\n') + ';';
 }
-
 interface Migration {
   version: string;
   filename: string;

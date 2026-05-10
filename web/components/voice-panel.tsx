@@ -333,7 +333,7 @@ export function VoicePanel({ onClose, onTextSubmit }: VoicePanelProps) {
                 )}>
                   <div className="flex items-center gap-2 mb-1">
                     {msg.role === "user" ? <User className="h-3 w-3 text-blue-400" /> : <Bot className="h-3 w-3 text-purple-400" />}
-                    <span className="text-[10px] text-white/50">{msg.role === "user" ? "You" : "AI"}</span>
+                    <span className="text-[10px] text-white/50">{msg.role === "user" ? "User" : (msg.modelName || "AI")}</span>
                   </div>
                   <p className="text-xs text-white/80">{msg.content}</p>
                 </div>
