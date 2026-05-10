@@ -1341,11 +1341,10 @@ export async function callMCPToolFromAI_SDK(
         || (args as any).scopePath
         || (sessionIdFromConv ? `project/sessions/${sessionIdFromConv}` : 'project/sessions/000');
 
-      const result = await toolContextStore.run(
-        {
+      const result = await toolContextStore.run(        {
           userId,
-          sessionId: args.sessionId || sessionIdFromConv,
-          scopePath: computedScopePath,  // Use session-aware scope path
+          sessionId: args.sessionId ?? sessionIdFromConv ?? 'anonymous',
+          scopePath: computedScopePath, // Use session-aware scope path
         },
         async () => vfsTool.execute(args || {}, {
           messages: [],
