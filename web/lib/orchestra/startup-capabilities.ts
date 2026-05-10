@@ -34,7 +34,12 @@ function checkOpenCodeSDKPackage(): boolean {
     return _hasOpenCodeSDKPackageCache;
   }
   try {
-    require.resolve('@opencode-ai/sdk');
+    // Wrap the package name in a non-static expression so the Next.js / webpack
+    // dependency analyzer doesn't try to bundle (or warn) when the optional
+    // `@opencode-ai/sdk` peer is not installed. We just want a runtime probe.
+    const pkgName = ['@opencode-ai', 'sdk'].join('/');
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    (eval('require') as NodeRequire).resolve(pkgName);
     _hasOpenCodeSDKPackageCache = true;
   } catch {
     _hasOpenCodeSDKPackageCache = false;

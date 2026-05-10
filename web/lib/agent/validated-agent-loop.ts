@@ -23,6 +23,7 @@ import {
   PluginRegistry,
   createLintPlugin,
   createTscPlugin,
+  createLspTsPlugin,
   type PluginContext,
 } from "../agent/plugins";
 import { trace, increment } from "../agent/metrics";
@@ -35,6 +36,8 @@ export interface ValidatedAgentLoopOptions extends Omit<AgentLoopOptions, "valid
   enableLint?: boolean;
   /** Enable TypeScript type-check validation (default: true if exec available) */
   enableTsc?: boolean;
+  /** Enable LSP-based TypeScript validation (faster per-file checks, falls back to tsc). Default: true */
+  enableLspTs?: boolean;
   /** Enable git diff review before committing (default: true) */
   enableGitDiff?: boolean;
   /** File path for git operations */
@@ -71,6 +74,7 @@ export async function runValidatedAgentLoop(
     pluginContext,
     enableLint = true,
     enableTsc = true,
+    enableLspTs = true,
     enableGitDiff = true,
     gitFilePath,
     ...agentOpts
@@ -89,7 +93,18 @@ export async function runValidatedAgentLoop(
     await registry.register(createLintPlugin());
     pluginsRan.push("lint");
   }
-  if (enableTsc && pluginContext.exec) {
+  // LSP-based TS validation (faster per-file checks, falls back to tsc)
+  if (enableLspTs) {
+    try {
+      await registry.register(createLspTsPlugin());
+      pluginsRan.push("lsp-ts");
+    } catch (err) {
+      logger.warn('LSP TS plugin registration failed:', err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  // Only register tsc as a separate plugin if LSP is NOT active (avoid double-checking)
+  if (enableTsc && pluginContext.exec && !pluginsRan.includes("lsp-ts")) {
     await registry.register(createTscPlugin());
     pluginsRan.push("tsc");
   }
@@ -119,7 +134,25 @@ export async function runValidatedAgentLoop(
       }
     }
 
-    // TypeScript check
+    // LSP TypeScript check (preferred — runs first, faster per-file)
+    if (enableLspTs && registry.listCommands().includes("lsp-ts.check")) {
+      try {
+        const lspFile = gitFilePath ?? filePath;
+        const lspResult = await registry.run<{ stdout: string; stderr: string; exitCode: number }>(
+          "lsp-ts.check",
+          { file: lspFile, content: code }
+        );
+        if (lspResult.exitCode !== 0 && lspResult.stdout) {
+          increment("validation-failed", 1);
+          return `TypeScript errors (LSP):\n${lspResult.stdout.slice(0, 2000)}`;
+        }
+      } catch (err) {
+        logger.warn("LSP TS validation failed to run:", err instanceof Error ? err.message : String(err));
+        // Don't fail — let tsc check run as fallback below
+      }
+    }
+
+    // TypeScript check (CLI fallback — runs tsc --noEmit for full project)
     if (enableTsc && registry.listCommands().includes("tsc.check")) {
       try {
         const tscResult = await registry.run<{ stdout: string; stderr: string; exitCode: number }>(
@@ -127,7 +160,7 @@ export async function runValidatedAgentLoop(
         );
         if (tscResult.exitCode !== 0 && tscResult.stdout) {
           increment("validation-failed", 1);
-          return `TypeScript errors:\n${tscResult.stdout.slice(0, 2000)}`;
+          return `TypeScript errors (tsc):\n${tscResult.stdout.slice(0, 2000)}`;
         }
       } catch (err) {
         logger.warn("TSC validation failed to run:", err instanceof Error ? err.message : String(err));

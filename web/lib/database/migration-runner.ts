@@ -161,6 +161,11 @@ export class MigrationRunner {
             // This covers cases where a column/table/index was added by a fresh
             // schema initialization or a previous partial run, so the migration's
             // effect is already in place. We mark it as executed and continue.
+            //
+            // Also tolerate foreign-key references to tables/columns that don't
+            // exist yet because the base schema initialization skipped them. The
+            // migration itself will be re-run on the next startup once the schema
+            // is fully bootstrapped.
             const msg = String(err?.message ?? '');
             if (
               /duplicate column name/i.test(msg) ||
@@ -170,6 +175,17 @@ export class MigrationRunner {
                 `Migration ${migration.version} already applied (schema present): ${msg}. Marking as executed.`
               );
               alreadyApplied = true;
+            } else if (
+              /no such table/i.test(msg) ||
+              /no such column/i.test(msg)
+            ) {
+              // Schema not yet fully bootstrapped — skip this migration for now.
+              // It will be re-attempted on the next startup after schema init
+              // has created the missing tables/columns.
+              console.warn(
+                `Migration ${migration.version} skipped (missing schema prerequisite: ${msg}). Will retry next startup.`
+              );
+              continue; // Skip to next migration without marking as executed
             } else {
               // Re-throw if transaction fails so outer loop catches and stops
               throw new Error(`Transaction failed: ${err.message}`);

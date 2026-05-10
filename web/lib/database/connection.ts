@@ -839,7 +839,15 @@ function initializeDatabaseSync(): void {
 
   // Initialize schema synchronously
   if (!dbInitialized) {
-    initializeSchemaSync();
+    try {
+      initializeSchemaSync();
+    } catch (schemaError: any) {
+      console.error('[database] Schema initialization failed:', schemaError);
+      if (process.env.NODE_ENV === 'production') {
+        throw schemaError;
+      }
+      console.warn('[database] Continuing with partial schema (development only)');
+    }
 
     // Run migrations synchronously
     try {
@@ -898,31 +906,92 @@ export async function initializeDatabaseAsync(): Promise<any> {
   return getDatabase();
 }
 
-async function initializeSchemaSync(): Promise<void> {
+/**
+ * Execute each SQL statement individually with per-statement error tolerance.
+ *
+ * When an existing database has tables created by an older schema version, some
+ * statements in schema.sql (e.g. CREATE INDEX on a column added later) will fail
+ * because the column doesn't exist yet.  Executing the entire schema as a single
+ * blob (db.exec) would abort on the first error, leaving later tables uncreated.
+ *
+ * By executing statements one-by-one we create every new table while skipping
+ * index definitions that reference columns not yet present in pre-existing tables.
+ * Migrations will add those columns and indexes afterwards.
+ */
+function executeSchemaStatements(sql: string): void {
+  // Split on semicolons — simple but effective for schema.sql which does not
+  // embed semicolons inside string literals.
+  const statements = sql.split(';');
+  let created = 0;
+  let skipped = 0;
+
+  for (const raw of statements) {
+    const stmt = raw.trim();
+    if (!stmt) continue;
+
+    try {
+      db.exec(stmt + ';');
+      created++;
+    } catch (err: any) {
+      const msg: string = err?.message ?? '';
+      // Tolerate references to columns / tables that don't exist yet on a
+      // pre-existing database.  Migrations are responsible for bringing those
+      // columns/tables into existence.
+      if (/no such column/i.test(msg) || /no such table/i.test(msg)) {
+        skipped++;
+        console.warn(`[schema-init] Skipping statement (schema drift — migration will add): ${msg}`);
+        continue;
+      }
+      // SQLITE_BUSY is transient — let the caller's retry loop handle it.
+      if (err.code === 'SQLITE_BUSY') {
+        throw err;
+      }
+      // All other errors (syntax, constraint violations, etc.) are real.
+      console.error(`[schema-init] Statement failed: ${stmt.substring(0, 120)} — ${msg}`);
+      throw err;
+    }
+  }
+
+  console.log(`[schema-init] Executed ${created} statements, skipped ${skipped} (schema drift)`);
+}
+
+/**
+ * Synchronous schema initializer.
+ *
+ * better-sqlite3 is inherently synchronous so this was always called without
+ * `await`, making the old `async` + `await setTimeout` retry a broken
+ * fire-and-forget whose rejections became unhandled rejections.
+ *
+ * Now fully synchronous with a busy-wait fallback for the rare SQLITE_BUSY
+ * case (unlikely under WAL mode but handled defensively).
+ */
+function initializeSchemaSync(): void {
   if (!db) return;
 
   // Only run schema initialization in Node.js runtime
   if (typeof process === 'undefined' || process.env.NEXT_RUNTIME !== 'nodejs') return;
 
   const maxRetries = 5;
-  let attempt = 1;
 
-  while (attempt <= maxRetries) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       // Execute base schema to ensure required tables exist
       const schemaSql = getSchemaSql();
       if (schemaSql) {
-        db.exec(schemaSql);
+        executeSchemaStatements(schemaSql);
       }
 
       console.log('Database base schema initialized');
       return;
     } catch (error: any) {
       if (error.code === 'SQLITE_BUSY' && attempt < maxRetries) {
-        const delay = Math.pow(2, attempt) * 100; // Exponential backoff
-        console.warn(`Database is locked (SQLITE_BUSY), retrying in ${delay}ms... (Attempt ${attempt}/${maxRetries})`);
-        await new Promise(resolve => setTimeout(resolve, delay));
-        attempt++;
+        const delayMs = Math.pow(2, attempt) * 100; // Exponential backoff
+        console.warn(`Database is locked (SQLITE_BUSY), retrying in ${delayMs}ms... (Attempt ${attempt}/${maxRetries})`);
+        // Synchronous sleep — the old `await setTimeout` was never awaited.
+        // SQLITE_BUSY is extremely rare with WAL mode; a brief busy-wait is
+        // acceptable for these short delays (200–3200 ms).
+        const end = Date.now() + delayMs;
+        while (Date.now() < end) { /* spin */ }
         continue;
       }
       console.error('Failed to initialize database schema after retries', error);
