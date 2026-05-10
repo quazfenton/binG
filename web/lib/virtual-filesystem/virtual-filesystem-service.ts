@@ -1050,12 +1050,18 @@ export class VirtualFilesystemService {
       return this.workspaceRoot;
     }
 
-    const normalizedPath = safeParts.join('/');
+const normalizedPath = safeParts.join('/');
     const workspacePrefix = workspaceRootParts.join('/');
     
+    console.log('[VFS normalizePath] inputPath:', inputPath, 'workspaceRoot:', this.workspaceRoot, 'normalizedPath:', normalizedPath, 'workspacePrefix:', workspacePrefix);
+    
     // Verify the normalized path is within or an ancestor of the workspace root
-    const isWithin = normalizedPath.startsWith(workspacePrefix + '/') || normalizedPath === workspacePrefix;
+    // When workspacePrefix is empty (no workspace root set), any non-empty relative path is valid
+    const isWithin = workspacePrefix === ''
+      ? true
+      : normalizedPath.startsWith(workspacePrefix + '/') || normalizedPath === workspacePrefix;
     const isAncestor = workspacePrefix.startsWith(normalizedPath + '/');
+    console.log('[VFS normalizePath] isWithin:', isWithin, 'isAncestor:', isAncestor);
     if (!isWithin && !isAncestor) {
       throw new Error(`Path traversal beyond workspace root: ${inputPath}`);
     }
@@ -1538,7 +1544,7 @@ class GitBackedVFSProxy {
           });
         } catch (err: any) {
           // File may not exist or read may fail — log warning so we know if originalContent is missing from the git commit
-          logger.warn('Could not read file content before DELETE for git tracking', { path: node.path, error: err?.message || String(err) });
+          console.warn('[VFS] Could not read file content before DELETE for git tracking', { path: node.path, error: err?.message || String(err) });
         }
       }
     }

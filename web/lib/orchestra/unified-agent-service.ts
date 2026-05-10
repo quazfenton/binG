@@ -587,10 +587,17 @@ export async function processUnifiedAgentRequest(
 
         case 'v1-agent-loop': {
           log.info('[UnifiedAgent] → v1-agent-loop mode (PlanActVerify orchestrator)');
+          // Filter system messages from conversationHistory — they belong in the
+          // `system` option of generateText/streamText, NOT in the messages array.
+          // System messages in the messages array violate the AI SDK ModelMessage[] schema
+          // and cause 'messages do not match ModelMessage[] schema' errors in PlanActVerify.callLLM.
+          const filteredHistory = (config.conversationHistory || []).filter(
+            (msg: any) => msg.role !== 'system'
+          );
           const orchMessages = [
-            ...(config.conversationHistory || []),
+            ...filteredHistory,
             { role: 'user', content: config.userMessage },
-          ];
+          ];;
           return await runV1Orchestrated(config, orchMessages, startTime);
         }
 

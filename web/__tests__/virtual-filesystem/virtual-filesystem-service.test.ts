@@ -258,6 +258,21 @@ describe('VirtualFilesystemService', () => {
       // Multiple .. that would escape above the workspace root
       expect(() => vfs.normalizePath('../../../../etc/passwd')).toThrow('Path traversal');
     });
+
+    it('should allow relative paths when workspaceRoot is empty (browser context)', () => {
+      // When workspaceRoot is empty (no Tauri config in browser), the isWithin
+      // check should not reject valid relative paths like project/sessions/001
+      const vfsEmptyRoot = new VirtualFilesystemService('');
+      expect(vfsEmptyRoot.normalizePath('project/sessions/001')).toBe('project/sessions/001');
+      expect(vfsEmptyRoot.normalizePath('project/sessions/002/src/app.ts')).toBe('project/sessions/002/src/app.ts');
+      expect(vfsEmptyRoot.normalizePath('src/index.ts')).toBe('src/index.ts');
+    });
+
+    it('should reject traversal beyond workspace root even with empty workspaceRoot', () => {
+      // Empty workspaceRoot should still block actual path traversal attempts
+      const vfsEmptyRoot = new VirtualFilesystemService('');
+      expect(() => vfsEmptyRoot.normalizePath('../../../../etc/passwd')).toThrow('Path traversal');
+    });
   });
 
   describe('Workspace Isolation', () => {
