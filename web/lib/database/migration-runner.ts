@@ -3,6 +3,34 @@
 // This file is server-only - do not import in Client Components
 export const runtime = 'nodejs';
 
+/**
+ * Strip BEGIN / COMMIT / ROLLBACK / PRAGMA statements from migration SQL.
+ *
+ * better-sqlite3's db.transaction() manages its own BEGIN/COMMIT lifecycle.
+ * If a migration file contains explicit transaction-control statements (e.g.
+ * BEGIN TRANSACTION … COMMIT) they interfere with the wrapper and cause
+ * "cannot commit - no transaction is active" errors.
+ *
+ * PRAGMA statements are also stripped because SQLite forbids them inside
+ * transactions; the PRAGMAs are applied at connection-open time instead.
+ */
+function stripTransactionStatements(sql: string): string {
+  return sql
+    .split(';')
+    .map(stmt => stmt.trim())
+    .filter(stmt => {
+      const upper = stmt.toUpperCase();
+      // BEGIN / BEGIN TRANSACTION / BEGIN IMMEDIATE / BEGIN EXCLUSIVE
+      if (/^\s*BEGIN(\s+(TRANSACTION|IMMEDIATE|EXCLUSIVE))?\s*$/i.test(upper)) return false;
+      if (/^\s*COMMIT(\s+TRANSACTION)?\s*$/i.test(upper)) return false;
+      if (/^\s*END(\s+TRANSACTION)?\s*$/i.test(upper)) return false;
+      if (/^\s*ROLLBACK(\s+TRANSACTION)?\s*$/i.test(upper)) return false;
+      if (/^\s*PRAGMA\s/i.test(upper)) return false;
+      return stmt.length > 0;
+    })
+    .join(';\n') + ';';
+}
+
 interface Migration {
   version: string;
   filename: string;
@@ -148,14 +176,19 @@ export class MigrationRunner {
         if (alreadyExecuted) {
           console.log(`Migration ${migration.version} already executed, skipping`);
         } else {
-          // Wrap migration execution in a transaction to ensure atomicity
+          // Wrap migration execution in a transaction to ensure atomicity.
+          // Strip transaction-control and PRAGMA statements from the migration SQL
+          // because better-sqlite3's db.transaction() manages BEGIN/COMMIT itself,
+          // and PRAGMA statements cannot run inside a transaction.
+          const sanitizedSql = stripTransactionStatements(migration.sql);
+
           const transaction = this.db.transaction((sql: string) => {
             this.db.exec(sql);
           });
 
           let alreadyApplied = false;
           try {
-            transaction(migration.sql);
+            transaction(sanitizedSql);
           } catch (err: any) {
             // Treat schema-already-present errors as idempotent success.
             // This covers cases where a column/table/index was added by a fresh

@@ -36,7 +36,7 @@
  *   const diags = await adapter.waitForDiagnostics('/workspace/src/app.ts');
  */
 
-import { diagnosticBus, type UnifiedDiagnostic, SEVERITY_MAP } from './diagnostic-bus';
+import { diagnosticBus, type UnifiedDiagnostic, type DiagnosticSource, SEVERITY_MAP } from './diagnostic-bus';
 import { uriToPath, pathToUri } from './path-utils';
 import type { LSPAdapter } from './adapter';
 
@@ -159,7 +159,7 @@ export class RemoteLspAdapter implements LSPAdapter {
     }
 
     this.disconnect();
-    diagnosticBus.clear(this.diagnosticSource as any);
+    diagnosticBus.clear(this.diagnosticSource as DiagnosticSource);
     console.log(`[${this.name}] Remote LSP shut down`);
   }
 
@@ -197,12 +197,12 @@ export class RemoteLspAdapter implements LSPAdapter {
   // ── LSPAdapter: Diagnostics ────────────────────────────────────────────────
 
   getDiagnostics(filePath: string): UnifiedDiagnostic[] {
-    return diagnosticBus.getForFile(filePath, this.diagnosticSource as any);
+    return diagnosticBus.getForFile(filePath, this.diagnosticSource as DiagnosticSource);
   }
 
   async waitForDiagnostics(filePath: string, timeoutMs = 3000): Promise<UnifiedDiagnostic[]> {
     return new Promise((resolve) => {
-      const existing = diagnosticBus.getForFile(filePath, this.diagnosticSource as any);
+      const existing = diagnosticBus.getForFile(filePath, this.diagnosticSource as DiagnosticSource);
       if (existing.length > 0) {
         resolve(existing);
         return;
@@ -210,14 +210,14 @@ export class RemoteLspAdapter implements LSPAdapter {
 
       const timer = setTimeout(() => {
         unsubscribe();
-        resolve(diagnosticBus.getForFile(filePath, this.diagnosticSource as any));
+        resolve(diagnosticBus.getForFile(filePath, this.diagnosticSource as DiagnosticSource));
       }, timeoutMs);
 
       const unsubscribe = diagnosticBus.subscribe((_all, updatedFiles) => {
         if (updatedFiles.includes(filePath)) {
           clearTimeout(timer);
           unsubscribe();
-          resolve(diagnosticBus.getForFile(filePath, this.diagnosticSource as any));
+          resolve(diagnosticBus.getForFile(filePath, this.diagnosticSource as DiagnosticSource));
         }
       });
     });
@@ -227,6 +227,7 @@ export class RemoteLspAdapter implements LSPAdapter {
 
   private async connect(): Promise<void> {
     if (this.destroyed) throw new Error(`[${this.name}] Adapter is destroyed`);
+    if (this._connecting) return;
 
     return new Promise((resolve, reject) => {
       void this.connectInternal(resolve, reject);
@@ -237,14 +238,15 @@ export class RemoteLspAdapter implements LSPAdapter {
     resolve: (value: void) => void,
     reject: (error: Error) => void
   ): Promise<void> {
+    this._connecting = true;
     try {
       // Try Node 22+ global WebSocket first, then fall back to 'ws' package
-      let WS: typeof WebSocket = (globalThis as any).WebSocket;
+      let WS: any = (globalThis as any).WebSocket;
       let useWsPackage = false;
       if (!WS) {
         try {
           const wsModule = await import('ws');
-          WS = (wsModule.default || wsModule) as unknown as typeof WebSocket;
+          WS = wsModule.default || wsModule;
           useWsPackage = true;
         } catch {
           throw new Error(
@@ -265,13 +267,14 @@ export class RemoteLspAdapter implements LSPAdapter {
       if (useWsPackage && this.authToken) {
         this.ws = new WS(url, {
           headers: { Authorization: `Bearer ${this.authToken}` },
-        }) as WebSocket;
+        } as any) as WebSocket;
       } else {
         this.ws = new WS(url) as WebSocket;
       }
 
       this.ws.onopen = () => {
         console.log(`[${this.name}] WebSocket connected to ${this.wsUrl}`);
+        this._connecting = false;
         this.reconnectAttempts = 0;
         resolve();
       };
@@ -288,12 +291,14 @@ export class RemoteLspAdapter implements LSPAdapter {
       this.ws.onerror = (err: Event) => {
         console.error(`[${this.name}] WebSocket error:`, err);
         if (!this._ready) {
+          this._connecting = false;
           reject(new Error(`[${this.name}] WebSocket connection failed`));
         }
       };
 
       this.ws.onclose = (event: CloseEvent) => {
         console.log(`[${this.name}] WebSocket closed (code: ${event.code})`);
+        this._connecting = false;
         this._ready = false;
 
         // Reject pending requests
@@ -309,12 +314,13 @@ export class RemoteLspAdapter implements LSPAdapter {
         }
       };
     } catch (err) {
+      this._connecting = false;
       reject(err instanceof Error ? err : new Error(String(err)));
     }
   }
 
   private scheduleReconnect(): void {
-    if (this.destroyed) return;
+    if (this.destroyed || this._connecting) return;
 
     this.reconnectAttempts++;
     const delay = this.reconnectDelayMs * Math.pow(2, this.reconnectAttempts - 1);
@@ -344,6 +350,7 @@ export class RemoteLspAdapter implements LSPAdapter {
       this.ws.close();
       this.ws = null;
     }
+    this._connecting = false;
     this.openDocs.clear();
   }
 
@@ -380,7 +387,7 @@ export class RemoteLspAdapter implements LSPAdapter {
         const filePath = uriToPath(uri);
 
         if (diagnostics.length === 0) {
-          diagnosticBus.upsert(this.diagnosticSource as any, [], [filePath]);
+          diagnosticBus.upsert(this.diagnosticSource as DiagnosticSource, [], [filePath]);
         } else {
           const items: Omit<UnifiedDiagnostic, 'id' | 'timestamp' | 'source'>[] = [];
           for (const d of diagnostics) {
@@ -398,7 +405,7 @@ export class RemoteLspAdapter implements LSPAdapter {
               context: d.source as string | undefined,
             });
           }
-          diagnosticBus.upsert(this.diagnosticSource as any, items, [filePath]);
+          diagnosticBus.upsert(this.diagnosticSource as DiagnosticSource, items, [filePath]);
         }
         break;
       }
