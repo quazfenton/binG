@@ -65,11 +65,13 @@ const CodeSandboxEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) 
     fallbackLevel,
     fallbackUrl,
     loadingProgress,
+    iframeKey,
     handleLoad,
     handleRetry,
     handleReset,
     handleFallback,
     handleLoadSuccess,
+    handleIframeError,
   } = useIframeLoader({
     url: iframeUrl,
     timeout: 30000,
@@ -330,8 +332,7 @@ const CodeSandboxEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) 
                         handleLoadSuccess();
                       }}
                       onError={() => {
-                        setIframeError('Failed to load CodeSandbox. Note: CodeSandbox requires valid sandbox IDs.');
-                        setIsLoading(false);
+                        handleIframeError('CodeSandbox embedding blocked');
                       }}
                       sandbox="allow-same-origin allow-scripts allow-popups allow-forms allow-modals allow-top-navigation allow-top-navigation-by-user-activation"
                       allow="fullscreen; encrypted-media"

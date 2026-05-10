@@ -159,6 +159,10 @@ const config: Config = {
             opacity: "1",
           },
         },
+        "loading-bar-sweep": {
+          "0%": { transform: "translateX(-100%)" },
+          "100%": { transform: "translateX(300%)" },
+        },
       },
       animation: {
         "accordion-down": "accordion-down 0.2s ease-out",
@@ -169,6 +173,7 @@ const config: Config = {
         "bounce-subtle": "bounce 1s ease-in-out 2",
         "fade-in": "fadeIn 0.3s ease-in-out",
         "slide-up": "slideUp 0.3s ease-out",
+        "loading-bar-sweep": "loading-bar-sweep 2s linear infinite",
       },
     },
   },

@@ -250,7 +250,11 @@ class MCPFilesystemProvider implements CapabilityProvider {
     }
 
     try {
-      const result = await callMCPToolFromAI_SDK(toolName, input, context.userId, context.scopePath);
+        // Defensive: if scopePath is missing, VFS operations will write to wrong workspace
+        if (!context.scopePath) {
+          console.warn('[MCPFilesystemProvider] Missing scopePath in tool context — VFS files may be written to wrong workspace. Ensure createCapabilityToolExecutor passes a valid scopePath.');
+        }
+        const result = await callMCPToolFromAI_SDK(toolName, input, context.userId, context.scopePath);
       return {
         success: result.success,
         output: result.output,

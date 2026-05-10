@@ -61,11 +61,13 @@ const ArchiveOrgEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
     fallbackLevel,
     fallbackUrl,
     loadingProgress,
+    iframeKey,
     handleLoad,
     handleRetry,
     handleReset,
     handleFallback,
     handleLoadSuccess,
+    handleIframeError,
   } = useIframeLoader({
     url: iframeUrl,
     timeout: 30000,
@@ -349,8 +351,7 @@ const ArchiveOrgEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
                         handleLoadSuccess();
                       }}
                       onError={() => {
-                        setIframeError('Failed to load Archive.org. The site may not allow embedding.');
-                        setIsLoading(false);
+                        handleIframeError('Archive.org embedding blocked');
                       }}
                       sandbox="allow-same-origin allow-scripts allow-popups allow-forms allow-top-navigation allow-top-navigation-by-user-activation"
                       allow="fullscreen"

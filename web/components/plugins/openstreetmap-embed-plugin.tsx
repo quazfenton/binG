@@ -70,11 +70,13 @@ const OpenStreetMapEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }
     fallbackLevel,
     fallbackUrl,
     loadingProgress,
+    iframeKey,
     handleLoad,
     handleRetry,
     handleReset,
     handleFallback,
     handleLoadSuccess,
+    handleIframeError,
   } = useIframeLoader({
     url: iframeUrl,
     timeout: 30000,
@@ -401,10 +403,7 @@ const OpenStreetMapEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }
                         handleLoadSuccess();
                       }}
                       onError={() => {
-                        const msg = 'Failed to load OpenStreetMap. Try refreshing or use the external link button.';
-                        setIframeError(msg);
-                        console.warn('[OpenStreetMap Embed]', msg);
-                        setIsLoading(false);
+                        handleIframeError('OpenStreetMap embedding blocked');
                       }}
                       sandbox="allow-same-origin allow-scripts allow-popups allow-forms allow-top-navigation allow-top-navigation-by-user-activation"
                       allow="fullscreen"

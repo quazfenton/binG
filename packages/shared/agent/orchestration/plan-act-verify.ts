@@ -238,7 +238,7 @@ export type OrchestratorEvent =
   | { type: 'verification_failed'; errors: Array<{ file: string; message: string; suggestion?: string }> }
   | { type: 'verification_passed' }
   | { type: 'warning'; message: string }
-  | { type: 'done'; response: string; stats: { iterations: number; tokensUsed: number; durationMs: number } };
+  | { type: 'done'; response: string; stats: { iterations: number; tokensUsed: number; durationMs: number }; budgetExhausted?: boolean };
 
 // ─── Orchestrator Config (P2 #9 — typed) ─────────────────────────────────────
 
@@ -457,7 +457,8 @@ export class PlanActVerifyOrchestrator {
       yield {
           type: 'done',
           response: `Execution halted: ${finalCheck.reason || 'budget exhausted'}. Consumed ${stats.iterations ?? 0} iterations, ${stats.tokensUsed ?? 0} tokens, ${Math.round((stats.durationMs ?? 0) / 1000)}s. Partial results returned.`,
-          stats
+          stats,
+          budgetExhausted: true
         };
         return;
       }

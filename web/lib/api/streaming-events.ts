@@ -198,6 +198,7 @@ export function createStreamingEvents(
     source: response.source,
     metadata: response.metadata,
     messageMetadata: response.data?.messageMetadata || response.metadata?.messageMetadata,
+    modelName: response.data?.model || response.metadata?.model,
     // Include filesystem metadata for enhanced-diff-viewer
     filesystem: response.metadata?.filesystem,
     fileEdits: response.metadata?.fileEdits,
