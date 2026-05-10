@@ -18,7 +18,7 @@ import type { BlaxelProvider } from '../sandbox/providers/blaxel-provider'
 import { ArcadeService, getArcadeService } from '../integrations/arcade-service'
 import { nullclawMCPBridge } from './nullclaw-mcp-bridge'
 import { initializeNullclaw, isNullclawAvailable, getNullclawMode } from '@bing/shared/agent/nullclaw-integration'
-import { normalizeSessionId } from '../virtual-filesystem/scope-utils';
+import { normalizeSessionId, getVfsScopeBasePath, getVfsScopePath } from '../virtual-filesystem/scope-utils';
 // Tool caching for repeated operations
 import { toolResultCache, toolCacheKey, contentHash } from '../cache';
 // Dynamically imported to avoid pulling Node.js-only deps (fs, database) into client bundle
@@ -222,6 +222,42 @@ const getBlaxelCodegenToolDefinitions = (): Array<{
 ]
 
 const logger = createLogger('MCP:Integration')
+
+// Redact sensitive or large fields from tool args for logging/tracing
+function redactArgsForLogging(args: any) {
+  if (!args || typeof args !== 'object') return args;
+  const out: Record<string, any> = {};
+  for (const [k, v] of Object.entries(args)) {
+    const key = String(k || '');
+    const lower = key.toLowerCase();
+    // Sensitive keys
+    if (['content', 'body', 'file', 'files'].some(s => lower.includes(s))) {
+      if (key === 'files' && Array.isArray(v)) {
+        out[key] = v.map((f: any) => ({ path: f?.path, name: f?.name }));
+      } else {
+        out[key] = '[REDACTED]';
+      }
+      continue;
+    }
+
+    if (typeof v === 'string' && v.length > 200) {
+      out[key] = v.slice(0, 200) + '...[TRUNCATED]';
+    } else if (typeof v === 'object') {
+      try {
+        out[key] = JSON.parse(JSON.stringify(v, (kk, vv) => {
+          const kl = String(kk || '').toLowerCase();
+          if (kl.includes('secret') || kl.includes('token') || kl.includes('password') || kl.includes('apikey')) return '[REDACTED]';
+          return vv;
+        }));
+      } catch {
+        out[key] = '[UNSERIALIZABLE]';
+      }
+    } else {
+      out[key] = v;
+    }
+  }
+  return out;
+}
 
 // Guard to prevent redundant reinitialization on every /api/mcp/connect click
 let mcpArch1Initialized = false;
@@ -760,7 +796,7 @@ export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string)
     registerVFSSyncHook();
 
     const sessionId = userId ? normalizeSessionId(userId) : undefined;
-    const scopePath = sessionId ? `project/sessions/${sessionId}` : 'project';
+    const scopePath = getVfsScopeBasePath(sessionId);
 
     const bashToolMap = createBashTool({
       workingDir: scopePath,
@@ -1326,20 +1362,51 @@ export async function callMCPToolFromAI_SDK(
     const { vfsTools, toolContextStore, getVFSTool } = await import('./vfs-mcp-tools');
     const vfsTool = getVFSTool(toolName);
     if (vfsTool) {
-      // Explicit logging for VFS MCP tool invocation
+      // Pre-validate common VFS tool arguments to avoid malformed invocations
+      const validationErrors: string[] = [];
+      if (toolName === 'write_file') {
+        if (!args || !args.path) validationErrors.push('path: Required');
+        if (!args || (!args.content && !args.files)) validationErrors.push('content: Required');
+      }
+      if (toolName === 'apply_diff' || toolName === 'batch_write') {
+        if (!args || (!args.files && !Array.isArray(args.files))) validationErrors.push('files: Required (array)');
+      }
+
+      if (validationErrors.length) {
+        logger.warn('[VFS MCP] Input validation failed for ' + toolName, {
+          errors: validationErrors.join('; '),
+          inputKeys: Object.keys(args || {}),
+        });
+        return {
+          success: false,
+          output: '',
+          error: validationErrors.join('; '),
+        };
+      }
+
+      // Redacted payload dump for tracing origin of malformed tool calls
+      try {
+        const redacted = redactArgsForLogging(args || {});
+        logger.debug('[VFS MCP] Tool payload (redacted)', { payload: redacted });
+      } catch (e) {
+        logger.debug('[VFS MCP] Failed to redact payload for logging', { error: (e as any)?.message || e });
+      }
+
+      // Explicit logging for VFS MCP tool invocation (safe path extraction)
       logger.info('[VFS MCP] Tool invoked (AI_SDK path)', {
         tool: toolName,
         userId,
         args: Object.keys(args || {}),
-        path: args?.path || args?.files?.map((f: any) => f.path)?.join(', ') || undefined,
+        path: args?.path || (Array.isArray(args?.files) ? args.files.map((f: any) => f.path).join(', ') : undefined),
       });
 
       // Run inside request-scoped context so the tool gets the right userId and scopePath
-      // Compute session-aware scopePath from conversationId if not provided
+      // Compute session-aware scopePath - use passed scopePath first (from executeToolCapability config)
       const sessionIdFromConv = normalizeSessionId(args.conversationId || '');
-      const computedScopePath = scopePath
-        || (args as any).scopePath
-        || (sessionIdFromConv ? `project/sessions/${sessionIdFromConv}` : 'project/sessions/000');
+      const computedScopePath = getVfsScopePath({
+        scopePath: scopePath && scopePath !== 'project' ? scopePath : undefined,
+        sessionId: sessionIdFromConv || undefined,
+      });
 
       const result = await toolContextStore.run(        {
           userId,

@@ -21,6 +21,42 @@ import { createLogger } from '@/lib/utils/logger';
 
 const log = createLogger('PlanActVerify');
 
+/**
+ * Redact tool args for safe logging.
+ * - Replaces large or sensitive fields (content, body) with <redacted>
+ * - Preserves file paths / names when present
+ */
+function redactArgsForLogging(args: any): any {
+  if (args == null) return args;
+  try {
+    const copy: any = Array.isArray(args) ? [] : {};
+    for (const k of Object.keys(args)) {
+      const v = args[k];
+      if (k === 'content' || k === 'body' || k === 'fileContents' || k === 'contentEncoded') {
+        copy[k] = '<redacted>'; continue;
+      }
+      if (k === 'files' && Array.isArray(v)) {
+        copy[k] = v.map((f: any) => (typeof f === 'string' ? f : f?.path || f?.name || '<file>'));
+        continue;
+      }
+      if (typeof v === 'string' && v.length > 1000) {
+        copy[k] = `${v.slice(0, 200)}...<truncated:${v.length}>`;
+        continue;
+      }
+      if (typeof v === 'object' && v !== null) {
+        // shallow map nested objects to avoid deep traversal
+        copy[k] = Array.isArray(v) ? v.slice(0, 5).map(x => (typeof x === 'object' ? '<obj>' : x)) : (Object.fromEntries(Object.entries(v).slice(0,5).map(([kk, vv]) => [kk, typeof vv === 'string' && vv.length > 200 ? `${vv.slice(0,200)}...` : vv])));
+        continue;
+      }
+      copy[k] = v;
+    }
+    return copy;
+  } catch (e) {
+    return '<unserializable-args>';
+  }
+}
+
+
 // ─── Typed Configuration ─────────────────────────────────────────────────────
 
 /** Iteration budget configuration with validation and defaults */
@@ -397,6 +433,32 @@ export class PlanActVerifyOrchestrator {
 
           yield { type: 'tool_call', tool: call.name, args: call.arguments };
 
+          // Instrumentation: redact and log constructed tool-call payloads to trace origins of malformed calls
+          let _redactedForLog: any = null;
+          try {
+            _redactedForLog = redactArgsForLogging(call.arguments);
+            log.debug('PlanActVerify: constructed tool call', { tool: call.name, redactedArgs: _redactedForLog, stack: (new Error()).stack?.split('\n').slice(1,6) });
+          } catch (e) {
+            log.debug('PlanActVerify: failed to redact tool call args', { tool: call.name });
+          }
+
+          // Persist redacted invocation payload for later aggregation and analysis
+          try {
+            import('../../../../web/lib/chat/tool-call-tracker').then(({ toolCallTracker }) => {
+              toolCallTracker.recordInvocationPayload({
+                timestamp: Date.now(),
+                model: this.validatedConfig.model,
+                provider: this.validatedConfig.provider,
+                toolName: call.name,
+                redactedArgs: typeof _redactedForLog === 'string' ? _redactedForLog : JSON.stringify(_redactedForLog || {}),
+                originStack: (new Error()).stack?.split('\n').slice(1,8).join('\n'),
+                toolCallId: call.id || null,
+              }).catch(() => {});
+            }).catch(() => {});
+          } catch (e) {
+            log.debug('PlanActVerify: failed to persist invocation payload', { tool: call.name });
+          }
+
           let structuredResult: ToolResult;
           try {
             const rawResult = await this.executeToolWithHealing(call.name, call.arguments);
@@ -584,6 +646,7 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
 
     while (attempt <= maxRetries) {
       try {
+        log.debug('PlanActVerify: executing tool with orchestrator', { tool: name, redactedArgs: redactArgsForLogging(args), toolCallId });
         const result = await this.config.executeTool(name, args);
 
         // Record successful tool call in telemetry

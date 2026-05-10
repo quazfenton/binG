@@ -768,8 +768,11 @@ function parseSetPair(pair: string): { col: string; value: any; rawValue?: strin
 // HMR cycles in dev mode (module-level variables reset on re-evaluation).
 let db: any = (globalThis as any).__binG_dbInstance || null;
 let dbInitialized: boolean = (globalThis as any).__binG_dbInitialized || false;
-// Single-flight promise guard (Bug 3 fix): prevents concurrent callers getting null
-let dbInitPromise: Promise<void> | null = null;
+
+// Mutex to prevent concurrent schema initialization in serverless cold starts
+// Multiple concurrent requests during cold start would otherwise race and cause
+// initializeSchemaSync() to run multiple times (even though it's idempotent, it causes log spam)
+let dbInitLock: boolean = false;
 
 // Lazy-loaded imports - only loaded when needed, not at module load time
 type Database = any;
@@ -810,12 +813,34 @@ export function getDatabase(): any {
     return getMockDatabase();
   }
 
-  // Single-flight init (Bug 3 fix): concurrent cold-start callers all wait on
-  // the same promise instead of racing and getting null back.
-  if (!db) {
-    initializeDatabaseSync();
+  // Acquire mutex lock to prevent concurrent schema initialization in serverless cold starts
+  // Multiple concurrent requests during cold start would otherwise race and cause
+  // initializeSchemaSync() to run multiple times (even though it's idempotent, it causes log spam)
+
+  // Check if db is already available BEFORE spin-waiting (avoid unnecessary wait)
+  if (db) return db;
+
+  if (dbInitLock) {
+    // Another caller is initializing - wait for it to complete (spin-wait, but init is fast <100ms)
+    const maxWaitMs = 5000;
+    const startTime = Date.now();
+    while (dbInitLock && (Date.now() - startTime) < maxWaitMs) {
+      // spin wait - in practice initialization completes in <100ms
+    }
+    // After wait, db should be initialized (unless error occurred)
+    if (db) return db;
+    // If db still not set after wait, we should proceed with our own init attempt
   }
-  // better-sqlite3 is synchronous so the promise is already settled here.
+  dbInitLock = true;
+
+  try {
+    if (!db) {
+      initializeDatabaseSync();
+    }
+  } finally {
+    dbInitLock = false;
+  }
+
   return db ?? getMockDatabase();
 }
 
@@ -825,10 +850,16 @@ export function getDatabase(): any {
 function initializeDatabaseSync(): void {
   if (db) return; // Already initialized
 
+  // Use boolean lock to prevent concurrent initialization
+  if (dbInitLock) {
+    // Another caller is initializing - this shouldn't happen since getDatabase()
+    // handles the lock, but just in case, wait briefly
+    return;
+  }
+
   const fsModule = require('fs');
   const pathModule = require('path');
   const mkdirSync = fsModule.mkdirSync;
-  const join = pathModule.join;
   const dirname = pathModule.dirname;
 
   const dbPath = getDBPath();
@@ -884,7 +915,7 @@ function initializeDatabaseSync(): void {
           }
         }
       }
-      } catch (migrationError: unknown) {
+    } catch (migrationError: unknown) {
       const errMsg = migrationError instanceof Error ? migrationError.message : String(migrationError);
       if (!errMsg?.includes('Cannot find module')) {
         // HIGH-2 fix: In production, migration failure is fatal — the app would run

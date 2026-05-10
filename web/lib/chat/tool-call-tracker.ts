@@ -66,6 +66,8 @@ class ToolCallTracker {
   private initPromise: Promise<void> | null = null;
   /** In-memory fallback when SQLite is unavailable */
   private memoryRecords: ToolCallRecord[] = [];
+  /** In-memory storage for redacted invocation payloads */
+  private memoryInvocations: any[] = [];
   /** Deduplication set: tracks seen toolCallIds to prevent double-counting */
   private seenToolCallIds = new Set<string>();
 
@@ -98,6 +100,24 @@ class ToolCallTracker {
 
         // logging-schema.sql defines tool_calls + chat_request_logs + hitl_audit_logs
         execSchemaFile(this.db, 'logging-schema');
+
+        // Create a lightweight table for redacted invocation payloads (for debugging)
+        try {
+          this.db.prepare(`
+            CREATE TABLE IF NOT EXISTS tool_call_payloads (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              timestamp INTEGER,
+              model TEXT,
+              provider TEXT,
+              tool_name TEXT,
+              redacted_args TEXT,
+              origin_stack TEXT,
+              tool_call_id TEXT
+            )
+          `).run();
+        } catch (e) {
+          logger.warn('Failed to create tool_call_payloads table', e);
+        }
 
         this.initialized = true;
         logger.info('Tool call tracker initialized (SQLite)');
@@ -432,6 +452,64 @@ class ToolCallTracker {
     }
 
     return records;
+  }
+
+  /**
+   * Record a redacted invocation payload for debugging and tracing (non-sensitive)
+   */
+  async recordInvocationPayload(payload: {
+    timestamp?: number;
+    model?: string;
+    provider?: string;
+    toolName?: string;
+    redactedArgs?: string;
+    originStack?: string;
+    toolCallId?: string | null;
+  }): Promise<void> {
+    await this.initialize();
+    const rec = {
+      timestamp: payload.timestamp || Date.now(),
+      model: payload.model || null,
+      provider: payload.provider || null,
+      tool_name: payload.toolName || null,
+      redacted_args: payload.redactedArgs || null,
+      origin_stack: payload.originStack || null,
+      tool_call_id: payload.toolCallId || null,
+    };
+
+    if (this.db) {
+      try {
+        const stmt = this.db.prepare(`
+          INSERT INTO tool_call_payloads (timestamp, model, provider, tool_name, redacted_args, origin_stack, tool_call_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `);
+        stmt.run(rec.timestamp, rec.model, rec.provider, rec.tool_name, rec.redacted_args, rec.origin_stack, rec.tool_call_id);
+        return;
+      } catch (e) {
+        logger.warn('Failed to insert tool_call_payloads row', e);
+      }
+    }
+
+    // In-memory fallback
+    this.memoryInvocations.push(rec);
+  }
+
+  async getRecentInvocations(limit: number = 100): Promise<any[]> {
+    await this.initialize();
+    const results: any[] = [];
+    if (this.db) {
+      try {
+        const stmt = this.db.prepare(`SELECT * FROM tool_call_payloads ORDER BY timestamp DESC LIMIT ?`);
+        results.push(...stmt.all(limit));
+      } catch (e) {
+        logger.warn('Failed to query tool_call_payloads', e);
+      }
+    }
+
+    const mem = [...this.memoryInvocations].sort((a, b) => b.timestamp - a.timestamp);
+    const remaining = limit - results.length;
+    if (remaining > 0) results.push(...mem.slice(0, remaining));
+    return results;
   }
 
   /**

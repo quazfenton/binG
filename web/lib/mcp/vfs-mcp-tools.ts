@@ -28,6 +28,7 @@ import { emitFileEvent, emitBatchFileEvents } from '../virtual-filesystem/file-e
 import { createLogger } from '../utils/logger';
 import { tolerantJsonParse, sanitizeJsonString, findBalancedJsonObject } from '../utils/json-tolerant';
 import { resolveToScopedPath } from '../virtual-filesystem/path-normalizer';
+import { getVfsScopeBasePath, getVfsScopePath } from '../virtual-filesystem/scope-utils';
 
 // Re-export for backwards compatibility (other modules may import from here)
 export { tolerantJsonParse, sanitizeJsonString, findBalancedJsonObject };
@@ -420,13 +421,12 @@ function getToolContext(): ToolContext {
   if (ctx) return ctx;
   // Safe fallback — should only happen if tools are called outside
   // of a toolContextStore.run() wrapper (which indicates a caller bug).
-  // Use consistent default session matching MCP route defaults (project/sessions/000)
+  // Use mode-aware default session (desktop: 'project', web: 'project/sessions/000')
   // BUG: If you see this in production, the tool caller did not wrap in toolContextStore.run()
   console.warn('[VFS-MCP-TOOLS] WARNING: No tool context set — toolContextStore.run() was not called by the caller. Files may be written to wrong workspace (anon:public).');
   return {
     userId: 'default',
-    sessionId: undefined,
-    scopePath: 'project/sessions/000',
+    sessionId: undefined,      scopePath: getVfsScopeBasePath(),
   };
 }
 
@@ -447,7 +447,7 @@ function getToolContext(): ToolContext {
  */
 function resolveScopedPath(inputPath: string): string {
   const context = getToolContext();
-  const scopePath = context.scopePath || 'project/sessions/000';
+  const scopePath = getVfsScopePath({ scopePath: context.scopePath, sessionId: context.sessionId });
   return resolveToScopedPath(inputPath, scopePath);
 }
 
@@ -464,7 +464,8 @@ export function initializeVFSTools(userId: string, sessionId?: string, scopePath
   setToolContext({
     userId,
     sessionId,
-    scopePath: scopePath || 'project/sessions/000',  // Default to session scope
+    scopePath: getVfsScopePath({ scopePath, sessionId }),
+    // Default to session-scoped path based on mode (desktop uses 'project', web uses 'project/sessions/{id}')
   });
 }
 
@@ -936,7 +937,7 @@ export const applyDiffTool = (tool as any)({
  */
 function reverseNormalizePath(originalPath: string, scopedPath: string): string {
   const context = getToolContext();
-  const scopePath = context.scopePath || 'project/sessions/000';
+  const scopePath = getVfsScopePath({ scopePath: context.scopePath, sessionId: context.sessionId });
 
   // If scoped path starts with the scope, strip it to get the relative part
   if (scopedPath.startsWith(`${scopePath}/`)) {
