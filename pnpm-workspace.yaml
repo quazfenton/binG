@@ -2,3 +2,4 @@ packages:
   - "desktop"
   - "packages/*"
   - "web"
+  - "backend"

@@ -103,6 +103,7 @@ import {
 
 import { initializeComposioService, getComposioService, type ComposioService } from '../integrations/composio-service'
 import { chatLogger } from './chat-logger'
+import { recordToolCallTelemetry, prepareTelemetryPayload } from './logging-utils'
 import { withRetry, isRetryableError } from '../vector-memory/retry'
 // Binary finders for desktop CLI agents (used to determine availability)
 import { findAmpBinarySync, findCodexBinarySync, findKilocodeBinarySync, findPiBinarySync, findClaudeCodeBinarySync, findOpencodeBinarySync } from '../agent-bins'
@@ -1589,6 +1590,17 @@ class LLMService {
           contentLength: response.content.length,
         });
 
+        // Record response latency telemetry with correct fallback tracking
+        {
+          const actualProvider = response.metadata?.actualProvider || provider;
+          const actualModel = response.metadata?.actualModel || model;
+          const { redactedArgs: responseArgs, originStack: responseStack } = prepareTelemetryPayload({
+            args: { provider: actualProvider, model: actualModel, latencyMs: responseLatency, tokensUsed: response.tokensUsed, success: true },
+          });
+          recordToolCallTelemetry({ toolCallId: requestId || null, redactedArgs: responseArgs, originStack: responseStack })
+            .catch((err) => { chatLogger.debug(`Failed to record response telemetry: ${err}`); });
+        }
+
         return response;
       },
       {
@@ -1628,6 +1640,15 @@ class LLMService {
       temperature,
       maxTokens,
     });
+
+    // Record streaming start telemetry
+    {
+      const { redactedArgs: startArgs, originStack: startStack } = prepareTelemetryPayload({
+        args: { provider, model, messageCount: messages.length, success: true, event: 'stream_start' },
+      });
+      recordToolCallTelemetry({ toolCallId: requestId || null, redactedArgs: startArgs, originStack: startStack })
+        .catch((err) => { chatLogger.debug(`Failed to record stream start telemetry: ${err}`); });
+    }
 
     try {
       switch (provider) {
@@ -1761,6 +1782,15 @@ class LLMService {
         latencyMs: streamLatency,
         chunkCount,
       });
+
+      // Record streaming completion telemetry
+      {
+        const { redactedArgs: completionArgs, originStack: completionStack } = prepareTelemetryPayload({
+          args: { provider, model, latencyMs: streamLatency, chunkCount, success: true, event: 'stream_complete', fallbackOccurred: false },
+        });
+        recordToolCallTelemetry({ toolCallId: requestId || null, redactedArgs: completionArgs, originStack: completionStack })
+          .catch((err) => { chatLogger.debug(`Failed to record stream completion telemetry: ${err}`); });
+      }
     } catch (error) {
       const streamLatency = Date.now() - streamStartTime;
       chatLogger.error('LLM streaming failed', { requestId, provider, model }, {
@@ -1769,6 +1799,15 @@ class LLMService {
         error: error instanceof Error ? error.message : String(error),
       });
 
+
+      // Record streaming error telemetry
+      {
+        const { redactedArgs: errorArgs, originStack: errorStack } = prepareTelemetryPayload({
+          args: { provider, model, latencyMs: streamLatency, chunkCount, success: false, errorType: (error as any).failureType || (error as any).message || 'unknown', event: 'stream_error', retryCount: (error as any).retryCount || 1 },
+        });
+        recordToolCallTelemetry({ toolCallId: requestId || null, redactedArgs: errorArgs, originStack: errorStack })
+          .catch((err) => { chatLogger.debug(`Failed to record stream error telemetry: ${err}`); });
+      }
       throw createStreamError(`Streaming LLM request failed: ${error instanceof Error ? error.message : String(error)}`, {
         code: ERROR_CODES.STREAMING.REQUEST_FAILED,
         severity: 'high',

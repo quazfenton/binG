@@ -29,9 +29,10 @@ export function withAnonSessionCookie<T extends NextResponse>(
 ): T {
   if (owner.anonSessionId) {
     const isSecure = process.env.NODE_ENV === 'production';
+    const cookieDomain = process.env.COOKIE_DOMAIN ? `; Domain=${process.env.COOKIE_DOMAIN}` : '';
     response.headers.set(
       'set-cookie',
-      `anon-session-id=${owner.anonSessionId}; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly${isSecure ? '; Secure' : ''}`
+      `anon-session-id=${owner.anonSessionId}; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly${isSecure ? '; Secure' : ''}${cookieDomain}`
     );
     // Also add a readable header for client-side JavaScript to sync localStorage
     response.headers.set('x-anonymous-session-id', owner.anonSessionId);

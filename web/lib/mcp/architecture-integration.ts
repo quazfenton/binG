@@ -12,7 +12,8 @@ import { parseMCPServerConfigs, initializeMCP, shutdownMCP, getMCPSettings, isMC
 import { callMCPorterTool, getMCPorterToolDefinitions, mcporterIntegration } from './mcporter-integration'
 import { createHTTPTransport, isValidMCPURL, parseMCPURL, HTTPTransport, registerHTTPTransport, getRemoteMCPTools, callRemoteMCPTool, hasRemoteMCPServers } from './http-transport'
 import { startHealthMonitoring } from './health-check'
-import { createLogger } from '../utils/logger'
+import { createLogger } from '../utils/logger';
+import { redactArgsForLogging } from '@/lib/chat/logging-utils';
 // Dynamically imported to avoid pulling Node.js-only deps (database/fs) into client bundle
 import type { BlaxelProvider } from '../sandbox/providers/blaxel-provider'
 import { ArcadeService, getArcadeService } from '../integrations/arcade-service'
@@ -224,40 +225,6 @@ const getBlaxelCodegenToolDefinitions = (): Array<{
 const logger = createLogger('MCP:Integration')
 
 // Redact sensitive or large fields from tool args for logging/tracing
-function redactArgsForLogging(args: any) {
-  if (!args || typeof args !== 'object') return args;
-  const out: Record<string, any> = {};
-  for (const [k, v] of Object.entries(args)) {
-    const key = String(k || '');
-    const lower = key.toLowerCase();
-    // Sensitive keys
-    if (['content', 'body', 'file', 'files'].some(s => lower.includes(s))) {
-      if (key === 'files' && Array.isArray(v)) {
-        out[key] = v.map((f: any) => ({ path: f?.path, name: f?.name }));
-      } else {
-        out[key] = '[REDACTED]';
-      }
-      continue;
-    }
-
-    if (typeof v === 'string' && v.length > 200) {
-      out[key] = v.slice(0, 200) + '...[TRUNCATED]';
-    } else if (typeof v === 'object') {
-      try {
-        out[key] = JSON.parse(JSON.stringify(v, (kk, vv) => {
-          const kl = String(kk || '').toLowerCase();
-          if (kl.includes('secret') || kl.includes('token') || kl.includes('password') || kl.includes('apikey')) return '[REDACTED]';
-          return vv;
-        }));
-      } catch {
-        out[key] = '[UNSERIALIZABLE]';
-      }
-    } else {
-      out[key] = v;
-    }
-  }
-  return out;
-}
 
 // Guard to prevent redundant reinitialization on every /api/mcp/connect click
 let mcpArch1Initialized = false;
@@ -1386,7 +1353,7 @@ export async function callMCPToolFromAI_SDK(
 
       // Redacted payload dump for tracing origin of malformed tool calls
       try {
-        const redacted = redactArgsForLogging(args || {});
+        const redacted = redactArgsForLogging(args || {}, { deep: true });
         logger.debug('[VFS MCP] Tool payload (redacted)', { payload: redacted });
       } catch (e) {
         logger.debug('[VFS MCP] Failed to redact payload for logging', { error: (e as any)?.message || e });

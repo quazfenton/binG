@@ -18,6 +18,7 @@ import { verifyChanges } from '@/lib/orchestra/stateful-agent/agents/verificatio
 import { SelfHealingExecutor } from '@/lib/crewai/runtime/self-healing';
 import { getVercelModel } from '@/lib/chat/vercel-ai-streaming';
 import { createLogger } from '@/lib/utils/logger';
+import { createOriginStack, redactArgsForLogging } from '@/lib/chat/logging-utils';
 
 const log = createLogger('PlanActVerify');
 
@@ -26,36 +27,6 @@ const log = createLogger('PlanActVerify');
  * - Replaces large or sensitive fields (content, body) with <redacted>
  * - Preserves file paths / names when present
  */
-function redactArgsForLogging(args: any): any {
-  if (args == null) return args;
-  try {
-    const copy: any = Array.isArray(args) ? [] : {};
-    for (const k of Object.keys(args)) {
-      const v = args[k];
-      if (k === 'content' || k === 'body' || k === 'fileContents' || k === 'contentEncoded') {
-        copy[k] = '<redacted>'; continue;
-      }
-      if (k === 'files' && Array.isArray(v)) {
-        copy[k] = v.map((f: any) => (typeof f === 'string' ? f : f?.path || f?.name || '<file>'));
-        continue;
-      }
-      if (typeof v === 'string' && v.length > 1000) {
-        copy[k] = `${v.slice(0, 200)}...<truncated:${v.length}>`;
-        continue;
-      }
-      if (typeof v === 'object' && v !== null) {
-        // shallow map nested objects to avoid deep traversal
-        copy[k] = Array.isArray(v) ? v.slice(0, 5).map(x => (typeof x === 'object' ? '<obj>' : x)) : (Object.fromEntries(Object.entries(v).slice(0,5).map(([kk, vv]) => [kk, typeof vv === 'string' && vv.length > 200 ? `${vv.slice(0,200)}...` : vv])));
-        continue;
-      }
-      copy[k] = v;
-    }
-    return copy;
-  } catch (e) {
-    return '<unserializable-args>';
-  }
-}
-
 
 // ─── Typed Configuration ─────────────────────────────────────────────────────
 
@@ -451,10 +422,10 @@ export class PlanActVerifyOrchestrator {
                 provider: this.validatedConfig.provider,
                 toolName: call.name,
                 redactedArgs: typeof _redactedForLog === 'string' ? _redactedForLog : JSON.stringify(_redactedForLog || {}),
-                originStack: (new Error()).stack?.split('\n').slice(1,8).join('\n'),
+                originStack: createOriginStack(),
                 toolCallId: call.id || null,
-              }).catch(() => {});
-            }).catch(() => {});
+              }).catch((err) => { log.debug?.('PlanActVerify: recordInvocationPayload failed:', err); });
+            }).catch((err) => { log.debug?.('PlanActVerify: recordToolResultTelemetry failed:', err); });
           } catch (e) {
             log.debug('PlanActVerify: failed to persist invocation payload', { tool: call.name });
           }
@@ -660,7 +631,7 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
             timestamp: Date.now(),
             toolCallId,
           });
-        }).catch(() => {});
+        }).catch((err) => { log.debug?.('PlanActVerify: recordToolResult failed:', err); });
 
         return result;
       } catch (error: any) {
@@ -678,7 +649,7 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
               timestamp: Date.now(),
               toolCallId,
             });
-          }).catch(() => {});
+          }).catch((err) => { log.debug?.('PlanActVerify: executeTool telemetry failed:', err); });
 
           throw new Error(`Tool ${name} failed after ${maxRetries} retries: ${error.message}`);
         }

@@ -2065,6 +2065,13 @@ export class ResponseRouter {
         { type: 'spec-amplification', primaryRequestId: request.requestId },
       );
       
+      logger.info('\x1b[36m[Spec-Amplification]\x1b[0m ✨ Triggered background refinement', {
+        requestId: request.requestId,
+        specRequestId,
+        model: fastModel.model,
+        provider: fastModel.provider
+      });
+      
       logger.debug('Building spec prompt', {
         userContentLength: userContent.length,
         specRequestId,

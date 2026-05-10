@@ -31,6 +31,29 @@ export async function proxy(request: NextRequest) {
     return response;
   }
 
+  // List of API routes that have been moved to the dedicated backend
+  const MIGRATED_TO_BACKEND = ['/api/chat']; 
+  
+  const pathname = request.nextUrl.pathname;
+  if (MIGRATED_TO_BACKEND.some(route => pathname.startsWith(route))) {
+    const backendUrl = process.env.BACKEND_URL || 'http://localhost:3001';
+    const targetUrl = new URL(pathname, backendUrl);
+    
+    // Forward all query parameters
+    request.nextUrl.searchParams.forEach((value, key) => {
+      targetUrl.searchParams.set(key, value);
+    });
+
+    // Create the rewrite response
+    const response = NextResponse.rewrite(targetUrl);
+    
+    // CRITICAL: Ensure CORS and Credentials headers are preserved during rewrite
+    response.headers.set('Access-Control-Allow-Origin', request.headers.get('origin') || '*');
+    response.headers.set('Access-Control-Allow-Credentials', 'true');
+    
+    return response;
+  }
+
   // Block access to sensitive files
   const blockedResponse = blockSensitiveFiles(request);
   if (blockedResponse) {

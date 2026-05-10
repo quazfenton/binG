@@ -25,6 +25,7 @@ import { runAgentLoop as runV2AgentLoop } from './agent-loop';
 import { getConfiguredFallbackChain } from '../chat/provider-fallback-chains';
 import { chatRequestLogger } from '../chat/chat-request-logger';
 import { extractFileWritesFromLLMResponse, type FileWrite } from '../chat/file-diff-utils';
+import { recordToolCallTelemetry, prepareTelemetryPayload } from '@/lib/chat/logging-utils';
 import { getRecontextSupplement } from '@/lib/memory/cache-exporter';
 import {
   createOpenCodeEngine,
@@ -520,6 +521,12 @@ export async function processUnifiedAgentRequest(
   // (OpenCodeEngine, StatefulAgent, Mastra). They can append this to their
   // system prompt or user message as appropriate.
   config._autoInjectContext = autoInjectContext;
+  if (autoInjectContext) {
+    log.debug('[Context-Inject] Auto-inject context stashed', { 
+      contextLength: autoInjectContext.length,
+      preview: autoInjectContext.slice(0, 100) + '...'
+    });
+  }
 
   // Inject re-context supplement for unfinished tasks (periodic reminders)
   // Only inject if not too many messages already (avoid bloating the context)
@@ -671,6 +678,16 @@ export async function processUnifiedAgentRequest(
     // fallback to a text-mode completion to provide a more helpful response.
     const isAutoMode = !config.mode || config.mode === 'auto';
     const roleSelection = result.metadata?.roleSelection;
+
+  // Log auto-continue trigger
+  if (roleSelection?.continue) {
+    log.info('\x1b[33m[Auto-Continue]\x1b[0m 🔄 triggered by model', {
+      reason: roleSelection.classification || 'multi-step plan detected',
+      suggestedRole: roleSelection.suggestedRole,
+      nextAction: roleSelection.specializationRoute
+    });
+  }
+
     if (isAutoMode && result.success && (result.steps?.length ?? 0) === 0 && !roleSelection?.continue) {
       log.info('[PhaseTransition] No tools used in Phase 1, entering Phase 2 fallback (text-mode)');
       
@@ -1971,6 +1988,14 @@ async function runV1ApiWithTools(
         promptLength: composedPrompt.length,
         hasRag: !!ragContext,
       });
+
+      // Log tool broadening if more than the usual set
+      if (toolIds.length > 10) {
+        log.info('\x1b[35m[Tool-Broadening]\x1b[0m 🚀 System has BROADENED tool access', {
+          count: toolIds.length,
+          tools: toolIds.slice(0, 15).join(', ') + (toolIds.length > 15 ? '...' : '')
+        });
+      }
     } else if (config.systemPrompt) {
       let systemContent = config.systemPrompt + ragContext + workspaceSnippet;
       // FIX: Inject dynamic feedback and tracker summary into system prompt for self-routing
@@ -1984,7 +2009,16 @@ async function runV1ApiWithTools(
         if (trackerSummary) feedbackParts.push(trackerSummary);
         if (feedbackParts.length > 0) {
           systemContent += '\n\n' + feedbackParts.join('\n\n');
-          log.info('[V1-API-WITH-TOOLS] Injected feedback into system prompt', { feedbackParts: feedbackParts.length });
+          log.info('\x1b[32m[V1-API-WITH-TOOLS]\x1b[0m 🧠 Injected feedback into system prompt', { 
+            hasCorrection: !!injected?.correctionSection,
+            hasHealing: !!injected?.healingInstructions,
+            hasFormatGuidance: !!injected?.formatGuidance,
+            hasTrackerSummary: !!trackerSummary
+          });
+          
+          if (injected?.correctionSection) {
+            log.debug('[Feedback-Content] Correction:', injected.correctionSection.slice(0, 100) + '...');
+          }
         }
       }
       llmMessages.push({ role: 'system', content: systemContent });
@@ -2241,14 +2275,12 @@ async function runV1ApiWithTools(
 
         // Use full feedback injection module for richer healing context
         const injectedFeedback = injectFeedback(enrichedContext);
-        log.info('[V1-API-WITH-TOOLS] [SelfHeal] Injected feedback for retry', {
+
+        log.info('\x1b[32m[V1-API-WITH-TOOLS]\x1b[0m [SelfHeal] 🩹 Injected feedback for retry', {
+          failures: feedbackContext.recentFailures.length,
+          turn: feedbackContext.turnNumber,
           hasCorrection: !!injectedFeedback.correctionSection,
-          correctionLen: injectedFeedback.correctionSection?.length || 0,
-          hasHealing: !!injectedFeedback.healingInstructions,
-          healingLen: injectedFeedback.healingInstructions?.length || 0,
-          hasFormatGuidance: !!injectedFeedback.formatGuidance,
-          formatLen: injectedFeedback.formatGuidance?.length || 0,
-          failureCount: enrichedContext.recentFailures?.length || 0,
+          hasHealing: !!injectedFeedback.healingInstructions
         });
 
         // Build feedback that depends on what went wrong
@@ -2318,6 +2350,22 @@ async function runV1ApiWithTools(
           toolCount: toolInvocations.length,
           retryCount: retryCount + 1,
         });
+
+        // Record telemetry for retry (helps trace malformed/duplicate calls)
+        if (toolInvocations && toolInvocations.length > 0) {
+          const { redactedArgs, originStack } = prepareTelemetryPayload(
+            { toolInvocations, retryCount: retryCount + 1, anyToolFailed, noToolCalls },
+            { maxStringLength: 200, maxObjectProps: 5, maxArrayItems: 5 }
+          );
+          recordToolCallTelemetry({
+            toolName: 'UnifiedAgentService.retry',
+            redactedArgs,
+            model: config.model,
+            provider: config.provider,
+            originStack,
+            toolCallId: null,
+          }).catch((err) => { log.debug?.('[UnifiedAgentService] retry telemetry failed:', err); }); // Silent - telemetry should not break flow
+        }
 
         // Track retries so we don't loop forever
         (config as any)._toolFailureRetryCount = retryCount + 1;
