@@ -211,7 +211,14 @@ function invalidateSnapshotCache(path?: string, ownerId?: string): void {
  * Anonymous sessions carry no persistent sensitive data.
  */
 function isAnonOwner(id: string): boolean {
-  return id === 'anonymous' || id === 'anon' || id.startsWith('anon-') || id.startsWith('anonymous-');
+  return (
+    id === 'anonymous' ||
+    id === 'anon' ||
+    id.startsWith('anon-') ||
+    id.startsWith('anonymous-') ||
+    id.startsWith('anon$') ||
+    id.startsWith('anonymous$')
+  );
 }
 
 export function useVirtualFilesystem(

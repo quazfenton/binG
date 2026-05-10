@@ -1657,7 +1657,7 @@ function createCapabilityToolExecutor(config: UnifiedAgentConfig) {
       // VFS batch/file tools — route through capability system so userId/scopePath are threaded
       'batch_write': 'file.batch_write', 'write_files': 'file.batch_write',
       'batchwrite': 'file.batch_write', 'writefiles': 'file.batch_write',
-      'create_directory': 'file.write', 'mkdir': 'file.write',
+      'create_directory': 'file.create_directory', 'mkdir': 'file.create_directory',
       'search_code': 'file.search', 'grep_code': 'file.search',
     };
 

@@ -2111,7 +2111,7 @@ export default function ConversationInterface() {
           className="relative z-10 flex flex-col min-h-0 w-full md:border-l md:border-white/10"
           style={{ 
             width: isDesktop ? chatPanelWidth : '100%',
-            minWidth: '400px',
+            minWidth: isDesktop ? '400px' : '300px',
             maxWidth: '1200px',
           } as React.CSSProperties}
         >

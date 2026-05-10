@@ -118,7 +118,8 @@ export function getDefaultWorkspaceRoot(): string | null {
     // Sanitize and validate the path
     const sanitized = userProfile.trim();
     // Check for invalid characters that could cause issues
-    if (/[<>:"|?*]/.test(sanitized)) {
+    // Note: Allow : for Windows drive letters (e.g., C:\Users\...)
+    if (/[<>"|?*]/.test(sanitized)) {
       console.warn('[env.ts] USERPROFILE contains invalid characters, using fallback');
       return null;
     }

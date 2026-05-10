@@ -242,9 +242,57 @@ export function useIframeLoader({
   }, [detectFailureReason, handleFallback, onFailed]);
 
   // Manually trigger a reload of the iframe
+  // Resets state and increments iframeKey to force iframe re-render
   const triggerReload = useCallback(() => {
+    if (!currentUrlRef.current) return;
+
+    // Reset retry/fallback state for manual reload
+    fallbackAttemptRef.current = 0;
+    setFallbackAttempt(0);
+    setFallbackLevel('none');
+    setIsUsingFallback(false);
+    setFallbackUrl(null);
+
+    // Reset loading/failed state
+    setIsLoading(true);
+    setIsLoaded(false);
+    setIsFailed(false);
+    setFailureReason(null);
+    setErrorMessage(null);
+    setLoadingProgress(0);
+
+    // Clear any existing timeout
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+    }
+    if (progressRef.current) {
+      clearInterval(progressRef.current);
+    }
+
+    // Reset load start time and start progress tracking
+    loadStartRef.current = Date.now();
+    progressRef.current = setInterval(() => {
+      const elapsed = Date.now() - loadStartRef.current;
+      const progress = Math.min((elapsed / timeoutValueRef.current) * 100, 95);
+      setLoadingProgress(progress);
+    }, 100);
+
+    // Set timeout for reload
+    timeoutRef.current = setTimeout(() => {
+      if (progressRef.current) {
+        clearInterval(progressRef.current);
+        progressRef.current = null;
+      }
+      setLoadingProgress(100);
+      // Trigger fallback if enabled on timeout during manual reload
+      if (enableFallbackRef.current && fallbackAttemptRef.current < 2) {
+        handleFallback();
+      }
+    }, timeoutValueRef.current);
+
+    // Increment key to force iframe reload with new URL
     setIframeKey(prev => prev + 1);
-  }, []);
+  }, [handleFallback]);
 
   const handleLoad = useCallback((newUrl: string) => {
     if (!newUrl) return;

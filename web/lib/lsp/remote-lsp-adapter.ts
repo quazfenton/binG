@@ -83,6 +83,7 @@ export class RemoteLspAdapter implements LSPAdapter {
   private ws: WebSocket | null = null;
   private _ready = false;
   private _connecting = false;
+  private _connectPromise: Promise<void> | null = null;
   private messageId = 0;
   private pending = new Map<number, PendingRequest>();
   private reconnectAttempts = 0;
@@ -227,11 +228,16 @@ export class RemoteLspAdapter implements LSPAdapter {
 
   private async connect(): Promise<void> {
     if (this.destroyed) throw new Error(`[${this.name}] Adapter is destroyed`);
-    if (this._connecting) return;
+    // Wait for in-progress connection instead of returning early - this prevents
+    // race conditions where initialize() sends RPC requests on a not-yet-open socket
+    if (this._connecting && this._connectPromise) {
+      return this._connectPromise;
+    }
 
-    return new Promise((resolve, reject) => {
+    this._connectPromise = new Promise((resolve, reject) => {
       void this.connectInternal(resolve, reject);
     });
+    return this._connectPromise;
   }
 
   private async connectInternal(
@@ -275,6 +281,7 @@ export class RemoteLspAdapter implements LSPAdapter {
       this.ws.onopen = () => {
         console.log(`[${this.name}] WebSocket connected to ${this.wsUrl}`);
         this._connecting = false;
+        this._connectPromise = null;
         this.reconnectAttempts = 0;
         resolve();
       };
@@ -292,6 +299,7 @@ export class RemoteLspAdapter implements LSPAdapter {
         console.error(`[${this.name}] WebSocket error:`, err);
         if (!this._ready) {
           this._connecting = false;
+          this._connectPromise = null;
           reject(new Error(`[${this.name}] WebSocket connection failed`));
         }
       };
@@ -299,6 +307,7 @@ export class RemoteLspAdapter implements LSPAdapter {
       this.ws.onclose = (event: CloseEvent) => {
         console.log(`[${this.name}] WebSocket closed (code: ${event.code})`);
         this._connecting = false;
+        this._connectPromise = null;
         this._ready = false;
 
         // Reject pending requests
@@ -315,6 +324,7 @@ export class RemoteLspAdapter implements LSPAdapter {
       };
     } catch (err) {
       this._connecting = false;
+      this._connectPromise = null;
       reject(err instanceof Error ? err : new Error(String(err)));
     }
   }
@@ -351,6 +361,7 @@ export class RemoteLspAdapter implements LSPAdapter {
       this.ws = null;
     }
     this._connecting = false;
+    this._connectPromise = null;
     this.openDocs.clear();
   }
 
