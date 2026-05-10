@@ -2208,7 +2208,9 @@ async function runV1ApiWithTools(
         : { detected: false, reason: '', prompt: '', confidence: 0 as number };
       const responseIncomplete = incompleteDetection.detected;
 
-      const shouldRetry = (responseEmpty || responseIncomplete) && retryCount < MAX_TOOL_FAILURE_RETRIES && (anyToolFailed || noToolCalls);
+      const shouldRetry = retryCount < MAX_TOOL_FAILURE_RETRIES && (
+        (responseEmpty && (anyToolFailed || noToolCalls)) || responseIncomplete
+      );
 
       if (shouldRetry) {
         // Build FeedbackEntry objects from tool failures and accumulate into
@@ -2737,7 +2739,23 @@ async function runV1Orchestrated(
         } catch (chainErr: any) {
           log.error('[runV1Orchestrated] attemptFallback chain also failed', { error: chainErr?.message || String(chainErr) });
         }
-        // Return the partial orchestrated result as last resort
+        // Both fallbacks failed after budget exhaustion — return partial orchestrated result with budgetExhausted signal so callers can distinguish degraded response
+        return {
+          success: true,
+          response: cleanedResponse,
+          steps,
+          totalSteps: stepsCount,
+          mode: 'v1-agent-loop',
+          metadata: {
+            provider,
+            model,
+            duration,
+            orchestrator: true,
+            budgetExhausted: true,
+            fallbackFailed: true,
+            originalOrchResponse: cleanedResponse.slice(0, 200) + (cleanedResponse.length > 200 ? '...' : ''),
+          },
+        };
       }
     }
 
