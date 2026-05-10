@@ -2180,62 +2180,87 @@ async function runV1ApiWithTools(
       // "no response generated" with no recovery. Self-heal by re-prompting
       // the model with the validation error appended to messages so it can fix
       // the call. Bounded by config._toolFailureRetryCount to prevent infinite loops.
-      const allToolsFailed =
+      // ─── Empty-response self-healing ───
+      // The user must NEVER see "No response generated" without at least one
+      // recovery attempt. Triggers when the cleaned response is empty, regardless
+      // of whether tools were called: (a) tool-call but blocked/failed → retry
+      // with feedback so the model fixes its args, (b) no tool call AND no text
+      // → retry in text-mode so the model produces *something*. Bounded by
+      // config._toolFailureRetryCount to prevent infinite loops.
+      const anyToolFailed =
         toolInvocations.length > 0 &&
-        toolInvocations.every((inv) => inv.result?.success === false);
+        toolInvocations.some((inv) => inv.result?.success === false);
+      const noToolCalls = toolInvocations.length === 0;
       const responseEmpty = !cleanedResponse || cleanedResponse.trim().length === 0;
       const retryCount = ((config as any)._toolFailureRetryCount as number) || 0;
       const MAX_TOOL_FAILURE_RETRIES = 1;
-      if (allToolsFailed && responseEmpty && retryCount < MAX_TOOL_FAILURE_RETRIES) {
-        const failureSummaries = toolInvocations.map((inv) => {
-          const err = inv.result?.error;
-          const errMsg = typeof err === 'string'
-            ? err
-            : (err?.message || JSON.stringify(err) || 'unknown error');
-          const suggestion = (typeof err === 'object' && err?.suggestedNextAction) || '';
-          return `- Tool "${inv.toolName}" called with args ${JSON.stringify(inv.args).slice(0, 300)} failed: ${errMsg}. ${suggestion}`;
-        });
 
-        const feedbackMsg = `[TOOL-FAILURE-FEEDBACK] Your previous tool call(s) failed validation. Fix and retry:\n${failureSummaries.join('\n')}\n\nIMPORTANT: Provide ALL required arguments for each tool. For batch_write specifically, you MUST include the "files" array (e.g., [{ "path": "...", "content": "..." }, ...]).`;
+      if (responseEmpty && retryCount < MAX_TOOL_FAILURE_RETRIES && (anyToolFailed || noToolCalls)) {
+        // Build feedback that depends on what went wrong
+        let feedbackMsg: string;
+        let userPrompt: string;
+        if (anyToolFailed) {
+          const failureSummaries = toolInvocations
+            .filter((inv) => inv.result?.success === false)
+            .map((inv) => {
+              const err = inv.result?.error;
+              const errMsg = typeof err === 'string'
+                ? err
+                : (err?.message || JSON.stringify(err) || 'unknown error');
+              const suggestion = (typeof err === 'object' && err?.suggestedNextAction) || '';
+              return `- Tool "${inv.toolName}" called with args ${JSON.stringify(inv.args).slice(0, 300)} failed: ${errMsg}. ${suggestion}`;
+            });
+          feedbackMsg = `[TOOL-FAILURE-FEEDBACK] Your previous tool call(s) failed validation. Fix and retry:\n${failureSummaries.join('\n')}\n\nIMPORTANT: Provide ALL required arguments for each tool. For batch_write you MUST include the "files" array; for web_search you MUST include the "query" string; for write_file you MUST include both "path" and "content".`;
+          userPrompt = 'Please retry the failed tool call(s) above with the correct arguments AND then provide a final text answer to me.';
+        } else {
+          // No tool calls and no text — model went silent. Force a text-mode response.
+          feedbackMsg = '[EMPTY-RESPONSE-FEEDBACK] You produced no text and no tool calls. Respond directly to the user in plain text now. If a tool was needed, describe what you would have done.';
+          userPrompt = 'Please respond directly with a complete answer.';
+        }
 
-        log.warn('[V1-API-WITH-TOOLS] [SelfHeal] Auto-retrying after tool-failure(s)', {
-          failedToolCount: toolInvocations.length,
+        log.warn('[V1-API-WITH-TOOLS] [SelfHeal] Auto-retrying empty response', {
+          anyToolFailed,
+          noToolCalls,
+          toolCount: toolInvocations.length,
           retryCount: retryCount + 1,
         });
 
         // Track retries so we don't loop forever
         (config as any)._toolFailureRetryCount = retryCount + 1;
 
-        // Append assistant ack + system feedback so the next call retries the tool
         const retryMessages = [
           ...messages,
-          {
-            role: 'assistant' as const,
-            content: '',
-          },
-          {
-            role: 'system' as const,
-            content: feedbackMsg,
-          },
-          {
-            role: 'user' as const,
-            content: 'Please retry the failed tool call(s) above with the correct arguments now.',
-          },
+          { role: 'assistant' as const, content: '' },
+          { role: 'system' as const, content: feedbackMsg },
+          { role: 'user' as const, content: userPrompt },
         ];
 
         try {
-          return await runV1ApiWithTools(config, retryMessages, startTime);
+          const retryResult = await runV1ApiWithTools(config, retryMessages, startTime);
+          // If the retry produced something, use it. Otherwise fall through to
+          // the friendly fallback below so the user still sees a message.
+          if (retryResult.response && retryResult.response.trim() && retryResult.response !== 'No response generated') {
+            return retryResult;
+          }
+          log.warn('[V1-API-WITH-TOOLS] [SelfHeal] Retry also produced empty response, using friendly fallback');
         } catch (retryErr: any) {
-          log.warn('[V1-API-WITH-TOOLS] [SelfHeal] Retry failed, returning original result', {
+          log.warn('[V1-API-WITH-TOOLS] [SelfHeal] Retry failed, using friendly fallback', {
             error: retryErr?.message,
           });
-          // Fall through to return original failed result (don't loop)
         }
       }
 
+      // Friendly fallback message — preferable to a bald "No response generated"
+      const friendlyFallback = anyToolFailed
+        ? 'I attempted to use a tool but the call was rejected. Could you rephrase or clarify what you\'d like me to do?'
+        : 'I didn\'t produce a response for that — could you rephrase your request?';
+      const finalResponse = cleanedResponse && cleanedResponse.trim()
+        ? cleanedResponse
+        : (response && response.trim() ? response : friendlyFallback);
+
       return {
         success: true,
-        response: cleanedResponse || response || 'No response generated',
+        response: finalResponse,
         steps,
         totalSteps: steps.length,
         mode: 'v1-api',
@@ -2434,11 +2459,26 @@ async function runV1Orchestrated(
   // Use shared capability-based tool executor
   const capabilityExecuteTool = createCapabilityToolExecutor(config);
 
+  // Resolve provider/model with the same precedence as the rest of the service
+  // (config override -> dynamic defaults). Without this, PlanActVerifyOrchestrator
+  // silently falls back to its hardcoded `openai`/`gpt-4o` schema defaults and
+  // tries to use OPENAI_API_KEY even when the user picked a different provider.
+  const _orchProvDefaults = await resolveDynamicDefaults();
+  const resolvedProvider = config.provider || _orchProvDefaults.provider;
+  const resolvedModel = config.model || _orchProvDefaults.model;
+  log.info('[runV1Orchestrated] Passing provider/model to PlanActVerify', {
+    provider: resolvedProvider,
+    model: resolvedModel,
+    fromConfig: !!config.provider,
+  });
+
   const orchestratorConfig: OrchestratorConfig = {
     iterationConfig: {
       maxIterations: config.maxSteps || parseInt(process.env.LLM_AGENT_TOOLS_MAX_ITERATIONS || '15', 10),
       maxTokens: config.maxTokens || 32000,
       maxDurationMs: parseInt(process.env.LLM_AGENT_TOOLS_TIMEOUT_MS || '60000', 10),
+      provider: resolvedProvider,
+      model: resolvedModel,
     },
     tools: config.tools || [],
     executeTool: capabilityExecuteTool,

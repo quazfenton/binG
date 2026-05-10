@@ -932,36 +932,46 @@ export async function* streamWithVercelAI(
         }
       } else if (supportsFC === undefined) {
         // Model doesn't report this capability — could be unknown provider.
-        // Auto text-mode: if telemetry shows this model fails >70% of tool calls,
-        // strip tools and switch to text-mode proactively.
-        if (shouldForceTextMode(modelName)) {
-          chatLogger.warn('[FC-GATE] Auto text-mode: model has >70% tool failure rate', {
-            provider,
-            model: modelName,
-            toolCount,
-            action: 'Stripping tools and using text-mode fallback based on telemetry',
-          });
-          delete streamOptions.tools;
-          if (streamOptions.system) {
-            streamOptions.system = streamOptions.system + '\n\n' + TEXT_MODE_TOOL_INSTRUCTIONS;
-          } else {
-            streamOptions.system = TEXT_MODE_TOOL_INSTRUCTIONS;
-          }
-        } else {
-          // TWO-PHASE STRATEGY:
-          //   Phase 1: Use tools only (no text-mode instructions).
-          //   Phase 2: After streaming, if zero tool calls produced, check if
-          //            the response text contains tool-call patterns. If so,
-          //            issue a second completion with text-mode instructions.
-          chatLogger.info('[FC-GATE] Function calling ability UNKNOWN — using two-phase strategy', {
-            provider,
-            model: modelName,
-            toolCount,
-            strategy: 'Phase 1: tools only; Phase 2: text-mode fallback if no tool calls',
-          });
-          // Do NOT inject text-mode instructions yet — let the model try native tool calls first.
-        }
+        // POLICY (per user): always let the model TRY tools first. Don't pre-emptively
+        // strip them based on telemetry. The Phase 2 fallback below already kicks in
+        // after the fact if Phase 1 produces zero usable output.
+        chatLogger.info('[FC-GATE] Function calling ability UNKNOWN — using two-phase strategy', {
+          provider,
+          model: modelName,
+          toolCount,
+          strategy: 'Phase 1: tools only (always); Phase 2: text-mode fallback only if file-edit tools failed',
+        });
+        // Do NOT inject text-mode instructions yet — let the model try native tool calls first.
       }
+      // === COMMENTED OUT: Auto text-mode based on telemetry ===
+      // This was removed in favor of letting the model TRY tools first and only
+      // falling back after Phase 1 fails (see FC-GATE Phase 2 below).
+      // Uncomment this block if you want to go back to proactively stripping
+      // tools for models with >70% tool failure rates in telemetry.
+      //
+      // // Auto text-mode: if telemetry shows this model fails >70% of tool calls,
+      // // strip tools and switch to text-mode proactively.
+      // if (shouldForceTextMode(modelName)) {
+      //   chatLogger.warn('[FC-GATE] Auto text-mode: model has >70% tool failure rate', {
+      //     provider,
+      //     model: modelName,
+      //     toolCount,
+      //     action: 'Stripping tools and using text-mode fallback based on telemetry',
+      //   });
+      //   delete streamOptions.tools;
+      //   if (streamOptions.system) {
+      //     streamOptions.system = streamOptions.system + '\n\n' + TEXT_MODE_TOOL_INSTRUCTIONS;
+      //   } else {
+      //     streamOptions.system = TEXT_MODE_TOOL_INSTRUCTIONS;
+      //   }
+      // } else {
+      //   // TWO-PHASE STRATEGY:
+      //   //   Phase 1: Use tools only (no text-mode instructions).
+      //   //   Phase 2: After streaming, if zero tool calls produced, check if
+      //   //            the response text contains tool-call patterns. If so,
+      //   //            issue a second completion with text-mode instructions.
+      // }
+      // === END COMMENTED OUT ===
     } else {
       chatLogger.info('[FC-GATE] No tools provided, skipping function calling check', { provider, model: modelName });
     }
@@ -1383,9 +1393,12 @@ export async function* streamWithVercelAI(
         // response text contains tool-call-like patterns, issue a second completion
         // with text-mode instructions.
         const supportsFC = (vercelModel as any)?.supports?.functionCalling;
-        if (supportsFC === undefined && textContent) {
-          // Check for tool-call patterns in text content
-          const hasToolCallPattern =
+        if (supportsFC === undefined) {
+          const allToolCallsFailed = allToolCalls.length > 0 && allToolCalls.every((tc: any) => {
+            const r = tc?.result;
+            return r && (r.success === false || r.error != null);
+          });
+          const hasToolCallPattern = !!textContent && (
             textContent.includes('"tool"') ||
             textContent.includes('"function"') ||
             textContent.includes('"name"') ||
@@ -1395,14 +1408,22 @@ export async function* streamWithVercelAI(
             textContent.includes('"input"') ||
             textContent.includes('"batch_write"') ||
             textContent.includes('"write_file"') ||
-            /```(?:file|diff|mkdir|delete):/i.test(textContent);
+            /```(?:file|diff|mkdir|delete):/i.test(textContent)
+          );
+          const noOutputAtAll = !textContent && allToolCalls.length === 0;
+          const triggerFallback = hasToolCallPattern
+            || (allToolCallsFailed && (!textContent || textContent.length < 20))
+            || noOutputAtAll;
 
-          if (hasToolCallPattern) {
-            chatLogger.warn('[FC-GATE] Phase 2: No tool calls + tool-call patterns detected in text — retrying with text-mode instructions', {
+          if (triggerFallback) {
+            chatLogger.warn('[FC-GATE] Phase 2: Retrying in text-mode', {
               provider,
               model: modelName,
-              textContentLength: textContent.length,
-              patternsDetected: true,
+              reason: hasToolCallPattern
+                ? 'tool-call patterns in text'
+                : (allToolCallsFailed ? 'all tool calls failed with empty response' : 'no output at all'),
+              textContentLength: textContent?.length || 0,
+              toolCallCount: allToolCalls.length,
             });
 
             // Issue second completion with text-mode instructions

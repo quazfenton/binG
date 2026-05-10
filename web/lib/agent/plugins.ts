@@ -9,6 +9,8 @@
  *   await registry.run("git.status");
  */
 
+import { formatDiagnosticsForFeedback, type LspGateway } from '@/lib/lsp';
+
 // ─── Plugin Interface ─────────────────────────────────────────────────────────
 
 export interface PluginContext {
@@ -187,6 +189,127 @@ export function createTscPlugin(): Plugin {
     },
     setup(ctx) {
       _ctx = ctx;
+    },
+  };
+}
+
+/**
+ * LSP TypeScript plugin — uses the LspGateway for fast, per-file
+ * diagnostics instead of a full-project `tsc --noEmit`.
+ *
+ * The gateway auto-detects tsconfig.json and spawns the appropriate
+ * language server(s). Falls back to the tsc CLI plugin when LSP is
+ * unavailable (e.g. web-only deployments where child_process can't spawn).
+ */
+export function createLspTsPlugin(): Plugin {
+  let _ctx: PluginContext;
+  let _gateway: LspGateway | null = null;
+  let _started = false;
+  let _fallbackTsc: Plugin | null = null;
+
+  return {
+    name: 'lsp-ts',
+    description: 'TypeScript LSP diagnostics (fast per-file checks via gateway)',
+    commands: {
+      /**
+       * Run LSP diagnostics on a file. Returns human-readable error output
+       * or an empty string if no issues found.
+       */
+      async check(args) {
+        const filePath = (args?.file as string) || '';
+        if (!filePath) {
+          // No specific file — run a broad tsc check as fallback
+          if (_fallbackTsc?.commands.check) {
+            return _fallbackTsc.commands.check(args);
+          }
+          return { stdout: '', stderr: '', exitCode: 0 };
+        }
+
+        // Try LSP gateway path first
+        if (_gateway?.isReady) {
+          try {
+            // Use passed content if available (from agent loop's code param),
+            // otherwise read from disk/VFS as fallback
+            let content = (args?.content as string) || '';
+            if (!content && _ctx.readFile) {
+              content = await _ctx.readFile(filePath);
+            }
+
+            // Sync file to the gateway — it routes to the correct adapter
+            await _gateway.syncFile(filePath, content);
+            const diags = await _gateway.waitForDiagnostics(filePath, 2500);
+
+            if (diags.length === 0) {
+              return { stdout: '', stderr: '', exitCode: 0 };
+            }
+
+            // Format diagnostics as tsc-like output for compatibility
+            const formatted = formatDiagnosticsForFeedback(
+              diags.map((d) => ({
+                file: d.file,
+                message: d.message,
+                severity: d.severity,
+                line: d.line,
+                column: d.column,
+                code: d.code,
+              }))
+            );
+
+            return {
+              stdout: formatted,
+              stderr: '',
+              exitCode: diags.some((d) => d.severity === 'error') ? 1 : 0,
+            };
+          } catch (err) {
+            console.warn('[lsp-ts] Gateway check failed, falling back to tsc:',
+              err instanceof Error ? err.message : String(err));
+            // Fall through to tsc fallback
+          }
+        }
+
+        // Fallback: use tsc CLI plugin
+        if (_fallbackTsc?.commands.check) {
+          return _fallbackTsc.commands.check(args);
+        }
+
+        return { stdout: '', stderr: '', exitCode: 0 };
+      },
+    },
+    async setup(ctx) {
+      _ctx = ctx;
+      _fallbackTsc = createTscPlugin();
+      await _fallbackTsc.setup?.(ctx);
+
+      // Try to start the LSP gateway (server-side only)
+      if (ctx.exec) {
+        try {
+          const { getGateway } = await import('@/lib/lsp');
+          _gateway = getGateway({
+            projectRoot: ctx.projectPath || process.cwd(),
+            autoDetect: true,
+          });
+          await _gateway.start();
+          _started = true;
+          if (_gateway.isReady) {
+            console.log('[lsp-ts] LSP gateway enabled with adapters:',
+              _gateway.getAdapters().map(a => a.name).join(', '));
+            ctx.emit('plugin:lsp-ts:ready', {
+              available: true,
+              adapters: _gateway.getAdapters().map(a => a.name),
+            });
+          }
+        } catch (err) {
+          console.warn('[lsp-ts] LSP gateway unavailable, using tsc fallback:',
+            err instanceof Error ? err.message : String(err));
+        }
+      }
+    },
+    async teardown() {
+      if (_gateway && _started) {
+        await _gateway.shutdown();
+        _gateway = null;
+        _started = false;
+      }
     },
   };
 }
