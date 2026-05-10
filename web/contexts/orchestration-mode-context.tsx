@@ -202,6 +202,8 @@ export function OrchestrationModeProvider({ children }: { children: React.ReactN
 
     // Persist to server-side DB (fire-and-forget — doesn't block UI)
     // Server resolves userId from session_id cookie (internal auth) or JWT
+    // NOTE: /api/chat/modes is currently disabled or missing from some environments
+    /* 
     if (typeof window !== 'undefined') {
       fetch('/api/chat/modes', {
         method: 'POST',
@@ -220,6 +222,7 @@ export function OrchestrationModeProvider({ children }: { children: React.ReactN
         console.warn('[OrchestrationMode] Server persistence error:', err.message);
       });
     }
+    */
   }, [config, saveConfig]);
 
   const setAutoApply = useCallback((enabled: boolean) => {
@@ -233,10 +236,12 @@ export function OrchestrationModeProvider({ children }: { children: React.ReactN
   const resetToDefault = useCallback(() => {
     saveConfig(DEFAULT_CONFIG);
 
+    /*
     // Reset server-side too (server resolves userId from session_id cookie)
     if (typeof window !== 'undefined') {
       fetch('/api/chat/modes', { method: 'DELETE', credentials: 'include' }).catch(() => {});
     }
+    */
   }, [saveConfig]);
 
   const isOverridden = config.mode !== DEFAULT_CONFIG.mode;

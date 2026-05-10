@@ -421,6 +421,8 @@ function getToolContext(): ToolContext {
   // Safe fallback — should only happen if tools are called outside
   // of a toolContextStore.run() wrapper (which indicates a caller bug).
   // Use consistent default session matching MCP route defaults (project/sessions/000)
+  // BUG: If you see this in production, the tool caller did not wrap in toolContextStore.run()
+  console.warn('[VFS-MCP-TOOLS] WARNING: No tool context set — toolContextStore.run() was not called by the caller. Files may be written to wrong workspace (anon:public).');
   return {
     userId: 'default',
     sessionId: undefined,

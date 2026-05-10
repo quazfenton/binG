@@ -3004,6 +3004,7 @@ const config: UnifiedAgentConfig = {
                       finishReason: streamChunk.finishReason,
                       tokensUsed: streamChunk.tokensUsed,
                       usage: streamChunk.usage,
+                      modelName: actualModel,
                     };
 
                     // Add filesystem metadata if files were applied
@@ -3507,6 +3508,7 @@ const config: UnifiedAgentConfig = {
                     requestId: streamRequestId,
                     timestamp: Date.now(),
                     content: finalContent,
+                    modelName: actualModel,
                   };
 
                   // Include filesystem metadata if files were applied

@@ -7,7 +7,7 @@ import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import type { Message } from "@/types";
-import {
+import { 
   X,
   Volume2,
   VolumeX,
@@ -35,6 +35,8 @@ import {
   Eye,
   EyeOff,
   Copy,
+  ChevronUp,
+  ChevronDown,
 } from "lucide-react";
 import ModalLoginForm from "@/components/auth/modal-login-form";
 import ModalSignupForm from "@/components/auth/modal-signup-form";
@@ -705,6 +707,21 @@ export default function Settings({
       localStorage.setItem(ASSISTANT_BUBBLE_BORDER_KEY, assistantBubbleBorder);
     }
     toast.success("Message bubble colors updated");
+  };
+
+  const ORCHESTRATION_MODES = ['auto', 'v1-api', 'v1-agent-loop', 'v1-progressive-build', 'dual-process', 'execution-controller', 'spec:super', 'spec:maximal', 'v2-native', 'v2-containerized', 'v2-local', 'unified-agent', 'stateful-agent', 'mastra-workflow', 'mastra:code-agent', 'mastra:research', 'mastra:parallel', 'mastra:data-analysis', 'mastra:hitl', 'agent-loop', 'task-router', 'opencode-sdk', 'crewai', 'crewai:role-agent', 'crewai:swarm', 'crewai:streaming', 'v2-executor', 'agent-team', 'attractor-driven', 'intent-driven', 'energy-driven', 'cognitive-resonance', 'cognitive:converged', 'adversarial-verify', 'adversarial:revised', 'distributed-cognition', 'distributed:no-synthesis'] as const;
+
+  const handleOrchestrationKeyDown = (e: React.KeyboardEvent) => {
+    const currentIndex = ORCHESTRATION_MODES.indexOf(orchestConfig.mode as any);
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      const nextIndex = (currentIndex - 1 + ORCHESTRATION_MODES.length) % ORCHESTRATION_MODES.length;
+      setOrchestrationMode(ORCHESTRATION_MODES[nextIndex]);
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      const nextIndex = (currentIndex + 1) % ORCHESTRATION_MODES.length;
+      setOrchestrationMode(ORCHESTRATION_MODES[nextIndex]);
+    }
   };
 
   return (
@@ -1444,34 +1461,6 @@ export default function Settings({
             Override environment variables for your session. Settings sync to your account and persist across devices.
           </p>
           <div className="space-y-3">
-            {/* Orchestration Mode Selector */}
-            <div className="p-3 bg-black/20 rounded-lg border border-white/10">
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex-1">
-                  <Label className="text-sm">Orchestration Mode</Label>
-                  <p className="text-xs text-gray-500">Agent execution framework</p>
-                </div>
-              </div>
-              
-              <div className="grid grid-cols-3 gap-1 mb-2">
-                {(['auto', 'v1-api', 'v1-agent-loop', 'v1-progressive-build', 'dual-process', 'execution-controller', 'spec:super', 'spec:maximal', 'v2-native', 'v2-containerized', 'v2-local', 'unified-agent', 'stateful-agent', 'mastra-workflow', 'mastra:code-agent', 'mastra:research', 'mastra:parallel', 'mastra:data-analysis', 'mastra:hitl', 'agent-loop', 'task-router', 'opencode-sdk', 'crewai', 'crewai:role-agent', 'crewai:swarm', 'crewai:streaming', 'v2-executor', 'agent-team', 'attractor-driven', 'intent-driven', 'energy-driven', 'cognitive-resonance', 'cognitive:converged', 'adversarial-verify', 'adversarial:revised', 'distributed-cognition', 'distributed:no-synthesis'] as const).map((mode) => {
-                  return (
-                    <button
-                      key={mode}
-                      onClick={() => setOrchestrationMode(mode)}
-                      className={`p-2 rounded-lg border text-left text-xs transition-all ${
-                        orchestConfig.mode === mode
-                          ? 'border-purple-500 bg-purple-500/20 text-purple-300'
-                          : 'border-white/10 bg-white/5 text-white/60 hover:border-white/30'
-                      }`}
-                    >
-                      {mode}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
             {/* Agent Engine Selector */}
             <div className="p-3 bg-black/20 rounded-lg border border-white/10">
               <div className="flex items-center justify-between mb-3">
@@ -1520,75 +1509,136 @@ export default function Settings({
                 </button>
               )}
             </div>
+
+            {/* Orchestration Mode Selector */}
+            <div className="p-3 bg-black/20 rounded-lg border border-white/10">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex-1">
+                  <Label className="text-sm">Orchestration Mode</Label>
+                  <p className="text-xs text-gray-500">Agent execution framework</p>
+                </div>
+              </div>
+              
+              <div className="relative group">
+                <div 
+                  className="flex flex-col items-center justify-center h-24 bg-black/40 rounded-lg border border-white/20 relative overflow-hidden cursor-ns-resize select-none"
+                  onKeyDown={handleOrchestrationKeyDown}
+                  tabIndex={0}
+                  onWheel={(e) => {
+                    // Only trigger if the element is focused OR if user is explicitly scrolling over it with intent
+                    // We check if the delta is significant enough to be intentional
+                    const delta = e.deltaY;
+                    if (Math.abs(delta) < 20) return; // Ignore small/accidental scrolls
+
+                    e.preventDefault();
+                    const currentIndex = ORCHESTRATION_MODES.indexOf(orchestConfig.mode as any);
+                    if (delta > 0) {
+                      setOrchestrationMode(ORCHESTRATION_MODES[(currentIndex + 1) % ORCHESTRATION_MODES.length]);
+                    } else {
+                      setOrchestrationMode(ORCHESTRATION_MODES[(currentIndex - 1 + ORCHESTRATION_MODES.length) % ORCHESTRATION_MODES.length]);
+                    }
+                  }}
+                  onMouseDown={(e) => {
+                    const startY = e.clientY;
+                    const currentIndex = ORCHESTRATION_MODES.indexOf(orchestConfig.mode as any);
+                    const handleMouseMove = (moveEvent: MouseEvent) => {
+                      const deltaY = moveEvent.clientY - startY;
+                      if (Math.abs(deltaY) > 20) {
+                        const step = Math.floor(deltaY / 20);
+                        const nextIndex = (currentIndex + step + ORCHESTRATION_MODES.length * 10) % ORCHESTRATION_MODES.length;
+                        setOrchestrationMode(ORCHESTRATION_MODES[nextIndex]);
+                      }
+                    };
+                    const handleMouseUp = () => {
+                      window.removeEventListener('mousemove', handleMouseMove);
+                      window.removeEventListener('mouseup', handleMouseUp);
+                    };
+                    window.addEventListener('mousemove', handleMouseMove);
+                    window.addEventListener('mouseup', handleMouseUp);
+                  }}
+                >
+                  <div className="absolute top-1 text-white/20 animate-pulse">
+                    <ChevronUp className="h-4 w-4" />
+                  </div>
+                  
+                  <div className="flex flex-col items-center transition-all duration-200">
+                    <span className="text-[10px] text-white/30 mb-1 opacity-50">
+                      {ORCHESTRATION_MODES[(ORCHESTRATION_MODES.indexOf(orchestConfig.mode as any) - 1 + ORCHESTRATION_MODES.length) % ORCHESTRATION_MODES.length]}
+                    </span>
+                    <span className="text-sm font-bold text-purple-400 break-all px-4 text-center">
+                      {orchestConfig.mode}
+                    </span>
+                    <span className="text-[10px] text-white/30 mt-1 opacity-50">
+                      {ORCHESTRATION_MODES[(ORCHESTRATION_MODES.indexOf(orchestConfig.mode as any) + 1) % ORCHESTRATION_MODES.length]}
+                    </span>
+                  </div>
+
+                  <div className="absolute bottom-1 text-white/20 animate-pulse">
+                    <ChevronDown className="h-4 w-4" />
+                  </div>
+                </div>
+                <div className="mt-1 text-[10px] text-center text-white/40">
+                  Scroll, drag, or use ↑↓ arrows to cycle
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
-        {/* Spec Enhancement Mode Selector */}
-        <div className="p-3 bg-black/20 rounded-lg border border-white/10">
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex-1">
-                  <Label className="text-sm">Spec Enhancement Mode</Label>
-                  <p className="text-xs text-gray-500">Controls how SPEC is amplified during build</p>
-                </div>
-                {isOverridden && (
-                  <span className="text-[10px] px-2 py-0.5 bg-purple-500/20 text-purple-400 rounded">Custom</span>
-                )}
+        <div className="bg-black/30 rounded-lg p-4 border border-white/10">
+          <div className="p-3 bg-black/20 rounded-lg border border-white/10">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex-1">
+                <Label className="text-sm">Spec Enhancement Mode</Label>
+                <p className="text-xs text-gray-500">Controls how SPEC is amplified during build</p>
               </div>
-              
-              <div className="grid grid-cols-2 gap-2 mb-2">
-                {(['normal', 'enhanced', 'max', 'super'] as SpecEnhancementMode[]).map((mode) => {
-                  const modeInfo = getSpecEnhancementModeInfo(mode);
-                  const isActive = specConfig.mode === mode;
-                  return (
+              {isOverridden && (
+                <span className="text-[10px] px-2 py-0.5 bg-purple-500/20 text-purple-400 rounded">Custom</span>
+              )}
+            </div>
+            
+            <div className="grid grid-cols-2 gap-2 mb-2">
+              {(['normal', 'enhanced', 'max', 'super'] as SpecEnhancementMode[]).map((mode) => {
+                const modeInfo = getSpecEnhancementModeInfo(mode);
+                const isActive = specConfig.mode === mode;
+                return (
+                  <button
+                    key={mode}
+                    onClick={() => setSpecMode(mode)}
+                    className={`p-2 rounded-lg border text-left transition-all ${
+                      isActive 
+                        ? 'border-purple-500/50 bg-purple-500/10' 
+                        : 'border-white/10 hover:border-white/20 hover:bg-white/5'
+                    }`}
+                  >
+                    <div className="text-xs font-medium text-white">{modeInfo.label}</div>
+                    <div className="text-[10px] text-gray-400 truncate">{modeInfo.description}</div>
+                  </button>
+                );
+              })}
+            </div>
+            
+            {/* Show chain selector when super mode is selected */}
+            {specConfig.mode === 'super' && (
+              <div className="mt-3 pt-3 border-t border-white/10">
+                <Label className="text-xs text-white/70 mb-2 block">Super Mode Chain</Label>
+                <div className="flex flex-wrap gap-1">
+                  {(['default', 'frontend', 'backend', 'ml_ai', 'mobile', 'security', 'devops', 'data', 'api', 'system', 'web3'] as const).map((chain) => (
                     <button
-                      key={mode}
-                      onClick={() => setSpecMode(mode)}
-                      className={`p-2 rounded-lg border text-left transition-all ${
-                        isActive 
-                          ? 'border-purple-500/50 bg-purple-500/10' 
-                          : 'border-white/10 hover:border-white/20 hover:bg-white/5'
+                      key={chain}
+                      onClick={() => setChain(chain)}
+                      className={`px-2 py-1 text-[10px] rounded border transition-all ${
+                        specConfig.chain === chain
+                          ? 'border-cyan-500/50 bg-cyan-500/10 text-cyan-400'
+                          : 'border-white/10 text-gray-400 hover:border-white/20'
                       }`}
                     >
-                      <div className="text-xs font-medium text-white">{modeInfo.label}</div>
-                      <div className="text-[10px] text-gray-400 truncate">{modeInfo.description}</div>
+                      {chain.replace('_', ' ')}
                     </button>
-                  );
-                })}
-              </div>
-              
-              {/* Show chain selector when super mode is selected */}
-              {specConfig.mode === 'super' && (
-                <div className="mt-3 pt-3 border-t border-white/10">
-                  <Label className="text-xs text-white/70 mb-2 block">Super Mode Chain</Label>
-                  <div className="flex flex-wrap gap-1">
-                    {(['default', 'frontend', 'backend', 'ml_ai', 'mobile', 'security', 'devops', 'data', 'api', 'system', 'web3'] as const).map((chain) => (
-                      <button
-                        key={chain}
-                        onClick={() => setChain(chain)}
-                        className={`px-2 py-1 text-[10px] rounded border transition-all ${
-                          specConfig.chain === chain
-                            ? 'border-cyan-500/50 bg-cyan-500/10 text-cyan-400'
-                            : 'border-white/10 text-gray-400 hover:border-white/20'
-                        }`}
-                      >
-                        {chain.replace('_', ' ')}
-                      </button>
-                    ))}
-                  </div>
+                  ))}
                 </div>
-              )}
-
-          <div className="mt-4 space-y-2">
-            <div className="p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg">
-              <p className="text-xs text-blue-400">
-                💡 <strong>How it works:</strong> Your preferences override server environment variables for your session only.
-              </p>
-            </div>
-            <div className="p-3 bg-green-500/10 border border-green-500/20 rounded-lg">
-              <p className="text-xs text-green-400">
-                ✅ <strong>Synced to account:</strong> Settings persist across devices when logged in.
-              </p>
-            </div>
+              </div>
+            )}
           </div>
         </div>
 
