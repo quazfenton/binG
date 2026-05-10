@@ -127,19 +127,9 @@ class DesktopFs implements FsAdapter {
       // Determine base directories for source and destination
       const srcBaseDir = this.getBaseDir(src, BaseDirectory);
       const destBaseDir = this.getBaseDir(dest, BaseDirectory);
-      
-      // Validate that both paths are either absolute or relative
-      // Tauri requires consistent base directory handling
-      const srcIsAbsolute = this.isAbsolute(src);
-      const destIsAbsolute = this.isAbsolute(dest);
-      
-      if (srcIsAbsolute !== destIsAbsolute) {
-        throw new Error(
-          `Cannot copy between absolute and relative paths: src="${src}" (${srcIsAbsolute ? 'absolute' : 'relative'}), dest="${dest}" (${destIsAbsolute ? 'absolute' : 'relative'})`
-        );
-      }
-      
-      // Tauri v2 uses fromPathBaseDir and toPathBaseDir
+
+      // Tauri v2 supports independent base directories via fromPathBaseDir and toPathBaseDir,
+      // so mixed absolute/relative paths are valid when both base dirs are configured
       await copyFile(src, dest, { fromPathBaseDir: srcBaseDir, toPathBaseDir: destBaseDir });
     } catch (err) {
       throw new Error(`Failed to copy file from ${src} to ${dest}: ${err instanceof Error ? err.message : String(err)}`);

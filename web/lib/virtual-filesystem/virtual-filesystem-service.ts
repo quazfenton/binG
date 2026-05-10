@@ -1536,8 +1536,9 @@ class GitBackedVFSProxy {
             timestamp: Date.now(),
             originalContent: file.content,
           });
-        } catch {
-          // File may not exist
+        } catch (err: any) {
+          // File may not exist or read may fail — log warning so we know if originalContent is missing from the git commit
+          logger.warn('Could not read file content before DELETE for git tracking', { path: node.path, error: err?.message || String(err) });
         }
       }
     }

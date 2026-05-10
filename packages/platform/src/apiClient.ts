@@ -188,7 +188,8 @@ async function executeFetch<T>(
 
             bytesRead += value.length;
             if (bytesRead > maxSize) {
-              errorBody += decoder.decode(value.slice(0, maxSize - bytesRead + value.length));
+              // Use stream:true for partial chunk at boundary
+              errorBody += decoder.decode(value.slice(0, maxSize - bytesRead + value.length), { stream: true });
               break;
             }
             // Use stream: true for intermediate chunks to handle multi-byte UTF-8 correctly

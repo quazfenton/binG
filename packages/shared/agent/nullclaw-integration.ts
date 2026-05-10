@@ -557,8 +557,9 @@ class NullclawIntegration {
         if (response.ok) {
           return true;
         }
-      } catch {
-        // Health check failed, retry
+      } catch (err: any) {
+        // Health check failed — log at debug level to avoid noise during normal retries, rethrow only on final attempt
+        this.logger.debug('Health check attempt failed, retrying', { attempt: i + 1, maxAttempts, containerId: container.id, error: err?.message || String(err) });
       }
       await new Promise(resolve => setTimeout(resolve, interval));
     }

@@ -244,7 +244,7 @@ class VFSProvider implements CapabilityProvider {
 class MCPFilesystemProvider implements CapabilityProvider {
   readonly id = 'mcp-filesystem';
   readonly name = 'MCP Filesystem';
-  readonly capabilities = ['file.read', 'file.write', 'file.append', 'file.delete', 'file.list', 'file.search', 'file.batch_write'];
+  readonly capabilities = ['file.read', 'file.write', 'file.append', 'file.delete', 'file.list', 'file.search', 'file.batch_write', 'file.create_directory'];
 
   isAvailable(): boolean {
     // Check if MCP server is configured
@@ -267,6 +267,7 @@ class MCPFilesystemProvider implements CapabilityProvider {
       'file.list': 'list_directory',
       'file.search': 'search_files',
       'file.batch_write': 'batch_write',
+      'file.create_directory': 'create_directory',
     };
 
     const toolName = toolMap[capabilityId];

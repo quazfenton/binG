@@ -201,10 +201,10 @@ export function generateToolBlock(toolIds: string[]): string {
   }
 
   const lines = ['# AVAILABLE CAPABILITIES', ''];
-  
-  for (const category of Object.keys(groups)) {
+
+  for (const category of Object.keys(groups).sort()) {
     lines.push(`## ${CATEGORY_LABELS[category] || category}`);
-    for (const cap of groups[category]) {
+    for (const cap of groups[category].sort((a, b) => a.id.localeCompare(b.id))) {
       lines.push(`- **${cap.id}** — ${cap.description}`);
     }
     lines.push('');
