@@ -2234,7 +2234,7 @@ async function runV1ApiWithTools(
           healingLen: injectedFeedback.healingInstructions?.length || 0,
           hasFormatGuidance: !!injectedFeedback.formatGuidance,
           formatLen: injectedFeedback.formatGuidance?.length || 0,
-          failureCount: enrichedContext.failures?.length || 0,
+          failureCount: enrichedContext.recentFailures?.length || 0,
         });
 
         // Build feedback that depends on what went wrong
@@ -2568,6 +2568,7 @@ async function runV1Orchestrated(
   let content = '';
   let firstResponseContent: string | null = null; 
   let stepsCount = 0;
+  let budgetExhausted = false;
   const steps: any[] = [];
 
   try {
@@ -2582,6 +2583,10 @@ async function runV1Orchestrated(
         
         if (!firstResponseContent && content) {
           firstResponseContent = content;
+        }
+
+        if (event.budgetExhausted) {
+          budgetExhausted = true;
         }
       } else if (event.type === 'tool_result') {
         recordToolCall(sessionId);
@@ -2688,6 +2693,48 @@ async function runV1Orchestrated(
     // routing block was parsed.
     const roleSelectMeta = (config as any)._roleSelectMetadata as RoutingMetadata | undefined;
     const routingForClient = roleSelectMeta ? buildRoutingMetadataForClient(roleSelectMeta) : undefined;
+
+    // If budget was exhausted during orchestration, fall back to v1-api for a simpler completion
+    if (budgetExhausted) {
+      log.warn('[runV1Orchestrated] Budget exhausted during orchestration, falling back to v1-api');
+      try {
+        const fallbackResult = await runV1Api(config);
+        log.info('[runV1Orchestrated] v1-api fallback completed after budget exhaustion');
+        return {
+          ...fallbackResult,
+          metadata: {
+            ...fallbackResult.metadata,
+            budgetExhausted: true,
+            originalOrchResponse: cleanedResponse.slice(0, 200) + (cleanedResponse.length > 200 ? '...' : ''),
+            fallbackFrom: 'v1-agent-loop',
+            fallbackReason: 'budget_exhausted',
+          },
+        };
+      } catch (fbError: any) {
+        log.error('[runV1Orchestrated] v1-api fallback also failed', { error: fbError?.message || String(fbError) });
+
+        // Try broader fallback chain before giving up
+        try {
+          const triedModes = new Set<string>(['v1-agent-loop', 'v1-api']);
+          const chainResult = await attemptFallback(config, 'v1-agent-loop', fbError, triedModes);
+          if (chainResult) {
+            log.info('[runV1Orchestrated] attemptFallback chain succeeded after budget exhaustion + v1-api failure');
+            return {
+              ...chainResult,
+              metadata: {
+                ...chainResult.metadata,
+                budgetExhausted: true,
+                originalOrchResponse: cleanedResponse,
+                fallbackChain: ['v1-agent-loop', 'v1-api', chainResult.mode],
+              },
+            };
+          }
+        } catch (chainErr: any) {
+          log.error('[runV1Orchestrated] attemptFallback chain also failed', { error: chainErr?.message || String(chainErr) });
+        }
+        // Return the partial orchestrated result as last resort
+      }
+    }
 
     return {
       success: true,

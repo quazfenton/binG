@@ -66,11 +66,13 @@ const StackBlitzEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
     fallbackLevel,
     fallbackUrl,
     loadingProgress,
+    iframeKey,
     handleLoad,
     handleRetry,
     handleReset,
     handleFallback,
     handleLoadSuccess,
+    handleIframeError,
   } = useIframeLoader({
     url: iframeUrl,
     timeout: 30000,
@@ -340,8 +342,7 @@ const StackBlitzEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
                         handleLoadSuccess();
                       }}
                       onError={() => {
-                        setIframeError('Failed to load StackBlitz. Note: StackBlitz requires valid project URLs.');
-                        setIsReloading(false);
+                        handleIframeError('StackBlitz embedding blocked');
                       }}
                       sandbox="allow-same-origin allow-scripts allow-popups allow-forms allow-modals allow-top-navigation allow-top-navigation-by-user-activation"
                       allow="fullscreen; encrypted-media"

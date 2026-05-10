@@ -43,12 +43,14 @@ export interface UseIframeLoaderReturn {
   isUsingFallback: boolean;
   fallbackLevel: FallbackLevel;
   fallbackUrl: string | null;
-  loadingProgress: number; // 0-100% progress during loading
+  loadingProgress: number;
+  iframeKey: number;
   handleLoad: (url: string) => void;
   handleRetry: () => void;
   handleReset: () => void;
   handleFallback: () => void;
   handleLoadSuccess: () => void;
+  handleIframeError: (error?: string) => void;
 }
 
 export function useIframeLoader({
@@ -72,6 +74,7 @@ export function useIframeLoader({
   const [isUsingFallback, setIsUsingFallback] = useState(false);
   const [fallbackUrl, setFallbackUrl] = useState<string | null>(null);
   const [loadingProgress, setLoadingProgress] = useState(0);
+  const [iframeKey, setIframeKey] = useState(0);
 
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
   const progressRef = useRef<NodeJS.Timeout | null>(null);
@@ -84,6 +87,7 @@ export function useIframeLoader({
   const isFailedRef = useRef(isFailed);
   const isLoadingRef = useRef(isLoading);
   const timeoutValueRef = useRef(timeout);
+  const isRetryingRef = useRef(false);
 
   // Keep refs in sync
   useEffect(() => {
@@ -196,7 +200,45 @@ export function useIframeLoader({
     // Actually load the fallback URL - this updates currentUrlRef and starts the loading cycle
     currentUrlRef.current = nextFallbackUrl;
     setIsLoading(true);
+    // Increment key to force iframe reload with new URL
+    setIframeKey(prev => prev + 1);
   }, [timeout, onFailed]);
+
+  // Handle iframe error events - trigger fallback if enabled
+  const handleIframeError = useCallback((error?: string) => {
+    // Only handle error if we're not already in a fallback or failed state
+    if (isFailedRef.current || isRetryingRef.current) return;
+    isRetryingRef.current = true;
+
+    // Clear existing timeout
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+    }
+    if (progressRef.current) {
+      clearInterval(progressRef.current);
+    }
+
+    const reason = detectFailureReason(error);
+    console.log(`[useIframeLoader] Iframe error detected: ${reason}`, error);
+
+    // If fallback is enabled, try fallback instead of failing immediately
+    if (enableFallbackRef.current && fallbackAttemptRef.current < 2) {
+      console.log(`[useIframeLoader] Triggering fallback (attempt ${fallbackAttemptRef.current + 1})`);
+      handleFallback();
+    } else {
+      // Fallback disabled or exhausted - show failure
+      setIsLoading(false);
+      setIsFailed(true);
+      setFailureReason(reason);
+      setErrorMessage(error || 'Failed to load content');
+      onFailed?.(reason, error);
+    }
+
+    // Reset retry flag after a short delay
+    setTimeout(() => {
+      isRetryingRef.current = false;
+    }, 1000);
+  }, [detectFailureReason, handleFallback, onFailed]);
 
   const handleLoad = useCallback((newUrl: string) => {
     if (!newUrl) return;
@@ -411,11 +453,13 @@ export function useIframeLoader({
     fallbackLevel,
     fallbackUrl,
     loadingProgress,
+    iframeKey,
     handleLoad,
     handleRetry,
     handleReset,
     handleFallback,
     handleLoadSuccess,
+    handleIframeError,
   };
 }
 

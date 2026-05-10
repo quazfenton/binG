@@ -71,11 +71,13 @@ const DuckDuckGoEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
     fallbackLevel,
     fallbackUrl,
     loadingProgress,
+    iframeKey,
     handleLoad,
     handleRetry,
     handleReset,
     handleFallback,
     handleLoadSuccess,
+    handleIframeError,
   } = useIframeLoader({
     url: iframeUrl,
     timeout: 30000,
@@ -421,8 +423,7 @@ const DuckDuckGoEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
                         handleLoadSuccess();
                       }}
                       onError={() => {
-                        setIframeError('Failed to load DuckDuckGo. Note: DuckDuckGo limits iframe embedding. Try using the external link button.');
-                        setIsReloading(false);
+                        handleIframeError('DuckDuckGo embedding blocked');
                       }}
                       sandbox="allow-same-origin allow-scripts allow-popups allow-forms allow-top-navigation allow-top-navigation-by-user-activation"
                       allow="fullscreen"

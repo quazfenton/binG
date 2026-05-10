@@ -64,11 +64,13 @@ const WikipediaEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =>
     fallbackLevel,
     fallbackUrl,
     loadingProgress,
+    iframeKey,
     handleLoad,
     handleRetry,
     handleReset,
     handleFallback,
     handleLoadSuccess,
+    handleIframeError,
   } = useIframeLoader({
     url: iframeUrl,
     timeout: 30000,
@@ -339,10 +341,7 @@ const WikipediaEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =>
                         handleLoadSuccess();
                       }}
                       onError={() => {
-                        const msg = 'Wikipedia embedding may be restricted by the site. Try refreshing, checking your network connection, or using the external link button to open in a new tab.';
-                        setIframeError(msg);
-                        console.warn('[Wikipedia Embed]', msg);
-                        setIsReloading(false);
+                        handleIframeError('Wikipedia embedding blocked');
                       }}
                       sandbox="allow-same-origin allow-scripts allow-popups allow-forms allow-top-navigation allow-top-navigation-by-user-activation"
                       allow="fullscreen"
