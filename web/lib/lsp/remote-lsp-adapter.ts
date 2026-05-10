@@ -18,10 +18,15 @@
  *
  * They behave MUCH worse when run in-process or against fake/in-memory FS.
  *
+ * NOTE: This is the client side only. A companion LSP WebSocket server
+ * (e.g., a small Node.js process that wraps `typescript-language-server --stdio`
+ * and bridges it to WebSocket) must be deployed in the container alongside
+ * the language server binary.
+ *
  * Usage:
  *   const adapter = new RemoteLspAdapter({
  *     name: 'typescript',
- *     wsUrl: 'wss://sandbox-abc.e2b.dev/lsp',
+ *     wsUrl: 'wss://sandbox-abc.e2b.dev/lsp/typescript',
  *     languageIds: ['typescript', 'typescriptreact'],
  *     extensions: ['.ts', '.tsx'],
  *     diagnosticSource: 'ts-lsp',
@@ -31,7 +36,7 @@
  *   const diags = await adapter.waitForDiagnostics('/workspace/src/app.ts');
  */
 
-import { diagnosticBus, type UnifiedDiagnostic, type DiagnosticSeverity, type DiagnosticSource, SEVERITY_MAP } from './diagnostic-bus';
+import { diagnosticBus, type UnifiedDiagnostic, SEVERITY_MAP } from './diagnostic-bus';
 import { uriToPath, pathToUri } from './path-utils';
 import type { LSPAdapter } from './adapter';
 
@@ -47,8 +52,8 @@ export interface RemoteLspAdapterConfig {
   /** File extensions this adapter handles */
   extensions: string[];
   /** Diagnostic source label for the bus */
-  diagnosticSource: DiagnosticSource;
-  /** Optional auth token for the WebSocket connection */
+  diagnosticSource: string & {};
+  /** Optional auth token for the WebSocket connection (sent as query param) */
   authToken?: string;
   /** Reconnect delay in ms (default: 2000) */
   reconnectDelayMs?: number;
@@ -68,7 +73,7 @@ export class RemoteLspAdapter implements LSPAdapter {
   readonly name: string;
   readonly languageIds: string[];
   readonly extensions: string[];
-  readonly diagnosticSource: DiagnosticSource;
+  readonly diagnosticSource: string & {};
 
   private wsUrl: string;
   private authToken?: string;
@@ -77,6 +82,7 @@ export class RemoteLspAdapter implements LSPAdapter {
 
   private ws: WebSocket | null = null;
   private _ready = false;
+  private _connecting = false;
   private messageId = 0;
   private pending = new Map<number, PendingRequest>();
   private reconnectAttempts = 0;
@@ -107,7 +113,7 @@ export class RemoteLspAdapter implements LSPAdapter {
     await this.connect();
 
     const result = await this.rpcRequest('initialize', {
-      processId: null, // Remote — no local PID
+      processId: null,
       rootUri,
       capabilities: {
         textDocument: {
@@ -153,7 +159,7 @@ export class RemoteLspAdapter implements LSPAdapter {
     }
 
     this.disconnect();
-    diagnosticBus.clear(this.diagnosticSource);
+    diagnosticBus.clear(this.diagnosticSource as any);
     console.log(`[${this.name}] Remote LSP shut down`);
   }
 
@@ -191,12 +197,12 @@ export class RemoteLspAdapter implements LSPAdapter {
   // ── LSPAdapter: Diagnostics ────────────────────────────────────────────────
 
   getDiagnostics(filePath: string): UnifiedDiagnostic[] {
-    return diagnosticBus.getForFile(filePath, this.diagnosticSource);
+    return diagnosticBus.getForFile(filePath, this.diagnosticSource as any);
   }
 
   async waitForDiagnostics(filePath: string, timeoutMs = 3000): Promise<UnifiedDiagnostic[]> {
     return new Promise((resolve) => {
-      const existing = diagnosticBus.getForFile(filePath, this.diagnosticSource);
+      const existing = diagnosticBus.getForFile(filePath, this.diagnosticSource as any);
       if (existing.length > 0) {
         resolve(existing);
         return;
@@ -204,14 +210,14 @@ export class RemoteLspAdapter implements LSPAdapter {
 
       const timer = setTimeout(() => {
         unsubscribe();
-        resolve(diagnosticBus.getForFile(filePath, this.diagnosticSource));
+        resolve(diagnosticBus.getForFile(filePath, this.diagnosticSource as any));
       }, timeoutMs);
 
       const unsubscribe = diagnosticBus.subscribe((_all, updatedFiles) => {
         if (updatedFiles.includes(filePath)) {
           clearTimeout(timer);
           unsubscribe();
-          resolve(diagnosticBus.getForFile(filePath, this.diagnosticSource));
+          resolve(diagnosticBus.getForFile(filePath, this.diagnosticSource as any));
         }
       });
     });
@@ -223,21 +229,23 @@ export class RemoteLspAdapter implements LSPAdapter {
     if (this.destroyed) throw new Error(`[${this.name}] Adapter is destroyed`);
 
     return new Promise((resolve, reject) => {
-      void this._connect(resolve, reject);
+      void this.connectInternal(resolve, reject);
     });
   }
 
-  private async _connect(
+  private async connectInternal(
     resolve: (value: void) => void,
     reject: (error: Error) => void
   ): Promise<void> {
     try {
       // Try Node 22+ global WebSocket first, then fall back to 'ws' package
       let WS: typeof WebSocket = (globalThis as any).WebSocket;
+      let useWsPackage = false;
       if (!WS) {
         try {
           const wsModule = await import('ws');
           WS = (wsModule.default || wsModule) as unknown as typeof WebSocket;
+          useWsPackage = true;
         } catch {
           throw new Error(
             `[${this.name}] WebSocket not available. Install the 'ws' package: npm install ws`
@@ -252,50 +260,57 @@ export class RemoteLspAdapter implements LSPAdapter {
         url = `${url}${sep}token=${encodeURIComponent(this.authToken)}`;
       }
 
-      this.ws = new WS(url) as WebSocket;
-
-        this.ws.onopen = () => {
-          console.log(`[${this.name}] WebSocket connected to ${this.wsUrl}`);
-          this.reconnectAttempts = 0;
-          resolve();
-        };
-
-        this.ws.onmessage = (event: MessageEvent) => {
-          try {
-            const msg = JSON.parse(event.data as string);
-            this.dispatchMessage(msg);
-          } catch (err) {
-            console.error(`[${this.name}] Failed to parse WS message:`, (event.data as string)?.slice(0, 200));
-          }
-        };
-
-        this.ws.onerror = (err: Event) => {
-          console.error(`[${this.name}] WebSocket error:`, err);
-          if (!this._ready) {
-            reject(new Error(`[${this.name}] WebSocket connection failed`));
-          }
-        };
-
-        this.ws.onclose = (event: CloseEvent) => {
-          console.log(`[${this.name}] WebSocket closed (code: ${event.code})`);
-          this._ready = false;
-
-          // Reject pending requests
-          for (const [, pr] of this.pending) {
-            clearTimeout(pr.timer);
-            pr.reject(new Error(`[${this.name}] Connection closed`));
-          }
-          this.pending.clear();
-
-          // Auto-reconnect (unless destroyed)
-          if (!this.destroyed && this.reconnectAttempts < this.maxReconnectAttempts) {
-            this.scheduleReconnect();
-          }
-        };
-      } catch (err) {
-        reject(err);
+      // When using the 'ws' package, pass auth header for better security
+      // (query params appear in proxy logs; headers don't)
+      if (useWsPackage && this.authToken) {
+        this.ws = new WS(url, {
+          headers: { Authorization: `Bearer ${this.authToken}` },
+        }) as WebSocket;
+      } else {
+        this.ws = new WS(url) as WebSocket;
       }
-    });
+
+      this.ws.onopen = () => {
+        console.log(`[${this.name}] WebSocket connected to ${this.wsUrl}`);
+        this.reconnectAttempts = 0;
+        resolve();
+      };
+
+      this.ws.onmessage = (event: MessageEvent) => {
+        try {
+          const msg = JSON.parse(event.data as string);
+          this.dispatchMessage(msg);
+        } catch (err) {
+          console.error(`[${this.name}] Failed to parse WS message:`, (event.data as string)?.slice(0, 200));
+        }
+      };
+
+      this.ws.onerror = (err: Event) => {
+        console.error(`[${this.name}] WebSocket error:`, err);
+        if (!this._ready) {
+          reject(new Error(`[${this.name}] WebSocket connection failed`));
+        }
+      };
+
+      this.ws.onclose = (event: CloseEvent) => {
+        console.log(`[${this.name}] WebSocket closed (code: ${event.code})`);
+        this._ready = false;
+
+        // Reject pending requests
+        for (const [, pr] of this.pending) {
+          clearTimeout(pr.timer);
+          pr.reject(new Error(`[${this.name}] Connection closed`));
+        }
+        this.pending.clear();
+
+        // Auto-reconnect (unless destroyed)
+        if (!this.destroyed && this.reconnectAttempts < this.maxReconnectAttempts) {
+          this.scheduleReconnect();
+        }
+      };
+    } catch (err) {
+      reject(err instanceof Error ? err : new Error(String(err)));
+    }
   }
 
   private scheduleReconnect(): void {
@@ -365,7 +380,7 @@ export class RemoteLspAdapter implements LSPAdapter {
         const filePath = uriToPath(uri);
 
         if (diagnostics.length === 0) {
-          diagnosticBus.upsert(this.diagnosticSource, [], [filePath]);
+          diagnosticBus.upsert(this.diagnosticSource as any, [], [filePath]);
         } else {
           const items: Omit<UnifiedDiagnostic, 'id' | 'timestamp' | 'source'>[] = [];
           for (const d of diagnostics) {
@@ -383,7 +398,7 @@ export class RemoteLspAdapter implements LSPAdapter {
               context: d.source as string | undefined,
             });
           }
-          diagnosticBus.upsert(this.diagnosticSource, items, [filePath]);
+          diagnosticBus.upsert(this.diagnosticSource as any, items, [filePath]);
         }
         break;
       }
