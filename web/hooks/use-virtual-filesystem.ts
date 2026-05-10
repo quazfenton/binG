@@ -206,6 +206,14 @@ function invalidateSnapshotCache(path?: string, ownerId?: string): void {
   }
 }
 
+/**
+ * Detect anonymous owner IDs to avoid unnecessary VFS clearing.
+ * Anonymous sessions carry no persistent sensitive data.
+ */
+function isAnonOwner(id: string): boolean {
+  return id === 'anonymous' || id === 'anon' || id.startsWith('anon-') || id.startsWith('anonymous-');
+}
+
 export function useVirtualFilesystem(
   initialPath?: string,
   options: UseVirtualFilesystemOptions = {}
@@ -348,7 +356,12 @@ export function useVirtualFilesystem(
       // If new user, clear localStorage + IndexedDB to prevent data leakage between users on shared browser.
       const LAST_OPFS_KEY = 'opfs:lastOwnerId';
       const lastOwnerId = localStorage.getItem(LAST_OPFS_KEY);
-      if (lastOwnerId && lastOwnerId !== opfsOwnerId && lastOwnerId !== 'anonymous' && lastOwnerId !== 'anon') {
+      const shouldClear = lastOwnerId &&
+        lastOwnerId !== opfsOwnerId &&
+        !isAnonOwner(lastOwnerId) &&
+        !isAnonOwner(opfsOwnerId);
+
+      if (shouldClear) {
         log('OPFS: User changed from', lastOwnerId, 'to', opfsOwnerId, '- clearing local VFS data for security');
         
         // Targeted clear of VFS and session-related data to avoid destroying 
@@ -371,21 +384,27 @@ export function useVirtualFilesystem(
           }
         });
 
-        // Clear IndexedDB fallback data for previous user
-        // FIX: Only clear if backend is initialized and owner is valid
+        // Clear IndexedDB fallback data for previous user.
+        // Only attempt if the backend is fully initialized (has an open DB);
+        // otherwise log and skip — the IndexedDB store is fresh anyway.
         if (typeof window !== 'undefined') {
           (async () => {
             try {
-              // Check if backend is initialized before clearing
               const isInitialized = indexedDBBackend.isInitialized?.() || false;
               if (!isInitialized) {
-                log('OPFS: Skipping IndexedDB clear - backend not initialized yet');
+                log('OPFS: Skipping IndexedDB clear - backend not initialized (fresh session)');
                 return;
               }
               await indexedDBBackend.clear(lastOwnerId);
               log('OPFS: Cleared IndexedDB data for previous owner:', lastOwnerId);
-            } catch (e) {
-              logWarn('OPFS: Failed to clear IndexedDB (this is OK if backend not initialized):', e);
+            } catch (e: any) {
+              // Non-fatal: the store may be empty or not yet opened.  Warn but
+              // don't surface a stack trace — this is expected on fresh loads.
+              if (e?.message?.includes('not initialized') || e?.message?.includes('not open')) {
+                log('OPFS: IndexedDB clear skipped — backend not ready yet');
+              } else {
+                logWarn('OPFS: Failed to clear IndexedDB:', e?.message || e);
+              }
             }
           })();
         }
