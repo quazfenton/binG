@@ -8,6 +8,7 @@ import { DAG, DAGNode, DAGExecutionResult, createDAG } from './bash-event-schema
 import { executeBashCommand } from './bash-tool';
 import { virtualFilesystem } from '@/lib/virtual-filesystem/index.server';
 import { createLogger } from '@/lib/utils/logger';
+import { recordToolCallTelemetry, prepareTelemetryPayload, createOriginStack } from '@/lib/chat/logging-utils';
 import { optimizeDAG, validateDAG } from './dag-compiler';
 
 const logger = createLogger('Bash:DAGExecutor');
@@ -484,6 +485,21 @@ export async function executeDAGWithRetry(
       logger.warn(`DAG execution failed, attempt ${attempt}/${maxRetries}`, {
         errorCount: result.errors.length,
       });
+
+      // Record telemetry for DAG retry
+      const { redactedArgs, originStack } = prepareTelemetryPayload({
+        args: {
+          retryAttempt: attempt,
+          maxRetries,
+          errorCount: result.errors.length,
+          totalNodes: dag.nodes.length,
+        },
+      });
+      recordToolCallTelemetry({
+        toolCallId: null,
+        redactedArgs,
+        originStack,
+      }).catch((err) => { logger.debug?.(`Failed to record DAG retry telemetry: ${err}`); });
 
       // TODO: Implement self-healing at DAG level
       // - Identify failed nodes

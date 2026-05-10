@@ -27,6 +27,7 @@ import { createLogger } from '@/lib/utils/logger';
 import { estimateTokens } from '@/lib/context/contextBuilder';
 import { stripScopePrefixForDisplay } from './path-normalizer';
 import { detectIncompleteResponse } from '@bing/shared/agent/feedback-injection';
+import { recordToolCallTelemetry, prepareTelemetryPayload } from '@/lib/chat/logging-utils';
 
 const logger = createLogger('SmartContext');
 
@@ -1983,13 +1984,27 @@ export async function* streamWithAutoContinue(
       });
 
       if (autoContinue && autoContinue.shouldContinue) {
-        logger.info('Auto-continuing with requested files', {
-          fileCount: autoContinue.requestedFiles.length,
-          files: autoContinue.requestedFiles,
-          continuationCount: continuationCount + 1,
-          maxContinuations,
-          conversationId,
-        });
+logger.info('Auto-continuing with requested files', {
+  fileCount: autoContinue.requestedFiles.length,
+  files: autoContinue.requestedFiles,
+  continuationCount: continuationCount + 1,
+  maxContinuations,
+  conversationId,
+});
+
+// Record telemetry for auto-continue (helps trace malformed/duplicate calls)
+const toolCallsForTelemetry = allToolCalls ?? [];
+if (toolCallsForTelemetry.length > 0) {
+  const { redactedArgs, originStack } = prepareTelemetryPayload(
+    { toolCalls: toolCallsForTelemetry, autoContinue: true },
+    { maxStringLength: 200, maxObjectProps: 5, maxArrayItems: 5 }
+  );
+  recordToolCallTelemetry({
+    toolName: 'streamWithAutoContinue',
+    redactedArgs,
+    originStack,
+    toolCallId: conversationId ?? null,          }).catch((err) => { logger.debug?.('streamWithAutoContinue telemetry failed:', err); }); // Silent - telemetry should not break flow
+}
 
         // FIX: Update conversation-level counter to prevent infinite loops across requests
         if (conversationId) {
@@ -2210,6 +2225,21 @@ export async function* streamWithServerAutoRePrompt(
         reason: chunk.metadata?.reason,
         toolResultCount: collectedToolResults.length,
       });
+      // Record telemetry for auto-continue event detection
+      if (collectedToolResults.length > 0) {
+        const { redactedArgs, originStack } = prepareTelemetryPayload(
+          { autoContinueEvent: true, toolResultCount: collectedToolResults.length, reason: chunk.metadata?.reason },
+          { maxStringLength: 200, maxObjectProps: 5, maxArrayItems: 5 }
+        );
+        recordToolCallTelemetry({
+          toolName: 'streamWithServerAutoRePrompt.autoContinueDetected',
+          redactedArgs,
+          model: options.model,
+          provider: options.provider,
+          originStack,
+          toolCallId: options.conversationId ?? null,
+        }).catch((err) => { logger.debug?.('streamWithServerAutoRePrompt telemetry failed:', err); });
+      }
     }
   }
 
@@ -2230,6 +2260,19 @@ export async function* streamWithServerAutoRePrompt(
         toolResults: collectedToolResults.map(t => t.toolName),
         rePromptCount: rePromptCount + 1,
       });
+      // Record telemetry for re-prompt trigger
+      const { redactedArgs, originStack } = prepareTelemetryPayload(
+        { rePromptTriggered: true, toolNames: collectedToolResults.map(t => t.toolName), rePromptCount: rePromptCount + 1, maxRePrompts: options.maxRePrompts },
+        { maxStringLength: 200, maxObjectProps: 5, maxArrayItems: 5 }
+      );
+      recordToolCallTelemetry({
+        toolName: 'streamWithServerAutoRePrompt.rePromptTriggered',
+        redactedArgs,
+        model: options.model,
+        provider: options.provider,
+        originStack,
+        toolCallId: options.conversationId ?? null,
+      }).catch((err) => { logger.debug?.('streamWithServerAutoRePrompt rePrompt telemetry failed:', err); });
 
       rePromptCount++;
 

@@ -20,6 +20,10 @@ import type { UIMessage } from 'ai';
 import { tokenTracker } from './ai-caching';
 import type { StreamingResponse } from './llm-providers';
 import { getOrchestrationModeHeaders } from '@/contexts/orchestration-mode-context';
+import { recordToolCallTelemetry, prepareTelemetryPayload } from '@/lib/chat/logging-utils';
+import { createChatLogger } from '@/lib/chat/chat-logger';
+
+const logger = createChatLogger('use-chat-hooks');
 
 // Type alias for Message (using UIMessage from AI SDK)
 export type Message = UIMessage;
@@ -224,9 +228,22 @@ export function useChatEnhanced(options: UseChatOptions = {}): ChatState {
       setError(err);
       
       if (retryCount < maxRetries && window.__chatCircuitBreaker.count < 3) {
+        const delay = Math.pow(2, retryCount) * 1000;
         setRetryCount(prev => prev + 1);
         // Retry with exponential backoff
-        await new Promise(resolve => setTimeout(resolve, Math.pow(2, retryCount) * 1000));
+        logger.debug(`🔄 Retry ${retryCount + 1}/${maxRetries} - backing off ${delay}ms`);
+        // Record retry telemetry
+        const { redactedArgs, originStack } = prepareTelemetryPayload(
+          { retryAttempt: retryCount + 1, maxRetries, delayMs: delay, circuitBreakerCount: window.__chatCircuitBreaker.count },
+          { maxStringLength: 150, maxObjectProps: 5, maxArrayItems: 3 }
+        );
+        recordToolCallTelemetry({
+          toolName: 'useChatEnhanced.retry',
+          redactedArgs,
+          originStack,
+          toolCallId: null,
+        }).catch((err) => { logger.debug?.('useChatEnhanced retry telemetry failed:', err); });
+        await new Promise(resolve => setTimeout(resolve, delay));
         return append(message, options);
       }
       
@@ -497,6 +514,18 @@ export function useRetryHandler(options?: {
 
         // Exponential backoff
         const delay = Math.pow(2, retryCount) * 1000;
+        logger.debug(`🔄 Retry ${retryCount + 1}/${maxRetries} - backing off ${delay}ms [${context || 'unknown'}]`);
+        // Record retry telemetry
+        const { redactedArgs, originStack } = prepareTelemetryPayload(
+          { retryAttempt: retryCount + 1, maxRetries, delayMs: delay, context: context || 'unknown' },
+          { maxStringLength: 150, maxObjectProps: 5, maxArrayItems: 3 }
+        );
+        recordToolCallTelemetry({
+          toolName: 'useRetryHandler.retry',
+          redactedArgs,
+          originStack,
+          toolCallId: null,
+        }).catch((err) => { logger.debug?.('useRetryHandler retry telemetry failed:', err); });
         await new Promise(resolve => setTimeout(resolve, delay));
 
         setRetryCount(prev => prev + 1);

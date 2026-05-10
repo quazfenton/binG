@@ -70,6 +70,10 @@ export async function withRetry<T>(
   }
 
   logger.error(`[${label}] All ${opts.maxRetries + 1} attempts failed`);
+  // Annotate error with retry attempt count for telemetry
+  if (lastError && typeof lastError === 'object') {
+    (lastError as any).retryCount = opts.maxRetries + 1;  // total attempts (initial + retries)
+  }
   throw lastError;
 }
 

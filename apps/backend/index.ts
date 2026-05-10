@@ -1,0 +1,1 @@
+import { Hono } from "hono";\nimport { serve } from "@hono/node-server";\nimport { cors } from "hono/cors";\n\nconst app = new Hono();\napp.use("*", cors({ origin: "*" }));\n\napp.get("/health", (c) => c.json({ status: "ok" }));\n\nserve(app, (info) => {\n  console.log(`Backend listening on http://localhost:${info.port}`);\n});

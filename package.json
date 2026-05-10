@@ -7,7 +7,8 @@
   "packageManager": "pnpm@9.15.4",
   "private": true,
   "scripts": {
-    "dev": "pnpm --filter web dev",
+    "dev": "turbo dev",
+    "dev:backend": "pnpm --filter backend dev",
     "dev:web": "pnpm --filter web dev",
     "dev:desktop": "pnpm --filter desktop tauri dev",
     "build": "pnpm --filter web build",
@@ -18,6 +19,7 @@
     "type-check": "pnpm --filter web type-check",
     "lint": "pnpm --filter web lint",
     "test": "pnpm --filter web test && vitest run test",
+    "env:check": "node scripts/compare-env.mjs web/.env web/.env.example",
     "logs": "node tail-logs.js"
   },
   "devDependencies": {

@@ -22,7 +22,8 @@ import { getProviderForTask, getModelForTask } from '../config/task-providers';
 import { normalizeSessionId } from '../virtual-filesystem/scope-utils';
 import { advancedToolCallDispatcher } from '../tools/tool-integration/parsers/dispatcher';
 import { callMCPToolFromAI_SDK, getMCPToolsForAI_SDK } from '../mcp/architecture-integration';
-import { chatLogger } from './chat-logger';
+import { chatLogger } from './chat-logger'
+import { recordToolCallTelemetry, prepareTelemetryPayload } from './logging-utils';
 import { chatRequestLogger } from './chat-request-logger';
 import { isCLIProvider } from './vercel-ai-streaming';
 import { recordRateLimitError } from '../models/model-ranker';
@@ -585,10 +586,53 @@ export class EnhancedLLMService {
       // The UnifiedAgentService orchestrates fallbacks based on these categorized errors.
       try {
         const response = await this.callProviderWithEnhancedClient(actualProvider, fullRequest, retryOptions, enableCircuitBreaker, requestId);
+        
+        // Record response success telemetry with correct fallback tracking
+        const latencyMs = Date.now() - requestStartTime;
+        // Use response metadata's actual provider/model if available (set by llm-providers after fallback)
+        const recordedProvider = response.metadata?.actualProvider || actualProvider;
+        const recordedModel = response.metadata?.actualModel || actualModel;
+        const { redactedArgs: successArgs, originStack: successStack } = prepareTelemetryPayload({
+          args: {
+            provider: recordedProvider,
+            model: recordedModel,
+            latencyMs,
+            contentLength: response.content?.length || 0,
+            success: true,
+            fallbackOccurred: response.metadata?.actualProvider && response.metadata.actualProvider !== actualProvider,
+          },
+        });
+        recordToolCallTelemetry({
+          toolCallId: requestId || null,
+          redactedArgs: successArgs,
+          originStack: successStack,
+        }).catch((err) => { chatLogger.debug(`Failed to record response success telemetry: ${err}`); });
+
         return await postProcessToolCalls(response);
       } catch (primaryError: any) {
+        // Enhance error first to get the failureType
+        const enhancedError = this.enhanceError(primaryError, actualProvider, actualModel);
+        
+        // Record error telemetry with actual provider/model (may have fallen back before failure)
+        const latencyMs = Date.now() - requestStartTime;
+        const { redactedArgs: errorArgs, originStack: errorStack } = prepareTelemetryPayload({
+          args: {
+            provider: actualProvider,
+            model: actualModel,
+            latencyMs,
+            errorType: enhancedError.failureType || 'unknown',
+            success: false,
+            retryCount: (primaryError as any).retryCount || 1,
+          },
+        });
+        recordToolCallTelemetry({
+          toolCallId: requestId || null,
+          redactedArgs: errorArgs,
+          originStack: errorStack,
+        }).catch((err) => { chatLogger.debug(`Failed to record error telemetry: ${err}`); });
+
         // Re-throw with categorization so the Orchestrator knows how to handle the retry/fallback
-        throw this.enhanceError(primaryError, actualProvider, actualModel);
+        throw enhancedError;
       }
     } catch (outerError: any) {
       throw outerError;
