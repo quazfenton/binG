@@ -12,7 +12,7 @@
  * 4. Streaming: Native SSE event emission at every state transition.
  */
 
-import { generateText, tool as aiTool, type Tool } from 'ai';
+import { generateText, tool as aiTool, type Tool, type CoreMessage } from 'ai';
 import { z } from 'zod';
 import { verifyChanges } from '@/lib/orchestra/stateful-agent/agents/verification';
 import { SelfHealingExecutor } from '@/lib/crewai/runtime/self-healing';
@@ -34,15 +34,6 @@ const IterationConfigSchema = z.object({
 
 export type IterationConfigInput = z.input<typeof IterationConfigSchema>;
 export interface IterationConfig extends z.infer<typeof IterationConfigSchema> {}
-
-// ─── Message type — use local definition since AI SDK types vary by version ──
-
-type AgentMessage = {
-  role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string | any[];
-  toolCallId?: string;
-  toolName?: string;
-};
 
 // ─── Structured Tool Result Interface (P2 #7) ────────────────────────────────
 
@@ -329,9 +320,9 @@ export class PlanActVerifyOrchestrator {
    * Executes a task using a Plan -> Act -> Verify -> Respond loop.
    * Yields SSE-compatible events for UI rendering.
    */
-  async *execute(task: string, initialContext: any[]): AsyncGenerator<OrchestratorEvent, void, unknown> {
+  async *execute(task: string, initialContext: CoreMessage[]): AsyncGenerator<OrchestratorEvent, void, unknown> {
     const controller = new IterationController(this.validatedConfig);
-    const conversationHistory = [...initialContext];
+    const conversationHistory: CoreMessage[] = [...initialContext];
 
     try {
       yield { type: 'phase_change', phase: 'planning' };
@@ -363,8 +354,13 @@ export class PlanActVerifyOrchestrator {
         const llmResponse = await this.callLLM(task, conversationHistory);
         controller.recordTokens(llmResponse.usage?.totalTokens || 0);
 
+        // Add the AI SDK's properly formatted response messages to history
+        // (includes assistant text + tool-call parts in the correct CoreMessage format)
+        if (llmResponse.responseMessages?.length) {
+          conversationHistory.push(...llmResponse.responseMessages);
+        }
+
         if (llmResponse.done || !llmResponse.toolCalls?.length) {
-          conversationHistory.push({ role: 'assistant', content: llmResponse.text });
           break; // Task complete or no tools to call
         }
 
@@ -399,14 +395,18 @@ export class PlanActVerifyOrchestrator {
           }
 
           // P2 #7: Pass structured ToolResult into conversation history
-          // The LLM gets structured fields (success, output, error.type, suggestions, etc.)
-          // instead of a raw JSON string blob
+          // Use AI SDK CoreToolResultPart format: content must be an array of
+          // { type: 'tool-result', toolCallId, toolName, result } parts.
+          // Plain-string content triggers "messages do not match ModelMessage[] schema".
           conversationHistory.push({
-            role: 'tool',
-            content: JSON.stringify(structuredResult),
-            toolCallId: call.id,
-            toolName: call.name,
-          } as AgentMessage);
+            role: 'tool' as const,
+            content: [{
+              type: 'tool-result' as const,
+              toolCallId: call.id,
+              toolName: call.name,
+              result: structuredResult,
+            }],
+          });
         }
 
         // 3. VERIFICATION PHASE (Critic/Verifier Agent)
@@ -431,8 +431,10 @@ export class PlanActVerifyOrchestrator {
             }
 
             // Feed errors back to the ACT loop for self-healing
+            // Use 'user' role for mid-conversation feedback (many providers reject
+            // 'system' messages after tool calls) — CoreMessage user accepts string content
             conversationHistory.push({
-              role: 'system',
+              role: 'user' as const,
               content: `Verification failed. Please fix these errors in the next step: ${JSON.stringify(verificationResult.errors)}`
             });
             continue;
@@ -483,7 +485,7 @@ export class PlanActVerifyOrchestrator {
   // Private Helper Methods
   // ==========================================
 
-  private async generatePlan(task: string, history: AgentMessage[]) {
+  private async generatePlan(task: string, history: CoreMessage[]) {
     const planPrompt = `You are a planning agent. Create a step-by-step execution plan for the following task.
 TASK: ${task}
 Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"}]`;
@@ -501,7 +503,7 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
    * P2 #9: Uses typed provider config with validated defaults.
    * P2 #9: Uses properly adapted sdkTools (no @ts-expect-error).
    */
-  private async callLLM(prompt: string, history: AgentMessage[]) {
+  private async callLLM(prompt: string, history: CoreMessage[]) {
     const { provider, model } = this.validatedConfig;
 
     try {
@@ -513,15 +515,18 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
         throw new Error(`Cannot initialize LLM provider '${provider}' with model '${model}': ${modelError.message}`);
       }
 
-      const messages: AgentMessage[] = [
-        { role: 'system', content: 'You are an autonomous AI coding agent. You have tools available to interact with the system.' },
+      // Build messages using AI SDK CoreMessage format.
+      // System/user/assistant roles accept plain-string content;
+      // tool role MUST use content: [{ type: 'tool-result', ... }] array.
+      const messages: CoreMessage[] = [
+        { role: 'system' as const, content: 'You are an autonomous AI coding agent. You have tools available to interact with the system.' },
         ...history,
-        { role: 'user', content: prompt }
+        { role: 'user' as const, content: prompt },
       ];
 
       const result = await generateText({
         model: vercelModel,
-        messages: messages as any, // AgentMessage is compatible with ModelMessage at runtime
+        messages,
         tools: Object.keys(this.sdkTools).length > 0 ? this.sdkTools : undefined,
         maxOutputTokens: 4000,
         temperature: 0.2,
@@ -539,6 +544,10 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
         done: toolCalls.length === 0,
         toolCalls,
         usage: result.usage || { totalTokens: 0 },
+        // Include AI SDK's native response messages (CoreMessage[])
+        // so the caller can push them directly into conversation history
+        // without losing tool-call parts or violating the schema.
+        responseMessages: (result as any).responseMessages || [],
       };
     } catch (error: any) {
       log.error('Vercel AI SDK callLLM failed', { provider, model, error: error.message });

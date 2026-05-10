@@ -2069,7 +2069,7 @@ export default function InteractionPanel({
                     {showFileSelector && (
                       <div
                         ref={fileSelectorRef}
-                        className="absolute right-0 bottom-full mb-2 w-80 bg-black/98 border border-white/20 rounded-lg shadow-2xl z-50 p-3"
+                        className="absolute right-0 bottom-full mb-2 w-80 bg-black border border-white/20 rounded-lg shadow-2xl z-50 p-3"
                         style={{ zIndex: 100000 }}
                       >
                         <div className="flex items-center justify-between mb-3 pb-2 border-b border-white/10">

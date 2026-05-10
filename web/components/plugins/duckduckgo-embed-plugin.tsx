@@ -50,7 +50,7 @@ const DuckDuckGoEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
   const [bookmarks, setBookmarks] = useState<BookmarkEntry[]>([]);
   const [searchHistory, setSearchHistory] = useState<SearchHistoryEntry[]>([]);
   const [isReloading, setIsReloading] = useState(false);
-  const [iframeKey, setIframeKey] = useState(0);
+  // Use iframeKey from hook
   const [activeTab, setActiveTab] = useState<'search' | 'bookmarks' | 'history'>('search');
 
   // Settings
@@ -162,7 +162,7 @@ const DuckDuckGoEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
     localStorage.setItem('ddg-search-history', JSON.stringify(newHistory));
 
     setIsReloading(true);
-    setIframeKey(prev => prev + 1);
+    triggerReload();
     setTimeout(() => setIsReloading(false), 1000);
   };
 
@@ -170,7 +170,7 @@ const DuckDuckGoEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
     setIframeError(null);
     setIsReloading(true);
     setIsReloading(true);
-    setIframeKey(prev => prev + 1);
+    triggerReload();
     setTimeout(() => setIsReloading(false), 1000);
   };
 
@@ -217,7 +217,7 @@ const DuckDuckGoEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
     setSearchQuery(bookmark.query);
     setActiveTab('search');
     setIsReloading(true);
-    setIframeKey(prev => prev + 1);
+    triggerReload();
     setTimeout(() => setIsReloading(false), 1000);
   };
 
@@ -232,7 +232,7 @@ const DuckDuckGoEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
     setIframeUrl(searchUrl);
     setActiveTab('search');
     setIsReloading(true);
-    setIframeKey(prev => prev + 1);
+    triggerReload();
     setTimeout(() => setIsReloading(false), 1000);
   };
 

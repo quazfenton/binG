@@ -51,6 +51,7 @@ export interface UseIframeLoaderReturn {
   handleFallback: () => void;
   handleLoadSuccess: () => void;
   handleIframeError: (error?: string) => void;
+  triggerReload: () => void;
 }
 
 export function useIframeLoader({
@@ -239,6 +240,11 @@ export function useIframeLoader({
       isRetryingRef.current = false;
     }, 1000);
   }, [detectFailureReason, handleFallback, onFailed]);
+
+  // Manually trigger a reload of the iframe
+  const triggerReload = useCallback(() => {
+    setIframeKey(prev => prev + 1);
+  }, []);
 
   const handleLoad = useCallback((newUrl: string) => {
     if (!newUrl) return;
@@ -460,6 +466,7 @@ export function useIframeLoader({
     handleFallback,
     handleLoadSuccess,
     handleIframeError,
+    triggerReload,
   };
 }
 

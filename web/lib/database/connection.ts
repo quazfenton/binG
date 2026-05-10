@@ -794,6 +794,14 @@ function getDatabaseConstructor(): any {
  * - Synchronously initialized real DB on first call (Node.js runtime)
  */
 export function getDatabase(): any {
+  // CRITICAL FIX: Always check globalThis FIRST - module variables may be reset
+  // on HMR, serverless cold starts, or container restarts
+  const persistedDb = (globalThis as any).__binG_dbInstance;
+  if (persistedDb) {
+    db = persistedDb;
+    return db;
+  }
+
   // Return cached instance (most common case after first init)
   if (db) return db;
 
@@ -842,8 +850,11 @@ function initializeDatabaseSync(): void {
   // the existing connection even if schema init or migrations fail later.
   (globalThis as any).__binG_dbInstance = db;
 
-  // Initialize schema synchronously
-  if (!dbInitialized) {
+  // CRITICAL FIX: Check globalThis for dbInitialized flag - module variable may be reset
+  const isAlreadyInitialized = dbInitialized || (globalThis as any).__binG_dbInitialized;
+
+  // Initialize schema synchronously (only if not already initialized)
+  if (!isAlreadyInitialized) {
     try {
       initializeSchemaSync();
     } catch (schemaError: any) {

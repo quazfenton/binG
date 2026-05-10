@@ -60,7 +60,7 @@ const WorldMonitorEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose })
   const [activeTab, setActiveTab] = useState<'embed' | 'status' | 'bookmarks'>('embed');
   const [selectedCountry, setSelectedCountry] = useState<string | null>(null);
   const [isReloading, setIsReloading] = useState(false);
-  const [iframeKey, setIframeKey] = useState(0);
+  // Use iframeKey from hook
 
   // Use iframe loader hook with fallback
   const {
@@ -142,7 +142,7 @@ const WorldMonitorEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose })
   const handleReload = () => {
     setIframeError(null);
     setIsReloading(true);
-    setIframeKey(prev => prev + 1);
+    triggerReload();
     setTimeout(() => setIsReloading(false), 1000);
   };
 

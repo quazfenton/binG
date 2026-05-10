@@ -59,6 +59,7 @@ const PStreamEmbedPlugin: React.FC<{ onClose: () => void, initialUrl?: string }>
     handleFallback,
     handleLoadSuccess,
     handleIframeError,
+    triggerReload,
   } = useIframeLoader({
     url: 'https://www.pstream.net',
     timeout: 10000, // 10s per attempt (fast detection, reasonable for most sites)

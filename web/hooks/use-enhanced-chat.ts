@@ -763,6 +763,14 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                     currentAction: eventData.currentAction || 'Initializing...',
                   }));
 
+                  // Update current model/provider from init event (avoids waiting for done event)
+                  if (eventData.model) {
+                    setCurrentModel(eventData.model);
+                  }
+                  if (eventData.provider) {
+                    setCurrentProvider(eventData.provider);
+                  }
+
                   // Extract streamId for WebSocket control channel (same port as app)
                   if (eventData.streamId) {
                     setStreamId(eventData.streamId);

@@ -48,7 +48,7 @@ const CodeSandboxEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) 
   const [isLoading, setIsLoading] = useState(false);
   const [bookmarks, setBookmarks] = useState<BookmarkEntry[]>([]);
   const [isReloading, setIsReloading] = useState(false);
-  const [iframeKey, setIframeKey] = useState(0);
+  // Use iframeKey from hook
   const [activeTab, setActiveTab] = useState<'embed' | 'templates' | 'bookmarks'>('embed');
   const [autoRefresh, setAutoRefresh] = useState(false);
 
@@ -130,7 +130,7 @@ const CodeSandboxEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) 
     }
     setActiveTab('embed');
     setIsReloading(true);
-    setIframeKey(prev => prev + 1);
+    triggerReload();
     setTimeout(() => setIsReloading(false), 1000);
   };
 
@@ -138,14 +138,14 @@ const CodeSandboxEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) 
     setIframeUrl(`https://codesandbox.io/embed/${templateId}`);
     setActiveTab('embed');
     setIsReloading(true);
-    setIframeKey(prev => prev + 1);
+    triggerReload();
     setTimeout(() => setIsReloading(false), 1000);
   };
 
   const handleReload = () => {
     setIframeError(null);
     setIsReloading(true);
-    setIframeKey(prev => prev + 1);
+    triggerReload();
     if (autoRefresh) {
       setTimeout(() => setIsReloading(false), 500);
     } else {
@@ -192,7 +192,7 @@ const CodeSandboxEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) 
     setIframeUrl(url);
     setActiveTab('embed');
     setIsReloading(true);
-    setIframeKey(prev => prev + 1);
+    triggerReload();
     setTimeout(() => setIsReloading(false), 1000);
   };
 

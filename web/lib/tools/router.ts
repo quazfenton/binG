@@ -63,7 +63,7 @@ export interface CapabilityProvider {
 class VFSProvider implements CapabilityProvider {
   readonly id = 'vfs';
   readonly name = 'Virtual Filesystem';
-  readonly capabilities = ['file.read', 'file.write', 'file.append', 'file.delete', 'file.list', 'file.search', 'memory.context', 'workspace.getChanges'];
+  readonly capabilities = ['file.read', 'file.write', 'file.append', 'file.delete', 'file.list', 'file.search', 'file.batch_write', 'memory.context', 'workspace.getChanges'];
 
   isAvailable(): boolean {
     return true;
@@ -99,6 +99,18 @@ class VFSProvider implements CapabilityProvider {
             : undefined
       );
       return { success: true, path: file.path, bytesWritten: file.size };
+    },
+
+    'file.batch_write': async (ownerId, input) => {
+      // Delegate to the MCP batch_write tool which handles per-file validation,
+      // scope path resolution, and event emission atomically
+      const { callMCPToolFromAI_SDK } = await import('../mcp');
+      const result = await callMCPToolFromAI_SDK('batch_write', input, ownerId);
+      return {
+        success: result.success,
+        output: result.output,
+        error: result.error,
+      };
     },
 
     'file.append': async (ownerId, input) => {
@@ -220,7 +232,7 @@ class VFSProvider implements CapabilityProvider {
 class MCPFilesystemProvider implements CapabilityProvider {
   readonly id = 'mcp-filesystem';
   readonly name = 'MCP Filesystem';
-  readonly capabilities = ['file.read', 'file.write', 'file.append', 'file.delete', 'file.list', 'file.search'];
+  readonly capabilities = ['file.read', 'file.write', 'file.append', 'file.delete', 'file.list', 'file.search', 'file.batch_write'];
 
   isAvailable(): boolean {
     // Check if MCP server is configured
@@ -242,6 +254,7 @@ class MCPFilesystemProvider implements CapabilityProvider {
       'file.delete': 'delete_file',
       'file.list': 'list_directory',
       'file.search': 'search_files',
+      'file.batch_write': 'batch_write',
     };
 
     const toolName = toolMap[capabilityId];

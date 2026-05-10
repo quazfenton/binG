@@ -4181,8 +4181,9 @@ const config: UnifiedAgentConfig = {
           data: clientResponse.data,
           commands: clientResponse.commands,
           filesystem: filesystemEdits,
-          metadata: clientResponse.metadata,
-          timestamp: clientResponse.metadata?.timestamp
+          metadata: { ...clientResponse.metadata, modelName: actualModel },
+          timestamp: clientResponse.metadata?.timestamp,
+          modelName: actualModel,
         },
         { status: responseStatus }
       ));

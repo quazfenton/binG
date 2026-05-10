@@ -59,6 +59,7 @@ const ObservableEmbedPlugin: React.FC<ObservableEmbedPluginProps> = ({ onOpenWin
     handleFallback,
     handleLoadSuccess,
     handleIframeError,
+    triggerReload,
   } = useIframeLoader({
     url: currentNotebook?.embedUrl || '',
     timeout: 30000,

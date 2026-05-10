@@ -49,7 +49,7 @@ const StackBlitzEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [bookmarks, setBookmarks] = useState<BookmarkEntry[]>([]);
   const [isReloading, setIsReloading] = useState(false);
-  const [iframeKey, setIframeKey] = useState(0);
+  // Use iframeKey from hook
   const [activeTab, setActiveTab] = useState<'embed' | 'templates' | 'bookmarks'>('embed');
   const [embedMode, setEmbedMode] = useState<'full' | 'editor' | 'preview'>('full');
 
@@ -136,7 +136,7 @@ const StackBlitzEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
     }
     setActiveTab('embed');
     setIsReloading(true);
-    setIframeKey(prev => prev + 1);
+    triggerReload();
     setTimeout(() => setIsReloading(false), 1000);
   };
 
@@ -145,14 +145,14 @@ const StackBlitzEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
     setIframeUrl(url);
     setActiveTab('embed');
     setIsReloading(true);
-    setIframeKey(prev => prev + 1);
+    triggerReload();
     setTimeout(() => setIsReloading(false), 1000);
   };
 
   const handleReload = () => {
     setIframeError(null);
     setIsReloading(true);
-    setIframeKey(prev => prev + 1);
+    triggerReload();
     setTimeout(() => setIsReloading(false), 1000);
   };
 
@@ -195,7 +195,7 @@ const StackBlitzEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
     setIframeUrl(url);
     setActiveTab('embed');
     setIsReloading(true);
-    setIframeKey(prev => prev + 1);
+    triggerReload();
     setTimeout(() => setIsReloading(false), 1000);
   };
 

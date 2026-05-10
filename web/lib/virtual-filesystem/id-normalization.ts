@@ -45,6 +45,7 @@ export function cookieToScopePath(cookieValue: string, prefix = 'project/session
  * "1$001" -> "001" (uses FIRST $ to handle user-provided $ in session names)
  */
 export function extractSessionIdFromOwnerId(ownerId: string): string {
+  if (!ownerId || typeof ownerId !== 'string') return '';
   if (ownerId.startsWith('anon:')) {
     return ownerId.slice(5);
   }
@@ -64,6 +65,7 @@ export function extractSessionIdFromOwnerId(ownerId: string): string {
  * "1$001" -> "1" (uses FIRST $ to handle user-provided $ in session names)
  */
 export function extractUserIdFromOwnerId(ownerId: string): string {
+  if (!ownerId || typeof ownerId !== 'string') return '';
   if (ownerId.startsWith('anon:')) {
     return 'anon';
   }
