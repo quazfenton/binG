@@ -592,7 +592,7 @@ export default function Settings({
 
     const transcriptText = messages
       .map((msg) => {
-        const sender = msg.role === 'user' ? 'You' : (msg.modelName || 'AI');
+        const sender = msg.role === 'user' ? 'User' : (msg.modelName || 'AI');
         return `${sender}: ${msg.content}`;
       })
       .join('\n\n');
@@ -1699,7 +1699,7 @@ export default function Settings({
                 <div key={index} className="mb-4 group">
                   <div className="flex items-center justify-between">
                     <p className="font-bold">
-                      {message.role === "user" ? "You" : (message.modelName || "AI")}
+                      {message.role === "user" ? "User" : (message.modelName || "AI")}
                     </p>
                     {screenReader && (
                       <Button

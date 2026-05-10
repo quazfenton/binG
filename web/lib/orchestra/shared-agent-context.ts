@@ -59,6 +59,8 @@ export interface StructuredToolError {
   suggestedPaths?: string[];
   suggestedNextAction?: string;
   expectedFields?: string[];
+  /** Schema snippet showing expected field types, e.g. '{ path: <required>, content: <required> }' */
+  expectedSchema?: string;
 }
 
 /**
@@ -123,6 +125,7 @@ export function validateToolArgs(
     message: `Missing required arguments for ${toolName}: ${missing.join(', ')}`,
     retryable: true,
     expectedFields: requiredFields,
+    expectedSchema: `{ ${requiredFields.map(f => f + ': <required>').join(', ')} }`,
     suggestedNextAction: `Call ${toolName} again with all required fields: ${requiredFields.join(', ')}`,
   };
 }

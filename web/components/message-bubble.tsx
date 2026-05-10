@@ -920,9 +920,9 @@ export default function MessageBubble({
           {isUser ? message.content : mainContent}
         </ReactMarkdown>
 
-        {/* Model Used - shown below assistant messages */}
+        {/* Model Used - shown below assistant messages, outside ReactMarkdown, not copyable */}
         {!isUser && message.modelName && (
-          <div className="text-[10px] text-white/40 mt-1 ml-1">
+          <div className="text-[10px] text-white/40 mt-1 ml-1 select-none pointer-events-none" style={{ userSelect: 'none' }}>
             via {message.modelName}
           </div>
         )}
@@ -1470,12 +1470,6 @@ export default function MessageBubble({
             <Copy className={`${layout.isMobile ? 'h-5 w-5' : 'h-3 w-3'} text-white/70`} />
           )}
         </Button>
-        {/* Model annotation - shows which model generated this response */}
-        {!isUser && message.modelName && (
-          <div className="absolute -bottom-5 left-0 text-[10px] text-white/30">
-            {message.modelName}
-          </div>
-        )}
       </div>
     </div>
   )

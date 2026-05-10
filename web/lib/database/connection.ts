@@ -838,6 +838,10 @@ function initializeDatabaseSync(): void {
   db.pragma('temp_store = memory');
   db.pragma('foreign_keys = ON');
 
+  // Persist db on globalThis BEFORE schema init so Next.js HMR can find
+  // the existing connection even if schema init or migrations fail later.
+  (globalThis as any).__binG_dbInstance = db;
+
   // Initialize schema synchronously
   if (!dbInitialized) {
     try {
@@ -890,7 +894,7 @@ function initializeDatabaseSync(): void {
     (globalThis as any).__binG_dbInitialized = true;
   }
 
-  // Persist db on globalThis so it survives HMR re-evaluations
+  // Belt-and-suspenders: re-persist after init completes successfully
   (globalThis as any).__binG_dbInstance = db;
 
   console.log('[DB] Database initialized successfully (synchronous)');

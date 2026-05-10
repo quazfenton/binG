@@ -70,6 +70,15 @@ const EVENT_TTL_MS = parseInt(process.env.EVENT_TTL_MS || (4 * 60 * 60 * 1000).t
  */
 export class EnhancedSandboxEventEmitter extends UniversalEventEmitter {
   private listenerCounts = new Map<string, number>()
+
+  constructor() {
+    super();
+    // Prevent MaxListenersExceededWarning when many components subscribe
+    // (e.g., sandbox lifecycle, streaming, agent spawn all listen on "*")
+    if (typeof (this as any).setMaxListeners === 'function') {
+      (this as any).setMaxListeners(100);
+    }
+  }
   
   /**
    * Emit event with persistence

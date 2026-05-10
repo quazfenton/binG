@@ -48,7 +48,7 @@ export default function ChatHistoryModal({
 
   const handleCopyChat = (chat: ChatHistory) => {
     // add Log details about the chat object being processed by the filter
-    const chatText = (chat.messages || []).map((msg) => `${msg.role === "user" ? "You" : "AI"}: ${msg.content}`).join("\n\n")
+    const chatText = (chat.messages || []).map((msg) => `${msg.role === "user" ? "User" : (msg.modelName || "AI")}: ${msg.content}`).join("\n\n")
 
     clipboard.writeText(chatText)
   }

@@ -2227,6 +2227,15 @@ async function runV1ApiWithTools(
 
         // Use full feedback injection module for richer healing context
         const injectedFeedback = injectFeedback(enrichedContext);
+        log.info('[V1-API-WITH-TOOLS] [SelfHeal] Injected feedback for retry', {
+          hasCorrection: !!injectedFeedback.correctionSection,
+          correctionLen: injectedFeedback.correctionSection?.length || 0,
+          hasHealing: !!injectedFeedback.healingInstructions,
+          healingLen: injectedFeedback.healingInstructions?.length || 0,
+          hasFormatGuidance: !!injectedFeedback.formatGuidance,
+          formatLen: injectedFeedback.formatGuidance?.length || 0,
+          feedbackEntryCount: enrichedContext.failures?.length || 0,
+        });
 
         // Build feedback that depends on what went wrong
         let feedbackMsg: string;
@@ -2594,6 +2603,15 @@ async function runV1Orchestrated(
 
     (config as any)._injectedFeedback = injectedFeedback;
     (config as any)._trackerSummary = trackerSummary;
+    log.info('[FirstResponse] Feedback injection stashed on config', {
+      hasCorrection: !!injectedFeedback.correctionSection,
+      correctionLen: injectedFeedback.correctionSection?.length || 0,
+      hasHealing: !!injectedFeedback.healingInstructions,
+      healingLen: injectedFeedback.healingInstructions?.length || 0,
+      hasFormatGuidance: !!injectedFeedback.formatGuidance,
+      formatLen: injectedFeedback.formatGuidance?.length || 0,
+      hasTrackerSummary: !!trackerSummary,
+    });
 
     // ─── First-Response Routing Parsing ───
     const parsedRouting: ParsedRouting = parseFirstResponseRouting(firstResponseContent || content);
@@ -2968,7 +2986,15 @@ async function runV1ApiCompletion(
         const trackerSummary = generateTrackerSummary(sessionId);
         (config as any)._injectedFeedback = injectedFeedback;
         (config as any)._trackerSummary = trackerSummary;
-        log.info('[AutoHealing-Completion] Feedback injection prepared', { hasFeedback: !!injectedFeedback, hasSummary: !!trackerSummary });
+        log.info('[AutoHealing-Completion] Feedback injection prepared', {
+          hasCorrection: !!injectedFeedback.correctionSection,
+          correctionLen: injectedFeedback.correctionSection?.length || 0,
+          hasHealing: !!injectedFeedback.healingInstructions,
+          healingLen: injectedFeedback.healingInstructions?.length || 0,
+          hasFormatGuidance: !!injectedFeedback.formatGuidance,
+          formatLen: injectedFeedback.formatGuidance?.length || 0,
+          hasTrackerSummary: !!trackerSummary,
+        });
         // Also inject feedback into messages for completion path
         if (injectedFeedback || trackerSummary) {
           const feedbackParts = [];

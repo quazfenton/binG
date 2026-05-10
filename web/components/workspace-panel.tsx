@@ -151,7 +151,7 @@ function MessageBubble({ message, isStreaming }: { message: Message; isStreaming
             <MessageSquare className="w-4 h-4 text-blue-400" />
           )}
           <span className="text-xs font-medium text-white/70">
-            {isAssistant ? "Assistant" : "You"}
+            {isAssistant ? "Assistant" : "User"}
           </span>
           {isStreaming && (
             <span className="text-[10px] text-purple-400 animate-pulse">
@@ -1889,7 +1889,7 @@ export function WorkspacePanel() {
 
   const exportChatHistory = useCallback(() => {
     const chatText = chatMessages.map((msg) =>
-      `[${new Date(msg.timestamp).toLocaleString()}] ${msg.role === 'user' ? 'You' : 'Assistant'}: ${msg.content}`
+      `[${new Date(msg.timestamp).toLocaleString()}] ${msg.role === 'user' ? 'User' : (msg.modelName || 'Assistant')}: ${msg.content}`
     ).join('\n\n');
     clipboard.writeText(chatText);
     toast.success("Chat history copied to clipboard");
@@ -1923,7 +1923,7 @@ export function WorkspacePanel() {
 
     const newPost: ForumPost = {
       id: Date.now().toString(),
-      author: isAnonymousPost ? "Anonymous" : "You",
+      author: isAnonymousPost ? "Anonymous" : "User",
       content: newPostContent.trim(),
       timestamp: Date.now(),
       likes: 0,

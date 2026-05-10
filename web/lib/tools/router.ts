@@ -2020,6 +2020,19 @@ export class CapabilityRouter {
   private agency: any = null;
 
   /**
+   * Check if any registered provider supports a given capability.
+   * Used by execute-capability.ts hasToolCapability for routing decisions.
+   */
+  hasCapability(capabilityId: string): boolean {
+    for (const provider of this.providers.values()) {
+      if (provider.capabilities.includes(capabilityId)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
    * Set the bootstrapped agency instance for adaptive routing.
    * When set, the router uses learned capability success rates
    * to influence provider selection.
