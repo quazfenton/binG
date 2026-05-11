@@ -25,7 +25,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import type { IPty } from 'node-pty';
 import { createLogger } from '@/lib/utils/logger';
-import { generateSecureId } from '@/lib/virtual-filesystem/opfs/utils';
+import { generateSecureId } from '@/lib/utils/utils';
 import {
   materializeWorkspace,
   watchWorkspaceForChanges,
@@ -1764,3 +1764,4 @@ export async function GET(req: NextRequest) {
     },
   });
 }
+

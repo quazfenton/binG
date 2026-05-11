@@ -9,7 +9,7 @@
 
 import React from 'react';
 import { useOPFSStatus } from '@/hooks/use-opfs-status';
-import { formatBytes } from '@/lib/virtual-filesystem/opfs/utils';
+import { formatBytes } from '@/lib/utils/utils';
 import {
   Cloud,
   CloudOff,
@@ -286,3 +286,4 @@ export function OPFSNotSupportedBanner() {
 }
 
 export default OPFSStatusIndicator;
+

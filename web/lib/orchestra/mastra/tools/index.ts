@@ -10,7 +10,7 @@
 import { Mastra } from '@mastra/core';
 import { z } from 'zod';
 import { virtualFilesystem } from '@/lib/virtual-filesystem/index.server';
-import { getSandboxProvider, type SandboxProvider } from '@/lib/providers/9router/providers';
+import { getSandboxProvider, type SandboxProvider } from '@/lib/sandbox/providers/sandbox-provider';
 
 // Local tool factory since @mastra/core doesn't export createTool
 interface ToolConfig<T extends z.ZodObject<any>, U extends z.ZodObject<any>> {
@@ -590,3 +590,4 @@ export function getAllToolsWithAgentTools(userId: string = 'anonymous') {
     ...agentTools,
   ];
 }
+

@@ -4,7 +4,7 @@ import * as React from "react"
 import * as SelectPrimitive from "@radix-ui/react-select"
 import { Check, ChevronDown, ChevronUp } from "lucide-react"
 
-import { cn } from '@/lib/virtual-filesystem/opfs/utils'
+import { cn } from '@/lib/utils/utils'
 
 const Select = SelectPrimitive.Root
 
@@ -158,3 +158,4 @@ export {
   SelectScrollUpButton,
   SelectScrollDownButton,
 }
+

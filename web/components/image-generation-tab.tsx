@@ -21,7 +21,7 @@ import {
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
-import { buildApiHeaders } from '@/lib/virtual-filesystem/opfs/utils';
+import { buildApiHeaders } from '@/lib/utils/utils';
 import {
   ImageIcon,
   Sparkles,
@@ -45,7 +45,7 @@ import {
   Copy,
   ImageOff,
 } from "lucide-react";
-import { cn } from '@/lib/virtual-filesystem/opfs/utils';
+import { cn } from '@/lib/utils/utils';
 import { clipboard } from "@bing/platform/clipboard";
 import { useApiKeys } from '@/hooks/use-api-keys';
 import { useBYOKFallback } from '@/hooks/use-byok-fallback';
@@ -1114,3 +1114,4 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
     </>
   );
 }
+

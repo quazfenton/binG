@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Mic, MicOff, Volume2, Settings, Sliders, Cpu, Activity, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useVoiceSettings, useVoiceCapabilities } from "@/lib/voice/use-voice";
-import { cn } from '@/lib/virtual-filesystem/opfs/utils';
+import { cn } from '@/lib/utils/utils';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -289,3 +289,4 @@ export function VoiceToggleButton({ className }: { className?: string }) {
     </TooltipProvider>
   );
 }
+

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 
-import { secureRandomString } from '@/lib/virtual-filesystem/opfs/utils';
+import { secureRandomString } from '@/lib/utils/utils';
 import { setUrl } from '@/lib/vector-memory/store';
 
 export async function POST(req: NextRequest) {
@@ -44,3 +44,4 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Failed to shorten URL' }, { status: 500 });
   }
 }
+

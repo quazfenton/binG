@@ -22,7 +22,7 @@ import type { LLMProviderConfig } from "@/lib/providers/llm-providers-types";
 import { enhancedBufferManager } from "@/lib/streaming/enhanced-buffer-manager";
 import { useStreamingState } from "@/hooks/use-streaming-state";
 import { useAuth } from "@/contexts/auth-context";
-import { generateSecureId, getOrCreateAnonymousSessionId, buildApiHeaders } from '@/lib/virtual-filesystem/opfs/utils';
+import { generateSecureId, getOrCreateAnonymousSessionId, buildApiHeaders } from '@/lib/utils/utils';
 import { generateSessionName, checkFileConflicts } from "@/lib/session/session-naming";
 import { useOrchestrationMode, getOrchestrationModeHeaders } from "@/contexts/orchestration-mode-context";
 import type { OrchestrationMode } from "@/contexts/orchestration-mode-context";
@@ -2291,3 +2291,4 @@ export default function ConversationInterface() {
     </>
   );
 }
+

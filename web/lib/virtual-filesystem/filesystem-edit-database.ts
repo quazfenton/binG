@@ -14,7 +14,7 @@ export const runtime = 'nodejs';
  * - Rollback support
  */
 
-import { getDatabase } from '../../../../database/connection';
+import { getDatabase } from '../database/connection';
 import { execSchemaFile } from '../database/schema';
 import type {
   FilesystemEditTransaction,

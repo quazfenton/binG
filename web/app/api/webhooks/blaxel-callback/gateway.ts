@@ -10,7 +10,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 
-import { verifyBlaxelCallbackFromRequest } from '@/lib/providers/9router/providers';
+import { verifyBlaxelCallbackFromRequest } from '@/lib/sandbox/providers/sandbox-provider';
 
 const CALLBACK_SECRET = process.env.BLAXEL_CALLBACK_SECRET;
 
@@ -120,3 +120,4 @@ export async function GET() {
     verificationMethod: 'HMAC-SHA256 signature in X-Blaxel-Signature header',
   });
 }
+

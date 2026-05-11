@@ -6,10 +6,10 @@ import { streamText, generateText } from 'ai';
 import { createModelWithFallback } from '@/lib/orchestra/stateful-agent/agents/provider-fallback';
 import { runStatefulAgent } from '@/lib/orchestra/stateful-agent/agents/stateful-agent';
 import { runCrewAIWorkflow } from '@/lib/crewai';
-import { getSandboxProvider } from '@/lib/providers/9router/providers';
+import { getSandboxProvider } from '@/lib/sandbox/providers/sandbox-provider';
 import { runAgentLoop } from '@/lib/orchestra/agent-loop';
-import { generateSecureId } from '@/lib/virtual-filesystem/opfs/utils';
-import type { SandboxProviderType } from '@/lib/providers/9router/providers';
+import { generateSecureId } from '@/lib/utils/utils';
+import type { SandboxProviderType } from '@/lib/sandbox/providers/sandbox-provider';
 import { getAllTools } from '@/lib/chat/vercel-ai-tools';
 
 const USE_STATEFUL_AGENT = process.env.USE_STATEFUL_AGENT !== 'false';
@@ -333,3 +333,5 @@ export async function GET() {
     },
   });
 }
+
+

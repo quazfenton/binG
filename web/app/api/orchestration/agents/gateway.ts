@@ -16,7 +16,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
-import { generateSecureId } from '@/lib/virtual-filesystem/opfs/utils';
+import { generateSecureId } from '@/lib/utils/utils';
 import { createLogger } from '@/lib/utils/logger';
 import { getAgentKernel, type AgentConfig, type AgentType, type AgentPriority } from '@bing/shared/agent/agent-kernel';
 
@@ -131,3 +131,4 @@ export async function POST(request: NextRequest) {
     );
   }
 }
+

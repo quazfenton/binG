@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react"
 import FallbackUI from "../../components/fallback-ui"
-import { startCacheCleanup } from "../../lib/cache"
+import { startCacheCleanup } from "../../lib/utils/cache"
 import dynamic from "next/dynamic"
 
 // Dynamically import components to avoid build-time SSR errors

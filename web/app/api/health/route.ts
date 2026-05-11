@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { enhancedLLMService } from "@/lib/chat/enhanced-llm-service";
 import { enhancedAPIClient } from "@/lib/chat/enhanced-api-client";
-import { errorHandler } from '@/lib/utils/error-handler';
+import { getErrorHandler } from '@/lib/utils/error-handler';
 
 export async function GET(request: NextRequest) {
   try {

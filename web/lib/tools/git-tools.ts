@@ -14,7 +14,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { GitManager, type GitStatusResult } from '@bing/shared/agent/git-manager';
-import type { SandboxHandle } from '@/lib/providers/9router/providers';
+import type { SandboxHandle } from '@/lib/sandbox/providers/sandbox-provider';
 import { getGitVFSSync, type GitVFSStatus } from '@/lib/virtual-filesystem/opfs/git-vfs-sync';
 import { ShadowCommitManager, type CommitResult, type CommitHistoryEntry, type TransactionEntry } from '@/lib/orchestra/stateful-agent/commit/shadow-commit';
 import { createLogger } from '@/lib/utils/logger';
@@ -641,4 +641,5 @@ export const standaloneGitTools = {
  */
 export type GitTools = ReturnType<typeof createGitTools>;
 export type StandaloneGitTools = typeof standaloneGitTools;
+
 

@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useState, useRef } from 'react';
 import { opfsAdapter, OPFSAdapter, type SyncStatus, type SyncResult } from '@/lib/virtual-filesystem/opfs/opfs-adapter';
 import { opfsCore, type OPFSStats } from '@/lib/virtual-filesystem/opfs/opfs-core';
-import { formatBytes, getOPFSSupportInfo } from '@/lib/virtual-filesystem/opfs/utils';
+import { formatBytes, getOPFSSupportInfo } from '@/lib/utils/utils';
 
 export interface UseOPFSOptions {
   autoEnable?: boolean;
@@ -369,3 +369,4 @@ export function useOPFS(
     supportInfo,
   };
 }
+

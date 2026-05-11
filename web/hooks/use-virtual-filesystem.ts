@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { getOrCreateAnonymousSessionId, buildApiHeaders, syncAnonymousSessionId } from '@/lib/virtual-filesystem/opfs/utils';
+import { getOrCreateAnonymousSessionId, buildApiHeaders, syncAnonymousSessionId } from '@/lib/utils/utils';
 import { createDebugLogger } from '../.bing-infra-config/config/features';
 import type {
   VirtualFile,
@@ -1152,3 +1152,4 @@ export function useVirtualFilesystem(
     syncWithServer,
   };
 }
+

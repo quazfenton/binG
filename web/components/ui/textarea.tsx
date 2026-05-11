@@ -1,6 +1,6 @@
 import * as React from "react"
 
-import { cn } from '@/lib/virtual-filesystem/opfs/utils'
+import { cn } from '@/lib/utils/utils'
 
 const Textarea = React.forwardRef<
   HTMLTextAreaElement,
@@ -20,3 +20,4 @@ const Textarea = React.forwardRef<
 Textarea.displayName = "Textarea"
 
 export { Textarea }
+

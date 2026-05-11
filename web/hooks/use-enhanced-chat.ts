@@ -6,7 +6,7 @@ import { createNDJSONParser } from '@/lib/utils/ndjson-parser';
 import { enhancedBufferManager } from '@/lib/streaming/enhanced-buffer-manager';
 import type { Message } from '@/types';
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
-import { buildApiHeaders } from '@/lib/virtual-filesystem/opfs/utils';
+import { buildApiHeaders } from '@/lib/utils/utils';
 import type { AgentType, AgentStatus } from '@/components/agent-status-display';
 import { isValidExtractedPath } from '@/lib/chat/file-edit-parser';  // NEW: Server-side validation
 import { useStreamControl } from './use-stream-control';
@@ -2571,3 +2571,4 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
     inputQueue,
   } as unknown as UseChatReturn;
 }
+

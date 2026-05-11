@@ -3,7 +3,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { secureRandom } from '@/lib/virtual-filesystem/opfs/utils';
+import { secureRandom } from '@/lib/utils/utils';
 import { Button } from '../ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
 import { 
@@ -552,3 +552,4 @@ export const PluginManager: React.FC<PluginManagerProps> = ({
 };
 
 export default PluginManager;
+

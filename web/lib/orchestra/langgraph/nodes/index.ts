@@ -9,7 +9,7 @@
 
 import type { AgentStateType } from '../state';
 import { StatefulAgent } from '@/lib/orchestra/stateful-agent/agents/stateful-agent';
-import type { SandboxHandle } from '@/lib/providers/9router/providers';
+import type { SandboxHandle } from '@/lib/sandbox/providers/sandbox-provider';
 
 /**
  * Enhanced error interface for better self-healing
@@ -289,3 +289,4 @@ export function verifierRouter(state: AgentStateType): string {
 export function selfHealingRouter(state: AgentStateType): string {
   return state.next || 'end';
 }
+

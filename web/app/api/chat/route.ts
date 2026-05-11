@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { PROVIDERS } from "@/lib/providers/llm-providers";
-import { errorHandler } from '@/lib/utils/error-handler';
+import { getErrorHandler } from '@/lib/utils/error-handler';
 import { responseRouter } from "@/lib/api/response-router";
 import { resolveRequestAuth } from "@/lib/auth/request-auth";
 import { resolveFilesystemOwner, withAnonSessionCookie } from "@/lib/virtual-filesystem/resolve-filesystem-owner";
 import { detectRequestType } from "@/lib/utils/request-type-detector";
-import { generateSecureId } from '@/lib/virtual-filesystem/opfs/utils';
+import { generateSecureId } from '@/lib/utils/utils';
 import { chatRequestLogger } from '@/lib/chat/chat-request-logger';
 import { chatLogger } from '@/lib/chat/chat-logger';
 import { setMetricsLogger } from '@/lib/observability/metrics';
@@ -51,7 +51,7 @@ import { applyUnifiedDiffToContent } from '@/lib/chat/file-diff-utils';
 import { generateSessionName, sessionNameExists } from '@/lib/session/session-naming';
 import { timingSafeEqual } from 'node:crypto';
 import { buildSupplementalAgenticEvents } from '@/lib/api/streaming-events';
-import { sandboxBridge } from '@/lib/events/trigger/handlers/sandbox';
+import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge';
 import { determineExecutionPolicy } from '@/lib/voice/types';
 import {
   applySearchReplace,
@@ -6006,4 +6006,6 @@ export async function OPTIONS(request: NextRequest) {
     },
   });
 }
+
+
 

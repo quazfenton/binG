@@ -25,7 +25,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "sonner";
-import { cn } from '@/lib/virtual-filesystem/opfs/utils';
+import { cn } from '@/lib/utils/utils';
 import { parseLinks, parseLinksFromFile, type ParsedLink } from '@/lib/utils/link-parser';
 import {
    Link,
@@ -771,3 +771,4 @@ function IntegrationCard({
 }
 
 export default BookmarksCurationPlugin;
+

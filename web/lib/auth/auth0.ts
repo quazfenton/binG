@@ -23,17 +23,17 @@ import { auth0, AUTH0_CONNECTIONS } from './auth0-edge';
 // Node.js modules (crypto, fs, path) in connection.ts are not compatible with Edge
 // Dynamic import to avoid bundling in Edge Runtime
 async function getDatabase() {
-  const dbModule = await import('../../database/connection');
+  const dbModule = await import('@/lib/database/connection');
   return dbModule.getDatabase();
 }
 
 async function encryptApiKey(apiKey: string) {
-  const dbModule = await import('../../database/connection');
+  const dbModule = await import('../database/connection');;
   return dbModule.encryptApiKey(apiKey);
 }
 
 async function decryptApiKey(encryptedData: string) {
-  const dbModule = await import('../../database/connection');
+  const dbModule = await import('../database/connection');;
   return dbModule.decryptApiKey(encryptedData);
 }
 

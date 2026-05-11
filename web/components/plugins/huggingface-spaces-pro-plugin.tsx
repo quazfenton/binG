@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from 'react';
-import { secureRandomInt } from '@/lib/virtual-filesystem/opfs/utils';
+import { secureRandomInt } from '@/lib/utils/utils';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Textarea } from '../ui/textarea';
@@ -841,3 +841,4 @@ export default function HuggingFaceSpacesProPlugin({ onClose }: PluginProps) {
     </div>
   );
 }
+

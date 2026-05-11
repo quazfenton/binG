@@ -23,7 +23,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { useVoiceSettings, useAvailableVoices } from "@/lib/voice/use-voice";
-import { cn } from '@/lib/virtual-filesystem/opfs/utils';
+import { cn } from '@/lib/utils/utils';
 
 interface VoiceMessage {
   id: string;
@@ -348,3 +348,4 @@ export function VoicePanel({ onClose, onTextSubmit }: VoicePanelProps) {
 }
 
 export default VoicePanel;
+

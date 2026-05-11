@@ -23,14 +23,14 @@
  * ```
  */
 
-import { createTerminalLocalFSHandler } from './terminal/terminal-local-fs-handler'
-import { createTerminalInputHandler } from './terminal/terminal-input-handler'
-import { createTerminalEditorHandler } from './terminal/terminal-editor-handler'
+import { createTerminalLocalFSHandler } from './terminal-local-fs-handler'
+import { createTerminalInputHandler } from './terminal-input-handler'
+import { createTerminalEditorHandler } from './terminal-editor-handler'
 import { createSandboxConnectionManager } from '../../sandbox/sandbox-connection-manager'
-import { createTerminalInputBatcher } from '../terminal/terminal-input-batcher'
-import { createTerminalHealthMonitor } from '../terminal/terminal-health-monitor'
+import { createTerminalInputBatcher } from '../terminal-input-batcher'
+import { createTerminalHealthMonitor } from '../terminal-health-monitor'
 import { createTerminalStateManager } from '../session/terminal-state-manager'
-import { createTerminalUIManager } from '../terminal/terminal-ui-manager'
+import { createTerminalUIManager } from '../terminal-ui-manager'
 
 export interface TerminalHandlerWiringConfig {
   // Terminal identification

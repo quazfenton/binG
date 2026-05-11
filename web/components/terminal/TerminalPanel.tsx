@@ -11,7 +11,7 @@ import {
 import { toast } from 'sonner';
 import { motion } from 'framer-motion';
 import { saveTerminalSession, getTerminalSessions, addCommandToHistory } from '@/lib/terminal/terminal-storage';
-import { secureRandom, generateSecureId } from '@/lib/virtual-filesystem/opfs/utils';
+import { secureRandom, generateSecureId } from '@/lib/utils/utils';
 import { checkCommandSecurity, formatSecurityWarning, detectObfuscation, DEFAULT_SECURITY_CONFIG } from '@/lib/terminal/security/terminal-security';
 import { createLogger } from '@/lib/utils/logger';
 import { useVirtualFilesystem } from '@/hooks/use-virtual-filesystem';
@@ -2724,3 +2724,4 @@ export default function TerminalPanel({
     </motion.div>
   );
 }
+

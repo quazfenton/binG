@@ -819,7 +819,7 @@ export class OpencodeV2Provider implements LLMProvider {
    */
   private async translateNaturalLanguageToCommand(task: string, cwd: string): Promise<string> {
     // Import the shared workspace detection module
-    const { buildProjectContext, translateNaturalLanguageToCommand: translateNL } = await import('../../../drivers/opencode/workspace-detection');
+    const { buildProjectContext, translateNaturalLanguageToCommand: translateNL } = await import('@/lib/context/project-detection');
 
     // Get file listing from the cwd directory for workspace detection
     try {

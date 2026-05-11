@@ -1,4 +1,4 @@
-import { cn } from '@/lib/virtual-filesystem/opfs/utils'
+import { cn } from '@/lib/utils/utils'
 
 function Skeleton({
   className,
@@ -13,3 +13,4 @@ function Skeleton({
 }
 
 export { Skeleton }
+

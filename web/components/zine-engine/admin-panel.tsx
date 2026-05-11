@@ -22,7 +22,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
-import { cn } from '@/lib/virtual-filesystem/opfs/utils';
+import { cn } from '@/lib/utils/utils';
 import type { DataSource, ZineTemplate, ZineContent, LayoutStyle, AnimationStyle } from "./index";
 import { createDataSource } from "./data-sources";
 
@@ -799,3 +799,4 @@ function getSourceIcon(type: string) {
 }
 
 export default ZineAdminPanel;
+

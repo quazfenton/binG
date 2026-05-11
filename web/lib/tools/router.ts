@@ -73,7 +73,7 @@ class VFSProvider implements CapabilityProvider {
 
   private readonly methods: Record<string, (ownerId: string, input: any, context: ToolExecutionContext) => Promise<any>> = {
     'file.read': async (ownerId, input, context) => {
-      const { virtualFilesystem } = await import('../../virtual-filesystem/virtual-filesystem-service');
+      const { virtualFilesystem } = await import('../virtual-filesystem/virtual-filesystem-service');
       const file = await virtualFilesystem.readFile(ownerId, input.path);
       return {
         content: file.content,
@@ -86,7 +86,7 @@ class VFSProvider implements CapabilityProvider {
     },
 
     'file.write': async (ownerId, input, context) => {
-      const { virtualFilesystem } = await import('../../virtual-filesystem/virtual-filesystem-service');
+      const { virtualFilesystem } = await import('../virtual-filesystem/virtual-filesystem-service');
       const file = await virtualFilesystem.writeFile(
         ownerId,
         input.path,
@@ -127,7 +127,7 @@ class VFSProvider implements CapabilityProvider {
     },
 
     'file.append': async (ownerId, input, context) => {
-      const { virtualFilesystem } = await import('../../virtual-filesystem/virtual-filesystem-service');
+      const { virtualFilesystem } = await import('../virtual-filesystem/virtual-filesystem-service');
       const file = await virtualFilesystem.writeFile(
         ownerId,
         input.path,
@@ -139,13 +139,13 @@ class VFSProvider implements CapabilityProvider {
     },
 
     'file.delete': async (ownerId, input, context) => {
-      const { virtualFilesystem } = await import('../../virtual-filesystem/virtual-filesystem-service');
+      const { virtualFilesystem } = await import('../virtual-filesystem/virtual-filesystem-service');
       const result = await virtualFilesystem.deletePath(ownerId, input.path);
       return { deletedCount: result.deletedCount, path: input.path };
     },
 
     'file.list': async (ownerId, input, context) => {
-      const { virtualFilesystem } = await import('../../virtual-filesystem/virtual-filesystem-service');
+      const { virtualFilesystem } = await import('../virtual-filesystem/virtual-filesystem-service');
       const listing = await virtualFilesystem.listDirectory(ownerId, input.path || 'workspace');
       return {
         path: listing.path,
@@ -194,7 +194,7 @@ class VFSProvider implements CapabilityProvider {
     },
 
     'memory.context': async (ownerId) => {
-      const { virtualFilesystem } = await import('../../virtual-filesystem/virtual-filesystem-service');
+      const { virtualFilesystem } = await import('../virtual-filesystem/virtual-filesystem-service');
       const workspace = await virtualFilesystem.exportWorkspace(ownerId);
       return {
         root: workspace.root,
@@ -577,8 +577,8 @@ class OpenCodeV2Provider implements CapabilityProvider {
         let smartContextMd = '';
         let projectRoot = '';
         try {
-          const { buildProjectContext, formatSmartContextAsMarkdown } = await import('../../drivers/opencode/workspace-detection');
-          const { virtualFilesystem } = await import('../../virtual-filesystem/virtual-filesystem-service');
+          const { buildProjectContext, formatSmartContextAsMarkdown } = await import('@/lib/context/project-detection');
+          const { virtualFilesystem } = await import('../virtual-filesystem/virtual-filesystem-service');
           const ownerId = context.userId || 'default';
           const workspace = await virtualFilesystem.exportWorkspace(ownerId);
           const filePaths = workspace.files.map(f => f.path);
@@ -607,7 +607,7 @@ class OpenCodeV2Provider implements CapabilityProvider {
         let resolvedCwd: string | undefined;
         if (input.cwd) {
           try {
-            const { resolveVfsPathToRealPath } = await import('../../drivers/opencode/workspace-detection');
+            const { resolveVfsPathToRealPath } = await import('@/lib/context/project-detection');
             resolvedCwd = resolveVfsPathToRealPath(input.cwd, session.workspacePath || process.cwd());
           } catch {
             resolvedCwd = input.cwd;
@@ -1910,7 +1910,7 @@ class TerminalProvider implements CapabilityProvider {
         stopProcess,
         listProcesses,
         getPortStatus,
-      } = await import('./terminal/terminal');
+      } = await import('../terminal/terminal');
 
       const userId = context.userId || 'default';
 

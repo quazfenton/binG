@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 
 import { authService } from '@/lib/auth/auth-service';
-import { rateLimitMiddleware } from '@/lib/utils/rate-limiter';
+import { createRateLimitMiddleware } from '@/lib/utils/rate-limiter';
 import { generateCsrfToken, setCsrfCookie } from '@/lib/auth/csrf';
 import { generateMfaToken } from '@/lib/auth/jwt';
 

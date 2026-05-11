@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { blockSensitiveFiles } from './lib/security/file-access-blocker';
 import { generateAndStoreNonces, generateCspHeader } from './lib/security/nonce-generator';
-import { auth0 } from '../lib/auth/auth0-edge';
+import { auth0 } from '@/lib/auth/auth0';
 import { checkRateLimitMiddleware } from './lib/middleware/rate-limit';
 import { rateLimitMiddleware as authRateLimit, RATE_LIMIT_CONFIGS } from './lib/middleware/rate-limiter';
 

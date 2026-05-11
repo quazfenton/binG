@@ -23,7 +23,7 @@ import { SpecAmplificationProgress, DAGProgressDisplay } from "@/components/spec
 import { normalizeToolInvocations } from "@/lib/types/tool-invocation"
 import { useReasoningStream } from "@/hooks/use-reasoning-stream"
 import { toast } from "sonner"
-import { buildApiHeaders } from '@/lib/virtual-filesystem/opfs/utils'
+import { buildApiHeaders } from '@/lib/utils/utils'
 import {
   extractReasoningContent,
   sanitizeAssistantDisplayContent,
@@ -1474,3 +1474,4 @@ export default function MessageBubble({
     </div>
   )
 }
+

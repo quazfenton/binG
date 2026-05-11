@@ -17,7 +17,7 @@ import {
   parseMCPURL,
   registerHTTPTransport,
 } from '@/lib/mcp/http-transport'
-import { mcpToolRegistry } from '@/lib/tools/registry'
+import { ToolRegistry } from '@/lib/tools/registry'
 import type { MCPServerConfig } from '@/lib/voice/types'
 
 const logger = createLogger('MCP-Connect')

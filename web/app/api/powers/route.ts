@@ -12,7 +12,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { createLogger } from '@/lib/utils/logger';
 import { ToolRegistry } from '@/lib/tools/registry';
-import { powersRegistry } from '@/lib/powers';
+import { powersRegistry } from '@/lib/powers/index';
 
 const logger = createLogger('API:Powers');
 

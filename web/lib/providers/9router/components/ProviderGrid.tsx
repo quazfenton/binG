@@ -5,7 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { ProviderConnectButton } from "./ProviderConnectButton"
-import { getAllProviders } from "@/lib/providers/9router/providers"
+import { getAllProviders } from "@/lib/sandbox/providers/sandbox-provider"
 import { getUserRouterConnections, revokeUserRouterConnection, isTokenExpiringSoon } from "@/lib/providers/9router/token-store"
 import type { OAuthConnection } from "@/lib/auth/oauth-service"
 
@@ -334,3 +334,4 @@ export function ProviderGridCompact({
     </div>
   )
 }
+

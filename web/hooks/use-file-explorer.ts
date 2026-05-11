@@ -28,7 +28,7 @@
 
 import { useState, useCallback } from 'react';
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
-import { buildApiHeaders } from '@/lib/virtual-filesystem/opfs/utils';
+import { buildApiHeaders } from '@/lib/utils/utils';
 
 export interface FileOperationResult {
   success: boolean;
@@ -423,3 +423,4 @@ export function useFileExplorer() {
     isOperating,
   };
 }
+

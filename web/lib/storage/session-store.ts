@@ -1,4 +1,4 @@
-import type { WorkspaceSession } from '../../../sandbox/types'
+import type { WorkspaceSession } from '../sandbox/types'
 import type BetterSqlite3 from 'better-sqlite3'
 import { createLogger } from '@/lib/utils/logger'
 import { compress, decompress, isCompressed } from '@/lib/utils/compression'

@@ -18,7 +18,7 @@ import {
 import {
   getProjectSymbols,
 } from "../memory/vectorStore";
-import { virtualFilesystem } from "../../../virtual-filesystem/virtual-filesystem-service";
+import { virtualFilesystem } from '../virtual-filesystem/virtual-filesystem-service';
 import { createLogger } from "@/lib/utils/logger";
 
 const logger = createLogger("HybridRetrieval");
@@ -53,7 +53,7 @@ async function getCachedProjectAnalysis(
   }
 
   try {
-    const { analyzeProject } = await import('@/lib/tools/project-analysis/workspace-analysis');
+    const { analyzeProject } = await import('@/lib/tools/project-analysis');
     const analysis = await analyzeProject(userId, { depth: 1 });
 
     let result = '';

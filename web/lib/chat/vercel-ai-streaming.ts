@@ -1539,7 +1539,7 @@ export async function* streamWithVercelAI(
           });
 
           try {
-            const { getVercelModel } = await import('../streaming/vercel-ai-streaming');
+            const { getVercelModel } = await import('./vercel-ai-streaming');
             const currentEnv: any = typeof process !== 'undefined' ? process.env : {};
             const apiKey = currentEnv[`${betterModel.provider.toUpperCase()}_API_KEY`];
             const baseURL = currentEnv[`${betterModel.provider.toUpperCase()}_BASE_URL`];
@@ -1727,7 +1727,7 @@ ${healingInstructions}` : healingInstructions)
       let fallbackModel: any;
       try {
         // Use the centralized provider registry instead of hardcoded factory calls
-        const { getVercelModel } = await import('../streaming/vercel-ai-streaming');
+        const { getVercelModel } = await import('./vercel-ai-streaming');
 
         // Construct the key/URL dynamically using the same logic as the primary request
         const apiKey = currentEnv[`${fallbackProviderName.toUpperCase()}_API_KEY`];

@@ -17,7 +17,7 @@ import path from 'path';
 import fs from 'fs/promises';
 import { existsSync } from 'fs';
 import { spawn } from 'child_process';
-import { generateSecureId } from '@/lib/virtual-filesystem/opfs/utils';
+import { generateSecureId } from '@/lib/utils/utils';
 import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-service';
 import { resolveFilesystemOwnerWithFallback } from '@/app/api/filesystem/utils';
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
@@ -1038,3 +1038,4 @@ export async function POST(request: NextRequest) {
     }, { status: 500 });
   }
 }
+

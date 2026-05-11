@@ -3,7 +3,7 @@
 import React, { useState, useCallback } from 'react';
 import { toast } from 'sonner';
 import { clipboard } from '@bing/platform/clipboard';
-import { secureRandomString } from '@/lib/virtual-filesystem/opfs/utils';
+import { secureRandomString } from '@/lib/utils/utils';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Textarea } from '../ui/textarea';
@@ -686,3 +686,4 @@ export const UrlUtilitiesPlugin: React.FC<PluginProps> = ({
 };
 
 export default UrlUtilitiesPlugin;
+

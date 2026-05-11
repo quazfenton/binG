@@ -13,7 +13,7 @@
  * - Health checking for provider availability
  */
 
-import type { ToolResult } from '../../../../../sandbox/types';
+import type { ToolResult } from '../sandbox/types';
 import type { LLMProvider } from '../sandbox/providers/llm-provider';
 import { getLLMProvider } from '../sandbox/providers/llm-factory';
 import { getCircuitStateName } from '../middleware/circuit-breaker';
@@ -1559,7 +1559,7 @@ async function runProgressiveBuildMode(
   // Import and run the progressive build engine
   let buildResult: any;
   try {
-    const { runProgressiveBuild, BuildPresets } = await import('../../engineers/progressive-build-engine');
+    const { runProgressiveBuild, BuildPresets } = await import('../engineers/progressive-build-engine');
 
     // Use balanced preset as base, override with user config
     const preset = buildConfig.contextMode === 'tree' ? BuildPresets.fast
@@ -1597,7 +1597,7 @@ async function runProgressiveBuildMode(
           };
         } catch {
           // Fall back to default reflection
-          const { defaultReflectionFn } = await import('../../engineers/progressive-build-engine');
+          const { defaultReflectionFn } = await import('../engineers/progressive-build-engine');
           return defaultReflectionFn(llmCallFn, userPrompt, tree, lastResponse);
         }
       } : false,

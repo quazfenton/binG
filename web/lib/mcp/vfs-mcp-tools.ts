@@ -23,7 +23,7 @@
 import { z } from 'zod';
 import { tool } from 'ai';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { virtualFilesystem } from '../../../../virtual-filesystem/virtual-filesystem-service';
+import { virtualFilesystem } from '../virtual-filesystem/virtual-filesystem-service';
 import { emitFileEvent, emitBatchFileEvents } from '../virtual-filesystem/file-events';
 import { createLogger } from '../utils/logger';
 import { tolerantJsonParse, sanitizeJsonString, findBalancedJsonObject } from '../utils/json-tolerant';
