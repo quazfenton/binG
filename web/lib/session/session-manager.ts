@@ -18,7 +18,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { createLogger } from '../utils/logger';
 import type { ExecutionPolicy } from '../sandbox/types';
-import { registerActiveSession, unregisterActiveSession } from '../session-naming';
+import { registerActiveSession, unregisterActiveSession } from './session-naming';
 import {
   getExecutionPolicyConfig,
   requiresCloudSandbox,
@@ -814,7 +814,7 @@ export class SessionManager {
         // Session key format: "userId$conversationId" (modern) or "userId:conversationId" (legacy)
         // SECURITY: Use indexOf (FIRST separator) not lastIndexOf, because:
         // - userId is system-controlled and NEVER contains $ or :
-        // - conversationId MAY contain user-provided $ or : (e.g., folder named "my$project")
+        // - conversationId MAY contain user-provided $ or : (e.g., folder named "my$workspace")
         // - The FIRST separator is always our system separator
         const dollarIndex = key.indexOf('$');
         const colonIndex = key.indexOf(':');
@@ -1050,7 +1050,7 @@ export class SessionManager {
         // Session key format: "userId$conversationId" (modern) or "userId:conversationId" (legacy)
         // SECURITY: Use indexOf (FIRST separator) not lastIndexOf, because:
         // - userId is system-controlled and NEVER contains $ or :
-        // - conversationId MAY contain user-provided $ or : (e.g., folder named "my$project")
+        // - conversationId MAY contain user-provided $ or : (e.g., folder named "my$workspace")
         // - The FIRST separator is always our system separator
         const dollarIndex = key.indexOf('$');
         const colonIndex = key.indexOf(':');

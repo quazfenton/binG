@@ -250,7 +250,7 @@ export class BootstrappedAgency {
    * capability inputs. The LLM is expected to do this when calling the
    * capability directly — this is a fallback for agency auto-execution.
    *
-   * Uses project-detection module to detect framework, package manager,
+   * Uses workspace-detection module to detect framework, package manager,
    * and translate NL commands appropriately.
    */
   private async buildCapabilityInput(capabilityId: string, task: string): Promise<any> {
@@ -264,10 +264,10 @@ export class BootstrappedAgency {
     const urlMatch = task.match(/https?:\/\/[^\s"'<>]+/);
     const extractedUrl = urlMatch?.[0] ?? null;
 
-    // Note: Full project detection (framework, package manager, NL→command translation)
+    // Note: Full workspace detection (framework, package manager, NL→command translation)
     // happens in the capability router (web/lib/tools/router.ts). The agency uses a
     // simple fallback here to avoid cross-package imports from packages/shared → web/lib.
-    // The router will handle project detection when the capability is actually executed.
+    // The router will handle workspace detection when the capability is actually executed.
 
     switch (capabilityId) {
       case 'file.read':

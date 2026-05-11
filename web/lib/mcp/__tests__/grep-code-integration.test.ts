@@ -14,14 +14,14 @@ vi.mock('../../virtual-filesystem/virtual-filesystem-service', () => ({
     vfs: {
       ensureWorkspace: vi.fn(async () => ({
         files: new Map([
-          ['project/src/index.ts', {
-            path: 'project/src/index.ts',
+          ['workspace/src/index.ts', {
+            path: 'workspace/src/index.ts',
             content: 'import React from "react";\n\nfunction App() {\n  return <div>Hello World</div>;\n}\n\nexport default App;',
             language: 'typescript',
             lastModified: new Date().toISOString(),
           }],
-          ['project/src/utils.ts', {
-            path: 'project/src/utils.ts',
+          ['workspace/src/utils.ts', {
+            path: 'workspace/src/utils.ts',
             content: 'export function hello() {\n  console.log("Hello");\n}\n\nexport function world() {\n  console.log("World");\n}',
             language: 'typescript',
             lastModified: new Date().toISOString(),
@@ -74,7 +74,7 @@ describe('grep_code tool integration', () => {
       
       // Verify path is VFS-normalized (no leading slash, forward slashes)
       expect(match.path).not.toMatch(/^\//);
-      expect(match.path).toMatch(/^project\//);
+      expect(match.path).toMatch(/^workspace\//);
     }
   });
 

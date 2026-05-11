@@ -32,7 +32,7 @@ const readRequestSchema = z.object({
   path: pathSchema.refine(
     (path) => {
       if (!path.startsWith('/')) return true;
-      return path.startsWith('/home/') || path.startsWith('/workspace/') || path.startsWith('/tmp/') || path.startsWith('/project/');
+      return path.startsWith('/home/') || path.startsWith('/workspace/') || path.startsWith('/tmp/') || path.startsWith('/workspace/');
     },
     'Invalid path format'
   ),
@@ -49,7 +49,7 @@ function validateReadPath(rawPath: string): string | null {
   if (!path || path.length < 2) return null;
   
   // CRITICAL: Check the last segment of the path (the actual filename)
-  // This catches "project/sessions/002/0.3s" where "0.3s" is the invalid part
+  // This catches "workspace/sessions/002/0.3s" where "0.3s" is the invalid part
   const pathSegments = path.split('/');
   const lastSegment = pathSegments[pathSegments.length - 1] || path;
 

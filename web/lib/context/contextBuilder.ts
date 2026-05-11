@@ -315,7 +315,7 @@ ${userMessage}`;
  * Adapts instructions based on the context format.
  */
 export function buildContextSystemPrompt(projectName?: string, format?: ContextFormat): string {
-  const project = projectName ? ` for the "${projectName}" project` : '';
+  const workspace = projectName ? ` for the "${projectName}" workspace` : '';
 
   const contextInstructions: Record<ContextFormat, string> = {
     json: 'Use the provided JSON context object which contains relevant code symbols retrieved from the codebase, ranked by relevance score.',
@@ -326,7 +326,7 @@ export function buildContextSystemPrompt(projectName?: string, format?: ContextF
 
   const instruction = contextInstructions[format || 'json'];
 
-  return `You are an expert coding assistant${project}.
+  return `You are an expert coding assistant${workspace}.
 
 When answering, ${instruction}
 

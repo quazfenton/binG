@@ -90,7 +90,7 @@ async function createRetrieval(projectPath: string): Promise<Retrieval> {
   return retrieval;
 }
 
-// ─── 2. Index a project ───────────────────────────────────────────────────────
+// ─── 2. Index a workspace ───────────────────────────────────────────────────────
 
 async function indexProject(retrieval: Retrieval, projectPath: string) {
   let files: Array<{ path: string; content: string }>;
@@ -104,7 +104,7 @@ async function indexProject(retrieval: Retrieval, projectPath: string) {
     files = []; // populate from your file store
   }
 
-  const results = await trace("index-project", () =>
+  const results = await trace("index-workspace", () =>
     retrieval.indexFiles(files, {
       onProgress: (done, total, current) => {
         console.log(`Indexing: ${done}/${total} — ${current}`);
@@ -224,7 +224,7 @@ export async function runExample() {
   // 1. Create Retrieval
   const retrieval = await createRetrieval(projectPath);
 
-  // 2. Index project
+  // 2. Index workspace
   await indexProject(retrieval, projectPath);
 
   // 3. Start file watcher (desktop only)

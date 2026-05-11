@@ -1,7 +1,7 @@
 /**
  * file-watcher-reindex.ts — Auto-reindex when files change
  *
- * Watches a project directory for file changes and triggers incremental
+ * Watches a workspace directory for file changes and triggers incremental
  * reindexing of changed files only (SHA-256 hash check skips unchanged files).
  *
  * On web: no-op (file watching requires desktop).
@@ -19,9 +19,9 @@ import { createLogger } from "@/lib/utils/logger";
 const logger = createLogger("FileWatcherReindex");
 
 export interface WatcherReindexOptions {
-  /** Project root path to watch */
+  /** Workspace root path to watch */
   projectPath: string;
-  /** Project ID for indexer */
+  /** Workspace ID for indexer */
   projectId: string;
   /** File extensions to watch (default: code files) */
   extensions?: string[];
@@ -39,7 +39,7 @@ export interface WatcherHandle {
 }
 
 /**
- * Watch a project directory and auto-reindex changed files.
+ * Watch a workspace directory and auto-reindex changed files.
  * Returns a handle to stop watching.
  */
 export function watchAndReindex(
@@ -54,7 +54,7 @@ export function watchAndReindex(
     onError,
   } = opts;
 
-  // Create a single indexer for this project
+  // Create a single indexer for this workspace
   const indexer = new ProjectIndexer(projectId);
 
   // Debounce: batch rapid file changes

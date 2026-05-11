@@ -8,7 +8,7 @@
  * - 15+ editable craft components (Container, Text, Button, Image, Input, Card, Badge, Divider, Icon, Hero, NavBar, Grid, Form, Video, Code)
  * - Live CSS inspector panel (all box-model, typography, background, border, effects)
  * - Component template library sourced from community patterns
- * - Craft.js nodes → JSX string export (writes back to project files)
+ * - Craft.js nodes → JSX string export (writes back to workspace files)
  * - Split mode: visual canvas + live code editor side by side
  * - Layers panel (Craft.js built-in Tree)
  * - Viewport switcher (desktop / tablet / mobile)
@@ -24,7 +24,7 @@
  *
  * KNOWN LIMITATIONS:
  * - Craft.js Resolver Gap: CLI-installed components (HeroUI, shadcn, etc.) are installed into
- *   project files but NOT available in the Craft.js drag-and-drop palette. The Craft resolver
+ *   workspace files but NOT available in the Craft.js drag-and-drop palette. The Craft resolver
  *   only contains built-in craft components. Use CLI installer to add dependencies, then use
  *   Craft components for visual prototyping. Exported JSX will reference installed components.
  * - JSX Parser: Handles inline styles AND Tailwind classes. Complex CSS-in-JS (styled-components,
@@ -5955,7 +5955,7 @@ function CanvasPane({
 // ─────────────────────────────────────────────────────────────────────────────
 
 interface VisualEditorMainProps {
-  project: VFSProject;
+  workspace: VFSProject;
   onSave: (updatedFiles: Record<string, string>) => void;
   onReturn: () => void;
   isSaving: boolean;
@@ -5963,7 +5963,7 @@ interface VisualEditorMainProps {
 }
 
 export function VisualEditorMain({
-  project,
+  workspace,
   onSave,
   onReturn,
   isSaving,
@@ -5971,7 +5971,7 @@ export function VisualEditorMain({
 }: VisualEditorMainProps) {
   const [editorMode, setEditorMode] = useState<"design" | "code" | "split">("design");
   const [viewport, setViewport] = useState<"desktop" | "tablet" | "mobile">("desktop");
-  const [files, setFiles] = useState<Record<string, string>>(project.files);
+  const [files, setFiles] = useState<Record<string, string>>(workspace.files);
   const [showLayers, setShowLayers] = useState(true);
   const [showProps, setShowProps] = useState(true);
   const [showComponents, setShowComponents] = useState(true);
@@ -5982,7 +5982,7 @@ export function VisualEditorMain({
 
   // Parse JSX files to create initial Craft.js nodes
   const initialNodes = useMemo(() => {
-    const mainJSX = findMainJSXFile(project.files);
+    const mainJSX = findMainJSXFile(workspace.files);
     if (mainJSX) {
       try {
         return jsxToCraftNodes(mainJSX);
@@ -5991,7 +5991,7 @@ export function VisualEditorMain({
       }
     }
     return undefined;
-  }, [project.files]);
+  }, [workspace.files]);
 
   // We keep a ref to the Craft serialised JSON so the toolbar can read it on save
   const craftJsonRef = useRef<Record<string, unknown>>({});
@@ -6006,7 +6006,7 @@ export function VisualEditorMain({
   const handleSave = useCallback(() => {
     log('[handleSave] triggered');
     
-    // Serialize craft nodes → JSX and inject into project files
+    // Serialize craft nodes → JSX and inject into workspace files
     const craftNodes = craftJsonRef.current;
     log(`[handleSave] editorMode="${editorMode}", craftNodesCount=${Object.keys(craftNodes || {}).length}`);
 
@@ -6029,7 +6029,7 @@ export function VisualEditorMain({
     // For code mode without craft nodes, use existing file content
 
     // Find the main entry file to update
-    const preferredEntry = (project as any).entryFile || '';
+    const preferredEntry = (workspace as any).entryFile || '';
     const allFileKeys = Object.keys(files);
     log(`[handleSave] available files: [${allFileKeys.join(', ')}], preferredEntry="${preferredEntry}"`);
     
@@ -6050,7 +6050,7 @@ export function VisualEditorMain({
     }
 
     // Dispatch VFS save event for code-preview-panel to receive
-    const filesystemScopePath = (project as any).filesystemScopePath || 'project';
+    const filesystemScopePath = (workspace as any).filesystemScopePath || 'workspace';
     log(`[handleSave] dispatching VFS_SAVE event, scope="${filesystemScopePath}", files=[${Object.keys(updatedFiles).join(', ')}]`);
     
     const message = {
@@ -6063,7 +6063,7 @@ export function VisualEditorMain({
 
     onSave(updatedFiles);
     log(`[handleSave] completed`);
-  }, [files, onSave, editorMode, project]);
+  }, [files, onSave, editorMode, workspace]);
 
   // Figma import handler
   const handleFigmaImport = useCallback(async () => {
@@ -6194,7 +6194,7 @@ export function VisualEditorMain({
           onReturn={onReturn}
           isSaving={isSaving}
           saveStatus={saveStatus}
-          projectName={project.name ?? "Untitled"}
+          projectName={workspace.name ?? "Untitled"}
           onFigmaImport={handleFigmaImport}
           onFigmaExport={handleFigmaExport}
         />
@@ -6207,7 +6207,7 @@ export function VisualEditorMain({
               showComponents ? "w-56" : "w-0 border-r-0"
             }`}
           >
-            {editorMode !== "code" && <ComponentLibrary projectPath={(project as Record<string, string>).filesystemScopePath ?? ""} />}
+            {editorMode !== "code" && <ComponentLibrary projectPath={(workspace as Record<string, string>).filesystemScopePath ?? ""} />}
           </div>
 
           {/* ── CENTER ── */}
@@ -6333,8 +6333,8 @@ export function VisualEditorMain({
         {/* ── STATUS BAR ── */}
         <div className="h-6 bg-[#161b22] border-t border-[#30363d] flex items-center justify-between px-4 text-[10px] text-[#484f58] flex-shrink-0">
           <div className="flex items-center gap-4">
-            <span>{project.framework}</span>
-            <span>{project.name}</span>
+            <span>{workspace.framework}</span>
+            <span>{workspace.name}</span>
             <span>{Object.keys(files).length} files</span>
           </div>
           <div className="flex items-center gap-3">

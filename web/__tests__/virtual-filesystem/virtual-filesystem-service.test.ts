@@ -11,7 +11,7 @@ import { VirtualFilesystemService } from '@/lib/virtual-filesystem/virtual-files
 describe('VirtualFilesystemService', () => {
   let vfs: VirtualFilesystemService;
   const testUserId = 'test_user_' + Date.now();
-  const testWorkspace = 'project';
+  const testWorkspace = 'workspace';
 
   beforeEach(() => {
     vfs = new VirtualFilesystemService(testWorkspace);
@@ -261,10 +261,10 @@ describe('VirtualFilesystemService', () => {
 
     it('should allow relative paths when workspaceRoot is empty (browser context)', () => {
       // When workspaceRoot is empty (no Tauri config in browser), the isWithin
-      // check should not reject valid relative paths like project/sessions/001
+      // check should not reject valid relative paths like workspace/sessions/001
       const vfsEmptyRoot = new VirtualFilesystemService('');
-      expect(vfsEmptyRoot.normalizePath('project/sessions/001')).toBe('project/sessions/001');
-      expect(vfsEmptyRoot.normalizePath('project/sessions/002/src/app.ts')).toBe('project/sessions/002/src/app.ts');
+      expect(vfsEmptyRoot.normalizePath('workspace/sessions/001')).toBe('workspace/sessions/001');
+      expect(vfsEmptyRoot.normalizePath('workspace/sessions/002/src/app.ts')).toBe('workspace/sessions/002/src/app.ts');
       expect(vfsEmptyRoot.normalizePath('src/index.ts')).toBe('src/index.ts');
     });
 
@@ -353,7 +353,7 @@ describe('VirtualFilesystemService', () => {
       await vfs.writeFile(testUserId, 'src/index.ts', 'export const app = "test";');
       await vfs.writeFile(testUserId, 'src/utils.ts', 'export const util = "helper";');
       await vfs.writeFile(testUserId, 'test/index.test.ts', 'import { app } from "../src/index";');
-      await vfs.writeFile(testUserId, 'README.md', '# Test Project');
+      await vfs.writeFile(testUserId, 'README.md', '# Test Workspace');
     });
 
     it.skip('should search by filename pattern', async () => {
@@ -373,7 +373,7 @@ describe('VirtualFilesystemService', () => {
     });
 
     it('should respect path filter', async () => {
-      const result = await vfs.search(testUserId, 'test', { path: 'project/src' });
+      const result = await vfs.search(testUserId, 'test', { path: 'workspace/src' });
 
       // All results should be within the filtered path
       expect(result.files.every(r => r.path.includes('src') || r.path.includes('test'))).toBe(true);
@@ -395,7 +395,7 @@ describe('VirtualFilesystemService', () => {
   describe('Error Handling', () => {
     it('should handle empty path by defaulting to workspace', async () => {
       const result = await vfs.writeFile(testUserId, '', 'content');
-      expect(result.path).toBe('project');
+      expect(result.path).toBe('workspace');
       expect(result.content).toBe('content');
     });
 

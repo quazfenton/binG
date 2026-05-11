@@ -54,7 +54,7 @@ export default function GitHubImport({ onImportComplete }: GitHubImportProps) {
   const [importProgress, setImportProgress] = useState<{ current: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const vfs = useVirtualFilesystem('project');
+  const vfs = useVirtualFilesystem('workspace');
 
   useEffect(() => {
     checkConnection();

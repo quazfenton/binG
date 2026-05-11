@@ -520,7 +520,7 @@ class EnhancedStreamingManager extends EventEmitter {
   }
 
   /**
-   * Build context windows from task and project files
+   * Build context windows from task and workspace files
    */
   private async buildContextWindows(
     task: string,
@@ -558,7 +558,7 @@ class EnhancedStreamingManager extends EventEmitter {
       metadata: { type: "task", structure: "enhanced" },
     });
 
-    // Project files context with intelligent selection
+    // Workspace files context with intelligent selection
     const relevantFiles = this.selectRelevantFiles(projectFiles, task, contextHints);
     
     for (const file of relevantFiles) {

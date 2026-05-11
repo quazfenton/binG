@@ -173,7 +173,7 @@ class AdvancedFileManager extends EventEmitter {
   }
 
   /**
-   * Register a new project file with the manager
+   * Register a new workspace file with the manager
    */
   async registerFile(projectItem: ProjectItem): Promise<void> {
     const fileState: FileState = {

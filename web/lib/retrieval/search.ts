@@ -298,7 +298,7 @@ export async function search(
     };
   }
 
-  // 2. Load all symbols for this project
+  // 2. Load all symbols for this workspace
   const allSymbols = cachedSymbols ?? (await getProjectSymbols(projectId));
 
   if (allSymbols.length === 0) {

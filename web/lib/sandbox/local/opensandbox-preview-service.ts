@@ -1,7 +1,7 @@
 /**
  * OpenSandbox Preview Service
  *
- * Provides live preview capability by deploying project files into an
+ * Provides live preview capability by deploying workspace files into an
  * OpenSandbox container, installing dependencies, starting a dev server,
  * and returning the preview URL.
  *
@@ -252,7 +252,7 @@ export class OpenSandboxPreviewService {
 
       const sandboxId = `osb-preview-${serverId}`
 
-      // Write all project files with path traversal and shell injection protection
+      // Write all workspace files with path traversal and shell injection protection
       let filesWritten = 0
       for (const [filePath, content] of Object.entries(req.files)) {
         // SECURITY: Sanitize file path to prevent traversal

@@ -262,7 +262,7 @@ ${NON_TECHNICAL_TOOL_REFERENCE}
 ## Product Documentation — Define the Solution
 1. **file.read** — Existing product requirements, design specs, technical architecture docs
 2. **file.write** — Write PRDs, user stories, release notes, strategy memos
-3. **file.list** → Explore project structure to understand what's been built
+3. **file.list** → Explore workspace structure to understand what's been built
 4. **automation.discord** — Announce product updates, share release notes, notify stakeholders
 
 ============================================

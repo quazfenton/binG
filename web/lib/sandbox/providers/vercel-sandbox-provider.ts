@@ -14,7 +14,7 @@
  * Authentication (choose one):
  * - VERCEL_TOKEN - Vercel Access Token (from vercel.com/account/tokens)
  * - VERCEL_SANDBOX_TOKEN - Dedicated sandbox token
- * - Project-based OIDC (when deployed to Vercel)
+ * - Workspace-based OIDC (when deployed to Vercel)
  * 
  * @example
  * ```typescript

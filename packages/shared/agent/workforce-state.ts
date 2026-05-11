@@ -36,7 +36,7 @@ const DEFAULT_STATE: WorkforceState = {
 function getStatePath(conversationId: string): string {
   // CRITICAL FIX: Normalize conversationId to prevent composite IDs in paths
   const simpleSessionId = normalizeSessionId(conversationId) || '001'; // Fallback to '001' only if truly invalid
-  return `project/sessions/${simpleSessionId}/STATE.yaml`;
+  return `workspace/sessions/${simpleSessionId}/STATE.yaml`;
 }
 
 export async function loadState(userId: string, conversationId: string): Promise<WorkforceState> {

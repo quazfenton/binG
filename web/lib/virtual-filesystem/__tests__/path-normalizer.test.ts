@@ -11,7 +11,7 @@ beforeEach(() => {
 });
 
 describe('normalizeLLMPath', () => {
-  const scope = 'project/sessions/001';
+  const scope = 'workspace/sessions/001';
 
   describe('basic normalization', () => {
     it('passes through clean relative paths', () => {
@@ -73,17 +73,17 @@ describe('normalizeLLMPath', () => {
 
   describe('VFS scope prefix stripping', () => {
     it('strips exact scope prefix', () => {
-      expect(normalizeLLMPath('project/sessions/001/src/app.ts', { scopePath: scope }))
+      expect(normalizeLLMPath('workspace/sessions/001/src/app.ts', { scopePath: scope }))
         .toBe('src/app.ts');
     });
 
     it('strips scope prefix when path equals scope', () => {
-      expect(normalizeLLMPath('project/sessions/001', { scopePath: scope }))
+      expect(normalizeLLMPath('workspace/sessions/001', { scopePath: scope }))
         .toBe('.');
     });
 
-    it('strips project/sessions/{otherId}/ prefix', () => {
-      expect(normalizeLLMPath('project/sessions/002/src/app.ts', { scopePath: scope }))
+    it('strips workspace/sessions/{otherId}/ prefix', () => {
+      expect(normalizeLLMPath('workspace/sessions/002/src/app.ts', { scopePath: scope }))
         .toBe('src/app.ts');
     });
 
@@ -128,10 +128,10 @@ describe('normalizeLLMPath', () => {
   });
 
   describe('double-nesting prevention', () => {
-    it('prevents sessions/001/src → project/sessions/001/001/src', () => {
+    it('prevents sessions/001/src → workspace/sessions/001/001/src', () => {
       const result = normalizeLLMPath('sessions/001/src/app.ts', { scopePath: scope });
       expect(result).toBe('src/app.ts');
-      // When scoped, this becomes project/sessions/001/src/app.ts (NOT .../001/001/...)
+      // When scoped, this becomes workspace/sessions/001/src/app.ts (NOT .../001/001/...)
     });
 
     it('prevents workspace/sessions/001/src → double nesting', () => {
@@ -141,47 +141,47 @@ describe('normalizeLLMPath', () => {
   });
 
   describe('scope escape prevention', () => {
-    it('throws when path tries to escape to unrelated project scope', () => {
-      expect(() => resolveToScopedPath('project/other-scope/secret.txt', scope))
+    it('throws when path tries to escape to unrelated workspace scope', () => {
+      expect(() => resolveToScopedPath('workspace/other-scope/secret.txt', scope))
         .toThrow('outside the allowed scope');
     });
 
     it('re-scopes paths from other sessions (stripping session prefix)', () => {
-      expect(resolveToScopedPath('project/sessions/002/src/app.ts', scope))
-        .toBe('project/sessions/001/src/app.ts');
+      expect(resolveToScopedPath('workspace/sessions/002/src/app.ts', scope))
+        .toBe('workspace/sessions/001/src/app.ts');
     });
 
     it('allows path that exactly matches scope', () => {
-      expect(resolveToScopedPath('project/sessions/001', scope)).toBe(scope);
+      expect(resolveToScopedPath('workspace/sessions/001', scope)).toBe(scope);
     });
 
     it('allows path within same session scope', () => {
-      expect(resolveToScopedPath('project/sessions/001/src/app.ts', scope))
-        .toBe('project/sessions/001/src/app.ts');
+      expect(resolveToScopedPath('workspace/sessions/001/src/app.ts', scope))
+        .toBe('workspace/sessions/001/src/app.ts');
     });
   });
 });
 
 describe('stripScopePrefixForDisplay', () => {
-  it('strips project/sessions/{id}/ prefix', () => {
-    expect(stripScopePrefixForDisplay('project/sessions/001/src/app.ts'))
+  it('strips workspace/sessions/{id}/ prefix', () => {
+    expect(stripScopePrefixForDisplay('workspace/sessions/001/src/app.ts'))
       .toBe('src/app.ts');
   });
 
-  it('strips project/ prefix as fallback', () => {
-    expect(stripScopePrefixForDisplay('project/shared/utils.ts'))
+  it('strips workspace/ prefix as fallback', () => {
+    expect(stripScopePrefixForDisplay('workspace/shared/utils.ts'))
       .toBe('shared/utils.ts');
   });
 
   it('strips explicit scopePath', () => {
-    expect(stripScopePrefixForDisplay('project/sessions/my-app/src/app.ts', {
-      scopePath: 'project/sessions/my-app',
+    expect(stripScopePrefixForDisplay('workspace/sessions/my-app/src/app.ts', {
+      scopePath: 'workspace/sessions/my-app',
     })).toBe('src/app.ts');
   });
 
   it('returns . for exact scope match', () => {
-    expect(stripScopePrefixForDisplay('project/sessions/001', {
-      scopePath: 'project/sessions/001',
+    expect(stripScopePrefixForDisplay('workspace/sessions/001', {
+      scopePath: 'workspace/sessions/001',
     })).toBe('.');
   });
 
@@ -191,35 +191,35 @@ describe('stripScopePrefixForDisplay', () => {
 });
 
 describe('resolveToScopedPath', () => {
-  const scope = 'project/sessions/001';
+  const scope = 'workspace/sessions/001';
 
   it('scopes a clean relative path', () => {
     expect(resolveToScopedPath('src/app.ts', scope))
-      .toBe('project/sessions/001/src/app.ts');
+      .toBe('workspace/sessions/001/src/app.ts');
   });
 
   it('does not double-scope an already-scoped path', () => {
-    expect(resolveToScopedPath('project/sessions/001/src/app.ts', scope))
-      .toBe('project/sessions/001/src/app.ts');
+    expect(resolveToScopedPath('workspace/sessions/001/src/app.ts', scope))
+      .toBe('workspace/sessions/001/src/app.ts');
   });
 
   it('normalizes and scopes a path with wrong session id', () => {
-    expect(resolveToScopedPath('project/sessions/002/src/app.ts', scope))
-      .toBe('project/sessions/001/src/app.ts');
+    expect(resolveToScopedPath('workspace/sessions/002/src/app.ts', scope))
+      .toBe('workspace/sessions/001/src/app.ts');
   });
 
   it('returns scope root for scope-only path', () => {
-    expect(resolveToScopedPath('project/sessions/001', scope))
-      .toBe('project/sessions/001');
+    expect(resolveToScopedPath('workspace/sessions/001', scope))
+      .toBe('workspace/sessions/001');
   });
 
   it('strips sessions/ prefix and scopes correctly', () => {
     expect(resolveToScopedPath('sessions/001/src/app.ts', scope))
-      .toBe('project/sessions/001/src/app.ts');
+      .toBe('workspace/sessions/001/src/app.ts');
   });
 
   it('strips workspace/sessions/ prefix and scopes correctly', () => {
     expect(resolveToScopedPath('workspace/sessions/001/src/app.ts', scope))
-      .toBe('project/sessions/001/src/app.ts');
+      .toBe('workspace/sessions/001/src/app.ts');
   });
 });

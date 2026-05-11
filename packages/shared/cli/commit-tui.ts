@@ -9,7 +9,7 @@
  * - Escape to cancel
  *
  * IMPORTANT: This operates on the LOCAL HISTORY repo in ~/.quaz/,
- * NOT the user's project git repository. This ensures we never
+ * NOT the user's workspace git repository. This ensures we never
  * accidentally destroy the user's own git history.
  */
 
@@ -284,7 +284,7 @@ export async function renderCommitSelector(commits: CommitInfo[]): Promise<Commi
 
 /**
  * Get commit history from LOCAL history repo (~/.quaz/),
- * NOT from the user's project git repository.
+ * NOT from the user's workspace git repository.
  */
 export async function getCommitHistory(
   workspacePath?: string,
@@ -355,7 +355,7 @@ export async function getCommitFiles(
  * Execute rollback to specified commit by restoring files
  * to the user's ACTUAL workspace (not the history repo).
  *
- * IMPORTANT: This does NOT use `git reset --hard` on the user's project.
+ * IMPORTANT: This does NOT use `git reset --hard` on the user's workspace.
  * Instead, it reads the file contents from the local history repo and
  * copies them to the workspace. This is safe and non-destructive.
  */

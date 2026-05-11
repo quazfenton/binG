@@ -548,7 +548,7 @@ class EnhancedCodeOrchestrator extends EventEmitter {
 
     const fileManager = session.components.fileManager;
 
-    // Register project files
+    // Register workspace files
     for (const file of session.request.files) {
       await fileManager.registerFile(file as ProjectItem);
     }
@@ -599,7 +599,7 @@ class EnhancedCodeOrchestrator extends EventEmitter {
     const nextFile = session.request.files.find((f) => f.name === nextFileName);
     if (!nextFile) {
       session.state.warnings.push(
-        `Requested file ${nextFileName} not found in project`,
+        `Requested file ${nextFileName} not found in workspace`,
       );
       return;
     }

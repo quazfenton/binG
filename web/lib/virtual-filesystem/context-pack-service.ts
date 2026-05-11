@@ -15,7 +15,7 @@
 
 import { virtualFilesystem } from './virtual-filesystem-service';
 import type { VirtualFilesystemDirectoryListing } from './filesystem-types';
-import { getProjectServices } from '@/lib/project-context';
+import { getProjectServices } from '@/lib/workspace-context';
 import { contentHash } from '@/lib/cache';
 import { summarizeCode } from '@/lib/tools/rtk-integration';
 
@@ -118,12 +118,12 @@ const DEFAULT_OPTIONS: Required<ContextPackOptions> = {
  * Context Pack Service
  * Generates dense, LLM-friendly bundles of VFS state
  *
- * Each project gets its own isolated vector store and retrieval pipeline
- * via the project-context layer.
+ * Each workspace gets its own isolated vector store and retrieval pipeline
+ * via the workspace-context layer.
  */
 class ContextPackService {
   /**
-   * Generate a context pack from the VFS with project isolation
+   * Generate a context pack from the VFS with workspace isolation
    */
   async generateContextPack(
     ownerId: string,
@@ -133,7 +133,7 @@ class ContextPackService {
     const opts = { ...DEFAULT_OPTIONS, ...options };
     const warnings: string[] = [];
 
-    // Initialize project-scoped services for this project (isolated per ownerId+rootPath)
+    // Initialize workspace-scoped services for this workspace (isolated per ownerId+rootPath)
     const projectId = `${ownerId}:${rootPath}`;
     const projectServices = getProjectServices({
       id: projectId,
@@ -147,7 +147,7 @@ class ContextPackService {
     // Get all files recursively
     const files = await this.collectFiles(ownerId, rootPath, opts, warnings);
 
-    // Index new/changed files into project's vector store (contentHash avoids re-embedding)
+    // Index new/changed files into workspace's vector store (contentHash avoids re-embedding)
     // DEFERRED: Run async in background so slow embedding doesn't block context generation
     // Use a separate warnings array — the background job mutates this after the result
     // is returned, so returned warnings remain deterministic.
@@ -428,7 +428,7 @@ class ContextPackService {
     let bundle = '';
     
     // Header
-    bundle += `# Project Context Pack\n\n`;
+    bundle += `# Workspace Context Pack\n\n`;
     bundle += `**Format:** Markdown\n`;
     bundle += `**Files:** ${files.length}\n`;
     bundle += `**Generated:** ${new Date().toISOString()}\n\n`;
@@ -561,7 +561,7 @@ class ContextPackService {
   ): string {
     let bundle = '';
     
-    bundle += `=== PROJECT CONTEXT PACK ===\n`;
+    bundle += `=== WORKSPACE CONTEXT PACK ===\n`;
     bundle += `Format: Plain Text\n`;
     bundle += `Files: ${files.length}\n`;
     bundle += `Generated: ${new Date().toISOString()}\n\n`;
@@ -674,7 +674,7 @@ class ContextPackService {
   }
 
   /**
-   * Index files into project's vector store using content hash for dedup
+   * Index files into workspace's vector store using content hash for dedup
    * Skips files that haven't changed since last indexing
    */
   private async indexFilesToVectorStore(

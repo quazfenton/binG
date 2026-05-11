@@ -2,11 +2,11 @@
  * Bash Self-Heal + LLM Terminal Integration Tests
  *
  * Tests:
- * 1. Project detection (package.json, Cargo.toml, go.mod, requirements.txt)
+ * 1. Workspace detection (package.json, Cargo.toml, go.mod, requirements.txt)
  * 2. Natural language → command translation
  * 3. Self-heal retry on common error patterns
  * 4. cwd resolution from VFS scopedPath to real filesystem path
- * 5. End-to-end: LLM "run the project" → detect → execute
+ * 5. End-to-end: LLM "run the workspace" → detect → execute
  *
  * Run: npx vitest run __tests__/bash-selfheal-terminal.test.ts
  */
@@ -16,10 +16,10 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 
 // ============================================================
-// Project Detection Tests
+// Workspace Detection Tests
 // ============================================================
 
-describe('Project Detection', () => {
+describe('Workspace Detection', () => {
   const testDir = path.join(process.env.TEMP || '/tmp', 'bash-selfheal-test');
 
   beforeEach(async () => {
@@ -33,7 +33,7 @@ describe('Project Detection', () => {
   it('detects npm dev script from package.json', async () => {
     const pkgPath = path.join(testDir, 'package.json');
     await fs.writeFile(pkgPath, JSON.stringify({
-      name: 'test-project',
+      name: 'test-workspace',
       scripts: { dev: 'next dev', build: 'next build', test: 'jest' },
     }));
 
@@ -53,7 +53,7 @@ describe('Project Detection', () => {
   it('detects npm start when dev is missing', async () => {
     const pkgPath = path.join(testDir, 'package.json');
     await fs.writeFile(pkgPath, JSON.stringify({
-      name: 'test-project',
+      name: 'test-workspace',
       scripts: { start: 'node server.js', build: 'tsc' },
     }));
 
@@ -68,7 +68,7 @@ describe('Project Detection', () => {
     expect(detected).toBe('npm start');
   });
 
-  it('detects Rust project from Cargo.toml', async () => {
+  it('detects Rust workspace from Cargo.toml', async () => {
     const cargoPath = path.join(testDir, 'Cargo.toml');
     await fs.writeFile(cargoPath, '[package]\nname = "test"\nversion = "0.1.0"');
 
@@ -80,7 +80,7 @@ describe('Project Detection', () => {
     expect(detected).toBe(true);
   });
 
-  it('detects Go project from go.mod', async () => {
+  it('detects Go workspace from go.mod', async () => {
     const goModPath = path.join(testDir, 'go.mod');
     await fs.writeFile(goModPath, 'module test\ngo 1.21');
 
@@ -92,7 +92,7 @@ describe('Project Detection', () => {
     expect(detected).toBe(true);
   });
 
-  it('detects Python project from requirements.txt + main.py', async () => {
+  it('detects Python workspace from requirements.txt + main.py', async () => {
     const reqPath = path.join(testDir, 'requirements.txt');
     const mainPath = path.join(testDir, 'main.py');
     await fs.writeFile(reqPath, 'flask==2.0\nrequests');
@@ -112,7 +112,7 @@ describe('Project Detection', () => {
     expect(detected).toBe('pip install -r requirements.txt && python main.py');
   });
 
-  it('returns null for unrecognized project type', async () => {
+  it('returns null for unrecognized workspace type', async () => {
     // Empty directory
     let detected: string | null = null;
 
@@ -150,8 +150,8 @@ describe('Natural Language → Command Translation', () => {
     // Direct commands — pass through
     if (/^(npm|yarn|pnpm|npx|cargo|go|python|pip|node|deno|bun)\b/.test(lower)) return task;
 
-    // "run the project", "start it", "debug the app"
-    if (/(run|start|launch|debug|execute)\s*(the\s*)?(project|app|server|dev|it|this)?\s*$/i.test(lower) ||
+    // "run the workspace", "start it", "debug the app"
+    if (/(run|start|launch|debug|execute)\s*(the\s*)?(workspace|app|server|dev|it|this)?\s*$/i.test(lower) ||
         /^(run|start)$/.test(lower)) {
       return '[DETECT_PROJECT]';
     }
@@ -178,8 +178,8 @@ describe('Natural Language → Command Translation', () => {
     return task;
   };
 
-  it('translates "run the project" to project detection', () => {
-    expect(translate('run the project')).toBe('[DETECT_PROJECT]');
+  it('translates "run the workspace" to workspace detection', () => {
+    expect(translate('run the workspace')).toBe('[DETECT_PROJECT]');
     expect(translate('Run it')).toBe('[DETECT_PROJECT]');
     expect(translate('start the app')).toBe('[DETECT_PROJECT]');
     expect(translate('debug')).toBe('[DETECT_PROJECT]');
@@ -188,14 +188,14 @@ describe('Natural Language → Command Translation', () => {
 
   it('translates "build" commands', () => {
     expect(translate('build')).toBe('[DETECT_BUILD]');
-    expect(translate('build the project')).toBe('[DETECT_BUILD]');
+    expect(translate('build the workspace')).toBe('[DETECT_BUILD]');
     expect(translate('compile')).toBe('[DETECT_BUILD]');
   });
 
   it('translates test commands', () => {
     expect(translate('test')).toBe('npm test || echo "No test script found"');
     expect(translate('run tests')).toBe('npm test || echo "No test script found"');
-    expect(translate('test the project')).toBe('npm test || echo "No test script found"');
+    expect(translate('test the workspace')).toBe('npm test || echo "No test script found"');
   });
 
   it('passes through direct npm commands', () => {
@@ -301,8 +301,8 @@ describe('cwd Resolution: VFS scopedPath → Real Path', () => {
     const sanitized = requestedCwd.replace(/\0/g, '');
     if (!sanitized) return isWindows ? 'C:\\temp\\workspace' : '/tmp/workspace';
 
-    if (sanitized.startsWith('project/')) {
-      const relativePart = sanitized.replace(/^project\//, '');
+    if (sanitized.startsWith('workspace/')) {
+      const relativePart = sanitized.replace(/^workspace\//, '');
       // Use forward slashes for VFS paths — normalize for comparison
       const normalized = ('/tmp/workspace/' + relativePart).replace(/\/+/g, '/');
       return isWindows ? normalized.replace(/\//g, '\\') : normalized;
@@ -314,13 +314,13 @@ describe('cwd Resolution: VFS scopedPath → Real Path', () => {
     return sanitized;
   };
 
-  it('resolves VFS scoped path "project/sessions/002" to real path', () => {
-    const resolved = resolveCwd('project/sessions/002', false);
+  it('resolves VFS scoped path "workspace/sessions/002" to real path', () => {
+    const resolved = resolveCwd('workspace/sessions/002', false);
     expect(resolved).toBe('/tmp/workspace/sessions/002');
   });
 
   it('resolves nested VFS paths', () => {
-    const resolved = resolveCwd('project/sessions/002/src', false);
+    const resolved = resolveCwd('workspace/sessions/002/src', false);
     expect(resolved).toBe('/tmp/workspace/sessions/002/src');
   });
 
@@ -342,8 +342,8 @@ describe('cwd Resolution: VFS scopedPath → Real Path', () => {
 
   it('handles empty/invalid cwd', () => {
     expect(resolveCwd('', false)).toBe('/tmp/workspace');
-    // project/ with nothing after — still gets the base path (trailing slash stripped by normalization)
-    const result = resolveCwd('project/', false);
+    // workspace/ with nothing after — still gets the base path (trailing slash stripped by normalization)
+    const result = resolveCwd('workspace/', false);
     expect(result.startsWith('/tmp/workspace')).toBe(true);
   });
 });
@@ -357,10 +357,10 @@ describe('Capability Router cwd Pass-Through', () => {
     const { SANDBOX_SHELL_CAPABILITY } = await import('@/lib/tools/capabilities');
     const result = SANDBOX_SHELL_CAPABILITY.inputSchema.safeParse({
       command: 'npm run dev',
-      cwd: 'project/sessions/002',
+      cwd: 'workspace/sessions/002',
     });
     expect(result.success).toBe(true);
-    expect((result.data as any).cwd).toBe('project/sessions/002');
+    expect((result.data as any).cwd).toBe('workspace/sessions/002');
   });
 
   it('sandbox.shell capability cwd is optional', async () => {
@@ -382,27 +382,27 @@ describe('Capability Router cwd Pass-Through', () => {
 });
 
 // ============================================================
-// E2E: LLM "run the project" Full Pipeline
+// E2E: LLM "run the workspace" Full Pipeline
 // ============================================================
 
-describe('E2E: LLM "run the project" Full Pipeline', () => {
+describe('E2E: LLM "run the workspace" Full Pipeline', () => {
   it('simulates full pipeline: NL → detect → command', async () => {
     const testDir = path.join(process.env.TEMP || '/tmp', 'e2e-pipeline-test');
     await fs.mkdir(testDir, { recursive: true }).catch(() => {});
 
-    // Step 1: Create a fake project
+    // Step 1: Create a fake workspace
     await fs.writeFile(
       path.join(testDir, 'package.json'),
       JSON.stringify({ scripts: { dev: 'next dev', build: 'next build', test: 'jest' } })
     );
 
-    // Step 2: LLM says "run the project" → translate
-    const nlInput = 'run the project';
+    // Step 2: LLM says "run the workspace" → translate
+    const nlInput = 'run the workspace';
     const lower = nlInput.toLowerCase().trim();
-    const isRunCommand = /(run|start|launch|debug|execute)\s*(the\s*)?(project|app|server|dev|it|this)?\s*$/i.test(lower);
+    const isRunCommand = /(run|start|launch|debug|execute)\s*(the\s*)?(workspace|app|server|dev|it|this)?\s*$/i.test(lower);
     expect(isRunCommand).toBe(true);
 
-    // Step 3: Detect project command
+    // Step 3: Detect workspace command
     const pkgRaw = await fs.readFile(path.join(testDir, 'package.json'), 'utf-8');
     const pkg = JSON.parse(pkgRaw);
     let cmd: string | null = null;
@@ -414,7 +414,7 @@ describe('E2E: LLM "run the project" Full Pipeline', () => {
     await fs.rm(testDir, { recursive: true, force: true }).catch(() => {});
   });
 
-  it('simulates "build the project" pipeline', async () => {
+  it('simulates "build the workspace" pipeline', async () => {
     const testDir = path.join(process.env.TEMP || '/tmp', 'e2e-build-test');
     await fs.mkdir(testDir, { recursive: true }).catch(() => {});
     await fs.writeFile(
@@ -422,7 +422,7 @@ describe('E2E: LLM "run the project" Full Pipeline', () => {
       JSON.stringify({ scripts: { dev: 'next dev', build: 'next build' } })
     );
 
-    const nlInput = 'build the project';
+    const nlInput = 'build the workspace';
     const isBuild = /^(build|compile|package)\b/i.test(nlInput.toLowerCase());
     expect(isBuild).toBe(true);
 

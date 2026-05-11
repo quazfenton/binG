@@ -188,7 +188,7 @@ export class ProjectIndexer {
   }
 
   /**
-   * Recompute PageRank importance scores for all symbols in this project.
+   * Recompute PageRank importance scores for all symbols in this workspace.
    * Run after bulk indexing or significant changes.
    */
   async recomputePageRank(): Promise<void> {
@@ -210,7 +210,7 @@ export class ProjectIndexer {
   }
 
   /**
-   * Update project metadata after indexing.
+   * Update workspace metadata after indexing.
    */
   async updateProjectMeta(name: string, path: string, fileCount: number): Promise<void> {
     await upsertProject({
@@ -223,7 +223,7 @@ export class ProjectIndexer {
   }
 }
 
-// ─── Convenience: hash a project folder path to a stable ID ──────────────────
+// ─── Convenience: hash a workspace folder path to a stable ID ──────────────────
 
 export async function projectIdFromPath(path: string): Promise<string> {
   const hash = await hashContent(path);

@@ -9,7 +9,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 
-import { auth0 } from '@/lib/auth0';
+import { auth0 } from '@/lib/auth/auth0';
 import { getLocalUserIdFromAuth0, mapAuth0UserId } from '@/lib/oauth/connections';
 
 export const dynamic = 'force-dynamic';

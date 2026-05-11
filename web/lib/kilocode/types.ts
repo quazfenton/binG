@@ -98,7 +98,7 @@ export interface CodeReviewRequest {
   context?: {
     /** Related files */
     files?: Array<{ name: string; content: string }>;
-    /** Project structure */
+    /** Workspace structure */
     projectType?: string;
     /** Target environment */
     environment?: 'web' | 'server' | 'mobile' | 'desktop';

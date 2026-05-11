@@ -353,7 +353,7 @@ export class ModeManager {
 
   /**
    * Detect folder structure from file operations
-   * Analyzes if all files are under a single folder (indicating new project with pre-named folder)
+   * Analyzes if all files are under a single folder (indicating new workspace with pre-named folder)
    */
   detectFolderStructure(fileOperations: FileOperation[]): DetectedFolderStructure {
     if (fileOperations.length === 0) {
@@ -391,8 +391,8 @@ export class ModeManager {
     const isSingleFolder = folderNameArray.length === 1;
     const singleFolderName = isSingleFolder ? folderNameArray[0] : null;
     
-    // Determine if this looks like a new project
-    // New project = single folder with multiple files inside OR files at root level
+    // Determine if this looks like a new workspace
+    // New workspace = single folder with multiple files inside OR files at root level
     const isNewProject = isSingleFolder || (paths.length > 1 && filesOutsideAnyFolder.length > 0);
 
     // Count files inside the single folder
@@ -438,7 +438,7 @@ export class ModeManager {
   }
 
   /**
-   * Check if response indicates a new project with single folder structure
+   * Check if response indicates a new workspace with single folder structure
    * Returns folder name if detected, null otherwise
    */
   detectNewProjectFolder(response: string): string | null {
@@ -455,7 +455,7 @@ export class ModeManager {
     // Prefer diffs if available, otherwise use code blocks
     const structure = fileOperations.length > 0 ? structureFromDiffs : structureFromCodeBlocks;
     
-    // Rule: New project with single folder AND all files inside it (no external files)
+    // Rule: New workspace with single folder AND all files inside it (no external files)
     // AND at least 2 files (to distinguish from intentional subdirectory writes)
     if (
       structure.isSingleFolder &&

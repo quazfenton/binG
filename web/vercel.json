@@ -1,0 +1,6 @@
+{
+  "version": 2,
+  "buildCommand": "node scripts/sync-vendored-packages.mjs && next build && node scripts/copy-ripgrep-binaries.js",
+  "installCommand": "pnpm install",
+  "framework": "nextjs"
+}

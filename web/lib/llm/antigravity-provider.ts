@@ -154,7 +154,7 @@ function decodeState(state: string): { verifier: string; projectId: string } {
 
 /**
  * Generate Google OAuth authorization URL with PKCE
- * @param projectId - Optional Google Cloud project ID to associate with the account
+ * @param projectId - Optional Google Cloud workspace ID to associate with the account
  * @returns OAuth authorization URL for user redirection
  */
 export async function getAntigravityOAuthUrl(projectId?: string): Promise<string> {
@@ -240,7 +240,7 @@ export async function exchangeCodeForTokens(
 
   const userInfo = userInfoResponse.ok ? await userInfoResponse.json() : {};
 
-  // Try to resolve project ID if not provided
+  // Try to resolve workspace ID if not provided
   let effectiveProjectId = projectId;
   if (!effectiveProjectId) {
     effectiveProjectId = await fetchProjectID(tokenData.access_token);
@@ -258,7 +258,7 @@ export async function exchangeCodeForTokens(
 }
 
 /**
- * Fetch project ID from Antigravity API
+ * Fetch workspace ID from Antigravity API
  */
 async function fetchProjectID(accessToken: string): Promise<string> {
   const endpoints = [
@@ -414,7 +414,7 @@ interface AntigravityRequest {
 }
 
 /**
- * Get authenticated client and project info for an account
+ * Get authenticated client and workspace info for an account
  */
 export async function getAuthenticatedClient(account: AntigravityAccount): Promise<{
   accessToken: string;
@@ -548,7 +548,7 @@ async function sendStreamingRequest(
   };
 
   if (projectId) {
-    (headers as any)['x-goog-user-project'] = projectId;
+    (headers as any)['x-goog-user-workspace'] = projectId;
   }
 
   const response = await fetch(url, {
@@ -560,7 +560,7 @@ async function sendStreamingRequest(
   if (!response.ok) {
     const errorBody = await response.text();
     if (response.status === 429) {
-      throw new Error(`Rate limited. Project: ${projectId}. Try another account.`);
+      throw new Error(`Rate limited. Workspace: ${projectId}. Try another account.`);
     }
     throw new Error(`Antigravity API error (${response.status}): ${errorBody}`);
   }
@@ -639,7 +639,7 @@ async function sendNonStreamingRequest(
   };
 
   if (projectId) {
-    (headers as any)['x-goog-user-project'] = projectId;
+    (headers as any)['x-goog-user-workspace'] = projectId;
   }
 
   const response = await fetch(url, {
@@ -651,7 +651,7 @@ async function sendNonStreamingRequest(
   if (!response.ok) {
     const errorBody = await response.text();
     if (response.status === 429) {
-      throw new Error(`Rate limited. Project: ${projectId}. Try another account.`);
+      throw new Error(`Rate limited. Workspace: ${projectId}. Try another account.`);
     }
     throw new Error(`Antigravity API error (${response.status}): ${errorBody}`);
   }

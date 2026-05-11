@@ -26,7 +26,7 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json();
-    const { sessionId, scopePath = 'project', syncToVFS = true } = body;
+    const { sessionId, scopePath = 'workspace', syncToVFS = true } = body;
 
     if (!sessionId) {
       return NextResponse.json(

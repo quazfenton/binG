@@ -207,7 +207,7 @@ async function runCritic(
   ].join('\n');
 
   try {
-    const engine = resolveEngine(options.engine, baseConfig.engine);
+    const engine = resolveEngine(baseConfig.engine, baseConfig.engine);
     const subCall = configureSubCall({
       ...baseConfig,
       userMessage,
@@ -218,7 +218,7 @@ async function runCritic(
       maxTokens,
       tools: readOnlyTools,
       // Critics are read_only — no executeTool callback needed
-      mode: 'v1-api',
+      mode: 'v1-api' as const,
     }, engine);
     const result = await processUnifiedAgentRequest(subCall);
 
@@ -392,7 +392,7 @@ export async function runAdversarialVerifyMode(
   log.info('[AdversarialVerify] → Primary execution');
   const primaryCall = configureSubCall({
     ...baseConfig,
-    mode: 'v1-api',
+    mode: 'v1-api' as const,
   }, resolveEngine(options.engine, baseConfig.engine));
   const primaryResult = await processUnifiedAgentRequest(primaryCall);
 
@@ -487,7 +487,7 @@ export async function runAdversarialVerifyMode(
     ...baseConfig,
     systemPrompt: revisionSystemPrompt,
     maxTokens: options.revisionMaxTokens || baseConfig.maxTokens,
-    mode: 'v1-api',
+    mode: 'v1-api' as const,
   }, resolveEngine(options.engine, baseConfig.engine));
   const revisionResult = await processUnifiedAgentRequest(revisionCall);
 

@@ -16,7 +16,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getAccessTokenForConnection, AUTH0_CONNECTIONS } from '@/lib/auth0';
+import { getAccessTokenForConnection, AUTH0_CONNECTIONS } from '@/lib/auth/auth0';
 
 
 

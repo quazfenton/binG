@@ -174,7 +174,7 @@ export const FILE_CREATION_TEMPLATE: TemplateFlow = {
           criteria: [
             'No syntax errors',
             'No linting errors',
-            'Follows project conventions',
+            'Follows workspace conventions',
           ],
         },
       ],
@@ -199,7 +199,7 @@ export const FILE_CREATION_TEMPLATE: TemplateFlow = {
   successCriteria: [
     'File created successfully',
     'No syntax errors',
-    'Follows project conventions',
+    'Follows workspace conventions',
     'Properly typed (if TypeScript)',
   ],
 };

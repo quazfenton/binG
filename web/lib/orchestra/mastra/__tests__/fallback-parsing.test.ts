@@ -72,7 +72,7 @@ describe('Fallback Text-Based Tool Call Parsing', () => {
       const agent = new AgentLoop('test-user', 'test-path', 5, {}, 'test-model');
       const parseTextToolCalls = (agent as any).parseTextToolCalls.bind(agent);
       
-      const text = `I'll set up the project:
+      const text = `I'll set up the workspace:
 write_file({ "path": "package.json", "content": "{}" })
 write_file({ "path": "index.js", "content": "console.log(\"hello\")" })`;
       

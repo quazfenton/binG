@@ -194,7 +194,7 @@ describe('V2 Agent Session Management', () => {
 // ============================================================================
 
 describe('VFS ↔ Sandbox Synchronization', () => {
-  const testFilePath = 'project/test-vfs-sync.txt';
+  const testFilePath = 'workspace/test-vfs-sync.txt';
   const testContent = `Test content generated at ${Date.now()}`;
 
   beforeEach(async () => {
@@ -242,7 +242,7 @@ describe('VFS ↔ Sandbox Synchronization', () => {
       'POST',
       {
         sessionId: sessionId,
-        task: 'Create a file named project/test-output.txt with content "Hello from V2 agent"',
+        task: 'Create a file named workspace/test-output.txt with content "Hello from V2 agent"',
         stream: false,
       }
     );
@@ -255,7 +255,7 @@ describe('VFS ↔ Sandbox Synchronization', () => {
       '/api/filesystem/read',
       'POST',
       {
-        path: 'project/test-output.txt',
+        path: 'workspace/test-output.txt',
       }
     );
 

@@ -105,7 +105,7 @@ const sendChat = async (
 };
 
 // Helper: List VFS files
-const listVfsFiles = async (path: string = 'project'): Promise<{ success: boolean; files: any[]; error?: string }> => {
+const listVfsFiles = async (path: string = 'workspace'): Promise<{ success: boolean; files: any[]; error?: string }> => {
   try {
     const res = await fetch(`${BASE_URL}/api/filesystem/list?path=${encodeURIComponent(path)}`, {
       headers: authHeaders(),
@@ -174,7 +174,7 @@ const testMultiFileAppCreation = async (): Promise<boolean> => {
 2. style.css - Basic styling for the todo app
 3. app.js - JavaScript for adding/removing todos
 
-Write all files to the project directory.`;
+Write all files to the workspace directory.`;
 
   const result = await retryWithFallback(prompt);
   
@@ -188,12 +188,12 @@ Write all files to the project directory.`;
   await new Promise(r => setTimeout(r, 2000));
   
   // Check if files were created
-  const files = await listVfsFiles('project');
+  const files = await listVfsFiles('workspace');
   log.info('VFS files after app creation:', JSON.stringify(files.files?.slice(0, 10), null, 2));
   
-  const hasHtml = await vfsFileExists('project/index.html');
-  const hasCss = await vfsFileExists('project/style.css');
-  const hasJs = await vfsFileExists('project/app.js');
+  const hasHtml = await vfsFileExists('workspace/index.html');
+  const hasCss = await vfsFileExists('workspace/style.css');
+  const hasJs = await vfsFileExists('workspace/app.js');
   
   if (hasHtml || hasCss || hasJs) {
     log.ok(`Files created: ${hasHtml ? 'index.html ' : ''}${hasCss ? 'style.css ' : ''}${hasJs ? 'app.js' : ''}`);
@@ -249,7 +249,7 @@ const testToolCallArgs = async (): Promise<boolean> => {
   log.info('TEST 3: Tool call argument population');
   
   // Request a specific file operation that requires arguments
-  const prompt = `Read the file called package.json in the project directory and tell me what dependencies it has.`;
+  const prompt = `Read the file called package.json in the workspace directory and tell me what dependencies it has.`;
   
   const result = await retryWithFallback(prompt);
   
@@ -279,7 +279,7 @@ const testContextBundling = async (): Promise<boolean> => {
   log.info('TEST 4: Context bundling verification');
   
   // Request that requires context awareness
-  const prompt = `List all the files in my project and describe what each one does.`;
+  const prompt = `List all the files in my workspace and describe what each one does.`;
   
   const result = await sendChat(prompt, 'mistral', 'mistral-small-latest');
   
@@ -290,11 +290,11 @@ const testContextBundling = async (): Promise<boolean> => {
   }
   
   const response = result.data?.response || '';
-  // Check if response mentions files or project structure
-  const hasContext = response.toLowerCase().includes('file') || response.toLowerCase().includes('project') || response.includes('directory');
+  // Check if response mentions files or workspace structure
+  const hasContext = response.toLowerCase().includes('file') || response.toLowerCase().includes('workspace') || response.includes('directory');
   
   if (hasContext) {
-    log.ok('Context bundling working (response references project files)');
+    log.ok('Context bundling working (response references workspace files)');
     testResults.push({ name: 'Context bundling', passed: true, details: 'context references found', response: result.data });
     return true;
   }
@@ -312,9 +312,9 @@ const testMultiFolderScoping = async (): Promise<boolean> => {
   await sendChat('Create a file src/utils.js with the content "export function add(a,b){return a+b}"', 'mistral', 'mistral-small-latest');
   await new Promise(r => setTimeout(r, 2000));
   
-  // List project structure
-  const listResult = await listVfsFiles('project');
-  log.info('Project structure:', JSON.stringify(listResult.files?.map((f: any) => f.name || f.path), null, 2));
+  // List workspace structure
+  const listResult = await listVfsFiles('workspace');
+  log.info('Workspace structure:', JSON.stringify(listResult.files?.map((f: any) => f.name || f.path), null, 2));
   
   // Ask about a file without explicit path
   const prompt = `What does the utils.js file do?`;
@@ -345,7 +345,7 @@ const testAutoContinue = async (): Promise<boolean> => {
   log.info('TEST 6: Auto-continue detection');
   
   // Request listing files which often triggers LLM stopping
-  const prompt = `List all files in the project directory recursively.`;
+  const prompt = `List all files in the workspace directory recursively.`;
   
   const result = await sendChat(prompt, 'mistral', 'mistral-small-latest');
   
@@ -444,11 +444,11 @@ const testVfsMcpToolCreation = async (): Promise<boolean> => {
   await new Promise(r => setTimeout(r, 2000));
   
   // Check if file was created
-  const fileExists = await vfsFileExists('project/mcp-test.txt');
+  const fileExists = await vfsFileExists('workspace/mcp-test.txt');
   
   if (fileExists) {
     log.ok('VFS MCP tool created file successfully');
-    const content = await readVfsFile('project/mcp-test.txt');
+    const content = await readVfsFile('workspace/mcp-test.txt');
     testResults.push({ name: 'VFS MCP tool creation', passed: true, details: `file exists, content: ${content.content?.slice(0, 50)}`, response: result.data });
     return true;
   }

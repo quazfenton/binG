@@ -99,7 +99,7 @@ export async function POST(
     // - "ownerId$001" or "ownerId:001" (scoped format) → extract conversation ID part
     // SECURITY: Use indexOf (FIRST $) not split().pop(), because:
     // - userId is system-controlled and NEVER contains $
-    // - sessionId MAY contain user-provided $ (e.g., folder named "my$project")
+    // - sessionId MAY contain user-provided $ (e.g., folder named "my$workspace")
     let conversationId = sessionId;
     if (conversationId.includes('$')) {
       const dollarIndex = conversationId.indexOf('$');

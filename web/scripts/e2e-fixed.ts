@@ -61,7 +61,7 @@ async function runTests() {
   
   const tests = [
     { name: 'Simple Prompt', prompt: 'Say OK if you receive this.' },
-    { name: 'File Read', prompt: 'Read the file package.json and tell me the project name.' },
+    { name: 'File Read', prompt: 'Read the file package.json and tell me the workspace name.' },
     { name: 'File Write', prompt: 'Write "hello test" to /test-e2e.txt using write_file.' },
     { name: 'Bash', prompt: 'Run: echo "bash works"' },
     { name: 'Reasoning', prompt: 'Explain how factorial recursive works in 1 sentence.' },

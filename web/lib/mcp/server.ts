@@ -85,7 +85,7 @@ export async function createMCPToolServer(options: MCPServerOptions = {}) {
     },
     async (params, context?: { scopePath?: string; sessionId?: string }) => {
       try {
-        const effectiveScopePath = context?.scopePath || 'project';
+        const effectiveScopePath = context?.scopePath || 'workspace';
         const effectiveSessionId = context?.sessionId;
         const result = await toolContextStore.run(
           { userId: 'mcp-server', sessionId: effectiveSessionId, scopePath: effectiveScopePath },
@@ -128,7 +128,7 @@ export async function createMCPToolServer(options: MCPServerOptions = {}) {
     async (params) => {
       try {
         const result = await toolContextStore.run(
-          { userId: 'mcp-server', sessionId: undefined, scopePath: 'project' },
+          { userId: 'mcp-server', sessionId: undefined, scopePath: 'workspace' },
           async () => readFileTool.execute(params, {
             messages: [],
             toolCallId: crypto.randomUUID(),
@@ -172,7 +172,7 @@ export async function createMCPToolServer(options: MCPServerOptions = {}) {
     async (params) => {
       try {
         const result = await toolContextStore.run(
-          { userId: 'mcp-server', sessionId: undefined, scopePath: 'project' },
+          { userId: 'mcp-server', sessionId: undefined, scopePath: 'workspace' },
           async () => listFilesTool.execute(params, {
             messages: [],
             toolCallId: crypto.randomUUID(),
@@ -214,7 +214,7 @@ export async function createMCPToolServer(options: MCPServerOptions = {}) {
     async (params) => {
       try {
         const result = await toolContextStore.run(
-          { userId: 'mcp-server', sessionId: undefined, scopePath: 'project' },
+          { userId: 'mcp-server', sessionId: undefined, scopePath: 'workspace' },
           async () => writeFileTool.execute(params, {
             messages: [],
             toolCallId: crypto.randomUUID(),
@@ -271,7 +271,7 @@ export async function createMCPToolServer(options: MCPServerOptions = {}) {
     async () => {
       try {
         const result = await toolContextStore.run(
-          { userId: 'mcp-server', sessionId: undefined, scopePath: 'project' },
+          { userId: 'mcp-server', sessionId: undefined, scopePath: 'workspace' },
           async () => listFilesTool.execute({ path: '.' }, {
             messages: [],
             toolCallId: crypto.randomUUID(),

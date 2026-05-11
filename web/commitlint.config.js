@@ -1,7 +1,7 @@
 {
   "name": "@bing/commitlint-config",
   "version": "1.0.0",
-  "description": "Commitlint configuration for binG project",
+  "description": "Commitlint configuration for binG workspace",
   "extends": ["@commitlint/config-conventional"],
   "rules": {
     "type-enum": [

@@ -27,13 +27,13 @@
  * - nextjs: Next.js via WebContainer
  *
  * Key Functions:
- * - detectProject(): Full project analysis with heuristics
+ * - detectProject(): Full workspace analysis with heuristics
  * - detectFramework(): Framework detection from files and package.json
  * - detectEntryPoint(): Entry point detection with path normalization
  * - detectPort(): Port detection from package.json or code content
  * - getCodeSandboxTemplate(): Map frameworks to CodeSandbox templates
- * - getSandpackConfig(): Get Sandpack configuration for project
- * - analyzeHeuristics(): Analyze project for cloud offload decision
+ * - getSandpackConfig(): Get Sandpack configuration for workspace
+ * - analyzeHeuristics(): Analyze workspace for cloud offload decision
  *
  * @example
  * ```typescript
@@ -46,7 +46,7 @@
  *   analyzeHeuristics
  * } from '@/lib/previews/live-preview-offloading';
  *
- * // Full project analysis
+ * // Full workspace analysis
  * const detection = detectProject({ files });
  * console.log(`Framework: ${detection.framework}, Port: ${detectPort(files)}`);
  *
@@ -73,7 +73,7 @@ const logger = createLogger('Previews:LivePreview');
  * Preview mode types
  * Local/Client-side: sandpack, webcontainer, pyodide, parcel, iframe, raw, vite, webpack, nextjs, node
  * Cloud providers: devbox, codesandbox, opensandbox
- * Hybrid: local, cloud (auto-detect based on project requirements)
+ * Hybrid: local, cloud (auto-detect based on workspace requirements)
  */
 export type PreviewMode =
   | 'sandpack'     // Local: In-browser bundling (React, Vue, Svelte, etc.)
@@ -133,7 +133,7 @@ export type AppFramework =
 export type Bundler = 'webpack' | 'vite' | 'parcel' | 'rollup' | 'esbuild' | 'unknown';
 
 /**
- * Project detection result
+ * Workspace detection result
  */
 export interface ProjectDetection {
   /** Detected framework */
@@ -203,7 +203,7 @@ export interface SandpackConfig {
  * Preview request
  */
 export interface PreviewRequest {
-  /** Files in the project */
+  /** Files in the workspace */
   files: Record<string, string>;
   
   /** Scope path for VFS normalization */
@@ -367,8 +367,8 @@ const SERVER_FILES = [
 ];
 
 /**
- * Backend-only dependency patterns. If a project has ONLY these deps (no frontend framework),
- * it's a backend project that Sandpack cannot run.
+ * Backend-only dependency patterns. If a workspace has ONLY these deps (no frontend framework),
+ * it's a backend workspace that Sandpack cannot run.
  */
 const BACKEND_ONLY_DEPS = new Set([
   'express', 'fastify', 'koa', 'hapi',
@@ -378,7 +378,7 @@ const BACKEND_ONLY_DEPS = new Set([
 ]);
 
 /**
- * Frontend framework dependency patterns. If present, the project HAS a frontend
+ * Frontend framework dependency patterns. If present, the workspace HAS a frontend
  * even if it also has backend deps (like Next.js + Express).
  */
 const FRONTEND_DEPS = new Set([
@@ -421,13 +421,13 @@ const BACKEND_FILE_PATTERNS = [
 ];
 
 /**
- * Check if a project is backend-only (not runnable in Sandpack).
+ * Check if a workspace is backend-only (not runnable in Sandpack).
  *
- * A project is backend-only if:
+ * A workspace is backend-only if:
  * - It has backend deps but NO frontend framework deps
  * - OR it has Node.js backend code patterns but no frontend files
  *
- * A project with BOTH frontend AND backend (e.g. Next.js + Express) is NOT backend-only
+ * A workspace with BOTH frontend AND backend (e.g. Next.js + Express) is NOT backend-only
  * — Sandpack can still render the frontend portion.
  */
 export function isBackendOnlyProject(files: Record<string, string>, deps: string[]): { isBackendOnly: boolean; reasons: string[] } {
@@ -554,7 +554,7 @@ export class LivePreviewOffloading {
   private cloudDestCache: Map<string, boolean> = new Map<string, boolean>();
 
   /**
-   * Analyze project for offload heuristics
+   * Analyze workspace for offload heuristics
    *
    * Detects:
    * - node_modules size
@@ -571,7 +571,7 @@ export class LivePreviewOffloading {
     // Detect node_modules size
     const nodeModulesSizeMB = this.estimateNodeModulesSize(safeFiles);
 
-    // Estimate build time based on project characteristics
+    // Estimate build time based on workspace characteristics
     const estimatedBuildTime = this.estimateBuildTime(filePaths, fileContents);
 
     // Estimate memory usage
@@ -629,7 +629,7 @@ export class LivePreviewOffloading {
   }
 
   /**
-   * Estimate build time based on project size and complexity
+   * Estimate build time based on workspace size and complexity
    */
   private estimateBuildTime(filePaths: string[], fileContents: string[]): number {
     const fileCount = filePaths.length;
@@ -655,7 +655,7 @@ export class LivePreviewOffloading {
   }
 
   /**
-   * Estimate memory usage based on project characteristics
+   * Estimate memory usage based on workspace characteristics
    */
   private estimateMemoryUsage(filePaths: string[], fileContents: string[]): number {
     const totalSize = fileContents.reduce((sum, content) => sum + content.length, 0);
@@ -673,7 +673,7 @@ export class LivePreviewOffloading {
     );
     const frameworkMemory = hasHeavyFramework ? 300 : 0;
     
-    // node_modules in project indicates larger memory needs
+    // node_modules in workspace indicates larger memory needs
     const hasNodeModules = filePaths.some(p => p.includes('node_modules'));
     const nodeModulesMemory = hasNodeModules ? 500 : 0;
     
@@ -797,11 +797,11 @@ export class LivePreviewOffloading {
   }
 
   /**
-   * Detect project configuration from files
+   * Detect workspace configuration from files
    * 
    * Enhanced with heuristics analysis for auto-offload decision
    *
-   * Analyzes project files to determine:
+   * Analyzes workspace files to determine:
    * - Framework (React, Vue, Next.js, Flask, etc.)
    * - Bundler (Vite, Webpack, Parcel)
    * - Entry point (main.tsx, app.py, etc.)
@@ -850,7 +850,7 @@ export class LivePreviewOffloading {
     // Normalize files relative to selected root
     const normalizedFiles = this.normalizeFiles(filesObj, selectedRoot, scopePath);
 
-    // Detect project characteristics
+    // Detect workspace characteristics
     const hasPython = filePaths.some(p => p.endsWith('.py'));
     const hasNodeServer = filePaths.some(p => SERVER_FILES.includes(p));
     const hasNextJS = this.detectNextJS(filePaths, packageJson);
@@ -924,7 +924,7 @@ export class LivePreviewOffloading {
   }
 
   /**
-   * Detect framework from project files
+   * Detect framework from workspace files
    * Comprehensive detection using package.json, file patterns, and code content
    */
   detectFramework(
@@ -1050,7 +1050,7 @@ export class LivePreviewOffloading {
       }
     }
 
-    // Check for HTML files - vanilla project (should come BEFORE general node detection)
+    // Check for HTML files - vanilla workspace (should come BEFORE general node detection)
     if (filePaths.some(p => p.endsWith('.html'))) return 'vanilla';
 
     return 'unknown';
@@ -1108,7 +1108,7 @@ export class LivePreviewOffloading {
   }
 
   /**
-   * Detect entry point for the project
+   * Detect entry point for the workspace
    */
   detectEntryPoint(filePaths: string[], framework: AppFramework): string | null {
     const candidates = FRAMEWORK_ENTRY_POINTS[framework] || FRAMEWORK_ENTRY_POINTS.unknown;
@@ -1138,7 +1138,7 @@ export class LivePreviewOffloading {
   }
 
   /**
-   * Detect if project is Next.js
+   * Detect if workspace is Next.js
    */
   detectNextJS(filePaths: string[], packageJson: Record<string, any> | null): boolean {
     if (packageJson && (packageJson.dependencies?.next || packageJson.devDependencies?.next)) return true;
@@ -1181,7 +1181,7 @@ export class LivePreviewOffloading {
       scores.set(root, (scores.get(root) || 0) + score);
     };
 
-    // First pass: Identify all potential project roots (directories with config files)
+    // First pass: Identify all potential workspace roots (directories with config files)
     const projectRoots = new Set<string>();
     for (const filePath of Object.keys(files)) {
       const cleanPath = filePath.replace(/^\/+/, '');
@@ -1191,7 +1191,7 @@ export class LivePreviewOffloading {
       const fileName = parts[parts.length - 1];
       const dir = parts.slice(0, -1).join('/');
 
-      // High-value config files indicate a project root
+      // High-value config files indicate a workspace root
       if (fileName === 'package.json' || 
           CONFIG_FILES.nuxtConfig.includes(fileName) ||
           CONFIG_FILES.nextConfig.includes(fileName) ||
@@ -1209,13 +1209,13 @@ export class LivePreviewOffloading {
       const fileName = parts[parts.length - 1];
       const dir = parts.slice(0, -1).join('/');
 
-      // Check if this file's directory is a known project root
+      // Check if this file's directory is a known workspace root
       const isInProjectRoot = projectRoots.has(dir);
 
       // Score based on config files presence - highest priority for framework configs
       if (fileName === 'package.json') addScore(dir, 8);
       if (fileName === 'index.html') {
-        // Only score index.html in root if no other project root exists
+        // Only score index.html in root if no other workspace root exists
         if (!projectRoots.size || dir === '') addScore(dir, 6);
       }
       if (CONFIG_FILES.viteConfig.includes(fileName)) addScore(dir, 6);
@@ -1229,9 +1229,9 @@ export class LivePreviewOffloading {
       }
       if (CONFIG_FILES.astroConfig.includes(fileName)) addScore(dir, 8);
 
-      // Docker files - moderate score but indicate a runnable project
+      // Docker files - moderate score but indicate a runnable workspace
       if (fileName === 'Dockerfile' || fileName === 'docker-compose.yml' || fileName === 'docker-compose.yaml') {
-        // If in a known project root, give higher score; otherwise lower
+        // If in a known workspace root, give higher score; otherwise lower
         if (isInProjectRoot) {
           addScore(dir, 6);
         } else {
@@ -1248,7 +1248,7 @@ export class LivePreviewOffloading {
       // Nuxt/Vue specific entry points - higher score
       if (fileName === 'app.vue' || fileName === 'App.vue') {
         addScore(dir, 7); // Higher score for app.vue
-        // If app.vue is in a subdirectory and that directory has a project root, boost it
+        // If app.vue is in a subdirectory and that directory has a workspace root, boost it
         if (dir && !projectRoots.has(dir)) {
           const parentDir = dir.split('/').slice(0, -1).join('/');
           if (projectRoots.has(parentDir)) {
@@ -1272,7 +1272,7 @@ export class LivePreviewOffloading {
       }
 
       if (/^index\.(js|jsx|ts|tsx|html|vue)$/.test(fileName)) {
-        // Don't score index files in hidden/dot directories as project roots
+        // Don't score index files in hidden/dot directories as workspace roots
         if (!fileName.startsWith('.') && !dir.startsWith('.')) {
           addScore(dir, 3);
         }
@@ -1320,8 +1320,8 @@ export class LivePreviewOffloading {
         if (relativePath.startsWith(scopeNormalized + '/')) {
           relativePath = relativePath.slice(scopeNormalized.length + 1);
         }
-        // Also handle project/sessions/ pattern
-        if (relativePath.startsWith('project/sessions/')) {
+        // Also handle workspace/sessions/ pattern
+        if (relativePath.startsWith('workspace/sessions/')) {
           const sessionIdx = relativePath.indexOf('/', 17);
           if (sessionIdx > 0) {
             relativePath = relativePath.slice(sessionIdx + 1);
@@ -1342,7 +1342,7 @@ export class LivePreviewOffloading {
   }
 
   /**
-   * Determine if a project is destined for cloud execution
+   * Determine if a workspace is destined for cloud execution
    * Cached for performance since this is called frequently
    */
   private isCloudDestinedProject(detection: ProjectDetection): boolean {
@@ -1366,7 +1366,7 @@ export class LivePreviewOffloading {
   }
 
   /**
-   * Detect preview mode based on project characteristics
+   * Detect preview mode based on workspace characteristics
    *
    * Priority: Local first (Sandpack -> WebContainer -> Pyodide), then cloud fallback
    */
@@ -1462,9 +1462,9 @@ export class LivePreviewOffloading {
                                hasAPIKeys || hasNodeServer || shouldOffload;
 
     if (needsRealExecution) {
-      logger.info(`[detectPreviewMode] Complex project detected, routing to cloud: ${offloadReason || 'complex requirements'}`);
+      logger.info(`[detectPreviewMode] Complex workspace detected, routing to cloud: ${offloadReason || 'complex requirements'}`);
 
-      // Determine best cloud provider based on project type
+      // Determine best cloud provider based on workspace type
       if (hasPython) {
         return 'modal';  // Python/ML needs modal
       }
@@ -1755,7 +1755,7 @@ export class LivePreviewOffloading {
   }
 
   /**
-   * Get Sandpack configuration for the project
+   * Get Sandpack configuration for the workspace
    * 
    * CRITICAL: Filters files and dependencies for browser compatibility
    * - Removes Node.js-only packages (@vue/server-renderer, crypto, etc.)
@@ -1763,7 +1763,7 @@ export class LivePreviewOffloading {
    */
   getSandpackConfig(detection: ProjectDetection): SandpackConfig {
     // --- NATIVE CLOUD BYPASS ---
-    // If we have a backend, node server, or cloud-destined project, do NOT attempt to strip code for the browser.
+    // If we have a backend, node server, or cloud-destined workspace, do NOT attempt to strip code for the browser.
     // Bypass ALL code transformations (SSR stripping, Node module removal) to preserve original code for native execution.
     const isCloudDestined = this.isCloudDestinedProject(detection);
 
@@ -2592,7 +2592,7 @@ export const detectEntryPoint = (filePaths: string[], framework: AppFramework) =
   livePreviewOffloading.detectEntryPoint(filePaths, framework);
 
 /**
- * Analyze project heuristics for auto-offload decision
+ * Analyze workspace heuristics for auto-offload decision
  * 
  * @param request - Preview request with files
  * @returns Heuristics analysis result
@@ -2654,7 +2654,7 @@ import type { SandboxHandle } from '../sandbox/providers/sandbox-provider';
 export interface CloudPreviewConfig {
   /** Sandbox handle (from sandbox provider) */
   handle: SandboxHandle;
-  /** Project files (if not already in sandbox) */
+  /** Workspace files (if not already in sandbox) */
   files?: Record<string, string>;
   /** Detected framework */
   framework?: string;

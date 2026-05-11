@@ -52,3 +52,10 @@ export {
   type AuthMiddlewareOptions,
   type EnhancedAuthResult,
 } from './enhanced-middleware';
+
+// Auth0 integration
+export {
+  auth0,
+  AUTH0_CONNECTIONS,
+  PROVIDER_CONNECTION_MAP,
+} from './auth0';

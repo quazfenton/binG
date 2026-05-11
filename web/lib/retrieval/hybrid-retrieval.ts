@@ -5,7 +5,7 @@
  * Fallback: existing smart-context (keyword + import graph scoring)
  *
  * This ensures new functionality enhances existing behavior without breaking it.
- * When the vector store has no symbols for a project, smart-context kicks in automatically.
+ * When the vector store has no symbols for a workspace, smart-context kicks in automatically.
  */
 
 import { search, type SearchOptions, type SearchResult } from "../retrieval/search";
@@ -23,10 +23,10 @@ import { createLogger } from "@/lib/utils/logger";
 
 const logger = createLogger("HybridRetrieval");
 
-// ─── Project Analysis Cache ──────────────────────────────────────────────────
-// Cached project analysis results, keyed by `${userId}:${scopePath}`.
-// Avoids re-analyzing the same project on every prompt.
-// TTL: 5 minutes — re-analyzes if project structure might have changed.
+// ─── Workspace Analysis Cache ──────────────────────────────────────────────────
+// Cached workspace analysis results, keyed by `${userId}:${scopePath}`.
+// Avoids re-analyzing the same workspace on every prompt.
+// TTL: 5 minutes — re-analyzes if workspace structure might have changed.
 
 interface CachedAnalysis {
   result: string;
@@ -38,7 +38,7 @@ const PROJECT_ANALYSIS_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const MAX_PROJECT_ANALYSIS_CACHE = 50; // Maximum number of cached analyses
 
 /**
- * Get cached project analysis or compute fresh value.
+ * Get cached workspace analysis or compute fresh value.
  * Cache key: `${userId}:${scopePath}` — only re-analyzes when scope changes.
  */
 async function getCachedProjectAnalysis(
@@ -53,12 +53,12 @@ async function getCachedProjectAnalysis(
   }
 
   try {
-    const { analyzeProject } = await import('@/lib/tools/project-analysis');
+    const { analyzeProject } = await import('@/lib/tools/workspace-analysis');
     const analysis = await analyzeProject(userId, { depth: 1 });
 
     let result = '';
     if (analysis.framework !== 'unknown' || analysis.packageManager !== 'unknown') {
-      result = `Project: framework=${analysis.framework}, packageManager=${analysis.packageManager}, runtimeMode=${analysis.runtimeMode}`;
+      result = `Workspace: framework=${analysis.framework}, packageManager=${analysis.packageManager}, runtimeMode=${analysis.runtimeMode}`;
       if (analysis.entryFile) result += `, entryFile=${analysis.entryFile}`;
       if (analysis.hints.length > 0) result += `, hints: ${analysis.hints.slice(0, 3).join('; ')}`;
     }
@@ -142,7 +142,7 @@ async function buildSmartTreeForSymbols(
     return buildTreeFromPaths(symbolFilePaths);
   }
 
-  // Small project — try to show full tree
+  // Small workspace — try to show full tree
   if (totalFileCount <= 10) {
     try {
       const listing = await virtualFilesystem.listDirectory(userId, '/');
@@ -189,7 +189,7 @@ function buildFullTreeString(
 export interface HybridRetrievalOptions {
   /** User ID for VFS access */
   userId: string;
-  /** Project ID for symbol retrieval */
+  /** Workspace ID for symbol retrieval */
   projectId?: string;
   /** User's prompt/question */
   prompt: string;
@@ -199,7 +199,7 @@ export interface HybridRetrievalOptions {
   explicitFiles?: string[];
   /** Files referenced in recent conversation */
   recentSessionFiles?: string[];
-  /** Current project root path */
+  /** Current workspace root path */
   currentProjectPath?: string;
   /** VFS scope path for session isolation */
   scopePath?: string;
@@ -395,7 +395,7 @@ export async function retrieveHybrid(
     warnings.push(`Smart-context failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 
-  // ── Final fallback: minimal context with cached project analysis hint ───────
+  // ── Final fallback: minimal context with cached workspace analysis hint ───────
   // Uses cached analysis (keyed by userId + scopePath) — only re-analyzes when scope changes.
   const projectHint = await getCachedProjectAnalysis(opts.userId, opts.scopePath);
 

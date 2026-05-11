@@ -12,7 +12,7 @@ import { searchQuerySchema, pathSchema } from '@/lib/validation/schemas';
  */
 const searchRequestSchema = z.object({
   q: searchQuerySchema,
-  path: pathSchema.optional().default('project'),
+  path: pathSchema.optional().default('workspace'),
   limit: z.number().int().positive().refine((val) => val <= 200, 'Limit must be at most 200').optional(),
 });
 
@@ -20,7 +20,7 @@ export async function GET(req: NextRequest) {
   try {
     const url = new URL(req.url);
     const query = url.searchParams.get('q') || '';
-    const path = url.searchParams.get('path') || 'project';
+    const path = url.searchParams.get('path') || 'workspace';
     const ownerIdFromQuery = url.searchParams.get('ownerId');
     const limitRaw = Number.parseInt(url.searchParams.get('limit') || '', 10);
     const limit = Number.isFinite(limitRaw) ? limitRaw : undefined;

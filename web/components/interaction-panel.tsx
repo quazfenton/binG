@@ -671,7 +671,7 @@ export default function InteractionPanel({
     }
   }, []);
   // Virtual filesystem integration
-  const virtualFilesystem = useVirtualFilesystem(filesystemScopePath || "project");
+  const virtualFilesystem = useVirtualFilesystem(filesystemScopePath || "workspace");
   const selectedFilePaths = useMemo(
     () => Object.keys(virtualFilesystem.attachedFiles),
     [virtualFilesystem.attachedFiles],
@@ -1432,14 +1432,14 @@ export default function InteractionPanel({
           ),
       },
       {
-        id: "project-scaffolder",
-        name: "Project Scaffolder",
-        description: "Create complete project templates with best practices",
+        id: "workspace-scaffolder",
+        name: "Workspace Scaffolder",
+        description: "Create complete workspace templates with best practices",
         icon: FolderPlus,
         color: "text-green-400",
         action: () =>
           setInput(
-            "Create a complete project scaffold including:\n\nðŸ“ **Project Structure**\n- Organized folder hierarchy\n- Configuration files\n- Environment setup\n\nðŸ”§ **Development Tools**\n- Build scripts\n- Linting configuration\n- Testing setup\n\nðŸ“š **Documentation**\n- README with setup instructions\n- API documentation\n- Contributing guidelines\n\nProject Type: \nFramework: \nDeployment Target: ",
+            "Create a complete workspace scaffold including:\n\nðŸ“ **Workspace Structure**\n- Organized folder hierarchy\n- Configuration files\n- Environment setup\n\nðŸ”§ **Development Tools**\n- Build scripts\n- Linting configuration\n- Testing setup\n\nðŸ“š **Documentation**\n- README with setup instructions\n- API documentation\n- Contributing guidelines\n\nProject Type: \nFramework: \nDeployment Target: ",
           ),
       },
       {
@@ -1517,7 +1517,7 @@ export default function InteractionPanel({
         color: "text-green-400",
         action: () =>
           setInput(
-            "ðŸ•¹ï¸ **GITHUB ARCADE** ðŸ•¹ï¸\n\n```\nâ”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”\nâ”‚  ðŸŽ® SELECT TRENDING REPOSITORY ðŸŽ®   â”‚\nâ”œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¤\nâ”‚ [A] ðŸ”¥ React 19 - Latest Features  â”‚\nâ”‚ [B] âš¡ Vite 5.0 - Lightning Fast   â”‚\nâ”‚ [C] ðŸ¤– LangChain - AI Chains       â”‚\nâ”‚ [D] ðŸŽ¨ Tailwind CSS - Utility CSS  â”‚\nâ”‚ [E] ðŸ“¦ Next.js 14 - Full Stack     â”‚\nâ”‚ [F] ðŸ”§ TypeScript - Type Safety    â”‚\nâ”‚ [G] ðŸš€ Astro - Static Site Gen     â”‚\nâ”‚ [H] ðŸ’¾ Prisma - Database ORM       â”‚\nâ””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜\n```\n\nðŸŽ¯ **MISSION:** Select a repository to:\n- ðŸ“‹ Auto-fetch README.md\n- ðŸ“¦ Parse package.json\n- ðŸ” Extract main scripts\n- ðŸ“ Generate project analysis\n- ðŸ› ï¸ Suggest improvements\n\n**Enter your choice (A-H) or specify a custom repo:**\nRepository: ",
+            "ðŸ•¹ï¸ **GITHUB ARCADE** ðŸ•¹ï¸\n\n```\nâ”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”\nâ”‚  ðŸŽ® SELECT TRENDING REPOSITORY ðŸŽ®   â”‚\nâ”œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¤\nâ”‚ [A] ðŸ”¥ React 19 - Latest Features  â”‚\nâ”‚ [B] âš¡ Vite 5.0 - Lightning Fast   â”‚\nâ”‚ [C] ðŸ¤– LangChain - AI Chains       â”‚\nâ”‚ [D] ðŸŽ¨ Tailwind CSS - Utility CSS  â”‚\nâ”‚ [E] ðŸ“¦ Next.js 14 - Full Stack     â”‚\nâ”‚ [F] ðŸ”§ TypeScript - Type Safety    â”‚\nâ”‚ [G] ðŸš€ Astro - Static Site Gen     â”‚\nâ”‚ [H] ðŸ’¾ Prisma - Database ORM       â”‚\nâ””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜\n```\n\nðŸŽ¯ **MISSION:** Select a repository to:\n- ðŸ“‹ Auto-fetch README.md\n- ðŸ“¦ Parse package.json\n- ðŸ” Extract main scripts\n- ðŸ“ Generate workspace analysis\n- ðŸ› ï¸ Suggest improvements\n\n**Enter your choice (A-H) or specify a custom repo:**\nRepository: ",
           ),
       },
       {
@@ -2158,7 +2158,7 @@ export default function InteractionPanel({
                                   const parts = current.split("/").filter(Boolean);
                                   if (parts.length > 1) {
                                     const parentPath = parts.slice(0, -1).join("/");
-                                    void virtualFilesystem.listDirectory(parentPath || "project");
+                                    void virtualFilesystem.listDirectory(parentPath || "workspace");
                                   }
                                 }}
                                 className="p-1 hover:bg-white/10 rounded"

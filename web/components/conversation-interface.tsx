@@ -23,7 +23,7 @@ import { enhancedBufferManager } from "@/lib/streaming/enhanced-buffer-manager";
 import { useStreamingState } from "@/hooks/use-streaming-state";
 import { useAuth } from "@/contexts/auth-context";
 import { generateSecureId, getOrCreateAnonymousSessionId, buildApiHeaders } from "@/lib/utils";
-import { generateSessionName, checkFileConflicts } from "@/lib/session-naming";
+import { generateSessionName, checkFileConflicts } from "@/lib/session/session-naming";
 import { useOrchestrationMode, getOrchestrationModeHeaders } from "@/contexts/orchestration-mode-context";
 import type { OrchestrationMode } from "@/contexts/orchestration-mode-context";
 import { useSpecEnhancementMode, getSpecEnhancementModeInfo } from "@/contexts/spec-enhancement-mode-context";
@@ -286,7 +286,7 @@ export default function ConversationInterface() {
     }
   }, [compositeSessionId]);
   
-  // Project name for simpler terminal paths (e.g., "webGame" instead of long session ID)
+  // Workspace name for simpler terminal paths (e.g., "webGame" instead of long session ID)
   const [projectName, setProjectName] = useState<string>('workspace');
   
   // Track if LLM folder detection has already run for this session (one-time only)
@@ -314,7 +314,7 @@ export default function ConversationInterface() {
   }, [compositeSessionId]);
 
   const filesystemScopePath = useMemo(
-    () => `project/sessions/${detectedFolderName || simpleSessionFolder}`,
+    () => `workspace/sessions/${detectedFolderName || simpleSessionFolder}`,
     [detectedFolderName, simpleSessionFolder],
   );
 
@@ -492,7 +492,7 @@ export default function ConversationInterface() {
     return () => window.removeEventListener("storage", handleStorage);
   }, []);
 
-  // Expose project name setter globally for LLM/chat to update
+  // Expose workspace name setter globally for LLM/chat to update
   useEffect(() => {
     (window as any).__setProjectName = setProjectName;
   }, []);
@@ -853,13 +853,13 @@ export default function ConversationInterface() {
     // Only process diffs if we have file edits
     if (!processedResponse.shouldShowDiffs || !processedResponse.fileDiffs.length) return;
 
-    // LLM Folder Detection: Check if AI response indicates a new project with single folder structure
+    // LLM Folder Detection: Check if AI response indicates a new workspace with single folder structure
     // This only applies to NEW sessions (no prior messages/files) with multiple files under one folder
     // Only run once per session to avoid re-triggering
     // CRITICAL: This MUST run BEFORE applying diffs to ensure files go to correct session folder
     const detectedFolder = !llmFolderDetected && detectNewProjectFolder(lastAssistant.content);
 
-    // Check if this is the first message being processed (initial project creation)
+    // Check if this is the first message being processed (initial workspace creation)
     const isFirstMessage = processedMessageIdsRef.current.size === 1;
     if (detectedFolder && isFirstMessage) {
       // Only apply for new sessions with no prior messages - use LLM-suggested folder name
@@ -870,7 +870,7 @@ export default function ConversationInterface() {
       generateSessionName(detectedFolder, true, true).then((newSessionId) => {
         setCompositeSessionId(newSessionId);
         setLlmFolderDetected(true); // Mark as detected to prevent re-triggering
-        toast.success(`Project initialized: ${newSessionId}`);
+        toast.success(`Workspace initialized: ${newSessionId}`);
       });
     }
 
@@ -1207,7 +1207,7 @@ export default function ConversationInterface() {
   }, [error]);
 
   // Function to update session ID based on LLM's suggested folder name
-  // Called when AI response indicates a single-folder project structure
+  // Called when AI response indicates a single-folder workspace structure
   const updateSessionFromLLM = useCallback((suggestedFolderName: string) => {
     // Only update if this is a new session (no existing files)
     // and the name is valid
@@ -1215,7 +1215,7 @@ export default function ConversationInterface() {
     if (cleanName.length > 0 && messages.length === 0) {
       generateSessionName(cleanName, true, true).then((newSessionId) => {
         setCompositeSessionId(newSessionId);
-        toast.success(`Project initialized: ${newSessionId}`);
+        toast.success(`Workspace initialized: ${newSessionId}`);
       });
     }
   }, [messages.length]);
@@ -1451,7 +1451,7 @@ export default function ConversationInterface() {
 
   const applyDiffsToFilesystem = useCallback(async (entries: Array<{ path: string; diff: string }>) => {
     if (!entries.length) return;
-    const scopePath = filesystemScopePath || "project";
+    const scopePath = filesystemScopePath || "workspace";
     const failed: Record<string, string[]> = {};
     let appliedCount = 0;
     let lastWriteMetadata: {
@@ -1689,7 +1689,7 @@ export default function ConversationInterface() {
         scopePath: filesystemScopePath,
       });
       // emitFilesystemUpdated({
-      //   scopePath: filesystemScopePath || "project",
+      //   scopePath: filesystemScopePath || "workspace",
       //   paths: entries.map((entry) => resolveScopedPath(entry.path, scopePath)),
       //   source: "command-diff",
       //   workspaceVersion: lastWriteMetadata?.workspaceVersion,

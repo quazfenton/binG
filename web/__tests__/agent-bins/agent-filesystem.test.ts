@@ -142,8 +142,8 @@ describe('agent-filesystem', () => {
   describe('getDefaultAgentCwd', () => {
     it('returns workspace root in desktop mode when available', () => {
       toggleDesktopMode(true);
-      setWorkspaceRoot('/home/user/project');
-      expect(getDefaultAgentCwd()).toBe('/home/user/project');
+      setWorkspaceRoot('/home/user/workspace');
+      expect(getDefaultAgentCwd()).toBe('/home/user/workspace');
     });
 
     it('falls back to process.cwd() in desktop mode without workspace root', () => {

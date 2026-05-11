@@ -1,11 +1,11 @@
 /**
- * Register Project Analysis Tools
+ * Register Workspace Analysis Tools
  *
- * Registers project-analysis tools as built-in capabilities:
- * - project.analyze      — Deep project analysis with structured JSON output
- * - project.list_scripts — All runnable scripts/tasks from any project type
- * - project.dependencies — Installed packages, version conflicts, issues
- * - project.structure    — Semantic file tree with notable items
+ * Registers workspace-analysis tools as built-in capabilities:
+ * - workspace.analyze      — Deep workspace analysis with structured JSON output
+ * - workspace.list_scripts — All runnable scripts/tasks from any workspace type
+ * - workspace.dependencies — Installed packages, version conflicts, issues
+ * - workspace.structure    — Semantic file tree with notable items
  *
  * These replace the shallow buildProjectContext() + markdown blob approach
  * with queryable, structured MCP tools that the LLM can call on demand.
@@ -22,13 +22,13 @@ import {
   listScripts,
   getDependencies,
   buildProjectStructure,
-} from '../project-analysis';
+} from '../workspace-analysis';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('Tools:ProjectAnalysis-Bootstrap');
 
 /**
- * Register project analysis tools
+ * Register workspace analysis tools
  *
  * @param registry - Tool registry instance
  * @param config - Bootstrap configuration
@@ -56,9 +56,9 @@ export async function registerProjectAnalysisTools(
   // Register tool implementations
   const tools: Array<Omit<RegisteredTool, 'inputSchema' | 'outputSchema'>> = [
     {
-      name: 'project-analysis:analyze',
-      capability: 'project.analyze',
-      provider: 'project-analysis',
+      name: 'workspace-analysis:analyze',
+      capability: 'workspace.analyze',
+      provider: 'workspace-analysis',
       handler: async (args: any, context: any) => {
         const ownerId = context.userId || 'anonymous';
         return analyzeProject(ownerId, {
@@ -69,14 +69,14 @@ export async function registerProjectAnalysisTools(
         latency: 'medium',
         cost: 'low',
         reliability: 0.99,
-        tags: ['project', 'analyze', 'detection'],
+        tags: ['workspace', 'analyze', 'detection'],
       },
       permissions: ['file:read'],
     },
     {
-      name: 'project-analysis:list-scripts',
-      capability: 'project.list_scripts',
-      provider: 'project-analysis',
+      name: 'workspace-analysis:list-scripts',
+      capability: 'workspace.list_scripts',
+      provider: 'workspace-analysis',
       handler: async (_args: any, context: any) => {
         const ownerId = context.userId || 'anonymous';
         const scripts = await listScripts(ownerId);
@@ -86,14 +86,14 @@ export async function registerProjectAnalysisTools(
         latency: 'low',
         cost: 'low',
         reliability: 0.99,
-        tags: ['project', 'scripts', 'tasks'],
+        tags: ['workspace', 'scripts', 'tasks'],
       },
       permissions: ['file:read'],
     },
     {
-      name: 'project-analysis:dependencies',
-      capability: 'project.dependencies',
-      provider: 'project-analysis',
+      name: 'workspace-analysis:dependencies',
+      capability: 'workspace.dependencies',
+      provider: 'workspace-analysis',
       handler: async (_args: any, context: any) => {
         const ownerId = context.userId || 'anonymous';
         return getDependencies(ownerId);
@@ -102,14 +102,14 @@ export async function registerProjectAnalysisTools(
         latency: 'low',
         cost: 'low',
         reliability: 0.99,
-        tags: ['project', 'dependencies', 'packages'],
+        tags: ['workspace', 'dependencies', 'packages'],
       },
       permissions: ['file:read'],
     },
     {
-      name: 'project-analysis:structure',
-      capability: 'project.structure',
-      provider: 'project-analysis',
+      name: 'workspace-analysis:structure',
+      capability: 'workspace.structure',
+      provider: 'workspace-analysis',
       handler: async (args: any, context: any) => {
         const { virtualFilesystem } = await import('@/lib/virtual-filesystem/virtual-filesystem-service');
         const ownerId = context.userId || 'anonymous';
@@ -135,7 +135,7 @@ export async function registerProjectAnalysisTools(
         latency: 'low',
         cost: 'low',
         reliability: 0.99,
-        tags: ['project', 'structure', 'tree'],
+        tags: ['workspace', 'structure', 'tree'],
       },
       permissions: ['file:read'],
     },
@@ -146,19 +146,19 @@ export async function registerProjectAnalysisTools(
     count++;
   }
 
-  logger.info(`Registered ${count} project analysis tools/capabilities`);
+  logger.info(`Registered ${count} workspace analysis tools/capabilities`);
   return count;
 }
 
 /**
- * Unregister project analysis tools
+ * Unregister workspace analysis tools
  *
  * @param registry - Tool registry instance
  */
 export async function unregisterProjectAnalysisTools(registry: ToolRegistry): Promise<void> {
-  const tools = registry.getAllTools().filter(t => t.provider === 'project-analysis');
+  const tools = registry.getAllTools().filter(t => t.provider === 'workspace-analysis');
   for (const tool of tools) {
     await registry.unregisterTool(tool.name);
   }
-  logger.info(`Unregistered ${tools.length} project analysis tools`);
+  logger.info(`Unregistered ${tools.length} workspace analysis tools`);
 }

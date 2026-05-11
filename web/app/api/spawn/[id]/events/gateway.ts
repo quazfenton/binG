@@ -10,7 +10,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { createLogger } from '@/lib/utils/logger';
 import { getAgentServiceManager } from '@/lib/spawn';
-import { auth0 } from '@/lib/auth0';
+import { auth0 } from '@/lib/auth/auth0';
 import { getLocalUserIdFromAuth0 } from '@/lib/oauth/connections';
 
 const logger = createLogger('API:Agents:Events');

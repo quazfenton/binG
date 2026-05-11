@@ -9,11 +9,11 @@ import { isDesktopMode } from '@bing/platform/env';
  * instead of duplicating the regex list.
  *
  * IMPORTANT: This function preserves compositeId paths in the sessions folder.
- * For example, "project/sessions/1$005/src/game.js" should NOT become "project/sessions/005/src/game.js"
+ * For example, "workspace/sessions/1$005/src/game.js" should NOT become "workspace/sessions/005/src/game.js"
  * The "1$" prefix represents userId$sessionId and must be preserved.
  *
  * Handles prefixes like:
- *   /tmp/workspaces/, /workspace/, /home/<user>/workspace/, /sessions/, project/
+ *   /tmp/workspaces/, /workspace/, /home/<user>/workspace/, /sessions/, workspace/
  */
 export function stripWorkspacePrefixes(rawPath: string): string {
   let path = (rawPath || '')
@@ -21,14 +21,14 @@ export function stripWorkspacePrefixes(rawPath: string): string {
     .trim();
 
   // CRITICAL FIX: Check for compositeId path in sessions folder
-  // Pattern: project/sessions/{userId}${sessionId}/...
+  // Pattern: workspace/sessions/{userId}${sessionId}/...
   // We must NOT strip /sessions/ when it contains a composite path like "1$005"
-  // The regex below matches and preserves paths like: project/sessions/1$005/src/game.js
-  // Also handles paths with leading slash: /project/sessions/1$005/file.js
+  // The regex below matches and preserves paths like: workspace/sessions/1$005/src/game.js
+  // Also handles paths with leading slash: /workspace/sessions/1$005/file.js
 
-  // Check if path matches sessions/compositeId pattern (e.g., project/sessions/1$005/file or /project/sessions/1$005/file)
-  // Supports both /project/sessions/ and project/sessions/ (with or without leading slash)
-  const sessionsCompositeMatch = path.match(/^(\/?project\/sessions\/)([a-zA-Z0-9_-]+)\$([a-zA-Z0-9_-]+)(\/.*)?$/i);
+  // Check if path matches sessions/compositeId pattern (e.g., workspace/sessions/1$005/file or /workspace/sessions/1$005/file)
+  // Supports both /workspace/sessions/ and workspace/sessions/ (with or without leading slash)
+  const sessionsCompositeMatch = path.match(/^(\/?workspace\/sessions\/)([a-zA-Z0-9_-]+)\$([a-zA-Z0-9_-]+)(\/.*)?$/i);
   if (sessionsCompositeMatch) {
     // Preserve the composite format - don't strip anything
     // Remove leading slash if present to normalize to same format
@@ -52,8 +52,8 @@ export function stripWorkspacePrefixes(rawPath: string): string {
   // and must never be stripped. /sessions/001 → sessions/001 (preserved).
 
   // Desktop/CLI: Strip absolute real-filesystem prefixes set by INITIAL_CWD / process.cwd()
-  // LLMs in desktop mode may echo back paths like "C:\Users\user\project\src\app.ts"
-  // or "/home/user/project/src/app.ts" which should become just "src/app.ts"
+  // LLMs in desktop mode may echo back paths like "C:\Users\user\workspace\src\app.ts"
+  // or "/home/user/workspace/src/app.ts" which should become just "src/app.ts"
   if (typeof process !== 'undefined' && process.env) {
     const desktopRoot = process.env.INITIAL_CWD || process.env.DESKTOP_WORKSPACE_ROOT;
     if (desktopRoot) {
@@ -79,21 +79,21 @@ export function stripWorkspacePrefixes(rawPath: string): string {
 }
 
 export function normalizeScopePath(scopePath?: string): string {
-  const path = (scopePath || 'project')
+  const path = (scopePath || 'workspace')
     .replace(/\\/g, '/')
     .trim()
     .replace(/^\/+/, '')
     .replace(/\/+$/, '');
 
-  if (!path || path === 'project') {
-    return 'project';
+  if (!path || path === 'workspace') {
+    return 'workspace';
   }
 
-  if (path.startsWith('project/')) {
-    return path.replace(/\/{2,}/g, '/').replace(/^(project\/)+/i, 'project/');
+  if (path.startsWith('workspace/')) {
+    return path.replace(/\/{2,}/g, '/').replace(/^(workspace\/)+/i, 'workspace/');
   }
 
-  return `project/${path}`.replace(/\/{2,}/g, '/');
+  return `workspace/${path}`.replace(/\/{2,}/g, '/');
 }
 
 export function resolveScopedPath(requestedPath: string, scopePath?: string): string {
@@ -105,8 +105,8 @@ export function resolveScopedPath(requestedPath: string, scopePath?: string): st
   // '.' means "root of scope" after all stripping
   if (relative === '.') return scope;
 
-  // Validate fully-qualified project paths are within the expected scope to prevent scope escape
-  if (relative.startsWith('project/')) {
+  // Validate fully-qualified workspace paths are within the expected scope to prevent scope escape
+  if (relative.startsWith('workspace/')) {
     if (relative.startsWith(scope + '/') || relative === scope) {
       return relative;
     }
@@ -118,7 +118,7 @@ export function resolveScopedPath(requestedPath: string, scopePath?: string): st
 
 export function extractSessionIdFromPath(scopePath?: string): string | null {
   const normalizedPath = normalizeScopePath(scopePath);
-  const match = normalizedPath.match(/^project\/sessions\/([^/]+)/i);
+  const match = normalizedPath.match(/^workspace\/sessions\/([^/]+)/i);
   if (!match) return null;
 
   const sessionIdSegment = match[1];
@@ -138,13 +138,13 @@ export function extractSessionIdFromPath(scopePath?: string): string | null {
  * Sanitize scope path to remove any userId prefix from composite IDs
  *
  * Converts:
- *   project/sessions/1$004 -> project/sessions/004
+ *   workspace/sessions/1$004 -> workspace/sessions/004
  *   1$004 -> 004
  *
  * This prevents composite IDs from leaking into file paths during LLM refinement
  */
 export function sanitizeScopePath(scopePath?: string): string {
-  if (!scopePath) return 'project';
+  if (!scopePath) return 'workspace';
 
   let normalizedPath = normalizeScopePath(scopePath);
 
@@ -157,18 +157,18 @@ export function sanitizeScopePath(scopePath?: string): string {
       const lastPart = normalizedPath.slice(dollarIndex + 1);
       // If last part looks like a session ID (3 digits or with suffix), use it
       if (/^\d{3}(-\d+)?$/.test(lastPart) || /^[a-z]+(-\d+)?$/.test(lastPart)) {
-        return `project/sessions/${lastPart}`;
+        return `workspace/sessions/${lastPart}`;
       }
     }
     // If it's already a simple session ID, wrap it properly
     if (/^\d{3}(-\d+)?$/.test(normalizedPath) || /^[a-z]+(-\d+)?$/.test(normalizedPath)) {
-      return `project/sessions/${normalizedPath}`;
+      return `workspace/sessions/${normalizedPath}`;
     }
-    // Otherwise return as-is (might be "project" or another valid path)
+    // Otherwise return as-is (might be "workspace" or another valid path)
     return normalizedPath;
   }
 
-  const match = normalizedPath.match(/^project\/sessions\/([^/]+)(\/.*)?$/i);
+  const match = normalizedPath.match(/^workspace\/sessions\/([^/]+)(\/.*)?$/i);
 
   if (!match) return normalizedPath;
 
@@ -180,7 +180,7 @@ export function sanitizeScopePath(scopePath?: string): string {
   if (sessionIdSegment.includes('$')) {
     const dollarIndex = sessionIdSegment.lastIndexOf('$');
     const actualSessionId = sessionIdSegment.slice(dollarIndex + 1);
-    return `project/sessions/${actualSessionId}${remainingPath}`;
+    return `workspace/sessions/${actualSessionId}${remainingPath}`;
   }
 
   return normalizedPath;
@@ -191,15 +191,15 @@ export function sanitizeScopePath(scopePath?: string): string {
  * Used for cache invalidation to notify the correct directory after file operations.
  *
  * Examples:
- *   "project/sessions/002/src/App.tsx" -> "project/sessions/002"
- *   "project/sessions/002/package.json" -> "project/sessions/002"
- *   "project/package.json" -> "project"
+ *   "workspace/sessions/002/src/App.tsx" -> "workspace/sessions/002"
+ *   "workspace/sessions/002/package.json" -> "workspace/sessions/002"
+ *   "workspace/package.json" -> "workspace"
  */
 export function extractScopePath(filePath: string): string {
   const parts = filePath.split('/');
   return parts.length > 1
     ? parts.slice(0, parts.length - 1).join('/')
-    : parts[0] || 'project';
+    : parts[0] || 'workspace';
 }
 
 /**
@@ -265,9 +265,9 @@ export function normalizeSessionId(sessionId: string): string {
  * never composite IDs. It's the safe way to construct session paths.
  *
  * Examples:
- *   normalizeSessionPath("001") -> "project/sessions/001"
- *   normalizeSessionPath("1$004") -> "project/sessions/004"
- *   normalizeSessionPath("alpha-1") -> "project/sessions/alpha-1"
+ *   normalizeSessionPath("001") -> "workspace/sessions/001"
+ *   normalizeSessionPath("1$004") -> "workspace/sessions/004"
+ *   normalizeSessionPath("alpha-1") -> "workspace/sessions/alpha-1"
  *
  * @param sessionId - The session ID (may be simple or composite)
  * @param subPath - Optional sub-path within the session (e.g., "src/App.tsx")
@@ -275,7 +275,7 @@ export function normalizeSessionId(sessionId: string): string {
  */
 export function normalizeSessionPath(sessionId: string, subPath?: string): string {
   const simpleSessionId = normalizeSessionId(sessionId);
-  const basePath = `project/sessions/${simpleSessionId}`;
+  const basePath = `workspace/sessions/${simpleSessionId}`;
 
   if (!subPath) {
     return basePath;
@@ -293,23 +293,23 @@ export function normalizeSessionPath(sessionId: string, subPath?: string): strin
 /**
  * Get the VFS scope base path for the current execution mode.
  * In desktop/CLI mode, users can choose arbitrary workspace directories,
- * so we use 'project' as the VFS root namespace.
- * In web mode, we use 'project/sessions/{sessionId}' for session isolation.
+ * so we use 'workspace' as the VFS root namespace.
+ * In web mode, we use 'workspace/sessions/{sessionId}' for session isolation.
  * 
  * @param sessionId - Optional session ID for web mode
  * @returns The appropriate VFS scope base path
  */
 export function getVfsScopeBasePath(sessionId?: string): string {
   if (isDesktopMode()) {
-    // Desktop/CLI mode: use 'project' as VFS root - users choose their own workspace
-    return 'project';
+    // Desktop/CLI mode: use 'workspace' as VFS root - users choose their own workspace
+    return 'workspace';
   }
   // Web mode: use session-scoped path
   if (sessionId) {
     const simpleSessionId = normalizeSessionId(sessionId);
-    return `project/sessions/${simpleSessionId}`;
+    return `workspace/sessions/${simpleSessionId}`;
   }
-  return 'project/sessions/000'; // Default fallback for web mode without session
+  return 'workspace/sessions/000'; // Default fallback for web mode without session
 }
 
 /**
@@ -322,13 +322,13 @@ export function getVfsScopeBasePath(sessionId?: string): string {
 export function getVfsScopePath(options: { sessionId?: string; scopePath?: string }): string {
   const { sessionId, scopePath } = options;
   // If explicitly passed scopePath and it's the session-scoped form, use it
-  if (scopePath && scopePath.startsWith('project/sessions/')) {
+  if (scopePath && scopePath.startsWith('workspace/sessions/')) {
     return scopePath;
   }
-  // If scopePath is explicitly 'project' (no session context), preserve it as-is
+  // If scopePath is explicitly 'workspace' (no session context), preserve it as-is
   // This preserves the web fallback behavior when sessionId is empty
-  if (scopePath === 'project') {
-    return 'project';
+  if (scopePath === 'workspace') {
+    return 'workspace';
   }
   // Otherwise derive from sessionId with mode awareness
   return getVfsScopeBasePath(sessionId);

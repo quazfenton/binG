@@ -720,7 +720,7 @@ export async function quickSyntaxCheck(path: string, content: string): Promise<{
 /**
  * Enhanced code quality checks (no external dependencies required)
  * 
- * Uses built-in TypeScript/Acorn parsers already available in the project.
+ * Uses built-in TypeScript/Acorn parsers already available in the workspace.
  * Catches common issues without requiring ESLint/Prettier in sandbox.
  */
 export async function runCodeQualityChecks(

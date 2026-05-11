@@ -11,13 +11,13 @@
  * consolidation across Nango/Arcade/Composio and Auth0.
  */
 
-import { AUTH0_CONNECTIONS } from '@/lib/auth0';
+import { AUTH0_CONNECTIONS } from '@/lib/auth/auth0';
 import { oauthService } from '../auth/oauth-service';
 import { getDatabase, encryptApiKey, decryptApiKey } from '../database/connection';
 
 // Lazy-loaded functions to avoid circular dependency
 async function getAccessTokenForConnection(connection: string, userId?: string) {
-  const { getAccessTokenForConnection: fn } = await import('@/lib/auth0');
+  const { getAccessTokenForConnection: fn } = await import('@/lib/auth/auth0');
   return fn(connection, userId);
 }
 
@@ -355,7 +355,7 @@ export async function disconnectProviderAll(userId: string, provider: string): P
     dbStmt.run(userId, provider);
     
     // 2. Disconnect from Auth0 Connected Accounts
-    const { disconnectProvider } = await import('@/lib/auth0');
+    const { disconnectProvider } = await import('@/lib/auth/auth0');
     try {
       await disconnectProvider(userId, provider);
     } catch (e) {

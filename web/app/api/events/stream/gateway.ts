@@ -10,7 +10,7 @@
 import { NextRequest } from 'next/server';
 
 
-import { auth0 } from '@/lib/auth0';
+import { auth0 } from '@/lib/auth/auth0';
 import { getDatabase } from '@/lib/database/connection';
 import { createLogger } from '@/lib/utils/logger';
 

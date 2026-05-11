@@ -59,9 +59,9 @@ export class Retrieval {
     this.indexer = new ProjectIndexer(config.projectId);
   }
 
-  // ── Project Setup ────────────────────────────────────────────────────────
+  // ── Workspace Setup ────────────────────────────────────────────────────────
 
-  /** Initialize a project from a path — generates a stable project ID */
+  /** Initialize a workspace from a path — generates a stable workspace ID */
   static async fromPath(
     path: string,
     config: Omit<RetrievalConfig, "projectId">

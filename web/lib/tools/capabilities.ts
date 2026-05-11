@@ -94,7 +94,7 @@ export const PROVIDER = {
   GIT_HELPER: 'git-helper' as const,
   OAUTH_INTEGRATION: 'oauth-integration' as const,
   TERMINAL: 'terminal' as const,
-  PROJECT_ANALYSIS: 'project-analysis' as const,
+  PROJECT_ANALYSIS: 'workspace-analysis' as const,
 } as const;
 
 export type ProviderIdString = typeof PROVIDER[keyof typeof PROVIDER];
@@ -581,12 +581,12 @@ export const WORKSPACE_GET_CHANGES_CAPABILITY: CapabilityDefinition = {
 };
 
 export const PROJECT_BUNDLE_CAPABILITY: CapabilityDefinition = {
-  id: 'project.bundle',
-  name: 'Bundle Project',
+  id: 'workspace.bundle',
+  name: 'Bundle Workspace',
   category: 'memory',
-  description: 'Generate a project context bundle (like Repomix) for LLM consumption.',
+  description: 'Generate a workspace context bundle (like Repomix) for LLM consumption.',
   inputSchema: z.object({
-    path: z.string().optional().describe('Project path'),
+    path: z.string().optional().describe('Workspace path'),
     format: z.enum(['markdown', 'xml', 'json', 'plain']).optional().default('markdown'),
     maxFileSize: z.number().optional().describe('Max file size in bytes'),
     maxTotalSize: z.number().optional().describe('Max total bundle size'),
@@ -609,7 +609,7 @@ export const PROJECT_BUNDLE_CAPABILITY: CapabilityDefinition = {
     warnings: z.array(z.string()),
   }),
   providerPriority: ['context-pack', 'vfs'],
-  tags: ['project', 'bundle', 'context', 'repomix', 'export'],
+  tags: ['workspace', 'bundle', 'context', 'repomix', 'export'],
 };
 
 export const REPO_ANALYZE_CAPABILITY: CapabilityDefinition = {
@@ -1941,14 +1941,14 @@ export const WORKFLOW_REQUEST_APPROVAL_CAPABILITY: CapabilityDefinition = {
 // ============================================================================
 
 // ============================================================================
-// Project Analysis Capabilities (Queryable MCP-style tools)
+// Workspace Analysis Capabilities (Queryable MCP-style tools)
 // ============================================================================
 
 export const PROJECT_ANALYZE_CAPABILITY: CapabilityDefinition = {
-  id: 'project.analyze',
-  name: 'Analyze Project',
+  id: 'workspace.analyze',
+  name: 'Analyze Workspace',
   category: 'repo',
-  description: 'Deep analysis of a project: detects framework, package manager, ' +
+  description: 'Deep analysis of a workspace: detects framework, package manager, ' +
     'entry points, configuration files, dependencies, and generates recommended ' +
     'commands for install/run/test/build. Returns structured JSON.',
   inputSchema: z.object({
@@ -1974,15 +1974,15 @@ export const PROJECT_ANALYZE_CAPABILITY: CapabilityDefinition = {
     fileCount: z.number(),
     topDirs: z.array(z.string()),
   }),
-  providerPriority: ['project-analysis'],
-  tags: ['project', 'analyze', 'detection', 'context'],
+  providerPriority: ['workspace-analysis'],
+  tags: ['workspace', 'analyze', 'detection', 'context'],
 };
 
 export const PROJECT_LIST_SCRIPTS_CAPABILITY: CapabilityDefinition = {
-  id: 'project.list_scripts',
+  id: 'workspace.list_scripts',
   name: 'List Scripts',
   category: 'repo',
-  description: 'List all runnable scripts/tasks in the project. Includes npm scripts, ' +
+  description: 'List all runnable scripts/tasks in the workspace. Includes npm scripts, ' +
     'Makefile targets, pyproject.toml tasks, deno tasks, cargo commands, go tasks, ' +
     'turbo and nx tasks.',
   inputSchema: z.object({}),
@@ -1993,12 +1993,12 @@ export const PROJECT_LIST_SCRIPTS_CAPABILITY: CapabilityDefinition = {
       source: z.string(),
     })),
   }),
-  providerPriority: ['project-analysis'],
-  tags: ['project', 'scripts', 'tasks', 'commands'],
+  providerPriority: ['workspace-analysis'],
+  tags: ['workspace', 'scripts', 'tasks', 'commands'],
 };
 
 export const PROJECT_DEPENDENCIES_CAPABILITY: CapabilityDefinition = {
-  id: 'project.dependencies',
+  id: 'workspace.dependencies',
   name: 'Get Dependencies',
   category: 'repo',
   description: 'List installed dependencies and detect issues like missing packages, ' +
@@ -2018,15 +2018,15 @@ export const PROJECT_DEPENDENCIES_CAPABILITY: CapabilityDefinition = {
     }),
     packageManager: z.string(),
   }),
-  providerPriority: ['project-analysis'],
-  tags: ['project', 'dependencies', 'packages', 'issues'],
+  providerPriority: ['workspace-analysis'],
+  tags: ['workspace', 'dependencies', 'packages', 'issues'],
 };
 
 export const PROJECT_STRUCTURE_CAPABILITY: CapabilityDefinition = {
-  id: 'project.structure',
-  name: 'Get Project Structure',
+  id: 'workspace.structure',
+  name: 'Get Workspace Structure',
   category: 'repo',
-  description: 'Get the file tree of the project with semantic understanding. ' +
+  description: 'Get the file tree of the workspace with semantic understanding. ' +
     'Returns a structured tree object, file type counts, a text summary, ' +
     'and notable files (config files, entry points, documentation).',
   inputSchema: z.object({
@@ -2042,8 +2042,8 @@ export const PROJECT_STRUCTURE_CAPABILITY: CapabilityDefinition = {
     summary: z.string().describe('Text summary of top-level structure'),
     notableItems: z.array(z.string()),
   }),
-  providerPriority: ['project-analysis'],
-  tags: ['project', 'structure', 'tree', 'files'],
+  providerPriority: ['workspace-analysis'],
+  tags: ['workspace', 'structure', 'tree', 'files'],
 };
 
 // ============================================================================
@@ -2370,7 +2370,7 @@ export const ALL_CAPABILITIES: CapabilityDefinition[] = [
   WORKFLOW_ROLLBACK_CAPABILITY,
   WORKFLOW_HISTORY_CAPABILITY,
   WORKFLOW_REQUEST_APPROVAL_CAPABILITY,
-  // Project Analysis (Queryable MCP-style tools)
+  // Workspace Analysis (Queryable MCP-style tools)
   PROJECT_ANALYZE_CAPABILITY,
   PROJECT_LIST_SCRIPTS_CAPABILITY,
   PROJECT_DEPENDENCIES_CAPABILITY,

@@ -1,11 +1,11 @@
 /**
  * Progressive Build Engine
  *
- * A multi-iteration, file-aware, self-stopping project build loop.
+ * A multi-iteration, file-aware, self-stopping workspace build loop.
  *
  * The LLM is called repeatedly with:
  *   1. Original user prompt (the north-star)
- *   2. Current project tree
+ *   2. Current workspace tree
  *   3. Context from last iteration (diffs, full files, or tree-only via contextMode)
  *   4. Optional: gap analysis from a self-review pass
  *
@@ -90,7 +90,7 @@ export interface ProgressiveBuildResult {
   totalDurationMs: number;
   allIterations: BuildIterationResult[];
   finalResponse: string;
-  /** Full project tree at completion */
+  /** Full workspace tree at completion */
   projectTree: string;
   warnings: string[];
 }
@@ -117,7 +117,7 @@ const BUILD_COMPLETE_PATTERNS = [
   /{"build_status"\s*:\s*"complete"/i,
   /All requirements satisfied/i,
   /Everything has been implemented/i,
-  /The project is now complete/i,
+  /The workspace is now complete/i,
 ];
 
 // ─── Completion Detection ─────────────────────────────────────────────────────
@@ -151,19 +151,19 @@ export function detectBuildComplete(response: string, customIndicator?: string):
  * This is emitted once at the start and persists across all iterations.
  */
 function buildBuildSystemPrompt(userPrompt: string, completionIndicator: string): string {
-  return `You are an expert software engineer building a complete software project iteratively.
+  return `You are an expert software engineer building a complete software workspace iteratively.
 
 ## ORIGINAL REQUEST
 ${userPrompt}
 
 ## HOW THIS LOOP WORKS
-- You are called in **successive iterations**. Each call, you receive the current project state and must implement the NEXT logical piece.
+- You are called in **successive iterations**. Each call, you receive the current workspace state and must implement the NEXT logical piece.
 - Each response should create or modify files with **real, working code**.
 - Do NOT repeat or rewrite files from previous iterations unless you are specifically improving them.
-- Build incrementally but meaningfully — each iteration should advance the project significantly.
+- Build incrementally but meaningfully — each iteration should advance the workspace significantly.
 
 ## WHAT YOU RECEIVE EACH ITERATION
-1. The current **project file tree** (always included)
+1. The current **workspace file tree** (always included)
 2. Either:
    - A **diff of changes** from the last iteration (what was added/modified/deleted)
    - **Full file contents** of key files to review
@@ -171,7 +171,7 @@ ${userPrompt}
 3. An optional **gap analysis** from a review of the previous iteration
 
 ## YOUR JOB
-1. Review the current project tree and recent changes.
+1. Review the current workspace tree and recent changes.
 2. Identify what the user originally asked for that is NOT YET implemented.
 3. Write ONLY the files/edits needed for the NEXT logical piece.
 4. Use the write_file, batch_write, and apply_diff tools to make changes.
@@ -182,13 +182,13 @@ When you believe the original request is **100% complete** — every feature, fi
 
 ${completionIndicator}
 
-Do NOT emit ${completionIndicator} until the project is genuinely fully complete.
+Do NOT emit ${completionIndicator} until the workspace is genuinely fully complete.
 Do NOT emit it at the end of every response — only the final one.
 If there is still work to do, do NOT emit it — just continue building.`;
 }
 
 /**
- * Build the per-iteration user message with project state.
+ * Build the per-iteration user message with workspace state.
  */
 function buildIterationUserMessage(params: {
   iteration: number;
@@ -203,9 +203,9 @@ function buildIterationUserMessage(params: {
   const parts: string[] = [
     `## Iteration ${iteration}`,
     '',
-    '### Current Project Tree',
+    '### Current Workspace Tree',
     '```',
-    projectTree || '(empty — project root exists but no files yet)',
+    projectTree || '(empty — workspace root exists but no files yet)',
     '```',
   ];
 
@@ -255,7 +255,7 @@ export async function defaultReflectionFn(
       {
         role: 'system',
         content: `You are a code reviewer analyzing the output of a software build iteration.
-Your job is to identify what is still MISSING from the project compared to the original request.
+Your job is to identify what is still MISSING from the workspace compared to the original request.
 Be concise. List specific gaps. Give a completeness score (0-100).`,
       },
       {
@@ -263,7 +263,7 @@ Be concise. List specific gaps. Give a completeness score (0-100).`,
         content: `## Original Request
 ${userPrompt}
 
-## Current Project Tree
+## Current Workspace Tree
 ${projectTree}
 
 ## Last Iteration Output (excerpt)
@@ -323,7 +323,7 @@ async function fetchMemories(userId: string, sessionId?: string): Promise<string
     const { isMem0Configured, mem0Search } = await import('@/lib/powers/mem0-power');
     if (!isMem0Configured()) return null;
 
-    const result = await mem0Search({ query: 'project build requirements preferences', userId, limit: 5 }, { userId });
+    const result = await mem0Search({ query: 'workspace build requirements preferences', userId, limit: 5 }, { userId });
     if (!result.success || !result.results || result.results.length === 0) return null;
 
     return result.results
@@ -341,7 +341,7 @@ export interface ProgressiveBuildOptions {
   userId: string;
   /** Session ID for mem0 scoping */
   sessionId?: string;
-  /** The user's original project prompt */
+  /** The user's original workspace prompt */
   userPrompt: string;
   /**
    * LLM call function. Receives an array of {role, content} messages.
@@ -360,7 +360,7 @@ export interface ProgressiveBuildOptions {
     projectTree: string,
     lastResponse: string,
   ) => Promise<ReflectionResult>) | false;
-  /** Optional: function to get project tree string (defaults to smart-context's tree builder) */
+  /** Optional: function to get workspace tree string (defaults to smart-context's tree builder) */
   getProjectTree?: () => Promise<string>;
   /** Loop config — merges with defaults */
   config?: ProgressiveBuildConfig;
@@ -438,7 +438,7 @@ export async function runProgressiveBuild(options: ProgressiveBuildOptions): Pro
     log(`\n${'─'.repeat(50)}`);
     log(`Iteration ${iteration}/${config.maxIterations} [contextMode: ${config.contextMode}]`);
 
-    // Get project tree (use custom getter or fall back to smart-context)
+    // Get workspace tree (use custom getter or fall back to smart-context)
     let projectTree: string;
     if (options.getProjectTree) {
       projectTree = await options.getProjectTree();
@@ -512,7 +512,7 @@ export async function runProgressiveBuild(options: ProgressiveBuildOptions): Pro
       gapsIdentified = reflection.gapsIdentified;
 
       if (reflection.score >= 90) {
-        log(`Reflection: project looks ${reflection.score}% complete`);
+        log(`Reflection: workspace looks ${reflection.score}% complete`);
       } else {
         log(`Reflection: ${reflection.gapsIdentified.length} gaps identified (score: ${reflection.score}%)`);
       }
@@ -634,7 +634,7 @@ export async function runProgressiveBuild(options: ProgressiveBuildOptions): Pro
     log(`Continuing to iteration ${iteration + 1}...`);
   }
 
-  // Final project tree
+  // Final workspace tree
   let finalTree = '';
   try {
     if (options.getProjectTree) {
@@ -735,7 +735,7 @@ function isValidPath(p: string): boolean {
 // ─── Presets ──────────────────────────────────────────────────────────────────
 
 /**
- * Pre-configured build presets for common project sizes.
+ * Pre-configured build presets for common workspace sizes.
  */
 export const BuildPresets = {
   /** Large codebases — minimal token usage, tree + diffs only */

@@ -140,7 +140,7 @@ describe('Unified Agent Service', () => {
         'Build a full-stack app with React and Node.js',
         'Create multiple files for authentication',
         'Implement dashboard with API integration',
-        'Set up project structure and deployment',
+        'Set up workspace structure and deployment',
         'Refactor codebase to use TypeScript',
       ];
 

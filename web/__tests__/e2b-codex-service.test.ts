@@ -551,7 +551,7 @@ describe('E2B Codex Service', () => {
         imagePath: '/design.png',
         imageData,
         fullAuto: true,
-        workingDir: '/home/user/project',
+        workingDir: '/home/user/workspace',
       })
 
       expect(result.exitCode).toBe(0)

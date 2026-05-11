@@ -320,7 +320,7 @@ export async function syncSandboxToVFS(
     // Emit event for cross-panel sync (client-side only)
     if (filesSynced > 0 && typeof window !== 'undefined') {
       emitFilesystemUpdated({
-        scopePath: 'project',
+        scopePath: 'workspace',
         source: 'sandbox',
         workspaceVersion: undefined, // Version tracking handled by VFS service
         sessionId: sandbox.id,
@@ -381,7 +381,7 @@ async function readIndividualFiles(
     // Emit event for cross-panel sync (client-side only)
     if (filesSynced > 0 && typeof window !== 'undefined') {
       emitFilesystemUpdated({
-        scopePath: 'project',
+        scopePath: 'workspace',
         source: 'sandbox',
         paths: syncedPaths,
         workspaceVersion: undefined,

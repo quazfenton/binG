@@ -189,7 +189,7 @@ class PlannerService {
       tasks.push({
         id: taskId(tasks.length),
         type: 'create',
-        goal: 'Create necessary project structure and configuration files',
+        goal: 'Create necessary workspace structure and configuration files',
         dependencies: [taskId(0)],
         status: 'pending',
         executionPolicy,

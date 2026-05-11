@@ -23,7 +23,7 @@
  * // Start Claude Code agent
  * const claudeAgent = await manager.startAgent({
  *   type: 'claude-code',
- *   workspaceDir: '/workspace/my-project',
+ *   workspaceDir: '/workspace/my-workspace',
  *   apiKey: process.env.ANTHROPIC_API_KEY,
  * });
  * 

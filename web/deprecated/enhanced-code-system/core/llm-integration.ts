@@ -272,7 +272,7 @@ export class LLMIntegration {
   }
 
   /**
-   * Build enhanced prompt with project context
+   * Build enhanced prompt with workspace context
    */
   private buildEnhancedPrompt(prompt: string, projectFiles?: ProjectItem[]): string {
     let enhancedPrompt = prompt;

@@ -6,7 +6,7 @@
  *
  * Usage in a React component:
  *   const { search, indexedFiles, isIndexing } = useCodeRetrieval({
- *     projectId: 'my-project',
+ *     projectId: 'my-workspace',
  *     userId: 'user-123',
  *   });
  *
@@ -23,9 +23,9 @@ import type { SearchResult } from "../retrieval/search";
 import { retrieveHybrid, type HybridRetrievalOptions, type HybridRetrievalResult } from "./hybrid-retrieval";
 
 export interface UseCodeRetrievalOptions {
-  /** Stable project identifier — same ID across sessions for persistence */
+  /** Stable workspace identifier — same ID across sessions for persistence */
   projectId: string;
-  /** Human-readable project name (for system prompt) */
+  /** Human-readable workspace name (for system prompt) */
   projectName?: string;
   /** LLM provider function — called for Q&A */
   llm?: RetrievalConfig["llm"];

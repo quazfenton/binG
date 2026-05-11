@@ -11,7 +11,7 @@
  *
  * Core Model:
  * - Namespace: Isolation boundary for compute/storage
- * - Project: Collaboration and permission boundary for filesystems
+ * - Workspace: Collaboration and permission boundary for filesystems
  * - Filesystem: Persistent files mounted at /workspace
  * - Agent: Deployed Python runtime (versions via branches)
  * - Task: One running conversation/unit of work
@@ -38,7 +38,7 @@
  *     OPENAI_API_KEY: process.env.OPENAI_API_KEY,
  *   },
  *   labels: {
- *     project_id: 'proj_xxxxx', // Links to a project for filesystem
+ *     project_id: 'proj_xxxxx', // Links to a workspace for filesystem
  *   },
  * })
  *
@@ -578,7 +578,7 @@ export class TerminalUseProvider implements SandboxProvider {
     logger.info(`Creating TerminalUse sandbox: ${sandboxId}`)
 
     try {
-      // Create a project if project_id is provided in labels
+      // Create a workspace if project_id is provided in labels
       let projectId: string | undefined
       if (config.labels?.project_id) {
         projectId = config.labels.project_id

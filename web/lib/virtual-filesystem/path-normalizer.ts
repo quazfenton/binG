@@ -11,7 +11,7 @@
  *  - Strip leading `./`
  *  - Strip absolute desktop/CLI workspace root (INITIAL_CWD, DESKTOP_WORKSPACE_ROOT)
  *  - Strip bare Windows drive letter (C:/) in web mode
- *  - Strip redundant VFS scope prefixes (project/sessions/XXX/, sessions/, workspace/sessions/)
+ *  - Strip redundant VFS scope prefixes (workspace/sessions/XXX/, sessions/, workspace/sessions/)
  *  - Path traversal rejection
  *
  * @module path-normalizer
@@ -22,7 +22,7 @@
 // ============================================================================
 
 export interface NormalizePathOptions {
-  /** The VFS scope path for this session (e.g. "project/sessions/001"). */
+  /** The VFS scope path for this session (e.g. "workspace/sessions/001"). */
   scopePath?: string;
   /** If true, strip Windows drive letters even when not in desktop mode. Default: true. */
   stripDriveLetters?: boolean;
@@ -35,7 +35,7 @@ export interface NormalizePathOptions {
 }
 
 export interface NormalizeForDisplayOptions {
-  /** If provided, this prefix is stripped first (e.g. "project/sessions/001"). */
+  /** If provided, this prefix is stripped first (e.g. "workspace/sessions/001"). */
   scopePath?: string;
 }
 
@@ -136,8 +136,8 @@ export function normalizeLLMPath(
     }
   }
 
-  // 4b: Strip "project/sessions/{anyId}/" prefix (LLM echoing context paths)
-  const projectSessionMatch = p.match(/^project\/sessions\/[^/]+\/(.+)$/);
+  // 4b: Strip "workspace/sessions/{anyId}/" prefix (LLM echoing context paths)
+  const projectSessionMatch = p.match(/^workspace\/sessions\/[^/]+\/(.+)$/);
   if (projectSessionMatch) {
     p = projectSessionMatch[1];
   }
@@ -197,7 +197,7 @@ export function normalizeLLMPath(
 
 /**
  * Strip VFS internal prefixes from a path for display to the LLM.
- * The LLM should see "src/App.tsx", not "project/sessions/001/src/App.tsx".
+ * The LLM should see "src/App.tsx", not "workspace/sessions/001/src/App.tsx".
  *
  * Also strips desktop workspace root if running in desktop mode.
  */
@@ -215,12 +215,12 @@ export function stripScopePrefixForDisplay(
     if (p === opts.scopePath) return '.';
   }
 
-  // Strip "project/sessions/{sessionId}/" prefix
-  const match = p.match(/^project\/sessions\/[^/]+\/(.+)$/);
+  // Strip "workspace/sessions/{sessionId}/" prefix
+  const match = p.match(/^workspace\/sessions\/[^/]+\/(.+)$/);
   if (match) return match[1];
 
-  // Strip "project/" prefix as fallback
-  if (p.startsWith('project/')) return p.slice('project/'.length);
+  // Strip "workspace/" prefix as fallback
+  if (p.startsWith('workspace/')) return p.slice('workspace/'.length);
 
   // Strip desktop workspace root
   const desktopRoot = getDesktopRoot();
@@ -242,7 +242,7 @@ export function stripScopePrefixForDisplay(
  * Normalize an LLM path and prepend the VFS scope path.
  * This is the primary function for resolving tool paths to VFS paths.
  *
- * @returns Fully-qualified VFS path (e.g. "project/sessions/001/src/app.ts")
+ * @returns Fully-qualified VFS path (e.g. "workspace/sessions/001/src/app.ts")
  */
 export function resolveToScopedPath(
   inputPath: string,
@@ -253,10 +253,10 @@ export function resolveToScopedPath(
   // If normalization returned '.', return the scope root
   if (relative === '.') return scopePath;
 
-  // If the relative path already starts with "project/", validate it's within the expected scope.
-  // Paths like "project/sessions/other-id/file" or "project/other-scope/file" are rejected
+  // If the relative path already starts with "workspace/", validate it's within the expected scope.
+  // Paths like "workspace/sessions/other-id/file" or "workspace/other-scope/file" are rejected
   // to prevent scope escape attacks.
-  if (relative.startsWith('project/')) {
+  if (relative.startsWith('workspace/')) {
     if (relative.startsWith(scopePath + '/') || relative === scopePath) {
       return relative;
     }

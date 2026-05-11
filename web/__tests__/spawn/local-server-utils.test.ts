@@ -245,7 +245,7 @@ describe('local-server-utils', () => {
 
   describe('spawnLocalAgent', () => {
     const baseOptions: SpawnLocalAgentOptions = {
-      cwd: '/workspace/project',
+      cwd: '/workspace/workspace',
       env: { MY_KEY: 'my-value' },
       label: 'test-agent',
       onExit: undefined,
@@ -264,7 +264,7 @@ describe('local-server-utils', () => {
         '/usr/local/bin/agent',
         ['serve', '--port', '3000'],
         expect.objectContaining({
-          cwd: '/workspace/project',
+          cwd: '/workspace/workspace',
           stdio: ['pipe', 'pipe', 'pipe'],
         }),
       );

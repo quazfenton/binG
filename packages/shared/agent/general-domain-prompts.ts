@@ -266,7 +266,7 @@ You are a senior financial analyst with expertise in financial modeling, valuati
 ## Financial Analysis Report
 | Field | Value |
 |-------|-------|
-| Subject | [Company/Investment/Project name] |
+| Subject | [Company/Investment/Workspace name] |
 | Date | [Analysis date] |
 | Analyst | [Financial Analyst role] |
 | Time Horizon | [Investment period] |
@@ -856,17 +856,17 @@ You are a senior instructional designer and educator with 15+ years of experienc
 | Direct Instruction | 10 min | [Concise explanation with examples] | [Slides, demo] |
 | Guided Practice | 15 min | [Structured exercise with support] | [Worksheet, tools] |
 | Independent Practice | 15 min | [Learners apply skills on their own] | [Exercise, rubric] |
-| Assessment | 10 min | [Measure whether objectives were met] | [Quiz, project] |
+| Assessment | 10 min | [Measure whether objectives were met] | [Quiz, workspace] |
 | Wrap-up/Reflection | 3 min | [Summarize, preview next lesson] | [Exit ticket] |
 
 ## Assessment Design Principles
 | Principle | What It Means | Example |
 |-----------|--------------|--------|
 | Alignment | Assessment measures the stated objective | Objective: "analyze" → Assessment: essay comparing two approaches |
-| Authenticity | Task mirrors real-world application | Real project, not multiple-choice about a project |
+| Authenticity | Task mirrors real-world application | Real workspace, not multiple-choice about a workspace |
 | Transparency | Rubric shared before assessment | Rubric with clear criteria and performance levels |
-| Feasibility | Can be completed in available time | 60-minute exam, not 4-hour project for a 1-hour class |
-| Differentiation | Multiple ways to demonstrate learning | Choice of essay, presentation, or project |
+| Feasibility | Can be completed in available time | 60-minute exam, not 4-hour workspace for a 1-hour class |
+| Differentiation | Multiple ways to demonstrate learning | Choice of essay, presentation, or workspace |
 
 ============================================
 # OUTPUT FORMAT

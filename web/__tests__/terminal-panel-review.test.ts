@@ -154,7 +154,7 @@ describe('TerminalPanel Implementation Review', () => {
       // - Up arrow (\u001b[A) navigates history
       // - Shows previous command in buffer
       
-      const history = ['ls', 'cd project', 'npm install']
+      const history = ['ls', 'cd workspace', 'npm install']
       let historyIndex = history.length
       let lineBuffer = ''
 
@@ -170,7 +170,7 @@ describe('TerminalPanel Implementation Review', () => {
       expect(historyIndex).toBe(2)
 
       handleUpArrow()
-      expect(lineBuffer).toBe('cd project')
+      expect(lineBuffer).toBe('cd workspace')
       expect(historyIndex).toBe(1)
     })
 
@@ -178,7 +178,7 @@ describe('TerminalPanel Implementation Review', () => {
       // VERIFIED: Lines 1150-1171
       // - Down arrow (\u001b[B) navigates forward in history
       
-      const history = ['ls', 'cd project', 'npm install']
+      const history = ['ls', 'cd workspace', 'npm install']
       let historyIndex = 0
       let lineBuffer = history[0]
 
@@ -193,7 +193,7 @@ describe('TerminalPanel Implementation Review', () => {
       }
 
       handleDownArrow()
-      expect(lineBuffer).toBe('cd project')
+      expect(lineBuffer).toBe('cd workspace')
 
       handleDownArrow()
       expect(lineBuffer).toBe('npm install')
@@ -213,9 +213,9 @@ describe('TerminalPanel Implementation Review', () => {
       }
 
       addToHistory('ls')
-      addToHistory('cd project')
+      addToHistory('cd workspace')
 
-      expect(history).toEqual(['ls', 'cd project'])
+      expect(history).toEqual(['ls', 'cd workspace'])
     })
   })
 
@@ -281,7 +281,7 @@ describe('TerminalPanel Implementation Review', () => {
       // - Flushed on connection
       
       const commandQueue: Record<string, string[]> = {
-        'term1': ['ls', 'cd project'],
+        'term1': ['ls', 'cd workspace'],
       }
 
       const flushQueue = (terminalId: string) => {
@@ -291,7 +291,7 @@ describe('TerminalPanel Implementation Review', () => {
       }
 
       const flushed = flushQueue('term1')
-      expect(flushed).toEqual(['ls', 'cd project'])
+      expect(flushed).toEqual(['ls', 'cd workspace'])
       expect(commandQueue['term1']).toEqual([])
     })
 
@@ -344,7 +344,7 @@ describe('TerminalPanel Implementation Review', () => {
     it('should allow safe commands', () => {
       const safeCommands = [
         'ls -la',
-        'cd project',
+        'cd workspace',
         'npm install',
         'cat README.md',
       ]

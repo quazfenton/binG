@@ -21,7 +21,7 @@ export interface MCPToolConfig {
   
   /**
    * Tool-specific configuration
-   * Varies by tool (e.g., API keys, project IDs)
+   * Varies by tool (e.g., API keys, workspace IDs)
    */
   config?: Record<string, any>;
 }

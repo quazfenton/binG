@@ -556,7 +556,7 @@ export class EnhancedPTYTerminalManager {
       displayName = instance.session.userId.slice(0, 12);
     }
 
-    // Build a short workspace display — prefer session sandboxId or project name
+    // Build a short workspace display — prefer session sandboxId or workspace name
     let workspaceInfo = '';
     if (instance.session?.sandboxId) {
       // Truncate sandbox ID to first 8 chars
@@ -564,7 +564,7 @@ export class EnhancedPTYTerminalManager {
     } else {
       // Extract last path segment from cwd as workspace name
       const segments = cwd.replace(/\\/g, '/').split('/').filter(Boolean);
-      workspaceInfo = segments.length > 0 ? segments[segments.length - 1] : 'project';
+      workspaceInfo = segments.length > 0 ? segments[segments.length - 1] : 'workspace';
     }
 
     // Prompt format: ➜ user @ workspace $

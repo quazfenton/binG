@@ -169,10 +169,10 @@ export class OpencodeV2Provider implements LLMProvider {
         const path = await import('path');
         const sanitized = this.sanitizePath(requestedCwd);
         if (sanitized) {
-          // If it's a VFS scoped path like "project/sessions/xxx", convert to real path
-          if (sanitized.startsWith('project/')) {
-            // Strip "project/" prefix and append to workspace base
-            const relativePart = sanitized.replace(/^project\//, '');
+          // If it's a VFS scoped path like "workspace/sessions/xxx", convert to real path
+          if (sanitized.startsWith('workspace/')) {
+            // Strip "workspace/" prefix and append to workspace base
+            const relativePart = sanitized.replace(/^workspace\//, '');
             localWorkspaceDir = isWindows
               ? path.join(process.env.TEMP || process.env.TMP || 'C:\\temp', 'workspace', relativePart)
               : path.join('/tmp/workspace', relativePart);
@@ -187,8 +187,8 @@ export class OpencodeV2Provider implements LLMProvider {
         const path = await import('path');
         const sanitizedWorkspace = this.sanitizePath(workspaceDir);
 
-        if (sanitizedWorkspace?.startsWith('project/')) {
-          const relativePart = sanitizedWorkspace.replace(/^project\//, '');
+        if (sanitizedWorkspace?.startsWith('workspace/')) {
+          const relativePart = sanitizedWorkspace.replace(/^workspace\//, '');
           localWorkspaceDir = isWindows
             ? path.join(process.env.TEMP || process.env.TMP || 'C:\\temp', 'workspace', relativePart)
             : path.join('/tmp/workspace', relativePart);
@@ -770,7 +770,7 @@ export class OpencodeV2Provider implements LLMProvider {
   }
 
   /**
-   * Detect project type from the workspace directory by examining package.json, 
+   * Detect workspace type from the workspace directory by examining package.json, 
    * Cargo.toml, go.mod, etc. Returns the appropriate run command.
    */
   private async detectProjectCommand(cwd: string): Promise<string | null> {
@@ -815,13 +815,13 @@ export class OpencodeV2Provider implements LLMProvider {
 
   /**
    * Translate natural language task descriptions into actual shell commands.
-   * Uses the shared project-detection module for consistency.
+   * Uses the shared workspace-detection module for consistency.
    */
   private async translateNaturalLanguageToCommand(task: string, cwd: string): Promise<string> {
-    // Import the shared project detection module
-    const { buildProjectContext, translateNaturalLanguageToCommand: translateNL } = await import('../../project-detection');
+    // Import the shared workspace detection module
+    const { buildProjectContext, translateNaturalLanguageToCommand: translateNL } = await import('../../workspace-detection');
 
-    // Get file listing from the cwd directory for project detection
+    // Get file listing from the cwd directory for workspace detection
     try {
       const fs = await import('fs/promises');
       const path = await import('path');
@@ -858,7 +858,7 @@ export class OpencodeV2Provider implements LLMProvider {
 
       return translateNL(task, projectCtx);
     } catch {
-      // Fallback if project detection fails
+      // Fallback if workspace detection fails
       return task;
     }
   }

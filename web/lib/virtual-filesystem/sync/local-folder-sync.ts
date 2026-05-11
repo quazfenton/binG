@@ -89,7 +89,7 @@ export interface SyncedFolder {
   sessionId: string;
   /** User-friendly folder name */
   name: string;
-  /** Path in VFS (e.g., project/sessions/abc/synced/my-folder) */
+  /** Path in VFS (e.g., workspace/sessions/abc/synced/my-folder) */
   vfsPath: string;
   /** Root path in OPFS (e.g., /synced/my-folder) */
   opfsRoot: string;

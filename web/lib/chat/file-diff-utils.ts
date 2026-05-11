@@ -445,7 +445,7 @@ export function extractFileWritesFromLLMResponse(
   options: { scopePath?: string } = {}
 ): Array<{ path: string; content: string }> {
   const writes: Array<{ path: string; content: string }> = [];
-  const scopePath = options.scopePath || 'project';
+  const scopePath = options.scopePath || 'workspace';
 
   // Pattern 1: echo "content" > file or echo 'content' > file in bash blocks
   const bashBlockPattern = /```(?:bash|sh|shell)\s*\n([\s\S]*?)```/gi;
@@ -457,7 +457,7 @@ export function extractFileWritesFromLLMResponse(
     while ((echoMatch = echoPattern.exec(blockContent)) !== null) {
       const fileContent = echoMatch[1] ?? echoMatch[2] ?? '';
       let filePath = echoMatch[3].trim();
-      if (!filePath.startsWith('project/') && !filePath.startsWith('/')) {
+      if (!filePath.startsWith('workspace/') && !filePath.startsWith('/')) {
         filePath = `${scopePath}/${filePath}`;
       }
       filePath = filePath.replace(/^\/+/, '');
@@ -471,7 +471,7 @@ export function extractFileWritesFromLLMResponse(
     while ((catMatch = catPattern.exec(blockContent)) !== null) {
       let filePath = catMatch[1].trim();
       const fileContent = catMatch[3].trim();
-      if (!filePath.startsWith('project/') && !filePath.startsWith('/')) {
+      if (!filePath.startsWith('workspace/') && !filePath.startsWith('/')) {
         filePath = `${scopePath}/${filePath}`;
       }
       filePath = filePath.replace(/^\/+/, '');
@@ -486,7 +486,7 @@ export function extractFileWritesFromLLMResponse(
   let diffMatch;
   while ((diffMatch = diffBlockPattern.exec(content)) !== null) {
     let filePath = diffMatch[2].trim();
-    if (!filePath.startsWith('project/') && !filePath.startsWith('/')) {
+    if (!filePath.startsWith('workspace/') && !filePath.startsWith('/')) {
       filePath = `${scopePath}/${filePath}`;
     }
     filePath = filePath.replace(/^\/+/, '');
@@ -517,10 +517,10 @@ export function extractFileWritesFromLLMResponse(
     let diffApplyMatch;
     while ((diffApplyMatch = diffApplyPattern.exec(content)) !== null) {
       const fileContent = diffApplyMatch[1].trim();
-      const pathMatch = content.match(/[`'"]?(project\/[\w\-\/]+\.[\w]+)[`'"]?/i);
+      const pathMatch = content.match(/[`'"]?(workspace\/[\w\-\/]+\.[\w]+)[`'"]?/i);
       if (pathMatch && fileContent && fileContent.length > 3) {
         let filePath = pathMatch[1].trim();
-        if (!filePath.startsWith('project/') && !filePath.startsWith('/')) {
+        if (!filePath.startsWith('workspace/') && !filePath.startsWith('/')) {
           filePath = `${scopePath}/${filePath}`;
         }
         filePath = filePath.replace(/^\/+/, '');
@@ -540,7 +540,7 @@ export function extractFileWritesFromLLMResponse(
     if (isFilePath && !pathHint.startsWith('bash') && !pathHint.startsWith('sh') && !pathHint.startsWith('javascript') && !pathHint.startsWith('python') && !pathHint.startsWith('diff')) {
       let filePath = pathHint;
       const fileContent = codeFileMatch[2].trim();
-      if (!filePath.startsWith('project/') && !filePath.startsWith('/')) {
+      if (!filePath.startsWith('workspace/') && !filePath.startsWith('/')) {
         filePath = `${scopePath}/${filePath}`;
       }
       filePath = filePath.replace(/^\/+/, '');
@@ -561,7 +561,7 @@ export function extractFileWritesFromLLMResponse(
       let filePath = (fsMatch[1] ?? fsMatch[2] ?? '').trim();
       const fileContent = fsMatch[3] ?? '';
       if (filePath && fileContent) {
-        if (!filePath.startsWith('project/') && !filePath.startsWith('/')) {
+        if (!filePath.startsWith('workspace/') && !filePath.startsWith('/')) {
           filePath = `${scopePath}/${filePath}`;
         }
         filePath = filePath.replace(/^\/+/, '');
@@ -581,7 +581,7 @@ export function extractFileWritesFromLLMResponse(
       let filePath = pyMatch[1].trim();
       const fileContent = pyMatch[2] ?? '';
       if (filePath && fileContent) {
-        if (!filePath.startsWith('project/') && !filePath.startsWith('/')) {
+        if (!filePath.startsWith('workspace/') && !filePath.startsWith('/')) {
           filePath = `${scopePath}/${filePath}`;
         }
         filePath = filePath.replace(/^\/+/, '');

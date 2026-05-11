@@ -40,7 +40,7 @@ describe('LivePreview Integration', () => {
   };
 
   describe('Framework Detection', () => {
-    it('should detect React project from package.json dependencies', async () => {
+    it('should detect React workspace from package.json dependencies', async () => {
       const files = [
         {
           name: 'package.json',
@@ -72,7 +72,7 @@ describe('LivePreview Integration', () => {
       expect(result.previewMode).toBe('sandpack');
     });
 
-    it('should detect Next.js project from package.json and config files', async () => {
+    it('should detect Next.js workspace from package.json and config files', async () => {
       const files = [
         {
           name: 'package.json',
@@ -106,7 +106,7 @@ describe('LivePreview Integration', () => {
       expect(result.previewMode).toBe('nextjs');
     });
 
-    it('should detect Vue project', async () => {
+    it('should detect Vue workspace', async () => {
       const files = [
         {
           name: 'package.json',
@@ -137,7 +137,7 @@ describe('LivePreview Integration', () => {
       expect(result.previewMode).toBe('sandpack');
     });
 
-    it('should detect Svelte project', async () => {
+    it('should detect Svelte workspace', async () => {
       const files = [
         {
           name: 'package.json',
@@ -166,7 +166,7 @@ describe('LivePreview Integration', () => {
       expect(result.previewMode).toBe('sandpack');
     });
 
-    it('should detect Python Flask project', async () => {
+    it('should detect Python Flask workspace', async () => {
       const files = [
         {
           name: 'requirements.txt',
@@ -185,7 +185,7 @@ describe('LivePreview Integration', () => {
       expect(['pyodide', 'modal']).toContain(result.previewMode);
     });
 
-    it('should detect FastAPI project', async () => {
+    it('should detect FastAPI workspace', async () => {
       const files = [
         {
           name: 'requirements.txt',
@@ -203,7 +203,7 @@ describe('LivePreview Integration', () => {
       expect(result.previewMode).toBe('devbox');
     });
 
-    it('should detect Streamlit project', async () => {
+    it('should detect Streamlit workspace', async () => {
       const files = [
         {
           name: 'requirements.txt',
@@ -221,7 +221,7 @@ describe('LivePreview Integration', () => {
       expect(result.previewMode).toBe('pyodide');
     });
 
-    it('should detect Vite project with explicit config', async () => {
+    it('should detect Vite workspace with explicit config', async () => {
       const files = [
         {
           name: 'package.json',
@@ -249,7 +249,7 @@ expect(result.framework).toBe('vite');
       expect(['iframe']).toContain(result.previewMode);
     });
 
-    it('should detect Webpack project', async () => {
+    it('should detect Webpack workspace', async () => {
       const files = [
         {
           name: 'package.json',
@@ -275,7 +275,7 @@ expect(result.framework).toBe('vite');
       expect(result.previewMode).toBe('webpack');
     });
 
-    it('should detect vanilla HTML/CSS/JS project', async () => {
+    it('should detect vanilla HTML/CSS/JS workspace', async () => {
       const files = [
         {
           name: 'index.html',
@@ -297,7 +297,7 @@ expect(result.framework).toBe('vite');
       expect(result.previewMode).toBe('iframe');
     });
 
-    it('should detect Nuxt project', async () => {
+    it('should detect Nuxt workspace', async () => {
       const files = [
         {
           name: 'package.json',
@@ -321,7 +321,7 @@ expect(result.framework).toBe('vite');
       expect(result.previewMode).toBe('sandpack');
     });
 
-    it('should detect Astro project', async () => {
+    it('should detect Astro workspace', async () => {
       const files = [
         {
           name: 'package.json',
@@ -344,7 +344,7 @@ expect(result.framework).toBe('vite');
       expect(result.previewMode).toBe('iframe');
     });
 
-    it('should detect Remix project', async () => {
+    it('should detect Remix workspace', async () => {
       const files = [
         {
           name: 'package.json',
@@ -369,7 +369,7 @@ expect(result.framework).toBe('vite');
       expect(result.previewMode).toBe('sandpack');
     });
 
-    it('should detect Angular project', async () => {
+    it('should detect Angular workspace', async () => {
       const files = [
         {
           name: 'package.json',
@@ -394,7 +394,7 @@ expect(result.framework).toBe('vite');
       expect(result.previewMode).toBe('sandpack');
     });
 
-    it('should detect Solid project', async () => {
+    it('should detect Solid workspace', async () => {
       const files = [
         {
           name: 'package.json',
@@ -420,7 +420,7 @@ expect(result.framework).toBe('vite');
       expect(result.previewMode).toBe('sandpack');
     });
 
-    it('should detect Gradio project', async () => {
+    it('should detect Gradio workspace', async () => {
       const files = [
         {
           name: 'requirements.txt',
@@ -439,11 +439,11 @@ expect(result.framework).toBe('vite');
       expect(['pyodide', 'modal']).toContain(result.previewMode);
     });
 
-    it('should return unknown for empty project', async () => {
+    it('should return unknown for empty workspace', async () => {
       const files = [
         {
           name: 'README.md',
-          content: '# My Project',
+          content: '# My Workspace',
         },
       ];
 
@@ -684,7 +684,7 @@ expect(result.framework).toBe('vite');
   });
 
   describe('Cloud Offloading Heuristics', () => {
-    it('should not offload simple React project', () => {
+    it('should not offload simple React workspace', () => {
       const files = [
         {
           name: 'package.json',
@@ -704,7 +704,7 @@ expect(result.framework).toBe('vite');
       expect(heuristics.shouldOffload).toBe(false);
     });
 
-    it('should offload project with large node_modules indicator', () => {
+    it('should offload workspace with large node_modules indicator', () => {
       const files = [
         {
           name: 'package.json',
@@ -725,7 +725,7 @@ expect(result.framework).toBe('vite');
       expect(typeof heuristics.shouldOffload).toBe('boolean');
     });
 
-    it('should offload project with build scripts', () => {
+    it('should offload workspace with build scripts', () => {
       const files = [
         {
           name: 'package.json',
@@ -905,7 +905,7 @@ expect(result.framework).toBe('vite');
     });
   });
 
-  describe('Comprehensive Project Detection Scenarios', () => {
+  describe('Comprehensive Workspace Detection Scenarios', () => {
     it('should handle full-stack monorepo', () => {
       const files = [
         {
@@ -953,7 +953,7 @@ expect(result.framework).toBe('vite');
       expect(['next', 'react']).toContain(result.framework);
     });
 
-    it('should handle TypeScript project without framework', () => {
+    it('should handle TypeScript workspace without framework', () => {
       const files = [
         {
           name: 'package.json',
@@ -985,7 +985,7 @@ expect(result.framework).toBe('vite');
       expect(result.bundler).toBe('unknown');
     });
 
-    it('should handle project with multiple config files', () => {
+    it('should handle workspace with multiple config files', () => {
       const files = [
         {
           name: 'package.json',
@@ -1018,7 +1018,7 @@ expect(result.framework).toBe('vite');
       expect(result.previewMode).toBe('sandpack');
     });
 
-    it('should detect project with custom bundler configuration', () => {
+    it('should detect workspace with custom bundler configuration', () => {
       const files = [
         {
           name: 'package.json',
@@ -1146,7 +1146,7 @@ expect(result.framework).toBe('vite');
       expect(result.previewMode).toBe('sandpack');
     });
 
-    it('should log project root detection', async () => {
+    it('should log workspace root detection', async () => {
       const files = [
         {
           name: 'my-app/package.json',
@@ -1163,8 +1163,8 @@ expect(result.framework).toBe('vite');
     });
   });
 
-  describe('Backend-Only Project Detection', () => {
-    it('should detect Express backend project without frontend', () => {
+  describe('Backend-Only Workspace Detection', () => {
+    it('should detect Express backend workspace without frontend', () => {
       const files = {
         'package.json': JSON.stringify({
           dependencies: {
@@ -1216,7 +1216,7 @@ expect(result.framework).toBe('vite');
       expect(result.isBackendOnly).toBe(true);
     });
 
-    it('should NOT detect pure frontend project as backend-only', () => {
+    it('should NOT detect pure frontend workspace as backend-only', () => {
       const files = {
         'package.json': JSON.stringify({
           dependencies: {

@@ -72,12 +72,12 @@ console.log(`   Source: ${files[0]}`);
 console.log(`   Target: ${files[1]}\n`);
 
 if (missingInTarget.length > 0) {
-  console.log(`\x1b[31m❌ Missing in ${files[1]} (Target):\x1b[0m`);
+  console.log(`\x1b[31m❌ Keys found in "${files[0]}" but MISSING from "${files[1]}":\x1b[0m`);
   missingInTarget.sort().forEach(k => console.log(`   - ${k}`));
 }
 
 if (missingInSource.length > 0) {
-  console.log(`\x1b[31m❌ Missing in ${files[0]} (Source):\x1b[0m`);
+  console.log(`\n\x1b[31m❌ Keys found in "${files[1]}" but MISSING from "${files[0]}":\x1b[0m`);
   missingInSource.sort().forEach(k => console.log(`   - ${k}`));
 }
 

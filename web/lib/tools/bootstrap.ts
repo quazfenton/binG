@@ -109,15 +109,15 @@ export async function bootstrapToolSystem(config: BootstrapConfig): Promise<Boot
     errors.push(`Built-in capabilities: ${error.message}`);
   }
 
-  // Register project analysis tools (always enabled — replaces shallow buildProjectContext)
+  // Register workspace analysis tools (always enabled — replaces shallow buildProjectContext)
   try {
-    const { registerProjectAnalysisTools } = await import('./bootstrap/bootstrap-project-analysis');
+    const { registerProjectAnalysisTools } = await import('./bootstrap/bootstrap-workspace-analysis');
     const count = await registerProjectAnalysisTools(registry, config);
     capabilityCount += count;
-    logger.info(`Registered ${count} project analysis tools/capabilities`);
+    logger.info(`Registered ${count} workspace analysis tools/capabilities`);
   } catch (error: any) {
-    logger.error('Failed to register project analysis tools', error);
-    errors.push(`Project analysis: ${error.message}`);
+    logger.error('Failed to register workspace analysis tools', error);
+    errors.push(`Workspace analysis: ${error.message}`);
   }
 
   // Register MCP tools (if enabled)

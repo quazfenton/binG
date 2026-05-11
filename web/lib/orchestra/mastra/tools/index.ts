@@ -476,7 +476,7 @@ export const installDepsTool = createTool({
 Use this tool when you need to:
 - Install npm packages
 - Install Python packages
-- Set up project dependencies
+- Set up workspace dependencies
 
 Only install trusted packages from official registries.`,
   inputSchema: z.object({

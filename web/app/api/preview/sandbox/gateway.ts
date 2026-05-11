@@ -15,7 +15,7 @@ export const runtime = 'nodejs'
 export const maxDuration = 120 // 2 minutes for install + start
 
 /**
- * POST: Deploy project files to an OpenSandbox preview container
+ * POST: Deploy workspace files to an OpenSandbox preview container
  *
  * Body: { files: Record<string, string>, framework?, installCommand?, startCommand?, port?, sandboxId? }
  * Returns: { success, previewUrl, sandboxId, logs, duration }

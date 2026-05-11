@@ -476,7 +476,7 @@ export function executeV2TaskStreaming(options: V2ExecuteOptions): ReadableStrea
             })),
             errors: [],
             requestedFiles: [],
-            scopePath: `project/sessions/${normalizeSessionId(options.conversationId) || options.conversationId}`,
+            scopePath: `workspace/sessions/${normalizeSessionId(options.conversationId) || options.conversationId}`,
           })));
         }
 

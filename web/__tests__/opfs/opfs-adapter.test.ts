@@ -323,7 +323,7 @@ describe('OPFSAdapter', () => {
 
       // Mock server workspace export
       vi.mocked(getWorkspaceSnapshot).mockResolvedValue({
-        root: 'project',
+        root: 'workspace',
         version: 1,
         updatedAt: new Date().toISOString(),
         files: [
@@ -360,7 +360,7 @@ describe('OPFSAdapter', () => {
       (adapter as any).fileVersions.set('file1.txt', { opfs: 3, server: 1 });
 
       vi.mocked(getWorkspaceSnapshot).mockResolvedValue({
-        root: 'project',
+        root: 'workspace',
         version: 1,
         updatedAt: new Date().toISOString(),
         files: [

@@ -4,7 +4,7 @@
  * Provides consistent functions for handling:
  * - userId: "anon:sessionId" for VFS ownership
  * - sessionId: session number (e.g., "001")
- * - scopePath: "project/sessions/001" for file operations
+ * - scopePath: "workspace/sessions/001" for file operations
  * - Composite IDs: "userId$sessionId" format
  * 
  * SECURITY: Always use these functions instead of manual string construction
@@ -32,9 +32,9 @@ export function cookieToOwnerId(cookieValue: string): string {
 
 /**
  * Convert cookie value to scopePath format
- * cookie: "anon_timestamp_random" -> scopePath: "project/sessions/timestamp_random"
+ * cookie: "anon_timestamp_random" -> scopePath: "workspace/sessions/timestamp_random"
  */
-export function cookieToScopePath(cookieValue: string, prefix = 'project/sessions'): string {
+export function cookieToScopePath(cookieValue: string, prefix = 'workspace/sessions'): string {
   const rawId = cookieValue.startsWith('anon_') ? cookieValue.slice(5) : cookieValue;
   return `${prefix}/${rawId}`;
 }
@@ -80,9 +80,9 @@ export function extractUserIdFromOwnerId(ownerId: string): string {
 
 /**
  * Build scopePath from sessionId
- * "001" -> "project/sessions/001"
+ * "001" -> "workspace/sessions/001"
  */
-export function buildScopePath(sessionId: string, prefix = 'project/sessions'): string {
+export function buildScopePath(sessionId: string, prefix = 'workspace/sessions'): string {
   return `${prefix}/${sessionId}`;
 }
 

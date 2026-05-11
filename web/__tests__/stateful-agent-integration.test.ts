@@ -231,8 +231,8 @@ describe('StatefulAgent', () => {
       expect(result.success).toBe(true);
     });
 
-    it('should detect complex tasks with project structure', async () => {
-      const result = await agent.run('Set up project structure with authentication');
+    it('should detect complex tasks with workspace structure', async () => {
+      const result = await agent.run('Set up workspace structure with authentication');
       expect(result.success).toBe(true);
     });
 

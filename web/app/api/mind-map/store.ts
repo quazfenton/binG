@@ -34,9 +34,9 @@ export const mindMaps = new Map<string, MindMap>();
 if (mindMaps.size === 0) {
   mindMaps.set('sample-1', {
     id: 'sample-1',
-    title: 'Project Planning',
+    title: 'Workspace Planning',
     nodes: [
-      { id: 'root', text: 'Project Goals', x: 400, y: 300, color: '#8B5CF6' },
+      { id: 'root', text: 'Workspace Goals', x: 400, y: 300, color: '#8B5CF6' },
       { id: 'node-1', text: 'Research', parentId: 'root', x: 200, y: 150, color: '#3B82F6' },
       { id: 'node-2', text: 'Development', parentId: 'root', x: 600, y: 150, color: '#10B981' },
       { id: 'node-3', text: 'Testing', parentId: 'root', x: 400, y: 450, color: '#F59E0B' },

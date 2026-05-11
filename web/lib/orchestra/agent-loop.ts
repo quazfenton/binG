@@ -45,7 +45,7 @@ Additional capabilities:
 
 Always write files before trying to run them.
 When installing packages, use the appropriate package manager (npm, pip, etc.).
-Use project_analyze before running commands to understand the project structure.
+Use project_analyze before running commands to understand the workspace structure.
 For interactive programs (dev servers, TUIs), use terminal_create_session + terminal_get_output with waitForPattern.
 Report results clearly and concisely.`
 }

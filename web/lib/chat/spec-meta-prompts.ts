@@ -120,7 +120,7 @@ Avoid basic or lackluster frameworks. Use modern frameworks:
 ============================================
 
 Build the frontend foundation and core UI components:
-- Project setup with modern tooling (Vite, Turborepo)
+- Workspace setup with modern tooling (Vite, Turborepo)
 - Core layout components and structure
 - Global styles with Tailwind CSS
 - Theme system and design tokens
@@ -342,14 +342,14 @@ const FRONTEND_CHAIN: MetaPrompt[] = [
   {
     id: 'frontend-1-setup',
     targetRound: 1,
-    title: 'Frontend Project Setup & Tooling',
+    title: 'Frontend Workspace Setup & Tooling',
     combinable: true,
     content: `
 ============================================
 # META-PROMPT: FRONTEND SETUP & TOOLING
 ============================================
 
-Set up the frontend project with modern tooling:
+Set up the frontend workspace with modern tooling:
 - Package manager (pnpm, yarn, or npm)
 - Build tool (Vite, Turborepo, Next.js App Router)
 - TypeScript configuration with strict mode
@@ -1137,14 +1137,14 @@ const MOBILE_CHAIN: MetaPrompt[] = [
   {
     id: 'mobile-1-setup',
     targetRound: 1,
-    title: 'Mobile Project Setup',
+    title: 'Mobile Workspace Setup',
     combinable: true,
     content: `
 ============================================
-# META-PROMPT: MOBILE PROJECT SETUP
+# META-PROMPT: MOBILE WORKSPACE SETUP
 ============================================
 
-Set up mobile project:
+Set up mobile workspace:
 
 CROSS-PLATFORM:
 - React Native with Expo (recommended)

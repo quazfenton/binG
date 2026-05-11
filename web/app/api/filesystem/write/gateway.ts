@@ -15,7 +15,7 @@ import type { ResolvedRequestAuth } from '@/lib/auth/auth-cache';
 /**
  * Schema for filesystem write requests
  * Validates path, content, and prevents path traversal attacks
- * Accepts both relative paths (project/sessions/...) and absolute paths (/home/..., /workspace/...)
+ * Accepts both relative paths (workspace/sessions/...) and absolute paths (/home/..., /workspace/...)
  */
 const writeRequestSchema = z.object({
   path: z.string()
@@ -27,10 +27,10 @@ const writeRequestSchema = z.object({
     )
     .refine(
       (path) => {
-        // Allow relative paths (project, project/sessions, etc.)
+        // Allow relative paths (workspace, workspace/sessions, etc.)
         if (!path.startsWith('/')) return true;
-        // If absolute, must start with /home/, /workspace/, /tmp/, or /project/
-        return path.startsWith('/home/') || path.startsWith('/workspace/') || path.startsWith('/tmp/') || path.startsWith('/project/');
+        // If absolute, must start with /home/, /workspace/, /tmp/, or /workspace/
+        return path.startsWith('/home/') || path.startsWith('/workspace/') || path.startsWith('/tmp/') || path.startsWith('/workspace/');
       },
       'Invalid path format'
     ),
@@ -153,11 +153,11 @@ export async function POST(req: NextRequest) {
     const resolvedSessionId = requestedSessionId || extractSessionIdFromPath(filePath);
 
     // Emit filesystem updated event for UI panels
-    // Extract scopePath from file path (e.g., "project/sessions/001-1/package.json" -> "project/sessions/001-1")
+    // Extract scopePath from file path (e.g., "workspace/sessions/001-1/package.json" -> "workspace/sessions/001-1")
     const pathParts = file.path.split('/');
     const scopePath = pathParts.length > 2 
       ? pathParts.slice(0, pathParts.length - 1).join('/')  
-      : pathParts[0] || 'project';
+      : pathParts[0] || 'workspace';
     
     emitFilesystemUpdated({
       path: file.path,

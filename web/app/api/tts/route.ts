@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { generateSpeech, checkKittenTTSAvailability, KITTEN_VOICES, KITTEN_MODELS } from '@/lib/voice/kitten-tts-server';
 import { voiceServerManager } from '@/lib/voice/server-control';
-import { auth0 } from '@/lib/auth0';
+import { auth0 } from '@/lib/auth/auth0';
 
 const VALID_MODEL_IDS = KITTEN_MODELS.map(m => m.id);
 

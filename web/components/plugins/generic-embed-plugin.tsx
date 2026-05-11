@@ -144,6 +144,7 @@ const GenericEmbedPlugin: React.FC<{ onClose: () => void, initialUrl?: string }>
     handleLoadSuccess,
     handleIframeError,
     triggerReload,
+    iframeKey,
   } = useIframeLoader({
     url: currentUrl,
     timeout: 30000,

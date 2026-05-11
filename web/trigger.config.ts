@@ -1,7 +1,7 @@
 import { defineConfig } from "@trigger.dev/sdk/v3";
 
 export default defineConfig({
-  project: "binG-agent-system",
+  workspace: "binG-agent-system",
   runtime: "node",
   logLevel: "log",
   maxDuration: 3600,

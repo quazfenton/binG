@@ -351,7 +351,7 @@ function getPlanningFocusForPhase(
   // Map phases 1-10 to specific planning focuses per chain
   const phaseMapping: Record<MetaPromptChain, Record<number, { title: string; description: string }>> = {
     frontend: {
-      1: { title: 'Project Foundation', description: 'Project setup, tooling, design system foundation' },
+      1: { title: 'Workspace Foundation', description: 'Workspace setup, tooling, design system foundation' },
       3: { title: 'Core Components', description: 'Component architecture, state management foundation' },
       5: { title: 'Interactive Features', description: 'User interactions, forms, real-time features' },
       7: { title: 'Advanced Features', description: 'Complex features, integrations, performance optimization' },
@@ -372,7 +372,7 @@ function getPlanningFocusForPhase(
       9: { title: 'ML Production', description: 'Monitoring, retraining, drift detection, safety' },
     },
     mobile: {
-      1: { title: 'Mobile Foundation', description: 'Project setup, navigation, core architecture' },
+      1: { title: 'Mobile Foundation', description: 'Workspace setup, navigation, core architecture' },
       3: { title: 'UI Components', description: 'Design system, reusable components, theming' },
       5: { title: 'Data & Sync', description: 'Offline-first, local storage, background sync' },
       7: { title: 'Native Features', description: 'Device APIs, push notifications, biometrics' },
@@ -421,7 +421,7 @@ function getPlanningFocusForPhase(
       9: { title: 'Web3 Production', description: 'Gas optimization, monitoring, governance' },
     },
     default: {
-      1: { title: 'Architecture Planning', description: 'Tech stack, project structure, integration points' },
+      1: { title: 'Architecture Planning', description: 'Tech stack, workspace structure, integration points' },
       3: { title: 'Feature Planning', description: 'Core features breakdown, dependencies, priorities' },
       5: { title: 'Implementation Planning', description: 'Code organization, patterns, testing approach' },
       7: { title: 'Integration Planning', description: 'API integrations, external services, data flow' },

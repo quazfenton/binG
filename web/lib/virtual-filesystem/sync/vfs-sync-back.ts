@@ -20,7 +20,7 @@
  * ```typescript
  * // After snapshot restoration
  * await vfsSyncBackService.syncSandboxToVFS(sessionId, {
- *   vfsScopePath: 'project',
+ *   vfsScopePath: 'workspace',
  *   syncMode: 'full',  // or 'incremental'
  * });
  *

@@ -3,7 +3,7 @@
  *
  * POST /api/cli-install
  *
- * Executes an `npx <baseCmd> <subCmd> [...args]` command in the user's project
+ * Executes an `npx <baseCmd> <subCmd> [...args]` command in the user's workspace
  * directory and streams stdout/stderr back as Server-Sent Events (SSE).
  *
  * Request body:

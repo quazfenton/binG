@@ -82,7 +82,7 @@ export interface ChatRequest {
   maxTokens?: number;
   /** Max steps for agent loop */
   maxSteps?: number;
-  /** Project context for classification */
+  /** Workspace context for classification */
   projectContext?: {
     id?: string;
     size?: 'small' | 'medium' | 'large';
@@ -274,7 +274,7 @@ export async function routeChatRequest(request: ChatRequest): Promise<ChatRespon
     mode: 'auto', // Let unified agent select best mode
     enableMastraWorkflows: request.enableMastraWorkflows,
     workflowId: request.workflowId,
-    // Project context — pass through if provided, omit if not
+    // Workspace context — pass through if provided, omit if not
     ...(request.projectContext ? {
       projectContext: {
         id: request.projectContext.id,

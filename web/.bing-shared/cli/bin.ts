@@ -4935,8 +4935,8 @@ program
     
     console.log(COLORS.info('\nStarting Next.js development server...'));
     console.log(COLORS.info('Starting WebSocket server...'));
-    console.log(COLORS.warning('\nNote: This requires the binG project to be installed locally.'));
-    console.log(COLORS.info('Run this command from the binG project directory.\n'));
+    console.log(COLORS.warning('\nNote: This requires the binG workspace to be installed locally.'));
+    console.log(COLORS.info('Run this command from the binG workspace directory.\n'));
   });
 
 // ============================================================================

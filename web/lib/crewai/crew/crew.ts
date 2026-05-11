@@ -680,7 +680,7 @@ export class Crew {
       this.manager_agent = new RoleAgent(sessionId, {
         role: 'Crew Manager',
         goal: 'Coordinate the crew to complete all tasks efficiently',
-        backstory: 'You are an experienced project manager specialized in AI coordination.',
+        backstory: 'You are an experienced workspace manager specialized in AI coordination.',
         llm: this.manager_llm,
         allow_delegation: true,
       });

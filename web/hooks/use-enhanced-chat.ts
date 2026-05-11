@@ -42,6 +42,9 @@ export interface UseChatReturn {
   };
   // Version tracking
   currentVersion?: number;
+  // Model and provider tracking
+  currentModel?: string;
+  currentProvider?: string;
   // Agent activity for experimental panel
   agentActivity?: any;
   setAgentActivity?: (activity: any) => void;
@@ -163,8 +166,10 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
   const [agentStatus, setAgentStatus] = useState<AgentStatus>('idle');
   const [currentAction, setCurrentAction] = useState<string | undefined>();
   
-  // Version tracking
+  // Version and model tracking
   const [currentVersion, setCurrentVersion] = useState<number | undefined>();
+  const [currentModel, setCurrentModel] = useState<string | undefined>();
+  const [currentProvider, setCurrentProvider] = useState<string | undefined>();
 
   // Agent activity for experimental panel
   const [agentActivity, setAgentActivity] = useState<any>({
@@ -2554,8 +2559,10 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
       status: agentStatus,
       currentAction,
     },
-    // Version tracking
+    // Version and model tracking
     currentVersion,
+    currentModel,
+    currentProvider,
     // Agent activity for experimental panel
     agentActivity,
     setAgentActivity,

@@ -14,7 +14,7 @@
 import { NextResponse } from 'next/server';
 
 
-import { auth0, AUTH0_CONNECTIONS, getConnectedAccountsByUser } from '@/lib/auth0';
+import { auth0, AUTH0_CONNECTIONS, getConnectedAccountsByUser } from '@/lib/auth/auth0';
 import { getLocalUserIdFromAuth0 } from '@/lib/oauth/connections';
 
 const AUTH0_TO_CANONICAL: Record<string, string> = {
@@ -30,7 +30,7 @@ const AUTH0_TO_CANONICAL: Record<string, string> = {
   'slack': 'slack',
 };
 
-export async function GET() {
+export async function GET(request?: Request) {
   try {
     const session = await auth0.getSession();
     

@@ -225,7 +225,7 @@ const embedConfigs: Record<string, EmbedConfig> = {
     component: 'WikiPlugin',
     metadata: {
       ogTitle: 'Wiki - binG',
-      ogDescription: 'Project documentation and guides',
+      ogDescription: 'Workspace documentation and guides',
     },
     settings: {
       allowFullscreen: false,

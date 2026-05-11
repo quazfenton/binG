@@ -149,7 +149,7 @@ export class TerminalLocalFSHandler {
     const raw = (input || '').trim().replace(/\\/g, '/')
     if (!raw) return cwd
 
-    const scopePath = this.filesystemScopePath || 'project'
+    const scopePath = this.filesystemScopePath || 'workspace'
 
     // Handle absolute paths
     if (raw.startsWith('/')) {
@@ -164,14 +164,14 @@ export class TerminalLocalFSHandler {
         stack.push(part)
       }
       const result = stack.join('/')
-      if (!result.startsWith(scopePath.replace(/^project\//, ''))) {
+      if (!result.startsWith(scopePath.replace(/^workspace\//, ''))) {
         return `${scopePath}/${result}`.replace(/\/+/g, '/')
       }
       return `${scopePath}/${result}`.replace(/\/+/g, '/')
     }
 
     // Handle relative paths
-    const base = raw.startsWith('project') ? raw : `${cwd}/${raw}`.replace(/\/+/g, '/')
+    const base = raw.startsWith('workspace') ? raw : `${cwd}/${raw}`.replace(/\/+/g, '/')
     const parts = base.split('/').filter(Boolean)
     const stack: string[] = []
     for (const part of parts) {
@@ -184,7 +184,7 @@ export class TerminalLocalFSHandler {
       }
       stack.push(part)
     }
-    if (stack.length === 0 || !stack[0].startsWith('project')) {
+    if (stack.length === 0 || !stack[0].startsWith('workspace')) {
       return scopePath
     }
     return stack.join('/')
@@ -227,16 +227,16 @@ export class TerminalLocalFSHandler {
   }
 
   /**
-   * Ensure project root exists (TerminalPanel compatibility)
+   * Ensure workspace root exists (TerminalPanel compatibility)
    */
   ensureProjectRootExists(): void {
     const fs = this.getFileSystem()
-    const scopePath = this.filesystemScopePath || 'project'
+    const scopePath = this.filesystemScopePath || 'workspace'
 
-    if (!fs['project']) {
-      fs['project'] = { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() }
+    if (!fs['workspace']) {
+      fs['workspace'] = { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() }
     }
-    if (scopePath !== 'project' && !fs[scopePath]) {
+    if (scopePath !== 'workspace' && !fs[scopePath]) {
       fs[scopePath] = { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() }
     }
 
@@ -268,7 +268,7 @@ export class TerminalLocalFSHandler {
   getParentPath(path: string): string {
     const parts = path.split('/').filter(Boolean)
     parts.pop()
-    return parts.join('/') || 'project'
+    return parts.join('/') || 'workspace'
   }
 
   /**
@@ -305,7 +305,7 @@ export class TerminalLocalFSHandler {
         },
         body: JSON.stringify({
           sessionId,
-          scopePath: this.filesystemScopePath || 'project',
+          scopePath: this.filesystemScopePath || 'workspace',
           syncToVFS: options?.syncToVFS !== false,
         }),
       });

@@ -195,7 +195,7 @@ export function createTscPlugin(): Plugin {
 
 /**
  * LSP TypeScript plugin — uses the LspGateway for fast, per-file
- * diagnostics instead of a full-project `tsc --noEmit`.
+ * diagnostics instead of a full-workspace `tsc --noEmit`.
  *
  * The gateway auto-detects tsconfig.json and spawns the appropriate
  * language server(s). Falls back to the tsc CLI plugin when LSP is

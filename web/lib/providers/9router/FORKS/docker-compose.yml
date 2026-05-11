@@ -1,0 +1,57 @@
+# 9Router Multi-Tenant Fork - Docker Compose
+version: '3.8'
+
+services:
+  9router:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: 9router
+    restart: unless-stopped
+    ports:
+      - '20128:20128'
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=file:///app/data/9router.db
+      - NINEROUTER_ADMIN_KEY=${NINEROUTER_ADMIN_KEY}
+      # Provider OAuth credentials
+      - CLAUDE_CODE_CLIENT_ID=${CLAUDE_CODE_CLIENT_ID}
+      - CLAUDE_CODE_CLIENT_SECRET=${CLAUDE_CODE_CLIENT_SECRET}
+      - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
+      - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}
+      - CURSOR_CLIENT_ID=${CURSOR_CLIENT_ID}
+      - CURSOR_CLIENT_SECRET=${CURSOR_CLIENT_SECRET}
+      - COPILOT_CLIENT_ID=${COPILOT_CLIENT_ID}
+      - COPILOT_CLIENT_SECRET=${COPILOT_CLIENT_SECRET}
+    volumes:
+      # Persist SQLite database and upload files
+      - 9router-data:/app/data
+      - 9router-uploads:/app/uploads
+    healthcheck:
+      test: ['CMD', 'wget', '--no-verbose', '--tries=1', '--spider', 'http://localhost:20128/api/health']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    # Resource limits (adjust based on your VPS specs)
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+    # Network isolation (optional)
+    networks:
+      - 9router-net
+
+networks:
+  9router-net:
+    driver: bridge
+
+volumes:
+  9router-data:
+    driver: local
+  9router-uploads:
+    driver: local

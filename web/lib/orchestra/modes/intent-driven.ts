@@ -23,6 +23,8 @@
  */
 
 import { createLogger } from '@/lib/utils/logger';
+import { embedBatch } from '@/lib/memory/embeddings';
+import { cosineSimilarity } from '@/lib/retrieval/similarity';
 import {
   processUnifiedAgentRequest,
   type UnifiedAgentConfig,
@@ -385,7 +387,7 @@ export async function runIntentDrivenMode(
     const subCall = configureSubCall({
       ...baseConfig,
       systemPrompt,
-      mode: 'v1-api',
+      mode: 'v1-api' as const,
     }, engine);
     const result = await processUnifiedAgentRequest(subCall);
 

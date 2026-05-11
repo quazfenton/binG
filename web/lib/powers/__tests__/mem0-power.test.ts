@@ -51,14 +51,14 @@ describe('Mem0 Power', () => {
       const { buildMem0SystemPrompt } = await import('../mem0-power');
       const memories = [
         { id: '1', memory: 'User prefers dark mode', score: 0.9 },
-        { id: '2', memory: 'User is working on a React project', score: 0.8 },
+        { id: '2', memory: 'User is working on a React workspace', score: 0.8 },
       ];
       
       const result = buildMem0SystemPrompt(memories);
       
       expect(result).toContain('## Relevant User Memories');
       expect(result).toContain('User prefers dark mode');
-      expect(result).toContain('User is working on a React project');
+      expect(result).toContain('User is working on a React workspace');
     });
   });
 

@@ -73,6 +73,7 @@ const StackBlitzEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
     handleFallback,
     handleLoadSuccess,
     handleIframeError,
+    triggerReload,
   } = useIframeLoader({
     url: iframeUrl,
     timeout: 30000,
@@ -165,7 +166,7 @@ const StackBlitzEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
 
   const toggleBookmark = () => {
     if (!projectId.trim()) {
-      toast.error('Load a project first');
+      toast.error('Load a workspace first');
       return;
     }
 
@@ -275,7 +276,7 @@ const StackBlitzEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
           <TabsList className="w-full justify-start rounded-none border-b border-violet-800/50 bg-violet-950/50 px-4 py-2">
             <TabsTrigger value="embed" className="data-[state=active]:bg-violet-800/50">
               <Terminal className="w-4 h-4 mr-2" />
-              Project
+              Workspace
             </TabsTrigger>
             <TabsTrigger value="templates" className="data-[state=active]:bg-violet-800/50">
               <Folder className="w-4 h-4 mr-2" />
@@ -289,14 +290,14 @@ const StackBlitzEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
 
           <TabsContent value="embed" className="h-[calc(100%-60px)] m-0">
             <div className="flex flex-col h-full">
-              {/* Project ID Input */}
+              {/* Workspace ID Input */}
               <form onSubmit={handleLoadProject} className="p-3 border-b border-violet-800/50 bg-violet-950/30 flex gap-2">
                 <div className="relative flex-1">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-violet-400/60" />
                   <Input
                     value={projectId}
                     onChange={(e) => setProjectId(e.target.value)}
-                    placeholder="Enter project ID or template name..."
+                    placeholder="Enter workspace ID or template name..."
                     className="bg-violet-900/30 border-violet-700 text-white placeholder:text-violet-400/60 pl-10"
                   />
                 </div>
@@ -416,7 +417,7 @@ const StackBlitzEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
                   <div className="text-center space-y-4">
                     <Bookmark className="w-12 h-12 mx-auto text-violet-500/40" />
                     <p className="text-violet-200/60">No bookmarked projects</p>
-                    <p className="text-xs text-violet-400/40">Load a project and click bookmark to save</p>
+                    <p className="text-xs text-violet-400/40">Load a workspace and click bookmark to save</p>
                   </div>
                 </div>
               ) : (

@@ -480,7 +480,7 @@ function detectDeadFlow(output: string): boolean {
 }
 
 /**
- * Detect shallow project generation.
+ * Detect shallow workspace generation.
  */
 function detectShallowProject(filesGenerated: number = 0): boolean {
   return filesGenerated < 5;
@@ -534,9 +534,9 @@ function evaluateTriggers(
     return { triggered: true, reason: 'Tool chain break: file read without follow-up action', type: 'premature_stop' };
   }
 
-  // Hard Trigger 5: Shallow Project
+  // Hard Trigger 5: Shallow Workspace
   if (detectShallowProject(filesGenerated)) {
-    return { triggered: true, reason: 'Shallow project: insufficient files generated', type: 'low_quality' };
+    return { triggered: true, reason: 'Shallow workspace: insufficient files generated', type: 'low_quality' };
   }
 
   // Score-based triggers (use config thresholds)
@@ -601,7 +601,7 @@ function generateStructuredReview(
     missingComponents.push('- Test scaffolding');
   }
   if (!cumulativeOutput.includes('src/') && !cumulativeOutput.includes('components/')) {
-    missingComponents.push('- Proper project structure');
+    missingComponents.push('- Proper workspace structure');
   }
 
   // Generate expansion plan based on task type
@@ -660,7 +660,7 @@ function classifyTask(task: string): 'create' | 'fix' | 'refactor' | 'test' | 'd
 function generateExpansionPlan(taskType: string, currentOutput: string): string {
   const plans: Record<string, string[]> = {
     create: [
-      'Ensure proper project structure (src/, components/, services/, config/)',
+      'Ensure proper workspace structure (src/, components/, services/, config/)',
       'Implement core functionality with error handling',
       'Add input validation and edge case handling',
       'Create configuration files (package.json, tsconfig.json, .env.example)',
@@ -870,7 +870,7 @@ export async function runExecutionControllerMode(
     const engine = resolveEngine(options.engine, baseConfig.engine);
     const subCall = configureSubCall({
       ...baseConfig,
-      mode: 'v1-api',
+      mode: 'v1-api' as const,
     }, engine);
     const result = await processUnifiedAgentRequest(subCall);
 

@@ -15,7 +15,7 @@
  * 
  * const memory = await createAgentMemory({
  *   agentId: 'agent-123',
- *   workspaceDir: '/workspace/project',
+ *   workspaceDir: '/workspace/workspace',
  *   vectorStore: 'pinecone', // or 'chroma', 'qdrant', 'local'
  * });
  * 
@@ -56,7 +56,7 @@ export type MemoryType =
   | 'pattern'         // Code patterns
   | 'decision'        // Decisions made
   | 'feedback'        // User feedback
-  | 'context';        // Project context
+  | 'context';        // Workspace context
 
 export type VectorStoreType = 'local' | 'pinecone' | 'chroma' | 'qdrant' | 'weaviate';
 
@@ -148,7 +148,7 @@ export interface AgentMemoryConfig {
   enableSemanticSearch?: boolean;
   /** Embedding model */
   embeddingModel?: string;
-  /** Project ID for memory isolation (scopes memories per project) */
+  /** Workspace ID for memory isolation (scopes memories per workspace) */
   projectId?: string;
 }
 
@@ -260,7 +260,7 @@ export class AgentMemory extends EventEmitter {
       ...config,
     };
 
-    // Scope memory directory by project if provided
+    // Scope memory directory by workspace if provided
     const projectSuffix = config.projectId ? `-${config.projectId}` : '';
     this.memoryDir = path.join(config.workspaceDir, '.agent-memory', config.agentId + projectSuffix);
     this.vectorStore = new LocalVectorStore(config.workspaceDir, config.projectId);

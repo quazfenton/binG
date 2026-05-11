@@ -31,7 +31,7 @@ import {
   type PackageManager,
   type RuntimeMode,
   type SmartContextFile,
-} from '@/lib/project-detection';
+} from '@/lib/workspace-detection';
 
 // ============================================================================
 // Package Manager Detection Tests
@@ -151,7 +151,7 @@ describe('Runtime Mode Detection', () => {
   });
 
   it('detects monorepo-nx from nx.json', () => {
-    const files = ['nx.json', 'package.json', 'apps/web/project.json'];
+    const files = ['nx.json', 'package.json', 'apps/web/workspace.json'];
     expect(detectRuntimeMode(files)).toBe('monorepo-nx');
   });
 
@@ -292,7 +292,7 @@ describe('buildProjectContext + Smart Context', () => {
     expect(markdown).toContain('App Router');
   });
 
-  it('generates smart context for Docker Compose project', async () => {
+  it('generates smart context for Docker Compose workspace', async () => {
     const files = [
       'docker-compose.yml',
       'Dockerfile',
@@ -337,7 +337,7 @@ describe('NL → Command Translation (with PM + Docker)', () => {
     };
 
     expect(translateNaturalLanguageToCommand('install dependencies', ctx)).toBe('pnpm install');
-    expect(translateNaturalLanguageToCommand('run the project', ctx)).toBe('pnpm run dev');
+    expect(translateNaturalLanguageToCommand('run the workspace', ctx)).toBe('pnpm run dev');
   });
 
   it('uses bun for install command', () => {
@@ -429,7 +429,7 @@ describe('NL → Command Translation (with PM + Docker)', () => {
 // ============================================================================
 
 describe('E2E: Full Pipeline — Lockfile + Docker + Smart Context', () => {
-  it('simulates: "run the project" on pnpm + docker-compose Next.js repo', async () => {
+  it('simulates: "run the workspace" on pnpm + docker-compose Next.js repo', async () => {
     const files = [
       'pnpm-lock.yaml',
       'docker-compose.yml',
@@ -454,12 +454,12 @@ describe('E2E: Full Pipeline — Lockfile + Docker + Smart Context', () => {
     expect(ctx.runtimeMode).toBe('docker-compose');
     expect(ctx.framework).toBe('next');
 
-    // LLM says "run the project"
-    const cmd = translateNaturalLanguageToCommand('run the project', ctx);
+    // LLM says "run the workspace"
+    const cmd = translateNaturalLanguageToCommand('run the workspace', ctx);
     expect(cmd).toBe('pnpm run dev');
   });
 
-  it('simulates: "start docker" on bun + Dockerfile project', async () => {
+  it('simulates: "start docker" on bun + Dockerfile workspace', async () => {
     const files = [
       'bun.lockb',
       'Dockerfile',

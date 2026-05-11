@@ -294,7 +294,7 @@ export const fixtures = {
   // Sandbox fixtures
   sandbox: {
     id: 'test-sandbox-123',
-    workspaceDir: '/project/workspace',
+    workspaceDir: '/workspace/workspace',
     status: 'running' as const,
   },
 
@@ -350,7 +350,7 @@ export function createMockDiffOperation(overrides?: Partial<any>): any {
 export function createMockSandboxHandle(overrides?: Partial<any>): any {
   return {
     id: 'test-sandbox-123',
-    workspaceDir: '/project/workspace',
+    workspaceDir: '/workspace/workspace',
     executeCommand: vi.fn().mockResolvedValue({ success: true, output: '' }),
     writeFile: vi.fn().mockResolvedValue({ success: true }),
     readFile: vi.fn().mockResolvedValue({ success: true, content: '' }),

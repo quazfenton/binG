@@ -225,7 +225,7 @@ export class TerminalInputHandler {
         const fs = this.getFileSystem()
         const completions = Object.keys(fs)
           .filter(k => {
-            const relativePath = k.replace(/^project\//, '')
+            const relativePath = k.replace(/^workspace\//, '')
             return relativePath.startsWith(lastWord)
           })
           .map(k => k.split('/').pop() || k)

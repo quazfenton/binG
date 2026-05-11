@@ -1,7 +1,7 @@
 /**
  * Custom Test Endpoint: Read file from VFS
  * 
- * GET /api/test/vfs-read-file?path=project/sessions/001/filename.txt&ownerId=user123
+ * GET /api/test/vfs-read-file?path=workspace/sessions/001/filename.txt&ownerId=user123
  * Returns: file content or error
  */
 

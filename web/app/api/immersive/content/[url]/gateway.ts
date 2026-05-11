@@ -13,7 +13,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 
-import { auth0 } from "@/lib/auth0";
+import { auth0 } from "@/lib/auth/auth0";
 import { readFile, writeFile, mkdir } from "fs/promises";
 import { join } from "path";
 import { existsSync } from "fs";

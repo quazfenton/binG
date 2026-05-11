@@ -27,7 +27,7 @@ export interface CompositeSessionId {
   userId: string;
   /** Simple session folder name (e.g., "004", "alpha") */
   simpleSessionId: string;
-  /** Filesystem scope path (e.g., "project/sessions/004") */
+  /** Filesystem scope path (e.g., "workspace/sessions/004") */
   scopePath: string;
 }
 
@@ -52,7 +52,7 @@ export function parseCompositeSessionId(
       composite,
       userId: defaultUserId,
       simpleSessionId: '000',
-      scopePath: 'project/sessions/000',
+      scopePath: 'workspace/sessions/000',
     };
   }
 
@@ -68,7 +68,7 @@ export function parseCompositeSessionId(
       composite: trimmed,
       userId,
       simpleSessionId,
-      scopePath: `project/sessions/${simpleSessionId}`,
+      scopePath: `workspace/sessions/${simpleSessionId}`,
     };
   }
 
@@ -77,7 +77,7 @@ export function parseCompositeSessionId(
     composite: `${defaultUserId}$${trimmed}`,
     userId: defaultUserId,
     simpleSessionId: trimmed,
-    scopePath: `project/sessions/${trimmed}`,
+    scopePath: `workspace/sessions/${trimmed}`,
   };
 }
 
@@ -103,7 +103,7 @@ export function buildCompositeSessionId(
  *
  * SECURITY: Uses indexOf (FIRST $) not lastIndexOf, because:
  * - userId is system-controlled and NEVER contains $
- * - sessionId MAY contain user-provided $ (e.g., folder named "my$project")
+ * - sessionId MAY contain user-provided $ (e.g., folder named "my$workspace")
  * - The FIRST $ is always our system separator
  *
  * @param input - Composite ("1$004") or simple ("004")
@@ -128,7 +128,7 @@ export function extractSimpleSessionId(input: string | undefined): string {
  *
  * SECURITY: Uses indexOf (FIRST $) not lastIndexOf, because:
  * - userId is system-controlled and NEVER contains $
- * - sessionId MAY contain user-provided $ (e.g., folder named "my$project")
+ * - sessionId MAY contain user-provided $ (e.g., folder named "my$workspace")
  * - The FIRST $ is always our system separator
  *
  * @param input - Composite ("1$004") or simple ("004")
@@ -160,16 +160,16 @@ export function extractUserIdFromComposite(
 /**
  * Build a filesystem scope path from a session ID.
  *
- * ALWAYS returns `project/sessions/{simpleSessionId}` format.
+ * ALWAYS returns `workspace/sessions/{simpleSessionId}` format.
  * Never includes $ in the path.
  *
  * @param input - Composite ("1$004") or simple ("004")
- * @returns Scope path (e.g., "project/sessions/004")
+ * @returns Scope path (e.g., "workspace/sessions/004")
  */
 export function buildScopePath(input: string | undefined): string {
   const simpleId = extractSimpleSessionId(input);
   // Guard against empty string from extractSimpleSessionId
-  return `project/sessions/${simpleId || '000'}`;
+  return `workspace/sessions/${simpleId || '000'}`;
 }
 
 /**
@@ -177,7 +177,7 @@ export function buildScopePath(input: string | undefined): string {
  *
  * @param input - Composite or simple session ID
  * @param relativePath - File path relative to session root
- * @returns Full scoped path (e.g., "project/sessions/004/src/App.tsx")
+ * @returns Full scoped path (e.g., "workspace/sessions/004/src/App.tsx")
  */
 export function buildScopedFilePath(
   input: string | undefined,

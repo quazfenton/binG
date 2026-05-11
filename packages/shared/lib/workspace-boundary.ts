@@ -51,9 +51,9 @@ export const DESTRUCTIVE_OPERATIONS = new Set([
  * and should never trigger a workspace-boundary confirmation.
  */
 export const VFS_VIRTUAL_PREFIXES = [
-  '/project/',
   '/workspace/',
-  'project/',
+  '/workspace/',
+  'workspace/',
   'workspace/',
 ];
 // ──────────────────────────────────────────────────────────────────────────────
@@ -169,7 +169,7 @@ function isAbsolutePath(p: string): boolean {
 /**
  * Check whether a given file path is outside the workspace root.
  * 
- * VFS-awareness: Virtual paths (e.g., `/project/foo.txt`, `/workspace/bar.txt`)
+ * VFS-awareness: Virtual paths (e.g., `/workspace/foo.txt`, `/workspace/bar.txt`)
  * are always considered inside the workspace, since they are managed by the
  * virtual filesystem layer and don't correspond to real filesystem locations.
  * 
@@ -240,7 +240,7 @@ export function requiresWorkspaceBoundaryConfirmation(
   return {
     needsConfirmation: true,
     reason: `Path \"${targetPath}\" is outside the workspace root \"${root}\". ` +
-      `This operation will modify data outside the project directory.`,
+      `This operation will modify data outside the workspace directory.`,
     workspaceRoot: root,
   };
 }

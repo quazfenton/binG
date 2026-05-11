@@ -33,7 +33,7 @@ describe('Terminal Session Store', () => {
     cols: 120,
     rows: 30,
     lastActive: Date.now(),
-    history: ['ls', 'cd project', 'npm install'],
+    history: ['ls', 'cd workspace', 'npm install'],
     metadata: { provider: 'daytona', region: 'us-east-1' },
   }
 

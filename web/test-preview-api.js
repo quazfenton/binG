@@ -8,7 +8,7 @@ const API_BASE = 'http://localhost:3000';
 async function testPreviewSandbox() {
   console.log('Testing /api/preview/sandbox API endpoint...\n');
 
-  // Test 1: React project
+  // Test 1: React workspace
   const reactProject = {
     files: {
       'package.json': JSON.stringify({
@@ -28,7 +28,7 @@ async function testPreviewSandbox() {
   };
 
   try {
-    console.log('Test 1: POST /api/preview/sandbox with React project');
+    console.log('Test 1: POST /api/preview/sandbox with React workspace');
     const response = await fetch(`${API_BASE}/api/preview/sandbox`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -43,7 +43,7 @@ async function testPreviewSandbox() {
     console.error('Error:', err.message);
   }
 
-  // Test 2: Vanilla HTML project
+  // Test 2: Vanilla HTML workspace
   const vanillaProject = {
     files: {
       'index.html': '<!DOCTYPE html><html><head><title>Test</title></head><body><h1>Hello World</h1></body></html>',
@@ -54,7 +54,7 @@ async function testPreviewSandbox() {
   };
 
   try {
-    console.log('Test 2: POST /api/preview/sandbox with Vanilla project');
+    console.log('Test 2: POST /api/preview/sandbox with Vanilla workspace');
     const response = await fetch(`${API_BASE}/api/preview/sandbox`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -69,7 +69,7 @@ async function testPreviewSandbox() {
     console.error('Error:', err.message);
   }
 
-  // Test 3: Flask project
+  // Test 3: Flask workspace
   const flaskProject = {
     files: {
       'app.py': 'from flask import Flask\napp = Flask(__name__)\n@app.route("/")\ndef hello():\n    return "Hello World"',
@@ -79,7 +79,7 @@ async function testPreviewSandbox() {
   };
 
   try {
-    console.log('Test 3: POST /api/preview/sandbox with Flask project');
+    console.log('Test 3: POST /api/preview/sandbox with Flask workspace');
     const response = await fetch(`${API_BASE}/api/preview/sandbox`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

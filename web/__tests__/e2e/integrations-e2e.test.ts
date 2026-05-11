@@ -251,15 +251,15 @@ describe('DAG Executor — E2E', () => {
 
 describe('LLM Tool Integration — E2E Parser Tests', () => {
   it('handles complex multi-file LLM output with batch_write', () => {
-    const content = `I'll create the full project structure:
+    const content = `I'll create the full workspace structure:
 
 batch_write
 
 \`\`\`javascript
 [
-  {"path": "project/app/package.json", "content": "{\\"name\\": \\"app\\"}"},
-  {"path": "project/app/src/index.ts", "content": "export const app = () => {};"},
-  {"path": "project/app/src/utils.ts", "content": "export const add = (a: number, b: number) => a + b;"}
+  {"path": "workspace/app/package.json", "content": "{\\"name\\": \\"app\\"}"},
+  {"path": "workspace/app/src/index.ts", "content": "export const app = () => {};"},
+  {"path": "workspace/app/src/utils.ts", "content": "export const add = (a: number, b: number) => a + b;"}
 ]
 \`\`\`
 
@@ -267,9 +267,9 @@ All files created successfully!`;
 
     const edits = extractFileEdits(content);
     expect(edits.length).toBeGreaterThanOrEqual(3);
-    expect(edits.find(e => e.path === 'project/app/package.json')).toBeDefined();
-    expect(edits.find(e => e.path === 'project/app/src/index.ts')).toBeDefined();
-    expect(edits.find(e => e.path === 'project/app/src/utils.ts')).toBeDefined();
+    expect(edits.find(e => e.path === 'workspace/app/package.json')).toBeDefined();
+    expect(edits.find(e => e.path === 'workspace/app/src/index.ts')).toBeDefined();
+    expect(edits.find(e => e.path === 'workspace/app/src/utils.ts')).toBeDefined();
   });
 
   it('handles incremental parsing of streaming LLM output', () => {
@@ -277,10 +277,10 @@ All files created successfully!`;
     // Use actual backticks (via charCode) to avoid escaping issues
     const BT = String.fromCharCode(96);
     const chunks = [
-      BT+BT+BT+'file: project/stream/a.ts\n',
+      BT+BT+BT+'file: workspace/stream/a.ts\n',
       'content a\n',
       BT+BT+BT+'\n',
-      BT+BT+BT+'file: project/stream/b.ts\n',
+      BT+BT+BT+'file: workspace/stream/b.ts\n',
       'content b\n',
       BT+BT+BT+'\n',
     ];
@@ -293,24 +293,24 @@ All files created successfully!`;
     }
 
     // Should detect both edits
-    expect(allEdits.filter(e => e.path === 'project/stream/a.ts').length).toBeGreaterThanOrEqual(1);
-    expect(allEdits.filter(e => e.path === 'project/stream/b.ts').length).toBeGreaterThanOrEqual(1);
+    expect(allEdits.filter(e => e.path === 'workspace/stream/a.ts').length).toBeGreaterThanOrEqual(1);
+    expect(allEdits.filter(e => e.path === 'workspace/stream/b.ts').length).toBeGreaterThanOrEqual(1);
   });
 
   it('handles LLM output with mixed formats (XML + fenced + JSON)', () => {
     // Use actual backticks (via charCode) to avoid escaping issues
     const BT = String.fromCharCode(96);
-    const fenced = BT+BT+BT+'file: project/mixed/fenced.ts\nexport const fenced = true;\n'+BT+BT+BT;
+    const fenced = BT+BT+BT+'file: workspace/mixed/fenced.ts\nexport const fenced = true;\n'+BT+BT+BT;
 
     const content = `Here are the files:
 
-<file_edit path="project/mixed/xml.ts">
+<file_edit path="workspace/mixed/xml.ts">
 export const xml = true;
 </file_edit>
 
 ${fenced}
 
-{"tool": "write_file", "arguments": {"path": "project/mixed/json.ts", "content": "export const json = true;"}}`;
+{"tool": "write_file", "arguments": {"path": "workspace/mixed/json.ts", "content": "export const json = true;"}}`;
 
     // Debug: verify content has actual backticks
     const hasBackticks = content.includes(BT+BT+BT+'file:');
@@ -319,12 +319,12 @@ ${fenced}
     const edits = extractFileEdits(content);
     expect(edits.length).toBeGreaterThanOrEqual(2);
     const paths = edits.map(e => e.path);
-    expect(paths).toContain('project/mixed/xml.ts');
-    expect(paths).toContain('project/mixed/fenced.ts');
+    expect(paths).toContain('workspace/mixed/xml.ts');
+    expect(paths).toContain('workspace/mixed/fenced.ts');
   });
 
   it('handles LLM output with arrow functions in content (XML parser fix)', () => {
-    const content = `<file_edit path="project/arrow.ts">
+    const content = `<file_edit path="workspace/arrow.ts">
 const fn = (x: number) => x + 1;
 const map = [1, 2, 3].map(v => v * 2);
 const filter = [1, 2, 3].filter(v => v > 1);
@@ -332,7 +332,7 @@ const filter = [1, 2, 3].filter(v => v > 1);
 
     const edits = extractFileEdits(content);
     expect(edits).toHaveLength(1);
-    expect(edits[0].path).toBe('project/arrow.ts');
+    expect(edits[0].path).toBe('workspace/arrow.ts');
     expect(edits[0].content).toContain('(x: number) => x + 1');
     expect(edits[0].content).toContain('v => v * 2');
     expect(edits[0].content).toContain('v => v > 1');

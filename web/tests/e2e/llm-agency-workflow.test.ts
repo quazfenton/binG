@@ -207,7 +207,7 @@ async function testAutoContinue(token: string): Promise<void> {
       body: JSON.stringify({
         messages: [{
           role: 'user',
-          content: 'Create a complex multi-file Node.js project with: 1) package.json, 2) src/index.js with Express server, 3) src/routes/api.js with GET endpoint, 4) src/middleware/auth.js, 5) README.md with setup instructions. Make sure each file has complete, working code.',
+          content: 'Create a complex multi-file Node.js workspace with: 1) package.json, 2) src/index.js with Express server, 3) src/routes/api.js with GET endpoint, 4) src/middleware/auth.js, 5) README.md with setup instructions. Make sure each file has complete, working code.',
         }],
         provider: LLM_PROVIDER,
         model: LLM_MODEL,

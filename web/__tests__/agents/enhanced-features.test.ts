@@ -369,7 +369,7 @@ describe.skip('Agent Enhanced Features', () => {
       const memory = new AgentMemoryManager();
 
       // Add context to memory
-      memory.addFact('Project uses React', 0.8);
+      memory.addFact('Workspace uses React', 0.8);
       memory.addInstruction('Always write tests', 0.9);
 
       // Register agents

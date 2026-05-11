@@ -25,6 +25,24 @@ export {
   openCodeV2SessionManager,
 } from './session-manager'
 
+// Session Naming
+export {
+  generateSessionName,
+  sessionNameExists,
+  registerSessionName,
+  unregisterSessionName,
+  checkFileConflicts,
+  generateUniqueNameWithSuffix,
+  registerActiveSession,
+  unregisterActiveSession,
+  resetSessionNaming,
+  detectSingleFolderFromResponse,
+  type FileConflictCheck,
+} from './session-naming'
+
+// Session Hoist (server-only)
+export { hoistSessionFolder } from './session-hoist'
+
 export type {
   Session,
   SessionConfig,

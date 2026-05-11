@@ -21,7 +21,7 @@
  *     { role: 'developer', type: 'claude-code', model: 'claude-sonnet' },
  *     { role: 'reviewer', type: 'amp', model: 'amp-coder' },
  *   ],
- *   workspaceDir: '/workspace/my-project',
+ *   workspaceDir: '/workspace/my-workspace',
  * });
  *
  * const result = await team.execute({

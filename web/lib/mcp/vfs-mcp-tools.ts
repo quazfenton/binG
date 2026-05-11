@@ -394,7 +394,7 @@ export function parseBatchWriteFiles(files: unknown): Array<{ path: string; cont
 export interface ToolContext {
   userId: string;
   sessionId?: string;
-  scopePath: string;  // VFS scope path relative to workspace root (e.g., "project/sessions/001")
+  scopePath: string;  // VFS scope path relative to workspace root (e.g., "workspace/sessions/001")
 }
 
 // Request-scoped context storage using AsyncLocalStorage.
@@ -414,14 +414,14 @@ export function setToolContext(context: ToolContext): void {
 /**
  * Get the current tool execution context.
  * Returns the request-scoped context or a safe fallback.
- * FALLBACK: Uses "project" as the default scope if none is set.
+ * FALLBACK: Uses "workspace" as the default scope if none is set.
  */
 function getToolContext(): ToolContext {
   const ctx = toolContextStore.getStore();
   if (ctx) return ctx;
   // Safe fallback — should only happen if tools are called outside
   // of a toolContextStore.run() wrapper (which indicates a caller bug).
-  // Use mode-aware default session (desktop: 'project', web: 'project/sessions/000')
+  // Use mode-aware default session (desktop: 'workspace', web: 'workspace/sessions/000')
   // BUG: If you see this in production, the tool caller did not wrap in toolContextStore.run()
   console.warn('[VFS-MCP-TOOLS] WARNING: No tool context set — toolContextStore.run() was not called by the caller. Files may be written to wrong workspace (anon:public).');
   return {
@@ -433,7 +433,7 @@ function getToolContext(): ToolContext {
 /**
  * Resolve a file path relative to the session scope.
  *
- * The scopePath is always a VFS-relative path (e.g., "project/sessions/001"),
+ * The scopePath is always a VFS-relative path (e.g., "workspace/sessions/001"),
  * never an absolute filesystem path. The VFS layer handles mapping to actual
  * filesystem locations for both web and desktop modes.
  *
@@ -441,9 +441,9 @@ function getToolContext(): ToolContext {
  * If the path is relative, prepends the scopePath.
  *
  * Examples:
- * - scopePath="project/sessions/001", path="src/app.ts" → "project/sessions/001/src/app.ts"
- * - scopePath="project/sessions/001", path="/src/app.ts" → "project/sessions/001/src/app.ts"
- * - scopePath="project", path="src/app.ts" → "project/src/app.ts"
+ * - scopePath="workspace/sessions/001", path="src/app.ts" → "workspace/sessions/001/src/app.ts"
+ * - scopePath="workspace/sessions/001", path="/src/app.ts" → "workspace/sessions/001/src/app.ts"
+ * - scopePath="workspace", path="src/app.ts" → "workspace/src/app.ts"
  */
 function resolveScopedPath(inputPath: string): string {
   const context = getToolContext();
@@ -458,14 +458,14 @@ function resolveScopedPath(inputPath: string): string {
  * 
  * @param userId - The user/owner ID
  * @param sessionId - Optional session ID
- * @param scopePath - The VFS scope path relative to workspace root (e.g., "project/sessions/001")
+ * @param scopePath - The VFS scope path relative to workspace root (e.g., "workspace/sessions/001")
  */
 export function initializeVFSTools(userId: string, sessionId?: string, scopePath?: string): void {
   setToolContext({
     userId,
     sessionId,
     scopePath: getVfsScopePath({ scopePath, sessionId }),
-    // Default to session-scoped path based on mode (desktop uses 'project', web uses 'project/sessions/{id}')
+    // Default to session-scoped path based on mode (desktop uses 'workspace', web uses 'workspace/sessions/{id}')
   });
 }
 
@@ -488,7 +488,7 @@ export const writeFileTool = (tool as any)({
     'Examples of correct usage:',
     '  write_file(path="hello.py", content="print(\'Hello, World!\')")',
     '  write_file(path="src/App.tsx", content="export default function App() { return <div>Hello</div>; }")',
-    '  write_file(path="README.md", content="# My Project\\n\\nThis is a sample project.")',
+    '  write_file(path="README.md", content="# My Workspace\\n\\nThis is a sample workspace.")',
     '',
     'Common mistakes to avoid:',
     '  ✗ create_file(...)          → Use write_file instead (wrong tool name)',
@@ -932,7 +932,7 @@ export const applyDiffTool = (tool as any)({
 
 /**
  * Reverse-normalize a scoped VFS path back to the simple form the AI expects.
- * E.g. "project/sessions/001/src/app.ts" → "/src/app.ts" (if AI sent "/src/app.ts")
+ * E.g. "workspace/sessions/001/src/app.ts" → "/src/app.ts" (if AI sent "/src/app.ts")
  * or "src/app.ts" (if AI sent "src/app.ts")
  */
 function reverseNormalizePath(originalPath: string, scopedPath: string): string {
@@ -1277,7 +1277,7 @@ export const grepCodeTool = (tool as any)({
     '',
     'Arguments:',
     '   query (string)            - regex pattern, e.g. "useState\\(" or "TODO\\b"',
-    '   path (string, optional)   - root dir to search (default: project root)',
+    '   path (string, optional)   - root dir to search (default: workspace root)',
     '   glob (string, optional)   - file filter, e.g. "*.ts" or "**/*.{ts,tsx}"',
     '   caseInsensitive (bool)    - default false',
     '   wordRegexp (bool)         - match whole words only',
@@ -1292,7 +1292,7 @@ export const grepCodeTool = (tool as any)({
   ].join('\n'),
   parameters: z.object({
     query: z.string().describe('Regex pattern (or literal text if fixedString=true)'),
-    path: z.string().optional().describe('Root directory to search (default: project root)'),
+    path: z.string().optional().describe('Root directory to search (default: workspace root)'),
     glob: z.union([z.string(), z.array(z.string())]).optional()
       .describe('File filter glob, e.g. "*.ts" or ["*.ts","*.tsx"]'),
     caseInsensitive: z.boolean().optional().default(false),
@@ -1392,7 +1392,7 @@ export const batchWriteTool = (tool as any)({
     'Examples of correct usage:',
     '  batch_write(files=[{path:"src/app.py", content:"from flask import Flask\\napp = Flask(__name__)"},{path:"requirements.txt", content:"flask\\ngunicorn"}])',
     '  batch_write(files=[{path:"src/App.tsx", content:"export default function App() {}"},{path:"src/App.css", content:".app { margin: 0 }"}])',
-    '  batch_write(files=[{path:"README.md", content:"# Project"},{path:"LICENSE", content:"MIT"},{path:".gitignore", content:"node_modules/"}])',
+    '  batch_write(files=[{path:"README.md", content:"# Workspace"},{path:"LICENSE", content:"MIT"},{path:".gitignore", content:"node_modules/"}])',
     '',
     'Common mistakes to avoid:',
     '  ✗ batch_write(files="[{\\"path\\":...}]")  → Do NOT stringify the files array — pass as a proper JSON/array',
@@ -1860,7 +1860,7 @@ const TOOL_META: Record<string, { description: string; parameters: z.ZodType }> 
     description: grepCodeTool.description,
     parameters: z.object({
   query: z.string().describe('Regex pattern, e.g. "useState\\(" or "TODO|FIXME"'),
-  path: z.string().optional().describe('Root directory (default: project root)'),
+  path: z.string().optional().describe('Root directory (default: workspace root)'),
   glob: z.union([z.string(), z.array(z.string())]).optional().describe('File filter, e.g. "*.ts"'),
   caseInsensitive: z.boolean().optional().default(false),
   wordRegexp: z.boolean().optional().default(false),

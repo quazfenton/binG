@@ -62,7 +62,7 @@ export function createFilesystemTools(
   userId: string,
   options: FilesystemToolOptions = {},
 ): FilesystemTool[] {
-  const workspacePath = options.workspacePath || 'project';
+  const workspacePath = options.workspacePath || 'workspace';
   const tools: FilesystemTool[] = [
     {
       name: 'read_file',
@@ -530,7 +530,7 @@ export function createFilesystemTools(
 
     {
       name: 'context_pack',
-      description: 'Generate a dense, LLM-friendly bundle of directory structure and file contents. Similar to Repomix or Gitingest. Use this to get a comprehensive view of a project structure with file contents in a single response.',
+      description: 'Generate a dense, LLM-friendly bundle of directory structure and file contents. Similar to Repomix or Gitingest. Use this to get a comprehensive view of a workspace structure with file contents in a single response.',
       parameters: {
         type: 'object',
         properties: {

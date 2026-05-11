@@ -98,7 +98,7 @@ EXAMPLE OUTPUT:
       "tasks": [
         "Add smooth scroll animations with Framer Motion",
         "Implement dark/light theme toggle with persistence",
-        "Create interactive project cards with hover effects",
+        "Create interactive workspace cards with hover effects",
         "Add contact form with real-time validation"
       ],
       "priority": 2

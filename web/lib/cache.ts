@@ -98,7 +98,7 @@ export class Cache {
 export const responseCache = new Cache(500); // For API responses
 export const templateCache = new Cache(100); // For code templates
 export const fileCache = new Cache(200); // For file contents
-export const projectCache = new Cache(50); // For project structures
+export const projectCache = new Cache(50); // For workspace structures
 
 // Tool-specific caches
 export const toolResultCache = new Cache(500); // For tool execution results
@@ -118,9 +118,9 @@ export const cacheKey = {
   fileContent: (path: string) =>
     `file:${path}`,
 
-  // Project keys
+  // Workspace keys
   projectStructure: (files: string[]) =>
-    `project:${files.sort().join(',')}`,
+    `workspace:${files.sort().join(',')}`,
 
   // GitHub keys
   githubRepo: (owner: string, repo: string) =>

@@ -369,7 +369,7 @@ export interface SSEProgressiveBuildPayload {
   gapsIdentified?: string[];
   /** Summary from reflection/review */
   reflectionSummary?: string;
-  /** Current project tree snapshot */
+  /** Current workspace tree snapshot */
   projectTree?: string;
   /** Duration of this iteration in ms */
   durationMs?: number;

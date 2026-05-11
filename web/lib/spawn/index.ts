@@ -15,7 +15,7 @@
  * // Create Claude Code agent
  * const claude = await createAgent('claude-code', {
  *   apiKey: process.env.ANTHROPIC_API_KEY,
- *   workspaceDir: '/workspace/my-project',
+ *   workspaceDir: '/workspace/my-workspace',
  * });
  * 
  * // Send prompt
@@ -26,7 +26,7 @@
  * // Create Amp agent
  * const amp = await createAgent('amp', {
  *   apiKey: process.env.OPENAI_API_KEY,
- *   workspaceDir: '/workspace/my-project',
+ *   workspaceDir: '/workspace/my-workspace',
  * });
  * 
  * // Generate code

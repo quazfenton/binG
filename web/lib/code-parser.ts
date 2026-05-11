@@ -98,7 +98,7 @@ export async function* streamPartsToEdits(parts: AsyncIterable<StreamPart>, curr
       const edits = parseTextToEdits(buffer)
       if (edits.length) {
         currentProject = applyEditsToProject(currentProject, edits)
-        yield { project: currentProject, edits }
+        yield { workspace: currentProject, edits }
         buffer = ''
       }
     }
@@ -107,7 +107,7 @@ export async function* streamPartsToEdits(parts: AsyncIterable<StreamPart>, curr
     const edits = parseTextToEdits(buffer)
     if (edits.length) {
       currentProject = applyEditsToProject(currentProject, edits)
-      yield { project: currentProject, edits }
+      yield { workspace: currentProject, edits }
     }
   }
 }

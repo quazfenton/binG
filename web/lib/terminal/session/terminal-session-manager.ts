@@ -751,7 +751,7 @@ export class TerminalSessionManager {
       const { vfsSyncBackService } = await import('../../virtual-filesystem/sync/vfs-sync-back')
 
       const result = await vfsSyncBackService.syncSandboxToVFS(sessionId, {
-        vfsScopePath: options.vfsScopePath || 'project',
+        vfsScopePath: options.vfsScopePath || 'workspace',
         syncMode: options.syncMode || 'full',
       })
 

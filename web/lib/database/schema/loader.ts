@@ -41,9 +41,9 @@ function isEdgeRuntime(): boolean {
  * Strategy 1: process.cwd()/subpath — works in dev and in the Tauri desktop
  *   where Rust sets CWD to the web-assets/web/ dir.
  * Strategy 2: __dirname walk-up — for Next.js standalone builds where __dirname
- *   is deep inside .next/server/ and the .sql files are alongside the project root.
+ *   is deep inside .next/server/ and the .sql files are alongside the workspace root.
  *
- * @param subpath  Path segments under the project root (e.g. ['lib','database','schema','events-schema.sql'])
+ * @param subpath  Path segments under the workspace root (e.g. ['lib','database','schema','events-schema.sql'])
  * @returns Absolute path if found, or null.
  */
 export function resolveSqlPath(subpath: string[]): string | null {

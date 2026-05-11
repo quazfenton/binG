@@ -48,7 +48,7 @@ import {
 } from '@/lib/chat/file-edit-parser';
 import { isValidFilePath } from '@/lib/chat/file-edit-parser';
 import { applyUnifiedDiffToContent } from '@/lib/chat/file-diff-utils';
-import { generateSessionName, sessionNameExists } from '@/lib/session-naming';
+import { generateSessionName, sessionNameExists } from '@/lib/session/session-naming';
 import { timingSafeEqual } from 'node:crypto';
 import { buildSupplementalAgenticEvents } from '@/lib/api/streaming-events';
 import { sandboxBridge } from '@/lib/sandbox';
@@ -108,10 +108,10 @@ const SPEC_AMPLIFICATION_STREAM_EVENTS_ENABLED =
 // FIX 2: Pre-compiled RegExp for legacy fallback detection (used when task classifier is unavailable)
 // These patterns are now SECONDARY to the multi-factor task classifier
 const STRONG_CODE_PATTERN =
-  /\b(refactor|bug\s*fix|stack\s*trace|typescript|javascript|python|react|next\.js|vue\.js|angular|node\.?js|endpoint|database|schema|compile|lint|migrations?|docker|kubernetes|k8s|redis|mongodb|postgresql|mysql|sqlite|express|fastapi|flask|django|spring|rails|laravel|symfony|golang|rust|java|c\+\+|cpp|c#|dotnet|swift|kotlin|flutter|react\s*native|electron|code|build|implement|create\s+app|create\s+project|scaffold|generate\s+app)\b/i
+  /\b(refactor|bug\s*fix|stack\s*trace|typescript|javascript|python|react|next\.js|vue\.js|angular|node\.?js|endpoint|database|schema|compile|lint|migrations?|docker|kubernetes|k8s|redis|mongodb|postgresql|mysql|sqlite|express|fastapi|flask|django|spring|rails|laravel|symfony|golang|rust|java|c\+\+|cpp|c#|dotnet|swift|kotlin|flutter|react\s*native|electron|code|build|implement|create\s+app|create\s+workspace|scaffold|generate\s+app)\b/i
 
 const WEAK_CODE_KEYWORDS = [
-  'app', 'project', 'component', 'file', 'api',
+  'app', 'workspace', 'component', 'file', 'api',
   'function', 'class', 'module', 'package', 'implement', 'build', 'develop',
 ] as const
 
@@ -224,15 +224,15 @@ async function classifyRequest(
 // FIX 3: Pre-compiled RegExp for shouldUseContextPack
 const CONTEXT_PACK_PATTERN = new RegExp(
   [
-    'full project',
-    'entire project',
-    'whole project',
+    'full workspace',
+    'entire workspace',
+    'whole workspace',
     'complete codebase',
     'full codebase',
     'entire codebase',
-    'project structure',
+    'workspace structure',
     'codebase structure',
-    'project overview',
+    'workspace overview',
     'codebase overview',
     'all files',
     'everything in',
@@ -241,9 +241,9 @@ const CONTEXT_PACK_PATTERN = new RegExp(
     'gitingest',
     'bundle.*context',
     'pack.*files',
-    'scaffold.*project',
-    'understand.*project',
-    'analyze.*project',
+    'scaffold.*workspace',
+    'understand.*workspace',
+    'analyze.*workspace',
     'review.*codebase',
   ].join('|'),
   'i',
@@ -676,9 +676,9 @@ export async function POST(request: NextRequest) {
       chatLogger.debug('Session file tracking failed (non-critical)', { error: error.message });
     }
 
-    const defaultScopePath = `project/sessions/${sanitizePathSegment(resolvedConversationId)}`;
+    const defaultScopePath = `workspace/sessions/${sanitizePathSegment(resolvedConversationId)}`;
     // Sanitize scopePath to ensure folder names are not corrupted with ownerId prefix
-    // e.g., "project/sessions/anon:1774710784761_6TB03h8Ow:002" -> "project/sessions/002"
+    // e.g., "workspace/sessions/anon:1774710784761_6TB03h8Ow:002" -> "workspace/sessions/002"
     const rawScopePath = typeof filesystemContext?.scopePath === 'string' && filesystemContext.scopePath.trim()
       ? filesystemContext.scopePath.trim()
       : defaultScopePath;
@@ -779,7 +779,7 @@ export async function POST(request: NextRequest) {
       enableFilesystemEdits && userPrompt
         ? buildHybridWorkspaceContext(filesystemOwnerId, scopePathForHybrid, {
             prompt: userPrompt,
-            projectId: scopePathForHybrid, // Use scopePath as stable project ID
+            projectId: scopePathForHybrid, // Use scopePath as stable workspace ID
             maxTokens: body.maxTokens,
           })
         : Promise.resolve(''),
@@ -1457,11 +1457,11 @@ const config: UnifiedAgentConfig = {
                   result.metadata.extractedEditCount = finalEdits?.length || 0;
                 }
 
-                // SESSION NAMING: Detect if this is a new single-folder project
-                // If so, rename the session folder to match the project folder
+                // SESSION NAMING: Detect if this is a new single-folder workspace
+                // If so, rename the session folder to match the workspace folder
                 const responseContent = streamingContentBuffer + (typeof result.response === 'string' ? result.response : '') || '';
 
-                const { detectSingleFolderFromResponse } = await import('@/lib/session-naming');
+                const { detectSingleFolderFromResponse } = await import('@/lib/session/session-naming');
                 const detectedFolder = detectSingleFolderFromResponse(responseContent);
 
                 // Check if we should rename: new session (sequential ID) with single detected folder
@@ -1481,13 +1481,13 @@ const config: UnifiedAgentConfig = {
                 
                 if (detectedFolder && isNewSession && detectedFolder !== resolvedConversationId) {
                   // Check if detected folder name is available
-                  const { sessionNameExists } = await import('@/lib/session-naming');
+                  const { sessionNameExists } = await import('@/lib/session/session-naming');
                   const folderExists = await sessionNameExists(detectedFolder);
 
                   if (!folderExists) {
                     // Rename session folder by moving contents
-                    const oldPath = `project/sessions/${resolvedConversationId}`;
-                    const newPath = `project/sessions/${detectedFolder}`;
+                    const oldPath = `workspace/sessions/${resolvedConversationId}`;
+                    const newPath = `workspace/sessions/${detectedFolder}`;
 
                     try {
                       const { virtualFilesystem } = await import('@/lib/virtual-filesystem/virtual-filesystem-service');
@@ -1511,9 +1511,9 @@ const config: UnifiedAgentConfig = {
                       const previousId = resolvedConversationId;
                       resolvedConversationId = detectedFolder;
                       // CRITICAL: Update scope path to match renamed session
-                      requestedScopePath = `project/sessions/${detectedFolder}`;
+                      requestedScopePath = `workspace/sessions/${detectedFolder}`;
 
-                      chatLogger.info('Session folder renamed based on detected project structure', {
+                      chatLogger.info('Session folder renamed based on detected workspace structure', {
                         previousId,
                         newId: detectedFolder,
                         filesMoved: listing.nodes.length,
@@ -1523,7 +1523,7 @@ const config: UnifiedAgentConfig = {
                       emit(SSE_EVENT_TYPES.FILESYSTEM, {
                         previousId,
                         newId: detectedFolder,
-                        reason: 'single-folder-project',
+                        reason: 'single-folder-workspace',
                       });
                     } catch (renameError: any) {
                       chatLogger.warn('Failed to rename session folder', {
@@ -1722,7 +1722,7 @@ const config: UnifiedAgentConfig = {
           ownerId: authenticatedUserId,
           stream: stream === true,
           model: normalizedModel,
-          workspacePath: `project/sessions/${resolvedConversationId}`,
+          workspacePath: `workspace/sessions/${resolvedConversationId}`,
         });
 
         if (stream === true) {
@@ -4370,12 +4370,12 @@ function shouldHandleFilesystemEdits(
     return false;
   }
 
-  return /\b(file|files|code|edit|patch|create|write|update|project|program|build|run|execute|install|scaffold|component|page|app|module|function|class)\b/i.test(lastUserMessage);
+  return /\b(file|files|code|edit|patch|create|write|update|workspace|program|build|run|execute|install|scaffold|component|page|app|module|function|class)\b/i.test(lastUserMessage);
 }
 
 /**
  * Detect if user is requesting a comprehensive context pack
- * Look for keywords suggesting they want full project context
+ * Look for keywords suggesting they want full workspace context
  */
 function shouldUseContextPack(messages: LLMMessage[]): boolean {
   const lastUserMessage = [...messages].reverse().find((message) => message.role === 'user')?.content;
@@ -4712,7 +4712,7 @@ async function buildWorkspaceSessionContext(
  * Hybrid workspace context — combines AST-based symbol retrieval with existing
  * smart-context fallback. No breaking changes to existing behavior.
  *
- * When the vector store has indexed symbols for this project, uses the
+ * When the vector store has indexed symbols for this workspace, uses the
  * high-precision 7-signal ranking. Falls back to smart-context keyword scoring
  * when no symbols are available.
  */
@@ -5067,7 +5067,7 @@ function validateExtractedPath(raw: string, isFolder: boolean = false): string |
     return null;
   }
   // CRITICAL FIX: Reject CSS values and SCSS variables in last path segment
-  // This catches "project/sessions/002/0.3s" where "0.3s" is invalid
+  // This catches "workspace/sessions/002/0.3s" where "0.3s" is invalid
   if (PATH_CSS_VALUE_RE.test(path)) {
     console.debug('[validateExtractedPath] Rejected: CSS value', { path: path.slice(0, 100) });
     return null;
@@ -5158,8 +5158,8 @@ function resolveScopedPath(input: {
     return resolveScopeUtil(rawPath, input.scopePath);
   }
 
-  const normalizedRelative = rawPath.startsWith('project/')
-    ? rawPath.slice('project/'.length)
+  const normalizedRelative = rawPath.startsWith('workspace/')
+    ? rawPath.slice('workspace/'.length)
     : rawPath;
   
   const resolvedPath = resolveScopeUtil(normalizedRelative, input.scopePath);

@@ -5,7 +5,7 @@ import { NextResponse } from "next/server";
 // Pre-warm endpoint to initialize LLM service and avoid cold starts
 // Call this on app mount to speed up first chat request
 
-export async function GET() {
+export async function GET(request?: Request) {
   try {
     // Pre-warm the LLM service by triggering provider initialization
     const { llmService } = await import("@/lib/chat/llm-providers");

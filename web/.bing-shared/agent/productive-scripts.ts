@@ -80,8 +80,8 @@ export interface ScriptDefinition {
 
 const SCRIPT_TEMPLATES: Record<ScriptType, ScriptDefinition> = {
   build: {
-    name: 'Build Project',
-    description: 'Build the project for production',
+    name: 'Build Workspace',
+    description: 'Build the workspace for production',
     parallel: false,
     steps: [
       {
@@ -151,7 +151,7 @@ const SCRIPT_TEMPLATES: Record<ScriptType, ScriptDefinition> = {
   },
   install: {
     name: 'Install Dependencies',
-    description: 'Install project dependencies',
+    description: 'Install workspace dependencies',
     parallel: false,
     steps: [
       {

@@ -81,24 +81,24 @@ const GlitchEmbedPlugin: React.FC<GlitchEmbedPluginProps> = ({ onOpenWindow }) =
     },
     onFailed: (reason, error) => {
       setIsLoading(false);
-      setError(error || 'Failed to load Glitch project');
+      setError(error || 'Failed to load Glitch workspace');
     },
   });
 
-  // Extract project name from Glitch URL
+  // Extract workspace name from Glitch URL
   const extractProjectName = (url: string): string | null => {
     try {
       const urlObj = new URL(url);
       if (!urlObj.hostname.endsWith('.glitch.me') && urlObj.hostname !== 'glitch.com') {
         return null;
       }
-      // For glitch.com/edit/#!project:name format
+      // For glitch.com/edit/#!workspace:name format
       if (urlObj.hostname === 'glitch.com') {
         const hash = urlObj.hash;
-        const match = hash.match(/project:([^&]+)/);
+        const match = hash.match(/workspace:([^&]+)/);
         return match ? match[1] : null;
       }
-      // For project-name.glitch.me format
+      // For workspace-name.glitch.me format
       const subdomain = urlObj.hostname.split('.')[0];
       return subdomain !== 'www' ? subdomain : null;
     } catch {
@@ -106,10 +106,10 @@ const GlitchEmbedPlugin: React.FC<GlitchEmbedPluginProps> = ({ onOpenWindow }) =
     }
   };
 
-  // Load Glitch project
+  // Load Glitch workspace
   const loadProject = useCallback(async () => {
     if (!projectUrl.trim()) {
-      setError("Please enter a Glitch project URL");
+      setError("Please enter a Glitch workspace URL");
       return;
     }
 
@@ -119,28 +119,28 @@ const GlitchEmbedPlugin: React.FC<GlitchEmbedPluginProps> = ({ onOpenWindow }) =
     const projectName = extractProjectName(projectUrl.trim());
     
     if (!projectName) {
-      setError("Invalid Glitch URL. Please use a URL like https://glitch.com/edit/#!project:name or https://name.glitch.me");
+      setError("Invalid Glitch URL. Please use a URL like https://glitch.com/edit/#!workspace:name or https://name.glitch.me");
       setIsLoading(false);
       return;
     }
 
     try {
-      const project: GlitchProject = {
+      const workspace: GlitchProject = {
         id: projectName,
         name: projectName,
         embedUrl: `https://glitch.com/embed/#!/edit/${projectName}`,
         viewUrl: `https://${projectName}.glitch.me`,
       };
 
-      setCurrentProject(project);
+      setCurrentProject(workspace);
       setIsLoading(false);
     } catch (err) {
-      setError("Failed to load Glitch project. Please check the URL.");
+      setError("Failed to load Glitch workspace. Please check the URL.");
       setIsLoading(false);
     }
   }, [projectUrl]);
 
-  // Open project in new window
+  // Open workspace in new window
   const openInNewWindow = useCallback(() => {
     if (!currentProject) return;
     
@@ -180,7 +180,7 @@ const GlitchEmbedPlugin: React.FC<GlitchEmbedPluginProps> = ({ onOpenWindow }) =
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Code className="h-5 w-5 text-purple-600" />
-            <h3 className="text-lg font-semibold">Glitch Project Embed</h3>
+            <h3 className="text-lg font-semibold">Glitch Workspace Embed</h3>
           </div>
           <div className="flex items-center gap-2">
             <Select value={embedMode} onValueChange={(v) => setEmbedMode(v as any)}>
@@ -220,11 +220,11 @@ const GlitchEmbedPlugin: React.FC<GlitchEmbedPluginProps> = ({ onOpenWindow }) =
         {!currentProject ? (
           <div className="space-y-4">
             <div className="grid gap-2">
-              <Label htmlFor="glitch-url">Glitch Project URL</Label>
+              <Label htmlFor="glitch-url">Glitch Workspace URL</Label>
               <div className="flex gap-2">
                 <Input
                   id="glitch-url"
-                  placeholder="https://glitch.com/edit/#!project:my-project or https://my-project.glitch.me"
+                  placeholder="https://glitch.com/edit/#!workspace:my-workspace or https://my-workspace.glitch.me"
                   value={projectUrl}
                   onChange={(e) => setProjectUrl(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && loadProject()}
@@ -238,7 +238,7 @@ const GlitchEmbedPlugin: React.FC<GlitchEmbedPluginProps> = ({ onOpenWindow }) =
                 </Button>
               </div>
               <p className="text-sm text-muted-foreground">
-                Enter a Glitch project URL to embed the live editor and preview
+                Enter a Glitch workspace URL to embed the live editor and preview
               </p>
             </div>
             {error && (
@@ -249,7 +249,7 @@ const GlitchEmbedPlugin: React.FC<GlitchEmbedPluginProps> = ({ onOpenWindow }) =
             <div className="text-sm text-muted-foreground">
               <p className="font-medium mb-2">Examples:</p>
               <ul className="list-disc list-inside space-y-1">
-                <li>https://glitch.com/edit/#!project:hello-webapp</li>
+                <li>https://glitch.com/edit/#!workspace:hello-webapp</li>
                 <li>https://hello-webapp.glitch.me</li>
               </ul>
             </div>
@@ -262,7 +262,7 @@ const GlitchEmbedPlugin: React.FC<GlitchEmbedPluginProps> = ({ onOpenWindow }) =
                 <span className="font-medium">{currentProject.name}</span>
               </div>
               <Button variant="ghost" size="sm" onClick={() => setCurrentProject(null)}>
-                Close Project
+                Close Workspace
               </Button>
             </div>
             
@@ -294,7 +294,7 @@ const GlitchEmbedPlugin: React.FC<GlitchEmbedPluginProps> = ({ onOpenWindow }) =
                     <iframe
                       src={isUsingFallback && fallbackUrl ? fallbackUrl : currentProject.embedUrl}
                       className="w-full h-full"
-                      title={`Glitch Project: ${currentProject.name}`}
+                      title={`Glitch Workspace: ${currentProject.name}`}
                       allow="camera; microphone; midi; geolocation; display-capture; encrypted-media; fullscreen"
                       sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
                       onLoad={handleLoadSuccess}

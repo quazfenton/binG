@@ -10,7 +10,7 @@
  *   import { getGateway, buildFeedbackForPrompt } from '@/lib/lsp';
  *
  *   // Start the gateway (auto-detects tsconfig.json, Cargo.toml, etc.)
- *   const gateway = getGateway({ projectRoot: '/path/to/project' });
+ *   const gateway = getGateway({ projectRoot: '/path/to/workspace' });
  *   await gateway.start();
  *
  *   // Sync a file — gateway routes to the right language server

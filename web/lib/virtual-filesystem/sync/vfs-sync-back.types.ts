@@ -24,7 +24,7 @@ export type SyncMode = 'full' | 'incremental' | 'changed-only';
  * Sync configuration
  */
 export interface VFSyncConfig {
-  /** VFS scope path (e.g., 'project') */
+  /** VFS scope path (e.g., 'workspace') */
   vfsScopePath: string;
 
   /** Sync mode */

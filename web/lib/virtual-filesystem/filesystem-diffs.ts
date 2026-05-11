@@ -183,7 +183,7 @@ export class FilesystemDiffTracker {
 
       if (found && content !== null) {
         // Prepend workspace root for consistency with virtual filesystem paths
-        const fullPath = history.path.startsWith('project/') ? history.path : `project/${history.path}`;
+        const fullPath = history.path.startsWith('workspace/') ? history.path : `workspace/${history.path}`;
         filesAtVersion.set(fullPath, content);
       }
     }

@@ -30,6 +30,7 @@ interface VoiceMessage {
   role: "user" | "assistant";
   content: string;
   timestamp: number;
+  modelName?: string;
 }
 
 interface VoicePanelProps {

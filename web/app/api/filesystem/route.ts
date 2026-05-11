@@ -30,7 +30,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Not found' }, { status: 404 });
   }
 
-  // Strip query string from last segment (e.g. "list?path=project" → "list")
+  // Strip query string from last segment (e.g. "list?path=workspace" → "list")
   // 4-segment paths like /api/filesystem/events/push → action = "events-push"
   const action = segments.length === 4
     ? `${segments[2]}-${segments[3]?.split('?')[0] ?? ''}`

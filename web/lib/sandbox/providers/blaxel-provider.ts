@@ -272,7 +272,7 @@ export class BlaxelProvider implements SandboxProvider {
    * 
    * @example
    * ```typescript
-   * await blaxelProvider.createVolumeTemplate('node-project', [
+   * await blaxelProvider.createVolumeTemplate('node-workspace', [
    *   { path: 'package.json', content: '{...}' },
    *   { path: 'src/index.ts', content: '...' },
    * ])

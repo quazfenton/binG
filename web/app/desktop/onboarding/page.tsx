@@ -49,7 +49,7 @@ interface OnboardingData {
   enableTelemetry: boolean;
   // Workspace boundary settings
   boundaryEnabled: boolean;
-  boundaryMode: 'session' | 'project' | 'none';
+  boundaryMode: 'session' | 'workspace' | 'none';
 }
 
 const STEPS = [
@@ -477,10 +477,10 @@ function WorkspaceStep({ workspaceRoot, onChange, onSelect }: WorkspaceStepProps
 
 interface BoundaryStepProps {
   boundaryEnabled: boolean;
-  boundaryMode: 'session' | 'project' | 'none';
+  boundaryMode: 'session' | 'workspace' | 'none';
   workspaceRoot: string;
   onEnabledChange: (value: boolean) => void;
-  onModeChange: (value: 'session' | 'project' | 'none') => void;
+  onModeChange: (value: 'session' | 'workspace' | 'none') => void;
 }
 
 const BOUNDARY_MODES = [
@@ -499,9 +499,9 @@ const BOUNDARY_MODES = [
     iconColor: 'text-yellow-400',
   },
   { 
-    value: 'project', 
-    label: 'Project Boundary', 
-    description: 'Agent can only access project folder',
+    value: 'workspace', 
+    label: 'Workspace Boundary', 
+    description: 'Agent can only access workspace folder',
     icon: Lock,
     iconColor: 'text-blue-400',
   },
@@ -551,7 +551,7 @@ function BoundaryStep({ boundaryEnabled, boundaryMode, workspaceRoot, onEnabledC
 
             <RadioGroup
               value={boundaryMode}
-              onValueChange={(value) => onModeChange(value as 'session' | 'project' | 'none')}
+              onValueChange={(value) => onModeChange(value as 'session' | 'workspace' | 'none')}
               className="grid grid-cols-1 gap-3"
             >
               {BOUNDARY_MODES.map((mode) => (
@@ -574,7 +574,7 @@ function BoundaryStep({ boundaryEnabled, boundaryMode, workspaceRoot, onEnabledC
                           Creates: {workspaceRoot}/session-abc123/
                         </p>
                       )}
-                      {mode.value === 'project' && (
+                      {mode.value === 'workspace' && (
                         <p className="text-xs text-muted-foreground mt-1">
                           Agent can only read/write in: {workspaceRoot}/
                         </p>

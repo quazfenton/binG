@@ -60,7 +60,7 @@ export const listFilesTool = tool({
   description: `List files and directories at the given path.
 
 USE CASES:
-- Discover project structure
+- Discover workspace structure
 - Find files matching a pattern
 - Explore unknown codebases
 
@@ -164,7 +164,7 @@ SECURITY: Some dangerous commands are blocked:
 EXAMPLE:
 {
   "command": "npm run build",
-  "cwd": "/workspace/my-project"
+  "cwd": "/workspace/my-workspace"
 }`,
   parameters: z.object({
     command: z.string().describe('Shell command to execute'),
@@ -235,10 +235,10 @@ This tool creates an approval request that must be resolved before proceeding.`,
 } as any);
 
 export const discoveryTool = tool({
-  description: `Analyze project files to understand current state.
+  description: `Analyze workspace files to understand current state.
 
 USE THIS at the start of any task to:
-- Understand project structure
+- Understand workspace structure
 - Identify relevant files
 - Plan your approach
 

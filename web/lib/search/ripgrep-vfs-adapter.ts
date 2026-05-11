@@ -139,7 +139,7 @@ async function searchVFS(opts: VFSRipgrepOptions, startTime: number): Promise<VF
       : [];
     
     // Search base path
-    const searchBasePath = opts.path || 'project';
+    const searchBasePath = opts.path || 'workspace';
     const normalizedBasePath = searchBasePath.replace(/\\/g, '/').trim();
     
     let filesSearched = 0;
@@ -149,7 +149,7 @@ async function searchVFS(opts: VFSRipgrepOptions, startTime: number): Promise<VF
       if (matches.length >= maxResults) break;
       
       // Skip files outside search path
-      if (normalizedBasePath && normalizedBasePath !== 'project') {
+      if (normalizedBasePath && normalizedBasePath !== 'workspace') {
         if (!file.path.startsWith(normalizedBasePath + '/') && file.path !== normalizedBasePath) {
           continue;
         }
