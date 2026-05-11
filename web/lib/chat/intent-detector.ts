@@ -3,7 +3,7 @@
 import { detectRequestType } from '../utils/request-type-detector';
 export { detectRequestType as detectIntent };
 
-import type { LLMMessage } from './llm-providers';
+import type { LLMMessage } from '../providers/llm-providers';
 
 export type RequestIntent = 'tool' | 'sandbox' | 'chat';
 

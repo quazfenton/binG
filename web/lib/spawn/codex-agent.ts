@@ -12,7 +12,7 @@
  */
 
 import { OpenAIAgentBase, type OpenAIAgentDescriptor, type OpenAIAgentConfig, type OpenAIAgentMessage, type OpenAIAgentTool } from './openai-agent-base';
-import { findCodexBinarySync } from '@/lib/agent-bins/find-codex-binary';
+import { findCodexBinarySync } from '@/lib/drivers/agent-bins/find-codex-binary';
 
 // ============================================================================
 // Types

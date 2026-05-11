@@ -7,7 +7,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 
-import { getModelBenchmarks } from '@/lib/model-comparison/model-comparison';
+import { getModelBenchmarks } from '@/lib/plugins/model-comparison/model-comparison';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('API:Models:Benchmarks');

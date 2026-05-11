@@ -9,7 +9,7 @@ vi.mock('@bing/shared/FS/fs-bridge', () => ({
   isUsingLocalFS: vi.fn(() => false),
 }));
 
-vi.mock('../../virtual-filesystem/virtual-filesystem-service', () => ({
+vi.mock('../../../../../virtual-filesystem/virtual-filesystem-service', () => ({
   virtualFilesystem: {
     vfs: {
       ensureWorkspace: vi.fn(async () => ({

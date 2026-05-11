@@ -6,7 +6,7 @@
  */
 
 import { isDesktopMode } from "@bing/platform/env";
-import { findOpencodeBinarySync } from "@/lib/agent-bins/find-opencode-binary";
+import { findOpencodeBinarySync } from "@/lib/drivers/opencode/find-opencode-binary";
 import { agentLog } from './agent-logger';
 
 /**

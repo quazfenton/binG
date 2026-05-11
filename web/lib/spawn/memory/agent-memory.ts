@@ -11,7 +11,7 @@
  * 
  * @example
  * ```typescript
- * import { createAgentMemory } from '@/lib/spawn/memory';
+ * import { createAgentMemory } from '@/lib/crewai/agents/memory';
  * 
  * const memory = await createAgentMemory({
  *   agentId: 'agent-123',

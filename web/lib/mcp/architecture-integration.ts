@@ -13,7 +13,7 @@ import { callMCPorterTool, getMCPorterToolDefinitions, mcporterIntegration } fro
 import { createHTTPTransport, isValidMCPURL, parseMCPURL, HTTPTransport, registerHTTPTransport, getRemoteMCPTools, callRemoteMCPTool, hasRemoteMCPServers } from './http-transport'
 import { startHealthMonitoring } from './health-check'
 import { createLogger } from '../utils/logger';
-import { redactArgsForLogging } from '@/lib/chat/logging-utils';
+import { redactArgsForLogging } from '@/lib/errors/logging-utils';
 // Dynamically imported to avoid pulling Node.js-only deps (database/fs) into client bundle
 import type { BlaxelProvider } from '../sandbox/providers/blaxel-provider'
 import { ArcadeService, getArcadeService } from '../integrations/arcade-service'

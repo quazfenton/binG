@@ -1,7 +1,7 @@
 import { getVercelModel } from '../../../chat/vercel-ai-streaming';
 import { streamText, generateObject, type Tool as CoreTool } from 'ai';
 import type { SandboxHandle } from '@/lib/sandbox/providers/sandbox-provider';
-import type { ProjectServices } from '@/lib/workspace-context';
+import type { ProjectServices } from '@/lib/context/project-context';
 import { ToolExecutor } from '../tools/tool-executor';
 import { reflectionEngine } from '@/lib/orchestra/reflection-engine';
 import { executionGraphEngine } from '@bing/shared/agent/execution-graph';

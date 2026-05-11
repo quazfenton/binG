@@ -3,8 +3,8 @@ export const runtime = 'nodejs';
 
 import * as bcrypt from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
-import { getDatabase } from '../database/connection';
-import { DatabaseOperations } from '../database/connection';
+import { getDatabase } from '../../database/connection';
+import { DatabaseOperations } from '../../database/connection';
 import { generateToken, blacklistToken, isTokenExpiringSoon } from './jwt';
 import { authCache } from './auth-cache';
 import { createLogger } from '../utils/logger';
@@ -470,7 +470,7 @@ export class AuthService {
       // OAuth users already have verified emails from their provider
       if (!credentials.emailVerified) {
         try {
-          const { emailService } = await import('@/lib/email/email-service');
+          const { emailService } = await import('@/lib/auth/email/email-service');
           const verificationUrl = `${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/verify-email?token=${verificationToken}`;
           await emailService.sendVerificationEmail(credentials.email, {
             token: verificationToken,

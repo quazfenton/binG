@@ -38,7 +38,7 @@ import {
   Code, Terminal, Cpu, Server, Globe, MapPin, Hash,
 } from "lucide-react";
 import { toast } from "sonner";
-import { PersistentCache } from "@/lib/cache";
+import { PersistentCache } from '@/lib/utils/cache';
 import { clipboard } from '@bing/platform/clipboard';
 
 // Helper to ensure image URLs go through the proxy

@@ -23,7 +23,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { useVoiceSettings, useAvailableVoices } from "@/lib/voice/use-voice";
-import { cn } from "@/lib/utils";
+import { cn } from '@/lib/virtual-filesystem/opfs/utils';
 
 interface VoiceMessage {
   id: string;

@@ -516,7 +516,7 @@ async function checkDirectOAuthStatus(
     try {
       const userId = appUserId; // userId is now string (UUID)
       // Check if connected using string userId
-      const { isGitHubConnected, getGitHubUser, getGitHubToken } = await import('@/lib/github/github-oauth');
+      const { isGitHubConnected, getGitHubUser, getGitHubToken } = await import('@/lib/integrations/github/github-oauth');
       const connected = isGitHubConnected(userId);
 
       if (connected) {

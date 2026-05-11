@@ -12,7 +12,7 @@
  */
 
 import { OpenAIAgentBase, type OpenAIAgentDescriptor, type OpenAIAgentConfig, type OpenAIAgentMessage, type OpenAIAgentTool } from './openai-agent-base';
-import { findAmpBinarySync } from '@/lib/agent-bins/find-amp-binary';
+import { findAmpBinarySync } from '@/lib/drivers/agent-bins/find-amp-binary';
 
 // ============================================================================
 // Types

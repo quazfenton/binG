@@ -17,7 +17,7 @@
  * ```
  */
 
-import type { LLMMessage } from '@/lib/chat/llm-providers';
+import type { LLMMessage } from '@/lib/providers/llm-providers';
 import { createHash } from 'crypto';
 
 // Cache for stage 1 results (fast path — no LLM cost)

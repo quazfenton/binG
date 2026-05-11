@@ -7,7 +7,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 
-import { repoIndexer } from '@/lib/repo-index/indexer';
+import { repoIndexer } from '@/lib/retrieval/indexer';
 
 /**
  * GET /api/repo-index/stats

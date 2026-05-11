@@ -11,7 +11,7 @@
  * @see lib/terminal/session/terminal-session-manager.ts - Consolidated terminal session manager
  */
 
-import { terminalSessionManager, type TerminalSessionState } from './terminal-session-manager'
+import { terminalSessionManager, type TerminalSessionState } from './terminal/terminal-session-manager'
 import type { SandboxProviderType } from '../../sandbox/providers'
 
 // Log deprecation warning on first import

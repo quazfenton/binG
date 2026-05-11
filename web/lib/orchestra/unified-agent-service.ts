@@ -13,7 +13,7 @@
  * - Health checking for provider availability
  */
 
-import type { ToolResult } from '../sandbox/types';
+import type { ToolResult } from '../../../../../sandbox/types';
 import type { LLMProvider } from '../sandbox/providers/llm-provider';
 import { getLLMProvider } from '../sandbox/providers/llm-factory';
 import { getCircuitStateName } from '../middleware/circuit-breaker';
@@ -22,10 +22,10 @@ import { getCircuitStateName } from '../middleware/circuit-breaker';
 import { initToolSystem, executeToolCapability, hasToolCapability, isToolSystemReady } from '@/lib/tools';
 
 import { runAgentLoop as runV2AgentLoop } from './agent-loop';
-import { getConfiguredFallbackChain } from '../chat/provider-fallback-chains';
+import { getConfiguredFallbackChain } from '../providers/provider-fallback-chains';
 import { chatRequestLogger } from '../chat/chat-request-logger';
 import { extractFileWritesFromLLMResponse, type FileWrite } from '../chat/file-diff-utils';
-import { recordToolCallTelemetry, prepareTelemetryPayload } from '@/lib/chat/logging-utils';
+import { recordToolCallTelemetry, prepareTelemetryPayload } from '@/lib/errors/logging-utils';
 import { getRecontextSupplement } from '@/lib/memory/cache-exporter';
 import {
   createOpenCodeEngine,
@@ -33,7 +33,7 @@ import {
   type OpenCodeEngineConfig,
 } from '../session/agent/opencode-engine-service';
 import { isDesktopMode } from "@bing/platform/env";
-import { findOpencodeBinarySync } from "@/lib/agent-bins/find-opencode-binary";
+import { findOpencodeBinarySync } from "@/lib/drivers/opencode/find-opencode-binary";
 
 // Centralized agent logging, startup capabilities, and health tracking
 import { createAgentLogger, agentLog } from './agent-logger';
@@ -76,7 +76,7 @@ import {
   type RoutingMetadata,
   type ParsedRouting,
 } from '@bing/shared/agent/first-response-routing';
-import { resolveV2Model } from '@/lib/chat/v2-model-config';
+import { resolveV2Model } from '@/lib/providers/v2-model-config';
 import {
   buildWorkspaceSnapshot,
   normalizeToolArgs,
@@ -91,7 +91,7 @@ import {
   type OrchestratorEvent
 } from '@bing/shared/agent/orchestration/plan-act-verify';
 
-import { getProjectServices, type ProjectContext } from '@/lib/workspace-context';
+import { getProjectServices, type ProjectContext } from '@/lib/context/project-context';
 import {
   runDualProcessMode,
   runAdversarialVerifyMode,
@@ -118,7 +118,7 @@ import {
   ingestTrajectory,
   ingestRule,
   ingestAntiPattern,
-} from '@/lib/rag/retrieval';
+} from '@/lib/vector-memory/retrieval';
 
 // Does the @opencode-ai/sdk package exist in node_modules?
 // Cached at module load so checkStartupCapabilities() can use it cheaply.
@@ -160,7 +160,7 @@ async function resolveDynamicDefaults(): Promise<{ provider: string; model: stri
   let provider = process.env.LLM_PROVIDER || 'mistral';
   let model = process.env.DEFAULT_MODEL || 'mistral-large-latest';
   try {
-    const { getModelForRotation, isRateLimited } = await import('../models/model-ranker');
+    const { getModelForRotation, isRateLimited } = await import('../providers/model-ranker');
     const rotation = getModelForRotation();
     if (rotation && !isRateLimited(rotation.provider, rotation.model)) {
       // Also verify circuit isn't open for this provider
@@ -1132,7 +1132,7 @@ async function runOpencodeSDKMode(
 
   // Attempt 1: Connect to existing server via HTTP API
   try {
-    const { createOpencodeSessionManager } = await import('@/lib/opencode');
+    const { createOpencodeSessionManager } = await import('@/lib/drivers/opencode');
     const sdkUrl = process.env.OPENCODE_SDK_URL;
     const hostname = process.env.OPENCODE_HOSTNAME || '127.0.0.1';
     const port = parseInt(process.env.OPENCODE_PORT || '4096');
@@ -1262,7 +1262,7 @@ async function runOpencodeSDKMode(
 
     // Attempt 2: Try to start server via @opencode-ai/sdk
     try {
-      const { createOpenCodeSDKProvider } = await import('@/lib/chat/opencode-sdk-provider');
+      const { createOpenCodeSDKProvider } = await import('@/lib/engineers/opencode-sdk-provider');
       const sdkProvider = createOpenCodeSDKProvider({
         hostname: process.env.OPENCODE_HOSTNAME || '127.0.0.1',
         port: parseInt(process.env.OPENCODE_PORT || '4096'),
@@ -1559,7 +1559,7 @@ async function runProgressiveBuildMode(
   // Import and run the progressive build engine
   let buildResult: any;
   try {
-    const { runProgressiveBuild, BuildPresets } = await import('../chat/progressive-build-engine');
+    const { runProgressiveBuild, BuildPresets } = await import('../../engineers/progressive-build-engine');
 
     // Use balanced preset as base, override with user config
     const preset = buildConfig.contextMode === 'tree' ? BuildPresets.fast
@@ -1597,7 +1597,7 @@ async function runProgressiveBuildMode(
           };
         } catch {
           // Fall back to default reflection
-          const { defaultReflectionFn } = await import('../chat/progressive-build-engine');
+          const { defaultReflectionFn } = await import('../../engineers/progressive-build-engine');
           return defaultReflectionFn(llmCallFn, userPrompt, tree, lastResponse);
         }
       } : false,
@@ -1756,7 +1756,7 @@ async function runV1ApiWithTools(
   // the original model name may not be valid for the fallback provider.
   // Check if the model is in the provider's supported models list; if not,
   // use the provider's default instead.
-  const { PROVIDERS } = await import('../chat/llm-providers');
+  const { PROVIDERS } = await import('../providers/llm-providers');
 
   // FIX: Normalize model name for Vercel provider by stripping 'vercel:' prefix if present
   function getModelForProvider(providerName: string): string {
@@ -1805,7 +1805,7 @@ async function runV1ApiWithTools(
     circuitBreakerMgr = cbMod.circuitBreakerManager;
   } catch { /* circuit-breaker unavailable */ }
   try {
-    const mrMod = await import('../models/model-ranker');
+    const mrMod = await import('../providers/model-ranker');
     modelRankerFns = {
       isRateLimited: mrMod.isRateLimited,
       recordRateLimitError: mrMod.recordRateLimitError,
@@ -2903,7 +2903,7 @@ async function runV1ApiCompletion(
 
   // FIX: Map each provider to a model that supports tool calling / function calling.
   // Also: when falling back, check if the model is valid for the target provider.
-  const { PROVIDERS } = await import('../chat/llm-providers');
+  const { PROVIDERS } = await import('../providers/llm-providers');
 
   function getModelForProvider(providerName: string): string {
     // If no explicit model set, use provider default
@@ -2961,7 +2961,7 @@ async function runV1ApiCompletion(
         }
       } catch { /* circuit-breaker unavailable, proceed */ }
       try {
-        const { isRateLimited } = await import('../models/model-ranker');
+        const { isRateLimited } = await import('../providers/model-ranker');
         if (isRateLimited(providerName, modelForProvider)) {
           log.warn(`[V1-API-COMPLETION] RATE LIMITED - Skipping model: ${modelForProvider} for provider: ${providerName}`);
           continue;
@@ -3030,7 +3030,7 @@ async function runV1ApiCompletion(
         cbMgrOk.getBreaker(providerName).recordSuccess();
       } catch { /* ignore */ }
       try {
-        const { recordModelAttempt } = await import('../models/model-ranker');
+        const { recordModelAttempt } = await import('../providers/model-ranker');
         recordModelAttempt(providerName, modelForProvider, true);
       } catch { /* ignore */ }
 

@@ -8,7 +8,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 
 import { auth0 } from '@/lib/auth/auth0';
-import { disconnectGitHub } from '@/lib/github/github-oauth';
+import { disconnectGitHub } from '@/lib/integrations/github/github-oauth';
 import { getLocalUserIdFromAuth0 } from '@/lib/oauth/connections';
 
 export const dynamic = 'force-dynamic';

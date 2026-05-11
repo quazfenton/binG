@@ -5,7 +5,7 @@
  * Drop this into a React component, a server action, or an API route.
  *
  * Imports from the barrel:
- *   import { Retrieval, trace, isDesktop, ... } from "@/lib/memory";
+ *   import { Retrieval, trace, isDesktop, ... } from '@/lib/crewai/agents/memory';
  */
 
 import {

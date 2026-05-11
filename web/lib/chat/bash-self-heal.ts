@@ -23,7 +23,7 @@
  */
 
 import { createLogger } from '../utils/logger';
-import { llmService } from '../chat/llm-providers';
+import { llmService } from '../providers/llm-providers';
 import { z } from 'zod';
 
 const logger = createLogger('Bash:SelfHeal');

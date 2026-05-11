@@ -22,7 +22,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Dynamic import — server-side only, avoids client bundle contamination
-    const { PROVIDERS, llmService } = await import('@/lib/chat/llm-providers');
+    const { PROVIDERS, llmService } = await import('@/lib/providers/llm-providers');
     const availableProviderIds = new Set(
       llmService.getAvailableProviders().map((p: any) => p.id)
     );

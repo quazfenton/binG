@@ -15,10 +15,10 @@
 import { generateText, tool as aiTool, type Tool, type ModelMessage } from 'ai';
 import { z } from 'zod';
 import { verifyChanges } from '@/lib/orchestra/stateful-agent/agents/verification';
-import { SelfHealingExecutor } from '@/lib/crewai/runtime/self-healing';
+import { SelfHealingExecutor } from '@/lib/tools/tool-integration/parsers/self-healing';
 import { getVercelModel } from '@/lib/chat/vercel-ai-streaming';
 import { createLogger } from '@/lib/utils/logger';
-import { createOriginStack, redactArgsForLogging } from '@/lib/chat/logging-utils';
+import { createOriginStack, redactArgsForLogging } from '@/lib/errors/logging-utils';
 
 const log = createLogger('PlanActVerify');
 
@@ -415,7 +415,7 @@ export class PlanActVerifyOrchestrator {
 
           // Persist redacted invocation payload for later aggregation and analysis
           try {
-            import('../../../../web/lib/chat/tool-call-tracker').then(({ toolCallTracker }) => {
+            import('../../../../web/lib/tools/tool-call-tracker').then(({ toolCallTracker }) => {
               toolCallTracker.recordInvocationPayload({
                 timestamp: Date.now(),
                 model: this.validatedConfig.model,
@@ -621,7 +621,7 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
         const result = await this.config.executeTool(name, args);
 
         // Record successful tool call in telemetry
-        import('@/lib/chat/tool-call-tracker').then(({ toolCallTracker }) => {
+        import('@/lib/tools/tool-call-tracker').then(({ toolCallTracker }) => {
           const structuredResult = buildToolResult(name, args, result);
           toolCallTracker.recordToolCall({
             model: this.validatedConfig.model,
@@ -638,7 +638,7 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
         attempt++;
         if (attempt > maxRetries) {
           // Record failed tool call in telemetry
-          import('@/lib/chat/tool-call-tracker').then(({ toolCallTracker }) => {
+          import('@/lib/tools/tool-call-tracker').then(({ toolCallTracker }) => {
             const structuredResult = buildToolResult(name, args, undefined, error);
             toolCallTracker.recordToolCall({
               model: this.validatedConfig.model,

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { withAnonSessionCookie } from '@/lib/virtual-filesystem/index.server';
 import { resolveFilesystemOwnerWithFallback } from '../utils';
 import { ShadowCommitManager } from '@/lib/orchestra/stateful-agent/commit/shadow-commit';
-import { sessionIdSchema } from '@/lib/validation/schemas';
+import { sessionIdSchema } from '@/lib/utils/schemas';
 
 
 

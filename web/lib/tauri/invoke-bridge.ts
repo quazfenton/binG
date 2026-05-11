@@ -20,7 +20,7 @@ import {
   canRewrite,
   getCommandCategory,
   type FilterOptions,
-} from '@/lib/tools/rtk-integration';
+} from '@/lib/context/rtk-integration';
 
 const log = createLogger('TauriInvoke');
 

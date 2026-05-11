@@ -10,7 +10,7 @@
 import { NextResponse } from 'next/server';
 
 
-import { getToolCallTelemetrySummary, logTelemetrySummary } from '@/lib/chat/tool-call-telemetry';
+import { getToolCallTelemetrySummary, logTelemetrySummary } from '@/lib/tools/tool-call-telemetry';
 
 export async function GET() {
   // Gate to dev or explicit opt-in

@@ -7,7 +7,7 @@ import {
   AudioTrack,
   LocalAudioTrack,
 } from "livekit-client";
-import { rankModels } from "@/lib/models/model-ranker";
+import { rankModels } from "@/lib/providers/model-ranker";
 import { providerCircuitBreakers } from "@/lib/utils/circuit-breaker";
 import { resourceTelemetry } from "@/lib/management/resource-telemetry";
 

@@ -6085,7 +6085,7 @@ export function VisualEditorMain({
       setIsImportingFigma(true);
 
       // Import the convertFigmaToCraft function dynamically
-      const { convertFigmaNodesToCraft } = await import('@/lib/figma/converter');
+      const { convertFigmaNodesToCraft } = await import('@/lib/integrations/figma/converter');
       
       // Convert Figma nodes to Craft.js format
       const result = convertFigmaNodesToCraft(importData.nodes, {

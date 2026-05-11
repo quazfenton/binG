@@ -6,7 +6,7 @@ import { createNDJSONParser } from '@/lib/utils/ndjson-parser';
 import { enhancedBufferManager } from '@/lib/streaming/enhanced-buffer-manager';
 import type { Message } from '@/types';
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
-import { buildApiHeaders } from '@/lib/utils';
+import { buildApiHeaders } from '@/lib/virtual-filesystem/opfs/utils';
 import type { AgentType, AgentStatus } from '@/components/agent-status-display';
 import { isValidExtractedPath } from '@/lib/chat/file-edit-parser';  // NEW: Server-side validation
 import { useStreamControl } from './use-stream-control';
@@ -1135,7 +1135,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                             // If model didn't change, use fallback chain's first provider
                             if (selectedProvider === origProvider && selectedModel === origModel) {
                               try {
-                                const { getConfiguredFallbackChain } = await import('@/lib/chat/provider-fallback-chains');
+                                const { getConfiguredFallbackChain } = await import('@/lib/providers/provider-fallback-chains');
                                 const fallbackChain = getConfiguredFallbackChain(origProvider);
                                 if (fallbackChain.length > 0) {
                                   selectedProvider = fallbackChain[0];
@@ -1148,7 +1148,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                           } else {
                             // Subsequent retries: rotate through fallback providers
                             try {
-                              const { getConfiguredFallbackChain } = await import('@/lib/chat/provider-fallback-chains');
+                              const { getConfiguredFallbackChain } = await import('@/lib/providers/provider-fallback-chains');
                               const fallbackChain = getConfiguredFallbackChain(origProvider);
                               if (fallbackChain.length > 0) {
                                 const providerIdx = (retryCount - 1) % fallbackChain.length;

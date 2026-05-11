@@ -39,7 +39,7 @@ import {
   type PromptParameters,
 } from '@bing/shared/agent/prompt-parameters';
 import { useResponseStyle } from '@/contexts/response-style-context';
-import { cn } from '@/lib/utils';
+import { cn } from '@/lib/virtual-filesystem/opfs/utils';
 import {
   ChevronDown,
   Settings2,

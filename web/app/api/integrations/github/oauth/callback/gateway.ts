@@ -8,7 +8,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 
-import { exchangeCodeForToken, getGitHubUser, saveGitHubToken } from '@/lib/github/github-oauth';
+import { exchangeCodeForToken, getGitHubUser, saveGitHubToken } from '@/lib/integrations/github/github-oauth';
 import { auth0 } from '@/lib/auth/auth0';
 
 export const dynamic = 'force-dynamic';

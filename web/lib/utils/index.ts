@@ -95,3 +95,8 @@ export {
   secureShuffle,
   securePick,
 } from './crypto-random';
+
+// ID generation
+export {
+  generateSecureId,
+} from './utils';

@@ -14,7 +14,7 @@
 import { EventEmitter } from 'node:events';
 import type { ChildProcess } from 'node:child_process';
 import { createLogger } from '../utils/logger';
-import { findOpencodeBinarySync } from '@/lib/agent-bins/find-opencode-binary';
+import { findOpencodeBinarySync } from '@/lib/drivers/opencode/find-opencode-binary';
 import { waitForLocalServer, spawnLocalAgent, connectToRemoteAgent } from './local-server-utils';
 import type { AgentInstance, PromptRequest, PromptResponse, AgentEvent } from './agent-service-manager';
 

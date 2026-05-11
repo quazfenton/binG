@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 
-import { hitlManager, requireApproval } from '@/lib/orchestra/stateful-agent';
+import { hitlManager, requireApproval } from '@/lib/orchestra/stateful-agent/agents/stateful-agent';
 import { verifyAuth } from '@/lib/auth/verify-auth';
 
 /**

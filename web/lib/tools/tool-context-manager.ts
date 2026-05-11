@@ -1,6 +1,6 @@
 import { getToolManager, getToolErrorHandler } from '../tools';
 import { toolAuthManager as toolAuthorizationManager } from './tool-authorization-manager';
-import type { LLMMessage } from '../chat/llm-providers';
+import type { LLMMessage } from '../providers/llm-providers';
 import type { ToolExecutionContext } from '../tools';
 import { authService } from '../auth/auth-service';
 

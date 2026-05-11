@@ -13,7 +13,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 
 import { auth0 } from '@/lib/auth/auth0';
-import { repoIndexer } from '@/lib/repo-index/indexer';
+import { repoIndexer } from '@/lib/retrieval/indexer';
 
 /**
  * POST /api/repo-index/index

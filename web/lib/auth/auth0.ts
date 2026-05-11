@@ -23,29 +23,29 @@ import { auth0, AUTH0_CONNECTIONS } from './auth0-edge';
 // Node.js modules (crypto, fs, path) in connection.ts are not compatible with Edge
 // Dynamic import to avoid bundling in Edge Runtime
 async function getDatabase() {
-  const dbModule = await import('./database/connection');
+  const dbModule = await import('../../database/connection');
   return dbModule.getDatabase();
 }
 
 async function encryptApiKey(apiKey: string) {
-  const dbModule = await import('./database/connection');
+  const dbModule = await import('../../database/connection');
   return dbModule.encryptApiKey(apiKey);
 }
 
 async function decryptApiKey(encryptedData: string) {
-  const dbModule = await import('./database/connection');
+  const dbModule = await import('../../database/connection');
   return dbModule.decryptApiKey(encryptedData);
 }
 
 // Lazy-loaded mapping functions to avoid circular dependency
 // These will be called inside callback to avoid import issues
 async function getLocalUserIdFromAuth0(auth0UserId: string): Promise<string | null> {
-  const { getLocalUserIdFromAuth0: fn } = await import("./oauth/connections");
+  const { getLocalUserIdFromAuth0: fn } = await import("../oauth/connections");
   return fn(auth0UserId);
 }
 
 async function mapAuth0UserId(localUserId: string, auth0UserId: string): Promise<boolean> {
-  const { mapAuth0UserId: fn } = await import("./oauth/connections");
+  const { mapAuth0UserId: fn } = await import("../oauth/connections");
   return fn(localUserId, auth0UserId);
 }
 

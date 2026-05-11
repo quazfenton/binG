@@ -7,7 +7,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 
-import { getMindMapStats } from '@/lib/mind-map/mind-map-service';
+import { getMindMapStats } from '@/lib/plugins/mind-map/mind-map-service';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('API:MindMap:Stats');

@@ -565,7 +565,7 @@ async function executeContextPack(userId: string, params: Record<string, unknown
  * Each action validates required params and returns normalized data.
  */
 async function executeGitHubAction(action: string, params: Record<string, unknown>, userId: string) {
-  const { getGitHubToken, githubApi, getGitHubRepos, getGitHubBranches, getGitHubCommits } = await import('@/lib/github/github-oauth');
+  const { getGitHubToken, githubApi, getGitHubRepos, getGitHubBranches, getGitHubCommits } = await import('@/lib/integrations/github/github-oauth');
   const token = await getGitHubToken(userId);
 
   if (!token) {

@@ -22,7 +22,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { virtualFilesystem } from '@/lib/virtual-filesystem/index.server';
-import { getSandboxProvider, type SandboxProvider } from '@/lib/sandbox/providers';
+import { getSandboxProvider, type SandboxProvider } from '@/lib/providers/9router/providers';
 
 // Use shared VFS singleton for consistent state across all routes
 const vfs = virtualFilesystem;
@@ -369,7 +369,7 @@ export { startMCPServer, server, mcpTools };
 
 // Re-export the canonical MCPClient from the main MCP module
 // (avoid duplicating the implementation)
-export { MCPClient } from '@/lib/mcp/client';
+export { MCPClient } from '@/lib/storage/ipfs/client';
 
 // Start server if run directly
 if (process.argv[1]?.includes('mcp-server')) {

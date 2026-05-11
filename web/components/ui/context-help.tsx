@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { useToast } from "@/components/ui/use-toast"
-import { cn } from "@/lib/utils"
+import { cn } from '@/lib/virtual-filesystem/opfs/utils'
 import { HelpCircle, AlertTriangle, Lightbulb, X, ChevronRight, BookOpen } from "lucide-react"
 
 interface StruggleDetection {

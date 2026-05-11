@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from 'react';
-import { secureRandomInt } from '@/lib/utils';
+import { secureRandomInt } from '@/lib/virtual-filesystem/opfs/utils';
 import { Button } from '../ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
 import { Input } from '../ui/input';

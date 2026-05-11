@@ -15,7 +15,7 @@ import {
   circuitBreakerManager, 
   type CircuitState,
   getCircuitStateName 
-} from '@/lib/middleware/circuit-breaker';
+} from '@/lib/utils/circuit-breaker';
 
 const log = createLogger('Model:Health');
 

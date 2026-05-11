@@ -29,7 +29,7 @@ import {
   Globe, Shield, Wand2, Box, Frame, Aperture, ZoomIn, ZoomOut, Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
-import { PersistentCache } from "@/lib/cache";
+import { PersistentCache } from '@/lib/utils/cache';
 import { clipboard } from '@bing/platform/clipboard';
 
 // ==================== Types (Strict TypeScript) ====================

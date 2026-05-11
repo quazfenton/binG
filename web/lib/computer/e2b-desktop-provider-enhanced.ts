@@ -25,7 +25,7 @@
  */
 
 import { quotaManager } from '../management/quota-manager'
-import type { ToolResult } from '../sandbox/types'
+import type { ToolResult } from '../../sandbox/types'
 
 // Dynamic import type for E2B Desktop SDK
 type DesktopSandbox = any

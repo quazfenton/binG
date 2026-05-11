@@ -9,7 +9,7 @@
 
 import type { AgentStateType } from '../state';
 import { StatefulAgent } from '@/lib/orchestra/stateful-agent/agents/stateful-agent';
-import type { SandboxHandle } from '@/lib/sandbox/providers';
+import type { SandboxHandle } from '@/lib/providers/9router/providers';
 
 /**
  * Enhanced error interface for better self-healing

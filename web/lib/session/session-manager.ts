@@ -17,17 +17,17 @@
 
 import { v4 as uuidv4 } from 'uuid';
 import { createLogger } from '../utils/logger';
-import type { ExecutionPolicy } from '../sandbox/types';
+import type { ExecutionPolicy } from '../../../sandbox/types';
 import { registerActiveSession, unregisterActiveSession } from './session-naming';
 import {
   getExecutionPolicyConfig,
   requiresCloudSandbox,
   allowsLocalFallback,
   getPreferredProviders,
-} from '../sandbox/types';
+} from '../../../sandbox/types';
 import { getSandboxProvider, getSandboxProviderWithFallback } from '../sandbox/providers';
 import type { SandboxHandle, SandboxCreateConfig } from '../sandbox/providers/sandbox-provider';
-import { createOpencodeSessionManager, type OpencodeSessionManager } from '@/lib/opencode';
+import { createOpencodeSessionManager, type OpencodeSessionManager } from '@/lib/drivers/opencode';
 import { normalizeSessionId } from '@/lib/virtual-filesystem/scope-utils';
 import { enhancedBackgroundJobsManager, type EnhancedJobConfig, type EnhancedJob } from '@bing/shared/agent/enhanced-background-jobs';
 import { executionGraphEngine } from '@bing/shared/agent/execution-graph';

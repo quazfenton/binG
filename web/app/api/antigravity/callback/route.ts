@@ -8,7 +8,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 
-import { exchangeCodeForTokens } from '@/lib/llm/antigravity-provider';
+import { exchangeCodeForTokens } from '@/lib/providers/antigravity-provider';
 import { saveAntigravityAccount } from '@/lib/database/antigravity-accounts';
 import { verifyAuth } from '@/lib/auth/jwt';
 

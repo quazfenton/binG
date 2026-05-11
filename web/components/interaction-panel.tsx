@@ -86,8 +86,8 @@ import BookOpen from "lucide-react/dist/esm/icons/book-open";
 import Archive from "lucide-react/dist/esm/icons/archive";
 import Monitor from "lucide-react/dist/esm/icons/monitor";
 import VNCConnectionTab from "./vnc-connection-tab";
-import type { LLMProviderConfig } from "@/lib/chat/llm-providers-types";
-import type { ModelConfig } from "@/lib/chat/llm-providers-types";
+import type { LLMProviderConfig } from "@/lib/providers/llm-providers-types";
+import type { ModelConfig } from "@/lib/providers/llm-providers-types";
 import MultiModelComparison from "./multi-model-comparison";
 import PluginManager, { type Plugin } from "./plugins/plugin-manager";
 import AIEnhancerPlugin from "./plugins/ai-enhancer-plugin";
@@ -141,7 +141,7 @@ import Bell from "lucide-react/dist/esm/icons/bell";
 import { ImportDialog } from "./file-import/import-dialog";
 import { useVoiceSettings } from "../lib/voice/use-voice";
 import { VoiceToggleButton } from "./voice/voice-toggle";
-import { getSponsorAd, trackAdView, adsEnabled, type EthicalAdResponse } from "../lib/ads/ethical-ads-service";
+import { getSponsorAd, trackAdView, adsEnabled, type EthicalAdResponse } from "../lib/components/ethical-ads-service";
 import { ResponseStyleSelector } from "./response-style-selector";
 import { ResponseStyleProvider, useResponseStyle } from "@/contexts/response-style-context";
 // VoiceToggleButton already imported above
@@ -2020,7 +2020,7 @@ export default function InteractionPanel({
                           // On desktop, use native Tauri file dialog
                           if (process.env.DESKTOP_MODE === 'true' || process.env.DESKTOP_LOCAL_EXECUTION === 'true') {
                             try {
-                              const { tauriDialogProvider } = await import('@/lib/hitl/tauri-dialog-provider');
+                              const { tauriDialogProvider } = await import('@/lib/tauri/tauri-dialog-provider');
                               if (tauriDialogProvider.isAvailable()) {
                                 const result = await tauriDialogProvider.openFile({
                                   title: 'Attach Files to Chat',
@@ -2113,7 +2113,7 @@ export default function InteractionPanel({
                               // On desktop, use native Tauri folder dialog
                               if (process.env.DESKTOP_MODE === 'true' || process.env.DESKTOP_LOCAL_EXECUTION === 'true') {
                                 try {
-                                  const { tauriDialogProvider } = await import('@/lib/hitl/tauri-dialog-provider');
+                                  const { tauriDialogProvider } = await import('@/lib/tauri/tauri-dialog-provider');
                                   if (tauriDialogProvider.isAvailable()) {
                                     const result = await tauriDialogProvider.openFolder({
                                       title: 'Select Folder to Import',

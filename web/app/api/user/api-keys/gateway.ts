@@ -10,7 +10,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 
 import { getDatabase } from '@/lib/database/connection';
-import { authManager } from '@/lib/backend/auth';
+import { authManager } from '@/lib/auth/auth';
 
 /**
  * GET /api/user/api-keys

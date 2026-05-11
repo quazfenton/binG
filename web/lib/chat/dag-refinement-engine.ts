@@ -8,7 +8,7 @@
  */
 
 import { createLogger } from '@/lib/utils/logger'
-import { RefinementChunk } from './spec-parser'
+import { RefinementChunk } from '../engineers/spec-parser'
 import {
   createSSEEmitter,
   SSE_EVENT_TYPES,

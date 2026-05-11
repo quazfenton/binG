@@ -2,7 +2,7 @@
  * index.ts — Public API barrel
  *
  * Import everything you need from here:
- *   import { Retrieval, ProjectIndexer, search, buildContext } from "@/lib/memory";
+ *   import { Retrieval, ProjectIndexer, search, buildContext } from '@/lib/crewai/agents/memory';
  */
 
 // ─── Core Retrieval ────────────────────────────────────────────────────────────

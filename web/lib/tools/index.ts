@@ -264,7 +264,7 @@ export {
   type DependencyIssue,
   type ProjectStructureResult,
   type DirectoryNode,
-} from './workspace-analysis';
+} from './project-analysis/workspace-analysis';
 
 // ============================================================================
 // Terminal / PTY Tools (Interactive terminal sessions)
@@ -302,7 +302,7 @@ export {
   type TerminalSessionInfo,
   type ProcessInfo,
   type PortInfo,
-} from './terminal';
+} from './terminal/terminal';
 
 // Capability router - maps capabilities to providers
 export {

@@ -15,7 +15,7 @@
  */
 
 import { getDatabase } from '@/lib/database/connection';
-import { execSchemaFile } from '@/lib/database/schema';
+import { execSchemaFile } from '@/lib/events/schema';
 
 // Dynamic import to avoid circular dependency with model-ranker
 // model-ranker imports chatRequestLogger, so we import recordModelAttempt lazily
@@ -25,7 +25,7 @@ import { execSchemaFile } from '@/lib/database/schema';
  */
 async function recordModelAttemptAsync(provider: string, model: string, success: boolean): Promise<void> {
   try {
-    const { recordModelAttempt } = await import('@/lib/models/model-ranker');
+    const { recordModelAttempt } = await import('@/lib/providers/model-ranker');
     recordModelAttempt(provider, model, success);
   } catch (error) {
     console.warn('[ChatRequestLogger] Failed to record model attempt:', error);
@@ -38,7 +38,7 @@ async function recordModelAttemptAsync(provider: string, model: string, success:
  */
 async function recordRateLimitErrorAsync(provider: string, model: string): Promise<void> {
   try {
-    const { recordRateLimitError, recordModelAttempt } = await import('@/lib/models/model-ranker');
+    const { recordRateLimitError, recordModelAttempt } = await import('@/lib/providers/model-ranker');
     recordRateLimitError(provider, model);
     // FIX: Also record as a failed attempt so rotation tracking knows this model failed
     recordModelAttempt(provider, model, false);

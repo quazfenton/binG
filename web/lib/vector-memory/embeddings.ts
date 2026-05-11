@@ -10,7 +10,7 @@
 import type { EmbeddingProvider } from './types';
 import { createLogger } from '@/lib/utils/logger';
 import { withRetry } from '@/lib/vector-memory/retry';
-import { contentHash, embeddingCache } from '@/lib/cache';
+import { contentHash, embeddingCache } from '@/lib/utils/cache';
 
 const logger = createLogger('Embeddings');
 

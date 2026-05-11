@@ -15,7 +15,7 @@ import {
   compareModels,
   getModelBenchmarks,
   getComparisonHistory,
-} from '@/lib/model-comparison/model-comparison';
+} from '@/lib/plugins/model-comparison/model-comparison';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('API:Models');

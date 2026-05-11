@@ -20,7 +20,7 @@ import {
   getZineStats,
   searchContent,
   type ContentSource,
-} from '@/lib/zine/zine-display-service';
+} from '@/lib/plugins/zine/zine-display-service';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('API:ZineDisplay');

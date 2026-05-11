@@ -21,7 +21,7 @@ import {
   ArrowLeft,
 } from 'lucide-react';
 import { ScrollArea } from '../ui/scroll-area';
-import { buildApiHeaders } from '@/lib/utils';
+import { buildApiHeaders } from '@/lib/virtual-filesystem/opfs/utils';
 
 interface GitHubRepo {
   name: string;
@@ -289,7 +289,7 @@ const GitHubExplorerPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =>
       const vfsPath = clonePath.trim() || `workspace/sessions/${parsed.owner}/${parsed.repo}`;
 
       // Primary: client-side clone via GitHub API zipball
-      const { cloneRepoToVFS } = await import('@/lib/github/client-clone');
+      const { cloneRepoToVFS } = await import('@/lib/integrations/github/client-clone');
       const result = await cloneRepoToVFS(
         parsed.owner,
         parsed.repo,

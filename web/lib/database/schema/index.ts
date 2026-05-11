@@ -4,7 +4,7 @@
  * Single source of truth for all per-module SQL schemas.
  * All database table definitions live here in .sql files, never inline in TypeScript.
  * Callers should use:
- *   import { execSchemaFile } from '@/lib/database/schema';
+ *   import { execSchemaFile } from '@/lib/events/schema';
  *   execSchemaFile(db, 'events-schema');
  *
  * Available schema files (in web/lib/database/schema/):

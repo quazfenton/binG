@@ -43,15 +43,25 @@ export async function loadState(userId: string, conversationId: string): Promise
   const path = getStatePath(conversationId);
   try {
     const file = await virtualFilesystem.readFile(userId, path);
-    const parsed = yaml.load(file.content) as WorkforceState;
-    if (!parsed || !Array.isArray(parsed.tasks)) {
+    const parsed = yaml.load(file.content) as WorkforceState | null;
+    // yaml.load returns null for empty files — rethrow instead of treating as default
+    if (parsed === null || parsed === undefined) {
+      logger.error('STATE.yaml is empty or parse returned null');
+      throw new Error('STATE.yaml is empty; cannot load empty state');
+    }
+    if (!Array.isArray(parsed.tasks)) {
       return { ...DEFAULT_STATE, updatedAt: new Date().toISOString() };
     }
     return parsed;
-  } catch {
-    logger.debug('STATE.yaml not found, initializing new state');
-    await saveState(userId, conversationId, DEFAULT_STATE);
-    return { ...DEFAULT_STATE };
+  } catch (err: any) {
+    const isNotFound = err?.code === 'ENOENT' || err?.message?.includes('not found') || err?.message?.includes('ENOENT');
+    if (isNotFound) {
+      logger.debug('STATE.yaml not found, initializing new state');
+      await saveState(userId, conversationId, DEFAULT_STATE);
+      return { ...DEFAULT_STATE };
+    }
+    logger.error('Failed to load state:', err);
+    throw err;
   }
 }
 
@@ -61,11 +71,22 @@ export async function saveState(
   state: WorkforceState,
 ): Promise<void> {
   const path = getStatePath(conversationId);
-  const content = yaml.dump({
-    ...state,
-    updatedAt: new Date().toISOString(),
-  });
-  await virtualFilesystem.writeFile(userId, path, content);
+  let content: string;
+  try {
+    content = yaml.dump({
+      ...state,
+      updatedAt: new Date().toISOString(),
+    });
+  } catch (err: any) {
+    logger.error('Failed to serialize state to YAML:', err);
+    throw new Error(`Failed to serialize state: ${err?.message || String(err)}`);
+  }
+  try {
+    await virtualFilesystem.writeFile(userId, path, content);
+  } catch (err: any) {
+    logger.error('Failed to write STATE.yaml:', { path, error: err?.message || String(err) });
+    throw err;
+  }
 }
 
 export async function addTask(

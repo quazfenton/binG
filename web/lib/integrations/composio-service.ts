@@ -2,7 +2,7 @@
  * Composio Service - Advanced Tool Integration with 800+ Toolkits
  */
 
-import { generateSecureId } from '@/lib/utils';
+import { generateSecureId } from '@/lib/virtual-filesystem/opfs/utils';
 
 // Composio uses its own internal LLM handling, so we just need to set up the service
 export interface ComposioService {

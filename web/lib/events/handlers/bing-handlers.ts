@@ -26,7 +26,7 @@ export async function handleAgentLoop(event: EventRecord): Promise<any> {
 
   try {
     // Get LLM service
-    const { llmService } = await import('@/lib/chat/llm-providers');
+    const { llmService } = await import('@/lib/providers/llm-providers');
 
     // Derive provider from model name
     const provider = model.startsWith('gpt') || model.startsWith('o1') || model.startsWith('o3')
@@ -157,7 +157,7 @@ export async function handleSkillBootstrap(event: EventRecord): Promise<any> {
 
   try {
     // Get LLM service
-    const { llmService } = await import('@/lib/chat/llm-providers');
+    const { llmService } = await import('@/lib/providers/llm-providers');
 
     // Extract skill abstraction
     const response = await llmService.generateResponse({
@@ -207,7 +207,7 @@ export async function handleMultiAgentConsensus(event: EventRecord): Promise<any
   const { goal, roles = ['planner', 'executor', 'critic'], maxRounds = 3 } = event.payload;
 
   try {
-    const { llmService } = await import('@/lib/chat/llm-providers');
+    const { llmService } = await import('@/lib/providers/llm-providers');
 
     const responses: any[] = [];
 

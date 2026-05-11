@@ -12,8 +12,8 @@
  */
 
 import { enhancedAPIClient, type RequestConfig, type APIResponse } from './enhanced-api-client';
-import { llmService, type LLMRequest, type LLMResponse, type StreamingResponse, type LLMMessage, PROVIDERS } from './llm-providers';
-import { PROVIDER_FALLBACK_CHAINS } from './provider-fallback-chains';
+import { llmService, type LLMRequest, type LLMResponse, type StreamingResponse, type LLMMessage, PROVIDERS } from '../providers/llm-providers';
+import { PROVIDER_FALLBACK_CHAINS } from '../providers/provider-fallback-chains';
 import { toolContextManager } from '../tools/tool-context-manager';
 import { getToolManager, TOOL_REGISTRY } from '../tools';
 import { sandboxBridge } from '../sandbox';
@@ -23,11 +23,11 @@ import { normalizeSessionId } from '../virtual-filesystem/scope-utils';
 import { advancedToolCallDispatcher } from '../tools/tool-integration/parsers/dispatcher';
 import { callMCPToolFromAI_SDK, getMCPToolsForAI_SDK } from '../mcp/architecture-integration';
 import { chatLogger } from './chat-logger'
-import { recordToolCallTelemetry, prepareTelemetryPayload } from './logging-utils';
+import { recordToolCallTelemetry, prepareTelemetryPayload } from '../errors/logging-utils';
 import { chatRequestLogger } from './chat-request-logger';
-import { isCLIProvider } from './vercel-ai-streaming';
-import { recordRateLimitError } from '../models/model-ranker';
-import { sandboxMetrics } from '@/lib/backend/metrics';
+import { isCLIProvider } from '../streaming/vercel-ai-streaming';
+import { recordRateLimitError } from '../providers/model-ranker';
+import { sandboxMetrics } from '@/lib/observability/metrics';
 import { classifyFailure, FailureType } from '@/lib/errors/failure-classifier';
 
 export interface EnhancedLLMRequest extends LLMRequest {
@@ -93,7 +93,7 @@ export class EnhancedLLMService {
     this.persistedKeysLoaded = true;
 
     try {
-      const { getStoredProviderApiKeys } = await import('./provider-keys');
+      const { getStoredProviderApiKeys } = await import('../providers/provider-keys');
       const storedKeys = await getStoredProviderApiKeys();
 
       for (const [provider, apiKey] of Object.entries(storedKeys)) {
@@ -119,7 +119,7 @@ export class EnhancedLLMService {
    * Useful for UI to show which providers have user-configured keys.
    */
   async getStoredProviderKeyProviders(): Promise<string[]> {
-    const { getStoredProviderApiKeys } = await import('./provider-keys');
+    const { getStoredProviderApiKeys } = await import('../providers/provider-keys');
     const keys = await getStoredProviderApiKeys();
     return Object.keys(keys);
   }
@@ -128,7 +128,7 @@ export class EnhancedLLMService {
    * Public API: Remove a stored provider API key.
    */
   async removeStoredProviderKey(provider: string): Promise<void> {
-    const { removeProviderApiKey } = await import('./provider-keys');
+    const { removeProviderApiKey } = await import('../providers/provider-keys');
     await removeProviderApiKey(provider);
     // Also remove from request-scoped configs
     for (const key of this.requestScopedConfigs.keys()) {
@@ -395,7 +395,7 @@ export class EnhancedLLMService {
         chatLogger.debug('Dynamically registered request-scoped provider config', { requestId, provider: actualProvider });
 
         // Persist for future use (encrypted, client-side)
-        const { saveProviderApiKey } = await import('./provider-keys');
+        const { saveProviderApiKey } = await import('../providers/provider-keys');
         await saveProviderApiKey(actualProvider, userApiKey);
       }
     }
@@ -670,7 +670,7 @@ export class EnhancedLLMService {
         chatLogger.debug('Dynamically registered request-scoped provider config (streaming)', { requestId, provider: primaryProvider });
 
         // Persist for future use (encrypted, client-side)
-        const { saveProviderApiKey } = await import('./provider-keys');
+        const { saveProviderApiKey } = await import('../providers/provider-keys');
         await saveProviderApiKey(primaryProvider, userApiKey);
       }
     }
@@ -755,7 +755,7 @@ export class EnhancedLLMService {
 
     try {
       // NEW: Use Vercel AI SDK for unified streaming across all providers
-      const { streamWithVercelAI } = await import('./vercel-ai-streaming');
+      const { streamWithVercelAI } = await import('../streaming/vercel-ai-streaming');
 
       // Map provider names to Vercel AI SDK identifiers.
       // - Direct Vercel AI SDK providers use their own name.
@@ -763,7 +763,7 @@ export class EnhancedLLMService {
       //   the correct apiKey/baseURL via OPENAI_COMPATIBLE_PROVIDERS config.
       // - Mapping them all to 'openai' caused the wrong API key (OPENAI_API_KEY)
       //   and wrong baseURL to be used.
-      const vercelProviderMap: Record<string, import('./vercel-ai-streaming').VercelProvider | string> = {
+      const vercelProviderMap: Record<string, import('../streaming/vercel-ai-streaming').VercelProvider | string> = {
         // Direct Vercel AI SDK providers
         'openai': 'openai',
         'anthropic': 'anthropic',
@@ -1462,7 +1462,7 @@ export class EnhancedLLMService {
 
       if (provider === 'opencode-cli') {
         // Check if opencode binary is available
-        const { findOpencodeBinarySync } = await import('../agent-bins/find-opencode-binary');
+        const { findOpencodeBinarySync } = await import('../drivers/opencode/find-opencode-binary');
         const binaryPath = findOpencodeBinarySync();
         if (!binaryPath) {
           chatLogger.error('[CLI-PROVIDER] opencode binary not found', { requestId });
@@ -1591,7 +1591,7 @@ export class EnhancedLLMService {
         } else if (provider === 'pi') {
 
         // Check if pi binary is available
-        const { findPiBinarySync } = await import('../agent-bins/find-pi-binary');
+        const { findPiBinarySync } = await import('../../drivers/agent-bins/find-pi-binary');
         const binaryPath = findPiBinarySync();
         if (!binaryPath) {
           chatLogger.error('[CLI-PROVIDER] pi binary not found', { requestId });
@@ -1611,7 +1611,7 @@ export class EnhancedLLMService {
           ? request.model.split('/')[0]  // Extract provider from model like 'anthropic/claude-3.5'
           : 'anthropic';  // Default to anthropic if no model specified
         
-        const { createCliPiSession } = await import('../pi/pi-cli-session');
+        const { createCliPiSession } = await import('../drivers/pi/pi-cli-session');
         
         // Wrap createCliPiSession in try-catch to handle initialization failures
         let session: any;

@@ -15,7 +15,7 @@ vi.mock('@/lib/utils/logger', () => ({
 }));
 
 // Mock spec-parser to avoid import issues
-vi.mock('@/lib/chat/spec-parser', () => ({
+vi.mock('@/lib/engineers/spec-parser', () => ({
   RefinementChunk: {},
 }));
 

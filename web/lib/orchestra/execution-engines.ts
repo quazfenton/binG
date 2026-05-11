@@ -32,7 +32,7 @@
  */
 
 import { createLogger } from '@/lib/utils/logger';
-import { resolveV2Model } from '@/lib/chat/v2-model-config';
+import { resolveV2Model } from '@/lib/providers/v2-model-config';
 
 const log = createLogger('ExecutionEngines');
 

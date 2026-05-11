@@ -12,7 +12,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 
-import { exchangeCodeForTokens } from '@/lib/llm/antigravity-provider';
+import { exchangeCodeForTokens } from '@/lib/providers/antigravity-provider';
 import { requireAdminApiOrForbidden } from '@/lib/auth/admin';
 import { cookies } from 'next/headers';
 

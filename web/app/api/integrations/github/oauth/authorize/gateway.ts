@@ -8,7 +8,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 
-import { getGitHubOAuthUrl } from '@/lib/github/github-oauth';
+import { getGitHubOAuthUrl } from '@/lib/integrations/github/github-oauth';
 
 export const dynamic = 'force-dynamic';
 

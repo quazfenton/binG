@@ -88,9 +88,12 @@ export function addFeedback(context: FeedbackContext, entry: FeedbackEntry): Fee
   const recentFailures = entries.filter(f => f.type === 'failure' && !f.resolved && Date.now() - f.timestamp < FEEDBACK_TTL_MS);
   const corrections = entries.filter(f => f.type === 'correction');
   
+  // Only increment turnNumber for feedback types that correspond to actual turns
+  const isTurnEvent = ['failure', 'direction', 'behavior'].includes(entry.type);
+  
   return {
     ...context,
-    turnNumber: context.turnNumber + 1,
+    turnNumber: isTurnEvent ? context.turnNumber + 1 : context.turnNumber,
     accumulatedFeedback: entries,
     recentFailures,
     corrections,
@@ -424,7 +427,7 @@ export function injectFeedback(context: FeedbackContext): InjectedFeedback {
     if (!analysis) continue;
     allRedirects.push(...(analysis.correctionPrompt.redirectSuggestions || []));
   }
-  
+
   // If no failure-based redirects, generate default role options based on context
   if (allRedirects.length === 0) {
     allRedirects.push(
@@ -433,12 +436,17 @@ export function injectFeedback(context: FeedbackContext): InjectedFeedback {
       { role: 'planner', weight: 0.3, reason: 'decomposition role for complex tasks', triggerCondition: 'complexity > low' },
     );
   }
-  
+
+  // Deduplicate by role to avoid redundant entries in routing metadata
+  const uniqueRedirects = Array.from(
+    new Map(allRedirects.map(r => [r.role, r])).values()
+  );
+
   // Always generate the section (not conditional on allRedirects.length > 0)
   // Use shared formatting helper (deduplicates, sorts by weight, includes header)
   // Map RoleRedirect → RoleOption (drop triggerCondition which formatRoleRedirectOptions ignores)
   const roleOptions: Array<{ role: string; weight: number; reason: string }> =
-    allRedirects.map(({ role, weight, reason }) => ({ role, weight, reason }));
+    uniqueRedirects.map(({ role, weight, reason }) => ({ role, weight, reason }));
   roleRedirectSection = formatRoleRedirectOptions(roleOptions);
   
   return {

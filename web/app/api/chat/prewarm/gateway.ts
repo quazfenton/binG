@@ -8,7 +8,7 @@ import { NextResponse } from "next/server";
 export async function GET(request?: Request) {
   try {
     // Pre-warm the LLM service by triggering provider initialization
-    const { llmService } = await import("@/lib/chat/llm-providers");
+    const { llmService } = await import("@/lib/providers/llm-providers");
 
     // Force initialization of lazy-loaded SDK clients (OpenAI, Anthropic, Google, etc.)
     // This triggers the dynamic imports that would otherwise happen on first request

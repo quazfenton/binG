@@ -31,7 +31,7 @@ import {
 } from "lucide-react";
 
 import { toast } from "sonner";
-import { PersistentCache } from "@/lib/cache";
+import { PersistentCache } from '@/lib/utils/cache';
 
 // Helper to ensure image URLs go through the proxy
 function getProxiedImageUrl(url: string | undefined): string | undefined {

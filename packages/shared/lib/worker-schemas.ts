@@ -11,7 +11,7 @@
  * This eliminates duplication and ensures all workers can interoperate.
  */
 
-import type { ExecutionPolicy } from '@/lib/sandbox/types';
+import type { ExecutionPolicy } from '@/lib/voice/types';
 
 /**
  * Base job type definition

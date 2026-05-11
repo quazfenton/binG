@@ -87,7 +87,7 @@
 
 import type { Sandbox } from '@e2b/code-interpreter'
 import type { Readable } from 'node:stream'
-import { findCodexBinarySync } from '@/lib/agent-bins/find-codex-binary'
+import { findCodexBinarySync } from '@/lib/drivers/agent-bins/find-codex-binary'
 import { spawnLocalAgent } from '@/lib/spawn/local-server-utils'
 
 /**

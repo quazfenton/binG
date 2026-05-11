@@ -208,7 +208,7 @@ async function healWithLLM(
 ): Promise<HealingResult> {
   try {
     // Get LLM service
-    const { llmService } = await import('@/lib/chat/llm-providers');
+    const { llmService } = await import('@/lib/providers/llm-providers');
 
     // Generate fix prompt
     const prompt = `

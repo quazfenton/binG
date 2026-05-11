@@ -11,7 +11,7 @@ import {
 import { toast } from 'sonner';
 import { motion } from 'framer-motion';
 import { saveTerminalSession, getTerminalSessions, addCommandToHistory } from '@/lib/terminal/terminal-storage';
-import { secureRandom, generateSecureId } from '@/lib/utils';
+import { secureRandom, generateSecureId } from '@/lib/virtual-filesystem/opfs/utils';
 import { checkCommandSecurity, formatSecurityWarning, detectObfuscation, DEFAULT_SECURITY_CONFIG } from '@/lib/terminal/security/terminal-security';
 import { createLogger } from '@/lib/utils/logger';
 import { useVirtualFilesystem } from '@/hooks/use-virtual-filesystem';
@@ -21,7 +21,7 @@ import { extractSessionIdFromPath, normalizeScopePath } from '@/lib/virtual-file
 import { clipboard } from '@bing/platform/clipboard';
 import { emitFilesystemUpdated, onFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import { createRefreshScheduler } from '@/lib/virtual-filesystem/refresh-scheduler';
-import { getSponsorAd, trackAdView, adsEnabled, type EthicalAdResponse } from '@/lib/ads/ethical-ads-service';
+import { getSponsorAd, trackAdView, adsEnabled, type EthicalAdResponse } from '@/lib/components/ethical-ads-service';
 import { desktopPtyManager, shouldUseDesktopPty, type DesktopPtyInstance, requestShellCompletion } from '@/lib/terminal/desktop-pty-provider';
 import { createWebLocalPty, isWebLocalPtyAvailable, type WebLocalPtyInstance } from '@/lib/terminal/web-local-pty';
 import { isDesktopMode, getDesktopWorkspaceDir } from '@/lib/utils/desktop-env';

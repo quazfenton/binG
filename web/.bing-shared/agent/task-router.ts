@@ -7,7 +7,7 @@
 import { createLogger } from '@/lib/utils/logger';
 import type { AgentPriority, AgentType } from './agent-kernel';
 import { getAgentKernel } from './agent-kernel';
-import { determineExecutionPolicy } from '@/lib/sandbox/types';
+import { determineExecutionPolicy } from '@/lib/voice/types';
 import { normalizeSessionId } from '@/lib/virtual-filesystem/scope-utils';
 import { emitEvent } from '@/lib/events/bus';
 import { AnyEvent as EventTypes } from '@/lib/events/schema';
@@ -778,7 +778,7 @@ class TaskRouter {
       onStreamChunk: request.onStreamChunk,
       onToolExecution: request.onToolExecution,
       executeTool: async (name, args) => {
-        const toolResult = await callMCPToolFromAI_SDK(name, args, request.userId);
+        const toolResult = await callMCPToolFromAI_SDK(name, args, request.userId, session.id);
         return { success: toolResult.success, output: toolResult.output, exitCode: toolResult.success ? 0 : 1 };
       },
     });

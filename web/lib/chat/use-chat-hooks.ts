@@ -17,10 +17,10 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { UIMessage } from 'ai';
-import { tokenTracker } from './ai-caching';
-import type { StreamingResponse } from './llm-providers';
+import { tokenTracker } from '../middleware/ai-caching';
+import type { StreamingResponse } from '../providers/llm-providers';
 import { getOrchestrationModeHeaders } from '@/contexts/orchestration-mode-context';
-import { recordToolCallTelemetry, prepareTelemetryPayload } from '@/lib/chat/logging-utils';
+import { recordToolCallTelemetry, prepareTelemetryPayload } from '@/lib/errors/logging-utils';
 import { createChatLogger } from '@/lib/chat/chat-logger';
 
 const logger = createChatLogger('use-chat-hooks');

@@ -22,7 +22,7 @@ import {
   getGalleryStats,
   searchImages,
   type ArtStyle,
-} from '@/lib/ai-art/ai-art-gallery';
+} from '@/lib/image-generation/ai-art-gallery';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('API:AIArt');

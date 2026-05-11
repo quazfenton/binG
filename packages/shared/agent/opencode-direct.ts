@@ -12,8 +12,8 @@
 
 import { createLogger } from '@/lib/utils/logger';
 import { agentSessionManager } from '@/lib/session/agent/agent-session-manager';
-import type { ExecutionPolicy } from '@/lib/sandbox/types';
-import { determineExecutionPolicy } from '@/lib/sandbox/types';
+import type { ExecutionPolicy } from '@/lib/voice/types';
+import { determineExecutionPolicy } from '@/lib/voice/types';
 import type { ToolIntegrationManager } from '@/lib/tools/tool-integration-system';
 import { applyPromptModifiers, type PromptParameters } from './prompt-parameters';
 

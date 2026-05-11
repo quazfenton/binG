@@ -23,7 +23,7 @@ import { resolve, relative, join, dirname } from 'node:path'
 import { readFile } from 'node:fs/promises'
 import { quotaManager } from '../../management/quota-manager'
 import { SandboxSecurityManager } from '../security-manager'
-import { E2BDesktopProvider, type DesktopSandboxHandle as DesktopHandle } from '../../computer/e2b-desktop-provider-enhanced'
+import { E2BDesktopProvider, type DesktopSandboxHandle as DesktopHandle } from '../../../computer/e2b-desktop-provider-enhanced'
 import {
   createAmpService,
   type E2BAmpService,
