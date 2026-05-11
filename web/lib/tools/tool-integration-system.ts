@@ -12,7 +12,7 @@
 import { z } from "zod";
 import {
   createDefaultProviders,
-} from '@/lib/providers/9router/providers';
+} from '@/lib/sandbox/providers/sandbox-provider';
 import { ToolProviderRegistry } from "@/lib/tools/tool-integration/provider-registry";
 import type {
   IntegrationConfig as BaseIntegrationConfig,
@@ -1076,4 +1076,5 @@ export function formatToolOutput(toolKey: string, output: any): string {
 }
 
 export default ToolIntegrationManager;
+
 

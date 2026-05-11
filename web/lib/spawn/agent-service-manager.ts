@@ -40,7 +40,7 @@
 
 import { EventEmitter } from 'node:events';
 import { createLogger } from '../utils/logger';
-import type { ToolResult } from '../../../sandbox/types';
+import type { ToolResult } from '../sandbox/types';
 
 const logger = createLogger('Agents:ServiceManager');
 

@@ -276,7 +276,7 @@ export async function checkCommandSecurity(
   command: string
 ): Promise<{ allowed: boolean; reason?: string; severity?: string }> {
   try {
-    const terminalSecurity = await import('../../../../terminal/security/terminal-security');
+    const terminalSecurity = await import('../../../terminal/security/terminal-security');
     const result = terminalSecurity.checkCommandSecurity(command);
     return {
       allowed: result.allowed,

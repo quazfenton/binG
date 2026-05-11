@@ -1,5 +1,5 @@
 import { randomUUID, createCipheriv, createDecipheriv, randomBytes, createHash } from 'crypto';
-import { getDatabase } from '../../database/connection';
+import { getDatabase } from '../database/connection';
 
 const ALGORITHM = 'aes-256-gcm';
 const IV_LENGTH = 12; // 96-bit IV per NIST SP 800-38D (standard for GCM)

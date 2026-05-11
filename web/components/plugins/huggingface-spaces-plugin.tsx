@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from 'react';
-import { secureRandomInt } from '@/lib/virtual-filesystem/opfs/utils';
+import { secureRandomInt } from '@/lib/utils/utils';
 import { Button } from '../ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
 import { Input } from '../ui/input';
@@ -430,3 +430,4 @@ const HuggingFaceSpacesPlugin: React.FC<PluginProps> = ({ onClose, onResult, ini
 };
 
 export default HuggingFaceSpacesPlugin;
+

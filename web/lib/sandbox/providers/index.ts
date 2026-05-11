@@ -13,7 +13,7 @@ import { CodeSandboxProvider } from './codesandbox-provider'
 import { E2BProvider } from './e2b-provider'
 import { DaytonaProvider } from './daytona-provider'
 import { RunloopProvider } from './runloop-provider'
-import { E2BDesktopProvider, desktopSessionManager, type DesktopSandboxHandle as DesktopHandle } from '../../../computer/e2b-desktop-provider-enhanced'
+import { E2BDesktopProvider, desktopSessionManager, type DesktopSandboxHandle as DesktopHandle } from '../../computer/e2b-desktop-provider-enhanced'
 import { CircuitBreaker, providerCircuitBreakers, createCircuitBreakerWithMetrics, getCircuitStateName } from '@/lib/utils/circuit-breaker'
 import { sandboxMetrics } from '@/lib/observability/metrics'
 import { createLogger } from '@/lib/utils/logger'
@@ -956,7 +956,7 @@ export {
   type DesktopStats,
   type AmpSession,
   type MCPConfig,
-} from '../../../computer/e2b-desktop-provider-enhanced';
+} from '../../computer/e2b-desktop-provider-enhanced';
 
 // ===========================================
 // E2B MCP Gateway Exports

@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { cn } from '@/lib/virtual-filesystem/opfs/utils'
+import { cn } from '@/lib/utils/utils'
 import { Trash2, Edit3, Download, CheckSquare, Square, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"

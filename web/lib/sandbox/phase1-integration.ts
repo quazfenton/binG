@@ -38,7 +38,7 @@ export {
   type CreateSessionOptions,
   type DisconnectSessionOptions,
   type RestoreResult,
-} from '../../terminal/session/user-terminal-sessions';
+} from '../terminal/session/user-terminal-sessions';
 
 // ==================== Auto-Snapshot Service ====================
 export {
@@ -96,6 +96,6 @@ export {
   type PTYConnectOptions,
   type PTYDisconnectOptions,
   type PTYTerminalInstance,
-} from '../../terminal/enhanced-pty-terminal';
+} from '../terminal/enhanced-pty-terminal';
 
 // Re-exports from underlying modules (these are actively used)

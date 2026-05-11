@@ -2,7 +2,7 @@
 // Exports helper to get flat model list and Puter adapter getter.
 
 import { PROVIDERS } from '../providers/llm-providers' // use existing providers
-import { fetchPuterModels, getPuterAdapter } from '../providers/puter'
+import { fetchPuterModels, getPuterAdapter } from '../chat/puter'
 
 type ProviderModel = { id: string; name?: string; meta?: any; external?: boolean; labelSymbol?: string }
 

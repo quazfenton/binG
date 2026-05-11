@@ -24,7 +24,7 @@ import {
 } from './bootstrap';
 import { type CapabilityRouter } from './router';
 import { createLogger } from '../utils/logger';
-import { toolResultCache, toolCacheKey, Cache } from '../cache';
+import { toolResultCache, toolCacheKey, Cache } from '../utils/cache';
 
 // Export Cache for external use
 export { Cache };

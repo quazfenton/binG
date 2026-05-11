@@ -10,7 +10,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 
-import { getPrometheusMetrics } from '@/lib/observability';
+import { getPrometheusMetrics } from '@/lib/observability/index';
 
 /**
  * GET /api/observability/metrics

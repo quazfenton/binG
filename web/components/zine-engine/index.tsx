@@ -21,7 +21,7 @@
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { motion, AnimatePresence, useAnimation } from "framer-motion";
-import { cn } from '@/lib/virtual-filesystem/opfs/utils';
+import { cn } from '@/lib/utils/utils';
 import { toast } from "sonner";
 
 // ============================================================================
@@ -846,3 +846,4 @@ export function ZineEngine({
 }
 
 export default ZineEngine;
+

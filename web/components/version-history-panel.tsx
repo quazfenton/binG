@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { History, Clock, RotateCcw, FileCode, CheckCircle, XCircle, Loader2, ChevronDown, ChevronUp, RefreshCw, ExternalLink } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
-import { buildApiHeaders } from '@/lib/virtual-filesystem/opfs/utils';
+import { buildApiHeaders } from '@/lib/utils/utils';
 
 export interface VersionHistory {
   version: number;
@@ -406,3 +406,4 @@ export function VersionIndicator({
     </div>
   );
 }
+

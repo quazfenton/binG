@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react"
 import { getRouterClient } from '@/lib/storage/ipfs/client'
 import { createOAuthState } from "@/lib/providers/9router/oauth-utils"
-import { getAllProviders, type ProviderConfig } from "@/lib/providers/9router/providers"
+import { getAllProviders, type ProviderConfig } from "@/lib/sandbox/providers/sandbox-provider"
 import type { OAuthProvider } from '@/lib/voice/types'
 
 interface Props {
@@ -94,3 +94,4 @@ export function ProviderGrid({ userId, connectedProviders = [], onConnect, baseU
     </div>
   )
 }
+

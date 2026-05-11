@@ -115,7 +115,7 @@ export {
   type TerminalOPFSConfig,
   type TerminalOperation,
   type TerminalSyncResult,
-} from './terminal/terminal-sync';
+} from './terminal-sync';
 
 // Multi-tab broadcast
 export {

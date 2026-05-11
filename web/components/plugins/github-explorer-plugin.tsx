@@ -21,7 +21,7 @@ import {
   ArrowLeft,
 } from 'lucide-react';
 import { ScrollArea } from '../ui/scroll-area';
-import { buildApiHeaders } from '@/lib/virtual-filesystem/opfs/utils';
+import { buildApiHeaders } from '@/lib/utils/utils';
 
 interface GitHubRepo {
   name: string;
@@ -599,3 +599,4 @@ const GitHubExplorerPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =>
 };
 
 export default GitHubExplorerPlugin;
+

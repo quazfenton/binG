@@ -25,7 +25,7 @@ import { callMCPToolFromAI_SDK, getMCPToolsForAI_SDK } from '../mcp/architecture
 import { chatLogger } from './chat-logger'
 import { recordToolCallTelemetry, prepareTelemetryPayload } from '../errors/logging-utils';
 import { chatRequestLogger } from './chat-request-logger';
-import { isCLIProvider } from '../streaming/vercel-ai-streaming';
+import { isCLIProvider } from './vercel-ai-streaming';
 import { recordRateLimitError } from '../providers/model-ranker';
 import { sandboxMetrics } from '@/lib/observability/metrics';
 import { classifyFailure, FailureType } from '@/lib/errors/failure-classifier';
@@ -755,7 +755,7 @@ export class EnhancedLLMService {
 
     try {
       // NEW: Use Vercel AI SDK for unified streaming across all providers
-      const { streamWithVercelAI } = await import('../streaming/vercel-ai-streaming');
+      const { streamWithVercelAI } = await import('./vercel-ai-streaming');
 
       // Map provider names to Vercel AI SDK identifiers.
       // - Direct Vercel AI SDK providers use their own name.
@@ -763,7 +763,7 @@ export class EnhancedLLMService {
       //   the correct apiKey/baseURL via OPENAI_COMPATIBLE_PROVIDERS config.
       // - Mapping them all to 'openai' caused the wrong API key (OPENAI_API_KEY)
       //   and wrong baseURL to be used.
-      const vercelProviderMap: Record<string, import('../streaming/vercel-ai-streaming').VercelProvider | string> = {
+      const vercelProviderMap: Record<string, import('./vercel-ai-streaming').VercelProvider | string> = {
         // Direct Vercel AI SDK providers
         'openai': 'openai',
         'anthropic': 'anthropic',
@@ -1591,7 +1591,7 @@ export class EnhancedLLMService {
         } else if (provider === 'pi') {
 
         // Check if pi binary is available
-        const { findPiBinarySync } = await import('../../drivers/agent-bins/find-pi-binary');
+        const { findPiBinarySync } = await import('../drivers/agent-bins/find-pi-binary');
         const binaryPath = findPiBinarySync();
         if (!binaryPath) {
           chatLogger.error('[CLI-PROVIDER] pi binary not found', { requestId });

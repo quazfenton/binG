@@ -32,7 +32,7 @@
 import { createLogger } from '@/lib/utils/logger'
 import { chatLogger } from '@/lib/chat/chat-logger'
 import { normalizeToolInvocations, type ToolInvocation } from '@/lib/types/tool-invocation'
-import { quotaManager } from '@/lib/services/quota-manager'
+import { quotaManager } from '@/lib/management/quota-manager'
 import { detectRequestType } from '@/lib/utils/request-type-detector'
 import {
   extractFsActionWrites,
@@ -52,7 +52,7 @@ import { initializeComposioService, getComposioService, type ComposioToolRequest
 // Import tools
 import { getToolManager, getUnifiedToolRegistry, getToolDiscoveryService, getToolErrorHandler } from '@/lib/tools'
 import { toolAuthManager } from '@/lib/tools/tool-authorization-manager'
-import { sandboxBridge } from '@/lib/events/trigger/handlers/sandbox'
+import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge'
 
 // Import state for session management
 import { sessionManager } from '@/lib/session/session-manager'
@@ -2848,3 +2848,4 @@ export async function routeWithSpecAmplification(
 export function createStreamingEvents(response: UnifiedResponse, requestId: string): string[] {
   return responseRouter.createStreamingEvents(response, requestId)
 }
+

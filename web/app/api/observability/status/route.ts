@@ -7,7 +7,7 @@
 import { NextResponse } from 'next/server';
 
 
-import { getObservabilityStatus } from '@/lib/observability';
+import { getObservabilityStatus } from '@/lib/observability/index';
 
 /**
  * GET /api/observability/status

@@ -17,7 +17,7 @@
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { cn } from '@/lib/virtual-filesystem/opfs/utils';
+import { cn } from '@/lib/utils/utils';
 import { GripVertical, GripHorizontal, Maximize2, Minimize2 } from "lucide-react";
 
 // ============================================================================
@@ -588,3 +588,4 @@ export const PanelPresets = {
 };
 
 export default ResizablePanelGroup;
+

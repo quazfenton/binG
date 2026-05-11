@@ -21,7 +21,7 @@ import { nullclawMCPBridge } from './nullclaw-mcp-bridge'
 import { initializeNullclaw, isNullclawAvailable, getNullclawMode } from '@bing/shared/agent/nullclaw-integration'
 import { normalizeSessionId, getVfsScopeBasePath, getVfsScopePath } from '../virtual-filesystem/scope-utils';
 // Tool caching for repeated operations
-import { toolResultCache, toolCacheKey, contentHash } from '../cache';
+import { toolResultCache, toolCacheKey, contentHash } from '../utils/cache';
 // Dynamically imported to avoid pulling Node.js-only deps (fs, database) into client bundle
 // import { standaloneGitTools } from '../tools/git-tools'
 

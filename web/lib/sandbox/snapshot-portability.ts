@@ -32,7 +32,7 @@
  */
 
 import { getSandboxProvider, type SandboxProviderType } from './providers';
-import { getTerminalSession, updateTerminalSession } from '../../terminal/session/terminal-session-store';
+import { getTerminalSession, updateTerminalSession } from '../terminal/session/terminal-session-store';
 import { createLogger } from '../utils/logger';
 import { vfsSyncBackService } from '../virtual-filesystem/sync/vfs-sync-back';
 import { sandboxFilesystemSync } from '../virtual-filesystem/sync/sandbox-filesystem-sync';
@@ -198,7 +198,7 @@ export class SnapshotPortability {
       const { randomUUID } = await import('crypto');
       const sessionId = `user-${snapshot.userId}-${Date.now()}-${randomUUID().slice(0, 8)}`;
       
-      const { saveTerminalSession } = await import('../../terminal/session/terminal-session-store');
+      const { saveTerminalSession } = await import('../terminal/session/terminal-session-store');
       saveTerminalSession({
         sessionId,
         sandboxId: handle.id,

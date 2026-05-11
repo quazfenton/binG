@@ -29,7 +29,7 @@
  */
 
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { getOrCreateAnonymousSessionId, buildApiHeaders } from '@/lib/virtual-filesystem/opfs/utils';
+import { getOrCreateAnonymousSessionId, buildApiHeaders } from '@/lib/utils/utils';
 
 export interface FileMentionOption {
   path: string;
@@ -420,3 +420,4 @@ export function useFileMentionAutocomplete(
     recentFiles,
   };
 }
+

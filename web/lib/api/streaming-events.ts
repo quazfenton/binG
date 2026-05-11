@@ -19,7 +19,7 @@
  */
 
 import { generateSecureId } from '../utils'
-import { sseEncode, type SSEEventTypeName } from '../../streaming/sse-event-schema'
+import { sseEncode, type SSEEventTypeName } from '../streaming/sse-event-schema'
 
 export interface StreamingEventOptions {
   requestId?: string

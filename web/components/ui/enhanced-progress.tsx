@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { cn } from '@/lib/virtual-filesystem/opfs/utils'
+import { cn } from '@/lib/utils/utils'
 import { Clock, CheckCircle2, AlertCircle } from "lucide-react"
 
 export function formatTime(ms: number): string {

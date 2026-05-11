@@ -474,4 +474,4 @@ export function providerSupportsFunctionCalling(providerId: string): boolean {
  * Re-export CLI provider utilities for client-side filtering.
  * These are safe to import on the client since they only check env vars server-side.
  */
-export { CLI_PROVIDERS, isCLIProvider, isCLIProviderConfigured } from '../streaming/vercel-ai-streaming';
+export { CLI_PROVIDERS, isCLIProvider, isCLIProviderConfigured } from '../chat/vercel-ai-streaming';

@@ -7,7 +7,7 @@
  * - Replicate (SDXL, Flux, Stable Diffusion models)
  * 
  * Usage:
- * import { getDefaultRegistry, ImageGenerationParams } from '@/lib/image-generation';
+ * import { getDefaultRegistry, ImageGenerationParams } from '@/lib/image-generation/index';
  * 
  * const registry = getDefaultRegistry();
  * registry.initializeAll({

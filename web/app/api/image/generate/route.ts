@@ -5,7 +5,7 @@ import {
   getDefaultRegistry,
   type ImageGenerationParams,
   type AspectRatio,
-} from '@/lib/image-generation'
+} from '@/lib/image-generation/index'
 import { RateLimiter } from '@/lib/utils/rate-limiter'
 import { authenticateRequest } from '@/lib/security/jwt-auth'
 import { secureRandomSeed } from '@/lib/utils/crypto-random'

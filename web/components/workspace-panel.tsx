@@ -322,7 +322,7 @@ function ThreadListSidebar({
   );
 }
 
-import { getOrCreateAnonymousSessionId } from '@/lib/virtual-filesystem/opfs/utils';
+import { getOrCreateAnonymousSessionId } from '@/lib/utils/utils';
 import { useAuth } from "@/contexts/auth-context";
 import type { Message } from "@/types";
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog";
@@ -331,7 +331,7 @@ import { requiresWorkspaceBoundaryConfirmation } from "@/lib/drivers/agent-bins/
 import MultiModelComparison from "@/components/multi-model-comparison";
 import type { LLMProviderConfig } from "@/lib/providers/llm-providers-types";
 import { resolveScopedPath } from "@/lib/virtual-filesystem/scope-utils";
-import { buildApiHeaders } from '@/lib/virtual-filesystem/opfs/utils';
+import { buildApiHeaders } from '@/lib/utils/utils';
 import { EnhancedDiffViewer } from "@/components/enhanced-diff-viewer";
 import IntegrationPanel from "@/components/integrations/IntegrationPanel";
 import GitSourceControl from "@/components/git-source-control-tabs";
@@ -5179,3 +5179,4 @@ export function WorkspacePanel() {
     </>
   );
 }
+

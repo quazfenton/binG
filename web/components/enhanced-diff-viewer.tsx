@@ -18,7 +18,7 @@
 
 import React, { useMemo, useState, useCallback, useEffect } from 'react';
 import { useOPFS } from '@/hooks/use-opfs';
-import { getOrCreateAnonymousSessionId } from '@/lib/virtual-filesystem/opfs/utils';
+import { getOrCreateAnonymousSessionId } from '@/lib/utils/utils';
 import { onFilesystemUpdated, type FilesystemUpdatedDetail } from '@/lib/virtual-filesystem/sync/sync-events';
 import { Plus, Minus, FileDiff, AlertCircle, Cloud, HardDrive, GitBranch, ChevronDown } from 'lucide-react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
@@ -782,3 +782,4 @@ export function OPFSSyncStatusBadge({ path }: { path: string }) {
 }
 
 export default EnhancedDiffViewer;
+
