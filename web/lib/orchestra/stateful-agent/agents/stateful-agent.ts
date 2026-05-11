@@ -1,7 +1,7 @@
 import { getVercelModel } from '../../../chat/vercel-ai-streaming';
 import { streamText, generateObject, type Tool as CoreTool } from 'ai';
 import type { SandboxHandle } from '@/lib/sandbox/providers/sandbox-provider';
-import type { ProjectServices } from '@/lib/project-context';
+import type { ProjectServices } from '@/lib/workspace-context';
 import { ToolExecutor } from '../tools/tool-executor';
 import { reflectionEngine } from '@/lib/orchestra/reflection-engine';
 import { executionGraphEngine } from '@bing/shared/agent/execution-graph';
@@ -72,7 +72,7 @@ export interface StatefulAgentOptions {
   enableCapabilityChaining?: boolean;
   // Enable bootstrapped agency for learning from past executions
   enableBootstrappedAgency?: boolean;
-  // Project-scoped services for project-isolated memory and retrieval
+  // Workspace-scoped services for workspace-isolated memory and retrieval
   projectServices?: ProjectServices;
 }
 
@@ -186,7 +186,7 @@ export class StatefulAgent {
   private enableBootstrappedAgency: boolean;
   private agency?: BootstrappedAgency;
 
-  // Project-scoped services for project-isolated memory and retrieval
+  // Workspace-scoped services for workspace-isolated memory and retrieval
   private projectServices?: ProjectServices;
 
   constructor(options: StatefulAgentOptions = {}) {
@@ -197,7 +197,7 @@ export class StatefulAgent {
     // We need just the trailing conversation segment (e.g., "001")
     // SECURITY: Use indexOf (FIRST separator) not lastIndexOf, because:
     // - userId is system-controlled and NEVER contains $ or :
-    // - conversationId MAY contain user-provided $ or : (e.g., folder named "my$project")
+    // - conversationId MAY contain user-provided $ or : (e.g., folder named "my$workspace")
     const firstDollar = options.sessionId?.indexOf('$');
     const firstColon = options.sessionId?.indexOf(':');
     let separatorIndex: number | undefined;

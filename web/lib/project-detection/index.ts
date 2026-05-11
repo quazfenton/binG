@@ -1,8 +1,8 @@
 /**
- * Universal Project Detection & Auto-Context
+ * Universal Workspace Detection & Auto-Context
  *
  * Used by ANY agent/provider (OpenCode, Daytona, E2B, sandbox.shell, sandbox.execute)
- * to auto-detect project structure, entry points, frameworks, package managers,
+ * to auto-detect workspace structure, entry points, frameworks, package managers,
  * Docker/Compose modes, and generate smart-context for LLM consumption.
  *
  * This consolidates the scattered detection logic from:
@@ -10,7 +10,7 @@
  * - code-preview-panel.tsx (detectEntryFile, detectFrameworkFromFiles)
  * - opencode-cli.ts (detectProjectCommand, translateNaturalLanguageToCommand)
  *
- * @module project-detection
+ * @module workspace-detection
  */
 
 import type { ToolExecutionContext } from '@/lib/tools/tool-integration/types';
@@ -112,7 +112,7 @@ export type RuntimeMode =
   | 'serverless'      // serverless.yml
   | 'vercel'          // vercel.json
   | 'netlify'         // netlify.toml
-  | 'standard';       // Standard project (no special runtime)
+  | 'standard';       // Standard workspace (no special runtime)
 
 const RUNTIME_CONFIG_MAP: Record<string, RuntimeMode> = {
   'docker-compose.yml': 'docker-compose',
@@ -290,7 +290,7 @@ export function detectFrameworkFromFiles(
     }
   }
 
-  // Python project detection
+  // Python workspace detection
   if (filePaths.some(p => p.endsWith('manage.py'))) return 'django';
   if (filePaths.some(p => p.endsWith('app.py') || p.endsWith('main.py'))) {
     if (filePaths.some(p => p.endsWith('requirements.txt'))) return 'python';
@@ -376,7 +376,7 @@ export function detectEntryFile(
 }
 
 // ============================================================================
-// Project Root Detection
+// Workspace Root Detection
 // ============================================================================
 
 const ROOT_INDICATORS = [
@@ -466,7 +466,7 @@ export function computeRootScores(filePaths: string[]): Array<{ dir: string; sco
 }
 
 /**
- * Get the best project root directory from file paths.
+ * Get the best workspace root directory from file paths.
  */
 export function detectProjectRoot(filePaths: string[]): string {
   const scored = computeRootScores(filePaths);
@@ -601,7 +601,7 @@ export function detectBuildCommand(packageJsonContent?: string, packageManager?:
 
 /**
  * Smart context file format that the LLM can read or receive as system prompt.
- * Combines project detection results with actionable recommendations.
+ * Combines workspace detection results with actionable recommendations.
  */
 export interface SmartContextFile {
   /** Generated summary for LLM */
@@ -614,7 +614,7 @@ export interface SmartContextFile {
   runtimeMode: RuntimeMode;
   /** Entry file path */
   entryFile: string | null;
-  /** Project root directory */
+  /** Workspace root directory */
   projectRoot: string;
   /** Available scripts from package.json */
   availableScripts: string[];
@@ -657,21 +657,21 @@ export function generateSmartContext(
 
   // Framework-specific hints
   if (projectContext.framework === 'next') {
-    hints.push('Next.js project — use `npm run dev` for HMR dev server');
+    hints.push('Next.js workspace — use `npm run dev` for HMR dev server');
     hints.push('App Router detected — entry is src/app/page.tsx');
   }
   if (projectContext.framework === 'nuxt') {
-    hints.push('Nuxt.js project — uses Vue 3 + Vite');
+    hints.push('Nuxt.js workspace — uses Vue 3 + Vite');
   }
   if (projectContext.framework === 'django') {
-    hints.push('Django project — use `python manage.py runserver`');
+    hints.push('Django workspace — use `python manage.py runserver`');
     hints.push('Entry point is manage.py for admin/migrations');
   }
   if (projectContext.framework === 'rust') {
-    hints.push('Rust project — use `cargo run` to build and run');
+    hints.push('Rust workspace — use `cargo run` to build and run');
   }
   if (projectContext.framework === 'go') {
-    hints.push('Go project — use `go run main.go` to run');
+    hints.push('Go workspace — use `go run main.go` to run');
   }
 
   // Package manager hints
@@ -697,7 +697,7 @@ export function generateSmartContext(
 
   // Summary
   const summary = [
-    `Project: ${projectContext.framework} app`,
+    `Workspace: ${projectContext.framework} app`,
     `Package Manager: ${packageManager}`,
     `Runtime: ${runtimeMode}`,
     `Entry: ${projectContext.entryFile || 'not detected'}`,
@@ -723,7 +723,7 @@ export function generateSmartContext(
  */
 export function formatSmartContextAsMarkdown(ctx: SmartContextFile): string {
   const lines = [
-    `## Project Context`,
+    `## Workspace Context`,
     ``,
     `${ctx.summary}`,
     ``,
@@ -733,7 +733,7 @@ export function formatSmartContextAsMarkdown(ctx: SmartContextFile): string {
     `| Package Manager | \`${ctx.packageManager}\` |`,
     `| Runtime Mode | \`${ctx.runtimeMode}\` |`,
     `| Entry File | \`${ctx.entryFile || 'not detected'}\` |`,
-    `| Project Root | \`${ctx.projectRoot || '.'}\` |`,
+    `| Workspace Root | \`${ctx.projectRoot || '.'}\` |`,
     ``,
     `### Available Scripts`,
     ``,
@@ -780,12 +780,12 @@ export interface ProjectContext {
 }
 
 /**
- * Build complete project context from file paths and optional file reader.
+ * Build complete workspace context from file paths and optional file reader.
  * Detects:
  * - Framework (Next, Vue, Nuxt, Svelte, React, Django, Rust, Go, etc.)
  * - Package manager (npm, yarn, pnpm, bun, deno) from lockfiles
  * - Runtime mode (Docker, Docker Compose, Monorepo, Serverless, Vercel, Netlify)
- * - Entry file, project root, run/test/build commands
+ * - Entry file, workspace root, run/test/build commands
  *
  * The LLM can use this to make informed decisions about what commands to run.
  */
@@ -875,13 +875,13 @@ export async function buildProjectContext(
  * @deprecated This was the rule-based NL→command path. The primary path is now:
  *   1. LLM receives the original command (not translated)
  *   2. LLM has access to EXTENDED_SANDBOX_TOOLS (project_analyze, terminal_*, etc.)
- *   3. LLM calls project_analyze to get structured project context
+ *   3. LLM calls project_analyze to get structured workspace context
  *   4. LLM decides what command to run based on that context
  *
  * This function is kept as a fallback for standalone code paths that don't
  * have access to the extended tool system (e.g., opencode-cli.ts direct usage).
  *
- * Uses detected project context to generate the correct command.
+ * Uses detected workspace context to generate the correct command.
  */
 export function translateNaturalLanguageToCommand(
   task: string,
@@ -926,8 +926,8 @@ export function translateNaturalLanguageToCommand(
     }
   }
 
-  // "run the project", "start it", "debug the app"
-  if (/(run|start|launch|debug|execute)\s*(the\s*)?(project|app|server|dev|it|this)?\s*$/i.test(lower) ||
+  // "run the workspace", "start it", "debug the app"
+  if (/(run|start|launch|debug|execute)\s*(the\s*)?(workspace|app|server|dev|it|this)?\s*$/i.test(lower) ||
       /^(run|start)$/.test(lower)) {
     return context.runCommand || run('dev');
   }
@@ -966,7 +966,7 @@ export function translateNaturalLanguageToCommand(
 // ============================================================================
 
 /**
- * Resolve a VFS scoped path (e.g., "project/sessions/002") to a real filesystem path.
+ * Resolve a VFS scoped path (e.g., "workspace/sessions/002") to a real filesystem path.
  * Used by any provider that needs to execute shell commands in the correct directory.
  */
 export function resolveVfsPathToRealPath(
@@ -982,9 +982,9 @@ export function resolveVfsPathToRealPath(
   // Strip leading slash
   if (normalized.startsWith('/')) normalized = normalized.slice(1);
 
-  // Handle VFS scoped paths like "project/sessions/002/src"
-  if (normalized.startsWith('project/')) {
-    const relativePart = normalized.replace(/^project\//, '');
+  // Handle VFS scoped paths like "workspace/sessions/002/src"
+  if (normalized.startsWith('workspace/')) {
+    const relativePart = normalized.replace(/^workspace\//, '');
     const segments = relativePart.split('/');
     return [workspaceBaseDir, ...segments].join(isWindows ? '\\' : '/');
   }

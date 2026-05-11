@@ -12,7 +12,7 @@
  *                                                                        ├─ VFS
  *                                                                        ├─ Sandbox (Daytona/E2B/...)
  *                                                                        ├─ Terminal / PTY
- *                                                                        ├─ Project Analysis
+ *                                                                        ├─ Workspace Analysis
  *                                                                        └─ ...
  *
  * USER ID ISOLATION:
@@ -80,7 +80,7 @@ logger.info('MCP stdio server user context', { userId: MCP_USER_ID });
 // Capability Router Proxy
 // ============================================================================
 // All tools delegate through the capability router, which handles:
-// - Provider selection (VFS, sandbox, terminal, project-analysis, etc.)
+// - Provider selection (VFS, sandbox, terminal, workspace-analysis, etc.)
 // - Input validation against Zod schemas
 // - Provider failover if primary fails
 // - Agency learning (tracks success rates for adaptive routing)
@@ -610,13 +610,13 @@ server.registerTool(
 );
 
 // ============================================================================
-// 6. PROJECT ANALYSIS (delegates to project-analysis provider)
+// 6. WORKSPACE ANALYSIS (delegates to workspace-analysis provider)
 // ============================================================================
 
 server.registerTool(
-  'project.analyze',
+  'workspace.analyze',
   {
-    description: 'Deep analysis of a project: detects framework, package manager, ' +
+    description: 'Deep analysis of a workspace: detects framework, package manager, ' +
       'entry points, configuration files, dependencies, and generates recommended ' +
       'commands for install/run/test/build. Returns structured JSON.',
     inputSchema: {
@@ -625,9 +625,9 @@ server.registerTool(
     },
   },
   async ({ includeDependencies }) => {
-    logger.debug('project.analyze requested', { includeDependencies });
+    logger.debug('workspace.analyze requested', { includeDependencies });
     const result = await executeCapability({
-      capabilityId: 'project.analyze',
+      capabilityId: 'workspace.analyze',
       input: { includeDependencies },
       userId: MCP_USER_ID,
     });
@@ -638,17 +638,17 @@ server.registerTool(
 );
 
 server.registerTool(
-  'project.list_scripts',
+  'workspace.list_scripts',
   {
-    description: 'List all runnable scripts/tasks in the project. ' +
+    description: 'List all runnable scripts/tasks in the workspace. ' +
       'Includes npm scripts, Makefile targets, pyproject.toml tasks, deno tasks, ' +
       'cargo commands, go tasks, turbo and nx tasks.',
     inputSchema: z.object({}).passthrough().optional(),
   },
   async () => {
-    logger.debug('project.list_scripts requested');
+    logger.debug('workspace.list_scripts requested');
     const result = await executeCapability({
-      capabilityId: 'project.list_scripts',
+      capabilityId: 'workspace.list_scripts',
       input: {},
       userId: MCP_USER_ID,
     });
@@ -659,16 +659,16 @@ server.registerTool(
 );
 
 server.registerTool(
-  'project.dependencies',
+  'workspace.dependencies',
   {
     description: 'List installed dependencies and detect issues like missing packages, ' +
       'version conflicts, missing lock files.',
     inputSchema: z.object({}).passthrough().optional(),
   },
   async () => {
-    logger.debug('project.dependencies requested');
+    logger.debug('workspace.dependencies requested');
     const result = await executeCapability({
-      capabilityId: 'project.dependencies',
+      capabilityId: 'workspace.dependencies',
       input: {},
       userId: MCP_USER_ID,
     });
@@ -679,9 +679,9 @@ server.registerTool(
 );
 
 server.registerTool(
-  'project.structure',
+  'workspace.structure',
   {
-    description: 'Get the file tree of the project with semantic understanding.',
+    description: 'Get the file tree of the workspace with semantic understanding.',
     inputSchema: {
       maxDepth: z.number().optional().default(5),
       summaryOnly: z.boolean().optional().default(false)
@@ -689,9 +689,9 @@ server.registerTool(
     },
   },
   async ({ maxDepth, summaryOnly }) => {
-    logger.debug('project.structure requested', { maxDepth, summaryOnly });
+    logger.debug('workspace.structure requested', { maxDepth, summaryOnly });
     const result = await executeCapability({
-      capabilityId: 'project.structure',
+      capabilityId: 'workspace.structure',
       input: { maxDepth, summaryOnly },
       userId: MCP_USER_ID,
     });

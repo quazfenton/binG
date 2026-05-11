@@ -44,7 +44,7 @@ function looksLikeCssValueSegment(segment: string): boolean {
 
 /**
  * Validate file path - must be a valid filesystem path
- * CRITICAL: Prevents AI from generating malformed paths like 'project/sessions/003/{'
+ * CRITICAL: Prevents AI from generating malformed paths like 'workspace/sessions/003/{'
  * Also rejects CSS values, SCSS variables, and code snippets
  *
  * NOTE: Trailing slashes ARE allowed for directory paths (e.g., "src/", "components/")
@@ -53,7 +53,7 @@ export function isValidFilePath(path: string, isFolder: boolean = false): boolea
   if (!path || path.length === 0) return false;
 
   // CRITICAL: Check the last segment of the path (the actual filename)
-  // This catches "project/sessions/002/0.3s" where "0.3s" is the invalid part
+  // This catches "workspace/sessions/002/0.3s" where "0.3s" is the invalid part
   const pathSegments = path.split('/');
   const lastSegment = pathSegments[pathSegments.length - 1] || path;
 
@@ -2145,7 +2145,7 @@ export function extractFencedDiffEdits(content: string): DiffEdit[] {
     }
 
     // CRITICAL FIX: Validate path to reject JSX/HTML fragments, CSS values, etc.
-    // This prevents paths like "project/sessions/002/Input'" from being extracted
+    // This prevents paths like "workspace/sessions/002/Input'" from being extracted
     if (!isValidExtractedPath(targetPath)) {
       console.warn('[extractFencedDiffEdits] Skipping invalid path:', targetPath);
       continue;
@@ -2827,7 +2827,7 @@ export interface FileOperation {
   diff?: string
 }
 
-/** Minimum number of files in a folder for it to be treated as a new project. */
+/** Minimum number of files in a folder for it to be treated as a new workspace. */
 const NEW_PROJECT_MIN_FILES = parseInt(process.env.NEW_PROJECT_MIN_FILES || '2', 10)
 
 /**
@@ -2882,11 +2882,11 @@ export function detectFolderStructure(fileOperations: FileOperation[]): Detected
 }
 
 /**
- * Detect if response indicates a new project with single folder structure
+ * Detect if response indicates a new workspace with single folder structure
  * Moved from mode-manager.ts to consolidate all file parsing logic
  * 
  * @param content - LLM response content to analyze
- * @returns Folder name if a single-folder project structure is detected, null otherwise
+ * @returns Folder name if a single-folder workspace structure is detected, null otherwise
  */
 export function detectNewProjectFolder(content: string): string | null {
   const parsed = parseFilesystemResponse(content)
@@ -3212,10 +3212,10 @@ export function sanitizeFileEditTags(content: string): string {
   }
   }
 
-  // Remove leaked project/artifact XML tags and continuation markers
+  // Remove leaked workspace/artifact XML tags and continuation markers
   // Use lookahead (?=[\s/>]) to avoid matching hyphenated tag names like <artifact-link>
   // This preserves legitimate XML/code snippets in assistant responses
-  sanitized = sanitized.replace(/<\/?project(?=[\s/>])[^>]*>/gi, '');
+  sanitized = sanitized.replace(/<\/?workspace(?=[\s/>])[^>]*>/gi, '');
   sanitized = sanitized.replace(/<\/?artifact(?=[\s/>])[^>]*>/gi, '');
   sanitized = sanitized.replace(/\[CONTINUE_REQUESTED\]/gi, '');
 

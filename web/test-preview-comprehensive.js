@@ -91,7 +91,7 @@ async function testComprehensive() {
   
   // Test filesystem routes
   const filesystemTests = [
-    { route: '/api/filesystem/list', method: 'POST', body: { path: 'project' } },
+    { route: '/api/filesystem/list', method: 'POST', body: { path: 'workspace' } },
   ];
   
   for (const test of filesystemTests) {

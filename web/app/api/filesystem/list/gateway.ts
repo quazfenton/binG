@@ -110,7 +110,7 @@ function trackRequest(path: string): { isPolling: boolean; requestCount: number;
 /**
  * Schema for filesystem list requests
  * Validates directory path and prevents path traversal attacks
- * Accepts both relative paths (project, project/sessions) and absolute paths
+ * Accepts both relative paths (workspace, workspace/sessions) and absolute paths
  */
 const listRequestSchema = z.object({
   path: z.string()
@@ -122,7 +122,7 @@ const listRequestSchema = z.object({
     )
     .refine(
       (path) => {
-        // Allow relative paths (project, project/sessions, etc.)
+        // Allow relative paths (workspace, workspace/sessions, etc.)
         if (!path.startsWith('/')) return true;
         // If absolute, must start with /home/ or /workspace/
         return path.startsWith('/home/') || path.startsWith('/workspace/') || path.startsWith('/tmp/');
@@ -138,7 +138,7 @@ export async function GET(req: NextRequest) {
 
   try {
     const url = new URL(req.url);
-    const path = url.searchParams.get('path') || 'project';
+    const path = url.searchParams.get('path') || 'workspace';
     const ownerIdFromQuery = url.searchParams.get('ownerId');
 
     // CRITICAL FIX: Check ban list for rate-limited paths

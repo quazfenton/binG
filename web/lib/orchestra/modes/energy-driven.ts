@@ -250,7 +250,7 @@ export async function runEnergyDrivenMode(
     const subCall = configureSubCall({
       ...baseConfig,
       systemPrompt,
-      mode: 'v1-api',
+      mode: 'v1-api' as const,
     }, engine);
     const result = await processUnifiedAgentRequest(subCall);
 

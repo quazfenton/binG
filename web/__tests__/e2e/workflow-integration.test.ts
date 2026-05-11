@@ -123,7 +123,7 @@ describe('End-to-End Workflow Tests', () => {
       expect(diffSummary.changedFiles).toHaveLength(1);
       expect(diffSummary.totalChanges).toBe(2); // Create + Update
 
-      // Step 7: Detect project for preview
+      // Step 7: Detect workspace for preview
       const files = [
         {
           name: 'package.json',
@@ -235,7 +235,7 @@ describe('End-to-End Workflow Tests', () => {
       expect(snapshot.files.length).toBe(files.length);
       expect(snapshot.version).toBe(files.length);
 
-      // Detect project for preview
+      // Detect workspace for preview
       const previewFiles = files.map(f => ({ name: f.path, content: f.content }));
       const previewDetection = detectProject({ files: previewFiles } as PreviewRequest);
 
@@ -337,7 +337,7 @@ def health_check():
     it('should sync VFS files to sandbox format', async () => {
       const ownerId = 'test-sync-1';
 
-      // Create project in VFS
+      // Create workspace in VFS
       const files = [
         { path: 'package.json', content: '{"name": "sync-test", "dependencies": {"react": "^18.2.0"}}' },
         { path: 'src/App.tsx', content: 'export default function App() { return <div>Hello</div>; }' },
@@ -534,7 +534,7 @@ export default function App() {
       // Write updated App
       await vfs.writeFile(ownerId, 'src/App.tsx', appResult.updatedContent, 'typescript');
 
-      // Verify complete project
+      // Verify complete workspace
       const snapshot = await vfs.exportWorkspace(ownerId);
 
       expect(snapshot.files.length).toBe(4); // 3 initial + 1 new

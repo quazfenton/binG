@@ -241,10 +241,10 @@ export {
 } from './capabilities';
 
 // ============================================================================
-// Project Analysis Tools (Queryable MCP-style tools)
+// Workspace Analysis Tools (Queryable MCP-style tools)
 // ============================================================================
 // These replace the shallow buildProjectContext() + markdown blob approach.
-// The LLM can now call structured tools to discover project information on demand.
+// The LLM can now call structured tools to discover workspace information on demand.
 
 export {
   // Capability definitions
@@ -264,7 +264,7 @@ export {
   type DependencyIssue,
   type ProjectStructureResult,
   type DirectoryNode,
-} from './project-analysis';
+} from './workspace-analysis';
 
 // ============================================================================
 // Terminal / PTY Tools (Interactive terminal sessions)

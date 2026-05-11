@@ -211,7 +211,7 @@ function getContentTitle(index: number, source: ContentSource): string {
       'Community Discussion: React vs Vue',
       'Event Announcement: Dev Meetup',
       'Question: Best Database for Scale?',
-      'Showcase: My New Open Source Project',
+      'Showcase: My New Open Source Workspace',
       'Help Needed: Debugging Issue',
     ],
     twitter: [

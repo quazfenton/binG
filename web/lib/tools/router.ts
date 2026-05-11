@@ -71,8 +71,8 @@ class VFSProvider implements CapabilityProvider {
 
   // ─── Declarative Method Map ──────────────────────────────────────────────
 
-  private readonly methods: Record<string, (ownerId: string, input: any) => Promise<any>> = {
-    'file.read': async (ownerId, input) => {
+  private readonly methods: Record<string, (ownerId: string, input: any, context: ToolExecutionContext) => Promise<any>> = {
+    'file.read': async (ownerId, input, context) => {
       const { virtualFilesystem } = await import('../virtual-filesystem/virtual-filesystem-service');
       const file = await virtualFilesystem.readFile(ownerId, input.path);
       return {
@@ -85,7 +85,7 @@ class VFSProvider implements CapabilityProvider {
       };
     },
 
-    'file.write': async (ownerId, input) => {
+    'file.write': async (ownerId, input, context) => {
       const { virtualFilesystem } = await import('../virtual-filesystem/virtual-filesystem-service');
       const file = await virtualFilesystem.writeFile(
         ownerId,
@@ -105,12 +105,13 @@ class VFSProvider implements CapabilityProvider {
       // Delegate to the MCP batch_write tool which handles per-file validation,
       // scope path resolution, and event emission atomically
       const { callMCPToolFromAI_SDK } = await import('../mcp');
-      const scopePath = (context as any)?.scopePath || input.scopePath;
+      const scopePath = context?.scopePath || input.scopePath;
       const result = await callMCPToolFromAI_SDK('batch_write', input, ownerId, scopePath);
-      if (!result.success) {
-        throw new Error(result.error || 'batch_write failed');
-      }
-      return result.output;
+      return {
+        success: result.success,
+        output: result.output,
+        error: result.error,
+      };
     },
 
     'file.create_directory': async (ownerId, input, context) => {
@@ -125,7 +126,7 @@ class VFSProvider implements CapabilityProvider {
       return result.output;
     },
 
-    'file.append': async (ownerId, input) => {
+    'file.append': async (ownerId, input, context) => {
       const { virtualFilesystem } = await import('../virtual-filesystem/virtual-filesystem-service');
       const file = await virtualFilesystem.writeFile(
         ownerId,
@@ -137,15 +138,15 @@ class VFSProvider implements CapabilityProvider {
       return { success: true, path: file.path, bytesWritten: file.size };
     },
 
-    'file.delete': async (ownerId, input) => {
+    'file.delete': async (ownerId, input, context) => {
       const { virtualFilesystem } = await import('../virtual-filesystem/virtual-filesystem-service');
       const result = await virtualFilesystem.deletePath(ownerId, input.path);
       return { deletedCount: result.deletedCount, path: input.path };
     },
 
-    'file.list': async (ownerId, input) => {
+    'file.list': async (ownerId, input, context) => {
       const { virtualFilesystem } = await import('../virtual-filesystem/virtual-filesystem-service');
-      const listing = await virtualFilesystem.listDirectory(ownerId, input.path || 'project');
+      const listing = await virtualFilesystem.listDirectory(ownerId, input.path || 'workspace');
       return {
         path: listing.path,
         nodes: listing.nodes.map(node => ({
@@ -159,7 +160,7 @@ class VFSProvider implements CapabilityProvider {
       };
     },
 
-    'file.search': async (ownerId, input) => {
+    'file.search': async (ownerId, input, context) => {
       // Use ripgrep-vfs-adapter for better performance (10-100x faster)
       const { ripgrepVFS } = await import('../search/ripgrep-vfs-adapter');
       
@@ -186,7 +187,7 @@ class VFSProvider implements CapabilityProvider {
       };
     },
 
-    'workspace.getChanges': async (ownerId, input) => {
+    'workspace.getChanges': async (ownerId, input, context) => {
       const { diffTracker } = await import('../virtual-filesystem/filesystem-diffs');
       const changedFiles = diffTracker.getChangedFilesForSync(ownerId, input.maxFiles || 50);
       return { ownerId, count: changedFiles.length, files: changedFiles };
@@ -226,7 +227,7 @@ class VFSProvider implements CapabilityProvider {
     }
 
     try {
-      const output = await handler(ownerId, input);
+      const output = await handler(ownerId, input, context);
       return { success: true, output };
     } catch (error: any) {
       return { success: false, error: error.message };
@@ -572,11 +573,11 @@ class OpenCodeV2Provider implements CapabilityProvider {
           ? `run ${input.language} code: ${input.code}`
           : input.command;
 
-        // Get project context for the system prompt (lightweight — just file listing)
+        // Get workspace context for the system prompt (lightweight — just file listing)
         let smartContextMd = '';
         let projectRoot = '';
         try {
-          const { buildProjectContext, formatSmartContextAsMarkdown } = await import('../project-detection');
+          const { buildProjectContext, formatSmartContextAsMarkdown } = await import('../workspace-detection');
           const { virtualFilesystem } = await import('../virtual-filesystem/virtual-filesystem-service');
           const ownerId = context.userId || 'default';
           const workspace = await virtualFilesystem.exportWorkspace(ownerId);
@@ -595,18 +596,18 @@ class OpenCodeV2Provider implements CapabilityProvider {
           smartContextMd = formatSmartContextAsMarkdown(projectContext.smartContext);
           projectRoot = projectContext.projectRoot || '';
         } catch {
-          // Project detection failed — LLM will work without it
+          // Workspace detection failed — LLM will work without it
         }
 
         // Build the tool set for the LLM: extended sandbox tools including
-        // terminal sessions, project analysis, and port status.
+        // terminal sessions, workspace analysis, and port status.
         const { EXTENDED_SANDBOX_TOOLS, mapToolToCapability } = await import('../sandbox/extended-sandbox-tools');
 
         // Resolve cwd
         let resolvedCwd: string | undefined;
         if (input.cwd) {
           try {
-            const { resolveVfsPathToRealPath } = await import('../project-detection');
+            const { resolveVfsPathToRealPath } = await import('../workspace-detection');
             resolvedCwd = resolveVfsPathToRealPath(input.cwd, session.workspacePath || process.cwd());
           } catch {
             resolvedCwd = input.cwd;
@@ -618,7 +619,7 @@ class OpenCodeV2Provider implements CapabilityProvider {
             `Available tools: exec_shell, write_file, read_file, list_dir, project_analyze, ` +
             `project_list_scripts, project_dependencies, project_structure, terminal_create_session, ` +
             `terminal_send_input, terminal_get_output, port_status.\n` +
-            `If the command looks like natural language (e.g., "run the project"), ` +
+            `If the command looks like natural language (e.g., "run the workspace"), ` +
             `first call project_analyze to detect the framework and recommended commands.`
           : `Working directory: ${input.cwd || session.workspacePath || ''}\n\n` +
             `Available tools: exec_shell, write_file, read_file, list_dir, project_analyze, ` +
@@ -929,12 +930,12 @@ class BlaxelProvider implements CapabilityProvider {
 }
 
 /**
- * Context Pack Provider - generates project context bundles
+ * Context Pack Provider - generates workspace context bundles
  */
 class ContextPackProvider implements CapabilityProvider {
   readonly id = 'context-pack';
   readonly name = 'Context Pack';
-  readonly capabilities = ['memory.store', 'memory.context', 'project.bundle'];
+  readonly capabilities = ['memory.store', 'memory.context', 'workspace.bundle'];
 
   isAvailable(): boolean {
     // Context pack service is always available when VFS is available
@@ -949,8 +950,8 @@ class ContextPackProvider implements CapabilityProvider {
     const { contextPackService } = await import('../virtual-filesystem/context-pack-service');
 
     try {
-      // Input validation for project.bundle
-      if (capabilityId === 'project.bundle' && !input.path && !input.scopePath) {
+      // Input validation for workspace.bundle
+      if (capabilityId === 'workspace.bundle' && !input.path && !input.scopePath) {
         return { success: false, error: 'Missing required field: path or scopePath' };
       }
 
@@ -2013,7 +2014,7 @@ export enum ProviderId {
   GIT_HELPER = 'git-helper',
   OAUTH_INTEGRATION = 'oauth-integration',
   TERMINAL = 'terminal',
-  PROJECT_ANALYSIS = 'project-analysis',
+  PROJECT_ANALYSIS = 'workspace-analysis',
   CUSTOM = 'custom', // For dynamically registered providers
 }
 

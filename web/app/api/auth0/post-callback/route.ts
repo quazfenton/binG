@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 
 import { getLocalUserIdFromAuth0, mapAuth0UserId } from '@/lib/oauth/connections';
-import { saveConnectedAccount } from '@/lib/auth0';
+import { saveConnectedAccount } from '@/lib/auth/auth0';
 
 const CONNECTION_TO_PROVIDER: Record<string, string> = {
   'github': 'github',
@@ -56,7 +56,7 @@ export async function POST(request: NextRequest) {
     // Map Auth0 user ID to local user on successful login
     if (auth0UserId && email) {
       // Use authenticated session email as the trusted source instead of client-controlled body email
-      const { auth0 } = await import('@/lib/auth0');
+      const { auth0 } = await import('@/lib/auth/auth0');
       const session = await auth0.getSession(request);
       const trustedEmail = session?.user?.email;
       const trustedAuth0UserId = session?.user?.sub;

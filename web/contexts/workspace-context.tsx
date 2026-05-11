@@ -99,7 +99,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const openProjectFolder = useCallback(async () => {
     try {
       const result = await tauriInvoke.openDirectoryDialog({
-        title: 'Open Project Folder',
+        title: 'Open Workspace Folder',
         defaultPath: workspaceRoot || getDesktopWorkspaceDir() || undefined,
       });
       if (result && result.path) {

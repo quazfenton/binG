@@ -33,8 +33,8 @@ const logger = createLogger('SmartContext');
 
 /**
  * Strip VFS scope prefix from a path so the LLM sees session-relative paths.
- * "project/sessions/001/src/App.tsx" → "src/App.tsx"
- * "project/sessions/my-app/package.json" → "package.json"
+ * "workspace/sessions/001/src/App.tsx" → "src/App.tsx"
+ * "workspace/sessions/my-app/package.json" → "package.json"
  * Paths not matching the prefix are returned as-is.
  */
 function stripScopePrefix(filePath: string): string {
@@ -52,11 +52,11 @@ export interface SmartContextOptions {
   explicitFiles?: string[];
   /** Files referenced in recent conversation messages (for session awareness) */
   recentSessionFiles?: string[];
-  /** Current project root path (to prioritize files in this project) */
+  /** Current workspace root path (to prioritize files in this workspace) */
   currentProjectPath?: string;
-  /** VFS scope path for session isolation (e.g. "project/sessions/001").
+  /** VFS scope path for session isolation (e.g. "workspace/sessions/001").
    *  Used as a priority boost for files within the scope — NOT a hard filter.
-   *  New chats and cross-project suggestions still work normally. */
+   *  New chats and cross-workspace suggestions still work normally. */
   scopePath?: string;
   /** Maximum total context size in bytes */
   maxTotalSize?: number;
@@ -69,7 +69,7 @@ export interface SmartContextOptions {
    *  - 'diff': Only the changes since last iteration (unified diffs). Efficient for
    *    multi-round build loops where the LLM already knows the prior state.
    *  - 'tree': Directory tree only, no file content. Lightest weight — the LLM
-   *    infers what files contain from their names and the project structure. */
+   *    infers what files contain from their names and the workspace structure. */
   contextMode?: 'diff' | 'read' | 'tree';
   /** Snapshot of file contents BEFORE the last iteration's writes.
    *  Required when contextMode is 'diff'. Used to generate unified diffs
@@ -502,7 +502,7 @@ function scoreFile(
   reverseImportMap: Map<string, Set<string>>,
   options: SmartContextOptions, // Changed from individual params to include scopePath
   recentSessionFiles?: Set<string>, // Files from recent conversation sessions
-  currentProjectPath?: string, // Current project path to prioritize
+  currentProjectPath?: string, // Current workspace path to prioritize
 ): FileScore {
   const path = file.path.toLowerCase();
   const filename = path.split('/').pop() || '';
@@ -580,14 +580,14 @@ function scoreFile(
     score += SCORE_THRESHOLDS.RECENT;
   }
 
-  // 8. Current project path priority (prevent editing wrong project)
+  // 8. Current workspace path priority (prevent editing wrong workspace)
   if (currentProjectPath && path.startsWith(currentProjectPath)) {
-    reasons.push('current project file');
-    score += 40; // Moderate boost to current project files
+    reasons.push('current workspace file');
+    score += 40; // Moderate boost to current workspace files
   }
 
   // 9. Scope path priority boost — files within the active session scope get priority.
-  // This is a soft boost, NOT a hard filter, so new chats and cross-project suggestions
+  // This is a soft boost, NOT a hard filter, so new chats and cross-workspace suggestions
   // still work normally. Files outside the scope are still included if they score high enough.
   if (options.scopePath && path.startsWith(options.scopePath.toLowerCase())) {
     reasons.push('within active session scope');
@@ -928,7 +928,7 @@ export async function generateSmartContext(options: SmartContextOptions): Promis
     // Never filters explicit @mentions even if they match exclusion patterns
     allFiles = filterFilesSmart(allFiles, explicitFiles);
 
-    // Option A: Build smart tree (progressive pruning based on project size)
+    // Option A: Build smart tree (progressive pruning based on workspace size)
     const referencedPaths = new Set<string>();
     for (const f of explicitFileList) referencedPaths.add(f.toLowerCase());
 
@@ -1116,7 +1116,7 @@ export async function generateSmartContext(options: SmartContextOptions): Promis
     // The LLM infers what files contain from their names and structure.
     bundle = format === 'json'
       ? JSON.stringify({ tree, note: 'Tree-only mode — file contents not included. Infer file purpose from names.' }, null, 2)
-      : `--- PROJECT TREE ---\n${tree || '(empty)'}\n--- END TREE ---\n`;
+      : `--- WORKSPACE TREE ---\n${tree || '(empty)'}\n--- END TREE ---\n`;
   } else if (contextMode === 'diff' && snapshotBefore && snapshotAfter) {
     // DIFF MODE: Only the changes since last iteration (unified diffs).
     // Efficient for multi-round build loops where the LLM already knows the prior state.
@@ -1127,12 +1127,12 @@ export async function generateSmartContext(options: SmartContextOptions): Promis
       // No changes since last snapshot — provide tree only
       bundle = format === 'json'
         ? JSON.stringify({ tree, note: 'No changes since last iteration.', diffs: [] }, null, 2)
-        : `--- PROJECT TREE ---\n${tree || '(empty)'}\n\nNo changes since last iteration.\n--- END TREE ---\n`;
+        : `--- WORKSPACE TREE ---\n${tree || '(empty)'}\n\nNo changes since last iteration.\n--- END TREE ---\n`;
     } else {
       const diffBlock = diffs.map(d => `## ${d.status === 'created' ? 'CREATED' : d.status === 'deleted' ? 'DELETED' : 'MODIFIED'}: ${d.path}\n\n\`\`\`diff\n${d.diff}\n\`\`\``).join('\n\n');
       bundle = format === 'json'
         ? JSON.stringify({ tree, diffs: diffs.map(d => ({ path: d.path, status: d.status, diff: d.diff })) }, null, 2)
-        : `--- CHANGES SINCE LAST ITERATION (${diffs.length} files) ---\n\n${tree ? `Project tree:\n${tree}\n\n` : ''}${diffBlock}\n--- END CHANGES ---\n`;
+        : `--- CHANGES SINCE LAST ITERATION (${diffs.length} files) ---\n\n${tree ? `Workspace tree:\n${tree}\n\n` : ''}${diffBlock}\n--- END CHANGES ---\n`;
     }
   } else {
     // READ MODE (default): Full file contents inlined.
@@ -1352,7 +1352,7 @@ async function buildAbbreviatedTree(
 }
 
 /**
- * Decide which tree mode to use based on project size.
+ * Decide which tree mode to use based on workspace size.
  * Returns { tree, mode } where mode is 'full' | 'abbreviated' | 'minimal'.
  */
 async function buildSmartTree(
@@ -1366,7 +1366,7 @@ async function buildSmartTree(
     return { tree: '', mode: 'minimal' };
   }
 
-  // Small project (< 10 files) — show full tree
+  // Small workspace (< 10 files) — show full tree
   if (totalFileCount <= 10) {
     try {
       const listing = await virtualFilesystem.listDirectory(ownerId, rootPath);
@@ -1379,7 +1379,7 @@ async function buildSmartTree(
     }
   }
 
-  // Medium project (10-50 files) — abbreviated tree
+  // Medium workspace (10-50 files) — abbreviated tree
   if (totalFileCount <= 50) {
     try {
       const tree = await buildAbbreviatedTree(ownerId, rootPath, referencedFiles);
@@ -1389,7 +1389,7 @@ async function buildSmartTree(
     }
   }
 
-  // Large project (> 50 files) — minimal tree (top-level dirs only)
+  // Large workspace (> 50 files) — minimal tree (top-level dirs only)
   try {
     const listing = await virtualFilesystem.listDirectory(ownerId, rootPath);
     const topDirs = (listing.nodes || []).filter(n => n.type === 'directory');
@@ -1525,17 +1525,17 @@ function estimateContextBudget(
   estimatedTokenCount: number,
   hasExplicitFiles: boolean
 ): 'compact' | 'balanced' | 'full' {
-  // Compact: large project, no explicit files — tree-only mode
+  // Compact: large workspace, no explicit files — tree-only mode
   if (totalFileCount > 50 && !hasExplicitFiles) {
     return 'compact';
   }
 
-  // Full: small project or explicit file attachments
+  // Full: small workspace or explicit file attachments
   if (totalFileCount <= 15 || hasExplicitFiles) {
     return 'full';
   }
 
-  // Balanced: medium project
+  // Balanced: medium workspace
   if (estimatedTokenCount > 8000) {
     return 'compact';
   }

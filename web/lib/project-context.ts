@@ -1,10 +1,10 @@
 /**
- * Project Context
+ * Workspace Context
  *
- * Provides project-scoped services and memory isolation.
- * Each project gets its own vector store, cache, and file context.
+ * Provides workspace-scoped services and memory isolation.
+ * Each workspace gets its own vector store, cache, and file context.
  *
- * @module project-context
+ * @module workspace-context
  */
 
 import { createVectorStore } from '@/lib/vector-memory/store';
@@ -29,7 +29,7 @@ export interface ProjectServices {
 const projectMap = new Map<string, { services: ProjectServices; lastAccessed: number }>();
 
 /**
- * Get or create project-scoped services.
+ * Get or create workspace-scoped services.
  * Evicts least-recently-used projects when the limit is reached.
  */
 export function getProjectServices(ctx: ProjectContext): ProjectServices {
@@ -39,7 +39,7 @@ export function getProjectServices(ctx: ProjectContext): ProjectServices {
     return existing.services;
   }
 
-  // Evict LRU project if at capacity
+  // Evict LRU workspace if at capacity
   if (projectMap.size >= MAX_PROJECTS) {
     let lruKey: string | null = null;
     let lruTime = Infinity;

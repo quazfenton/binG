@@ -499,7 +499,7 @@ function generateModifierText(key: string, value: string): string {
 - Speak with confidence and decisiveness
 - Use strong, assertive language; avoid hedging where evidence supports it
 - Frame recommendations as clear directives, not suggestions
-- Project expertise and command of the subject
+- Workspace expertise and command of the subject
 - When uncertainty exists, state it directly: "We don't yet know X"`,
 
       tentative: `

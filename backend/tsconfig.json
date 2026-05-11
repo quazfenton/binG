@@ -6,6 +6,7 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["../web/*"],
+      "@bing/shared/*": ["../packages/shared/*"],
       "backend/*": ["src/*"]
     },
     "allowJs": true,

@@ -50,7 +50,7 @@ import {
 } from "../lib/code-parser";
 import { createDebugLogger } from "../.bing-infra-config/config/features";
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog";
-import { checkFileConflicts } from "@/lib/session-naming";
+import { checkFileConflicts } from "@/lib/session/session-naming";
 import { buildApiHeaders } from "@/lib/utils";
 import { usePanel } from "@/contexts/panel-context";
 import { clipboard } from "@bing/platform/clipboard";
@@ -93,7 +93,7 @@ interface CodePreviewPanelProps {
   isOpen: boolean;
   onClose: () => void;
   filesystemScopePath?: string;
-  // Optional: Inject project files directly (e.g., from code service)
+  // Optional: Inject workspace files directly (e.g., from code service)
   // DEBUG: This creates dual data sources - to be removed after debugging
   projectFiles?: { [key: string]: string };
   // commands management
@@ -185,7 +185,7 @@ export default function CodePreviewPanel({
   messages,
   isOpen,
   onClose,
-  filesystemScopePath = "project",
+  filesystemScopePath = "workspace",
   projectFiles,
   commandsByFile = {},
   onApplyAllCommandDiffs,
@@ -219,7 +219,7 @@ export default function CodePreviewPanel({
     [commandsByFile],
   );
   
-  const virtualFilesystem = useVirtualFilesystem(filesystemScopePath || 'project', { useOPFS: true });
+  const virtualFilesystem = useVirtualFilesystem(filesystemScopePath || 'workspace', { useOPFS: true });
   const {
     currentPath: filesystemCurrentPath,
     nodes: filesystemRawNodes,
@@ -245,7 +245,7 @@ export default function CodePreviewPanel({
 
   // Normalize filesystem path for display (prevent accumulated prefixes)
   const normalizedFilesystemPath = useMemo(() => {
-    let cleanPath = filesystemCurrentPath || 'project';
+    let cleanPath = filesystemCurrentPath || 'workspace';
     
     cleanPath = stripWorkspacePrefixes(cleanPath);
     return normalizeScopePath(cleanPath);
@@ -339,7 +339,7 @@ export default function CodePreviewPanel({
       const encoded = btoa(encodeURIComponent(json));
       // Truncate warning if too large for URL
       if (encoded.length > 2000000) {
-        toast.warning('Project is large for WebContainer. Try Sandpack or OpenSandbox preview instead.');
+        toast.warning('Workspace is large for WebContainer. Try Sandpack or OpenSandbox preview instead.');
         return;
       }
       const url = `/webcontainer?files=${encodeURIComponent(encoded)}`;
@@ -411,7 +411,7 @@ export default function CodePreviewPanel({
   // Centralized path normalization helper
   const normalizeProjectPath = useCallback((path: string): string => {
     const originalPath = path;
-    const cleanPath = stripWorkspacePrefixes(path || 'project');
+    const cleanPath = stripWorkspacePrefixes(path || 'workspace');
     const normalized = normalizeScopePath(cleanPath);
     // Removed verbose logging - called too frequently
     return normalized;
@@ -432,12 +432,12 @@ export default function CodePreviewPanel({
     const cleanedCurrentPath = normalizeProjectPath(filesystemCurrentPath);
     const current = cleanedCurrentPath.replace(/\/+$/, "");
     const parts = current.split("/").filter(Boolean);
-    if (parts.length <= 1 || (parts.length === 1 && parts[0] === 'project')) {
-      openFilesystemDirectory("project");
+    if (parts.length <= 1 || (parts.length === 1 && parts[0] === 'workspace')) {
+      openFilesystemDirectory("workspace");
       return;
     }
     const parentPath = parts.slice(0, -1).join("/");
-    openFilesystemDirectory(parentPath || "project");
+    openFilesystemDirectory(parentPath || "workspace");
   }, [filesystemCurrentPath, normalizeProjectPath, openFilesystemDirectory]);
 
   const selectFilesystemFile = useCallback(async (path: string) => {
@@ -1140,7 +1140,7 @@ export default function CodePreviewPanel({
         return;
       }
 
-      // Advanced root detection: find the project root based on config files and entry points
+      // Advanced root detection: find the workspace root based on config files and entry points
       const rootScores = new Map<string, number>();
       rootScores.set('', 1);
       const addRootScore = (root: string, score: number) => {
@@ -1156,7 +1156,7 @@ export default function CodePreviewPanel({
 
         // Score directories based on presence of config/entry files
         if (fileName === 'package.json') {
-          // package.json at root level - project root is ''
+          // package.json at root level - workspace root is ''
           if (dir === '') addRootScore('', 8);
           // package.json in subdirectory - that dir is a potential root
           else addRootScore(dir, 8);
@@ -1170,7 +1170,7 @@ export default function CodePreviewPanel({
           else addRootScore(dir, 6);
         }
         if (/^main\.(js|jsx|ts|tsx)$/.test(fileName)) {
-          // main.js in src/ means project root is parent of src (i.e., '')
+          // main.js in src/ means workspace root is parent of src (i.e., '')
           if (dir === 'src') addRootScore('', 5);
           // Also score the src directory itself
           addRootScore(dir, 2);
@@ -1207,7 +1207,7 @@ export default function CodePreviewPanel({
       if (!mode) {
         selectedMode = detection.previewMode;
 
-        // Determine execution mode based on project requirements
+        // Determine execution mode based on workspace requirements
         if (detection.hasHeavyComputation || detection.hasAPIKeys) {
           detectedExecutionMode = 'cloud';
         } else if (detection.hasPython || detection.hasNodeServer) {
@@ -1227,8 +1227,8 @@ export default function CodePreviewPanel({
       // Set execution mode
       setExecutionMode(detectedExecutionMode);
 
-      // Strip the detected project root from file paths for Sandpack
-      // Sandpack runners expect files relative to project root (e.g., src/App.tsx not my-app/src/App.tsx)
+      // Strip the detected workspace root from file paths for Sandpack
+      // Sandpack runners expect files relative to workspace root (e.g., src/App.tsx not my-app/src/App.tsx)
       const previewRoot = detection.selectedRoot || selectedRoot;
       const previewFiles = previewRoot
         ? Object.fromEntries(
@@ -1242,7 +1242,7 @@ export default function CodePreviewPanel({
           )
         : files;
 
-      log(`[handleManualPreview] Storing ${Object.keys(previewFiles).length} files (root: "${previewRoot || 'project root'}")`);
+      log(`[handleManualPreview] Storing ${Object.keys(previewFiles).length} files (root: "${previewRoot || 'workspace root'}")`);
 
       // Store files with root-relative paths for Sandpack runners
       setManualPreviewFiles(previewFiles);
@@ -1387,7 +1387,7 @@ export default function CodePreviewPanel({
       }
       lastVfsSaveRef.current = now;
 
-      const normalizedScope = normalizeProjectPath(savedScopePath || 'project');
+      const normalizedScope = normalizeProjectPath(savedScopePath || 'workspace');
 
       // Track write results for event emission
       const writeResults: Array<{ path: string; workspaceVersion?: number; commitId?: string; sessionId?: string | null }> = [];
@@ -1542,7 +1542,7 @@ export default function CodePreviewPanel({
 
         // Check if there are files in the filesystem
         try {
-          const nodes = await listFilesystemDirectory(filesystemCurrentPath || filesystemScopePath || 'project');
+          const nodes = await listFilesystemDirectory(filesystemCurrentPath || filesystemScopePath || 'workspace');
           const hasFiles = nodes.some(n => n.type === 'file');
 
           if (hasFiles && !isManualPreviewActive) {
@@ -1596,7 +1596,7 @@ export default function CodePreviewPanel({
 
       // Determine root directory dynamically for desktop vs web
       const isDesktop = typeof window !== 'undefined' && (window as any).__SIDECAR_CONFIG__;
-      const sessionsRoot = isDesktop ? "" : "project/sessions";
+      const sessionsRoot = isDesktop ? "" : "workspace/sessions";
       
       const sessionDirectories = (await listFilesystemDirectory(sessionsRoot))
         .filter((node) => node.type === "directory");
@@ -1755,7 +1755,7 @@ export default function CodePreviewPanel({
         }
 
         // Use refs to avoid re-creating listener
-        const currentPath = filesystemCurrentPathRef.current || filesystemScopePathRef.current || 'project';
+        const currentPath = filesystemCurrentPathRef.current || filesystemScopePathRef.current || 'workspace';
         const normalizedScopePath = normalizeProjectPath(currentPath);
         log(`[filesystem-updated] refreshing directory: "${normalizedScopePath}"`);
         await debouncedListDirectory(normalizedScopePath);
@@ -1854,20 +1854,20 @@ export default function CodePreviewPanel({
     if (isOpen && pendingRefreshRef.current) {
       pendingRefreshRef.current = false;
       log('[CodePreviewPanel] panel opened with pending refresh, triggering now');
-      const currentPath = filesystemCurrentPathRef.current || filesystemScopePathRef.current || 'project';
+      const currentPath = filesystemCurrentPathRef.current || filesystemScopePathRef.current || 'workspace';
       void debouncedListDirectory(normalizeProjectPath(currentPath));
     }
   }, [isOpen]);
 
-  // Generate project structure for complex projects
+  // Generate workspace structure for complex projects
   // Also merge virtual filesystem files for live preview
   // NOTE: Commented out legacy codeBlock parsing - use VFS (scopedPreviewFiles) as primary source instead
   useEffect(() => {
-    // Use scopedPreviewFiles from VFS as the primary source - this has real project files
-    // Legacy codeBlocks parsing creates file-0.sh, file-1.js etc which pollutes the project
+    // Use scopedPreviewFiles from VFS as the primary source - this has real workspace files
+    // Legacy codeBlocks parsing creates file-0.sh, file-1.js etc which pollutes the workspace
     /*
     if (codeBlocks.length > 0) {
-      // Use the centralized parser to get project structure
+      // Use the centralized parser to get workspace structure
       const parsedData = parseCodeBlocksFromMessages(messages);
       if (parsedData.projectStructure) {
         setProjectStructure(parsedData.projectStructure);
@@ -1880,7 +1880,7 @@ export default function CodePreviewPanel({
     */
     if (projectFiles && Object.keys(projectFiles).length > 0) {
       const structure: ProjectStructure = {
-        name: 'filesystem-project',
+        name: 'filesystem-workspace',
         files: projectFiles,
         framework: 'react',
         bundler: 'vite',
@@ -1895,7 +1895,7 @@ export default function CodePreviewPanel({
       (acc, [path, content]) => {
         const relativePath = path.startsWith(`${filesystemScopePath}/`)
           ? path.slice(filesystemScopePath.length + 1)
-          : path.replace(/^project\//, '');
+          : path.replace(/^workspace\//, '');
         acc[relativePath] = content;
         return acc;
       },
@@ -1906,7 +1906,7 @@ export default function CodePreviewPanel({
     // Only use projectStructure as fallback if VFS is empty
     if (Object.keys(scopedRelativeFiles).length > 0) {
       return {
-        name: 'filesystem-project',
+        name: 'filesystem-workspace',
         files: scopedRelativeFiles,
         framework: 'react',
         bundler: 'vite',
@@ -2028,7 +2028,7 @@ export default function CodePreviewPanel({
 
     if (!structure && scopedPreviewFiles && Object.keys(scopedPreviewFiles).length > 0) {
       structure = {
-        name: 'filesystem-project',
+        name: 'filesystem-workspace',
         files: scopedPreviewFiles,
         framework: 'react',
         bundler: 'vite',
@@ -2039,7 +2039,7 @@ export default function CodePreviewPanel({
 
     if (!structure && projectFiles && Object.keys(projectFiles).length > 0) {
       structure = {
-        name: 'filesystem-project',
+        name: 'filesystem-workspace',
         files: projectFiles,
         framework: 'react',
         bundler: 'vite',
@@ -2096,7 +2096,7 @@ export default function CodePreviewPanel({
       previewModeHint,
     };
 
-    // Log only when project data changes (prevent spam)
+    // Log only when workspace data changes (prevent spam)
     const logKey = `${inferredBundler}-${entryFile}-${previewModeHint}`;
     if (lastLoggedProjectDataRef.current !== logKey) {
       lastLoggedProjectDataRef.current = logKey;
@@ -2169,7 +2169,7 @@ export default function CodePreviewPanel({
 
       files[finalFilename] = block.code;
 
-      // Extract dependencies and project info
+      // Extract dependencies and workspace info
       if (block.language === "json" && finalFilename === "package.json") {
         try {
           const pkg = JSON.parse(block.code);
@@ -2299,7 +2299,7 @@ export default function CodePreviewPanel({
           finalFilename.includes("vite.config.js") ||
           finalFilename.includes("vite.config.ts")
         ) {
-          // If we see a vite config, it's likely a vite project
+          // If we see a vite config, it's likely a vite workspace
           if (framework === "vanilla") framework = "vite-react";
         }
       }
@@ -2335,7 +2335,7 @@ export default function CodePreviewPanel({
       : 'sandpack';
 
     const structure: ProjectStructure = {
-      name: "Generated Project",
+      name: "Generated Workspace",
       files,
       dependencies: dependencies.length > 0 ? dependencies : undefined,
       devDependencies: devDependencies.length > 0 ? devDependencies : undefined,
@@ -2362,7 +2362,7 @@ export default function CodePreviewPanel({
         // Add all VFS files to zip
         for (const file of vfsFiles) {
           // Get relative path from workspace
-          const relativePath = file.path.replace(/^project\//, '');
+          const relativePath = file.path.replace(/^workspace\//, '');
           zip.file(relativePath, file.content || '');
         }
         
@@ -2372,11 +2372,11 @@ export default function CodePreviewPanel({
       console.warn('[Download] Failed to get VFS files, using fallback:', err);
     }
 
-    // Fallback to project structure if VFS failed or empty
+    // Fallback to workspace structure if VFS failed or empty
     const structureToUse = projectStructureWithScopedFiles || projectStructure;
     
     if (zip.files['README.md'] === undefined && structureToUse && Object.keys(structureToUse.files).length > 0) {
-      // Add all files from project structure
+      // Add all files from workspace structure
       Object.entries(structureToUse.files).forEach(([filename, fileData]) => {
         const content = fileData;
         if (!zip.files[filename]) {
@@ -2395,15 +2395,15 @@ export default function CodePreviewPanel({
       });
     }
 
-    // Add README if project has files
+    // Add README if workspace has files
     if (Object.keys(zip.files).length > 0 && !zip.files['README.md']) {
       const structureToUse = projectStructureWithScopedFiles || projectStructure;
       const shellCommands = (codeBlocks as any).shellCommands || "";
       const nonCodeText = (codeBlocks as any).nonCodeText || "";
       
-      const readme = `# Code Project
+      const readme = `# Code Workspace
 
-This project was generated via AI chat assistant.
+This workspace was generated via AI chat assistant.
 
 ## Files:
 ${structureToUse
@@ -2441,7 +2441,7 @@ Generated on: ${new Date().toLocaleString()}
       const url = URL.createObjectURL(content);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `project-${Date.now()}.zip`;
+      a.download = `workspace-${Date.now()}.zip`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -2523,8 +2523,8 @@ Generated on: ${new Date().toLocaleString()}
       const { isBackendOnly, reasons } = isBackendOnlyProject(files, []);
       if (isBackendOnly) {
         setPreviewMode('codesandbox');
-        toast.info(`Backend project detected — redirected to CodeSandbox for full Node.js support`);
-        previewLogger.log('[Preview] Backend-only project redirected from Sandpack to CodeSandbox', { reasons });
+        toast.info(`Backend workspace detected — redirected to CodeSandbox for full Node.js support`);
+        previewLogger.log('[Preview] Backend-only workspace redirected from Sandpack to CodeSandbox', { reasons });
         return;
       }
     }
@@ -2702,7 +2702,7 @@ Generated on: ${new Date().toLocaleString()}
         useStructure?.framework || 'vanilla',
       );
 
-      // Add vue-router if project has router files but doesn't include it
+      // Add vue-router if workspace has router files but doesn't include it
       const hasVueRouter = useStructure?.files && Object.keys(useStructure.files).some(path => {
         const lowerPath = path.toLowerCase();
         return lowerPath.includes('router/') ||
@@ -3163,8 +3163,8 @@ export default app;`,
           baseSandpackFiles = normalizedSandpackFiles;
         }
 
-        // CRITICAL FIX: Normalize file paths to be relative to project root for Sandpack
-        // The VFS paths are like "/project/sessions/draft-chat_xxx/src/main.js" but Sandpack needs "/src/main.js"
+        // CRITICAL FIX: Normalize file paths to be relative to workspace root for Sandpack
+        // The VFS paths are like "/workspace/sessions/draft-chat_xxx/src/main.js" but Sandpack needs "/src/main.js"
         // We need to strip the filesystem scope prefix from all file paths
         const finalSandpackFiles = (() => {
           // Create a copy of baseSandpackFiles to work with
@@ -3283,18 +3283,18 @@ root.render(<App />);` };
 </html>` };
           }
 
-          // For auto-detected projects (not manual preview), strip scope prefix and project subfolders
+          // For auto-detected projects (not manual preview), strip scope prefix and workspace subfolders
           // Manual preview files are already normalized, so skip this step
           if (!isManualPreviewActive) {
             // Step 1: Normalize (filter build outputs, cache files, etc.)
             const normalized = normalizeFilesForSandpack(filesCopy);
 
-            // Step 2: Strip any leading project folder to get paths relative to project root
+            // Step 2: Strip any leading workspace folder to get paths relative to workspace root
             // Files at this point are like: "/my-vue-app/src/main.js" or "/src/main.js" or "/index.html"
-            // We need them to be: "/src/main.js" or "/index.html" (relative to project root for Sandpack)
+            // We need them to be: "/src/main.js" or "/index.html" (relative to workspace root for Sandpack)
             const stripped: Record<string, { code: string }> = {};
 
-            // Common project subfolder names that indicate the preceding folder is a project root
+            // Common workspace subfolder names that indicate the preceding folder is a workspace root
             const projectSubfolderPatterns = [
               /^\/([^/]+)\/src\//,      // /my-app/src/...
               /^\/([^/]+)\/pages\//,    // /my-app/pages/...
@@ -3306,7 +3306,7 @@ root.render(<App />);` };
               /^\/([^/]+)\/assets\//,   // /my-app/assets/...
             ];
 
-            // Strip VFS scope prefix (e.g. /project/sessions/draft-chat_xxx/)
+            // Strip VFS scope prefix (e.g. /workspace/sessions/draft-chat_xxx/)
             const scopePrefix = normalizeProjectPath(filesystemScopePath || normalizedFilesystemPath);
 
             for (const [path, fileObj] of Object.entries(normalized)) {
@@ -3317,18 +3317,18 @@ root.render(<App />);` };
                 relativePath = '/' + relativePath;
               }
 
-              // Strip VFS scope prefix first (e.g. /project/sessions/draft-chat_xxx/my-vue-app/src/main.js -> /my-vue-app/src/main.js)
+              // Strip VFS scope prefix first (e.g. /workspace/sessions/draft-chat_xxx/my-vue-app/src/main.js -> /my-vue-app/src/main.js)
               // Try both with and without leading slash variants
               const prefixVariants = [
                 `/${scopePrefix}/`,
                 `${scopePrefix}/`,
-                `/project/sessions/`,
+                `/workspace/sessions/`,
               ];
               for (const prefix of prefixVariants) {
                 if (relativePath.startsWith(prefix)) {
                   relativePath = relativePath.slice(prefix.length);
                   // If we stripped a sessions prefix, also strip the session ID folder
-                  if (prefix === '/project/sessions/' || prefix === 'project/sessions/') {
+                  if (prefix === '/workspace/sessions/' || prefix === 'workspace/sessions/') {
                     const slashIdx = relativePath.indexOf('/');
                     if (slashIdx > 0) {
                       relativePath = relativePath.slice(slashIdx);
@@ -3338,13 +3338,13 @@ root.render(<App />);` };
                 }
               }
 
-              // Try to strip leading project folder if path contains a known subfolder pattern
+              // Try to strip leading workspace folder if path contains a known subfolder pattern
               // e.g., /my-vue-app/src/main.js -> /src/main.js
               for (const pattern of projectSubfolderPatterns) {
                 const match = relativePath.match(pattern);
                 if (match) {
                   const projectFolder = match[1];
-                  // Don't strip if the "project folder" is actually a standard folder name
+                  // Don't strip if the "workspace folder" is actually a standard folder name
                   if (!['src', 'pages', 'app', 'public', 'lib', 'components', 'styles', 'assets'].includes(projectFolder)) {
                     relativePath = relativePath.replace(`/${projectFolder}/`, '/');
                     break;
@@ -3389,7 +3389,7 @@ root.render(<App />);` };
           const sandpackFiles: Record<string, { code: string }> = {};
 
           // Add all files to Sandpack - useStructure.files is already normalized
-          // (paths are relative to project root, e.g., /src/App.tsx)
+          // (paths are relative to workspace root, e.g., /src/App.tsx)
           Object.entries(useStructure.files).forEach(([path, content]) => {
             if (typeof content === "string" && content.trim()) {
               // Ensure path starts with / (normalization should already do this)
@@ -3398,7 +3398,7 @@ root.render(<App />);` };
             }
           });
 
-          // Get template from project detection (uses FRAMEWORK_TO_TEMPLATE mapping)
+          // Get template from workspace detection (uses FRAMEWORK_TO_TEMPLATE mapping)
           const activeTemplate = isManualPreviewActive && projectDetection?.framework
             ? getSandpackTemplate(projectDetection.framework)
             : template;
@@ -3870,7 +3870,7 @@ root.render(<App />);` };
                         Full-stack {runtime} environment for backend applications
                       </p>
                       <p className="text-gray-500 text-xs max-w-md">
-                        Starts a cloud development container with your project files, including a full VS Code editor
+                        Starts a cloud development container with your workspace files, including a full VS Code editor
                       </p>
                       <Button onClick={startDevBox} className="bg-blue-600 hover:bg-blue-700 text-white px-6">
                         <Play className="w-4 h-4 mr-2" />
@@ -4460,7 +4460,7 @@ root.render(<App />);` };
                     log(`[WebContainer] Extracted port ${port} from output after timeout`);
                     setWebcontainerUrl(`http://localhost:${port}`);
                   } else {
-                    // Check if this might be a Next.js project (known WebContainer limitation)
+                    // Check if this might be a Next.js workspace (known WebContainer limitation)
                     const cleanOutput = outputWithoutAnsi.slice(-300).replace(/\n/g, ' ').trim();
                     const isNextJs = files['next.config.js'] || files['next.config.ts'] || (files['package.json'] && files['package.json'].includes('next'));
                     const nextJsHint = isNextJs 
@@ -5363,7 +5363,7 @@ root.render(<App />);` };
           </Suspense>
         );
       } catch (error) {
-        // If Sandpack fails, it might be a backend project we missed — try CodeSandbox
+        // If Sandpack fails, it might be a backend workspace we missed — try CodeSandbox
         const errorMsg = (error as Error).message?.toLowerCase() || '';
         if (errorMsg.includes('express') || errorMsg.includes('sqlite') || errorMsg.includes('backend') || errorMsg.includes('node:')) {
           previewLogger.log('[Preview] Sandpack failed with backend error, redirecting to CodeSandbox', { error: errorMsg });
@@ -5852,7 +5852,7 @@ root.render(<App />);` };
 
   useEffect(() => {
     if (isOpen && messages.length > 0) {
-      // CRITICAL FIX: Only parse project structure from JSON code blocks when VFS is empty.
+      // CRITICAL FIX: Only parse workspace structure from JSON code blocks when VFS is empty.
       // The JSON-parsed system is a LEGACY fallback — VFS files take priority.
       // If VFS has files, skip this to prevent dual-source conflicts.
       if (Object.keys(scopedPreviewFiles).length > 0) {
@@ -5860,7 +5860,7 @@ root.render(<App />);` };
         return;
       }
 
-      // Extract project structure from messages
+      // Extract workspace structure from messages
       const projectMessages = messages
         .filter((msg) => msg.role === "assistant")
         .filter((msg) => {
@@ -5884,7 +5884,7 @@ root.render(<App />);` };
               fileCount: Object.keys(projectData.files || {}).length,
             });
           } catch (error) {
-            console.error("Error parsing project structure:", error);
+            console.error("Error parsing workspace structure:", error);
           }
         }
       }
@@ -5993,8 +5993,8 @@ root.render(<App />);` };
                     className="text-white text-xs md:text-sm"
                   >
                     <Package className="w-3 h-3 md:w-4 md:h-4 mr-1 md:mr-2" />
-                    <span className="hidden sm:inline">Project</span>
-                    <span className="sm:hidden">Project</span>
+                    <span className="hidden sm:inline">Workspace</span>
+                    <span className="sm:hidden">Workspace</span>
                   </TabsTrigger>
                 </TabsList>
 
@@ -6513,7 +6513,7 @@ root.render(<App />);` };
                                 {selectedFilesystemLanguage}
                               </span>
                               <span className="text-sm font-mono text-gray-300 truncate">
-                                {selectedFilesystemPath.replace(/^project\//, '')}
+                                {selectedFilesystemPath.replace(/^workspace\//, '')}
                               </span>
                             </div>
                             <div className="flex items-center gap-2">
@@ -6653,7 +6653,7 @@ root.render(<App />);` };
                     <div className="space-y-4">
                       <div>
                         <h3 className="text-lg font-semibold text-white mb-2">
-                          Project Structure
+                          Workspace Structure
                         </h3>
                         <div className="bg-black/40 rounded-lg p-4">
                           <pre className="text-sm text-gray-300">
@@ -6700,7 +6700,7 @@ root.render(<App />);` };
 2. Extract to your desired location
 3. Review the README.md file
 4. Install dependencies (if any)
-5. Run the project according to the language requirements`}
+5. Run the workspace according to the language requirements`}
                           </pre>
                         </div>
                       </div>
@@ -6708,9 +6708,9 @@ root.render(<App />);` };
                   ) : (
                     <div className="text-center text-gray-400">
                       <Package className="w-16 h-16 mx-auto mb-4" />
-                      <p>No project structure detected</p>
+                      <p>No workspace structure detected</p>
                       <p className="text-sm mt-2">
-                        Add more code files to analyze project structure
+                        Add more code files to analyze workspace structure
                       </p>
                     </div>
                   )}

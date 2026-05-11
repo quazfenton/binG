@@ -117,8 +117,8 @@ function resolveScopedPath(input: {
     return resolveScopeUtil(rawPath, input.scopePath);
   }
 
-  const normalizedRelative = rawPath.startsWith('project/')
-    ? rawPath.slice('project/'.length)
+  const normalizedRelative = rawPath.startsWith('workspace/')
+    ? rawPath.slice('workspace/'.length)
     : rawPath;
 
   return resolveScopeUtil(normalizedRelative, input.scopePath);

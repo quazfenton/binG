@@ -12,7 +12,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { readFile, writeFile, mkdir } from "fs/promises";
 import { join } from "path";
 import { existsSync } from "fs";
-import { auth0 } from "@/lib/auth0";
+import { auth0 } from "@/lib/auth/auth0";
 
 const DATA_DIR = join(process.cwd(), "data");
 const IMAGES_PATH = join(DATA_DIR, "art-gallery.json");

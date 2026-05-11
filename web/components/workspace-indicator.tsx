@@ -79,7 +79,7 @@ export function WorkspaceIndicator() {
             <div className="flex items-center gap-2 mb-1">
               <Folder className="w-3 h-3 text-blue-400 shrink-0" />
               <span className="text-[10px] text-white/40 uppercase tracking-wider font-medium">
-                Project Folder
+                Workspace Folder
               </span>
             </div>
             <p className="text-xs text-white/70 break-all font-mono leading-relaxed">
@@ -99,7 +99,7 @@ export function WorkspaceIndicator() {
 
 /**
  * Empty-state workspace prompt — shown when no workspace is set.
- * Prompts the user to open a project folder.
+ * Prompts the user to open a workspace folder.
  */
 export function WorkspacePrompt() {
   const { openProjectFolder, isChanging } = useWorkspace();
@@ -112,7 +112,7 @@ export function WorkspacePrompt() {
         <Home className="w-7 h-7 text-blue-400" />
       </div>
       <div className="text-center space-y-1">
-        <h3 className="text-sm font-semibold text-white/90">Open a Project Folder</h3>
+        <h3 className="text-sm font-semibold text-white/90">Open a Workspace Folder</h3>
         <p className="text-xs text-white/50 max-w-[280px]">
           Select a folder on your computer to use as your workspace. The agent will work with files in this directory.
         </p>

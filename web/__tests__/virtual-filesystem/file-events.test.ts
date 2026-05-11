@@ -17,43 +17,43 @@ describe('File Events - MCP Edit Tracking', () => {
 
   describe('trackMcpFileEdit', () => {
     it('should track a file edit for a session', () => {
-      trackMcpFileEdit('session-1', 'project/index.html');
+      trackMcpFileEdit('session-1', 'workspace/index.html');
       const edits = getRecentMcpFileEdits('session-1');
       expect(edits).toHaveLength(1);
-      expect(edits[0].path).toBe('project/index.html');
+      expect(edits[0].path).toBe('workspace/index.html');
     });
 
     it('should track multiple files for the same session', () => {
-      trackMcpFileEdit('session-1', 'project/index.html');
-      trackMcpFileEdit('session-1', 'project/styles.css');
-      trackMcpFileEdit('session-1', 'project/app.js');
+      trackMcpFileEdit('session-1', 'workspace/index.html');
+      trackMcpFileEdit('session-1', 'workspace/styles.css');
+      trackMcpFileEdit('session-1', 'workspace/app.js');
 
       const edits = getRecentMcpFileEdits('session-1');
       expect(edits).toHaveLength(3);
-      expect(edits.map(e => e.path)).toContain('project/index.html');
-      expect(edits.map(e => e.path)).toContain('project/styles.css');
-      expect(edits.map(e => e.path)).toContain('project/app.js');
+      expect(edits.map(e => e.path)).toContain('workspace/index.html');
+      expect(edits.map(e => e.path)).toContain('workspace/styles.css');
+      expect(edits.map(e => e.path)).toContain('workspace/app.js');
     });
 
     it('should not duplicate the same file path', () => {
-      trackMcpFileEdit('session-1', 'project/index.html');
-      trackMcpFileEdit('session-1', 'project/index.html');
+      trackMcpFileEdit('session-1', 'workspace/index.html');
+      trackMcpFileEdit('session-1', 'workspace/index.html');
 
       const edits = getRecentMcpFileEdits('session-1');
       expect(edits).toHaveLength(1);
     });
 
     it('should track files for different sessions independently', () => {
-      trackMcpFileEdit('session-1', 'project/a.html');
-      trackMcpFileEdit('session-2', 'project/b.html');
+      trackMcpFileEdit('session-1', 'workspace/a.html');
+      trackMcpFileEdit('session-2', 'workspace/b.html');
 
       const edits1 = getRecentMcpFileEdits('session-1');
       const edits2 = getRecentMcpFileEdits('session-2');
 
       expect(edits1).toHaveLength(1);
       expect(edits2).toHaveLength(1);
-      expect(edits1[0].path).toBe('project/a.html');
-      expect(edits2[0].path).toBe('project/b.html');
+      expect(edits1[0].path).toBe('workspace/a.html');
+      expect(edits2[0].path).toBe('workspace/b.html');
     });
 
     it('should return empty array for unknown session', () => {
@@ -69,8 +69,8 @@ describe('File Events - MCP Edit Tracking', () => {
     it('should refresh TTL on subsequent edits', () => {
       // This test verifies that editing the same file again updates the timestamp
       // We can't easily test TTL expiry in unit tests, but we verify the function doesn't crash
-      trackMcpFileEdit('session-1', 'project/file.ts');
-      trackMcpFileEdit('session-1', 'project/file.ts');
+      trackMcpFileEdit('session-1', 'workspace/file.ts');
+      trackMcpFileEdit('session-1', 'workspace/file.ts');
       const edits = getRecentMcpFileEdits('session-1');
       expect(edits).toHaveLength(1);
     });
@@ -78,8 +78,8 @@ describe('File Events - MCP Edit Tracking', () => {
 
   describe('clearRecentMcpFileEdits', () => {
     it('should clear all edits when no sessionId provided', () => {
-      trackMcpFileEdit('session-1', 'project/a.html');
-      trackMcpFileEdit('session-2', 'project/b.html');
+      trackMcpFileEdit('session-1', 'workspace/a.html');
+      trackMcpFileEdit('session-2', 'workspace/b.html');
 
       clearRecentMcpFileEdits();
 
@@ -88,8 +88,8 @@ describe('File Events - MCP Edit Tracking', () => {
     });
 
     it('should clear edits for specific session only', () => {
-      trackMcpFileEdit('session-1', 'project/a.html');
-      trackMcpFileEdit('session-2', 'project/b.html');
+      trackMcpFileEdit('session-1', 'workspace/a.html');
+      trackMcpFileEdit('session-2', 'workspace/b.html');
 
       clearRecentMcpFileEdits('session-1');
 

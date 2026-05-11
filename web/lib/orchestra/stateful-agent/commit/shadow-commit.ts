@@ -171,7 +171,7 @@ export class ShadowCommitManager {
       // sessionId format: 'ownerId$conversationId' (modern) or 'ownerId:conversationId' (legacy)
       // SECURITY: Use indexOf (FIRST $) NOT lastIndexOf, because:
       // - userId is system-controlled and NEVER contains $ or :
-      // - conversationId MAY contain user-provided $ or : (e.g., folder named "my$project")
+      // - conversationId MAY contain user-provided $ or : (e.g., folder named "my$workspace")
       // - The FIRST separator is always our system separator
       // Priority: author > sessionId with ownerId prefix > fallback
       let ownerId = options.author;
@@ -474,7 +474,7 @@ export class ShadowCommitManager {
 
       // SECURITY: Use indexOf (FIRST $) NOT split, because:
       // - userId is system-controlled and NEVER contains $ or :
-      // - conversationId MAY contain user-provided $ or : (e.g., folder named "my$project")
+      // - conversationId MAY contain user-provided $ or : (e.g., folder named "my$workspace")
       const firstDollarIndex = commit.sessionId.indexOf('$');
       const firstColonIndex = commit.sessionId.indexOf(':');
       let ownerId: string;

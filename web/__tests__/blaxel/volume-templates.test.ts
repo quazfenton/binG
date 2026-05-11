@@ -23,7 +23,7 @@ describe.skip('Blaxel Volume Templates', () => {
         volumes: {
           createTemplate: vi.fn().mockResolvedValue({
             id: 'template_1',
-            name: 'node-project',
+            name: 'node-workspace',
           }),
         },
       };
@@ -33,11 +33,11 @@ describe.skip('Blaxel Volume Templates', () => {
         { path: 'src/index.ts', content: 'console.log("hello");' },
       ];
 
-      const templateId = await provider.createVolumeTemplate('node-project', files);
+      const templateId = await provider.createVolumeTemplate('node-workspace', files);
 
       expect(templateId).toBe('template_1');
       expect(provider.client.volumes.createTemplate).toHaveBeenCalledWith({
-        name: 'node-project',
+        name: 'node-workspace',
         workspace: 'default',
         files,
       });
@@ -51,8 +51,8 @@ describe.skip('Blaxel Volume Templates', () => {
       provider.client = {
         volumes: {
           listTemplates: vi.fn().mockResolvedValue([
-            { id: 'template_1', name: 'node-project', created_at: '2024-01-01' },
-            { id: 'template_2', name: 'python-project', created_at: '2024-01-02' },
+            { id: 'template_1', name: 'node-workspace', created_at: '2024-01-01' },
+            { id: 'template_2', name: 'python-workspace', created_at: '2024-01-02' },
           ]),
         },
       };
@@ -60,7 +60,7 @@ describe.skip('Blaxel Volume Templates', () => {
       const templates = await provider.listVolumeTemplates();
 
       expect(templates).toHaveLength(2);
-      expect(templates[0].name).toBe('node-project');
+      expect(templates[0].name).toBe('node-workspace');
     });
 
     it('should handle empty list', async () => {
@@ -123,13 +123,13 @@ describe.skip('Blaxel Volume Templates', () => {
 
       const handle = await provider.createSandboxWithVolume(
         { language: 'typescript' },
-        'node-project'
+        'node-workspace'
       );
 
       expect(handle).toBeDefined();
       expect(provider.client.sandbox.create).toHaveBeenCalledWith(
         expect.objectContaining({
-          volumeTemplate: 'node-project',
+          volumeTemplate: 'node-workspace',
         })
       );
     });

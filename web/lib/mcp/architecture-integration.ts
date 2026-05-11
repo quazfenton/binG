@@ -1371,7 +1371,7 @@ export async function callMCPToolFromAI_SDK(
       // Compute session-aware scopePath - use passed scopePath first (from executeToolCapability config)
       const sessionIdFromConv = normalizeSessionId(args.conversationId || '');
       const computedScopePath = getVfsScopePath({
-        scopePath: scopePath && scopePath !== 'project' ? scopePath : undefined,
+        scopePath: scopePath && scopePath !== 'workspace' ? scopePath : undefined,
         sessionId: sessionIdFromConv || undefined,
       });
 
@@ -1475,7 +1475,7 @@ export async function callMCPToolFromAI_SDK(
     if (toolName === 'bash_execute') {
       const { createBashTool } = await import('../bash/bash-tool');
       const sessionId = normalizeSessionId(args.conversationId || userId || '000');
-      const scopePath = `project/sessions/${sessionId}`;
+      const scopePath = `workspace/sessions/${sessionId}`;
 
       // Get filesystem state for command routing
       let filesystemState: Record<string, { content?: string; isDirectory?: boolean }> = {};

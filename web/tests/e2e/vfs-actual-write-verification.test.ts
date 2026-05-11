@@ -115,7 +115,7 @@ async function readVFSDirectly(filePath: string, ownerId: string): Promise<{ exi
  */
 async function verifyFileInVFS(token: string, fileName: string, expectedContent: string, ownerId: string, _convId: string, provider: string, model: string): Promise<{ exists: boolean; contentCorrect: boolean; vfsContent: string }> {
   // Read file directly from VFS
-  const vfsRead = await readVFSDirectly(`project/sessions/000/${fileName}`, ownerId);
+  const vfsRead = await readVFSDirectly(`workspace/sessions/000/${fileName}`, ownerId);
 
   if (!vfsRead.exists) {
     return { exists: false, contentCorrect: false, vfsContent: '' };

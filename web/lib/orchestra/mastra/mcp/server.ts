@@ -183,7 +183,7 @@ const mcpTools: MCPTool[] = [
   },
   {
     name: 'RUN_TESTS',
-    description: 'Run test suite for the project',
+    description: 'Run test suite for the workspace',
     inputSchema: z.object({
       ownerId: z.string().describe('Workspace owner ID'),
       testPattern: z.string().optional().describe('Optional test file pattern'),

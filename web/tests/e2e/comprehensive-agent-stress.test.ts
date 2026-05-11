@@ -498,7 +498,7 @@ async function testImplicitPaths(token: string): Promise<void> {
 
   const r = await chat(token, [{
     role: 'user',
-    content: 'I need to set up a project. Create the main entry point file and a configuration file',
+    content: 'I need to set up a workspace. Create the main entry point file and a configuration file',
   }], 'implicit-paths');
 
   const hasFiles = r.content.includes('entry') || r.content.includes('main') || r.content.includes('index') || r.content.includes('config') || r.content.includes('file');

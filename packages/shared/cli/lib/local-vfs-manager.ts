@@ -25,7 +25,7 @@ export class LocalVFSManager {
   constructor(workspacePath: string) {
     this.workspacePath = path.resolve(workspacePath);
     // Unique history path based on workspace path hash to avoid conflicts
-    // This is SEPARATE from the user's project git repo — no interference
+    // This is SEPARATE from the user's workspace git repo — no interference
     const hash = Buffer.from(this.workspacePath).toString('base64').slice(0, 12);
     this.historyPath = path.join(os.homedir(), '.quaz', 'workspace-history', hash);
     fs.ensureDirSync(this.historyPath);

@@ -28,13 +28,13 @@ describe('execute model tool calls flow', () => {
     const response = {
       content: 'Done',
       toolCalls: [
-        { name: 'write_file', arguments: { path: 'project/sessions/000/index.html', content: '<html></html>' } },
+        { name: 'write_file', arguments: { path: 'workspace/sessions/000/index.html', content: '<html></html>' } },
         { name: 'write_file', arguments: {} }
       ],
       finishReason: 'stop'
     } as any;
 
-    const out = await executeModelToolCallsFromResponse(response, 'anon:1', '000', 'project/sessions/000');
+    const out = await executeModelToolCallsFromResponse(response, 'anon:1', '000', 'workspace/sessions/000');
 
     expect(out.metadata).toBeDefined();
     const toolResults = out.metadata.toolResults as any[];

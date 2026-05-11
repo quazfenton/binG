@@ -69,7 +69,7 @@ function getLspExecutionMode(): LspExecutionMode {
 // ─── Types ──────────────────────────────────────────────────────────────────────
 
 export interface GatewayOptions {
-  /** Project root directory */
+  /** Workspace root directory */
   projectRoot?: string;
   /** Manually specified adapters (bypasses auto-detection) */
   adapters?: LSPAdapter[];

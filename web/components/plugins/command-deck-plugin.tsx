@@ -95,7 +95,7 @@ const PLATFORM_ACTIONS: ActionItem[] = [
   // LinkedIn
   { id: "linkedin-post", label: "Create Post", description: "Publish a LinkedIn post", icon: Share2, provider: "linkedin", category: "social", requiresConnection: true, oauthProvider: "linkedin" },
   // Vercel
-  { id: "vercel-deploy", label: "Deploy Project", description: "Deploy a project to Vercel", icon: Upload, provider: "vercel", category: "dev", requiresConnection: true, oauthProvider: "vercel" },
+  { id: "vercel-deploy", label: "Deploy Workspace", description: "Deploy a workspace to Vercel", icon: Upload, provider: "vercel", category: "dev", requiresConnection: true, oauthProvider: "vercel" },
   // Railway
   { id: "railway-deploy", label: "Deploy Service", description: "Deploy to Railway", icon: Upload, provider: "railway", category: "dev", requiresConnection: true, oauthProvider: "railway" },
   // Web

@@ -81,19 +81,19 @@ export async function resolveFilesystemOwnerWithFallback(
 /**
  * Normalize a filesystem path to handle composite session IDs.
  *
- * Converts paths like "project/sessions/anon$001" to "project/sessions/001"
+ * Converts paths like "workspace/sessions/anon$001" to "workspace/sessions/001"
  * This prevents VFS errors when clients send composite session IDs.
  *
  * @param path - The filesystem path to normalize
  * @returns Normalized path with simple session folder names
  */
 export function normalizeFilesystemPath(path: string): string {
-  const sessionsMatch = path.match(/^project\/sessions\/([^/]+)/i);
+  const sessionsMatch = path.match(/^workspace\/sessions\/([^/]+)/i);
   if (sessionsMatch) {
     const sessionSegment = sessionsMatch[1];
     if (sessionSegment.includes('$') || sessionSegment.includes(':')) {
       const normalizedSimpleId = normalizeSessionId(sessionSegment);
-      return path.replace(`project/sessions/${sessionSegment}`, `project/sessions/${normalizedSimpleId}`);
+      return path.replace(`workspace/sessions/${sessionSegment}`, `workspace/sessions/${normalizedSimpleId}`);
     }
   }
   return path;

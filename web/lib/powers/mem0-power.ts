@@ -614,13 +614,13 @@ export function prewarmMem0Cache(
   }
 
   // Default broad query — designed to surface durable user-level memories
-  // (preferences, conventions, project facts) that are useful regardless of
+  // (preferences, conventions, workspace facts) that are useful regardless of
   // the specific next prompt. The search result populates the LRU cache, so
   // a follow-up `mem0Search` from the chat route with the same shape hits
   // the cache (~0 ms) instead of the network.
   const query =
     opts.query ??
-    'user preferences, conventions, project context, past decisions';
+    'user preferences, conventions, workspace context, past decisions';
 
   // Fire-and-forget. Errors are logged at debug — never propagate.
   mem0Search({
@@ -1105,7 +1105,7 @@ You have access to Mem0 for persistent memory storage and retrieval.
 
 1. **After each user interaction**: Call mem0_add to store the conversation for future context
 2. **Before generating responses**: Call mem0_search to retrieve relevant memories and personalize
-3. **User preferences**: Remember dietary restrictions, communication style, project preferences
+3. **User preferences**: Remember dietary restrictions, communication style, workspace preferences
 4. **Context recall**: Remember previous discussions, decisions, code patterns used
 
 ### Available tools

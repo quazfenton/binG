@@ -413,8 +413,8 @@ export async function executeWithOrchestrationMode(
 
         const maxIterations = (request as any).maxIterations ?? 10;
         const modelOverride = request.model || process.env.AGENT_MODEL || process.env.DEFAULT_MODEL;
-        // Default to user's cwd or project/sessions for VFS tools
-        const workspacePath = request.workspacePath || process.cwd() || `project/sessions/${request.sessionId}`;
+        // Default to user's cwd or workspace/sessions for VFS tools
+        const workspacePath = request.workspacePath || process.cwd() || `workspace/sessions/${request.sessionId}`;
 
         const agentLoop = createAgentLoop(request.ownerId, workspacePath, maxIterations, undefined, modelOverride);
         const loopResult = await agentLoop.executeTask(request.task);

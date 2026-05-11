@@ -109,7 +109,7 @@
     {
       "name": "Multi-file correct (mentions 3000 or reads files)",
       "pass": true,
-      "detail": "I'll read both files to determine what port the server uses.\n\n```file: project/ctx-1775805513539/config.js\nexport const port = 3000;\n```\n\n```file: project/ctx-1775805513539/app.js\nimport { port } from",
+      "detail": "I'll read both files to determine what port the server uses.\n\n```file: workspace/ctx-1775805513539/config.js\nexport const port = 3000;\n```\n\n```file: workspace/ctx-1775805513539/app.js\nimport { port } from",
       "timestamp": 1775805535112
     },
     {

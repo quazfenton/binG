@@ -34,8 +34,8 @@ describe('Updated Search Implementations', () => {
       // Mock ripgrep-vfs-adapter
       const mockRipgrepVFS = vi.fn().mockResolvedValue({
         matches: [
-          { path: 'project/src/app.tsx', lineNumber: 5, content: 'function App() {' },
-          { path: 'project/src/utils.ts', lineNumber: 10, content: 'function helper() {' },
+          { path: 'workspace/src/app.tsx', lineNumber: 5, content: 'function App() {' },
+          { path: 'workspace/src/utils.ts', lineNumber: 10, content: 'function helper() {' },
         ],
         stats: { searches: 1, matches: 2, filesWithMatches: 2, filesSearched: 10, elapsedMs: 50 },
         errors: [],
@@ -64,7 +64,7 @@ describe('Updated Search Implementations', () => {
       // Mock ripgrep-vfs-adapter
       const mockRipgrepVFS = vi.fn().mockResolvedValue({
         matches: [
-          { path: 'project/src/app.tsx', lineNumber: 5, content: 'function App() {' },
+          { path: 'workspace/src/app.tsx', lineNumber: 5, content: 'function App() {' },
         ],
         stats: { searches: 1, matches: 1, filesWithMatches: 1, filesSearched: 5, elapsedMs: 25 },
         errors: [],
@@ -108,7 +108,7 @@ describe('Updated Search Implementations', () => {
       // Simulate ripgrep search
       const mockRipgrepResult = {
         matches: Array(100).fill(null).map((_, i) => ({
-          path: `project/file${i}.ts`,
+          path: `workspace/file${i}.ts`,
           lineNumber: 1,
           content: 'function test() {}',
         })),

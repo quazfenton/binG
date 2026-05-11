@@ -24,7 +24,7 @@
 import { createLogger } from '@/lib/utils/logger';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import type { AutonomousAgentEngine, StimulusEntry } from './autonomous-agent-engine';
+import type { AutonomousAgentEngine, StimulusEntry } from './agent-catalyst/autonomous-agent-engine';
 
 const logger = createLogger('MoltbookAPI');
 

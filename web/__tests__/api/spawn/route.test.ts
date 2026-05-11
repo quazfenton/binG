@@ -185,7 +185,7 @@ describe('Spawn Route', () => {
     it('passes all provided fields to the service manager', async () => {
       const req = makeRequest({
         type: 'codex',
-        workspaceDir: '/workspace/project',
+        workspaceDir: '/workspace/workspace',
         apiKey: 'sk-123',
         port: 5555,
         agentId: 'my-codex-agent',
@@ -197,7 +197,7 @@ describe('Spawn Route', () => {
       expect(mockGetAgentServiceManager().startAgent).toHaveBeenCalledWith(
         expect.objectContaining({
           type: 'codex',
-          workspaceDir: '/workspace/project',
+          workspaceDir: '/workspace/workspace',
           apiKey: 'sk-123',
           port: 5555,
           agentId: 'my-codex-agent',

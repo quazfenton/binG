@@ -69,7 +69,7 @@ const MCP_SERVERS: MCPCardDef[] = [
   {
     id: "filesystem",
     name: "Filesystem",
-    description: "Read/write files with project root access",
+    description: "Read/write files with workspace root access",
     icon: FolderOpen,
     category: "built-in",
     npxArgs: ["-y", "@modelcontextprotocol/server-filesystem", "."],

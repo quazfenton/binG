@@ -1,6 +1,6 @@
 import { oauthService } from '../auth/oauth-service';
 import { authService } from '../auth/auth-service';
-import { getAccessTokenForConnection } from '@/lib/auth0';
+import { getAccessTokenForConnection } from '@/lib/auth/auth0';
 import {
   TOOL_PROVIDER_MAP,
   NO_AUTH_TOOLS,

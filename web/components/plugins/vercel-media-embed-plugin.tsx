@@ -108,6 +108,7 @@ export default function VercelMediaEmbedPlugin({ onClose, initialUrl }: VercelMe
   const [isLoading, setIsLoading] = useState(true);
   const [iframeError, setIframeError] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [iframeReloadKey, setIframeReloadKey] = useState(0);
   const [sites, setSites] = useState<SiteEntry[]>(DEFAULT_SITES);
   const [activeCategory, setActiveCategory] = useState<string>('all');
   const [showAddSite, setShowAddSite] = useState(false);
@@ -115,7 +116,6 @@ export default function VercelMediaEmbedPlugin({ onClose, initialUrl }: VercelMe
   const [newSiteUrl, setNewSiteUrl] = useState('');
   const [newSiteCategory, setNewSiteCategory] = useState<SiteEntry['category']>('other');
   const [copied, setCopied] = useState(false);
-  // Use iframeKey from hook
 
   // Load sites from localStorage
   useEffect(() => {
@@ -161,7 +161,7 @@ export default function VercelMediaEmbedPlugin({ onClose, initialUrl }: VercelMe
     setInputUrl(cleanUrl);
     setIsLoading(true);
     setIframeError(null);
-    triggerReload();
+    setIframeReloadKey(n => n + 1);
 
     // Update last visited for existing site
     setSites(prev => prev.map(site => 
@@ -174,7 +174,7 @@ export default function VercelMediaEmbedPlugin({ onClose, initialUrl }: VercelMe
   }, []);
 
   const handleReload = () => {
-    triggerReload();
+    setIframeReloadKey(n => n + 1);
     setIsLoading(true);
     setIframeError(null);
     toast.info('Reloading...');
@@ -454,7 +454,7 @@ export default function VercelMediaEmbedPlugin({ onClose, initialUrl }: VercelMe
                 </div>
               ) : (
                 <iframe
-                  key={iframeKey}
+                  key={iframeReloadKey}
                   src={currentUrl}
                   className="w-full h-full border-0"
                   title="Vercel Media Site"

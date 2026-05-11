@@ -137,7 +137,7 @@ describe('FilesystemDiffTracker', () => {
 
 describe('VirtualFilesystemService - Diff Integration', () => {
   const testOwnerId = 'test-user-diff';
-  const root = 'project'; // Default workspace root
+  const root = 'workspace'; // Default workspace root
 
   beforeEach(async () => {
     await virtualFilesystem.clearWorkspace(testOwnerId);

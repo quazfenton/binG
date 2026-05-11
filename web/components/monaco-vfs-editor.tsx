@@ -303,7 +303,7 @@ function getFileDisplayName(filePath: string): string {
 export function MonacoVFSEditor({
   initialFilePath,
   initialContent,
-  filesystemScopePath = "project",
+  filesystemScopePath = "workspace",
   ownerId,
   onClose,
   onSave,

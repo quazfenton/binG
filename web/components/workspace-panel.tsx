@@ -653,13 +653,13 @@ class TabErrorBoundary extends React.Component<
   }
 }
 
-// Helper to normalize paths to relative format (project/...) for API compatibility
+// Helper to normalize paths to relative format (workspace/...) for API compatibility
 // Moved outside component to avoid recreation on every render
 const normalizePath = (path: string): string => {
-  if (path.startsWith('project/') || path.startsWith('project')) return path;
-  if (path === '/') return 'project';
-  // Convert absolute paths like /folder/file to relative project/folder/file
-  return path.startsWith('/') ? `project${path}` : `project/${path}`;
+  if (path.startsWith('workspace/') || path.startsWith('workspace')) return path;
+  if (path === '/') return 'workspace';
+  // Convert absolute paths like /folder/file to relative workspace/folder/file
+  return path.startsWith('/') ? `workspace${path}` : `workspace/${path}`;
 };
 
 interface FileNode {
@@ -1538,7 +1538,7 @@ export function WorkspacePanel() {
       const effectiveProvider = chatProvider || 'openrouter';
       const effectiveModel = chatModel || 'nvidia/nemotron-3-30b-a3b:free';
       const effectiveConversationId = activeThreadId ? `exp-workspace-thread-${activeThreadId}` : undefined;
-      const effectiveScopePath = filesystem?.sessionId || 'project';
+      const effectiveScopePath = filesystem?.sessionId || 'workspace';
 
       // Create abort controller for stopping
       const abortController = new AbortController();
@@ -1665,7 +1665,7 @@ export function WorkspacePanel() {
                     const snapshot = await vfs.getSnapshot();
                     setVfsSnapshot(snapshot);
                     setFilesystem({
-                      sessionId: filesystem?.sessionId || 'project',
+                      sessionId: filesystem?.sessionId || 'workspace',
                       version: snapshot?.version || 1,
                       files: snapshot?.files || [],
                     });
@@ -2203,7 +2203,7 @@ export function WorkspacePanel() {
       // Emit filesystem SSE event for paste operation
       emitFilesystemUpdated({
         path: targetPath,
-        scopePath: vfs?.currentPath || 'project',
+        scopePath: vfs?.currentPath || 'workspace',
         type: 'update',
         source: 'workspace-panel-paste',
         sessionId: filesystem?.sessionId,
@@ -2318,7 +2318,7 @@ export function WorkspacePanel() {
       // Emit filesystem SSE event for rename operation
       emitFilesystemUpdated({
         path: newPath,
-        scopePath: vfs?.currentPath || 'project',
+        scopePath: vfs?.currentPath || 'workspace',
         type: 'update',
         source: 'workspace-panel-rename',
         sessionId: filesystem?.sessionId,
@@ -2498,7 +2498,7 @@ export function WorkspacePanel() {
               // Emit filesystem SSE event for move operation
               emitFilesystemUpdated({
                 path: targetPath,
-                scopePath: vfs?.currentPath || 'project',
+                scopePath: vfs?.currentPath || 'workspace',
                 type: 'update',
                 source: 'workspace-panel-move',
                 sessionId: filesystem?.sessionId,
@@ -2526,7 +2526,7 @@ export function WorkspacePanel() {
       // Emit filesystem SSE event for move operation
       emitFilesystemUpdated({
         path: targetPath,
-        scopePath: vfs?.currentPath || 'project',
+        scopePath: vfs?.currentPath || 'workspace',
         type: 'update',
         source: 'workspace-panel-move',
         sessionId: filesystem?.sessionId,
@@ -4570,7 +4570,7 @@ export function WorkspacePanel() {
 
                 {/* Git Tab - Source Control */}
                 <TabsContent value="git" className="flex-1 mt-0 overflow-hidden">
-                  <GitSourceControl scopePath={'project'} />
+                  <GitSourceControl scopePath={'workspace'} />
                 </TabsContent>
 
                 {/* Voice Tab - Full Voice Chat */}
@@ -4847,7 +4847,7 @@ export function WorkspacePanel() {
                           // Emit filesystem SSE event for delete operation
                           emitFilesystemUpdated({
                             path: contextMenu.path,
-                            scopePath: vfs?.currentPath || 'project',
+                            scopePath: vfs?.currentPath || 'workspace',
                             type: 'delete',
                             source: 'workspace-panel-delete',
                             sessionId: filesystem?.sessionId,

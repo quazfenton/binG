@@ -13,7 +13,7 @@
  *   - repo.search, repo.git, repo.clone, repo.commit, repo.push, repo.pull,
  *     repo.semantic-search, repo.analyze
  *   - memory.store, memory.retrieve
- *   - project.bundle, workspace.getChanges
+ *   - workspace.bundle, workspace.getChanges
  *   - automation.discord, automation.telegram, automation.workflow
  *   - integration.connect, integration.execute, integration.listConnections,
  *     integration.revoke, integration.searchTools, integration.proxy
@@ -77,7 +77,7 @@ const ACTUAL_TOOL_REFERENCE = `
 - **repo.git**({command: 'status'|'diff'|'commit'|'push'|'pull'|'branch'|'log'|'stash', args?, message?, files?}) — Version control operations
 - **repo.semantic-search**({query, path?, limit?, similarityThreshold?}) — Find conceptually related content
 - **repo.analyze**({path, depth?, includeStats?}) — Repository structure, language breakdown, dependencies
-- **project.bundle**({path?, format: 'markdown'|'xml'|'json'|'plain', includePatterns?, excludePatterns?, ...}) — Generate complete project context
+- **workspace.bundle**({path?, format: 'markdown'|'xml'|'json'|'plain', includePatterns?, excludePatterns?, ...}) — Generate complete workspace context
 - **workspace.getChanges**({maxFiles?, ownerId?}) — Get git-style diffs of recent changes
 - **memory.store**({key, value, ttl?, namespace?}) — Persistent storage with expiration
 - **memory.retrieve**({key?, query?, namespace?, limit?}) — Search and recall stored information
@@ -368,7 +368,7 @@ ci = stats.t.interval(0.95, len(df)-1, loc=df['treatment'].mean(),
 ## Knowledge Management
 1. **memory.store** — Save experimental results, methodology notes, literature findings
 2. **memory.retrieve** — Previous experiments, established baselines, known effects
-3. **project.bundle** — Bundle entire research project for sharing or archiving
+3. **workspace.bundle** — Bundle entire research workspace for sharing or archiving
 4. **automation.discord** — Alert team on significant findings, coordinate with collaborators
 
 ============================================
@@ -1277,7 +1277,7 @@ total_co2 = sum(emissions_factors[k] * consumption[k] for k in consumption)
 ## Environmental Assessment Report
 | Field | Value |
 |-------|-------|
-| Project/Site | [Location and scope] |
+| Workspace/Site | [Location and scope] |
 | Assessment Type | [EIA / Compliance / Sustainability / Carbon] |
 | Date | [Report date] |
 | Consultant | [Environmental Consultant role] |

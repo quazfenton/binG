@@ -40,7 +40,7 @@ const phaseConfig: Record<AgentPhase, {
     label: 'Discovering',
     color: 'bg-blue-500',
     icon: Search,
-    description: 'Analyzing project files',
+    description: 'Analyzing workspace files',
   },
   planning: {
     label: 'Planning',

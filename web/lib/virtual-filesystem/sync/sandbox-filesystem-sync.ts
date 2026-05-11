@@ -109,7 +109,7 @@ function shouldExcludeFromSync(filePath: string): boolean {
 // This will be resolved per-sandbox based on the provider
 /**
  * Get all possible workspace directories for a sandbox
- * Some sandbox providers may use multiple directories (e.g., user home + project dirs)
+ * Some sandbox providers may use multiple directories (e.g., user home + workspace dirs)
  * This returns an array to check all possibilities for delete detection
  */
 function getWorkspaceDirsForSandbox(sandboxId: string): string[] {
@@ -117,10 +117,10 @@ function getWorkspaceDirsForSandbox(sandboxId: string): string[] {
 
   // Explicit prefix matches first (highest priority)
   if (sandboxId.startsWith('e2b-')) {
-    return ['/home/user', '/home/user/project', '/home/user/code'];
+    return ['/home/user', '/home/user/workspace', '/home/user/code'];
   }
   if (sandboxId.startsWith('mistral-') || sandboxId.startsWith('mistral-agent-')) {
-    return ['/workspace', '/workspace/project', '/app'];
+    return ['/workspace', '/workspace/workspace', '/app'];
   }
   if (sandboxId.startsWith('blaxel-') || sandboxId.startsWith('blaxel-mcp-')) {
     return ['/workspace', '/workspace/app'];
@@ -132,40 +132,40 @@ function getWorkspaceDirsForSandbox(sandboxId: string): string[] {
     return ['/workspace', '/workspace/src'];
   }
   if (sandboxId.startsWith('modal-')) {
-    return ['/workspace', '/workspace/project'];
+    return ['/workspace', '/workspace/workspace'];
   }
   if (sandboxId.startsWith('agentfs-')) {
-    return ['/workspace', '/workspace/project'];
+    return ['/workspace', '/workspace/workspace'];
   }
   if (sandboxId.startsWith('local-')) {
     return ['/workspace'];
   }
   if (sandboxId.startsWith('desktop-')) {
-    return ['/workspace', '/home/user/project'];
+    return ['/workspace', '/home/user/workspace'];
   }
   if (sandboxId.startsWith('daytona-')) {
     return ['/home/daytona/workspace', '/home/daytona/projects'];
   }
   if (sandboxId.startsWith('runloop-')) {
-    return ['/workspace', '/workspace/project'];
+    return ['/workspace', '/workspace/workspace'];
   }
   if (sandboxId.startsWith('opensandbox-') || sandboxId.startsWith('osb-')) {
-    return ['/workspace', '/workspace/project'];
+    return ['/workspace', '/workspace/workspace'];
   }
   if (sandboxId.startsWith('microsandbox-') || sandboxId.startsWith('micro-')) {
-    return ['/workspace', '/workspace/project'];
+    return ['/workspace', '/workspace/workspace'];
   }
   if (sandboxId.startsWith('webcontainer-')) {
-    return ['/home/project', '/home/node/project'];
+    return ['/home/workspace', '/home/node/workspace'];
   }
   if (sandboxId.startsWith('vercel-')) {
-    return ['/workspace', '/workspace/project'];
+    return ['/workspace', '/workspace/workspace'];
   }
 
   // Pattern-based detection
   // E2B: 18-25 char alphanumeric
   if (/^[a-z0-9]{18,25}$/i.test(sandboxId)) {
-    return ['/home/user', '/home/user/project', '/home/user/code'];
+    return ['/home/user', '/home/user/workspace', '/home/user/code'];
   }
   // CodeSandbox: 6-char code
   if (/^[a-z0-9]{6}$/i.test(sandboxId)) {
@@ -181,7 +181,7 @@ function getWorkspaceDirsForSandbox(sandboxId: string): string[] {
   }
 
   // Default workspace for unknown providers
-  return ['/workspace', '/workspace/project'];
+  return ['/workspace', '/workspace/workspace'];
 }
 
 /**
@@ -529,7 +529,7 @@ class SandboxFilesystemSync {
         const deduplicatedDeletes = finalDeletedFiles.filter(f => !this.shouldSkipDuplicateDelete(f));
         if (deduplicatedDeletes.length > 0) {
           emitFilesystemUpdated({
-            scopePath: 'project',
+            scopePath: 'workspace',
             source: 'sandbox',
             paths: [],  // Empty paths signals deletes
             workspaceVersion: undefined,
@@ -593,7 +593,7 @@ class SandboxFilesystemSync {
       
       if (deduplicatedPaths.length > 0) {
         emitFilesystemUpdated({
-          scopePath: 'project',
+          scopePath: 'workspace',
           source: 'sandbox',
           paths: deduplicatedPaths.map(f => f.path),
           workspaceVersion: undefined,
@@ -631,8 +631,8 @@ class SandboxFilesystemSync {
     }
 
     // Get VFS workspace root to strip from paths when syncing to sandbox
-    // This ensures files appear directly in /workspace instead of /workspace/project/
-    const vfsRoot = 'project';
+    // This ensures files appear directly in /workspace instead of /workspace/workspace/
+    const vfsRoot = 'workspace';
 
     for (const file of snapshot.files) {
       // === EXCLUSION CHECK: Skip node_modules, venvs, caches, build outputs, etc. ===

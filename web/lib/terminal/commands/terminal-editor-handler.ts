@@ -17,7 +17,7 @@
  * ```typescript
  * const editor = createTerminalEditorHandler({
  *   terminalId: 'term-1',
- *   filePath: 'project/test.txt',
+ *   filePath: 'workspace/test.txt',
  *   content: 'file content',
  *   write: (text) => term.write(text),
  *   writeLine: (text) => term.write(text + '\r\n'),
@@ -118,8 +118,8 @@ export class TerminalEditorHandler {
 
   /**
    * Find file content by resolving path against filesystem keys
-   * Handles cases where VFS stores files with full scoped paths like project/sessions/onex8/file.txt
-   * but user provides relative paths like file.txt or project/sessions/file.txt
+   * Handles cases where VFS stores files with full scoped paths like workspace/sessions/onex8/file.txt
+   * but user provides relative paths like file.txt or workspace/sessions/file.txt
    */
   private findFileContent(fs: Record<string, any>, filePath: string): { content: string; resolvedPath: string } {
     // First try exact match

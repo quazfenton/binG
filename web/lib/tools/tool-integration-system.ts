@@ -504,7 +504,7 @@ export const TOOL_REGISTRY: Record<string, ToolConfig> = {
   "vercel.get_project": {
     provider: "arcade",
     toolName: "Vercel.GetProject",
-    description: "Get Vercel project details",
+    description: "Get Vercel workspace details",
     category: "infrastructure",
     requiresAuth: true,
   },

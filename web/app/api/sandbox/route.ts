@@ -32,7 +32,7 @@ export async function GET(request: NextRequest) {
     case 'daemon': return daemonGET(request);
     case 'devbox': return devboxGET(request);
     case 'files': return filesGET(request);
-    case 'pty': return ptyGET();
+    case 'pty': return ptyGET(request);
     case 'session': return sessionGET(request);
     case 'sync': return syncGET(request);
     case 'terminal-stream': return terminalStreamGET(request);

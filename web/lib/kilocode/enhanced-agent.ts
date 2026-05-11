@@ -622,12 +622,12 @@ Be thorough, constructive, and specific in your feedback.`;
   }
 
   /**
-   * Analyze project structure
+   * Analyze workspace structure
    */
   private async analyzeProjectStructure(files?: Array<{ name: string; content: string }>): Promise<any> {
     if (!files) return {};
 
-    // Simplified project structure analysis
+    // Simplified workspace structure analysis
     const structure = {
       hasPackageJson: files.some(f => f.name === 'package.json'),
       hasTests: files.some(f => f.name.includes('.test.') || f.name.includes('.spec.')),

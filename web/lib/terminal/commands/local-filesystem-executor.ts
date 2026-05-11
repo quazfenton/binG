@@ -99,7 +99,7 @@ export class LocalCommandExecutor {
 
     // Initialize cwd - use external cwd if available, otherwise default
     const extCwd = this.getExtCwd?.()
-    const defaultCwd = isDesktopMode() ? 'project' : 'project/sessions'
+    const defaultCwd = isDesktopMode() ? 'workspace' : 'workspace/sessions'
 
     // Use external cwd if provided and valid, otherwise use default
     // FIX: Validate that the CWD actually exists in the filesystem - if not, fall back to default
@@ -118,10 +118,10 @@ export class LocalCommandExecutor {
         // Neither exists - create the default directory structure
         initialCwd = defaultCwd;
         const fsWithDefaults: Record<string, LocalFilesystemEntry> = {
-          'project': { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() },
+          'workspace': { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() },
         };
         if (!isDesktopMode()) {
-          fsWithDefaults['project/sessions'] = { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() };
+          fsWithDefaults['workspace/sessions'] = { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() };
         }
         // Merge with existing filesystem
         this.fileSystem = { ...fs, ...fsWithDefaults };
@@ -131,11 +131,11 @@ export class LocalCommandExecutor {
 
     this.cwd[this.terminalId] = initialCwd
 
-    // Ensure project root exists (fallback if not created above)
-    if (!this.fileSystem['project']) {
+    // Ensure workspace root exists (fallback if not created above)
+    if (!this.fileSystem['workspace']) {
       this.fileSystem = {
         ...this.fileSystem,
-        'project': { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() },
+        'workspace': { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() },
       }
       this.saveToExternal();
     }
@@ -201,7 +201,7 @@ export class LocalCommandExecutor {
     const allArgs = args.slice(1).join(' ')
 
     // Get current working directory
-    const cwd = this.cwd[this.terminalId] || 'project'
+    const cwd = this.cwd[this.terminalId] || 'workspace'
 
     // Execute command
     switch (cmd) {
@@ -213,7 +213,7 @@ export class LocalCommandExecutor {
         return ''
       
       case 'pwd':
-        writeLine(cwd.replace(/^project/, '~'))
+        writeLine(cwd.replace(/^workspace/, '~'))
         return ''
       
       case 'cd':
@@ -381,9 +381,9 @@ export class LocalCommandExecutor {
   private resolvePath(cwd: string, target: string): string {
     if (!target) return cwd
     // Handle ~ first
-    if (target === '~' || target === '~/') return 'project'
+    if (target === '~' || target === '~/') return 'workspace'
     if (target.startsWith('~/')) {
-      target = 'project/' + target.slice(2)
+      target = 'workspace/' + target.slice(2)
     }
     // Absolute path
     if (target.startsWith('/')) {
@@ -399,29 +399,29 @@ export class LocalCommandExecutor {
     for (const part of parts) {
       if (part === '.') continue
       if (part === '..') {
-        // Don't pop below project root
+        // Don't pop below workspace root
         if (stack.length > 1) stack.pop()
-        else if (stack.length === 1 && stack[0] !== 'project') stack.pop()
+        else if (stack.length === 1 && stack[0] !== 'workspace') stack.pop()
         continue
       }
       stack.push(part)
     }
     
     const result = stack.join('/')
-    // Ensure we always have at least 'project'
-    return result || 'project'
+    // Ensure we always have at least 'workspace'
+    return result || 'workspace'
   }
 
   private getParentPath(path: string): string {
     const parts = path.split('/')
     parts.pop()
-    return parts.join('/') || 'project'
+    return parts.join('/') || 'workspace'
   }
 
   private ensureProjectRootExists() {
     const fs = this.getFileSystem()
-    if (!fs['project']) {
-      fs['project'] = { 
+    if (!fs['workspace']) {
+      fs['workspace'] = { 
         type: 'directory', 
         createdAt: Date.now(), 
         modifiedAt: Date.now() 
@@ -485,8 +485,8 @@ export class LocalCommandExecutor {
 
   private executeCd(args: string[], writeError: (text: string) => void): string {
     const target = args.slice(1).join(' ')
-    // No argument = go to project root directly (don't resolve 'project' against cwd)
-    const nextPath = target ? this.resolvePath(this.cwd[this.terminalId], target) : 'project'
+    // No argument = go to workspace root directly (don't resolve 'workspace' against cwd)
+    const nextPath = target ? this.resolvePath(this.cwd[this.terminalId], target) : 'workspace'
     const fs = this.getFileSystem() // Use external filesystem if available
     
     this.ensureProjectRootExists()
@@ -518,7 +518,7 @@ export class LocalCommandExecutor {
     this.ensureProjectRootExists()
 
     if (!fs[targetPath]) {
-      const fileCount = Object.keys(fs).filter(k => k !== 'project').length
+      const fileCount = Object.keys(fs).filter(k => k !== 'workspace').length
       if (fileCount === 0) {
         writeLine('\x1b[33m⚠ Filesystem is empty. Files will appear here when created.\x1b[0m')
       } else {
@@ -541,7 +541,7 @@ export class LocalCommandExecutor {
     const entries = this.listDirectory(targetPath, fs)
     if (showLong) {
       for (const entry of entries) {
-        const entryPath = targetPath === 'project' ? `project/${entry}` : `${targetPath}/${entry}`
+        const entryPath = targetPath === 'workspace' ? `workspace/${entry}` : `${targetPath}/${entry}`
         const info = fs[entryPath]
         const prefix = info.type === 'directory' ? 'd' : '-'
         const date = new Date(info.modifiedAt).toLocaleDateString()
@@ -552,7 +552,7 @@ export class LocalCommandExecutor {
       const dirs: string[] = []
       const files: string[] = []
       for (const entry of entries) {
-        const entryPath = targetPath === 'project' ? `project/${entry}` : `${targetPath}/${entry}`
+        const entryPath = targetPath === 'workspace' ? `workspace/${entry}` : `${targetPath}/${entry}`
         if (fs[entryPath]?.type === 'directory') {
           dirs.push(`\x1b[34m${entry}/\x1b[0m`)
         } else {
@@ -701,7 +701,7 @@ export class LocalCommandExecutor {
     writeLine: (text: string) => void,
     writeError: (text: string) => void
   ): string {
-    const cwd = this.cwd[this.terminalId] || 'project'
+    const cwd = this.cwd[this.terminalId] || 'workspace'
     
     switch (cmd) {
       case 'help':
@@ -710,7 +710,7 @@ export class LocalCommandExecutor {
         write('\x1bc')
         return ''
       case 'pwd':
-        writeLine(cwd.replace(/^project/, '~'))
+        writeLine(cwd.replace(/^workspace/, '~'))
         return ''
       case 'cd':
         return this.executeCd(args, writeError)
@@ -1243,8 +1243,8 @@ export class LocalCommandExecutor {
 
       this.ensureProjectRootExists()
 
-      if (!this.fileSystem[parent] && parent === 'project') {
-        this.fileSystem['project'] = { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() }
+      if (!this.fileSystem[parent] && parent === 'workspace') {
+        this.fileSystem['workspace'] = { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() }
       }
 
       if (!this.fileSystem[parent]) {
@@ -1422,7 +1422,7 @@ export class LocalCommandExecutor {
   }
 
   private executeTree(writeLine: (text: string) => void): string {
-    writeLine('project/')
+    writeLine('workspace/')
     
     const printTree = (dir: string, prefix: string = '') => {
       const entries = this.listDirectory(dir)
@@ -1440,12 +1440,12 @@ export class LocalCommandExecutor {
       })
     }
     
-    printTree('project')
+    printTree('workspace')
     return ''
   }
 
   private executeFind(args: string[], writeLine: (text: string) => void): string {
-    const startDir = args[1] || 'project'
+    const startDir = args[1] || 'workspace'
     const pattern = args[2] || '*'
     const startPath = this.resolvePath(this.cwd[this.terminalId], startDir)
     
@@ -1496,7 +1496,7 @@ export class LocalCommandExecutor {
   private envVars: Record<string, string> = {
     'TERM': 'xterm-256color',
     'LANG': 'en_US.UTF-8',
-    'PWD': 'project',
+    'PWD': 'workspace',
     'HOME': '/home/user',
     'USER': 'user',
     'SHELL': '/bin/bash',
@@ -1504,7 +1504,7 @@ export class LocalCommandExecutor {
 
   private executeEnv(writeLine: (text: string) => void): string {
     // Update PWD from current cwd
-    this.envVars['PWD'] = this.cwd[this.terminalId] || 'project'
+    this.envVars['PWD'] = this.cwd[this.terminalId] || 'workspace'
     
     // Print all environment variables
     for (const [key, value] of Object.entries(this.envVars)) {
@@ -1540,7 +1540,7 @@ export class LocalCommandExecutor {
       value = this.expandVariables(value)
       
       this.envVars[key] = value
-      this.envVars['PWD'] = this.cwd[this.terminalId] || 'project'
+      this.envVars['PWD'] = this.cwd[this.terminalId] || 'workspace'
     } else {
       // Just mark variable for export (already exported if exists)
       const key = exportArg
@@ -1579,7 +1579,7 @@ export class LocalCommandExecutor {
         return extCwd
       }
     }
-    return this.cwd[this.terminalId] || 'project'
+    return this.cwd[this.terminalId] || 'workspace'
   }
 
   setCwd(cwd: string): void {

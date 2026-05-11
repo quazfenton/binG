@@ -21,9 +21,10 @@ export interface RetryOptions {
   context?: string;
   shouldRetry?: (error: unknown, attempt: number) => boolean;
   onRetry?: (error: unknown, attempt: number, delay: number) => void;
+  onSuccess?: (totalAttempts: number) => void;  // Called when operation succeeds with attempt count
 }
 
-const DEFAULT_OPTIONS: Required<Omit<RetryOptions, 'context' | 'shouldRetry' | 'onRetry'>> = {
+const DEFAULT_OPTIONS: Required<Omit<RetryOptions, 'context' | 'shouldRetry' | 'onRetry' | 'onSuccess'>> = {
   maxRetries: 3,
   baseDelay: 500,
   maxDelay: 30_000,
@@ -42,7 +43,10 @@ export async function withRetry<T>(
 
   for (let attempt = 0; attempt <= opts.maxRetries; attempt++) {
     try {
-      return await fn();
+      const result = await fn();
+      // Call onSuccess with totalAttempts (attempt + 1 since attempt is 0-indexed)
+      opts.onSuccess?.(attempt + 1);
+      return result;
     } catch (error) {
       lastError = error;
 
@@ -72,7 +76,7 @@ export async function withRetry<T>(
   logger.error(`[${label}] All ${opts.maxRetries + 1} attempts failed`);
   // Annotate error with retry attempt count for telemetry
   if (lastError && typeof lastError === 'object') {
-    (lastError as any).retryCount = opts.maxRetries + 1;  // total attempts (initial + retries)
+    (lastError as any).totalAttempts = opts.maxRetries + 1;  // total attempts (initial + retries)
   }
   throw lastError;
 }

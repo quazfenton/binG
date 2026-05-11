@@ -152,7 +152,7 @@ export async function runValidatedAgentLoop(
       }
     }
 
-    // TypeScript check (CLI fallback — runs tsc --noEmit for full project)
+    // TypeScript check (CLI fallback — runs tsc --noEmit for full workspace)
     if (enableTsc && registry.listCommands().includes("tsc.check")) {
       try {
         const tscResult = await registry.run<{ stdout: string; stderr: string; exitCode: number }>(

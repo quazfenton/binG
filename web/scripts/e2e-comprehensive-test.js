@@ -152,11 +152,11 @@ async function stage02_FileSystem_ListEmpty() {
   log('\n=== STAGE 2: Filesystem Baseline ===');
   
   // List root directory
-  const res = await fetchJSON(`${BASE_URL}/api/filesystem/list?path=project`, {
+  const res = await fetchJSON(`${BASE_URL}/api/filesystem/list?path=workspace`, {
     headers: { Authorization: `Bearer ${authToken}`, Cookie: cookie },
   });
   
-  logTest('List project directory', res.status === 200, `status=${res.status}`);
+  logTest('List workspace directory', res.status === 200, `status=${res.status}`);
   logTest('List returns nodes array', Array.isArray(res.data.nodes), `nodes=${res.data.nodes?.length || 0}`);
   
   // Check sessions dir exists
@@ -239,7 +239,7 @@ async function stage04_Code_ViteApp() {
   
   // Check filesystem for created files
   await sleep(3000);
-  const fsList = await fetchJSON(`${BASE_URL}/api/filesystem/list?path=project/sessions`, {
+  const fsList = await fetchJSON(`${BASE_URL}/api/filesystem/list?path=workspace/sessions`, {
     headers: { Authorization: `Bearer ${authToken}`, Cookie: cookie },
   });
   
@@ -257,19 +257,19 @@ async function stage05_MultiFileRead() {
   const writeRes = await fetchJSON(`${BASE_URL}/api/filesystem/write`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${authToken}`, Cookie: cookie },
-    body: { path: 'project/test-multi/a.txt', content: 'Hello A' },
+    body: { path: 'workspace/test-multi/a.txt', content: 'Hello A' },
   });
   logTest('Write file A', writeRes.status === 200 && writeRes.data.success);
   
   const writeRes2 = await fetchJSON(`${BASE_URL}/api/filesystem/write`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${authToken}`, Cookie: cookie },
-    body: { path: 'project/test-multi/b.txt', content: 'Hello B' },
+    body: { path: 'workspace/test-multi/b.txt', content: 'Hello B' },
   });
   logTest('Write file B', writeRes2.status === 200 && writeRes2.data.success);
   
   // Read them back
-  const readRes = await fetchJSON(`${BASE_URL}/api/filesystem/list?path=project/test-multi`, {
+  const readRes = await fetchJSON(`${BASE_URL}/api/filesystem/list?path=workspace/test-multi`, {
     headers: { Authorization: `Bearer ${authToken}`, Cookie: cookie },
   });
   logTest('List multi dir', readRes.status === 200, `nodes=${readRes.data.nodes?.length || 0}`);
@@ -282,7 +282,7 @@ async function stage06_PathResolution() {
   const bsRes = await fetchJSON(`${BASE_URL}/api/filesystem/write`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${authToken}`, Cookie: cookie },
-    body: { path: 'project/test-paths\\subdir\\file.txt', content: 'Backslash test' },
+    body: { path: 'workspace/test-paths\\subdir\\file.txt', content: 'Backslash test' },
   });
   logTest('Backslash path write', bsRes.status === 200 && bsRes.data.success);
   
@@ -290,7 +290,7 @@ async function stage06_PathResolution() {
   const lsRes = await fetchJSON(`${BASE_URL}/api/filesystem/write`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${authToken}`, Cookie: cookie },
-    body: { path: '/project/test-paths/leading-slash.txt', content: 'Leading slash test' },
+    body: { path: '/workspace/test-paths/leading-slash.txt', content: 'Leading slash test' },
   });
   logTest('Leading slash path write', lsRes.status === 200 && lsRes.data.success);
   
@@ -298,7 +298,7 @@ async function stage06_PathResolution() {
   const travRes = await fetchJSON(`${BASE_URL}/api/filesystem/write`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${authToken}`, Cookie: cookie },
-    body: { path: 'project/../../../etc/passwd', content: 'Should fail' },
+    body: { path: 'workspace/../../../etc/passwd', content: 'Should fail' },
   });
   logTest('Traversal rejected', travRes.status === 400 || travRes.data.success === false);
 }
@@ -310,7 +310,7 @@ async function stage07_DiffApplication() {
   await fetchJSON(`${BASE_URL}/api/filesystem/write`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${authToken}`, Cookie: cookie },
-    body: { path: 'project/test-diff/app.ts', content: 'const x = 1;\nconsole.log(x);\n' },
+    body: { path: 'workspace/test-diff/app.ts', content: 'const x = 1;\nconsole.log(x);\n' },
   });
   
   // Apply a diff
@@ -318,14 +318,14 @@ async function stage07_DiffApplication() {
     method: 'POST',
     headers: { Authorization: `Bearer ${authToken}`, Cookie: cookie },
     body: {
-      path: 'project/test-diff/app.ts',
+      path: 'workspace/test-diff/app.ts',
       content: 'const x = 1;\nconst y = 2;\nconsole.log(x + y);\n',
     },
   });
   logTest('File overwrite (simulated diff)', diffRes.status === 200 && diffRes.data.success);
   
   // Read back
-  const readRes = await fetchJSON(`${BASE_URL}/api/filesystem/list?path=project/test-diff`, {
+  const readRes = await fetchJSON(`${BASE_URL}/api/filesystem/list?path=workspace/test-diff`, {
     headers: { Authorization: `Bearer ${authToken}`, Cookie: cookie },
   });
   logTest('Read diff dir', readRes.status === 200);
@@ -338,7 +338,7 @@ async function stage08_ChatWithFSContext() {
   await fetchJSON(`${BASE_URL}/api/filesystem/write`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${authToken}`, Cookie: cookie },
-    body: { path: 'project/test-context/hello.py', content: 'print("Hello from Python")\n' },
+    body: { path: 'workspace/test-context/hello.py', content: 'print("Hello from Python")\n' },
   });
   
   // Chat about it
@@ -433,9 +433,9 @@ async function stage12_BatchWrite() {
   
   // Test batch write via filesystem API
   const files = [
-    { path: 'project/test-batch/index.html', content: '<!DOCTYPE html><html><body>Test</body></html>' },
-    { path: 'project/test-batch/app.js', content: 'console.log("hello");' },
-    { path: 'project/test-batch/styles.css', content: 'body { margin: 0; }' },
+    { path: 'workspace/test-batch/index.html', content: '<!DOCTYPE html><html><body>Test</body></html>' },
+    { path: 'workspace/test-batch/app.js', content: 'console.log("hello");' },
+    { path: 'workspace/test-batch/styles.css', content: 'body { margin: 0; }' },
   ];
   
   const results = [];
@@ -451,7 +451,7 @@ async function stage12_BatchWrite() {
   logTest('Batch write 3 files', results.every(r => r), `success=${results.filter(r => r).length}/3`);
   
   // Verify via list
-  const listRes = await fetchJSON(`${BASE_URL}/api/filesystem/list?path=project/test-batch`, {
+  const listRes = await fetchJSON(`${BASE_URL}/api/filesystem/list?path=workspace/test-batch`, {
     headers: { Authorization: `Bearer ${authToken}`, Cookie: cookie },
   });
   logTest('Batch dir lists 3 files', listRes.data.nodes?.length >= 3, `nodes=${listRes.data.nodes?.length || 0}`);
@@ -462,9 +462,9 @@ async function stage13_ContextBundling() {
   
   // Write multiple files that form a coherent app
   const appFiles = [
-    { path: 'project/test-app/package.json', content: JSON.stringify({ name: 'test-app', scripts: { start: 'node index.js' } }, null, 2) },
-    { path: 'project/test-app/index.js', content: 'const http = require("http");\nconst server = http.createServer((req, res) => {\n  res.writeHead(200, {"Content-Type": "text/plain"});\n  res.end("Hello World");\n});\nserver.listen(3000);\n' },
-    { path: 'project/test-app/README.md', content: '# Test App\nA simple HTTP server.' },
+    { path: 'workspace/test-app/package.json', content: JSON.stringify({ name: 'test-app', scripts: { start: 'node index.js' } }, null, 2) },
+    { path: 'workspace/test-app/index.js', content: 'const http = require("http");\nconst server = http.createServer((req, res) => {\n  res.writeHead(200, {"Content-Type": "text/plain"});\n  res.end("Hello World");\n});\nserver.listen(3000);\n' },
+    { path: 'workspace/test-app/README.md', content: '# Test App\nA simple HTTP server.' },
   ];
   
   for (const file of appFiles) {
@@ -483,7 +483,7 @@ async function stage13_ContextBundling() {
       Cookie: cookie,
     },
     body: {
-      messages: [{ role: 'user', content: 'What does the test-app do? Check the files in project/test-app.' }],
+      messages: [{ role: 'user', content: 'What does the test-app do? Check the files in workspace/test-app.' }],
       provider: PROVIDER,
       model: MODEL,
       stream: true,

@@ -90,7 +90,7 @@ export default async function AntigravitySetupPage() {
               Connected as: <strong>{tokens.email}</strong>
             </p>
             <p className="text-green-600 dark:text-green-400 text-sm">
-              Project ID: <strong>{tokens.projectId}</strong>
+              Workspace ID: <strong>{tokens.projectId}</strong>
             </p>
           </div>
 

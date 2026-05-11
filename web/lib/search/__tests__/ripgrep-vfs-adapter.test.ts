@@ -15,21 +15,21 @@ vi.mock('@/lib/virtual-filesystem/virtual-filesystem-service', () => ({
     vfs: {
       ensureWorkspace: vi.fn(async () => ({
         files: new Map([
-          ['project/src/index.ts', {
-            path: 'project/src/index.ts',
+          ['workspace/src/index.ts', {
+            path: 'workspace/src/index.ts',
             content: 'import React from "react";\n\nfunction App() {\n  return <div>Hello World</div>;\n}\n\nexport default App;',
             language: 'typescript',
             lastModified: new Date().toISOString(),
           }],
-          ['project/src/utils.ts', {
-            path: 'project/src/utils.ts',
+          ['workspace/src/utils.ts', {
+            path: 'workspace/src/utils.ts',
             content: 'export function hello() {\n  console.log("Hello");\n}\n\nexport function world() {\n  console.log("World");\n}',
             language: 'typescript',
             lastModified: new Date().toISOString(),
           }],
-          ['project/README.md', {
-            path: 'project/README.md',
-            content: '# My Project\n\nThis is a test project.\n\nHello world!',
+          ['workspace/README.md', {
+            path: 'workspace/README.md',
+            content: '# My Workspace\n\nThis is a test workspace.\n\nHello world!',
             language: 'markdown',
             lastModified: new Date().toISOString(),
           }],
@@ -160,12 +160,12 @@ describe('ripgrepVFS', () => {
     const result = await ripgrepVFS({
       query: 'Hello',
       ownerId: 'test-user',
-      path: 'project/src',
+      path: 'workspace/src',
     });
 
     expect(result.matches.length).toBeGreaterThan(0);
     result.matches.forEach(match => {
-      expect(match.path).toMatch(/^project\/src\//);
+      expect(match.path).toMatch(/^workspace\/src\//);
     });
   });
 

@@ -10,7 +10,7 @@
  * import { createPiSession, PiInMemorySessionManager } from '@/lib/pi';
  * 
  * const session = await createPiSession({
- *   cwd: '/project',
+ *   cwd: '/workspace',
  *   mode: 'vfs',
  *   runMode: 'remote',
  *   remoteUrl: 'http://localhost:3000',
@@ -22,7 +22,7 @@
  *   }
  * });
  * 
- * await session.prompt('List files in the project');
+ * await session.prompt('List files in the workspace');
  * ```
  * 
  * ### Desktop Mode (CLI)

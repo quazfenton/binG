@@ -35,7 +35,7 @@
  *   getAuthToken: () => localStorage.getItem('token'),
  *   getAuthHeaders: () => ({ Authorization: `Bearer ${token}` }),
  *   toSandboxScopedPath: (scopePath, sandboxId) => { ... },
- *   filesystemScopePath: 'project/sessions/...',
+ *   filesystemScopePath: 'workspace/sessions/...',
  * })
  *
  * await connectionManager.connect()

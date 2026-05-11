@@ -18,17 +18,17 @@
  * // Upload large file
  * const result = await objectStorageIntegration.uploadFile(sandboxId, {
  *   localPath: '/workspace/data/model.pkl',
- *   storageKey: 'my-project/model.pkl',
+ *   storageKey: 'my-workspace/model.pkl',
  * });
  * 
  * // Download file
  * await objectStorageIntegration.downloadFile(sandboxId, {
- *   storageKey: 'my-project/model.pkl',
+ *   storageKey: 'my-workspace/model.pkl',
  *   localPath: '/workspace/data/model-restored.pkl',
  * });
  * 
  * // List stored files
- * const files = await objectStorageIntegration.listFiles(sandboxId, 'my-project/');
+ * const files = await objectStorageIntegration.listFiles(sandboxId, 'my-workspace/');
  * ```
  */
 

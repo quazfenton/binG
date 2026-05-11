@@ -4,7 +4,7 @@
  * Replaces fragile regex with structured scoring system:
  * 1. Keyword scoring (weighted, not binary)
  * 2. Semantic analysis (task scope estimation)
- * 3. Context-aware factors (project size, file dependencies)
+ * 3. Context-aware factors (workspace size, file dependencies)
  * 4. Historical patterns (learn from past classifications)
  *
  * @example
@@ -142,7 +142,7 @@ export class TaskClassifier {
       semanticScore = await this.analyzeSemantics(userMessage, reasoning);
     }
     
-    // 3. Context Analysis (project-aware)
+    // 3. Context Analysis (workspace-aware)
     let contextScore = 0.5; // neutral default
     if (this.config.enableContextAwareness && context) {
       contextScore = this.analyzeContext(userMessage, context, reasoning);
@@ -498,13 +498,13 @@ Task: ${message.substring(0, 500)}`,
     let score = 0.5;
     const factors: string[] = [];
     
-    // Project size factor
+    // Workspace size factor
     if (context.projectSize === 'large') {
       score += 0.15;
-      factors.push('large project');
+      factors.push('large workspace');
     } else if (context.projectSize === 'small') {
       score -= 0.1;
-      factors.push('small project');
+      factors.push('small workspace');
     }
     
     // File dependency analysis

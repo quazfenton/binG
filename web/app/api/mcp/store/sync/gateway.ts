@@ -5,7 +5,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 
-import { auth0 } from '@/lib/auth0';
+import { auth0 } from '@/lib/auth/auth0';
 import { mcpStoreService } from '@/lib/mcp/mcp-store-service';
 import { createLogger } from '@/lib/utils/logger';
 

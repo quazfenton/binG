@@ -31,7 +31,7 @@ describe('Diff Application Fixes', () => {
   describe('Test 1: Invalid Path Rejection', () => {
     it('should reject path ending with single quote immediately', () => {
       // Test path validation logic directly
-      const path = "project/sessions/002/Input'";
+      const path = "workspace/sessions/002/Input'";
       
       // Path should end with quote
       expect(path.endsWith("'")).toBe(true);
@@ -47,7 +47,7 @@ describe('Diff Application Fixes', () => {
       // Assertions
       expect(warnSpy).toHaveBeenCalledWith(
         expect.stringContaining('Rejecting path ending with quote'),
-        expect.stringContaining("project/sessions/002/Input'")
+        expect.stringContaining("workspace/sessions/002/Input'")
       );
       
       warnSpy.mockRestore();
@@ -56,7 +56,7 @@ describe('Diff Application Fixes', () => {
     it('should reject path ending with double quote immediately', () => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       
-      const path = 'project/sessions/002/File"';
+      const path = 'workspace/sessions/002/File"';
       
       if (path.endsWith('"') || path.endsWith("'") || path.endsWith('`')) {
         console.warn('Rejecting path ending with quote:', path);
@@ -64,7 +64,7 @@ describe('Diff Application Fixes', () => {
       
       expect(warnSpy).toHaveBeenCalledWith(
         expect.stringContaining('Rejecting path ending with quote'),
-        expect.stringContaining('project/sessions/002/File"')
+        expect.stringContaining('workspace/sessions/002/File"')
       );
       
       warnSpy.mockRestore();
@@ -73,7 +73,7 @@ describe('Diff Application Fixes', () => {
     it('should reject CSS value paths immediately', () => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       
-      const path = 'project/sessions/002/0.3s';
+      const path = 'workspace/sessions/002/0.3s';
       const lastSegment = path.split('/').pop() || path;
       
       // CSS value pattern
@@ -83,7 +83,7 @@ describe('Diff Application Fixes', () => {
       
       expect(warnSpy).toHaveBeenCalledWith(
         expect.stringContaining('Rejecting CSS value path'),
-        expect.stringContaining('project/sessions/002/0.3s')
+        expect.stringContaining('workspace/sessions/002/0.3s')
       );
       
       warnSpy.mockRestore();
@@ -101,7 +101,7 @@ describe('Diff Application Fixes', () => {
       const MAX_RETRY_ATTEMPTS = 2;
       const rejectedDiffs = new Map<string, number>();
       
-      const diffKey = 'project/sessions/002/file.ts::invalid-diff';
+      const diffKey = 'workspace/sessions/002/file.ts::invalid-diff';
       
       // First failure
       rejectedDiffs.set(diffKey, 1);
@@ -119,8 +119,8 @@ describe('Diff Application Fixes', () => {
     it('should track failures per unique path+diff combination', () => {
       const rejectedDiffs = new Map<string, number>();
       
-      const key1 = 'project/sessions/002/file1.ts::diff1';
-      const key2 = 'project/sessions/002/file1.ts::diff2';
+      const key1 = 'workspace/sessions/002/file1.ts::diff1';
+      const key2 = 'workspace/sessions/002/file1.ts::diff2';
       
       // First diff fails twice
       rejectedDiffs.set(key1, 2);
@@ -139,7 +139,7 @@ describe('Diff Application Fixes', () => {
   describe('Test 3: Rate Limit Handling', () => {
     it('should mark diff as permanently rejected on 429', () => {
       const rejectedDiffs = new Map<string, number>();
-      const diffKey = 'project/sessions/002/file.ts::diff';
+      const diffKey = 'workspace/sessions/002/file.ts::diff';
       const MAX_RETRY_ATTEMPTS = 2;
       
       // Simulate 429 response
@@ -159,7 +159,7 @@ describe('Diff Application Fixes', () => {
 
     it('should mark diff as permanently rejected on 400', () => {
       const rejectedDiffs = new Map<string, number>();
-      const diffKey = 'project/sessions/002/invalid::path.ts::diff';
+      const diffKey = 'workspace/sessions/002/invalid::path.ts::diff';
       const MAX_RETRY_ATTEMPTS = 2;
       
       // Simulate 400 response
@@ -414,7 +414,7 @@ line3`;
    */
   describe('Test 6: Edge Cases and Error Handling', () => {
     it('should handle very long diff paths', () => {
-      const longPath = 'project/sessions/002/' + 'a/'.repeat(100) + 'file.ts';
+      const longPath = 'workspace/sessions/002/' + 'a/'.repeat(100) + 'file.ts';
       expect(longPath.length).toBeGreaterThan(200);
       
       // Path should still be valid (not rejected for length alone, but has 500 char limit)

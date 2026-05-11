@@ -863,3 +863,54 @@ isolated execution workers
 stream back results
 ```
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+Stack Summary
+- Frontend: Next.js (stays on Vercel)
+- Heavy Compute: 70+ API routes, agent loops, streaming, long-running tasks
+- Problem: Vercel serverless limits (10-60s) can't handle AI agent workloads
+Recommended Architecture
+┌───────────────┬────────────────────────────────────┬────────────────────────────────────────────┐
+│ Component     │ Platform                           │ Why                                        │
+├───────────────┼────────────────────────────────────┼────────────────────────────────────────────┤
+│ Frontend UI   │ Vercel ✓                           │ Already set up, perfect for Next.js        │
+│ API Gateway   │ Cloudflare Workers                 │ Edge auth, rate-limiting, geo-routing      │
+│ Orchestration │ Railway or Fly.io                  │ Persistent Node.js, WebSockets, streaming  │
+│ Heavy Workers │ Render (Containers) or Hetzner VPS │ CPU-intensive, long-running, sandboxed     │
+│ Queues        │ Upstash Redis + BullMQ             │ Serverless Redis, reliable job persistence │
+└───────────────┴────────────────────────────────────┴────────────────────────────────────────────┘
+────────────────────────────────────────────────────────────────────────────────
+Hono vs Fastify
+Choose Hono if you want:
+- Edge-compatible (runs on Cloudflare, Fly, Bun, Node)
+- Ultra-lightweight, fastest cold starts
+- Simpler streaming/SSE patterns
+Choose Fastify if you want:
+- More plugins, enterprise ecosystem
+- Better WebSocket support out of the box
+- More mature for complex orchestration
+- Better for heavy Node.js workloads with many middleware
+For  AI agent system with dynamic runtime needs: Fastify + Bun is ideal. But if you prefer edge deployment, Hono is excellent.
+────────────────────────────────────────────────────────────────────────────────
+Compute Platform Comparison
+┌────────────────────┬───────────────────────────────┬─────────────────────────────────────┐
+│ Platform           │ Best For                      │ Trade-offs                          │
+├────────────────────┼───────────────────────────────┼─────────────────────────────────────┤
+│ Railway            │ Easiest fullstack backend     │ Simpler ops, slightly pricier       │
+│ Fly.io             │ Distributed low-latency       │ Multi-region, more config           │
+│ Render             │ Docker containers, long tasks │ Great for sandboxes, workers        │
+│ Hetzner            │ Cheapest raw CPU              │ No managed services, self-maintain  │
+│ Cloudflare Workers │ Edge functions only           │ 50ms CPU limit, not for heavy tasks │
+└────────────────────┴───────────────────────────────┴─────────────────────────────────────┘
+For  agentic workloads: suggest Railway (simplest) or Fly.io (multi-region) for the orchestration layer, and Render containers for sandboxed execution workers.

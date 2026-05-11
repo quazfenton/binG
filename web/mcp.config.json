@@ -13,7 +13,7 @@
       "args": ["-y", "@modelcontextprotocol/server-filesystem", "."],
       "enabled": false,
       "disabledReason": "stdio/npx server — only available in desktop mode",
-      "description": "Read/write local files with project root access (disabled — stdio only)"
+      "description": "Read/write local files with workspace root access (disabled — stdio only)"
     },
     "git": {
       "command": "npx",

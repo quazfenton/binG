@@ -111,7 +111,7 @@ export async function runArchitectPhase(
   const systemPrompt = `You are the Architect - create detailed plans for code modifications.
 
 Your role:
-1. Analyze the project structure and understand the codebase
+1. Analyze the workspace structure and understand the codebase
 2. Identify all files that need to be read or modified
 3. Create a detailed plan with execution order
 4. Consider dependencies and potential risks

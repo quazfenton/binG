@@ -115,7 +115,7 @@ export interface RouterRequest {
   enableSandbox?: boolean
   enableComposio?: boolean
   conversationId?: string
-  /** VFS scope path for session-scoped file operations (e.g., "project/sessions/001") */
+  /** VFS scope path for session-scoped file operations (e.g., "workspace/sessions/001") */
   scopePath?: string
   /** When true, the Vercel AI SDK handles tool calling natively — skip regex intent parsing */
   nativeToolCalling?: boolean
@@ -2516,7 +2516,7 @@ export class ResponseRouter {
         logger.debug('Spec: Applying refinement filesystem edits', {
           ownerId: ownerIdForEdits.toString(),
           conversationId: compositeConversationId,
-          scopePath: `project/sessions/${simpleSessionId}`,
+          scopePath: `workspace/sessions/${simpleSessionId}`,
           refinedOutputLength: refinedOutput.length,
           hasFileWrites: fileWriteEdits.length > 0,
         })
@@ -2528,7 +2528,7 @@ export class ResponseRouter {
             ownerId: ownerIdForEdits.toString(),
             conversationId: compositeConversationId,
             requestId: `refinement-${Date.now()}`,
-            scopePath: `project/sessions/${simpleSessionId}`,
+            scopePath: `workspace/sessions/${simpleSessionId}`,
             lastUserMessage: '',
             attachedPaths: [],
             responseContent: refinedOutput,

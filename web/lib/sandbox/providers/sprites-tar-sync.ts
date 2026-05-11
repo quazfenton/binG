@@ -158,7 +158,7 @@ export async function syncVfsSnapshotToSprite(
   targetDir?: string
 ): Promise<TarSyncResult> {
   const files: TarSyncFile[] = snapshot.files.map(f => ({
-    path: f.path.replace(/^project\//, ''), // Remove 'project/' prefix for Sprite
+    path: f.path.replace(/^workspace\//, ''), // Remove 'workspace/' prefix for Sprite
     content: f.content
   }))
   

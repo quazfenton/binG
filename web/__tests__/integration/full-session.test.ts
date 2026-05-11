@@ -158,7 +158,7 @@ describe('=== SESSION 2: File Edit Parser — batch_write formats ===', () => {
     {"path": "package.json", "content": "{\\"name\\": \\"my-app\\"}"},
     {"path": "vite.config.js", "content": "import { defineConfig } from 'vite';\\nexport default defineConfig({});"}
   ],
-  "commitMessage": "Initial project setup"
+  "commitMessage": "Initial workspace setup"
 }`;
       const edits = extractFileEdits(content);
       expect(edits.length).toBeGreaterThanOrEqual(2);

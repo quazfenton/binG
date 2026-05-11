@@ -358,7 +358,7 @@ async function testSandboxSyncing(token: string): Promise<void> {
   // Create files that need to be synced to sandbox
   const result = await chat(token, [{
     role: 'user',
-    content: 'Create a Node.js project with package.json and src/index.js, then run npm install and node src/index.js',
+    content: 'Create a Node.js workspace with package.json and src/index.js, then run npm install and node src/index.js',
   }], 'sandbox-sync-001', false, 180000, m);
 
   const response = result.content || result.response || '';

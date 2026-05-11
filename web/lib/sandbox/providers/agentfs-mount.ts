@@ -2,7 +2,7 @@
  * AgentFS Mount Service
  *
  * Mounts AgentFS (Turso/libSQL) databases as isolated filesystems
- * that can sync bidirectionally with the project VFS.
+ * that can sync bidirectionally with the workspace VFS.
  *
  * Use cases:
  * - Isolated agent filesystems separate from server VFS
@@ -277,7 +277,7 @@ export class AgentFSMount {
   // ---- VFS ↔ AgentFS sync ----
 
   /**
-   * Import files from the project VFS into this AgentFS mount.
+   * Import files from the workspace VFS into this AgentFS mount.
    * Uses the VFS API to read files and writes them to AgentFS.
    */
   async importFromVfs(
@@ -304,7 +304,7 @@ export class AgentFSMount {
   }
 
   /**
-   * Export files from this AgentFS mount to the project VFS.
+   * Export files from this AgentFS mount to the workspace VFS.
    * Recursively snapshots the AgentFS filesystem and writes to VFS.
    */
   async exportToVfs(

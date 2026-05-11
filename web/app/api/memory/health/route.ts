@@ -4,7 +4,7 @@
  * Returns the status of all memory module components:
  * - IndexedDB (vector store)
  * - Embedding cache
- * - Symbol count per project
+ * - Symbol count per workspace
  * - File watchers active
  * - Plugin registry status
  *
@@ -41,7 +41,7 @@ export async function GET(req: NextRequest) {
         const projects = await listProjects();
         components.vectorStore = {
           status: "ok",
-          detail: `${projects.length} project(s) indexed`,
+          detail: `${projects.length} workspace(s) indexed`,
         };
       }
     } catch (err) {
@@ -82,7 +82,7 @@ export async function GET(req: NextRequest) {
       overallStatus = "degraded";
     }
 
-    // ── Symbol counts per project ────────────────────────────────────────────
+    // ── Symbol counts per workspace ────────────────────────────────────────────
     try {
       const isBrowser = typeof indexedDB !== "undefined";
       if (!isBrowser) {

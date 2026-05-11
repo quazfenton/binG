@@ -26,11 +26,11 @@ describe('VFS MCP Tools', () => {
 
     it('should return context after setToolContext', () => {
       const { setToolContext } = require('./vfs-mcp-tools');
-      setToolContext({ userId: 'test-user', sessionId: 'test-session', scopePath: 'project/sessions/001' });
+      setToolContext({ userId: 'test-user', sessionId: 'test-session', scopePath: 'workspace/sessions/001' });
       const ctx = toolContextStore.getStore();
       expect(ctx).toBeDefined();
       expect(ctx?.userId).toBe('test-user');
-      expect(ctx?.scopePath).toBe('project/sessions/001');
+      expect(ctx?.scopePath).toBe('workspace/sessions/001');
     });
   });
 
@@ -105,7 +105,7 @@ describe('VFS MCP Tools', () => {
 
       // Set context via toolContextStore.run
       const result = await toolContextStore.run(
-        { userId: 'test-user', sessionId: 'test-session', scopePath: 'project' },
+        { userId: 'test-user', sessionId: 'test-session', scopePath: 'workspace' },
         async () => {
           return writeFileTool.execute({ path: 'test.txt', content: undefined }, {});
         }
@@ -119,7 +119,7 @@ describe('VFS MCP Tools', () => {
       const { writeFileTool } = require('./vfs-mcp-tools');
 
       const result = await toolContextStore.run(
-        { userId: 'test-user', sessionId: 'test-session', scopePath: 'project' },
+        { userId: 'test-user', sessionId: 'test-session', scopePath: 'workspace' },
         async () => {
           return writeFileTool.execute({ path: 'test.txt', content: null }, {});
         }
@@ -135,7 +135,7 @@ describe('VFS MCP Tools', () => {
       const { batchWriteTool } = require('./vfs-mcp-tools');
 
       const result = await toolContextStore.run(
-        { userId: 'test-user', sessionId: 'test-session', scopePath: 'project' },
+        { userId: 'test-user', sessionId: 'test-session', scopePath: 'workspace' },
         async () => {
           return batchWriteTool.execute({ files: [] }, {});
         }
@@ -149,7 +149,7 @@ describe('VFS MCP Tools', () => {
       const { batchWriteTool } = require('./vfs-mcp-tools');
 
       const result = await toolContextStore.run(
-        { userId: 'test-user', sessionId: 'test-session', scopePath: 'project' },
+        { userId: 'test-user', sessionId: 'test-session', scopePath: 'workspace' },
         async () => {
           return batchWriteTool.execute({ files: undefined }, {});
         }

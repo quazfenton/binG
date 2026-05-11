@@ -381,7 +381,7 @@ export async function executeE2BAmpAgentWithRepo(args: {
     // Validate inputs to prevent command injection
     const sanitizedRepoUrl = sanitizeGitInput(args.repoUrl);
     const sanitizedBranch = args.branch ? sanitizeGitInput(args.branch) : null;
-    const sanitizedWorkingDir = sanitizePath(args.workingDir || '/home/user/project');
+    const sanitizedWorkingDir = sanitizePath(args.workingDir || '/home/user/workspace');
     
     if (!sanitizedRepoUrl) {
       return { success: false, output: '', error: 'Invalid repoUrl: contains disallowed characters' };
@@ -459,7 +459,7 @@ export async function executeE2BCodexAgentWithRepo(args: {
     // Validate inputs to prevent command injection
     const sanitizedRepoUrl = sanitizeGitInput(args.repoUrl);
     const sanitizedBranch = args.branch ? sanitizeGitInput(args.branch) : null;
-    const sanitizedWorkingDir = sanitizePath(args.workingDir || '/home/user/project');
+    const sanitizedWorkingDir = sanitizePath(args.workingDir || '/home/user/workspace');
     
     if (!sanitizedRepoUrl) {
       return { success: false, output: '', error: 'Invalid repoUrl: contains disallowed characters' };

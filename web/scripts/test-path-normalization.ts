@@ -7,7 +7,7 @@ const tests = [
   { input: '/sessions/002', expected: 'sessions/002' },
   { input: '/src', expected: 'src' },
   { input: '/src/app.ts', expected: 'src/app.ts' },
-  { input: 'project/sessions/001', expected: 'sessions/001' },
+  { input: 'workspace/sessions/001', expected: 'sessions/001' },
   { input: '/workspace/sessions/001', expected: 'sessions/001' },
   { input: '/tmp/workspaces/abc/sessions/001', expected: 'sessions/001' },
   { input: '/workspace/sessions/anon:123:001', expected: 'sessions/anon:123:001' },

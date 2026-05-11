@@ -12,7 +12,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
-import { auth0 } from '@/lib/auth0';
+import { auth0 } from '@/lib/auth/auth0';
 import path from 'path';
 import fs from 'fs/promises';
 import { existsSync } from 'fs';
@@ -845,18 +845,18 @@ export async function POST(request: NextRequest) {
       }
 
       const repoName = extractRepoName(normalizedRepoUrl);
-      // Treat 'repos' as omitted value and default to project/sessions/{repoName}
+      // Treat 'repos' as omitted value and default to workspace/sessions/{repoName}
       const vfsDestinationPath =
         !validation.data.destinationPath || validation.data.destinationPath === 'repos'
-          ? `project/sessions/${repoName}`
+          ? `workspace/sessions/${repoName}`
           : validation.data.destinationPath;
 
       // Security: validate VFS destination path
       const normalizedVfsPath = vfsDestinationPath.replace(/\\/g, '/').replace(/^\/+/, '');
-      // Ensure path starts with project/sessions for security isolation
-      if (!normalizedVfsPath.startsWith('project/sessions') || normalizedVfsPath.includes('..') || normalizedVfsPath.includes('\0')) {
+      // Ensure path starts with workspace/sessions for security isolation
+      if (!normalizedVfsPath.startsWith('workspace/sessions') || normalizedVfsPath.includes('..') || normalizedVfsPath.includes('\0')) {
         return NextResponse.json(
-          { success: false, error: 'Destination path must be within project/sessions/' },
+          { success: false, error: 'Destination path must be within workspace/sessions/' },
           { status: 400 }
         );
       }

@@ -31,7 +31,7 @@ const MAX_STORED_FILE_SIZE = 1024 * 1024; // 1MB
 
 const DEFAULT_FILES: CloudFile[] = [
   { id: '1', name: 'Documents', type: 'folder', size: 0, modified: '2 days ago', provider: 'Google Drive', shared: false },
-  { id: '2', name: 'project.zip', type: 'file', size: 2048000, modified: '1 hour ago', provider: 'Google Drive', shared: true },
+  { id: '2', name: 'workspace.zip', type: 'file', size: 2048000, modified: '1 hour ago', provider: 'Google Drive', shared: true },
   { id: '3', name: 'report.pdf', type: 'file', size: 512000, modified: '3 days ago', provider: 'Google Drive', shared: false }
 ];
 

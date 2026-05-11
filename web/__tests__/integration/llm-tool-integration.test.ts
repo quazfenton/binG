@@ -39,7 +39,7 @@ import {
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 /** Run a VFS tool inside a proper context store scope */
-async function runTool(tool: any, args: any, userId = 'test-user', sessionId = '999', scopePath = 'project/sessions/999') {
+async function runTool(tool: any, args: any, userId = 'test-user', sessionId = '999', scopePath = 'workspace/sessions/999') {
   return toolContextStore.run(
     { userId, sessionId, scopePath },
     async () => tool.execute(args, { messages: [], toolCallId: `test-${Date.now()}` })
@@ -47,7 +47,7 @@ async function runTool(tool: any, args: any, userId = 'test-user', sessionId = '
 }
 
 /** Read a file from the VFS for verification */
-async function readFile(path: string, userId = 'test-user', sessionId = '999', scopePath = 'project/sessions/999') {
+async function readFile(path: string, userId = 'test-user', sessionId = '999', scopePath = 'workspace/sessions/999') {
   return runTool(readFileTool, { path }, userId, sessionId, scopePath);
 }
 
@@ -63,29 +63,29 @@ describe('LLM Tool Integration — End-to-End', () => {
     it('writes a file and reads it back with correct content', async () => {
       const content = 'export const hello = () => "world";\n';
       const writeResult = await runTool(writeFileTool, {
-        path: 'project/sessions/999/roundtrip.ts',
+        path: 'workspace/sessions/999/roundtrip.ts',
         content,
       });
       expect(writeResult.success).toBe(true);
 
-      const readResult = await readFile('project/sessions/999/roundtrip.ts');
+      const readResult = await readFile('workspace/sessions/999/roundtrip.ts');
       expect(readResult.success).toBe(true);
       expect(readResult.content).toBe(content);
     });
 
     it('overwrites a file and verifies new content', async () => {
       await runTool(writeFileTool, {
-        path: 'project/sessions/999/overwrite.txt',
+        path: 'workspace/sessions/999/overwrite.txt',
         content: 'version 1',
       });
       const write2 = await runTool(writeFileTool, {
-        path: 'project/sessions/999/overwrite.txt',
+        path: 'workspace/sessions/999/overwrite.txt',
         content: 'version 2',
       });
       expect(write2.success).toBe(true);
       expect(write2.version).toBeGreaterThan(1);
 
-      const read = await readFile('project/sessions/999/overwrite.txt');
+      const read = await readFile('workspace/sessions/999/overwrite.txt');
       expect(read.content).toBe('version 2');
     });
 
@@ -97,12 +97,12 @@ describe('LLM Tool Integration — End-to-End', () => {
       }, null, 2);
 
       const writeResult = await runTool(writeFileTool, {
-        path: 'project/sessions/999/package.json',
+        path: 'workspace/sessions/999/package.json',
         content,
       });
       expect(writeResult.success).toBe(true);
 
-      const readResult = await readFile('project/sessions/999/package.json');
+      const readResult = await readFile('workspace/sessions/999/package.json');
       expect(readResult.success).toBe(true);
       expect(JSON.parse(readResult.content)).toEqual(JSON.parse(content));
     });
@@ -110,12 +110,12 @@ describe('LLM Tool Integration — End-to-End', () => {
     it('writes a file with Unicode content', async () => {
       const content = '# 日本語テスト\nconsole.log("🎉🚀💻");\n';
       const writeResult = await runTool(writeFileTool, {
-        path: 'project/sessions/999/unicode.js',
+        path: 'workspace/sessions/999/unicode.js',
         content,
       });
       expect(writeResult.success).toBe(true);
 
-      const readResult = await readFile('project/sessions/999/unicode.js');
+      const readResult = await readFile('workspace/sessions/999/unicode.js');
       expect(readResult.success).toBe(true);
       expect(readResult.content).toContain('日本語');
       expect(readResult.content).toContain('🎉');
@@ -129,9 +129,9 @@ describe('LLM Tool Integration — End-to-End', () => {
   describe('batch_write — multi-file operations', () => {
     it('writes multiple files atomically and verifies each', async () => {
       const files = [
-        { path: 'project/sessions/999/batch/index.html', content: '<!DOCTYPE html><html><body>Batch Test</body></html>' },
-        { path: 'project/sessions/999/batch/style.css', content: 'body { margin: 0; font-family: sans-serif; }' },
-        { path: 'project/sessions/999/batch/app.js', content: 'console.log("batch write works");' },
+        { path: 'workspace/sessions/999/batch/index.html', content: '<!DOCTYPE html><html><body>Batch Test</body></html>' },
+        { path: 'workspace/sessions/999/batch/style.css', content: 'body { margin: 0; font-family: sans-serif; }' },
+        { path: 'workspace/sessions/999/batch/app.js', content: 'console.log("batch write works");' },
       ];
 
       const result = await runTool(batchWriteTool, { files });
@@ -149,7 +149,7 @@ describe('LLM Tool Integration — End-to-End', () => {
 
     it('handles mixed valid/invalid paths gracefully', async () => {
       const files = [
-        { path: 'project/sessions/999/valid.txt', content: 'valid' },
+        { path: 'workspace/sessions/999/valid.txt', content: 'valid' },
         { path: '../../../etc/passwd', content: 'traversal' },
         { path: '', content: 'empty path' },
       ];
@@ -160,7 +160,7 @@ describe('LLM Tool Integration — End-to-End', () => {
 
     it('rejects batch with missing content property', async () => {
       const files = [
-        { path: 'project/sessions/999/no-content.txt' } as any,
+        { path: 'workspace/sessions/999/no-content.txt' } as any,
       ];
       const result = await runTool(batchWriteTool, { files });
       expect(result.success).toBe(false);
@@ -168,7 +168,7 @@ describe('LLM Tool Integration — End-to-End', () => {
 
     it('rejects batch exceeding 50 files', async () => {
       const files = Array.from({ length: 51 }, (_, i) => ({
-        path: `project/sessions/999/overflow-${i}.txt`,
+        path: `workspace/sessions/999/overflow-${i}.txt`,
         content: 'x',
       }));
       const result = await runTool(batchWriteTool, { files });
@@ -178,7 +178,7 @@ describe('LLM Tool Integration — End-to-End', () => {
 
     it('handles empty string content (edge case)', async () => {
       const files = [
-        { path: 'project/sessions/999/empty.txt', content: '' },
+        { path: 'workspace/sessions/999/empty.txt', content: '' },
       ];
       const result = await runTool(batchWriteTool, { files });
       // Empty string content should still write (it's valid content)
@@ -187,9 +187,9 @@ describe('LLM Tool Integration — End-to-End', () => {
 
     it('creates deeply nested directory structure', async () => {
       const files = [
-        { path: 'project/sessions/999/deep/nested/path/to/file.txt', content: 'deep' },
-        { path: 'project/sessions/999/deep/nested/path/to/another.txt', content: 'deeper' },
-        { path: 'project/sessions/999/deep/nested/path/file.txt', content: 'shallow' },
+        { path: 'workspace/sessions/999/deep/nested/path/to/file.txt', content: 'deep' },
+        { path: 'workspace/sessions/999/deep/nested/path/to/another.txt', content: 'deeper' },
+        { path: 'workspace/sessions/999/deep/nested/path/file.txt', content: 'shallow' },
       ];
       const result = await runTool(batchWriteTool, { files });
       expect(result.success).toBe(true);
@@ -204,12 +204,12 @@ describe('LLM Tool Integration — End-to-End', () => {
   describe('apply_diff — unified diff', () => {
     it('applies a simple diff to an existing file', async () => {
       await runTool(writeFileTool, {
-        path: 'project/sessions/999/diff-test.txt',
+        path: 'workspace/sessions/999/diff-test.txt',
         content: 'line1\nline2\nline3\n',
       });
 
-      const diff = `--- a/project/sessions/999/diff-test.txt
-+++ b/project/sessions/999/diff-test.txt
+      const diff = `--- a/workspace/sessions/999/diff-test.txt
++++ b/workspace/sessions/999/diff-test.txt
 @@ -1,3 +1,3 @@
  line1
 -line2
@@ -218,19 +218,19 @@ describe('LLM Tool Integration — End-to-End', () => {
 `;
 
       const result = await runTool(applyDiffTool, {
-        path: 'project/sessions/999/diff-test.txt',
+        path: 'workspace/sessions/999/diff-test.txt',
         diff,
       });
       expect(result.success).toBe(true);
 
-      const read = await readFile('project/sessions/999/diff-test.txt');
+      const read = await readFile('workspace/sessions/999/diff-test.txt');
       expect(read.content).toContain('line2-modified');
       expect(read.content).not.toContain('\nline2\n');
     });
 
     it('fails gracefully on non-existent file', async () => {
       const result = await runTool(applyDiffTool, {
-        path: 'project/sessions/999/does-not-exist.txt',
+        path: 'workspace/sessions/999/does-not-exist.txt',
         diff: '--- a/fake\n+++ b/fake\n@@ -1 +1 @@\n-old\n+new\n',
       });
       expect(result.success).toBe(false);
@@ -238,24 +238,24 @@ describe('LLM Tool Integration — End-to-End', () => {
 
     it('handles diff that adds new lines', async () => {
       await runTool(writeFileTool, {
-        path: 'project/sessions/999/diff-add.txt',
+        path: 'workspace/sessions/999/diff-add.txt',
         content: 'line1\n',
       });
 
-      const diff = `--- a/project/sessions/999/diff-add.txt
-+++ b/project/sessions/999/diff-add.txt
+      const diff = `--- a/workspace/sessions/999/diff-add.txt
++++ b/workspace/sessions/999/diff-add.txt
 @@ -1 +1,2 @@
  line1
 +line2
 `;
 
       const result = await runTool(applyDiffTool, {
-        path: 'project/sessions/999/diff-add.txt',
+        path: 'workspace/sessions/999/diff-add.txt',
         diff,
       });
       expect(result.success).toBe(true);
 
-      const read = await readFile('project/sessions/999/diff-add.txt');
+      const read = await readFile('workspace/sessions/999/diff-add.txt');
       expect(read.content).toBe('line1\nline2\n');
     });
   });
@@ -270,7 +270,7 @@ describe('LLM Tool Integration — End-to-End', () => {
       const resultA = await runTool(writeFileTool, {
         path: 'isolated.txt',
         content: 'session 998',
-      }, 'test-user', '998', 'project/sessions/998');
+      }, 'test-user', '998', 'workspace/sessions/998');
       expect(resultA.success).toBe(true);
       expect(resultA.path).toContain('998');
 
@@ -278,7 +278,7 @@ describe('LLM Tool Integration — End-to-End', () => {
       const resultB = await runTool(writeFileTool, {
         path: 'isolated.txt',
         content: 'session 999',
-      }, 'test-user', '999', 'project/sessions/999');
+      }, 'test-user', '999', 'workspace/sessions/999');
       expect(resultB.success).toBe(true);
       expect(resultB.path).toContain('999');
 
@@ -298,7 +298,7 @@ describe('LLM Tool Integration — End-to-End', () => {
     it('rejects path with encoded traversal', async () => {
       const result = await runTool(writeFileTool, {
         // URL-encoded path that decodes to a traversal attempt
-        path: 'project/%2e%2e/%2e%2e/%2e%2e/etc/passwd',
+        path: 'workspace/%2e%2e/%2e%2e/%2e%2e/etc/passwd',
         content: 'hacked',
       });
       expect(result.success).toBe(false);
@@ -313,7 +313,7 @@ describe('LLM Tool Integration — End-to-End', () => {
     it('parses ```file: path\\ncontent\\n``` blocks', () => {
       const content = `I'll create the file for you.
 
-\`\`\`file: project/index.js
+\`\`\`file: workspace/index.js
 export const app = () => {
   console.log("Hello from non-FC model");
 };
@@ -322,32 +322,32 @@ export const app = () => {
 Done!`;
       const edits = extractFileEdits(content);
       expect(edits).toHaveLength(1);
-      expect(edits[0].path).toBe('project/index.js');
+      expect(edits[0].path).toBe('workspace/index.js');
       expect(edits[0].content).toContain('console.log');
     });
 
     it('parses ```diff: path\\n...\\n``` blocks', () => {
-      const content = `\`\`\`diff: project/app.py
---- a/project/app.py
-+++ b/project/app.py
+      const content = `\`\`\`diff: workspace/app.py
+--- a/workspace/app.py
++++ b/workspace/app.py
 @@ -1 +1 @@
 -old_version
 +new_version
 \`\`\``;
       const edits = extractFileEdits(content);
       expect(edits.length).toBeGreaterThanOrEqual(1);
-      expect(edits[0].path).toBe('project/app.py');
+      expect(edits[0].path).toBe('workspace/app.py');
     });
 
     it('parses ```mkdir: path\\n``` blocks', () => {
-      const content = `\`\`\`mkdir: project/new-dir
+      const content = `\`\`\`mkdir: workspace/new-dir
 \`\`\``;
       const edits = extractFileEdits(content);
       expect(edits.length).toBeGreaterThanOrEqual(1);
     });
 
     it('parses ```delete: path\\n``` blocks', () => {
-      const content = `\`\`\`delete: project/old-file.txt
+      const content = `\`\`\`delete: workspace/old-file.txt
 \`\`\``;
       const edits = extractFileEdits(content);
       expect(edits.length).toBeGreaterThanOrEqual(1);
@@ -366,10 +366,10 @@ export const main = () => {
     });
 
     it('parses JSON tool call format', () => {
-      const content = `{"tool": "write_file", "arguments": {"path": "project/json-test.txt", "content": "from JSON tool call"}}`;
+      const content = `{"tool": "write_file", "arguments": {"path": "workspace/json-test.txt", "content": "from JSON tool call"}}`;
       const edits = extractFileEdits(content);
       expect(edits).toHaveLength(1);
-      expect(edits[0].path).toBe('project/json-test.txt');
+      expect(edits[0].path).toBe('workspace/json-test.txt');
       expect(edits[0].content).toBe('from JSON tool call');
     });
 
@@ -378,15 +378,15 @@ export const main = () => {
   "tool": "batch_write",
   "arguments": {
     "files": [
-      {"path": "project/batch-a.txt", "content": "file a"},
-      {"path": "project/batch-b.txt", "content": "file b"}
+      {"path": "workspace/batch-a.txt", "content": "file a"},
+      {"path": "workspace/batch-b.txt", "content": "file b"}
     ]
   }
 }`;
       const edits = extractFileEdits(content);
       expect(edits).toHaveLength(2);
-      expect(edits[0].path).toBe('project/batch-a.txt');
-      expect(edits[1].path).toBe('project/batch-b.txt');
+      expect(edits[0].path).toBe('workspace/batch-a.txt');
+      expect(edits[1].path).toBe('workspace/batch-b.txt');
     });
 
     it('parses JS-style write_file() in code blocks', () => {
@@ -398,26 +398,26 @@ export const main = () => {
     });
 
     it('parses multiple edit formats in one response', () => {
-      const content = `I'll create the project structure:
+      const content = `I'll create the workspace structure:
 
-\`\`\`file: project/package.json
+\`\`\`file: workspace/package.json
 {
   "name": "my-app",
   "version": "1.0.0"
 }
 \`\`\`
 
-<file_edit path="project/README.md">
+<file_edit path="workspace/README.md">
 # My App
 </file_edit>
 
-\`\`\`delete: project/old-file.txt
+\`\`\`delete: workspace/old-file.txt
 \`\`\``;
       const edits = extractFileEdits(content);
       expect(edits.length).toBeGreaterThanOrEqual(2);
       const paths = edits.map(e => e.path);
-      expect(paths).toContain('project/package.json');
-      expect(paths).toContain('project/README.md');
+      expect(paths).toContain('workspace/package.json');
+      expect(paths).toContain('workspace/README.md');
     });
   });
 
@@ -429,7 +429,7 @@ export const main = () => {
     it('detects edits that span multiple chunks', () => {
       const parser = createIncrementalParser();
       const chunks = [
-        '```file: project/stream-test.js\n',
+        '```file: workspace/stream-test.js\n',
         'export const streamTest = () => {\n',
         '  return "streaming works";\n',
         '};\n```\n',
@@ -443,13 +443,13 @@ export const main = () => {
       }
 
       expect(allEdits).toHaveLength(1);
-      expect(allEdits[0].path).toBe('project/stream-test.js');
+      expect(allEdits[0].path).toBe('workspace/stream-test.js');
       expect(allEdits[0].content).toContain('streaming works');
     });
 
     it('does not re-emit the same edit across chunks', () => {
       const parser = createIncrementalParser();
-      let buffer = '```file: project/once.txt\ncontent\n```';
+      let buffer = '```file: workspace/once.txt\ncontent\n```';
       const first = extractIncrementalFileEdits(buffer, parser);
       buffer += '\n\nAdditional text after the edit.';
       const second = extractIncrementalFileEdits(buffer, parser);
@@ -460,10 +460,10 @@ export const main = () => {
 
     it('handles partial content that completes later', () => {
       const parser = createIncrementalParser();
-      const edits1 = extractIncrementalFileEdits('```file: project/partial.txt\n', parser);
+      const edits1 = extractIncrementalFileEdits('```file: workspace/partial.txt\n', parser);
       expect(edits1).toHaveLength(0); // Not complete yet
 
-      const edits2 = extractIncrementalFileEdits('```file: project/partial.txt\nfull content\n```', parser);
+      const edits2 = extractIncrementalFileEdits('```file: workspace/partial.txt\nfull content\n```', parser);
       expect(edits2).toHaveLength(1);
       expect(edits2[0].content).toBe('full content');
     });
@@ -474,13 +474,13 @@ export const main = () => {
       const allEdits: any[] = [];
 
       // Chunk 1: first edit complete
-      buffer += '```file: project/a.txt\ncontent a\n```\n';
+      buffer += '```file: workspace/a.txt\ncontent a\n```\n';
       allEdits.push(...extractIncrementalFileEdits(buffer, parser));
 
       // Chunk 2: second edit starts
-      buffer += '```file: project/b.txt\n';
+      buffer += '```file: workspace/b.txt\n';
       allEdits.push(...extractIncrementalFileEdits(buffer, parser));
-      expect(allEdits.filter(e => e.path === 'project/b.txt')).toHaveLength(0);
+      expect(allEdits.filter(e => e.path === 'workspace/b.txt')).toHaveLength(0);
 
       // Chunk 3: second edit completes
       buffer += 'content b\n```\n';
@@ -546,28 +546,28 @@ export const main = () => {
 
   describe('parseFilesystemResponse — full extraction pipeline', () => {
     it('extracts writes from heredoc format', () => {
-      const content = "cat > project/test.sh << 'SCRIPT'\n#!/bin/bash\necho hello\nSCRIPT";
+      const content = "cat > workspace/test.sh << 'SCRIPT'\n#!/bin/bash\necho hello\nSCRIPT";
       const result = parseFilesystemResponse(content);
       expect(result.writes.length).toBeGreaterThanOrEqual(1);
     });
 
     it('extracts deletes from rm format', () => {
-      const content = 'rm -f project/old-file.txt';
+      const content = 'rm -f workspace/old-file.txt';
       const result = parseFilesystemResponse(content);
       expect(result.deletes.length).toBeGreaterThanOrEqual(0);
     });
 
     it('handles mixed operations in one response', () => {
-      const content = `I'll set up the project:
+      const content = `I'll set up the workspace:
 
-\`\`\`file: project/package.json
+\`\`\`file: workspace/package.json
 {"name": "test"}
 \`\`\`
 
-\`\`\`mkdir: project/src
+\`\`\`mkdir: workspace/src
 \`\`\`
 
-\`\`\`delete: project/old.js
+\`\`\`delete: workspace/old.js
 \`\`\``;
       const result = parseFilesystemResponse(content);
       expect(result.writes.length).toBeGreaterThanOrEqual(1);
@@ -584,12 +584,12 @@ export const main = () => {
     it('extracts from JSON tool call embedded in prose', () => {
       const content = `Sure, I'll create that file.
 
-{"tool": "write_file", "arguments": {"path": "project/embedded.json", "content": "embedded content"}}
+{"tool": "write_file", "arguments": {"path": "workspace/embedded.json", "content": "embedded content"}}
 
 Let me know if you need anything else.`;
       const result = parseFilesystemResponse(content);
       expect(result.writes.length).toBeGreaterThanOrEqual(1);
-      const write = result.writes.find(w => w.path === 'project/embedded.json');
+      const write = result.writes.find(w => w.path === 'workspace/embedded.json');
       expect(write).toBeDefined();
       expect(write!.content).toBe('embedded content');
     });
@@ -601,14 +601,14 @@ Let me know if you need anything else.`;
 
   describe('Edge cases — realistic LLM output patterns', () => {
     it('handles write_file with Windows-style paths', () => {
-      const content = '```file: project\\windows\\path.txt\nwindows content\n```';
+      const content = '```file: workspace\\windows\\path.txt\nwindows content\n```';
       const edits = extractFileEdits(content);
       // The parser normalizes backslashes to forward slashes
       expect(edits.length).toBeGreaterThanOrEqual(0);
     });
 
     it('handles write_file with content containing backticks', () => {
-      const content = `\`\`\`file: project/readme.md
+      const content = `\`\`\`file: workspace/readme.md
 # Usage
 \`\`\`
 \`npm install\`
@@ -619,7 +619,7 @@ Let me know if you need anything else.`;
     });
 
     it('handles write_file with content containing XML-like tags', () => {
-      const content = `\`\`\`file: project/component.html
+      const content = `\`\`\`file: workspace/component.html
 <div class="app">
   <h1>Hello</h1>
   <file_edit path="should-not-parse">nested</file_edit>
@@ -631,7 +631,7 @@ Let me know if you need anything else.`;
 
     it('handles batch_write with 50 files at the limit', async () => {
       const files = Array.from({ length: 50 }, (_, i) => ({
-        path: `project/sessions/999/limit/f-${i}.txt`,
+        path: `workspace/sessions/999/limit/f-${i}.txt`,
         content: `content ${i}`,
       }));
       const result = await runTool(batchWriteTool, { files });
@@ -642,7 +642,7 @@ Let me know if you need anything else.`;
 
     it('handles write_file where content is just whitespace', async () => {
       const result = await runTool(writeFileTool, {
-        path: 'project/sessions/999/whitespace.txt',
+        path: 'workspace/sessions/999/whitespace.txt',
         content: '   \n  \n   ',
       });
       // Whitespace-only content is valid — it's still content
@@ -651,14 +651,14 @@ Let me know if you need anything else.`;
 
     it('handles create_directory for nested paths', async () => {
       const result = await runTool(createDirectoryTool, {
-        path: 'project/sessions/999/a/b/c/d',
+        path: 'workspace/sessions/999/a/b/c/d',
       });
       expect(result.success).toBe(true);
     });
 
     it('handles list_files on non-existent directory gracefully', async () => {
       const result = await runTool(listFilesTool, {
-        path: 'project/sessions/999/nonexistent',
+        path: 'workspace/sessions/999/nonexistent',
         recursive: false,
       });
       // Should not throw — return empty or error gracefully

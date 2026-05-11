@@ -186,7 +186,7 @@ describe('Enhanced Sandbox Infrastructure - Integration', () => {
       saveTerminalSession(session)
       
       // Simulate command execution with events
-      const commands = ['cd project', 'npm install', 'npm run dev']
+      const commands = ['cd workspace', 'npm install', 'npm run dev']
       
       commands.forEach((cmd, index) => {
         // Update session history

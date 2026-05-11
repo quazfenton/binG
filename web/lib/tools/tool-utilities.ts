@@ -225,7 +225,7 @@ export class ToolUtilities {
   }
 
   /**
-   * Create project repository and task tracker
+   * Create workspace repository and task tracker
    */
   async initializeProject(
     context: ToolExecutionContext,
@@ -253,7 +253,7 @@ export class ToolUtilities {
       results.github = repoResult;
     }
 
-    // Create Notion project page
+    // Create Notion workspace page
     if (params.notionDatabase) {
       const notionResult = await this.toolManager.executeTool(
         "notion.create_page",

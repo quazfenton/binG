@@ -4,7 +4,7 @@ import { streamPartsToEdits, applyEditsToProject } from '../lib/code-parser'
 import { llmService } from '../lib/chat/llm-providers' // Import the main LLM service
 
 export async function runModelAndApply(
-  project: any,
+  workspace: any,
   modelId: string,
   payload: any,
   opts: { stream?: boolean; defaultKey?: string; puterBase?: string } = {}
@@ -21,19 +21,19 @@ export async function runModelAndApply(
 
   if (opts.stream && adapter.stream) {
     const parts = normalizeStream(adapter.stream(payload))
-    for await (const update of streamPartsToEdits(parts, project)) {
-      project = update.project
+    for await (const update of streamPartsToEdits(parts, workspace)) {
+      workspace = update.workspace
       // Emit updates to UI: you should hook into your event or state update system
-      // Example: window.dispatchEvent(new CustomEvent('project:update', { detail: project }))
+      // Example: window.dispatchEvent(new CustomEvent('workspace:update', { detail: workspace }))
     }
-    return project
+    return workspace
   } else {
     const resp = await adapter.responses(payload)
     const text = await collectNonStream(resp)
     const { parseTextToEdits } = await import('../lib/code-parser')
     const edits = parseTextToEdits(text)
-    project = applyEditsToProject(project, edits)
-    // Emit final project update
-    return project
+    workspace = applyEditsToProject(workspace, edits)
+    // Emit final workspace update
+    return workspace
   }
 }

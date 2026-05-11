@@ -26,7 +26,7 @@ import { toolResultCache, toolCacheKey } from '@/lib/cache';
 // import { emitFilesystemUpdated } from './sync/sync-events'; // Imported but not used - central emit deferred for now
 
 // Default configuration - use DESKTOP_WORKSPACE_ROOT for desktop mode
-// Priority: window.__SIDECAR_CONFIG__ (Tauri) > DESKTOP_WORKSPACE_ROOT > INITIAL_CWD > 'project'
+// Priority: window.__SIDECAR_CONFIG__ (Tauri) > DESKTOP_WORKSPACE_ROOT > INITIAL_CWD > 'workspace'
 import { getDesktopWorkspaceDir } from '@/lib/utils/desktop-env';
 const DEFAULT_WORKSPACE_ROOT = getDesktopWorkspaceDir();
 const MAX_PATH_LENGTH = 1024;
@@ -442,7 +442,7 @@ export class VirtualFilesystemService {
     //   path: normalizedPath,
     //   paths: [normalizedPath],
     //   type: changeType,
-    //   sessionId: normalizedPath.match(/^project\/sessions\/([^/]+)/)?.[1],  // Extract from path, not ownerId
+    //   sessionId: normalizedPath.match(/^workspace\/sessions\/([^/]+)/)?.[1],  // Extract from path, not ownerId
     //   workspaceVersion: workspace.version,
     //   source: 'vfs-write',
     // });
@@ -672,7 +672,7 @@ export class VirtualFilesystemService {
           })),
         };
       } catch (error: any) {
-        // Virtual VFS paths like "project/sessions" don't exist on the real
+        // Virtual VFS paths like "workspace/sessions" don't exist on the real
         // filesystem in desktop mode. Return an empty listing instead of
         // propagating the ENOENT error — the UI handles empty workspaces
         // gracefully, but an unhandled exception breaks the sidebar.
@@ -1032,8 +1032,8 @@ export class VirtualFilesystemService {
         if (safeParts.length === 0) {
           throw new Error(`Path traversal is not allowed: ${inputPath}`);
         }
-        // Allow .. to navigate above workspace root (e.g. project/sessions/001 -> project)
-        // but prevent escaping project root entirely
+        // Allow .. to navigate above workspace root (e.g. workspace/sessions/001 -> workspace)
+        // but prevent escaping workspace root entirely
         if (safeParts.length <= 1) {
           throw new Error(`Path traversal is not allowed: ${inputPath}`);
         }
@@ -1050,9 +1050,9 @@ export class VirtualFilesystemService {
       return this.workspaceRoot;
     }    const normalizedPath = safeParts.join('/');
 
-    // VFS scoped paths (project/...) bypass workspaceRoot validation
+    // VFS scoped paths (workspace/...) bypass workspaceRoot validation
     // These are virtual session namespaces, not filesystem paths relative to workspaceRoot
-    if (normalizedPath.startsWith('project/')) {
+    if (normalizedPath.startsWith('workspace/')) {
       return normalizedPath;
     }
 
@@ -1071,7 +1071,7 @@ export class VirtualFilesystemService {
       throw new Error(`Path traversal beyond workspace root: ${inputPath}`);
     }
     
-    const sessionsMatch = normalizedPath.match(/^project\/sessions\/([^/]+)/i);
+    const sessionsMatch = normalizedPath.match(/^workspace\/sessions\/([^/]+)/i);
     if (sessionsMatch) {
       const sessionSegment = sessionsMatch[1];
       if (sessionSegment.includes('//') || sessionSegment.includes('..')) {

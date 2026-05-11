@@ -97,7 +97,7 @@ async function testFileRead(cookies: string | null) {
       body: JSON.stringify({
         messages: [{ 
           role: 'user', 
-          content: 'Read the file package.json from the current directory and tell me the project name and version.' 
+          content: 'Read the file package.json from the current directory and tell me the workspace name and version.' 
         }],
         provider: 'mistral',
         model: 'mistral-large-latest',

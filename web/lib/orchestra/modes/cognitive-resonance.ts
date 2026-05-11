@@ -300,7 +300,7 @@ export async function runCognitiveResonanceMode(
       systemPrompt: prompt,
       temperature: temp,
       maxTokens,
-      mode: 'v1-api',
+      mode: 'v1-api' as const,
     }, engine);
     const result = await processUnifiedAgentRequest(subCall);
 
@@ -439,7 +439,7 @@ export async function runCognitiveResonanceMode(
     systemPrompt: synthesizerPrompt,
     temperature: 0.4,
     maxTokens: maxTokens * 2,
-    mode: 'v1-api',
+    mode: 'v1-api' as const,
   }, engine);
   const synthesisResult = await processUnifiedAgentRequest(synthCall);
 

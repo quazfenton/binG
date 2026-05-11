@@ -816,7 +816,7 @@ export function registerVFSSyncHook(): void {
         const content = await readFile(absolutePath, 'utf8');
 
         // Determine VFS scope path from session
-        const scopePath = ctx.scopePath || 'project';
+        const scopePath = ctx.scopePath || 'workspace';
         const vfsPath = filePath.startsWith('/')
           ? filePath.replace(/^\/+/, '')
           : `${scopePath}/${filePath}`;

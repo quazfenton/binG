@@ -28,7 +28,7 @@ import { ShadowCommitManager } from '@/lib/orchestra/stateful-agent/commit/shado
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 async function runTool(tool: any, args: any, userId: string, sessionId: string) {
-  const scopePath = `project/sessions/${sessionId}`;
+  const scopePath = `workspace/sessions/${sessionId}`;
   return toolContextStore.run(
     { userId, sessionId, scopePath },
     async () => tool.execute(args, { messages: [], toolCallId: `test-${Date.now()}` })
@@ -44,7 +44,7 @@ async function readFile(path: string, userId: string, sessionId: string) {
 describe('Git-backed VFS — E2E Versioning & Rollbacks', () => {
   const TEST_USER = 'e2e-git-test-user';
   const TEST_SESSION = `e2e-git-${Date.now()}`;
-  const BASE_PATH = `project/sessions/${TEST_SESSION}`;
+  const BASE_PATH = `workspace/sessions/${TEST_SESSION}`;
 
   describe('VFS tool round-trip with version tracking', () => {
     it('writes v1, reads back, verifies version=1', async () => {
@@ -171,14 +171,14 @@ batch_write
 
 \`\`\`javascript
 [
-  {"path": "project/index.js", "content": "console.log('hi')"},
-  {"path": "project/utils.js", "content": "export const add = (a,b) => a+b;"}
+  {"path": "workspace/index.js", "content": "console.log('hi')"},
+  {"path": "workspace/utils.js", "content": "export const add = (a,b) => a+b;"}
 ]
 \`\`\``;
       const edits = extractFileEdits(content);
       expect(edits.length).toBeGreaterThanOrEqual(2);
-      expect(edits.find(e => e.path === 'project/index.js')).toBeDefined();
-      expect(edits.find(e => e.path === 'project/utils.js')).toBeDefined();
+      expect(edits.find(e => e.path === 'workspace/index.js')).toBeDefined();
+      expect(edits.find(e => e.path === 'workspace/utils.js')).toBeDefined();
     });
 
     it('parses write_file from tool-name + fenced-block format', () => {

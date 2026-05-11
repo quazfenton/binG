@@ -1,7 +1,10 @@
-node_modules
-web/node_modules
-desktop/node_modules
-.next
-.git
-.vercel
-*.log
+# Exclude heavy folders from Vercel download
+desktop/
+backend/
+scripts/
+docs/
+
+# Standard excludes
+node_modules/
+.git/
+*.db

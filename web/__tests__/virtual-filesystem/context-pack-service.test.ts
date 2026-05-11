@@ -11,7 +11,7 @@ import { contextPackService } from '@/lib/virtual-filesystem/context-pack-servic
 
 describe('ContextPackService', () => {
   const testUserId = 'context_pack_test_' + Date.now();
-  const vfs = new VirtualFilesystemService('project');
+  const vfs = new VirtualFilesystemService('workspace');
 
   beforeEach(async () => {
     // Create test file structure
@@ -19,7 +19,7 @@ describe('ContextPackService', () => {
     await vfs.writeFile(testUserId, 'src/utils.ts', 'export const util = 1;');
     await vfs.writeFile(testUserId, 'src/components/Button.tsx', 'export const Button = () => null;');
     await vfs.writeFile(testUserId, 'package.json', JSON.stringify({ name: 'test', version: '1.0.0' }));
-    await vfs.writeFile(testUserId, 'README.md', '# Test Project\n\nDescription here.');
+    await vfs.writeFile(testUserId, 'README.md', '# Test Workspace\n\nDescription here.');
     await vfs.writeFile(testUserId, '.gitignore', 'node_modules/\n*.log');
   });
 
@@ -27,7 +27,7 @@ describe('ContextPackService', () => {
     it('should generate context pack with default options', async () => {
       const result = await contextPackService.generateContextPack(
         testUserId,
-        'project'
+        'workspace'
       );
       
       expect(result.bundle).toBeDefined();
@@ -39,7 +39,7 @@ describe('ContextPackService', () => {
     it('should include directory tree', async () => {
       const result = await contextPackService.generateContextPack(
         testUserId,
-        'project',
+        'workspace',
         { includeTree: true, includeContents: false }
       );
       
@@ -51,7 +51,7 @@ describe('ContextPackService', () => {
     it('should include file contents', async () => {
       const result = await contextPackService.generateContextPack(
         testUserId,
-        'project',
+        'workspace',
         { includeTree: false, includeContents: true }
       );
       
@@ -62,7 +62,7 @@ describe('ContextPackService', () => {
     it('should respect exclude patterns', async () => {
       const result = await contextPackService.generateContextPack(
         testUserId,
-        'project',
+        'workspace',
         { 
           excludePatterns: ['*.md', '.gitignore'],
           includeTree: true 
@@ -76,7 +76,7 @@ describe('ContextPackService', () => {
     it('should handle empty directory', async () => {
       const result = await contextPackService.generateContextPack(
         testUserId,
-        'project/src'
+        'workspace/src'
       );
       
       expect(result.fileCount).toBeGreaterThan(0);
@@ -87,7 +87,7 @@ describe('ContextPackService', () => {
     it('should generate markdown format', async () => {
       const result = await contextPackService.generateContextPack(
         testUserId,
-        'project',
+        'workspace',
         { format: 'markdown' }
       );
       
@@ -99,7 +99,7 @@ describe('ContextPackService', () => {
     it('should generate XML format', async () => {
       const result = await contextPackService.generateContextPack(
         testUserId,
-        'project',
+        'workspace',
         { format: 'xml' }
       );
       
@@ -111,7 +111,7 @@ describe('ContextPackService', () => {
     it('should generate JSON format', async () => {
       const result = await contextPackService.generateContextPack(
         testUserId,
-        'project',
+        'workspace',
         { format: 'json' }
       );
       
@@ -123,7 +123,7 @@ describe('ContextPackService', () => {
       // Skipped: Windows VFS file locking issue
       const result = await contextPackService.generateContextPack(
         testUserId,
-        'project',
+        'workspace',
         { format: 'plain' }
       );
       
@@ -139,7 +139,7 @@ describe('ContextPackService', () => {
       
       const result = await contextPackService.generateContextPack(
         testUserId,
-        'project',
+        'workspace',
         { maxFileSize: 1024 * 100 }
       );
       
@@ -153,7 +153,7 @@ describe('ContextPackService', () => {
       
       const result = await contextPackService.generateContextPack(
         testUserId,
-        'project',
+        'workspace',
         { maxLinesPerFile: 100 }
       );
       
@@ -165,7 +165,7 @@ describe('ContextPackService', () => {
     it('should estimate tokens for content', async () => {
       const result = await contextPackService.generateContextPack(
         testUserId,
-        'project'
+        'workspace'
       );
       
       expect(result.estimatedTokens).toBeGreaterThan(0);
@@ -181,7 +181,7 @@ describe('ContextPackService', () => {
     it('should filter by base path', async () => {
       const result = await contextPackService.generateContextPack(
         testUserId,
-        'project/src'
+        'workspace/src'
       );
       
       expect(result.bundle).toContain('index.ts');
@@ -193,7 +193,7 @@ describe('ContextPackService', () => {
     it('should handle nested paths', async () => {
       const result = await contextPackService.generateContextPack(
         testUserId,
-        'project/src/components'
+        'workspace/src/components'
       );
       
       expect(result.bundle).toContain('Button.tsx');
@@ -204,7 +204,7 @@ describe('ContextPackService', () => {
   describe('Performance', () => {
     it('should generate pack quickly for small projects', async () => {
       const startTime = Date.now();
-      await contextPackService.generateContextPack(testUserId, 'project');
+      await contextPackService.generateContextPack(testUserId, 'workspace');
       const duration = Date.now() - startTime;
       
       expect(duration).toBeLessThan(2000); // Should complete within 2 seconds
@@ -212,7 +212,7 @@ describe('ContextPackService', () => {
 
     it('should handle many files efficiently', async () => {
       const startTime = Date.now();
-      const result = await contextPackService.generateContextPack(testUserId, 'project');
+      const result = await contextPackService.generateContextPack(testUserId, 'workspace');
       const duration = Date.now() - startTime;
       
       expect(result.fileCount).toBeGreaterThan(0);

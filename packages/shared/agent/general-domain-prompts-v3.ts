@@ -121,7 +121,7 @@ ${RESEARCH_TOOL_STRATEGY}
 3. **file.write** → Write scouting reports, game previews, post-game analyses
 4. **memory.retrieve** → Previous matchups, historical patterns, coach tendencies
 
-## Statistical Modeling — Project Performance
+## Statistical Modeling — Workspace Performance
 \`\`\`python
 # Example: Player efficiency comparison
 import pandas as pd
@@ -991,7 +991,7 @@ import mapclassify
 ## GIS Analysis Report
 | Field | Value |
 |-------|-------|
-| Project | [Project name] |
+| Workspace | [Workspace name] |
 | Area | [Geographic extent] |
 | Date | [Date] |
 | Specialist | [GIS/Cartographer role] |

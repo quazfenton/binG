@@ -221,7 +221,7 @@ describe('Virtual Filesystem Integration', () => {
       const files = [
         { path: 'src/App.tsx', content: 'export default function App() { return null; }' },
         { path: 'package.json', content: '{}' },
-        { path: 'README.md', content: '# My Project' },
+        { path: 'README.md', content: '# My Workspace' },
       ];
 
       for (const file of files) {
@@ -527,8 +527,8 @@ line 7 modified`;
 
       const filesAtV2 = diffTracker.getFilesAtVersion(ownerId, 2);
 
-      // getFilesAtVersion prepends 'project/' to paths that don't already start with it
-      const lookupKey = filePath.startsWith('project/') ? filePath : `project/${filePath}`;
+      // getFilesAtVersion prepends 'workspace/' to paths that don't already start with it
+      const lookupKey = filePath.startsWith('workspace/') ? filePath : `workspace/${filePath}`;
       const contentAtV2 = filesAtV2.get(lookupKey);
       expect(contentAtV2).toBe('v2');
     });

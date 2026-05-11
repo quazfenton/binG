@@ -25,7 +25,7 @@
       "timestamp": 1775759178558
     },
     {
-      "name": "List project directory",
+      "name": "List workspace directory",
       "pass": true,
       "detail": "status=200",
       "timestamp": 1775759180087

@@ -138,7 +138,7 @@ export const EMBED_CONFIGS: Record<string, EmbedConfig> = {
   },
 
   'wiki': {
-    title: 'Project Wiki',
+    title: 'Workspace Wiki',
     description: 'Collaborative documentation and knowledge base',
     component: 'WikiPlugin',
     theme: 'light',

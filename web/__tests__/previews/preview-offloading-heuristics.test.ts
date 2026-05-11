@@ -420,7 +420,7 @@ describe('Preview Offloading Heuristics', () => {
       expect(result.heuristics?.shouldOffload).toBe(false);
     });
 
-    it('should correctly identify Vite project without framework', () => {
+    it('should correctly identify Vite workspace without framework', () => {
       const files = [
         {
           name: 'package.json',
@@ -443,7 +443,7 @@ describe('Preview Offloading Heuristics', () => {
       expect(result.previewMode).toBe('vite');
     });
 
-    it('should correctly identify Webpack project', () => {
+    it('should correctly identify Webpack workspace', () => {
       const files = [
         {
           name: 'package.json',
@@ -468,7 +468,7 @@ describe('Preview Offloading Heuristics', () => {
       expect(result.previewMode).toBe('webpack');
     });
 
-    it('should correctly identify Rollup project', () => {
+    it('should correctly identify Rollup workspace', () => {
       const files = [
         {
           name: 'package.json',
@@ -511,14 +511,14 @@ describe('Preview Offloading Heuristics', () => {
 
       const result = detectProject({ files } as PreviewRequest);
 
-      // typescript-only project with no HTML → unknown framework
+      // typescript-only workspace with no HTML → unknown framework
       expect(result.framework).toBe('unknown');
       expect(result.previewMode).toBe('sandpack');
     });
   });
 
   describe('Cloud Offloading Decision Logic', () => {
-    it('should not offload simple React project', () => {
+    it('should not offload simple React workspace', () => {
       const files = [
         {
           name: 'package.json',
@@ -540,7 +540,7 @@ describe('Preview Offloading Heuristics', () => {
       expect(result.previewMode).toBe('sandpack');
     });
 
-    it('should offload project with many dependencies', () => {
+    it('should offload workspace with many dependencies', () => {
       // Source's estimateNodeModulesSize: heavy deps (exact match: typescript,
       // react, react-dom, @angular/core, vue, next, nuxt) = 20MB each,
       // regular deps = 0.2MB each. Need total > 500MB to trigger offload.
@@ -575,7 +575,7 @@ describe('Preview Offloading Heuristics', () => {
       expect(result.heuristics?.offloadReason).toContain('node_modules');
     });
 
-    it('should offload project with complex build scripts', () => {
+    it('should offload workspace with complex build scripts', () => {
       const files = [
         {
           name: 'package.json',
@@ -685,7 +685,7 @@ describe('Preview Offloading Heuristics', () => {
       const result = detectProject({ files } as PreviewRequest);
 
       expect(result.heuristics?.shouldOffload).toBe(false);
-      // Empty project defaults to sandpack (frontend default)
+      // Empty workspace defaults to sandpack (frontend default)
       expect(result.previewMode).toBe('sandpack');
     });
 
@@ -879,7 +879,7 @@ describe('Preview Offloading Heuristics', () => {
   });
 
   describe('Performance Benchmarks', () => {
-    it('should detect framework in under 100ms for typical project', () => {
+    it('should detect framework in under 100ms for typical workspace', () => {
       const files = [
         {
           name: 'package.json',
@@ -910,7 +910,7 @@ describe('Preview Offloading Heuristics', () => {
       expect(duration).toBeLessThan(100);
     });
 
-    it('should handle large project efficiently', () => {
+    it('should handle large workspace efficiently', () => {
       const files = Array.from({ length: 1000 }, (_, i) => ({
         name: `src/components/Component${i}.tsx`,
         content: `export const Component${i} = () => <div>{${i}}</div>;`,

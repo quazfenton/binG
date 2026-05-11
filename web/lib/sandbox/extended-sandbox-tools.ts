@@ -3,12 +3,12 @@
  *
  * Extends `ENHANCED_SANDBOX_TOOLS` with:
  * - Terminal / PTY session management
- * - Project analysis (framework detection, script listing, dependency analysis)
+ * - Workspace analysis (framework detection, script listing, dependency analysis)
  * - Port status checking
  *
  * These tools let the LLM:
  * - Start a dev server and monitor its output interactively
- * - Detect project structure and recommended commands
+ * - Detect workspace structure and recommended commands
  * - Check listening ports and running processes
  * - Navigate TUIs and interactive programs
  */
@@ -113,15 +113,15 @@ export const TERMINAL_TOOLS: ToolDefinition[] = [
 ];
 
 /**
- * Project analysis tools
+ * Workspace analysis tools
  */
 export const PROJECT_ANALYSIS_TOOLS: ToolDefinition[] = [
   {
     name: 'project_analyze',
-    description: 'Analyze the project at the workspace root. ' +
+    description: 'Analyze the workspace at the workspace root. ' +
       'Detects framework, package manager, entry points, config files, dependencies, ' +
       'and returns recommended commands for install/run/test/build. ' +
-      'Use this before running commands to understand the project structure.',
+      'Use this before running commands to understand the workspace structure.',
     parameters: {
       type: 'object',
       properties: {
@@ -136,7 +136,7 @@ export const PROJECT_ANALYSIS_TOOLS: ToolDefinition[] = [
   },
   {
     name: 'project_list_scripts',
-    description: 'List all runnable scripts/tasks in the project. ' +
+    description: 'List all runnable scripts/tasks in the workspace. ' +
       'Includes npm scripts, Makefile targets, pyproject.toml tasks, deno tasks, ' +
       'cargo commands, go tasks, turbo and nx tasks. ' +
       'Use this to discover what commands are available.',
@@ -158,7 +158,7 @@ export const PROJECT_ANALYSIS_TOOLS: ToolDefinition[] = [
   },
   {
     name: 'project_structure',
-    description: 'Get the file tree of the project with semantic understanding. ' +
+    description: 'Get the file tree of the workspace with semantic understanding. ' +
       'Returns a text summary of top-level structure and notable files (configs, entry points, docs).',
     parameters: {
       type: 'object',
@@ -194,7 +194,7 @@ export const PORT_TOOLS: ToolDefinition[] = [
 ];
 
 /**
- * All extended sandbox tools (base + terminal + project analysis + port).
+ * All extended sandbox tools (base + terminal + workspace analysis + port).
  */
 export const EXTENDED_SANDBOX_TOOLS: ToolDefinition[] = [
   ...ENHANCED_SANDBOX_TOOLS,
@@ -239,11 +239,11 @@ const EXTENDED_TOOL_TO_CAPABILITY: Record<string, string> = {
   terminal_resize: 'terminal.resize',
   terminal_close_session: 'terminal.close_session',
   terminal_list_sessions: 'terminal.list_sessions',
-  // New project analysis tools
-  project_analyze: 'project.analyze',
-  project_list_scripts: 'project.list_scripts',
-  project_dependencies: 'project.dependencies',
-  project_structure: 'project.structure',
+  // New workspace analysis tools
+  project_analyze: 'workspace.analyze',
+  project_list_scripts: 'workspace.list_scripts',
+  project_dependencies: 'workspace.dependencies',
+  project_structure: 'workspace.structure',
   // New port status tool
   port_status: 'terminal.get_port_status',
 };

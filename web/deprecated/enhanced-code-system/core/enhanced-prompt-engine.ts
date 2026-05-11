@@ -97,10 +97,10 @@ Previous Solution: {previous_solution}
 `,
 
   MULTI_FILE_CONTEXT: `
-Working with multi-file project context.
+Working with multi-file workspace context.
 Primary file: {primary_file}
 Related files: {related_files}
-Project structure: {project_structure}
+Workspace structure: {project_structure}
 
 Ensure:
 - Consistency across files
@@ -181,7 +181,7 @@ class EnhancedPromptEngine extends EventEmitter {
       qualityRequirements = {}
     } = options;
 
-    // Build context from files and project state
+    // Build context from files and workspace state
     const context = this.buildEnhancedContext(files);
 
     // Select appropriate template
@@ -261,7 +261,7 @@ class EnhancedPromptEngine extends EventEmitter {
       }
     }
 
-    // Update project state
+    // Update workspace state
     if (updateProjectState) {
       this.updateProjectState(targetFile.id, response);
     }
@@ -440,7 +440,7 @@ class EnhancedPromptEngine extends EventEmitter {
   }
 
   /**
-   * Build enhanced context from project files and state
+   * Build enhanced context from workspace files and state
    */
   private buildEnhancedContext(files: ProjectItem[]): any {
     const context = {
@@ -589,7 +589,7 @@ class EnhancedPromptEngine extends EventEmitter {
   }
 
   /**
-   * Update project state with new content
+   * Update workspace state with new content
    */
   private updateProjectState(fileId: string, newContent: string): void {
     const existingFile = this.projectState.get(fileId);
@@ -701,7 +701,7 @@ class EnhancedPromptEngine extends EventEmitter {
   }
 
   /**
-   * Build project structure representation
+   * Build workspace structure representation
    */
   private buildProjectStructure(files: ProjectItem[]): any {
     return {
@@ -715,7 +715,7 @@ class EnhancedPromptEngine extends EventEmitter {
   }
 
   /**
-   * Extract project dependencies
+   * Extract workspace dependencies
    */
   private extractDependencies(files: ProjectItem[]): string[] {
     const allDeps = files.flatMap(file => this.extractImports(file.content));

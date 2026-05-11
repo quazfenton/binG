@@ -15,7 +15,7 @@ import { pathToUri } from './path-utils';
 // ─── Types ──────────────────────────────────────────────────────────────────────
 
 export interface TsServerOptions {
-  /** Project root directory (where tsconfig.json lives) */
+  /** Workspace root directory (where tsconfig.json lives) */
   projectRoot?: string;
   /** Custom path to typescript-language-server binary */
   binaryPath?: string;

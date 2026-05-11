@@ -868,7 +868,7 @@ describe('Feedback Injection System - Tool Failure Tests', () => {
       expect(healingTriggerAfter.healingMode).toBe('replan');
       
       // Step 9: Generate healing prompt
-      const originalTask = 'Install npm dependencies for the project';
+      const originalTask = 'Install npm dependencies for the workspace';
       const healingPrompt = generateHealingPrompt(healingTriggerAfter, context, originalTask);
       
       expect(healingPrompt).toContain('Auto-Healing Re-Prompt');

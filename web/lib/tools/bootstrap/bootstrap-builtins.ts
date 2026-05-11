@@ -101,12 +101,12 @@ export async function registerBuiltInCapabilities(registry: ToolRegistry): Promi
     count++;
   }
 
-  // Register context-pack as the provider for project.bundle capability
+  // Register context-pack as the provider for workspace.bundle capability
   try {
     const { contextPackService } = await import('@/lib/virtual-filesystem/context-pack-service');
     await registry.registerTool({
       name: 'context-pack:bundle',
-      capability: 'project.bundle',
+      capability: 'workspace.bundle',
       provider: 'context-pack',
       handler: async (args: any, context: any) => {
         const ownerId = context.userId || 'anonymous';
@@ -127,7 +127,7 @@ export async function registerBuiltInCapabilities(registry: ToolRegistry): Promi
         latency: 'medium',
         cost: 'low',
         reliability: 0.99,
-        tags: ['context', 'bundle', 'repomix', 'project'],
+        tags: ['context', 'bundle', 'repomix', 'workspace'],
       },
       permissions: ['file:read'],
     });

@@ -653,8 +653,8 @@ class CrewAIAdapter extends FrameworkAdapter {
     const taskPrompt = `Your task is: ${task}`;
     
     const filesPrompt = files.length > 0 
-      ? `Project files:\n${files.map(f => `File: ${f.path}\n${f.content.substring(0, 200)}...`).join('\n\n')}`
-      : 'No project files provided';
+      ? `Workspace files:\n${files.map(f => `File: ${f.path}\n${f.content.substring(0, 200)}...`).join('\n\n')}`
+      : 'No workspace files provided';
       
     const capabilitiesPrompt = `Your capabilities: ${JSON.stringify(agent.capabilities || {})}`;
     
@@ -916,8 +916,8 @@ class AG2Adapter extends FrameworkAdapter {
     const taskPrompt = `The group discussion topic is: ${task}`;
     
     const filesPrompt = files.length > 0 
-      ? `Relevant project files:\n${files.map(f => `File: ${f.path}\n${f.content.substring(0, 150)}...`).join('\n\n')}`
-      : 'No project files provided';
+      ? `Relevant workspace files:\n${files.map(f => `File: ${f.path}\n${f.content.substring(0, 150)}...`).join('\n\n')}`
+      : 'No workspace files provided';
       
     const capabilitiesPrompt = `Your capabilities: ${JSON.stringify(agent.capabilities || {})}`;
     

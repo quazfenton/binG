@@ -252,7 +252,7 @@ export function initializeDefaultTools(): void {
       }),
       tool: async ({ path, ownerId }: { path?: string; ownerId?: string }) => {
         const owner = ownerId || ANON_READONLY_OWNER;
-        const queryParams = new URLSearchParams({ path: path || 'project', ownerId: owner });
+        const queryParams = new URLSearchParams({ path: path || 'workspace', ownerId: owner });
         const response = await fetch(`/api/filesystem/list?${queryParams.toString()}`);
         const result = await response.json();
         if (!result.success) throw new Error(result.error || 'Failed to list directory');
@@ -319,7 +319,7 @@ export function initializeDefaultTools(): void {
       }),
       tool: async ({ query, path, ownerId }: { query: string; path?: string; ownerId?: string }) => {
         const owner = ownerId || ANON_READONLY_OWNER;
-        const queryParams = new URLSearchParams({ q: query, path: path || 'project', ownerId: owner });
+        const queryParams = new URLSearchParams({ q: query, path: path || 'workspace', ownerId: owner });
         const response = await fetch(`/api/filesystem/search?${queryParams.toString()}`);
         const result = await response.json();
         if (!result.success) throw new Error(result.error || 'Search failed');

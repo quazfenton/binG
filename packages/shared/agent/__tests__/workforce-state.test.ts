@@ -132,7 +132,7 @@ describe('WorkforceState — Full Lifecycle Integration', () => {
       updatedAt: '2025-01-01T00:00:00.000Z',
       tasks: [],
     });
-    vfsMock.files.set(`${userId}:project/sessions/001/STATE.yaml`, { content: existingYaml });
+    vfsMock.files.set(`${userId}:workspace/sessions/001/STATE.yaml`, { content: existingYaml });
 
     const newTask = {
       id: 'task-new-001',
@@ -180,7 +180,7 @@ describe('WorkforceState — Full Lifecycle Integration', () => {
       updatedAt: '2025-01-01T00:00:00.000Z',
       tasks: [existingTask],
     });
-    vfsMock.files.set(`${userId}:project/sessions/001/STATE.yaml`, { content: existingYaml });
+    vfsMock.files.set(`${userId}:workspace/sessions/001/STATE.yaml`, { content: existingYaml });
 
     const state = await updateTask(userId, conversationId, 'task-update-001', {
       status: 'running',
@@ -216,8 +216,8 @@ describe('WorkforceState — Full Lifecycle Integration', () => {
     // Step B: addTask — adds task-1
     const task1 = {
       id: 'task-1',
-      title: 'Initialize project',
-      description: 'Set up the project structure',
+      title: 'Initialize workspace',
+      description: 'Set up the workspace structure',
       agent: 'nullclaw' as const,
       status: 'pending' as const,
     };
@@ -231,10 +231,10 @@ describe('WorkforceState — Full Lifecycle Integration', () => {
     const stateC = await updateTask(userId, conversationId, 'task-1', {
       status: 'completed',
       completedAt: '2025-03-01T15:30:00.000Z',
-      result: 'Project initialized successfully with 12 files',
+      result: 'Workspace initialized successfully with 12 files',
     });
     expect(stateC.tasks[0].status).toBe('completed');
-    expect(stateC.tasks[0].result).toBe('Project initialized successfully with 12 files');
+    expect(stateC.tasks[0].result).toBe('Workspace initialized successfully with 12 files');
     expect(vfsMock.writeCallCount).toBe(secondWriteCount + 1);
 
     // Step D: re-load — simulates a new call (e.g. agent restart) reading persisted state
@@ -246,10 +246,10 @@ describe('WorkforceState — Full Lifecycle Integration', () => {
 
     expect(stateD.tasks).toHaveLength(1);
     expect(stateD.tasks[0].id).toBe('task-1');
-    expect(stateD.tasks[0].title).toBe('Initialize project');
+    expect(stateD.tasks[0].title).toBe('Initialize workspace');
     expect(stateD.tasks[0].agent).toBe('nullclaw');
     expect(stateD.tasks[0].status).toBe('completed');
-    expect(stateD.tasks[0].result).toBe('Project initialized successfully with 12 files');
+    expect(stateD.tasks[0].result).toBe('Workspace initialized successfully with 12 files');
     expect(stateD.tasks[0].completedAt).toBe('2025-03-01T15:30:00.000Z');
 
     // Verify the final written YAML is valid and round-trippable
@@ -268,7 +268,7 @@ describe('WorkforceState — Full Lifecycle Integration', () => {
     const conversationId = 'conv-malformed';
 
     // Pre-populate with invalid YAML content (missing tasks array)
-    vfsMock.files.set(`${userId}:project/sessions/001/STATE.yaml`, {
+    vfsMock.files.set(`${userId}:workspace/sessions/001/STATE.yaml`, {
       content: 'version: 99\nupdatedAt: never\ntasks: null',
     });
 
@@ -290,7 +290,7 @@ describe('WorkforceState — Full Lifecycle Integration', () => {
 
     const existingTask = { id: 'existing-1', title: 'Existing', description: 'desc', agent: 'opencode' as const, status: 'pending' as const };
     const existingYaml = yaml.dump({ version: 1, updatedAt: '', tasks: [existingTask] });
-    vfsMock.files.set(`${userId}:project/sessions/001/STATE.yaml`, { content: existingYaml });
+    vfsMock.files.set(`${userId}:workspace/sessions/001/STATE.yaml`, { content: existingYaml });
 
     const state = await updateTask(userId, conversationId, 'non-existent-id', { status: 'running' });
 

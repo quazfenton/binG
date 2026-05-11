@@ -32,7 +32,7 @@
  * // Upload large file to object storage
  * await phase3.uploadFile(sandboxId, {
  *   localPath: '/workspace/data/model.pkl',
- *   storageKey: 'my-project/model.pkl',
+ *   storageKey: 'my-workspace/model.pkl',
  * });
  * ```
  */

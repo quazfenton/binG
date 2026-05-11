@@ -91,7 +91,7 @@ async function testHybridRetrievalFallback() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         messages: [
-          { role: 'user', content: 'What is the structure of this project?' }
+          { role: 'user', content: 'What is the structure of this workspace?' }
         ],
         provider: PROVIDER,
         model: MODEL,
@@ -173,7 +173,7 @@ async function testContextBuilderJsonFormat() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         messages: [
-          { role: 'user', content: 'What files are in the project?' }
+          { role: 'user', content: 'What files are in the workspace?' }
         ],
         provider: PROVIDER,
         model: MODEL,

@@ -138,7 +138,7 @@ describe('Cloud Agent + Preview Offload Integration', () => {
       expect(decision.estimatedCost).toBeGreaterThan(0);
     });
 
-    it('should use Daytona for large project (>50 files)', () => {
+    it('should use Daytona for large workspace (>50 files)', () => {
       const files: Record<string, string> = {};
       for (let i = 0; i < 51; i++) {
         files[`src/file${i}.js`] = `console.log(${i})`;
@@ -258,7 +258,7 @@ describe('Cloud Agent + Preview Offload Integration', () => {
 
       expect(agentResult.success).toBe(true);
 
-      // Decide preview routing for a Next.js project
+      // Decide preview routing for a Next.js workspace
       const previewDecision = previewOffloader.decide({
         files: {
           'pages/index.js': 'export default function Index() {}',

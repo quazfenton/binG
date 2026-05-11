@@ -325,7 +325,7 @@ export default function GitSourceControl({ scopePath }: GitSourceControlProps) {
           // For modified/deleted files, fetch from VFS or use current content
           try {
             // Read file content from VFS via API (cannot import server modules in client components)
-            const vfsPath = change.path.startsWith('project/') ? change.path : `project/${change.path}`;
+            const vfsPath = change.path.startsWith('workspace/') ? change.path : `workspace/${change.path}`;
             const readRes = await fetch('/api/filesystem/read', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },

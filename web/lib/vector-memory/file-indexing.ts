@@ -135,18 +135,18 @@ export async function handleFileEvent(
 }
 
 /**
- * Wire a VFSFileWatcher to a project's vector store so every
+ * Wire a VFSFileWatcher to a workspace's vector store so every
  * file change automatically re-indexes.
  *
  * @example
  * ```ts
  * import { watchFiles } from '@/lib/virtual-filesystem/vfs-file-watcher';
- * import { getProjectServices } from '@/lib/project-context';
+ * import { getProjectServices } from '@/lib/workspace-context';
  * import { wireWatcherToIndex } from '@/lib/vector-memory/file-indexing';
  *
- * const project = getProjectServices({ id: 'proj-1', name: 'my-app' });
+ * const workspace = getProjectServices({ id: 'proj-1', name: 'my-app' });
  * const watcher = createFileWatcher(userId, { exclude: ['node_modules/*'] });
- * wireWatcherToIndex(watcher, project.vectorStore, project.context.id);
+ * wireWatcherToIndex(watcher, workspace.vectorStore, workspace.context.id);
  * watcher.start();
  * ```
  */

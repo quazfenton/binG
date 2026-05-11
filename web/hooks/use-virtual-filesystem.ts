@@ -229,10 +229,10 @@ export function useVirtualFilesystem(
   const useOPFS = options?.useOPFS ?? false;
   const offlineMode = options?.offlineMode ?? false;
 
-  // Derive session ID from initialPath if it's a scoped path (e.g., "project/sessions/004")
+  // Derive session ID from initialPath if it's a scoped path (e.g., "workspace/sessions/004")
   const deriveSessionIdFromPath = (path: string | undefined | null): string | null => {
     if (!path) return null;
-    const match = path.match(/^project\/sessions\/([^/]+)/);
+    const match = path.match(/^workspace\/sessions\/([^/]+)/);
     return match ? match[1] : null;
   };
 
@@ -242,7 +242,7 @@ export function useVirtualFilesystem(
   // This ensures the VFS always starts in the correct session subdirectory.
   // SECURITY: Use indexOf (FIRST $) not split().pop(), because:
   // - userId is system-controlled and NEVER contains $
-  // - sessionId MAY contain user-provided $ (e.g., folder named "my$project")
+  // - sessionId MAY contain user-provided $ (e.g., folder named "my$workspace")
   const deriveSessionFolderFromComposite = (): string | null => {
     const composite = options?.compositeSessionId;
     if (!composite) return null;
@@ -260,8 +260,8 @@ export function useVirtualFilesystem(
   // Compute the resolved session-scoped path for initialization
   const resolveInitialSessionPath = (): string => {
     // CRITICAL FIX: In desktop mode, use DESKTOP_WORKSPACE_ROOT directly
-    // The VFS in desktop mode accesses the actual filesystem, not a virtual 'project/' hierarchy
-    // Files are stored at the workspace root, not under 'project/' subdirectory
+    // The VFS in desktop mode accesses the actual filesystem, not a virtual 'workspace/' hierarchy
+    // Files are stored at the workspace root, not under 'workspace/' subdirectory
     if (typeof window !== 'undefined') {
       const tauriConfig = (window as any).__SIDECAR_CONFIG__;
       const desktopWsRoot = (tauriConfig?.workspace_root) || 
@@ -272,22 +272,22 @@ export function useVirtualFilesystem(
       }
     }
     
-    // Priority 1: If initialPath is already a scoped path (e.g., "project/sessions/..."), use it
+    // Priority 1: If initialPath is already a scoped path (e.g., "workspace/sessions/..."), use it
     if (initialPath && initialPath.includes('sessions/')) {
       return initialPath.replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
     }
     // Priority 2: Derive session folder from compositeSessionId
     const sessionFolder = deriveSessionFolderFromComposite();
     if (sessionFolder) {
-      return `project/sessions/${sessionFolder}`;
+      return `workspace/sessions/${sessionFolder}`;
     }
     // Priority 3: Derive from initialPath
     const derived = deriveSessionIdFromPath(initialPath || '');
     if (derived) {
-      return `project/sessions/${derived}`;
+      return `workspace/sessions/${derived}`;
     }
-    // Priority 4: Fall back to 'project' root (for legacy/test scenarios)
-    return 'project';
+    // Priority 4: Fall back to 'workspace' root (for legacy/test scenarios)
+    return 'workspace';
   };
 
   const resolvedInitialPath = resolveInitialSessionPath();
@@ -304,11 +304,11 @@ export function useVirtualFilesystem(
   // Priority order:
   // 1. Explicit options.userId (authenticated user) — ensures logged-in users see their own workspace
   // 2. Composite sessionId in "userId$sessionNum" format (e.g., "1$004") — extract userId part
-  // 3. Derive from scoped path (e.g., "project/sessions/004")
+  // 3. Derive from scoped path (e.g., "workspace/sessions/004")
   // 4. Fall back to anonymous session ID
   // SECURITY: Use indexOf (FIRST $) not split()[0], because:
   // - userId is system-controlled and NEVER contains $
-  // - sessionId MAY contain user-provided $ (e.g., folder named "my$project")
+  // - sessionId MAY contain user-provided $ (e.g., folder named "my$workspace")
   const getOwnerId = useCallback(() => {
     // Priority 1: Explicit authenticated userId
     if (options?.userId) return options.userId;
@@ -600,7 +600,7 @@ export function useVirtualFilesystem(
       // Returns empty string for invalid input - caller should handle this case
       // SECURITY: Use indexOf (FIRST $) not split().pop(), because:
       // - userId is system-controlled and NEVER contains $
-      // - sessionId MAY contain user-provided $ (e.g., folder named "my$project")
+      // - sessionId MAY contain user-provided $ (e.g., folder named "my$workspace")
       const extractSessionPart = (id: string): string => {
         if (!id || typeof id !== 'string') return '';
         const trimmed = id.trim();
@@ -829,7 +829,7 @@ export function useVirtualFilesystem(
   }, [request]);
 
   const readFile = useCallback(async (filePath: string): Promise<VirtualFile> => {
-    // Normalize path: strip leading slash since VFS uses relative paths (e.g., "project/..." not "/project/...")
+    // Normalize path: strip leading slash since VFS uses relative paths (e.g., "workspace/..." not "/workspace/...")
     const normalizedPath = filePath.startsWith('/') ? filePath.substring(1) : filePath;
 
     // OPFS-first strategy — use authenticated userId for OPFS when available
@@ -1102,10 +1102,10 @@ export function useVirtualFilesystem(
       return;
     }
 
-    // CRITICAL: If compositeSessionId just became available and we loaded 'project' root,
+    // CRITICAL: If compositeSessionId just became available and we loaded 'workspace' root,
     // re-navigate to the correct session-scoped path
     const sessionFolder = deriveSessionFolderFromComposite();
-    if (sessionFolder && loadedPathRef.current === 'project') {
+    if (sessionFolder && loadedPathRef.current === 'workspace') {
       log('listDirectory: compositeSessionId now available, navigating to session folder:', resolvedInitialPath);
       hasMountedRef.current = false; // Reset to force reload
     }
@@ -1113,7 +1113,7 @@ export function useVirtualFilesystem(
     if (!hasMountedRef.current) {
       hasMountedRef.current = true;
       loadPath(resolvedInitialPath);
-    } else if (initialPathRef.current !== resolvedInitialPath && resolvedInitialPath !== 'project') {
+    } else if (initialPathRef.current !== resolvedInitialPath && resolvedInitialPath !== 'workspace') {
       initialPathRef.current = resolvedInitialPath;
       loadPath(resolvedInitialPath);
     }

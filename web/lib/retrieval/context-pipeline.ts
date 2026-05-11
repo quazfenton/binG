@@ -40,7 +40,7 @@ export interface ContextSourceResult {
 export interface PipelineContextOptions {
   /** User/owner ID */
   userId: string;
-  /** Project ID for symbol retrieval */
+  /** Workspace ID for symbol retrieval */
   projectId?: string;
   /** User prompt */
   prompt: string;

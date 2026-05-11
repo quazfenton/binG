@@ -87,8 +87,8 @@ describe('Sprites Tar-Pipe Sync', () => {
       const sprite = createMockSprite()
       const snapshot = {
         files: [
-          { path: 'project/src/index.ts', content: 'export default 1' },
-          { path: 'project/package.json', content: '{"name": "test"}' },
+          { path: 'workspace/src/index.ts', content: 'export default 1' },
+          { path: 'workspace/package.json', content: '{"name": "test"}' },
         ],
       }
 
@@ -98,17 +98,17 @@ describe('Sprites Tar-Pipe Sync', () => {
       expect(result.filesSynced).toBe(2)
     })
 
-    it('should remove project prefix from paths', async () => {
+    it('should remove workspace prefix from paths', async () => {
       const sprite = createMockSprite()
       const snapshot = {
         files: [
-          { path: 'project/src/index.ts', content: 'test' },
+          { path: 'workspace/src/index.ts', content: 'test' },
         ],
       }
 
       await syncVfsSnapshotToSprite(sprite, snapshot)
 
-      // Verify the tar command uses the path without 'project/' prefix
+      // Verify the tar command uses the path without 'workspace/' prefix
       expect(sprite.exec).toHaveBeenCalled()
     })
   })

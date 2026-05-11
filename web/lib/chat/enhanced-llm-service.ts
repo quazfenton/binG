@@ -45,7 +45,7 @@ export interface EnhancedLLMRequest extends LLMRequest {
   userId?: string;
   conversationId?: string;
   requestId?: string;
-  /** VFS scope path for session-scoped file operations (e.g., "project/sessions/001") */
+  /** VFS scope path for session-scoped file operations (e.g., "workspace/sessions/001") */
   scopePath?: string;
   task?: 'chat' | 'code' | 'embedding' | 'image' | 'tool' | 'agent' | 'ocr'; // Task-specific provider selection
   /** Request a bundled context pack (file tree + contents) for LLM */
@@ -501,7 +501,7 @@ export class EnhancedLLMService {
     // Compute session-aware scopePath for VFS tools
     const sessionIdFromConv = normalizeSessionId(conversationId || '');
     const computedScopePath = request.scopePath 
-      || (sessionIdFromConv ? `project/sessions/${sessionIdFromConv}` : 'project/sessions/000');
+      || (sessionIdFromConv ? `workspace/sessions/${sessionIdFromConv}` : 'workspace/sessions/000');
 
     // If tools are enabled and user ID is provided, process tools
     if (enableTools && userId && conversationId) {
@@ -622,7 +622,7 @@ export class EnhancedLLMService {
             latencyMs,
             errorType: enhancedError.failureType || 'unknown',
             success: false,
-            retryCount: (primaryError as any).retryCount || 1,
+            totalAttempts: (primaryError as any).totalAttempts || 1,
           },
         });
         recordToolCallTelemetry({
@@ -813,7 +813,7 @@ export class EnhancedLLMService {
             // Compute session-aware scopePath for VFS tools
             const sessionIdFromConv = normalizeSessionId(request.conversationId || '');
             const computedScopePath = (request as any).scopePath
-              || (sessionIdFromConv ? `project/sessions/${sessionIdFromConv}` : 'project/sessions/000');
+              || (sessionIdFromConv ? `workspace/sessions/${sessionIdFromConv}` : 'workspace/sessions/000');
 
             // Extract last user message for trigger-matching powers (lazy tool loading)
             const lastUserMsgForPowers = [...(llmRequest.messages || [])].reverse().find(m => m.role === 'user');
@@ -1483,7 +1483,7 @@ export class EnhancedLLMService {
             userId,
             conversationId,
             enableMcp: true,
-            workspaceDir: request.scopePath || `project/sessions/${sessionId}`,
+            workspaceDir: request.scopePath || `workspace/sessions/${sessionId}`,
           },
         });
 
@@ -1500,7 +1500,7 @@ export class EnhancedLLMService {
                conversationId,
                sessionId,
                requestId,
-               scopePath: request.scopePath || `project/sessions/${sessionId}`,
+               scopePath: request.scopePath || `workspace/sessions/${sessionId}`,
                lastUserMessage: userMessage,
              });
              // Convert to LLMToolDefinition format for opencode-cli
@@ -1571,7 +1571,7 @@ export class EnhancedLLMService {
             tools,
             systemPrompt,
             maxSteps: 15,
-            cwd: request.scopePath || `project/sessions/${sessionId}`,
+            cwd: request.scopePath || `workspace/sessions/${sessionId}`,
             executeTool: async (toolName: string, args: Record<string, any>) => {
               try {
                 return await toolManager.executeTool(toolName, args, {

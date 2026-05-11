@@ -226,7 +226,7 @@ describe('Shell Command Injection Prevention', () => {
     });
 
     it('should allow normal workspace paths', () => {
-      const normal = '/home/user/workspace/project';
+      const normal = '/home/user/workspace/workspace';
       const result = sanitizePath(normal);
       
       expect(result).toBe(normal);

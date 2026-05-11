@@ -100,7 +100,7 @@ export async function writeFileToServer(
  * Get workspace snapshot from server via API
  */
 export async function getWorkspaceSnapshot(
-  path = 'project'
+  path = 'workspace'
 ): Promise<{
   root: string;
   version: number;

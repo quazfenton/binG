@@ -4,9 +4,9 @@
  * pages/visual-editor.tsx
  *
  * Entry point for the Visual Editor page.
- * - Reads project data from localStorage ("visualEditorProject") injected by CodePreviewPanel
+ * - Reads workspace data from localStorage ("visualEditorProject") injected by CodePreviewPanel
  * - On save, writes changed files back via the VFS bridge (postMessage → opener or BroadcastChannel)
- * - On "Return to project", closes tab and signals the opener to reload its VFS state
+ * - On "Return to workspace", closes tab and signals the opener to reload its VFS state
  */
 
 import React, { useEffect, useState, useCallback } from "react";
@@ -22,7 +22,7 @@ export interface ProjectFile {
 
 export interface VFSProject {
   name: string;
-  filesystemScopePath: string; // e.g. "project/sessions/draft-chat_xyz"
+  filesystemScopePath: string; // e.g. "workspace/sessions/draft-chat_xyz"
   framework: string;
   files: Record<string, string>; // relative path → content
   dependencies?: string[];
@@ -40,17 +40,17 @@ const VFS_SAVE_CHANNEL = "visual_editor_vfs_save";
 // ── Page ─────────────────────────────────────────────────────────────────────
 
 export default function VisualEditorPage() {
-  const [project, setProject] = useState<VFSProject | null>(null);
+  const [workspace, setProject] = useState<VFSProject | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState<"idle" | "saved" | "error">("idle");
 
-  // ── Load project from localStorage on mount ──────────────────────────────
+  // ── Load workspace from localStorage on mount ──────────────────────────────
   useEffect(() => {
     try {
       const raw = localStorage.getItem("visualEditorProject");
       if (!raw) {
-        setLoadError("No project data found. Please open this editor from the Code Preview panel.");
+        setLoadError("No workspace data found. Please open this editor from the Code Preview panel.");
         return;
       }
       const parsed = JSON.parse(raw) as VFSProject;
@@ -61,19 +61,19 @@ export default function VisualEditorPage() {
       }
       setProject({ ...parsed, files: normalisedFiles });
     } catch (err) {
-      setLoadError(`Failed to parse project: ${err instanceof Error ? err.message : String(err)}`);
+      setLoadError(`Failed to parse workspace: ${err instanceof Error ? err.message : String(err)}`);
     }
   }, []);
 
   const handleSave = useCallback(
     async (updatedFiles: Record<string, string>) => {
-      if (!project) return;
+      if (!workspace) return;
 
       setIsSaving(true);
       setSaveStatus("idle");
 
       try {
-        const scopePath = project.filesystemScopePath ?? "project";
+        const scopePath = workspace.filesystemScopePath ?? "workspace";
         const payload = {
           type: "VFS_SAVE",
           filesystemScopePath: scopePath,
@@ -99,7 +99,7 @@ export default function VisualEditorPage() {
           savedAt: Date.now()
         }));
         
-        const updatedProject: VFSProject = { ...project, files: updatedFiles };
+        const updatedProject: VFSProject = { ...workspace, files: updatedFiles };
         localStorage.setItem("visualEditorProject", JSON.stringify(updatedProject));
 
         setProject(updatedProject);
@@ -113,10 +113,10 @@ export default function VisualEditorPage() {
         setIsSaving(false);
       }
     },
-    [project]
+    [workspace]
   );
 
-  // ── Return to project ─────────────────────────────────────────────────────
+  // ── Return to workspace ─────────────────────────────────────────────────────
   const handleReturn = useCallback(() => {
     // Signal opener to refresh
     try {
@@ -141,7 +141,7 @@ export default function VisualEditorPage() {
     <>
       <Head>
         <title>
-          {project ? `Visual Editor — ${project.name ?? "Untitled"}` : "Visual Editor"}
+          {workspace ? `Visual Editor — ${workspace.name ?? "Untitled"}` : "Visual Editor"}
         </title>
         <meta name="robots" content="noindex" />
         <link
@@ -159,7 +159,7 @@ export default function VisualEditorPage() {
               </svg>
             </div>
             <h1 className="text-xl font-semibold text-white" style={{ fontFamily: "Syne, sans-serif" }}>
-              Cannot load project
+              Cannot load workspace
             </h1>
             <p className="text-sm text-[#8b949e]">{loadError}</p>
             <button
@@ -170,16 +170,16 @@ export default function VisualEditorPage() {
             </button>
           </div>
         </div>
-      ) : !project ? (
+      ) : !workspace ? (
         <div className="h-screen w-screen bg-[#070b0f] flex items-center justify-center">
           <div className="flex flex-col items-center gap-4">
             <div className="w-8 h-8 border-2 border-[#3b82f6] border-t-transparent rounded-full animate-spin" />
-            <p className="text-sm text-[#8b949e]">Loading project…</p>
+            <p className="text-sm text-[#8b949e]">Loading workspace…</p>
           </div>
         </div>
       ) : (
         <VisualEditorMain
-          project={project}
+          workspace={workspace}
           onSave={handleSave}
           onReturn={handleReturn}
           isSaving={isSaving}

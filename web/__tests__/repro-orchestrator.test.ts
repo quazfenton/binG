@@ -35,7 +35,7 @@ describe('orchestrator reproduction harness', () => {
         return {
           text: '',
           done: false,
-          toolCalls: [{ id: 't1', name: 'write_file', arguments: { path: 'project/sessions/000/index.html', content: '<html></html>' } }],
+          toolCalls: [{ id: 't1', name: 'write_file', arguments: { path: 'workspace/sessions/000/index.html', content: '<html></html>' } }],
           usage: { totalTokens: 0 },
         };
       }

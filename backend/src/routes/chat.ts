@@ -51,8 +51,8 @@ const CHAT_RATE_LIMIT_MAX_ANONYMOUS = 10;
 const VALIDATION_CACHE_TTL_MS = 30000;
 
 // --- REGEX ---
-const STRONG_CODE_PATTERN = /\b(refactor|bug\s*fix|stack\s*trace|typescript|javascript|python|react|next\.js|vue\.js|angular|node\.?js|endpoint|database|schema|compile|lint|migrations?|docker|kubernetes|k8s|redis|mongodb|postgresql|mysql|sqlite|express|fastapi|flask|django|spring|rails|laravel|symfony|golang|rust|java|c\+\+|cpp|c#|dotnet|swift|kotlin|flutter|react\s*native|electron|code|build|implement|create\s+app|create\s+project|scaffold|generate\s+app)\b/i;
-const WEAK_CODE_KEYWORDS = ["app", "project", "component", "file", "api", "function", "class", "module", "package", "implement", "build", "develop"] as const;
+const STRONG_CODE_PATTERN = /\b(refactor|bug\s*fix|stack\s*trace|typescript|javascript|python|react|next\.js|vue\.js|angular|node\.?js|endpoint|database|schema|compile|lint|migrations?|docker|kubernetes|k8s|redis|mongodb|postgresql|mysql|sqlite|express|fastapi|flask|django|spring|rails|laravel|symfony|golang|rust|java|c\+\+|cpp|c#|dotnet|swift|kotlin|flutter|react\s*native|electron|code|build|implement|create\s+app|create\s+workspace|scaffold|generate\s+app)\b/i;
+const WEAK_CODE_KEYWORDS = ["app", "workspace", "component", "file", "api", "function", "class", "module", "package", "implement", "build", "develop"] as const;
 const WEAK_CODE_PATTERNS = WEAK_CODE_KEYWORDS.map(kw => new RegExp(`\\b${kw}\\b`, "i"));
 
 // --- HELPER LOGIC ---
@@ -125,7 +125,7 @@ chatRoute.post("/", async (c) => {
   const ownerResolution = await resolveFilesystemOwner(request);
   const filesystemOwnerId = ownerResolution.ownerId;
   const resolvedConversationId = conversationId || await generateSessionName();
-  const requestedScopePath = sanitizeScopePath(filesystemContext?.scopePath || `project/sessions/${normalizeSessionId(resolvedConversationId)}`);
+  const requestedScopePath = sanitizeScopePath(filesystemContext?.scopePath || `workspace/sessions/${normalizeSessionId(resolvedConversationId)}`);
 
   // 4. Config Building
   const classification = await classifyRequest(messages, []);

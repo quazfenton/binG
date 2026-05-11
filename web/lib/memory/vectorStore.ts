@@ -67,7 +67,7 @@ function getDB(): VectorDB {
   return _db;
 }
 
-// ─── Project Operations ──────────────────────────────────────────────────────
+// ─── Workspace Operations ──────────────────────────────────────────────────────
 
 export async function upsertProject(meta: ProjectMeta): Promise<void> {
   await getDB().projects.put(meta);
@@ -98,7 +98,7 @@ export async function upsertSymbols(entries: VectorEntry[]): Promise<void> {
   await getDB().symbols.bulkPut(entries);
 }
 
-/** Get all symbols for a project (for in-memory ranking) */
+/** Get all symbols for a workspace (for in-memory ranking) */
 export async function getProjectSymbols(projectId: string): Promise<VectorEntry[]> {
   return getDB().symbols.where("projectId").equals(projectId).toArray();
 }

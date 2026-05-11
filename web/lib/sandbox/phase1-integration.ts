@@ -26,7 +26,7 @@
  * const tools = phase1.getProviderMCPTools();
  * 
  * // Sync sandbox to VFS after restore
- * await phase1.syncToVFS(session.sessionId, 'project');
+ * await phase1.syncToVFS(session.sessionId, 'workspace');
  * ```
  */
 

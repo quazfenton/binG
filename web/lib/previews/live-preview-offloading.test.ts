@@ -18,7 +18,7 @@ import {
 
 describe('LivePreviewOffloading', () => {
   describe('detectProject', () => {
-    it('should detect React project from package.json', () => {
+    it('should detect React workspace from package.json', () => {
       const files: Record<string, string> = {
         'package.json': JSON.stringify({
           dependencies: { react: '^18.0.0', 'react-dom': '^18.0.0' }
@@ -33,7 +33,7 @@ describe('LivePreviewOffloading', () => {
       expect(result.previewMode).toBe('sandpack');
     });
 
-    it('should detect Next.js project from package.json', () => {
+    it('should detect Next.js workspace from package.json', () => {
       const files: Record<string, string> = {
         'package.json': JSON.stringify({
           dependencies: { next: '^14.0.0', react: '^18.0.0' }
@@ -49,7 +49,7 @@ describe('LivePreviewOffloading', () => {
       expect(['nextjs', 'sandpack']).toContain(result.previewMode);
     });
 
-    it('should detect Vue project from .vue files', () => {
+    it('should detect Vue workspace from .vue files', () => {
       const files: Record<string, string> = {
         'src/App.vue': '<template><div>Hello</div></template>',
         'src/main.js': 'import { createApp } from "vue";'
@@ -61,7 +61,7 @@ describe('LivePreviewOffloading', () => {
       expect(result.previewMode).toBe('sandpack');
     });
 
-    it('should detect Svelte project from .svelte files', () => {
+    it('should detect Svelte workspace from .svelte files', () => {
       const files: Record<string, string> = {
         'src/App.svelte': '<script>let name = "World";</script><h1>Hello {name}!</h1>'
       };
@@ -72,7 +72,7 @@ describe('LivePreviewOffloading', () => {
       expect(result.previewMode).toBe('sandpack');
     });
 
-    it('should detect Flask project from Python imports', () => {
+    it('should detect Flask workspace from Python imports', () => {
       const files: Record<string, string> = {
         'app.py': 'from flask import Flask\napp = Flask(__name__)'
       };
@@ -84,7 +84,7 @@ describe('LivePreviewOffloading', () => {
       expect(result.previewMode).toBe('pyodide');
     });
 
-    it('should detect FastAPI project from Python imports', () => {
+    it('should detect FastAPI workspace from Python imports', () => {
       const files: Record<string, string> = {
         'main.py': 'from fastapi import FastAPI\napp = FastAPI()'
       };
@@ -97,7 +97,7 @@ describe('LivePreviewOffloading', () => {
       expect(['pyodide', 'devbox']).toContain(result.previewMode);
     });
 
-    it('should detect Streamlit project from imports', () => {
+    it('should detect Streamlit workspace from imports', () => {
       const files: Record<string, string> = {
         'app.py': 'import streamlit as st\nst.title("Hello")'
       };
@@ -109,7 +109,7 @@ describe('LivePreviewOffloading', () => {
       expect(['pyodide', 'devbox']).toContain(result.previewMode);
     });
 
-    it('should detect Django project from imports', () => {
+    it('should detect Django workspace from imports', () => {
       const files: Record<string, string> = {
         'manage.py': '#!/usr/bin/env python',
         'settings.py': 'import django'
@@ -122,7 +122,7 @@ describe('LivePreviewOffloading', () => {
       expect(result.hasPython).toBe(true);
     });
 
-    it('should detect Vite project from vite.config', () => {
+    it('should detect Vite workspace from vite.config', () => {
       const files: Record<string, string> = {
         'vite.config.ts': 'export default defineConfig({})',
         'src/main.ts': 'console.log("Hello");'
@@ -133,7 +133,7 @@ describe('LivePreviewOffloading', () => {
       expect(result.bundler).toBe('vite');
     });
 
-    it('should detect Webpack project from webpack.config', () => {
+    it('should detect Webpack workspace from webpack.config', () => {
       const files: Record<string, string> = {
         'webpack.config.js': 'module.exports = {}',
         'src/index.js': 'console.log("Hello");'
@@ -144,7 +144,7 @@ describe('LivePreviewOffloading', () => {
       expect(result.bundler).toBe('webpack');
     });
 
-    it('should detect vanilla HTML project', () => {
+    it('should detect vanilla HTML workspace', () => {
       const files: Record<string, string> = {
         'index.html': '<!DOCTYPE html><html><body>Hello</body></html>',
         'style.css': 'body { color: red; }'
@@ -157,7 +157,7 @@ describe('LivePreviewOffloading', () => {
       expect(result.previewMode).toBe('iframe');
     });
 
-    it('should detect Nuxt project', () => {
+    it('should detect Nuxt workspace', () => {
       const files: Record<string, string> = {
         'package.json': JSON.stringify({
           dependencies: { nuxt: '^3.0.0' }
@@ -173,7 +173,7 @@ describe('LivePreviewOffloading', () => {
       expect(['nextjs', 'sandpack']).toContain(result.previewMode);
     });
 
-    it('should detect Astro project', () => {
+    it('should detect Astro workspace', () => {
       const files: Record<string, string> = {
         'package.json': JSON.stringify({
           dependencies: { astro: '^4.0.0' }
@@ -189,7 +189,7 @@ describe('LivePreviewOffloading', () => {
       expect(result.previewMode).toBe('iframe');
     });
 
-    it('should detect Remix project', () => {
+    it('should detect Remix workspace', () => {
       const files: Record<string, string> = {
         'package.json': JSON.stringify({
           dependencies: { '@remix-run/react': '^2.0.0' }
@@ -204,7 +204,7 @@ describe('LivePreviewOffloading', () => {
       expect(['nextjs', 'sandpack']).toContain(result.previewMode);
     });
 
-    it('should detect Angular project', () => {
+    it('should detect Angular workspace', () => {
       const files: Record<string, string> = {
         'package.json': JSON.stringify({
           dependencies: { '@angular/core': '^17.0.0' }
@@ -218,7 +218,7 @@ describe('LivePreviewOffloading', () => {
       expect(result.previewMode).toBe('sandpack');
     });
 
-    it('should detect SolidJS project', () => {
+    it('should detect SolidJS workspace', () => {
       const files: Record<string, string> = {
         'package.json': JSON.stringify({
           dependencies: { 'solid-js': '^1.8.0' }
@@ -232,7 +232,7 @@ describe('LivePreviewOffloading', () => {
       expect(result.previewMode).toBe('sandpack');
     });
 
-    it('should detect Gradio project', () => {
+    it('should detect Gradio workspace', () => {
       const files: Record<string, string> = {
         'app.py': 'import gradio as gr\ndemo = gr.Interface(fn=lambda x: x, inputs="text", outputs="text")'
       };
@@ -352,11 +352,11 @@ describe('LivePreviewOffloading', () => {
 
     it('should score index.html moderately', () => {
       const files = {
-        'project/index.html': '<html></html>',
-        'project/src/index.js': 'console.log("hello")'
+        'workspace/index.html': '<html></html>',
+        'workspace/src/index.js': 'console.log("hello")'
       };
       const scores = livePreviewOffloading.computeRootScores(files);
-      expect(scores.get('project')).toBeGreaterThan(1);
+      expect(scores.get('workspace')).toBeGreaterThan(1);
     });
   });
 
@@ -364,29 +364,29 @@ describe('LivePreviewOffloading', () => {
     it('should return highest scored root', () => {
       const scores = new Map<string, number>();
       scores.set('', 1);
-      scores.set('project', 5);
-      scores.set('project/src', 3);
+      scores.set('workspace', 5);
+      scores.set('workspace/src', 3);
 
       const result = livePreviewOffloading.selectRoot(scores);
-      expect(result).toBe('project');
+      expect(result).toBe('workspace');
     });
 
     it('should prefer shallower paths when scores equal', () => {
       const scores = new Map<string, number>();
-      scores.set('project', 3);
-      scores.set('project/src', 3);
+      scores.set('workspace', 3);
+      scores.set('workspace/src', 3);
 
       const result = livePreviewOffloading.selectRoot(scores);
-      expect(result).toBe('project');
+      expect(result).toBe('workspace');
     });
   });
 
   describe('normalizeFiles', () => {
     it('should strip VFS scope path', () => {
       const files = {
-        '/project/sessions/session123/src/index.js': 'console.log("hello")'
+        '/workspace/sessions/session123/src/index.js': 'console.log("hello")'
       };
-      const result = livePreviewOffloading.normalizeFiles(files, '', 'project/sessions/session123');
+      const result = livePreviewOffloading.normalizeFiles(files, '', 'workspace/sessions/session123');
       expect(result['/src/index.js']).toBe('console.log("hello")');
     });
 
@@ -721,13 +721,13 @@ describe('LivePreviewOffloading', () => {
 
     it('should handle scope path with leading slashes', () => {
       const files: Record<string, string> = {
-        '///project/sessions/test/src/index.js': 'console.log("hello")'
+        '///workspace/sessions/test/src/index.js': 'console.log("hello")'
       };
-      const result = livePreviewOffloading.normalizeFiles(files, '', '///project/sessions/test');
+      const result = livePreviewOffloading.normalizeFiles(files, '', '///workspace/sessions/test');
       expect(result['/src/index.js']).toBe('console.log("hello")');
     });
 
-    it('should handle multiple Python frameworks in same project (first match wins)', () => {
+    it('should handle multiple Python frameworks in same workspace (first match wins)', () => {
       const files: Record<string, string> = {
         'app.py': 'from flask import Flask\nimport streamlit as st'
       };

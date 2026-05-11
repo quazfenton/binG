@@ -234,7 +234,7 @@ const generateMockArticles = (source: string, count: number): NewsArticle[] => {
     "Quantum Computing Reaches Milestone with 1000 Qubit Chip",
     "New Battery Technology Promises Week-Long Phone Charge",
     "SpaceX Starship Completes First Orbital Flight",
-    "Open Source Project Revolutionizes Web Development",
+    "Open Source Workspace Revolutionizes Web Development",
     "Climate Tech Startup Raises $500M for Carbon Capture",
     "Neural Network Achieves Human-Level Code Generation",
     "New Material Enables Transparent Solar Panels",

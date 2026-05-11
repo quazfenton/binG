@@ -147,7 +147,7 @@ async function runRole(
     context ? `\n## Context from previous roles:\n${context.slice(0, 6000)}` : '',
   ].join('\n');
 
-  const engine = resolveEngine(options.engine, baseConfig.engine);
+  const engine = resolveEngine(baseConfig.engine, baseConfig.engine);
   const subCall = configureSubCall({
     ...baseConfig,
     provider,
@@ -155,7 +155,7 @@ async function runRole(
     systemPrompt,
     temperature,
     maxTokens,
-    mode: 'v1-api',
+    mode: 'v1-api' as const,
   }, engine);
   const result = await processUnifiedAgentRequest(subCall);
 

@@ -65,7 +65,7 @@ export class OpencodeFileService {
    * 
    * GET /file/content?path={path}
    * 
-   * @param path - File path relative to project root
+   * @param path - File path relative to workspace root
    * @returns File content as string
    * 
    * @example

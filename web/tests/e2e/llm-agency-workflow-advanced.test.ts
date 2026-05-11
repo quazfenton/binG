@@ -167,7 +167,7 @@ async function testImplicitPaths(token: string): Promise<void> {
   // Prompt that mentions files without explicit paths
   const result = await chat(token, [{
     role: 'user',
-    content: 'I need to set up a new project. Create the main entry point file called index.js and a configuration file called config.json in the root directory.',
+    content: 'I need to set up a new workspace. Create the main entry point file called index.js and a configuration file called config.json in the root directory.',
   }], 'implicit-paths-001');
 
   const response = result.content || result.response || '';
@@ -319,7 +319,7 @@ async function testNoPrematureEnding(token: string): Promise<void> {
 
   const result = await chat(token, [{
     role: 'user',
-    content: 'Create a detailed README.md for a Node.js project with sections: Installation, Usage, API Reference, Contributing, and License.',
+    content: 'Create a detailed README.md for a Node.js workspace with sections: Installation, Usage, API Reference, Contributing, and License.',
   }], 'no-premature-001', false, 180000);
 
   const response = result.content || result.response || '';
@@ -350,12 +350,12 @@ async function testCorrectToolChoice(token: string): Promise<void> {
 
   const result = await chat(token, [{
     role: 'user',
-    content: 'Create a directory called "my-project" and then create a package.json inside it with name "my-project" and version "1.0.0"',
+    content: 'Create a directory called "my-workspace" and then create a package.json inside it with name "my-workspace" and version "1.0.0"',
   }], 'tool-choice-001');
 
   const response = result.content || result.response || '';
-  const hasDirectory = response.includes('my-project') && (response.includes('mkdir') || response.includes('directory') || response.includes('create'));
-  const hasPackageJson = response.includes('package.json') && response.includes('my-project');
+  const hasDirectory = response.includes('my-workspace') && (response.includes('mkdir') || response.includes('directory') || response.includes('create'));
+  const hasPackageJson = response.includes('package.json') && response.includes('my-workspace');
 
   record(
     'Correct Tool Choice',
@@ -468,12 +468,12 @@ async function testConversationScoping(token: string): Promise<void> {
 
   const resultA = await chat(token, [{
     role: 'user',
-    content: 'My project name is "Project Alpha".',
+    content: 'My workspace name is "Workspace Alpha".',
   }], 'scope-A-001');
 
   const resultB = await chat(token, [{
     role: 'user',
-    content: 'My project name is "Project Beta".',
+    content: 'My workspace name is "Workspace Beta".',
   }], 'scope-B-001');
 
   // Both should succeed independently

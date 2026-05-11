@@ -42,7 +42,7 @@ describe('file-edit-parser incremental parsing', () => {
   it('extracts text-mode fenced mkdir from incremental chunks', () => {
     const parser = createIncrementalParser();
     const chunks = [
-      'Creating directory:\n```mkdir: project/new-dir',
+      'Creating directory:\n```mkdir: workspace/new-dir',
       '\n```',
     ];
 
@@ -55,7 +55,7 @@ describe('file-edit-parser incremental parsing', () => {
     }
 
     expect(seen).toHaveLength(1);
-    expect(seen[0].path).toBe('project/new-dir');
+    expect(seen[0].path).toBe('workspace/new-dir');
     expect(seen[0].action).toBe('mkdir');
     expect(seen[0].content).toBe('');
   });
@@ -63,7 +63,7 @@ describe('file-edit-parser incremental parsing', () => {
   it('extracts text-mode fenced delete from incremental chunks', () => {
     const parser = createIncrementalParser();
     const chunks = [
-      'Deleting old file:\n```delete: project/old.txt',
+      'Deleting old file:\n```delete: workspace/old.txt',
       '\n```',
     ];
 
@@ -76,14 +76,14 @@ describe('file-edit-parser incremental parsing', () => {
     }
 
     expect(seen).toHaveLength(1);
-    expect(seen[0].path).toBe('project/old.txt');
+    expect(seen[0].path).toBe('workspace/old.txt');
     expect(seen[0].action).toBe('delete');
     expect(seen[0].content).toBe('');
   });
 
   it('does not re-emit mkdir/delete edits on subsequent chunks', () => {
     const parser = createIncrementalParser();
-    let buffer = '```mkdir: project/test\n```\n```delete: project/old.txt\n```';
+    let buffer = '```mkdir: workspace/test\n```\n```delete: workspace/old.txt\n```';
 
     const firstPass = extractIncrementalFileEdits(buffer, parser);
     buffer += '\nMore text after.';
@@ -244,10 +244,10 @@ describe('extractAndSanitize', () => {
 describe('text-mode fenced parsers (for non-FC models)', () => {
   describe('extractFencedFileEdits', () => {
     it('extracts file from ```file: path block', () => {
-      const content = 'Here is the file:\n\n```file: project/test.txt\nHello World!\n```\n\nDone.';
+      const content = 'Here is the file:\n\n```file: workspace/test.txt\nHello World!\n```\n\nDone.';
       const edits = extractFencedFileEdits(content);
       expect(edits).toHaveLength(1);
-      expect(edits[0].path).toBe('project/test.txt');
+      expect(edits[0].path).toBe('workspace/test.txt');
       expect(edits[0].content).toBe('Hello World!');
     });
 
@@ -271,28 +271,28 @@ describe('text-mode fenced parsers (for non-FC models)', () => {
 
   describe('extractFencedDiffEdits (colon format)', () => {
     it('extracts diff from ```diff: path block', () => {
-      const content = '```diff: project/test.txt\n--- a/test\n+++ b/test\n@@ -1 +1 @@\n-old\n+new\n```';
+      const content = '```diff: workspace/test.txt\n--- a/test\n+++ b/test\n@@ -1 +1 @@\n-old\n+new\n```';
       const edits = extractFencedDiffEdits(content);
       expect(edits).toHaveLength(1);
-      expect(edits[0].path).toBe('project/test.txt');
+      expect(edits[0].path).toBe('workspace/test.txt');
       expect(edits[0].diff).toContain('-old');
       expect(edits[0].diff).toContain('+new');
     });
 
     it('still works with original space format (no colon)', () => {
-      const content = '```diff project/test.txt\n--- a/test\n+++ b/test\n@@ -1 +1 @@\n-old\n+new\n```';
+      const content = '```diff workspace/test.txt\n--- a/test\n+++ b/test\n@@ -1 +1 @@\n-old\n+new\n```';
       const edits = extractFencedDiffEdits(content);
       expect(edits).toHaveLength(1);
-      expect(edits[0].path).toBe('project/test.txt');
+      expect(edits[0].path).toBe('workspace/test.txt');
     });
   });
 
   describe('extractFencedMkdirEdits', () => {
     it('extracts mkdir from ```mkdir: path block', () => {
-      const content = '```mkdir: project/new-dir\n```';
+      const content = '```mkdir: workspace/new-dir\n```';
       const edits = extractFencedMkdirEdits(content);
       expect(edits).toHaveLength(1);
-      expect(edits[0].path).toBe('project/new-dir');
+      expect(edits[0].path).toBe('workspace/new-dir');
       expect(edits[0].action).toBe('mkdir');
     });
 
@@ -303,10 +303,10 @@ describe('text-mode fenced parsers (for non-FC models)', () => {
 
   describe('extractFencedDeleteBlocks', () => {
     it('extracts delete from ```delete: path block', () => {
-      const content = '```delete: project/old.txt\n```';
+      const content = '```delete: workspace/old.txt\n```';
       const deletes = extractFencedDeleteBlocks(content);
       expect(deletes).toHaveLength(1);
-      expect(deletes[0].path).toBe('project/old.txt');
+      expect(deletes[0].path).toBe('workspace/old.txt');
     });
 
     it('returns empty for no delete blocks', () => {
@@ -316,24 +316,24 @@ describe('text-mode fenced parsers (for non-FC models)', () => {
 
   describe('parseFilesystemResponse with text-mode formats', () => {
     it('parses ```file: blocks as writes', () => {
-      const content = 'I created the file:\n\n```file: project/test.txt\nhello\n```\n\nAll done.';
+      const content = 'I created the file:\n\n```file: workspace/test.txt\nhello\n```\n\nAll done.';
       const result = parseFilesystemResponse(content);
       expect(result.writes.length).toBeGreaterThanOrEqual(1);
-      const match = result.writes.find(w => w.path === 'project/test.txt');
+      const match = result.writes.find(w => w.path === 'workspace/test.txt');
       expect(match).toBeDefined();
       expect(match!.content.trim()).toBe('hello');
     });
 
     it('parses ```mkdir: blocks as folders', () => {
-      const content = '```mkdir: project/new-dir\n```';
+      const content = '```mkdir: workspace/new-dir\n```';
       const result = parseFilesystemResponse(content);
-      expect(result.folders).toContain('project/new-dir');
+      expect(result.folders).toContain('workspace/new-dir');
     });
 
     it('parses ```delete: blocks as deletes', () => {
-      const content = '```delete: project/old.txt\n```';
+      const content = '```delete: workspace/old.txt\n```';
       const result = parseFilesystemResponse(content);
-      expect(result.deletes).toContain('project/old.txt');
+      expect(result.deletes).toContain('workspace/old.txt');
     });
   });
 
@@ -648,14 +648,14 @@ batch_write
 
 \`\`\`javascript
 [
-  {"path": "project/package.json", "content": "{\\"name\\": \\"test\\"}"},
-  {"path": "project/index.js", "content": "console.log('hi')"}
+  {"path": "workspace/package.json", "content": "{\\"name\\": \\"test\\"}"},
+  {"path": "workspace/index.js", "content": "console.log('hi')"}
 ]
 \`\`\``;
       const edits = extractFileEdits(content);
       expect(edits.length).toBeGreaterThanOrEqual(2);
-      expect(edits.find(e => e.path === 'project/package.json')).toBeDefined();
-      expect(edits.find(e => e.path === 'project/index.js')).toBeDefined();
+      expect(edits.find(e => e.path === 'workspace/package.json')).toBeDefined();
+      expect(edits.find(e => e.path === 'workspace/index.js')).toBeDefined();
     });
 
     it('extracts write_file from fenced javascript block', () => {

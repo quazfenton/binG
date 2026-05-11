@@ -1,16 +1,16 @@
 /**
- * Project Analysis Tools
+ * Workspace Analysis Tools
  *
- * Exposes project-aware analysis capabilities that the LLM can query
+ * Exposes workspace-aware analysis capabilities that the LLM can query
  * instead of receiving a pre-baked markdown blob. Replaces the shallow
  * `buildProjectContext()` + `translateNaturalLanguageToCommand()` pipeline
  * with structured, queryable MCP tools.
  *
  * Tools:
- * - `project.analyze`    — Deep analysis: framework, dependencies, entry points, config
- * - `project.list_scripts` — All npm scripts, Makefile targets, pyproject.toml tasks
- * - `project.dependencies` — Installed packages, version conflicts, missing deps
- * - `project.structure`  — File tree with semantic understanding
+ * - `workspace.analyze`    — Deep analysis: framework, dependencies, entry points, config
+ * - `workspace.list_scripts` — All npm scripts, Makefile targets, pyproject.toml tasks
+ * - `workspace.dependencies` — Installed packages, version conflicts, missing deps
+ * - `workspace.structure`  — File tree with semantic understanding
  *
  * These tools are registered as built-in capabilities and can be called by
  * any agent (Vercel AI SDK, OpenCode agent loop, non-Mastra workflows).
@@ -62,7 +62,7 @@ async function readJSONFile<T = Record<string, unknown>>(userId: string, path: s
 }
 
 // ============================================================================
-// 1. analyze_project — Deep Project Analysis
+// 1. analyze_project — Deep Workspace Analysis
 // ============================================================================
 
 export interface ProjectAnalysisResult {
@@ -74,7 +74,7 @@ export interface ProjectAnalysisResult {
   runtimeMode: string;
   /** Entry file path */
   entryFile: string | null;
-  /** Project root relative path */
+  /** Workspace root relative path */
   projectRoot: string;
   /** Available scripts from package.json */
   scripts: string[];
@@ -123,7 +123,7 @@ export async function analyzeProject(
     getDockerCommands,
     formatSmartContextAsMarkdown,
     generateSmartContext,
-  } = await import('@/lib/project-detection');
+  } = await import('@/lib/workspace-detection');
 
   const filePaths = await getFileListing(userId);
   if (filePaths.length === 0) {
@@ -138,7 +138,7 @@ export async function analyzeProject(
       dependencies: {},
       devDependencies: {},
       configFiles: [],
-      hints: ['Workspace is empty — no project detected'],
+      hints: ['Workspace is empty — no workspace detected'],
       potentialIssues: ['No files found in workspace'],
       fileCount: 0,
       topDirs: [],
@@ -244,7 +244,7 @@ export async function listScripts(userId: string): Promise<ScriptInfo[]> {
     }
   }
 
-  // 3. pyproject.toml tasks (under [tool.poetry.scripts] or [project.scripts])
+  // 3. pyproject.toml tasks (under [tool.poetry.scripts] or [workspace.scripts])
   if (filePaths.some(p => p.endsWith('pyproject.toml'))) {
     const pyproject = await readVFSFile(
       userId,
@@ -402,7 +402,7 @@ export async function getDependencies(
   const issues: DependencyIssue[] = [];
 
   // Detect package manager
-  const { detectPackageManager } = await import('@/lib/project-detection');
+  const { detectPackageManager } = await import('@/lib/workspace-detection');
   const pm = detectPackageManager(filePaths);
 
   // Detect lock file
@@ -454,7 +454,7 @@ export async function getDependencies(
       issues.push({
         type: 'info',
         severity: 'info',
-        message: `Project requires Node.js ${nodeVersion}`,
+        message: `Workspace requires Node.js ${nodeVersion}`,
       });
     }
   }
@@ -528,7 +528,7 @@ export interface DirectoryNode {
 }
 
 /**
- * Files and directories to consider "notable" for project understanding.
+ * Files and directories to consider "notable" for workspace understanding.
  */
 const NOTABLE_PATTERNS = [
   // Config files
@@ -702,26 +702,26 @@ function detectConfigFiles(filePaths: string[]): string[] {
 }
 
 /**
- * Generate hints for the LLM based on project analysis.
+ * Generate hints for the LLM based on workspace analysis.
  */
 function generateHints(projectCtx: any): string[] {
   const hints: string[] = [];
 
   if (projectCtx.framework === 'next') {
-    hints.push('Next.js project — use `npm run dev` for HMR dev server');
+    hints.push('Next.js workspace — use `npm run dev` for HMR dev server');
     hints.push('App Router detected — entry is src/app/page.tsx');
   }
   if (projectCtx.framework === 'nuxt') {
-    hints.push('Nuxt.js project — uses Vue 3 + Vite');
+    hints.push('Nuxt.js workspace — uses Vue 3 + Vite');
   }
   if (projectCtx.framework === 'django') {
-    hints.push('Django project — use `python manage.py runserver`');
+    hints.push('Django workspace — use `python manage.py runserver`');
   }
   if (projectCtx.framework === 'rust') {
-    hints.push('Rust project — use `cargo run` to build and run');
+    hints.push('Rust workspace — use `cargo run` to build and run');
   }
   if (projectCtx.framework === 'go') {
-    hints.push('Go project — use `go run main.go` to run');
+    hints.push('Go workspace — use `go run main.go` to run');
   }
   if (projectCtx.packageManager === 'pnpm') {
     hints.push('Uses pnpm — faster installs, disk-efficient');
@@ -737,7 +737,7 @@ function generateHints(projectCtx: any): string[] {
 }
 
 /**
- * Detect potential issues in the project.
+ * Detect potential issues in the workspace.
  */
 function detectPotentialIssues(filePaths: string[], pkgJson: Record<string, unknown> | null): string[] {
   const issues: string[] = [];
@@ -747,7 +747,7 @@ function detectPotentialIssues(filePaths: string[], pkgJson: Record<string, unkn
         !filePaths.some(p => p.endsWith('go.mod')) &&
         !filePaths.some(p => p.endsWith('pyproject.toml')) &&
         !filePaths.some(p => p.endsWith('requirements.txt'))) {
-      issues.push('No project configuration file detected');
+      issues.push('No workspace configuration file detected');
     }
   }
 

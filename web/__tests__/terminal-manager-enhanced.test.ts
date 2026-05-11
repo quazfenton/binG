@@ -363,7 +363,7 @@ describe('Terminal Manager - Enhanced Integration', () => {
 
       // Execute multiple commands
       await terminalManager.sendInput('test-session-cmd-history', 'ls\n')
-      await terminalManager.sendInput('test-session-cmd-history', 'cd project\n')
+      await terminalManager.sendInput('test-session-cmd-history', 'cd workspace\n')
       await terminalManager.sendInput('test-session-cmd-history', 'npm install\n')
 
       // Wait for async processing

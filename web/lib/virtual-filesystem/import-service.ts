@@ -65,7 +65,7 @@ export interface ImportOptions {
   sessionId?: string;
   /** Custom import folder name (default: "imports-{timestamp}") */
   importFolderName?: string;
-  /** Scope path for import destination (default: project/sessions/{sessionId}) */
+  /** Scope path for import destination (default: workspace/sessions/{sessionId}) */
   scopePath?: string;
   /** Preserve folder structure from uploaded files */
   preserveStructure?: boolean;
@@ -103,7 +103,7 @@ export class FileImportService {
   /**
    * Import files from client into VFS
    *
-   * Files are stored in: project/sessions/{sessionId}/imports-{timestamp}/
+   * Files are stored in: workspace/sessions/{sessionId}/imports-{timestamp}/
    * or custom destination if specified.
    *
    * @param files - Array of file objects with name, content, and optional path
@@ -149,7 +149,7 @@ export class FileImportService {
     const folderName = importFolderName || `imports-${timestamp}`;
     // CRITICAL FIX: Normalize sessionId to prevent composite IDs in paths
     const simpleSessionId = sessionId ? normalizeSessionId(sessionId) : undefined;
-    const baseScopePath = scopePath || (simpleSessionId ? `project/sessions/${simpleSessionId}` : 'project/sessions/000');
+    const baseScopePath = scopePath || (simpleSessionId ? `workspace/sessions/${simpleSessionId}` : 'workspace/sessions/000');
     const destinationPath = resolveScopedPath(folderName, baseScopePath);
 
     logger.info(`Starting import to ${destinationPath}`, {

@@ -8,7 +8,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 
-import { auth0 } from '@/lib/auth0';
+import { auth0 } from '@/lib/auth/auth0';
 import { getGitHubToken, githubApi, pushToGitHub } from '@/lib/github/github-oauth';
 import { getLocalUserIdFromAuth0 } from '@/lib/oauth/connections';
 import { virtualFilesystem } from '@/lib/virtual-filesystem/index.server';

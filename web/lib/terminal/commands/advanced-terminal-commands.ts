@@ -358,7 +358,7 @@ const handleNpm = async (args: string[], context: CommandContext): Promise<Comma
       
     case 'run':
       const script = args[1];
-      context.writeLine(`\x1b[90m> project@1.0.0 ${script}\x1b[0m`);
+      context.writeLine(`\x1b[90m> workspace@1.0.0 ${script}\x1b[0m`);
       context.writeLine(`\x1b[90m> ${script} command\x1b[0m`);
       break;
       
@@ -380,7 +380,7 @@ const handleNpm = async (args: string[], context: CommandContext): Promise<Comma
       context.writeLine('  install, i    Install packages');
       context.writeLine('  run           Run scripts');
       context.writeLine('  start         Start application');
-      context.writeLine('  build         Build project');
+      context.writeLine('  build         Build workspace');
       context.writeLine('  test          Run tests');
   }
 

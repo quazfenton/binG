@@ -76,7 +76,7 @@ export async function POST(request: NextRequest) {
     const sessionId = getSessionId(request, bodySessionId);
     // CRITICAL FIX: Normalize sessionId to prevent composite IDs in paths
     const simpleSessionId = normalizeSessionId(sessionId) || sessionId; // Use original if normalize returns empty
-    const effectiveScopePath = scopePath || `project/sessions/${simpleSessionId}`;
+    const effectiveScopePath = scopePath || `workspace/sessions/${simpleSessionId}`;
 
     // Log for audit trail (without exposing sensitive data)
     console.log('[DiffsApply] Processing diffs for authenticated user:', {

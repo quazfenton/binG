@@ -15,7 +15,7 @@ import { EventEmitter } from 'node:events';
 import { EnhancedCodeOrchestrator } from '../enhanced-code-orchestrator';
 import { ProjectItem } from '../core/enhanced-prompt-engine';
 
-// Sample project files for demonstration
+// Sample workspace files for demonstration
 const sampleProjectFiles: ProjectItem[] = [
   {
     id: 'auth-component',

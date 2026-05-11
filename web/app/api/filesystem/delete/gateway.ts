@@ -15,8 +15,8 @@ import { isOutsideWorkspace } from '@/lib/agent-bins/workspace-boundary';
 const deleteRequestSchema = z.object({
   path: absolutePathSchema
     .refine(
-      (path) => path.startsWith('/home/') || path.startsWith('/workspace/') || path.startsWith('/project/'),
-      'Absolute paths must start with /home/, /workspace/, or /project/'
+      (path) => path.startsWith('/home/') || path.startsWith('/workspace/') || path.startsWith('/workspace/'),
+      'Absolute paths must start with /home/, /workspace/, or /workspace/'
     )
     .refine(
       (path) => !path.includes('..'),
@@ -47,7 +47,7 @@ export async function POST(req: NextRequest) {
     const { path: targetPath } = validation.data;
 
     // WORKSPACE BOUNDARY (defense-in-depth):
-    // If the schema is ever relaxed to allow real filesystem paths (outside /project/,
+    // If the schema is ever relaxed to allow real filesystem paths (outside /workspace/,
     // /workspace/, /home/), this check prevents unauthorised out-of-workspace deletes.
     // Currently the schema already constrains paths to VFS prefixes, so this code
     // path is unreachable — but it guards against future schema changes.

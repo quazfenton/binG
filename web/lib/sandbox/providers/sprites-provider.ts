@@ -460,7 +460,7 @@ export class SpritesSandboxHandle implements SandboxHandle {
     duration: number
   }> {
     const files: TarSyncFile[] = vfsSnapshot.files.map(f => ({
-      path: f.path.replace(/^project\//, ''),
+      path: f.path.replace(/^workspace\//, ''),
       content: f.content
     }))
     

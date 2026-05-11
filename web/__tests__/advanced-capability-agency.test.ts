@@ -784,7 +784,7 @@ describe('Natural Language → Terminal Shell Initiation', () => {
     expect(result.success).toBe(true);
   });
 
-  it('LLM "build the project" maps to sandbox.execute with language context', () => {
+  it('LLM "build the workspace" maps to sandbox.execute with language context', () => {
     const cap = SANDBOX_EXECUTE_CAPABILITY;
 
     const input = {

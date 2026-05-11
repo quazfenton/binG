@@ -317,7 +317,7 @@ export async function validateCommandExecution(
   }
 
   // Validate working directory if provided
-  // CWD paths are naturally absolute (e.g. /workspace, /home/user/project)
+  // CWD paths are naturally absolute (e.g. /workspace, /home/user/workspace)
   // so we only check for dangerous patterns, not absolute-path rejection.
   if (cwd) {
     // Null byte check

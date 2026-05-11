@@ -92,7 +92,7 @@ export const FALLBACK_ADS: EthicalAdResponse[] = [
     identifier: 'fallback-2',
     image: '',
     url: 'https://ethicalads.io',
-    text: 'Support this project — disable your adblocker for ethicalads.io.',
+    text: 'Support this workspace — disable your adblocker for ethicalads.io.',
     legal: 'Ads by EthicalAds',
     pixel: '',
     view_url: '',

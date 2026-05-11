@@ -66,7 +66,7 @@ export interface LSPAdapterConfig {
   command: string;
   /** CLI args passed to the binary */
   args?: string[];
-  /** Working directory (default: project root) */
+  /** Working directory (default: workspace root) */
   cwd?: string;
   /** Environment overrides */
   env?: Record<string, string>;

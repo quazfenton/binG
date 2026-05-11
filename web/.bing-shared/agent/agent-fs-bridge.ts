@@ -70,7 +70,7 @@ class AgentFSBridge {
       const session = await agentSessionManager.getOrCreateSession(userId, conversationId);
       // CRITICAL FIX: Normalize conversationId to prevent composite IDs in paths
       const simpleSessionId = normalizeSessionId(conversationId) || conversationId; // Use original if normalize returns empty
-      const vfsPath = `project/sessions/${simpleSessionId}`;
+      const vfsPath = `workspace/sessions/${simpleSessionId}`;
       const sandboxPath = session.workspacePath;
 
       logger.debug(`Syncing VFS → Sandbox: ${vfsPath} → ${sandboxPath}`);
@@ -93,7 +93,7 @@ class AgentFSBridge {
       // Sync each file to sandbox
       for (const file of sessionFiles) {
         try {
-          const relativePath = file.path.replace('project/', '');
+          const relativePath = file.path.replace('workspace/', '');
           const sandboxFilePath = sanitizeSandboxPath(relativePath, sandboxPath);
 
           await session.sandboxHandle.writeFile(sandboxFilePath, file.content);
@@ -143,7 +143,7 @@ class AgentFSBridge {
       const session = await agentSessionManager.getOrCreateSession(userId, conversationId);
       // CRITICAL FIX: Normalize conversationId to prevent composite IDs in paths
       const simpleSessionId = normalizeSessionId(conversationId) || conversationId; // Use original if normalize returns empty
-      const vfsPath = `project/sessions/${simpleSessionId}`;
+      const vfsPath = `workspace/sessions/${simpleSessionId}`;
       const sandboxPath = session.workspacePath;
 
       logger.debug(`Syncing Sandbox → VFS: ${sandboxPath} → ${vfsPath}`);

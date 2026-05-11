@@ -35,7 +35,7 @@ type CodeSandboxSDK = any
 type CSBSandbox = any
 type CSBClient = any
 
-const WORKSPACE_DIR = '/project/workspace'
+const WORKSPACE_DIR = '/workspace/workspace'
 const MAX_COMMAND_TIMEOUT = 600_000 // 10 minutes
 
 export class CodeSandboxProvider implements SandboxProvider {

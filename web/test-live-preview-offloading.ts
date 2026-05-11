@@ -249,7 +249,7 @@ function runTests() {
       
       const heuristics = analyzeHeuristics({ files } as PreviewRequest);
       assert(heuristics.shouldOffload === false, 'Simple React should NOT offload');
-      console.log('  ✓ Simple project heuristics work\n');
+      console.log('  ✓ Simple workspace heuristics work\n');
       passed++;
     } catch (e: any) {
       console.log(`  ✗ Failed: ${e.message}\n`);
@@ -257,9 +257,9 @@ function runTests() {
     }
   }
 
-  // Test 12: Heuristics Analysis - Large Project (should offload)
+  // Test 12: Heuristics Analysis - Large Workspace (should offload)
   {
-    console.log('Test 12: Heuristics - Large project (should offload)');
+    console.log('Test 12: Heuristics - Large workspace (should offload)');
     try {
       // Create 1000 files to trigger offload threshold
       const files: Record<string, string> = {
@@ -270,9 +270,9 @@ function runTests() {
       }
       
       const heuristics = analyzeHeuristics({ files } as PreviewRequest);
-      assert(heuristics.shouldOffload === true, 'Large project SHOULD offload');
+      assert(heuristics.shouldOffload === true, 'Large workspace SHOULD offload');
       assert(heuristics.offloadReason !== undefined, 'Should have offload reason');
-      console.log('  ✓ Large project heuristics work\n');
+      console.log('  ✓ Large workspace heuristics work\n');
       passed++;
     } catch (e: any) {
       console.log(`  ✗ Failed: ${e.message}\n`);
@@ -280,9 +280,9 @@ function runTests() {
     }
   }
 
-  // Test 13: Backend-Only Project Detection
+  // Test 13: Backend-Only Workspace Detection
   {
-    console.log('Test 13: Backend-Only Project Detection');
+    console.log('Test 13: Backend-Only Workspace Detection');
     try {
       const files = {
         'package.json': JSON.stringify({
@@ -301,7 +301,7 @@ function runTests() {
     }
   }
 
-  // Test 14: Backend-Only Project - Next.js + Express (should NOT be backend-only)
+  // Test 14: Backend-Only Workspace - Next.js + Express (should NOT be backend-only)
   {
     console.log('Test 14: Next.js + Express (not backend-only)');
     try {
@@ -382,9 +382,9 @@ function runTests() {
     }
   }
 
-  // Test 18: Project Root Detection - Subdirectory project
+  // Test 18: Workspace Root Detection - Subdirectory workspace
   {
-    console.log('Test 18: Project Root Detection - Subdirectory');
+    console.log('Test 18: Workspace Root Detection - Subdirectory');
     try {
       const files = {
         'my-app/package.json': JSON.stringify({ dependencies: { react: '^18.2.0' } }),
@@ -393,7 +393,7 @@ function runTests() {
       
       const result = detectProject({ files } as PreviewRequest);
       assert(result.selectedRoot === 'my-app', `Expected 'my-app', got '${result.selectedRoot}'`);
-      console.log('  ✓ Subdirectory project root detection works\n');
+      console.log('  ✓ Subdirectory workspace root detection works\n');
       passed++;
     } catch (e: any) {
       console.log(`  ✗ Failed: ${e.message}\n`);
@@ -496,9 +496,9 @@ function runTests() {
     }
   }
 
-  // Test 24: Vanilla HTML/CSS/JS project
+  // Test 24: Vanilla HTML/CSS/JS workspace
   {
-    console.log('Test 24: Vanilla HTML Project');
+    console.log('Test 24: Vanilla HTML Workspace');
     try {
       const files = {
         'index.html': '<!DOCTYPE html><html><head><link rel="stylesheet" href="style.css"></head><body><script src="app.js"></script></body></html>',

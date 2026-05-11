@@ -1,17 +1,17 @@
 /**
- * E2E: Project Detection + Auto-Context + LLM Terminal Integration
+ * E2E: Workspace Detection + Auto-Context + LLM Terminal Integration
  *
  * Tests the FULL pipeline:
  * 1. File paths → detect framework (Next, React, Vue, Python, Rust, Go)
  * 2. File paths → detect entry file
- * 3. File paths → detect project root
+ * 3. File paths → detect workspace root
  * 4. package.json → detect run/test/build commands
  * 5. NL prompt → translate to command using context
  * 6. VFS scopedPath → real filesystem path resolution
  * 7. buildProjectContext → complete context from file listing
  * 8. Capability router cwd resolution via resolveVfsPathToRealPath
  *
- * Run: npx vitest run __tests__/e2e-project-detection-terminal.test.ts
+ * Run: npx vitest run __tests__/e2e-workspace-detection-terminal.test.ts
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -35,7 +35,7 @@ import {
   buildProjectContext,
   type ProjectContext,
   type AppFramework,
-} from '@/lib/project-detection';
+} from '@/lib/workspace-detection';
 
 describe('Framework Detection', () => {
   it('detects Next.js from next.config.js', () => {
@@ -177,10 +177,10 @@ describe('Entry File Detection', () => {
 });
 
 // ============================================================================
-// Project Root Detection Tests
+// Workspace Root Detection Tests
 // ============================================================================
 
-describe('Project Root Detection', () => {
+describe('Workspace Root Detection', () => {
   it('identifies root with package.json at top level', () => {
     const files = [
       'package.json',
@@ -194,7 +194,7 @@ describe('Project Root Detection', () => {
     expect(scored[0].indicators).toContain('package.json');
   });
 
-  it('identifies root in nested project structure', () => {
+  it('identifies root in nested workspace structure', () => {
     const files = [
       'apps/web/package.json',
       'apps/web/src/index.tsx',
@@ -208,14 +208,14 @@ describe('Project Root Detection', () => {
     expect(root).toBe('');
   });
 
-  it('identifies Rust project root', () => {
+  it('identifies Rust workspace root', () => {
     const files = ['Cargo.toml', 'src/main.rs', 'src/lib.rs', 'tests/integration.rs'];
     const scored = computeRootScores(files);
     expect(scored[0].dir).toBe('');
     expect(scored[0].indicators).toContain('Cargo.toml');
   });
 
-  it('identifies Go project root', () => {
+  it('identifies Go workspace root', () => {
     const files = ['go.mod', 'main.go', 'handlers/api.go', 'models/user.go'];
     const scored = computeRootScores(files);
     expect(scored[0].dir).toBe('');
@@ -286,8 +286,8 @@ describe('Natural Language → Command Translation (with context)', () => {
     configFileIndicators: ['next.config.js', 'package.json'],
   };
 
-  it('translates "run the project" → npm run dev', () => {
-    expect(translateNaturalLanguageToCommand('run the project', mockContext)).toBe('npm run dev');
+  it('translates "run the workspace" → npm run dev', () => {
+    expect(translateNaturalLanguageToCommand('run the workspace', mockContext)).toBe('npm run dev');
   });
 
   it('translates "start it" → npm run dev', () => {
@@ -317,7 +317,7 @@ describe('Natural Language → Command Translation (with context)', () => {
     expect(translateNaturalLanguageToCommand('push origin main', mockContext)).toBe('push origin main');
   });
 
-  it('uses framework-specific commands for Python project', () => {
+  it('uses framework-specific commands for Python workspace', () => {
     const pythonContext: ProjectContext = {
       framework: 'django',
       entryFile: '/manage.py',
@@ -329,10 +329,10 @@ describe('Natural Language → Command Translation (with context)', () => {
       packageJsonScripts: [],
       configFileIndicators: ['manage.py'],
     };
-    expect(translateNaturalLanguageToCommand('run the project', pythonContext)).toBe('python manage.py runserver');
+    expect(translateNaturalLanguageToCommand('run the workspace', pythonContext)).toBe('python manage.py runserver');
   });
 
-  it('uses framework-specific commands for Rust project', () => {
+  it('uses framework-specific commands for Rust workspace', () => {
     const rustContext: ProjectContext = {
       framework: 'rust',
       entryFile: '/src/main.rs',
@@ -363,13 +363,13 @@ describe('VFS Path → Real Path Resolution', () => {
     ? 'C:\\temp\\workspace'
     : '/tmp/workspace';
 
-  it('resolves "project/sessions/002" to workspace + sessions/002', () => {
-    const resolved = resolveVfsPathToRealPath('project/sessions/002', workspaceBase);
+  it('resolves "workspace/sessions/002" to workspace + sessions/002', () => {
+    const resolved = resolveVfsPathToRealPath('workspace/sessions/002', workspaceBase);
     expect(resolved).toBe(path.join(workspaceBase, 'sessions', '002'));
   });
 
-  it('resolves "project/sessions/002/src" with nested path', () => {
-    const resolved = resolveVfsPathToRealPath('project/sessions/002/src', workspaceBase);
+  it('resolves "workspace/sessions/002/src" with nested path', () => {
+    const resolved = resolveVfsPathToRealPath('workspace/sessions/002/src', workspaceBase);
     expect(resolved).toBe(path.join(workspaceBase, 'sessions', '002', 'src'));
   });
 
@@ -390,7 +390,7 @@ describe('VFS Path → Real Path Resolution', () => {
   });
 
   it('normalizes backslashes on Windows', () => {
-    const resolved = resolveVfsPathToRealPath('project\\sessions\\002', workspaceBase, true);
+    const resolved = resolveVfsPathToRealPath('workspace\\sessions\\002', workspaceBase, true);
     expect(resolved).toBe(path.join(workspaceBase, 'sessions', '002'));
   });
 });
@@ -400,7 +400,7 @@ describe('VFS Path → Real Path Resolution', () => {
 // ============================================================================
 
 describe('buildProjectContext', () => {
-  it('builds complete context for Next.js project', async () => {
+  it('builds complete context for Next.js workspace', async () => {
     const files = [
       'next.config.js',
       'package.json',
@@ -434,7 +434,7 @@ describe('buildProjectContext', () => {
     expect(ctx.configFileIndicators).toContain('package.json');
   });
 
-  it('builds context for Rust project without readFile', async () => {
+  it('builds context for Rust workspace without readFile', async () => {
     const files = ['Cargo.toml', 'src/main.rs', 'src/lib.rs'];
     const ctx = await buildProjectContext(files);
 
@@ -444,7 +444,7 @@ describe('buildProjectContext', () => {
     expect(ctx.hasPackageJson).toBe(false);
   });
 
-  it('builds context for Go project', async () => {
+  it('builds context for Go workspace', async () => {
     const files = ['go.mod', 'main.go', 'handlers/api.go'];
     const ctx = await buildProjectContext(files);
 
@@ -463,10 +463,10 @@ describe('Capability Router cwd Resolution', () => {
     const { SANDBOX_SHELL_CAPABILITY } = await import('@/lib/tools/capabilities');
     const result = SANDBOX_SHELL_CAPABILITY.inputSchema.safeParse({
       command: 'npm run dev',
-      cwd: 'project/sessions/002',
+      cwd: 'workspace/sessions/002',
     });
     expect(result.success).toBe(true);
-    expect((result.data as any).cwd).toBe('project/sessions/002');
+    expect((result.data as any).cwd).toBe('workspace/sessions/002');
   });
 
   it('sandbox.execute capability accepts workingDir in context', async () => {
@@ -474,7 +474,7 @@ describe('Capability Router cwd Resolution', () => {
     const result = SANDBOX_EXECUTE_CAPABILITY.inputSchema.safeParse({
       code: 'npm run dev',
       language: 'bash' as const,
-      context: { workingDir: 'project/sessions/002' },
+      context: { workingDir: 'workspace/sessions/002' },
     });
     expect(result.success).toBe(true);
   });
@@ -484,17 +484,17 @@ describe('Capability Router cwd Resolution', () => {
       ? 'C:\\temp\\workspace'
       : '/tmp/workspace';
 
-    const cwd = resolveVfsPathToRealPath('project/sessions/002', workspacePath);
+    const cwd = resolveVfsPathToRealPath('workspace/sessions/002', workspacePath);
     expect(cwd).toBe(path.join(workspacePath, 'sessions', '002'));
   });
 });
 
 // ============================================================================
-// E2E: Full Pipeline — LLM Prompt → Project Detection → Command Execution
+// E2E: Full Pipeline — LLM Prompt → Workspace Detection → Command Execution
 // ============================================================================
 
-describe('E2E: Full Pipeline — LLM Prompt → Project Detection → Command Execution', () => {
-  it('simulates: "run and debug project" on Next.js repo', async () => {
+describe('E2E: Full Pipeline — LLM Prompt → Workspace Detection → Command Execution', () => {
+  it('simulates: "run and debug workspace" on Next.js repo', async () => {
     // Step 1: VFS provides file listing
     const files = [
       'next.config.js',
@@ -510,7 +510,7 @@ describe('E2E: Full Pipeline — LLM Prompt → Project Detection → Command Ex
       dependencies: { next: '^14.0.0', react: '^18.0.0' },
     });
 
-    // Step 3: Build project context
+    // Step 3: Build workspace context
     const ctx = await buildProjectContext(files, async (p: string) => {
       if (p.endsWith('package.json')) return pkgContent;
       return null;
@@ -519,14 +519,14 @@ describe('E2E: Full Pipeline — LLM Prompt → Project Detection → Command Ex
     expect(ctx.framework).toBe('next');
     expect(ctx.runCommand).toBe('npm run dev');
 
-    // Step 4: LLM says "run and debug project"
-    const nlPrompt = 'run and debug project';
+    // Step 4: LLM says "run and debug workspace"
+    const nlPrompt = 'run and debug workspace';
     const command = translateNaturalLanguageToCommand(nlPrompt, ctx);
 
     expect(command).toBe('npm run dev');
   });
 
-  it('simulates: "build the project" on Vue repo', async () => {
+  it('simulates: "build the workspace" on Vue repo', async () => {
     const files = ['vite.config.ts', 'package.json', 'src/main.ts', 'src/App.vue'];
     const pkgContent = JSON.stringify({
       scripts: { dev: 'vite', build: 'vue-tsc && vite build' },
@@ -541,7 +541,7 @@ describe('E2E: Full Pipeline — LLM Prompt → Project Detection → Command Ex
     expect(ctx.framework).toBe('vue');
     expect(ctx.buildCommand).toBe('npm run build');
 
-    const command = translateNaturalLanguageToCommand('build the project', ctx);
+    const command = translateNaturalLanguageToCommand('build the workspace', ctx);
     expect(command).toBe('npm run build');
   });
 
@@ -581,7 +581,7 @@ describe('E2E: Full Pipeline — LLM Prompt → Project Detection → Command Ex
     expect(command).toBe('go run main.go');
   });
 
-  it('auto-detects entry file and project root before running', async () => {
+  it('auto-detects entry file and workspace root before running', async () => {
     const files = [
       'next.config.js',
       'package.json',
@@ -598,7 +598,7 @@ describe('E2E: Full Pipeline — LLM Prompt → Project Detection → Command Ex
     expect(ctx.entryFile).not.toBeNull();
     expect(ctx.entryFile).toContain('page.tsx');
 
-    // Project root should be top-level
+    // Workspace root should be top-level
     expect(ctx.projectRoot).toBe('');
 
     // Framework should be Next.js

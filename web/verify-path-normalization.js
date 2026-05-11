@@ -12,12 +12,12 @@ function normalizeSessionId(sessionId) {
 }
 
 function normalizeFilesystemPath(path) {
-  const sessionsMatch = path.match(/^project\/sessions\/([^/]+)/i);
+  const sessionsMatch = path.match(/^workspace\/sessions\/([^/]+)/i);
   if (sessionsMatch) {
     const sessionSegment = sessionsMatch[1];
     if (sessionSegment.includes('$') || sessionSegment.includes(':')) {
       const normalizedSimpleId = normalizeSessionId(sessionSegment);
-      return path.replace(`project/sessions/${sessionSegment}`, `project/sessions/${normalizedSimpleId}`);
+      return path.replace(`workspace/sessions/${sessionSegment}`, `workspace/sessions/${normalizedSimpleId}`);
     }
   }
   return path;
@@ -25,10 +25,10 @@ function normalizeFilesystemPath(path) {
 
 // Test cases
 const tests = [
-  { input: 'project/sessions/anon$006/src/file.ts', expected: 'project/sessions/006/src/file.ts' },
-  { input: 'project/sessions/1$006/file.txt', expected: 'project/sessions/006/file.txt' },
-  { input: 'project/sessions/user:006/config.json', expected: 'project/sessions/006/config.json' },
-  { input: 'project/sessions/006/file.ts', expected: 'project/sessions/006/file.ts' },
+  { input: 'workspace/sessions/anon$006/src/file.ts', expected: 'workspace/sessions/006/src/file.ts' },
+  { input: 'workspace/sessions/1$006/file.txt', expected: 'workspace/sessions/006/file.txt' },
+  { input: 'workspace/sessions/user:006/config.json', expected: 'workspace/sessions/006/config.json' },
+  { input: 'workspace/sessions/006/file.ts', expected: 'workspace/sessions/006/file.ts' },
   { input: 'src/file.ts', expected: 'src/file.ts' },
 ];
 

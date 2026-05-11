@@ -1492,6 +1492,8 @@ class LLMService {
 
     const { provider = 'openai', model, messages, temperature = 0.7, maxTokens = 65536, requestId, apiKey } = request
 
+    let totalAttempts = 1;  // Track total attempts for telemetry (default to 1 for immediate success)
+    
     return withRetry(
       async () => {
         const responseStartTime = Date.now();
@@ -1595,7 +1597,7 @@ class LLMService {
           const actualProvider = response.metadata?.actualProvider || provider;
           const actualModel = response.metadata?.actualModel || model;
           const { redactedArgs: responseArgs, originStack: responseStack } = prepareTelemetryPayload({
-            args: { provider: actualProvider, model: actualModel, latencyMs: responseLatency, tokensUsed: response.tokensUsed, success: true },
+            args: { provider: actualProvider, model: actualModel, latencyMs: responseLatency, tokensUsed: response.tokensUsed, success: true, totalAttempts },
           });
           recordToolCallTelemetry({ toolCallId: requestId || null, redactedArgs: responseArgs, originStack: responseStack })
             .catch((err) => { chatLogger.debug(`Failed to record response telemetry: ${err}`); });
@@ -1786,7 +1788,7 @@ class LLMService {
       // Record streaming completion telemetry
       {
         const { redactedArgs: completionArgs, originStack: completionStack } = prepareTelemetryPayload({
-          args: { provider, model, latencyMs: streamLatency, chunkCount, success: true, event: 'stream_complete', fallbackOccurred: false },
+          args: { provider, model, latencyMs: streamLatency, chunkCount, success: true, event: 'stream_complete', fallbackOccurred: false, totalAttempts: 1 }  // Streaming has no internal retry; single attempt,
         });
         recordToolCallTelemetry({ toolCallId: requestId || null, redactedArgs: completionArgs, originStack: completionStack })
           .catch((err) => { chatLogger.debug(`Failed to record stream completion telemetry: ${err}`); });
@@ -1803,7 +1805,7 @@ class LLMService {
       // Record streaming error telemetry
       {
         const { redactedArgs: errorArgs, originStack: errorStack } = prepareTelemetryPayload({
-          args: { provider, model, latencyMs: streamLatency, chunkCount, success: false, errorType: (error as any).failureType || (error as any).message || 'unknown', event: 'stream_error', retryCount: (error as any).retryCount || 1 },
+          args: { provider, model, latencyMs: streamLatency, chunkCount, success: false, errorType: (error as any).failureType || (error as any).message || 'unknown', event: 'stream_error', totalAttempts: (error as any).totalAttempts || 1 },
         });
         recordToolCallTelemetry({ toolCallId: requestId || null, redactedArgs: errorArgs, originStack: errorStack })
           .catch((err) => { chatLogger.debug(`Failed to record stream error telemetry: ${err}`); });

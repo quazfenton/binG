@@ -48,7 +48,7 @@ describe('Core Integration Tests', () => {
       offloading = new LivePreviewOffloading();
     });
 
-    it('should detect preview mode for React project', () => {
+    it('should detect preview mode for React workspace', () => {
       const detection = {
         framework: 'react' as const,
         hasBackend: false,

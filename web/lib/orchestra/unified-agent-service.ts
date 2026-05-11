@@ -91,7 +91,7 @@ import {
   type OrchestratorEvent
 } from '@bing/shared/agent/orchestration/plan-act-verify';
 
-import { getProjectServices, type ProjectContext } from '@/lib/project-context';
+import { getProjectServices, type ProjectContext } from '@/lib/workspace-context';
 import {
   runDualProcessMode,
   runAdversarialVerifyMode,
@@ -225,7 +225,7 @@ export interface UnifiedAgentConfig {
   userId?: string;  // Authenticated user ID — passed to BootstrappedAgency for VFS scoping
   conversationId?: string;  // Session/conversation ID for VFS session scoping (e.g., "001")
 
-  // Project isolation (provides project-scoped vector memory and retrieval)
+  // Workspace isolation (provides workspace-scoped vector memory and retrieval)
   projectContext?: ProjectContext;
 
   // Filesystem (additional options)
@@ -764,7 +764,7 @@ async function runV2Native(
   // Use regex-based detection for StatefulAgent routing (classifier removed)
   // IMPORTANT: Only test against the raw user task, not the full context-augmented message
   const rawTask = extractRawUserTask(config.userMessage || '');
-  const isComplexTask = /(create|build|implement|refactor|migrate|add feature|new file|multiple files|project structure|full-stack|application|service|api|component|page|dashboard|authentication|database|integration|deployment|setup|initialize|scaffold|generate|boilerplate)/i.test(rawTask);
+  const isComplexTask = /(create|build|implement|refactor|migrate|add feature|new file|multiple files|workspace structure|full-stack|application|service|api|component|page|dashboard|authentication|database|integration|deployment|setup|initialize|scaffold|generate|boilerplate)/i.test(rawTask);
   const hasMultipleSteps = /\b(and|then|after|before|first|next|finally|also|plus)\b/i.test(rawTask);
   const mentionsFiles = /\b(file|files|folder|directory|component|page|module|service|api)\b/i.test(rawTask);
   const shouldUseStatefulAgent = isComplexTask || (hasMultipleSteps && mentionsFiles);
@@ -947,7 +947,7 @@ async function runDesktopMode(
 async function runStatefulAgentMode(config: UnifiedAgentConfig): Promise<UnifiedAgentResult> {
   const startTime = Date.now();
 
-  // Initialize project-scoped services if projectContext provided
+  // Initialize workspace-scoped services if projectContext provided
   let projectServices: ReturnType<typeof getProjectServices> | null = null;
   if (config.projectContext) {
     projectServices = getProjectServices(config.projectContext);
@@ -970,7 +970,7 @@ async function runStatefulAgentMode(config: UnifiedAgentConfig): Promise<Unified
       enableTaskDecomposition: process.env.STATEFUL_AGENT_ENABLE_TASK_DECOMPOSITION !== 'false',
       enableCapabilityChaining: process.env.STATEFUL_AGENT_ENABLE_CAPABILITY_CHAINING !== 'false',
       enableBootstrappedAgency: process.env.STATEFUL_AGENT_ENABLE_BOOTSTRAPPED_AGENCY !== 'false',
-      // Pass project-scoped retrieval for project-isolated memory access
+      // Pass workspace-scoped retrieval for workspace-isolated memory access
       projectServices: projectServices || undefined,
     };
 
@@ -1446,7 +1446,7 @@ async function runMastraWorkflow(config: UnifiedAgentConfig): Promise<UnifiedAge
  * VFS scoping, and streaming support.
  *
  * Each iteration:
- * 1. Gets current project tree + diffs from last round (via smart-context.ts)
+ * 1. Gets current workspace tree + diffs from last round (via smart-context.ts)
  * 2. Calls LLM with "build the next piece" instructions
  * 3. Applies file writes through VFS MCP tools
  * 4. Optional reflection pass identifies gaps
@@ -1694,7 +1694,7 @@ function createCapabilityToolExecutor(config: UnifiedAgentConfig) {
       const result = await executeToolCapability(capabilityId, args, {
         userId: config.userId || 'system',
         sessionId: config.conversationId,  // FIX: Session scoping for VFS
-        scopePath: config.conversationId ? `project/sessions/${config.conversationId}` : undefined,  // FIX: VFS scope path
+        scopePath: config.conversationId ? `workspace/sessions/${config.conversationId}` : undefined,  // FIX: VFS scope path
         workspaceId: config.projectContext?.id,
       });
       return { success: result.success, output: (result.output as string) || result.error, exitCode: result.exitCode };
@@ -3266,7 +3266,7 @@ async function attemptFallback(
   // IMPORTANT: Only analyze the raw user task, not the full context-augmented message
   let isComplexTask = false;
   const rawTask = extractRawUserTask(config.userMessage || '');
-  isComplexTask = /create|build|implement|refactor|migrate|add feature|new file|multiple files|project structure|full-stack|application|service|api|component|page/i.test(rawTask);
+  isComplexTask = /create|build|implement|refactor|migrate|add feature|new file|multiple files|workspace structure|full-stack|application|service|api|component|page/i.test(rawTask);
   log.debug('Fallback complexity detection', { isComplexTask });
 
   // TEMP: If v2 is disabled globally, skip all v2 fallbacks

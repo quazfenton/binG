@@ -302,14 +302,14 @@ describe('Agent Lifecycle Integration', () => {
     const spawn1 = await spawnPOST(
       makeSpawnRequest({
         type: 'codex',
-        workspaceDir: '/workspace/project-a',
+        workspaceDir: '/workspace/workspace-a',
         apiKey: 'key-a',
       }) as any,
     );
     const spawn2 = await spawnPOST(
       makeSpawnRequest({
         type: 'claude-code',
-        workspaceDir: '/workspace/project-b',
+        workspaceDir: '/workspace/workspace-b',
         apiKey: 'key-b',
       }) as any,
     );

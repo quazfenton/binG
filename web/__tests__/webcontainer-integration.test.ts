@@ -269,7 +269,7 @@ describeIfBrowser('WebContainer Integration', () => {
   });
 
   describe('Package Installation', () => {
-    it('should initialize npm project', async () => {
+    it('should initialize npm workspace', async () => {
       expect(wcInstance).toBeTruthy();
       
       const projectDir = '/workspace/npm-test';
@@ -279,7 +279,7 @@ describeIfBrowser('WebContainer Integration', () => {
       const packageJson = {
         name: 'webcontainer-test',
         version: '1.0.0',
-        description: 'WebContainer test project',
+        description: 'WebContainer test workspace',
         main: 'index.js',
         scripts: {
           test: 'echo "Tests passed" && exit 0',

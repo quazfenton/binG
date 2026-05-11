@@ -172,7 +172,7 @@ const DEBUG = process.env.DEBUG_VFS === 'true' || process.env.NODE_ENV === 'deve
 /**
  * Schema for filesystem snapshot requests
  * Validates directory path and prevents path traversal attacks
- * Accepts both relative paths (project, project/sessions) and absolute paths
+ * Accepts both relative paths (workspace, workspace/sessions) and absolute paths
  */
 const snapshotRequestSchema = z.object({
   path: z.string()
@@ -184,7 +184,7 @@ const snapshotRequestSchema = z.object({
     )
     .refine(
       (path) => {
-        // Allow relative paths (project, project/sessions, etc.)
+        // Allow relative paths (workspace, workspace/sessions, etc.)
         if (!path.startsWith('/')) return true;
         // If absolute, must start with /home/ or /workspace/
         return path.startsWith('/home/') || path.startsWith('/workspace/') || path.startsWith('/tmp/');
@@ -232,10 +232,10 @@ export async function GET(req: NextRequest) {
   try {
     owner = await resolveFilesystemOwner(req);
     const url = new URL(req.url);
-    let pathFilter = url.searchParams.get('path') || 'project';
+    let pathFilter = url.searchParams.get('path') || 'workspace';
     const useDesktopSnapshot = isDesktopMode() && isUsingLocalFS();
-    if (!useDesktopSnapshot && pathFilter === 'project') {
-      pathFilter = 'project/sessions';
+    if (!useDesktopSnapshot && pathFilter === 'workspace') {
+      pathFilter = 'workspace/sessions';
     }
     pathFilter = pathFilter.replace(/\/+$/, '');
 

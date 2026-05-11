@@ -115,13 +115,13 @@ function getAuthHeaders(): Record<string, string> {
   return {};
 }
 
-const createMinimalProject = (scopePath: string = 'project'): LocalFileSystem => {
+const createMinimalProject = (scopePath: string = 'workspace'): LocalFileSystem => {
   // Use parent sessions directory as root, not specific session folder
   // This allows 'ls' to show all session folders (001, 002, web_app, etc.)
-  const parentScopePath = scopePath.replace(/\/sessions\/[^/]+$/, '') || 'project/sessions';
+  const parentScopePath = scopePath.replace(/\/sessions\/[^/]+$/, '') || 'workspace/sessions';
   return {
   [parentScopePath]: { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() },
-  'project': { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() },
+  'workspace': { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() },
   };
 };
 
@@ -190,15 +190,15 @@ export default function TerminalPanel({
   filesystemScopePathRef.current = filesystemScopePath;
   
   // Compute parent sessions path for terminal root (allows listing all sessions)
-  // Keep "project/sessions" even when scopePath is deeper like "project/sessions/001/sub"
+  // Keep "workspace/sessions" even when scopePath is deeper like "workspace/sessions/001/sub"
   const parentSessionsPath =
     filesystemScopePath && /\/sessions(\/.*)?$/.test(filesystemScopePath)
       ? filesystemScopePath.replace(/(\/sessions)\/?.*$/, '$1')
-      : 'project/sessions';
+      : 'workspace/sessions';
   
   // Use virtual filesystem to get real files instead of mock
   // autoLoad: false since TerminalPanel manages its own VFS sync lifecycle
-  // Use parent sessions path so terminal starts at project/sessions (not specific session)
+  // Use parent sessions path so terminal starts at workspace/sessions (not specific session)
   const virtualFilesystem = useVirtualFilesystem(parentSessionsPath, { autoLoad: false });
   const {
     listDirectory: listVfsDirectory,
@@ -256,7 +256,7 @@ export default function TerminalPanel({
        // This prevents the filesystem from being wiped after sandbox connection failures
        if (files.length === 0) {
          const existingFs = localFileSystemRef.current;
-         const existingKeys = Object.keys(existingFs).filter(k => k !== 'project');
+         const existingKeys = Object.keys(existingFs).filter(k => k !== 'workspace');
 
          if (existingKeys.length > 0) {
            // VFS is temporarily empty but we have existing files - keep them
@@ -270,18 +270,18 @@ export default function TerminalPanel({
          localFileSystemRef.current = createMinimalProject(parentSessionsPath);
          setIsVfsSynced(true);
          setVfsFileCount(0);
-         console.log('[TerminalPanel] VFS is empty, using minimal project structure');
+         console.log('[TerminalPanel] VFS is empty, using minimal workspace structure');
          return;
        }
 
        // Use ONLY VFS files with their original paths
        const fs: LocalFileSystem = {
-         'project': { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() },
+         'workspace': { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() },
          [parentSessionsPath]: { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() }
        };
 
        for (const file of files) {
-         // Normalize path: ensure it starts with project/
+         // Normalize path: ensure it starts with workspace/
          let fullPath = file.path;
 
          // Strip any sandbox/workspace prefixes that might have been stored incorrectly
@@ -293,15 +293,15 @@ export default function TerminalPanel({
            .replace(/^(\/home\/[^/]+\/workspace\/)+/gi, '')
            .replace(/^(home\/[^/]+\/workspace\/)+/gi, '');
 
-         // Ensure path starts with project/
-         if (!fullPath.startsWith('project/') && fullPath !== 'project') {
+         // Ensure path starts with workspace/
+         if (!fullPath.startsWith('workspace/') && fullPath !== 'workspace') {
            fullPath = fullPath.replace(/^\/+/, '');
-           if (fullPath.startsWith('project/')) {
-             fullPath = fullPath.replace(/^project\/(project\/)+/, 'project/');
+           if (fullPath.startsWith('workspace/')) {
+             fullPath = fullPath.replace(/^workspace\/(workspace\/)+/, 'workspace/');
            } else if (fullPath) {
-             fullPath = `project/${fullPath}`;
+             fullPath = `workspace/${fullPath}`;
            } else {
-             fullPath = 'project';
+             fullPath = 'workspace';
            }
          }
 
@@ -378,14 +378,14 @@ export default function TerminalPanel({
 
             // Show file listing
             const fs = localFileSystemRef.current;
-            const projectFiles = Object.keys(fs).filter(k => k.startsWith('project/') && k.split('/').length === 2);
+            const projectFiles = Object.keys(fs).filter(k => k.startsWith('workspace/') && k.split('/').length === 2);
             if (projectFiles.length > 0) {
               term.terminal.writeln('');
               term.terminal.writeln('\x1b[1;34mWorkspace files:\x1b[0m');
               projectFiles.forEach(f => {
                 const info = fs[f];
                 const icon = info?.type === 'directory' ? '\x1b[34m📁\x1b[0m' : '\x1b[37m📄\x1b[0m';
-                term.terminal.writeln(`  ${icon} ${f.replace('project/', '')}`);
+                term.terminal.writeln(`  ${icon} ${f.replace('workspace/', '')}`);
             });
             term.terminal.writeln('');
           }
@@ -398,7 +398,7 @@ export default function TerminalPanel({
         term.terminal.writeln('\x1b[90m  Type "connect" to connect to sandbox.\x1b[0m');
         term.terminal.writeln('');
         
-        const cwd = localShellCwdRef.current[term.id] || 'project';
+        const cwd = localShellCwdRef.current[term.id] || 'workspace';
         term.terminal.write(getPrompt('local', cwd));
       }
     });
@@ -432,25 +432,25 @@ export default function TerminalPanel({
         // FIX: Don't reset filesystem to minimal if VFS returns empty - preserve existing data
         if (files.length === 0) {
           const existingFs = localFileSystemRef.current;
-          const existingKeys = Object.keys(existingFs).filter(k => k !== 'project');
+          const existingKeys = Object.keys(existingFs).filter(k => k !== 'workspace');
           
           if (existingKeys.length > 0) {
             log('[filesystem-updated] VFS appears empty but keeping existing', existingKeys.length, 'entries');
             return;
           }
           
-          log('[filesystem-updated] VFS empty, creating minimal project structure');
+          log('[filesystem-updated] VFS empty, creating minimal workspace structure');
           localFileSystemRef.current = createMinimalProject(parentSessionsPath);
           return;
         }
 
         const fs: LocalFileSystem = {
-          project: { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() },
+          workspace: { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() },
           [parentSessionsPath]: { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() },
         };
 
         let fileCount = 0;
-        let dirCount = 2; // project + scope path
+        let dirCount = 2; // workspace + scope path
         
         for (const file of files) {
           const fullPath = normalizeScopePath(file.path);
@@ -792,7 +792,7 @@ export default function TerminalPanel({
           term.mode
         ).then((showPrompt) => {
           if (index === commands.length - 1 && showPrompt) {
-            const cwd = localShellCwdRef.current[activeTerminalId!] || 'project';
+            const cwd = localShellCwdRef.current[activeTerminalId!] || 'workspace';
             term.terminal?.write(getPrompt(term.mode, cwd));
           }
           // Execute next command after a small delay
@@ -826,9 +826,9 @@ export default function TerminalPanel({
 
     // FIX: Start at parent sessions directory, not specific session folder
     // Session folders (001, 002, etc.) are only created when LLM generates files
-    // Starting at project/sessions avoids "directory doesn't exist" errors
-    // CORRECTED: Keep project/sessions, not just project
-    const parentScopePath = filesystemScopePathRef.current?.replace(/(\/sessions)\/[^/]+$/, '$1') || 'project/sessions';
+    // Starting at workspace/sessions avoids "directory doesn't exist" errors
+    // CORRECTED: Keep workspace/sessions, not just workspace
+    const parentScopePath = filesystemScopePathRef.current?.replace(/(\/sessions)\/[^/]+$/, '$1') || 'workspace/sessions';
     localShellCwdRef.current[id] = (isDesktopMode() ? getDesktopWorkspaceDir() : '') || parentScopePath;
     reconnectCooldownUntilRef.current[id] = 0;
     commandQueueRef.current[id] = [];
@@ -1052,18 +1052,18 @@ export default function TerminalPanel({
     if (sandboxId.startsWith('bing-') || sandboxId.startsWith('sprite-')) return '/home/sprite/workspace';
     if (sandboxId.startsWith('daytona-')) return '/home/daytona/workspace';
     if (sandboxId.startsWith('e2b-')) return '/home/user';
-    if (sandboxId.startsWith('csb-') || sandboxId.length === 6) return '/project/workspace';
+    if (sandboxId.startsWith('csb-') || sandboxId.length === 6) return '/workspace/workspace';
     return '/workspace';
   }, []);
 
   const toSandboxScopedPath = useCallback((scopePath?: string, sandboxId?: string): string => {
     const root = getSandboxWorkspaceRoot(sandboxId);
-    const rawScope = (scopePath || 'project').replace(/\\/g, '/').replace(/^\/+/, '');
-    const normalizedScope = rawScope.startsWith('project/')
+    const rawScope = (scopePath || 'workspace').replace(/\\/g, '/').replace(/^\/+/, '');
+    const normalizedScope = rawScope.startsWith('workspace/')
       ? rawScope
-      : rawScope === 'project'
-        ? 'project'
-        : `project/${rawScope.replace(/^project\/?/, '')}`;
+      : rawScope === 'workspace'
+        ? 'workspace'
+        : `workspace/${rawScope.replace(/^workspace\/?/, '')}`;
     return `${root}/${normalizedScope}`.replace(/\/+/g, '/');
   }, [getSandboxWorkspaceRoot]);
 
@@ -1073,16 +1073,16 @@ export default function TerminalPanel({
       const normalizedScope = normalizeScopePath(filesystemScopePathRef.current);
       const normalizedInput = (filePath || '').replace(/\\/g, '/').replace(/^\/+/, '');
       
-      // Fix: Only add scope prefix if path is truly relative (not starting with project/)
-      // If path already starts with project/, it's already project-relative, don't add scope
+      // Fix: Only add scope prefix if path is truly relative (not starting with workspace/)
+      // If path already starts with workspace/, it's already workspace-relative, don't add scope
       let scopedFilePath: string;
-      if (normalizedInput.startsWith('project/') || normalizedInput.startsWith(normalizedScope)) {
+      if (normalizedInput.startsWith('workspace/') || normalizedInput.startsWith(normalizedScope)) {
         scopedFilePath = normalizedInput;
-      } else if (normalizedInput === 'project') {
-        scopedFilePath = 'project';
+      } else if (normalizedInput === 'workspace') {
+        scopedFilePath = 'workspace';
       } else {
-        // Truly relative path - prepend project/ prefix
-        scopedFilePath = `project/${normalizedInput}`.replace(/\/+/g, '/');
+        // Truly relative path - prepend workspace/ prefix
+        scopedFilePath = `workspace/${normalizedInput}`.replace(/\/+/g, '/');
       }
 
       log(`syncFileToVFS: normalized paths - scope="${normalizedScope}", input="${normalizedInput}", scoped="${scopedFilePath}"`);
@@ -1147,10 +1147,10 @@ export default function TerminalPanel({
   // listLocalDirectory migrated to TerminalLocalFSHandler
 
   const getPrompt = (mode: TerminalMode, cwd: string): string => {
-    // Only replace 'project' or 'workspace' at root level with '~', not subdirectories
-    // e.g., 'project' -> '~' but 'project/sessions' stays as 'project/sessions'
-    const displayCwd = (cwd === 'project' || cwd === 'workspace') 
-      ? cwd.replace(/^(project|workspace)/, '~')
+    // Only replace 'workspace' or 'workspace' at root level with '~', not subdirectories
+    // e.g., 'workspace' -> '~' but 'workspace/sessions' stays as 'workspace/sessions'
+    const displayCwd = (cwd === 'workspace' || cwd === 'workspace') 
+      ? cwd.replace(/^(workspace|workspace)/, '~')
       : cwd;
     switch (mode) {
       case 'local':
@@ -1422,7 +1422,7 @@ export default function TerminalPanel({
               termRef.isConnected = false;
               termRef.ptyInstance = undefined;
               termRef.terminal?.writeln('\r\n\x1b[31m[PTY session closed]\x1b[0m');
-              termRef.terminal?.write(getPrompt('local', localShellCwdRef.current[terminalId] || 'project'));
+              termRef.terminal?.write(getPrompt('local', localShellCwdRef.current[terminalId] || 'workspace'));
             });
 
             // Handle file changes from PTY - sync to VFS and local filesystem view
@@ -1481,7 +1481,7 @@ export default function TerminalPanel({
             webPty = await createWebLocalPty({
               cols: terminal.cols,
               rows: terminal.rows,
-              cwd: localShellCwdRef.current[terminalId] || getDesktopWorkspaceDir() || 'project',
+              cwd: localShellCwdRef.current[terminalId] || getDesktopWorkspaceDir() || 'workspace',
             });
           }
         } catch (ptyError) {
@@ -1517,7 +1517,7 @@ export default function TerminalPanel({
                 current.isConnected = false;
                 current.webLocalPtyInstance = undefined;
                 current.terminal?.writeln('\r\n\x1b[31m[PTY session closed]\x1b[0m');
-                current.terminal?.write(getPrompt('local', localShellCwdRef.current[terminalId] || 'project'));
+                current.terminal?.write(getPrompt('local', localShellCwdRef.current[terminalId] || 'workspace'));
               }
             });
           }
@@ -1584,7 +1584,7 @@ export default function TerminalPanel({
             }
 
             // Get completions from backend
-            const cwd = localShellCwdRef.current[terminalId] || 'project';
+            const cwd = localShellCwdRef.current[terminalId] || 'workspace';
 
             requestShellCompletion(
               term.ptyInstance!.sessionId,
@@ -1685,7 +1685,7 @@ export default function TerminalPanel({
               state.selectedIndex = (state.selectedIndex - 1 + state.completions.length) % state.completions.length;
               
               // Re-display completions with new selection
-              const cwd = localShellCwdRef.current[terminalId] || 'project';
+              const cwd = localShellCwdRef.current[terminalId] || 'workspace';
               term.terminal?.write('\r\n');
               term.terminal?.writeln('\x1b[33mCompletions:\x1b[0m');
               state.completions.forEach((comp, idx) => {
@@ -1706,7 +1706,7 @@ export default function TerminalPanel({
               state.selectedIndex = (state.selectedIndex + 1) % state.completions.length;
               
               // Re-display completions with new selection
-              const cwd = localShellCwdRef.current[terminalId] || 'project';
+              const cwd = localShellCwdRef.current[terminalId] || 'workspace';
               term.terminal?.write('\r\n');
               term.terminal?.writeln('\x1b[33mCompletions:\x1b[0m');
               state.completions.forEach((comp, idx) => {
@@ -1724,7 +1724,7 @@ export default function TerminalPanel({
             // Escape - cancel completion mode
             if (completionStateRef.current[terminalId]) {
               completionStateRef.current[terminalId] = null;
-              const cwd = localShellCwdRef.current[terminalId] || 'project';
+              const cwd = localShellCwdRef.current[terminalId] || 'workspace';
               term.terminal?.write('\r\n');
               term.terminal?.writeln('\x1b[90mCompletion cancelled\x1b[0m');
               term.terminal?.write('\r' + getPrompt('desktop-pty', cwd) + (desktopPtyInputLineRef.current[terminalId] || ''));
@@ -1859,7 +1859,7 @@ export default function TerminalPanel({
         term.terminal?.write(completion);
       } else if (commandCompletions.length > 1) {
         term.terminal?.write('\r\n' + commandCompletions.join('  ') + '\r\n');
-        const cwd = localShellCwdRef.current[terminalId] || filesystemScopePathRef.current || 'project';
+        const cwd = localShellCwdRef.current[terminalId] || filesystemScopePathRef.current || 'workspace';
         term.terminal?.write(getPrompt('sandbox-cmd', cwd) + lineBuffer);
       } else {
         term.terminal?.write('\x07'); // Beep — no command matches
@@ -1871,7 +1871,7 @@ export default function TerminalPanel({
     // Uses the terminal's VFS state if available, otherwise just beep
     const vfsEntries = (term as any).vfsEntries;
     if (vfsEntries && Object.keys(vfsEntries).length > 0) {
-      const scopePath = filesystemScopePathRef.current || 'project';
+      const scopePath = filesystemScopePathRef.current || 'workspace';
       const completions = Object.keys(vfsEntries)
         .filter(k => k.startsWith(scopePath) && k.toLowerCase().includes(lastWord.toLowerCase()))
         .map(k => k.replace(scopePath + '/', ''))
@@ -1885,7 +1885,7 @@ export default function TerminalPanel({
         term.terminal?.write(completion);
       } else if (uniqueCompletions.length > 1) {
         term.terminal?.write('\r\n' + uniqueCompletions.join('  ') + '\r\n');
-        const cwd = localShellCwdRef.current[terminalId] || filesystemScopePathRef.current || 'project';
+        const cwd = localShellCwdRef.current[terminalId] || filesystemScopePathRef.current || 'workspace';
         term.terminal?.write(getPrompt('sandbox-cmd', cwd) + lineBuffer);
       } else {
         term.terminal?.write('\x07'); // Beep
@@ -1923,7 +1923,7 @@ export default function TerminalPanel({
         const isDangerous = dangerousPatterns.some(p => p.test(command));
         if (isDangerous) {
           term.terminal?.write('\x1b[31m⚠ Dangerous command detected. Blocking for safety.\x1b[0m\r\n');
-          const cwd = localShellCwdRef.current[terminalId] || filesystemScopePathRef.current || 'project';
+          const cwd = localShellCwdRef.current[terminalId] || filesystemScopePathRef.current || 'workspace';
           term.terminal?.write(getPrompt('sandbox-cmd', cwd));
           return;
         }
@@ -1940,7 +1940,7 @@ export default function TerminalPanel({
         }
       }
 
-      const cwd = localShellCwdRef.current[terminalId] || filesystemScopePathRef.current || 'project';
+      const cwd = localShellCwdRef.current[terminalId] || filesystemScopePathRef.current || 'workspace';
       term.terminal?.write(getPrompt('sandbox-cmd', cwd));
       return;
     }
@@ -1962,27 +1962,27 @@ export default function TerminalPanel({
     if (data === '\x03') { // Ctrl+C
       term.terminal?.write('^C\r\n');
       lineBufferRef.current[terminalId] = '';
-      const cwd = localShellCwdRef.current[terminalId] || filesystemScopePathRef.current || 'project';
+      const cwd = localShellCwdRef.current[terminalId] || filesystemScopePathRef.current || 'workspace';
       term.terminal?.write(getPrompt('sandbox-cmd', cwd));
       return;
     }
 
     if (data === '\u0015') { // Ctrl+U — clear to start of line
       if (lineBuffer.length > 0) {
-        term.terminal?.write('\r\x1b[K' + getPrompt('sandbox-cmd', localShellCwdRef.current[terminalId] || filesystemScopePathRef.current || 'project'));
+        term.terminal?.write('\r\x1b[K' + getPrompt('sandbox-cmd', localShellCwdRef.current[terminalId] || filesystemScopePathRef.current || 'workspace'));
         lineBufferRef.current[terminalId] = '';
       }
       return;
     }
 
     if (data === '\u001b[H') { // Home — move cursor to start (via line clear + rewrite)
-      const cwd = localShellCwdRef.current[terminalId] || filesystemScopePathRef.current || 'project';
+      const cwd = localShellCwdRef.current[terminalId] || filesystemScopePathRef.current || 'workspace';
       term.terminal?.write('\r\x1b[K' + getPrompt('sandbox-cmd', cwd) + lineBuffer + '\x1b[' + (getPrompt('sandbox-cmd', cwd).length + 1) + 'G');
       return;
     }
 
     if (data === '\u001b[F') { // End — move cursor to end (via line rewrite)
-      const cwd = localShellCwdRef.current[terminalId] || filesystemScopePathRef.current || 'project';
+      const cwd = localShellCwdRef.current[terminalId] || filesystemScopePathRef.current || 'workspace';
       term.terminal?.write('\r\x1b[K' + getPrompt('sandbox-cmd', cwd) + lineBuffer);
       return;
     }
@@ -1995,7 +1995,7 @@ export default function TerminalPanel({
         idx--;
         historyIndexRef.current[terminalId] = idx;
         const cmd = history[idx] || '';
-        const cwd = localShellCwdRef.current[terminalId] || filesystemScopePathRef.current || 'project';
+        const cwd = localShellCwdRef.current[terminalId] || filesystemScopePathRef.current || 'workspace';
         term.terminal?.write('\r\x1b[K' + getPrompt('sandbox-cmd', cwd) + cmd);
         lineBufferRef.current[terminalId] = cmd;
       }
@@ -2010,13 +2010,13 @@ export default function TerminalPanel({
         idx++;
         historyIndexRef.current[terminalId] = idx;
         const cmd = history[idx] || '';
-        const cwd = localShellCwdRef.current[terminalId] || filesystemScopePathRef.current || 'project';
+        const cwd = localShellCwdRef.current[terminalId] || filesystemScopePathRef.current || 'workspace';
         term.terminal?.write('\r\x1b[K' + getPrompt('sandbox-cmd', cwd) + cmd);
         lineBufferRef.current[terminalId] = cmd;
       } else {
         idx = history.length;
         historyIndexRef.current[terminalId] = idx;
-        const cwd = localShellCwdRef.current[terminalId] || filesystemScopePathRef.current || 'project';
+        const cwd = localShellCwdRef.current[terminalId] || filesystemScopePathRef.current || 'workspace';
         term.terminal?.write('\r\x1b[K' + getPrompt('sandbox-cmd', cwd));
         lineBufferRef.current[terminalId] = '';
       }
@@ -2030,7 +2030,7 @@ export default function TerminalPanel({
         if (lines.length > 1) {
           // Queue all lines for execution
           term.terminal?.write(`\r\n\x1b[33mPasting ${lines.length} commands...\x1b[0m\r\n`);
-          const cwd = localShellCwdRef.current[terminalId] || filesystemScopePathRef.current || 'project';
+          const cwd = localShellCwdRef.current[terminalId] || filesystemScopePathRef.current || 'workspace';
           for (const line of lines) {
             const trimmed = line.trim();
             if (trimmed) {
