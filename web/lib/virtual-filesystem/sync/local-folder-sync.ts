@@ -23,7 +23,7 @@
 import { opfsCore } from '../opfs/opfs-core';
 import { normalizeScopePath, resolveScopedPath } from '../scope-utils';
 import { createLogger } from '@/lib/utils/logger';
-import { buildApiHeaders } from '@/lib/utils';
+import { buildApiHeaders } from '@/lib/virtual-filesystem/opfs/utils';
 
 // ============================================================================
 // Comprehensive sync exclusion patterns — all languages

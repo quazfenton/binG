@@ -12,13 +12,13 @@
  */
 
 import type BetterSqlite3 from 'better-sqlite3'
-import { terminalSessionManager } from './terminal-session-manager'
+import { terminalSessionManager } from './terminal/terminal-session-manager'
 
 // Log deprecation warning on first import
 console.warn('[DEPRECATED] terminal-session-store.ts is deprecated. Use terminal-session-manager.ts instead.')
 
 // Re-export types
-export type { TerminalSessionState } from './terminal-session-manager'
+export type { TerminalSessionState } from './terminal/terminal-session-manager'
 
 // ============================================================================
 // DEPRECATED - Use terminalSessionManager from terminal-session-manager.ts

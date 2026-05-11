@@ -21,8 +21,8 @@
  */
 
 import { createLogger } from '@/lib/utils/logger';
-import { embed, embedBatch } from '@/lib/memory/embeddings';
-import { cosineSimilarity } from '@/lib/retrieval/similarity';
+import { embed, embedBatch } from '@/lib/vector-memory/embeddings';
+import { cosineSimilarity } from '@/lib/vector-memory/similarity';
 import {
   processUnifiedAgentRequest,
   type UnifiedAgentConfig,

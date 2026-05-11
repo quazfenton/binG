@@ -234,7 +234,7 @@ export class CircuitBreaker extends EventEmitter {
 // ==================== Provider Circuit Breaker Registry ====================
 
 import { EventEmitter } from 'events';
-import type { SandboxProviderType } from '@/lib/sandbox/providers';
+import type { SandboxProviderType } from '@/lib/providers/9router/providers';
 
 interface ProviderCircuitBreaker {
   breaker: CircuitBreaker;
@@ -380,7 +380,7 @@ export const providerCircuitBreakers = new ProviderCircuitBreakerRegistry();
 
 // ==================== Metrics Integration ====================
 
-import { sandboxMetrics } from '@/lib/backend/metrics';
+import { sandboxMetrics } from '@/lib/observability/metrics';
 
 /**
  * Create a circuit breaker with metrics integration

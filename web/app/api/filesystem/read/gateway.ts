@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { virtualFilesystem, withAnonSessionCookie } from '@/lib/virtual-filesystem/index.server';
-import { pathSchema } from '@/lib/validation/schemas';
+import { pathSchema } from '@/lib/utils/schemas';
 import { resolveFilesystemOwnerWithFallback } from '../utils';
 
 

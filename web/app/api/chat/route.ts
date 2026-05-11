@@ -1,14 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import { PROVIDERS } from "@/lib/chat/llm-providers";
-import { errorHandler } from "@/lib/chat/error-handler";
+import { PROVIDERS } from "@/lib/providers/llm-providers";
+import { errorHandler } from '@/lib/utils/error-handler';
 import { responseRouter } from "@/lib/api/response-router";
 import { resolveRequestAuth } from "@/lib/auth/request-auth";
 import { resolveFilesystemOwner, withAnonSessionCookie } from "@/lib/virtual-filesystem/resolve-filesystem-owner";
 import { detectRequestType } from "@/lib/utils/request-type-detector";
-import { generateSecureId } from '@/lib/utils';
+import { generateSecureId } from '@/lib/virtual-filesystem/opfs/utils';
 import { chatRequestLogger } from '@/lib/chat/chat-request-logger';
 import { chatLogger } from '@/lib/chat/chat-logger';
-import { setMetricsLogger } from '@/lib/agent/metrics';
+import { setMetricsLogger } from '@/lib/observability/metrics';
 import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-service';
 import { filesystemEditSessionService } from '@/lib/virtual-filesystem/filesystem-edit-session-service';
 import { contextPackService } from '@/lib/virtual-filesystem/context-pack-service';
@@ -17,8 +17,8 @@ import { extractSessionIdFromPath, resolveScopedPath as resolveScopeUtil, saniti
 import { createNDJSONParser } from '@/lib/utils/ndjson-parser';
 import { streamStateManager } from '@/lib/streaming/stream-state-manager';
 import { notifyStreamComplete, notifyNeedMoreTurns } from '@/lib/streaming/stream-control-handler';
-import type { LLMMessage, StreamingResponse } from "@/lib/chat/llm-providers";
-import { checkRateLimit } from '@/lib/middleware/rate-limiter';
+import type { LLMMessage, StreamingResponse } from "@/lib/providers/llm-providers";
+import { checkRateLimit } from '@/lib/utils/rate-limiter';
 import { createFilesystemTools, createAgentLoop } from '@/lib/orchestra/mastra';
 import { 
   executeV2Task, 
@@ -32,7 +32,7 @@ import {
   executeWithOrchestrationMode
 } from '@bing/shared/agent';
 import { processUnifiedAgentRequest, type UnifiedAgentConfig } from '@/lib/orchestra/unified-agent-service';
-import { checkProviderHealth } from '@/lib/orchestra/provider-health';
+import { checkProviderHealth } from '@/lib/sandbox/provider-health';
 import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp';
 import { mem0Search, buildMem0SystemPrompt, isMem0Configured, mem0Add, prewarmMem0Cache } from '@/lib/powers/mem0-power';
 import { createSSEEmitter, SSE_RESPONSE_HEADERS, SSE_EVENT_TYPES } from '@/lib/streaming/sse-event-schema';
@@ -51,8 +51,8 @@ import { applyUnifiedDiffToContent } from '@/lib/chat/file-diff-utils';
 import { generateSessionName, sessionNameExists } from '@/lib/session/session-naming';
 import { timingSafeEqual } from 'node:crypto';
 import { buildSupplementalAgenticEvents } from '@/lib/api/streaming-events';
-import { sandboxBridge } from '@/lib/sandbox';
-import { determineExecutionPolicy } from '@/lib/sandbox/types';
+import { sandboxBridge } from '@/lib/events/trigger/handlers/sandbox';
+import { determineExecutionPolicy } from '@/lib/voice/types';
 import {
   applySearchReplace,
   pollWithBackoff,
@@ -444,7 +444,7 @@ export async function POST(request: NextRequest) {
 
       // Record failed tool calls in telemetry for model ranking
       if (retryContext.failedToolCalls && retryContext.failedToolCalls.length > 0 && retryContext.originalModel) {
-        const { toolCallTracker } = await import('@/lib/chat/tool-call-tracker');
+        const { toolCallTracker } = await import('@/lib/tools/tool-call-tracker');
         const timestamp = Date.now();
 
         const failedRecords = retryContext.failedToolCalls.map(tc => ({
@@ -488,7 +488,7 @@ export async function POST(request: NextRequest) {
       // PRIORITY 2: Fall back to telemetry-based model ranker if client didn't rotate
       if (!selectedRetryModel && retryContext.originalModel) {
         try {
-          const { getRetryModel } = await import('@/lib/models/model-ranker');
+          const { getRetryModel } = await import('@/lib/providers/model-ranker');
           const retryModel = await getRetryModel({
             failedModel: retryContext.originalModel,
             failedProvider: retryContext.originalProvider,
@@ -1308,7 +1308,7 @@ const config: UnifiedAgentConfig = {
                 // Track tool call success/failure in telemetry for model ranking
                 // Uses generated toolCallId for deduplication
                 if (toolName) {
-                  import('@/lib/chat/tool-call-tracker').then(({ toolCallTracker }) => {
+                  import('@/lib/tools/tool-call-tracker').then(({ toolCallTracker }) => {
                     toolCallTracker.recordToolCall({
                       model: actualModel,
                       provider: actualProvider,
@@ -2777,7 +2777,7 @@ const config: UnifiedAgentConfig = {
 
                           // Real-time: Record tool call for model ranking telemetry
                           try {
-                            const { toolCallTracker: realTimeTracker } = await import('@/lib/chat/tool-call-tracker');
+                            const { toolCallTracker: realTimeTracker } = await import('@/lib/tools/tool-call-tracker');
                             await realTimeTracker.recordToolCall({
                               model: actualModel,
                               provider: actualProvider,
@@ -3385,7 +3385,7 @@ const config: UnifiedAgentConfig = {
                         const errorMsg = chunk.toolInvocation.result?.error;
 
                         try {
-                          const { toolCallTracker: realTimeTracker } = await import('@/lib/chat/tool-call-tracker');
+                          const { toolCallTracker: realTimeTracker } = await import('@/lib/tools/tool-call-tracker');
                           await realTimeTracker.recordToolCall({
                             model: actualModel,
                             provider: actualProvider,
@@ -5939,7 +5939,7 @@ export async function GET(request: NextRequest) {
     }
     
     try {
-      const { llmService } = await import("@/lib/chat/llm-providers");
+      const { llmService } = await import("@/lib/providers/llm-providers");
       await llmService.warmupProviders();
 
       return NextResponse.json({

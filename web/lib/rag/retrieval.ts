@@ -16,7 +16,7 @@
  */
 
 import { createLogger } from '@/lib/utils/logger';
-import { embed } from '@/lib/memory/embeddings';
+import { embed } from '@/lib/vector-memory/embeddings';
 import { estimateTokens } from '@/lib/context/contextBuilder';
 import { getKnowledgeStore } from './knowledge-store';
 import type { KnowledgeSearchResult, KnowledgeSearchOptions, KnowledgeType, KnowledgeChunk } from './knowledge-store';

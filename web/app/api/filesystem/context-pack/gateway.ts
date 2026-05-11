@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { withAnonSessionCookie } from '@/lib/virtual-filesystem/index.server';
 import { resolveFilesystemOwnerWithFallback } from '../utils';
 import { contextPackService, type ContextPackFormat } from '@/lib/virtual-filesystem/context-pack-service';
-import { absolutePathSchema, contextPackOptionsSchema } from '@/lib/validation/schemas';
+import { absolutePathSchema, contextPackOptionsSchema } from '@/lib/utils/schemas';
 
 
 

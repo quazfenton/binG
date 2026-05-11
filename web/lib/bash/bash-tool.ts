@@ -27,7 +27,7 @@ import {
   canRewrite,
   getCommandCategory,
   type FilterOptions,
-} from '@/lib/tools/rtk-integration';
+} from '@/lib/context/rtk-integration';
 
 /**
  * Re-export isCommandSafe for external consumers

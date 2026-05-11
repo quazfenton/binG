@@ -36,8 +36,8 @@
 
 import { getSandboxProvider, type SandboxProviderType } from '../../sandbox/providers';
 import type { SandboxHandle, CheckpointInfo } from '../../sandbox/providers/sandbox-provider';
-import { getTerminalSession, updateTerminalSession, type TerminalSessionState } from '../../terminal/session/terminal-session-store';
-import { userTerminalSessionManager, type UserTerminalSession } from '../../terminal/session/user-terminal-sessions';
+import { getTerminalSession, updateTerminalSession, type TerminalSessionState } from '../../../terminal/terminal/session/terminal-session-store';
+import { userTerminalSessionManager, type UserTerminalSession } from '../../../terminal/terminal/session/user-terminal-sessions';
 
 /**
  * Snapshot metadata

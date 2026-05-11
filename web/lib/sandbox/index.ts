@@ -5,13 +5,13 @@ export type { ToolResult, PreviewInfo, AgentMessage } from './types';
 export { runAgentLoop } from '../orchestra/agent-loop';
 export { sandboxEvents } from './sandbox-events';
 export type { SandboxEvent, SandboxEventType } from './sandbox-events';
-export { terminalManager, TerminalManager } from '../terminal/terminal-manager';
+export { terminalManager, TerminalManager } from '../../terminal/terminal-manager';
 export { provisionBaseImage, warmPool, WarmPool } from './base-image';
 export type { BasePackageSet, ProvisionResult } from './base-image';
 export { sandboxFilesystemSync } from '../virtual-filesystem/sync/sandbox-filesystem-sync';
 
 // Enhanced terminal manager with desktop/MCP support
-export { EnhancedTerminalManager } from '../terminal/enhanced-terminal-manager';
+export { EnhancedTerminalManager } from '../../terminal/enhanced-terminal-manager';
 
 // Enhanced sandbox tools with computer use, MCP, desktop operations
 export { ENHANCED_SANDBOX_TOOLS, TOOL_CATEGORIES, getToolsByCategory, isToolAvailable, getToolByName } from './enhanced-sandbox-tools';
@@ -53,27 +53,27 @@ export {
   LocalCommandExecutor,
   type LocalFilesystemEntry,
   type LocalCommandExecutorConfig,
-} from '../terminal/commands/local-filesystem-executor'
+} from '../../terminal/commands/local-filesystem-executor'
 
 // Terminal handlers (NEW - complete migration)
 export {
   TerminalLocalFSHandler,
   createTerminalLocalFSHandler,
   type TerminalLocalFSConfig,
-} from '../terminal/commands/terminal-local-fs-handler'
+} from '../../terminal/commands/terminal-local-fs-handler'
 
 export {
   TerminalInputHandler,
   createTerminalInputHandler,
   type TerminalInputHandlerConfig,
-} from '../terminal/commands/terminal-input-handler'
+} from '../../terminal/commands/terminal-input-handler'
 
 export {
   TerminalEditorHandler,
   createTerminalEditorHandler,
   type EditorSession,
   type TerminalEditorHandlerConfig,
-} from '../terminal/commands/terminal-editor-handler'
+} from '../../terminal/commands/terminal-editor-handler'
 
 export {
   SandboxConnectionManager,
@@ -102,20 +102,20 @@ export {
   TerminalInputBatcher,
   createTerminalInputBatcher,
   type TerminalInputBatcherConfig,
-} from '../terminal/terminal-input-batcher'
+} from '../../terminal/terminal-input-batcher'
 
 export {
   TerminalHealthMonitor,
   createTerminalHealthMonitor,
   type TerminalHealthMonitorConfig,
-} from '../terminal/terminal-health-monitor'
+} from '../../terminal/terminal-health-monitor'
 
 export {
   TerminalStateManager,
   createTerminalStateManager,
   type TerminalState,
   type TerminalStateManagerConfig,
-} from '../terminal/session/terminal-state-manager'
+} from '../../terminal/session/terminal-state-manager'
 
 // Terminal UI Manager (NEW - UI/UX operations)
 export {
@@ -123,7 +123,7 @@ export {
   createTerminalUIManager,
   type TerminalUIState,
   type TerminalUIManagerConfig,
-} from '../terminal/terminal-ui-manager'
+} from '../../terminal/terminal-ui-manager'
 
 // Terminal Handler Wiring (NEW - wiring utilities)
 export {
@@ -133,7 +133,7 @@ export {
   cleanupHandlers,
   type TerminalHandlers,
   type TerminalHandlerWiringConfig,
-} from '../terminal/commands/terminal-handler-wiring'
+} from '../../terminal/commands/terminal-handler-wiring'
 
 // ==================== Phase 1 Integration ====================
 // Per-user terminal session isolation, auto-snapshots, VFS sync, provider MCP tools

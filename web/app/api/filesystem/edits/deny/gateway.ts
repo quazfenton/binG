@@ -5,7 +5,7 @@ import {
   filesystemEditSessionService,
 } from '@/lib/virtual-filesystem/index.server';
 import { resolveFilesystemOwnerWithFallback } from '../../utils';
-import { transactionIdSchema } from '@/lib/validation/schemas';
+import { transactionIdSchema } from '@/lib/utils/schemas';
 
 
 

@@ -24,7 +24,7 @@ export {
   requireAuth,
   validateUserId,
   type AuthConfig,
-} from './auth';
+} from '../auth';
 
 // Preview Router
 export {
@@ -67,7 +67,7 @@ export {
   WebSocketTerminalServer,
   webSocketTerminalServer,
   type TerminalSession,
-} from '../terminal/websocket-terminal';
+} from '../../terminal/websocket-terminal';
 
 // Storage Backend
 export {

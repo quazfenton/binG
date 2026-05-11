@@ -27,7 +27,7 @@ import { createLogger } from '@/lib/utils/logger';
 import { estimateTokens } from '@/lib/context/contextBuilder';
 import { stripScopePrefixForDisplay } from './path-normalizer';
 import { detectIncompleteResponse } from '@bing/shared/agent/feedback-injection';
-import { recordToolCallTelemetry, prepareTelemetryPayload } from '@/lib/chat/logging-utils';
+import { recordToolCallTelemetry, prepareTelemetryPayload } from '@/lib/errors/logging-utils';
 
 const logger = createLogger('SmartContext');
 

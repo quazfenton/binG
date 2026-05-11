@@ -259,7 +259,7 @@ export class ToolExecutorWrapper {
       diff,
       llm: async (prompt: string): Promise<string> => {
         try {
-          const { llmService } = await import('@/lib/chat/llm-providers');
+          const { llmService } = await import('@/lib/providers/llm-providers');
           const response = await llmService.generateResponse({
             provider: 'openai',
             model: 'gpt-4o-mini',

@@ -11,7 +11,7 @@
  * @example
  * ```typescript
  * // Initialize on server startup
- * import { initializeEventSystem, startEventProcessing } from '@/lib/events';
+ * import { initializeEventSystem, startEventProcessing } from '@/lib/crewai/crew/events';
  *
  * await initializeEventSystem();
  * const timer = startEventProcessing();
@@ -20,7 +20,7 @@
  * @example
  * ```typescript
  * // Emit an event
- * import { emitEvent } from '@/lib/events';
+ * import { emitEvent } from '@/lib/crewai/crew/events';
  *
  * const result = await emitEvent({
  *   type: 'SCHEDULED_TASK',

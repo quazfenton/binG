@@ -47,8 +47,8 @@
 
 import { spawn, type ChildProcess } from 'child_process';
 import { createLogger } from '../../utils/logger';
-import { findOpencodeBinarySync } from '@/lib/agent-bins/find-opencode-binary';
-import { createAgentFilesystem, type AgentFilesystem } from '@/lib/agent-bins/agent-filesystem';
+import { findOpencodeBinarySync } from '@/lib/drivers/opencode/find-opencode-binary';
+import { createAgentFilesystem, type AgentFilesystem } from '@/lib/drivers/agent-bins/agent-filesystem';
 import type { ToolResult } from '../types';
 import type {
   LLMProvider,
@@ -819,7 +819,7 @@ export class OpencodeV2Provider implements LLMProvider {
    */
   private async translateNaturalLanguageToCommand(task: string, cwd: string): Promise<string> {
     // Import the shared workspace detection module
-    const { buildProjectContext, translateNaturalLanguageToCommand: translateNL } = await import('../../workspace-detection');
+    const { buildProjectContext, translateNaturalLanguageToCommand: translateNL } = await import('../../../drivers/opencode/workspace-detection');
 
     // Get file listing from the cwd directory for workspace detection
     try {

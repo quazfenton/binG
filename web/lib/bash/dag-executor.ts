@@ -8,7 +8,7 @@ import { DAG, DAGNode, DAGExecutionResult, createDAG } from './bash-event-schema
 import { executeBashCommand } from './bash-tool';
 import { virtualFilesystem } from '@/lib/virtual-filesystem/index.server';
 import { createLogger } from '@/lib/utils/logger';
-import { recordToolCallTelemetry, prepareTelemetryPayload, createOriginStack } from '@/lib/chat/logging-utils';
+import { recordToolCallTelemetry, prepareTelemetryPayload, createOriginStack } from '@/lib/errors/logging-utils';
 import { optimizeDAG, validateDAG } from './dag-compiler';
 
 const logger = createLogger('Bash:DAGExecutor');

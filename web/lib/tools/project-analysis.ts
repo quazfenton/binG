@@ -123,7 +123,7 @@ export async function analyzeProject(
     getDockerCommands,
     formatSmartContextAsMarkdown,
     generateSmartContext,
-  } = await import('@/lib/workspace-detection');
+  } = await import('@/lib/drivers/opencode/workspace-detection');
 
   const filePaths = await getFileListing(userId);
   if (filePaths.length === 0) {
@@ -402,7 +402,7 @@ export async function getDependencies(
   const issues: DependencyIssue[] = [];
 
   // Detect package manager
-  const { detectPackageManager } = await import('@/lib/workspace-detection');
+  const { detectPackageManager } = await import('@/lib/drivers/opencode/workspace-detection');
   const pm = detectPackageManager(filePaths);
 
   // Detect lock file

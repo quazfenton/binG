@@ -1,4 +1,4 @@
-import type { WorkspaceSession } from '../sandbox/types'
+import type { WorkspaceSession } from '../../../sandbox/types'
 import type BetterSqlite3 from 'better-sqlite3'
 import { createLogger } from '@/lib/utils/logger'
 import { compress, decompress, isCompressed } from '@/lib/utils/compression'
@@ -52,7 +52,7 @@ let stmtAllActive: BetterSqlite3.Statement | null = null
 let stmtCleanup: BetterSqlite3.Statement | null = null
 
 try {
-  const { default: getDatabase } = require('../database/connection') as { default: () => BetterSqlite3.Database }
+  const { default: getDatabase } = require('../../../../database/connection') as { default: () => BetterSqlite3.Database }
   db = getDatabase()
 
   db.exec(`

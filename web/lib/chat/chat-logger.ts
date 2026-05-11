@@ -5,7 +5,7 @@
  * Supports debug, info, warn, and error levels with optional request context.
  * 
  * Usage:
- *   import { chatLogger } from '@/lib/api/chat-logger';
+ *   import { chatLogger } from '@/lib/chat/chat-logger';
  *   chatLogger.debug('Message', { requestId }, { extraData });
  * 
  * Log levels (controlled by LOG_LEVEL env var):

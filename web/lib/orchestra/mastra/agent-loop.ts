@@ -16,7 +16,7 @@ import { createLogger } from '@/lib/utils/logger';
 import { getProviderForTask, getModelForTask } from '@/lib/config/task-providers';
 import { streamWithVercelAI, type VercelStreamOptions } from '@/lib/chat/vercel-ai-streaming';
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
-import type { LLMMessage } from '@/lib/chat/llm-providers';
+import type { LLMMessage } from '@/lib/providers/llm-providers';
 import { generateId, generateText, tool as createTool } from 'ai';
 import type { Tool } from 'ai';
 import {

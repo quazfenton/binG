@@ -6,7 +6,7 @@
  * to prevent the kind of drift that caused the user_sessions / performance-indexes bug.
  *
  * Usage:
- *   import { execSchemaFile } from '@/lib/database/schema';
+ *   import { execSchemaFile } from '@/lib/events/schema';
  *   execSchemaFile(db, 'events-schema');
  *
  * Returns empty string during build/Edge where fs access is unavailable.

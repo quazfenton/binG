@@ -15,14 +15,14 @@
 
 import { getSandboxProvider, type SandboxHandle, type PtyHandle as ProviderPtyHandle, type SandboxProviderType } from '../sandbox/providers'
 import { updateSession } from '../storage/session-store'
-import type { PreviewInfo } from '../sandbox/types'
+import type { PreviewInfo } from '../../../sandbox/types'
 import { emitEvent } from '../sandbox/sandbox-events'
 import { createLogger } from '@/lib/utils/logger'
 
 const log = createLogger('TerminalManager')
 
 // Re-export existing functionality
-export * from './terminal-manager'
+export * from './terminal/terminal-manager'
 
 // Enhanced port detection patterns
 const ENHANCED_PORT_PATTERNS = [

@@ -1,5 +1,5 @@
 import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-service';
-import { groupGrepOutput, filterOutput, summarizeCode, estimateTokens } from '@/lib/tools/rtk-integration';
+import { groupGrepOutput, filterOutput, summarizeCode, estimateTokens } from '@/lib/context/rtk-integration';
 
 // NOTE: Tambo local tools are for server-side tool execution without persistent sessions.
 // Using 'anon:public' for unauthenticated requests is acceptable for development/public use.

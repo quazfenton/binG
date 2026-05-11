@@ -6,4 +6,4 @@
  * @see lib/sandbox/spawn/cloud-agent-spawner.ts
  */
 
-export * from '@/lib/sandbox/spawn/cloud-agent-spawner';
+export * from '@/lib/sandbox/cloud-agent-spawner';

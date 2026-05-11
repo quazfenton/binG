@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 
-import { secureRandomString } from '@/lib/utils';
-import { setUrl } from '@/lib/url-shortener/store';
+import { secureRandomString } from '@/lib/virtual-filesystem/opfs/utils';
+import { setUrl } from '@/lib/vector-memory/store';
 
 export async function POST(req: NextRequest) {
   try {

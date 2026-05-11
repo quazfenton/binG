@@ -14,7 +14,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { GitManager, type GitStatusResult } from '@bing/shared/agent/git-manager';
-import type { SandboxHandle } from '@/lib/sandbox/providers';
+import type { SandboxHandle } from '@/lib/providers/9router/providers';
 import { getGitVFSSync, type GitVFSStatus } from '@/lib/virtual-filesystem/opfs/git-vfs-sync';
 import { ShadowCommitManager, type CommitResult, type CommitHistoryEntry, type TransactionEntry } from '@/lib/orchestra/stateful-agent/commit/shadow-commit';
 import { createLogger } from '@/lib/utils/logger';

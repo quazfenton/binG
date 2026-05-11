@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 
-import { fastAgentService } from "@/lib/chat/fast-agent-service";
+import { fastAgentService } from "@/lib/engineers/fast-agent-service";
 
 /**
  * Fast-Agent health check endpoint

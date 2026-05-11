@@ -5,7 +5,7 @@
  * All new code should use sessionManager from lib/session/session-manager.
  * 
  * Migration guide:
- * - import { openCodeV2SessionManager } from '@/lib/api/opencode-v2-session-manager'
+ * - import { openCodeV2SessionManager } from '@/lib/session/agent/opencode-v2-session-manager'
  * + import { sessionManager } from '@/lib/session/session-manager'
  * 
  * @see lib/session/session-manager.ts - Consolidated session manager

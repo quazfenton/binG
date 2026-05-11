@@ -19,7 +19,7 @@
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { cn } from "@/lib/utils";
+import { cn } from '@/lib/virtual-filesystem/opfs/utils';
 import { toast } from "sonner";
 import { useVirtualFilesystem } from "@/hooks/use-virtual-filesystem";
 import { emitFilesystemUpdated } from "@/lib/virtual-filesystem/sync/sync-events";

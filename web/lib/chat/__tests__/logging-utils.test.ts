@@ -9,7 +9,7 @@ import {
   redactArgsForLogging,
   createOriginStack,
   prepareTelemetryPayload,
-} from '../logging-utils';
+} from '.../errors/logging-utils';
 
 // Mock the tool-call-tracker module
 vi.mock('../tool-call-tracker', () => ({
@@ -258,7 +258,7 @@ describe('prepareTelemetryPayload', () => {
 describe('recordToolCallTelemetry', () => {
   // Import is async so we test it separately
   it('should be callable without throwing', async () => {
-    const { recordToolCallTelemetry } = await import('../logging-utils');
+    const { recordToolCallTelemetry } = await import('.../errors/logging-utils');
     // Should not throw even with invalid toolCallId
     await expect(
       recordToolCallTelemetry({
@@ -269,7 +269,7 @@ describe('recordToolCallTelemetry', () => {
   });
 
   it('should handle missing toolCallTracker gracefully', async () => {
-    const { recordToolCallTelemetry } = await import('../logging-utils');
+    const { recordToolCallTelemetry } = await import('.../errors/logging-utils');
     // Module is mocked, so we just verify it doesn't throw
     await expect(
       recordToolCallTelemetry({

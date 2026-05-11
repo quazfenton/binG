@@ -7,7 +7,7 @@ import { useVoiceSettings } from "@/lib/voice/use-voice";
 import MessageBubble from "@/components/message-bubble";
 import Settings from "@/components/settings";
 import CodePreviewPanel from "@/components/code-preview-panel";
-import { type LLMProviderConfig } from "@/lib/chat/llm-providers-types";
+import { type LLMProviderConfig } from "@/lib/providers/llm-providers-types";
 import { enhancedBufferManager } from "@/lib/streaming/enhanced-buffer-manager";
 import { GlobalStreamingState } from "@/hooks/use-streaming-state";
 

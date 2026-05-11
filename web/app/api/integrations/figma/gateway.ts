@@ -13,9 +13,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth0 } from '@/lib/auth/auth0';
 import { getDatabase } from '@/lib/database/connection';
 import { decryptApiKey, encryptApiKey } from '@/lib/database/connection';
-import { createFigmaApi, FigmaApiError } from '@/lib/figma/api';
-import { isFigmaConfigured, getFigmaRedirectUri } from '@/lib/figma/config';
-import { generateCodeVerifier, generateCodeChallenge, generateState, generateAuthUrl } from '@/lib/figma/oauth';
+import { createFigmaApi, FigmaApiError } from '@/lib/integrations/figma/api';
+import { isFigmaConfigured, getFigmaRedirectUri } from '@/lib/mcp/config';
+import { generateCodeVerifier, generateCodeChallenge, generateState, generateAuthUrl } from '@/lib/integrations/figma/oauth';
 import { oauthStateStore } from './oauth-state-store';
 
 
@@ -59,7 +59,7 @@ async function getFigmaToken(userId: number): Promise<string | null> {
       const refreshToken = decryptApiKey(row.refresh_token_encrypted);
       if (refreshToken) {
         try {
-          const { refreshToken: refreshFigmaToken } = await import('@/lib/figma/oauth');
+          const { refreshToken: refreshFigmaToken } = await import('@/lib/integrations/figma/oauth');
           const tokenData = await refreshFigmaToken({ refreshToken });
           
           // Update database with new token

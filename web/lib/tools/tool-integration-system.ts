@@ -12,13 +12,13 @@
 import { z } from "zod";
 import {
   createDefaultProviders,
-} from "@/lib/tools/tool-integration/providers";
+} from '@/lib/providers/9router/providers';
 import { ToolProviderRegistry } from "@/lib/tools/tool-integration/provider-registry";
 import type {
   IntegrationConfig as BaseIntegrationConfig,
   IntegrationProvider as BaseIntegrationProvider,
   ToolExecutionResult as BaseToolExecutionResult,
-} from "@/lib/tools/tool-integration/types";
+} from '@/lib/voice/types';
 
 // ============================================================================
 // TYPE DEFINITIONS

@@ -6,7 +6,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { parseRSSFeed, type NewsArticle } from '@/lib/news/rss-parser';
+import { parseRSSFeed, type NewsArticle } from '@/lib/plugins/news/rss-parser';
 
 // Image proxy helper
 function proxyImageUrl(url: string | undefined): string | undefined {

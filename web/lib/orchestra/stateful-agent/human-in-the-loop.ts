@@ -1,7 +1,7 @@
 import type { ApprovalRequest } from './schemas';
 import { hitlAuditLogger } from './hitl-audit-logger';
 import { minimatch } from 'minimatch';
-import { isOutsideWorkspace, resolveWorkspaceRoot, DESTRUCTIVE_OPERATIONS } from '@/lib/agent-bins/workspace-boundary';
+import { isOutsideWorkspace, resolveWorkspaceRoot, DESTRUCTIVE_OPERATIONS } from '@/lib/drivers/agent-bins/workspace-boundary';
 
 export interface InterruptRequest {
   type: 'approval_required';

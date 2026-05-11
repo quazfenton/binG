@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 
 import { getDatabase } from '@/lib/database/connection';
-import { rateLimitMiddleware } from '@/lib/middleware/rate-limiter';
+import { rateLimitMiddleware } from '@/lib/utils/rate-limiter';
 import { hashValue } from '@/lib/utils/crypto';
 
 export async function POST(request: NextRequest) {
@@ -71,7 +71,7 @@ export async function POST(request: NextRequest) {
     `).run(tokenHash, expiresAt.toISOString(), email);
 
     // Send verification email
-    const { emailService } = await import('@/lib/email/email-service');
+    const { emailService } = await import('@/lib/auth/email/email-service');
     const verificationUrl = `${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/verify-email?token=${token}`;
 
     await emailService.sendVerificationEmail(email, { token, expiresAt, verificationUrl });

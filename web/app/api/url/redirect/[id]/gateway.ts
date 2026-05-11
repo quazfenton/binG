@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 
-import { getUrl, incrementClicks } from '@/lib/url-shortener/store';
+import { getUrl, incrementClicks } from '@/lib/vector-memory/store';
 
 export async function GET(
   req: NextRequest,

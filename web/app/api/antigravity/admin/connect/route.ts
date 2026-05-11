@@ -13,7 +13,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 
 import { requireAdminApiOrForbidden } from '@/lib/auth/admin';
-import { getAntigravityOAuthUrl } from '@/lib/llm/antigravity-provider';
+import { getAntigravityOAuthUrl } from '@/lib/providers/antigravity-provider';
 
 export async function GET(req: NextRequest) {
   const admin = await requireAdminApiOrForbidden(req);

@@ -10,7 +10,7 @@ import { Copy, Check, ChevronDown, ChevronUp, Brain, Loader2, SkipForward, Pause
 import type { Message, CodeArtifact } from "@/types"
 import { useEnhancedStreamingDisplay } from "@/hooks/use-enhanced-streaming-display"
 import { useResponsiveLayout, calculateDynamicWidth, getOverflowStrategy } from "@/hooks/use-responsive-layout"
-import { analyzeMessageContent, getContentBasedStyling, shouldUseCompactLayout } from "@/lib/message-content-analyzer"
+import { analyzeMessageContent, getContentBasedStyling, shouldUseCompactLayout } from '@/lib/chat/message-content-analyzer'
 import { useKeyboardHandler } from "@/hooks/use-touch-handler"
 import IntegrationAuthPrompt from "@/components/integrations/IntegrationAuthPrompt"
 import { isEmbeddableUrl, transformToEmbed, getSuggestedPlugin } from "@/lib/utils/iframe-helper"
@@ -23,7 +23,7 @@ import { SpecAmplificationProgress, DAGProgressDisplay } from "@/components/spec
 import { normalizeToolInvocations } from "@/lib/types/tool-invocation"
 import { useReasoningStream } from "@/hooks/use-reasoning-stream"
 import { toast } from "sonner"
-import { buildApiHeaders } from "@/lib/utils"
+import { buildApiHeaders } from '@/lib/virtual-filesystem/opfs/utils'
 import {
   extractReasoningContent,
   sanitizeAssistantDisplayContent,

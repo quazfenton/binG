@@ -3,8 +3,8 @@ import { z } from 'zod';
 import { virtualFilesystem, withAnonSessionCookie } from '@/lib/virtual-filesystem/index.server';
 import { resolveFilesystemOwnerWithFallback } from '../utils';
 import type { FilesystemOwnerResolution } from '@/lib/virtual-filesystem/resolve-filesystem-owner';
-import { absolutePathSchema } from '@/lib/validation/schemas';
-import { isOutsideWorkspace } from '@/lib/agent-bins/workspace-boundary';
+import { absolutePathSchema } from '@/lib/utils/schemas';
+import { isOutsideWorkspace } from '@/lib/drivers/agent-bins/workspace-boundary';
 
 
 

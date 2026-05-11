@@ -85,7 +85,7 @@ export function ImportDialog({
   const handleOpenFileDialog = useCallback(async (directory = false) => {
     if (isDesktopMode()) {
       try {
-        const { tauriDialogProvider } = await import('@/lib/hitl/tauri-dialog-provider');
+        const { tauriDialogProvider } = await import('@/lib/tauri/tauri-dialog-provider');
         if (tauriDialogProvider.isAvailable()) {
           const result = directory
             ? await tauriDialogProvider.openFolder({ title: 'Select Folder to Import' })

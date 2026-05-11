@@ -11,7 +11,7 @@
  * 
  * @example
  * ```typescript
- * import { createUnifiedAgentState } from '@/lib/orchestra/state/unified-agent-state'
+ * import { createUnifiedAgentState } from '@/lib/orchestra/unified-agent-state'
  * 
  * const state = createUnifiedAgentState({
  *   type: 'execution', // or 'collaboration' or 'session'

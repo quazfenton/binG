@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { resolveFilesystemOwner, virtualFilesystem } from '@/lib/virtual-filesystem/index.server';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
-import { absolutePathSchema } from '@/lib/validation/schemas';
+import { absolutePathSchema } from '@/lib/utils/schemas';
 
 // ANSI color codes for terminal output
 const COLORS = {

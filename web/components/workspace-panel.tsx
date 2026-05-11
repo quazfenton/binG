@@ -322,16 +322,16 @@ function ThreadListSidebar({
   );
 }
 
-import { getOrCreateAnonymousSessionId } from "@/lib/utils";
+import { getOrCreateAnonymousSessionId } from '@/lib/virtual-filesystem/opfs/utils';
 import { useAuth } from "@/contexts/auth-context";
 import type { Message } from "@/types";
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog";
 import { ApprovalDialog, type ApprovalRequest } from "@/components/state/ApprovalDialog";
-import { requiresWorkspaceBoundaryConfirmation } from "@/lib/agent-bins/workspace-boundary";
+import { requiresWorkspaceBoundaryConfirmation } from "@/lib/drivers/agent-bins/workspace-boundary";
 import MultiModelComparison from "@/components/multi-model-comparison";
-import type { LLMProviderConfig } from "@/lib/chat/llm-providers-types";
+import type { LLMProviderConfig } from "@/lib/providers/llm-providers-types";
 import { resolveScopedPath } from "@/lib/virtual-filesystem/scope-utils";
-import { buildApiHeaders } from "@/lib/utils";
+import { buildApiHeaders } from '@/lib/virtual-filesystem/opfs/utils';
 import { EnhancedDiffViewer } from "@/components/enhanced-diff-viewer";
 import IntegrationPanel from "@/components/integrations/IntegrationPanel";
 import GitSourceControl from "@/components/git-source-control-tabs";
@@ -341,7 +341,7 @@ import { NewsPanel } from "@/components/news-panel";
 import { CronJobsPanel } from "@/components/cron-jobs-panel";
 import FrontierFeedPlugin from "@/components/plugins/frontier-feed-plugin";
 import CommandDeckPlugin from "@/components/plugins/command-deck-plugin";
-import { PROVIDERS } from "@/lib/chat/llm-providers-types";
+import { PROVIDERS } from "@/lib/providers/llm-providers-types";
 
 // ---------------------------------------------------------------------------
 // Tab definitions - single source of truth for the workspace tab bar

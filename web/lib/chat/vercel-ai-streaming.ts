@@ -25,13 +25,13 @@ import { createOpenAI } from '@ai-sdk/openai';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createMistral } from '@ai-sdk/mistral';
-import type { StreamingResponse, LLMMessage } from './llm-providers';
+import type { StreamingResponse, LLMMessage } from '../providers/llm-providers';
 import { chatLogger } from './chat-logger';
 
 import { getProviderForModel } from './openai-compat-wrapper';
-import { tokenTracker } from './ai-caching';
-import { createReasoningMiddleware, withRetry, createSmoothStream, isTokenLimitError, handleTokenLimitError } from './ai-middleware';
-import { recordToolCall, shouldForceTextMode } from './tool-call-telemetry';
+import { tokenTracker } from '../middleware/ai-caching';
+import { createReasoningMiddleware, withRetry, createSmoothStream, isTokenLimitError, handleTokenLimitError } from '../middleware/ai-middleware';
+import { recordToolCall, shouldForceTextMode } from '../tools/tool-call-telemetry';
 import { getModelsForPurpose } from './model-capability-registry';
 
 /**
@@ -1539,7 +1539,7 @@ export async function* streamWithVercelAI(
           });
 
           try {
-            const { getVercelModel } = await import('./vercel-ai-streaming');
+            const { getVercelModel } = await import('../streaming/vercel-ai-streaming');
             const currentEnv: any = typeof process !== 'undefined' ? process.env : {};
             const apiKey = currentEnv[`${betterModel.provider.toUpperCase()}_API_KEY`];
             const baseURL = currentEnv[`${betterModel.provider.toUpperCase()}_BASE_URL`];
@@ -1727,7 +1727,7 @@ ${healingInstructions}` : healingInstructions)
       let fallbackModel: any;
       try {
         // Use the centralized provider registry instead of hardcoded factory calls
-        const { getVercelModel } = await import('./vercel-ai-streaming');
+        const { getVercelModel } = await import('../streaming/vercel-ai-streaming');
 
         // Construct the key/URL dynamically using the same logic as the primary request
         const apiKey = currentEnv[`${fallbackProviderName.toUpperCase()}_API_KEY`];

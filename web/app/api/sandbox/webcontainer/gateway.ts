@@ -14,7 +14,7 @@ import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { createLogger } from '@/lib/utils/logger';
 import { withAnonSessionCookie } from '@/lib/virtual-filesystem/index.server';
 import { resolveFilesystemOwnerWithFallback } from '../../filesystem/utils';
-import { generateSecureId } from '@/lib/utils';
+import { generateSecureId } from '@/lib/virtual-filesystem/opfs/utils';
 
 const logger = createLogger('WebContainerAPI');
 

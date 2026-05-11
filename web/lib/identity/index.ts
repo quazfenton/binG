@@ -7,7 +7,7 @@
  *   parseCompositeSessionId,
  *   buildToolContextIdentity,
  *   buildScopePath,
- * } from '@/lib/identity';
+ * } from '@/lib/messaging/identity';
  * ```
  */
 

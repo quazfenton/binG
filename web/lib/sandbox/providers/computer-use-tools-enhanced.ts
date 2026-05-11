@@ -14,7 +14,7 @@
 
 import { z } from 'zod'
 import type { Tool } from 'ai'
-import type { DesktopAction } from '../../computer/e2b-desktop-provider-enhanced'
+import type { DesktopAction } from '../../../computer/e2b-desktop-provider-enhanced'
 
 // ==================== Tool Definitions ====================
 

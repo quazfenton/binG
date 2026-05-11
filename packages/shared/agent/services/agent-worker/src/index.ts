@@ -21,7 +21,7 @@ import { getOpenCodeEngine, OpenCodeEngine } from './opencode-engine.js';
 import { executeV2Task } from '@bing/shared/agent/v2-executor';
 import { taskRouter } from '@bing/shared/agent/task-router';
 import { providerRouter, latencyTracker } from '@/lib/sandbox/provider-router';
-import { determineExecutionPolicy } from '@/lib/sandbox/types';
+import { determineExecutionPolicy } from '@/lib/voice/types';
 import { normalizeSessionId } from '@/lib/virtual-filesystem/scope-utils';
 
 const logger = createLogger('Agent:Worker');

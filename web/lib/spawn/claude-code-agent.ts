@@ -14,7 +14,7 @@
 import { EventEmitter } from 'node:events';
 import type { ChildProcess } from 'node:child_process';
 import { createLogger } from '../utils/logger';
-import { findClaudeCodeBinarySync } from '@/lib/agent-bins/find-claude-code-binary';
+import { findClaudeCodeBinarySync } from '@/lib/drivers/agent-bins/find-claude-code-binary';
 import { waitForLocalServer, spawnLocalAgent, connectToRemoteAgent } from './local-server-utils';
 import type { AgentInstance, PromptRequest, PromptResponse, AgentEvent } from './agent-service-manager';
 

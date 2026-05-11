@@ -10,7 +10,7 @@
  * @module vector-memory/file-indexing
  */
 
-import { contentHash } from '@/lib/cache';
+import { contentHash } from '@/lib/utils/cache';
 import { chunkText } from './chunking';
 import { getEmbeddingProvider } from './embeddings';
 import type { VectorEntry, VectorStore } from './types';
@@ -141,7 +141,7 @@ export async function handleFileEvent(
  * @example
  * ```ts
  * import { watchFiles } from '@/lib/virtual-filesystem/vfs-file-watcher';
- * import { getProjectServices } from '@/lib/workspace-context';
+ * import { getProjectServices } from '@/lib/context/project-context';
  * import { wireWatcherToIndex } from '@/lib/vector-memory/file-indexing';
  *
  * const workspace = getProjectServices({ id: 'proj-1', name: 'my-app' });

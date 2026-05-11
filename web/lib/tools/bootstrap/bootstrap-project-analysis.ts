@@ -22,7 +22,7 @@ import {
   listScripts,
   getDependencies,
   buildProjectStructure,
-} from '../workspace-analysis';
+} from '../project-analysis/workspace-analysis';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('Tools:ProjectAnalysis-Bootstrap');

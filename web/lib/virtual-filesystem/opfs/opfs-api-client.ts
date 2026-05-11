@@ -5,9 +5,9 @@
  * Handles authentication, session management, and error handling
  */
 
-import { buildApiHeaders } from '@/lib/utils';
+import { buildApiHeaders } from '@/lib/virtual-filesystem/opfs/utils';
 import { isDesktopMode, isTauriRuntime } from '@bing/platform/env';
-import { tauriFetch } from '@/lib/tauri-api-adapter';
+import { tauriFetch } from '@/lib/tauri/tauri-api-adapter';
 
 /**
  * Get authentication headers for API requests.

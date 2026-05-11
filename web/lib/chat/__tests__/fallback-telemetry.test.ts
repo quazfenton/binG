@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { prepareTelemetryPayload } from '../logging-utils';
+import { prepareTelemetryPayload } from '.../errors/logging-utils';
 
 // Mock the tool-call-tracker module
 vi.mock('../tool-call-tracker', () => ({

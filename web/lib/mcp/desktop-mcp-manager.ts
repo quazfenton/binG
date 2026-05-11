@@ -12,7 +12,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { isDesktopMode } from '@bing/platform/env';
 import { createLogger } from '@/lib/utils/logger';
-import type { MCPServerConfig, MCPTransportConfig } from '@/lib/mcp/types';
+import type { MCPServerConfig, MCPTransportConfig } from '@/lib/voice/types';
 
 const log = createLogger('DesktopMCP');
 

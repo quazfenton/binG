@@ -12,8 +12,8 @@
 
 import { createLogger } from '@/lib/utils/logger';
 import { agentSessionManager } from '@/lib/session/agent/agent-session-manager';
-import type { ExecutionPolicy } from '@/lib/sandbox/types';
-import { determineExecutionPolicy } from '@/lib/sandbox/types';
+import type { ExecutionPolicy } from '@/lib/voice/types';
+import { determineExecutionPolicy } from '@/lib/voice/types';
 import type { ToolIntegrationManager } from '@/lib/tools/tool-integration-system';
 import { applyPromptModifiers, type PromptParameters } from './prompt-parameters';
 
@@ -86,6 +86,7 @@ interface OpenCodeDirectResult {
   agent: string;
   fileChanges: FileChange[];
   steps?: any[];
+  error?: string;
 }
 
 /**
@@ -185,7 +186,7 @@ export async function runOpenCodeDirect(options: OpenCodeDirectOptions): Promise
       onTool?.(toolName, args, toolResult);
     },
     executeTool: async (name, args) => {
-      const toolResult = await callMCPToolFromAI_SDK(name, args, userId);
+      const toolResult = await callMCPToolFromAI_SDK(name, args, userId, session.id);
       return {
         success: toolResult.success,
         output: toolResult.output,
@@ -202,6 +203,14 @@ export async function runOpenCodeDirect(options: OpenCodeDirectOptions): Promise
     }
   } catch (syncError) {
     logger.warn('Sync from sandbox failed', { error: syncError });
+    return {
+      success: false,
+      response: result.response || '',
+      agent: 'opencode',
+      fileChanges,
+      steps: result.steps,
+      error: `Sandbox sync failed: ${syncError instanceof Error ? syncError.message : String(syncError)}`,
+    };
   }
 
   return {

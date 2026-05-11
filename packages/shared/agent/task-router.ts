@@ -7,7 +7,7 @@
 import { createLogger } from '@/lib/utils/logger';
 import type { AgentPriority, AgentType } from './agent-kernel';
 import { getAgentKernel } from './agent-kernel';
-import { determineExecutionPolicy } from '@/lib/sandbox/types';
+import { determineExecutionPolicy } from '@/lib/voice/types';
 import { normalizeSessionId } from '@/lib/virtual-filesystem/scope-utils';
 import { emitEvent } from '@/lib/events/bus';
 import { AnyEvent as EventTypes } from '@/lib/events/schema';

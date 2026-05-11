@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { GET as rootGET } from './main';
-import { getVisualizerModes, getVisualizerStats, getTracks } from '@/lib/music/music-visualizer';
+import { getVisualizerModes, getVisualizerStats, getTracks } from '@/lib/plugins/music/music-visualizer';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('API:Music');

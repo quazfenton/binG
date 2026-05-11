@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { authService } from '@/lib/auth/auth-service';
 import { generateToken } from '@/lib/auth/jwt';
-import { RateLimiter } from '@/lib/security';
+import { RateLimiter } from '@/lib/security/security';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('Auth:Refresh');

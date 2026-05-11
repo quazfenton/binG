@@ -30,7 +30,7 @@
  *
  * @example
  * ```typescript
- * import { TerminalUseProvider } from './terminaluse-provider'
+ * import { TerminalUseProvider } from './terminal/terminaluse-provider'
  *
  * const provider = new TerminalUseProvider()
  * const handle = await provider.createSandbox({

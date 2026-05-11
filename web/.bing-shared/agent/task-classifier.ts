@@ -272,7 +272,7 @@ export class TaskClassifier {
       // FIX: Use conditional import for model-ranker (web-only path)
       // This path is only available when running in the web context, not in standalone shared package
       try {
-        const { getSpecGenerationModel, isRateLimited, recordRateLimitError } = await import('@/lib/models/model-ranker');
+        const { getSpecGenerationModel, isRateLimited, recordRateLimitError } = await import('@/lib/providers/model-ranker');
         const ranked = await getSpecGenerationModel();
         if (ranked) {
           // FIX: Check circuit breaker before using this model
@@ -291,7 +291,7 @@ export class TaskClassifier {
       // FIX: Fallback to model rotation (which also checks rate limits)
       if (!fastModelProvider || !fastModelName) {
         try {
-          const { getModelForRotation, isRateLimited, recordRateLimitError } = await import('@/lib/models/model-ranker');
+          const { getModelForRotation, isRateLimited, recordRateLimitError } = await import('@/lib/providers/model-ranker');
           const rotationPick = getModelForRotation();
           if (rotationPick && !isRateLimited(rotationPick.provider, rotationPick.model)) {
             fastModelProvider = rotationPick.provider;

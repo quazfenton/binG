@@ -1,15 +1,15 @@
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
-import { PROVIDERS } from "@/lib/chat/llm-providers";
-import { errorHandler } from "@/lib/chat/error-handler";
+import { PROVIDERS } from '@/lib/providers/llm-providers';
+import { errorHandler } from '@/lib/utils/error-handler';
 import { responseRouter } from "@/lib/api/response-router";
 import { resolveRequestAuth } from "@/lib/auth/request-auth";
 import { resolveFilesystemOwner } from "@/lib/virtual-filesystem/resolve-filesystem-owner";
 import { detectRequestType } from "@/lib/utils/request-type-detector";
-import { generateSecureId } from "@/lib/utils";
+import { generateSecureId } from '@/lib/virtual-filesystem/opfs/utils';
 import { chatRequestLogger } from "@/lib/chat/chat-request-logger";
 import { chatLogger } from "@/lib/chat/chat-logger";
-import { setMetricsLogger } from "@/lib/agent/metrics";
+import { setMetricsLogger } from '@/lib/observability/metrics';
 import { virtualFilesystem } from "@/lib/virtual-filesystem/virtual-filesystem-service";
 import { filesystemEditSessionService } from "@/lib/virtual-filesystem/filesystem-edit-session-service";
 import { 
@@ -17,8 +17,8 @@ import {
   normalizeSessionId 
 } from "@/lib/virtual-filesystem/scope-utils";
 import { createNDJSONParser } from "@/lib/utils/ndjson-parser";
-import type { LLMMessage, StreamingResponse } from "@/lib/chat/llm-providers";
-import { checkRateLimit } from "@/lib/middleware/rate-limiter";
+import type { LLMMessage, StreamingResponse } from '@/lib/providers/llm-providers';
+import { checkRateLimit } from '@/lib/utils/rate-limiter';
 import { 
   createTaskClassifier as createTaskClassifierShared,
 } from "@bing/shared/agent";
@@ -31,7 +31,7 @@ import {
   extractIncrementalFileEdits,
   isValidFilePath 
 } from "@/lib/chat/file-edit-parser";
-import { generateSessionName, sessionNameExists } from "@/lib/session-naming";
+import { generateSessionName, sessionNameExists } from '@/lib/session/session-naming';
 import {
   chatRequestSchema,
 } from "@/app/api/chat/chat-helpers";

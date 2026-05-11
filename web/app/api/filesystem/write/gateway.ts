@@ -4,7 +4,7 @@ import { virtualFilesystem, withAnonSessionCookie } from '@/lib/virtual-filesyst
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { ShadowCommitManager } from '@/lib/orchestra/stateful-agent/commit/shadow-commit';
 import { extractSessionIdFromPath } from '@/lib/virtual-filesystem/scope-utils';
-import { fileContentSchema, languageSchema } from '@/lib/validation/schemas';
+import { fileContentSchema, languageSchema } from '@/lib/utils/schemas';
 import { resolveFilesystemOwnerWithFallback } from '../utils';
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import type { FilesystemOwnerResolution } from '@/lib/virtual-filesystem/resolve-filesystem-owner';

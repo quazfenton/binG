@@ -13,7 +13,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 
-import { sendAntigravityChat, ANTIGRAVITY_MODELS } from '@/lib/llm/antigravity-provider';
+import { sendAntigravityChat, ANTIGRAVITY_MODELS } from '@/lib/providers/antigravity-provider';
 import { getAntigravityAccounts, isMasterAccountConfigured } from '@/lib/database/antigravity-accounts';
 import { verifyAuth } from '@/lib/auth/jwt';
 

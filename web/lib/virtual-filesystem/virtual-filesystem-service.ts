@@ -22,7 +22,7 @@ import { createGitBackedVFS, getGitBackedVFSForOwner, type GitBackedVFS, type Gi
 import { getDatabase } from '@/lib/database/connection';
 import { compress, decompress, isCompressed } from '@/lib/utils/compression';
 // Caching for repeated directory listings (used by smart-context)
-import { toolResultCache, toolCacheKey } from '@/lib/cache';
+import { toolResultCache, toolCacheKey } from '@/lib/utils/cache';
 // import { emitFilesystemUpdated } from './sync/sync-events'; // Imported but not used - central emit deferred for now
 
 // Default configuration - use DESKTOP_WORKSPACE_ROOT for desktop mode

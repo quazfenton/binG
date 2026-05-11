@@ -32,7 +32,7 @@
 import { createLogger } from '@/lib/utils/logger'
 import { chatLogger } from '@/lib/chat/chat-logger'
 import { normalizeToolInvocations, type ToolInvocation } from '@/lib/types/tool-invocation'
-import { quotaManager } from '@/lib/management/quota-manager'
+import { quotaManager } from '@/lib/services/quota-manager'
 import { detectRequestType } from '@/lib/utils/request-type-detector'
 import {
   extractFsActionWrites,
@@ -41,18 +41,18 @@ import {
 } from '@/lib/chat/file-edit-parser'
 
 // Import maximalist spec enhancer for 'max' mode
-import { enhanceWithSpec } from '@/lib/chat/maximalist-spec-enhancer'
+import { enhanceWithSpec } from '@/lib/engineers/maximalist-spec-enhancer'
 
 // Import router services
-import { n8nAgentService, type N8nAgentRequest, type N8nAgentResponse } from '@/lib/chat/n8n-agent-service'
-import { customFallbackService, type CustomFallbackRequest, type CustomFallbackResponse } from '@/lib/chat/custom-fallback-service'
+import { n8nAgentService, type N8nAgentRequest, type N8nAgentResponse } from '@/lib/automations/n8n-agent-service'
+import { customFallbackService, type CustomFallbackRequest, type CustomFallbackResponse } from '@/lib/providers/custom-fallback-service'
 import { enhancedLLMService, type EnhancedLLMRequest } from '@/lib/chat/enhanced-llm-service'
 import { initializeComposioService, getComposioService, type ComposioToolRequest } from '@/lib/integrations/composio-service'
 
 // Import tools
 import { getToolManager, getUnifiedToolRegistry, getToolDiscoveryService, getToolErrorHandler } from '@/lib/tools'
 import { toolAuthManager } from '@/lib/tools/tool-authorization-manager'
-import { sandboxBridge } from '@/lib/sandbox'
+import { sandboxBridge } from '@/lib/events/trigger/handlers/sandbox'
 
 // Import state for session management
 import { sessionManager } from '@/lib/session/session-manager'
@@ -1986,7 +1986,7 @@ export class ResponseRouter {
       }
       
       // Get fastest model from telemetry
-      const { getModelStatsFromTelemetry, getSpecGenerationModel } = await import('@/lib/models/model-ranker')
+      const { getModelStatsFromTelemetry, getSpecGenerationModel } = await import('@/lib/providers/model-ranker')
       const modelStats = await getModelStatsFromTelemetry()
       fastModel = await getSpecGenerationModel()
 
@@ -2040,7 +2040,7 @@ export class ResponseRouter {
       }
 
       // Generate spec only (primary already done by caller)
-      const { buildSpecPrompt } = await import('@/lib/prompts/spec-generator')
+      const { buildSpecPrompt } = await import('@/lib/orchestra/spec-generator')
       const { enhancedLLMService } = await import('@/lib/chat/enhanced-llm-service')
       
       // Generate unique request ID for spec generation
@@ -2198,11 +2198,11 @@ export class ResponseRouter {
     let safeParseSpec: any, chunkSpec: any, explodeChunks: any
     let validateSpec: any, scoreSpec: any
     try {
-      const specParser = await import('@/lib/chat/spec-parser')
+      const specParser = await import('@/lib/engineers/spec-parser')
       safeParseSpec = specParser.safeParseSpec
       chunkSpec = specParser.chunkSpec
       explodeChunks = specParser.explodeChunks
-      const specValidator = await import('@/lib/prompts/spec-generator')
+      const specValidator = await import('@/lib/orchestra/spec-generator')
       validateSpec = specValidator.validateSpec
       scoreSpec = specValidator.scoreSpec
     } catch (importErr) {
@@ -2325,7 +2325,7 @@ export class ResponseRouter {
         
         try {
           // Import super mode executor
-          const { executeSuperMode, DEFAULT_SUPER_MODE_CONFIG } = await import('@/lib/chat/spec-super-mode')
+          const { executeSuperMode, DEFAULT_SUPER_MODE_CONFIG } = await import('@/lib/engineers/spec-super-mode')
           
           // Use super mode spec enhancer
           const superModeResult = await executeSuperMode(
@@ -2633,7 +2633,7 @@ export class ResponseRouter {
     }
   ): string[] {
     // Use enhanced streaming events module
-    const { createStreamingEvents } = require('./streaming-events')
+    const { createStreamingEvents } = require('../streaming/streaming-events')
     return createStreamingEvents(response, requestId, {
       includeReasoning: options?.includeReasoning ?? true,
       includeToolState: options?.includeToolState ?? true,

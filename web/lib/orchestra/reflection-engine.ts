@@ -85,7 +85,7 @@ class ReflectionEngine {
     // If no explicit provider/model, use the same selection as spec amplification
     if (!provider || !modelName) {
       try {
-        const { getSpecGenerationModel } = await import('@/lib/models/model-ranker');
+        const { getSpecGenerationModel } = await import('@/lib/providers/model-ranker');
         const ranked = await getSpecGenerationModel();
         if (ranked) {
           provider = ranked.provider;

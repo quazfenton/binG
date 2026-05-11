@@ -515,7 +515,7 @@ export async function executeWithOrchestrationMode(
 
         try {
         // Execute nodes in dependency order
-        const { llmService } = await import('@/lib/chat/llm-providers');
+        const { llmService } = await import('@/lib/providers/llm-providers');
 
         // Use user-selected model for planning
 
@@ -653,7 +653,7 @@ export async function executeWithOrchestrationMode(
       // OPENCODE SDK (Direct API to local OpenCode server)
       // ========================================================================
       case 'opencode-sdk': {
-        const { getOpenCodeSDKProvider } = await import('@/lib/chat/opencode-sdk-provider');
+        const { getOpenCodeSDKProvider } = await import('@/lib/engineers/opencode-sdk-provider');
 
         // Use user-selected model, fall back to env vars
         const model = request.model || process.env.OPENCODE_MODEL || 'anthropic/claude-3-5-sonnet-20241022';

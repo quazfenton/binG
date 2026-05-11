@@ -86,7 +86,9 @@ export function getDefaultWorkspaceRoot(): string | null {
   // Priority 2: Web mode - don't use process.cwd() as it incorrectly
   // uses the server's cwd (where pnpm dev was run). Use 'workspace/sessions'
   // as base - user separation is handled by VFS via userID/compositeID.
-  if (!isDesktopMode() && !isTauriRuntime()) {
+  // Check for browser environment explicitly - CLI/standalone runs in Node.js
+  // where window is undefined, so it should fall through to process.cwd()
+  if (typeof window !== 'undefined' && !isDesktopMode() && !isTauriRuntime()) {
     return 'workspace/sessions';
   }
 
@@ -118,7 +120,8 @@ export function getDefaultWorkspaceRoot(): string | null {
     // Sanitize and validate the path
     const sanitized = userProfile.trim();
     // Check for invalid characters that could cause issues
-    if (/[<>:"|?*]/.test(sanitized)) {
+    // Note: Allow : for Windows drive letters (e.g., C:\Users\...)
+    if (/[<>"|?*]/.test(sanitized)) {
       console.warn('[env.ts] USERPROFILE contains invalid characters, using fallback');
       return null;
     }

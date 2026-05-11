@@ -22,7 +22,7 @@
  */
 
 import { createLogger } from '@/lib/utils/logger';
-import type { RefinementChunk } from '@/lib/chat/spec-parser';
+import type { RefinementChunk } from '@/lib/engineers/spec-parser';
 
 const log = createLogger('Task:Persistence');
 

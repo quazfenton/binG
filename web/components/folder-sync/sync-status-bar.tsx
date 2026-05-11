@@ -37,7 +37,7 @@ import {
   Clock,
   Save,
 } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { cn } from '@/lib/virtual-filesystem/opfs/utils';
 
 interface SyncStatusBarProps {
   sessionId?: string;

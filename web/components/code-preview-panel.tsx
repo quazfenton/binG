@@ -51,7 +51,7 @@ import {
 import { createDebugLogger } from "../.bing-infra-config/config/features";
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog";
 import { checkFileConflicts } from "@/lib/session/session-naming";
-import { buildApiHeaders } from "@/lib/utils";
+import { buildApiHeaders } from '@/lib/virtual-filesystem/opfs/utils';
 import { usePanel } from "@/contexts/panel-context";
 import { clipboard } from "@bing/platform/clipboard";
 

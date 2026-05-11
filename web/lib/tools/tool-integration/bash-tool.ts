@@ -20,10 +20,10 @@
  * ```
  */
 
-import { getSandboxProvider, type SandboxProviderType } from '@/lib/sandbox/providers';
+import { getSandboxProvider, type SandboxProviderType } from '@/lib/providers/9router/providers';
 import { createLogger } from '@/lib/utils/logger';
 import { executeWithHealing } from '@/lib/chat/bash-self-heal';
-import { rewriteCommand, filterOutput, estimateTokenSavings, hasRewriteRule } from '../rtk-rewriter';
+import { rewriteCommand, filterOutput, estimateTokenSavings, hasRewriteRule } from '.../tools/rtk-rewriter';
 import type { ToolExecutionContext, ToolExecutionResult } from '../tool-integration-system';
 
 const logger = createLogger('Tool:Bash');

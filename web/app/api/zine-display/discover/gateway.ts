@@ -15,7 +15,7 @@ import { z } from 'zod';
 import { 
   discoverFeedsFromUrl, 
   validateFeed 
-} from '@/lib/zine-rss-auto-discovery';
+} from '@/lib/plugins/zine/zine-rss-auto-discovery';
 import { sanitizeUrlInput } from '@/lib/utils/sanitize';
 import { checkRateLimitMiddleware } from '@/lib/middleware/rate-limit';
 

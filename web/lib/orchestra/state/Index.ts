@@ -10,7 +10,7 @@
  *   createUnifiedAgentState,
  *   type UnifiedAgentState,
  *   type ExecutionAgentState,
- * } from '@/lib/orchestra/state'
+ * } from '@/lib/orchestra/langgraph/state'
  * ```
  */
 

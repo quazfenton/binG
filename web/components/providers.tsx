@@ -8,7 +8,7 @@ import { OrchestrationModeProvider } from '@/contexts/orchestration-mode-context
 import { AgentEngineProvider } from '@/contexts/agent-engine-context';
 import { SpecEnhancementModeProvider } from '@/contexts/spec-enhancement-mode-context';
 import { createLogger } from '@/lib/utils/logger';
-import { tauriFetch } from '@/lib/tauri-api-adapter';
+import { tauriFetch } from '@/lib/tauri/tauri-api-adapter';
 
 const logger = createLogger('Providers:Init');
 

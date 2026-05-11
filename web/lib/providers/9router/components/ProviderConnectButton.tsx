@@ -1,10 +1,10 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { getRouterClient } from "@/lib/providers/9router/client"
+import { getRouterClient } from '@/lib/storage/ipfs/client'
 import { createOAuthState } from "@/lib/providers/9router/oauth-utils"
 import { getAllProviders, type ProviderConfig } from "@/lib/providers/9router/providers"
-import type { OAuthProvider } from "@/lib/providers/9router/types"
+import type { OAuthProvider } from '@/lib/voice/types'
 
 interface Props {
   provider: ProviderConfig

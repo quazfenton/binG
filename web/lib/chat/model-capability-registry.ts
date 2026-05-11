@@ -23,9 +23,9 @@
  */
 
 import { createLogger } from '@/lib/utils/logger';
-import { getToolCallTelemetrySummary } from '@/lib/chat/tool-call-telemetry';
-import { isProviderConfigured } from '@/lib/chat/provider-fallback-chains';
-import { PROVIDERS } from '@/lib/chat/llm-providers';
+import { getToolCallTelemetrySummary } from '@/lib/tools/tool-call-telemetry';
+import { isProviderConfigured } from '@/lib/providers/provider-fallback-chains';
+import { PROVIDERS } from '@/lib/providers/llm-providers';
 
 const logger = createLogger('model-capability-registry');
 

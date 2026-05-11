@@ -12,14 +12,21 @@
  * 4. Streaming: Native SSE event emission at every state transition.
  */
 
-import { generateText, tool as aiTool, type Tool } from 'ai';
+import { generateText, tool as aiTool, type Tool, type ModelMessage } from 'ai';
 import { z } from 'zod';
 import { verifyChanges } from '@/lib/orchestra/stateful-agent/agents/verification';
-import { SelfHealingExecutor } from '@/lib/crewai/runtime/self-healing';
+import { SelfHealingExecutor } from '@/lib/tools/tool-integration/parsers/self-healing';
 import { getVercelModel } from '@/lib/chat/vercel-ai-streaming';
 import { createLogger } from '@/lib/utils/logger';
+import { createOriginStack, redactArgsForLogging } from '@/lib/errors/logging-utils';
 
 const log = createLogger('PlanActVerify');
+
+/**
+ * Redact tool args for safe logging.
+ * - Replaces large or sensitive fields (content, body) with <redacted>
+ * - Preserves file paths / names when present
+ */
 
 // ─── Typed Configuration ─────────────────────────────────────────────────────
 
@@ -34,15 +41,6 @@ const IterationConfigSchema = z.object({
 
 export type IterationConfigInput = z.input<typeof IterationConfigSchema>;
 export interface IterationConfig extends z.infer<typeof IterationConfigSchema> {}
-
-// ─── Message type — use local definition since AI SDK types vary by version ──
-
-type AgentMessage = {
-  role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string | any[];
-  toolCallId?: string;
-  toolName?: string;
-};
 
 // ─── Structured Tool Result Interface (P2 #7) ────────────────────────────────
 
@@ -238,7 +236,7 @@ export type OrchestratorEvent =
   | { type: 'verification_failed'; errors: Array<{ file: string; message: string; suggestion?: string }> }
   | { type: 'verification_passed' }
   | { type: 'warning'; message: string }
-  | { type: 'done'; response: string; stats: { iterations: number; tokensUsed: number; durationMs: number } };
+  | { type: 'done'; response: string; stats: { iterations: number; tokensUsed: number; durationMs: number }; budgetExhausted?: boolean };
 
 // ─── Orchestrator Config (P2 #9 — typed) ─────────────────────────────────────
 
@@ -329,9 +327,9 @@ export class PlanActVerifyOrchestrator {
    * Executes a task using a Plan -> Act -> Verify -> Respond loop.
    * Yields SSE-compatible events for UI rendering.
    */
-  async *execute(task: string, initialContext: any[]): AsyncGenerator<OrchestratorEvent, void, unknown> {
+  async *execute(task: string, initialContext: ModelMessage[]): AsyncGenerator<OrchestratorEvent, void, unknown> {
     const controller = new IterationController(this.validatedConfig);
-    const conversationHistory = [...initialContext];
+    const conversationHistory: ModelMessage[] = [...initialContext];
 
     try {
       yield { type: 'phase_change', phase: 'planning' };
@@ -363,8 +361,32 @@ export class PlanActVerifyOrchestrator {
         const llmResponse = await this.callLLM(task, conversationHistory);
         controller.recordTokens(llmResponse.usage?.totalTokens || 0);
 
+        // Push assistant response to conversation history.
+        // When the model calls tools, we must include tool-call content parts
+        // so the AI SDK can match subsequent tool-result messages to their calls.
+        // Without this, the SDK rejects the schema with:
+        // "The messages do not match the ModelMessage[] schema".
+        if (llmResponse.toolCalls?.length) {
+          // Assistant message with tool calls — use array content format
+          const content: any[] = [];
+          if (llmResponse.text) {
+            content.push({ type: 'text' as const, text: llmResponse.text });
+          }
+          for (const tc of llmResponse.toolCalls) {
+            content.push({
+              type: 'tool-call' as const,
+              toolCallId: tc.id,
+              toolName: tc.name,
+              args: tc.arguments,
+            });
+          }
+          conversationHistory.push({ role: 'assistant' as const, content });
+        } else if (llmResponse.text) {
+          // Text-only assistant response — plain string content is fine
+          conversationHistory.push({ role: 'assistant' as const, content: llmResponse.text });
+        }
+
         if (llmResponse.done || !llmResponse.toolCalls?.length) {
-          conversationHistory.push({ role: 'assistant', content: llmResponse.text });
           break; // Task complete or no tools to call
         }
 
@@ -381,6 +403,32 @@ export class PlanActVerifyOrchestrator {
           if (recentToolCalls.length > MAX_RECENT_TOOLS) recentToolCalls.shift();
 
           yield { type: 'tool_call', tool: call.name, args: call.arguments };
+
+          // Instrumentation: redact and log constructed tool-call payloads to trace origins of malformed calls
+          let _redactedForLog: any = null;
+          try {
+            _redactedForLog = redactArgsForLogging(call.arguments);
+            log.debug('PlanActVerify: constructed tool call', { tool: call.name, redactedArgs: _redactedForLog, stack: (new Error()).stack?.split('\n').slice(1,6) });
+          } catch (e) {
+            log.debug('PlanActVerify: failed to redact tool call args', { tool: call.name });
+          }
+
+          // Persist redacted invocation payload for later aggregation and analysis
+          try {
+            import('../../../../web/lib/tools/tool-call-tracker').then(({ toolCallTracker }) => {
+              toolCallTracker.recordInvocationPayload({
+                timestamp: Date.now(),
+                model: this.validatedConfig.model,
+                provider: this.validatedConfig.provider,
+                toolName: call.name,
+                redactedArgs: typeof _redactedForLog === 'string' ? _redactedForLog : JSON.stringify(_redactedForLog || {}),
+                originStack: createOriginStack(),
+                toolCallId: call.id || null,
+              }).catch((err) => { log.debug?.('PlanActVerify: recordInvocationPayload failed:', err); });
+            }).catch((err) => { log.debug?.('PlanActVerify: recordToolResultTelemetry failed:', err); });
+          } catch (e) {
+            log.debug('PlanActVerify: failed to persist invocation payload', { tool: call.name });
+          }
 
           let structuredResult: ToolResult;
           try {
@@ -399,14 +447,20 @@ export class PlanActVerifyOrchestrator {
           }
 
           // P2 #7: Pass structured ToolResult into conversation history
-          // The LLM gets structured fields (success, output, error.type, suggestions, etc.)
-          // instead of a raw JSON string blob
+          // Use AI SDK ToolResultPart format: content must be an array of
+          // { type: 'tool-result', toolCallId, toolName, output } parts.
+          // Plain-string content triggers "messages do not match ModelMessage[] schema".
+          // Cast structuredResult as any — our custom ToolResult wraps tool outputs
+          // with typed fields (success, error, summary, etc.) which the LLM can reason about.
           conversationHistory.push({
-            role: 'tool',
-            content: JSON.stringify(structuredResult),
-            toolCallId: call.id,
-            toolName: call.name,
-          } as AgentMessage);
+            role: 'tool' as const,
+            content: [{
+              type: 'tool-result' as const,
+              toolCallId: call.id,
+              toolName: call.name,
+              output: structuredResult as any,
+            }],
+          });
         }
 
         // 3. VERIFICATION PHASE (Critic/Verifier Agent)
@@ -418,7 +472,7 @@ export class PlanActVerifyOrchestrator {
             consecutiveVerificationFailures++;
             yield { 
               type: 'verification_failed', 
-              errors: verificationResult.errors.map(e => ({ 
+              errors: verificationResult.errors.map((e: any) => ({ 
                 file: (e as any).path || 'unknown', 
                 message: (e as any).error || String(e), 
                 suggestion: undefined 
@@ -431,8 +485,10 @@ export class PlanActVerifyOrchestrator {
             }
 
             // Feed errors back to the ACT loop for self-healing
+            // Use 'user' role for mid-conversation feedback (many providers reject
+            // 'system' messages after tool calls) — CoreMessage user accepts string content
             conversationHistory.push({
-              role: 'system',
+              role: 'user' as const,
               content: `Verification failed. Please fix these errors in the next step: ${JSON.stringify(verificationResult.errors)}`
             });
             continue;
@@ -453,10 +509,12 @@ export class PlanActVerifyOrchestrator {
           type: 'warning',
           message: `Final summarization skipped: ${finalCheck.reason}. Returning partial results.`
         };
-        yield {
+        const stats = controller.getStats();
+      yield {
           type: 'done',
-          response: 'Execution completed with partial results due to budget constraints.',
-          stats: controller.getStats()
+          response: `Execution halted: ${finalCheck.reason || 'budget exhausted'}. Consumed ${stats.iterations ?? 0} iterations, ${stats.tokensUsed ?? 0} tokens, ${Math.round((stats.durationMs ?? 0) / 1000)}s. Partial results returned.`,
+          stats,
+          budgetExhausted: true
         };
         return;
       }
@@ -481,7 +539,7 @@ export class PlanActVerifyOrchestrator {
   // Private Helper Methods
   // ==========================================
 
-  private async generatePlan(task: string, history: AgentMessage[]) {
+  private async generatePlan(task: string, history: ModelMessage[]) {
     const planPrompt = `You are a planning agent. Create a step-by-step execution plan for the following task.
 TASK: ${task}
 Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"}]`;
@@ -499,7 +557,7 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
    * P2 #9: Uses typed provider config with validated defaults.
    * P2 #9: Uses properly adapted sdkTools (no @ts-expect-error).
    */
-  private async callLLM(prompt: string, history: AgentMessage[]) {
+  private async callLLM(prompt: string, history: ModelMessage[]) {
     const { provider, model } = this.validatedConfig;
 
     try {
@@ -511,16 +569,23 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
         throw new Error(`Cannot initialize LLM provider '${provider}' with model '${model}': ${modelError.message}`);
       }
 
-      const messages: AgentMessage[] = [
-        { role: 'system', content: 'You are an autonomous AI coding agent. You have tools available to interact with the system.' },
+      // Build messages using AI SDK ModelMessage format.
+      // System/user/assistant roles accept plain-string content;
+      // tool role MUST use content: [{ type: 'tool-result', ... }] array.
+      // System prompt is passed via generateText's `system` param (not in messages)
+      // to avoid the SDK warning about system-in-messages and prevent duplication
+      // across iterations (history already includes prior system messages).
+      const messages: ModelMessage[] = [
         ...history,
-        { role: 'user', content: prompt }
+        { role: 'user' as const, content: prompt },
       ];
 
       const result = await generateText({
         model: vercelModel,
-        messages: messages as any, // AgentMessage is compatible with ModelMessage at runtime
+        messages,
         tools: Object.keys(this.sdkTools).length > 0 ? this.sdkTools : undefined,
+        system:
+          'You are an autonomous AI coding agent. You have tools available to interact with the system.',
         maxOutputTokens: 4000,
         temperature: 0.2,
       });
@@ -552,10 +617,11 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
 
     while (attempt <= maxRetries) {
       try {
+        log.debug('PlanActVerify: executing tool with orchestrator', { tool: name, redactedArgs: redactArgsForLogging(args), toolCallId });
         const result = await this.config.executeTool(name, args);
 
         // Record successful tool call in telemetry
-        import('@/lib/chat/tool-call-tracker').then(({ toolCallTracker }) => {
+        import('@/lib/tools/tool-call-tracker').then(({ toolCallTracker }) => {
           const structuredResult = buildToolResult(name, args, result);
           toolCallTracker.recordToolCall({
             model: this.validatedConfig.model,
@@ -565,14 +631,14 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
             timestamp: Date.now(),
             toolCallId,
           });
-        }).catch(() => {});
+        }).catch((err) => { log.debug?.('PlanActVerify: recordToolResult failed:', err); });
 
         return result;
       } catch (error: any) {
         attempt++;
         if (attempt > maxRetries) {
           // Record failed tool call in telemetry
-          import('@/lib/chat/tool-call-tracker').then(({ toolCallTracker }) => {
+          import('@/lib/tools/tool-call-tracker').then(({ toolCallTracker }) => {
             const structuredResult = buildToolResult(name, args, undefined, error);
             toolCallTracker.recordToolCall({
               model: this.validatedConfig.model,
@@ -583,7 +649,7 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
               timestamp: Date.now(),
               toolCallId,
             });
-          }).catch(() => {});
+          }).catch((err) => { log.debug?.('PlanActVerify: executeTool telemetry failed:', err); });
 
           throw new Error(`Tool ${name} failed after ${maxRetries} retries: ${error.message}`);
         }

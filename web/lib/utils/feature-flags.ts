@@ -13,7 +13,7 @@
  * ```
  */
 
-import { getDatabase } from '../database/connection';
+import { getDatabase } from '../../../../database/connection';
 
 const DB_FILE = process.env.SQLITE_DB_PATH || './data/bing.db';
 

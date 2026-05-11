@@ -15,9 +15,9 @@
 
 import { virtualFilesystem } from './virtual-filesystem-service';
 import type { VirtualFilesystemDirectoryListing } from './filesystem-types';
-import { getProjectServices } from '@/lib/workspace-context';
-import { contentHash } from '@/lib/cache';
-import { summarizeCode } from '@/lib/tools/rtk-integration';
+import { getProjectServices } from '@/lib/context/project-context';
+import { contentHash } from '@/lib/utils/cache';
+import { summarizeCode } from '@/lib/context/rtk-integration';
 
 export type ContextPackFormat = 'markdown' | 'xml' | 'json' | 'plain';
 

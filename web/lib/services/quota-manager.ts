@@ -6,4 +6,4 @@
  * @see lib/management/quota-manager.ts
  */
 
-export * from '@/lib/management/quota-manager';
+export * from '@/lib/services/quota-manager';

@@ -29,7 +29,7 @@
  */
 
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { getOrCreateAnonymousSessionId, buildApiHeaders } from '@/lib/utils';
+import { getOrCreateAnonymousSessionId, buildApiHeaders } from '@/lib/virtual-filesystem/opfs/utils';
 
 export interface FileMentionOption {
   path: string;

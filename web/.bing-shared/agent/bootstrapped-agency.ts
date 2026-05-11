@@ -329,9 +329,17 @@ export class BootstrappedAgency {
           // packages/shared/agent → web/lib/tools/router
           const { getCapabilityRouter } = await import('../../../web/lib/tools/router');
           const router = getCapabilityRouter();
+          // ?? fallback: userId -> sessionId -> anonymous; warn if identity is unknown
+          const effectiveUserId = this.config.userId ?? this.config.sessionId ?? 'anonymous'
+          const effectiveSessionId = this.config.sessionId ?? 'anonymous'
+          if (!this.config.userId && !this.config.sessionId) {
+            log.warn('Capability router context: no userId or sessionId, using anonymous', {
+              sessionId: this.config.sessionId,
+            })
+          }
           const context = {
-            userId: this.config.userId || this.config.sessionId,
-            sessionId: this.config.sessionId,
+            userId: effectiveUserId,
+            sessionId: effectiveSessionId,
           };
 
           const results = new Map<string, any>();
@@ -419,9 +427,17 @@ export class BootstrappedAgency {
         try {
           const { getCapabilityRouter } = await import('@/lib/tools/router');
           const router = getCapabilityRouter();
+          // ?? fallback: userId -> sessionId -> anonymous; warn if identity is unknown
+          const effectiveUserId = this.config.userId ?? this.config.sessionId ?? 'anonymous'
+          const effectiveSessionId = this.config.sessionId ?? 'anonymous'
+          if (!this.config.userId && !this.config.sessionId) {
+            log.warn('Capability router context: no userId or sessionId, using anonymous', {
+              sessionId: this.config.sessionId,
+            })
+          }
           const context = {
-            userId: this.config.userId || this.config.sessionId,
-            sessionId: this.config.sessionId,
+            userId: effectiveUserId,
+            sessionId: effectiveSessionId,
           };
           // Build structured input from the task description
           const input = await this.buildCapabilityInput(capability, task);

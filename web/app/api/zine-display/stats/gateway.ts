@@ -7,7 +7,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 
-import { getZineStats } from '@/lib/zine/zine-display-service';
+import { getZineStats } from '@/lib/plugins/zine/zine-display-service';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('API:ZineDisplay:Stats');

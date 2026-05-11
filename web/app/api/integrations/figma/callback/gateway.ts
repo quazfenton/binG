@@ -14,8 +14,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth0 } from '@/lib/auth/auth0';
 import { getDatabase } from '@/lib/database/connection';
-import { exchangeCodeForToken, calculateExpiryDate } from '@/lib/figma/oauth';
-import { getFigmaRedirectUri } from '@/lib/figma/config';
+import { exchangeCodeForToken, calculateExpiryDate } from '@/lib/integrations/figma/oauth';
+import { getFigmaRedirectUri } from '@/lib/mcp/config';
 import { oauthStateStore } from '../oauth-state-store';
 
 

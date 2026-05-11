@@ -41,6 +41,7 @@ async function hashTask(content: string): Promise<string> {
 }
 
 export type OrchestrationMode =
+  | 'auto'
   | 'task-router'
   | 'unified-agent'
   | 'stateful-agent'
@@ -92,7 +93,13 @@ export type OrchestrationMode =
   | 'crewai:swarm'
   | 'crewai:streaming'
   | 'v2-executor'
-  | 'agent-team';
+  | 'agent-team'
+  | 'multi-agent'
+  // Advanced modes
+  | 'attractor-driven'
+  | 'intent-driven'
+  | 'energy-driven'
+  | 'execution-controller';
 
 export interface OrchestrationRequest {
   task: string;
@@ -162,7 +169,7 @@ export function getOrchestrationModeFromRequest(req: NextRequest): Orchestration
   // In a real implementation, this would be generated at build time
   const allModes: OrchestrationMode[] = [
     'task-router', 'unified-agent', 'stateful-agent', 'agent-kernel', 'agent-loop', 'execution-graph',
-    'nullclaw', 'opencode-sdk', 'mastra-workflow', 'crewai', 'v2-executor', 'agent-team',
+    'nullclaw', 'opencode-sdk', 'mastra-workflow', 'crewai', 'v2-executor', 'agent-team', 'multi-agent',
     'v1-api', 'v1-agent-loop', 'v1-progressive-build', 'v2-containerized', 'v2-local',
     'v2-native', 'desktop',
     'dual-process', 'dual-process:fast', 'dual-process:slow', 'dual-process:fast-fallback', 'dual-process:slow-failed',
@@ -172,6 +179,7 @@ export function getOrchestrationModeFromRequest(req: NextRequest): Orchestration
     'spec:super', 'spec:maximal',
     'mastra:code-agent', 'mastra:research', 'mastra:parallel', 'mastra:data-analysis', 'mastra:hitl',
     'crewai:role-agent', 'crewai:swarm', 'crewai:streaming',
+    'attractor-driven', 'intent-driven', 'energy-driven', 'execution-controller',
   ];
 
   allModes.forEach(mode => knownModes.add(mode));
@@ -239,37 +247,62 @@ export async function executeWithOrchestrationMode(
 
     switch (mode) {
       // ========================================================================
-      // TASK ROUTER (Default)
+      // AUTO MODE - Uses unified-agent-service.ts AGENT_EXECUTION_ENGINE auto-detection
       // ========================================================================
-      case 'task-router': {
-        const { taskRouter } = await import('@bing/shared/agent/task-router');
+      case 'auto':
+      {
+        const { processUnifiedAgentRequest } = await import('@/lib/orchestra/unified-agent-service');
 
-        // ownerId and sessionId already validated at function entry
-        const taskResult = await taskRouter.executeTask({
-          task: request.task,
-          id: request.sessionId,
+        const autoResult = await processUnifiedAgentRequest({
+          userMessage: request.task,
           userId: request.ownerId,
           conversationId: request.sessionId,
-          
+          mode: 'auto', // Uses AGENT_EXECUTION_ENGINE auto-detection
         });
 
         result = {
-        success: taskResult.success,
-        response: taskResult.response,
-        steps: taskResult.steps,
-        metadata: {
-        agentType: 'task-router',
-        routingTarget: taskResult.target,
-        duration: Date.now() - startTime,
-        },
+          success: autoResult.success,
+          response: autoResult.response,
+          steps: autoResult.steps,
+          metadata: {
+            agentType: 'unified-agent',
+            mode: autoResult.mode,
+            duration: Date.now() - startTime,
+          },
         };
         break;
       }
 
       // ========================================================================
-      // UNIFIED AGENT SERVICE
+      // UNIFIED AGENT SERVICE (explicit)
       // ========================================================================
       case 'unified-agent': {
+        const { processUnifiedAgentRequest } = await import('@/lib/orchestra/unified-agent-service');
+
+        const unifiedResult = await processUnifiedAgentRequest({
+          userMessage: request.task,
+          userId: request.ownerId,
+          conversationId: request.sessionId,
+          mode: 'auto', // Uses AGENT_EXECUTION_ENGINE auto-detection
+        });
+
+        result = {
+          success: unifiedResult.success,
+          response: unifiedResult.response,
+          steps: unifiedResult.steps,
+          metadata: {
+            agentType: 'unified-agent',
+            mode: unifiedResult.mode,
+            duration: Date.now() - startTime,
+          },
+        };
+        break;
+      }
+
+      // ========================================================================
+      // TASK ROUTER (Default)
+      // ========================================================================
+      case 'task-router': {
         const { processUnifiedAgentRequest } = await import('@/lib/orchestra/unified-agent-service');
 
         const modeConfig = (request as any).modeConfig as ModeConfig | undefined;
@@ -434,8 +467,20 @@ export async function executeWithOrchestrationMode(
         break;
       }
 
+      /**
+ * INTERNAL ENGINE - Not a standalone orchestration mode
+ * 
+ * ExecutionGraph is a DAG (Directed Acyclic Graph) engine for complex multi-step 
+ * task execution tracking. It is used internally by other orchestration modes
+ * (dual-process, spec:super/spec:maximal, cognitive-resonance, etc.) to track their
+ * multi-step execution workflows.
+ * 
+ * This mode exists here for direct access if needed, but primarily serves as internal
+ * infrastructure. Other modes internally leverage this engine rather than being
+ * implemented as separate executions.
+ */
       // ========================================================================
-      // EXECUTION GRAPH (DAG Dependency Engine)
+      // EXECUTION GRAPH (DAG Dependency Engine - INTERNAL INFRASTRUCTURE)
       // ========================================================================
       case 'execution-graph': {
         const { executionGraphEngine } = await import('@bing/shared/agent/execution-graph');
@@ -470,7 +515,7 @@ export async function executeWithOrchestrationMode(
 
         try {
         // Execute nodes in dependency order
-        const { llmService } = await import('@/lib/chat/llm-providers');
+        const { llmService } = await import('@/lib/providers/llm-providers');
 
         // Use user-selected model for planning
 
@@ -608,7 +653,7 @@ export async function executeWithOrchestrationMode(
       // OPENCODE SDK (Direct API to local OpenCode server)
       // ========================================================================
       case 'opencode-sdk': {
-        const { getOpenCodeSDKProvider } = await import('@/lib/chat/opencode-sdk-provider');
+        const { getOpenCodeSDKProvider } = await import('@/lib/engineers/opencode-sdk-provider');
 
         // Use user-selected model, fall back to env vars
         const model = request.model || process.env.OPENCODE_MODEL || 'anthropic/claude-3-5-sonnet-20241022';
@@ -975,6 +1020,49 @@ export async function executeWithOrchestrationMode(
       }
 
       // ========================================================================
+      // MULTI-AGENT-COLLABORATION (Parallel role-based execution)
+      // Uses packages/shared/agent/multi-agent-collaboration.ts
+      // ========================================================================
+      case 'multi-agent': {
+        const { MultiAgentCollaboration } = await import('@bing/shared/agent/multi-agent-collaboration');
+        type AgentRole = 'planner' | 'researcher' | 'coder' | 'reviewer' | 'tester' | 'executor' | 'coordinator';
+
+        const roles = (request as any).roles || ['planner', 'coder', 'reviewer'];
+        const strategy = (request as any).strategy || 'parallel';
+
+        const collaboration = new MultiAgentCollaboration();
+
+        let collabResult;
+        if (strategy === 'orchestrated') {
+          collabResult = await collaboration.executeWithOrchestration(
+            request.task,
+            roles as any[],
+            { provider: (request as any).provider || 'e2b' }
+          );
+        } else {
+          collabResult = await collaboration.executeCollaborative(
+            request.task,
+            roles as AgentRole[],
+            { provider: (request as any).provider || 'e2b' }
+          );
+        }
+
+        result = {
+          success: collabResult.success,
+          response: Object.values(collabResult.results).join('\n\n'),
+          error: collabResult.error,
+          metadata: {
+            agentType: 'multi-agent',
+            strategy,
+            roles,
+            taskCount: Object.keys(collabResult.taskStatus).length,
+            duration: collabResult.duration,
+          },
+        };
+        break;
+      }
+
+      // ========================================================================
       // V1-API MODE (Direct API calls with tools - fast, simple)
       // ========================================================================
       case 'v1-api': {
@@ -1122,9 +1210,17 @@ export async function executeWithOrchestrationMode(
         break;
       }
 
+      /**
+ * INTERNAL ROUTING - Variants handled by unified-agent-service internally
+ * 
+ * These variants are handled internally by unified-agent-service.ts based on
+ * runtime conditions. The base mode (dual-process) is user-selectable, but the
+ * :fast/:slow/:fast-fallback/:slow-failed variants are determined at runtime
+ * by the execution engine based on task classification and success/failure states.
+ */
       // ========================================================================
       // DUAL-PROCESS MODES (Fast/slow planning + executor)
-      // With task-classifier as initial step
+      // Variants handled internally - base 'dual-process' is user-selectable
       // ========================================================================
       case 'dual-process':
       case 'dual-process:fast':
@@ -1158,6 +1254,15 @@ export async function executeWithOrchestrationMode(
 
       // ========================================================================
       // ADVERSARIAL-VERIFY MODES (Multi-agent verification)
+/**
+ * INTERNAL ROUTING - Variants handled by unified-agent-service internally
+ * 
+ * Adversarial verification variants determined at runtime based on verification
+ * success/failure state. Base 'adversarial-verify' is user-selectable.
+ */
+      // ========================================================================
+      // ADVERSARIAL-VERIFY MODES (Multi-agent verification)
+      // Variants handled internally - base 'adversarial-verify' selectable
       // ========================================================================
       case 'adversarial-verify':
       case 'adversarial:revised':
@@ -1172,17 +1277,18 @@ export async function executeWithOrchestrationMode(
           mode: (modeVariant ? `adversarial-verify-${modeVariant}` : 'adversarial-verify') as any,
         });
         result = {
-        success: unifiedResult.success,
-        response: unifiedResult.response,
-        steps: unifiedResult.steps,
-        error: unifiedResult.error,
-        metadata: { agentType: mode, duration: Date.now() - startTime },
+          success: unifiedResult.success,
+          response: unifiedResult.response,
+          steps: unifiedResult.steps,
+          error: unifiedResult.error,
+          metadata: { agentType: mode, duration: Date.now() - startTime },
         };
         break;
       }
 
       // ========================================================================
       // COGNITIVE-RESONANCE MODES (Iterative refinement)
+      // Variants handled internally - base 'cognitive-resonance' selectable
       // ========================================================================
       case 'cognitive-resonance':
       case 'cognitive:converged':
@@ -1199,17 +1305,18 @@ export async function executeWithOrchestrationMode(
           mode: (modeVariant ? `cognitive-resonance-${modeVariant}` : 'cognitive-resonance') as any,
         });
         result = {
-        success: unifiedResult.success,
-        response: unifiedResult.response,
-        steps: unifiedResult.steps,
-        error: unifiedResult.error,
-        metadata: { agentType: mode, duration: Date.now() - startTime },
+          success: unifiedResult.success,
+          response: unifiedResult.response,
+          steps: unifiedResult.steps,
+          error: unifiedResult.error,
+          metadata: { agentType: mode, duration: Date.now() - startTime },
         };
         break;
       }
 
       // ========================================================================
       // DISTRIBUTED-COGNITION MODES (Multi-agent synthesis)
+      // Variants handled internally - base 'distributed-cognition' selectable
       // ========================================================================
       case 'distributed-cognition':
       case 'distributed:no-synthesis': {
@@ -1228,6 +1335,49 @@ export async function executeWithOrchestrationMode(
         steps: unifiedResult.steps,
         error: unifiedResult.error,
         metadata: { agentType: mode, duration: Date.now() - startTime },
+        };
+        break;
+      }
+
+      // ========================================================================
+      // ADVANCED MODES - delegate to unified-agent-service.ts
+      // ========================================================================
+      case 'attractor-driven':
+      case 'intent-driven':
+      case 'energy-driven': {
+        const { processUnifiedAgentRequest } = await import('@/lib/orchestra/unified-agent-service');
+        const unifiedResult = await processUnifiedAgentRequest({
+          userMessage: request.task,
+          userId: request.ownerId,
+          conversationId: request.sessionId,
+          sandboxId: request.sessionId,
+          mode: mode as any,
+        });
+        result = {
+          success: unifiedResult.success,
+          response: unifiedResult.response,
+          steps: unifiedResult.steps,
+          error: unifiedResult.error,
+          metadata: { agentType: mode, duration: Date.now() - startTime },
+        };
+        break;
+      }
+
+      case 'execution-controller': {
+        const { processUnifiedAgentRequest } = await import('@/lib/orchestra/unified-agent-service');
+        const unifiedResult = await processUnifiedAgentRequest({
+          userMessage: request.task,
+          userId: request.ownerId,
+          conversationId: request.sessionId,
+          sandboxId: request.sessionId,
+          mode: 'execution-controller',
+        });
+        result = {
+          success: unifiedResult.success,
+          response: unifiedResult.response,
+          steps: unifiedResult.steps,
+          error: unifiedResult.error,
+          metadata: { agentType: mode, duration: Date.now() - startTime },
         };
         break;
       }

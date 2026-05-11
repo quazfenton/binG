@@ -12,7 +12,7 @@
  */
 
 import { createLogger } from '@/lib/utils/logger';
-import { cosineSimilarity } from '@/lib/retrieval/similarity';
+import { cosineSimilarity } from '@/lib/vector-memory/similarity';
 
 const log = createLogger('RAGKnowledgeStore');
 

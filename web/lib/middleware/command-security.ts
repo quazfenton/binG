@@ -15,7 +15,7 @@
  */
 
 import { z } from 'zod';
-import { validatePath } from './filesystem-security';
+import { validatePath } from '../security/filesystem-security';
 
 /**
  * Command validation result

@@ -111,7 +111,7 @@ export async function bootstrapToolSystem(config: BootstrapConfig): Promise<Boot
 
   // Register workspace analysis tools (always enabled — replaces shallow buildProjectContext)
   try {
-    const { registerProjectAnalysisTools } = await import('./bootstrap/bootstrap-workspace-analysis');
+    const { registerProjectAnalysisTools } = await import('../tools/project-analysis/workspace-analysis');
     const count = await registerProjectAnalysisTools(registry, config);
     capabilityCount += count;
     logger.info(`Registered ${count} workspace analysis tools/capabilities`);

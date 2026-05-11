@@ -38,7 +38,7 @@ import type { VFSFileEntry, SyncMode, VFSyncConfig, VFSyncResult, VFSyncStatus }
 
 // Dynamic import to prevent bundling in client components
 import type { SandboxProviderType } from '../../sandbox/providers';
-import { getTerminalSession } from '../../terminal/session/terminal-session-store';
+import { getTerminalSession } from '../../../terminal/terminal/session/terminal-session-store';
 import { createLogger } from '../../utils/logger';
 
 const logger = createLogger('VFS:SyncBack');

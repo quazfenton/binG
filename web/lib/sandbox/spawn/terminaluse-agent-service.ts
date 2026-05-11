@@ -13,8 +13,8 @@
  *
  * @example
  * ```typescript
- * import { TerminalUseProvider } from './terminaluse-provider'
- * import { createTerminalUseAgentService } from './terminaluse-agent-service'
+ * import { TerminalUseProvider } from './terminal/terminaluse-provider'
+ * import { createTerminalUseAgentService } from './terminal/terminaluse-agent-service'
  *
  * const provider = new TerminalUseProvider()
  * const handle = await provider.createSandbox({

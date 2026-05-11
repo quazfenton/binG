@@ -15,7 +15,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 
-import { getMetricsSummary } from "@/lib/agent/metrics";
+import { getMetricsSummary } from '@/lib/observability/metrics';
 import { listProjects, getProjectSymbols } from "@/lib/memory/vectorStore";
 import { createLogger } from "@/lib/utils/logger";
 

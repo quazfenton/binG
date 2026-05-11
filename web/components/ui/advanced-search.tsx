@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { cn } from "@/lib/utils"
+import { cn } from '@/lib/virtual-filesystem/opfs/utils'
 import { Search, X, Filter, ChevronDown, Calendar, Tag, SortAsc, SortDesc } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"

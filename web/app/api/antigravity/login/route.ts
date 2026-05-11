@@ -7,7 +7,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 
-import { getAntigravityOAuthUrl } from '@/lib/llm/antigravity-provider';
+import { getAntigravityOAuthUrl } from '@/lib/providers/antigravity-provider';
 import { verifyAuth } from '@/lib/auth/jwt';
 
 export async function GET(req: NextRequest) {

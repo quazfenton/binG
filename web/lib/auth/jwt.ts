@@ -251,7 +251,7 @@ export async function verifyAuth(request: NextRequest): Promise<AuthResult> {
 function getUserTokenVersion(userId: string): number | null {
   try {
     // Lazy load to avoid circular deps at module level
-    const { getDatabase } = require('../database/connection');
+    const { getDatabase } = require('../../../../database/connection');
     const db = getDatabase();
     if (!db) return null;
     const row = db.prepare('SELECT token_version FROM users WHERE id = ?').get(userId) as any;
@@ -267,7 +267,7 @@ function getUserTokenVersion(userId: string): number | null {
  */
 export function incrementUserTokenVersion(userId: string): number {
   try {
-    const { getDatabase } = require('../database/connection');
+    const { getDatabase } = require('../../../../database/connection');
     const db = getDatabase();
     if (!db) {
       logger.error('Cannot increment token version — DB not available', { userId });
@@ -392,7 +392,7 @@ export function verifyMfaToken(mfaToken: string): { userId: string; jti: string 
  */
 export function getUserEmail(userId: string): string | null {
   try {
-    const { getDatabase } = require('../database/connection');
+    const { getDatabase } = require('../../../../database/connection');
     const db = getDatabase();
     if (!db) return null;
     const row = db.prepare('SELECT email FROM users WHERE id = ?').get(userId) as any;
