@@ -7,7 +7,7 @@
  *   Get grammar WASMs from: https://github.com/tree-sitter/tree-sitter-typescript
  */
 
-import Parser from "web-tree-sitter";
+import { Parser } from "web-tree-sitter";
 import type { VectorEntry } from "../memory/vectorStore";
 import { buildSymbolEmbedInput } from "../memory/embeddings";
 import { v4 as uuidv4 } from "uuid";

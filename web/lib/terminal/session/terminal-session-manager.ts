@@ -118,7 +118,7 @@ const MAX_SESSIONS_PER_USER = parseInt(process.env.MAX_TERMINAL_SESSIONS_PER_USE
 
 // Initialize SQLite
 try {
-  const { default: getDatabase } = require('../../../../../database/connection') as { default: () => BetterSqlite3.Database }
+  const { default: getDatabase } = require('../../database/connection') as { default: () => BetterSqlite3.Database }
   db = getDatabase()
 
   // Create terminal_sessions table

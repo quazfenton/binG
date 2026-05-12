@@ -300,6 +300,13 @@ const nextConfig = {
       '@bing/shared/agent/workforce-state': resolvePackagePath('shared', 'agent/workforce-state.ts'),
       '@bing/shared/lib/workspace-boundary': resolvePackagePath('shared', 'lib/workspace-boundary.ts'),
       '@bing/infra/config/config/features': resolve(projectRoot, '..', 'infra', 'config', 'config', 'features.ts'),
+
+      // Tauri API stub — throws on web, real impl via dynamic import in desktop builds
+      '@tauri-apps/api': resolve(projectRoot, 'lib/utils/tauri-api-stub.ts'),
+      '@tauri-apps/api/fs': resolve(projectRoot, 'lib/utils/tauri-api-stub.ts'),
+      '@tauri-apps/api/tauri': resolve(projectRoot, 'lib/utils/tauri-api-stub.ts'),
+      '@tauri-apps/api/dialog': resolve(projectRoot, 'lib/utils/tauri-api-stub.ts'),
+      '@tauri-apps/api/fs-sync': resolve(projectRoot, 'lib/utils/tauri-api-stub.ts'),
     };
 
     config.resolve.mainFields = ['module', 'main'];
@@ -325,6 +332,15 @@ const nextConfig = {
         'node:assert': 'assert',
         'node:module': 'module',
         'node:child_process': 'child_process',
+        // Tauri API stub for server-side builds
+        '@tauri-apps/api': resolve(projectRoot, 'lib/utils/tauri-api-stub.ts'),
+        '@tauri-apps/api/fs': resolve(projectRoot, 'lib/utils/tauri-api-stub.ts'),
+        '@tauri-apps/api/tauri': resolve(projectRoot, 'lib/utils/tauri-api-stub.ts'),
+        '@tauri-apps/api/dialog': resolve(projectRoot, 'lib/utils/tauri-api-stub.ts'),
+        '@tauri-apps/api/fs-sync': resolve(projectRoot, 'lib/utils/tauri-api-stub.ts'),
+        '@tauri-apps/api/window': resolve(projectRoot, 'lib/utils/tauri-api-stub.ts'),
+        '@tauri-apps/api/event': resolve(projectRoot, 'lib/utils/tauri-api-stub.ts'),
+        '@tauri-apps/api/core': resolve(projectRoot, 'lib/utils/tauri-api-stub.ts'),
       };
     }
 

@@ -91,7 +91,7 @@ export function watchAndReindex(
         } else {
           // Modified or created: read content and reindex
           // @ts-ignore - Tauri API only available in desktop builds
-          const { readTextFile } = await import("@tauri-apps/api/fs");
+          const { readTextFile } = await import(/* webpackIgnore: true */ "@tauri-apps/api/fs");
           const content = await readTextFile(path);
 
           const result = await trace("watcher-reindex", () =>
@@ -166,7 +166,7 @@ function startPollingFallback(
       if (!isDesktop) return;
 
       // @ts-ignore - Tauri API only available in desktop builds
-      const { invoke } = await import("@tauri-apps/api/tauri");
+      const { invoke } = await import(/* webpackIgnore: true */ "@tauri-apps/api/tauri");
       const files: Array<{ path: string; mtime: number }> = await invoke(
         "list_file_mtimes",
         { path: projectPath, extensions }
