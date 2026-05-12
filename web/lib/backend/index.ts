@@ -158,4 +158,4 @@ export {
   type WorkerListing,
   type PublishWorkerRequest,
   type ExecRequest,
-} from '@bing/shared/agent/agent-workspace';
+} from '@/.bing-shared/agent/agent-project';

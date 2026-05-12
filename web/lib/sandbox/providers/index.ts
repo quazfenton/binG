@@ -15,7 +15,7 @@ import { DaytonaProvider } from './daytona-provider'
 import { RunloopProvider } from './runloop-provider'
 import { E2BDesktopProvider, desktopSessionManager, type DesktopSandboxHandle as DesktopHandle } from '../../computer/e2b-desktop-provider-enhanced'
 import { CircuitBreaker, providerCircuitBreakers, createCircuitBreakerWithMetrics, getCircuitStateName } from '@/lib/utils/circuit-breaker'
-import { sandboxMetrics } from '@/lib/observability/metrics'
+import { sandboxMetrics } from '@/lib/backend/metrics'
 import { createLogger } from '@/lib/utils/logger'
 import { isDesktopMode } from '@bing/platform/env'
 

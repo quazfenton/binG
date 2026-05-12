@@ -17,8 +17,8 @@ import {
   parseMCPURL,
   registerHTTPTransport,
 } from '@/lib/mcp/http-transport'
-import { ToolRegistry } from '@/lib/tools/registry'
-import type { MCPServerConfig } from '@/lib/voice/types'
+import { mcpToolRegistry } from '@/lib/mcp/registry'
+import type { MCPServerConfig } from '@/lib/mcp/types'
 
 const logger = createLogger('MCP-Connect')
 
@@ -55,8 +55,8 @@ export async function POST(req: Request) {
       const config = { ...tauriServer, id: serverId || tauriServer.id, name: serverName || tauriServer.name };
 
       // Use mcpToolRegistry exclusively
-      mcpToolRegistry.registerServer(config);
-      await (mcpToolRegistry as any).connectServer(config.id);
+      await mcpToolRegistry.registerServer(config);
+      await mcpToolRegistry.connectServer(config.id);
 
       // Check bridge connectivity
       const bridgeConnected = await isTauriBridgeConnected(tauriBridgeUrl);
@@ -75,7 +75,7 @@ export async function POST(req: Request) {
     if (isDesktop && npxArgs) {
       logger.info(`Connecting to local MCP server: ${serverName}`, { serverId })
 
-      // Use mcpToolRegistry exclusively — do NOT also call initializeDesktopMCP
+      // Use ToolRegistry exclusively — do NOT also call initializeDesktopMCP
       // to avoid double-spawning the same process.
       const config: MCPServerConfig = {
         id: serverId,
@@ -90,7 +90,7 @@ export async function POST(req: Request) {
       }
 
       mcpToolRegistry.registerServer(config)
-      await (mcpToolRegistry as any).connectServer(serverId)
+      await mcpToolRegistry.connectServer(serverId)
 
       return NextResponse.json({ ok: true, mode: 'desktop-stdio' })
     }

@@ -11,7 +11,7 @@
  * @module lib/events/init
  */
 
-import { initializeEventSystem, startEventProcessing, stopEventProcessing } from '@/lib/crewai/crew/events';
+import { initializeEventSystem, startEventProcessing, stopEventProcessing } from '@/lib/events';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('Events:Init');

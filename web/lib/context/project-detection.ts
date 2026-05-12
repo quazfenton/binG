@@ -13,7 +13,7 @@
  * @module workspace-detection
  */
 
-import type { ToolExecutionContext } from '@/lib/voice/types';
+import type { ToolExecutionContext } from '@/lib/tools/tool-integration/types';
 
 // ============================================================================
 // Package Manager Detection

@@ -63,12 +63,12 @@ export function createAgentTool() {
   return {
     name: 'create_agent',
     description: 'Create and spawn an AI agent for task execution with execution policy control',
-    inputSchema: z.object({
+    inputSchema: {
       // MED-1 fix: Add min length validation to prevent empty/malicious task strings
       task: z.string().min(1).max(10000).describe('Task description or goal for the agent to execute'),
       model: z.string().optional().describe('LLM model to use (default: mistral-small-latest)'),
       executionPolicy: z.string().optional().describe('Execution policy (default: sandboxed)'),
-    }),
+    },
     execute: async ({ task, model, executionPolicy }: { task: string; model?: string; executionPolicy?: string }) => {
       // MED-7 fix: Check active agent limit before spawning
       cleanupStaleAgents();
@@ -127,9 +127,9 @@ export function getAgentStatusTool() {
   return {
     name: 'get_agent_status',
     description: 'Get status and metadata of a running or completed agent',
-    inputSchema: z.object({
+    inputSchema: {
       agentId: z.string().describe('Agent ID returned from create_agent'),
-    }),
+    },
     execute: async ({ agentId }: { agentId: string }) => {
       const session = agentRegistry.get(agentId);
 
@@ -180,10 +180,10 @@ export function stopAgentTool() {
   return {
     name: 'stop_agent',
     description: 'Stop a running agent session',
-    inputSchema: z.object({
+    inputSchema: {
       agentId: z.string().describe('Agent ID to stop'),
       reason: z.string().optional().describe('Optional reason for stopping'),
-    }),
+    },
     execute: async ({ agentId, reason }: { agentId: string; reason?: string }) => {
       const session = agentRegistry.get(agentId);
 
@@ -228,12 +228,12 @@ export function spawnAgentSessionTool() {
   return {
     name: 'spawn_agent_session',
     description: 'Spawn persistent agent session for complex multi-step workflows',
-    inputSchema: z.object({
+    inputSchema: {
       // MED-1 fix: Add min/max validation
       goal: z.string().min(1).max(10000).describe('Session goal / high-level task description'),
       mode: z.string().optional().describe('Agent mode: code, analysis, creative, etc.'),
       maxIterations: z.number().int().min(1).max(500).optional().describe('Maximum iteration count (default: 50)'),
-    }),
+    },
     execute: async ({ goal, mode, maxIterations }: { goal: string; mode?: string; maxIterations?: number }) => {
       // MED-7 fix: Check active agent limit
       cleanupStaleAgents();

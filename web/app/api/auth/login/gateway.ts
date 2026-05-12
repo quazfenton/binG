@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 
 import { authService } from '@/lib/auth/auth-service';
-import { createRateLimitMiddleware } from '@/lib/utils/rate-limiter';
+import { checkUserRateLimit } from '@/lib/middleware/rate-limiter';
 import { generateCsrfToken, setCsrfCookie } from '@/lib/auth/csrf';
 import { generateMfaToken } from '@/lib/auth/jwt';
 
@@ -28,9 +28,9 @@ export async function POST(request: NextRequest) {
     // Rate limiting: Check before processing (strict limits to prevent brute-force)
     // Skip rate limiting in development for easier testing
     if (process.env.NODE_ENV !== 'development') {
-      const rateLimitResult = rateLimitMiddleware(request, 'login', normalizedEmail);
-      if (!rateLimitResult.success && rateLimitResult.response) {
-        return rateLimitResult.response;
+      const rateLimitResult = checkUserRateLimit(normalizedEmail, 'login');
+      if (!rateLimitResult.allowed) {
+        return NextResponse.json({ error: 'Rate limit exceeded' }, { status: 429, headers: rateLimitResult.headers });
       }
     }
 

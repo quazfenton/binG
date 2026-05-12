@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge';
 import { verifyAuth } from '@/lib/auth/jwt';
-import { getSandboxProvider } from '@/lib/sandbox/providers/sandbox-provider';
-import { checkRateLimit } from '@/lib/middleware/rate-limiter';
+import { getSandboxProvider } from '@/lib/sandbox/providers/index';
+import { checkUserRateLimit } from '@/lib/middleware/rate-limiter';
 
 // Force Node.js runtime for Daytona SDK compatibility
 

@@ -10,8 +10,8 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { StatefulAgent } from '@/lib/orchestra/stateful-agent/agents/stateful-agent';
-import type { StatefulAgentOptions, StatefulAgentResult } from '@/lib/orchestra/stateful-agent/agents/stateful-agent';
+import { StatefulAgent } from '@/lib/orchestra/stateful-agent/agents';
+import type { StatefulAgentOptions, StatefulAgentResult } from '@/lib/orchestra/stateful-agent/agents';
 
 // Mock session lock
 vi.mock('@/lib/session/session-lock', () => ({

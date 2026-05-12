@@ -7,7 +7,7 @@
  * @see https://mastra.ai/docs/verification/contract-inference
  */
 
-import { Workspace, SourceFile, FunctionDeclaration, InterfaceDeclaration, TypeAliasDeclaration } from 'ts-morph';
+import { Project, SourceFile, FunctionDeclaration, InterfaceDeclaration, TypeAliasDeclaration } from 'ts-morph';
 import * as path from 'path';
 
 /**
@@ -39,14 +39,14 @@ export interface BreakingChange {
  * Extract contracts from a TypeScript workspace
  */
 export function extractContracts(rootPath: string): ContractNode[] {
-  const workspace = new Workspace({
+  const project = new Project({
     tsConfigFilePath: path.join(rootPath, 'tsconfig.json'),
     skipAddingFilesFromTsConfig: false,
   });
 
   const contracts: ContractNode[] = [];
 
-  for (const sourceFile of workspace.getSourceFiles()) {
+  for (const sourceFile of project.getSourceFiles()) {
     const fileContracts = extractFromFile(sourceFile);
     contracts.push(...fileContracts);
   }

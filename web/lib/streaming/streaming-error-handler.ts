@@ -1,6 +1,6 @@
 "use client";
 
-import { secureRandom } from '@/lib/virtual-filesystem/opfs/utils';
+import { secureRandom } from '@/lib/utils';
 
 /**
  * Streaming Error Handler

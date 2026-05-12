@@ -15,7 +15,7 @@
  *   - enhanced-llm-service.ts → tool execution feedback
  */
 
-import { execSchemaFile } from '@/lib/events/schema';
+import { execSchemaFile } from '@/lib/database/schema';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('ToolCallTracker');

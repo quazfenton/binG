@@ -1,9 +1,8 @@
 import { defineConfig } from "@trigger.dev/sdk/v3";
 
 export default defineConfig({
-  workspace: "binG-agent-system",
+  project: process.env.TRIGGER_PROJECT_ID ?? "your-project-id",
   runtime: "node",
-  logLevel: "log",
   maxDuration: 3600,
   retries: {
     enabledInDev: true,

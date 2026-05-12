@@ -14,7 +14,7 @@ import { auth0 } from '@/lib/auth/auth0';
 import { getDatabase } from '@/lib/database/connection';
 import { decryptApiKey, encryptApiKey } from '@/lib/database/connection';
 import { createFigmaApi, FigmaApiError } from '@/lib/integrations/figma/api';
-import { isFigmaConfigured, getFigmaRedirectUri } from '@/lib/mcp/config';
+import { isFigmaConfigured, getFigmaRedirectUri } from '@/lib/integrations/figma/config';
 import { generateCodeVerifier, generateCodeChallenge, generateState, generateAuthUrl } from '@/lib/integrations/figma/oauth';
 import { oauthStateStore } from './oauth-state-store';
 

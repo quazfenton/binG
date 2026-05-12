@@ -15,7 +15,7 @@
  */
 
 import { getDatabase } from '@/lib/database/connection';
-import { execSchemaFile } from '@/lib/events/schema';
+import { execSchemaFile } from '@/lib/database/schema';
 
 // Dynamic import to avoid circular dependency with model-ranker
 // model-ranker imports chatRequestLogger, so we import recordModelAttempt lazily

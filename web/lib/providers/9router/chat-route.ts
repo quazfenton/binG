@@ -9,9 +9,9 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
-import { getRouterClient } from '@/lib/storage/ipfs/client'
+import { getRouterClient } from '@/lib/providers/9router/client'
 import { getUserRouterTokens } from '@/lib/providers/9router/token-store'
-import type { ChatRequest } from '@/lib/voice/types'
+import type { ChatRequest } from '@/lib/providers/9router/types'
 
 export const runtime = 'edge'
 

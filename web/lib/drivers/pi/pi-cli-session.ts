@@ -13,8 +13,8 @@
 import type { ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import type { PiSession, PiConfig, PiEvent, PiPromptOptions, PiState } from './pi-types';
-import type { AgentMessage } from '@/lib/voice/types';
-import type { ToolResult } from '@/lib/voice/types';
+import type { AgentMessage } from '@/lib/agent/types';
+import type { ToolResult } from '@/lib/agent/types';
 import { findPiBinarySync } from '@/lib/drivers/agent-bins/find-pi-binary';
 import { spawnLocalAgent, type SpawnLocalAgentOptions } from '@/lib/spawn/local-server-utils';
 

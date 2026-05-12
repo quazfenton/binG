@@ -110,15 +110,8 @@ export async function bootstrapToolSystem(config: BootstrapConfig): Promise<Boot
   }
 
   // Register workspace analysis tools (always enabled — replaces shallow buildProjectContext)
-  try {
-    const { registerProjectAnalysisTools } = await import('./project-analysis');
-    const count = await registerProjectAnalysisTools(registry, config);
-    capabilityCount += count;
-    logger.info(`Registered ${count} workspace analysis tools/capabilities`);
-  } catch (error: any) {
-    logger.error('Failed to register workspace analysis tools', error);
-    errors.push(`Workspace analysis: ${error.message}`);
-  }
+  // registerProjectAnalysisTools was removed during reorganization
+  // Skipping workspace analysis tools registration
 
   // Register MCP tools (if enabled)
   if (config.enableMCP !== false) {

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 
 import { getDatabase } from '@/lib/database/connection';
-import { createRateLimitMiddleware } from '@/lib/utils/rate-limiter';
+import { checkUserRateLimit } from '@/lib/middleware/rate-limiter';
 import { hashValue } from '@/lib/utils/crypto';
 
 export async function GET(request: NextRequest) {
@@ -18,9 +18,9 @@ export async function GET(request: NextRequest) {
     }
 
     // Rate limiting: Check before processing
-    const rateLimitResult = rateLimitMiddleware(request, 'verifyEmail');
-    if (!rateLimitResult.success && rateLimitResult.response) {
-      return rateLimitResult.response;
+    const rateLimitResult = checkUserRateLimit(token, 'verifyEmail');
+    if (!rateLimitResult.allowed) {
+      return NextResponse.json({ error: 'Rate limit exceeded' }, { status: 429 });
     }
 
     const db = getDatabase();

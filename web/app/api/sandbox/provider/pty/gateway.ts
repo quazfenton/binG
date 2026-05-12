@@ -9,7 +9,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
-import { getSandboxProvider } from '@/lib/sandbox/providers/sandbox-provider';
+import { getSandboxProvider } from '@/lib/sandbox/providers/index';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('ProviderPTY');

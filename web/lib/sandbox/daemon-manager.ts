@@ -1,5 +1,5 @@
 import type { SandboxHandle } from './providers/sandbox-provider'
-import { generateSecureId } from '@/lib/virtual-filesystem/opfs/utils';
+import { generateSecureId } from '@/lib/utils/utils';
 
 export interface DaemonProcess {
   id: string

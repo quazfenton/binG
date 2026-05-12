@@ -13,9 +13,9 @@
  */
 
 import { getCapabilityRouter } from '@/lib/tools/router';
-import { createSandboxRateLimiter } from '@/lib/utils/rate-limiter';
-import { evaluateActiveWorkflow, type ApprovalContext } from '@/lib/orchestra/stateful-agent/agents/stateful-agent';
-import { validateCommand as validateBlockedCommand } from '@/lib/security/security';
+import { createSandboxRateLimiter } from '@/lib/sandbox/providers/rate-limiter';
+import { evaluateActiveWorkflow, type ApprovalContext } from '@/lib/orchestra/stateful-agent/human-in-the-loop';
+import { validateCommand as validateBlockedCommand } from '@/lib/sandbox/security';
 import {
   validateToolInput,
   ExecShellSchema,
@@ -24,7 +24,7 @@ import {
 } from '@/lib/sandbox/validation-schemas';
 import { createBootstrappedAgency } from '@bing/shared/agent/bootstrapped-agency';
 import { createLogger } from '@/lib/utils/logger';
-import type { SandboxHandle } from '@/lib/sandbox/providers/sandbox-provider';
+import type { SandboxHandle } from '@/lib/sandbox/providers/index';
 
 const log = createLogger('AgentLoop:Wrapper');
 
