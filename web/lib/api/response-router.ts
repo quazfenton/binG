@@ -2633,7 +2633,7 @@ export class ResponseRouter {
     }
   ): string[] {
     // Use enhanced streaming events module
-    const { createStreamingEvents } = require('../streaming/streaming-events')
+    const { createStreamingEvents } = require('./streaming-events')
     return createStreamingEvents(response, requestId, {
       includeReasoning: options?.includeReasoning ?? true,
       includeToolState: options?.includeToolState ?? true,

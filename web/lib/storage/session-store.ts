@@ -52,7 +52,7 @@ let stmtAllActive: BetterSqlite3.Statement | null = null
 let stmtCleanup: BetterSqlite3.Statement | null = null
 
 try {
-  const { default: getDatabase } = require('../../../../database/connection') as { default: () => BetterSqlite3.Database }
+  const { default: getDatabase } = require('../database/connection') as { default: () => BetterSqlite3.Database }
   db = getDatabase()
 
   db.exec(`

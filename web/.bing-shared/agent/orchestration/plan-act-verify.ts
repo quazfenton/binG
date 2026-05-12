@@ -15,7 +15,7 @@
 import { generateText, tool as aiTool, type Tool, type ModelMessage } from 'ai';
 import { z } from 'zod';
 import { verifyChanges } from '@/lib/orchestra/stateful-agent/agents/verification';
-import { SelfHealingExecutor } from '@/lib/tools/tool-integration/parsers/self-healing';
+import { SelfHealingExecutor } from '@/lib/crewai';
 import { getVercelModel } from '@/lib/chat/vercel-ai-streaming';
 import { createLogger } from '@/lib/utils/logger';
 import { createOriginStack, redactArgsForLogging } from '@/lib/errors/logging-utils';

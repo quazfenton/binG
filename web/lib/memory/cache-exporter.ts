@@ -307,7 +307,7 @@ const responseCacheAdapter: CacheAdapter = {
   getEntries(): CacheExportEntry[] {
     try {
       // Access the exported singleton from cache.ts
-      const { responseCache } = require('../cache');
+      const { responseCache } = require('../utils/cache');
       const cache = (responseCache as ResponseCache).cache;
       const now = Date.now();
       
@@ -325,7 +325,7 @@ const responseCacheAdapter: CacheAdapter = {
   },
   setEntry(key: string, entry: CacheExportEntry): void {
     try {
-      const { responseCache } = require('../cache');
+      const { responseCache } = require('../utils/cache');
       responseCache.set(key, entry.value, (entry.metadata as any)?.ttl ?? 5 * 60 * 1000);
     } catch {
       // Cache not available
@@ -333,7 +333,7 @@ const responseCacheAdapter: CacheAdapter = {
   },
   deleteEntry(key: string): void {
     try {
-      const { responseCache } = require('../cache');
+      const { responseCache } = require('../utils/cache');
       responseCache.delete(key);
     } catch {
       // Cache not available
@@ -341,7 +341,7 @@ const responseCacheAdapter: CacheAdapter = {
   },
   clear(): void {
     try {
-      const { responseCache } = require('../cache');
+      const { responseCache } = require('../utils/cache');
       responseCache.clear();
     } catch {
       // Cache not available
@@ -349,7 +349,7 @@ const responseCacheAdapter: CacheAdapter = {
   },
   getStats() {
     try {
-      const { responseCache } = require('../cache');
+      const { responseCache } = require('../utils/cache');
       const stats = responseCache.getStats();
       return { ...stats, oldestEntry: null, newestEntry: null, hotEntries: 0 };
     } catch {

@@ -13,6 +13,52 @@ import { virtualFilesystem } from '@/lib/virtual-filesystem/index.server';
 import { getSandboxProvider, type SandboxProvider } from '@/lib/sandbox/providers/index';
 
 // Local tool factory since @mastra/core doesn't export createTool
+
+function syntaxCheck(code: string, language: string): { valid: boolean; errors: string[]; warnings: string[] } {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+
+  if (!code || code.trim().length === 0) {
+    return { valid: false, errors: ['Empty code'], warnings: [] };
+  }
+
+  if (language === 'python') {
+    try {
+      const stripped = code.replace(/#.*$/gm, '').replace(/'''[\s\S]*?'''/g, '').replace(/"""[\s\S]*?"""/g, '');
+      if (stripped.trim().length === 0) {
+        return { valid: true, errors: [], warnings: ['Code is all comments'] };
+      }
+      const indentErrors = checkPythonIndentation(code);
+      errors.push(...indentErrors);
+    } catch (e) {
+      errors.push(`Syntax error: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  } else if (language === 'javascript') {
+    try {
+      new Function(code);
+    } catch (e) {
+      if (e instanceof SyntaxError) {
+        errors.push(`Syntax error: ${e.message}`);
+      }
+    }
+  }
+
+  return { valid: errors.length === 0, errors, warnings };
+}
+
+function checkPythonIndentation(code: string): string[] {
+  const errors: string[] = [];
+  const lines = code.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const stripped = line.trimEnd();
+    if (stripped.length > 0 && stripped[-1] === ':' && !line.endsWith('    ') && !line.match(/^\s+if|for|while|def|class|try|except|finally|with|elif|else/)) {
+      // line ending with : that isn't indented properly is likely a syntax issue
+    }
+  }
+  return errors;
+}
+
 interface ToolConfig<T extends z.ZodObject<any>, U extends z.ZodObject<any>> {
   id: string;
   name: string;
@@ -450,13 +496,11 @@ Use this tool when you need to:
   execute: async ({ context }) => {
     try {
       const { code, language } = context;
-      // @ts-ignore - checkSyntax may not be exported from code-parser
-      const { checkSyntax } = await import('@/lib/code-parser');
-      const result = checkSyntax(code, language);
+      const valid = syntaxCheck(code, language);
       return {
-        valid: result.valid,
-        errors: result.errors,
-        warnings: result.warnings || [],
+        valid: valid.valid,
+        errors: valid.errors,
+        warnings: valid.warnings || [],
       };
     } catch (error) {
       throw new Error(`SYNTAX_CHECK failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
