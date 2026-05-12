@@ -42,10 +42,10 @@
  */
 
 import { enhancedTerminalManager } from '@/lib/terminal/enhanced-terminal-manager'
-import { getSandboxProvider } from '@/lib/providers/9router/providers'
+import { getSandboxProvider } from '@/lib/sandbox/providers/index'
 import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge'
 import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp'
-import type { PreviewInfo } from '@/lib/voice/types'
+import type { PreviewInfo } from '@/lib/sandbox/types'
 import type { DesktopHandle } from '@/lib/computer/e2b-desktop-provider-enhanced'
 import { GitManager, type GitStatusResult } from './git-manager'
 import { createLogger } from '@/lib/utils/logger'

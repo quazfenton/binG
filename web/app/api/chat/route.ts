@@ -307,8 +307,8 @@ export async function POST(request: NextRequest) {
   
   const rateLimitResult = checkRateLimit(
     rateLimitIdentifier,
-    { windowMs: CHAT_RATE_LIMIT_WINDOW_MS, maxRequests: rateLimitMax, message: 'Too many chat messages' },
-    { name: 'free', multiplier: 1, description: 'Free tier' }
+    rateLimitMax,
+    CHAT_RATE_LIMIT_WINDOW_MS
   );
 
   if (!rateLimitResult.allowed) {
@@ -325,7 +325,7 @@ export async function POST(request: NextRequest) {
           'Retry-After': String(rateLimitResult.retryAfter || 60),
           'X-RateLimit-Limit': String(rateLimitMax),
           'X-RateLimit-Remaining': String(rateLimitResult.remaining),
-          'X-RateLimit-Reset': String(Math.ceil(Date.now() / 1000 + rateLimitResult.resetAfter / 1000)),
+          'X-RateLimit-Reset': String(Math.ceil(Date.now() / 1000 + (rateLimitResult.resetAt - Date.now()) / 1000)),
         },
       }
     );

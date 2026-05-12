@@ -42,7 +42,7 @@
  */
 
 import { enhancedTerminalManager } from '@/lib/terminal/enhanced-terminal-manager'
-import { getSandboxProvider } from '@/lib/sandbox/sandbox-service-bridge'
+import { getSandboxProvider } from '@/lib/sandbox/providers/index'
 import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge'
 import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp'
 import type { PreviewInfo } from '@/lib/sandbox/types'
