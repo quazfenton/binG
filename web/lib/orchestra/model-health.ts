@@ -10,12 +10,7 @@
  * - Remote SDKs: HTTP endpoint health
  */
 
-import { createLogger } from '@/lib/utils/logger';
-import { 
-  circuitBreakerManager, 
-  type CircuitState,
-  getCircuitStateName 
-} from '@/lib/utils/circuit-breaker';
+import { createLogger } from '@/lib/utils/logger';import { circuitBreakerManager, type CircuitState, getCircuitStateName } from '@/lib/middleware/circuit-breaker';
 
 const log = createLogger('Model:Health');
 

@@ -8,7 +8,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyAuth } from './jwt';
 import { authManager } from '@/lib/auth/auth';
-import { RateLimiter, securityHeaders } from '@/lib/security/security';
+import { RateLimiter, securityHeaders } from '@/lib/security/security-utils';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('Auth:Middleware');
@@ -188,7 +188,7 @@ export function withAuth<T extends NextResponse>(
 
           if (addSecurityHeaders) {
             Object.entries(securityHeaders).forEach(([key, value]) => {
-              response.headers.set(key, value);
+              response.headers.set(key, value as string);
             });
           }
 
@@ -219,7 +219,7 @@ export function withAuth<T extends NextResponse>(
 
           if (addSecurityHeaders) {
             Object.entries(securityHeaders).forEach(([key, value]) => {
-              response.headers.set(key, value);
+              response.headers.set(key, value as string);
             });
           }
 

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 
 
-import { getMCPToolCount } from '@/lib/mcp/config'
+import { getMCPToolCount } from '@/lib/mcp/index'
 import { isDesktopMode } from '@bing/platform/env'
 import { createLogger } from '@/lib/utils/logger'
 

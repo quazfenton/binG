@@ -22,7 +22,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { virtualFilesystem } from '@/lib/virtual-filesystem/index.server';
-import { getSandboxProvider, type SandboxProvider } from '@/lib/sandbox/providers/sandbox-provider';
+import { getSandboxProvider, type SandboxProvider } from '@/lib/sandbox/providers/index';
 
 // Use shared VFS singleton for consistent state across all routes
 const vfs = virtualFilesystem;

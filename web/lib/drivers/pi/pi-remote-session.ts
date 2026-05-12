@@ -6,7 +6,7 @@
  */
 
 import type { PiSession, PiConfig, PiEvent, PiPromptOptions, PiState } from './pi-types';
-import type { AgentMessage } from '@/lib/voice/types';
+import type { AgentMessage } from '@/lib/sandbox/types';
 
 /** HTTP Remote session */
 export async function createRemotePiSession(config: PiConfig & { remoteUrl: string }): Promise<PiSession> {

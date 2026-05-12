@@ -5,7 +5,7 @@
  * Supports both Web (VFS) and Desktop (local FS) modes.
  */
 
-import type { AgentMessage, ToolCall, ToolResult } from '@/lib/voice/types';
+import type { AgentMessage } from '@/lib/agent/types'; import type { ToolCall, ToolResult } from '@/lib/tools/tool-integration/types';
 
 /** Mode of operation */
 export type PiMode = 'vfs' | 'local' | 'mcp' | 'remote';

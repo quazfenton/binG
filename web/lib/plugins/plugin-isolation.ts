@@ -1,4 +1,4 @@
-import { secureRandom } from '@/lib/virtual-filesystem/opfs/utils';
+import { secureRandom } from '@/lib/utils/crypto-random';
 
 /**
  * Plugin Isolation System

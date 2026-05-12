@@ -9,7 +9,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge'
 import { verifyAuth } from '@/lib/auth/jwt'
-import { checkUserRateLimit } from '@/lib/utils/rate-limiter'
+import { checkUserRateLimit } from '@/lib/middleware/rate-limit'
 import { z } from 'zod'
 
 export const runtime = 'nodejs'

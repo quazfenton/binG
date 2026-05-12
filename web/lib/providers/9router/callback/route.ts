@@ -8,7 +8,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { consumeOAuthState } from '@/lib/providers/9router/oauth-utils'
-import { getRouterClient } from '@/lib/storage/ipfs/client'
+import { getRouterClient } from '@/lib/providers/9router/client'
 import type { OAuthProvider } from '@/lib/voice/types'
 import { oauthService } from '@/lib/auth/oauth-service'
 

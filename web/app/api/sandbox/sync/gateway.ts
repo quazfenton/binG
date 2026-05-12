@@ -26,8 +26,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 
 import { UniversalVfsSync, type VfsFile, type SyncOptions } from '@/lib/virtual-filesystem/sync/universal-vfs-sync';
-import { getSandboxProvider } from '@/lib/sandbox/providers/sandbox-provider';
-import type { SandboxProviderType } from '@/lib/sandbox/providers/sandbox-provider';
+import { getSandboxProvider, type SandboxProviderType } from '@/lib/sandbox/providers/index';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge';
 

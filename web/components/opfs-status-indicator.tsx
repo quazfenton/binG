@@ -9,7 +9,7 @@
 
 import React from 'react';
 import { useOPFSStatus } from '@/hooks/use-opfs-status';
-import { formatBytes } from '@/lib/utils/utils';
+import { formatBytes } from '@/lib/virtual-filesystem/opfs/utils';
 import {
   Cloud,
   CloudOff,

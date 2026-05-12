@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { authService } from '@/lib/auth/auth-service';
 import { generateToken } from '@/lib/auth/jwt';
-import { RateLimiter } from '@/lib/security/security';
+import { RateLimiter } from '@/lib/utils/rate-limiter';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('Auth:Refresh');
@@ -20,8 +20,9 @@ export async function POST(request: NextRequest) {
       request.headers.get('x-real-ip') ||
       'unknown';
 
-    if (!refreshRateLimiter.isAllowed(clientIP)) {
-      const retryAfter = refreshRateLimiter.getRetryAfter(clientIP);
+    const limitResult = refreshRateLimiter.check(clientIP);
+    if (!limitResult.allowed) {
+      const retryAfter = limitResult.retryAfter || 3600;
       logger.warn('Refresh rate limit exceeded', { ip: clientIP, retryAfter });
       return NextResponse.json(
         { error: 'Too many refresh requests', retryAfter },
@@ -47,7 +48,8 @@ export async function POST(request: NextRequest) {
         // HIGH-5 fix: Per-user rate limit for authenticated refresh
         if (sessionResult.user.id) {
           const userKey = `user:${sessionResult.user.id}`;
-          if (!refreshRateLimiter.isAllowed(userKey)) {
+          const userLimitResult = refreshRateLimiter.check(userKey);
+          if (!userLimitResult.allowed) {
             logger.warn('Per-user refresh rate limit exceeded', { userId: sessionResult.user.id });
             return NextResponse.json(
               { error: 'Too many refresh requests' },

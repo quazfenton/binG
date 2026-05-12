@@ -23,7 +23,7 @@
  */
 
 import { vercelSandboxProvider } from '../sandbox/providers/vercel-sandbox-provider'
-import type { PreviewInfo } from '../../../sandbox/types'
+import type { PreviewInfo } from '../sandbox/types'
 
 export interface PreviewConfig {
   sandboxId: string

@@ -18,7 +18,7 @@ import {
   getEventStats,
   replayFailedEvents,
   AnyEvent,
-} from '@/lib/crewai/crew/events';
+} from '@/lib/events';
 
 /**
  * GET /api/events - List user events (already implemented)

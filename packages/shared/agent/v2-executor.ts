@@ -10,8 +10,8 @@ import { agentSessionManager } from '@/lib/session/agent/agent-session-manager';
 import { getToolManager } from '@/lib/tools';
 import { createLogger } from '@/lib/utils/logger';
 import { normalizeToolInvocation, type ToolInvocation } from '@/lib/types/tool-invocation';
-import type { ExecutionPolicy } from '@/lib/voice/types';
-import { determineExecutionPolicy } from '@/lib/voice/types';
+import type { ExecutionPolicy } from '@/lib/sandbox/types';
+import { determineExecutionPolicy } from '@/lib/sandbox/types';
 import { normalizeSessionId } from '@/lib/virtual-filesystem/scope-utils';
 import type { PromptParameters } from './prompt-parameters';
 

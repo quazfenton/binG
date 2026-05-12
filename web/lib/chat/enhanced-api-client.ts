@@ -9,7 +9,7 @@
  * - User-friendly error messages
  */
 
-import { secureRandom } from '@/lib/virtual-filesystem/opfs/utils';
+import { secureRandom } from '@/lib/utils/crypto-random';
 
 export interface RetryOptions {
   maxAttempts: number;

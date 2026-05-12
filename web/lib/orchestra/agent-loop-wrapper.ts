@@ -13,9 +13,9 @@
  */
 
 import { getCapabilityRouter } from '@/lib/tools/router';
-import { createSandboxRateLimiter } from '@/lib/utils/rate-limiter';
+import { createSandboxRateLimiter } from '@/lib/sandbox/providers/rate-limiter';
 import { evaluateActiveWorkflow, type ApprovalContext } from '@/lib/orchestra/stateful-agent/agents/stateful-agent';
-import { validateCommand as validateBlockedCommand } from '@/lib/security/security';
+import { validateCommand as validateBlockedCommand } from '@/lib/middleware/command-security';
 import {
   validateToolInput,
   ExecShellSchema,

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 
 import { secureRandomString } from '@/lib/utils/utils';
-import { setUrl } from '@/lib/vector-memory/store';
+import { setUrl } from '@/lib/utils/url-shortener';
 
 export async function POST(req: NextRequest) {
   try {

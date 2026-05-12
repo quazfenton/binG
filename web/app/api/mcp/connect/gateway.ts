@@ -18,7 +18,8 @@ import {
   registerHTTPTransport,
 } from '@/lib/mcp/http-transport'
 import { ToolRegistry } from '@/lib/tools/registry'
-import type { MCPServerConfig } from '@/lib/voice/types'
+import { mcpToolRegistry } from '@/lib/mcp/registry'
+import type { MCPServerConfig } from '@/lib/crewai/mcp/server'
 
 const logger = createLogger('MCP-Connect')
 

@@ -8,7 +8,7 @@ import { detectRequestType } from "@/lib/utils/request-type-detector";
 import { generateSecureId } from '@/lib/utils/utils';
 import { chatRequestLogger } from '@/lib/chat/chat-request-logger';
 import { chatLogger } from '@/lib/chat/chat-logger';
-import { setMetricsLogger } from '@/lib/observability/metrics';
+import { setMetricsLogger } from '@/lib/agent/metrics';
 import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-service';
 import { filesystemEditSessionService } from '@/lib/virtual-filesystem/filesystem-edit-session-service';
 import { contextPackService } from '@/lib/virtual-filesystem/context-pack-service';
@@ -18,8 +18,8 @@ import { createNDJSONParser } from '@/lib/utils/ndjson-parser';
 import { streamStateManager } from '@/lib/streaming/stream-state-manager';
 import { notifyStreamComplete, notifyNeedMoreTurns } from '@/lib/streaming/stream-control-handler';
 import type { LLMMessage, StreamingResponse } from "@/lib/providers/llm-providers";
-import { checkRateLimit } from '@/lib/utils/rate-limiter';
-import { createFilesystemTools, createAgentLoop } from '@/lib/orchestra/mastra';
+import { checkRateLimit } from '@/lib/middleware/rate-limit';
+import { createFilesystemTools, createAgentLoop } from '@/lib/orchestra/mastra/index';
 import { 
   executeV2Task, 
   executeV2TaskStreaming, 
@@ -32,7 +32,7 @@ import {
   executeWithOrchestrationMode
 } from '@bing/shared/agent';
 import { processUnifiedAgentRequest, type UnifiedAgentConfig } from '@/lib/orchestra/unified-agent-service';
-import { checkProviderHealth } from '@/lib/sandbox/provider-health';
+import { checkProviderHealth } from '@/lib/orchestra/provider-health';
 import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp';
 import { mem0Search, buildMem0SystemPrompt, isMem0Configured, mem0Add, prewarmMem0Cache } from '@/lib/powers/mem0-power';
 import { createSSEEmitter, SSE_RESPONSE_HEADERS, SSE_EVENT_TYPES } from '@/lib/streaming/sse-event-schema';
@@ -52,7 +52,7 @@ import { generateSessionName, sessionNameExists } from '@/lib/session/session-na
 import { timingSafeEqual } from 'node:crypto';
 import { buildSupplementalAgenticEvents } from '@/lib/api/streaming-events';
 import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge';
-import { determineExecutionPolicy } from '@/lib/voice/types';
+import { determineExecutionPolicy } from '@/lib/sandbox/types';
 import {
   applySearchReplace,
   pollWithBackoff,
@@ -4249,7 +4249,7 @@ const config: UnifiedAgentConfig = {
     }
 
     // Process error with enhanced error handler for logging
-    const processedError = errorHandler.processError(
+    const processedError = getErrorHandler().processError(
       error instanceof Error ? error : new Error(String(error)),
       {
         component: 'chat-api',

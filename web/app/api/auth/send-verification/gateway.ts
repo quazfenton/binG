@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 
 import { getDatabase } from '@/lib/database/connection';
-import { createRateLimitMiddleware } from '@/lib/utils/rate-limiter';
+import { rateLimitMiddleware } from '@/lib/middleware/rate-limiter';
 import { hashValue } from '@/lib/utils/crypto';
 
 export async function POST(request: NextRequest) {

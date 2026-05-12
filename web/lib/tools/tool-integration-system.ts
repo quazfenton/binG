@@ -18,7 +18,7 @@ import type {
   IntegrationConfig as BaseIntegrationConfig,
   IntegrationProvider as BaseIntegrationProvider,
   ToolExecutionResult as BaseToolExecutionResult,
-} from '@/lib/voice/types';
+} from '@/lib/sandbox/validation-schemas';
 
 // ============================================================================
 // TYPE DEFINITIONS

@@ -27,7 +27,7 @@ import { recordToolCallTelemetry, prepareTelemetryPayload } from '../errors/logg
 import { chatRequestLogger } from './chat-request-logger';
 import { isCLIProvider } from './vercel-ai-streaming';
 import { recordRateLimitError } from '../providers/model-ranker';
-import { sandboxMetrics } from '@/lib/observability/metrics';
+import { sandboxMetrics } from '@/lib/backend/metrics';
 import { classifyFailure, FailureType } from '@/lib/errors/failure-classifier';
 
 export interface EnhancedLLMRequest extends LLMRequest {

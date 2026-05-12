@@ -17,7 +17,7 @@ import { NextRequest, NextResponse } from 'next/server'
 
 import { z } from 'zod'
 import { verifyAuth } from '@/lib/auth/jwt'
-import { checkUserRateLimit } from '@/lib/middleware/rate-limiter'
+import { checkRateLimit } from '@/lib/middleware/rate-limiter'
 import { createLogger } from '@/lib/utils/logger'
 
 const logger = createLogger('TerminalUse:API')

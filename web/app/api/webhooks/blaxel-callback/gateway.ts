@@ -10,7 +10,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 
-import { verifyBlaxelCallbackFromRequest } from '@/lib/sandbox/providers/sandbox-provider';
+import { verifyBlaxelCallbackFromRequest } from '@/lib/sandbox/providers/blaxel-callback-verify';
 
 const CALLBACK_SECRET = process.env.BLAXEL_CALLBACK_SECRET;
 
