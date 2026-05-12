@@ -15,7 +15,7 @@
 
 import { createWorkflow, createStep } from '@mastra/core/workflows';
 import { z } from 'zod';
-import { simulatedOrchestrator } from '@bing/shared/agent/simulated-orchestration';
+import { mastraWorkflowIntegration } from '@/.bing-shared/agent/mastra-workflow-integration';
 import { getModel } from '../models/model-router';
 import {
   writeFileTool,
@@ -94,7 +94,7 @@ export const collectiveStep = createStep({
     externalProposals: z.array(z.any()),
   }),
   execute: async ({ inputData }) => {
-    const proposals = simulatedOrchestrator.listProposals();
+    const proposals = mastraWorkflowIntegration.listProposals();
     const relevant = proposals.filter(p => p.status === 'proposed');
     
     return {

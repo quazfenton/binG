@@ -10,7 +10,7 @@
 "use client";
 
 import JSZip from "jszip";
-import { buildApiHeaders } from '@/lib/virtual-filesystem/opfs/utils';
+import { buildApiHeaders } from '@/lib/utils/utils';
 import { emitFilesystemUpdated } from "@/lib/virtual-filesystem/sync/sync-events";
 
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB

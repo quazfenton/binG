@@ -31,11 +31,11 @@ export function voiceSpeechTool() {
   return {
     name: 'voice_speech',
     description: 'Generate speech audio from text using neural TTS (KittenTTS) or web speech synthesis. Returns base64 WAV or description.',
-    inputSchema: z.object({
+    inputSchema: {
       text: z.string().describe('Text to synthesize into speech'),
       voice: z.string().optional().describe('Voice name (Bruno, Sarah, Default)'),
       model: z.string().optional().describe('TTS model: KittenML/kitten-tts-mini-0.8, micro, or nano'),
-    }),
+    },
     execute: async ({ text, voice, model }: { text: string; voice?: string; model?: string }) => {
       if (!text || text.trim().length === 0) {
         return {

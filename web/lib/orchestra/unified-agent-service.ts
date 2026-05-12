@@ -118,7 +118,7 @@ import {
   ingestTrajectory,
   ingestRule,
   ingestAntiPattern,
-} from '@/lib/vector-memory/retrieval';
+} from '@/lib/rag/retrieval';
 
 // Does the @opencode-ai/sdk package exist in node_modules?
 // Cached at module load so checkStartupCapabilities() can use it cheaply.

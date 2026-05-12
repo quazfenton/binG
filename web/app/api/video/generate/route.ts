@@ -10,7 +10,7 @@ import { NextRequest, NextResponse } from 'next/server'
 
 
 import { authenticateRequest } from '@/lib/security/jwt-auth'
-import { RateLimiter } from '@/lib/utils/rate-limiter'
+import { checkRateLimit } from '@/lib/middleware/rate-limit'
 import { secureRandomSeed } from '@/lib/utils/crypto-random'
 import { videoGenerationService } from '@/lib/video-generation/index'
 
@@ -30,13 +30,6 @@ interface GenerateBody {
   cameraMovement?: string
   provider?: string
 }
-
-// Rate limiter for video generation: 5 requests per minute per user
-const videoGenerationRateLimiter = new RateLimiter(
-  5,  // max requests
-  60000,  // 1 minute window
-  300000  // 5 minute block duration
-)
 
 // Allowed models/providers (configurable via environment)
 const ALLOWED_MODELS = process.env.VIDEO_GENERATION_ALLOWED_MODELS?.split(',') || [
@@ -80,7 +73,7 @@ export async function POST(req: NextRequest) {
     const rateLimitKey = `video-gen:${userId}:${clientIP}`
 
     // Rate limit check
-    const rateLimitResult = videoGenerationRateLimiter.check(rateLimitKey)
+    const rateLimitResult = checkRateLimit(rateLimitKey, 5, 60000)
     if (!rateLimitResult.allowed) {
       clearTimeout(timeoutId)
       const retryAfter = rateLimitResult.retryAfter || 60
@@ -88,12 +81,10 @@ export async function POST(req: NextRequest) {
         {
           error: 'Rate limit exceeded. Too many video generation requests.',
           retryAfter,
-          blockedUntil: rateLimitResult.blockedUntil,
         },
         {
           status: 429,
           headers: {
-            'X-RateLimit-Limit': String(rateLimitResult.limit || 5),
             'X-RateLimit-Remaining': '0',
             'Retry-After': String(retryAfter),
           },

@@ -5,7 +5,7 @@
  */
 
 import type { PiTool, PiToolContext } from './pi-types';
-import type { ToolDefinition, ToolResult } from '@/lib/voice/types';
+import type { ToolDefinition, ToolResult } from '@/lib/agent/types';
 
 type PiSession = Awaited<ReturnType<typeof import('./pi-types')['createPiSession']>>;
 

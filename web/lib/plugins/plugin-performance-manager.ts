@@ -1,4 +1,4 @@
-import { generateSecureId } from '@/lib/virtual-filesystem/opfs/utils';
+import { generateSecureId } from '@/lib/utils/utils';
 
 /**
  * Plugin Performance and Resource Management System

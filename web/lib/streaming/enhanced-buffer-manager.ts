@@ -1,6 +1,6 @@
 "use client";
 
-import { generateSecureId } from '@/lib/virtual-filesystem/opfs/utils';
+import { generateSecureId } from '@/lib/utils/utils';
 import { streamingErrorHandler } from '../streaming/streaming-error-handler';
 
 // Browser-compatible EventEmitter implementation

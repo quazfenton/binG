@@ -23,7 +23,7 @@
  */
 
 import { createLogger } from '@/lib/utils/logger';
-import { embedBatch } from '@/lib/vector-memory/embeddings';
+import { embedBatch } from '@/lib/memory/embeddings';
 import { cosineSimilarity } from '@/lib/vector-memory/similarity';
 import {
   processUnifiedAgentRequest,

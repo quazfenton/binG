@@ -1,4 +1,4 @@
-import type { SandboxHandle } from '@/lib/sandbox/providers/sandbox-provider';
+import type { SandboxHandle } from '@/lib/sandbox/providers/index';
 import type { ToolResult } from './sandbox-tools';
 import { createToolExecutorWrapper, type ToolExecution, type TransactionEntry, type ToolExecutorWrapper } from './tool-executor-wrapper';
 import { normalizeToolArgs } from '@/lib/orchestra/shared-agent-context';

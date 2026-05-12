@@ -17,7 +17,7 @@
 import { EventEmitter } from 'node:events'
 import type { SandboxProviderType } from '../sandbox/providers/index'
 import { getSandboxProvider } from '../sandbox/providers/index'
-import { sandboxMetrics } from '@/lib/observability/metrics'
+import { sandboxMetrics } from '@/lib/backend/metrics'
 
 export interface ProviderHealthStatus {
   provider: SandboxProviderType

@@ -4,7 +4,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge';
 import { verifyAuth } from '@/lib/auth/jwt';
-import { checkUserRateLimit } from '@/lib/utils/rate-limiter';
+import { checkUserRateLimit } from '@/lib/middleware/rate-limiter';
 import { sandboxIdSchema, commandSchema } from '@/lib/utils/schemas';
 
 // ANSI color codes for terminal output

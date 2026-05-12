@@ -8,7 +8,7 @@
 
 import { createLogger } from '../../utils/logger';
 import { createKilocodeClient, defaultKilocodeConfig } from './client';
-import { ToolResult } from '../../../sandbox/types';
+import { ToolResult } from '@/lib/sandbox/types';
 import {
   CodeGenerationRequest,
   CodeCompletionRequest,

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 
 import { getDatabase } from '@/lib/database/connection';
-import { createRateLimitMiddleware } from '@/lib/utils/rate-limiter';
+import { checkUserRateLimit } from '@/lib/middleware/rate-limiter';
 import { hashValue } from '@/lib/utils/crypto';
 
 export async function POST(request: NextRequest) {
@@ -18,9 +18,9 @@ export async function POST(request: NextRequest) {
     }
 
     // Rate limiting: Check before processing
-    const rateLimitResult = rateLimitMiddleware(request, 'sendVerification', email);
-    if (!rateLimitResult.success) {
-      return rateLimitResult.response;
+    const rateLimitResult = checkUserRateLimit(email, 'sendVerification');
+    if (!rateLimitResult.allowed) {
+      return NextResponse.json({ error: 'Rate limit exceeded' }, { status: 429 });
     }
 
     const db = getDatabase();
@@ -35,7 +35,7 @@ export async function POST(request: NextRequest) {
         message: 'If the email exists, a verification link has been sent',
       });
       // Propagate rate limit headers so clients can see remaining attempts
-      if (rateLimitResult.success && rateLimitResult.headers) {
+      if (rateLimitResult.allowed && rateLimitResult.headers) {
         Object.entries(rateLimitResult.headers).forEach(([key, value]) => {
           response.headers.set(key, String(value));
         });
@@ -91,7 +91,7 @@ export async function POST(request: NextRequest) {
     });
 
     // Add accurate rate limit headers from the middleware result
-    if (rateLimitResult.success && rateLimitResult.headers) {
+    if (rateLimitResult.allowed && rateLimitResult.headers) {
       Object.entries(rateLimitResult.headers).forEach(([key, value]) => {
         response.headers.set(key, String(value));
       });

@@ -6,7 +6,7 @@ import {
   type ImageGenerationParams,
   type AspectRatio,
 } from '@/lib/image-generation/index'
-import { RateLimiter } from '@/lib/utils/rate-limiter'
+import { checkRateLimit } from '@/lib/middleware/rate-limit'
 import { authenticateRequest } from '@/lib/security/jwt-auth'
 import { secureRandomSeed } from '@/lib/utils/crypto-random'
 
@@ -28,13 +28,6 @@ interface GenerateBody {
   provider?: string
   imageStrength?: number
 }
-
-// Rate limiter for image generation: 10 requests per minute per user
-const imageGenerationRateLimiter = new RateLimiter(
-  10,  // max requests
-  60000,  // 1 minute window
-  300000  // 5 minute block duration
-)
 
 // Allowed models/providers (configurable via environment)
 const ALLOWED_MODELS = (process.env.IMAGE_GENERATION_ALLOWED_MODELS?.split(',').map(s => s.trim()).filter(Boolean)) || [
@@ -65,7 +58,7 @@ export async function POST(req: NextRequest) {
     const rateLimitKey = `image-gen:${userId}:${clientIP}`
 
     // Rate limit check
-    const rateLimitResult = imageGenerationRateLimiter.check(rateLimitKey)
+    const rateLimitResult = checkRateLimit(rateLimitKey, 10, 60000)
     if (!rateLimitResult.allowed) {
       clearTimeout(timeoutId)
       const retryAfter = rateLimitResult.retryAfter || 60
@@ -73,12 +66,10 @@ export async function POST(req: NextRequest) {
         {
           error: 'Rate limit exceeded. Too many image generation requests.',
           retryAfter,
-          blockedUntil: rateLimitResult.blockedUntil,
         },
         {
           status: 429,
           headers: {
-            'X-RateLimit-Limit': String(rateLimitResult.limit || 10),
             'X-RateLimit-Remaining': '0',
             'Retry-After': String(retryAfter),
           },

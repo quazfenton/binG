@@ -18,7 +18,7 @@
 import { getCapabilityRouter } from '@/lib/tools/router';
 import { smartApply } from '@/lib/chat/file-diff-utils';
 import { createLogger } from '@/lib/utils/logger';
-import type { SandboxHandle } from '@/lib/sandbox/providers/sandbox-provider';
+import type { SandboxHandle } from '@/lib/sandbox/providers/index';
 
 const log = createLogger('ToolExecutor:Wrapper');
 

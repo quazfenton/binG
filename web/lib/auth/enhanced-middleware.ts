@@ -8,7 +8,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyAuth } from './jwt';
 import { authManager } from '@/lib/auth/auth';
-import { RateLimiter, securityHeaders } from '@/lib/security/security';
+import { RateLimiter, securityHeaders } from '@/lib/security/security-utils';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('Auth:Middleware');

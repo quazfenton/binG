@@ -9,7 +9,7 @@ import { tool, type Tool, type ToolCallOptions } from 'ai';
 import { z } from 'zod';
 import { chatLogger } from './chat-logger';
 import type { ToolExecutionContext } from './vercel-ai-streaming';
-import type { ToolExecutionContext as RouterToolContext } from '@/lib/voice/types';
+import type { ToolExecutionContext as RouterToolContext } from '@/lib/tools/tool-integration/types';
 import { isMCPAvailable, vfsTools as mcpVFSTools, toolContextStore, getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp';
 import { ALL_CAPABILITIES, type CapabilityDefinition } from '@/lib/tools/capabilities';
 import { normalizeSessionId } from '@/lib/virtual-filesystem/scope-utils';

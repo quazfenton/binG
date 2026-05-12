@@ -7,7 +7,7 @@
  * - Provider-agnostic rollback
  */
 
-import type { SandboxHandle } from '@/lib/sandbox/providers/sandbox-provider';
+import type { SandboxHandle } from '@/lib/sandbox/providers/index';
 
 // Simple hash function using Web Crypto API
 async function hashContent(content: string): Promise<string> {

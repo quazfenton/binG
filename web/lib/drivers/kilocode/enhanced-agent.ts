@@ -11,7 +11,7 @@
 
 import { createLogger } from '../../utils/logger';
 import { createKiloGatewayClient, type KiloGatewayConfig, type ChatCompletionRequest, type ChatMessage } from './kilo-gateway';
-import { type ToolResult } from '../../../sandbox/types';
+import { type ToolResult } from '@/lib/sandbox/types';
 import {
   CodeGenerationRequest,
   CodeAnalysisRequest,

@@ -8,11 +8,12 @@
  * `@/lib/drivers/opencode/find-opencode-binary` continue to work.
  */
 
+// Re-export implementations from agent-bins to avoid circular definitions
 export {
   findOpencodeBinary,
   findOpencodeBinarySync,
   resetBinaryCacheForTesting,
-} from '@/lib/drivers/opencode/find-opencode-binary';
+} from '@/lib/drivers/agent-bins/find-opencode-binary';
 
 export {
   type FindBinaryOptions,

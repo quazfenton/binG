@@ -19,10 +19,10 @@ import { vfsTools, getVFSToolDefinitions, setToolContext, toolContextStore } fro
 import { buildMem0MCPTools } from '@/lib/mcp/vfs-mcp-tools';
 import { isMem0Configured } from '@/lib/powers/mem0-power';
 import { createHTTPTransport, isValidMCPURL } from '@/lib/mcp/http-transport';
-import { handleMCPHealthCheck } from '@/lib/middleware/health-check';
+import { handleMCPHealthCheck } from '@/lib/mcp/health-check';
 import { formatValueForMCPText } from '@/lib/mcp/result-format';
 import { createLogger } from '@/lib/utils/logger';
-import { buildCompositeSessionId, buildScopePath, extractSimpleSessionId } from '@/lib/messaging/identity';
+import { buildCompositeSessionId, buildScopePath, extractSimpleSessionId } from '@/lib/identity/composite-session-id';
 
 const logger = createLogger('MCP-Server');
 

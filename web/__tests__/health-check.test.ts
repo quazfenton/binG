@@ -11,7 +11,7 @@ import {
   createHttpHealthCheck,
   createFunctionHealthCheck,
   type HealthCheckResult,
-} from '@/lib/middleware/health-check';
+} from '@/lib/mcp/health-check';
 
 describe('HealthCheckManager', () => {
   let manager: HealthCheckManager;

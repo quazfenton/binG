@@ -34,7 +34,7 @@ export function generateImageTool() {
   return {
     name: 'generate_image',
     description: 'Generate images from text prompts using FLUX, SDXL, or other AI models. Returns URL or base64 data.',
-    inputSchema: z.object({
+    inputSchema: {
       prompt: z.string().describe('Image generation prompt'),
       negativePrompt: z.string().optional().describe('Negative prompt (what to exclude)'),
       // MED-1 fix: Clamp dimensions to prevent memory exhaustion (max 4096px)
@@ -46,7 +46,7 @@ export function generateImageTool() {
       // MED-1 fix: Limit number of images per request
       numImages: z.number().int().min(1).max(4).optional().describe('Number of images to generate (1-4)'),
       seed: z.number().optional().describe('Random seed for reproducibility'),
-    }),
+    },
     execute: async ({
       prompt,
       negativePrompt,

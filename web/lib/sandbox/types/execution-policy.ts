@@ -6,7 +6,7 @@
  *
  * Migration guide:
  * - import { ExecutionPolicy } from '@/lib/sandbox/types/execution-policy'
- * + import { ExecutionPolicy } from '@/lib/voice/types'
+ * + import { ExecutionPolicy } from '@/lib/sandbox/types'
  */
 
 // Re-export all from main types file

@@ -8,7 +8,7 @@
  */
 
 import { getDatabase } from '@/lib/database/connection';
-import { execSchemaFile } from '@/lib/events/schema';
+import { execSchemaFile } from '@/lib/database/schema';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('Events:HumanInLoop');

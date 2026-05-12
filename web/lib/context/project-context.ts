@@ -10,7 +10,7 @@
 import { createVectorStore } from '@/lib/vector-memory/store';
 import { getEmbeddingProvider } from '@/lib/vector-memory/embeddings';
 import { RetrievalPipeline } from '@/lib/vector-memory/retrieval';
-import type { VectorStore, EmbeddingProvider } from '@/lib/voice/types';
+import type { VectorStore, EmbeddingProvider } from '@/lib/vector-memory/types';
 
 const MAX_PROJECTS = 50; // LRU-style eviction limit
 

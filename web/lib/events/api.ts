@@ -13,12 +13,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth0 } from '@/lib/auth/auth0';
 import { emitEvent } from '@/lib/events/bus';
+import { AnyEvent } from '@/lib/events/schema';
 import {
   getEventsByUser,
   getEventStats,
   replayFailedEvents,
-  AnyEvent,
-} from '@/lib/crewai/crew/events';
+} from '@/lib/events/store';
 
 /**
  * GET /api/events - List user events (already implemented)
