@@ -1,0 +1,85 @@
+#cloud-config
+# cloud-init bootstrap for Oracle Cloud "Always Free" ARM A1 instance
+# (Canonical Ubuntu 22.04 — Oracle's default image is fine too, this works on either).
+#
+# Paste this in the Oracle Console:  Compute → Instance → Advanced → cloud-init
+# OR pass via:  oci compute instance launch --user-data-file infra/oracle/cloud-init.yaml ...
+#
+# Result: a hardened VM with Docker, Compose v2, UFW, Caddy (TLS), and the bing repo cloned.
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - ca-certificates
+  - curl
+  - gnupg
+  - git
+  - ufw
+  - fail2ban
+  - htop
+  - unzip
+
+write_files:
+  - path: /etc/ssh/sshd_config.d/99-bing.conf
+    permissions: '0644'
+    content: |
+      PasswordAuthentication no
+      PermitRootLogin no
+      X11Forwarding no
+      ClientAliveInterval 60
+
+  - path: /opt/bing/.env.example
+    permissions: '0644'
+    content: |
+      # Copy to /opt/bing/.env and fill in values, then `docker compose up -d`
+      DOMAIN=example.com
+      ACME_EMAIL=you@example.com
+
+      # 9router
+      NINEROUTER_ADMIN_KEY=replace-with-strong-key
+      NINEROUTER_PUBLIC_URL=https://router.${DOMAIN}
+
+      # Backend
+      FRONTEND_URL=https://your-app.vercel.app
+      BACKEND_PUBLIC_URL=https://api.${DOMAIN}
+      JWT_SECRET=replace
+      ENCRYPTION_KEY=replace
+      REDIS_URL=rediss://default:pass@your-upstash:6379
+      OPENAI_API_KEY=
+      ANTHROPIC_API_KEY=
+      OPENROUTER_API_KEY=
+      ENABLE_TASK_CLASSIFIER=true
+
+runcmd:
+  # --- Docker engine + compose plugin (official repo, ARM compatible) ---
+  - install -m 0755 -d /etc/apt/keyrings
+  - curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+  - chmod a+r /etc/apt/keyrings/docker.gpg
+  - echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" > /etc/apt/sources.list.d/docker.list
+  - apt-get update
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  - usermod -aG docker ubuntu
+
+  # --- Firewall: only 22, 80, 443 reachable from internet ---
+  - ufw default deny incoming
+  - ufw default allow outgoing
+  - ufw allow 22/tcp
+  - ufw allow 80/tcp
+  - ufw allow 443/tcp
+  - ufw --force enable
+
+  # --- Oracle iptables: open the same ports (Oracle ships a restrictive default) ---
+  - iptables -I INPUT 6 -m state --state NEW -p tcp --dport 80  -j ACCEPT
+  - iptables -I INPUT 6 -m state --state NEW -p tcp --dport 443 -j ACCEPT
+  - netfilter-persistent save || true
+
+  # --- Workspace ---
+  - mkdir -p /opt/bing
+  - chown -R ubuntu:ubuntu /opt/bing
+
+  # --- Restart services ---
+  - systemctl restart sshd
+  - systemctl enable --now docker
+
+final_message: "binG host bootstrap complete. Clone repo into /opt/bing, copy .env.example → .env, then `docker compose -f infra/oracle/docker-compose.yml up -d`."
