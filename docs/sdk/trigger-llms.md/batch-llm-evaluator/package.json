@@ -18,13 +18,13 @@
     "@radix-ui/react-radio-group": "^1.2.1",
     "@radix-ui/react-scroll-area": "^1.2.1",
     "@radix-ui/react-slot": "^1.1.0",
-    "@trigger.dev/react-hooks": "^3.3.5",
-    "@trigger.dev/sdk": "^3.3.5",
+    "@trigger.dev/react-hooks": "^4.4.6",
+    "@trigger.dev/sdk": "^4.4.6",
     "ai": "^6.0.172",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^0.465.0",
-    "next": "16.2.3",
+    "next": "16.2.6",
     "prisma": "^6.0.1",
     "react": "19.0.0-rc-66855b96-20241106",
     "react-dom": "19.0.0-rc-66855b96-20241106",
@@ -39,6 +39,6 @@
     "postcss": "^8",
     "tailwindcss": "^3.4.1",
     "typescript": "^5",
-    "trigger.dev": "^3.3.5"
+    "trigger.dev": "^4.4.6"
   }
 }
