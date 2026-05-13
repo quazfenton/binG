@@ -1,0 +1,87 @@
+# docker-compose for Oracle ARM A1 (Always Free) host.
+# One VM, three containers, one Caddy fronting them with auto-TLS.
+#
+# Hostnames assumed (set DNS A records on the Oracle VM public IP):
+#   api.${DOMAIN}      → backend Hono orchestrator
+#   router.${DOMAIN}   → 9Router LLM gateway
+#
+# Bring up:
+#   cd /opt/bing && docker compose -f infra/oracle/docker-compose.yml up -d --build
+
+name: bing
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN:     ${DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL}
+    volumes:
+      - ./infra/oracle/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - backend
+      - ninerouter
+    networks: [edge]
+
+  backend:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    image: bing-backend:latest
+    restart: unless-stopped
+    expose:
+      - "3001"
+    env_file: .env
+    environment:
+      PORT: "3001"
+      NODE_ENV: production
+      # Backend talks to 9router on the internal docker network
+      NINEROUTER_BASE_URL: http://ninerouter:3000
+    depends_on:
+      - ninerouter
+    networks: [edge]
+
+  ninerouter:
+    build:
+      context: ./infra/oracle
+      dockerfile: 9router.Dockerfile
+    image: bing-9router:latest
+    restart: unless-stopped
+    expose:
+      - "3000"
+    environment:
+      PORT: "3000"
+      NODE_ENV: production
+      NINEROUTER_ADMIN_KEY: ${NINEROUTER_ADMIN_KEY}
+    volumes:
+      - ninerouter_data:/data
+    networks: [edge]
+
+  # Optional BullMQ worker pool — uncomment when the queue is wired in backend/
+  # worker:
+  #   build:
+  #     context: ..
+  #     dockerfile: infra/Dockerfile.worker
+  #   restart: unless-stopped
+  #   env_file: .env
+  #   environment:
+  #     SERVICE_NAME: worker
+  #   depends_on:
+  #     - backend
+  #   networks: [edge]
+
+volumes:
+  caddy_data:
+  caddy_config:
+  ninerouter_data:
+
+networks:
+  edge:
+    driver: bridge
