@@ -1687,7 +1687,7 @@ function createCapabilityToolExecutor(config: UnifiedAgentConfig) {
 
     const capabilityId = capabilityMap[name] || name;
 
-    if (hasToolCapability(capabilityId)) {
+    if (await hasToolCapability(capabilityId)) {
       log.debug('Executing tool via capability', { tool: name, capability: capabilityId });
       // FIX: Pass conversationId as sessionId for VFS session scoping
       // Also pass scopePath for proper VFS file operation scoping
@@ -2770,6 +2770,17 @@ async function runV1Orchestrated(
             originalOrchResponse: cleanedResponse.slice(0, 200) + (cleanedResponse.length > 200 ? '...' : ''),
             fallbackFrom: 'v1-agent-loop',
             fallbackReason: 'budget_exhausted',
+            ...(routingForClient ? { routing: routingForClient } : {}),
+            ...(roleSelectMeta ? { roleSelection: {
+              classification: roleSelectMeta.classification,
+              complexity: roleSelectMeta.complexity,
+              suggestedRole: roleSelectMeta.suggestedRole,
+              specializationRoute: roleSelectMeta.specializationRoute,
+              planSteps: roleSelectMeta.planSteps?.length || 0,
+              continue: roleSelectMeta.continue,
+              reviewTriggered: (config as any)._reviewTriggered || false,
+              reviewReason: (config as any)._reviewReason || undefined,
+            }} : {}),
           },
         };
       } catch (fbError: any) {
@@ -2788,6 +2799,17 @@ async function runV1Orchestrated(
                 budgetExhausted: true,
                 originalOrchResponse: cleanedResponse,
                 fallbackChain: ['v1-agent-loop', 'v1-api', chainResult.mode],
+...(routingForClient ? { routing: routingForClient } : {}),
+            ...(roleSelectMeta ? { roleSelection: {
+              classification: roleSelectMeta.classification,
+              complexity: roleSelectMeta.complexity,
+              suggestedRole: roleSelectMeta.suggestedRole,
+              specializationRoute: roleSelectMeta.specializationRoute,
+              planSteps: roleSelectMeta.planSteps?.length || 0,
+              continue: roleSelectMeta.continue,
+              reviewTriggered: (config as any)._reviewTriggered || false,
+              reviewReason: (config as any)._reviewReason || undefined,
+            }} : {}),
               },
             };
           }
@@ -2809,6 +2831,14 @@ async function runV1Orchestrated(
             budgetExhausted: true,
             fallbackFailed: true,
             originalOrchResponse: cleanedResponse.slice(0, 200) + (cleanedResponse.length > 200 ? '...' : ''),
+            ...(routingForClient ? { routing: routingForClient } : {}),
+            ...(roleSelectMeta ? { roleSelection: {
+              classification: roleSelectMeta.classification,
+              complexity: roleSelectMeta.complexity,
+              suggestedRole: roleSelectMeta.suggestedRole,
+              specializationRoute: roleSelectMeta.specializationRoute,
+              planSteps: roleSelectMeta.planSteps?.length || 0,
+            }} : {}),
           },
         };
       }

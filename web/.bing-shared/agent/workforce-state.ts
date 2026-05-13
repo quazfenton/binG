@@ -54,7 +54,13 @@ export async function loadState(userId: string, conversationId: string): Promise
     }
     return parsed;
   } catch (err: any) {
-    const isNotFound = err?.code === 'ENOENT' || err?.message?.includes('not found') || err?.message?.includes('ENOENT');
+    const errMsg = err?.message || '';
+    const isNotFound = err?.code === 'ENOENT' || 
+      errMsg.includes('ENOENT') || 
+      errMsg.includes('not found') || 
+      errMsg.includes('no such file') ||
+      errMsg.includes('file does not exist') ||
+      errMsg.includes('Path does not exist');
     if (isNotFound) {
       logger.debug('STATE.yaml not found, initializing new state');
       await saveState(userId, conversationId, DEFAULT_STATE);

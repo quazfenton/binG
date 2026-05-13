@@ -38,9 +38,9 @@ function getStorage(): Promise<StorageAdapter> {
       : import('./web').then(m => m.storage)
     ).catch(err => {
       importFailure = err;
-      storagePromise = null;
       importInProgress = false;
       console.error('[Storage] Storage adapter import failed:', err);
+      // Keep storagePromise cached as the rejected promise to avoid retry loop
       throw err;
     });
     

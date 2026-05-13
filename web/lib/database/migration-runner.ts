@@ -21,9 +21,23 @@ function stripTransactionStatements(sql: string): string {
   const withoutComments = sql
     .replace(/\/\*[\s\S]*?\*\//g, '')        // Strip /* multi-line */ comments
     .split('\n')
-    .filter(line => !/^\s*--/.test(line))   // Strip -- single-line comments
-    .map(line => line.replace(/--.*$/, ''))   // Strip inline and full-line -- comments
-    .filter(line => line.trim().length > 0)
+    .map(line => {
+      // Strip inline -- comments but preserve statement-ending semicolons
+      // This handles the edge case where "-- comment" appears without
+      // a preceding semicolon, which would otherwise merge statements
+      const commentIdx = line.indexOf('--');
+      if (commentIdx === -1) return line;
+      
+      const beforeComment = line.substring(0, commentIdx);
+      // Check if there's a semicolon BEFORE the comment (statement ended)
+      const hasTerminator = /;\s*$/.test(beforeComment);
+      const stripped = beforeComment.replace(/--.*$/, '');
+      
+      // Ensure statement ends with semicolon if it originally did
+      return hasTerminator ? stripped + ';' : stripped;
+    })
+    .filter(line => line.trim().length > 0 && !/^\s*--/.test(line)) // Filter empty and full-line comments
+    .map(line => line.replace(/--.*$/, '')) // Strip any remaining trailing comments
     .join('\n');
 
   return withoutComments

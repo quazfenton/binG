@@ -2054,9 +2054,9 @@ export class CapabilityRouter {
    * Check if any registered provider supports a given capability.
    * Used by execute-capability.ts hasToolCapability for routing decisions.
    */
-  hasCapability(capabilityId: string): boolean {
+  async hasCapability(capabilityId: string): Promise<boolean> {
     if (!this.initialized) {
-      this.initialize();
+      await this.initialize();
     }
     for (const provider of this.providers.values()) {
       if (provider.capabilities.includes(capabilityId)) {

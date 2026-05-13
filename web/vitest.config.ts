@@ -168,7 +168,14 @@ export default defineConfig({
     alias: {
       '@': path.resolve(__dirname, './'),
       '@/app': path.resolve(__dirname, './app'),
+      '@bing/platform': path.resolve(__dirname, '../packages/platform/src'),
       '@bing/platform/env': path.resolve(__dirname, '../packages/platform/src/env.ts'),
+      '@bing/platform/*': path.resolve(__dirname, '../packages/platform/src/*'),
+      '@bing/shared': path.resolve(__dirname, '../packages/shared'),
+      '@bing/shared/*': path.resolve(__dirname, '../packages/shared/*'),
+      '@bing/shared/agent': path.resolve(__dirname, '../packages/shared/agent'),
+      '@bing/shared/agent/*': path.resolve(__dirname, '../packages/shared/agent/*'),
+      '@bing/infra/*': path.resolve(__dirname, '../infra/*'),
     },
   },
 });

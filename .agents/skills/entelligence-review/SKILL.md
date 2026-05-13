@@ -20,11 +20,12 @@ Run `entelligence auth status` to check if authenticated.
 
 If NOT authenticated (output contains "Not authenticated"):
 
-1. Open the API key page: run `open "https://app.entelligence.ai/settings?tab=api"` (macOS) or `xdg-open "https://app.entelligence.ai/settings?tab=api"` (Linux)
-2. Ask the user: **"Paste your API key here:"**
-3. When the user pastes their key, run `entelligence auth login --token <THE_KEY>`
-4. Verify with `entelligence auth status`
-5. If successful, proceed to Step 3. If failed, ask them to try again.
+1. For security, prefer setting the API key as an environment variable instead of passing it as a command argument:
+   - Export: `export ENTELLIGENCE_API_KEY="<YOUR_KEY>"` (Linux/macOS) or `$env:ENTELLIGENCE_API_KEY="<YOUR_KEY>"` (Windows PowerShell)
+   - Or ask the user to set it themselves before running entelligence
+2. If the user insists on CLI argument, have them run `entelligence auth login --token <THE_KEY>` directly in their terminal (not via this agent)
+3. Verify with `entelligence auth status`
+4. If successful, proceed to Step 3. If failed, ask them to try again.
 
 If already authenticated, proceed to Step 3.
 
@@ -33,7 +34,8 @@ If already authenticated, proceed to Step 3.
 Analyze `$ARGUMENTS` to determine what to review:
 
 ### PR number (e.g. `42` or `#42`):
-1. Run `entelligence review --committed-only --prompt-only --base-branch main` (the current branch should have the PR changes)
+1. First determine the default branch: run `git symbolic-ref refs/remotes/origin/HEAD` or `git remote show origin | grep "default branch"` to get the actual default branch
+2. Run `entelligence review --committed-only --prompt-only --base-branch <DEFAULT_BRANCH>` (the current branch should have the PR changes)
 2. If the user is not on the PR branch, tell them to check it out first
 
 ### GitHub/GitLab PR URL:

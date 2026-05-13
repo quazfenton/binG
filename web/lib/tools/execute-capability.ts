@@ -176,7 +176,7 @@ export async function executeToolCapability(
 /**
  * Check if a capability is available
  */
-export function hasToolCapability(capabilityId: string): boolean {
+export async function hasToolCapability(capabilityId: string): Promise<boolean> {
   if (!routerInstance) return false;
   return routerInstance.hasCapability(capabilityId);
 }

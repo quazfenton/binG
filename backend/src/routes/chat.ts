@@ -6,7 +6,7 @@ import { responseRouter } from "@/lib/api/response-router";
 import { resolveRequestAuth } from "@/lib/auth/request-auth";
 import { resolveFilesystemOwner } from "@/lib/virtual-filesystem/resolve-filesystem-owner";
 import { detectRequestType } from "@/lib/utils/request-type-detector";
-import { generateSecureId } from '@/lib/virtual-filesystem/opfs/utils';
+import { generateSecureId } from '@/lib/utils/server-id';
 import { chatRequestLogger } from "@/lib/chat/chat-request-logger";
 import { chatLogger } from "@/lib/chat/chat-logger";
 import { setMetricsLogger } from '@/lib/observability/metrics';
@@ -18,7 +18,7 @@ import {
 } from "@/lib/virtual-filesystem/scope-utils";
 import { createNDJSONParser } from "@/lib/utils/ndjson-parser";
 import type { LLMMessage, StreamingResponse } from '@/lib/providers/llm-providers';
-import { checkRateLimit } from '@/lib/utils/rate-limiter';
+import { checkRateLimit } from '@/lib/middleware/rate-limiter';
 import { 
   createTaskClassifier as createTaskClassifierShared,
 } from "@bing/shared/agent";

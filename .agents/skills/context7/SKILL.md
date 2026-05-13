@@ -20,13 +20,23 @@ Pull current docs and code examples for any programming library directly into co
 
 ## How to Use
 
-The script is at `Skills/context7/scripts/context7.ts`. Run with `bun`.
+The script is at `.agents/skills/context7/scripts/context7.ts`. Run with `bun`.
 
 ### Commands
 
 **Search for a library:**
 ```bash
-bun Skills/context7/scripts/context7.ts search "<library-name>"
+bun .agents/skills/context7/scripts/context7.ts search "<library-name>"
+```
+
+**Fetch docs for a specific query:**
+```bash
+bun .agents/skills/context7/scripts/context7.ts docs <library-id> "<query>"
+```
+
+**One-shot lookup (search + fetch docs):**
+```bash
+bun .agents/skills/context7/scripts/context7.ts lookup "<library-name>" "<query>" --tokens 10000
 ```
 Returns matching libraries with their Context7 IDs, descriptions, snippet counts, and quality scores. Pick the best match by name relevance, reputation, and benchmark score.
 

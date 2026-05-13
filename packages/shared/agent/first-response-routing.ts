@@ -119,8 +119,25 @@ export function stripRoutingMarkers(responseText: string): string {
   }
 
   // 2. Fallback: Remove stand-alone markers and simple JSON blocks if balanced search failed
-  cleaned = cleaned.replace(/^###?\s*\[(?:ROUTING_METADATA|ROLE_SELECT)\]\s*```?json?\s*[\s\S]*?```?\s*/gm, '');
-  cleaned = cleaned.replace(/\[(?:ROUTING_METADATA|ROLE_SELECT)\][\s\S]*?}(?:\s*```)?/g, '');
+  // Use extractFirstJsonObject to robustly handle JSON instead of brittle regex
+  const legacyMatch = cleaned.match(/\[(?:ROUTING_METADATA|ROLE_SELECT)\]/);
+  if (legacyMatch && legacyMatch.index !== undefined) {
+    const jsonBlock = extractFirstJsonObject(cleaned.slice(legacyMatch.index));
+    if (jsonBlock) {
+      // Find the header if it exists
+      const beforeMarker = cleaned.slice(0, legacyMatch.index);
+      const headerRegex = /###?\s*$/;
+      const cleanedBefore = beforeMarker.replace(headerRegex, '');
+      
+      const afterJsonIndex = cleaned.indexOf(jsonBlock, legacyMatch.index) + jsonBlock.length;
+      let afterJson = cleaned.slice(afterJsonIndex);
+      
+      // Remove trailing code fences if present
+      afterJson = afterJson.replace(/^\s*```?\s*/, '');
+      
+      cleaned = cleanedBefore + afterJson;
+    }
+  }
 
   // 3. Remove ### Initial Response section
   cleaned = cleaned.replace(/^###?\s*Initial Response[\s\S]*?^---/gm, '');

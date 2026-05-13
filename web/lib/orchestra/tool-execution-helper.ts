@@ -77,7 +77,7 @@ export async function executeToolCapability(
 /**
  * Check if a capability is available
  */
-export function isCapabilityAvailable(capabilityName: string): boolean {
+export async function isCapabilityAvailable(capabilityName: string): Promise<boolean> {
   return hasToolCapability(capabilityName);
 }
 

@@ -799,9 +799,12 @@ function getDatabaseConstructor(): any {
 export function getDatabase(): any {
   // CRITICAL FIX: Always check globalThis FIRST - module variables may be reset
   // on HMR, serverless cold starts, or container restarts
+  // BUT also verify that initialization completed to avoid returning a partially initialized db
   const persistedDb = (globalThis as any).__binG_dbInstance;
-  if (persistedDb) {
+  const persistedInit = (globalThis as any).__binG_dbInitialized;
+  if (persistedDb && persistedInit) {
     db = persistedDb;
+    dbInitialized = true;
     return db;
   }
 
