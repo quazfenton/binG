@@ -186,6 +186,18 @@ export function analyzeContextAndSuggestRoles(
       contextMatch: 0.9,
     });
   }
+
+  // Simplification/explanation tasks
+  if (taskLower.includes('explain') || taskLower.includes('simplify') || taskLower.includes('summarize') || taskLower.includes('summary')) {
+    suggestions.push({
+      role: 'simplifier',
+      weight: 0.9,
+      reason: 'Task involves explanation, simplification, or summarization',
+      triggerCondition: 'simplification_task',
+      confidence: 0.85,
+      contextMatch: 0.9,
+    });
+  }
   
   // High complexity suggests orchestrator or architect
   if (complexity === 'high') {

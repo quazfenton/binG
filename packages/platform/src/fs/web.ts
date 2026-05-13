@@ -81,14 +81,20 @@ class WebFs implements FsAdapter {
     a.href = url;
     a.download = filename;
     document.body.appendChild(a);
+    
+    // Revoke URL after click event to ensure download starts
+    // Use setTimeout of 0 to allow event loop to process the click first
+    a.onclick = () => {
+      setTimeout(() => {
+        URL.revokeObjectURL(url);
+      }, 0);
+    };
+    
     a.click();
     document.body.removeChild(a);
-    // Defer URL revocation to reduce risk of premature revocation before download starts
-    // Fixed 1000ms timeout is a compromise between reliability and memory management
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
-  openFileDialog(options?: { accept?: string; multiple?: boolean }): Promise<File[]> {
+  openFileDialog(options?: { accept?: string; multiple?: boolean }): Promise<string[]> {
     return new Promise((resolve) => {
       const input = document.createElement('input');
       input.type = 'file';
@@ -102,7 +108,10 @@ class WebFs implements FsAdapter {
         clearTimeout(timeoutId);
         window.removeEventListener('focus', onWindowFocus);
         input.remove();
-        resolve(files || []);
+        // Return dummy strings for File array since web mode openFileDialog isn't supported for returning paths
+        // MED-6 type fix: return names instead of File objects to match interface, though real usage
+        // shouldn't depend on these being resolvable paths in web mode
+        resolve(files ? files.map(f => f.name) : []);
       };
 
       const timeoutId = setTimeout(() => {

@@ -23,18 +23,12 @@ const APP_DATA_DIR = 'storage';
  * Handles Unicode characters correctly by encoding to UTF-8 first.
  */
 function base64urlEncode(str: string): string {
-  // Convert string to UTF-8 byte array for proper Unicode handling
-  const utf8 = new TextEncoder().encode(str);
-  let base64: string;
-  
-  if (typeof btoa === 'undefined') {
-    // Fallback for older Node.js versions without global btoa
-    base64 = Buffer.from(utf8).toString('base64');
-  } else {
-    // Standard btoa-based base64url encoding
-    // Convert Uint8Array to string for btoa
-    base64 = btoa(String.fromCharCode(...utf8));
-  }
+  // Use btoa/atob with manual character replacement, avoids Buffer dependency
+  // Convert UTF-8 characters properly
+  const utf8 = encodeURIComponent(str).replace(/%([0-9A-F]{2})/g, (match, p1) => {
+    return String.fromCharCode(parseInt(p1, 16));
+  });
+  const base64 = btoa(utf8);
   
   return base64
     .replace(/\+/g, '-')

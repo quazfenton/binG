@@ -287,6 +287,16 @@ export function useIframeLoader({
       // Trigger fallback if enabled on timeout during manual reload
       if (enableFallbackRef.current && fallbackAttemptRef.current < 2) {
         handleFallback();
+      } else if (!isFailedRef.current && isLoadingRef.current) {
+        // Fallback disabled or exhausted - transition to failed state
+        const reason: IframeFailureReason = 'timeout';
+        const errorMsg = fallbackAttemptRef.current >= 2 
+          ? 'Connection timed out after multiple fallback attempts'
+          : 'Connection timed out';
+        setIsFailed(true);
+        setFailureReason(reason);
+        setErrorMessage(errorMsg);
+        setIsLoading(false);
       }
     }, timeoutValueRef.current);
 

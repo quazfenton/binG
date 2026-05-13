@@ -198,7 +198,9 @@ class VoiceService {
   async disconnectFromLivekit() { if (this.room) { await this.room.disconnect(); this.room = null; this.isConnected = false; } }
 
   private async speakWithProvider(text: string, provider: TTSProvider, options: VoiceSettings): Promise<void> {
-    console.log(`[VoiceService] Synthesis started | Provider: ${provider} | Text: "${text.substring(0, 50)}${text.length > 50 ? '...' : ''}"`);
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(`[VoiceService] Synthesis started | Provider: ${provider} | Text: "${text.substring(0, 50)}${text.length > 50 ? '...' : ''}"`);
+    }
     switch (provider) {
       case 'web': return this.speakWeb(text, options);
       case 'kittentts': return this.speakKitten(text, options);

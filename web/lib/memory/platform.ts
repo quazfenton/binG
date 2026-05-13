@@ -90,10 +90,51 @@ export async function watchDirectory(
     return () => {};
   }
 
-// @ts-ignore - Tauri API only available in desktop builds
+  // @ts-ignore - Tauri API only available in desktop builds
   const { appWindow } = await import(/* webpackIgnore: true */ "@tauri-apps/api/window");
   // @ts-ignore - Tauri API only available in desktop builds
   const { invoke } = await import(/* webpackIgnore: true */ "@tauri-apps/api/tauri");
+
+  // Start the Rust watcher
+  await invoke("watch_directory", { path });
+
+  // Listen for events emitted by Rust
+  const unlisten = await appWindow.listen<FileChangeEvent>(
+    "file-change",
+    (event) => onChange(event.payload)
+  );
+
+  return () => unlisten();
+}
+
+// ─── Grep (fast file search) ──────────────────────────────────────────────────
+
+export interface GrepMatch {
+  filePath: string;
+  line: number;
+  matchLine: string;
+  contextBefore: string[];
+  contextAfter: string[];
+}
+
+/**
+ * Search files for a string query.
+ * Desktop: Rust/walkdir (fast).
+ * Web: JS in-memory search over provided files.
+ */
+export async function grepFiles(
+  query: string,
+  opts: {
+    rootPath?: string; // desktop
+    files?: Array<{ path: string; content: string }>; // web
+    contextLines?: number;
+  }
+): Promise<GrepMatch[]> {
+  const contextLines = opts.contextLines ?? 2;
+
+  if (isDesktop && opts.rootPath) {
+    // @ts-ignore - Tauri API only available in desktop builds
+    const { invoke } = await import(/* webpackIgnore: true */ "@tauri-apps/api/tauri");
     // @ts-ignore - Tauri invoke is dynamically typed
     return invoke<GrepMatch[]>("grep_search", {
       root: opts.rootPath,
@@ -108,14 +149,18 @@ export async function watchDirectory(
 
   for (const file of opts.files) {
     const lines = file.content.split("\n");
+    const lowerQuery = query.toLowerCase();
+
     for (let i = 0; i < lines.length; i++) {
-      if (lines[i].toLowerCase().includes(query.toLowerCase())) {
+      if (lines[i].toLowerCase().includes(lowerQuery)) {
+        const start = Math.max(0, i - contextLines);
+        const end = Math.min(lines.length - 1, i + contextLines);
         results.push({
           filePath: file.path,
           line: i + 1,
           matchLine: lines[i],
-          contextBefore: lines.slice(Math.max(0, i - contextLines), i),
-          contextAfter: lines.slice(i + 1, i + 1 + contextLines),
+          contextBefore: lines.slice(start, i),
+          contextAfter: lines.slice(i + 1, end + 1),
         });
       }
     }
