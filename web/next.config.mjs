@@ -137,6 +137,8 @@ const nextConfig = {
     DESKTOP_LOCAL_EXECUTION: process.env.DESKTOP_LOCAL_EXECUTION,
   },
   serverExternalPackages: [
+    'react',
+    'react-dom',
     'livekit-server-sdk',
     '@anthropic-ai/sdk',
     'openai',
