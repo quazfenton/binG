@@ -1,7 +1,6 @@
 // src/oauth-handler.ts
 
 import axios from 'axios';
-import open from 'open';
 import http from 'http';
 import url from 'url';
 import readline from 'readline';
@@ -71,6 +70,7 @@ async function initiateOauthFlow(provider: string, authorizationUrl: string): Pr
   });
 
   try {
+    const { default: open } = await import('open');
     await open(authorizationUrl);
   } catch (err: any) {
     console.log(COLORS.info(`Please navigate to: ${authorizationUrl}`));

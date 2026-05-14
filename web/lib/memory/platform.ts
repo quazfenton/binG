@@ -91,23 +91,33 @@ export async function watchDirectory(
   }
 
   // @ts-ignore - Tauri API only available in desktop builds
-  const { appWindow } = await import(/* webpackIgnore: true */ "@tauri-apps/api/window");
-  // @ts-ignore - Tauri API only available in desktop builds
   const { invoke } = await import(/* webpackIgnore: true */ "@tauri-apps/api/tauri");
+  // @ts-ignore - Tauri API only available in desktop builds
+  const { listen } = await import(/* webpackIgnore: true */ "@tauri-apps/api/event");
+
+  const watchId = `watch-${Math.random().toString(36).substring(7)}`;
 
   // Start the Rust watcher
-  await invoke("watch_directory", { path });
+  await invoke("start_file_watcher", { watchId, watchPath: path });
 
   // Listen for events emitted by Rust
-  const unlisten = await appWindow.listen<FileChangeEvent>(
-    "file-change",
-    (event) => onChange(event.payload)
-  );
+  const unlisten = await listen<any>("fs-watch-event", (event) => {
+    if (event.payload.watchId === watchId) {
+      const type: FileChangeEvent["type"] =
+        event.payload.changeType === "delete" ? "deleted" :
+        event.payload.changeType === "create" ? "created" :
+        "modified";
+      onChange({ type, path: event.payload.path });
+    }
+  });
 
-  return () => unlisten();
+  return async () => {
+    unlisten();
+    await invoke("stop_file_watcher", { watchId });
+  };
 }
 
-// ─── Grep (fast file search) ──────────────────────────────────────────────────
+// ─── Grep Search ──────────────────────────────────────────────────────────────
 
 export interface GrepMatch {
   filePath: string;
@@ -117,32 +127,20 @@ export interface GrepMatch {
   contextAfter: string[];
 }
 
+export interface GrepOptions {
+  files: FileEntry[];
+  rootPath?: string;
+}
+
 /**
- * Search files for a string query.
- * Desktop: Rust/walkdir (fast).
- * Web: JS in-memory search over provided files.
+ * Search file contents for a query string (case-insensitive).
+ * Works on both desktop and web.
  */
-export async function grepFiles(
+export function grepFiles(
   query: string,
-  opts: {
-    rootPath?: string; // desktop
-    files?: Array<{ path: string; content: string }>; // web
-    contextLines?: number;
-  }
-): Promise<GrepMatch[]> {
-  const contextLines = opts.contextLines ?? 2;
-
-  if (isDesktop && opts.rootPath) {
-    // @ts-ignore - Tauri API only available in desktop builds
-    const { invoke } = await import(/* webpackIgnore: true */ "@tauri-apps/api/tauri");
-    // @ts-ignore - Tauri invoke is dynamically typed
-    return invoke<GrepMatch[]>("grep_search", {
-      root: opts.rootPath,
-      query,
-      contextLines,
-    });
-  }
-
+  opts: GrepOptions,
+  contextLines = 2
+): GrepMatch[] {
   if (!opts.files) return [];
 
   const results: GrepMatch[] = [];

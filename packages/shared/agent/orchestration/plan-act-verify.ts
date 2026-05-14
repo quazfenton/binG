@@ -415,7 +415,7 @@ export class PlanActVerifyOrchestrator {
 
           // Persist redacted invocation payload for later aggregation and analysis
           try {
-            import('../../../../web/lib/tools/tool-call-tracker').then(({ toolCallTracker }) => {
+            import('@/lib/tools/tool-call-tracker').then(({ toolCallTracker }) => {
               toolCallTracker.recordInvocationPayload({
                 timestamp: Date.now(),
                 model: this.validatedConfig.model,

@@ -325,9 +325,8 @@ export class BootstrappedAgency {
 
         // Try to use the real capability router if available
         try {
-          // Use relative path — the @/ alias only works in web/ directory
-          // packages/shared/agent → web/lib/tools/router
-          const { getCapabilityRouter } = await import('../../../web/lib/tools/router');
+          // @/ alias works from .bing-shared (inside web/)
+          const { getCapabilityRouter } = await import('@/lib/tools/router');
           const router = getCapabilityRouter();
           // ?? fallback: userId -> sessionId -> anonymous; warn if identity is unknown
           const effectiveUserId = this.config.userId ?? this.config.sessionId ?? 'anonymous'

@@ -1,21 +1,29 @@
 #!/usr/bin/env bash
 # Vercel build wrapper for binG web
 #
-# Next.js 16 Turbopack has a known bug where /_global-error prerendering
-# crashes with `TypeError: Cannot read properties of null (reading 'useContext')`.
-# This happens even with a clean global-error.tsx (no hooks, no providers).
-# Neither force-dynamic, deleting the file, nor upgrading to canary fixes it.
+# Next.js 16 Turbopack crashes during "Generating static pages" on
+# /_global-error with: TypeError: Cannot read properties of null
+# (reading 'useContext'). This is a known Turbopack bug.
 #
-# Strategy: let Next.js crash, then manually supply the missing static page
-# output that Vercel needs. The rest of the build IS complete — only the
-# staticly-prerendered /_global-error.html is missing from the output.
+# The server bundle IS fully compiled before static generation begins.
+# Since the root layout has force-dynamic, we don't need static HTML
+# snapshots. The crash only prevents BUILD_ID and a few static HTML
+# files from being written — the server bundle is complete.
 #
-# We create a minimal fallback HTML page and the required metadata files.
-# Then we verify the overall output looks sane before exiting 0.
-
+# Strategy:
+#   1. Run 'next build' and capture exit code + stderr
+#   2. If success (exit 0) → deploy as-is
+#   3. If the known Turbopack error → verify server bundle is intact,
+#      create missing BUILD_ID, exit 0
+#   4. Any other error → fail the build
+#
 set -o pipefail
 
-NODE_OPTIONS="--max-old-space-size=4096" npx next build 2>/tmp/next-build-stderr.log
+OUTDIR=".next"
+STDERR_LOG="/tmp/next-build-stderr.log"
+
+# ── Run the build ─────────────────────────────────────────────────────
+NODE_OPTIONS="--max-old-space-size=4096" npx next build 2>"$STDERR_LOG"
 BUILD_EXIT=$?
 
 # ── Success path ──────────────────────────────────────────────────────
@@ -25,43 +33,76 @@ if [ $BUILD_EXIT -eq 0 ]; then
 fi
 
 # ── Check if this is the known Turbopack /_global-error crash ─────────
-if ! grep -qE "useContext.*null|Cannot read properties of null.*useContext" /tmp/next-build-stderr.log 2>/dev/null; then
-  echo "✗ Build failed with exit code $BUILD_EXIT (not the known Turbopack bug)"
-  echo "Last 50 lines of stderr:"
-  tail -50 /tmp/next-build-stderr.log
+if ! grep -qE "(useContext|Cannot read properties of null).*(null|useContext)" "$STDERR_LOG" 2>/dev/null; then
+  echo "✗ Build failed with exit code $BUILD_EXIT (unexpected error)"
+  echo "Last 60 lines of stderr:"
+  tail -60 "$STDERR_LOG"
   exit $BUILD_EXIT
 fi
 
-# ── Known crash: patch the missing global-error output ────────────────
 echo ""
-echo "⚠  Known Next.js 16 Turbopack issue: /_global-error prerender crashed."
-echo "   The rest of the build IS complete. Patching missing static output..."
+echo "⚠  Known Next.js 16 Turbopack bug: /_global-error prerender crashed."
+echo "   Server bundle is already compiled. Verifying output integrity..."
 
-OUTDIR=".next"
+# ── Verify critical build artifacts exist ─────────────────────────────
+MISSING=""
 
-# Verify the core build output exists before patching
-if [ ! -f "$OUTDIR/server/app/page.js" ] && [ ! -f "$OUTDIR/server/pages/index.html" ] && [ ! -f "$OUTDIR/server/app/index.html" ]; then
-  # Check for any server entry point
-  if ! ls "$OUTDIR/server/app/"*.js >/dev/null 2>&1 && ! ls "$OUTDIR/server/pages/"*.html >/dev/null 2>&1; then
-    echo "✗ Build output is empty — not a pre-existing global-error crash. Failing."
-    tail -50 /tmp/next-build-stderr.log
-    exit 1
+# Check for the main app server entry. The route group (main) produces
+# .next/server/app/(main)/page.js
+if [ ! -f "$OUTDIR/server/app/(main)/page.js" ] && [ ! -f "$OUTDIR/server/app/page.js" ]; then
+  # Try to find ANY page.js in the server output
+  PAGE_JS=$(find "$OUTDIR/server/app" -name "page.js" 2>/dev/null | head -1)
+  if [ -z "$PAGE_JS" ]; then
+    MISSING="$MISSING  - No server page entry found (no page.js in server/app)\n"
+  else
+    echo "   Found page entry: $PAGE_JS"
   fi
+else
+  echo "   Server page entry exists."
 fi
 
-# Check for at least some static pages
-PAGE_COUNT=$(find "$OUTDIR/server/app" -name "*.html" 2>/dev/null | wc -l)
-if [ "$PAGE_COUNT" -eq 0 ]; then
-  PAGE_COUNT=$(find "$OUTDIR/server/pages" -name "*.html" 2>/dev/null | wc -l)
+# Check for compiled chunks (proves Turbopack compilation succeeded)
+CHUNK_COUNT=$(find "$OUTDIR/server/chunks" -name "*.js" 2>/dev/null | wc -l)
+if [ "$CHUNK_COUNT" -lt 10 ]; then
+  MISSING="$MISSING  - Too few server chunks ($CHUNK_COUNT) — build likely incomplete\n"
+else
+  echo "   Server chunks found: $CHUNK_COUNT"
 fi
-echo "   Found $PAGE_COUNT static pages in build output."
 
-if [ "$PAGE_COUNT" -lt 5 ]; then
-  echo "✗ Too few static pages ($PAGE_COUNT) — build likely incomplete. Failing."
-  tail -50 /tmp/next-build-stderr.log
+# Check static assets (CSS, JS bundles for client)
+if [ ! -d "$OUTDIR/static" ]; then
+  MISSING="$MISSING  - No static/ directory — client assets missing\n"
+else
+  echo "   Static assets directory exists."
+fi
+
+# Check routes manifest (needed for Vercel routing)
+if [ ! -f "$OUTDIR/routes-manifest.json" ]; then
+  MISSING="$MISSING  - No routes-manifest.json — routing will be broken\n"
+else
+  echo "   Routes manifest exists."
+fi
+
+if [ -n "$MISSING" ]; then
+  echo ""
+  echo "✗ Build output is INCOMPLETE. Cannot proceed with deployment."
+  echo "Missing:"
+  printf "%b" "$MISSING"
+  echo ""
+  echo "Last 60 lines of stderr:"
+  tail -60 "$STDERR_LOG"
   exit 1
 fi
 
-echo "   Build output is intact. Deployment will proceed."
+# ── Create BUILD_ID if missing (Next.js writes it after static generation) ─
+if [ ! -f "$OUTDIR/BUILD_ID" ]; then
+  BUILD_ID_VALUE="${VERCEL_GIT_COMMIT_SHA:-deploy-$(date +%s)}"
+  echo "$BUILD_ID_VALUE" > "$OUTDIR/BUILD_ID"
+  echo "   Created BUILD_ID: $BUILD_ID_VALUE"
+fi
+
+echo ""
+echo "✓ Server bundle verified — deployment will proceed."
+echo "   (/_global-error static page skipped due to Turbopack bug)"
 echo ""
 exit 0
