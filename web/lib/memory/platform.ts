@@ -133,14 +133,26 @@ export interface GrepOptions {
 }
 
 /**
- * Search file contents for a query string (case-insensitive).
- * Works on both desktop and web.
+ * Search files for a string query.
+ * Desktop: Rust/ripgrep (fast).
+ * Web: JS in-memory search over provided files.
  */
-export function grepFiles(
+export async function grepFiles(
   query: string,
   opts: GrepOptions,
   contextLines = 2
-): GrepMatch[] {
+): Promise<GrepMatch[]> {
+  if (isDesktop && opts.rootPath) {
+    // @ts-ignore - Tauri API only available in desktop builds
+    const { invoke } = await import(/* webpackIgnore: true */ "@tauri-apps/api/tauri");
+    // @ts-ignore - Tauri invoke is dynamically typed
+    return invoke<GrepMatch[]>("grep_search", {
+      root: opts.rootPath,
+      query,
+      contextLines,
+    });
+  }
+
   if (!opts.files) return [];
 
   const results: GrepMatch[] = [];

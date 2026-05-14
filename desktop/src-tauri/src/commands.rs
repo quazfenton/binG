@@ -1312,15 +1312,86 @@ pub async fn stop_file_watcher(
 
 
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct GrepMatch {
+    pub file_path: String,
+    pub line: usize,
+    pub match_line: String,
+    pub context_before: Vec<String>,
+    pub context_after: Vec<String>,
+}
+
 #[tauri::command]
-pub async fn get_system_info() -> Result<SystemInfo, String> {
-    Ok(SystemInfo {
-        os: std::env::consts::OS.to_string(),
-        arch: std::env::consts::ARCH.to_string(),
-        hostname: hostname::get()
-            .map(|h| h.to_string_lossy().to_string())
-            .unwrap_or_else(|_| "unknown".to_string()),
-    })
+pub async fn grep_search(
+    root: String,
+    query: String,
+    context_lines: Option<usize>,
+) -> Result<Vec<GrepMatch>, String> {
+    use std::process::Command;
+
+    // Resolve workspace path
+    let root_path = validate_workspace_path(&root)?;
+    let root_str = root_path.to_string_lossy();
+
+    // 1. Locate rg binary (simple lookup based on current platform)
+    let binary_name = if cfg!(target_os = "windows") { "rg.exe" } else { "rg" };
+    // This is a simplified lookup, assuming rg is in the PATH or we can find it
+    // In a real production app, we would use the same logic as binG/web/lib/search/ripgrep.ts
+    
+    // For now, assume it's in the PATH or at a known location
+    let rg_path = "rg"; 
+
+    let mut args = vec![
+        "--json",
+        "--line-number",
+        "--column",
+        "--no-heading",
+        "--color=never",
+        &query,
+        &root_str,
+    ];
+
+    if let Some(ctx) = context_lines {
+        args.push(&format!("-C{}", ctx));
+    }
+
+    let output = Command::new(rg_path)
+        .args(&args)
+        .output()
+        .map_err(|e| format!("Failed to run rg: {}", e))?;
+
+    if !output.status.success() {
+        // rg exits with 1 if no results found, which is not an error
+        if output.status.code() == Some(1) {
+            return Ok(Vec::new());
+        }
+        return Err(format!("rg failed: {}", String::from_utf8_lossy(&output.stderr)));
+    }
+
+    // 2. Parse JSON output
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut matches = Vec::new();
+
+    for line in stdout.lines() {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(line) {
+            if value["type"] == "match" {
+                let data = &value["data"];
+                let path = data["path"]["text"].as_str().unwrap_or("").to_string();
+                let line_num = data["line_number"].as_u64().unwrap_or(0) as usize;
+                let match_line = data["lines"]["text"].as_str().unwrap_or("").trim().to_string();
+                
+                matches.push(GrepMatch {
+                    file_path: path,
+                    line: line_num,
+                    match_line,
+                    context_before: Vec::new(), // ripgrep JSON output requires more complex handling for context
+                    context_after: Vec::new(),
+                });
+            }
+        }
+    }
+
+    Ok(matches)
 }
 
 // ---------------------------------------------------------------------------

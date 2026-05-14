@@ -35,6 +35,7 @@ fn register_invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Syn
         commands::list_directory,
         commands::execute_command,
         commands::get_system_info,
+        commands::grep_search,
         // PTY terminal operations
         commands::create_pty_session,
         commands::write_pty_input,
