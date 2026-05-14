@@ -97,7 +97,7 @@ const nextConfig = {
       'date-fns',
       'lodash',
     ],
-    // Fix corrupted http-errors@2.0.1 package (empty exports:{}, missing lib/)
+    // Fix corrupted http-errors@2.0.1 package (empty exports:{}, missing lib/statuses)
     // Turbopack uses this to resolve the package to its working CJS entry
     turbopackResolveAlias: {
       'http-errors': resolve(projectRoot, 'node_modules/http-errors/index.js'),
@@ -118,7 +118,7 @@ const nextConfig = {
 
   // Skip generating the _error page for standalone builds
   // This prevents the _global-error prerender issue
-  generateBuildId: () => `desktop-build-${Date.now()}`,
+  generateBuildId: () => `build-${Date.now()}`,
 
   env: {
     DEFAULT_LLM_PROVIDER: process.env.DEFAULT_LLM_PROVIDER,
