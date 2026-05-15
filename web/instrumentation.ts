@@ -11,18 +11,16 @@ export const runtime = 'nodejs';
 
 /**
  * Initialize server resources
- * Uses dynamic require to avoid Edge Runtime analysis
+ * Uses dynamic import with bundler-resolved paths (@/ alias)
  */
 export async function register() {
   if (process.env.NEXT_RUNTIME === 'nodejs') {
-    /*
     try {
-      // Use require instead of import to avoid Edge Runtime analysis
-      const { initializeServer } = require('./lib/server-init');
-      await initializeServer();
+      // Use dynamic import() so the Next.js bundler resolves the @/ alias
+      const mod = await import('@/lib/backend/server-init');
+      await mod.initializeServer();
     } catch (error) {
       console.error('[Instrumentation] Failed to initialize server:', error);
     }
-    */
   }
 }
