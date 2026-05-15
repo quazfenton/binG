@@ -22,7 +22,15 @@ set -o pipefail
 OUTDIR=".next"
 STDERR_LOG="/tmp/next-build-stderr.log"
 
-# ── Run the build ─────────────────────────────────────────────────────
+# ── Step 1: Sync vendored monorepo packages ───────────────────────────
+# Copies packages/shared and packages/platform into web/.bing-*
+# so TypeScript path aliases (@bing/shared, @bing/platform) resolve.
+echo "Syncing vendored monorepo packages..."
+node scripts/sync-vendored-packages.mjs 2>&1 || {
+  echo "⚠  Vendored package sync failed — continuing anyway (build may fail)"
+}
+
+# ── Step 2: Run the build ─────────────────────────────────────────────
 NODE_OPTIONS="--max-old-space-size=4096" npx next build 2>"$STDERR_LOG"
 BUILD_EXIT=$?
 
