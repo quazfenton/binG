@@ -433,7 +433,7 @@ export const REPO_SEARCH_CAPABILITY: CapabilityDefinition = {
     score: z.number().optional(),
     type: z.enum(['file', 'function', 'class', 'text']),
   })),
-  providerPriority: ['blaxel', 'ripgrep', 'embedding-search', 'local-fs'],
+  providerPriority: ['ripgrep', 'blaxel', 'embedding-search', 'local-fs'],
   tags: ['repo', 'search', 'grep', 'semantic', 'code-search'],
 };
 

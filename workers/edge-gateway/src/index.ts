@@ -1,0 +1,170 @@
+/**
+ * binG Edge Gateway — Cloudflare Worker
+ *
+ * Sits in front of the Vercel frontend and OCI backend:
+ * 1. Rate-limits anonymous requests via KV
+ * 2. Authenticates JWT tokens at the edge
+ * 3. Routes /api/* to OCI backend, /* to Vercel frontend
+ * 4. Proxies requests and returns responses with correct headers
+ */
+import { authenticateRequest } from './auth';
+import { checkIpRateLimit } from './rate-limiter';
+import { routeRequest } from './router';
+import { handleFileRequest } from './r2-storage';
+import type { Env } from './env';
+
+// CORS headers applied to all responses
+const CORS_HEADERS: Record<string, string> = {
+  'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With, X-Auth-Token, X-CSRF-Token',
+  'Access-Control-Expose-Headers': 'X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset',
+  'Access-Control-Max-Age': '86400',
+};
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const url = new URL(request.url);
+
+    // ─── Health Check ────────────────────────────────────────────────
+    if (url.pathname === '/health' || url.pathname === '/api/health') {
+      return new Response(JSON.stringify({
+        status: 'healthy',
+        service: 'bing-edge-gateway',
+        timestamp: new Date().toISOString(),
+      }), {
+        headers: {
+          'Content-Type': 'application/json',
+          ...getCorsHeaders(request, env),
+        },
+      });
+    }
+
+    // ─── CORS Preflight ──────────────────────────────────────────────
+    if (request.method === 'OPTIONS') {
+      return new Response(null, {
+        status: 204,
+        headers: getCorsHeaders(request, env),
+      });
+    }
+
+    // ─── Rate Limiting (by IP) ───────────────────────────────────────
+    const rateLimit = await checkIpRateLimit(env.BING_KV, request);
+    if (!rateLimit.allowed) {
+      return new Response(JSON.stringify({
+        error: 'Too many requests',
+        retryAfter: rateLimit.retryAfter,
+      }), {
+        status: 429,
+        headers: {
+          'Content-Type': 'application/json',
+          'Retry-After': String(rateLimit.retryAfter),
+          'X-RateLimit-Limit': '100',
+          'X-RateLimit-Remaining': '0',
+          'X-RateLimit-Reset': String(Math.ceil(Date.now() / 1000) + rateLimit.retryAfter),
+          ...getCorsHeaders(request, env),
+        },
+      });
+    }
+
+    // ─── Authentication ──────────────────────────────────────────────
+    const auth = await authenticateRequest(request, env.JWT_SECRET);
+    // Pass auth info to backend via headers (even if unauthenticated)
+    const proxiedRequest = addAuthHeaders(request, auth);
+
+    // ─── File Storage (R2) — handled at edge ────────────────────────
+    if (url.pathname.startsWith('/api/files/')) {
+      return await handleFileRequest(request, env, url.pathname, auth.userId);
+    }
+
+    // ─── Route Request ───────────────────────────────────────────────
+    const target = routeRequest(request, env);
+    if (!target) {
+      return new Response('Not Found', { status: 404 });
+    }
+
+    // ─── Proxy to Target ─────────────────────────────────────────────
+    try {
+      const proxyHeaders = new Headers(proxiedRequest.headers);
+
+      // Remove hop-by-hop headers
+      for (const h of ['transfer-encoding', 'connection', 'keep-alive', 'upgrade']) {
+        proxyHeaders.delete(h);
+      }
+
+      // Set forwarded headers
+      proxyHeaders.set('X-Forwarded-For', request.headers.get('cf-connecting-ip') ?? url.hostname);
+      proxyHeaders.set('X-Forwarded-Proto', url.protocol.replace(':', ''));
+      proxyHeaders.set('X-Forwarded-Host', url.hostname);
+
+      const proxyResponse = await fetch(target.url, {
+        method: request.method,
+        headers: proxyHeaders,
+        body: request.method !== 'GET' && request.method !== 'HEAD' ? request.body : undefined,
+        signal: AbortSignal.timeout(25000),
+      });
+
+      // ─── Build Response ────────────────────────────────────────────
+      const responseHeaders = new Headers(proxyResponse.headers);
+
+      // Apply CORS headers
+      const cors = getCorsHeaders(request, env);
+      for (const [key, value] of Object.entries(cors)) {
+        responseHeaders.set(key, value);
+      }
+
+      // Add rate limit headers
+      responseHeaders.set('X-RateLimit-Limit', '100');
+      responseHeaders.set('X-RateLimit-Remaining', String(rateLimit.remaining));
+
+      // Apply cache TTL if specified
+      if (target.ttl && target.ttl > 0) {
+        responseHeaders.set('Cache-Control', `public, max-age=${target.ttl}, s-maxage=${target.ttl}`);
+      }
+
+      return new Response(proxyResponse.body, {
+        status: proxyResponse.status,
+        statusText: proxyResponse.statusText,
+        headers: responseHeaders,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      return new Response(JSON.stringify({
+        error: 'Backend unavailable',
+        detail: message,
+      }), {
+        status: 502,
+        headers: {
+          'Content-Type': 'application/json',
+          ...getCorsHeaders(request, env),
+        },
+      });
+    }
+  },
+} satisfies ExportedHandler<Env>;
+
+// ─── Helpers ──────────────────────────────────────────────────────────
+
+function getCorsHeaders(request: Request, env: Env): Record<string, string> {
+  const origin = request.headers.get('Origin');
+  const allowed = env.ALLOWED_ORIGINS?.split(',').map(s => s.trim()) ?? [];
+
+  let allowOrigin: string;
+  if (origin && (allowed.includes('*') || allowed.includes(origin) || origin === env.FRONTEND_URL)) {
+    allowOrigin = origin;
+  } else {
+    allowOrigin = env.FRONTEND_URL;
+  }
+
+  return {
+    ...CORS_HEADERS,
+    'Access-Control-Allow-Origin': allowOrigin,
+    'Vary': 'Origin',
+  };
+}
+
+function addAuthHeaders(request: Request, auth: { authenticated: boolean; userId: string | null }): Request {
+  const headers = new Headers(request.headers);
+  headers.set('X-User-Id', auth.userId ?? 'anonymous');
+  headers.set('X-User-Authenticated', String(auth.authenticated));
+  return new Request(request, { headers });
+}

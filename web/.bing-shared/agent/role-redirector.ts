@@ -9,11 +9,15 @@
  * - Routing options generation
  * - Tool call redirect suggestions
  * - Multi-role orchestration support
+ * 
+ * Maintainability:
+ * - Roles can be dynamically registered via registerRole()
+ * - Role tool weights can be extended via registerToolWeights()
  */
 
 import type { RoleRedirect } from './feedback-injection';
 
-export const REDIRECTABLE_ROLES = [
+const _REDIRECTABLE_ROLES = new Set([
   'coder',
   'reviewer',
   'planner',
@@ -23,7 +27,36 @@ export const REDIRECTABLE_ROLES = [
   'specialist',
   'orchestrator',
   'simplifier'
-] as const;
+]);
+
+/**
+ * Get the current list of redirectable roles
+ */
+export function getRedirectableRoles(): readonly string[] {
+  return Array.from(_REDIRECTABLE_ROLES) as readonly string[];
+}
+
+/**
+ * Register a new role dynamically
+ */
+export function registerRole(role: string): void {
+  if (!role || typeof role !== 'string') {
+    console.warn('[role-redirector] Invalid role registration:', role);
+    return;
+  }
+  _REDIRECTABLE_ROLES.add(role);
+  console.log('[role-redirector] Registered role:', role);
+}
+
+/**
+ * Check if a role is registered
+ */
+export function isRoleRegistered(role: string): boolean {
+  return _REDIRECTABLE_ROLES.has(role);
+}
+
+// Backwards compatibility: export the original array for type inference
+export const REDIRECTABLE_ROLES = getRedirectableRoles();
 
 export type Role = typeof REDIRECTABLE_ROLES[number];
 
@@ -429,6 +462,77 @@ export interface ToolSuggestion {
 /**
  * Generate tool suggestions based on role and context
  */
+// Default tool weights - can be extended via registerToolWeights()
+const _defaultToolWeights: Record<string, Record<string, number>> = {
+  coder: {
+    'write_file': 0.9,
+    'read_file': 0.8,
+    'execute_bash': 0.7,
+    'search_files': 0.6,
+  },
+  reviewer: {
+    'read_file': 0.9,
+    'search_files': 0.8,
+    'execute_bash': 0.5,
+  },
+  planner: {
+    'search_files': 0.8,
+    'read_file': 0.7,
+    'list_directory': 0.6,
+  },
+  architect: {
+    'search_files': 0.9,
+    'read_file': 0.8,
+    'list_directory': 0.7,
+  },
+  researcher: {
+    'web_search': 0.9,
+    'search_files': 0.7,
+    'read_file': 0.6,
+  },
+  debugger: {
+    'execute_bash': 0.9,
+    'read_file': 0.7,
+    'search_files': 0.6,
+  },
+  specialist: {
+    'execute_bash': 0.8,
+    'read_file': 0.8,
+    'search_files': 0.7,
+  },
+  orchestrator: {
+    'list_directory': 0.9,
+    'search_files': 0.7,
+    'read_file': 0.6,
+  },
+  simplifier: {
+    'read_file': 0.7,
+    'list_directory': 0.6,
+  },
+};
+
+// Mutable tool weights registry for dynamic extension
+let _toolWeights: Record<string, Record<string, number>> = { ..._defaultToolWeights };
+
+/**
+ * Register tool weights for a role (extend or override defaults)
+ */
+export function registerToolWeights(role: string, weights: Record<string, number>): void {
+  if (!role || !weights || typeof weights !== 'object') {
+    console.warn('[role-redirector] Invalid tool weights registration:', { role, weights });
+    return;
+  }
+  _toolWeights[role] = { ...(_toolWeights[role] || {}), ...weights };
+  console.log('[role-redirector] Registered tool weights for role:', role);
+}
+
+/**
+ * Get tool weights for a role (with fallback to defaults)
+ */
+export function getToolWeights(role: string): Record<string, number> {
+  return _toolWeights[role] || _defaultToolWeights[role] || {};
+}
+
 export function suggestToolsForRole(
   role: Role,
   context: {
@@ -440,56 +544,8 @@ export function suggestToolsForRole(
   const suggestions: ToolSuggestion[] = [];
   const { taskDescription = '', availableTools = [], recentToolCalls = [] } = context;
   
-  // Role-specific tool weights
-  const roleToolWeights: Record<Role, Record<string, number>> = {
-    coder: {
-      'write_file': 0.9,
-      'read_file': 0.8,
-      'execute_bash': 0.7,
-      'search_files': 0.6,
-    },
-    reviewer: {
-      'read_file': 0.9,
-      'search_files': 0.8,
-      'execute_bash': 0.5,
-    },
-    planner: {
-      'search_files': 0.8,
-      'read_file': 0.7,
-      'list_directory': 0.6,
-    },
-    architect: {
-      'search_files': 0.9,
-      'read_file': 0.8,
-      'list_directory': 0.7,
-    },
-    researcher: {
-      'web_search': 0.9,
-      'search_files': 0.7,
-      'read_file': 0.6,
-    },
-    debugger: {
-      'execute_bash': 0.9,
-      'read_file': 0.7,
-      'search_files': 0.6,
-    },
-    specialist: {
-      'execute_bash': 0.8,
-      'read_file': 0.8,
-      'search_files': 0.7,
-    },
-    orchestrator: {
-      'list_directory': 0.9,
-      'search_files': 0.7,
-      'read_file': 0.6,
-    },
-    simplifier: {
-      'read_file': 0.7,
-      'list_directory': 0.6,
-    },
-  };
-  
-  const weights = roleToolWeights[role] || {};
+  // Use dynamic tool weights with fallback to defaults
+  const weights = getToolWeights(role);
   
   // Generate suggestions for available tools
   for (const tool of availableTools) {

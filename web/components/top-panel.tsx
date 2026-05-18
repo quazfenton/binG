@@ -873,6 +873,8 @@ export default function TopPanel() {
   const resizeStartX = useRef(0);
   const resizeStartWidth = useRef(100);
   const resizeHandle = useRef<'left' | 'right' | 'bottom' | null>(null);
+  const touchStartX = useRef(0);
+  const MOBILE_TABS: TopPanelTab[] = ['news', 'plugins', 'marketplace'];
 
   // Tab visibility state - stored in localStorage
   const [visibleTabs, setVisibleTabs] = useState<TopPanelTab[]>(() => {
@@ -1045,9 +1047,19 @@ export default function TopPanel() {
       <AnimatePresence>
         {panelVisible && (
           <>
-            {/* Mobile: Separate panel with full width */}
+            {/* Mobile backdrop - tap to close */}
             <motion.div
-              className="fixed inset-x-2 top-2 z-[250] md:hidden"
+              className="fixed inset-0 bg-black/60 z-[240] md:hidden"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={closeTopPanel}
+            />
+
+            {/* Mobile: Separate panel with full width — flex-col layout so close button is always visible */}
+            <motion.div
+              data-mobile-panel
+              className="fixed inset-x-2 top-2 z-[250] md:hidden flex flex-col"
               initial={{ height: 0, opacity: 0, y: -20 }}
               animate={{
                 height: "auto",
@@ -1063,47 +1075,123 @@ export default function TopPanel() {
                 ease: [0.4, 0, 0.2, 1],
               }}
             >
+              {/* Drag-to-dismiss handle — pulls entire panel down */}
+              <div
+                className="absolute top-0 left-0 right-0 h-8 z-20 md:hidden cursor-grab active:cursor-grabbing"
+                onPointerDown={(e) => {
+                  const startY = e.clientY;
+                  const handlePointerMove = (ev: PointerEvent) => {
+                    const panel = (ev.target as HTMLElement).closest('[data-mobile-panel]') as HTMLElement;
+                    if (!panel) return;
+                    const dy = ev.clientY - startY;
+                    if (dy > 0) {
+                      panel.style.transform = `translateY(${Math.min(dy, 200)}px)`;
+                      panel.style.transition = 'none';
+                    }
+                  };
+                  const handlePointerUp = (ev: PointerEvent) => {
+                    const panel = (ev.target as HTMLElement).closest('[data-mobile-panel]') as HTMLElement;
+                    if (!panel) return;
+                    const dy = ev.clientY - startY;
+                    panel.style.transition = 'transform 0.3s ease';
+                    if (dy > 100) {
+                      panel.style.transform = 'translateY(100%)';
+                      setTimeout(closeTopPanel, 200);
+                    } else {
+                      panel.style.transform = 'translateY(0)';
+                    }
+                    document.removeEventListener('pointermove', handlePointerMove);
+                    document.removeEventListener('pointerup', handlePointerUp);
+                  };
+                  document.addEventListener('pointermove', handlePointerMove);
+                  document.addEventListener('pointerup', handlePointerUp);
+                }}
+              >
+                <div className="absolute top-2 left-1/2 -translate-x-1/2 w-10 h-1 rounded-full bg-white/30" />
+              </div>
+
               <div className="absolute inset-0 bg-gradient-to-b from-black/90 via-black/80 to-transparent backdrop-blur-xl rounded-xl border border-white/10 shadow-2xl pointer-events-none" />
-              <div className="relative h-full">
-                {/* Mobile Tab Bar */}
-                <div className="p-2 border-b border-white/10">
-                  <Tabs
-                    value={(['news', 'plugins', 'marketplace'] as TopPanelTab[]).includes(topPanelActiveTab) ? topPanelActiveTab : 'news'}
-                    onValueChange={(v) => setTopPanelTab(v as TopPanelTab)}
+
+              {/* Mobile: Header row — tab bar + close button */}
+              <div className="relative z-10 shrink-0 p-2 border-b border-white/10 flex items-center gap-2">
+                <Tabs
+                  value={MOBILE_TABS.includes(topPanelActiveTab) ? topPanelActiveTab : 'news'}
+                  onValueChange={(v) => setTopPanelTab(v as TopPanelTab)}
+                  className="flex-1 min-w-0"
+                >
+                  <ScrollableTabBar
+                    tabs={TAB_DEFS.filter(tab => MOBILE_TABS.includes(tab.value as TopPanelTab))}
+                    activeTab={MOBILE_TABS.includes(topPanelActiveTab) ? topPanelActiveTab : 'news'}
+                    onTabChange={setTopPanelTab}
+                    isTabVisible={isTabVisible}
+                    setTopPanelTab={setTopPanelTab}
+                  />
+                </Tabs>
+
+                {/* Mobile close button — always visible in header */}
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    closeTopPanel();
+                  }}
+                  className="h-8 w-8 shrink-0 text-white/60 hover:text-white hover:bg-white/10"
+                  title="Close panel"
+                  aria-label="Close panel"
+                >
+                  <X className="w-4 h-4" />
+                </Button>
+              </div>
+
+              {/* Mobile: Tab content area with swipe gesture support */}
+              <div className="relative z-10 flex-1 overflow-y-auto rounded-b-xl">
+                <Tabs
+                  value={MOBILE_TABS.includes(topPanelActiveTab) ? topPanelActiveTab : 'news'}
+                  className="h-full"
+                >
+                  <div
+                    className="p-2 h-[calc(100vh-180px)] overflow-y-auto"
+                    onTouchStart={(e) => {
+                      touchStartX.current = e.touches[0].clientX;
+                    }}
+                    onTouchEnd={(e) => {
+                      const touch = e.changedTouches[0];
+                      const diffX = touchStartX.current - touch.clientX;
+                      const currentIndex = MOBILE_TABS.indexOf(
+                        MOBILE_TABS.includes(topPanelActiveTab) ? topPanelActiveTab : 'news'
+                      );
+                      if (Math.abs(diffX) > 50) {
+                        if (diffX > 0 && currentIndex < MOBILE_TABS.length - 1) {
+                          setTopPanelTab(MOBILE_TABS[currentIndex + 1]);
+                        } else if (diffX < 0 && currentIndex > 0) {
+                          setTopPanelTab(MOBILE_TABS[currentIndex - 1]);
+                        }
+                      }
+                    }}
                   >
-                    {/* Mobile: Only show tabs that have mobile content implemented */}
-                    <ScrollableTabBar
-                      tabs={TAB_DEFS.filter(tab => ['news', 'plugins', 'marketplace'].includes(tab.value))}
-                      activeTab={(['news', 'plugins', 'marketplace'] as TopPanelTab[]).includes(topPanelActiveTab) ? topPanelActiveTab : 'news'}
-                      onTabChange={setTopPanelTab}
-                      isTabVisible={isTabVisible}
-                      setTopPanelTab={setTopPanelTab}
-                    />
-                    {/* Mobile Tab Content */}
-                    <div className="p-2 h-[calc(100vh-180px)] overflow-y-auto">
-                      <TabsContent value="news" className="h-full mt-0">
-                        <TabErrorBoundary tabName="News">
-                          <NewsTab />
-                        </TabErrorBoundary>
-                      </TabsContent>
-                      <TabsContent value="plugins" className="h-full mt-0">
-                        <TabErrorBoundary tabName="Plugins">
-                          <PluginsTab 
-                            visibleTabs={visibleTabs}
-                            toggleTabVisibility={toggleTabVisibility}
-                            isTabVisible={isTabVisible}
-                            setVisibleTabs={setVisibleTabs}
-                          />
-                        </TabErrorBoundary>
-                      </TabsContent>
-                      <TabsContent value="marketplace" className="h-full mt-0">
-                        <TabErrorBoundary tabName="Marketplace">
-                          <PluginMarketplace />
-                        </TabErrorBoundary>
-                      </TabsContent>
-                    </div>
-                  </Tabs>
-                </div>
+                    <TabsContent value="news" className="h-full mt-0">
+                      <TabErrorBoundary tabName="News">
+                        <NewsTab />
+                      </TabErrorBoundary>
+                    </TabsContent>
+                    <TabsContent value="plugins" className="h-full mt-0">
+                      <TabErrorBoundary tabName="Plugins">
+                        <PluginsTab 
+                          visibleTabs={visibleTabs}
+                          toggleTabVisibility={toggleTabVisibility}
+                          isTabVisible={isTabVisible}
+                          setVisibleTabs={setVisibleTabs}
+                        />
+                      </TabErrorBoundary>
+                    </TabsContent>
+                    <TabsContent value="marketplace" className="h-full mt-0">
+                      <TabErrorBoundary tabName="Marketplace">
+                        <PluginMarketplace />
+                      </TabErrorBoundary>
+                    </TabsContent>
+                  </div>
+                </Tabs>
               </div>
             </motion.div>
 

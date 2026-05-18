@@ -1,9 +1,11 @@
 import { notFound } from 'next/navigation';
-import { getEmbedConfig, isValidEmbedType } from './embed-config';
+import { getEmbedConfig, isValidEmbedType, getAllEmbedTypes } from './embed-config';
 import type { Metadata } from 'next';
 
-// Disable static prerendering - embed pages require client-side rendering
-export const dynamic = 'force-dynamic';
+// Pre-render all known embed types at build time for static export
+export function generateStaticParams() {
+  return getAllEmbedTypes().map((type) => ({ type }));
+}
 
 interface EmbedPageProps {
   params: Promise<{ type: string }>;
@@ -72,34 +74,47 @@ export default async function EmbedPage({ params }: EmbedPageProps) {
   );
 }
 
+import APIPlaygroundProPlugin from '@/components/plugins/api-playground-pro-plugin';
+import CloudProPlugin from '@/components/plugins/cloud-pro-plugin';
+import DevOpsPlugin from '@/components/plugins/devops-plugin';
+import DataWorkbenchPlugin from '@/components/plugins/data-workbench-plugin';
+import CreativePlugin from '@/components/plugins/creative-plugin';
+import GitHubPlugin from '@/components/plugins/github-plugin';
+import GitHubAdvancedPlugin from '@/components/plugins/github-advanced-plugin';
+import HFSpacesPlugin from '@/components/plugins/hf-spaces-plugin';
+import HFSpacesProPlugin from '@/components/plugins/hf-spaces-pro-plugin';
+import NetworkPlugin from '@/components/plugins/network-plugin';
+import NotesPlugin from '@/components/plugins/notes-plugin';
+import PromptsPlugin from '@/components/plugins/prompts-plugin';
+import SandboxPlugin from '@/components/plugins/sandbox-plugin';
+import WikiPlugin from '@/components/plugins/wiki-plugin';
+import DefaultPlugin from '@/components/plugins/default-plugin';
+
 /**
- * Load component dynamically based on config
+ * Load component based on config
  */
-async function loadComponent(componentName: string) {
+function loadComponent(componentName: string) {
   const componentMap: Record<string, any> = {
-    'APIPlaygroundProPlugin': () => import('@/components/plugins/api-playground-pro-plugin').then(m => m.default),
-    'CloudProPlugin': () => import('@/components/plugins/cloud-pro-plugin').then(m => m.default),
-    'DevOpsPlugin': () => import('@/components/plugins/devops-plugin').then(m => m.default),
-    'DataWorkbenchPlugin': () => import('@/components/plugins/data-workbench-plugin').then(m => m.default),
-    'CreativePlugin': () => import('@/components/plugins/creative-plugin').then(m => m.default),
-    'GitHubPlugin': () => import('@/components/plugins/github-plugin').then(m => m.default),
-    'GitHubAdvancedPlugin': () => import('@/components/plugins/github-advanced-plugin').then(m => m.default),
-    'HFSpacesPlugin': () => import('@/components/plugins/hf-spaces-plugin').then(m => m.default),
-    'HFSpacesProPlugin': () => import('@/components/plugins/hf-spaces-pro-plugin').then(m => m.default),
-    'NetworkPlugin': () => import('@/components/plugins/network-plugin').then(m => m.default),
-    'NotesPlugin': () => import('@/components/plugins/notes-plugin').then(m => m.default),
-    'PromptsPlugin': () => import('@/components/plugins/prompts-plugin').then(m => m.default),
-    'SandboxPlugin': () => import('@/components/plugins/sandbox-plugin').then(m => m.default),
-    'WikiPlugin': () => import('@/components/plugins/wiki-plugin').then(m => m.default),
-    'DefaultPlugin': () => import('@/components/plugins/default-plugin').then(m => m.default),
+    'APIPlaygroundProPlugin': APIPlaygroundProPlugin,
+    'CloudProPlugin': CloudProPlugin,
+    'DevOpsPlugin': DevOpsPlugin,
+    'DataWorkbenchPlugin': DataWorkbenchPlugin,
+    'CreativePlugin': CreativePlugin,
+    'GitHubPlugin': GitHubPlugin,
+    'GitHubAdvancedPlugin': GitHubAdvancedPlugin,
+    'HFSpacesPlugin': HFSpacesPlugin,
+    'HFSpacesProPlugin': HFSpacesProPlugin,
+    'NetworkPlugin': NetworkPlugin,
+    'NotesPlugin': NotesPlugin,
+    'PromptsPlugin': PromptsPlugin,
+    'SandboxPlugin': SandboxPlugin,
+    'WikiPlugin': WikiPlugin,
+    'DefaultPlugin': DefaultPlugin,
   };
 
-  const loader = componentMap[componentName];
-  
-  if (!loader) {
-    throw new Error(`Component "${componentName}" not found`);
+  const Component = componentMap[componentName];
+  if (!Component) {
+    return DefaultPlugin;
   }
-
-  const Component = await loader();
   return Component;
 }

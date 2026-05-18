@@ -1,11 +1,5 @@
 'use client';
 
-// Prevent static prerendering — Next.js 16 Turbopack has a bug where
-// global-error.tsx crashes with `TypeError: Cannot read properties of null
-// (reading 'useContext')` during static generation, even when the file
-// contains zero context consumers.
-export const dynamic = 'force-dynamic';
-
 export default function GlobalError({
   error,
   reset,

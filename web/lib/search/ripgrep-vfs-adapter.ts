@@ -5,7 +5,49 @@ import { isDesktopMode } from '@bing/platform/env';
 import { isUsingLocalFS } from '@bing/shared/FS/fs-bridge';
 import { ripgrep, type RipgrepOptions, type RipgrepResult } from './ripgrep';
 import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-service';
+import { Worker } from 'node:worker_threads';
 import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// Singleton worker instance
+let searchWorker: Worker | null = null;
+let isWorkerInitialized = false;
+let initializedOwnerId: string | null = null;
+
+// Resolve __dirname for ESM if needed, though runtime is nodejs
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+async function getWorker(ownerId: string, workspace: any): Promise<Worker | null> {
+  if (searchWorker && initializedOwnerId === ownerId) return searchWorker;
+  
+  try {
+    if (!searchWorker) {
+      const workerPath = path.join(__dirname, 'search.worker.js');
+      searchWorker = new Worker(workerPath);
+    }
+    
+    isWorkerInitialized = false;
+    initializedOwnerId = ownerId;
+    
+    // Initialize worker with workspace data
+    searchWorker.postMessage({ type: 'init', payload: workspace });
+    
+    return new Promise((resolve) => {
+      searchWorker!.once('message', (msg) => {
+        if (msg.type === 'initialized') {
+          isWorkerInitialized = true;
+          resolve(searchWorker!);
+        }
+      });
+      // Safety timeout
+      setTimeout(() => resolve(null), 2000);
+    });
+  } catch (e) {
+    console.error('Failed to initialize search worker', e);
+    return null;
+  }
+}
 
 export interface VFSRipgrepOptions {
   query: string;
@@ -100,19 +142,55 @@ export async function ripgrepVFS(opts: VFSRipgrepOptions): Promise<VFSRipgrepRes
 
 /**
  * Search VFS storage (in-memory + database) for web mode
+ * Uses worker threads if available, falls back to main-thread search
  */
 async function searchVFS(opts: VFSRipgrepOptions, startTime: number): Promise<VFSRipgrepResult> {
+  const workspace = await (virtualFilesystem as any).vfs.ensureWorkspace(opts.ownerId);
+
+  // Try to use Worker + Index
+  const worker = await getWorker(opts.ownerId, workspace);
+  
+  if (worker && isWorkerInitialized) {
+    return new Promise((resolve) => {
+      const handler = (msg: any) => {
+        if (msg.type === 'results') {
+          worker.removeListener('message', handler);
+          resolve({
+            matches: msg.matches,
+            stats: {
+              searches: 1,
+              matches: msg.matches.length,
+              filesWithMatches: new Set(msg.matches.map((m: any) => m.path)).size,
+              filesSearched: workspace.files.size,
+              elapsedMs: Date.now() - startTime,
+            },
+            errors: [],
+            usedRipgrep: false,
+            usedVFS: true,
+          });
+        }
+      };
+      worker.on('message', handler);
+      worker.postMessage({ type: 'search', payload: { 
+        query: opts.query,
+        maxResults: opts.maxResults ?? 100,
+        maxCountPerFile: opts.maxCountPerFile ?? 50,
+        contextLines: opts.contextLines ?? 0,
+        caseInsensitive: opts.caseInsensitive,
+        fixedString: opts.fixedString,
+        wordRegexp: opts.wordRegexp,
+        glob: opts.glob,
+        path: opts.path
+      }});
+    });
+  }
+
+  // Fallback to optimized main-thread search if worker unavailable
   try {
-    const workspace = await (virtualFilesystem as any).vfs.ensureWorkspace(opts.ownerId);
     const matches: VFSRipgrepMatch[] = [];
-    const maxResults = opts.maxResults ?? 100;
-    const maxPerFile = opts.maxCountPerFile ?? 50;
-    const contextLines = opts.contextLines ?? 0;
-    
     // Build regex pattern
     let pattern = opts.query;
     if (opts.fixedString) {
-      // Escape special regex chars for literal string matching
       pattern = pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     }
     if (opts.wordRegexp) {
@@ -146,7 +224,7 @@ async function searchVFS(opts: VFSRipgrepOptions, startTime: number): Promise<VF
     const filesWithMatches = new Set<string>();
     
     for (const file of workspace.files.values()) {
-      if (matches.length >= maxResults) break;
+      if (matches.length >= (opts.maxResults ?? 100)) break;
       
       // Skip files outside search path
       if (normalizedBasePath && normalizedBasePath !== 'workspace') {
@@ -164,27 +242,28 @@ async function searchVFS(opts: VFSRipgrepOptions, startTime: number): Promise<VF
       
       filesSearched++;
       
-      // Search file content
+      // OPTIMIZATION: Fast Path
+      if (!regex.test(file.content)) continue; 
+
+      // If match, lazy split
       const lines = file.content.split('\n');
       let fileMatches = 0;
       
       for (let i = 0; i < lines.length; i++) {
-        if (fileMatches >= maxPerFile || matches.length >= maxResults) break;
+        if (fileMatches >= (opts.maxCountPerFile ?? 50) || matches.length >= (opts.maxResults ?? 100)) break;
         
-        const line = lines[i];
-        if (regex.test(line)) {
+        if (regex.test(lines[i])) {
           filesWithMatches.add(file.path);
           
           const match: VFSRipgrepMatch = {
             path: file.path,
             lineNumber: i + 1,
-            content: line,
+            content: lines[i],
           };
           
-          // Add context lines if requested
-          if (contextLines > 0) {
-            match.contextBefore = lines.slice(Math.max(0, i - contextLines), i);
-            match.contextAfter = lines.slice(i + 1, Math.min(lines.length, i + 1 + contextLines));
+          if ((opts.contextLines ?? 0) > 0) {
+            match.contextBefore = lines.slice(Math.max(0, i - (opts.contextLines ?? 0)), i);
+            match.contextAfter = lines.slice(i + 1, Math.min(lines.length, i + 1 + (opts.contextLines ?? 0)));
           }
           
           matches.push(match);

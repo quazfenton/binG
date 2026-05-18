@@ -22,12 +22,12 @@ import {
   isTauriAvailable,
   type PtyOutputEvent 
 } from '@/lib/tauri/invoke-bridge';
-import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { listen, type UnlistenFn } from '@/lib/utils/tauri-api-stub';
 import { isDesktopMode, getDefaultWorkspaceRoot } from '@bing/platform/env';
 import { createLogger } from '@/lib/utils/logger';
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import { getDefaultWorkspaceRoot as getVfsWorkspaceRoot } from '@bing/platform/env';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '@/lib/utils/tauri-api-stub';
 
 const logger = createLogger('DesktopPTY');
 
