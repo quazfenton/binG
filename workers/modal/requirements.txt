@@ -1,0 +1,7 @@
+modal>=0.72.0
+fastapi>=0.115.0
+pydantic>=2.0.0
+httpx>=0.28.0
+openai>=1.55.0
+Pillow>=11.0.0
+python-multipart>=0.0.18

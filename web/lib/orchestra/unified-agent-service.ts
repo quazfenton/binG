@@ -22,6 +22,7 @@ import { getCircuitStateName } from '../middleware/circuit-breaker';
 import { initToolSystem, executeToolCapability, hasToolCapability, isToolSystemReady } from '@/lib/tools';
 
 import { runAgentLoop as runV2AgentLoop } from './agent-loop';
+import { ModalClient, maybeUseModal, getModalClient } from '@/lib/modal/modal-client';
 import { getConfiguredFallbackChain } from '../providers/provider-fallback-chains';
 import { chatRequestLogger } from '../chat/chat-request-logger';
 import { extractFileWritesFromLLMResponse, type FileWrite } from '../chat/file-diff-utils';
@@ -579,6 +580,106 @@ export async function processUnifiedAgentRequest(
       engine: process.env.AGENT_EXECUTION_ENGINE,
       disableV2: process.env.DISABLE_V2_MODE !== 'false',
     });
+  }
+
+  // ── Modal Offload Check ────────────────────────────────────────
+  // If Modal is configured and the task qualifies, offload to Modal's
+  // serverless infrastructure instead of running locally.
+  //
+  // Modal is best suited for:
+  //   - Complex tasks that would strain OCI backend resources
+  //   - Tasks requiring GPU inference (image gen, large models)
+  //   - Heavy sandbox code execution
+  //   - Tasks with large context windows (many conversation turns)
+  //
+  // If Modal is unavailable or fails, we fall through to normal execution.
+  const _modalProvider = config.provider || dynamicDefaults.provider;
+  const _modalContextSize = JSON.stringify({
+    msg: config.userMessage,
+    history: config.conversationHistory,
+    tools: config.tools,
+  }).length;
+
+  // Determine Modal eligibility:
+  // 1. Complex modes (v2-native, opencode-sdk) with large context (>50KB)
+  // 2. GPU-requiring tasks (image gen models)
+  // 3. Heavy execution contexts (many conversation turns)
+  const _modalEligible =
+    (mode === 'v2-native' || mode === 'opencode-sdk') &&
+    _modalContextSize > 50_000;
+
+  const modalClient = _modalEligible
+    ? maybeUseModal({
+        provider: _modalProvider,
+        requiresGpu: (config.model || '').includes('image') || (config.model || '').includes('diffusion'),
+        taskComplexity: mode === 'v2-native' || mode === 'opencode-sdk' ? 'complex' : 'moderate',
+        model: config.model,
+      })
+    : null;
+
+  if (modalClient) {
+    log.info('[UnifiedAgent] ⚡ OFFLOADING TO MODAL ──────────────────');
+    log.info('[UnifiedAgent] │ contextSize:', _modalContextSize, 'bytes');
+    log.info('[UnifiedAgent] │ modalProvider:', _modalProvider);
+    log.info('[UnifiedAgent] │ model:', config.model || dynamicDefaults.model);
+    log.info('[UnifiedAgent] └──────────────────────────────────────────');
+
+    try {
+      const modalResult = await modalClient.executeAgent({
+        userMessage: config.userMessage,
+        conversationId: config.conversationId || `modal-${Date.now()}`,
+        userId: config.userId || 'system',
+        systemPrompt: config.systemPrompt,
+        model: config.model || dynamicDefaults.model,
+        provider: _modalProvider,
+        temperature: config.temperature,
+        maxTokens: config.maxTokens || 4096,
+        tools: (config.tools || []).map(t => ({
+          name: t.name,
+          description: t.description || '',
+          parameters: t.parameters || {},
+        })),
+        conversationHistory: (config.conversationHistory || []).map(msg => ({
+          role: msg.role || 'user',
+          content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
+        })),
+      });
+
+      if (modalResult.success) {
+        const duration = Date.now() - startTime;
+        log.info('[UnifiedAgent] ✅ MODAL EXECUTION SUCCEEDED', {
+          durationMs: modalResult.durationMs,
+          totalDuration: duration,
+          responseLength: modalResult.response.length,
+          model: modalResult.model,
+          provider: modalResult.provider,
+          tokensUsed: modalResult.tokensUsed,
+        });
+
+        return {
+          success: true,
+          response: modalResult.response,
+          mode: 'v1-api',
+          metadata: {
+            provider: 'modal',
+            model: modalResult.model,
+            duration,
+            modalDurationMs: modalResult.durationMs,
+            tokensUsed: modalResult.tokensUsed,
+            offloadedToModal: true,
+            modalEndpoint: 'executeAgent',
+          },
+        };
+      } else {
+        log.warn('[UnifiedAgent] ⚠️ Modal returned failure, falling back', {
+          error: modalResult.error,
+        });
+      }
+    } catch (modalErr: any) {
+      log.warn('[UnifiedAgent] ⚠️ Modal call failed, falling back to normal execution', {
+        error: modalErr.message,
+      });
+    }
   }
 
   try {

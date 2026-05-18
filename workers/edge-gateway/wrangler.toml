@@ -1,0 +1,47 @@
+name = "bing-edge-gateway"
+main = "src/index.ts"
+compatibility_date = "2025-03-01"
+compatibility_flags = ["nodejs_compat"]
+
+# === Environment Variables (set via `npx wrangler secret put`) ===
+# BACKEND_URL      — OCI backend URL (e.g. https://api.bing.dev)
+# FRONTEND_URL     — Vercel frontend URL (e.g. https://web-eight-ashen-83.vercel.app)
+# JWT_SECRET       — Secret for verifying JWT tokens
+# ALLOWED_ORIGINS  — Comma-separated list of allowed CORS origins
+
+# === KV Namespace (Session Cache + Rate Limiting) ===
+# ⚠️ Run setup.sh or manually create:
+#   npx wrangler kv namespace create bing-kv
+# Then paste the ID below
+[[kv_namespaces]]
+binding = "BING_KV"
+id = ""
+preview_id = ""
+
+# === R2 Bucket (File Storage — replaces MinIO) ===
+[[r2_buckets]]
+binding = "BING_STORAGE"
+bucket_name = "bing-storage"
+preview_bucket_name = "bing-storage-dev"
+
+# === D1 Database (Lightweight SQL — replaces parts of PostgreSQL) ===
+# ⚠️ Run setup.sh or manually create:
+#   npx wrangler d1 create bing-db
+# Then paste the ID below
+[[d1_databases]]
+binding = "BING_DB"
+database_name = "bing-db"
+database_id = ""
+
+# === Routes ===
+# ⚠️ COMMENT OUT for initial deploy — only enable after configuring a custom domain.
+# Run: npx wrangler deploy  # (first deploy, no custom domain)
+# Then set up custom domain in Cloudflare Dashboard, get zone_id, and uncomment:
+# routes = [
+#   { pattern = "api.bing.dev/*", zone_id = "" },  # ⚠️ Set your zone_id after adding domain
+# ]
+
+# === Logging ===
+[observability]
+enabled = true
+head_sampling_rate = 0.1

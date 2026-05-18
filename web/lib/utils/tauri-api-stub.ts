@@ -40,3 +40,29 @@ export const appWindow = { listen: listen };
 
 export const Command = { create: notAvailable('Command.create') };
 export const spawn: any = notAvailable('spawn');
+
+// Additional stubs needed by @tauri-apps/plugin-* packages
+// ── @tauri-apps/api/core ────────────────────────────────────────
+export class Channel<T = unknown> {
+  constructor() {}
+  onmessage?: (data: T) => void;
+  /** @internal */
+  id = 0;
+}
+export class Resource {
+  /** @internal */
+  rid = 0;
+  constructor() {}
+}
+
+// ── @tauri-apps/api/image ───────────────────────────────────────
+export class Image extends Resource {
+  constructor() { super(); }
+  static async fromBytes(_bytes: number[]): Promise<Image> { throw new Error('Tauri Image is only available in desktop builds'); }
+  static async fromPath(_path: string): Promise<Image> { throw new Error('Tauri Image is only available in desktop builds'); }
+  static async fromPngBytes(_bytes: number[]): Promise<Image> { throw new Error('Tauri Image is only available in desktop builds'); }
+  static async fromIco(_bytes: number[]): Promise<Image> { throw new Error('Tauri Image is only available in desktop builds'); }
+}
+export async function transformImage(_options: { image: Image; dstWidth?: number; dstHeight?: number; srcX?: number; srcY?: number; srcWidth?: number; srcHeight?: number }): Promise<Image> {
+  throw new Error('Tauri transformImage is only available in desktop builds');
+}

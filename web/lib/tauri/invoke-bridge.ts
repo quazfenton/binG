@@ -6,7 +6,7 @@
  * native dialogs, file pickers, notifications, and custom commands.
  */
 
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '@/lib/utils/tauri-api-stub';
 import { isDesktopMode, isTauriRuntime } from '@bing/platform/env';
 import { createLogger } from '@/lib/utils/logger';
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';

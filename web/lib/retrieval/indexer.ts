@@ -12,6 +12,8 @@ import { getDatabase } from '@/lib/database/connection';
 import { getEmbeddingProvider } from '@/lib/vector-memory/embeddings';
 import { contentHash, embeddingCache } from '@/lib/utils/cache';
 
+import { parserService } from '@/lib/search/parser-service';
+
 const logger = createLogger('RepoIndex');
 
 /**
@@ -122,8 +124,10 @@ export class RepoIndexer {
     options?: { language?: string; skipEmbeddings?: boolean }
   ): Promise<IndexedFile> {
     const language = options?.language || this.detectLanguage(path);
-    const symbols = this.extractSymbols(content, language);
-    const keywords = this.extractKeywords(content, symbols);
+    
+    // OPTIMIZATION: Run heavy parsing off-thread using Parser Worker
+    const symbols = await parserService.runTask<SymbolInfo[]>('extractSymbols', { content, language });
+    const keywords = await parserService.runTask<string[]>('extractKeywords', { content, symbols });
 
     const file: IndexedFile = {
       id: this.generateId(path),
@@ -467,88 +471,6 @@ export class RepoIndexer {
       less: 'less',
     };
     return languageMap[ext || ''] || 'unknown';
-  }
-
-  private extractSymbols(content: string, language: string): SymbolInfo[] {
-    const symbols: SymbolInfo[] = [];
-    const lines = content.split('\n');
-
-    // Simple regex-based symbol extraction
-    // For production, use proper AST parser (tree-sitter, babel, etc.)
-
-    interface PatternInfo {
-      pattern: RegExp;
-      type: SymbolInfo['type'];
-    }
-
-    const patterns: Record<string, PatternInfo[]> = {
-      typescript: [
-        { pattern: /export\s+(?:async\s+)?function\s+(\w+)\s*\(([^)]*)\)/g, type: 'function' },
-        { pattern: /export\s+class\s+(\w+)/g, type: 'class' },
-        { pattern: /export\s+interface\s+(\w+)/g, type: 'interface' },
-        { pattern: /export\s+(?:const|let|var)\s+(\w+)/g, type: 'variable' },
-        { pattern: /export\s+type\s+(\w+)/g, type: 'type' },
-      ],
-      python: [
-        { pattern: /def\s+(\w+)\s*\(([^)]*)\)/g, type: 'function' },
-        { pattern: /class\s+(\w+)/g, type: 'class' },
-      ],
-      rust: [
-        { pattern: /fn\s+(\w+)\s*\(([^)]*)\)/g, type: 'function' },
-        { pattern: /struct\s+(\w+)/g, type: 'class' },
-        { pattern: /trait\s+(\w+)/g, type: 'interface' },
-      ],
-    };
-
-    const langPatterns = patterns[language] || patterns.typescript;
-
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-
-      for (const pattern of langPatterns) {
-        const regex = pattern.pattern;
-        const type = pattern.type;
-
-        let match;
-        while ((match = regex.exec(line)) !== null) {
-          symbols.push({
-            name: match[1],
-            type,
-            line: i + 1,
-            column: match.index + 1,
-            signature: match[2] || undefined,
-          });
-        }
-      }
-    }
-
-    return symbols;
-  }
-
-  private extractKeywords(content: string, symbols: SymbolInfo[]): string[] {
-    const keywords = new Set<string>();
-
-    // Add symbol names
-    for (const symbol of symbols) {
-      keywords.add(symbol.name.toLowerCase());
-    }
-
-    // Extract common programming keywords
-    const commonKeywords = [
-      'function', 'class', 'interface', 'type', 'const', 'let', 'var',
-      'import', 'export', 'from', 'return', 'async', 'await',
-      'if', 'else', 'for', 'while', 'switch', 'case', 'break', 'continue',
-      'try', 'catch', 'finally', 'throw', 'error',
-      'string', 'number', 'boolean', 'array', 'object', 'null', 'undefined',
-    ];
-
-    for (const keyword of commonKeywords) {
-      if (content.toLowerCase().includes(keyword)) {
-        keywords.add(keyword);
-      }
-    }
-
-    return Array.from(keywords);
   }
 
   private async generateEmbeddings(content: string): Promise<number[]> {

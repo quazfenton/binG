@@ -3,6 +3,11 @@ const FEATURE_FLAGS = {
   NEXTCLOUD_URL: process.env.NEXTCLOUD_URL || '',
   NEXTCLOUD_USERNAME: process.env.NEXTCLOUD_USERNAME || '',
   NEXTCLOUD_PASSWORD: process.env.NEXTCLOUD_PASSWORD || '',
+  R2_ACCESS_KEY_ID: process.env.R2_ACCESS_KEY_ID || '',
+  R2_SECRET_ACCESS_KEY: process.env.R2_SECRET_ACCESS_KEY || '',
+  R2_ENDPOINT: process.env.R2_ENDPOINT || '',
+  R2_BUCKET: process.env.R2_BUCKET || '',
+  R2_PUBLIC_URL: process.env.R2_PUBLIC_URL || '',
   ENABLE_CLOUD_STORAGE: process.env.ENABLE_CLOUD_STORAGE === 'true',
   CLOUD_STORAGE_PROVIDER: process.env.CLOUD_STORAGE_PROVIDER || 'gcp',
   CLOUD_STORAGE_BUCKET: process.env.CLOUD_STORAGE_BUCKET || '',
@@ -551,6 +556,230 @@ class MinIOStorageService implements CloudStorageService {
   }
 }
 
+/**
+ * Cloudflare R2 Storage Service
+ *
+ * S3-compatible client pointed at Cloudflare R2.
+ * Uses the same @aws-sdk/client-s3 as S3StorageService/MinIOStorageService
+ * but configured with R2-specific endpoint and credentials.
+ *
+ * Environment variables:
+ *   R2_ACCESS_KEY_ID     — R2 API token access key
+ *   R2_SECRET_ACCESS_KEY — R2 API token secret
+ *   R2_ENDPOINT          — R2 endpoint (e.g., https://<account-id>.r2.cloudflarestorage.com)
+ *   R2_BUCKET            — R2 bucket name (falls back to CLOUD_STORAGE_BUCKET)
+ *   R2_PUBLIC_URL        — Optional public URL for direct file access
+ */
+class R2StorageService implements CloudStorageService {
+  private client: S3Client;
+  private bucketName: string;
+  private endpoint: string;
+  private publicUrl: string;
+
+  constructor() {
+    this.bucketName = FEATURE_FLAGS.R2_BUCKET || FEATURE_FLAGS.CLOUD_STORAGE_BUCKET;
+    this.endpoint = FEATURE_FLAGS.R2_ENDPOINT;
+    this.publicUrl = FEATURE_FLAGS.R2_PUBLIC_URL;
+
+    const accessKeyId = FEATURE_FLAGS.R2_ACCESS_KEY_ID;
+    const secretAccessKey = FEATURE_FLAGS.R2_SECRET_ACCESS_KEY;
+
+    if (!accessKeyId || !secretAccessKey) {
+      throw new Error('R2 storage requires R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY to be set');
+    }
+
+    if (!this.endpoint) {
+      throw new Error('R2 storage requires R2_ENDPOINT to be set');
+    }
+
+    if (!this.bucketName) {
+      throw new Error('R2 storage requires either R2_BUCKET or CLOUD_STORAGE_BUCKET to be set');
+    }
+
+    this.client = new S3Client({
+      region: 'auto', // R2 doesn't use regions
+      endpoint: this.endpoint,
+      forcePathStyle: true, // Required for R2 (like MinIO)
+      credentials: {
+        accessKeyId,
+        secretAccessKey,
+      },
+    });
+  }
+
+  private getFullPath(path: string, userId?: string): string {
+    const userPrefix = userId ? `users/${userId}/` : '';
+    return `${userPrefix}${path}`;
+  }
+
+  private getPublicUrl(fullPath: string): string {
+    if (this.publicUrl) {
+      const base = this.publicUrl.replace(/\/+$/, '');
+      return `${base}/${fullPath}`;
+    }
+    return `${this.endpoint}/${this.bucketName}/${fullPath}`;
+  }
+
+  async upload(file: File, path: string, userId?: string): Promise<string> {
+    if (!FEATURE_FLAGS.ENABLE_CLOUD_STORAGE) {
+      throw new Error('Cloud storage is disabled');
+    }
+
+    const fullPath = this.getFullPath(path, userId);
+
+    try {
+      // Check quota before upload
+      const currentUsage = await this.getUsage(userId || 'anonymous');
+      if (currentUsage.used + file.size > currentUsage.limit) {
+        throw new Error(`Storage limit exceeded. Max ${Math.round(currentUsage.limit / (1024 * 1024 * 1024))}GB per user.`);
+      }
+
+      const command = new PutObjectCommand({
+        Bucket: this.bucketName,
+        Key: fullPath,
+        Body: file,
+        ContentType: file.type,
+        Metadata: {
+          userId: userId || 'anonymous',
+          originalName: file.name,
+          uploadedAt: new Date().toISOString(),
+        },
+      });
+
+      await this.client.send(command);
+
+      // Update usage tracking
+      if (userId) {
+        userStorageUsage[userId] = (userStorageUsage[userId] || 0) + file.size;
+      }
+
+      return this.getPublicUrl(fullPath);
+    } catch (error) {
+      console.error('R2 upload failed:', error);
+      throw new Error(`Failed to upload file to R2: ${(error as Error).message}`);
+    }
+  }
+
+  async download(path: string, userId?: string): Promise<Blob> {
+    if (!FEATURE_FLAGS.ENABLE_CLOUD_STORAGE) {
+      throw new Error('Cloud storage is disabled');
+    }
+
+    const fullPath = this.getFullPath(path, userId);
+
+    try {
+      const command = new GetObjectCommand({
+        Bucket: this.bucketName,
+        Key: fullPath,
+      });
+
+      const response = await this.client.send(command);
+      if (!response.Body) {
+        throw new Error('No file content received');
+      }
+
+      return response.Body as Blob;
+    } catch (error) {
+      console.error('R2 download failed:', error);
+      throw new Error(`Failed to download file from R2: ${(error as Error).message}`);
+    }
+  }
+
+  async delete(path: string, userId?: string): Promise<void> {
+    if (!FEATURE_FLAGS.ENABLE_CLOUD_STORAGE) {
+      throw new Error('Cloud storage is disabled');
+    }
+
+    const fullPath = this.getFullPath(path, userId);
+
+    try {
+      // Get file size before deletion for usage tracking
+      if (userId) {
+        try {
+          const headCommand = new HeadObjectCommand({
+            Bucket: this.bucketName,
+            Key: fullPath,
+          });
+          const headResponse = await this.client.send(headCommand);
+          const fileSize = headResponse.ContentLength || 0;
+          userStorageUsage[userId] = Math.max(0, (userStorageUsage[userId] || 0) - fileSize);
+        } catch (e) {
+          // File might not exist, continue with deletion
+        }
+      }
+
+      const command = new DeleteObjectCommand({
+        Bucket: this.bucketName,
+        Key: fullPath,
+      });
+
+      await this.client.send(command);
+    } catch (error) {
+      console.error('R2 delete failed:', error);
+      throw new Error(`Failed to delete file from R2: ${(error as Error).message}`);
+    }
+  }
+
+  async list(prefix?: string, userId?: string): Promise<string[]> {
+    if (!FEATURE_FLAGS.ENABLE_CLOUD_STORAGE) {
+      throw new Error('Cloud storage is disabled');
+    }
+
+    const fullPrefix = this.getFullPath(prefix || '', userId);
+
+    try {
+      const command = new ListObjectsV2Command({
+        Bucket: this.bucketName,
+        Prefix: fullPrefix,
+      });
+
+      const response = await this.client.send(command);
+      return (response.Contents || [])
+        .map(obj => obj.Key?.replace(fullPrefix, '').replace(/^\//, ''))
+        .filter(Boolean) as string[];
+    } catch (error) {
+      console.error('R2 list failed:', error);
+      throw new Error(`Failed to list files from R2: ${(error as Error).message}`);
+    }
+  }
+
+  async getSignedUrl(path: string, expiresIn: number = 3600, userId?: string): Promise<string> {
+    if (!FEATURE_FLAGS.ENABLE_CLOUD_STORAGE) {
+      throw new Error('Cloud storage is disabled');
+    }
+
+    const fullPath = this.getFullPath(path, userId);
+
+    try {
+      const command = new GetObjectCommand({
+        Bucket: this.bucketName,
+        Key: fullPath,
+      });
+
+      return await getSignedUrl(this.client, command, { expiresIn });
+    } catch (error) {
+      console.error('R2 signed URL failed:', error);
+      throw new Error(`Failed to generate signed URL for R2: ${(error as Error).message}`);
+    }
+  }
+
+  async getUsage(userId: string): Promise<{ used: number; limit: number }> {
+    if (!FEATURE_FLAGS.ENABLE_CLOUD_STORAGE) {
+      throw new Error('Cloud storage is disabled');
+    }
+
+    try {
+      return {
+        used: userStorageUsage[userId] || 0,
+        limit: FEATURE_FLAGS.CLOUD_STORAGE_PER_USER_LIMIT_BYTES,
+      };
+    } catch (error) {
+      console.error('R2 usage check failed:', error);
+      throw new Error(`Failed to get usage: ${(error as Error).message}`);
+    }
+  }
+}
+
 // Keep the existing GCP mock service for development
 class GCPStorageService implements CloudStorageService {
   private bucketName: string;
@@ -697,6 +926,8 @@ export function createCloudStorageService(): CloudStorageService {
       return new S3StorageService();
     case 'minio' as any:
       return new MinIOStorageService();
+    case 'r2' as any:
+      return new R2StorageService();
     case 'gcp' as any:
     default:
       return new GCPStorageService() as any;
@@ -715,4 +946,4 @@ export const cloudStorage = new Proxy({} as CloudStorageService, {
 });
 
 // Export individual services for testing
-export { NextcloudStorageService, S3StorageService, MinIOStorageService, GCPStorageService };
+export { NextcloudStorageService, S3StorageService, MinIOStorageService, R2StorageService, GCPStorageService };

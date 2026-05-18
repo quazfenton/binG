@@ -1,0 +1,97 @@
+# ============================================================
+#  binG Hono Backend — Docker Compose Override
+# ============================================================
+# Adds the dedicated Hono API server to the OCI deployment.
+# The main docker-compose.yml has `app` (Next.js frontend) but
+# this overrides/extends it with the standalone `/api/chat` backend.
+#
+# Usage:
+#   docker compose \
+#     -f docker-compose.yml \
+#     -f docker-compose.backend.yml \
+#     --env-file .env \
+#     up -d
+# ============================================================
+
+services:
+  # ===========================================
+  # Dedicated Hono Backend (API Server)
+  # ===========================================
+  # Serves /api/chat and /api/* routes via Hono.
+  # Built from backend/Dockerfile with repo root as context.
+  # Communicates with the same Postgres, Redis, and agent services.
+  backend:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    container_name: bing-backend
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - FRONTEND_URL=${FRONTEND_URL:?FRONTEND_URL required}
+
+      # Database
+      - DATABASE_URL=${DATABASE_URL:?DATABASE_URL required}
+
+      # LLM Providers
+      - MISTRAL_API_KEY=${MISTRAL_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+
+      # Sandbox Providers
+      - DAYTONA_API_KEY=${DAYTONA_API_KEY}
+      - E2B_API_KEY=${E2B_API_KEY}
+      - BLAXEL_API_KEY=${BLAXEL_API_KEY}
+      - CSB_API_KEY=${CSB_API_KEY}
+      - SANDBOX_PROVIDER=${SANDBOX_PROVIDER:-daytona}
+
+      # Auth
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET required}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:?ENCRYPTION_KEY required}
+
+      # Agent services (Docker network)
+      - AGENT_GATEWAY_URL=${AGENT_GATEWAY_URL:-http://agent-gateway:3002}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+
+      # Nullclaw
+      - NULLCLAW_ENABLED=${NULLCLAW_ENABLED:-true}
+      - NULLCLAW_URL=${NULLCLAW_URL:-http://nullclaw:3000}
+
+      # Storage
+      - STORAGE_TYPE=${STORAGE_TYPE:-local}
+      - RUNTIME_TYPE=${RUNTIME_TYPE:-process}
+      - WORKSPACE_DIR=/tmp/workspaces
+
+      # Quotas
+      - MAX_EXECUTIONS_PER_HOUR=${MAX_EXECUTIONS_PER_HOUR:-1000}
+      - MAX_CONCURRENT_SANDBOXES=${MAX_CONCURRENT_SANDBOXES:-10}
+
+    volumes:
+      - backend-workspaces:/tmp/workspaces
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - bing-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+
+volumes:
+  backend-workspaces:
+    driver: local

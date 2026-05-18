@@ -8,10 +8,13 @@ const isDesktopBuild = process.env.DESKTOP_MODE === 'true' || process.env.DESKTO
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Static export — Vercel only serves frontend assets
+  // Backend API routes are handled externally (OCI, 9router, etc.)
+  output: 'export',
+
   // Vendored workspace packages (web/.bing-platform, web/.bing-shared) ship raw .ts;
   // tell Next to transpile them during the Vercel build.
   transpilePackages: ['@bing/platform', '@bing/shared', '@opencode-ai/sdk'],
-  turbopack: {},
   onDemandEntries: {
     maxInactiveAge: 25 * 1000,
     pagesBufferLength: 2,
@@ -97,11 +100,6 @@ const nextConfig = {
       'date-fns',
       'lodash',
     ],
-    // Fix corrupted http-errors@2.0.1 package (empty exports:{}, missing lib/statuses)
-    // Turbopack uses this to resolve the package to its working CJS entry
-    turbopackResolveAlias: {
-      'http-errors': resolve(projectRoot, 'node_modules/http-errors/index.js'),
-    },
   },
   compiler: {
     removeConsole: process.env.NODE_ENV === 'production'
@@ -302,14 +300,28 @@ const nextConfig = {
 
       // Tauri API stub — throws on web, real impl via dynamic import in desktop builds
       '@tauri-apps/api': resolve(projectRoot, 'lib/utils/tauri-api-stub.ts'),
+      '@tauri-apps/api/core': resolve(projectRoot, 'lib/utils/tauri-api-stub.ts'),
+      '@tauri-apps/api/event': resolve(projectRoot, 'lib/utils/tauri-api-stub.ts'),
+      '@tauri-apps/api/window': resolve(projectRoot, 'lib/utils/tauri-api-stub.ts'),
       '@tauri-apps/api/fs': resolve(projectRoot, 'lib/utils/tauri-api-stub.ts'),
       '@tauri-apps/api/tauri': resolve(projectRoot, 'lib/utils/tauri-api-stub.ts'),
       '@tauri-apps/api/dialog': resolve(projectRoot, 'lib/utils/tauri-api-stub.ts'),
       '@tauri-apps/api/fs-sync': resolve(projectRoot, 'lib/utils/tauri-api-stub.ts'),
+      '@tauri-apps/api/image': resolve(projectRoot, 'lib/utils/tauri-api-stub.ts'),
+      '@tauri-apps/api/path': resolve(projectRoot, 'lib/utils/tauri-api-stub.ts'),
 
     };
 
     config.resolve.mainFields = ['module', 'main'];
+
+    // Replace ALL @tauri-apps/api imports (including subpath imports from plugins)
+    // with the web stub for both server and client builds
+    config.plugins.push(
+      new webpack.NormalModuleReplacementPlugin(
+        /^@tauri-apps\/api(\/.*)?$/,
+        resolve(projectRoot, 'lib/utils/tauri-api-stub.ts')
+      )
+    );
 
     if (isServer) {
       config.resolve.alias = {
@@ -406,26 +418,6 @@ const nextConfig = {
     }
 
     return config;
-  },
-  async headers() {
-
-    return [
-      {
-        source: "/api/:path*",
-        headers: [
-          { key: "Access-Control-Allow-Origin", value: "*" },
-          {
-            key: "Access-Control-Allow-Methods",
-            value: "GET, POST, PUT, DELETE, OPTIONS",
-          },
-          {
-            key: "Access-Control-Allow-Headers",
-            value: "Content-Type, Authorization",
-          },
-          { key: "Cross-Origin-Resource-Policy", value: "cross-origin" },
-        ],
-      },
-    ];
   },
 };
 

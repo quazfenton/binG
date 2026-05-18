@@ -20,6 +20,8 @@ import {
   type RankedSymbol,
 } from "./similarity";
 
+import { parserService } from "../search/parser-service";
+
 // ─── Tab Memory ───────────────────────────────────────────────────────────────
 
 export interface TabMemory {
@@ -215,6 +217,9 @@ export function grepSymbols(
   const lq = query.toLowerCase();
 
   for (const symbol of symbols) {
+    // OPTIMIZATION: Fast Path check before splitting
+    if (!symbol.content.toLowerCase().includes(lq)) continue;
+
     const lines = symbol.content.split("\n");
     const matches: GrepResult[] = [];
 
@@ -310,11 +315,17 @@ export async function search(
     };
   }
 
-  // 3. Semantic shortlist — fast cosine pass to get top 50 candidates
+  // 3. Semantic shortlist — fast off-thread cosine pass to get top 50 candidates
+  const embeddings = allSymbols.map(s => s.embedding);
+  const scores = await parserService.runTask<number[]>('cosineSimilarityBatch', { 
+    queryEmbedding, 
+    embeddings 
+  });
+
   const withScores = allSymbols
-    .map((s) => ({
+    .map((s, i) => ({
       ...s,
-      semanticScore: cosineSimilarity(queryEmbedding, s.embedding),
+      semanticScore: scores[i],
     }))
     .sort((a, b) => b.semanticScore - a.semanticScore)
     .slice(0, 50);

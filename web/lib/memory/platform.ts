@@ -24,7 +24,7 @@ export interface FileEntry {
 export async function readFile(path: string): Promise<string> {
   if (isDesktop) {
     // @ts-ignore - Tauri API only available in desktop builds
-    const { readTextFile } = await import("@tauri-apps/api/fs");
+    const { readTextFile } = await import(/* webpackIgnore: true */ "@tauri-apps/api/fs");
     return readTextFile(path);
   }
   throw new Error("Direct file reading not supported in web — use file upload");
@@ -34,7 +34,7 @@ export async function readFile(path: string): Promise<string> {
 export async function writeFile(path: string, content: string): Promise<void> {
   if (isDesktop) {
     // @ts-ignore - Tauri API only available in desktop builds
-    const { writeTextFile } = await import("@tauri-apps/api/fs");
+    const { writeTextFile } = await import(/* webpackIgnore: true */ "@tauri-apps/api/fs");
     return writeTextFile(path, content);
   }
   // Web: trigger download

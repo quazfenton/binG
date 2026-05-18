@@ -46,6 +46,3 @@ export default async function AuthErrorPage({
     <ErrorCard error={params?.error} error_description={params?.error_description} />
   );
 }
-
-// Force dynamic rendering - this page depends on URL search params
-export const dynamic = 'force-dynamic';
