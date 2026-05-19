@@ -18,11 +18,9 @@ services:
       - "80:80"
       - "443:443"
       - "443:443/udp"
-    environment:
-      DOMAIN:     ${DOMAIN}
-      ACME_EMAIL: ${ACME_EMAIL}
+    # No DOMAIN/ACME_EMAIL until we have a real domain for TLS
     volumes:
-      - ./infra/oracle/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
@@ -36,8 +34,8 @@ services:
       dockerfile: backend/Dockerfile
     image: bing-backend:latest
     restart: unless-stopped
-    expose:
-      - "3001"
+    ports:
+      - "3001:3001"
     env_file: .env
     environment:
       PORT: "3001"
@@ -54,8 +52,8 @@ services:
       dockerfile: 9router.Dockerfile
     image: bing-9router:latest
     restart: unless-stopped
-    expose:
-      - "3000"
+    ports:
+      - "3000:3000"
     environment:
       PORT: "3000"
       NODE_ENV: production
@@ -64,18 +62,15 @@ services:
       - ninerouter_data:/data
     networks: [edge]
 
-  # Optional BullMQ worker pool — uncomment when the queue is wired in backend/
-  # worker:
-  #   build:
-  #     context: ..
-  #     dockerfile: infra/Dockerfile.worker
-  #   restart: unless-stopped
-  #   env_file: .env
-  #   environment:
-  #     SERVICE_NAME: worker
-  #   depends_on:
-  #     - backend
-  #   networks: [edge]
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    # Creates a tunnel from Cloudflare edge → http://caddy:80
+    # Provides a *.trycloudflare.com URL with automatic HTTPS
+    command: tunnel --url http://caddy:80
+    depends_on:
+      - caddy
+    networks: [edge]
 
 volumes:
   caddy_data:

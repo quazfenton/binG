@@ -4,7 +4,7 @@
 
 FROM node:20-alpine
 
-RUN apk add --no-cache tini ca-certificates
+RUN apk add --no-cache ca-certificates
 
 # 9router pins react/react-dom 19 — pull peer deps with --legacy-peer-deps to be safe.
 RUN npm install -g --legacy-peer-deps 9router@latest
@@ -16,6 +16,6 @@ EXPOSE 3000
 
 VOLUME ["/data"]
 
-ENTRYPOINT ["/sbin/tini","--"]
-# `9router serve` is the long-running mode; falls back to `9router start` for older versions.
-CMD ["sh","-c","9router serve --port $PORT --data-dir $NINEROUTER_DATA_DIR || 9router start --port $PORT"]
+# 9router CLI options: -p port, -H host, -l logs
+# Config is via CLI flags and env vars (NINEROUTER_ADMIN_KEY, etc.) - no config file needed
+ENTRYPOINT ["9router", "-p", "3000", "-H", "0.0.0.0", "-l", "--skip-update"]
