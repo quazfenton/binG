@@ -1,28 +1,32 @@
-# Caddy 2 — automatic Let's Encrypt TLS + reverse proxy.
-# Replace ${DOMAIN} via Caddy's env var support (passed in docker-compose).
+# Caddy 2 — HTTP reverse proxy (no TLS until we have a domain).
+# Routes based on URL path prefixes:
+#   /api/*, /health*  → backend (Hono orchestrator)
+#   /*                → 9Router (LLM gateway)
+#
+# When you get a domain:
+#   api.yourdomain.com → backend:3001
+#   router.yourdomain.com → ninerouter:3000
+#   Then add { email your@email } block back for auto-TLS
 
-{
-    email {$ACME_EMAIL}
-    servers {
-        protocols h1 h2 h3
-    }
-}
-
-api.{$DOMAIN} {
+:80 {
     encode zstd gzip
-    # SSE / streaming: disable buffering, long-lived
-    reverse_proxy backend:3001 {
-        flush_interval -1
-        transport http {
-            read_timeout  30m
-            write_timeout 30m
+
+    # Backend routes
+    @api path /api/* /health*
+    handle @api {
+        reverse_proxy backend:3001 {
+            flush_interval -1
+            transport http {
+                read_timeout  30m
+                write_timeout 30m
+            }
         }
     }
-}
 
-router.{$DOMAIN} {
-    encode zstd gzip
-    reverse_proxy ninerouter:3000 {
-        flush_interval -1
+    # Everything else goes to 9router dashboard
+    handle {
+        reverse_proxy ninerouter:3000 {
+            flush_interval -1
+        }
     }
 }
