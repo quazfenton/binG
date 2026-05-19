@@ -36,7 +36,10 @@ write_files:
       DOMAIN=example.com
       ACME_EMAIL=you@example.com
 
-      # 9router
+      # 9router — INITIAL_PASSWORD seeds the dashboard login on FIRST run only
+      # (it's a no-op once the data volume has a saved password). Reuse the same
+      # value as NINEROUTER_ADMIN_KEY so backend/Vercel can call the admin API
+      # with the same credential. JWT_SECRET signs the dashboard session cookie.
       NINEROUTER_ADMIN_KEY=replace-with-strong-key
       NINEROUTER_PUBLIC_URL=https://router.${DOMAIN}
 

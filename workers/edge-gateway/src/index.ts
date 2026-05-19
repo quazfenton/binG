@@ -6,6 +6,12 @@
  * 2. Authenticates JWT tokens at the edge
  * 3. Routes /api/* to OCI backend, /* to Vercel frontend
  * 4. Proxies requests and returns responses with correct headers
+ *
+ * Admin:
+ *   POST /admin/backend-url  (header X-Admin-Token: <ADMIN_TOKEN>)
+ *     Body: { "url": "https://..." }
+ *     Updates the runtime BACKEND_URL in KV — used by the ARM box to
+ *     broadcast new Cloudflare tunnel URLs without redeploying the worker.
  */
 import { authenticateRequest } from './auth';
 import { checkIpRateLimit } from './rate-limiter';
@@ -13,10 +19,12 @@ import { routeRequest } from './router';
 import { handleFileRequest } from './r2-storage';
 import type { Env } from './env';
 
+const RUNTIME_BACKEND_KEY = 'runtime:BACKEND_URL';
+
 // CORS headers applied to all responses
 const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With, X-Auth-Token, X-CSRF-Token',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With, X-Auth-Token, X-CSRF-Token, X-Admin-Token',
   'Access-Control-Expose-Headers': 'X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset',
   'Access-Control-Max-Age': '86400',
 };
@@ -45,6 +53,12 @@ export default {
         status: 204,
         headers: getCorsHeaders(request, env),
       });
+    }
+
+    // ─── Admin: rotate BACKEND_URL at runtime ────────────────────────
+    // Done BEFORE rate limiting so a flood doesn't lock out the rotation hook.
+    if (url.pathname === '/admin/backend-url' && request.method === 'POST') {
+      return await handleAdminBackendUrl(request, env);
     }
 
     // ─── Rate Limiting (by IP) ───────────────────────────────────────
@@ -77,9 +91,18 @@ export default {
     }
 
     // ─── Route Request ───────────────────────────────────────────────
-    const target = routeRequest(request, env);
+    const target = await routeRequest(request, env);
     if (!target) {
-      return new Response('Not Found', { status: 404 });
+      return new Response(JSON.stringify({
+        error: 'No route configured',
+        detail: 'Neither BACKEND_URL nor FRONTEND_URL is configured for this path.',
+      }), {
+        status: 502,
+        headers: {
+          'Content-Type': 'application/json',
+          ...getCorsHeaders(request, env),
+        },
+      });
     }
 
     // ─── Proxy to Target ─────────────────────────────────────────────
@@ -144,22 +167,52 @@ export default {
 
 // ─── Helpers ──────────────────────────────────────────────────────────
 
-function getCorsHeaders(request: Request, env: Env): Record<string, string> {
-  const origin = request.headers.get('Origin');
-  const allowed = env.ALLOWED_ORIGINS?.split(',').map(s => s.trim()) ?? [];
-
-  let allowOrigin: string;
-  if (origin && (allowed.includes('*') || allowed.includes(origin) || origin === env.FRONTEND_URL)) {
-    allowOrigin = origin;
-  } else {
-    allowOrigin = env.FRONTEND_URL;
+/**
+ * Normalize a URL or origin to its canonical origin form (scheme://host[:port]).
+ * Returns null if the input is not a valid URL/origin.
+ */
+function toOrigin(input: string | undefined | null): string | null {
+  if (!input) return null;
+  const trimmed = input.trim();
+  if (!trimmed) return null;
+  try {
+    return new URL(trimmed).origin;
+  } catch {
+    return null;
   }
+}
 
-  return {
+function getCorsHeaders(request: Request, env: Env): Record<string, string> {
+  const headers: Record<string, string> = {
     ...CORS_HEADERS,
-    'Access-Control-Allow-Origin': allowOrigin,
     'Vary': 'Origin',
   };
+
+  const originHeader = request.headers.get('Origin');
+  const requestOrigin = toOrigin(originHeader);
+  if (!requestOrigin) {
+    // No Origin header (or malformed) → don't echo anything.
+    return headers;
+  }
+
+  const allowedRaw = env.ALLOWED_ORIGINS?.split(',').map(s => s.trim()).filter(Boolean) ?? [];
+  const wildcard = allowedRaw.includes('*');
+  const allowedOrigins = new Set(
+    allowedRaw
+      .filter(s => s !== '*')
+      .map(s => toOrigin(s))
+      .filter((s): s is string => s !== null),
+  );
+
+  const frontendOrigin = toOrigin(env.FRONTEND_URL);
+  if (frontendOrigin) allowedOrigins.add(frontendOrigin);
+
+  if (wildcard || allowedOrigins.has(requestOrigin)) {
+    headers['Access-Control-Allow-Origin'] = requestOrigin;
+  }
+  // Otherwise: omit Access-Control-Allow-Origin entirely (browser will block).
+
+  return headers;
 }
 
 function addAuthHeaders(request: Request, auth: { authenticated: boolean; userId: string | null }): Request {
@@ -167,4 +220,69 @@ function addAuthHeaders(request: Request, auth: { authenticated: boolean; userId
   headers.set('X-User-Id', auth.userId ?? 'anonymous');
   headers.set('X-User-Authenticated', String(auth.authenticated));
   return new Request(request, { headers });
+}
+
+/**
+ * POST /admin/backend-url — rotate the runtime BACKEND_URL stored in KV.
+ *
+ * Auth: header `X-Admin-Token` must equal `env.ADMIN_TOKEN`.
+ * Body: `{ "url": "https://..." }`
+ *
+ * On success: writes KV key `runtime:BACKEND_URL` and returns 200.
+ */
+async function handleAdminBackendUrl(request: Request, env: Env): Promise<Response> {
+  const json = (status: number, body: Record<string, unknown>): Response =>
+    new Response(JSON.stringify(body), {
+      status,
+      headers: {
+        'Content-Type': 'application/json',
+        ...getCorsHeaders(request, env),
+      },
+    });
+
+  if (!env.ADMIN_TOKEN) {
+    return json(503, {
+      error: 'Admin endpoint disabled',
+      detail: 'ADMIN_TOKEN is not configured on this worker.',
+    });
+  }
+
+  const provided = request.headers.get('X-Admin-Token');
+  if (!provided) {
+    return json(401, { error: 'Missing X-Admin-Token header' });
+  }
+  if (provided !== env.ADMIN_TOKEN) {
+    return json(403, { error: 'Invalid admin token' });
+  }
+
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return json(400, { error: 'Invalid JSON body' });
+  }
+
+  const candidate = (body as { url?: unknown })?.url;
+  if (typeof candidate !== 'string' || !candidate.trim()) {
+    return json(400, { error: 'Missing or invalid "url" field' });
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(candidate.trim());
+  } catch {
+    return json(400, { error: 'Invalid URL', detail: candidate });
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return json(400, { error: 'URL must use http or https', detail: parsed.protocol });
+  }
+
+  const normalized = parsed.toString().replace(/\/+$/, '');
+  await env.BING_KV.put(RUNTIME_BACKEND_KEY, normalized);
+
+  return json(200, {
+    ok: true,
+    url: normalized,
+    updatedAt: new Date().toISOString(),
+  });
 }

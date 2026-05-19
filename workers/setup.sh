@@ -89,21 +89,68 @@ else
   exit 1
 fi
 
-# ─── Step 5: Set Environment Secrets ───────────────────────
+# ─── Step 5: Set Environment Variables & Secrets ──────────
 echo ""
 echo "📌 Step 5: Set Environment Variables"
 echo "-------------------------------------"
 
-# Frontend URL (Vercel)
-read -rp "Vercel Frontend URL (e.g., https://bing.vercel.app): " FRONTEND_URL
-echo "$FRONTEND_URL" | npx wrangler secret put FRONTEND_URL
-echo "✅ FRONTEND_URL set"
+# Helper: write/replace a key in the [vars] section of wrangler.toml.
+# If the [vars] section doesn't exist, append it.
+set_wrangler_var() {
+  local key="$1"
+  local value="$2"
+  # Escape sed delimiters / metacharacters in value
+  local escaped
+  escaped=$(printf '%s' "$value" | sed -e 's/[\/&|]/\\&/g')
 
-# Backend URL (OCI)
+  if ! grep -q '^\[vars\]' wrangler.toml; then
+    printf '\n[vars]\n%s = "%s"\n' "$key" "$value" >> wrangler.toml
+    return
+  fi
+
+  if grep -qE "^${key}[[:space:]]*=" wrangler.toml; then
+    # Replace existing line
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+      sed -i '' -E "s|^${key}[[:space:]]*=.*|${key} = \"${escaped}\"|" wrangler.toml
+    else
+      sed -i -E "s|^${key}[[:space:]]*=.*|${key} = \"${escaped}\"|" wrangler.toml
+    fi
+  else
+    # Insert under [vars]
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+      sed -i '' -E "/^\[vars\]/a\\
+${key} = \"${escaped}\"
+" wrangler.toml
+    else
+      sed -i -E "/^\[vars\]/a ${key} = \"${escaped}\"" wrangler.toml
+    fi
+  fi
+}
+
+validate_http_url() {
+  [[ "$1" =~ ^https?://[^[:space:]/]+(/.*)?$ ]]
+}
+
+# Frontend URL (Vercel) — plain var, not a secret
+read -rp "Vercel Frontend URL (e.g., https://bing.vercel.app): " FRONTEND_URL
+FRONTEND_URL="${FRONTEND_URL%/}"
+if ! validate_http_url "$FRONTEND_URL"; then
+  echo "❌ Invalid URL: '$FRONTEND_URL'. Must start with http:// or https://"
+  exit 1
+fi
+set_wrangler_var FRONTEND_URL "$FRONTEND_URL"
+echo "✅ FRONTEND_URL set in wrangler.toml [vars]"
+
+# Backend URL (OCI / Cloudflare tunnel) — plain var, runtime-overridable via KV
 read -rp "OCI Backend URL (e.g., https://api.bing.dev, or leave blank): " BACKEND_URL
 if [ -n "$BACKEND_URL" ]; then
-  echo "$BACKEND_URL" | npx wrangler secret put BACKEND_URL
-  echo "✅ BACKEND_URL set"
+  BACKEND_URL="${BACKEND_URL%/}"
+  if ! validate_http_url "$BACKEND_URL"; then
+    echo "❌ Invalid URL: '$BACKEND_URL'. Must start with http:// or https://"
+    exit 1
+  fi
+  set_wrangler_var BACKEND_URL "$BACKEND_URL"
+  echo "✅ BACKEND_URL set in wrangler.toml [vars] (runtime-overridable via /admin/backend-url)"
 else
   echo "⚠️  BACKEND_URL not set — API routes will fallback to Vercel frontend."
 fi
@@ -126,6 +173,23 @@ if [ -n "$ALLOWED_ORIGINS" ]; then
   echo "$ALLOWED_ORIGINS" | npx wrangler secret put ALLOWED_ORIGINS
   echo "✅ ALLOWED_ORIGINS set"
 fi
+
+# ─── Step 5b: Admin Token (for runtime BACKEND_URL rotation) ──
+echo ""
+echo "📌 Step 5b: Admin Token"
+echo "------------------------"
+echo "This token gates POST /admin/backend-url, used to broadcast new"
+echo "Cloudflare tunnel URLs without redeploying the worker."
+read -rsp "Admin Token (press Enter to generate one): " ADMIN_TOKEN
+echo
+if [ -z "$ADMIN_TOKEN" ]; then
+  ADMIN_TOKEN=$(openssl rand -hex 32)
+  echo "   ✅ Generated a new Admin Token (saved to .admin-token for reference)"
+  echo "$ADMIN_TOKEN" > .admin-token
+  chmod 600 .admin-token
+fi
+echo "$ADMIN_TOKEN" | npx wrangler secret put ADMIN_TOKEN
+echo "✅ ADMIN_TOKEN set"
 
 # ─── Step 6: Generate Wrangler Types ───────────────────────
 echo ""
@@ -151,6 +215,14 @@ if [[ "$DEPLOY_NOW" =~ ^[Yy]?$ ]]; then
   echo "  2. Point DNS: api.bing.dev CNAME → your-worker.your-subdomain.workers.dev"
   echo "  3. Update Vercel FRONTEND_URL env var to use the worker URL"
   echo "  4. Update OCI BACKEND_URL to accept forwarded requests"
+  echo ""
+  echo "  Runtime tunnel URL rotation:"
+  echo "    On the ARM box (or wherever cloudflared restarts), run:"
+  echo "      ./edge-gateway/update-backend-url.sh --auto"
+  echo "    or:"
+  echo "      ./edge-gateway/update-backend-url.sh https://new-url.trycloudflare.com"
+  echo "    The script POSTs to /admin/backend-url with the ADMIN_TOKEN and"
+  echo "    updates the runtime BACKEND_URL in KV — no redeploy required."
 else
   echo "Skipping deploy. Run later with: cd workers/edge-gateway && npx wrangler deploy"
 fi

@@ -3,13 +3,28 @@ main = "src/index.ts"
 compatibility_date = "2025-03-01"
 compatibility_flags = ["nodejs_compat"]
 
-# === Environment Variables (set via `npx wrangler secret put`) ===
-# BACKEND_URL      — OCI backend URL (e.g. https://api.bing.dev)
-# FRONTEND_URL     — Vercel frontend URL (e.g. https://web-eight-ashen-83.vercel.app)
-# JWT_SECRET       — Secret for verifying JWT tokens
-# ALLOWED_ORIGINS  — Comma-separated list of allowed CORS origins
+# === Configuration Model =========================================
+# Plain vars (in this file, also overridable at runtime via KV):
+#   BACKEND_URL    — OCI backend URL (e.g. https://api.bing.dev or current
+#                    Cloudflare tunnel URL). Runtime override is written to
+#                    KV key `runtime:BACKEND_URL` by POST /admin/backend-url.
+#   FRONTEND_URL   — Vercel frontend URL.
+#
+# Secrets (set via `npx wrangler secret put <NAME>`):
+#   JWT_SECRET     — HS256 secret for verifying JWT tokens at the edge.
+#   ALLOWED_ORIGINS — Comma-separated list of allowed CORS origins.
+#   ADMIN_TOKEN    — Required to call POST /admin/backend-url. If unset,
+#                    the admin endpoint returns 503 (disabled).
+# =================================================================
 
-# === KV Namespace (Session Cache + Rate Limiting) ===
+[vars]
+# Deploy-time defaults. Overridable at runtime via KV (see above).
+# Update with: `npx wrangler deploy --var BACKEND_URL="https://..."` or by
+# editing this file and redeploying.
+BACKEND_URL = ""
+FRONTEND_URL = ""
+
+# === KV Namespace (Session Cache + Rate Limiting + Runtime Config) ===
 # ⚠️ Run setup.sh or manually create:
 #   npx wrangler kv namespace create bing-kv
 # Then paste the ID below
