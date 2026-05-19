@@ -1,6 +1,7 @@
 # Caddy 2 — HTTP reverse proxy (no TLS until we have a domain).
 # Routes based on URL path prefixes:
 #   /api/*, /health*  → backend (Hono orchestrator)
+#   /novnc/*          → noVNC web-based VNC client (on Docker host)
 #   /*                → 9Router (LLM gateway)
 #
 # When you get a domain:
@@ -21,6 +22,11 @@
                 write_timeout 30m
             }
         }
+    }
+
+    # noVNC web-based VNC client (on Docker host at 172.18.0.1:6080)
+    handle_path /novnc/* {
+        reverse_proxy 172.18.0.1:6080
     }
 
     # Everything else goes to 9router dashboard
