@@ -746,11 +746,18 @@ export default function MusicHubTab() {
             }
             
             if (albums.length > 0) {
-              setPlaylist({
+              const freshPlaylist = {
                 albums,
                 lastUpdated: data.timestamp || new Date().toISOString(),
                 autoUpdate: true,
-              });
+              };
+              setPlaylist(freshPlaylist);
+              // Cache fetched playlist so it survives page refreshes
+              try {
+                playbackCache.set('playlist', freshPlaylist);
+              } catch (err) {
+                console.warn('[MusicHub] Failed to cache playlist:', err);
+              }
               console.log(`[MusicHub] Loaded ${albums.length} playlists from API`);
             } else {
               console.warn('[MusicHub] No albums found in API response, using default');

@@ -87,6 +87,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
+import { PersistentCache } from "@/lib/utils/cache";
 // Helper to ensure image URLs go through the proxy
 function getProxiedImageUrl(url: string | undefined): string | undefined {
   if (!url) return undefined;
@@ -124,30 +125,61 @@ interface NewsArticle {
   author?: string;
 }
 
+// Cache news articles for 10 minutes so users don't refetch on every page load
+const newsCache = new PersistentCache('bing_news_', 10 * 60 * 1000);
+
 function NewsTab() {
   const [articles, setArticles] = useState<NewsArticle[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [usingFallback, setUsingFallback] = useState(false);
+  const [cachedAt, setCachedAt] = useState<number | null>(null);
 
-  const fetchNews = useCallback(async () => {
+  const fetchNews = useCallback(async (forceRefresh = false) => {
     try {
       setLoading(true);
+
+      // Try loading from cache first for instant render
+      if (!forceRefresh) {
+        const cached = newsCache.get<{ articles: NewsArticle[]; usingFallback: boolean; cachedAt: number }>('articles');
+        if (cached && cached.articles.length > 0) {
+          setArticles(cached.articles);
+          setUsingFallback(cached.usingFallback);
+          setCachedAt(cached.cachedAt);
+          setLoading(false);
+          // Return to allow background refresh
+        }
+      }
+
+      // Always fetch fresh data in the background
       const response = await fetch('/api/news?limit=30');
       const data = await response.json();
 
       if (data.success) {
         setArticles(data.articles);
         setUsingFallback(data.usingFallback || false);
+        setCachedAt(null);
+        // Cache the fresh data
+        newsCache.set('articles', {
+          articles: data.articles,
+          usingFallback: data.usingFallback || false,
+          cachedAt: Date.now(),
+        });
         if (data.usingFallback) {
           toast.info('Showing cached news (RSS feeds unavailable)');
         }
       } else {
-        setError(data.error || 'Failed to fetch news');
+        // Only show error if we have nothing cached
+        if (!newsCache.get('articles')) {
+          setError(data.error || 'Failed to fetch news');
+        }
       }
     } catch (err: any) {
       console.error('[NewsTab] Error:', err);
-      setError('Failed to fetch news');
+      // Only show error if we have nothing cached
+      if (!newsCache.get('articles')) {
+        setError('Failed to fetch news');
+      }
     } finally {
       setLoading(false);
     }
@@ -196,7 +228,7 @@ function NewsTab() {
             <Button
               variant="outline"
               size="sm"
-              onClick={fetchNews}
+              onClick={() => fetchNews(true)}
               className="mt-4 border-white/20"
             >
               <RefreshCw className="w-4 h-4 mr-2" />
@@ -210,6 +242,15 @@ function NewsTab() {
 
   return (
     <ScrollArea className="h-full">
+      {/* Cache indicator bar */}
+      {cachedAt && (
+        <div className="sticky top-0 z-10 px-6 pt-3 pb-1">
+          <div className="flex items-center gap-2 text-[10px] text-cyan-400/70 bg-cyan-500/10 border border-cyan-500/20 rounded-md px-3 py-1.5 w-fit">
+            <RefreshCw className="w-3 h-3" />
+            <span>Cached {Math.round((Date.now() - cachedAt) / 60000)} min ago — refreshing...</span>
+          </div>
+        </div>
+      )}
       <div className="p-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {articles.map((article, i) => (
           <motion.a
@@ -777,7 +818,7 @@ function ScrollableTabBar({
         className="flex-1 overflow-x-auto overflow-y-hidden scrollbar-none"
         style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
       >
-        <TabsList className="bg-transparent border-none h-auto p-0 gap-1 whitespace-nowrap">
+        <TabsList className="bg-transparent border-none h-auto p-0 gap-1 whitespace-nowrap min-w-max">
           {tabs.filter(tab => isTabVisible(tab.value)).map((tab) => {
             const Icon = tab.icon;
             const isActive = activeTab === tab.value;
@@ -874,7 +915,6 @@ export default function TopPanel() {
   const resizeStartWidth = useRef(100);
   const resizeHandle = useRef<'left' | 'right' | 'bottom' | null>(null);
   const touchStartX = useRef(0);
-  const MOBILE_TABS: TopPanelTab[] = ['news', 'plugins', 'marketplace'];
 
   // Tab visibility state - stored in localStorage
   const [visibleTabs, setVisibleTabs] = useState<TopPanelTab[]>(() => {
@@ -1115,13 +1155,13 @@ export default function TopPanel() {
               {/* Mobile: Header row — tab bar + close button */}
               <div className="relative z-10 shrink-0 p-2 border-b border-white/10 flex items-center gap-2">
                 <Tabs
-                  value={MOBILE_TABS.includes(topPanelActiveTab) ? topPanelActiveTab : 'news'}
+                  value={topPanelActiveTab}
                   onValueChange={(v) => setTopPanelTab(v as TopPanelTab)}
                   className="flex-1 min-w-0"
                 >
                   <ScrollableTabBar
-                    tabs={TAB_DEFS.filter(tab => MOBILE_TABS.includes(tab.value as TopPanelTab))}
-                    activeTab={MOBILE_TABS.includes(topPanelActiveTab) ? topPanelActiveTab : 'news'}
+                    tabs={TAB_DEFS.filter(tab => isTabVisible(tab.value))}
+                    activeTab={topPanelActiveTab}
                     onTabChange={setTopPanelTab}
                     isTabVisible={isTabVisible}
                     setTopPanelTab={setTopPanelTab}
@@ -1147,7 +1187,7 @@ export default function TopPanel() {
               {/* Mobile: Tab content area with swipe gesture support */}
               <div className="relative z-10 flex-1 overflow-y-auto rounded-b-xl">
                 <Tabs
-                  value={MOBILE_TABS.includes(topPanelActiveTab) ? topPanelActiveTab : 'news'}
+                  value={topPanelActiveTab}
                   className="h-full"
                 >
                   <div
@@ -1158,14 +1198,13 @@ export default function TopPanel() {
                     onTouchEnd={(e) => {
                       const touch = e.changedTouches[0];
                       const diffX = touchStartX.current - touch.clientX;
-                      const currentIndex = MOBILE_TABS.indexOf(
-                        MOBILE_TABS.includes(topPanelActiveTab) ? topPanelActiveTab : 'news'
-                      );
+                      const visibleTabValues = TAB_DEFS.filter(t => isTabVisible(t.value)).map(t => t.value);
+                      const currentIndex = visibleTabValues.indexOf(topPanelActiveTab);
                       if (Math.abs(diffX) > 50) {
-                        if (diffX > 0 && currentIndex < MOBILE_TABS.length - 1) {
-                          setTopPanelTab(MOBILE_TABS[currentIndex + 1]);
+                        if (diffX > 0 && currentIndex < visibleTabValues.length - 1) {
+                          setTopPanelTab(visibleTabValues[currentIndex + 1]);
                         } else if (diffX < 0 && currentIndex > 0) {
-                          setTopPanelTab(MOBILE_TABS[currentIndex - 1]);
+                          setTopPanelTab(visibleTabValues[currentIndex - 1]);
                         }
                       }
                     }}
@@ -1188,6 +1227,112 @@ export default function TopPanel() {
                     <TabsContent value="marketplace" className="h-full mt-0">
                       <TabErrorBoundary tabName="Marketplace">
                         <PluginMarketplace />
+                      </TabErrorBoundary>
+                    </TabsContent>
+                    <TabsContent value="workflows" className="h-full mt-0">
+                      <TabErrorBoundary tabName="Workflows">
+                        <WorkflowsTab />
+                      </TabErrorBoundary>
+                    </TabsContent>
+                    <TabsContent value="orchestration" className="h-full mt-0">
+                      <TabErrorBoundary tabName="Orchestration">
+                        <OrchestrationTab />
+                      </TabErrorBoundary>
+                    </TabsContent>
+                    <TabsContent value="art-gallery" className="h-full mt-0">
+                      <TabErrorBoundary tabName="Art Gallery">
+                        <ArtGalleryTab />
+                      </TabErrorBoundary>
+                    </TabsContent>
+                    <TabsContent value="mind-map" className="h-full mt-0">
+                      <TabErrorBoundary tabName="Mind Map">
+                        <MindMapTab />
+                      </TabErrorBoundary>
+                    </TabsContent>
+                    <TabsContent value="prompt-lab" className="h-full mt-0">
+                      <TabErrorBoundary tabName="Prompt Lab">
+                        <PromptLabTab />
+                      </TabErrorBoundary>
+                    </TabsContent>
+                    <TabsContent value="music" className="h-full mt-0">
+                      <TabErrorBoundary tabName="Music Visualizer">
+                        <MusicVisualizerTab />
+                      </TabErrorBoundary>
+                    </TabsContent>
+                    <TabsContent value="music-hub" className="h-full mt-0" forceMount>
+                      <TabErrorBoundary tabName="Music Hub">
+                        <MusicHubTab />
+                      </TabErrorBoundary>
+                    </TabsContent>
+                    <TabsContent value="immersive" className="h-full mt-0">
+                      <TabErrorBoundary tabName="Immersive View">
+                        <ImmersiveView />
+                      </TabErrorBoundary>
+                    </TabsContent>
+                    <TabsContent value="flow" className="h-full mt-0">
+                      <TabErrorBoundary tabName="Flow">
+                        <FlowEngine />
+                      </TabErrorBoundary>
+                    </TabsContent>
+                    <TabsContent value="events" className="h-full mt-0">
+                      <TabErrorBoundary tabName="Events">
+                        <EventsPanel />
+                      </TabErrorBoundary>
+                    </TabsContent>
+                    <TabsContent value="bookmarks" className="h-full mt-0">
+                      <TabErrorBoundary tabName="Bookmarks">
+                        <BookmarksCurationPlugin />
+                      </TabErrorBoundary>
+                    </TabsContent>
+                    <TabsContent value="code-playground" className="h-full mt-0">
+                      <TabErrorBoundary tabName="Code Playground">
+                        <CodePlaygroundTab />
+                      </TabErrorBoundary>
+                    </TabsContent>
+                    <TabsContent value="monaco-editor" className="h-full mt-0">
+                      <TabErrorBoundary tabName="Monaco Editor">
+                        <MonacoVFSEditor 
+                          initialFilePath={monacoFilePath || undefined}
+                          onClose={() => {
+                            closeMonacoEditor();
+                            setTopPanelTab('news');
+                          }}
+                        />
+                      </TabErrorBoundary>
+                    </TabsContent>
+                    <TabsContent value="broadway-deal-hunter" className="h-full mt-0">
+                      <TabErrorBoundary tabName="Broadway Deal Hunter">
+                        <BroadwayDealHunterTab />
+                      </TabErrorBoundary>
+                    </TabsContent>
+                    <TabsContent value="model-comparison" className="h-full mt-0">
+                      <TabErrorBoundary tabName="Model Comparison">
+                        <ModelComparisonTab />
+                      </TabErrorBoundary>
+                    </TabsContent>
+                    <TabsContent value="zine-display" className="h-full mt-0">
+                      <TabErrorBoundary tabName="Zine Display">
+                        <ZineDisplayTab />
+                      </TabErrorBoundary>
+                    </TabsContent>
+                    <TabsContent value="mcp" className="h-full mt-0">
+                      <TabErrorBoundary tabName="MCP Store">
+                        <MCPStore />
+                      </TabErrorBoundary>
+                    </TabsContent>
+                    <TabsContent value="movies" className="h-full mt-0">
+                      <TabErrorBoundary tabName="Movies">
+                        <PStreamEmbedPlugin onClose={closeTopPanel} />
+                      </TabErrorBoundary>
+                    </TabsContent>
+                    <TabsContent value="experience" className="h-full mt-0">
+                      <TabErrorBoundary tabName="Experience">
+                        <ExperiencePanel />
+                      </TabErrorBoundary>
+                    </TabsContent>
+                    <TabsContent value="movies-old" className="h-full mt-0">
+                      <TabErrorBoundary tabName="Movies">
+                        <PStreamEmbedPlugin onClose={closeTopPanel} />
                       </TabErrorBoundary>
                     </TabsContent>
                   </div>

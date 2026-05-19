@@ -47,6 +47,7 @@ import {
   Wifi,
 } from "lucide-react";
 import { toast } from "sonner";
+import { PersistentCache } from "@/lib/utils/cache";
 
 // Helper to ensure image URLs go through the proxy
 function getProxiedImageUrl(url: string | undefined): string | undefined {
@@ -120,6 +121,9 @@ const NEWS_SOURCES = [
   { id: "wired", name: "Wired", icon: Zap, color: "text-yellow-400", bg: "bg-yellow-500/20", feed: "wired", category: "tech" },
   { id: "bbc", name: "BBC Tech", icon: Globe, color: "text-green-400", bg: "bg-green-500/20", feed: "bbc", category: "world" },
 ];
+
+// Cache for news articles (persists across page refreshes, 10 min TTL)
+const newsCache = new PersistentCache('bing_news_panel_', 10 * 60 * 1000);
 
 // Key for storing layout preferences in localStorage
 const LAYOUT_STORAGE_KEY = 'bing-news-layout-';
@@ -633,6 +637,7 @@ export function NewsPanel({ onClose }: NewsPanelProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [refreshing, setRefreshing] = useState(false);
+  const [cachedAt, setCachedAt] = useState<number | null>(null);
   const [layoutConfig, setLayoutConfig] = useState<LayoutConfig>(LAYOUT_TEMPLATES.default);
   const [showLayoutSettings, setShowLayoutSettings] = useState(false);
   const [allArticles, setAllArticles] = useState<NewsArticle[]>([]); // Store all for "all" source
@@ -665,10 +670,27 @@ export function NewsPanel({ onClose }: NewsPanelProps) {
     }
   }, [layoutConfig]);
 
-  // Fetch articles from RSS API
-  const fetchArticles = async (source: string) => {
+  // Fetch articles from RSS API with cache-first-then-refresh pattern
+  const fetchArticles = async (source: string, forceRefresh = false) => {
     setIsLoading(true);
+
+    // Try loading from cache first for instant render
+    if (!forceRefresh) {
+      const cacheKey = `articles_${source}`;
+      const cached = newsCache.get<{ articles: NewsArticle[]; allArticles: NewsArticle[]; cachedAt: number }>(cacheKey);
+      if (cached && cached.articles.length > 0) {
+        setArticles(cached.articles);
+        setAllArticles(cached.allArticles);
+        setCachedAt(cached.cachedAt);
+        setIsLoading(false);
+        // Continue to fetch fresh data in background
+      }
+    }
+
     try {
+      let fetchedArticles: NewsArticle[] = [];
+      let fetchedAllArticles: NewsArticle[] = [];
+
       // If "all", fetch from multiple sources
       if (source === 'all') {
         const sources = ['hn', 'techcrunch', 'ars', 'verge'];
@@ -680,8 +702,8 @@ export function NewsPanel({ onClose }: NewsPanelProps) {
         if (combined.length === 0) {
           // Fallback to mock
           const mockWithImages = generateMockArticles('hn', 15);
-          setArticles(mockWithImages);
-          setAllArticles(mockWithImages);
+          fetchedArticles = mockWithImages;
+          fetchedAllArticles = mockWithImages;
         } else {
           // Fetch missing images
           const imageMap = await fetchMissingImages(combined);
@@ -690,8 +712,8 @@ export function NewsPanel({ onClose }: NewsPanelProps) {
             imageUrl: article.imageUrl || imageMap.get(article.id)?.[0],
             readingTime: Math.ceil((article.description?.split(' ').length || 100) / 200),
           }));
-          setArticles(withImages);
-          setAllArticles(withImages);
+          fetchedArticles = withImages;
+          fetchedAllArticles = withImages;
         }
       } else {
         const rssArticles = await fetchRSSArticles(source);
@@ -699,8 +721,8 @@ export function NewsPanel({ onClose }: NewsPanelProps) {
         if (rssArticles.length === 0) {
           // Fallback to mock data
           const mock = generateMockArticles(source, 15);
-          setArticles(mock);
-          if (source === 'all') setAllArticles(mock);
+          fetchedArticles = mock;
+          fetchedAllArticles = mock;
         } else {
           // Fetch missing images
           const imageMap = await fetchMissingImages(rssArticles);
@@ -709,16 +731,33 @@ export function NewsPanel({ onClose }: NewsPanelProps) {
             imageUrl: article.imageUrl || imageMap.get(article.id)?.[0],
             readingTime: Math.ceil((article.description?.split(' ').length || 100) / 200),
           }));
-          setArticles(withImages);
-          if (source === 'all') setAllArticles(withImages);
+          fetchedArticles = withImages;
+          fetchedAllArticles = withImages;
         }
       }
+
+      // Set fresh data and update cache
+      setArticles(fetchedArticles);
+      setAllArticles(fetchedAllArticles);
+      setCachedAt(null);
+
+      const cacheKey = `articles_${source}`;
+      newsCache.set(cacheKey, {
+        articles: fetchedArticles,
+        allArticles: fetchedAllArticles,
+        cachedAt: Date.now(),
+      });
     } catch (error) {
       console.error("Failed to fetch news:", error);
-      toast.error("Failed to load news");
-      // Fallback
-      const mock = generateMockArticles(source === "all" ? "hn" : source, 15);
-      setArticles(mock);
+      const cacheKey = `articles_${source}`;
+      // Only show error if we have nothing cached
+      if (!newsCache.get(cacheKey)) {
+        toast.error("Failed to load news");
+        // Fallback
+        const mock = generateMockArticles(source === "all" ? "hn" : source, 15);
+        setArticles(mock);
+        setAllArticles(mock);
+      }
     } finally {
       setIsLoading(false);
     }
@@ -737,10 +776,10 @@ export function NewsPanel({ onClose }: NewsPanelProps) {
     return () => clearInterval(interval);
   }, [selectedSource]);
 
-  // Refresh handler
+  // Refresh handler (bypasses cache)
   const handleRefresh = async () => {
     setRefreshing(true);
-    await fetchArticles(selectedSource);
+    await fetchArticles(selectedSource, true);
     setRefreshing(false);
     toast.success("News refreshed");
   };
@@ -920,6 +959,11 @@ export function NewsPanel({ onClose }: NewsPanelProps) {
           <div>
             <h2 className="text-sm font-semibold text-white/90">News Feed</h2>
             <p className="text-[10px] text-white/40">Latest stories from across the web</p>
+            {cachedAt && (
+              <p className="text-[9px] text-cyan-400/70 mt-0.5">
+                Cached {Math.floor((Date.now() - cachedAt) / 60000)} min ago — refreshing...
+              </p>
+            )}
           </div>
         </div>
         <Button
