@@ -1,0 +1,100 @@
+# Trim what gets uploaded to Railway builders. The Dockerfile only needs:
+#   backend/  packages/  web/lib/  web/app/api/chat/chat-helpers.ts
+#   tsconfig.json  package.json  pnpm-lock.yaml  pnpm-workspace.yaml
+# Everything else just inflates the upload tarball.
+**/node_modules
+**/.next
+**/.turbo
+**/dist
+**/build
+**/.git
+**/.github
+**/.vscode
+**/.idea
+**/.DS_Store
+**/coverage
+**/*.log
+**/.env
+**/.env.local
+**/.env.*.local
+**/test-results
+**/playwright-report
+**/.playwright-cli
+**/.sauce
+desktop/
+deprecated/
+docs/
+reviews/
+data/
+infra/grafana/
+tests/
+test/
+__tests__/
+tools/
+workers/
+netlify/
+# Big artifacts at root
+testcontainers-node-main.zip
+*.zip
+fix-model-key.js
+push-env.js
+tail-logs.js
+gradientBG.html
+prematureStopp.md
+issues-analysis.md
+TEST_STATUS_AND_REMAINING_WORK.md
+route-exports-audit.json
+v1v2.md
+000map.md
+000deploy.md
+fastagent.config.yaml
+nullclaw.config.yml
+prometheus.yml
+traefik.yml
+railway.json.bak
+# Web pieces the backend doesn't need (Dockerfile only COPYs web/lib)
+web/app/(main)/
+web/components/
+web/public/
+web/.next/
+web/test*
+web/playwright*
+web/e2e-*
+web/Dockerfile.local-pty
+web/test-*
+web/vitest*
+web/postcss.config.mjs
+web/tailwind.config.ts
+web/next.config.mjs
+web/next-env.d.ts
+web/server.ts
+web/jsconfig.json
+web/eslint.config.js
+web/commitlint.config.js
+web/components.json
+web/fastagent.config.yaml
+web/mcp.config.json
+web/mcp.json
+web/skills-lock.json
+web/registry_original_backup.ts
+web/check-depth.js
+web/fix-mcp-scope.cjs
+web/fix_logger.py
+web/verify-path-normalization.js
+#   backend/  packages/  web/lib/  web/app/api/chat/chat-helpers.ts
+#   tsconfig.json  package.json  pnpm-lock.yaml  pnpm-workspace.yaml
+# Everything else just inflates the upload tarball.
+node_modules
+**/node_modules
+.next
+**/.next
+web/.next
+.turbo
+**/.turbo
+dist
+**/dist
+build
+**/build
+**/.git
+**/.github
+**/.vscode
