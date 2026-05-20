@@ -16,6 +16,7 @@
 
 :80 {
     encode zstd gzip
+
     # Bing backend routes
     @bing_api path /api/* /health*
     handle @bing_api {
@@ -27,6 +28,7 @@
             }
         }
     }
+
     # Nocturne n8n routes (must come before nocturne catch-all)
     @nocturne_n8n path /nocturne-n8n/*
     handle @nocturne_n8n {
@@ -74,6 +76,7 @@
             }
         }
     }
+
     # noVNC web-based VNC client (on Docker host at 172.18.0.1:6080)
     handle_path /novnc/* {
         reverse_proxy 172.18.0.1:6080
@@ -83,6 +86,25 @@
     handle {
         reverse_proxy ninerouter:3000 {
             flush_interval -1
+            # Forward headers so 9Router knows it is behind a reverse proxy with HTTPS
+            header_up Host {host}
+            header_up X-Forwarded-Proto "https"
+            header_up X-Forwarded-Host {host}
+            header_up X-Real-IP {remote}
+            header_up X-Forwarded-For {remote}
+
+            # Cookie handling for tunnel access:
+            # Stripping Domain is SAFE - it makes cookies "host-only" which is
+            # MORE restrictive than domain-scoped cookies. Host-only cookies are
+            # only sent to the exact hostname, not shared across subdomains.
+            # Without stripping, 9Router sets Domain=IP which browsers refuse
+            # to send to *.trycloudflare.com (different domain).
+            header_down Set-Cookie "; Domain=129.213.35.8" ""
+            header_down Set-Cookie "; Domain=127.0.0.1" ""
+            header_down Set-Cookie "; Domain=localhost" ""
+            header_down Set-Cookie "Domain=129.213.35.8; " ""
+            header_down Set-Cookie "Domain=127.0.0.1; " ""
+            header_down Set-Cookie "Domain=localhost; " ""
         }
     }
 }
