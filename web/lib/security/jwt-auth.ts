@@ -97,7 +97,7 @@ function getSecretKey(): string {
       '⚠️  WARNING: JWT_SECRET not set. Using insecure development key.\n' +
       'Set JWT_SECRET environment variable for production.'
     );
-    return 'dev-insecure-key-change-in-production-' + Date.now();
+    return require('crypto').randomBytes(32).toString('hex');
   }
 
 

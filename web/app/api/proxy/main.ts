@@ -437,16 +437,16 @@ export async function GET(request: NextRequest) {
 
     return new NextResponse(assetLimitedStream, {
       status: response.status,
-      headers: {
-        'Content-Type': contentType,
-        'X-Proxied': 'true',
-        'X-Final-Url': finalUrl,
-        'Cache-Control': response.headers.get('cache-control') || 'public, max-age=300',
-        // Restrict CORS to parent origin for embedded assets
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'GET, OPTIONS',
-        // Do NOT forward Set-Cookie from upstream
-      },
+       headers: {
+         'Content-Type': contentType,
+         'X-Proxied': 'true',
+         'X-Final-Url': finalUrl,
+         'Cache-Control': response.headers.get('cache-control') || 'public, max-age=300',
+         // Restrict CORS to requesting origin for embedded assets
+         'Access-Control-Allow-Origin': request.headers.get('origin') || '*',
+         'Access-Control-Allow-Methods': 'GET, OPTIONS',
+         // Do NOT forward Set-Cookie from upstream
+       },
     });
   }
 
@@ -499,7 +499,7 @@ export async function GET(request: NextRequest) {
       ].join('; '),
       'X-Frame-Options': 'SAMEORIGIN',
       'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=(), magnetometer=(), gyroscope=(), accelerometer=()',
-      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Origin': request.headers.get('origin') || '*',
       'Access-Control-Allow-Methods': 'GET, OPTIONS',
     };
 
@@ -557,7 +557,7 @@ export async function GET(request: NextRequest) {
     'X-Original-Url': url,
 
     // CORS headers for iframe consumption
-    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Origin': request.headers.get('origin') || '*',
     'Access-Control-Allow-Methods': 'GET, OPTIONS',
     'Access-Control-Allow-Headers': '*',
   };
@@ -615,11 +615,11 @@ export async function GET(request: NextRequest) {
 /**
  * OPTIONS /api/proxy - CORS preflight
  */
-export async function OPTIONS() {
+export async function OPTIONS(request: NextRequest) {
   return new NextResponse(null, {
     status: 204,
     headers: {
-      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Origin': request.headers.get('origin') || '*',
       'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
       'Access-Control-Allow-Headers': '*',
       'Access-Control-Max-Age': '86400',

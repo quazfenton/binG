@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge';
 import { verifyAuth } from '@/lib/auth/jwt';
+import { csrfCheckOrReject } from '@/lib/auth/csrf';
 import { getSandboxProvider } from '@/lib/sandbox/providers/index';
 import { checkUserRateLimit } from '@/lib/middleware/rate-limiter';
 
@@ -9,6 +10,10 @@ import { checkUserRateLimit } from '@/lib/middleware/rate-limiter';
 
 export async function POST(req: NextRequest) {
   try {
+    // CSRF protection for state-changing operations
+    const csrfReject = csrfCheckOrReject(req);
+    if (csrfReject) return csrfReject;
+
     // CRITICAL: Authenticate user from JWT token - do NOT trust userId from request body
     const authResult = await verifyAuth(req);
     if (!authResult.success || !authResult.userId) {
@@ -75,6 +80,10 @@ export async function GET(req: NextRequest) {
 
 export async function DELETE(req: NextRequest) {
   try {
+    // CSRF protection for state-changing operations
+    const csrfReject = csrfCheckOrReject(req);
+    if (csrfReject) return csrfReject;
+
     // CRITICAL: Authenticate user from JWT token
     const authResult = await verifyAuth(req);
     if (!authResult.success || !authResult.userId) {
@@ -130,6 +139,10 @@ export async function DELETE(req: NextRequest) {
  */
 export async function PATCH(req: NextRequest) {
   try {
+    // CSRF protection for state-changing operations
+    const csrfReject = csrfCheckOrReject(req);
+    if (csrfReject) return csrfReject;
+
     // CRITICAL: Authenticate user from JWT token - do NOT trust userId from request body
     const authResult = await verifyAuth(req);
     if (!authResult.success || !authResult.userId) {

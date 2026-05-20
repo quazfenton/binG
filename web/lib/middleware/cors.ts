@@ -76,7 +76,16 @@ function validateOrigin(origin: string | null, config: CORSConfig): boolean {
   for (const allowed of config.origins) {
     if (allowed.startsWith('*.')) {
       const domain = allowed.slice(2);
-      if (origin.endsWith(domain)) return true;
+      // Parse origin as URL to extract hostname
+      try {
+        const url = new URL(origin);
+        const hostname = url.hostname;
+        // Match exact subdomain.domain.tld pattern
+        // hostname must end with .domain.tld (not just domain.tld)
+        if (hostname.endsWith('.' + domain) || hostname === domain) return true;
+      } catch {
+        // Invalid URL, skip
+      }
     }
   }
 
