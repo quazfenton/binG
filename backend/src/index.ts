@@ -14,8 +14,27 @@ app.use("*", logger());
 app.use(
   "/api/*",
   cors({
-    origin: process.env.FRONTEND_URL || "http://localhost:3000",
+    origin: (origin) => {
+      const allowed = [
+        process.env.FRONTEND_URL || "http://localhost:3000",
+        process.env.NEXT_PUBLIC_APP_URL,
+        origin?.startsWith('http://localhost') ? origin : undefined,
+        origin?.startsWith('http://127.0.0.1') ? origin : undefined,
+      ].filter(Boolean);
+
+      // Allow *.trycloudflare.com for tunnel access (dynamic subdomain)
+      if (origin?.endsWith('.trycloudflare.com')) {
+        return origin;
+      }
+
+      if (allowed.includes(origin)) {
+        return origin;
+      }
+      return undefined;
+    },
     credentials: true,
+    allowHeaders: ['Content-Type', 'Authorization', 'X-User-ID', 'X-Forwarded-For', 'X-Real-IP', 'X-Forwarded-Authorization'],
+    exposeHeaders: ['Content-Type'],
   })
 );
 

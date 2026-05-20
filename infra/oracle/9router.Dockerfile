@@ -11,13 +11,11 @@ RUN npm install -g --legacy-peer-deps 9router@latest
 
 ENV PORT=3000
 ENV NODE_ENV=production
+ENV NINEROUTER_DATA_DIR=/data
 EXPOSE 3000
 
-# 9router persists its SQLite DB and config under $HOME/.9router (i.e. /root/.9router
-# in this image since it runs as root). Mount a named volume there in compose to persist
-# the dashboard password and saved configuration across container recreations.
-VOLUME ["/root/.9router"]
+VOLUME ["/data"]
 
 # 9router CLI options: -p port, -H host, -l logs
-# Auth env vars: INITIAL_PASSWORD (seeds dashboard password on first run), JWT_SECRET
+# Config is via CLI flags and env vars (NINEROUTER_ADMIN_KEY, etc.) - no config file needed
 ENTRYPOINT ["9router", "-p", "3000", "-H", "0.0.0.0", "-l", "--skip-update"]

@@ -24,7 +24,7 @@ export async function proxy(request: NextRequest) {
     const response = NextResponse.redirect(new URL(request.nextUrl.pathname, request.url));
     response.cookies.set('sid_tkn', queryToken, { 
       httpOnly: true, 
-      secure: false, // Localhost
+      secure: process.env.NODE_ENV === 'production',
       sameSite: 'strict',
       path: '/' 
     });
@@ -47,9 +47,27 @@ export async function proxy(request: NextRequest) {
     // Create the rewrite response
     const response = NextResponse.rewrite(targetUrl);
     
-    // CRITICAL: Ensure CORS and Credentials headers are preserved during rewrite
-    response.headers.set('Access-Control-Allow-Origin', request.headers.get('origin') || '*');
+    // CRITICAL: Validate origin against allowlist before echoing with credentials
+    // Never use '*' with Access-Control-Allow-Credentials
+    const allowedOrigins = new Set([
+      process.env.FRONTEND_URL || 'http://localhost:3000',
+      process.env.NEXT_PUBLIC_APP_URL,
+    ].filter(Boolean));
+    
+    const requestOrigin = request.headers.get('origin');
+    if (requestOrigin && allowedOrigins.has(requestOrigin)) {
+      response.headers.set('Access-Control-Allow-Origin', requestOrigin);
+    } else if (!requestOrigin || requestOrigin.startsWith('http://localhost')) {
+      response.headers.set('Access-Control-Allow-Origin', requestOrigin || '*');
+    }
+    
     response.headers.set('Access-Control-Allow-Credentials', 'true');
+    
+    // Forward Authorization header explicitly (rewrite may strip it)
+    const authHeader = request.headers.get('authorization');
+    if (authHeader) {
+      response.headers.set('X-Forwarded-Authorization', authHeader);
+    }
     
     return response;
   }
