@@ -57,9 +57,18 @@ services:
     environment:
       PORT: "3000"
       NODE_ENV: production
+      # 9router auth: INITIAL_PASSWORD seeds the dashboard password on first init
+      # (only honored when the data volume is empty). JWT_SECRET signs session tokens.
+      # NINEROUTER_ADMIN_KEY is kept for downstream consumers (backend/Vercel) that
+      # call 9router programmatically with an X-Admin-Key header.
+      INITIAL_PASSWORD: ${NINEROUTER_ADMIN_KEY}
+      JWT_SECRET: ${JWT_SECRET}
       NINEROUTER_ADMIN_KEY: ${NINEROUTER_ADMIN_KEY}
     volumes:
-      - ninerouter_data:/data
+      # 9router persists its SQLite DB and config under $HOME/.9router (i.e. /root/.9router
+      # in this image since it runs as root). Mount the named volume there so the dashboard
+      # password and saved configuration survive container recreation.
+      - ninerouter_data:/root/.9router
     networks: [edge]
 
   cloudflared:

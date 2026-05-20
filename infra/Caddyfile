@@ -16,6 +16,7 @@
 
 :80 {
     encode zstd gzip
+
     # Bing backend routes
     @bing_api path /api/* /health*
     handle @bing_api {
@@ -27,6 +28,7 @@
             }
         }
     }
+
     # Nocturne n8n routes (must come before nocturne catch-all)
     @nocturne_n8n path /nocturne-n8n/*
     handle @nocturne_n8n {
@@ -74,6 +76,7 @@
             }
         }
     }
+
     # noVNC web-based VNC client (on Docker host at 172.18.0.1:6080)
     handle_path /novnc/* {
         reverse_proxy 172.18.0.1:6080

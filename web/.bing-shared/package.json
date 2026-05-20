@@ -7,7 +7,6 @@
     "./FS": "./FS/index.ts",
     "./FS/*": "./FS/*.ts"
   },
-  "dependencies": {},
   "peerDependencies": {
     "typescript": "^5.0.0"
   }
