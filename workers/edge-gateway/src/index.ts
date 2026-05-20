@@ -119,11 +119,16 @@ export default {
       proxyHeaders.set('X-Forwarded-Proto', url.protocol.replace(':', ''));
       proxyHeaders.set('X-Forwarded-Host', url.hostname);
 
+      // NOTE: no AbortSignal.timeout here on purpose.
+      // The previous 25 s cap cut off long agent SSE streams. Cloudflare
+      // Workers do NOT charge CPU time for time spent waiting on the
+      // upstream `fetch` body, so streaming responses can run for the
+      // full request lifetime (up to CF's hard 30 min cap on enterprise,
+      // ~10 min on paid, ~5 min on free — all far beyond what we need).
       const proxyResponse = await fetch(target.url, {
         method: request.method,
         headers: proxyHeaders,
         body: request.method !== 'GET' && request.method !== 'HEAD' ? request.body : undefined,
-        signal: AbortSignal.timeout(25000),
       });
 
       // ─── Build Response ────────────────────────────────────────────
