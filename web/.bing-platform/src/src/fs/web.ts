@@ -1,0 +1,139 @@
+/**
+ * Web File System Implementation
+ *
+ * Browser-based file operations using File API and drag-and-drop.
+ */
+
+export interface FsAdapter {
+  readFile(input: string | File): Promise<string>;
+  readBinaryFile?(path: string): Promise<Uint8Array>;
+  writeFile?(path: string, content: string): Promise<void>;
+  writeBinaryFile?(path: string, data: Uint8Array): Promise<void>;
+  readDir?(path: string): Promise<{ name: string; isDirectory: boolean; size?: number }[]>;
+  createDir?(path: string, recursive?: boolean): Promise<void>;
+  removeDir?(path: string, recursive?: boolean): Promise<void>;
+  removeFile?(path: string): Promise<void>;
+  exists?(path: string): Promise<boolean>;
+  copyFile?(src: string, dest: string): Promise<void>;
+  openFileDialog(options?: { accept?: string; multiple?: boolean }): Promise<File[] | string[]>;
+  saveFileDialog?(options?: { defaultPath?: string }): Promise<string | null>;
+  // Web-only methods (optional for desktop)
+  readAsDataURL?(file: File): Promise<string>;
+  readAsArrayBuffer?(file: File): Promise<ArrayBuffer>;
+  downloadFile?(content: string, filename: string, mimeType?: string): void;
+}
+
+class WebFs implements FsAdapter {
+  async readFile(input: string | File): Promise<string> {
+    if (typeof input === 'string') {
+      // MED-6 fix: Throw NotImplementedError for path-based reads in web mode
+      // Previously threw a generic Error — callers couldn't distinguish
+      // "web doesn't support this" from "actual I/O failure"
+      const err: Error & { code?: string } = new Error(
+        'Web fs readFile requires a File object, not a path string. '
+        + 'Path-based filesystem access is not available in browser mode.'
+      );
+      err.code = 'ENOTSUP'; // Not supported
+      throw err;
+    }
+    return await input.text();
+  }
+
+  async readAsDataURL(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async readAsArrayBuffer(file: File): Promise<ArrayBuffer> {
+    return await file.arrayBuffer();
+  }
+
+  /**
+   * Download content as a file.
+   * 
+   * @param content - The file content to download
+   * @param filename - The name of the file to save
+   * @param mimeType - The MIME type of the file (default: 'text/plain')
+   * 
+   * @remarks
+   * **Browser Limitation**: This method uses a fixed 1000ms timeout for URL revocation.
+   * On slow devices or with large files, the download may not have started before the URL is revoked,
+   * potentially causing the download to fail. Conversely, if users download many files, this could
+   * lead to memory leaks if URLs are not revoked promptly.
+   * 
+   * The timeout is a trade-off between:
+   * - Too short: Download may fail on slow connections
+   * - Too long: Memory leaks from unreleased URLs
+   * 
+   * For production use, consider:
+   * - Monitoring download completion via browser APIs (limited support)
+   - Using a download manager library for better control
+   - Adjusting the timeout based on expected file sizes
+   */
+  downloadFile(content: string, filename: string, mimeType = 'text/plain'): void {
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    
+    // Revoke URL after click event to ensure download starts
+    // Use setTimeout of 0 to allow event loop to process the click first
+    a.onclick = () => {
+      setTimeout(() => {
+        URL.revokeObjectURL(url);
+      }, 0);
+    };
+    
+    a.click();
+    document.body.removeChild(a);
+  }
+
+  openFileDialog(options?: { accept?: string; multiple?: boolean }): Promise<string[]> {
+    return new Promise((resolve) => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = options?.accept ?? '*';
+      input.multiple = options?.multiple ?? false;
+
+      let settled = false;
+      const settle = (files: File[] | null) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutId);
+        window.removeEventListener('focus', onWindowFocus);
+        input.remove();
+        // Return dummy strings for File array since web mode openFileDialog isn't supported for returning paths
+        // MED-6 type fix: return names instead of File objects to match interface, though real usage
+        // shouldn't depend on these being resolvable paths in web mode
+        resolve(files ? files.map(f => f.name) : []);
+      };
+
+      const timeoutId = setTimeout(() => {
+        if (!settled) {
+          console.warn('[WebFs] File dialog open > 60s, user may still be selecting files');
+        }
+      }, 60000); // Log warning after 60s, don't cancel
+
+      const onWindowFocus = () => {
+      // When window regains focus, explicitly check if files were actually selected
+      // (empty result indicates cancellation, not successful empty selection)
+      const files = input.files ? Array.from(input.files) : [];
+      settle(files.length > 0 ? files : null);
+    };
+
+      input.onchange = () => settle(Array.from(input.files || []));
+
+      window.addEventListener('focus', onWindowFocus, { once: true });
+      input.click();
+    });
+  }
+}
+
+export const fs = new WebFs();
+export default fs;

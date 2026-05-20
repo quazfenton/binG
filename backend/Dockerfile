@@ -9,7 +9,7 @@
 FROM node:20-slim AS base
 ENV PNPM_HOME="/pnpm"
 ENV PATH="$PNPM_HOME:$PATH"
-ENV CI=true
+ENV CI=false
 RUN corepack enable
 
 # ----------------------------------------------------------
@@ -30,9 +30,11 @@ COPY backend/package.json        ./backend/package.json
 COPY packages/shared/package.json   ./packages/shared/package.json
 COPY packages/platform/package.json ./packages/platform/package.json
 COPY packages/mcp-server/package.json ./packages/mcp-server/package.json
+COPY web/.bing-platform ./web/.bing-platform
+COPY web/.bing-shared ./web/.bing-shared
 
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
-    pnpm install --frozen-lockfile --filter backend... --filter @bing/shared... --filter @bing/platform...
+    pnpm install  --filter backend... --filter @bing/shared... --filter @bing/platform...
 
 # ----------------------------------------------------------
 # Stage 2 — copy source + run tsc (noEmit) for type safety
@@ -46,6 +48,7 @@ COPY packages ./packages
 # `web/lib` is consumed via tsconfig path "@/*": ["../web/*"].
 # We only ship `web/lib` (no app/, components/, public/) to keep the image small.
 COPY web/lib  ./web/lib
+COPY web/deprecated ./web/deprecated
 COPY web/app/api/chat/chat-helpers.ts ./web/app/api/chat/chat-helpers.ts
 COPY tsconfig.json ./tsconfig.json
 

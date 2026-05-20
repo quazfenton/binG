@@ -26,6 +26,5 @@
   },
   "devDependencies": {
     "typescript": "^5.8.0"
-  },
-  "peerDependencies": {}
+  }
 }
