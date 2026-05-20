@@ -9,6 +9,28 @@ set -o pipefail
 OUTDIR="out"
 STDERR_LOG="/tmp/next-build-stderr.log"
 
+# ── Step 0: Stash app/api so static export ignores backend routes ──────
+# The Oracle backend serves every /api/* route, so the Vercel build does
+# not need them. We MOVE the dir out of the build path before `next build`
+# and restore it afterwards, even on failure. This replaces the previous
+# (destructive) approach of deleting route.ts files.
+API_DIR="app/api"
+API_STASH="/tmp/bing-app-api-stash-$$"
+
+restore_api() {
+  if [ -d "$API_STASH" ] && [ ! -d "$API_DIR" ]; then
+    mkdir -p "$(dirname "$API_DIR")"
+    mv "$API_STASH" "$API_DIR"
+    echo "↩  Restored $API_DIR from stash."
+  fi
+}
+trap restore_api EXIT INT TERM
+
+if [ -d "$API_DIR" ]; then
+  mv "$API_DIR" "$API_STASH"
+  echo "📦 Stashed $API_DIR → $API_STASH (kept off the Vercel build path)"
+fi
+
 # ── Step 1: Sync vendored monorepo packages ───────────────────────────
 # Copies packages/shared and packages/platform into web/.bing-*
 # so TypeScript path aliases (@bing/shared, @bing/platform) resolve.
