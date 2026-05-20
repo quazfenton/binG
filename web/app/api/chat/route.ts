@@ -283,7 +283,7 @@ export async function POST(request: NextRequest) {
       const isSecure = process.env.NODE_ENV === 'production';
       response.headers.set(
         'set-cookie',
-        `anon-session-id=${anonSessionIdToSet}; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly${isSecure ? '; Secure' : ''}`
+        `anon-session-id=${anonSessionIdToSet}; Path=/; Max-Age=2592000; SameSite=Lax; HttpOnly${isSecure ? '; Secure' : ''}`
       );
     }
     return response;
@@ -3255,12 +3255,12 @@ const config: UnifiedAgentConfig = {
               Expires: '0',
               Connection: 'keep-alive',
               'X-Accel-Buffering': 'no',
-              'Access-Control-Allow-Origin': process.env.NEXT_PUBLIC_APP_URL || request.headers.get('origin') || '',
+              'Access-Control-Allow-Origin': process.env.NEXT_PUBLIC_APP_URL || '',
               'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
               'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-anonymous-session-id',
               'Vary': 'Origin',
               ...(anonSessionIdToSet ? {
-                'Set-Cookie': `anon-session-id=${anonSessionIdToSet}; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`,
+                'Set-Cookie': `anon-session-id=${anonSessionIdToSet}; Path=/; Max-Age=2592000; SameSite=Lax; HttpOnly${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`,
               } : {}),
             },
           });
@@ -3703,12 +3703,12 @@ const config: UnifiedAgentConfig = {
               Expires: "0",
               Connection: "keep-alive",
               "X-Accel-Buffering": "no",
-              "Access-Control-Allow-Origin": process.env.NEXT_PUBLIC_APP_URL || request.headers.get('origin') || "",
+              "Access-Control-Allow-Origin": process.env.NEXT_PUBLIC_APP_URL || '',
               "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
               "Access-Control-Allow-Headers": "Content-Type, Authorization, x-anonymous-session-id",
               "Vary": "Origin",
               ...(anonSessionIdToSet ? {
-                "Set-Cookie": `anon-session-id=${anonSessionIdToSet}; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`,
+                "Set-Cookie": `anon-session-id=${anonSessionIdToSet}; Path=/; Max-Age=2592000; SameSite=Lax; HttpOnly${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`,
               } : {}),
             },
           });
@@ -4125,12 +4125,12 @@ const config: UnifiedAgentConfig = {
             Expires: "0",
             Connection: "keep-alive",
             "X-Accel-Buffering": "no",
-            "Access-Control-Allow-Origin": process.env.NEXT_PUBLIC_APP_URL || request.headers.get('origin') || "",
+            "Access-Control-Allow-Origin": process.env.NEXT_PUBLIC_APP_URL || '',
             "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
             "Access-Control-Allow-Headers": "Content-Type, Authorization, x-anonymous-session-id",
             "Vary": "Origin",
             ...(anonSessionIdToSet ? {
-              "Set-Cookie": `anon-session-id=${anonSessionIdToSet}; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`,
+              "Set-Cookie": `anon-session-id=${anonSessionIdToSet}; Path=/; Max-Age=2592000; SameSite=Lax; HttpOnly${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`,
             } : {}),
           },
         });
@@ -4553,7 +4553,7 @@ async function handleGatewayStreaming(params: {
       'Connection': 'keep-alive',
       'X-Accel-Buffering': 'no',
       ...(anonSessionIdToSet ? {
-        'Set-Cookie': `anon-session-id=${anonSessionIdToSet}; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`,
+        'Set-Cookie': `anon-session-id=${anonSessionIdToSet}; Path=/; Max-Age=2592000; SameSite=Lax; HttpOnly${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`,
       } : {}),
     },
   });
@@ -5999,7 +5999,7 @@ export async function OPTIONS(request: NextRequest) {
   return new Response(null, {
     status: 200,
     headers: {
-      "Access-Control-Allow-Origin": process.env.NEXT_PUBLIC_APP_URL || request.headers.get('origin') || "",
+      "Access-Control-Allow-Origin": process.env.NEXT_PUBLIC_APP_URL || '',
       "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
       "Access-Control-Allow-Headers": "Content-Type, Authorization, x-anonymous-session-id",
       "Vary": "Origin",

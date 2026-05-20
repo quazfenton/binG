@@ -50,6 +50,7 @@ COPY packages ./packages
 COPY web/lib  ./web/lib
 COPY web/deprecated ./web/deprecated
 COPY web/app/api/chat/chat-helpers.ts ./web/app/api/chat/chat-helpers.ts
+COPY web/app/api/sandbox ./web/app/api/sandbox
 COPY tsconfig.json ./tsconfig.json
 
 # tsx runs TS at runtime — no build step needed.

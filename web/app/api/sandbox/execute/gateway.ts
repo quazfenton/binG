@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge';
 import { verifyAuth } from '@/lib/auth/jwt';
+import { csrfCheckOrReject } from '@/lib/auth/csrf';
 import { checkUserRateLimit } from '@/lib/middleware/rate-limiter';
 import { sandboxIdSchema, commandSchema } from '@/lib/utils/schemas';
 
@@ -39,6 +40,10 @@ export async function POST(req: NextRequest) {
 
   try {
     log(`${COLORS.dim}[${requestId}]${COLORS.reset} POST ${COLORS.green}/api/sandbox/execute${COLORS.reset}`);
+
+    // CSRF protection for state-changing operations
+    const csrfReject = csrfCheckOrReject(req);
+    if (csrfReject) return csrfReject;
 
     // CRITICAL: Authenticate user from JWT token - do NOT trust userId from request body
     const authResult = await verifyAuth(req);
