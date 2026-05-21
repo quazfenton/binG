@@ -7,6 +7,13 @@ import { fileURLToPath } from "node:url";
 import chatRoute from "./routes/chat";
 import { mountNextApiRoutes } from "./lib/next-route-loader";
 
+// Prevent unhandled rejections from crashing the process
+// (mountNextApiRoutes may encounter async rejections from
+// Next.js route files that use server-only or browser APIs)
+process.on("unhandledRejection", (reason) => {
+  console.warn("[backend] unhandledRejection (non-fatal):", reason);
+});
+
 const app = new Hono();
 
 // ── Middleware ───────────────────────────────────────────────────────────

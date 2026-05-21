@@ -42,6 +42,8 @@ services:
       NODE_ENV: production
       # Backend talks to 9router on the internal docker network
       NINEROUTER_BASE_URL: http://ninerouter:3000
+      # Exclude client-only route files that crash the backend
+      BACKEND_ROUTE_EXCLUDES: "desktop,sandbox"
     depends_on:
       - ninerouter
     networks: [edge]

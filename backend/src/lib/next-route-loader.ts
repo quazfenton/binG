@@ -139,7 +139,11 @@ export async function mountNextApiRoutes(
 
     let mod: Record<string, unknown>;
     try {
-      mod = await import(pathToFileURL(file).href);
+      // Attach a noop .catch() synchronously to prevent Node.js from
+      // emitting "unhandledRejection" before the await catches it.
+      const importP = import(pathToFileURL(file).href);
+      importP.catch(() => {});
+      mod = await importP;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.warn(`${prefix} skip ${rel} — import failed: ${msg}`);
