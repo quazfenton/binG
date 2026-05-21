@@ -65,12 +65,25 @@ export function setCsrfCookie(response: NextResponse, token: string): void {
  * @returns { valid: boolean, error?: string }
  */
 export function validateCsrfToken(request: NextRequest): { valid: boolean; error?: string } {
-  const cookieToken = request.cookies.get(CSRF_COOKIE_NAME)?.value;
+  // Handle standard Fetch Request (when mounted via Hono next-route-loader)
+  const cookies = (request as any).cookies;
+  const nextUrl = (request as any).nextUrl;
+  
+  let cookieToken: string | undefined;
+  if (cookies && typeof cookies.get === 'function') {
+    cookieToken = cookies.get(CSRF_COOKIE_NAME)?.value;
+  } else {
+    // Fallback: parse cookie header for standard Request
+    const cookieHeader = request.headers.get('cookie') || '';
+    const match = cookieHeader.match(new RegExp(`${CSRF_COOKIE_NAME}=([^;]+)`));
+    cookieToken = match ? match[1] : undefined;
+  }
+  
   const headerToken = request.headers.get(CSRF_HEADER_NAME);
 
   if (!cookieToken) {
     logger.warn('CSRF validation failed: missing cookie', {
-      path: request.nextUrl.pathname,
+      path: nextUrl?.pathname || request.url,
     });
     return { valid: false, error: 'CSRF token cookie missing' };
   }

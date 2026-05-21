@@ -46,11 +46,20 @@ WORKDIR /app
 COPY backend  ./backend
 COPY packages ./packages
 # `web/lib` is consumed via tsconfig path "@/*": ["../web/*"].
-# We only ship `web/lib` (no app/, components/, public/) to keep the image small.
+# We ship `web/lib` + specific API routes that work in Node.js backend.
+# Many routes import React client components or use browser APIs and
+# cannot run in the backend environment — those stay in the Next.js frontend.
 COPY web/lib  ./web/lib
 COPY web/deprecated ./web/deprecated
 COPY web/app/api/chat/chat-helpers.ts ./web/app/api/chat/chat-helpers.ts
 COPY web/app/api/sandbox ./web/app/api/sandbox
+COPY web/app/api/auth ./web/app/api/auth
+COPY web/app/api/health ./web/app/api/health
+COPY web/app/api/user ./web/app/api/user
+COPY web/app/api/admin ./web/app/api/admin
+COPY web/app/api/mcp ./web/app/api/mcp
+COPY web/app/api/9router ./web/app/api/9router
+COPY web/app/api/filesystem/utils.ts ./web/app/api/filesystem/utils.ts
 COPY tsconfig.json ./tsconfig.json
 
 # tsx runs TS at runtime — no build step needed.
