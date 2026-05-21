@@ -57,9 +57,11 @@ export async function proxy(request: NextRequest) {
     const requestOrigin = request.headers.get('origin');
     if (requestOrigin && allowedOrigins.has(requestOrigin)) {
       response.headers.set('Access-Control-Allow-Origin', requestOrigin);
-    } else if (!requestOrigin || requestOrigin.startsWith('http://localhost')) {
-      response.headers.set('Access-Control-Allow-Origin', requestOrigin || '*');
+    } else if (requestOrigin && requestOrigin.startsWith('http://localhost')) {
+      response.headers.set('Access-Control-Allow-Origin', requestOrigin);
     }
+    // No Origin header or unrecognised origin: omit Access-Control-Allow-Origin
+    // to avoid sending '*' alongside credentials (browsers reject this).
     
     response.headers.set('Access-Control-Allow-Credentials', 'true');
     
