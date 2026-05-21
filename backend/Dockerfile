@@ -51,15 +51,9 @@ COPY packages ./packages
 # cannot run in the backend environment — those stay in the Next.js frontend.
 COPY web/lib  ./web/lib
 COPY web/deprecated ./web/deprecated
-COPY web/app/api/chat/chat-helpers.ts ./web/app/api/chat/chat-helpers.ts
-COPY web/app/api/sandbox ./web/app/api/sandbox
-COPY web/app/api/auth ./web/app/api/auth
-COPY web/app/api/health ./web/app/api/health
-COPY web/app/api/user ./web/app/api/user
-COPY web/app/api/admin ./web/app/api/admin
-COPY web/app/api/mcp ./web/app/api/mcp
-COPY web/app/api/9router ./web/app/api/9router
-COPY web/app/api/filesystem/utils.ts ./web/app/api/filesystem/utils.ts
+# The next-route-loader auto-mounts every web/app/api/**/route.ts at startup.
+# Copy the full API tree so dynamic route discovery works in production.
+COPY web/app/api ./web/app/api
 COPY tsconfig.json ./tsconfig.json
 
 # tsx runs TS at runtime — no build step needed.

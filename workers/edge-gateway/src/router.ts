@@ -68,6 +68,14 @@ export async function getBackendUrl(env: Env): Promise<string> {
 function joinUrl(base: string, path: string, search: string): string | null {
   if (!base) return null;
   if (!isValidHttpUrl(base)) return null;
+  // Guard: if path already contains a query string, merge rather than append.
+  const qIndex = path.indexOf('?');
+  if (qIndex !== -1) {
+    // path has its own query — combine with search params
+    const basePath = `${stripTrailingSlash(base)}${path}`;
+    if (!search) return basePath;
+    return `${basePath}&${search.slice(1)}`;
+  }
   return `${stripTrailingSlash(base)}${path}${search}`;
 }
 

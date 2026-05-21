@@ -14,7 +14,7 @@
  *     broadcast new Cloudflare tunnel URLs without redeploying the worker.
  */
 import { authenticateRequest } from './auth';
-import { checkIpRateLimit } from './rate-limiter';
+import { checkIpRateLimit, checkRateLimit } from './rate-limiter';
 import { routeRequest } from './router';
 import { handleFileRequest } from './r2-storage';
 import type { Env } from './env';
@@ -57,7 +57,23 @@ export default {
 
     // ─── Admin: rotate BACKEND_URL at runtime ────────────────────────
     // Done BEFORE rate limiting so a flood doesn't lock out the rotation hook.
+    // BUT: applies its own stricter rate limit (10 req/min) to prevent
+    // brute-force on the admin token.
     if (url.pathname === '/admin/backend-url' && request.method === 'POST') {
+      const adminRateLimit = await checkRateLimit(env.BING_KV, 'admin:backend-url', 10);
+      if (!adminRateLimit.allowed) {
+        return new Response(JSON.stringify({
+          error: 'Too many admin requests',
+          retryAfter: adminRateLimit.retryAfter,
+        }), {
+          status: 429,
+          headers: {
+            'Content-Type': 'application/json',
+            'Retry-After': String(adminRateLimit.retryAfter),
+            ...getCorsHeaders(request, env),
+          },
+        });
+      }
       return await handleAdminBackendUrl(request, env);
     }
 
@@ -173,6 +189,18 @@ export default {
 // ─── Helpers ──────────────────────────────────────────────────────────
 
 /**
+ * Constant-time string comparison to prevent timing attacks on secrets.
+ */
+function constantTimeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let result = 0;
+  for (let i = 0; i < a.length; i++) {
+    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return result === 0;
+}
+
+/**
  * Normalize a URL or origin to its canonical origin form (scheme://host[:port]).
  * Returns null if the input is not a valid URL/origin.
  */
@@ -256,7 +284,7 @@ async function handleAdminBackendUrl(request: Request, env: Env): Promise<Respon
   if (!provided) {
     return json(401, { error: 'Missing X-Admin-Token header' });
   }
-  if (provided !== env.ADMIN_TOKEN) {
+  if (!constantTimeEqual(provided, env.ADMIN_TOKEN)) {
     return json(403, { error: 'Invalid admin token' });
   }
 

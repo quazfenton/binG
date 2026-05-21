@@ -99,12 +99,9 @@
             # only sent to the exact hostname, not shared across subdomains.
             # Without stripping, 9Router sets Domain=IP which browsers refuse
             # to send to *.trycloudflare.com (different domain).
-            header_down Set-Cookie "; Domain=129.213.35.8" ""
-            header_down Set-Cookie "; Domain=127.0.0.1" ""
-            header_down Set-Cookie "; Domain=localhost" ""
-            header_down Set-Cookie "Domain=129.213.35.8; " ""
-            header_down Set-Cookie "Domain=127.0.0.1; " ""
-            header_down Set-Cookie "Domain=localhost; " ""
+            # Regex strips ANY Domain attribute regardless of value.
+            header_down Set-Cookie "; Domain=[^;]*" ";"
+            header_down Set-Cookie "Domain=[^;]*; " ""
         }
     }
 }
