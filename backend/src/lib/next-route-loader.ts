@@ -196,7 +196,12 @@ export async function mountNextApiRoutes(
       taken.add(key);
 
       const method = verb.toLowerCase() as Lowercase<Verb>;
-      (app as unknown as Record<string, (p: string, h: (c: any) => any) => unknown>)[method](
+
+      // Hono does not expose a dedicated .head() method — use .on() for all
+      // methods so HEAD (and any future method without a dedicated shortcut)
+      // works consistently.
+      app.on(
+        method,
         honoPath,
         async (c: any) => {
           const params = c.req.param();

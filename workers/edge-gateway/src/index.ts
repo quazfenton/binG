@@ -48,7 +48,7 @@ export default {
     if (url.pathname === '/health' || url.pathname === '/api/health') {
       return new Response(JSON.stringify({
         status: 'healthy',
-        service: 'bing-edge-gateway',
+        service: 'shared-ingress',
         timestamp: new Date().toISOString(),
       }), {
         headers: {

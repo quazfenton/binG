@@ -93,13 +93,22 @@ async function getMistral() {
   return Mistral
 }
 
-import {
+import _errorTypes from '../../deprecated/enhanced-code-system/core/error-types';
+// Use default import + destructure for CJS/ESM interop compatibility
+// (the deprecated tsconfig forces CommonJS output on .ts files)
+const {
   createOrchestratorError,
   createStreamError,
   createLLMError,
   ERROR_CODES,
   LLMError
-} from '../../deprecated/enhanced-code-system/core/error-types'
+} = _errorTypes as unknown as {
+  createOrchestratorError: Function;
+  createStreamError: Function;
+  createLLMError: Function;
+  ERROR_CODES: Record<string, Record<string, string>>;
+  LLMError: new (msg: string, opts?: any) => Error;
+};
 
 import { initializeComposioService, getComposioService, type ComposioService } from '../integrations/composio-service'
 import { chatLogger } from '../chat/chat-logger'

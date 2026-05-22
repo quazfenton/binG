@@ -1,5 +1,5 @@
-const readline = require('readline');
-const { execSync } = require('child_process');
+import * as readline from 'readline';
+import { execSync } from 'child_process';
 
 const commitsOutput = execSync('git log --pretty=format:"%h %ad %s" --date=short --decorate=no').toString();
 const commits = commitsOutput.split('\n').filter(line => line.trim());
