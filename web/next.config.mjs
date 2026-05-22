@@ -320,6 +320,14 @@ const nextConfig = {
       new webpack.NormalModuleReplacementPlugin(
         /^@tauri-apps\/api(\/.*)?$/,
         resolve(projectRoot, 'lib/utils/tauri-api-stub.ts')
+      ),
+      // Handle node:* protocol imports for both server and client builds.
+      // Webpack 5.90+ enforces URI scheme checks before alias resolution.
+      new webpack.NormalModuleReplacementPlugin(
+        /^node:/,
+        (resource) => {
+          resource.request = resource.request.replace(/^node:/, '');
+        }
       )
     );
 
