@@ -1,11 +1,16 @@
 /**
- * binG Edge Gateway — Cloudflare Worker
+ * binG Edge Gateway — Cloudflare Worker (shared ingress for all 3 apps)
  *
- * Sits in front of the Vercel frontend and OCI backend:
+ * Sits in front of all Vercel frontends and OCI backends:
  * 1. Rate-limits anonymous requests via KV
  * 2. Authenticates JWT tokens at the edge
- * 3. Routes /api/* to OCI backend, /* to Vercel frontend
+ * 3. Routes /api/*, /copa/*, /nocturne/*, /novnc/*, /health* to OCI backend,
+ *    /* to Vercel frontend
  * 4. Proxies requests and returns responses with correct headers
+ *
+ * Vercel frontends point to this Worker's URL as their stable API ingress.
+ * The Worker routes to the tunnel URL stored in KV — tunnel rotation is
+ * instant with no frontend redeploy.
  *
  * Admin:
  *   POST /admin/backend-url  (header X-Admin-Token: <ADMIN_TOKEN>)
