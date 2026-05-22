@@ -29,6 +29,12 @@ const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Max-Age': '86400',
 };
 
+// Security headers applied to all responses
+const SECURITY_HEADERS: Record<string, string> = {
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'DENY',
+};
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -145,6 +151,7 @@ export default {
         method: request.method,
         headers: proxyHeaders,
         body: request.method !== 'GET' && request.method !== 'HEAD' ? request.body : undefined,
+        redirect: 'follow',
       });
 
       // ─── Build Response ────────────────────────────────────────────
@@ -218,6 +225,7 @@ function toOrigin(input: string | undefined | null): string | null {
 function getCorsHeaders(request: Request, env: Env): Record<string, string> {
   const headers: Record<string, string> = {
     ...CORS_HEADERS,
+    ...SECURITY_HEADERS,
     'Vary': 'Origin',
   };
 
