@@ -112,6 +112,26 @@ function nextPathToHono(relFromApi: string): string {
   return "/api/" + segs.join("/");
 }
 
+/** Check if a directory contains subdirectories (dispatcher pattern). */
+async function hasSubdirs(dir: string): Promise<boolean> {
+  try {
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    return entries.some((e) => {
+      if (e.isDirectory()) return true;
+      if (e.isSymbolicLink()) {
+        try {
+          return fs.stat(path.join(dir, e.name)).then((st) => st.isDirectory()).catch(() => false);
+        } catch {
+          return false;
+        }
+      }
+      return false;
+    });
+  } catch {
+    return false;
+  }
+}
+
 export async function mountNextApiRoutes(
   app: Hono,
   apiDir: string,
@@ -135,7 +155,16 @@ export async function mountNextApiRoutes(
       continue;
     }
 
-    const honoPath = nextPathToHono(rel);
+    let honoPath = nextPathToHono(rel);
+
+    // Dispatcher route.ts files (in directories with subdirs) need /* to match subpaths.
+    const baseName = path.basename(file);
+    if (baseName.startsWith("route.")) {
+      const dir = path.dirname(file);
+      if (await hasSubdirs(dir)) {
+        honoPath = honoPath.endsWith("/*") ? honoPath : `${honoPath}/*`;
+      }
+    }
 
     let mod: Record<string, unknown>;
     try {
@@ -171,8 +200,53 @@ export async function mountNextApiRoutes(
         honoPath,
         async (c: any) => {
           const params = c.req.param();
+          const raw = c.req.raw;
+
+          // Parse cookies from the Cookie header for Next.js compatibility
+          const parseCookies = (): Map<string, string> => {
+            const cookieHeader = raw.headers.get("cookie") || "";
+            const cookies = new Map<string, string>();
+            for (const pair of cookieHeader.split(";")) {
+              const trimmed = pair.trim();
+              const eq = trimmed.indexOf("=");
+              if (eq > 0) {
+                cookies.set(trimmed.slice(0, eq).trim(), decodeURIComponent(trimmed.slice(eq + 1)));
+              }
+            }
+            return cookies;
+          };
+
+          // Next.js handlers expect `request.nextUrl` (URL object) and
+          // `request.cookies` (RequestCookies-like API), but Hono passes a
+          // standard Fetch Request which only has `url` (string) and no cookies.
+          // Create a proxied request with both for compatibility.
+          const reqCompat = new Proxy(raw, {
+            get(target, prop) {
+              if (prop === "nextUrl") {
+                try {
+                  return new URL((target as Request).url);
+                } catch {
+                  return undefined;
+                }
+              }
+              if (prop === "cookies") {
+                const cookies = parseCookies();
+                return {
+                  get: (name: string) => {
+                    const value = cookies.get(name);
+                    return value ? { name, value } : undefined;
+                  },
+                  getAll: () =>
+                    Array.from(cookies.entries()).map(([name, value]) => ({ name, value })),
+                  has: (name: string) => cookies.has(name),
+                };
+              }
+              return Reflect.get(target, prop);
+            },
+          }) as Request & { nextUrl?: URL; cookies?: { get: (n: string) => { name: string; value: string } | undefined; getAll: () => { name: string; value: string }[]; has: (n: string) => boolean } };
+
           try {
-            return await handler(c.req.raw, { params });
+            return await handler(reqCompat, { params });
           } catch (err) {
             const msg = err instanceof Error ? err.stack ?? err.message : String(err);
             console.error(`${prefix} ${verb} ${honoPath} threw:\n${msg}`);

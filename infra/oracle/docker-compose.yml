@@ -30,7 +30,7 @@ services:
 
   backend:
     build:
-      context: ..
+      context: ../..
       dockerfile: backend/Dockerfile
     image: bing-backend:latest
     restart: unless-stopped
@@ -43,14 +43,14 @@ services:
       # Backend talks to 9router on the internal docker network
       NINEROUTER_BASE_URL: http://ninerouter:3000
       # Exclude client-only route files that crash the backend
-      BACKEND_ROUTE_EXCLUDES: "desktop,sandbox"
+      BACKEND_ROUTE_EXCLUDES: "/desktop/"
     depends_on:
       - ninerouter
     networks: [edge]
 
   ninerouter:
     build:
-      context: ./infra/oracle
+      context: .
       dockerfile: 9router.Dockerfile
     image: bing-9router:latest
     restart: unless-stopped

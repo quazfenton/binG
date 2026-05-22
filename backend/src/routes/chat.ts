@@ -97,7 +97,38 @@ async function classifyRequest(messages: LLMMessage[], attachedFiles: any[]) {
 chatRoute.post("/", async (c) => {
   const requestStartTime = Date.now();
   const requestId = generateSecureId("chat");
-  const request = c.req.raw;
+  const raw = c.req.raw;
+
+  // Add cookies property to request for Next.js auth compatibility
+  const parseCookies = (): Map<string, string> => {
+    const cookieHeader = raw.headers.get("cookie") || "";
+    const cookies = new Map<string, string>();
+    for (const pair of cookieHeader.split(";")) {
+      const trimmed = pair.trim();
+      const eq = trimmed.indexOf("=");
+      if (eq > 0) {
+        cookies.set(trimmed.slice(0, eq).trim(), decodeURIComponent(trimmed.slice(eq + 1)));
+      }
+    }
+    return cookies;
+  };
+  const cookies = parseCookies();
+  const request = new Proxy(raw, {
+    get(target, prop) {
+      if (prop === "cookies") {
+        return {
+          get: (name: string) => {
+            const value = cookies.get(name);
+            return value ? { name, value } : undefined;
+          },
+          getAll: () =>
+            Array.from(cookies.entries()).map(([name, value]) => ({ name, value })),
+          has: (name: string) => cookies.has(name),
+        };
+      }
+      return Reflect.get(target, prop);
+    },
+  }) as Request & { cookies: { get: (n: string) => { name: string; value: string } | undefined; getAll: () => { name: string; value: string }[]; has: (n: string) => boolean } };
 
   // 1. Auth and Rate Limit
   const authResult = await resolveRequestAuth(request, { allowAnonymous: true });

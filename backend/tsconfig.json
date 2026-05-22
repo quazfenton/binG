@@ -8,7 +8,8 @@
       "@/*": ["../web/*"],
       "@bing/platform/*": ["../packages/platform/src/*"],
       "@bing/shared/*": ["../packages/shared/*"],
-      "backend/*": ["src/*"]
+      "backend/*": ["src/*"],
+      "server-only": ["src/lib/server-only-mock.ts"]
     },
     "allowJs": true,
     "skipLibCheck": true,
