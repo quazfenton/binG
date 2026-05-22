@@ -7,7 +7,6 @@
  * - /copa/*         → OCI Backend (CopaMundial via shared tunnel)
  * - /nocturne/*     → OCI Backend (Nocturne via shared tunnel)
  * - /novnc/*        → OCI Backend (noVNC via shared tunnel)
- * - /health*        → OCI Backend
  * - /*              → Vercel Frontend (Next.js)
  *
  * BACKEND_URL resolution order (per-request):
@@ -108,7 +107,7 @@ export async function routeRequest(request: Request, env: Env): Promise<RouteTar
   }
 
   // /copa/* → OCI backend (CopaMundial via shared tunnel)
-  if (path.startsWith('/copa')) {
+  if (path === '/copa' || path.startsWith('/copa/')) {
     const target = joinUrl(backend, path, search);
     if (target) return { url: target };
     const fallback = joinUrl(frontend, path, search);
@@ -116,7 +115,7 @@ export async function routeRequest(request: Request, env: Env): Promise<RouteTar
   }
 
   // /nocturne/* → OCI backend (Nocturne via shared tunnel)
-  if (path.startsWith('/nocturne')) {
+  if (path === '/nocturne' || path.startsWith('/nocturne/')) {
     const target = joinUrl(backend, path, search);
     if (target) return { url: target };
     const fallback = joinUrl(frontend, path, search);
@@ -124,15 +123,7 @@ export async function routeRequest(request: Request, env: Env): Promise<RouteTar
   }
 
   // /novnc/* → OCI backend (noVNC via shared tunnel)
-  if (path.startsWith('/novnc')) {
-    const target = joinUrl(backend, path, search);
-    if (target) return { url: target };
-    const fallback = joinUrl(frontend, path, search);
-    return fallback ? { url: fallback, ttl: 0 } : null;
-  }
-
-  // /health* → OCI backend
-  if (path.startsWith('/health')) {
+  if (path === '/novnc' || path.startsWith('/novnc/')) {
     const target = joinUrl(backend, path, search);
     if (target) return { url: target };
     const fallback = joinUrl(frontend, path, search);

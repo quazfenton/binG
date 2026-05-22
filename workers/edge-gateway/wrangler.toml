@@ -2,6 +2,7 @@ name = "bing-edge-gateway"
 main = "src/index.ts"
 compatibility_date = "2025-03-01"
 compatibility_flags = ["nodejs_compat"]
+account_id = "69131dbe7a982d6e0ded89318103b605"
 
 # === Configuration Model =========================================
 # Plain vars (in this file, also overridable at runtime via KV):
@@ -25,28 +26,24 @@ BACKEND_URL = ""
 FRONTEND_URL = ""
 
 # === KV Namespace (Session Cache + Rate Limiting + Runtime Config) ===
-# ⚠️ Run setup.sh or manually create:
-#   npx wrangler kv namespace create bing-kv
-# Then paste the ID below
 [[kv_namespaces]]
 binding = "BING_KV"
-id = ""
+id = "57675a898c684724a66a1d85562c4327"
 preview_id = ""
 
 # === R2 Bucket (File Storage — replaces MinIO) ===
-[[r2_buckets]]
-binding = "BING_STORAGE"
-bucket_name = "bing-storage"
-preview_bucket_name = "bing-storage-dev"
+# Created via setup.sh — uncomment when R2 storage is needed
+# [[r2_buckets]]
+# binding = "BING_STORAGE"
+# bucket_name = "bing-storage"
+# preview_bucket_name = "bing-storage-dev"
 
 # === D1 Database (Lightweight SQL — replaces parts of PostgreSQL) ===
-# ⚠️ Run setup.sh or manually create:
-#   npx wrangler d1 create bing-db
-# Then paste the ID below
-[[d1_databases]]
-binding = "BING_DB"
-database_name = "bing-db"
-database_id = ""
+# Created via setup.sh — uncomment when D1 database is needed
+# [[d1_databases]]
+# binding = "BING_DB"
+# database_name = "bing-db"
+# database_id = ""
 
 # === Routes ===
 # ⚠️ COMMENT OUT for initial deploy — only enable after configuring a custom domain.

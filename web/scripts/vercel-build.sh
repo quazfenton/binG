@@ -40,7 +40,7 @@ node scripts/sync-vendored-packages.mjs 2>&1 || {
 }
 
 # ── Step 2: Run the build ─────────────────────────────────────────────
-NODE_OPTIONS="--max-old-space-size=4096" npx next build --webpack 2>"$STDERR_LOG"
+NODE_OPTIONS="--max-old-space-size=4096" npx next build 2>"$STDERR_LOG"
 BUILD_EXIT=$?
 
 # ── Success path ──────────────────────────────────────────────────────
