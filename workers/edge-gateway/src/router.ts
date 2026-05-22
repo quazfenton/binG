@@ -2,9 +2,13 @@
  * Request Router
  *
  * Routes incoming requests to the appropriate backend:
- * - /api/chat → OCI Backend (Node.js Hono server)
- * - /api/*    → OCI Backend (or Vercel fallback)
- * - /*        → Vercel Frontend (Next.js)
+ * - /api/chat       → OCI Backend (Node.js Hono server)
+ * - /api/*          → OCI Backend (or Vercel fallback)
+ * - /copa/*         → OCI Backend (CopaMundial via shared tunnel)
+ * - /nocturne/*     → OCI Backend (Nocturne via shared tunnel)
+ * - /novnc/*        → OCI Backend (noVNC via shared tunnel)
+ * - /health*        → OCI Backend
+ * - /*              → Vercel Frontend (Next.js)
  *
  * BACKEND_URL resolution order (per-request):
  *   1. KV key `runtime:BACKEND_URL` — set via POST /admin/backend-url so the
@@ -97,6 +101,38 @@ export async function routeRequest(request: Request, env: Env): Promise<RouteTar
 
   // All /api/* routes → OCI backend
   if (path.startsWith('/api/')) {
+    const target = joinUrl(backend, path, search);
+    if (target) return { url: target };
+    const fallback = joinUrl(frontend, path, search);
+    return fallback ? { url: fallback, ttl: 0 } : null;
+  }
+
+  // /copa/* → OCI backend (CopaMundial via shared tunnel)
+  if (path.startsWith('/copa')) {
+    const target = joinUrl(backend, path, search);
+    if (target) return { url: target };
+    const fallback = joinUrl(frontend, path, search);
+    return fallback ? { url: fallback, ttl: 0 } : null;
+  }
+
+  // /nocturne/* → OCI backend (Nocturne via shared tunnel)
+  if (path.startsWith('/nocturne')) {
+    const target = joinUrl(backend, path, search);
+    if (target) return { url: target };
+    const fallback = joinUrl(frontend, path, search);
+    return fallback ? { url: fallback, ttl: 0 } : null;
+  }
+
+  // /novnc/* → OCI backend (noVNC via shared tunnel)
+  if (path.startsWith('/novnc')) {
+    const target = joinUrl(backend, path, search);
+    if (target) return { url: target };
+    const fallback = joinUrl(frontend, path, search);
+    return fallback ? { url: fallback, ttl: 0 } : null;
+  }
+
+  // /health* → OCI backend
+  if (path.startsWith('/health')) {
     const target = joinUrl(backend, path, search);
     if (target) return { url: target };
     const fallback = joinUrl(frontend, path, search);
