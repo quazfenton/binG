@@ -36,6 +36,10 @@ COPY web/.bing-shared ./web/.bing-shared
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
     pnpm install  --filter backend... --filter @bing/shared... --filter @bing/platform...
 
+# Mock server-only package — throws in Next.js client context but backend runs
+# in pure Node.js where the import should be a no-op.
+RUN echo 'export {};' > node_modules/server-only/index.js
+
 # ----------------------------------------------------------
 # Stage 2 — copy source + run tsc (noEmit) for type safety
 # ----------------------------------------------------------
