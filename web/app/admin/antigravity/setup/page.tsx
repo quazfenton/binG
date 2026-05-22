@@ -1,74 +1,118 @@
+'use client';
+
 /**
  * Admin Antigravity Setup Page
  *
  * GET /admin/antigravity/setup
- * Requires authentication + admin check.
- * Displays the master account refresh token securely after OAuth,
- * or shows connection instructions if no token is pending.
+ *
+ * Static-export compatible: runs entirely client-side. Auth + admin check
+ * happen via /api/antigravity/admin/status (the browser forwards cookies
+ * automatically), which also surfaces the HttpOnly antigravity-admin-tokens
+ * cookie content so we can display the refresh token after OAuth.
+ *
+ * The previous server component used `cookies()` from `next/headers`, which
+ * is incompatible with `output: 'export'`.
  */
 
-import { cookies } from 'next/headers';
-import { redirect } from 'next/navigation';
-import { requireAdminPage } from '@/lib/auth/admin';
+import { useEffect, useState } from 'react';
 import { CopyButton } from './CopyButton';
 
-export default async function AntigravitySetupPage() {
-  const cookieStore = await cookies();
-  
-  // Check auth directly - if no auth token, show unauthorized page
-  const authToken = cookieStore.get('auth-token')?.value
-    || cookieStore.get('token')?.value
-    || cookieStore.get('next-auth.session-token')?.value
-    || cookieStore.get('session_id')?.value;
+type Tokens = { email: string; refreshToken: string; projectId: string };
 
-  if (!authToken) {
+type StatusResponse = {
+  pendingTokens: Tokens | null;
+  masterAccount: { configured: boolean; email?: string; projectId?: string };
+};
+
+type LoadState =
+  | { kind: 'loading' }
+  | { kind: 'unauthorized' }
+  | { kind: 'forbidden'; message?: string }
+  | { kind: 'error'; message: string }
+  | { kind: 'ready'; data: StatusResponse };
+
+export default function AntigravitySetupPage() {
+  const [state, setState] = useState<LoadState>({ kind: 'loading' });
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/antigravity/admin/status', {
+          credentials: 'include',
+          cache: 'no-store',
+        });
+
+        if (cancelled) return;
+
+        if (res.status === 401) {
+          setState({ kind: 'unauthorized' });
+          return;
+        }
+        if (res.status === 403) {
+          let msg: string | undefined;
+          try { msg = (await res.json())?.error; } catch { /* ignore */ }
+          setState({ kind: 'forbidden', message: msg });
+          return;
+        }
+        if (!res.ok) {
+          setState({ kind: 'error', message: `Status ${res.status}` });
+          return;
+        }
+
+        const data = (await res.json()) as StatusResponse;
+        setState({ kind: 'ready', data });
+      } catch (err: any) {
+        if (!cancelled) {
+          setState({ kind: 'error', message: err?.message || 'Network error' });
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  if (state.kind === 'loading') {
+    return (
+      <div className="max-w-2xl mx-auto p-8">
+        <p className="text-gray-500">Loading…</p>
+      </div>
+    );
+  }
+
+  if (state.kind === 'unauthorized') {
     return (
       <div className="max-w-2xl mx-auto p-8">
         <h1 className="text-2xl font-bold mb-4">Unauthorized</h1>
         <p className="text-gray-600 mb-4">You must be logged in as an admin to access this page.</p>
-        <a href="/login" className="inline-block px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors">
+        <a
+          href="/login"
+          className="inline-block px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors"
+        >
           Login →
         </a>
       </div>
     );
   }
 
-  // Require admin access
-  let admin: Awaited<ReturnType<typeof requireAdminPage>> | null = null;
-  try {
-    admin = await requireAdminPage();
-    const isAdmin = !!admin;
-
-    if (!isAdmin) {
-      return (
-        <div className="max-w-2xl mx-auto p-8">
-          <h1 className="text-2xl font-bold mb-4">Access Denied</h1>
-          <p className="text-red-600">You do not have admin privileges.</p>
-        </div>
-      );
-    }
-  } catch (err: any) {
-    // If redirect is thrown, re-throw it
-    if (err?.digest?.includes('NEXT_REDIRECT')) throw err;
+  if (state.kind === 'forbidden') {
     return (
       <div className="max-w-2xl mx-auto p-8">
         <h1 className="text-2xl font-bold mb-4">Access Denied</h1>
-        <p className="text-red-600">An error occurred: {err?.message || 'Unknown error'}</p>
+        <p className="text-red-600">{state.message ?? 'You do not have admin privileges.'}</p>
       </div>
     );
   }
 
-  const tokensCookie = cookieStore.get('antigravity-admin-tokens');
-
-  let tokens: { email: string; refreshToken: string; projectId: string } | null = null;
-
-  if (tokensCookie?.value) {
-    try {
-      tokens = JSON.parse(tokensCookie.value);
-    } catch {
-      // Invalid cookie, ignore
-    }
+  if (state.kind === 'error') {
+    return (
+      <div className="max-w-2xl mx-auto p-8">
+        <h1 className="text-2xl font-bold mb-4">Error</h1>
+        <p className="text-red-600">{state.message}</p>
+      </div>
+    );
   }
+
+  const tokens = state.data.pendingTokens;
 
   return (
     <div className="max-w-2xl mx-auto p-8">
@@ -80,7 +124,6 @@ export default async function AntigravitySetupPage() {
       </div>
 
       {tokens ? (
-        // Token received — display for copying
         <div className="space-y-6">
           <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg p-4">
             <p className="text-green-800 dark:text-green-200 font-medium">
@@ -121,7 +164,6 @@ ANTIGRAVITY_DEFAULT_PROJECT_ID=${tokens.projectId}`}
           </div>
         </div>
       ) : (
-        // No token pending — show instructions
         <div className="space-y-6">
           <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-6">
             <h2 className="text-lg font-semibold mb-3">Connect a Master Account</h2>

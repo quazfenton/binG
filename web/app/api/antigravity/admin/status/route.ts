@@ -22,6 +22,15 @@ export async function GET(req: NextRequest) {
     process.env.ANTIGRAVITY_CLIENT_ID || process.env.GOOGLE_CLIENT_ID
   );
 
+  // Surface the pending HttpOnly token cookie set by the OAuth callback so
+  // the static-exported setup page can render it client-side after fetching
+  // this endpoint. Reading happens server-side because the cookie is HttpOnly.
+  let pendingTokens: { email: string; refreshToken: string; projectId: string } | null = null;
+  const raw = req.cookies.get('antigravity-admin-tokens')?.value;
+  if (raw) {
+    try { pendingTokens = JSON.parse(raw); } catch { /* invalid cookie, ignore */ }
+  }
+
   return NextResponse.json({
     masterAccount: {
       configured: masterConfigured,
@@ -34,6 +43,7 @@ export async function GET(req: NextRequest) {
     },
     perUserOAuthEnabled: oauthAppConfigured,
     connectMasterUrl: '/api/antigravity/admin/connect',
+    pendingTokens,
   });
 }
 
