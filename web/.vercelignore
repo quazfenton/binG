@@ -1,7 +1,6 @@
 # Exclude heavy folders from Vercel download
+/backend/
 desktop/
-backend/
-scripts/
 docs/
 
 **/route.ts
