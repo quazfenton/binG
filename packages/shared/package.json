@@ -1,6 +1,7 @@
 {
   "name": "@bing/shared",
   "version": "1.0.0",
+  "type": "module",
   "exports": {
     "./agent": "./agent/index.ts",
     "./agent/*": "./agent/*.ts",

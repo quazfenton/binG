@@ -12,7 +12,7 @@
 #
 # Env vars / files:
 #   ADMIN_TOKEN  — admin token (or read from .admin-token in this dir)
-#   WORKER_URL   — worker public URL, e.g. https://bing-edge-gateway.<acct>.workers.dev
+#   WORKER_URL   — worker public URL, e.g. https://shared-ingress.<acct>.workers.dev
 #                  (or read from wrangler whoami / wrangler.toml-derived default)
 # ============================================================
 set -euo pipefail

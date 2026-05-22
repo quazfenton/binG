@@ -9,7 +9,8 @@
       "@bing/platform/*": ["../packages/platform/src/*"],
       "@bing/shared/*": ["../packages/shared/*"],
       "backend/*": ["src/*"],
-      "server-only": ["src/lib/server-only-mock.ts"]
+      "server-only": ["src/lib/server-only-mock.ts"],
+      "next/server": ["src/lib/next-server-mock.ts"]
     },
     "allowJs": true,
     "skipLibCheck": true,

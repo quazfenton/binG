@@ -11,7 +11,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 
-import { verify } from 'jsonwebtoken';
+import jwt from 'jsonwebtoken';
 
 interface TokenExchangeRequest {
   grant_type: 'urn:ietf:params:oauth:grant-type:token-exchange';
@@ -73,7 +73,7 @@ async function verifyUserJWT(token: string): Promise<{
       };
     }
 
-    const decoded = verify(token, JWT_SECRET, {
+    const decoded = jwt.verify(token, JWT_SECRET, {
       // SECURITY: Only accept HS256 (symmetric) algorithm
       // RS256 removed to prevent algorithm confusion attacks
       // See: https://auth0.com/blog/critical-vulnerabilities-in-json-web-token-libraries/
@@ -103,7 +103,9 @@ async function exchangeForTamboToken(
   userId: string,
   email?: string
 ): Promise<{ tamboToken: string; expiresAt: number }> {
-  const { sign } = await import('jsonwebtoken');
+  const jwtMod = await import('jsonwebtoken');
+  const sign = jwtMod.default.sign;
+
 
   const TAMBO_SECRET = process.env.TAMBO_API_KEY || process.env.JWT_SECRET;
   

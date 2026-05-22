@@ -13,6 +13,9 @@ import { mountNextApiRoutes } from "./lib/next-route-loader";
 process.on("unhandledRejection", (reason) => {
   console.warn("[backend] unhandledRejection (non-fatal):", reason);
 });
+process.on("uncaughtException", (err) => {
+  console.error("[backend] uncaughtException (non-fatal):", err);
+});
 
 const app = new Hono();
 
@@ -61,7 +64,7 @@ const apiDir = path.resolve(__dirname, "..", "..", "web", "app", "api");
 //   "tauri-only"       — files explicitly named *tauri-only*
 // Routes that gate themselves at runtime via process.env.DESKTOP_MODE do
 // NOT need to be listed; they fall through correctly when the env is unset.
-const ROUTE_EXCLUDES = (process.env.BACKEND_ROUTE_EXCLUDES ?? "/desktop/")
+const ROUTE_EXCLUDES = (process.env.BACKEND_ROUTE_EXCLUDES ?? "/desktop/,/chat/")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);

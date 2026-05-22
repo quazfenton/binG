@@ -1,4 +1,4 @@
-name = "bing-edge-gateway"
+name = "shared-ingress"
 main = "src/index.ts"
 compatibility_date = "2025-03-01"
 compatibility_flags = ["nodejs_compat"]
@@ -23,7 +23,7 @@ account_id = "69131dbe7a982d6e0ded89318103b605"
 # Update with: `npx wrangler deploy --var BACKEND_URL="https://..."` or by
 # editing this file and redeploying.
 BACKEND_URL = ""
-FRONTEND_URL = ""
+FRONTEND_URL = "https://web-eight-ashen-83.vercel.app"
 
 # === KV Namespace (Session Cache + Rate Limiting + Runtime Config) ===
 [[kv_namespaces]]
