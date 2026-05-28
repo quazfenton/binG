@@ -175,7 +175,7 @@
     "js-yaml": "^4.1.1",
     "jsonwebtoken": "^9.0.2",
     "jszip": "^3.10.1",
-    "langsmith": "^0.5.19",
+    "langsmith": "^0.6.0",
     "livekit-client": "^2.8.0",
     "livekit-server-sdk": "^2.9.7",
     "lodash": "^4.18.1",
@@ -220,9 +220,9 @@
     "ts-morph": "^25.0.0",
     "uuid": "^14.0.0",
     "vaul": "^0.9.6",
-    "vm2": "^3.11.2",
+    "vm2": "^3.11.3",
     "webdav": "^5.8.0",
-    "ws": "^8.19.0",
+    "ws": "^8.20.1",
     "zod": "^3.24.1"
   },
   "devDependencies": {
