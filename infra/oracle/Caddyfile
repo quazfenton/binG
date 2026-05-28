@@ -17,8 +17,31 @@
 :80 {
     encode zstd gzip
 
-    # Bing backend routes
-    @bing_api path /api/* /health*
+    # Health check → backend (rewrite /health → /api/health)
+    @health path /health*
+    handle @health {
+        uri replace /health /api/health
+        reverse_proxy backend:3001 {
+            flush_interval -1
+            transport http {
+                read_timeout  30m
+                write_timeout 30m
+            }
+        }
+    }
+
+    # 9Router auth routes (must come before /api/* catch-all)
+    @ninerouter_auth path /api/auth/*
+    handle @ninerouter_auth {
+        reverse_proxy ninerouter:3000 {
+            flush_interval -1
+            header_up X-Forwarded-Proto "https"
+            header_up X-Forwarded-Host {host}
+        }
+    }
+
+    # All other API routes → backend (no path mangling)
+    @bing_api path /api/*
     handle @bing_api {
         reverse_proxy backend:3001 {
             flush_interval -1
@@ -55,7 +78,7 @@
     @copa_socket path /copa/socket.io/*
     handle @copa_socket {
         uri strip_prefix /copa
-        reverse_proxy copa-app:3000 {
+        reverse_proxy copamundial-app-1:3000 {
             flush_interval -1
             transport http {
                 read_timeout  30m
@@ -68,7 +91,7 @@
     @copa path /copa/*
     handle @copa {
         uri strip_prefix /copa
-        reverse_proxy copa-app:3000 {
+        reverse_proxy copamundial-app-1:3000 {
             flush_interval -1
             transport http {
                 read_timeout  30m
