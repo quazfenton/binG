@@ -30,13 +30,15 @@
         }
     }
 
-    # 9Router auth routes (must come before /api/* catch-all)
-    @ninerouter_auth path /api/auth/*
-    handle @ninerouter_auth {
+    # 9Router dashboard API routes (must come before /api/* catch-all)
+    @ninerouter_api path /api/auth/* /api/keys* /api/settings* /api/combos* /api/init /api/locale /api/tags /api/pricing /api/tunnel/* /api/cli-tools/* /api/usage/* /api/oauth/* /api/mcp/* /api/provider-nodes/* /api/proxy-pools/* /api/translator/* /api/version* /api/media-providers/* /api/shutdown
+    handle @ninerouter_api {
         reverse_proxy ninerouter:3000 {
             flush_interval -1
             header_up X-Forwarded-Proto "https"
             header_up X-Forwarded-Host {host}
+            header_up X-Real-IP {remote}
+            header_up X-Forwarded-For {remote}
         }
     }
 
@@ -74,20 +76,7 @@
         }
     }
 
-    # CopaMundial Socket.IO (must be before generic /copa route)
-    @copa_socket path /copa/socket.io/*
-    handle @copa_socket {
-        uri strip_prefix /copa
-        reverse_proxy copamundial-app-1:3000 {
-            flush_interval -1
-            transport http {
-                read_timeout  30m
-                write_timeout 30m
-            }
-        }
-    }
-
-    # CopaMundial routes (Next.js + Socket.IO)
+    # CopaMundial routes (Next.js + Socket.IO at /api/socket)
     @copa path /copa/*
     handle @copa {
         uri strip_prefix /copa
