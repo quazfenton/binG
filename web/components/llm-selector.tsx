@@ -14,6 +14,7 @@ interface ProviderWithModels {
   models: string[];
   supportsStreaming: boolean;
   description: string;
+  subProviders?: string[];
 }
 
 export const LLMSelector: React.FC<{ 
@@ -65,9 +66,16 @@ export const LLMSelector: React.FC<{
     // Update models when selected provider changes
     const provider = providers.find(p => p.id === selectedProvider);
     if (provider) {
-      setModels(provider.models);
-      if (provider.models.length > 0) {
-        setSelectedModel(provider.models[0]);
+      // Filter models by subProviders if available (for ninerouter provider)
+      const filteredModels = provider.subProviders
+        ? provider.models.filter((model: string) => {
+            const [prefix] = model.split('/');
+            return provider.subProviders.includes(prefix);
+          })
+        : provider.models;
+      setModels(filteredModels);
+      if (filteredModels.length > 0) {
+        setSelectedModel(filteredModels[0]);
       } else {
         setSelectedModel('');
       }

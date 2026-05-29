@@ -380,7 +380,15 @@ const ProviderSelector = React.memo(function ProviderSelector({
             .map((provider) => (
               <SelectGroup key={provider.id}>
                 <SelectLabel>{provider.name}</SelectLabel>
-                {provider.models.map((model: ModelConfig | string) => {
+                {(provider.subProviders
+                  ? provider.models.filter((model: ModelConfig | string) => {
+                      const modelId = typeof model === "string" ? model : model.id;
+                      // Model format is like "gemini/gemini-3.1-flash-lite-preview" - prefix is first part
+                      const [prefix] = modelId.split('/');
+                      return provider.subProviders.includes(prefix);
+                    })
+                  : provider.models
+                ).map((model: ModelConfig | string) => {
                   const modelId = typeof model === "string" ? model : model.id;
                   return (
                     <SelectItem key={`${provider.id}:${modelId}`} value={`${provider.id}:${modelId}`}>

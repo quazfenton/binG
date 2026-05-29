@@ -32,6 +32,7 @@ export interface LLMProviderConfig {
   maxOutputTokens?: number;
   endpoint?: string;
   isAvailable?: boolean;  // Whether the provider is currently available (set at runtime)
+  subProviders?: string[];  // For ninerouter: list of enabled sub-providers for UI filtering
 }
 
 // LLM message types
@@ -448,6 +449,7 @@ export const PROVIDERS: Record<string, LLMProviderConfig> = {
   ninerouter: {
     id: 'ninerouter',
     name: '9Router',
+    subProviders: ['gemini', 'ag', 'gc', 'gh', 'kc', 'kr', 'oc', 'openrouter', 'nvidia', 'ollama', 'cf', 'mistral'],
     models: [
       // Gemini API models
       'gemini/gemini-3.1-flash-lite-preview',

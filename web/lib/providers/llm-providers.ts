@@ -3504,6 +3504,77 @@ class LLMService {
     }
   }
 
+  private async generateNinerouterResponse(
+    model: string,
+    messages: LLMMessage[],
+    temperature: number,
+    maxTokens: number,
+    requestId?: string,
+    apiKeyOverride?: string
+  ): Promise<LLMResponse> {
+    const apiKey = apiKeyOverride || this.getApiKey('ninerouter');
+    if (!this.ninerouter) {
+      const { default: OpenAI } = await import('openai');
+      this.ninerouter = new OpenAI({ 
+        apiKey, 
+        baseURL: process.env.NINEROUTER_BASE_URL || 'http://ninerouter:3000/v1' 
+      });
+    } else {
+      this.ninerouter.apiKey = apiKey;
+    }
+
+    const response = await this.ninerouter.chat.completions.create({
+      model,
+      messages: messages as any,
+      temperature,
+      max_tokens: maxTokens,
+    });
+
+    const toolCalls = response.choices[0]?.message?.tool_calls
+      ? this.normalizeOpenAIToolCalls(response.choices[0].message.tool_calls)
+      : undefined;
+
+    return {
+      content: response.choices[0]?.message?.content || '',
+      tokensUsed: response.usage?.total_tokens || 0,
+      finishReason: response.choices[0]?.finish_reason || 'stop',
+      timestamp: new Date(),
+      metadata: toolCalls ? { toolCalls } : {},
+      usage: response.usage,
+    };
+  }
+
+  private async *streamNinerouterResponse(
+    model: string,
+    messages: LLMMessage[],
+    temperature: number,
+    maxTokens: number
+  ): AsyncGenerator<StreamingResponse> {
+    const apiKey = this.getApiKey('ninerouter');
+    if (!this.ninerouter) {
+      const { default: OpenAI } = await import('openai');
+      this.ninerouter = new OpenAI({ 
+        apiKey, 
+        baseURL: process.env.NINEROUTER_BASE_URL || 'http://ninerouter:3000/v1' 
+      });
+    } else {
+      this.ninerouter.apiKey = apiKey;
+    }
+
+    const stream = await this.ninerouter.chat.completions.create({
+      model,
+      messages: messages as any,
+      temperature,
+      max_tokens: maxTokens,
+      stream: true,
+    });
+
+    for await (const chunk of stream) {
+      const content = chunk.choices[0]?.delta?.content;
+      if (content) yield content;
+    }
+  }
+
   private async *streamKiroResponse(
     model: string,
     messages: LLMMessage[],
