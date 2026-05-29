@@ -24,10 +24,10 @@ export interface FileListResult {
  * R2 Storage — file operations backed by Cloudflare R2
  */
 export class R2Storage {
-  private bucket: R2Bucket;
+  private bucket: R2Bucket | null;
 
   constructor(env: Env) {
-    this.bucket = env.BING_STORAGE;
+    this.bucket = env.BING_STORAGE ?? null;
   }
 
   async upload(
@@ -35,6 +35,7 @@ export class R2Storage {
     body: ArrayBuffer | ReadableStream | string,
     options?: { contentType?: string; customMetadata?: Record<string, string> },
   ): Promise<FileMetadata> {
+    if (!this.bucket) throw new Error('R2 storage not configured');
     const object = await this.bucket.put(key, body, {
       httpMetadata: options?.contentType ? { contentType: options.contentType } : undefined,
       customMetadata: options?.customMetadata,
@@ -47,6 +48,7 @@ export class R2Storage {
   }
 
   async download(key: string): Promise<{ data: ReadableStream; metadata: FileMetadata } | null> {
+    if (!this.bucket) return null;
     const object = await this.bucket.get(key);
     if (!object) return null;
     return {
@@ -60,16 +62,19 @@ export class R2Storage {
   }
 
   async delete(key: string): Promise<boolean> {
+    if (!this.bucket) return false;
     await this.bucket.delete(key);
     return true;
   }
 
   async exists(key: string): Promise<boolean> {
+    if (!this.bucket) return false;
     const head = await this.bucket.head(key);
     return head !== null;
   }
 
   async list(prefix?: string, cursor?: string, limit: number = 100): Promise<FileListResult> {
+    if (!this.bucket) return { files: [], truncated: false };
     const result = await this.bucket.list({ prefix, cursor, limit });
     return {
       files: result.objects.map((obj) => ({

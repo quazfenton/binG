@@ -315,6 +315,11 @@ const OPENAI_COMPATIBLE_PROVIDERS: Record<string, OpenAICompatibleConfig> = {
     apiKeyEnv: 'ZO_API_KEY',
     useChatEndpoint: true,
   },
+  ninerouter: {
+    baseURL: process.env.NINEROUTER_BASE_URL || 'http://ninerouter:3000/v1',
+    apiKeyEnv: 'NINEROUTER_API_KEY',
+    useChatEndpoint: true,
+  },
   openrouter: {
     baseURL: process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1',
     apiKeyEnv: 'OPENROUTER_API_KEY',

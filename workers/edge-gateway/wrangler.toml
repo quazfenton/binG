@@ -22,7 +22,7 @@ account_id = "69131dbe7a982d6e0ded89318103b605"
 # Deploy-time defaults. Overridable at runtime via KV (see above).
 # Update with: `npx wrangler deploy --var BACKEND_URL="https://..."` or by
 # editing this file and redeploying.
-BACKEND_URL = ""
+BACKEND_URL = "https://nation-web-christ-cell.trycloudflare.com"
 FRONTEND_URL = "https://web-eight-ashen-83.vercel.app"
 
 # === KV Namespace (Session Cache + Rate Limiting + Runtime Config) ===

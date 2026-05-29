@@ -43,7 +43,8 @@ services:
       PORT: "3001"
       NODE_ENV: production
       # Backend talks to 9router on the internal docker network
-      NINEROUTER_BASE_URL: http://ninerouter:3000
+      NINEROUTER_BASE_URL: http://ninerouter:3000/v1
+      NINEROUTER_API_KEY: ${NINEROUTER_API_KEY}
       KIRO_BASE_URL: http://ninerouter:3000/v1
       # Exclude client-only route files that crash the backend
       BACKEND_ROUTE_EXCLUDES: "/desktop/"

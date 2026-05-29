@@ -11,6 +11,7 @@ export interface LLMProvider {
   id: string;
   name: string;
   models: string[];
+  subProviders?: string[];
   supportsStreaming: boolean;
   maxTokens: number;
   description: string;

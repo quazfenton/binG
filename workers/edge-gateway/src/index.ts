@@ -15,16 +15,16 @@
  * Admin:
  *   POST /admin/backend-url  (header X-Admin-Token: <ADMIN_TOKEN>)
  *     Body: { "url": "https://..." }
- *     Updates the runtime BACKEND_URL in KV — used by the ARM box to
- *     broadcast new Cloudflare tunnel URLs without redeploying the worker.
+ *     Updates the runtime BACKEND_URL in KV + R2 fallback
+ *   POST /admin/backend-url-fallback
+ *     R2-only fallback when KV put quota is exceeded
  */
 import { authenticateRequest } from './auth';
 import { checkIpRateLimit, checkRateLimit } from './rate-limiter';
 import { routeRequest } from './router';
+import { setBackendUrl } from './url-store';
 import { handleFileRequest } from './r2-storage';
 import type { Env } from './env';
-
-const RUNTIME_BACKEND_KEY = 'runtime:BACKEND_URL';
 
 // CORS headers applied to all responses
 const CORS_HEADERS: Record<string, string> = {
@@ -70,6 +70,14 @@ export default {
     // Done BEFORE rate limiting so a flood doesn't lock out the rotation hook.
     // BUT: applies its own stricter rate limit (10 req/min) to prevent
     // brute-force on the admin token.
+
+    // R2-only fallback endpoint (when KV quota exceeded)
+    // NOTE: no rate limit here intentionally — needed when KV is failing.
+    // The primary endpoint has rate limiting to prevent brute force.
+    if (url.pathname === '/admin/backend-url-fallback' && request.method === 'POST') {
+      return await handleAdminBackendUrlFallback(request, env);
+    }
+
     if (url.pathname === '/admin/backend-url' && request.method === 'POST') {
       const adminRateLimit = await checkRateLimit(env.BING_KV, 'admin:backend-url', 10);
       if (!adminRateLimit.allowed) {
@@ -88,7 +96,7 @@ export default {
       return await handleAdminBackendUrl(request, env);
     }
 
-    // ─── Rate Limiting (by IP) ───────────────────────────────────────
+    // ─── Rate Limiting (by IP) ────────────────────────────────────────
     const rateLimit = await checkIpRateLimit(env.BING_KV, request);
     if (!rateLimit.allowed) {
       return new Response(JSON.stringify({
@@ -269,12 +277,13 @@ function addAuthHeaders(request: Request, auth: { authenticated: boolean; userId
 }
 
 /**
- * POST /admin/backend-url — rotate the runtime BACKEND_URL stored in KV.
+ * POST /admin/backend-url — rotate the runtime BACKEND_URL stored in KV + R2.
  *
  * Auth: header `X-Admin-Token` must equal `env.ADMIN_TOKEN`.
  * Body: `{ "url": "https://..." }`
  *
- * On success: writes KV key `runtime:BACKEND_URL` and returns 200.
+ * On success: writes KV key `runtime:BACKEND_URL` and R2 object `config/backend-url.txt`.
+ * Both writes are attempted; response indicates which succeeded.
  */
 async function handleAdminBackendUrl(request: Request, env: Env): Promise<Response> {
   const json = (status: number, body: Record<string, unknown>): Response =>
@@ -324,11 +333,93 @@ async function handleAdminBackendUrl(request: Request, env: Env): Promise<Respon
   }
 
   const normalized = parsed.toString().replace(/\/+$/, '');
-  await env.BING_KV.put(RUNTIME_BACKEND_KEY, normalized);
+  const { kvSuccess, r2Success } = await setBackendUrl(env, normalized);
 
   return json(200, {
     ok: true,
     url: normalized,
+    kvSuccess,
+    r2Success,
+    updatedAt: new Date().toISOString(),
+  });
+}
+
+/**
+ * POST /admin/backend-url-fallback — R2-only fallback when KV quota is exceeded.
+ *
+ * Auth: header `X-Admin-Token` must equal `env.ADMIN_TOKEN`.
+ * Body: `{ "url": "https://..." }`
+ *
+ * Only writes to R2 (not KV). Use when KV put quota is exceeded.
+ */
+async function handleAdminBackendUrlFallback(request: Request, env: Env): Promise<Response> {
+  const json = (status: number, body: Record<string, unknown>): Response =>
+    new Response(JSON.stringify(body), {
+      status,
+      headers: {
+        'Content-Type': 'application/json',
+        ...getCorsHeaders(request, env),
+      },
+    });
+
+  if (!env.ADMIN_TOKEN) {
+    return json(503, {
+      error: 'Admin endpoint disabled',
+      detail: 'ADMIN_TOKEN is not configured on this worker.',
+    });
+  }
+
+  const provided = request.headers.get('X-Admin-Token');
+  if (!provided) {
+    return json(401, { error: 'Missing X-Admin-Token header' });
+  }
+  if (!constantTimeEqual(provided, env.ADMIN_TOKEN)) {
+    return json(403, { error: 'Invalid admin token' });
+  }
+
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return json(400, { error: 'Invalid JSON body' });
+  }
+
+  const candidate = (body as { url?: unknown })?.url;
+  if (typeof candidate !== 'string' || !candidate.trim()) {
+    return json(400, { error: 'Missing or invalid "url" field' });
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(candidate.trim());
+  } catch {
+    return json(400, { error: 'Invalid URL', detail: candidate });
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return json(400, { error: 'URL must use http or https', detail: parsed.protocol });
+  }
+
+  const normalized = parsed.toString().replace(/\/+$/, '');
+
+  // Only write to R2 (skip KV)
+  let r2Success = false;
+  if (env.BING_STORAGE) {
+    try {
+      await env.BING_STORAGE.put('config/backend-url.txt', normalized, {
+        httpMetadata: { contentType: 'text/plain' },
+      });
+      r2Success = true;
+    } catch (err) {
+      console.error('[url-store] R2 put failed:', err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  return json(200, {
+    ok: true,
+    url: normalized,
+    r2Success,
+    kvSuccess: false,
+    fallbackMode: true,
     updatedAt: new Date().toISOString(),
   });
 }

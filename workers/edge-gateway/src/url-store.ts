@@ -1,0 +1,115 @@
+/**
+ * URL Store — Dual-backend storage for runtime configuration
+ *
+ * Stores the backend URL in two places:
+ * 1. KV (primary) — fast, for runtime rotation
+ * 2. R2 (fallback) — reliable, for when KV write quota is exceeded
+ *
+ * Resolution order for reading:
+ *   1. KV key `runtime:BACKEND_URL`
+ *   2. R2 object `config/backend-url.txt`
+ *   3. env.BACKEND_URL (deploy-time default)
+ *
+ * This ensures the URL remains reachable even when KV write quota is exceeded.
+ */
+import type { Env } from './env';
+
+export const RUNTIME_BACKEND_KEY = 'runtime:BACKEND_URL';
+const R2_BACKEND_KEY = 'config/backend-url.txt';
+
+/**
+ * Write the backend URL to both KV and R2.
+ * KV is primary — if it fails, we still write to R2 as fallback.
+ * Returns { kvSuccess: boolean, r2Success: boolean }
+ */
+export async function setBackendUrl(env: Env, url: string): Promise<{ kvSuccess: boolean; r2Success: boolean }> {
+  let kvSuccess = false;
+  let r2Success = false;
+
+  // Try KV first (primary)
+  try {
+    await env.BING_KV.put(RUNTIME_BACKEND_KEY, url);
+    kvSuccess = true;
+  } catch (err) {
+    console.error('[url-store] KV put failed:', err instanceof Error ? err.message : String(err));
+  }
+
+  // Always try R2 as fallback (more reliable for quota issues)
+  if (env.BING_STORAGE) {
+    try {
+      await env.BING_STORAGE.put(R2_BACKEND_KEY, url, {
+        httpMetadata: { contentType: 'text/plain' },
+      });
+      r2Success = true;
+    } catch (err) {
+      console.error('[url-store] R2 put failed:', err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  return { kvSuccess, r2Success };
+}
+
+/**
+ * Read the backend URL with cascading fallback.
+ * Tries KV first, then R2, then env var.
+ */
+export async function getBackendUrl(env: Env): Promise<string> {
+  // 1. Deploy-time env var — takes priority when explicitly set.
+  //    This is the emergency escape hatch: when KV quota is exhausted
+  //    and the tunnel URL has changed, redeploy with BACKEND_URL set.
+  //    When KV is healthy again, set BACKEND_URL="" and redeploy to
+  //    re-enable runtime rotation via the admin endpoint.
+  const envUrl = stripTrailingSlash(env.BACKEND_URL);
+  if (envUrl && isValidHttpUrl(envUrl)) {
+    return envUrl;
+  }
+
+  // 2. Try KV (runtime override via admin endpoint)
+  try {
+    const kvValue = await env.BING_KV.get(RUNTIME_BACKEND_KEY);
+    if (kvValue && isValidHttpUrl(kvValue)) {
+      return stripTrailingSlash(kvValue);
+    }
+  } catch (err) {
+    console.warn('[url-store] KV get failed, trying R2 fallback:', err instanceof Error ? err.message : String(err));
+  }
+
+  // 3. Try R2 fallback (only if R2 binding is configured)
+  if (env.BING_STORAGE) {
+    try {
+      const r2Object = await env.BING_STORAGE.get(R2_BACKEND_KEY);
+      if (r2Object) {
+        const r2Value = await r2Object.text();
+        if (r2Value && isValidHttpUrl(r2Value)) {
+          console.log('[url-store] Using R2 fallback for backend URL');
+          // Sync to KV if KV failed (best effort)
+          try {
+            await env.BING_KV.put(RUNTIME_BACKEND_KEY, stripTrailingSlash(r2Value));
+          } catch {
+            // Ignore - R2 has the value, that's what matters
+          }
+          return stripTrailingSlash(r2Value);
+        }
+      }
+    } catch (err) {
+      console.warn('[url-store] R2 get failed:', err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  // 4. Nothing configured
+  return '';
+}
+
+function stripTrailingSlash(u: string | undefined | null): string {
+  if (!u) return '';
+  return u.replace(/\/+$/, '');
+}
+
+function isValidHttpUrl(u: string): boolean {
+  try {
+    const parsed = new URL(u);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}

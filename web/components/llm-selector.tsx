@@ -1,4 +1,7 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useState, useMemo } from 'react'
+import { SUBPROVIDER_LABELS, isFreeTierModel } from '@/lib/providers/subprovider-labels'
+import Search from 'lucide-react/dist/esm/icons/search'
+import X from 'lucide-react/dist/esm/icons/x'
 
 interface ProviderModel {
   id: string;
@@ -25,6 +28,8 @@ export const LLMSelector: React.FC<{
   const [selectedProvider, setSelectedProvider] = useState<string>('');
   const [selectedModel, setSelectedModel] = useState<string>('');
   const [models, setModels] = useState<string[]>([]);
+  const [showFreeModels, setShowFreeModels] = useState(true);
+  const [modelSearch, setModelSearch] = useState('');
 
   useEffect(() => {
     const fetchProviders = async () => {
@@ -67,12 +72,16 @@ export const LLMSelector: React.FC<{
     const provider = providers.find(p => p.id === selectedProvider);
     if (provider) {
       // Filter models by subProviders if available (for ninerouter provider)
-      const filteredModels = provider.subProviders
+      const subFiltered = provider.subProviders?.length
         ? provider.models.filter((model: string) => {
             const [prefix] = model.split('/');
-            return provider.subProviders.includes(prefix);
+            return provider.subProviders!.includes(prefix);
           })
         : provider.models;
+      // Apply free-tier filter
+      const filteredModels = showFreeModels
+        ? subFiltered
+        : subFiltered.filter((m: string) => !isFreeTierModel(m));
       setModels(filteredModels);
       if (filteredModels.length > 0) {
         setSelectedModel(filteredModels[0]);
@@ -83,7 +92,7 @@ export const LLMSelector: React.FC<{
       setModels([]);
       setSelectedModel('');
     }
-  }, [selectedProvider, providers]);
+  }, [selectedProvider, providers, showFreeModels]);
 
   const handleProviderChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const providerId = e.target.value;
@@ -95,6 +104,17 @@ export const LLMSelector: React.FC<{
     setSelectedModel(modelId);
     onSelect?.(modelId, selectedProvider);
   };
+
+  // Count free-tier models from the UNFILTERED provider list (not the already-filtered models state).
+  // This ensures the toggle remains visible even when free models are hidden.
+  const freeModelCount = useMemo(() => {
+    const provider = providers.find(p => p.id === selectedProvider);
+    if (!provider) return 0;
+    const subFiltered = provider.subProviders?.length
+      ? provider.models.filter((m: string) => provider.subProviders!.includes(m.split('/')[0]))
+      : provider.models;
+    return subFiltered.filter(isFreeTierModel).length;
+  }, [selectedProvider, providers]);
 
   return (
     <div className="space-y-2">
@@ -114,17 +134,82 @@ export const LLMSelector: React.FC<{
       </div>
       
       <div>
-        <label className="block text-sm font-medium mb-1">Model</label>
+        <div className="flex items-center justify-between mb-1">
+          <label className="text-sm font-medium">Model</label>
+          {freeModelCount > 0 && (
+            <label className="flex items-center gap-1.5 text-xs cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={showFreeModels}
+                onChange={(e) => setShowFreeModels(e.target.checked)}
+                className="w-3 h-3"
+              />
+              <span className="text-green-400">FREE</span>
+              <span className="text-white/50">({freeModelCount})</span>
+            </label>
+          )}
+        </div>
+        {/* Search filter input */}
+        <div className="relative mb-1.5">
+          <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-white/30" />
+          <input
+            type="text"
+            placeholder="Filter models..."
+            value={modelSearch}
+            onChange={(e) => setModelSearch(e.target.value)}
+            className="w-full pl-7 pr-7 py-1.5 text-xs bg-white/5 border border-white/10 rounded outline-none focus:border-white/20 text-white/80 placeholder:text-white/30"
+          />
+          {modelSearch && (
+            <button
+              type="button"
+              onClick={() => setModelSearch('')}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-white/30 hover:text-white/60"
+            >
+              <X className="w-3 h-3" />
+            </button>
+          )}
+        </div>
         <select 
           value={selectedModel} 
           onChange={handleModelChange}
           className="w-full p-2 border rounded"
         >
-          {models.map((model) => (
-            <option key={model} value={model}>
-              {model}
-            </option>
-          ))}
+          {(() => {
+            const searchTerm = modelSearch.toLowerCase().trim();
+            const provider = providers.find(p => p.id === selectedProvider);
+            // Filter models by search term
+            const visibleModels = searchTerm
+              ? models.filter((m) => m.toLowerCase().includes(searchTerm))
+              : models;
+            // When searching, show a flat list without optgroup for easy scanning
+            if (searchTerm) {
+              if (visibleModels.length === 0) {
+                return <option disabled>No models found</option>;
+              }
+              return visibleModels.map((model) => (
+                <option key={model} value={model}>{model}</option>
+              ));
+            }
+            if (provider?.subProviders?.length) {
+              // Group models by sub-provider prefix
+              const grouped = new Map<string, string[]>();
+              for (const model of visibleModels) {
+                const [prefix] = model.split('/');
+                if (!grouped.has(prefix)) grouped.set(prefix, []);
+                grouped.get(prefix)!.push(model);
+              }
+              return Array.from(grouped.entries()).map(([prefix, groupModels]) => (
+                <optgroup key={prefix} label={SUBPROVIDER_LABELS[prefix] || prefix}>
+                  {groupModels.map((model) => (
+                    <option key={model} value={model}>{model}</option>
+                  ))}
+                </optgroup>
+              ));
+            }
+            return visibleModels.map((model) => (
+              <option key={model} value={model}>{model}</option>
+            ));
+          })()}
         </select>
       </div>
     </div>

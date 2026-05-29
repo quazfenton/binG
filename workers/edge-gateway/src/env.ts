@@ -21,9 +21,9 @@ export interface Env {
   // KV namespace (rate limiting + session cache + runtime config)
   BING_KV: KVNamespace;
 
-  // R2 bucket (file storage)
-  BING_STORAGE: R2Bucket;
+  // R2 bucket (file storage) — optional, not bound until [[r2_buckets]] configured
+  BING_STORAGE?: R2Bucket;
 
-  // D1 database (lightweight SQL)
-  BING_DB: D1Database;
+  // D1 database (lightweight SQL) — optional, not bound until [[d1_databases]] configured
+  BING_DB?: D1Database;
 }

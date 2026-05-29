@@ -88,6 +88,7 @@ import Monitor from "lucide-react/dist/esm/icons/monitor";
 import VNCConnectionTab from "./vnc-connection-tab";
 import type { LLMProviderConfig } from "@/lib/providers/llm-providers-types";
 import type { ModelConfig } from "@/lib/providers/llm-providers-types";
+import { SUBPROVIDER_LABELS, isFreeTierModel } from "@/lib/providers/subprovider-labels";
 import MultiModelComparison from "./multi-model-comparison";
 import PluginManager, { type Plugin } from "./plugins/plugin-manager";
 import AIEnhancerPlugin from "./plugins/ai-enhancer-plugin";
@@ -361,10 +362,31 @@ const ProviderSelector = React.memo(function ProviderSelector({
   availableProviders: any[];
   onValueChange: (provider: string, model: string) => void;
 }) {
+  const [showFreeModels, setShowFreeModels] = React.useState(true);
+  const [searchTerm, setSearchTerm] = React.useState("");
+  const searchInputRef = React.useRef<HTMLInputElement>(null);
+
   if (!selectValue || availableProviders.length === 0) return null;
+
+  // Count free-tier models across all providers for the toggle label
+  const freeModelCount = availableProviders
+    .filter((p: any) => p.isAvailable !== false)
+    .flatMap((p: any) => p.models)
+    .filter((m: any) => isFreeTierModel(typeof m === "string" ? m : m.id)).length;
+
+  // Helper: does a model match the search term?
+  const matchesSearch = (modelId: string) => {
+    if (!searchTerm.trim()) return true;
+    const term = searchTerm.toLowerCase().trim();
+    return modelId.toLowerCase().includes(term);
+  };
+
+  // Whether we're in search mode (search term entered)
+  const isSearching = searchTerm.trim().length > 0;
   
   return (
-    <div className="flex items-center gap-2 mb-2 text-xs text-white/60">
+    <div className="flex flex-col gap-1 mb-2">
+      <div className="flex items-center gap-2 text-xs text-white/60">
       <Select value={selectValue} onValueChange={(value) => {
         if (!value || value === "none") return;
         const [provider, ...modelParts] = value.split(":");
@@ -375,27 +397,120 @@ const ProviderSelector = React.memo(function ProviderSelector({
           <SelectValue placeholder="Select a model" />
         </SelectTrigger>
         <SelectContent>
+          {/* Search filter input */}
+          <div className="sticky top-0 z-10 px-2 pt-1 pb-1.5 border-b border-white/10 bg-black/90 backdrop-blur-sm"
+            onKeyDown={(e) => e.stopPropagation()}
+            onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
+          >
+            <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-white/5 border border-white/10">
+              <Search className="w-3 h-3 text-white/30 flex-shrink-0" />
+              <input
+                ref={searchInputRef}
+                type="text"
+                placeholder="Filter models..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                onClick={(e) => e.stopPropagation()}
+                onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                className="flex-1 bg-transparent border-none outline-none text-xs text-white/80 placeholder:text-white/30"
+              />
+              {searchTerm && (
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); setSearchTerm(""); searchInputRef.current?.focus(); }}
+                  onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                  className="text-white/30 hover:text-white/60"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              )}
+            </div>
+          </div>
           {availableProviders
             .filter((p: any) => p.isAvailable !== false)
             .map((provider) => (
               <SelectGroup key={provider.id}>
-                <SelectLabel>{provider.name}</SelectLabel>
-                {(provider.subProviders
-                  ? provider.models.filter((model: ModelConfig | string) => {
-                      const modelId = typeof model === "string" ? model : model.id;
-                      // Model format is like "gemini/gemini-3.1-flash-lite-preview" - prefix is first part
-                      const [prefix] = modelId.split('/');
-                      return provider.subProviders.includes(prefix);
-                    })
-                  : provider.models
-                ).map((model: ModelConfig | string) => {
-                  const modelId = typeof model === "string" ? model : model.id;
-                  return (
-                    <SelectItem key={`${provider.id}:${modelId}`} value={`${provider.id}:${modelId}`}>
-                      {modelId}
-                    </SelectItem>
-                  );
-                })}
+                {!isSearching && <SelectLabel>{provider.name}</SelectLabel>}
+                {isSearching
+                  // Search mode: flat filtered list across all models in this provider
+                  ? provider.models
+                      .filter((model: ModelConfig | string) => {
+                        const modelId = typeof model === "string" ? model : model.id;
+                        return matchesSearch(modelId) && (showFreeModels || !isFreeTierModel(modelId));
+                      })
+                      .map((model: ModelConfig | string) => {
+                        const modelId = typeof model === "string" ? model : model.id;
+                        return (
+                          <SelectItem key={`${provider.id}:${modelId}`} value={`${provider.id}:${modelId}`}>
+                            <span className="text-xs text-white/40 mr-1">{provider.name}</span>
+                            {modelId}
+                            {isFreeTierModel(modelId) && showFreeModels && (
+                              <span className="ml-1.5 text-[9px] text-green-400/70 font-medium">FREE</span>
+                            )}
+                          </SelectItem>
+                        );
+                      })
+                  // Normal mode: grouped by provider with sub-provider groupings
+                  : provider.subProviders?.length
+                    ? (() => {
+                        const filteredModels = provider.models
+                          .filter((model: ModelConfig | string) => {
+                            const modelId = typeof model === "string" ? model : model.id;
+                            const [prefix] = modelId.split('/');
+                            return provider.subProviders!.includes(prefix);
+                          })
+                          .filter((model: ModelConfig | string) => {
+                            const modelId = typeof model === "string" ? model : model.id;
+                            return showFreeModels || !isFreeTierModel(modelId);
+                          });
+                        // Group models by sub-provider prefix
+                        const grouped = new Map<string, Array<ModelConfig | string>>();
+                        for (const model of filteredModels) {
+                          const modelId = typeof model === "string" ? model : model.id;
+                          const [prefix] = modelId.split('/');
+                          if (!grouped.has(prefix)) grouped.set(prefix, []);
+                          grouped.get(prefix)!.push(model);
+                        }
+                        return Array.from(grouped.entries()).map(([prefix, groupModels]) => (
+                          <React.Fragment key={`${provider.id}-${prefix}`}>
+                            <SelectLabel className="text-[10px] uppercase tracking-wider text-white/40 pl-2 pt-1 pb-0.5">
+                              {SUBPROVIDER_LABELS[prefix] || prefix}
+                            </SelectLabel>
+                            {groupModels
+                              .filter((model: ModelConfig | string) => {
+                                const modelId = typeof model === "string" ? model : model.id;
+                                return showFreeModels || !isFreeTierModel(modelId);
+                              })
+                              .map((model: ModelConfig | string) => {
+                              const modelId = typeof model === "string" ? model : model.id;
+                              return (
+                                <SelectItem key={`${provider.id}:${modelId}`} value={`${provider.id}:${modelId}`}>
+                                  {modelId}
+                                  {isFreeTierModel(modelId) && showFreeModels && (
+                                    <span className="ml-1.5 text-[9px] text-green-400/70 font-medium">FREE</span>
+                                  )}
+                                </SelectItem>
+                              );
+                            })}
+                          </React.Fragment>
+                        ));
+                      })()
+                    : provider.models
+                        .filter((model: ModelConfig | string) => {
+                          const modelId = typeof model === "string" ? model : model.id;
+                          return showFreeModels || !isFreeTierModel(modelId);
+                        })
+                        .map((model: ModelConfig | string) => {
+                        const modelId = typeof model === "string" ? model : model.id;
+                        return (
+                          <SelectItem key={`${provider.id}:${modelId}`} value={`${provider.id}:${modelId}`}>
+                            {modelId}
+                            {isFreeTierModel(modelId) && showFreeModels && (
+                              <span className="ml-1.5 text-[9px] text-green-400/70 font-medium">FREE</span>
+                            )}
+                          </SelectItem>
+                        );
+                      })}
               </SelectGroup>
             ))}
           {availableProviders.filter((p: any) => p.isAvailable !== false).length === 0 && (
@@ -405,6 +520,19 @@ const ProviderSelector = React.memo(function ProviderSelector({
           )}
         </SelectContent>
       </Select>
+      {freeModelCount > 0 && (
+        <label className="flex items-center gap-1 text-[10px] cursor-pointer select-none whitespace-nowrap ml-1">
+          <input
+            type="checkbox"
+            checked={showFreeModels}
+            onChange={(e) => setShowFreeModels(e.target.checked)}
+            className="w-3 h-3"
+          />
+          <span className="text-green-400/80">FREE</span>
+          <span className="text-white/40">({freeModelCount})</span>
+        </label>
+      )}
+      </div>
     </div>
   );
 });

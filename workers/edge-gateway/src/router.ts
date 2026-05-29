@@ -17,13 +17,12 @@
  * Note: /health and /api/health are handled by index.ts before routing.
  */
 import type { Env } from './env';
+import { getBackendUrl } from './url-store';
 
 export interface RouteTarget {
   url: string;
   ttl?: number;  // cache TTL in seconds (0 = no cache)
 }
-
-const RUNTIME_BACKEND_KEY = 'runtime:BACKEND_URL';
 
 /**
  * Strip trailing slashes from a URL string. Returns '' for falsy input.
@@ -45,23 +44,7 @@ function isValidHttpUrl(u: string): boolean {
   }
 }
 
-/**
- * Resolve the active BACKEND_URL for this request.
- * Checks KV first (runtime override), falls back to env var.
- * Returns '' if nothing valid is configured.
- */
-export async function getBackendUrl(env: Env): Promise<string> {
-  let runtime: string | null = null;
-  try {
-    runtime = await env.BING_KV.get(RUNTIME_BACKEND_KEY);
-  } catch {
-    runtime = null;
-  }
 
-  const candidate = runtime ?? env.BACKEND_URL ?? '';
-  const normalized = stripTrailingSlash(candidate);
-  return isValidHttpUrl(normalized) ? normalized : '';
-}
 
 /**
  * Build a target URL by concatenating a base (no trailing slash) with the
