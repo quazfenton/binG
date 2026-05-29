@@ -152,14 +152,13 @@ export function wireTerminalHandlers(config: TerminalHandlerWiringConfig): Termi
     onOpenEditor: (filePath, editorType) => {
       editorHandler.openFile(filePath, editorType)
     },
-    onFileChanged: (path, type) => {
-      if (typeof window !== 'undefined') {
+    onFileChanged: (path, _type) => {
+      if (typeof window !== 'undefined' && path) {
         const { emitFilesystemUpdated } = require('@/lib/virtual-filesystem/sync/sync-events');
         emitFilesystemUpdated({
-          path,
-          type,
+          paths: [path],
+          scopePath: config.filesystemScopePath || 'workspace',
           source: 'terminal-local',
-          scopePath: config.filesystemScopePath,
         });
       }
     },

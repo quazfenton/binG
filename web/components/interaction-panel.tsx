@@ -390,7 +390,7 @@ const ProviderSelector = React.memo(function ProviderSelector({
         <SelectTrigger className="w-full sm:w-[280px] border-white/20" style={{ backgroundColor: 'rgba(255, 255, 255, 0.08)' }}>
           <SelectValue placeholder="Select a model" />
         </SelectTrigger>
-        <SelectContent onOpenAutoFocus={(e) => e.preventDefault()}>
+        <SelectContent onCloseAutoFocus={(e) => e.preventDefault()}>
           {/* Search filter input */}
           <div className="sticky top-0 z-10 px-2 pt-1 pb-1.5 border-b border-white/10 bg-black/90 backdrop-blur-sm"
             onKeyDown={(e) => e.stopPropagation()}

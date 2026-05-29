@@ -78,8 +78,8 @@ export const LLMSelector: React.FC<{
           })
         : provider.models;
       setModels(subFiltered);
-      if (filteredModels.length > 0) {
-        setSelectedModel(filteredModels[0]);
+      if (subFiltered.length > 0) {
+        setSelectedModel(subFiltered[0]);
       } else {
         setSelectedModel('');
       }
