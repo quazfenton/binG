@@ -7,7 +7,8 @@
     "node": "22.x"
   },
   "overrides": {
-    "@oxc-workspace/types": "0.103.0"
+    "@oxc-workspace/types": "0.103.0",
+    "vm2": ">=3.11.4"
   },
   "resolutions": {
     "@oxc-workspace/types": "0.103.0"
@@ -230,7 +231,7 @@
     "ts-morph": "^25.0.0",
     "tslib": "^2.8.1",
     "vaul": "^1.1.2",
-    "vm2": "^3.10.5",
+    "vm2": "^3.11.4",
     "web-tree-sitter": "^0.26.8",
     "webdav": "^5.8.0",
     "ws": "^8.19.0",

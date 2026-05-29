@@ -54,7 +54,8 @@
       "glob": ">=11.0.0",
       "ioredis": "^5.4.1",
       "bullmq>ioredis": "^5.4.1",
-      "elliptic": "^6.6.1"
+      "elliptic": "^6.6.1",
+      "vm2": ">=3.11.4"
     },
     "onlyBuiltDependencies": [
       "better-sqlite3",
