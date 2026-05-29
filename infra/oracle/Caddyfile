@@ -35,6 +35,8 @@
     handle @ninerouter_api {
         reverse_proxy ninerouter:3000 {
             flush_interval -1
+            # 9Router -l flag requires Host: localhost — pass it explicitly
+            header_up Host "localhost"
             header_up X-Forwarded-Proto "https"
             header_up X-Forwarded-Host {host}
             header_up X-Real-IP {remote}
@@ -98,8 +100,8 @@
     handle {
         reverse_proxy ninerouter:3000 {
             flush_interval -1
-            # Forward headers so 9Router knows it is behind a reverse proxy with HTTPS
-            header_up Host {host}
+            # 9Router -l flag requires Host: localhost — pass it explicitly
+            header_up Host "localhost"
             header_up X-Forwarded-Proto "https"
             header_up X-Forwarded-Host {host}
             header_up X-Real-IP {remote}
