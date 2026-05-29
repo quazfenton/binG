@@ -41,7 +41,7 @@ interface ActionHistoryItem {
   id: string
   iteration: number
   action: DesktopAction
-  result: { success: boolean; output: string }
+  result: { success: boolean; output: string; provider?: string }
   timestamp: number
 }
 

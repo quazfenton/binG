@@ -1,5 +1,5 @@
-import React, { useEffect, useState, useMemo } from 'react'
-import { SUBPROVIDER_LABELS, isFreeTierModel } from '@/lib/providers/subprovider-labels'
+import React, { useEffect, useState } from 'react'
+import { SUBPROVIDER_LABELS, fuzzyMatchModel } from '@/lib/providers/subprovider-labels'
 import Search from 'lucide-react/dist/esm/icons/search'
 import X from 'lucide-react/dist/esm/icons/x'
 
@@ -28,7 +28,6 @@ export const LLMSelector: React.FC<{
   const [selectedProvider, setSelectedProvider] = useState<string>('');
   const [selectedModel, setSelectedModel] = useState<string>('');
   const [models, setModels] = useState<string[]>([]);
-  const [showFreeModels, setShowFreeModels] = useState(true);
   const [modelSearch, setModelSearch] = useState('');
 
   useEffect(() => {
@@ -78,11 +77,7 @@ export const LLMSelector: React.FC<{
             return provider.subProviders!.includes(prefix);
           })
         : provider.models;
-      // Apply free-tier filter
-      const filteredModels = showFreeModels
-        ? subFiltered
-        : subFiltered.filter((m: string) => !isFreeTierModel(m));
-      setModels(filteredModels);
+      setModels(subFiltered);
       if (filteredModels.length > 0) {
         setSelectedModel(filteredModels[0]);
       } else {
@@ -92,7 +87,7 @@ export const LLMSelector: React.FC<{
       setModels([]);
       setSelectedModel('');
     }
-  }, [selectedProvider, providers, showFreeModels]);
+  }, [selectedProvider, providers]);
 
   const handleProviderChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const providerId = e.target.value;
@@ -104,17 +99,6 @@ export const LLMSelector: React.FC<{
     setSelectedModel(modelId);
     onSelect?.(modelId, selectedProvider);
   };
-
-  // Count free-tier models from the UNFILTERED provider list (not the already-filtered models state).
-  // This ensures the toggle remains visible even when free models are hidden.
-  const freeModelCount = useMemo(() => {
-    const provider = providers.find(p => p.id === selectedProvider);
-    if (!provider) return 0;
-    const subFiltered = provider.subProviders?.length
-      ? provider.models.filter((m: string) => provider.subProviders!.includes(m.split('/')[0]))
-      : provider.models;
-    return subFiltered.filter(isFreeTierModel).length;
-  }, [selectedProvider, providers]);
 
   return (
     <div className="space-y-2">
@@ -134,21 +118,7 @@ export const LLMSelector: React.FC<{
       </div>
       
       <div>
-        <div className="flex items-center justify-between mb-1">
-          <label className="text-sm font-medium">Model</label>
-          {freeModelCount > 0 && (
-            <label className="flex items-center gap-1.5 text-xs cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={showFreeModels}
-                onChange={(e) => setShowFreeModels(e.target.checked)}
-                className="w-3 h-3"
-              />
-              <span className="text-green-400">FREE</span>
-              <span className="text-white/50">({freeModelCount})</span>
-            </label>
-          )}
-        </div>
+        <label className="block text-sm font-medium mb-1">Model</label>
         {/* Search filter input */}
         <div className="relative mb-1.5">
           <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-white/30" />
@@ -179,7 +149,7 @@ export const LLMSelector: React.FC<{
             const provider = providers.find(p => p.id === selectedProvider);
             // Filter models by search term
             const visibleModels = searchTerm
-              ? models.filter((m) => m.toLowerCase().includes(searchTerm))
+              ? models.filter((m) => fuzzyMatchModel(m, searchTerm))
               : models;
             // When searching, show a flat list without optgroup for easy scanning
             if (searchTerm) {

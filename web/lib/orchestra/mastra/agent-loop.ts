@@ -221,18 +221,17 @@ export class AgentLoop {
         content: task,
       });
 
-      // Build messages with system prompt
+      // Build messages with system prompt (passed via system param, not messages array)
       const systemPrompt = this.buildSystemPrompt();
-      const messages: CoreMessage[] = [
-        { role: 'system', content: systemPrompt },
-        ...this.context.conversationHistory.map(m => ({
+      const messages: CoreMessage[] = this.context.conversationHistory
+        .filter(m => m.role !== 'system')
+        .map(m => ({
           role: m.role,
           content: m.content,
-        })),
-      ];
+        }));
 
       // Stream with ToolLoopAgent
-      const result = await this.toolLoopAgent.stream({ messages });
+      const result = await this.toolLoopAgent.stream({ messages, system: systemPrompt });
 
       // Process stream chunks in real-time
       for await (const chunk of result.fullStream) {
@@ -354,18 +353,17 @@ export class AgentLoop {
         content: task,
       });
 
-      // Build messages with system prompt
+      // Build messages with system prompt (passed via system param, not messages array)
       const systemPrompt = this.buildSystemPrompt();
-      const messages: CoreMessage[] = [
-        { role: 'system', content: systemPrompt },
-        ...this.context.conversationHistory.map(m => ({
+      const messages: CoreMessage[] = this.context.conversationHistory
+        .filter(m => m.role !== 'system')
+        .map(m => ({
           role: m.role,
           content: m.content,
-        })),
-      ];
+        }));
 
       // Execute with ToolLoopAgent
-      const result = await this.toolLoopAgent.generate({ messages });
+      const result = await this.toolLoopAgent.generate({ messages, system: systemPrompt });
 
       // Transform ToolLoopAgent result to AgentResult format
       // FIX: ToolLoopAgent may not populate toolInvocations correctly, so fall back to manually tracked invocations
@@ -1270,13 +1268,16 @@ export class AgentLoop {
     try {
       log.info('Continuing conversation after fallback tool execution');
       
-      // Build messages with tool results
+      // Build messages with tool results (system is handled by streamWithVercelAI's convertMessages)
+      const systemPrompt = this.buildSystemPrompt();
       const messages: CoreMessage[] = [
-        { role: 'system', content: this.buildSystemPrompt() },
-        ...this.context.conversationHistory.map(m => ({
-          role: m.role,
-          content: m.content,
-        })),
+        { role: 'system', content: systemPrompt },
+        ...this.context.conversationHistory
+          .filter(m => m.role !== 'system')
+          .map(m => ({
+            role: m.role,
+            content: m.content,
+          })),
         { role: 'assistant', content: originalText },
       ];
       

@@ -144,7 +144,9 @@ export default function AIPromptLibraryPlugin({ onClose }: PluginProps) {
       if (!response.ok) throw new Error('Execution failed');
       const data = await response.json();
       // Fix: Correct response parsing to match /api/chat contract
-      const generatedResult = data.data?.content || data.content || data.message?.content || '';
+      // Ensure generatedResult is always a string to prevent React error #31
+      const rawResult = data.data?.content || data.content || data.message?.content || '';
+      const generatedResult = typeof rawResult === 'string' ? rawResult : JSON.stringify(rawResult);
       setResult(generatedResult);
       toast.success('Prompt executed');
     } catch (err) {

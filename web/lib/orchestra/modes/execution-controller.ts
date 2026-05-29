@@ -955,8 +955,8 @@ export async function runExecutionControllerMode(
           const vercelModel = getVercelModel(evalProvider, evalModel);
           const result = await generateText({
             model: vercelModel as any,
+            system: 'You are a critical code reviewer. Respond ONLY with valid JSON.',
             messages: [
-              { role: 'system', content: 'You are a critical code reviewer. Respond ONLY with valid JSON.' },
               { role: 'user', content: prompt },
             ],
             temperature: 0.3,

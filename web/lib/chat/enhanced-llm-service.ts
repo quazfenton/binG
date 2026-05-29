@@ -788,13 +788,30 @@ export class EnhancedLLMService {
       const vercelProvider = vercelProviderMap[primaryProvider];
 
       if (vercelProvider) {
-        // Sanitize streaming messages as well to avoid provider schema rejections
+        // Sanitize streaming messages to avoid provider schema rejections.
+        // The sanitizer strips system-role messages (AI SDK forbids them in
+        // the messages array), so we extract system content BEFORE sanitization
+        // and re-attach it afterwards — streamWithVercelAI's internal
+        // convertMessages() will then move it to the `system` parameter of
+        // streamText(), which is the correct place for system prompts.
+        const systemMsgs = (processedMessages || []).filter((m: any) => m?.role === 'system');
         try {
           const { sanitizeMessages } = await import('./message-sanitizer');
           processedMessages = sanitizeMessages(processedMessages || []);
         } catch (err: any) {
           chatLogger.debug('Streaming message sanitization failed, continuing with coercion', { requestId, error: err?.message });
-          processedMessages = (processedMessages || []).map((m: any) => ({ role: m?.role || 'user', content: typeof m?.content === 'string' ? m.content : JSON.stringify(m?.content || '') }));
+          processedMessages = (processedMessages || [])
+            .filter((m: any) => m?.role !== 'system')  // Strip system messages even in fallback
+            .map((m: any) => ({
+              role: (m?.role && m.role !== 'system') ? m.role : 'user',
+              content: typeof m?.content === 'string' ? m.content : JSON.stringify(m?.content || ''),
+            }));
+        }
+        // Re-attach system messages so streamWithVercelAI's convertMessages()
+        // can extract them to the `system` parameter of streamText().
+        // Without this, context-pack and other system-level instructions are lost.
+        if (systemMsgs.length > 0) {
+          processedMessages = [...systemMsgs, ...processedMessages];
         }
 
         // Build tools if enabled — Vercel AI SDK handles tool calling natively

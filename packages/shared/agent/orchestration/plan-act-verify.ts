@@ -198,6 +198,227 @@ function classifyToolError(
   };
 }
 
+// ─── Pre-Execution Validation ────────────────────────────────────────────────
+
+/**
+ * Map of tool names to their required fields and sensible defaults.
+ * When the LLM generates a tool call with empty/missing required fields,
+ * we either fill sensible defaults or return a structured error the model
+ * can recover from — avoiding blind "EMPTY_ARGS" / "Path is required" failures.
+ */
+const TOOL_VALIDATION_SCHEMAS: Record<
+  string,
+  { required: string[]; defaults?: Record<string, any>; help: string }
+> = {
+  writeFile: {
+    required: ['path', 'content'],
+    defaults: {},
+    help: 'writeFile requires: path (string) — file path relative to workspace, content (string) — complete file content',
+  },
+  write_file: {
+    required: ['path', 'content'],
+    defaults: {},
+    help: 'write_file requires: path (string), content (string) — complete file content',
+  },
+  'file.write': {
+    required: ['path', 'content'],
+    defaults: {},
+    help: 'file.write requires: path (string), content (string) — complete file content',
+  },
+  readFile: {
+    required: ['path'],
+    defaults: {},
+    help: 'readFile requires: path (string) — file path relative to workspace',
+  },
+  read_file: {
+    required: ['path'],
+    defaults: {},
+    help: 'read_file requires: path (string) — file path relative to workspace',
+  },
+  'file.read': {
+    required: ['path'],
+    defaults: {},
+    help: 'file.read requires: path (string) — file path relative to workspace',
+  },
+  listFiles: {
+    required: ['path'],
+    defaults: { path: '/' },
+    help: 'listFiles requires: path (string) — directory path, defaults to "/" (workspace root)',
+  },
+  list_directory: {
+    required: ['path'],
+    defaults: { path: '/' },
+    help: 'list_directory requires: path (string) — directory path, defaults to "/" (workspace root)',
+  },
+  'file.list': {
+    required: ['path'],
+    defaults: { path: '/' },
+    help: 'file.list requires: path (string) — directory path, defaults to "/"',
+  },
+  deleteFile: {
+    required: ['path'],
+    defaults: {},
+    help: 'deleteFile requires: path (string) — file path to delete',
+  },
+  delete_file: {
+    required: ['path'],
+    defaults: {},
+    help: 'delete_file requires: path (string) — file path to delete',
+  },
+  'file.delete': {
+    required: ['path'],
+    defaults: {},
+    help: 'file.delete requires: path (string) — file path to delete',
+  },
+  createDirectory: {
+    required: ['path'],
+    defaults: {},
+    help: 'createDirectory requires: path (string) — directory path to create. Use listFiles("/") to browse existing directories first.',
+  },
+  create_directory: {
+    required: ['path'],
+    defaults: {},
+    help: 'create_directory requires: path (string) — directory path to create. Use listFiles("/") to browse existing directories first.',
+  },
+  mkdir: {
+    required: ['path'],
+    defaults: {},
+    help: 'mkdir requires: path (string) — directory path to create',
+  },
+  applyDiff: {
+    required: ['path', 'diff'],
+    defaults: {},
+    help: 'applyDiff requires: path (string) — file to patch, diff (string) — unified diff content',
+  },
+  executeShell: {
+    required: ['command'],
+    defaults: {},
+    help: 'executeShell requires: command (string) — shell command to run',
+  },
+  exec_shell: {
+    required: ['command'],
+    defaults: {},
+    help: 'exec_shell requires: command (string) — shell command to run',
+  },
+  search_files: {
+    required: ['query'],
+    defaults: {},
+    help: 'search_files requires: query (string) — search pattern or text',
+  },
+  batch_write: {
+    required: ['files'],
+    defaults: {},
+    help: 'batch_write requires: files (array) — array of { path, content } objects',
+  },
+  str_replace: {
+    required: ['path', 'oldString', 'newString'],
+    defaults: {},
+    help: 'str_replace requires: path (string) — file to edit, oldString (string) — exact text to replace, newString (string) — replacement text',
+  },
+  replace_in_file: {
+    required: ['path', 'oldString', 'newString'],
+    defaults: {},
+    help: 'replace_in_file requires: path (string) — file to edit, oldString (string) — exact text to replace, newString (string) — replacement text',
+  },
+};
+
+/** Result of pre-execution argument validation */
+interface ValidationResult {
+  /** Normalized / default-filled args (only set when valid) */
+  args?: Record<string, any>;
+  /** Structured error when validation fails (so the model can recover) */
+  error?: ToolError;
+}
+
+/**
+ * Validate and normalize tool arguments before execution.
+ *
+ * - Checks required fields exist and are non-empty
+ * - Fills in sensible defaults where possible (e.g., listFiles path → "/")
+ * - Returns a structured ToolError on failure so the LLM can self-heal
+ */
+function validateAndNormalizeArgs(
+  toolName: string,
+  args: Record<string, any>,
+): ValidationResult {
+  const schema = TOOL_VALIDATION_SCHEMAS[toolName];
+
+  // Unknown tool — pass through without validation
+  if (!schema) {
+    return { args };
+  }
+
+  // Check for null/undefined args
+  if (!args || typeof args !== 'object') {
+    return {
+      error: {
+        type: 'validation',
+        message: `Tool "${toolName}" called with no arguments. ${schema.help}`,
+        suggestions: [`Re-call ${toolName} with valid arguments: ${schema.help}`],
+      },
+    };
+  }
+
+  // Normalize: apply defaults first, then overlay provided args
+  const normalized: Record<string, any> = { ...(schema.defaults || {}), ...args };
+
+  // Check each required field
+  const missing: string[] = [];
+  const empty: string[] = [];
+
+  for (const field of schema.required) {
+    if (!(field in normalized)) {
+      missing.push(field);
+    } else {
+      const val = normalized[field];
+      // Empty string, empty array, null, undefined are all considered empty
+      const isEmpty =
+        val === null ||
+        val === undefined ||
+        (typeof val === 'string' && val.trim() === '') ||
+        (Array.isArray(val) && val.length === 0);
+
+      if (isEmpty) {
+        // Auto-fill from defaults when available (e.g. empty path for listFiles → "/")
+        const defaultVal = schema.defaults?.[field];
+        if (defaultVal !== undefined) {
+          normalized[field] = defaultVal;
+        } else {
+          empty.push(field);
+        }
+      }
+    }
+  }
+
+  if (missing.length > 0) {
+    return {
+      error: {
+        type: 'validation',
+        message: `Tool "${toolName}" is missing required fields: ${missing.join(', ')}. ${schema.help}`,
+        suggestions: [
+          `Provide values for: ${missing.join(', ')}`,
+          `Re-call ${toolName} with all required arguments: ${schema.help}`,
+        ],
+      },
+    };
+  }
+
+  if (empty.length > 0) {
+    return {
+      error: {
+        type: 'validation',
+        message: `Tool "${toolName}" has empty values for required fields: ${empty.join(', ')}. ${schema.help}`,
+        suggestions: [
+          `These fields cannot be empty: ${empty.join(', ')}`,
+          `Provide meaningful values and re-call ${toolName}`,
+        ],
+      },
+    };
+  }
+
+  return { args: normalized };
+}
+
 /** Build a concise summary for successful tool execution */
 function buildToolSuccessSummary(toolName: string, output: Record<string, any>): string {
   switch (toolName) {
@@ -424,25 +645,61 @@ export class PlanActVerifyOrchestrator {
                 redactedArgs: typeof _redactedForLog === 'string' ? _redactedForLog : JSON.stringify(_redactedForLog || {}),
                 originStack: createOriginStack(),
                 toolCallId: call.id || null,
-              }).catch((err) => { log.debug?.('PlanActVerify: recordInvocationPayload failed:', err); });
-            }).catch((err) => { log.debug?.('PlanActVerify: recordToolResultTelemetry failed:', err); });
+              }).catch((err: any) => { log.debug?.('PlanActVerify: recordInvocationPayload failed:', err); });
+            }).catch((err: any) => { log.debug?.('PlanActVerify: recordToolResultTelemetry failed:', err); });
           } catch (e) {
             log.debug('PlanActVerify: failed to persist invocation payload', { tool: call.name });
           }
 
           let structuredResult: ToolResult;
+
+          // ── Pre-execution argument validation ──────────────────────────
+          // Check required fields and fill sensible defaults BEFORE calling
+          // the tool.  This catches empty path/content/etc. early and gives
+          // the model a structured error it can recover from, rather than
+          // letting the tool itself fail with a cryptic "Path is required".
+          const validation = validateAndNormalizeArgs(call.name, call.arguments);
+          if (validation.error) {
+            // Validation failed — yield a tool_error so the model sees the
+            // structured feedback and can self-heal on the next iteration.
+            structuredResult = {
+              success: false,
+              toolName: call.name,
+              args: call.arguments,
+              error: validation.error,
+              summary: `Pre-execution validation failed: ${validation.error.message}`,
+            };
+            yield { type: 'tool_error', tool: call.name, error: validation.error };
+
+            // Push the error into conversation history so the LLM can recover.
+            // Uses tool-role with array content per AI SDK ModelMessage schema.
+            conversationHistory.push({
+              role: 'tool' as const,
+              content: [{
+                type: 'tool-result' as const,
+                toolCallId: call.id,
+                toolName: call.name,
+                output: structuredResult as any,
+              }],
+            });
+            continue; // Skip execution, let the model retry with corrected args
+          }
+
+          // Use validated/normalized args (with defaults filled) for execution
+          const normalizedArgs = validation.args!;
+
           try {
-            const rawResult = await this.executeToolWithHealing(call.name, call.arguments);
+            const rawResult = await this.executeToolWithHealing(call.name, normalizedArgs);
             // P2 #7: Build structured ToolResult instead of JSON.stringify blob
-            structuredResult = buildToolResult(call.name, call.arguments, rawResult);
+            structuredResult = buildToolResult(call.name, normalizedArgs, rawResult);
             yield { type: 'tool_result', tool: call.name, result: structuredResult };
 
             if (call.name === 'writeFile' || call.name === 'applyDiff') {
-              modifiedFiles.push(call.arguments.path || call.arguments.file);
+              modifiedFiles.push(normalizedArgs.path || normalizedArgs.file);
             }
           } catch (error: any) {
             // P2 #7: Build structured ToolResult for errors too
-            structuredResult = buildToolResult(call.name, call.arguments, undefined, error);
+            structuredResult = buildToolResult(call.name, normalizedArgs, undefined, error);
             yield { type: 'tool_error', tool: call.name, error: structuredResult.error! };
           }
 
@@ -556,57 +813,92 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
    * Call LLM using Vercel AI SDK generateText.
    * P2 #9: Uses typed provider config with validated defaults.
    * P2 #9: Uses properly adapted sdkTools (no @ts-expect-error).
+   *
+   * Includes a retry wrapper: if generateText throws a schema validation error
+   * (e.g. "messages do not match ModelMessage[] schema"), system-role messages
+   * are filtered from history and the call is retried once before giving up.
+   * System messages are always proactively filtered since they must go via
+   * generateText's `system` param, not the messages array.
    */
   private async callLLM(prompt: string, history: ModelMessage[]) {
     const { provider, model } = this.validatedConfig;
 
+    let vercelModel: any;
     try {
-      let vercelModel: any;
-      try {
-        vercelModel = getVercelModel(provider, model);
-      } catch (modelError: any) {
-        log.error('Failed to create Vercel model', { provider, model, error: modelError.message });
-        throw new Error(`Cannot initialize LLM provider '${provider}' with model '${model}': ${modelError.message}`);
-      }
-
-      // Build messages using AI SDK ModelMessage format.
-      // System/user/assistant roles accept plain-string content;
-      // tool role MUST use content: [{ type: 'tool-result', ... }] array.
-      // System prompt is passed via generateText's `system` param (not in messages)
-      // to avoid the SDK warning about system-in-messages and prevent duplication
-      // across iterations (history already includes prior system messages).
-      const messages: ModelMessage[] = [
-        ...history,
-        { role: 'user' as const, content: prompt },
-      ];
-
-      const result = await generateText({
-        model: vercelModel,
-        messages,
-        tools: Object.keys(this.sdkTools).length > 0 ? this.sdkTools : undefined,
-        system:
-          'You are an autonomous AI coding agent. You have tools available to interact with the system.',
-        maxOutputTokens: 4000,
-        temperature: 0.2,
-      });
-
-      // Extract tool calls from the result
-      const toolCalls = (result as any).toolCalls?.map((tc: any) => ({
-        id: tc.toolCallId,
-        name: tc.toolName,
-        arguments: tc.args || {},
-      })) || [];
-
-      return {
-        text: result.text || '',
-        done: toolCalls.length === 0,
-        toolCalls,
-        usage: result.usage || { totalTokens: 0 },
-      };
-    } catch (error: any) {
-      log.error('Vercel AI SDK callLLM failed', { provider, model, error: error.message });
-      throw error;
+      vercelModel = getVercelModel(provider, model);
+    } catch (modelError: any) {
+      log.error('Failed to create Vercel model', { provider, model, error: modelError.message });
+      throw new Error(`Cannot initialize LLM provider '${provider}' with model '${model}': ${modelError.message}`);
     }
+
+    const MAX_ATTEMPTS = 2;
+    let lastError: any;
+    // Working copy of history — mutated on retry to strip system messages.
+    // Defensive fallback to empty array in case of null/undefined at runtime.
+    let workingHistory = history || [];
+
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+      try {
+        // Build messages using AI SDK ModelMessage format.
+        // System/user/assistant roles accept plain-string content;
+        // tool role MUST use content: [{ type: 'tool-result', ... }] array.
+        // System prompt is passed via generateText's `system` param (not in
+        // messages). If a system message leaked into history, the first
+        // attempt will fail with a ModelMessage[] schema error and the
+        // retry below will filter it out.
+        const messages: ModelMessage[] = [
+          ...workingHistory,
+          { role: 'user' as const, content: prompt },
+        ];
+
+        const result = await generateText({
+          model: vercelModel,
+          messages,
+          tools: Object.keys(this.sdkTools).length > 0 ? this.sdkTools : undefined,
+          system:
+            'You are an autonomous AI coding agent. You have tools available to interact with the system.',
+          maxOutputTokens: 4000,
+          temperature: 0.2,
+        });
+
+        // Extract tool calls from the result
+        const toolCalls = (result as any).toolCalls?.map((tc: any) => ({
+          id: tc.toolCallId,
+          name: tc.toolName,
+          arguments: tc.args || {},
+        })) || [];
+
+        return {
+          text: result.text || '',
+          done: toolCalls.length === 0,
+          toolCalls,
+          usage: result.usage || { totalTokens: 0 },
+        };
+      } catch (error: any) {
+        lastError = error;
+
+        // Detect AI SDK schema validation errors — the most common cause is
+        // a system-role message in the messages array. Filter system messages
+        // from history and retry once before giving up.
+        const isSchemaError =
+          error.message?.includes('ModelMessage[]') ||
+          error.message?.includes('messages do not match');
+
+        if (isSchemaError && attempt < MAX_ATTEMPTS - 1) {
+          log.warn(
+            'callLLM: schema validation error, filtering system messages from history and retrying',
+            { provider, model, error: error.message },
+          );
+          workingHistory = workingHistory.filter(m => (m as any).role !== 'system');
+          continue;
+        }
+
+        break; // Non-retryable error, or final attempt exhausted
+      }
+    }
+
+    log.error('Vercel AI SDK callLLM failed', { provider, model, error: lastError?.message });
+    throw lastError;
   }
 
   private async executeToolWithHealing(name: string, args: any) {

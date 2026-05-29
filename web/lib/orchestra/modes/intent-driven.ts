@@ -226,8 +226,8 @@ async function extractIntentsFromTask(
     const vercelModel = getVercelModel(provider, model);
     const result = await generateText({
       model: vercelModel as any,
+      system: systemPrompt,
       messages: [
-        { role: 'system', content: systemPrompt },
         { role: 'user', content: task },
       ],
       temperature: 0.2,

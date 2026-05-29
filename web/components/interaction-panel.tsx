@@ -88,7 +88,7 @@ import Monitor from "lucide-react/dist/esm/icons/monitor";
 import VNCConnectionTab from "./vnc-connection-tab";
 import type { LLMProviderConfig } from "@/lib/providers/llm-providers-types";
 import type { ModelConfig } from "@/lib/providers/llm-providers-types";
-import { SUBPROVIDER_LABELS, isFreeTierModel } from "@/lib/providers/subprovider-labels";
+import { SUBPROVIDER_LABELS, fuzzyMatchModel, highlightFuzzyMatches } from "@/lib/providers/subprovider-labels";
 import MultiModelComparison from "./multi-model-comparison";
 import PluginManager, { type Plugin } from "./plugins/plugin-manager";
 import AIEnhancerPlugin from "./plugins/ai-enhancer-plugin";
@@ -362,24 +362,18 @@ const ProviderSelector = React.memo(function ProviderSelector({
   availableProviders: any[];
   onValueChange: (provider: string, model: string) => void;
 }) {
-  const [showFreeModels, setShowFreeModels] = React.useState(true);
   const [searchTerm, setSearchTerm] = React.useState("");
   const searchInputRef = React.useRef<HTMLInputElement>(null);
 
   if (!selectValue || availableProviders.length === 0) return null;
 
-  // Count free-tier models across all providers for the toggle label
-  const freeModelCount = availableProviders
-    .filter((p: any) => p.isAvailable !== false)
-    .flatMap((p: any) => p.models)
-    .filter((m: any) => isFreeTierModel(typeof m === "string" ? m : m.id)).length;
+  // Helper: does a model match the search term? Multi-token fuzzy: each
+  // space-separated word must be a case-insensitive substring.
+  const matchesSearch = (modelId: string) => fuzzyMatchModel(modelId, searchTerm);
 
-  // Helper: does a model match the search term?
-  const matchesSearch = (modelId: string) => {
-    if (!searchTerm.trim()) return true;
-    const term = searchTerm.toLowerCase().trim();
-    return modelId.toLowerCase().includes(term);
-  };
+  // Helper: highlight every matching search-token substring in the text.
+  const highlightMatch = (text: string): React.ReactNode =>
+    highlightFuzzyMatches(text, searchTerm);
 
   // Whether we're in search mode (search term entered)
   const isSearching = searchTerm.trim().length > 0;
@@ -396,7 +390,7 @@ const ProviderSelector = React.memo(function ProviderSelector({
         <SelectTrigger className="w-full sm:w-[280px] border-white/20" style={{ backgroundColor: 'rgba(255, 255, 255, 0.08)' }}>
           <SelectValue placeholder="Select a model" />
         </SelectTrigger>
-        <SelectContent>
+        <SelectContent onOpenAutoFocus={(e) => e.preventDefault()}>
           {/* Search filter input */}
           <div className="sticky top-0 z-10 px-2 pt-1 pb-1.5 border-b border-white/10 bg-black/90 backdrop-blur-sm"
             onKeyDown={(e) => e.stopPropagation()}
@@ -436,17 +430,14 @@ const ProviderSelector = React.memo(function ProviderSelector({
                   ? provider.models
                       .filter((model: ModelConfig | string) => {
                         const modelId = typeof model === "string" ? model : model.id;
-                        return matchesSearch(modelId) && (showFreeModels || !isFreeTierModel(modelId));
+                        return matchesSearch(modelId);
                       })
                       .map((model: ModelConfig | string) => {
                         const modelId = typeof model === "string" ? model : model.id;
                         return (
                           <SelectItem key={`${provider.id}:${modelId}`} value={`${provider.id}:${modelId}`}>
                             <span className="text-xs text-white/40 mr-1">{provider.name}</span>
-                            {modelId}
-                            {isFreeTierModel(modelId) && showFreeModels && (
-                              <span className="ml-1.5 text-[9px] text-green-400/70 font-medium">FREE</span>
-                            )}
+                            {highlightMatch(modelId)}
                           </SelectItem>
                         );
                       })
@@ -459,10 +450,6 @@ const ProviderSelector = React.memo(function ProviderSelector({
                             const [prefix] = modelId.split('/');
                             return provider.subProviders!.includes(prefix);
                           })
-                          .filter((model: ModelConfig | string) => {
-                            const modelId = typeof model === "string" ? model : model.id;
-                            return showFreeModels || !isFreeTierModel(modelId);
-                          });
                         // Group models by sub-provider prefix
                         const grouped = new Map<string, Array<ModelConfig | string>>();
                         for (const model of filteredModels) {
@@ -476,19 +463,11 @@ const ProviderSelector = React.memo(function ProviderSelector({
                             <SelectLabel className="text-[10px] uppercase tracking-wider text-white/40 pl-2 pt-1 pb-0.5">
                               {SUBPROVIDER_LABELS[prefix] || prefix}
                             </SelectLabel>
-                            {groupModels
-                              .filter((model: ModelConfig | string) => {
-                                const modelId = typeof model === "string" ? model : model.id;
-                                return showFreeModels || !isFreeTierModel(modelId);
-                              })
-                              .map((model: ModelConfig | string) => {
+                            {groupModels.map((model: ModelConfig | string) => {
                               const modelId = typeof model === "string" ? model : model.id;
                               return (
                                 <SelectItem key={`${provider.id}:${modelId}`} value={`${provider.id}:${modelId}`}>
-                                  {modelId}
-                                  {isFreeTierModel(modelId) && showFreeModels && (
-                                    <span className="ml-1.5 text-[9px] text-green-400/70 font-medium">FREE</span>
-                                  )}
+                                  {highlightMatch(modelId)}
                                 </SelectItem>
                               );
                             })}
@@ -496,18 +475,11 @@ const ProviderSelector = React.memo(function ProviderSelector({
                         ));
                       })()
                     : provider.models
-                        .filter((model: ModelConfig | string) => {
-                          const modelId = typeof model === "string" ? model : model.id;
-                          return showFreeModels || !isFreeTierModel(modelId);
-                        })
                         .map((model: ModelConfig | string) => {
                         const modelId = typeof model === "string" ? model : model.id;
                         return (
                           <SelectItem key={`${provider.id}:${modelId}`} value={`${provider.id}:${modelId}`}>
-                            {modelId}
-                            {isFreeTierModel(modelId) && showFreeModels && (
-                              <span className="ml-1.5 text-[9px] text-green-400/70 font-medium">FREE</span>
-                            )}
+                            {highlightMatch(modelId)}
                           </SelectItem>
                         );
                       })}
@@ -520,18 +492,6 @@ const ProviderSelector = React.memo(function ProviderSelector({
           )}
         </SelectContent>
       </Select>
-      {freeModelCount > 0 && (
-        <label className="flex items-center gap-1 text-[10px] cursor-pointer select-none whitespace-nowrap ml-1">
-          <input
-            type="checkbox"
-            checked={showFreeModels}
-            onChange={(e) => setShowFreeModels(e.target.checked)}
-            className="w-3 h-3"
-          />
-          <span className="text-green-400/80">FREE</span>
-          <span className="text-white/40">({freeModelCount})</span>
-        </label>
-      )}
       </div>
     </div>
   );

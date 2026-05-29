@@ -1532,13 +1532,11 @@ export async function* runStatefulAgentStreaming(
     workspaceSnapshot = await buildWorkspaceSnapshot(agent['userId']);
   } catch { /* best effort */ }
 
-  // Build initial messages
-  const messages: Array<{ role: 'system' | 'user'; content: string }> = [];
+  // Build initial messages (system prompt passed separately, not in messages array)
+  const messages: Array<{ role: 'user'; content: string }> = [];
+  let systemPrompt = '';
   if (workspaceSnapshot && !workspaceSnapshot.includes('unavailable') && !workspaceSnapshot.includes('empty')) {
-    messages.push({
-      role: 'system',
-      content: `### Existing Files in Workspace\n${workspaceSnapshot}\n\nUse ONLY these paths (or new paths you create). Do NOT guess file paths.`,
-    });
+    systemPrompt = `### Existing Files in Workspace\n${workspaceSnapshot}\n\nUse ONLY these paths (or new paths you create). Do NOT guess file paths.`;
   }
   messages.push({
     role: 'user',
@@ -1548,6 +1546,7 @@ export async function* runStatefulAgentStreaming(
   // Run streaming using Vercel AI SDK
   const result = streamText({
     model,
+    system: systemPrompt,
     messages,
     tools: toolDefs,
     maxSteps,

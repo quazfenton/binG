@@ -73,6 +73,14 @@ export async function routeRequest(request: Request, env: Env): Promise<RouteTar
   const backend = await getBackendUrl(env);
   const frontend = stripTrailingSlash(env.FRONTEND_URL);
 
+  // /v1/* → OCI backend (ninerouter OpenAI-compatible endpoint)
+  if (path.startsWith('/v1/')) {
+    const target = joinUrl(backend, path, search);
+    if (target) return { url: target };
+    const fallback = joinUrl(frontend, path, search);
+    return fallback ? { url: fallback, ttl: 0 } : null;
+  }
+
   // Chat API → OCI backend (or fallback to Vercel if BACKEND_URL not set)
   if (path.startsWith('/api/chat')) {
     const target = joinUrl(backend, path, search);
