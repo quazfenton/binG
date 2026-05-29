@@ -1107,6 +1107,9 @@ async function runStatefulAgentMode(config: UnifiedAgentConfig): Promise<Unified
         duration: Date.now() - startTime,
         filesModified: result.vfs ? Object.keys(result.vfs).length : 0,
         errors: result.errors?.length || 0,
+        // FIX: Pass anyToolFailed through to SSE metadata so client can auto-retry on tool failure
+        // StatefulAgent errors array contains step errors including tool failures
+        anyToolFailed: (result.errors?.length ?? 0) > 0,
         reflectionEnabled: agentOptions.enableReflection,
         taskDecompositionEnabled: agentOptions.enableTaskDecomposition,
       },
@@ -1359,6 +1362,8 @@ async function runOpencodeSDKMode(
         duration: Date.now() - startTime,
         sessionId: session.id,
         ...(isEmpty ? { isEmptyResponse: true, emptyReason: 'opencode-sdk produced no text' } : {}),
+        // FIX: Pass anyToolFailed through to SSE metadata so client can auto-retry on tool failure
+        ...(toolSteps.length > 0 && toolSteps.some(t => t.result?.success === false) ? { anyToolFailed: true } : {}),
       },
     };
   } catch (httpError: any) {
@@ -1429,6 +1434,8 @@ async function runOpencodeSDKMode(
           duration: Date.now() - startTime,
           fallbackMethod: '@opencode-ai/sdk',
           ...(isEmpty ? { isEmptyResponse: true, emptyReason: 'opencode-sdk-fallback produced no text' } : {}),
+          // FIX: Pass anyToolFailed through to SSE metadata so client can auto-retry on tool failure
+          ...(toolSteps.length > 0 && toolSteps.some(t => t.result?.success === false) ? { anyToolFailed: true } : {}),
         },
       };
     } catch (sdkError: any) {
@@ -2557,9 +2564,15 @@ async function runV1ApiWithTools(
       const friendlyFallback = anyToolFailed
         ? 'I attempted to use a tool but the call was rejected. Could you rephrase or clarify what you\'d like me to do?'
         : 'I didn\'t produce a response for that — could you rephrase your request?';
+      // FIX: Surface tool failure errors in primary response (not just retry path)
+      // When tools were invoked but failed AND model produced no text, show the error
+      // message as actual content so user knows what went wrong.
+      const toolFailureMessage = (toolInvocations.length > 0 && anyToolFailed && friendlyFallback)
+        ? friendlyFallback
+        : null;
       const finalResponse = cleanedResponse && cleanedResponse.trim()
         ? cleanedResponse
-        : (response && response.trim() ? response : friendlyFallback);
+        : (response && response.trim() ? response : (toolFailureMessage || ''));
 
       return {
         success: true,
@@ -2576,6 +2589,8 @@ async function runV1ApiWithTools(
             ? uniqueProviders.slice(0, uniqueProviders.indexOf(providerName) + 1)
             : [],
           ...(routingForClient ? { routing: routingForClient } : {}),
+          // FIX: Pass anyToolFailed through to SSE metadata so client can auto-retry on tool failure
+          ...(toolInvocations.length > 0 && toolInvocations.some(inv => inv.result?.success === false) ? { anyToolFailed: true } : {}),
         },
       };
     } catch (error: any) {

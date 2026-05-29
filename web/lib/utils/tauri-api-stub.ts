@@ -29,7 +29,11 @@ export const message = async () => {};
 export const open = async () => null;
 export const save = async () => null;
 
-export const listen = async () => { throw new Error('Tauri listen() is only available in desktop builds'); };
+export const listen: {
+  <T>(event: string, handler: (event: { payload: T }) => void): Promise<UnlistenFn>;
+} = async <T>(_event: string, _handler: (event: { payload: T }) => void): Promise<UnlistenFn> => { 
+  throw new Error('Tauri listen() is only available in desktop builds'); 
+};
 export type UnlistenFn = () => void;
 
 export const getCurrentWindow = notAvailable('getCurrentWindow') as any;

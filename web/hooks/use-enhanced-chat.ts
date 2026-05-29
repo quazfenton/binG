@@ -1301,11 +1301,14 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   const MAX_STEP_REPROMPTS = 5;
                   const stepRepromptCount = stepRepromptCountRef.current;
                   const stepReprompt = doneMetadata?.routing?.stepReprompt;
+                  // FIX: Also trigger auto-continue when tools failed, to allow automatic retry
+                  // This ensures tool failures get retried automatically rather than showing error to user
+                  const shouldRetryForToolFailure = doneMetadata?.anyToolFailed === true;
                   if (
                     stepReprompt &&
                     typeof stepReprompt === 'string' &&
                     stepReprompt.trim() &&
-                    !isEmptyResponse &&
+                    (!isEmptyResponse || shouldRetryForToolFailure) &&
                     stepRepromptCount < MAX_STEP_REPROMPTS &&
                     inputQueue.length === 0
                   ) {
@@ -1323,12 +1326,20 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                     setInput(stepReprompt);
                     setTimeout(() => {
                       if (!isMountedRef.current) return;
-                      handleSubmit(
-                        {
-                          preventDefault: () => {},
-                          currentTarget: { reset: () => {} },
-                        } as React.FormEvent<HTMLFormElement>
-                      );
+                      // FIX: Add error handling for auto-continue request failures
+                      // If handleSubmit fails (network error, etc.), cleanup isLoading state
+                      try {
+                        handleSubmit(
+                          {
+                            preventDefault: () => {},
+                            currentTarget: { reset: () => {} },
+                          } as React.FormEvent<HTMLFormElement>
+                        );
+                      } catch (err) {
+                        console.error('[Auto-continue] handleSubmit failed:', err);
+                        setIsLoading(false);
+                        setAgentStatus('error');
+                      }
                     }, 150);
                   }
                   
@@ -1350,7 +1361,15 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                       stepRepromptCountRef.current++;
                       setTimeout(() => {
                         if (!isMountedRef.current) return;
-                        submitWithPrompt(rolePrompt);
+                        // FIX: Add error handling for role redirect request failures
+                        // If submitWithPrompt fails (network error, etc.), cleanup isLoading state
+                        try {
+                          submitWithPrompt(rolePrompt);
+                        } catch (err) {
+                          console.error('[RoleRedirect] submitWithPrompt failed:', err);
+                          setIsLoading(false);
+                          setAgentStatus('error');
+                        }
                       }, 150);
                     }
                   }
@@ -2291,13 +2310,28 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
 
                   // Set the input and submit after state settles
                   setInput(continuationPrompt);
-                  setTimeout(() => { if (!isMountedRef.current) return;
-                    handleSubmit(
-                      {
-                        preventDefault: () => {},
-                        currentTarget: { reset: () => {} },
-                      } as React.FormEvent<HTMLFormElement>
-                    );
+                  setTimeout(() => {
+                    // FIX: Re-check inputQueue right before handleSubmit to prevent
+                    // overwriting user input that may have been typed during the 100ms delay
+                    if (!isMountedRef.current) return;
+                    if (inputQueue.length > 0) {
+                      console.log('[Auto-continue] Skipping - user typed during delay');
+                      return;
+                    }
+                    // FIX: Add error handling for auto-continue request failures
+                    // If handleSubmit fails (network error, etc.), cleanup isLoading state
+                    try {
+                      handleSubmit(
+                        {
+                          preventDefault: () => {},
+                          currentTarget: { reset: () => {} },
+                        } as React.FormEvent<HTMLFormElement>
+                      );
+                    } catch (err) {
+                      console.error('[Auto-continue] handleSubmit failed:', err);
+                      setIsLoading(false);
+                      setAgentStatus('error');
+                    }
                   }, 100);
                   break;
                 }

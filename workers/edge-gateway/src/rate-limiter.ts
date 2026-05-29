@@ -4,15 +4,77 @@
  * Uses Cloudflare KV with sliding window algorithm.
  * - 100 req/min for anonymous IPs
  * - 1000 req/min for authenticated users (by user ID)
+ *
+ * OPTIMIZATION: Uses in-memory counters with periodic KV sync to avoid
+ * excessive KV writes. Each worker instance maintains local counters and
+ * only writes to KV every WINDOW_MS milliseconds (configurable, default 10s).
+ * This reduces KV writes from O(requests) to O(10s intervals) per key.
  */
 const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
 const ANON_MAX_REQUESTS = 100;
 const AUTH_MAX_REQUESTS = 1000;
+const KV_SYNC_INTERVAL_MS = 10_000; // Sync to KV every 10 seconds (was every request)
 
 interface RateLimitResult {
   allowed: boolean;
   remaining: number;
   retryAfter: number; // seconds
+}
+
+interface Counter {
+  count: number;
+  windowStart: number;
+}
+
+// In-memory counters to reduce KV writes
+const memoryCounters = new Map<string, Counter>();
+const lastSyncTimes = new Map<string, number>();
+const CLEANUP_INTERVAL_MS = 60_000; // Cleanup old entries every minute
+let lastCleanup = 0;
+
+/**
+ * Get current window key for rate limiting
+ */
+function getWindowKey(key: string, windowMs: number): string {
+  return `ratelimit:${key}:${Math.floor(Date.now() / windowMs)}`;
+}
+
+/**
+ * Sync counter to KV (batched write)
+ */
+async function syncToKV(
+  kv: KVNamespace,
+  key: string,
+  counter: Counter,
+  windowMs: number
+): Promise<void> {
+  const windowKey = `ratelimit:${key}:${Math.floor(counter.windowStart / windowMs)}`;
+  try {
+    await kv.put(windowKey, JSON.stringify(counter), {
+      expirationTtl: Math.ceil(windowMs / 1000) + 1, // +1s buffer
+    });
+  } catch {
+    // Silent fail on sync - local counter still tracks
+  }
+}
+
+/**
+ * Cleanup old entries from in-memory Maps to prevent memory leaks
+ */
+function cleanupOldEntries(): void {
+  const now = Date.now();
+  if (now - lastCleanup < CLEANUP_INTERVAL_MS) return;
+  lastCleanup = now;
+
+  const currentWindow = Math.floor(now / RATE_LIMIT_WINDOW_MS);
+
+  for (const key of memoryCounters.keys()) {
+    const keyWindow = parseInt(key.split(':').pop() ?? '0', 10);
+    if (keyWindow < currentWindow - 1) { // Keep current and previous window
+      memoryCounters.delete(key);
+      lastSyncTimes.delete(key);
+    }
+  }
 }
 
 export async function checkRateLimit(
@@ -22,24 +84,45 @@ export async function checkRateLimit(
   windowMs: number = RATE_LIMIT_WINDOW_MS,
 ): Promise<RateLimitResult> {
   const now = Date.now();
-  const windowKey = `ratelimit:${key}:${Math.floor(now / windowMs)}`;
+  const windowKey = getWindowKey(key, windowMs);
+  const currentWindow = Math.floor(now / windowMs);
 
   try {
-    const current = await kv.get<{ count: number; windowStart: number }>(windowKey, 'json');
-    const count = current?.count ?? 0;
-    const windowStart = current?.windowStart ?? now;
+    // Check if we have a local counter for this window
+    let counter = memoryCounters.get(windowKey);
+    
+    if (!counter) {
+      // Try to load from KV first
+      const stored = await kv.get<Counter>(windowKey, 'json');
+      if (stored && Math.floor(stored.windowStart / windowMs) === currentWindow) {
+        counter = stored;
+      } else {
+        // Start fresh window
+        counter = { count: 0, windowStart: now };
+      }
+      memoryCounters.set(windowKey, counter);
+    }
 
-    if (count >= maxRequests) {
-      const retryAfter = Math.ceil((windowStart + windowMs - now) / 1000);
+    // Check rate limit
+    if (counter.count >= maxRequests) {
+      const retryAfter = Math.ceil((counter.windowStart + windowMs - now) / 1000);
       return { allowed: false, remaining: 0, retryAfter: Math.max(1, retryAfter) };
     }
 
-    // Increment counter
-    await kv.put(windowKey, JSON.stringify({ count: count + 1, windowStart }), {
-      expirationTtl: Math.ceil(windowMs / 1000),
-    });
+    // Increment local counter
+    counter.count++;
 
-    return { allowed: true, remaining: maxRequests - count - 1, retryAfter: 0 };
+    // Periodic cleanup to prevent memory leaks
+    cleanupOldEntries();
+
+    // Sync to KV periodically instead of every request
+    const lastSync = lastSyncTimes.get(windowKey) ?? 0;
+    if (now - lastSync >= KV_SYNC_INTERVAL_MS) {
+      await syncToKV(kv, key, counter, windowMs);
+      lastSyncTimes.set(windowKey, now);
+    }
+
+    return { allowed: true, remaining: maxRequests - counter.count, retryAfter: 0 };
   } catch {
     // If KV fails, allow the request (fail open)
     return { allowed: true, remaining: maxRequests, retryAfter: 0 };

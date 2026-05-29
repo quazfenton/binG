@@ -18,7 +18,7 @@
 
 import React, { useMemo, useState, useCallback, useEffect } from 'react';
 import { useOPFS } from '@/hooks/use-opfs';
-import { getOrCreateAnonymousSessionId } from '@/lib/utils/utils';
+import { getOrCreateAnonymousSessionId, normalizeOwnerId } from '@/lib/utils/utils';
 import { onFilesystemUpdated, type FilesystemUpdatedDetail } from '@/lib/virtual-filesystem/sync/sync-events';
 import { Plus, Minus, FileDiff, AlertCircle, Cloud, HardDrive, GitBranch, ChevronDown } from 'lucide-react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
@@ -326,7 +326,7 @@ export function EnhancedDiffViewer({
     readFile: readOPFSFile,
     isEnabled: isOPFSEnabled,
     syncStatus
-  } = useOPFS(sessionId || getOrCreateAnonymousSessionId(), { autoEnable: true });
+  } = useOPFS(normalizeOwnerId(sessionId || getOrCreateAnonymousSessionId()), { autoEnable: true });
 
   // Auto-detect language from file path
   const detectedLanguage = useMemo(() => {
@@ -754,7 +754,7 @@ export function EnhancedDiffViewer({
  * OPFS Sync Status Badge Component - Sleek Design
  */
 export function OPFSSyncStatusBadge({ path }: { path: string }) {
-  const { syncStatus, isEnabled } = useOPFS(getOrCreateAnonymousSessionId(), { autoEnable: true });
+  const { syncStatus, isEnabled } = useOPFS(normalizeOwnerId(getOrCreateAnonymousSessionId()), { autoEnable: true });
 
   if (!isEnabled) {
     return null;

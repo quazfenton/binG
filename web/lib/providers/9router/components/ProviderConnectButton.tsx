@@ -78,7 +78,7 @@ function generateRandomString(length: number): string {
   return Array.from(array, byte => chars[byte % chars.length]).join("")
 }
 
-interface ProviderGridProps { userId: string; connectedProviders?: string[]; onConnect: (providerId: string) => void; baseUrl?: string }
+interface ProviderGridProps { userId: string; connectedProviders?: string[]; onConnect: (providerId: string) => void; onDisconnect?: (providerId: string) => void; baseUrl?: string }
 
 export function ProviderGrid({ userId, connectedProviders = [], onConnect, baseUrl }: ProviderGridProps) {
   const providers = getAllProviders()

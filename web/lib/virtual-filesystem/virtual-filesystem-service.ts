@@ -1056,7 +1056,28 @@ export class VirtualFilesystemService {
       return normalizedPath;
     }
 
+    // FIX: Also allow VFS session paths that start with "sessions/" after stripping.
+    // When stripWorkspacePrefixes removes "workspace/" prefix, paths like
+    // "workspace/sessions/002/portfolio-app" become "sessions/002/portfolio-app".
+    // These are valid VFS session paths and should be allowed.
+    if (normalizedPath.startsWith('sessions/')) {
+      return normalizedPath;
+    }
+
     const workspacePrefix = workspaceRootParts.join('/');
+
+    // FIX: When workspaceRoot is a session ID like "002" (not a full path),
+    // relative paths like "portfolio-app" should be allowed. Only validate
+    // against workspacePrefix if it looks like a real filesystem path (contains '/').
+    // Session IDs alone (no '/') are namespace identifiers, not path validators.
+    const isSessionRoot = !workspacePrefix.includes('/') && workspacePrefix.length > 0;
+    
+    // If workspacePrefix is a simple session ID (no slashes), allow any relative path
+    // This allows paths like "portfolio-app" when workspaceRoot is "002"
+    if (isSessionRoot) {
+      console.log('[VFS normalizePath] Session root mode - allowing relative path:', normalizedPath);
+      return normalizedPath;
+    }
 
     console.log('[VFS normalizePath] inputPath:', inputPath, 'workspaceRoot:', this.workspaceRoot, 'normalizedPath:', normalizedPath, 'workspacePrefix:', workspacePrefix);
     

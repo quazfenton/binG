@@ -27,6 +27,15 @@ const PROVIDER_API_KEY_ENV: Record<string, string> = {
   lepton: 'LEPTON_API_KEY',
   zen: 'ZEN_API_KEY',
   portkey: 'PORTKEY_API_KEY',
+  cloudflare: 'CLOUDFLARE_API_KEY',
+  cohere: 'COHERE_API_KEY',
+  aihubmix: 'AIHUBMIX_API_KEY',
+  livekit: 'LIVEKIT_API_KEY',
+  pollinations: 'POLLINATIONS_API_KEY',
+  chatanywhere: 'CHATANYWHERE_API_KEY',
+  // 9router proxy providers
+  ollama: 'QUAZ_API_KEY',
+  kiro: 'QUAZ_API_KEY',
 };
 
 /**
@@ -48,22 +57,32 @@ export function getConfiguredFallbackChain(provider: string): string[] {
 }
 
 export const PROVIDER_FALLBACK_CHAINS: Record<string, string[]> = {
-  openrouter: ['nvidia', 'mistral', 'google', 'github', 'groq', 'zen'],
-  chutes: ['anthropic', 'google', 'mistral', 'github', 'nvidia', 'openrouter'],
-  anthropic: ['nvidia', 'github', 'mistral', 'google', 'openrouter'],
-  google: ['mistral', 'openai', 'github', 'nvidia', 'groq', 'openrouter'],
-  mistral: ['google', 'openai', 'github', 'nvidia', 'groq', 'openrouter'],
-  github: ['nvidia', 'mistral', 'google', 'groq', 'zen', 'openrouter'],
-  portkey: ['google', 'mistral', 'github', 'nvidia', 'openrouter'],
-  zen: ['mistral', 'google', 'github', 'nvidia', 'groq', 'openrouter'],
-  nvidia: ['google', 'mistral', 'groq', 'together', 'deepinfra', 'fireworks', 'openrouter'],
-  groq: ['nvidia', 'together', 'fireworks', 'deepinfra', 'mistral', 'openrouter'],
-  together: ['nvidia', 'groq', 'fireworks', 'deepinfra', 'mistral', 'openrouter'],
-  fireworks: ['nvidia', 'groq', 'together', 'deepinfra', 'mistral', 'openrouter'],
-  deepinfra: ['nvidia', 'groq', 'together', 'fireworks', 'mistral', 'openrouter'],
-  anyscale: ['nvidia', 'groq', 'together', 'mistral', 'google', 'openrouter'],
-  lepton: ['nvidia', 'groq', 'together', 'mistral', 'google', 'openrouter'],
-  openai: ['google', 'mistral', 'github', 'nvidia', 'groq', 'openrouter'],
+  openrouter: ['nvidia', 'mistral', 'google', 'github', 'groq', 'zen', 'aihubmix', 'together', 'deepinfra'],
+  chutes: ['anthropic', 'google', 'mistral', 'github', 'nvidia', 'openrouter', 'aihubmix'],
+  anthropic: ['nvidia', 'github', 'mistral', 'google', 'openrouter', 'aihubmix', 'groq'],
+  google: ['mistral', 'openai', 'github', 'nvidia', 'groq', 'openrouter', 'aihubmix', 'together'],
+  mistral: ['google', 'openai', 'github', 'nvidia', 'groq', 'openrouter', 'aihubmix', 'together'],
+  github: ['nvidia', 'mistral', 'google', 'groq', 'zen', 'openrouter', 'aihubmix'],
+  portkey: ['google', 'mistral', 'github', 'nvidia', 'openrouter', 'aihubmix', 'groq'],
+  zen: ['mistral', 'google', 'github', 'nvidia', 'groq', 'openrouter', 'aihubmix'],
+  nvidia: ['google', 'mistral', 'groq', 'together', 'deepinfra', 'fireworks', 'openrouter', 'aihubmix'],
+  groq: ['nvidia', 'together', 'fireworks', 'deepinfra', 'mistral', 'openrouter', 'aihubmix'],
+  together: ['nvidia', 'groq', 'fireworks', 'deepinfra', 'mistral', 'openrouter', 'aihubmix'],
+  fireworks: ['nvidia', 'groq', 'together', 'deepinfra', 'mistral', 'openrouter', 'aihubmix'],
+  deepinfra: ['nvidia', 'groq', 'together', 'fireworks', 'mistral', 'openrouter', 'aihubmix'],
+  anyscale: ['nvidia', 'groq', 'together', 'mistral', 'google', 'openrouter', 'aihubmix'],
+  lepton: ['nvidia', 'groq', 'together', 'mistral', 'google', 'openrouter', 'aihubmix'],
+  openai: ['google', 'mistral', 'github', 'nvidia', 'groq', 'openrouter', 'aihubmix', 'together'],
+  // Newer providers with broader fallback chains
+  cloudflare: ['nvidia', 'mistral', 'google', 'openrouter', 'github', 'groq', 'aihubmix'],
+  cohere: ['anthropic', 'nvidia', 'google', 'mistral', 'openrouter', 'github', 'aihubmix'],
+  aihubmix: ['openai', 'google', 'mistral', 'anthropic', 'nvidia', 'openrouter', 'groq', 'together'],
+  livekit: ['nvidia', 'mistral', 'google', 'openrouter', 'github', 'groq', 'aihubmix', 'together'],
+  pollinations: ['nvidia', 'mistral', 'google', 'openrouter', 'github', 'groq', 'aihubmix', 'together'],
+  chatanywhere: ['openai', 'google', 'mistral', 'anthropic', 'nvidia', 'openrouter', 'github'],
+  // 9router proxy providers (via QUAZ_API_KEY)
+  ollama: ['nvidia', 'mistral', 'google', 'openrouter', 'github', 'groq', 'aihubmix'],
+  kiro: ['nvidia', 'mistral', 'google', 'openrouter', 'anthropic', 'github', 'aihubmix'],
 };
 
 /**

@@ -207,7 +207,7 @@ function NewsTab() {
           <Button
             variant="outline"
             size="sm"
-            onClick={fetchNews}
+            onClick={() => fetchNews()}
             className="border-white/20 text-white/80 hover:bg-white/10"
           >
             <RefreshCw className="w-4 h-4 mr-2" />

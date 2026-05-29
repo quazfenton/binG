@@ -93,8 +93,8 @@ async function getMistral() {
   return Mistral
 }
 
-import _errorTypes from '../../deprecated/enhanced-code-system/core/error-types';
-// Use default import + destructure for CJS/ESM interop compatibility
+import * as _errorTypes from '../../deprecated/enhanced-code-system/core/error-types';
+// Use namespace import + destructure for CJS/ESM interop compatibility
 // (the deprecated tsconfig forces CommonJS output on .ts files)
 const {
   createOrchestratorError,
@@ -1270,6 +1270,7 @@ class LLMService {
   private ollama: any = null
   private kiro: any = null
   private chatanywhere: any = null
+  private ninerouter: any = null
   private composioService: ComposioService | null = null
   private opencodeClient: any = null
   private config: ProviderConfig = {}
@@ -1573,6 +1574,9 @@ class LLMService {
           case 'chatanywhere':
             response = await this.generateChatanywhereResponse(model, messages, temperature, maxTokens, requestId, apiKey)
             break;
+          case 'ninerouter':
+            response = await this.generateNinerouterResponse(model, messages, temperature, maxTokens, requestId, apiKey)
+            break;
           default:
             throw createLLMError(`Unsupported provider: ${provider}`, {
               code: ERROR_CODES.LLM.UNSUPPORTED_PROVIDER,
@@ -1784,6 +1788,12 @@ class LLMService {
             yield chunk;
           }
           break
+        case 'ninerouter':
+          for await (const chunk of this.streamNinerouterResponse(model, messages, temperature, maxTokens)) {
+            chunkCount++;
+            yield chunk;
+          }
+          break
         default:
           throw new Error(`Streaming is not supported for provider: ${provider}`);
       }
@@ -1877,6 +1887,8 @@ class LLMService {
         return currentEnv.NINEROUTER_API_KEY || currentEnv.QUAZ_API_KEY || this.config.ollama?.apiKey || '';
       case 'kiro':
         return currentEnv.NINEROUTER_API_KEY || currentEnv.QUAZ_API_KEY || this.config.kiro?.apiKey || '';
+      case 'ninerouter':
+        return currentEnv.NINEROUTER_API_KEY || currentEnv.QUAZ_API_KEY || '';
       case 'chatanywhere':
         return currentEnv.CHATANYWHERE_API_KEY || this.config.chatanywhere?.apiKey || '';
       case 'nvidia':
@@ -2933,9 +2945,12 @@ class LLMService {
           case 'livekit':
             return !!process.env.LIVEKIT_API_KEY;
           case 'ollama':
-            return !!process.env.QUAZ_API_KEY;
           case 'kiro':
-            return !!process.env.QUAZ_API_KEY;
+            // NineRouter proxy - available if either QUAZ_API_KEY or NINEROUTER_API_KEY is set
+            return !!process.env.QUAZ_API_KEY || !!process.env.NINEROUTER_API_KEY;
+          case 'ninerouter':
+            // Dedicated NineRouter provider with unified endpoint
+            return !!process.env.NINEROUTER_API_KEY;
           case 'chatanywhere':
             return !!process.env.CHATANYWHERE_API_KEY;
           case 'cloudflare':
