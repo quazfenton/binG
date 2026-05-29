@@ -675,7 +675,9 @@ export default function MessageBubble({
           overflowWrap: dynamicStyles.overflowStrategy === 'wrap' ? 'break-word' : 'normal',
           whiteSpace: contentAnalysis.hasCodeBlocks && layout.isMobile ? 'pre' : 'pre-wrap',
           // Mobile scrolling: allow touch scrolling on message bubbles
-          touchAction: 'auto',
+          touchAction: layout.isMobile ? 'pan-y' : 'auto',
+          // Enable touch scrolling for long content on mobile
+          overflowY: contentAnalysis.hasLongContent && layout.isMobile ? 'auto' : 'visible',
           // Prevent text from breaking out of bubble
           overflowX: layout.isMobile ? 'hidden' : 'visible',
         }}
@@ -917,7 +919,7 @@ export default function MessageBubble({
               }}
         >
           {/* Main content */}
-          {isUser ? message.content : mainContent}
+          {isUser ? (typeof message.content === 'string' ? message.content : JSON.stringify(message.content, null, 2)) : mainContent}
         </ReactMarkdown>
 
         {/* Model Used - shown below assistant messages, outside ReactMarkdown, not copyable */}

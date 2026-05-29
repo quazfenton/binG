@@ -178,7 +178,7 @@ function MessageBubble({ message, isStreaming }: { message: Message; isStreaming
       <div className={`text-sm text-white/90 whitespace-pre-wrap break-words ${
         !isExpanded && message.content.length > 500 ? "line-clamp-10" : ""
       }`}>
-        {message.content}
+        {typeof message.content === 'string' ? message.content : JSON.stringify(message.content, null, 2)}
       </div>
 
       {/* Expand for long messages */}

@@ -9,6 +9,7 @@ export interface ContentAnalysis {
   longestWord: string
   urlCount: number
   codeBlockCount: number
+  hasLongContent: boolean // True when content exceeds ~15 lines - needs scroll on mobile
 }
 
 export function analyzeMessageContent(content: string): ContentAnalysis {
@@ -46,6 +47,9 @@ export function analyzeMessageContent(content: string): ContentAnalysis {
   const lines = content.split('\n')
   const estimatedLines = lines.length + Math.floor(content.length / 80) // Assume ~80 chars per line
 
+  // Determine if content is long enough to need scroll on mobile
+  const hasLongContent = estimatedLines > 15
+
   return {
     hasCodeBlocks,
     hasInlineCode,
@@ -56,7 +60,8 @@ export function analyzeMessageContent(content: string): ContentAnalysis {
     estimatedLines,
     longestWord,
     urlCount: urls.length,
-    codeBlockCount: codeBlocks.length
+    codeBlockCount: codeBlocks.length,
+    hasLongContent
   }
 }
 

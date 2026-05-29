@@ -107,7 +107,7 @@ export function TamboChat({
                     : 'bg-muted'
                 }`}
               >
-                <p className="text-sm whitespace-pre-wrap">{message.content}</p>
+                <p className="text-sm whitespace-pre-wrap">{typeof message.content === 'string' ? message.content : JSON.stringify(message.content, null, 2)}</p>
                 <span className="text-xs opacity-50">
                   {message.timestamp.toLocaleTimeString()}
                 </span>

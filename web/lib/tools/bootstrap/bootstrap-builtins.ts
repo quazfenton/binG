@@ -109,7 +109,13 @@ export async function registerBuiltInCapabilities(registry: ToolRegistry): Promi
       capability: 'workspace.bundle',
       provider: 'context-pack',
       handler: async (args: any, context: any) => {
-        const ownerId = context.userId || 'anonymous';
+        // Normalize ownerId: 'anonymous' -> 'anon:public', 'anon_timestamp' -> 'anon:timestamp'
+        let ownerId = context.userId || 'anon:public';
+        if (ownerId.startsWith('anon_')) {
+          ownerId = ownerId.replace(/^anon_/, 'anon:');
+        } else if (ownerId === 'anonymous') {
+          ownerId = 'anon:public';
+        }
         const rootPath = args.path || '/';
         return await contextPackService.generateContextPack(ownerId, rootPath, {
           format: args.format || 'markdown',

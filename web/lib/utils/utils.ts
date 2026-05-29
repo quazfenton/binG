@@ -173,6 +173,40 @@ export function buildApiHeaders(options?: { json?: boolean }): Record<string, st
 }
 
 /**
+ * Normalize ownerId format to ensure consistency between frontend and backend.
+ * 
+ * The backend's resolveFilesystemOwner creates ownerIds in format 'anon:timestamp_random' (with colon),
+ * but various frontend code may generate ownerIds in formats like 'anon_timestamp_random' (with underscore),
+ * 'anon$unknown' (with dollar sign), or 'anonymous' (plain string).
+ * 
+ * This function normalizes all these formats to 'anon:xxx' format for consistency.
+ * 
+ * @param ownerId - The ownerId to normalize
+ * @param fallback - Fallback value if ownerId is falsy (default: 'anon:public')
+ * @returns Normalized ownerId in 'anon:xxx' format
+ */
+export function normalizeOwnerId(ownerId: string | undefined | null | false, fallback: string = 'anon:public'): string {
+  if (!ownerId) return fallback;
+  
+  // 'anon_timestamp_random' -> 'anon:timestamp_random'
+  if (ownerId.startsWith('anon_')) {
+    return ownerId.replace(/^anon_/, 'anon:');
+  }
+  
+  // 'anon$xxx' -> 'anon:xxx'
+  if (ownerId.startsWith('anon$')) {
+    return ownerId.replace(/^anon\$/, 'anon:');
+  }
+  
+  // 'anonymous' -> 'anon:public'
+  if (ownerId === 'anonymous') {
+    return 'anon:public';
+  }
+  
+  return ownerId;
+}
+
+/**
  * Generate a UUID v4 using crypto.randomUUID or crypto.getRandomValues
  */
 export function generateUUID(): string {

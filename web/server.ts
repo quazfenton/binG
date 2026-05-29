@@ -126,10 +126,50 @@ app.prepare().then(startup).then(() => {
     // to the default Next.js HMR handler (which uses its own WebSocket server).
     const isTerminalWS = pathname === '/ws' || pathname === '/api/sandbox/terminal/ws';
     const isStreamControl = pathname === '/stream-control';
+    const isVncProxy = pathname === '/vnc-proxy';
 
-    if (!isTerminalWS && !isStreamControl) {
+    if (!isTerminalWS && !isStreamControl && !isVncProxy) {
       // Not our WebSocket — let Next.js HMR or other WS servers handle it.
       socket.destroy();
+      return;
+    }
+
+    // Handle VNC proxy WebSocket (bridge WebSocket <-> TCP VNC server)
+    if (isVncProxy) {
+      // FIX: Reject if at connection limit
+      if (activeWsConnections >= MAX_WS_CONNECTIONS) {
+        console.warn(`[VNCProxy] Connection limit reached (${MAX_WS_CONNECTIONS}), rejecting`);
+        (socket as any).writeHead(503, { 'Content-Type': 'text/plain' });
+        socket.end('Service Unavailable: Too many WebSocket connections');
+        return;
+      }
+
+      const host = query.host as string;
+      const port = parseInt(query.port as string, 10);
+
+      if (!host || !port) {
+        logger.warn('[VNCProxy] Missing host or port');
+        socket.destroy();
+        return;
+      }
+
+      if (port < 1 || port > 65535) {
+        logger.warn('[VNCProxy] Invalid port:', port);
+        socket.destroy();
+        return;
+      }
+
+      // SECURITY: Block connections to private/internal IP ranges to prevent SSRF
+      const blockedPatterns = /^(127\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|0\.|localhost$|::1$|fe80:)/i;
+      if (blockedPatterns.test(host)) {
+        logger.warn(`[VNCProxy] Blocked internal host: ${host}`);
+        socket.destroy();
+        return;
+      }
+
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        wss.emit('connection', ws, req, { proxyType: 'vnc', vncHost: host, vncPort: port });
+      });
       return;
     }
 
@@ -210,9 +250,93 @@ app.prepare().then(startup).then(() => {
   });
 
   wss.on('connection', async (ws: WebSocket, req: IncomingMessage, context: any) => {
-    const { sessionId, sandboxId, token, anonymousSessionId } = context;
+    const { sessionId, sandboxId, token, anonymousSessionId, proxyType, vncHost, vncPort } = context;
     let userId: string | null = null;
     let isAuthenticated = false;
+
+    // ===========================================
+    // VNC Proxy Connection
+    // ===========================================
+    if (proxyType === 'vnc') {
+      const { connect } = await import('net');
+
+      activeWsConnections++;
+      logger.info(`[VNCProxy] Bridging WebSocket to ${vncHost}:${vncPort}`);
+
+      let cleanupCalled = false;
+      const cleanup = () => {
+        if (cleanupCalled) return;
+        cleanupCalled = true;
+        activeWsConnections--;
+        if (disconnectTimeout) clearTimeout(disconnectTimeout);
+      };
+
+      const tcpSocket = connect(vncPort, vncHost, () => {
+        logger.info(`[VNCProxy] TCP connected to ${vncHost}:${vncPort}`);
+      });
+
+      // Inactivity timeout: close if idle for 30min
+      let disconnectTimeout: NodeJS.Timeout | null = setTimeout(() => {
+        logger.warn(`[VNCProxy] Inactivity timeout for ${vncHost}:${vncPort}`);
+        try { ws.close(4004, 'Inactivity timeout'); } catch {}
+        if (!tcpSocket.destroyed) tcpSocket.end();
+      }, 30 * 60 * 1000);
+
+      const resetTimeout = () => {
+        if (disconnectTimeout) {
+          clearTimeout(disconnectTimeout);
+          disconnectTimeout = setTimeout(() => {
+            logger.warn(`[VNCProxy] Inactivity timeout for ${vncHost}:${vncPort}`);
+            try { ws.close(4004, 'Inactivity timeout'); } catch {}
+            if (!tcpSocket.destroyed) tcpSocket.end();
+          }, 30 * 60 * 1000);
+        }
+      };
+
+      tcpSocket.on('data', (data: Buffer) => {
+        resetTimeout();
+        if (ws.readyState === WebSocket.OPEN) {
+          // Apply backpressure: buffer if ws not ready
+          const buffered = ws.bufferedAmount;
+          if (buffered > 1024 * 1024) {
+            tcpSocket.pause();
+            ws.once('drain', () => tcpSocket.resume());
+          }
+          ws.send(data);
+        }
+      });
+
+      tcpSocket.on('error', (err: Error) => {
+        cleanup();
+        logger.error(`[VNCProxy] TCP error: ${err.message}`);
+        try { ws.close(4002, `VNC proxy TCP error: ${err.message}`); } catch {}
+      });
+
+      tcpSocket.on('close', () => {
+        cleanup();
+        try { ws.close(4003, 'VNC server disconnected'); } catch {}
+      });
+
+      ws.on('message', (data: Buffer) => {
+        resetTimeout();
+        if (!tcpSocket.destroyed) {
+          tcpSocket.write(typeof data === 'string' ? Buffer.from(data) : data);
+        }
+      });
+
+      ws.on('close', () => {
+        cleanup();
+        if (!tcpSocket.destroyed) tcpSocket.end();
+      });
+
+      ws.on('error', () => {
+        cleanup();
+        if (!tcpSocket.destroyed) tcpSocket.end();
+      });
+
+      ws.send(JSON.stringify({ type: 'vnc-proxy-connected', host: vncHost, port: vncPort }));
+      return;
+    }
 
     // ===========================================
     // SECURITY: Authenticate WebSocket Connection
@@ -436,7 +560,7 @@ app.prepare().then(startup).then(() => {
 
   server.listen(port, () => {
     console.log(`> Ready on http://${hostname}:${port}`);
-    console.log(`> WebSocket paths: /ws (terminal PTY), /stream-control (LLM control)`);
+    console.log(`> WebSocket paths: /ws (terminal PTY), /stream-control (LLM control), /vnc-proxy (VNC bridge)`);
   });
 });
 

@@ -1874,9 +1874,9 @@ class LLMService {
       case 'livekit':
         return currentEnv.LIVEKIT_API_KEY || this.config.livekit?.apiKey || '';
       case 'ollama':
-        return currentEnv.QUAZ_API_KEY || this.config.ollama?.apiKey || '';
+        return currentEnv.NINEROUTER_API_KEY || currentEnv.QUAZ_API_KEY || this.config.ollama?.apiKey || '';
       case 'kiro':
-        return currentEnv.QUAZ_API_KEY || this.config.kiro?.apiKey || '';
+        return currentEnv.NINEROUTER_API_KEY || currentEnv.QUAZ_API_KEY || this.config.kiro?.apiKey || '';
       case 'chatanywhere':
         return currentEnv.CHATANYWHERE_API_KEY || this.config.chatanywhere?.apiKey || '';
       case 'nvidia':
@@ -3332,7 +3332,7 @@ class LLMService {
     const ollamaBaseURL =
       this.config.ollama?.baseURL ||
       (typeof process !== 'undefined' ? process.env.OLLAMA_BASE_URL : undefined) ||
-      'http://localhost:20128/v1';
+      process.env.NINEROUTER_BASE_URL || 'http://ninerouter:3000/v1';
 
     let ollamaClient = this.ollama;
     if (apiKeyOverride && apiKey !== this.config.ollama?.apiKey) {
@@ -3376,7 +3376,7 @@ class LLMService {
     const ollamaBaseURL =
       this.config.ollama?.baseURL ||
       (typeof process !== 'undefined' ? process.env.OLLAMA_BASE_URL : undefined) ||
-      'http://localhost:20128/v1';
+      process.env.NINEROUTER_BASE_URL || 'http://ninerouter:3000/v1';
 
     let ollamaClient = this.ollama;
     if (!ollamaClient) {
@@ -3431,7 +3431,7 @@ class LLMService {
     const kiroBaseURL =
       this.config.kiro?.baseURL ||
       (typeof process !== 'undefined' ? process.env.KIRO_BASE_URL : undefined) ||
-      'http://localhost:20128/v1';
+      process.env.NINEROUTER_BASE_URL || 'http://ninerouter:3000/v1';
 
     let kiroClient = this.kiro;
     if (apiKeyOverride && apiKey !== this.config.kiro?.apiKey) {
@@ -3503,7 +3503,7 @@ class LLMService {
     const kiroBaseURL =
       this.config.kiro?.baseURL ||
       (typeof process !== 'undefined' ? process.env.KIRO_BASE_URL : undefined) ||
-      'http://localhost:20128/v1';
+      process.env.NINEROUTER_BASE_URL || 'http://ninerouter:3000/v1';
 
     let kiroClient = this.kiro;
     if (!kiroClient) {
@@ -3600,12 +3600,12 @@ export const llmService = new LLMService({
     model: process.env.OPENCODE_MODEL || 'anthropic/claude-3-5-sonnet-20241022',
   },
   ollama: {
-    apiKey: process.env.QUAZ_API_KEY,
-    baseURL: process.env.OLLAMA_BASE_URL || 'http://localhost:20128/v1'
+    apiKey: process.env.NINEROUTER_API_KEY || process.env.QUAZ_API_KEY,
+    baseURL: process.env.OLLAMA_BASE_URL || process.env.NINEROUTER_BASE_URL || process.env.NINEROUTER_BASE_URL || 'http://ninerouter:3000/v1'
   },
   kiro: {
-    apiKey: process.env.QUAZ_API_KEY,
-    baseURL: process.env.KIRO_BASE_URL || 'http://localhost:20128/v1'
+    apiKey: process.env.NINEROUTER_API_KEY || process.env.QUAZ_API_KEY,
+    baseURL: process.env.KIRO_BASE_URL || process.env.NINEROUTER_BASE_URL || process.env.NINEROUTER_BASE_URL || 'http://ninerouter:3000/v1'
   },
   antigravity: {
     enabled: process.env.ANTIGRAVITY_ENABLED !== 'false',

@@ -9,7 +9,7 @@ const notAvailable = (name: string) => () => {
   throw new Error(`Tauri ${name}() is only available in desktop builds`);
 };
 
-export const invoke = notAvailable('invoke');
+export const invoke = notAvailable('invoke') as <T = any>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
 export const readTextFile = notAvailable('readTextFile');
 export const writeTextFile = notAvailable('writeTextFile');
 export const exists = notAvailable('exists');

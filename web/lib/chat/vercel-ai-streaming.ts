@@ -291,13 +291,13 @@ const OPENAI_COMPATIBLE_PROVIDERS: Record<string, OpenAICompatibleConfig> = {
     useChatEndpoint: true,
   },
   ollama: {
-    baseURL: process.env.OLLAMA_BASE_URL || 'http://localhost:20128/v1',
-    apiKeyEnv: 'QUAZ_API_KEY',
+    baseURL: process.env.OLLAMA_BASE_URL || process.env.NINEROUTER_BASE_URL || process.env.NINEROUTER_BASE_URL || 'http://ninerouter:3000/v1',
+    apiKeyEnv: 'NINEROUTER_API_KEY',
     useChatEndpoint: true,
   },
   kiro: {
-    baseURL: process.env.KIRO_BASE_URL || 'https://kiro.ai/v1',
-    apiKeyEnv: 'QUAZ_API_KEY',
+    baseURL: process.env.KIRO_BASE_URL || process.env.NINEROUTER_BASE_URL || process.env.NINEROUTER_BASE_URL || 'http://ninerouter:3000/v1',
+    apiKeyEnv: 'NINEROUTER_API_KEY',
     useChatEndpoint: true,
   },
   aihubmix: {

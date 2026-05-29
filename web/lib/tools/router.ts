@@ -1584,7 +1584,11 @@ class RipgrepProvider implements CapabilityProvider {
       // Use VFS adapter that handles both desktop (native ripgrep) and web (VFS search)
       const { ripgrepVFS } = await import('@/lib/search/ripgrep-vfs-adapter');
       
-      const ownerId = context.userId || 'anon:public';
+      // Normalize ownerId: 'anon_timestamp' -> 'anon:timestamp'
+      let ownerId = context.userId || 'anon:public';
+      if (ownerId.startsWith('anon_')) {
+        ownerId = ownerId.replace(/^anon_/, 'anon:');
+      }
       const searchPath = input.path;
       const maxResults = input.maxResults || 50;
       const query = input.query;

@@ -638,25 +638,44 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
 
     // Set up a timeout to ensure we don't get stuck
     const timeoutId = setTimeout(() => { if (!isMountedRef.current) return;
-      console.warn('[Chat] Streaming timeout after 3min, finalizing with accumulated content', {
+      console.warn('[Chat] Streaming timeout after 3min, finalizing', {
         accumulatedContentLength: accumulatedContent?.length,
         tokenCount,
       });
-      if (accumulatedContent.trim()) {
-        // If we have some content, finalize it
-        setMessages(prev => prev.map(msg =>
-          msg.id === assistantMessage.id
-            ? { ...msg, content: accumulatedContent }
-            : msg
-        ));
-        setIsLoading(false);
-        if (options.onFinish) {
-          options.onFinish({
-            ...assistantMessage,
-            content: accumulatedContent,
-            metadata: assistantMessage.metadata || {}
-          });
-        }
+      // CRITICAL FIX: Always finalize the UI state on timeout — even when
+      // accumulatedContent is empty. Previously the empty branch did NOTHING,
+      // leaving isLoading=true and the bubble blank forever ("frozen UI").
+      const hasContent = !!accumulatedContent.trim();
+      const finalContent = hasContent
+        ? accumulatedContent + '\n\n⚠️ _Response timed out — partial content shown above._'
+        : '⚠️ _Response timed out without producing any content. Please try again._';
+      setMessages(prev => prev.map(msg =>
+        msg.id === assistantMessage.id
+          ? {
+              ...msg,
+              content: finalContent,
+              metadata: {
+                ...(msg.metadata || {}),
+                timedOut: true,
+                canRetry: true,
+                ...(hasContent ? {} : { isEmptyResponse: false /* don't loop the retry */ }),
+              },
+            }
+          : msg
+      ));
+      enhancedBufferManager.destroySession(sessionId);
+      setIsLoading(false);
+      setAgentStatus(hasContent ? 'completed' : 'error');
+      if (options.onFinish) {
+        options.onFinish({
+          ...assistantMessage,
+          content: finalContent,
+          metadata: { ...(assistantMessage.metadata || {}), timedOut: true, canRetry: true },
+        });
+      }
+      // Drain any queued prompts so the chat doesn't stay paralyzed
+      if (inputQueue.length > 0) {
+        setTimeout(() => processQueue(), 100);
       }
     }, 180000); // 3 minute timeout
 
@@ -1342,16 +1361,82 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   // Check if this is a V2 session failure that should trigger fallback to v1
                   if (eventData.fallbackToV1) {
                     console.warn('V2 execution failed, will retry with v1 mode:', eventData);
-                    
+
                     // Clear timeout from failed V2 stream
                     clearTimeout(timeoutId);
-                    
+
                     // Reuse handleStreamingResponse for v1 fallback
                     await handleV1Fallback(assistantMessage, abortController);
                     return;
                   }
-                  
-                  throw new Error(eventData.message || 'Streaming error');
+
+                  // CRITICAL FIX: Do NOT throw — that kills the bubble, the
+                  // accumulated tokens, the tool-invocation chips, AND the
+                  // empty-response retry-with-rotation pathway (which only
+                  // lives in `case 'done'`). Instead finalize the bubble
+                  // gracefully so the user sees whatever streamed before the
+                  // error and gets a Retry affordance.
+                  const errMsg = eventData.message || eventData.error || 'Streaming error';
+                  const canRetry = eventData.canRetry !== false;
+                  const hadContent = !!accumulatedContent.trim();
+                  const errorSuffix = canRetry
+                    ? `\n\n⚠️ _Stream interrupted: ${errMsg}. You can retry._`
+                    : `\n\n⚠️ _${errMsg}_`;
+                  const finalContent = hadContent
+                    ? accumulatedContent + errorSuffix
+                    : `⚠️ ${errMsg}${canRetry ? ' Please retry your request.' : ''}`;
+
+                  console.warn('[Chat] Server error event — preserving partial content', {
+                    errMsg,
+                    canRetry,
+                    accumulatedContentLength: accumulatedContent.length,
+                    toolInvocationCount: streamingToolInvocations.length,
+                  });
+
+                  enhancedBufferManager.completeSession(sessionId);
+                  clearTimeout(timeoutId);
+
+                  setMessages(prev => prev.map(msg =>
+                    msg.id === assistantMessage.id
+                      ? {
+                          ...msg,
+                          content: finalContent,
+                          metadata: {
+                            ...(msg.metadata || {}),
+                            hadStreamError: true,
+                            streamError: errMsg,
+                            canRetry,
+                            // Preserve tool invocations already collected during streaming
+                            toolInvocations: streamingToolInvocations.length > 0
+                              ? streamingToolInvocations
+                              : (msg.metadata as any)?.toolInvocations,
+                          },
+                        }
+                      : msg
+                  ));
+                  setIsLoading(false);
+                  setAgentStatus('error');
+
+                  if (options.onFinish) {
+                    options.onFinish({
+                      ...assistantMessage,
+                      content: finalContent,
+                      metadata: {
+                        ...(assistantMessage.metadata || {}),
+                        hadStreamError: true,
+                        streamError: errMsg,
+                        canRetry,
+                      },
+                    });
+                  }
+                  if (options.onError) {
+                    options.onError(new Error(errMsg));
+                  }
+                  // Drain queued prompts so chat keeps flowing
+                  if (inputQueue.length > 0) {
+                    setTimeout(() => processQueue(), 100);
+                  }
+                  return; // Exit the stream handler cleanly
                   }
 
                 case 'filesystem':

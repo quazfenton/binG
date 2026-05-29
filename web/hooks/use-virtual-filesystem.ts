@@ -317,6 +317,17 @@ export function useVirtualFilesystem(
     if (options?.compositeSessionId && options.compositeSessionId.includes('$')) {
       const dollarIndex = options.compositeSessionId.indexOf('$');
       const userIdPart = options.compositeSessionId.slice(0, dollarIndex);
+      const sessionPart = options.compositeSessionId.slice(dollarIndex + 1);
+      
+      // CRITICAL FIX: For anonymous sessions (userIdPart === 'anon'), we need to
+      // return 'anon:session' format to match the backend's resolveFilesystemOwner
+      // which uses 'anon:session' as the ownerId format for anonymous users.
+      // This fixes the issue where files written to 'anon:001' couldn't be read
+      // because the client was querying 'anon' instead of 'anon:001'.
+      if (userIdPart === 'anon' && sessionPart) {
+        return `anon:${sessionPart}`;
+      }
+      
       if (userIdPart && userIdPart !== 'anon') return userIdPart;
     }
 
@@ -325,7 +336,19 @@ export function useVirtualFilesystem(
     if (derived) return derived;
 
     // Priority 4: Fall back to anonymous session ID
-    return getOrCreateAnonymousSessionId();
+    const anonSessionId = getOrCreateAnonymousSessionId();
+    
+    // CRITICAL FIX: Normalize 'anon_timestamp_random' format to 'anon:timestamp_random'
+    // to match the backend's resolveFilesystemOwner which uses 'anon:' prefix with colon.
+    // This fixes the issue where files written to 'anon:12345_abc' couldn't be read
+    // because the client was querying 'anon_12345_abc' instead.
+    if (anonSessionId.startsWith('anon_')) {
+      // 'anon_timestamp_random' -> 'anon:timestamp_random'
+      return anonSessionId.replace(/^anon_/, 'anon:');
+    }
+    
+    // Handle already normalized format or other formats
+    return anonSessionId;
   }, [options?.userId, options?.compositeSessionId, initialPath]);
 
   const [currentPath, setCurrentPath] = useState(resolvedInitialPath);

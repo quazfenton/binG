@@ -619,9 +619,9 @@ export async function processUnifiedAgentRequest(
 
   if (modalClient) {
     log.info('[UnifiedAgent] ⚡ OFFLOADING TO MODAL ──────────────────');
-    log.info('[UnifiedAgent] │ contextSize:', _modalContextSize, 'bytes');
-    log.info('[UnifiedAgent] │ modalProvider:', _modalProvider);
-    log.info('[UnifiedAgent] │ model:', config.model || dynamicDefaults.model);
+    log.info('[UnifiedAgent] │ contextSize: ' + _modalContextSize + ' bytes');
+    log.info('[UnifiedAgent] │ modalProvider: ' + _modalProvider);
+    log.info('[UnifiedAgent] │ model: ' + (config.model || dynamicDefaults.model));
     log.info('[UnifiedAgent] └──────────────────────────────────────────');
 
     try {
@@ -1341,9 +1341,14 @@ async function runOpencodeSDKMode(
     });
 
     recordSuccess('v2-http-sdk', 'opencode-sdk');
+    // CRITICAL: Do NOT substitute a placeholder string for empty responses —
+    // it masks emptiness from the client's `isEmptyResponse` detection and
+    // disables the auto-retry-with-rotation pathway. Leave response empty and
+    // let the client trigger the retry, or set metadata.isEmptyResponse=true.
+    const isEmpty = !responseText || !responseText.trim();
     return {
       success: true,
-      response: responseText || 'No response generated',
+      response: responseText || '',
       steps: toolSteps,
       totalSteps: toolSteps.length,
       mode: 'opencode-sdk',
@@ -1353,6 +1358,7 @@ async function runOpencodeSDKMode(
         model: modelStr,
         duration: Date.now() - startTime,
         sessionId: session.id,
+        ...(isEmpty ? { isEmptyResponse: true, emptyReason: 'opencode-sdk produced no text' } : {}),
       },
     };
   } catch (httpError: any) {
@@ -1411,9 +1417,10 @@ async function runOpencodeSDKMode(
       // Clean up
       await sdkProvider.close().catch(() => {});
 
+      const isEmpty = !fullResponse || !fullResponse.trim();
       return {
         success: true,
-        response: fullResponse || 'No response generated',
+        response: fullResponse || '',
         steps: toolSteps,
         totalSteps: toolSteps.length,
         mode: 'opencode-sdk',
@@ -1421,6 +1428,7 @@ async function runOpencodeSDKMode(
           provider: 'opencode-sdk-fallback',
           duration: Date.now() - startTime,
           fallbackMethod: '@opencode-ai/sdk',
+          ...(isEmpty ? { isEmptyResponse: true, emptyReason: 'opencode-sdk-fallback produced no text' } : {}),
         },
       };
     } catch (sdkError: any) {
@@ -1905,6 +1913,25 @@ async function runV1ApiWithTools(
     const cbMod = await import('../middleware/circuit-breaker');
     circuitBreakerMgr = cbMod.circuitBreakerManager;
   } catch { /* circuit-breaker unavailable */ }
+
+  // FIX: Reset circuit breakers on first request of new session to prevent blocking
+  // Track first requests per session to avoid memory leaks
+  const firstRequestKey = `first-${sessionId}`;
+  if (!(global as any).__circuitBreakerFirstRequest) {
+    (global as any).__circuitBreakerFirstRequest = new Set();
+  }
+  const firstRequestSet = (global as any).__circuitBreakerFirstRequest as Set<string>;
+  
+  // Limit Set size to prevent memory leaks (evict oldest entries)
+  if (firstRequestSet.size > 100) {
+    const oldest = firstRequestSet.values().next().value;
+    if (oldest) firstRequestSet.delete(oldest);
+  }
+  
+  const isFirstRequestThisSession = !firstRequestSet.has(firstRequestKey);
+  if (isFirstRequestThisSession) {
+    firstRequestSet.add(firstRequestKey);
+  }
   try {
     const mrMod = await import('../providers/model-ranker');
     modelRankerFns = {
@@ -1922,14 +1949,20 @@ async function runV1ApiWithTools(
   for (const providerName of uniqueProviders) {
     const modelForProvider = getModelForProvider(providerName);
 
-    // FIX: Skip providers with open circuit breakers
+    // FIX: Skip providers with open circuit breakers (unless first request of session)
     if (circuitBreakerMgr) {
       const breaker = circuitBreakerMgr.getBreaker(providerName);
       if (breaker.getState() === 'OPEN' && breaker.getRetryAfter() > 0) {
-        log.warn('[V1-API-WITH-TOOLS] ┌─ CIRCUIT OPEN ─────────────────');
-        log.warn(`[V1-API-WITH-TOOLS] │ provider: ${providerName} (circuit BLOCKED, retry after ${breaker.getRetryAfter()}ms)`);
-        log.warn('[V1-API-WITH-TOOLS] └────────────────────────────────');
-        continue; // Skip this provider
+        // On first request of session, reset OPEN circuit instead of skipping
+        if (isFirstRequestThisSession) {
+          breaker.reset();
+          log.info('[V1-API-WITH-TOOLS] │ First request - reset OPEN circuit for provider', { provider: providerName });
+        } else {
+          log.warn('[V1-API-WITH-TOOLS] ┌─ CIRCUIT OPEN ─────────────────');
+          log.warn(`[V1-API-WITH-TOOLS] │ provider: ${providerName} (circuit BLOCKED, retry after ${breaker.getRetryAfter()}ms)`);
+          log.warn('[V1-API-WITH-TOOLS] └────────────────────────────────');
+          continue; // Skip this provider
+        }
       }
     }
 
@@ -2338,6 +2371,9 @@ async function runV1ApiWithTools(
       const anyToolFailed =
         toolInvocations.length > 0 &&
         toolInvocations.some((inv) => inv.result?.success === false);
+      const allToolsSucceeded =
+        toolInvocations.length > 0 &&
+        toolInvocations.every((inv) => inv.result?.success === true);
       const noToolCalls = toolInvocations.length === 0;
       const responseEmpty = !cleanedResponse || cleanedResponse.trim().length === 0;
       const retryCount = ((config as any)._toolFailureRetryCount as number) || 0;
@@ -2350,8 +2386,17 @@ async function runV1ApiWithTools(
         : { detected: false, reason: '', prompt: '', confidence: 0 as number };
       const responseIncomplete = incompleteDetection.detected;
 
+      // FIX #4: "stops on file read" — tools ran successfully but the model
+      // produced zero follow-up text. One more turn ("summarize what you got")
+      // almost always works. Without this branch we render the friendly
+      // fallback "I didn't produce a response for that" which looks broken
+      // to the user even though tools clearly ran.
+      const successfulToolsButSilent = responseEmpty && allToolsSucceeded;
+
       const shouldRetry = retryCount < MAX_TOOL_FAILURE_RETRIES && (
-        (responseEmpty && (anyToolFailed || noToolCalls)) || responseIncomplete
+        (responseEmpty && (anyToolFailed || noToolCalls)) ||
+        successfulToolsButSilent ||
+        responseIncomplete
       );
 
       if (shouldRetry) {
@@ -2426,6 +2471,15 @@ async function runV1ApiWithTools(
           // but included for future-proofing when both conditions may coexist.
           feedbackMsg = `[INCOMPLETE-RESPONSE-FEEDBACK] ${incompleteDetection.prompt}\n\nYour response was truncated or cut off. Please complete your thought and provide a full answer.${injectedFeedback.correctionSection}${injectedFeedback.formatGuidance}`;
           userPrompt = 'Please complete your previous response. Start from where you left off or restate your answer clearly.';
+        } else if (successfulToolsButSilent) {
+          // Tools ran successfully but the model produced zero follow-up text.
+          // Give it the executed tool list so it can summarize for the user.
+          const successSummary = toolInvocations
+            .filter((inv) => inv.result?.success === true)
+            .map((inv) => `- ${inv.toolName}(${Object.keys(inv.args || {}).join(', ')}) → succeeded`)
+            .join('\n');
+          feedbackMsg = `[POST-TOOL-FEEDBACK] You called tools and they succeeded, but you produced no text for the user.\n\nExecuted tools:\n${successSummary}\n\nNow write a clear final answer that uses the tool results.`;
+          userPrompt = 'Now summarize the results for me — what did you find / do, and what should I know?';
         } else {
           // No tool calls and no text -- model went silent. Force a text-mode response.
           feedbackMsg = '[EMPTY-RESPONSE-FEEDBACK] You produced no text and no tool calls. Respond directly to the user in plain text now. If a tool was needed, describe what you would have done.';
@@ -2440,7 +2494,13 @@ async function runV1ApiWithTools(
         log.debug('[V1-API-WITH-TOOLS] [SelfHeal] Assembled feedback for LLM', {
           feedbackLength: feedbackMsg.length,
           feedbackPreview,
-          branch: anyToolFailed ? 'tool-failure' : responseIncomplete ? 'incomplete-response' : 'empty-response',
+          branch: anyToolFailed
+            ? 'tool-failure'
+            : responseIncomplete
+              ? 'incomplete-response'
+              : successfulToolsButSilent
+                ? 'post-tool-silence'
+                : 'empty-response',
         });
 
         log.warn('[V1-API-WITH-TOOLS] [SelfHeal] Auto-retrying response', {
@@ -2777,6 +2837,20 @@ async function runV1Orchestrated(
     recordResponse(sessionId, content.length, true);
     
     const healingTrigger = detectHealingTrigger(feedbackContext, content, freshTracker.consecutiveToolCalls);
+
+    // FIX: Wire up healingTrigger to actually trigger self-healing paths
+    // Previously healingTrigger was detected but only logged, not used to route to healing
+    if (healingTrigger.detected) {
+      log.info('\x1b[32m[AutoHealing]\x1b[0m Healing trigger detected', {
+        reason: healingTrigger.reason,
+        healingMode: healingTrigger.healingMode,
+      });
+      // Generate healing prompt and attach to config for self-healing path
+      const originalTask = config.userMessage || '';
+      const healingPrompt = generateHealingPrompt(healingTrigger, feedbackContext, originalTask);
+      (config as any)._healingPrompt = healingPrompt;
+    }
+
     const injectedFeedback = injectFeedback(feedbackContext);
     const trackerSummary = generateTrackerSummary(sessionId);
 
@@ -3298,10 +3372,11 @@ async function runV1ApiCompletion(
       }
       const truncatedCompletion = truncateAtFirstRouting(content);
       const cleanedResponse = stripRoutingMarkers(truncatedCompletion);
+      const isEmpty = !cleanedResponse || !cleanedResponse.trim();
 
 return {
         success: true,
-        response: cleanedResponse || 'No response generated',
+        response: cleanedResponse || '',
         mode: 'v1-api',
         metadata: {
           provider: providerName,
@@ -3312,6 +3387,9 @@ return {
           fileEdits: fileEdits.length > 0 ? fileEdits : undefined,
           toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
           ...(routingForClientCompletion ? { routing: routingForClientCompletion } : {}),
+          // Signal emptiness so client triggers retry-with-rotation instead of
+          // rendering a useless "No response generated" literal.
+          ...(isEmpty ? { isEmptyResponse: true, emptyReason: 'v1-api-completion produced no text' } : {}),
         },
       };
     } catch (error: any) {

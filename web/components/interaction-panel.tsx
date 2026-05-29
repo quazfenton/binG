@@ -1778,20 +1778,21 @@ export default function InteractionPanel({
           </Button>
 
           {/* Expand/Collapse Button - Bottom Right */}
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setIsExpanded(!isExpanded)}
-            className="absolute bottom-1 right-1 w-6 h-6 p-0 text-gray-400 hover:text-white hover:bg-white/10 z-[60]"
-            title={isExpanded ? "Collapse height" : "Expand height"}
-            disabled={isMinimized}
-          >
-            {isExpanded ? (
-              <Minimize2 className="w-3 h-3" />
-            ) : (
-              <Maximize2 className="w-3 h-3" />
-            )}
-          </Button>
+          {!isMinimized && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setIsExpanded(!isExpanded)}
+              className="absolute bottom-1 right-1 w-6 h-6 p-0 text-gray-400 hover:text-white hover:bg-white/10 z-[60]"
+              title={isExpanded ? "Collapse height" : "Expand height"}
+            >
+              {isExpanded ? (
+                <Minimize2 className="w-3 h-3" />
+              ) : (
+                <Maximize2 className="w-3 h-3" />
+              )}
+            </Button>
+          )}
 
           {/* Header - Compact layout */}
           <div className="flex justify-between items-center mb-1 mt-3 sm:mt-5 px-1 ml-10" onDoubleClick={toggleMinimized}>

@@ -1320,7 +1320,11 @@ export const grepCodeTool = (tool as any)({
       
       // Get ownerId from tool context
       const context = toolContextStore.getStore();
-      const ownerId = context?.userId || 'anon:public';
+      // Normalize ownerId: 'anon_timestamp' -> 'anon:timestamp'
+      let ownerId = context?.userId || 'anon:public';
+      if (ownerId.startsWith('anon_')) {
+        ownerId = ownerId.replace(/^anon_/, 'anon:');
+      }
       
       // Use VFS adapter that handles both desktop (native ripgrep) and web (VFS search)
       const { ripgrepVFS } = await import('../search/ripgrep-vfs-adapter');

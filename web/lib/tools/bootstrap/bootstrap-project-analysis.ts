@@ -60,7 +60,13 @@ export async function registerProjectAnalysisTools(
       capability: 'workspace.analyze',
       provider: 'workspace-analysis',
       handler: async (args: any, context: any) => {
-        const ownerId = context.userId || 'anonymous';
+        // Normalize ownerId: 'anonymous' -> 'anon:public', 'anon_timestamp' -> 'anon:timestamp'
+        let ownerId = context.userId || 'anon:public';
+        if (ownerId.startsWith('anon_')) {
+          ownerId = ownerId.replace(/^anon_/, 'anon:');
+        } else if (ownerId === 'anonymous') {
+          ownerId = 'anon:public';
+        }
         return analyzeProject(ownerId, {
           includeDependencies: args.includeDependencies ?? false,
         });
@@ -78,7 +84,13 @@ export async function registerProjectAnalysisTools(
       capability: 'workspace.list_scripts',
       provider: 'workspace-analysis',
       handler: async (_args: any, context: any) => {
-        const ownerId = context.userId || 'anonymous';
+        // Normalize ownerId: 'anonymous' -> 'anon:public', 'anon_timestamp' -> 'anon:timestamp'
+        let ownerId = context.userId || 'anon:public';
+        if (ownerId.startsWith('anon_')) {
+          ownerId = ownerId.replace(/^anon_/, 'anon:');
+        } else if (ownerId === 'anonymous') {
+          ownerId = 'anon:public';
+        }
         const scripts = await listScripts(ownerId);
         return { scripts };
       },
@@ -95,7 +107,13 @@ export async function registerProjectAnalysisTools(
       capability: 'workspace.dependencies',
       provider: 'workspace-analysis',
       handler: async (_args: any, context: any) => {
-        const ownerId = context.userId || 'anonymous';
+        // Normalize ownerId: 'anonymous' -> 'anon:public', 'anon_timestamp' -> 'anon:timestamp'
+        let ownerId = context.userId || 'anon:public';
+        if (ownerId.startsWith('anon_')) {
+          ownerId = ownerId.replace(/^anon_/, 'anon:');
+        } else if (ownerId === 'anonymous') {
+          ownerId = 'anon:public';
+        }
         return getDependencies(ownerId);
       },
       metadata: {
@@ -112,7 +130,13 @@ export async function registerProjectAnalysisTools(
       provider: 'workspace-analysis',
       handler: async (args: any, context: any) => {
         const { virtualFilesystem } = await import('@/lib/virtual-filesystem/virtual-filesystem-service');
-        const ownerId = context.userId || 'anonymous';
+        // Normalize ownerId: 'anonymous' -> 'anon:public', 'anon_timestamp' -> 'anon:timestamp'
+        let ownerId = context.userId || 'anon:public';
+        if (ownerId.startsWith('anon_')) {
+          ownerId = ownerId.replace(/^anon_/, 'anon:');
+        } else if (ownerId === 'anonymous') {
+          ownerId = 'anon:public';
+        }
         const workspace = await virtualFilesystem.exportWorkspace(ownerId);
         const filePaths = workspace.files.map(f => f.path);
 

@@ -21,7 +21,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { toast } from 'sonner'
 import useIframeLoader from '@/hooks/use-iframe-loader'
 import { IframeUnavailableScreen } from '../ui/iframe-unavailable-screen'
-import type { DesktopAction, AgentLoopResult, DesktopStats } from '@/lib/computer/e2b-desktop-provider-enhanced'
+import type { DesktopAction, DesktopStats } from '@/lib/computer/e2b-desktop-provider-enhanced'
 
 // ==================== Types ====================
 
@@ -87,18 +87,13 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
   // Use iframe loader hook with fallback for stream URL
   const {
     isLoading,
-    isLoaded,
     isFailed,
     failureReason,
     errorMessage,
     retryCount,
-    canRetry,
     isUsingFallback,
     fallbackUrl,
-    handleLoad,
     handleRetry,
-    handleReset,
-    handleFallback,
   } = useIframeLoader({
     url: streamUrl,
     timeout: 30000,
@@ -511,13 +506,21 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
             <div className="h-full flex flex-col">
               {/* VNC Stream */}
               {streamUrl ? (
-                isFailed ? (
+                isLoading ? (
+                  <div className="flex-1 flex items-center justify-center bg-black">
+                    <div className="text-center text-gray-400">
+                      <div className="w-8 h-8 border-2 border-gray-400 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+                      <p className="text-sm">Connecting to desktop stream...</p>
+                    </div>
+                  </div>
+                ) : isFailed ? (
                   <div className="flex-1 relative">
                     <IframeUnavailableScreen
                       url={streamUrl}
                       reason={failureReason || 'failed'}
                       errorMessage={errorMessage || undefined}
-                      onRetry={handleRetry}onOpenExternal={() => window.open(streamUrl, '_blank', 'noopener,noreferrer')}
+                      onRetry={handleRetry}
+                      onOpenExternal={() => window.open(streamUrl, '_blank', 'noopener,noreferrer')}
                       onClose={onClose}
                       autoRetryCount={retryCount}
                       maxRetries={3}
@@ -544,28 +547,28 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
                   disabled={!isConnected}
                   className="px-4 py-2 bg-gray-700 text-white rounded hover:bg-gray-600 disabled:opacity-50"
                 >
-                  📸 Screenshot
+                  Screenshot
                 </button>
                 <button
                   onClick={() => manualAction({ type: 'left_click' })}
                   disabled={!isConnected}
                   className="px-4 py-2 bg-gray-700 text-white rounded hover:bg-gray-600 disabled:opacity-50"
                 >
-                  🖱️ Left Click
+                  Left Click
                 </button>
                 <button
                   onClick={() => manualAction({ type: 'right_click' })}
                   disabled={!isConnected}
                   className="px-4 py-2 bg-gray-700 text-white rounded hover:bg-gray-600 disabled:opacity-50"
                 >
-                  🖱️ Right Click
+                  Right Click
                 </button>
                 <button
                   onClick={() => manualAction({ type: 'keypress', keys: ['Control_L', 'c'] })}
                   disabled={!isConnected}
                   className="px-4 py-2 bg-gray-700 text-white rounded hover:bg-gray-600 disabled:opacity-50"
                 >
-                  ⌨️ Ctrl+C
+                  Ctrl+C
                 </button>
               </div>
             </div>
@@ -606,14 +609,14 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
                       disabled={!desktop || !agentTask}
                       className="flex-1 px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50"
                     >
-                      🚀 Start Agent
+                      Start Agent
                     </button>
                   ) : (
                     <button
                       onClick={stopAgent}
                       className="flex-1 px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700"
                     >
-                      ⏹️ Stop Agent
+                      Stop Agent
                     </button>
                   )}
                 </div>

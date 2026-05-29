@@ -199,7 +199,15 @@ export class ShadowCommitManager {
             : options.sessionId; // Fall back to full sessionId if unclear
         }
       }
-      ownerId = ownerId || 'anon$unknown';
+      // Normalize ownerId format: convert 'anon_timestamp_random' or 'anon$unknown' to 'anon:timestamp_random' or 'anon:unknown'
+      // to match the backend's resolveFilesystemOwner which uses 'anon:' prefix with colon.
+      if (ownerId && ownerId.startsWith('anon_')) {
+        ownerId = ownerId.replace(/^anon_/, 'anon:');
+      } else if (ownerId && ownerId.startsWith('anon$')) {
+        ownerId = ownerId.replace(/^anon\$/, 'anon:');
+      } else if (!ownerId) {
+        ownerId = 'anon:unknown';
+      }
 
       console.log('[ShadowCommit] Inserting with commitId:', commitId, 'ownerId:', ownerId);
 

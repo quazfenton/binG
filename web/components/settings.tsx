@@ -1769,7 +1769,7 @@ export default function Settings({
                     onClick={() => screenReader && speakText(message.content)}
                     title={screenReader ? "Click to read aloud" : undefined}
                   >
-                    {message.content}
+                    {typeof message.content === 'string' ? message.content : JSON.stringify(message.content, null, 2)}
                   </p>
                 </div>
               ))
