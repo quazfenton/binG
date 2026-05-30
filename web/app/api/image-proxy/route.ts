@@ -4,6 +4,14 @@
  * Proxies external image URLs to bypass CORS and hotlinking restrictions.
  * Usage: /api/image-proxy?url=https://example.com/image.jpg
  *
+ * NOTE: Marked force-dynamic because this route does HTTP requests at runtime.
+ * The project uses output: 'export' but backend API routes are handled
+ * externally in production (see next.config.mjs comment).
+ */
+
+export const dynamic = 'force-dynamic';
+
+/**
  * SECURITY: Includes SSRF protection, timeout, and size limits
  * Uses centralized validateImageUrl() for consistent security checks
  *

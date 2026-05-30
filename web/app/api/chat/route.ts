@@ -1314,7 +1314,7 @@ const config: UnifiedAgentConfig = {
                       provider: actualProvider,
                       toolName,
                       success: result?.success !== false,
-                      error: result?.error,
+                      error: typeof result?.error === 'string' ? result.error : result?.error instanceof Error ? result.error.message : undefined,
                       timestamp: Date.now(),
                       conversationId,
                       toolCallId: `agent-${toolName}-${Date.now()}`,
@@ -2762,7 +2762,8 @@ const config: UnifiedAgentConfig = {
                         } else if (toolInvocation.state === 'result') {
                           const tracked = toolCallTracker.get(toolInvocation.toolCallId);
                           const isSuccess = toolInvocation.result && toolInvocation.result.output !== undefined && toolInvocation.result.output !== null;
-                          const errorMsg = toolInvocation.result?.error;
+                          const toolResultErr = toolInvocation.result?.error;
+                          const errorMsg = typeof toolResultErr === 'string' ? toolResultErr : toolResultErr instanceof Error ? toolResultErr.message : undefined;
 
                           completedToolCalls.push({
                             toolCallId: toolInvocation.toolCallId,
@@ -3382,7 +3383,8 @@ const config: UnifiedAgentConfig = {
                         const isSuccess = chunk.toolInvocation.result &&
                           chunk.toolInvocation.result.output !== undefined &&
                           chunk.toolInvocation.result.output !== null;
-                        const errorMsg = chunk.toolInvocation.result?.error;
+                        const chunkResultErr = chunk.toolInvocation.result?.error;
+                        const errorMsg = typeof chunkResultErr === 'string' ? chunkResultErr : chunkResultErr instanceof Error ? chunkResultErr.message : undefined;
 
                         try {
                           const { toolCallTracker: realTimeTracker } = await import('@/lib/tools/tool-call-tracker');

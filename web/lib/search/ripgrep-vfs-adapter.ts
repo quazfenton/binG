@@ -5,12 +5,11 @@ import { isDesktopMode } from '@bing/platform/env';
 import { isUsingLocalFS } from '@bing/shared/FS/fs-bridge';
 import { ripgrep, type RipgrepOptions, type RipgrepResult } from './ripgrep';
 import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-service';
-import { Worker } from 'node:worker_threads';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// Singleton worker instance
-let searchWorker: Worker | null = null;
+// Singleton worker instance (node:worker_threads.Worker, imported dynamically to avoid bundler issues)
+let searchWorker: any = null;
 let isWorkerInitialized = false;
 let initializedOwnerId: string | null = null;
 
@@ -18,13 +17,16 @@ let initializedOwnerId: string | null = null;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-async function getWorker(ownerId: string, workspace: any): Promise<Worker | null> {
+async function getWorker(ownerId: string, workspace: any): Promise<any> {
   if (searchWorker && initializedOwnerId === ownerId) return searchWorker;
   
   try {
     if (!searchWorker) {
       const workerPath = path.join(__dirname, 'search.worker.js');
-      searchWorker = new Worker(workerPath);
+      // Dynamic import via new Function is completely opaque to bundlers
+      // (webpack/Turbopack can't statically analyze eval-like patterns).
+      const workerThreads = await new Function('return import("node:worker_threads")')();
+      searchWorker = new workerThreads.Worker(workerPath);
     }
     
     isWorkerInitialized = false;

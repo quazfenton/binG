@@ -52,6 +52,17 @@ function sanitizeMessageContent(content: string): string {
   return sanitizeAssistantDisplayContent(content);
 }
 
+/** Typed result from VFS MCP tool invocations (write_file, apply_diff, delete_file, batch_write) */
+interface VfsToolResult {
+  success?: boolean;
+  error?: string | Error;
+  path?: string;
+  version?: number;
+  content?: string;
+  results?: VfsToolResult[];
+  diff?: string;
+}
+
 interface MessageBubbleProps {
   message: Message
   isStreaming?: boolean
@@ -142,7 +153,7 @@ export default function MessageBubble({
     
     for (const tool of toolInvocations) {
       if (tool.state !== 'result') continue;
-      const result = tool.result as any;
+      const result = tool.result as VfsToolResult;
       if (!result) continue;
       
       // Handle VFS write tools: write_file, batch_write

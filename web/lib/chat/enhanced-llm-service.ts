@@ -914,11 +914,11 @@ export class EnhancedLLMService {
                         chatLogger.warn('[VFS MCP] Tool failed (streaming path)', {
                           tool: toolName,
                           success: false,
-                          error: result?.error,
+                          error: typeof result?.error === 'string' ? result.error : result?.error instanceof Error ? result.error.message : undefined,
                           userId: request.userId,
                           requestId,
                         });
-                        throw new Error(result?.error || `VFS tool ${toolName} execution failed`);
+                        throw new Error(typeof result?.error === 'string' ? result.error : result?.error instanceof Error ? result.error.message : `VFS tool ${toolName} execution failed`);
                       }
                     },
                   });

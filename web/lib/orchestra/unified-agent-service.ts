@@ -2538,11 +2538,19 @@ async function runV1ApiWithTools(
         // Track retries so we don't loop forever
         (config as any)._toolFailureRetryCount = retryCount + 1;
 
+        // CRITICAL: Build a ModelMessage-schema-valid retry sequence.
+        // Bug fixed: `{role:'assistant', content:''}` is rejected by Vercel
+        // AI SDK provider adapters (empty assistant content), and a stray
+        // `{role:'system'}` AFTER an assistant turn violates the ordering
+        // contract on newer providers (caused
+        //   "Invalid prompt: The messages do not match the ModelMessage[] schema")
+        // Instead: keep the existing conversation as-is and append a single
+        // user message that carries BOTH the steering feedback and the
+        // continuation prompt. This is provider-agnostic and ModelMessage-safe.
+        const combinedUserPrompt = `${feedbackMsg}\n\n---\n\n${userPrompt}`;
         const retryMessages = [
           ...messages,
-          { role: 'assistant' as const, content: '' },
-          { role: 'system' as const, content: feedbackMsg },
-          { role: 'user' as const, content: userPrompt },
+          { role: 'user' as const, content: combinedUserPrompt },
         ];
 
         try {
@@ -2560,16 +2568,24 @@ async function runV1ApiWithTools(
         }
       }
 
-      // Friendly fallback message — preferable to a bald "No response generated"
+      // Friendly fallback message — preferable to a bald "No response generated".
+      // CRITICAL: When we return a friendly fallback because SelfHeal couldn't
+      // recover, we MUST also signal `isEmptyResponse: true` (and a clear
+      // `emptyReason`) in metadata. Otherwise the client sees non-empty text
+      // and treats it as a successful terminal response — no rotation, no
+      // model swap, no second-attempt recovery. This is the exact reason the
+      // user kept seeing "I attempted to use a tool but the call was rejected"
+      // as a dead-end bubble.
       const friendlyFallback = anyToolFailed
         ? 'I attempted to use a tool but the call was rejected. Could you rephrase or clarify what you\'d like me to do?'
         : 'I didn\'t produce a response for that — could you rephrase your request?';
-      // FIX: Surface tool failure errors in primary response (not just retry path)
-      // When tools were invoked but failed AND model produced no text, show the error
-      // message as actual content so user knows what went wrong.
       const toolFailureMessage = (toolInvocations.length > 0 && anyToolFailed && friendlyFallback)
         ? friendlyFallback
         : null;
+      const usedFriendlyFallback =
+        (!cleanedResponse || !cleanedResponse.trim()) &&
+        (!response || !response.trim()) &&
+        !!toolFailureMessage;
       const finalResponse = cleanedResponse && cleanedResponse.trim()
         ? cleanedResponse
         : (response && response.trim() ? response : (toolFailureMessage || ''));
@@ -2589,8 +2605,15 @@ async function runV1ApiWithTools(
             ? uniqueProviders.slice(0, uniqueProviders.indexOf(providerName) + 1)
             : [],
           ...(routingForClient ? { routing: routingForClient } : {}),
-          // FIX: Pass anyToolFailed through to SSE metadata so client can auto-retry on tool failure
+          // Pass anyToolFailed through so client can auto-retry on tool failure
           ...(toolInvocations.length > 0 && toolInvocations.some(inv => inv.result?.success === false) ? { anyToolFailed: true } : {}),
+          // Mark friendly-fallback responses as empty so client triggers rotation
+          ...(usedFriendlyFallback ? {
+            isEmptyResponse: true,
+            emptyReason: anyToolFailed
+              ? 'tool calls failed and SelfHeal retry did not recover'
+              : 'no text and no successful tools after SelfHeal',
+          } : {}),
         },
       };
     } catch (error: any) {

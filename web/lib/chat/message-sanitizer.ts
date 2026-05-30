@@ -24,6 +24,21 @@ export function sanitizeMessages(messages: any[], options: SanitizeOptions = {})
       // of generateText / streamText.
       const role = m && typeof m.role === 'string' ? m.role : null;
       if (role === 'system') return false;
+
+      // Drop ASSISTANT messages that have NO content AND NO tool_calls.
+      // Vercel AI SDK provider adapters reject `{role:'assistant', content:''}`
+      // with "Invalid prompt: The messages do not match the ModelMessage[]
+      // schema". An assistant turn must carry either text or tool calls.
+      if (role === 'assistant') {
+        const content = m?.content;
+        const hasToolCalls = Array.isArray(m?.toolCalls) && m.toolCalls.length > 0
+          || Array.isArray(m?.tool_calls) && m.tool_calls.length > 0;
+        const hasText =
+          (typeof content === 'string' && content.trim().length > 0) ||
+          (Array.isArray(content) && content.length > 0);
+        if (!hasText && !hasToolCalls) return false;
+      }
+
       // Keep messages even with unknown roles — coerce to 'user' below
       // to avoid silently dropping context from non-standard message formats.
       return true;

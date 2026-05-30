@@ -73,7 +73,7 @@ function buildEmptyResponseRetryContext(ctx: {
     if (tool.error || tool.result?.success === false) {
       failedToolCalls.push({
         name: tool.toolName,
-        error: tool.error || tool.result?.error || 'Unknown error',
+        error: tool.error || (typeof tool.result?.error === 'string' ? tool.result.error : tool.result?.error instanceof Error ? tool.result.error.message : 'Unknown error'),
         args: tool.args,
       });
     } else if (tool.toolName) {
@@ -819,7 +819,16 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   // Primary response completed, but stream stays open for background refinement
                   // Update metadata but DON'T close the stream or call onFinish yet
                   if (eventData.messageMetadata) {
-                    const metadata = eventData.messageMetadata;
+                    const raw = eventData.messageMetadata;
+                    const metadata: Record<string, unknown> = {};
+                    const safeStringFields = ['agent', 'mode', 'currentAction', 'provider', 'model', 'agentType'];
+                    for (const key of safeStringFields) {
+                      const val = (raw as any)[key];
+                      if (typeof val === 'string') metadata[key] = val;
+                    }
+                    if (raw.processingSteps) metadata.processingSteps = raw.processingSteps;
+                    if (raw.routing) metadata.routing = raw.routing;
+                    if (raw.toolInvocations) metadata.toolInvocations = raw.toolInvocations;
                     setMessages(prev => prev.map(msg =>
                       msg.id === assistantMessage.id
                         ? { ...msg, metadata: { ...(msg.metadata || {}), ...metadata } }
@@ -876,8 +885,20 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                       filesystemApplied: eventData.filesystem?.applied?.length || 0,
                     });
                   }
-                  // Build metadata from done event
-                  const doneMetadata: any = eventData.messageMetadata || {};
+                  // Build metadata from done event — whitelist known-safe fields only
+                  // to prevent unexpected objects from leaking into rendering paths
+                  // and triggering React error #31 ("Objects not valid as a child").
+                  const raw = eventData.messageMetadata || {};
+                  const doneMetadata: Record<string, unknown> = {};
+                  const safeStringFields = ['agent', 'mode', 'currentAction', 'provider', 'model', 'agentType'];
+                  for (const key of safeStringFields) {
+                    const val = (raw as any)[key];
+                    if (typeof val === 'string') doneMetadata[key] = val;
+                  }
+                  if (raw.processingSteps) doneMetadata.processingSteps = raw.processingSteps;
+                  if (raw.routing) doneMetadata.routing = raw.routing;
+                  if (raw.toolInvocations) doneMetadata.toolInvocations = raw.toolInvocations;
+
                   // Also include filesystem info if present
                   if (eventData.filesystem) {
                     doneMetadata.filesystem = eventData.filesystem;
@@ -887,7 +908,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                     doneMetadata.fileEdits = eventData.fileEdits;
                   }
                   // Also include modelName from done event (top-level, not in messageMetadata)
-                  if (eventData.modelName) {
+                  if (typeof eventData.modelName === 'string') {
                     doneMetadata.modelName = eventData.modelName;
                   }
                   // ALWAYS update message with done content and metadata
@@ -918,7 +939,18 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   const hasFailedToolInvocations = failedToolInvocations.length > 0;
                   const hasFileSystemEdits = eventData.filesystem?.applied?.length > 0 ||
                     eventData.fileEdits?.length > 0;
-                  const isEmptyResponse = !doneContent.trim() && !hasSuccessfulToolInvocations && !hasFileSystemEdits;
+                  // CRITICAL: honor server-side `isEmptyResponse` flag too.
+                  // The server emits this when it had to return a friendly-
+                  // fallback string ("I attempted to use a tool but the call
+                  // was rejected…") after SelfHeal couldn't recover. Without
+                  // this check, non-empty fallback text → isEmptyResponse=false
+                  // → no rotation → user stuck on a dead-end bubble.
+                  const serverFlaggedEmpty =
+                    doneMetadata?.isEmptyResponse === true ||
+                    eventData?.messageMetadata?.isEmptyResponse === true;
+                  const isEmptyResponse =
+                    serverFlaggedEmpty ||
+                    (!doneContent.trim() && !hasSuccessfulToolInvocations && !hasFileSystemEdits);
 
                   if (isEmptyResponse) {
                     console.warn('[Chat] Empty response detected - content, tools, and filesystem edits all missing:', {

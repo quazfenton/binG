@@ -1668,6 +1668,65 @@ export default function CodePreviewPanel({
     return () => { cancelled = true; };
   }, [filesystemScopePath, isOpen, getFilesystemSnapshot]);
 
+  // ============================================================================
+  // VFS Polling: Fallback for detecting terminal-created files
+  // ============================================================================
+  // The filesystem-updated event system only captures changes from MCP tool flow.
+  // When files are created/modified through the terminal (e.g., nano, vim, echo, cat),
+  // no events are dispatched, leaving the preview panel stale.
+  // This polling fallback checks the VFS snapshot version periodically to detect
+  // any changes not captured by events, and triggers a refresh via the event system.
+  // The interval is deliberately conservative (3s) to balance responsiveness with
+  // resource usage.
+  const VFS_POLL_INTERVAL_MS = 3000;
+  const lastPolledSnapshotVersionRef = useRef<number>(0);
+
+  useEffect(() => {
+    // Only poll when panel is open — no need to check for changes when hidden
+    if (!isOpen) return;
+
+    let cancelled = false;
+
+    const pollVfsSnapshot = async () => {
+      if (cancelled) return;
+
+      try {
+        const scopePath = filesystemScopePathRef.current || 'workspace';
+        const snapshot = await getFilesystemSnapshot(scopePath);
+        if (cancelled) return;
+
+        const version = typeof snapshot?.version === 'number' ? snapshot.version : 0;
+
+        // If version increased since last poll, dispatch a synthetic filesystem-updated
+        // event so the existing event-driven refresh pipeline picks up the change.
+        // Skip the first poll (lastPolledSnapshotVersionRef === 0) to establish baseline.
+        if (version > lastPolledSnapshotVersionRef.current && lastPolledSnapshotVersionRef.current > 0) {
+          log(`[VFS Poller] detected version change: ${lastPolledSnapshotVersionRef.current} → ${version}, triggering refresh`);
+          emitFilesystemUpdated({
+            workspaceVersion: version,
+            scopePath: scopePath,
+            source: 'vfs-poller',
+          });
+        }
+
+        lastPolledSnapshotVersionRef.current = version;
+      } catch (err) {
+        // Silently ignore polling errors (e.g., snapshot not ready yet)
+        logError('[VFS Poller] polling error', err);
+      }
+    };
+
+    const intervalId = setInterval(pollVfsSnapshot, VFS_POLL_INTERVAL_MS);
+    log(`[VFS Poller] started with ${VFS_POLL_INTERVAL_MS}ms interval`);
+
+    return () => {
+      cancelled = true;
+      clearInterval(intervalId);
+      log('[VFS Poller] stopped');
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen]);
+
   // Bidirectional sync: Event-driven refresh from terminal/editor updates
   // FIXED: Use refs to avoid re-creating listener on every dependency change
   const filesystemCurrentPathRef = useRef(filesystemCurrentPath);
@@ -1726,6 +1785,9 @@ export default function CodePreviewPanel({
       
       // Reset workspace version tracking for new scope
       lastWorkspaceVersionRef.current = 0;
+      
+      // Reset VFS poller baseline so first poll re-establishes new scope
+      lastPolledSnapshotVersionRef.current = 0;
       
       // Reset debounce on navigation
       lastDirectoryListRef.current = null;

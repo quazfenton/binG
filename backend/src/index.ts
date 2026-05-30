@@ -3,6 +3,7 @@ import { serve } from "@hono/node-server";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import path from "node:path";
+import { createServer } from "node:net";
 import { fileURLToPath } from "node:url";
 import chatRoute from "./routes/chat";
 import { mountNextApiRoutes } from "./lib/next-route-loader";
@@ -81,6 +82,24 @@ app.notFound((c) =>
   c.json({ error: "Not found", path: c.req.path, method: c.req.method }, 404)
 );
 
-const port = Number(process.env.PORT) || 3001;
+async function findAvailablePort(start: number): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const srv = createServer();
+    srv.listen(start, () => {
+      const port = (srv.address() as any).port;
+      srv.close(() => resolve(port));
+    });
+    srv.on('error', (err: NodeJS.ErrnoException) => {
+      if (err.code === 'EADDRINUSE') {
+        resolve(findAvailablePort(start + 1));
+      } else {
+        reject(err);
+      }
+    });
+  });
+}
+
+const desiredPort = Number(process.env.PORT) || 3001;
+const port = await findAvailablePort(desiredPort);
 console.log(`🚀 binG backend listening on :${port}`);
 serve({ fetch: app.fetch, port });

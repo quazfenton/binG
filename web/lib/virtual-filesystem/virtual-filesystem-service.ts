@@ -1052,7 +1052,7 @@ export class VirtualFilesystemService {
 
     // VFS scoped paths (workspace/...) bypass workspaceRoot validation
     // These are virtual session namespaces, not filesystem paths relative to workspaceRoot
-    if (normalizedPath.startsWith('workspace/')) {
+    if (normalizedPath.startsWith('workspace/') || normalizedPath === 'workspace') {
       return normalizedPath;
     }
 
@@ -1060,7 +1060,7 @@ export class VirtualFilesystemService {
     // When stripWorkspacePrefixes removes "workspace/" prefix, paths like
     // "workspace/sessions/002/portfolio-app" become "sessions/002/portfolio-app".
     // These are valid VFS session paths and should be allowed.
-    if (normalizedPath.startsWith('sessions/')) {
+    if (normalizedPath.startsWith('sessions/') || normalizedPath === 'sessions') {
       return normalizedPath;
     }
 

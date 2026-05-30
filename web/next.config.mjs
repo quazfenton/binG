@@ -10,7 +10,8 @@ const isDesktopBuild = process.env.DESKTOP_MODE === 'true' || process.env.DESKTO
 const nextConfig = {
   // Static export — Vercel only serves frontend assets
   // Backend API routes are handled externally (OCI, 9router, etc.)
-  output: 'export',
+  // Disabled during dev so API routes work locally without 500 errors.
+  output: process.env.NODE_ENV === 'production' ? 'export' : undefined,
 
   // Vendored workspace packages (web/.bing-platform, web/.bing-shared) ship raw .ts;
   // tell Next to transpile them during the Vercel build.
@@ -169,6 +170,29 @@ const nextConfig = {
     // Let Next.js SWC handle TypeScript/TSX by default (supports generators, JSX, etc.)
     // Only add custom loaders if SWC fails
 
+    // Suppress warnings for all builds (server + client, dev + production)
+    const existingIgnoreWarnings = config.ignoreWarnings || [];
+    config.ignoreWarnings = [
+      ...existingIgnoreWarnings,
+      (warning) => {
+        const moduleName = typeof warning.module === 'string'
+          ? warning.module
+          : (warning.module?.resource || '');
+        const message = warning.message || '';
+
+        if (moduleName && moduleName.includes('require-in-the-middle')) {
+          return true;
+        }
+        if (message.includes('Critical dependency: require function is used')) {
+          return true;
+        }
+        if (moduleName && moduleName.includes('ripgrep-vfs-adapter') && message.includes("Can't resolve")) {
+          return true;
+        }
+        return message.includes('viewport');
+      },
+    ];
+
     if (!isServer) {
       config.resolve.fallback = {
         ...config.resolve.fallback,
@@ -199,27 +223,6 @@ const nextConfig = {
         'node:fs': false,
         'node:fs/promises': false,
       };
-
-      if (dev) {
-        const existingIgnoreWarnings = config.ignoreWarnings || [];
-        config.ignoreWarnings = [
-          ...existingIgnoreWarnings,
-          (warning) => {
-            const moduleName = typeof warning.module === 'string'
-              ? warning.module
-              : (warning.module?.resource || '');
-            const message = warning.message || '';
-
-            if (moduleName && moduleName.includes('require-in-the-middle')) {
-              return true;
-            }
-            if (message.includes('Critical dependency: require function is used')) {
-              return true;
-            }
-            return message.includes('viewport');
-          },
-        ];
-      }
     }
 
     config.resolve.extensionAlias = {
@@ -352,6 +355,7 @@ const nextConfig = {
         'node:assert': 'assert',
         'node:module': 'module',
         'node:child_process': 'child_process',
+        'node:worker_threads': 'worker_threads',
         // Tauri API stub for server-side builds
         '@tauri-apps/api': resolve(projectRoot, 'lib/utils/tauri-api-stub.ts'),
         '@tauri-apps/api/fs': resolve(projectRoot, 'lib/utils/tauri-api-stub.ts'),
@@ -389,6 +393,8 @@ const nextConfig = {
         events: false,
         child_process: false,
         'node:child_process': false,
+        worker_threads: false,
+        'node:worker_threads': false,
         module: false,
         'node:module': false,
         vm: false,

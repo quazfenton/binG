@@ -47,7 +47,7 @@ export const auth0 = new Auth0Client({
         const errorUrl = new URL('/auth/error', baseUrl);
         errorUrl.searchParams.set('error', 'callback_error');
         errorUrl.searchParams.set('error_description', error.message);
-        return NextResponse.redirect(errorUrl.toString());
+        return NextResponse.redirect(errorUrl.toString()) as NextResponse;
       }
 
       const returnTo = context?.returnTo || '/';
@@ -57,13 +57,13 @@ export const auth0 = new Auth0Client({
         ? parsedReturnTo.toString()
         : new URL('/', baseUrl).toString();
       console.log('[Auth0] onCallback successful, redirecting to:', redirectUrl);
-      return NextResponse.redirect(redirectUrl);
+      return NextResponse.redirect(redirectUrl) as NextResponse;
     } catch (e: any) {
       console.error('[Auth0] onCallback threw:', e?.message, e?.stack);
       const safeBaseUrl = (() => {
         try { return new URL(baseUrl).origin; } catch { return 'http://localhost:3000'; }
       })();
-      return NextResponse.redirect(new URL('/', safeBaseUrl).toString());
+      return NextResponse.redirect(new URL('/', safeBaseUrl).toString()) as NextResponse;
     }
   },
 });

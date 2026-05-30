@@ -25,7 +25,7 @@ import {
  */
 export async function GET(request: NextRequest) {
   try {
-    const session = await auth0.getSession(request);
+    const session = await auth0.getSession();
     if (!session?.user) {
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
@@ -65,7 +65,7 @@ export async function GET(request: NextRequest) {
  */
 export async function POST(request: NextRequest) {
   try {
-    const session = await auth0.getSession(request);
+    const session = await auth0.getSession();
     if (!session?.user) {
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
@@ -97,7 +97,7 @@ export async function POST(request: NextRequest) {
  */
 export async function GET_STATS(request: NextRequest) {
   try {
-    const session = await auth0.getSession(request);
+    const session = await auth0.getSession();
     if (!session?.user) {
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
@@ -125,7 +125,7 @@ export async function GET_STATS(request: NextRequest) {
  */
 export async function GET_APPROVALS(request: NextRequest) {
   try {
-    const session = await auth0.getSession(request);
+    const session = await auth0.getSession();
     if (!session?.user) {
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
@@ -154,7 +154,7 @@ export async function POST_APPROVAL_RESPOND(
   { params }: { params: { id: string } }
 ) {
   try {
-    const session = await auth0.getSession(request);
+    const session = await auth0.getSession();
     if (!session?.user) {
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
@@ -182,7 +182,7 @@ export async function POST_APPROVAL_RESPOND(
  */
 export async function POST_DAG(request: NextRequest) {
   try {
-    const session = await auth0.getSession(request);
+    const session = await auth0.getSession();
     if (!session?.user) {
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
@@ -234,7 +234,7 @@ export async function POST_DAG(request: NextRequest) {
  */
 export async function GET_DASHBOARD(request: NextRequest) {
   try {
-    const session = await auth0.getSession(request);
+    const session = await auth0.getSession();
     if (!session?.user) {
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }

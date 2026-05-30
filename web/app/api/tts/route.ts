@@ -13,7 +13,7 @@ export async function POST(req: NextRequest) {
     await voiceServerManager.startKittenServer();
 
     // Authenticate user before allowing TTS generation
-    const session = await auth0.getSession(req);
+    const session = await auth0.getSession();
     if (!session?.user) {
       return NextResponse.json(
         { 

@@ -1,0 +1,240 @@
+diff --git a/packages/shared/agent/orchestration/plan-act-verify.ts b/packages/shared/agent/orchestration/plan-act-verify.ts
+index ea8034ef..d6b02a1e 100644
+--- a/packages/shared/agent/orchestration/plan-act-verify.ts
++++ b/packages/shared/agent/orchestration/plan-act-verify.ts
+@@ -198,6 +198,227 @@ function classifyToolError(
+   };
+ }
+ 
++// ─── Pre-Execution Validation ────────────────────────────────────────────────
++
++/**
++ * Map of tool names to their required fields and sensible defaults.
++ * When the LLM generates a tool call with empty/missing required fields,
++ * we either fill sensible defaults or return a structured error the model
++ * can recover from — avoiding blind "EMPTY_ARGS" / "Path is required" failures.
++ */
++const TOOL_VALIDATION_SCHEMAS: Record<
++  string,
++  { required: string[]; defaults?: Record<string, any>; help: string }
++> = {
++  writeFile: {
++    required: ['path', 'content'],
++    defaults: {},
++    help: 'writeFile requires: path (string) — file path relative to workspace, content (string) — complete file content',
++  },
++  write_file: {
++    required: ['path', 'content'],
++    defaults: {},
++    help: 'write_file requires: path (string), content (string) — complete file content',
++  },
++  'file.write': {
++    required: ['path', 'content'],
++    defaults: {},
++    help: 'file.write requires: path (string), content (string) — complete file content',
++  },
++  readFile: {
++    required: ['path'],
++    defaults: {},
++    help: 'readFile requires: path (string) — file path relative to workspace',
++  },
++  read_file: {
++    required: ['path'],
++    defaults: {},
++    help: 'read_file requires: path (string) — file path relative to workspace',
++  },
++  'file.read': {
++    required: ['path'],
++    defaults: {},
++    help: 'file.read requires: path (string) — file path relative to workspace',
++  },
++  listFiles: {
++    required: ['path'],
++    defaults: { path: '/' },
++    help: 'listFiles requires: path (string) — directory path, defaults to "/" (workspace root)',
++  },
++  list_directory: {
++    required: ['path'],
++    defaults: { path: '/' },
++    help: 'list_directory requires: path (string) — directory path, defaults to "/" (workspace root)',
++  },
++  'file.list': {
++    required: ['path'],
++    defaults: { path: '/' },
++    help: 'file.list requires: path (string) — directory path, defaults to "/"',
++  },
++  deleteFile: {
++    required: ['path'],
++    defaults: {},
++    help: 'deleteFile requires: path (string) — file path to delete',
++  },
++  delete_file: {
++    required: ['path'],
++    defaults: {},
++    help: 'delete_file requires: path (string) — file path to delete',
++  },
++  'file.delete': {
++    required: ['path'],
++    defaults: {},
++    help: 'file.delete requires: path (string) — file path to delete',
++  },
++  createDirectory: {
++    required: ['path'],
++    defaults: {},
++    help: 'createDirectory requires: path (string) — directory path to create. Use listFiles("/") to browse existing directories first.',
++  },
++  create_directory: {
++    required: ['path'],
++    defaults: {},
++    help: 'create_directory requires: path (string) — directory path to create. Use listFiles("/") to browse existing directories first.',
++  },
++  mkdir: {
++    required: ['path'],
++    defaults: {},
++    help: 'mkdir requires: path (string) — directory path to create',
++  },
++  applyDiff: {
++    required: ['path', 'diff'],
++    defaults: {},
++    help: 'applyDiff requires: path (string) — file to patch, diff (string) — unified diff content',
++  },
++  executeShell: {
++    required: ['command'],
++    defaults: {},
++    help: 'executeShell requires: command (string) — shell command to run',
++  },
++  exec_shell: {
++    required: ['command'],
++    defaults: {},
++    help: 'exec_shell requires: command (string) — shell command to run',
++  },
++  search_files: {
++    required: ['query'],
++    defaults: {},
++    help: 'search_files requires: query (string) — search pattern or text',
++  },
++  batch_write: {
++    required: ['files'],
++    defaults: {},
++    help: 'batch_write requires: files (array) — array of { path, content } objects',
++  },
++  str_replace: {
++    required: ['path', 'oldString', 'newString'],
++    defaults: {},
++    help: 'str_replace requires: path (string) — file to edit, oldString (string) — exact text to replace, newString (string) — replacement text',
++  },
++  replace_in_file: {
++    required: ['path', 'oldString', 'newString'],
++    defaults: {},
++    help: 'replace_in_file requires: path (string) — file to edit, oldString (string) — exact text to replace, newString (string) — replacement text',
++  },
++};
++
++/** Result of pre-execution argument validation */
++interface ValidationResult {
++  /** Normalized / default-filled args (only set when valid) */
++  args?: Record<string, any>;
++  /** Structured error when validation fails (so the model can recover) */
++  error?: ToolError;
++}
++
++/**
++ * Validate and normalize tool arguments before execution.
++ *
++ * - Checks required fields exist and are non-empty
++ * - Fills in sensible defaults where possible (e.g., listFiles path → "/")
++ * - Returns a structured ToolError on failure so the LLM can self-heal
++ */
++function validateAndNormalizeArgs(
++  toolName: string,
++  args: Record<string, any>,
++): ValidationResult {
++  const schema = TOOL_VALIDATION_SCHEMAS[toolName];
++
++  // Unknown tool — pass through without validation
++  if (!schema) {
++    return { args };
++  }
++
++  // Check for null/undefined args
++  if (!args || typeof args !== 'object') {
++    return {
++      error: {
++        type: 'validation',
++        message: `Tool "${toolName}" called with no arguments. ${schema.help}`,
++        suggestions: [`Re-call ${toolName} with valid arguments: ${schema.help}`],
++      },
++    };
++  }
++
++  // Normalize: apply defaults first, then overlay provided args
++  const normalized: Record<string, any> = { ...(schema.defaults || {}), ...args };
++
++  // Check each required field
++  const missing: string[] = [];
++  const empty: string[] = [];
++
++  for (const field of schema.required) {
++    if (!(field in normalized)) {
++      missing.push(field);
++    } else {
++      const val = normalized[field];
++      // Empty string, empty array, null, undefined are all considered empty
++      const isEmpty =
++        val === null ||
++        val === undefined ||
++        (typeof val === 'string' && val.trim() === '') ||
++        (Array.isArray(val) && val.length === 0);
++
++      if (isEmpty) {
++        // Auto-fill from defaults when available (e.g. empty path for listFiles → "/")
++        const defaultVal = schema.defaults?.[field];
++        if (defaultVal !== undefined) {
++          normalized[field] = defaultVal;
++        } else {
++          empty.push(field);
++        }
++      }
++    }
++  }
++
++  if (missing.length > 0) {
++    return {
++      error: {
++        type: 'validation',
++        message: `Tool "${toolName}" is missing required fields: ${missing.join(', ')}. ${schema.help}`,
++        suggestions: [
++          `Provide values for: ${missing.join(', ')}`,
++          `Re-call ${toolName} with all required arguments: ${schema.help}`,
++        ],
++      },
++    };
++  }
++
++  if (empty.length > 0) {
++    return {
++      error: {
++        type: 'validation',
++        message: `Tool "${toolName}" has empty values for required fields: ${empty.join(', ')}. ${schema.help}`,
++        suggestions: [
++          `These fields cannot be empty: ${empty.join(', ')}`,
++          `Provide meaningful values and re-call ${toolName}`,
++        ],
++      },
++    };
++  }
++
++  return { args: normalized };
++}
++
+ /** Build a concise summary for successful tool execution */
+ function buildToolSuccessSummary(toolName: string, output: Record<string, any>): string {
+   switch (toolName) {
+@@ -424,25 +645,61 @@ export class PlanActVerifyOrchestrator {
+                 redactedArgs: typeof _redactedForLog === 'string' ? _redactedForLog : JSON.stringify(_redactedForLog || {}),
+                 originStack: createOriginStack(),
+                 toolCallId: call.id || null,
+-              }).catch((err) => { log.debug?.('PlanActVerify: recordInvocationPayload failed:', err); });
+-            }).catch((err) => { log.debug?.('PlanActVerify: recordToolResultTelemetry failed:', err); });
++              }).catch((err: any) => { log.debug?.('PlanActVerify: recordInvocationPayload failed:', err); });
++            }).catch((err: any) => { log.debug?.('PlanActVerify: recordToolResultTelemetry failed:', err); });

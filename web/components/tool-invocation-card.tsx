@@ -41,8 +41,8 @@ export function ToolInvocationCard({ tool, compact = false }: ToolInvocationCard
           showProgress: true,
         };
       case 'result':
-        const result = tool.result as any;
-        if (result?.error) {
+        const result = tool.result as Record<string, unknown>;
+        if (typeof result?.error === 'string' || result?.error instanceof Error) {
           return {
             icon: <XCircle className="h-3 w-3" />,
             label: 'Failed',
@@ -64,6 +64,59 @@ export function ToolInvocationCard({ tool, compact = false }: ToolInvocationCard
   };
 
   const config = getStatusConfig();
+
+  /**
+   * Safely render result content with typeof guards for error/output fields.
+   * Prevents runtime crashes from accessing `.error` or `.output` on non-object results
+   * or rendering non-string values directly.
+   */
+  const renderResultContent = (result: unknown) => {
+    const obj = result as Record<string, unknown>;
+    const errorValue = obj?.error;
+    const outputValue = obj?.output;
+    const hasError = typeof errorValue === 'string' || errorValue instanceof Error;
+    const errorText = typeof errorValue === 'string' ? errorValue : errorValue instanceof Error ? errorValue.message : '';
+    const hasOutput = typeof outputValue === 'string';
+
+    return hasError ? (
+      <div className="mt-1 rounded border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-950/30 p-2">
+        <div className="flex items-center gap-1 text-red-700 dark:text-red-300 text-xs font-medium mb-1">
+          <AlertCircle className="h-3 w-3" />
+          Execution Error
+        </div>
+        <pre className="whitespace-pre-wrap text-xs text-red-600 dark:text-red-400 font-mono">
+          {errorText}
+        </pre>
+      </div>
+    ) : (
+      <div className="mt-1 rounded border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/30 p-2">
+        <div className="flex items-center gap-1 text-emerald-700 dark:text-emerald-300 text-xs font-medium mb-1">
+          <CheckCircle className="h-3 w-3" />
+          Execution Success
+        </div>
+        {hasOutput ? (
+          <pre className="whitespace-pre-wrap text-xs text-emerald-600 dark:text-emerald-400 font-mono">
+            {outputValue}
+          </pre>
+        ) : (
+          <pre className="whitespace-pre-wrap text-xs text-emerald-600 dark:text-emerald-400 font-mono">
+            {JSON.stringify(result, null, 2)}
+          </pre>
+        )}
+      </div>
+    );
+  };
+
+  /**
+   * Safely determine if the result contains an error, using typeof guards.
+   * Used by the header status label to show "Error" vs "Success".
+   */
+  const getResultStatusLabel = (result: unknown): string => {
+    const obj = result as Record<string, unknown>;
+    const errorValue = obj?.error;
+    return (typeof errorValue === 'string' || errorValue instanceof Error) ? 'Error' : 'Success';
+  };
+
   const isToolCall = tool.toolName === 'execute_python' || tool.toolName === 'run_code';
   const isVFSTool = tool.toolName === 'write_file' || tool.toolName === 'read_file' || tool.toolName === 'apply_diff' || tool.toolName === 'delete_file' || tool.toolName === 'batch_write';
   // For VFS tools, extract path and content/diff; for code tools, extract code
@@ -97,7 +150,7 @@ export function ToolInvocationCard({ tool, compact = false }: ToolInvocationCard
         <div className="flex items-center gap-2">
           {tool.state === 'result' && (
             <span className="text-[10px] opacity-50">
-              {(tool.result as any)?.error ? 'Error' : 'Success'}
+              {getResultStatusLabel(tool.result)}
             </span>
           )}
           {expanded ? (
@@ -153,33 +206,7 @@ export function ToolInvocationCard({ tool, compact = false }: ToolInvocationCard
               <span className="text-[10px] uppercase tracking-wider opacity-60">
                 Result
               </span>
-              {(tool.result as any).error ? (
-                <div className="mt-1 rounded border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-950/30 p-2">
-                  <div className="flex items-center gap-1 text-red-700 dark:text-red-300 text-xs font-medium mb-1">
-                    <AlertCircle className="h-3 w-3" />
-                    Execution Error
-                  </div>
-                  <pre className="whitespace-pre-wrap text-xs text-red-600 dark:text-red-400 font-mono">
-                    {(tool.result as any).error}
-                  </pre>
-                </div>
-              ) : (
-                <div className="mt-1 rounded border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/30 p-2">
-                  <div className="flex items-center gap-1 text-emerald-700 dark:text-emerald-300 text-xs font-medium mb-1">
-                    <CheckCircle className="h-3 w-3" />
-                    Execution Success
-                  </div>
-                  {(tool.result as any).output ? (
-                    <pre className="whitespace-pre-wrap text-xs text-emerald-600 dark:text-emerald-400 font-mono">
-                      {(tool.result as any).output}
-                    </pre>
-                  ) : (
-                    <pre className="whitespace-pre-wrap text-xs text-emerald-600 dark:text-emerald-400 font-mono">
-                      {JSON.stringify(tool.result, null, 2)}
-                    </pre>
-                  )}
-                </div>
-              )}
+              {renderResultContent(tool.result)}
             </div>
           )}
         </div>

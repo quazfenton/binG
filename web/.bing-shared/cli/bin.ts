@@ -4620,7 +4620,7 @@ try { const mod = await import('../../web/lib/agent-bins/find-codex-binary'); fi
         if (options.model) args.push('--model', options.model);
 
         const { promisify } = await import('util');
-        const execAsync = promisify(require('child_process').exec);
+        const execAsync = promisify((await import('child_process')).exec);
 
         result = (await execAsync(`"${binaryPath}" ${args.join(' ')}`)).stdout;
       } else {
@@ -4634,7 +4634,7 @@ try { const mod = await import('../../web/lib/agent-bins/find-codex-binary'); fi
         }
 
         const { promisify } = await import('util');
-        const execAsync = promisify(require('child_process').exec);
+        const execAsync = promisify((await import('child_process')).exec);
         const args = [prompt];
         if (options.model) args.unshift('--model', options.model);
 

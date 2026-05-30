@@ -54,17 +54,7 @@ export async function setBackendUrl(env: Env, url: string): Promise<{ kvSuccess:
  * Tries KV first, then R2, then env var.
  */
 export async function getBackendUrl(env: Env): Promise<string> {
-  // 1. Deploy-time env var — takes priority when explicitly set.
-  //    This is the emergency escape hatch: when KV quota is exhausted
-  //    and the tunnel URL has changed, redeploy with BACKEND_URL set.
-  //    When KV is healthy again, set BACKEND_URL="" and redeploy to
-  //    re-enable runtime rotation via the admin endpoint.
-  const envUrl = stripTrailingSlash(env.BACKEND_URL);
-  if (envUrl && isValidHttpUrl(envUrl)) {
-    return envUrl;
-  }
-
-  // 2. Try KV (runtime override via admin endpoint)
+  // 1. Try KV (runtime override via admin endpoint) — primary source
   try {
     const kvValue = await env.BING_KV.get(RUNTIME_BACKEND_KEY);
     if (kvValue && isValidHttpUrl(kvValue)) {
@@ -74,7 +64,7 @@ export async function getBackendUrl(env: Env): Promise<string> {
     console.warn('[url-store] KV get failed, trying R2 fallback:', err instanceof Error ? err.message : String(err));
   }
 
-  // 3. Try R2 fallback (only if R2 binding is configured)
+  // 2. Try R2 fallback (only if R2 binding is configured)
   if (env.BING_STORAGE) {
     try {
       const r2Object = await env.BING_STORAGE.get(R2_BACKEND_KEY);
@@ -94,6 +84,14 @@ export async function getBackendUrl(env: Env): Promise<string> {
     } catch (err) {
       console.warn('[url-store] R2 get failed:', err instanceof Error ? err.message : String(err));
     }
+  }
+
+  // 3. Deploy-time env var — emergency escape hatch.
+  //    Only used when KV and R2 are both unavailable.
+  //    Set BACKEND_URL="" to re-enable runtime rotation.
+  const envUrl = stripTrailingSlash(env.BACKEND_URL);
+  if (envUrl && isValidHttpUrl(envUrl)) {
+    return envUrl;
   }
 
   // 4. Nothing configured
