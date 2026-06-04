@@ -115,7 +115,7 @@ export async function POST(req: NextRequest) {
       const banAge = Date.now() - INVALID_PATH_BAN.get(correctedPath)!;
       if (banAge < BAN_DURATION_MS) {
         console.debug('[VFS Read] Blocked banned path:', correctedPath);
-        return NextResponse.json(
+        const errorResponse = NextResponse.json(
           {
             success: false,
             error: 'Path temporarily blocked due to previous invalid format',
@@ -123,6 +123,7 @@ export async function POST(req: NextRequest) {
           },
           { status: 429, headers: { 'Retry-After': Math.ceil((BAN_DURATION_MS - banAge) / 1000).toString() } },
         );
+        return withAnonSessionCookie(errorResponse, authResolution);
       } else {
         INVALID_PATH_BAN.delete(correctedPath);
       }
@@ -140,7 +141,7 @@ export async function POST(req: NextRequest) {
     if (looksLikeCssValueSegment(lastSegment)) {  // CSS values like "0.3s"
       console.warn('[VFS Read] Rejected CSS value path:', correctedPath);
       INVALID_PATH_BAN.set(correctedPath, Date.now());
-      return NextResponse.json(
+      const errorResponse = NextResponse.json(
         {
           success: false,
           error: 'Invalid path format',
@@ -148,12 +149,13 @@ export async function POST(req: NextRequest) {
         },
         { status: 400 },
       );
+      return withAnonSessionCookie(errorResponse, authResolution);
     }
 
     if (/^\$/.test(lastSegment)) {  // SCSS variables
       console.warn('[VFS Read] Rejected SCSS variable path:', correctedPath);
       INVALID_PATH_BAN.set(correctedPath, Date.now());
-      return NextResponse.json(
+      const errorResponse = NextResponse.json(
         {
           success: false,
           error: 'Invalid path format',
@@ -161,6 +163,7 @@ export async function POST(req: NextRequest) {
         },
         { status: 400 },
       );
+      return withAnonSessionCookie(errorResponse, authResolution);
     }
 
     // CRITICAL FIX: Validate path to reject clearly invalid paths

@@ -215,6 +215,33 @@ const PROVIDER_DEFAULT_MODELS: Record<string, string> = {
   lepton: 'llama3-70b',
 };
 
+/**
+ * Exact-name sets from the capability map (createCapabilityToolExecutor)
+ * to avoid false positives from substring matching (e.g. 'read' in 'thread.read').
+ * These are used by the auto-continuation loop in runV1ApiWithTools.
+ */
+const WRITE_TOOL_NAMES = new Set([
+  'write_file', 'edit_file', 'apply_diff', 'applydiff',
+  'delete_file', 'batch_write', 'write_files',
+  'batchwrite', 'writefiles', 'create_directory', 'mkdir',
+  'str_replace', 'replace_in_file',
+  'execute_bash', 'execute_command', 'execute', 'bash',
+  'shell', 'terminal', 'run',
+  'sandbox_execute', 'sandbox_shell', 'sandbox_session',
+  'mcp_tool', 'mcp_execute',
+  // Canonical capability-style names
+  'file.write', 'file.delete', 'file.batch_write', 'file.create_directory',
+]);
+
+const READ_ONLY_TOOL_NAMES = new Set([
+  'read_file', 'list_directory', 'list_dir', 'ls',
+  'search_files', 'grep', 'glob', 'find',
+  'search_code', 'grep_code',
+  'web_search', 'web_fetch',
+  // Canonical capability-style names
+  'file.read', 'file.list', 'file.search',
+]);
+
 export interface UnifiedAgentConfig {
   // Core
   userMessage: string;
@@ -2122,6 +2149,17 @@ async function runV1ApiWithTools(
       ]),
     );
 
+    // Add built-in choose_role tool — enables dynamic role redirection.
+    // Uses dynamic import to avoid circular dependency with vercel-ai-tools.
+    if (!aiSdkTools['choose_role']) {
+      try {
+        const { chooseRoleCapability } = await import('@/lib/chat/tools/choose-role-tool');
+        aiSdkTools['choose_role'] = chooseRoleCapability;
+      } catch {
+        // chooseRoleCapability unavailable — role redirection won't be exposed
+      }
+    }
+
     const llmMessages: any[] = [];
 
     // RAG Knowledge Retrieval — inject relevant knowledge into system prompt
@@ -2269,6 +2307,113 @@ async function runV1ApiWithTools(
       // Empty-completion guard: if no response and no tool invocations, throw to trigger fallback
       if (!response.trim() && toolInvocations.length === 0) {
         throw new Error(`Empty completion from ${providerName}/${modelForProvider} — no text and no tool calls`);
+      }
+
+      // AUTO-CONTINUATION: When the model used read-only tools (read, search, list, glob)
+      // but stopped without writing, editing, or creating files, it likely investigated the
+      // codebase and then stopped prematurely. Re-prompt up to 2 times to continue work.
+      // Check for [ROLE_SELECT] marker — if present, client-side auto-continue
+      // via stepReprompt already handles it. Don't double-trigger.
+      const hasRoleSelectMarker = response.includes('[ROLE_SELECT]') || response.includes('[ROUTING_METADATA]');
+
+      const MAX_CONTINUATIONS = 2;
+      let continuationCount = 0;
+
+      while (
+        continuationCount < MAX_CONTINUATIONS &&
+        toolInvocations.length > 0 &&
+        response.trim() &&
+        !hasRoleSelectMarker
+      ) {
+        // Check the last few tool calls to determine if the model read without writing
+        const recentTools = toolInvocations.slice(-3);
+        // Use module-level WRITE_TOOL_NAMES and READ_ONLY_TOOL_NAMES Sets
+        const hasWriteTool = recentTools.some(t => {
+          const name = t.toolName?.toLowerCase() || '';
+          // Exact match first, then suffix-based for future capability-style tools
+          return WRITE_TOOL_NAMES.has(name) ||
+                 name.endsWith('.write') || name.endsWith('.create') ||
+                 name.endsWith('.delete') || name.endsWith('.edit');
+        });
+        const hasReadOnlyTool = recentTools.some(t => {
+          const name = t.toolName?.toLowerCase() || '';
+          return READ_ONLY_TOOL_NAMES.has(name) ||
+                 name.endsWith('.read') || name.endsWith('.list') ||
+                 name.endsWith('.search');
+        });
+
+        // Don't continue if: the model already wrote files, or didn't read anything
+        if (hasWriteTool) break;
+        if (!hasReadOnlyTool) break;
+
+        continuationCount++;
+        log.info('[V1-API-WITH-TOOLS] Auto-continuation triggered', {
+          continuationCount,
+          maxContinuations: MAX_CONTINUATIONS,
+          toolCount: toolInvocations.length,
+          responseLength: response.length,
+          lastTools: recentTools.map(t => t.toolName),
+        });
+
+        // Build continuation with the full conversation context so the model
+        // can see what it already read and act on that information.
+        const contMessages = [
+          ...llmMessages,
+          { role: 'assistant', content: response },
+          { role: 'user', content: 'Based on the information you have gathered, continue working on the original task. Take the necessary actions using the available tools.' },
+        ];
+
+        try {
+          const { streamWithVercelAI: streamAI } = await import('../chat/vercel-ai-streaming');
+          let contContent = '';
+          const toolsBeforeContinuation = toolInvocations.length;
+
+          for await (const chunk of streamAI({
+            provider: providerName,
+            model: modelForProvider,
+            messages: contMessages as any,
+            temperature: config.temperature || 0.7,
+            maxTokens: config.maxTokens || 65536,
+            maxSteps: config.maxSteps || 15,
+            tools: aiSdkTools,
+            toolCallStreaming: true,
+          })) {
+            if (chunk.content) {
+              contContent += chunk.content;
+              config.onStreamChunk?.(chunk.content);
+            }
+            if (chunk.toolInvocations) {
+              for (const inv of chunk.toolInvocations) {
+                if (inv.state !== 'result') continue;
+                toolInvocations.push({
+                  toolCallId: inv.toolCallId,
+                  toolName: inv.toolName,
+                  args: (inv.args as Record<string, any>) || {},
+                  result: inv.result ?? { success: false, error: 'Tool result was undefined' },
+                });
+              }
+            }
+          }
+
+          // If continuation produced no new content, the model has nothing more to say
+          if (!contContent?.trim()) {
+            log.info('[V1-API-WITH-TOOLS] Auto-continuation produced empty content — model done');
+            break;
+          }
+          response += '\n\n' + contContent;
+
+          // If continuation didn't produce new tool calls, the model is done (text-only)
+          if (toolInvocations.length <= toolsBeforeContinuation) {
+            log.info('[V1-API-WITH-TOOLS] Auto-continuation produced no new tool calls — model finished');
+            break;
+          }
+
+        } catch (contErr: any) {
+          log.warn('[V1-API-WITH-TOOLS] Auto-continuation failed, returning partial results', {
+            error: contErr.message,
+          });
+          break;
+        }
       }
 
       const duration = Date.now() - startTime;

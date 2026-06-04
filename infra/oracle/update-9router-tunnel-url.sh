@@ -33,8 +33,9 @@ if ! [[ "$TUNNEL_URL" =~ ^https://[a-zA-Z0-9._-]+\.trycloudflare\.com$ ]]; then
 fi
 
 # Access 9Router's SQLite database inside the container
-CONTAINER_NAME="bing-ninerouter-1"
-DB_PATH="/root/.9router/9router.db"
+# These can be overridden via environment variables for different deployments
+CONTAINER_NAME="${NINEROUTER_CONTAINER:-bing-ninerouter-1}"
+DB_PATH="${NINEROUTER_DB_PATH:-/root/.9router/9router.db}"
 
 echo "Updating 9Router configuration in container: $CONTAINER_NAME"
 

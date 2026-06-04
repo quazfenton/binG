@@ -551,13 +551,18 @@ function convertMessages(messages: LLMMessage[]): {
     }
     const textContent = textParts.join(' ');
 
-    const entry: any = {
-      role: msg.role === 'assistant' ? 'assistant' : 'user',
-      content: textContent,
-    };
-    // Use tool_calls from separate property OR extracted from content array
     const hasSeparateToolCalls = Array.isArray((msg as any).tool_calls) && (msg as any).tool_calls.length > 0;
     const hasContentToolCalls = toolCallsFromContent.length > 0;
+
+    // AI SDK v6 requires assistant content to be non-empty string or array of parts.
+    // When only tool-call parts exist with no text, use [] instead of ''.
+    const hasOnlyToolCalls = msg.role === 'assistant' && !textContent && (hasSeparateToolCalls || hasContentToolCalls);
+
+    const entry: any = {
+      role: msg.role === 'assistant' ? 'assistant' : 'user',
+      content: hasOnlyToolCalls ? [] : textContent,
+    };
+    // Use tool_calls from separate property OR extracted from content array
     if (msg.role === 'assistant' && hasSeparateToolCalls) {
       entry.tool_calls = (msg as any).tool_calls;
     } else if (msg.role === 'assistant' && hasContentToolCalls) {

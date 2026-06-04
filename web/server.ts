@@ -178,13 +178,14 @@ app.prepare().then(startup).then(() => {
       
       try {
         const { verifyToken } = await import('@/lib/security/jwt-auth');
-        const payload = verifyToken(token);
-        if (!payload) {
+        const verification = await verifyToken(token);
+        if (!verification.valid || !verification.payload) {
           logger.warn('[VNCProxy] Invalid token');
           socket.destroy();
           return;
         }
-        logger.info('[VNCProxy] Authenticated VNC proxy connection', { user: (payload as any).userId || (payload as any).sub });
+        const payload = verification.payload;
+        logger.info('[VNCProxy] Authenticated VNC proxy connection', { user: payload.userId || payload.sub });
       } catch (authErr: any) {
         logger.warn('[VNCProxy] Token validation failed', authErr);
         socket.destroy();
@@ -411,8 +412,14 @@ app.prepare().then(startup).then(() => {
     if (token) {
       try {
         const { verifyToken } = await import('@/lib/security/jwt-auth');
-        const payload = verifyToken(token);
-        userId = (payload as any).userId || (payload as any).sub;
+        const verification = await verifyToken(token);
+        if (!verification.valid || !verification.payload) {
+          console.warn('[WebSocket] Invalid token');
+          ws.close(4001, 'Invalid token');
+          return;
+        }
+        const payload = verification.payload;
+        userId = payload.userId || payload.sub;
         
         if (!userId) {
           console.warn('[WebSocket] Invalid token: missing user ID');

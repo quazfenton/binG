@@ -1,0 +1,72 @@
+name: AI Automated Code Review (Free Runner)
+
+on:
+  push:
+    branches:
+      - '**' # Triggers on every branch push
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  ai-review:
+    runs-on: ubuntu-latest # Uses the standard, free GitHub-hosted runner
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Fetches full history so git diff can compare commits
+
+      - name: Cache Ollama Models
+        id: cache-ollama
+        uses: actions/cache@v4
+        with:
+          path: ~/.ollama
+          key: ${{ runner.os }}-ollama-qwen2.5-coder-1.5b
+          restore-keys: |
+            ${{ runner.os }}-ollama-
+
+      - name: Install Ollama
+        run: |
+          curl -fsSL https://ollama.com | sh
+
+      - name: Start Ollama and Pull Model
+        run: |
+          ollama serve > ollama.log 2>&1 &
+          echo "Waiting for Ollama server to initialize..."
+          TIMEOUT=60
+          while [ $TIMEOUT -gt 0 ]; do
+            if curl -s http://localhost:11434/api/tags > /dev/null; then
+              echo "Ollama server is up!"
+              break
+            fi
+            sleep 2
+            TIMEOUT=$((TIMEOUT-2))
+          done
+          if [ $TIMEOUT -le 0 ]; then
+            echo "Error: Ollama server failed to start within 60 seconds."
+            cat ollama.log
+            exit 1
+          fi
+          
+          echo "Pulling qwen2.5-coder:1.5b..."
+          ollama pull qwen2.5-coder:1.5b
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Review Script Dependencies
+        run: pip install requests
+
+      - name: Execute CodeRabbit-style AI Review
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SHA: ${{ github.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
+        run: python .github/scripts/diffExt+aiAnal+routing+noise.py

@@ -29,7 +29,10 @@ function base64urlEncode(str: string): string {
   let utf8: string;
   try {
     const bytes = new TextEncoder().encode(str);
-    utf8 = String.fromCharCode(...bytes);
+    // Use Array.from + join instead of spread (...) to avoid JavaScript engine
+    // argument length limits (typically 65536). Storage keys are usually short,
+    // but this defensive pattern prevents silent failures on edge cases.
+    utf8 = Array.from(bytes).map(b => String.fromCharCode(b)).join('');
   } catch {
     // Fallback for environments without TextEncoder
     utf8 = encodeURIComponent(str).replace(/%([0-9A-F]{2})/g, (_, p1) => {

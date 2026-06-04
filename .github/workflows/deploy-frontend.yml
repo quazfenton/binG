@@ -19,8 +19,19 @@ jobs:
       - name: Install Vercel CLI
         run: npm install -g vercel
 
+      - name: Compute Vercel deploy args
+        id: vercel-args
+        run: |
+          if [ -n "${{ vars.VERCEL_PROJECT_ID }}" ]; then
+            echo "deploy_args=--project=${{ vars.VERCEL_PROJECT_ID }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy_args=" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Deploy to Vercel
-        run: vercel deploy --prod --token=${{ secrets.VERCEL_TOKEN }} ${{ vars.VERCEL_PROJECT_ID && format('--scope={0}', vars.VERCEL_PROJECT_ID) || '' }}
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: vercel deploy --prod --token=$VERCEL_TOKEN ${{ steps.vercel-args.outputs.deploy_args }}
         working-directory: ./web
       # Note: Consider adding a project link (vercel.json `orgId`/`projectId`)
       # or setting VERCEL_PROJECT_ID / VERCEL_ORG_ID as repository variables.

@@ -1261,7 +1261,7 @@ export const PROVIDERS: Record<string, LLMProvider> = {
   ninerouter: {
     id: 'ninerouter',
     name: '9Router',
-    subProviders: ['gemini', 'ag', 'gc', 'gh', 'kc', 'kr', 'oc', 'openrouter', 'nvidia', 'ollama', 'cf', 'mistral'],
+    subProviders: ['gemini', 'ag', 'gc', 'gh', 'kc', 'kr', 'oc', 'openrouter', 'nvidia', 'ollama', 'cf', 'mistral', 'cx', 'qd'],
     models: [
       // Gemini API models
       'gemini/gemini-3.1-flash-lite-preview',
@@ -1277,6 +1277,9 @@ export const PROVIDERS: Record<string, LLMProvider> = {
       'ag/gemini-3.1-pro-high',
       'ag/gemini-3.1-pro-low',
       'ag/gemini-3-flash',
+      'ag/gemini-3.5-flash-low',
+      'ag/gemini-3.5-flash-extra-low',
+      'ag/gemini-3-flash-agent',
       'ag/claude-sonnet-4-6',
       'ag/claude-opus-4-6-thinking',
       'ag/gpt-oss-120b-medium',
@@ -1392,6 +1395,102 @@ export const PROVIDERS: Record<string, LLMProvider> = {
       'mistral/mistral-large-latest',
       'mistral/codestral',
       'mistral/mistral-small',
+      'mistral/codestral-latest',
+      'mistral/mistral-medium-latest',
+      // NVIDIA NIM models
+      'nvidia/minimaxai/minimax-m2.7',
+      // Ollama Cloud models
+      'ollama/glm-4.7-flash',
+      // Opencode Free models
+      'oc/minimax-m3-free',
+      'oc/big-pickle',
+      'oc/nemotron-3-ultra-free',
+      // Kilo Code OAuth models
+      'kc/qwen/qwen3.7-plus:free',
+      'kc/nvidia/nemotron-3-ultra-550b-a55b:free',
+      // OpenRouter models
+      'openrouter/moonshotai/kimi-k2.6:free',
+      // Codex models
+      'cx/gpt-5.5',
+      'cx/gpt-5.4',
+      'cx/gpt-5.5-review',
+      'cx/gpt-5.4-review',
+      'cx/gpt-5.4-mini-review',
+      'cx/gpt-5.4-mini',
+      'cx/gpt-5.3-codex',
+      'cx/gpt-5.3-codex-review',
+      'cx/gpt-5.3-codex-xhigh',
+      'cx/gpt-5.3-codex-xhigh-review',
+      'cx/gpt-5.3-codex-high',
+      'cx/gpt-5.3-codex-low',
+      'cx/gpt-5.3-codex-low-review',
+      'cx/gpt-5.3-codex-none',
+      'cx/gpt-5.3-codex-spark',
+      'cx/gpt-5.3-codex-spark-review',
+      // Qoder models
+      'qd/auto',
+      'qd/ultimate',
+      'qd/performance',
+      'qd/lite',
+      'qd/dmodel',
+      'qd/gm51model',
+      'qd/mmodel',
+      'qd/efficient',
+      'qd/qmodel',
+      'qd/dfmodel',
+      'qd/kmodel',
+      // Vercel-backed models — NOTE: the 'vercel/' prefix is what 9router says but
+      // may cause API failure. If these return 404/route errors, try without the prefix.
+      'vercel/openai/gpt-5-nano',
+      'vercel/deepseek/deepseek-v3.2-thinking',
+      'vercel/deepseek/deepseek-v4-flash',
+      'vercel/xiaomi/mimo-v2.5',
+      'vercel/meta/llama-3.1-8b',
+      'vercel/alibaba/qwen-3-14b',
+      'vercel/minimax/minimax-m2.7-highspeed',
+      'vercel/minimax/minimax-m2.7',
+      'vercel/minimax/minimax-m3',
+    ],
+    modelConfigs: [
+      // Codex models
+      { id: 'cx/gpt-5.5', tags: ['reasoning', 'tool-use', 'file-input', 'implicit-caching', 'web-search'] },
+      { id: 'cx/gpt-5.4', tags: ['reasoning', 'tool-use', 'file-input', 'implicit-caching', 'web-search'] },
+      { id: 'cx/gpt-5.5-review', tags: ['reasoning', 'tool-use', 'file-input'] },
+      { id: 'cx/gpt-5.4-review', tags: ['reasoning', 'tool-use', 'file-input'] },
+      { id: 'cx/gpt-5.4-mini-review', tags: ['reasoning', 'tool-use'] },
+      { id: 'cx/gpt-5.4-mini', tags: ['reasoning', 'tool-use', 'file-input', 'implicit-caching'] },
+      { id: 'cx/gpt-5.3-codex', tags: ['reasoning', 'tool-use', 'file-input'] },
+      { id: 'cx/gpt-5.3-codex-review', tags: ['reasoning', 'tool-use'] },
+      { id: 'cx/gpt-5.3-codex-xhigh', tags: ['reasoning', 'tool-use', 'file-input'] },
+      { id: 'cx/gpt-5.3-codex-xhigh-review', tags: ['reasoning', 'tool-use'] },
+      { id: 'cx/gpt-5.3-codex-high', tags: ['reasoning', 'tool-use', 'file-input'] },
+      { id: 'cx/gpt-5.3-codex-low', tags: ['reasoning', 'tool-use', 'file-input'] },
+      { id: 'cx/gpt-5.3-codex-low-review', tags: ['reasoning', 'tool-use'] },
+      { id: 'cx/gpt-5.3-codex-none', tags: ['tool-use'] },
+      { id: 'cx/gpt-5.3-codex-spark', tags: ['reasoning', 'tool-use'] },
+      { id: 'cx/gpt-5.3-codex-spark-review', tags: ['reasoning', 'tool-use'] },
+      // Qoder models
+      { id: 'qd/auto', tags: ['reasoning', 'tool-use', 'implicit-caching'] },
+      { id: 'qd/ultimate', tags: ['reasoning', 'tool-use', 'file-input', 'implicit-caching'] },
+      { id: 'qd/performance', tags: ['reasoning', 'tool-use', 'implicit-caching'] },
+      { id: 'qd/lite', tags: ['tool-use'] },
+      { id: 'qd/dmodel', tags: ['reasoning', 'tool-use', 'implicit-caching'] },
+      { id: 'qd/gm51model', tags: ['reasoning', 'tool-use'] },
+      { id: 'qd/mmodel', tags: ['reasoning', 'tool-use', 'implicit-caching'] },
+      { id: 'qd/efficient', tags: ['reasoning', 'tool-use'] },
+      { id: 'qd/qmodel', tags: ['reasoning', 'tool-use', 'implicit-caching'] },
+      { id: 'qd/dfmodel', tags: ['reasoning', 'tool-use', 'implicit-caching'] },
+      { id: 'qd/kmodel', tags: ['reasoning', 'tool-use', 'implicit-caching'] },
+      // Antigravity OAuth models
+      { id: 'ag/gemini-3.1-pro-high', tags: ['reasoning', 'tool-use', 'vision', 'file-input', 'implicit-caching', 'web-search'] },
+      { id: 'ag/gemini-3.1-pro-low', tags: ['reasoning', 'tool-use', 'vision', 'file-input', 'implicit-caching'] },
+      { id: 'ag/gemini-3-flash', tags: ['reasoning', 'tool-use', 'vision', 'file-input'] },
+      { id: 'ag/gemini-3.5-flash-low', tags: ['reasoning', 'tool-use', 'vision', 'file-input'] },
+      { id: 'ag/gemini-3.5-flash-extra-low', tags: ['reasoning', 'tool-use', 'vision', 'file-input'] },
+      { id: 'ag/gemini-3-flash-agent', tags: ['reasoning', 'tool-use', 'vision', 'file-input', 'agent'] },
+      { id: 'ag/claude-sonnet-4-6', tags: ['reasoning', 'tool-use', 'vision', 'file-input', 'implicit-caching', 'web-search'] },
+      { id: 'ag/claude-opus-4-6-thinking', tags: ['reasoning', 'tool-use', 'vision', 'file-input', 'explicit-caching', 'web-search'] },
+      { id: 'ag/gpt-oss-120b-medium', tags: ['reasoning', 'tool-use', 'implicit-caching'] },
     ],
     supportsStreaming: true,
     maxTokens: 128000,
@@ -3731,6 +3830,10 @@ class LLMService {
     maxTokens: number
   ): AsyncGenerator<StreamingResponse> {
     const apiKey = this.getApiKey('ninerouter');
+
+    if (!apiKey) {
+      throw new Error('9Router API key not configured. Please set NINEROUTER_API_KEY or QUAZ_API_KEY in your environment variables.');
+    }
     if (!this.ninerouter) {
       const { default: OpenAI } = await import('openai');
       this.ninerouter = new OpenAI({ 

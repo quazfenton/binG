@@ -103,11 +103,21 @@ export default function VNCConnectionTab({ onConnectionChange }: VNCConnectionTa
     onConnectionChange?.(isConnected)
   }, [isConnected, onConnectionChange])
 
+  // Track latest e2bDesktopId via ref for unmount cleanup (avoids stale closure)
+  const e2bDesktopIdRef = useRef<string>('');
+  useEffect(() => {
+    e2bDesktopIdRef.current = e2bDesktopId;
+  }, [e2bDesktopId]);
+
   // Cleanup RFB on unmount
   useEffect(() => {
     return () => {
       disconnectRfb()
-      disconnectE2B()
+      // Use ref to avoid stale closure over e2bDesktopId state
+      const id = e2bDesktopIdRef.current;
+      if (id) {
+        fetch(`/api/desktop/${id}`, { method: 'DELETE' }).catch(() => {});
+      }
     }
   }, [])
 
@@ -234,7 +244,7 @@ export default function VNCConnectionTab({ onConnectionChange }: VNCConnectionTa
       setIsConnecting(false)
       toast.error('VNC connection failed', { description: err.message })
     }
-  }, [activeConnection, scaleViewport, viewOnly])
+  }, [activeConnection, newConnection, scaleViewport, viewOnly])
 
   const handleConnect = useCallback(async () => {
     if (!activeConnection) return
@@ -243,14 +253,18 @@ export default function VNCConnectionTab({ onConnectionChange }: VNCConnectionTa
       disconnectRfb()
       setIsConnected(false)
     }
-    if (activeConnection.protocol === 'e2b') {
+    // Use newConnection.protocol (the editable form state) instead of
+    // activeConnection.protocol so that protocol edits made in the form
+    // are reflected at connect time without requiring a save first.
+    const protocol = newConnection.protocol || activeConnection.protocol;
+    if (protocol === 'e2b') {
       await connectE2B()
-    } else if (activeConnection.protocol === 'vnc') {
+    } else if (protocol === 'vnc') {
       await connectVNC()
     } else {
-      toast.info(`${activeConnection.protocol.toUpperCase()} connections are not yet implemented`)
+      toast.info(`${protocol.toUpperCase()} connections are not yet implemented`)
     }
-  }, [activeConnection, isConnected, connectE2B, connectVNC])
+  }, [activeConnection, newConnection, isConnected, connectE2B, connectVNC])
 
   const handleDisconnect = useCallback(async () => {
     disconnectRfb()

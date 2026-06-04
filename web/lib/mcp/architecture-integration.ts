@@ -1437,9 +1437,12 @@ export async function callMCPToolFromAI_SDK(
       // 1. Server-side: passed via callMCPToolFromAI_SDK's recentFailures param (like retryContext.failedToolCalls from chat route)
       // 2. LLM-side: passed via tool call args (e.g., the LLM observed failures and passes them explicitly)
       // When both are provided, merge them so the debugger bias fires on combined count.
+      const llmRecentFailures = Array.isArray(args?.recentFailures)
+        ? args.recentFailures
+        : [];
       const mergedFailures = [
         ...(recentFailures || []),
-        ...(args?.recentFailures || []),
+        ...llmRecentFailures,
       ];
       const result = normalizeAndValidateRole(args?.role || '', args?.reason || '', {
         recentFailures: mergedFailures,

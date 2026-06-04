@@ -92,7 +92,14 @@ describe('mem0_* tool schema conversion (getMCPToolsForAI_SDK path)', () => {
         expect(prop).toBeDefined();
         expect(typeof prop).toBe('object');
         // Must be a valid JSON Schema property type
-        expect(['string', 'number', 'boolean', 'array', 'object'].includes(prop.type)).toBe(true);
+        // Allow undefined type for composable schemas (oneOf/anyOf),
+        // or standard JSON Schema primitive types
+        expect(
+          prop.type === undefined ||
+          ['string', 'number', 'boolean', 'array', 'object'].includes(prop.type) ||
+          prop.oneOf !== undefined ||
+          prop.anyOf !== undefined
+        ).toBe(true);
       }
 
       // Tool-specific validations

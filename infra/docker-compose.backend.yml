@@ -83,9 +83,9 @@ services:
     networks:
       - bing-network
     healthcheck:
-      # Use wget since the runtime image does not include curl.
-      # wget returns non-zero on failure; -q for quiet, -O /dev/null to discard output.
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:3001/health"]
+      # Use node's built-in http module since node:20-slim does not include wget or curl.
+      # Returns exit code 0 on success, 1 on failure.
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3001/health', r => { process.exit(r.statusCode === 200 ? 0 : 1) }).on('error', () => process.exit(1))"]
       interval: 30s
       timeout: 10s
       retries: 3

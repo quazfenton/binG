@@ -141,7 +141,9 @@ export async function correctSessionPath(ownerId: string, filePath: string): Pro
   const sessionsMatch = normalizedPath.match(/^sessions\/([^/]+)\/(.+)$/);
   if (!sessionsMatch) {
     // If it's not a session-scoped path, we cannot correct it.
-    return filePath;
+    // Return as { path: filePath } per the typed contract;
+    // callers destructure { path } from the result.
+    return { path: filePath };
   }
 
   const requestedSessionId = sessionsMatch[1];

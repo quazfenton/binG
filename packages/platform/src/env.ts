@@ -83,17 +83,17 @@ export function getDefaultWorkspaceRoot(): string | null {
     }
   }
 
-  // Priority 2: Web mode (both client and server) - don't use process.cwd()
+  // Priority 2: Web mode (browser only) - don't use process.cwd()
   // as it incorrectly picks up the server's working directory (where pnpm dev
   // was run). Instead use 'workspace/sessions' as the base - user separation
   // is handled by VFS via userID/compositeID.
-  // On the server, isDesktopMode() is false unless DESKTOP_MODE is explicitly set,
-  // so this check covers both SSR rendering and API route execution in web mode.
+  // This check uses a narrow browser-only condition to avoid accidentally
+  // blocking the CLI/standalone fallback below, which relies on process.cwd().
   const isInBrowser = typeof window !== 'undefined';
-  const isWebMode = isInBrowser
-    ? !isDesktopMode() && !isTauriRuntime()
-    : !isDesktopMode(); // Server-side web: DESKTOP_MODE env var not set
-  if (isWebMode) {
+  // Only treat as web mode when we have a browser window AND are NOT in a
+  // desktop shell AND are NOT in a Tauri runtime. Server-side code (no window)
+  // falls through to the CLI/standalone path below.
+  if (isInBrowser && !isDesktopMode() && !isTauriRuntime()) {
     return 'workspace/sessions';
   }
 

@@ -116,17 +116,18 @@ function nextPathToHono(relFromApi: string): string {
 async function hasSubdirs(dir: string): Promise<boolean> {
   try {
     const entries = await fs.readdir(dir, { withFileTypes: true });
-    return entries.some((e) => {
+    for (const e of entries) {
       if (e.isDirectory()) return true;
       if (e.isSymbolicLink()) {
         try {
-          return fs.stat(path.join(dir, e.name)).then((st) => st.isDirectory()).catch(() => false);
+          const st = await fs.stat(path.join(dir, e.name));
+          if (st.isDirectory()) return true;
         } catch {
-          return false;
+          // broken symlink — treat as non-directory
         }
       }
-      return false;
-    });
+    }
+    return false;
   } catch {
     return false;
   }
@@ -211,11 +212,39 @@ export async function mountNextApiRoutes(
           const parseCookies = (): Map<string, string> => {
             const cookieHeader = raw.headers.get("cookie") || "";
             const cookies = new Map<string, string>();
-            for (const pair of cookieHeader.split(";")) {
-              const trimmed = pair.trim();
-              const eq = trimmed.indexOf("=");
-              if (eq > 0) {
-                cookies.set(trimmed.slice(0, eq).trim(), decodeURIComponent(trimmed.slice(eq + 1)));
+            // Handle quoted cookie values that may contain semicolons (RFC 6265)
+            let i = 0;
+            while (i < cookieHeader.length) {
+              while (i < cookieHeader.length && cookieHeader[i] === ' ') i++;
+              if (i >= cookieHeader.length) break;
+              const eqIdx = cookieHeader.indexOf('=', i);
+              if (eqIdx < 0 || eqIdx === i) break;
+              const name = cookieHeader.slice(i, eqIdx).trim();
+              i = eqIdx + 1;
+              let value: string;
+              if (i < cookieHeader.length && cookieHeader[i] === '"') {
+                const closeQuote = cookieHeader.indexOf('"', i + 1);
+                if (closeQuote < 0) {
+                  value = cookieHeader.slice(i + 1);
+                  i = cookieHeader.length;
+                } else {
+                  value = cookieHeader.slice(i + 1, closeQuote);
+                  i = closeQuote + 1;
+                }
+              } else {
+                const semiIdx = cookieHeader.indexOf(';', i);
+                if (semiIdx < 0) {
+                  value = cookieHeader.slice(i);
+                  i = cookieHeader.length;
+                } else {
+                  value = cookieHeader.slice(i, semiIdx);
+                  i = semiIdx + 1;
+                }
+              }
+              try {
+                cookies.set(name, decodeURIComponent(value.trim()));
+              } catch {
+                cookies.set(name, value.trim());
               }
             }
             return cookies;

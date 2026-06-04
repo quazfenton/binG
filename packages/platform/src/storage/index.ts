@@ -44,7 +44,11 @@ function getStorage(): Promise<StorageAdapter> {
     ).catch(err => {
       importFailure = err;
       importInProgress = false;
-      console.error('[Storage] Storage adapter import failed:', err);
+      if (process.env.NODE_ENV === 'development') {
+        console.error('[Storage] Storage adapter import failed:', err);
+      } else {
+        console.error('[Storage] Storage adapter import failed:', err instanceof Error ? err.message : String(err));
+      }
       // getStorage() checks importFailure at the top and resets
       // storagePromise on the next call, enabling a clean retry.
       throw err;

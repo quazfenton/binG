@@ -44,9 +44,12 @@ app.use(
       } catch { /* invalid URL, fall through to reject */ }
 
       // Allow *.trycloudflare.com for tunnel access (dynamic subdomain)
-      if (origin && origin.endsWith('.trycloudflare.com')) {
-        return origin;
-      }
+      try {
+        const cfUrl = new URL(origin);
+        if (cfUrl.hostname.endsWith('.trycloudflare.com')) {
+          return origin;
+        }
+      } catch { /* invalid URL, fall through to reject */ }
 
       if (allowed.includes(origin)) {
         return origin;
@@ -78,7 +81,8 @@ const apiDir = path.resolve(__dirname, "..", "..", "web", "app", "api");
 const BACKEND_ROUTE_EXCLUDES_DEFAULT = ["/desktop/"];
 const ROUTE_EXCLUDES = (() => {
   const raw = process.env.BACKEND_ROUTE_EXCLUDES;
-  if (!raw) return BACKEND_ROUTE_EXCLUDES_DEFAULT;
+  // Only use default when env var is undefined/null; empty string means "no exclusions"
+  if (raw === undefined) return BACKEND_ROUTE_EXCLUDES_DEFAULT;
   return raw.split(",").map((s) => s.trim()).filter(Boolean);
 })();
 
@@ -145,9 +149,9 @@ async function startServer(initialPort: number): Promise<void> {
   // Fallback: if we exhausted all ports, try findAvailablePort (legacy probe)
   // as a last resort (note: still subject to TOCTOU, but unlikely after exhausting 64K ports).
   const fallbackPort = await findAvailablePort(initialPort);
+  console.warn(`[DEPRECATED] Auto-fallback to a different port — bound on :${fallbackPort} instead of the configured PORT=${initialPort}. This can break platform routing/health checks that expect the configured PORT.`);
   console.log(`🚀 binG backend listening on :${fallbackPort}`);
   serve({ fetch: app.fetch, port: fallbackPort });
 }
 
-console.warn(`[DEPRECATED] Auto-fallback to a different port (${desiredPort}) can break platform routing/health checks that expect the configured PORT.`);
 await startServer(desiredPort);

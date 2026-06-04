@@ -18,7 +18,7 @@
     "start:web": "pnpm --filter web start",
     "type-check": "pnpm --filter web type-check",
     "lint": "pnpm --filter web lint",
-    "test": "pnpm --filter web test && vitest run test/",
+    "test": "pnpm --filter web test && vitest run",
     "test:ci": "pnpm --filter web test",
     "test:unit": "vitest run",
 

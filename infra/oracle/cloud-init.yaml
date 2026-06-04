@@ -80,7 +80,8 @@ runcmd:
   - iptables -I INPUT 1 -m state --state NEW -p tcp --dport 443 -j ACCEPT
   # Save iptables rules persistently; netfilter-persistent may not be installed
   # on all base images (Oracle Linux, Ubuntu minimal, etc.) — fall back to iptables-save.
-  - (netfilter-persistent save 2>/dev/null || iptables-save > /etc/iptables/rules.v4 2>/dev/null) || true
+  # Create /etc/iptables/ first since it doesn't exist without the iptables-persistent package.
+  - (netfilter-persistent save 2>/dev/null || (mkdir -p /etc/iptables && iptables-save > /etc/iptables/rules.v4 2>/dev/null)) || true
 
   # --- Workspace ---
   - mkdir -p /opt/bing

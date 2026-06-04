@@ -3095,6 +3095,9 @@ export function WorkspacePanel() {
                           >
                             <ChevronUp className="h-3 w-3" />
                           </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
                             onClick={async () => {
                               const snapshot = await vfs.getSnapshot();
                               setVfsSnapshot(snapshot);

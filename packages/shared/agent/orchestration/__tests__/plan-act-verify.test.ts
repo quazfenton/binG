@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // different rejection/resolution sequences.
 
 let mockGenerateText = vi.fn();
+let mockVerifyChanges = vi.fn().mockResolvedValue({ passed: true, errors: [] });
 
 vi.mock('ai', () => ({
   generateText: (...args: any[]) => mockGenerateText(...args),
@@ -17,7 +18,7 @@ vi.mock('@/lib/chat/vercel-ai-streaming', () => ({
 }));
 
 vi.mock('@/lib/orchestra/stateful-agent/agents/verification', () => ({
-  verifyChanges: vi.fn().mockResolvedValue({ passed: true, errors: [] }),
+  verifyChanges: (...args: any[]) => mockVerifyChanges(...args),
 }));
 
 vi.mock('@/lib/crewai/runtime/self-healing', () => ({
@@ -87,11 +88,13 @@ describe('callLLM retry wrapper', () => {
     expect(result.usage.totalTokens).toBe(50);
     expect(mockGenerateText).toHaveBeenCalledTimes(2);
 
-    // First call must have contained the system message (proving filtering was needed)
+    // First call: system messages already stripped by sanitizeMessages upfront
     const firstCallMessages = mockGenerateText.mock.calls[0][0].messages;
-    expect(firstCallMessages.filter((m: any) => m.role === 'system')).toHaveLength(1);
+    const userMessages = firstCallMessages.filter((m: any) => m.role === 'user');
+    expect(userMessages.length).toBeGreaterThanOrEqual(1);
+    expect(userMessages[userMessages.length - 1].content).toBe('test prompt');
 
-    // Second call must have zero system-role messages (proving filtering worked)
+    // Second call: also has no system messages (re-sanitize happened on retry)
     const secondCallMessages = mockGenerateText.mock.calls[1][0].messages;
     const systemInSecond = secondCallMessages.filter((m: any) => m.role === 'system');
     expect(systemInSecond).toHaveLength(0);
@@ -135,5 +138,258 @@ describe('callLLM retry wrapper', () => {
 
     expect(result.text).toBe('first-try success');
     expect(mockGenerateText).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('stepHistory threading', () => {
+  beforeEach(() => {
+    mockGenerateText = vi.fn();
+    mockVerifyChanges = vi.fn().mockResolvedValue({ passed: true, errors: [] });
+  });
+
+  it('threads tool results into stepHistory across plan steps', async () => {
+    const orchestrator = new PlanActVerifyOrchestrator({
+      iterationConfig: { maxIterations: 10, maxTokens: 100000, maxDurationMs: 60000 },
+      tools: [],
+      executeTool: vi.fn().mockResolvedValue({ content: 'file content' }),
+    });
+
+    // Plan phase: task with 2 steps
+    mockGenerateText.mockResolvedValueOnce({
+      text: JSON.stringify([
+        { action: 'Read source files', tool: 'read_file' },
+        { action: 'Write implementation', tool: 'write_file' },
+      ]),
+      usage: { totalTokens: 10 },
+    });
+
+    // Step 1: LLM calls read_file (investigating)
+    mockGenerateText.mockResolvedValueOnce({
+      text: 'Let me read the source files first.',
+      toolCalls: [
+        { toolCallId: 'call-1', toolName: 'read_file', args: { path: '/src/main.ts' } },
+      ],
+      usage: { totalTokens: 20 },
+    });
+
+    // Step 2: LLM should have tool results from step 1 in its history
+    mockGenerateText.mockResolvedValueOnce({
+      text: 'Based on my analysis, I will now write the implementation.',
+      usage: { totalTokens: 15 },
+    });
+
+    // Respond phase
+    mockGenerateText.mockResolvedValueOnce({
+      text: 'Completed the two plan steps successfully.',
+      usage: { totalTokens: 5 },
+    });
+
+    // Consume the async generator
+    const events: any[] = [];
+    for await (const event of (orchestrator as any).execute('test task', [])) {
+      events.push(event);
+    }
+
+    // Plan: call 0, Step 1: call 1, Step 2: call 2, Respond: call 3
+    // Step 2's call to generateText should include history from step 1
+    const step2Messages = mockGenerateText.mock.calls[2][0].messages;
+
+    // Should contain the assistant message from step 1
+    expect(step2Messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: 'assistant',
+          content: 'Let me read the source files first.',
+        }),
+      ]),
+    );
+
+    // Should contain the tool result from step 1 (read_file call)
+    expect(step2Messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: 'tool',
+          content: expect.arrayContaining([
+            expect.objectContaining({
+              type: 'tool-result',
+              toolCallId: 'call-1',
+              toolName: 'read_file',
+            }),
+          ]),
+        }),
+      ]),
+    );
+
+    // The user prompt for step 2 should be the last message
+    const lastMsg = step2Messages[step2Messages.length - 1];
+    expect(lastMsg.role).toBe('user');
+    expect(lastMsg.content).toContain('Write implementation');
+  });
+
+  it('accumulates history correctly on verification failure retry', async () => {
+    const orchestrator = new PlanActVerifyOrchestrator({
+      iterationConfig: { maxIterations: 10, maxTokens: 100000, maxDurationMs: 60000 },
+      tools: [],
+      executeTool: vi.fn().mockImplementation((name: string, args: any) => {
+        if (name === 'readFile') return { content: 'mock file content' };
+        return { ok: true };
+      }),
+    });
+
+    // Plan phase: single step that triggers verification
+    mockGenerateText.mockResolvedValueOnce({
+      text: JSON.stringify([
+        { action: 'Edit the main file', tool: 'write_file' },
+      ]),
+      usage: { totalTokens: 10 },
+    });
+
+    // Step 1 (first attempt): LLM calls writeFile (camelCase triggers modifiedFiles)
+    mockGenerateText.mockResolvedValueOnce({
+      text: 'Writing the changes.',
+      toolCalls: [
+        { toolCallId: 'call-v1', toolName: 'writeFile', args: { path: '/src/main.ts', content: 'updated' } },
+      ],
+      usage: { totalTokens: 20 },
+    });
+
+    // Verification fails → retry same step
+    mockVerifyChanges.mockResolvedValueOnce({
+      passed: false,
+      errors: [{ file: '/src/main.ts', message: 'Syntax error found', suggestion: 'Check brackets' }],
+    });
+
+    // Step 1 (second attempt): LLM fixes the issue
+    mockGenerateText.mockResolvedValueOnce({
+      text: 'Fixing the syntax issue.',
+      toolCalls: [
+        { toolCallId: 'call-v2', toolName: 'writeFile', args: { path: '/src/main.ts', content: 'fixed content' } },
+      ],
+      usage: { totalTokens: 25 },
+    });
+
+    // Verification passes on second attempt
+    mockVerifyChanges.mockResolvedValueOnce({
+      passed: true,
+      errors: [],
+    });
+
+    // Respond phase
+    mockGenerateText.mockResolvedValueOnce({
+      text: 'Fixed the file after verification failure.',
+      usage: { totalTokens: 5 },
+    });
+
+    const events: any[] = [];
+    for await (const event of (orchestrator as any).execute('test task', [])) {
+      events.push(event);
+    }
+
+    // Plan: call 0, Step 1 attempt 1: call 1, Step 1 attempt 2: call 2, Respond: call 3
+    // Step 1 attempt 2 should have history from attempt 1
+    const retryMessages = mockGenerateText.mock.calls[2][0].messages;
+
+    // Should contain assistant message from first attempt
+    expect(retryMessages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: 'assistant',
+          content: 'Writing the changes.',
+        }),
+      ]),
+    );
+
+    // Should contain tool result from first attempt (writeFile call-v1)
+    expect(retryMessages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: 'tool',
+          content: expect.arrayContaining([
+            expect.objectContaining({
+              type: 'tool-result',
+              toolCallId: 'call-v1',
+              toolName: 'writeFile',
+            }),
+          ]),
+        }),
+      ]),
+    );
+
+    // Verify the retry context includes the verification failure feedback
+    const lastMsg = retryMessages[retryMessages.length - 1];
+    expect(lastMsg.role).toBe('user');
+    expect(lastMsg.content).toContain('Verification failed');
+
+    // Final respond phase should have BOTH attempts' history
+    const respondMessages = mockGenerateText.mock.calls[3][0].messages;
+    const assistantTexts = respondMessages
+      .filter((m: any) => m.role === 'assistant')
+      .map((m: any) => m.content);
+
+    expect(assistantTexts).toContain('Writing the changes.');
+    expect(assistantTexts).toContain('Fixing the syntax issue.');
+  });
+
+  it('truncates stepHistory at 30 messages cap', async () => {
+    const orchestrator = new PlanActVerifyOrchestrator({
+      iterationConfig: { maxIterations: 25, maxTokens: 100000, maxDurationMs: 120000 },
+      tools: [],
+      executeTool: vi.fn().mockResolvedValue({ ok: true }),
+    });
+
+    // Generate a plan with 18 steps (each step adds 1 assistant + 1 tool msg = 36 total, exceeding 30 cap)
+    const planSteps = Array.from({ length: 18 }, (_, i) => ({
+      action: `Step ${i + 1}: Process module`, tool: 'read_file',
+    }));
+
+    mockGenerateText.mockResolvedValueOnce({
+      text: JSON.stringify(planSteps),
+      usage: { totalTokens: 10 },
+    });
+
+    // Each step returns a read_file tool call (1 assistant + 1 tool msg = 2 per step)
+    for (let i = 0; i < 18; i++) {
+      mockGenerateText.mockResolvedValueOnce({
+        text: `Processing step ${i + 1}...`,
+        toolCalls: [
+          { toolCallId: `call-${i}`, toolName: 'read_file', args: { path: `/src/module${i + 1}.ts` } },
+        ],
+        usage: { totalTokens: 10 },
+      });
+    }
+
+    // Respond phase
+    mockGenerateText.mockResolvedValueOnce({
+      text: 'All steps processed.',
+      usage: { totalTokens: 5 },
+    });
+
+    const events: any[] = [];
+    for await (const event of (orchestrator as any).execute('test task', [])) {
+      events.push(event);
+    }
+
+    // Plan: call 0, Steps 1-18: calls 1-18, Respond: call 19
+    // After 15 steps (30 messages), truncation starts at step 16
+    // Respond phase (call 19) should have ≤ 30 history messages + 1 user prompt = ≤ 31 total
+    const respondMessages = mockGenerateText.mock.calls[19][0].messages;
+
+    // Total messages should be at most 31 (30 history + 1 user prompt)
+    expect(respondMessages.length).toBeLessThanOrEqual(31);
+
+    // The first history message (index 0) should NOT be from step 1 (which was truncated)
+    // Step 1's assistant content was "Processing step 1..."
+    const nonUserMessages = respondMessages.filter((m: any) => m.role !== 'user');
+    expect(nonUserMessages.length).toBeLessThanOrEqual(30);
+
+    // Verify that step 1's content is NOT present (it was truncated)
+    const allAssistantContents = respondMessages
+      .filter((m: any) => m.role === 'assistant')
+      .map((m: any) => m.content);
+    expect(allAssistantContents).not.toContain('Processing step 1...');
+
+    // Later steps should still be present
+    const lastAssistantContent = allAssistantContents[allAssistantContents.length - 1];
+    expect(lastAssistantContent).toBe('Processing step 18...');
   });
 });
