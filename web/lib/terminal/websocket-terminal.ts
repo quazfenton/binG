@@ -188,12 +188,18 @@ export class WebSocketTerminalServer extends EventEmitter {
 
     // Verify JWT token
     try {
-      const payload = verifyToken(token);
+      const verification = await verifyToken(token);
+      if (!verification.valid || !verification.payload) {
+        logger.warn('WebSocket authentication failed: invalid token');
+        ws.close(4002, 'Invalid token');
+        return;
+      }
+      const payload = verification.payload;
       
       // SECURITY: Verify user has permission to access this sandbox
       // For now, any authenticated user can access their own sandboxes
       // In production, add sandbox ownership verification
-      const userId = (payload as any).userId || (payload as any).sub;
+      const userId = payload.userId || payload.sub;
       if (!userId) {
         logger.warn('WebSocket authentication failed: missing user ID')
         ws.close(4002, 'Invalid token: missing user ID');

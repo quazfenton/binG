@@ -40,6 +40,7 @@ import type { PooledAgent as PoolAgent } from '../agent-pool';
 import { getAgentPool, type AgentPoolConfig, type PoolAgentType } from '../agent-pool';
 import { generateText } from 'ai';
 import { getVercelModel } from '@/lib/chat/vercel-ai-streaming';
+import { sanitizeMessages } from '@/lib/chat/message-sanitizer';
 
 const logger = createLogger('Agents:Orchestration');
 
@@ -73,9 +74,26 @@ async function runAgentLLM(options: {
     vercelModel = openai('gpt-4o-mini');
   }
 
+  // Extract system messages for the `system` parameter and sanitize the rest.
+  // The Vercel AI SDK ModelMessage[] schema rejects system-role messages in
+  // the messages array — they must be passed via the `system` parameter.
+  const systemMessages = (options.messages || []).filter(
+    (m: any) => m && m.role === 'system'
+  );
+  const systemPrompt = systemMessages
+    .map((m: any) => (typeof m.content === 'string' ? m.content : ''))
+    .filter(Boolean)
+    .join('\n\n');
+
+  const nonSystemMessages = (options.messages || []).filter(
+    (m: any) => m && m.role !== 'system'
+  );
+  const sanitizedMessages = sanitizeMessages(nonSystemMessages) as any[];
+
   const result = await generateText({
     model: vercelModel,
-    messages: options.messages,
+    messages: sanitizedMessages,
+    system: systemPrompt || undefined,
     maxOutputTokens: options.maxTokens || 8192,
     temperature: options.temperature ?? 0.7,
   });

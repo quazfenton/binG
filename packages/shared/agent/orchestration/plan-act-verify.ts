@@ -890,6 +890,53 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
       }
     }
 
+    // ── Plain-text fallback for schema errors ──
+    // If both retries failed due to ModelMessage[] schema errors, the
+    // conversation history is likely corrupted beyond repair. Fall back
+    // to a plain-text call with NO tools and NO history — just the
+    // system prompt and the user's prompt as a bare message. This
+    // sacrifices tool-calling ability but ensures the user gets a
+    // response instead of a crash.
+    const isSchemaError =
+      lastError?.message?.includes('ModelMessage[]') ||
+      lastError?.message?.includes('messages do not match');
+
+    if (isSchemaError) {
+      log.warn(
+        'callLLM: both retries failed with schema errors, falling back to plain-text call',
+        { provider, model, error: lastError?.message },
+      );
+
+      try {
+        const fallbackResult = await generateText({
+          model: vercelModel,
+          messages: [{ role: 'user' as const, content: prompt }],
+          system:
+            'You are an autonomous AI coding agent.' +
+            '\n\n' + CHOOSE_ROLE_DIRECTIVE,
+          maxSteps: 1,
+          maxOutputTokens: 4000,
+          temperature: 0.2,
+        });
+
+        log.info('callLLM: plain-text fallback succeeded', { provider, model });
+
+        return {
+          text: fallbackResult.text || '',
+          toolCalls: [],
+          usage: fallbackResult.usage || { totalTokens: 0 },
+        };
+      } catch (fallbackError: any) {
+        log.error('callLLM: plain-text fallback also failed', {
+          provider,
+          model,
+          error: fallbackError.message,
+        });
+        // Throw the original error — the fallback is best-effort
+        throw lastError;
+      }
+    }
+
     log.error('Vercel AI SDK callLLM failed', { provider, model, error: lastError?.message });
     throw lastError;
   }

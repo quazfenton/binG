@@ -307,7 +307,7 @@ const OPENAI_COMPATIBLE_PROVIDERS: Record<string, OpenAICompatibleConfig> = {
     useChatEndpoint: true,
   },
   pollinations: {
-    baseURL: process.env.POLLINATIONS_BASE_URL || 'https://text.pollinations.ai/openai',
+    baseURL: process.env.POLLINATIONS_BASE_URL || 'https://gen.pollinations.ai/v1',
     apiKeyEnv: 'POLLINATIONS_API_KEY',
     useChatEndpoint: true,
   },

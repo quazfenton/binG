@@ -474,12 +474,25 @@ async function determineMode(config: UnifiedAgentConfig): Promise<{
     return { mode: 'mastra-workflow' };
   }
 
+  // Simple chat detection: short, non-code, conversational messages route to v1-api
+  // instead of v1-agent-loop. The orchestrator (PlanActVerify) is designed for
+  // multi-step code/agentic tasks and can fail on simple requests due to the
+  // ModelMessage[] schema validation in callLLM when stepHistory accumulates
+  // tool-call messages. Simple chat goes directly through the LLM API without
+  // the orchestrator, which is faster and avoids this schema issue.
+  const userMsg = (config.userMessage || '').trim();
+  const isSimpleChat =
+    userMsg.length > 0 &&
+    userMsg.length < 200 &&
+    !/\b(create|build|implement|refactor|code|file|app|function|class|api|component|page|dashboard|fix|add|change|update|write|edit|make|install|setup|config|test|deploy|migrate|scaffold|generate|init|start|new)\b/i.test(userMsg);
+
+  if (isSimpleChat) {
+    log.info('[AutoMode] → v1-api (simple chat detected, bypassing orchestrator)');
+    return { mode: 'v1-api' as const };
+  }
+
   // Default to PlanActVerify orchestrator for all tasks.
-  // The dynamic injector (injectFeedback + generateTrackerSummary) is always active,
-  // providing self-correction and healing without needing a separate classifier step.
-  // Regex-based complexity detection is retained as a fallback for mode-specific
-  // logic (e.g., StatefulAgent routing in runV2Native/runDesktopMode).
-  log.info('[AutoMode] → v1-agent-loop (PlanActVerify default, dynamic injector always active)');
+  log.info('[AutoMode] → v1-agent-loop (PlanActVerify default)');
   return { mode: 'v1-agent-loop' as const };
 }
 

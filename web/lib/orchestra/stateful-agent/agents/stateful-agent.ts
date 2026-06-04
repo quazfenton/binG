@@ -14,6 +14,7 @@ import { createLoopDetector, type LoopDetectionResult } from '@bing/shared/agent
 import { createCapabilityChain, type CapabilityChain } from '@bing/shared/agent/capability-chain';
 import { createBootstrappedAgency, type BootstrappedAgency } from '@bing/shared/agent/bootstrapped-agency';
 import { chatRequestLogger } from '../../../chat/chat-request-logger';
+import { sanitizeMessages } from '@/lib/chat/message-sanitizer';
 
 const log = createLogger('StatefulAgent');
 
@@ -1544,11 +1545,15 @@ export async function* runStatefulAgentStreaming(
     content: userMessage,
   });
 
+  // Sanitize messages to prevent ModelMessage[] schema errors (system messages
+  // in the messages array are rejected by the AI SDK schema)
+  const sanitizedMessages = sanitizeMessages(messages) as any[];
+
   // Run streaming using Vercel AI SDK
   const result = streamText({
     model,
     system: systemPrompt,
-    messages,
+    messages: sanitizedMessages,
     tools: toolDefs,
     maxSteps,
     onChunk: ({ chunk }) => {

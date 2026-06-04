@@ -224,12 +224,14 @@ export async function executeWithOrchestrationMode(
   }
 
   // Validate ownerId and sessionId format (prevent injection attacks)
-  const idPattern = /^[a-zA-Z0-9_\-]+$/;
+  // Allow colon (':') for 'anon:' prefix and 'user@domain' style IDs — these come from
+  // resolveFilesystemOwner (format: 'anon:<sessionId>') and JWT auth (format: 'user@domain').
+  const idPattern = /^[a-zA-Z0-9_\-@:.]+$/;
   if (!idPattern.test(request.ownerId)) {
-    throw new Error('ownerId contains invalid characters. Only alphanumeric, underscore, and hyphen allowed.');
+    throw new Error('ownerId contains invalid characters. Only alphanumeric, underscore, hyphen, at-sign, and colon allowed.');
   }
   if (!idPattern.test(request.sessionId)) {
-    throw new Error('sessionId contains invalid characters. Only alphanumeric, underscore, and hyphen allowed.');
+    throw new Error('sessionId contains invalid characters. Only alphanumeric, underscore, hyphen, at-sign, and colon allowed.');
   }
 
   // Log without raw task content (security: prevent leaking secrets/tokens in logs)

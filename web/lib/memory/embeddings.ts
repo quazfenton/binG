@@ -23,7 +23,9 @@ export async function embed(text: string): Promise<number[]> {
     return EMBED_CACHE.get(key)!;
   }
 
-  const baseUrl = typeof window !== 'undefined' ? '' : (process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000');
+  const baseUrl = typeof window !== 'undefined' 
+    ? '' 
+    : (process.env.NEXT_PUBLIC_APP_URL || `http://localhost:${process.env.PORT || '3000'}`);
 
   const res = await fetch(`${baseUrl}/api/embed`, {
     method: "POST",

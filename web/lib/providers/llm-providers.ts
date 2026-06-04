@@ -1067,6 +1067,36 @@ export const PROVIDERS: Record<string, LLMProvider> = {
       'kimi-k2.6',
       'openai-large',
       'grok',
+      'gpt-5.4-mini',
+      'gpt-5.5',
+      'mistral-4',
+      'openai-audio',
+      'openai-audio-large',
+      'gemini-3.5-flash',
+      'gemini-flash-lite-3.1',
+      'deepseek',
+      'gemma',
+      'deepseek-pro',
+      'grok-large',
+      'grok-4.3',
+      'gemini-search',
+      'gemini-search-fast',
+      'gemini-search-large',
+      'midijourney',
+      'midijourney-large',
+      'claude',
+      'claude-large',
+      'claude-opus-4.7',
+      'claude-opus-4.8',
+      'perplexity-deep',
+      'gemini-large',
+      'llama-maverick',
+      'minimax-m3',
+      'mistral-large',
+      'polly',
+      'qwen-vision-pro',
+      'step-flash',
+      'step-3.5-flash',
     ],
     supportsStreaming: true,
     maxTokens: 128000,
@@ -2130,8 +2160,7 @@ class LLMService {
       case 'aihubmix':
         return currentEnv.AIHUBMIX_API_KEY || this.config.aihubmix?.apiKey || '';
       case 'pollinations':
-        // Pollinations text generation technically works without API keys, but we allow an optional key
-        return currentEnv.POLLINATIONS_API_KEY || this.config.pollinations?.apiKey || 'optional';
+        return currentEnv.POLLINATIONS_API_KEY || this.config.pollinations?.apiKey || '';
       case 'vercel':
         return currentEnv.VERCEL_API_KEY || this.config.vercel?.apiKey || '';
       case 'livekit':
@@ -2607,12 +2636,15 @@ class LLMService {
     requestId?: string,
     apiKeyOverride?: string
   ): Promise<LLMResponse> {
-    const apiKey = this.getApiKey('pollinations', apiKeyOverride) || 'optional';
+    const apiKey = this.getApiKey('pollinations', apiKeyOverride) ;;
+    if (!apiKey) {
+      throw new Error('Pollinations API key not configured. Please set POLLINATIONS_API_KEY in your environment variables.');
+    }
 
     const OpenAIClass = await getOpenAI();
     const pollinations = new OpenAIClass({
       apiKey,
-      baseURL: this.config.pollinations?.baseURL || 'https://text.pollinations.ai/openai',
+      baseURL: this.config.pollinations?.baseURL || 'https://gen.pollinations.ai/v1',
     });
 
     const response = await pollinations.chat.completions.create({
@@ -2815,12 +2847,15 @@ class LLMService {
     temperature: number,
     maxTokens: number
   ): AsyncGenerator<StreamingResponse> {
-    const apiKey = this.getApiKey('pollinations') || 'optional';
+    const apiKey = this.getApiKey('pollinations');
+    if (!apiKey) {
+      throw new Error('Pollinations API key not configured. Please set POLLINATIONS_API_KEY in your environment variables.');
+    }
 
     const OpenAIClass = await getOpenAI();
     const pollinations = new OpenAIClass({
       apiKey,
-      baseURL: this.config.pollinations?.baseURL || 'https://text.pollinations.ai/openai',
+      baseURL: this.config.pollinations?.baseURL || 'https://gen.pollinations.ai/v1',
     });
 
     const stream = await pollinations.chat.completions.create({
@@ -3958,7 +3993,7 @@ export const llmService = new LLMService({
   },
   pollinations: {
     apiKey: process.env.POLLINATIONS_API_KEY,
-    baseURL: process.env.POLLINATIONS_BASE_URL || 'https://text.pollinations.ai/openai'
+    baseURL: process.env.POLLINATIONS_BASE_URL || 'https://gen.pollinations.ai/v1'
   },
   aihubmix: {
     apiKey: process.env.AIHUBMIX_API_KEY,

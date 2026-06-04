@@ -112,7 +112,7 @@ describe('callLLM retry wrapper', () => {
     expect(mockGenerateText).toHaveBeenCalledTimes(1);
   });
 
-  it('throws after exactly one retry when schema error persists', async () => {
+  it('throws after retries + plain-text fallback when schema error persists', async () => {
     const orchestrator = makeOrchestrator();
 
     const schemaError = new Error('messages do not match the ModelMessage[] schema');
@@ -122,8 +122,16 @@ describe('callLLM retry wrapper', () => {
       (orchestrator as any).callLLM('test prompt', historyWithSystem),
     ).rejects.toThrow('messages do not match');
 
-    // Exactly 2 attempts, no more
-    expect(mockGenerateText).toHaveBeenCalledTimes(2);
+    // 2 retry attempts + 1 plain-text fallback = 3 calls total
+    expect(mockGenerateText).toHaveBeenCalledTimes(3);
+
+    // Verify the fallback call used plain text (no history, no tools)
+    const fallbackCallArgs = mockGenerateText.mock.calls[2][0];
+    expect(fallbackCallArgs.messages).toEqual([
+      { role: 'user', content: 'test prompt' },
+    ]);
+    expect(fallbackCallArgs.tools).toBeUndefined();
+    expect(fallbackCallArgs.maxSteps).toBe(1);
   });
 
   it('succeeds on first attempt when history has no system messages', async () => {
