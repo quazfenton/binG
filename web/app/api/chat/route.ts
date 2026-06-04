@@ -25,13 +25,11 @@ import {
   executeV2TaskStreaming, 
   workforceManager, 
   createTaskClassifier as createTaskClassifierShared,
-  SYSTEM_PROMPTS,
   VFS_FILE_EDITING_TOOL_PROMPT,
   generateDynamicInjection,
   getOrchestrationModeFromRequest,
   executeWithOrchestrationMode,
-  composeRoleWithTools,
-  type AgentRole,
+  selectAndComposeSystemPrompt,
 } from '@bing/shared/agent';
 import { processUnifiedAgentRequest, type UnifiedAgentConfig } from '@/lib/orchestra/unified-agent-service';
 import { checkProviderHealth } from '@/lib/orchestra/provider-health';
@@ -797,18 +795,72 @@ export async function POST(request: NextRequest) {
       chatLogger.debug('Retrieved relevant memories from mem0', { requestId, memoryCount: mem0Result.results.length });
     }
     
-    // Role-based identity prompt for code requests.
-    // Uses the rich `coder`/`architect`/`debugger` prompts in
-    // packages/shared/agent/system-prompts.ts via composeRoleWithTools,
-    // which were previously dead code on the standard /api/chat path
-    // (only the generic VFS_FILE_EDITING_TOOL_PROMPT was injected).
-    const roleSystemPrompt = buildRoleSystemPromptForRequest({
-      isCodeRequest: classification.isCodeRequest,
-      enableFilesystemEdits,
-      complexity: classification.complexity,
-      userPrompt,
-      responseDepth: body.responseDepth as string | undefined,
-    });
+    // Pick a role + compose a rich system prompt across ALL prompt sets
+    // (core/supplementary/general v1-v4). Previously /api/chat injected only
+    // the generic VFS_FILE_EDITING_TOOL_PROMPT and the rich role prompts in
+    // packages/shared/agent were dead code on this path.
+    //
+    // FIRST, check if the LLM called role_selection / choose_role in a previous
+    // turn. If so, honor that choice via forceRole — don't re-auto-detect.
+    let forcedRole: string | undefined;
+    for (const msg of messages) {
+      if (msg.role === 'assistant' && Array.isArray(msg.content)) {
+        for (const part of msg.content) {
+          if (part.type === 'tool-call' &&
+              (part.toolName === 'role_selection' || part.toolName === 'choose_role') &&
+              part.input?.role?.trim?.()) {
+            forcedRole = part.input.role.trim();
+            break;
+          }
+        }
+      }
+      // Also check for JSON-stringified tool calls in plain-text assistant messages
+      if (msg.role === 'assistant' && typeof msg.content === 'string') {
+        try {
+          const parsed = JSON.parse(msg.content);
+          if (Array.isArray(parsed)) {
+            for (const part of parsed) {
+              if (part.type === 'tool-call' &&
+                  (part.toolName === 'role_selection' || part.toolName === 'choose_role') &&
+                  part.input?.role?.trim?.()) {
+                forcedRole = part.input.role.trim();
+                break;
+              }
+            }
+          }
+        } catch { /* not JSON, skip */ }
+      }
+      if (forcedRole) break;
+    }
+    if (forcedRole) {
+      chatLogger.debug('Honouring previous role selection from tool call', {
+        requestId,
+        forcedRole,
+      });
+    }
+
+    const roleSelection = selectAndComposeSystemPrompt(
+      {
+        taskDescription: userPrompt,
+        complexity: classification.complexity,
+        enableFilesystemEdits,
+      },
+      {
+        forceRole: forcedRole as any,
+        availableTools: enableFilesystemEdits
+          ? ['file.read', 'file.write', 'file.append', 'file.delete', 'file.list', 'file.search', 'repo.search', 'web.search']
+          : ['web.search', 'memory.retrieve'],
+        maxLength: 6000,
+      },
+    );
+    if (roleSelection) {
+      chatLogger.debug('Role prompt selected', {
+        requestId,
+        role: roleSelection.role,
+        source: roleSelection.source,
+        promptLength: roleSelection.prompt.length,
+      });
+    }
 
     const contextualMessages = appendFilesystemContextMessages(
       processedMessages,
@@ -818,7 +870,7 @@ export async function POST(request: NextRequest) {
       workspaceSessionContext,
       memoryContext,
       hybridContext,
-      roleSystemPrompt,
+      roleSelection?.prompt || '',
     );
 
     // V1 / Regular LLM: Apply response style modifiers to messages
@@ -4851,65 +4903,7 @@ async function buildHybridWorkspaceContext(
     return '';
   }
 }
-
-/**
- * Pick the best role and build a rich system prompt for the request, or return
- * an empty string for non-code chats. Caps the role prompt at ~6KB to avoid
- * blowing the context window — the existing CODER/ARCHITECT/DEBUGGER prompts
- * are already comfortably within that.
- */
-function buildRoleSystemPromptForRequest(args: {
-  isCodeRequest: boolean;
-  enableFilesystemEdits: boolean;
-  complexity: string;
-  userPrompt: string;
-  responseDepth?: string;
-}): string {
-  // Only inject a rich role prompt for code-flavored requests.
-  if (!args.isCodeRequest && !args.enableFilesystemEdits) {
-    return '';
-  }
-
-  const text = (args.userPrompt || '').toLowerCase();
-
-  let role: AgentRole = 'coder';
-  if (/\b(architecture|architect|design system|system design|high.?level design|hld)\b/.test(text)) {
-    role = 'architect';
-  } else if (/\b(debug|stack ?trace|error|exception|crash|fails?|failing|broken|not working)\b/.test(text)) {
-    role = 'debugger';
-  } else if (/\b(review|audit|critique)\b/.test(text)) {
-    role = 'reviewer';
-  } else if (args.complexity === 'complex' || args.responseDepth === 'comprehensive') {
-    role = 'architect';
-  }
-
-  // Tools the model actually has access to when filesystem edits are enabled.
-  // Keep this list short and accurate — composeRoleWithTools formats them
-  // into a TOOL STRATEGY section.
-  const availableTools = args.enableFilesystemEdits
-    ? [
-        'file.read',
-        'file.write',
-        'file.append',
-        'file.delete',
-        'file.list',
-        'file.search',
-        'repo.search',
-        'web.search',
-      ]
-    : ['web.search', 'memory.retrieve'];
-
-  try {
-    const prompt = composeRoleWithTools(role, { availableTools });
-    // Hard cap as a safety net.
-    return prompt.length > 6000 ? prompt.slice(0, 6000) : prompt;
-  } catch {
-    // If composer fails for any reason, fall back to the raw role prompt.
-    return SYSTEM_PROMPTS[role] || '';
-  }
-}
-
-function appendFilesystemContextMessages(
+export function appendFilesystemContextMessages(
   messages: LLMMessage[],
   attachedFiles: ChatFilesystemFileContext[],
   allowFileEdits: boolean,

@@ -33,6 +33,7 @@ import { tokenTracker } from '../middleware/ai-caching';
 import { createReasoningMiddleware, withRetry, createSmoothStream, isTokenLimitError, handleTokenLimitError } from '../middleware/ai-middleware';
 import { recordToolCall, shouldForceTextMode } from '../tools/tool-call-telemetry';
 import { getModelsForPurpose } from './model-capability-registry';
+import { isKnownGoodFC, shouldStripTools, getTextModeInstructions } from '../llm-compat';
 
 /**
  * Tool execution context for Vercel AI SDK tools
@@ -810,48 +811,15 @@ export async function* streamWithVercelAI(
     // Strip tools upfront for known incompatible provider+model combos.
     let skipTools = false;
     if (tools && Object.keys(tools).length > 0) {
-      // Explicit list of models that DO NOT support function calling
-      const nonFCModels = [
-        // NVIDIA NIM models that don't support FC
-        'google/gemma-3-27b-it',
-        'google/gemma-3-12b-it',
-        'google/gemma-3-4b-it',
-        'meta/llama-3.1-8b-instruct',
-        'meta/llama-3.1-70b-instruct',
-        'meta/llama-3.3-70b-instruct',
-        // Mistral Small doesn't support FC reliably
-        'mistral-small-latest',
-        'mistral-small-2402',
-        // OpenRouter free models often don't support FC
-      ];
-
-      // Explicit list of models that DO support function calling (known good)
-      const knownGoodFCModels = [
-        'mistral-large-latest',
-        'mistral-large-2411',
-        'mistral-large-2407',
-        'mistral-medium-latest',
-        'gpt-4',
-        'gpt-3.5',
-        'claude-3',
-        'claude-sonnet',
-        'claude-opus',
-        'gemini-1.5',
-        'gemini-2.0',
-      ];
-
-      // Check if current model IS in the known good list (not just substring match)
-      const modelLower = modelName.toLowerCase();
-      const isKnownGoodFC = knownGoodFCModels.some(m => modelLower.includes(m.toLowerCase()));
+      // Check FC compatibility via shared LLM compat module
+      const knownGoodFC = isKnownGoodFC(modelName);
       chatLogger.info('[FC-KNOWN] Checking function calling support', {
         provider,
         model: modelName,
-        modelLower,
-        isKnownGoodFC,
-        knownGoodFCModels,
+        isKnownGoodFC: knownGoodFC,
       });
 
-      if (isKnownGoodFC) {
+      if (knownGoodFC) {
         chatLogger.info('[FC-KNOWN] Model is known to support function calling', {
           provider,
           model: modelName,
@@ -859,19 +827,11 @@ export async function* streamWithVercelAI(
         });
       }
 
-      if (provider === 'nvidia' && nonFCModels.some(m => modelName.includes(m))) {
-        skipTools = true;
-        chatLogger.warn('[FC-BYPASS] NVIDIA model does not support function calling despite SDK reporting otherwise', {
-          provider,
-          model: modelName,
-          action: 'Stripping tools and using text-mode fallback',
-          knownIssue: 'NVIDIA NIM returns 400 "DEGRADED function cannot be invoked" for tool calls on these models',
-        });
-      }
+      // Use shared shouldStripTools logic (handles NVIDIA, Mistral Small, GitHub Copilot)
+      skipTools = shouldStripTools(provider, modelName);
 
-      if (provider === 'mistral' && /mistral-small/.test(modelName) && !isKnownGoodFC) {
-        skipTools = true;
-        chatLogger.warn('[FC-BYPASS] Mistral Small does not support function calling reliably', {
+      if (skipTools) {
+        chatLogger.warn('[FC-BYPASS] Provider/model-specific tool stripping applied', {
           provider,
           model: modelName,
           action: 'Stripping tools and using text-mode fallback',
@@ -879,7 +839,7 @@ export async function* streamWithVercelAI(
       }
 
       // CRITICAL: If model is known good for FC, never skip tools regardless of SDK
-      if (isKnownGoodFC) {
+      if (knownGoodFC) {
         skipTools = false;
       }
     }
@@ -906,6 +866,17 @@ export async function* streamWithVercelAI(
       chatLogger.info('[TOOLS-FINAL] Tools assigned to streamOptions', {
         toolsCount: Object.keys(tools).length,
       });
+    } else if (provider === 'ninerouter' && modelName.startsWith('gh/')) {
+      // gh/ via ninerouter: send explicit empty tools array so the ninerouter
+      // server gets "tools": [] in the request body. This signals that we
+      // don't want function definitions; the server may respect this and
+      // skip injecting its own write_file schemas that GitHub Copilot rejects.
+      streamOptions.tools = {} as any;
+      chatLogger.warn('[TOOLS-STRIP] gh/ via ninerouter — sending explicit empty tools array to prevent server-side FC injection', {
+        provider,
+        model: modelName,
+        reason: 'gh/ (GitHub Copilot) rejects function call schemas — sending tools:[]',
+      });
     } else if (skipTools && tools) {
       chatLogger.warn('[TOOLS-STRIP] Provider-specific tool stripping applied', {
         provider,
@@ -913,11 +884,12 @@ export async function* streamWithVercelAI(
         strippedToolCount: Object.keys(tools).length,
         reason: 'provider API returns 400 for tool calls on this model',
       });
-      // Inject text-mode tool instructions since tools were stripped
+      // Inject text-mode tool instructions plus general plain-text fallback
+      const textModeInstructions = TEXT_MODE_TOOL_INSTRUCTIONS + '\n\n' + getTextModeInstructions();
       if (streamOptions.system) {
-        streamOptions.system = streamOptions.system + '\n\n' + TEXT_MODE_TOOL_INSTRUCTIONS;
+        streamOptions.system = streamOptions.system + '\n\n' + textModeInstructions;
       } else {
-        streamOptions.system = TEXT_MODE_TOOL_INSTRUCTIONS;
+        streamOptions.system = textModeInstructions;
       }
     } else {
       // Log when tools are NOT provided (different from FC check)
@@ -966,11 +938,12 @@ export async function* streamWithVercelAI(
         });
         delete streamOptions.tools;
 
-        // Inject text-mode tool instructions (reuse the same improved format)
+        // Inject text-mode tool instructions plus general plain-text fallback
+        const textModeInstructions = TEXT_MODE_TOOL_INSTRUCTIONS + '\n\n' + getTextModeInstructions();
         if (streamOptions.system) {
-          streamOptions.system = streamOptions.system + '\n\n' + TEXT_MODE_TOOL_INSTRUCTIONS;
+          streamOptions.system = streamOptions.system + '\n\n' + textModeInstructions;
         } else {
-          streamOptions.system = TEXT_MODE_TOOL_INSTRUCTIONS;
+          streamOptions.system = textModeInstructions;
         }
       } else if (supportsFC === undefined) {
         // Model doesn't report this capability — could be unknown provider.
@@ -1499,10 +1472,11 @@ export async function* streamWithVercelAI(
             // Issue second completion with text-mode instructions
             const fallbackStreamOptions = { ...streamOptions };
             delete fallbackStreamOptions.tools; // Strip tools
+            const textModeInstructions = TEXT_MODE_TOOL_INSTRUCTIONS + '\n\n' + getTextModeInstructions();
             if (fallbackStreamOptions.system) {
-              fallbackStreamOptions.system = fallbackStreamOptions.system + '\n\n' + TEXT_MODE_TOOL_INSTRUCTIONS;
+              fallbackStreamOptions.system = fallbackStreamOptions.system + '\n\n' + textModeInstructions;
             } else {
-              fallbackStreamOptions.system = TEXT_MODE_TOOL_INSTRUCTIONS;
+              fallbackStreamOptions.system = textModeInstructions;
             }
 
             try {
@@ -1811,10 +1785,11 @@ ${healingInstructions}` : healingInstructions)
             delete fallbackStreamOptions.tools;
 
             // Inject same text-mode instructions as main path
+            const textModeInstructions = TEXT_MODE_TOOL_INSTRUCTIONS + '\n\n' + getTextModeInstructions();
             if (fallbackStreamOptions.system) {
-              fallbackStreamOptions.system = fallbackStreamOptions.system + '\n\n' + TEXT_MODE_TOOL_INSTRUCTIONS;
+              fallbackStreamOptions.system = fallbackStreamOptions.system + '\n\n' + textModeInstructions;
             } else {
-              fallbackStreamOptions.system = TEXT_MODE_TOOL_INSTRUCTIONS;
+              fallbackStreamOptions.system = textModeInstructions;
             }
           }
         }

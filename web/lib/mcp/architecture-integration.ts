@@ -834,6 +834,7 @@ export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string)
   }
 
   // NEW: Include role_selection tool — enables dynamic role switching for task complexity
+  // Uses the unified-role-selector (76 roles, 6 prompt sets) to compose the new role's prompt.
   const roleSelectionTools: Array<{
     type: 'function'
     function: {
@@ -845,14 +846,13 @@ export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string)
     type: 'function' as const,
     function: {
       name: 'role_selection',
-      description: 'Switch the current expert role/persona to better handle task complexity, domain, or failure recovery.',
+      description: 'Switch the current expert role/persona to better handle task complexity, domain, or failure recovery. The system will re-inject the appropriate role prompt for subsequent turns.',
       parameters: {
         type: 'object',
         properties: {
           role: {
             type: 'string',
-            enum: ['architect', 'debugger', 'refactorer', 'implementer', 'reviewer', 'researcher'],
-            description: 'The target expert role to adopt.',
+            description: 'The target expert role to adopt. Choose from roles like: architect, coder, debugger, reviewer, tester, researcher, documenter, planner, securityAuditor, devopsEngineer, performanceEngineer, sre, databaseArchitect, apiDesigner, uiuxDesigner, dataAnalyst, mlEngineer, projectManager, mentor, refiner, simplifier, translator, and other domain-specific roles.',
           },
           reason: {
             type: 'string',
@@ -1411,13 +1411,31 @@ export async function callMCPToolFromAI_SDK(
 
     // NEW: Check if it's the role_selection tool
     if (toolName === 'role_selection') {
-      logger.info('[RoleSelection] Tool invoked', { role: args.role, reason: args.reason });
+      logger.info('[RoleSelection] Tool invoked', { role: args?.role, reason: args.reason });
+
+      const { normalizeAndValidateRole } = await import('@bing/shared/agent');
+      const result = normalizeAndValidateRole(args?.role || '', args?.reason || '');
+
+      if (!result.valid) {
+        logger.warn('[RoleSelection] Role validation failed', { role: result.roleAdopted, error: result.message });
+        return {
+          success: true,
+          output: JSON.stringify({
+            success: false,
+            roleAdopted: result.roleAdopted,
+            message: result.message,
+          }),
+        };
+      }
+
       return {
         success: true,
         output: JSON.stringify({
           success: true,
-          roleAdopted: args.role,
-          message: `Role switched to ${args.role} for: ${args.reason}. System prompt will be updated for the next interaction.`,
+          roleAdopted: result.roleAdopted,
+          rolePrompt: result.rolePrompt,
+          roleSource: result.roleSource,
+          message: result.message,
         }),
       };
     }

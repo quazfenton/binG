@@ -1367,34 +1367,33 @@ export const PROVIDERS: Record<string, LLMProvider> = {
       'openrouter/openrouter/owl-alpha',
       'openrouter/google/lyria-3-clip-preview',
       'openrouter/arcee-ai/trinity-large-thinking:free',
-      // Nvidia models
-      'nvidia/minimaxai/minimax-m2.7',
-      'nvidia/z-ai/glm4.7',
+      // Nvidia models - removed: ninerouter returns 404 for these
+      // 'nvidia/nemotron-3-super-120b-a12b',
       // Ollama Cloud models
       'ollama/gpt-oss:120b',
       'ollama/kimi-k2.5',
-      'ollama/glm-5',
       'ollama/minimax-m2.5',
-      'ollama/glm-4.7-flash',
       'ollama/qwen3.5',
-      // Cloudflare Workers AI models
-      'cf/@cf/meta/llama-3.2-1b-instruct',
-      'cf/@cf/meta/llama-3.2-3b-instruct',
-      'cf/@cf/meta/llama-3.1-8b-instruct-fp8-fast',
-      'cf/@cf/meta/llama-3.1-8b-instruct-awq',
-      'cf/@cf/mistralai/mistral-small-3.1-24b-instruct',
-      'cf/@cf/meta/llama-3.1-70b-instruct-fp8-fast',
-      'cf/@cf/meta/llama-3.3-70b-instruct-fp8-fast',
-      'cf/@cf/deepseek-ai/deepseek-r1-distill-qwen-32b',
-      'cf/@cf/moonshotai/kimi-k2.5',
-      'cf/@cf/moonshotai/kimi-k2.6',
-      'cf/@cf/zai-org/glm-4.7-flash',
-      'cf/@cf/qwen/qwq-32b',
-      'cf/@cf/qwen/qwen2.5-coder-32b-instruct',
+      // Cloudflare Workers AI models — DISABLED: ninerouter server forwards cf/ prefix
+      // as-is to Cloudflare, causing "No route for that URI" errors.
+      // Fix needed on ninerouter server: strip cf/ prefix before forwarding to Cloudflare.
+      // 'cf/@cf/meta/llama-3.2-1b-instruct',
+      // 'cf/@cf/meta/llama-3.2-3b-instruct',
+      // 'cf/@cf/meta/llama-3.1-8b-instruct-fp8-fast',
+      // 'cf/@cf/meta/llama-3.1-8b-instruct-awq',
+      // 'cf/@cf/mistralai/mistral-small-3.1-24b-instruct',
+      // 'cf/@cf/meta/llama-3.1-70b-instruct-fp8-fast',
+      // 'cf/@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+      // 'cf/@cf/deepseek-ai/deepseek-r1-distill-qwen-32b',
+      // 'cf/@cf/moonshotai/kimi-k2.5',
+      // 'cf/@cf/moonshotai/kimi-k2.6',
+      // 'cf/@cf/zai-org/glm-4.7-flash',
+      // 'cf/@cf/qwen/qwq-32b',
+      // 'cf/@cf/qwen/qwen2.5-coder-32b-instruct',
       // Mistral models
-      'mistral/mistral-large-la',
-      'mistral/codestral-la',
-      'mistral/mistral-medium-la',
+      'mistral/mistral-large-latest',
+      'mistral/codestral',
+      'mistral/mistral-small',
     ],
     supportsStreaming: true,
     maxTokens: 128000,
@@ -3661,6 +3660,21 @@ class LLMService {
     }
   }
 
+  /**
+   * Sanitize messages for ninerouter subproviders that don't support
+   * function calling. gh/ (GitHub Copilot) rejects requests containing
+   * tool/function definitions. The ninerouter server injects default
+   * file-editing tools server-side; these cannot be stripped from the
+   * client side. gh/ models routed through ninerouter to GitHub Copilot
+   * will fail until the ninerouter server stops injecting tools for gh/.
+   */
+  private sanitizeMessagesForNinerouter(model: string, messages: LLMMessage[]): LLMMessage[] {
+    if (model.startsWith('gh/')) {
+      return messages.filter(m => m.role !== 'tool');
+    }
+    return messages;
+  }
+
   private async generateNinerouterResponse(
     model: string,
     messages: LLMMessage[],
@@ -3680,12 +3694,20 @@ class LLMService {
       this.ninerouter.apiKey = apiKey;
     }
 
-    const response = await this.ninerouter.chat.completions.create({
+    const sanitizedMessages = this.sanitizeMessagesForNinerouter(model, messages);
+    const requestParams: any = {
       model,
-      messages: messages as any,
+      messages: sanitizedMessages,
       temperature,
       max_tokens: maxTokens,
-    });
+    };
+    // gh/ models via ninerouter route to GitHub Copilot which rejects
+    // the default function/tool definitions added by the ninerouter server.
+    // Send empty tools array to prevent server-side tool injection.
+    if (model.startsWith('gh/')) {
+      requestParams.tools = [];
+    }
+    const response = await this.ninerouter.chat.completions.create(requestParams);
 
     const toolCalls = response.choices[0]?.message?.tool_calls
       ? this.normalizeOpenAIToolCalls(response.choices[0].message.tool_calls)
@@ -3718,13 +3740,18 @@ class LLMService {
       this.ninerouter.apiKey = apiKey;
     }
 
-    const stream = await this.ninerouter.chat.completions.create({
+    const sanitizedMessages = this.sanitizeMessagesForNinerouter(model, messages);
+    const requestParams: any = {
       model,
-      messages: messages as any,
+      messages: sanitizedMessages,
       temperature,
       max_tokens: maxTokens,
       stream: true,
-    });
+    };
+    if (model.startsWith('gh/')) {
+      requestParams.tools = [];
+    }
+    const stream = await this.ninerouter.chat.completions.create(requestParams);
 
     for await (const chunk of stream) {
       const content = chunk.choices[0]?.delta?.content;

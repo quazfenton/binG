@@ -580,9 +580,9 @@ export const PROVIDERS: Record<string, LLMProviderConfig> = {
       'cf/@cf/qwen/qwq-32b',
       'cf/@cf/qwen/qwen2.5-coder-32b-instruct',
       // Mistral models
-      'mistral/mistral-large-la',
-      'mistral/codestral-la',
-      'mistral/mistral-medium-la',
+      'mistral/mistral-large-latest',
+      'mistral/codestral',
+      'mistral/mistral-small',
     ],
     apiKeyEnv: 'NINEROUTER_API_KEY',
     description: '9Router — Unified gateway to multiple AI providers via single endpoint',

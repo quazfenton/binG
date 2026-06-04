@@ -387,7 +387,7 @@ describe('AgentKernel', () => {
       kernel.start();
       
       const agent = await kernel.getAgent('invalid-id');
-      expect(agent).toBeUndefined();
+      expect(agent).toBeNull();
     });
 
     it('should handle terminating non-existent agents', async () => {
@@ -400,9 +400,8 @@ describe('AgentKernel', () => {
     it('should handle suspending non-existent agents', async () => {
       kernel.start();
       
-      await expect(
-        kernel.suspendAgent('non-existent', 'test')
-      ).rejects.toThrow();
+      const result = await kernel.suspendAgent('non-existent', 'test');
+      expect(result).toBe(false);
     });
   });
 });

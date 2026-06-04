@@ -858,7 +858,7 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
         const result = await generateText({
           model: vercelModel,
           messages,
-          tools: Object.keys(this.sdkTools).length > 0 ? this.sdkTools : undefined,
+          tools: (Object.keys(this.sdkTools).length > 0 && (this.validatedConfig.provider !== 'ninerouter' || !(this.validatedConfig.model || '').startsWith('gh/'))) ? this.sdkTools : ({} as any),
           system:
             'You are an autonomous AI coding agent. You have tools available to interact with the system.',
           maxOutputTokens: 4000,

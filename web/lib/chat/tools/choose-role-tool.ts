@@ -1,32 +1,40 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { analyzeContextAndSuggestRoles, Role, REDIRECTABLE_ROLES } from '@bing/shared/agent/role-redirector';
+import { normalizeAndValidateRole } from '@bing/shared/agent';
 
 /**
  * choose_role Capability
  * 
  * Allows the agent to dynamically switch its internal role/persona based on 
  * evolving task requirements, ensuring the system prompt remains optimized.
+ *
+ * Alias of role_selection — both names are handled by the system.
  */
 export const chooseRoleCapability = tool({
-  description: 'Switch the current expert role/persona to better handle task complexity, domain, or failure recovery.',
+  description: 'Switch the current expert role/persona to better handle task complexity, domain, or failure recovery. Alias of role_selection.',
   inputSchema: z.object({
-    role: z.enum(REDIRECTABLE_ROLES as any)
-      .describe('The target expert role to adopt.'),
+    role: z.string().describe('The target expert role to adopt. Use a role key from the unified prompt library (e.g., debugger, architect, reviewer, tester, researcher, coder, documenter, planner, mlEngineer, etc.).'),
     reason: z.string().describe('Reasoning for the role switch (e.g., handling high-complexity refactor, debugging error loops).'),
   }),
-  execute: async ({ role, reason }) => {
-    try {
-      // This tool is an orchestration directive. The system's routing layer 
-      // monitors the tool history, detects this call, and re-injects the 
-      // appropriate system prompt for the next turn.
+  execute: ({ role, reason }) => {
+    const result = normalizeAndValidateRole(role, reason || '');
+
+    if (!result.valid) {
       return {
-        success: true,
-        roleAdopted: role,
-        message: `Role switched to ${role} for: ${reason}. System prompt will be updated for the next interaction.`,
+        success: false,
+        roleAdopted: result.roleAdopted,
+        rolePrompt: '',
+        roleSource: null,
+        message: result.message,
       };
-    } catch (err: any) {
-      return { success: false, error: err.message };
     }
+
+    return {
+      success: true,
+      roleAdopted: result.roleAdopted,
+      rolePrompt: result.rolePrompt,
+      roleSource: result.roleSource,
+      message: result.message,
+    };
   },
 });

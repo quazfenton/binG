@@ -164,8 +164,8 @@ const DEFAULT_ROUTING: RoutingMetadata = {
  * Extract and parse [ROLE_SELECT] from an LLM response.
  */
 export function parseFirstResponseRouting(responseText: string): ParsedRouting {
-  if (!responseText) {
-    return { found: false, error: 'Empty response' };
+  if (!responseText || typeof responseText !== 'string') {
+    return { found: false, error: 'Empty or non-string response' };
   }
 
   // Support both new and legacy markers; pick the earliest occurrence
@@ -315,6 +315,7 @@ export function routingToRoleRedirectSection(routing: RoutingMetadata): string {
  * Generate a continuation prompt for the next step in the plan.
  */
 export function generateStepReprompt(routing: RoutingMetadata, stepIndex: number): string {
+  if (!routing.planSteps || !Array.isArray(routing.planSteps)) return '';
   const step = routing.planSteps[stepIndex];
   if (!step) return '';
 

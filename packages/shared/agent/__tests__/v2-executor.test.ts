@@ -122,10 +122,18 @@ describe('V2 Executor — Session Mode Mapping', () => {
   });
 
   it('maps "nullclaw" to nullclaw mode', async () => {
+    // For nullclaw, executeV2Task routes through taskRouter instead of creating a session
+    // We need to mock taskRouter.executeTask as well
+    const mockExecuteTask = vi.fn().mockResolvedValue({ success: true, response: 'ok' });
+    vi.doMock('../task-router', () => ({
+      taskRouter: { executeTask: mockExecuteTask },
+    }));
     const { getOrCreateSession } = await setupMocks();
     const { executeV2Task } = await import('../v2-executor');
     await executeV2Task({ userId: 'u1', conversationId: 'c1', task: 'test', preferredAgent: 'nullclaw' });
-    expect(getOrCreateSession).toHaveBeenCalledWith('u1', 'c1', expect.objectContaining({ mode: 'nullclaw' }));
+    // Nullclaw path calls taskRouter.executeTask, not getOrCreateSession
+    expect(mockExecuteTask).toHaveBeenCalled();
+    expect(getOrCreateSession).not.toHaveBeenCalled();
   });
 
   it('maps undefined preferredAgent to default mode', async () => {

@@ -6,7 +6,8 @@
     "./agent": "./agent/index.ts",
     "./agent/*": "./agent/*.ts",
     "./FS": "./FS/index.ts",
-    "./FS/*": "./FS/*.ts"
+    "./FS/*": "./FS/*.ts",
+    "./lib/*": "./lib/*.ts"
   },
   "dependencies": {},
   "peerDependencies": {

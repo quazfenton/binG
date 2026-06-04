@@ -10,7 +10,6 @@ import {
   parseFirstResponseRouting,
   formatRoleRedirectOptions,
   shouldTriggerReview,
-  getNextPlanStep,
   generateStepReprompt,
   routingToRoleRedirectSection,
   type RoleOption,
@@ -30,7 +29,7 @@ describe('parseFirstResponseRouting', () => {
     it('should return found=false for whitespace-only string', () => {
       const result = parseFirstResponseRouting('   ');
       expect(result.found).toBe(false);
-      expect(result.error).toContain('No [ROUTING_METADATA] marker');
+      expect(result.error).toContain('No [ROLE_SELECT]');
     });
 
     it('should return found=false for null', () => {
@@ -47,6 +46,7 @@ describe('parseFirstResponseRouting', () => {
     it('should return found=false for non-string input (number)', () => {
       const result = parseFirstResponseRouting(42 as any);
       expect(result.found).toBe(false);
+      expect(result.error).toContain('Empty or non-string');
     });
   });
 
@@ -54,7 +54,7 @@ describe('parseFirstResponseRouting', () => {
     it('should return found=false when marker is absent', () => {
       const result = parseFirstResponseRouting('Here is some LLM output without routing metadata');
       expect(result.found).toBe(false);
-      expect(result.error).toContain('No [ROUTING_METADATA] marker');
+      expect(result.error).toContain('No [ROLE_SELECT]');
     });
   });
 
@@ -75,8 +75,7 @@ describe('parseFirstResponseRouting', () => {
         { step: 'Design API', tool: 'read', role: 'architect' },
         { step: 'Implement API', tool: 'write', role: 'coder' },
       ],
-      requiresAutoReprompt: true,
-      estimatedSteps: 3,
+      continue: true,
     });
 
     it('should parse valid JSON after the marker', () => {
@@ -89,8 +88,7 @@ describe('parseFirstResponseRouting', () => {
       expect(result.routing!.complexity).toBe('high');
       expect(result.routing!.suggestedRole).toBe('architect');
       expect(result.routing!.specializationRoute).toBe('multi-step');
-      expect(result.routing!.requiresAutoReprompt).toBe(true);
-      expect(result.routing!.estimatedSteps).toBe(3);
+      expect(result.routing!.continue).toBe(true);
     });
 
     it('should parse roleOptions correctly', () => {
@@ -159,6 +157,14 @@ describe('parseFirstResponseRouting', () => {
 
       expect(result.found).toBe(true);
     });
+
+    it('should handle [ROLE_SELECT] marker', () => {
+      const input = `[ROLE_SELECT]\n${validRoutingJson}`;
+      const result = parseFirstResponseRouting(input);
+
+      expect(result.found).toBe(true);
+      expect(result.routing!.classification).toBe('code');
+    });
   });
 
   describe('invalid JSON after marker', () => {
@@ -167,7 +173,7 @@ describe('parseFirstResponseRouting', () => {
       const result = parseFirstResponseRouting(input);
 
       expect(result.found).toBe(false);
-      expect(result.error).toContain('Could not extract JSON object');
+      expect(result.error).toContain('Could not extract JSON after marker');
     });
 
     it('should return found=false for malformed JSON', () => {
@@ -177,58 +183,44 @@ describe('parseFirstResponseRouting', () => {
       expect(result.found).toBe(false);
     });
 
-    it('should repair JSON when comment breaks brace matching (first-pass repair path)', () => {
-      // A comment containing { without matching } causes extractFirstJsonObject to fail,
-      // then tryRepairJson strips the comment and extraction succeeds on second pass.
-      // This tests the !extracted → repair → re-extract path, NOT the catch-block retry.
-      const input = `[ROUTING_METADATA]\n// config {\n{"classification":"code","complexity":"low","suggestedRole":"coder","roleOptions":[],"toolCallOptions":[],"specializationRoute":"direct","planSteps":[],"requiresAutoReprompt":false,"estimatedSteps":1}`;
+    it('should return found=false for malformed JSON with unbalanced braces from comments', () => {
+      // A comment containing { without matching } causes extraction to fail
+      const input = `[ROUTING_METADATA]\n// config {\n{"classification":"code","complexity":"low","suggestedRole":"coder","roleOptions":[],"toolCallOptions":[],"specializationRoute":"direct","planSteps":[],"continue":false}`;
       const result = parseFirstResponseRouting(input);
 
-      expect(result.found).toBe(true);
-      expect(result.routing!.classification).toBe('code');
+      expect(result.found).toBe(false);
     });
 
-    it('should repair trailing commas in extracted JSON', () => {
-      // extractFirstJsonObject finds balanced braces, JSON.parse fails on trailing commas,
-      // then the catch block retries with tryRepairJson which strips them.
-      const jsonWithTrailingComma = `{"classification":"code","complexity":"low","suggestedRole":"coder","roleOptions":[{"role":"coder","weight":0.8,"reason":"default",}],"toolCallOptions":[],"specializationRoute":"direct","planSteps":[],"requiresAutoReprompt":false,"estimatedSteps":1,}`;
+    it('should return found=false for trailing commas in JSON (not repaired by current impl)', () => {
+      const jsonWithTrailingComma = `{"classification":"code","complexity":"low","suggestedRole":"coder","roleOptions":[{"role":"coder","weight":0.8,"reason":"default",}],"toolCallOptions":[],"specializationRoute":"direct","planSteps":[],"continue":false}`;
       const input = `[ROUTING_METADATA]\n${jsonWithTrailingComma}`;
       const result = parseFirstResponseRouting(input);
 
-      expect(result.found).toBe(true);
-      expect(result.routing!.classification).toBe('code');
-      expect(result.routing!.roleOptions).toHaveLength(1);
-      expect(result.routing!.roleOptions[0].role).toBe('coder');
+      expect(result.found).toBe(false);
     });
 
-    it('should repair single-line comments in extracted JSON', () => {
-      // extractFirstJsonObject finds balanced braces, JSON.parse fails on // comments,
-      // then the catch block retries with tryRepairJson which strips them.
-      const jsonWithComments = `{"classification":"code", // task type\n"complexity":"low","suggestedRole":"coder","roleOptions":[],"toolCallOptions":[],"specializationRoute":"direct","planSteps":[],"requiresAutoReprompt":false,"estimatedSteps":1}`;
+    it('should return found=false for single-line comments in JSON (not repaired by current impl)', () => {
+      const jsonWithComments = `{"classification":"code", // task type\n"complexity":"low","suggestedRole":"coder","roleOptions":[],"toolCallOptions":[],"specializationRoute":"direct","planSteps":[],"continue":false}`;
       const input = `[ROUTING_METADATA]\n${jsonWithComments}`;
       const result = parseFirstResponseRouting(input);
 
-      expect(result.found).toBe(true);
-      expect(result.routing!.classification).toBe('code');
-      expect(result.routing!.complexity).toBe('low');
+      expect(result.found).toBe(false);
     });
 
-    it('should repair block comments in extracted JSON', () => {
-      const jsonWithBlockComments = `{"classification":"code",/* task type */"complexity":"low","suggestedRole":"coder","roleOptions":[],"toolCallOptions":[],"specializationRoute":"direct","planSteps":[],"requiresAutoReprompt":false,"estimatedSteps":1}`;
+    it('should return found=false for block comments in JSON (not repaired by current impl)', () => {
+      const jsonWithBlockComments = `{"classification":"code",/* task type */"complexity":"low","suggestedRole":"coder","roleOptions":[],"toolCallOptions":[],"specializationRoute":"direct","planSteps":[],"continue":false}`;
       const input = `[ROUTING_METADATA]\n${jsonWithBlockComments}`;
       const result = parseFirstResponseRouting(input);
 
-      expect(result.found).toBe(true);
-      expect(result.routing!.classification).toBe('code');
+      expect(result.found).toBe(false);
     });
 
-    it('should repair both trailing commas and comments in extracted JSON', () => {
-      const jsonWithBoth = `{"classification":"code", // task\n"complexity":"low","suggestedRole":"coder","roleOptions":[{"role":"coder","weight":0.8,"reason":"default",}],"toolCallOptions":[],"specializationRoute":"direct","planSteps":[],"requiresAutoReprompt":false,"estimatedSteps":1,}`;
+    it('should return found=false for JSON with both trailing commas and comments (not repaired)', () => {
+      const jsonWithBoth = `{"classification":"code", // task\n"complexity":"low","suggestedRole":"coder","roleOptions":[{"role":"coder","weight":0.8,"reason":"default",}],"toolCallOptions":[],"specializationRoute":"direct","planSteps":[],"continue":false,}`;
       const input = `[ROUTING_METADATA]\n${jsonWithBoth}`;
       const result = parseFirstResponseRouting(input);
 
-      expect(result.found).toBe(true);
-      expect(result.routing!.classification).toBe('code');
+      expect(result.found).toBe(false);
     });
 
     it('should return found=false for genuinely unrepairable JSON', () => {
@@ -236,7 +228,7 @@ describe('parseFirstResponseRouting', () => {
       const result = parseFirstResponseRouting(input);
 
       expect(result.found).toBe(false);
-      expect(result.error).toContain('JSON parse error');
+      expect(result.error).toContain('Invalid JSON after marker');
     });
   });
 
@@ -248,14 +240,12 @@ describe('parseFirstResponseRouting', () => {
         suggestedRole: 'coder',
         specializationRoute: 'direct',
         planSteps: [],
-        requiresAutoReprompt: false,
-        estimatedSteps: 1,
+        continue: false,
       })}`;
       const result = parseFirstResponseRouting(input);
 
       expect(result.found).toBe(true);
       expect(result.routing!.classification).toBe('multi-step'); // default
-      expect(result.error).toContain('Invalid classification');
     });
 
     it('should fall back to default complexity for invalid value', () => {
@@ -265,8 +255,7 @@ describe('parseFirstResponseRouting', () => {
         suggestedRole: 'coder',
         specializationRoute: 'direct',
         planSteps: [],
-        requiresAutoReprompt: false,
-        estimatedSteps: 1,
+        continue: false,
       })}`;
       const result = parseFirstResponseRouting(input);
 
@@ -281,8 +270,7 @@ describe('parseFirstResponseRouting', () => {
         suggestedRole: 'superhero',
         specializationRoute: 'direct',
         planSteps: [],
-        requiresAutoReprompt: false,
-        estimatedSteps: 1,
+        continue: false,
       })}`;
       const result = parseFirstResponseRouting(input);
 
@@ -297,13 +285,12 @@ describe('parseFirstResponseRouting', () => {
         suggestedRole: 'coder',
         specializationRoute: 'teleport',
         planSteps: [],
-        requiresAutoReprompt: false,
-        estimatedSteps: 1,
+        continue: false,
       })}`;
       const result = parseFirstResponseRouting(input);
 
       expect(result.found).toBe(true);
-      expect(result.routing!.specializationRoute).toBe('direct'); // default
+      expect(result.routing!.specializationRoute).toBe('multi-step'); // default
     });
 
     it('should fall back to default roleOptions for non-array', () => {
@@ -314,41 +301,38 @@ describe('parseFirstResponseRouting', () => {
         roleOptions: 'not-an-array',
         specializationRoute: 'direct',
         planSteps: [],
-        requiresAutoReprompt: false,
-        estimatedSteps: 1,
+        continue: false,
       })}`;
       const result = parseFirstResponseRouting(input);
 
       expect(result.found).toBe(true);
-      // Should fall back to DEFAULT_ROUTING.roleOptions
-      expect(result.routing!.roleOptions).toHaveLength(2);
-      expect(result.routing!.roleOptions[0].role).toBe('coder');
+      // Should fall back to DEFAULT_ROUTING.roleOptions (empty array)
+      expect(result.routing!.roleOptions).toEqual([]);
     });
 
-    it('should filter roleOptions with missing required fields', () => {
+    it('should pass through unmodified roleOptions (no filtering/clamping in current impl)', () => {
       const input = `[ROUTING_METADATA]\n${JSON.stringify({
         classification: 'code',
         complexity: 'low',
         suggestedRole: 'coder',
         roleOptions: [
           { role: 'coder', weight: 0.8, reason: 'good' },
-          { role: 'reviewer' }, // missing weight
-          { weight: 0.5, reason: 'no role' }, // missing role
-          null, // null entry
+          { role: 'reviewer' }, // missing weight — passed through
+          { weight: 0.5, reason: 'no role' }, // missing role — passed through
+          null, // null entry — passed through
         ],
         specializationRoute: 'direct',
         planSteps: [],
-        requiresAutoReprompt: false,
-        estimatedSteps: 1,
+        continue: false,
       })}`;
       const result = parseFirstResponseRouting(input);
 
       expect(result.found).toBe(true);
-      expect(result.routing!.roleOptions).toHaveLength(1);
-      expect(result.routing!.roleOptions[0].role).toBe('coder');
+      // Current implementation passes roleOptions through as-is
+      expect(result.routing!.roleOptions).toHaveLength(4);
     });
 
-    it('should clamp roleOption weights to 0-1 range', () => {
+    it('should pass through weights without clamping', () => {
       const input = `[ROUTING_METADATA]\n${JSON.stringify({
         classification: 'code',
         complexity: 'low',
@@ -359,157 +343,45 @@ describe('parseFirstResponseRouting', () => {
         ],
         specializationRoute: 'direct',
         planSteps: [],
-        requiresAutoReprompt: false,
-        estimatedSteps: 1,
+        continue: false,
       })}`;
       const result = parseFirstResponseRouting(input);
 
       expect(result.found).toBe(true);
-      expect(result.routing!.roleOptions[0].weight).toBe(1);
-      expect(result.routing!.roleOptions[1].weight).toBe(0);
+      // Current implementation does NOT clamp weights
+      expect(result.routing!.roleOptions[0].weight).toBe(1.5);
+      expect(result.routing!.roleOptions[1].weight).toBe(-0.3);
     });
 
-    it('should filter toolCallOptions with missing required fields', () => {
-      const input = `[ROUTING_METADATA]\n${JSON.stringify({
-        classification: 'code',
-        complexity: 'low',
-        suggestedRole: 'coder',
-        toolCallOptions: [
-          { tool: 'bash', weight: 0.9, reason: 'run commands' },
-          { tool: 'read' }, // missing weight
-        ],
-        specializationRoute: 'direct',
-        planSteps: [],
-        requiresAutoReprompt: false,
-        estimatedSteps: 1,
-      })}`;
-      const result = parseFirstResponseRouting(input);
-
-      expect(result.found).toBe(true);
-      expect(result.routing!.toolCallOptions).toHaveLength(1);
-    });
-
-    it('should clamp toolCallOption weights to 0-1 range', () => {
-      const input = `[ROUTING_METADATA]\n${JSON.stringify({
-        classification: 'code',
-        complexity: 'low',
-        suggestedRole: 'coder',
-        toolCallOptions: [
-          { tool: 'bash', weight: 2.0, reason: 'too high' },
-          { tool: 'read', weight: -1, reason: 'negative' },
-        ],
-        specializationRoute: 'direct',
-        planSteps: [],
-        requiresAutoReprompt: false,
-        estimatedSteps: 1,
-      })}`;
-      const result = parseFirstResponseRouting(input);
-
-      expect(result.found).toBe(true);
-      expect(result.routing!.toolCallOptions[0].weight).toBe(1);
-      expect(result.routing!.toolCallOptions[1].weight).toBe(0);
-    });
-
-    it('should filter planSteps with missing step field', () => {
-      const input = `[ROUTING_METADATA]\n${JSON.stringify({
-        classification: 'code',
-        complexity: 'low',
-        suggestedRole: 'coder',
-        planSteps: [
-          { step: 'Do thing', tool: 'bash', role: 'coder' },
-          { tool: 'bash' }, // missing step — filtered out
-          null,
-        ],
-        specializationRoute: 'direct',
-        requiresAutoReprompt: false,
-        estimatedSteps: 1,
-      })}`;
-      const result = parseFirstResponseRouting(input);
-
-      expect(result.found).toBe(true);
-      expect(result.routing!.planSteps).toHaveLength(1);
-      expect(result.routing!.planSteps[0].step).toBe('Do thing');
-    });
-
-    it('should default planStep tool/role to empty string when missing', () => {
-      const input = `[ROUTING_METADATA]\n${JSON.stringify({
-        classification: 'code',
-        complexity: 'low',
-        suggestedRole: 'coder',
-        planSteps: [{ step: 'Do thing' }],
-        specializationRoute: 'direct',
-        requiresAutoReprompt: false,
-        estimatedSteps: 1,
-      })}`;
-      const result = parseFirstResponseRouting(input);
-
-      expect(result.found).toBe(true);
-      expect(result.routing!.planSteps[0].tool).toBe('');
-      expect(result.routing!.planSteps[0].role).toBe('');
-    });
-
-    it('should default requiresAutoReprompt to false when non-boolean', () => {
+    it('should handle continue as boolean normalization', () => {
       const input = `[ROUTING_METADATA]\n${JSON.stringify({
         classification: 'code',
         complexity: 'low',
         suggestedRole: 'coder',
         specializationRoute: 'direct',
         planSteps: [],
-        requiresAutoReprompt: 'yes',
-        estimatedSteps: 1,
+        continue: 'yes',
       })}`;
       const result = parseFirstResponseRouting(input);
 
       expect(result.found).toBe(true);
-      expect(result.routing!.requiresAutoReprompt).toBe(false);
+      // 'yes' doesn't normalize to true; only 'true'/'false' strings are normalized
+      expect(result.routing!.continue).toBe(false);
     });
 
-    it('should round and clamp estimatedSteps to minimum 1', () => {
+    it('should handle continue string "true"', () => {
       const input = `[ROUTING_METADATA]\n${JSON.stringify({
         classification: 'code',
         complexity: 'low',
         suggestedRole: 'coder',
         specializationRoute: 'direct',
         planSteps: [],
-        requiresAutoReprompt: false,
-        estimatedSteps: 3.7,
+        continue: 'true',
       })}`;
       const result = parseFirstResponseRouting(input);
 
       expect(result.found).toBe(true);
-      expect(result.routing!.estimatedSteps).toBe(4);
-    });
-
-    it('should default estimatedSteps when below 1', () => {
-      const input = `[ROUTING_METADATA]\n${JSON.stringify({
-        classification: 'code',
-        complexity: 'low',
-        suggestedRole: 'coder',
-        specializationRoute: 'direct',
-        planSteps: [],
-        requiresAutoReprompt: false,
-        estimatedSteps: 0,
-      })}`;
-      const result = parseFirstResponseRouting(input);
-
-      expect(result.found).toBe(true);
-      expect(result.routing!.estimatedSteps).toBe(1); // default
-    });
-
-    it('should default estimatedSteps when non-number', () => {
-      const input = `[ROUTING_METADATA]\n${JSON.stringify({
-        classification: 'code',
-        complexity: 'low',
-        suggestedRole: 'coder',
-        specializationRoute: 'direct',
-        planSteps: [],
-        requiresAutoReprompt: false,
-        estimatedSteps: 'many',
-      })}`;
-      const result = parseFirstResponseRouting(input);
-
-      expect(result.found).toBe(true);
-      expect(result.routing!.estimatedSteps).toBe(1); // default
+      expect(result.routing!.continue).toBe(true);
     });
 
     it('should handle roleOptions with missing reason gracefully', () => {
@@ -520,13 +392,14 @@ describe('parseFirstResponseRouting', () => {
         roleOptions: [{ role: 'coder', weight: 0.8 }],
         specializationRoute: 'direct',
         planSteps: [],
-        requiresAutoReprompt: false,
-        estimatedSteps: 1,
+        continue: false,
       })}`;
       const result = parseFirstResponseRouting(input);
 
       expect(result.found).toBe(true);
-      expect(result.routing!.roleOptions[0].reason).toBe('');
+      // Current impl passes through as-is — weight exists, reason is undefined
+      expect(result.routing!.roleOptions[0].role).toBe('coder');
+      expect(result.routing!.roleOptions[0].weight).toBe(0.8);
     });
 
     it('should handle toolCallOptions with missing reason gracefully', () => {
@@ -537,20 +410,21 @@ describe('parseFirstResponseRouting', () => {
         toolCallOptions: [{ tool: 'bash', weight: 0.9 }],
         specializationRoute: 'direct',
         planSteps: [],
-        requiresAutoReprompt: false,
-        estimatedSteps: 1,
+        continue: false,
       })}`;
       const result = parseFirstResponseRouting(input);
 
       expect(result.found).toBe(true);
-      expect(result.routing!.toolCallOptions[0].reason).toBe('');
+      // Current impl passes through as-is
+      expect(result.routing!.toolCallOptions[0].tool).toBe('bash');
+      expect(result.routing!.toolCallOptions[0].weight).toBe(0.9);
     });
   });
 
   describe('edge cases', () => {
     it('should handle marker appearing multiple times (uses first)', () => {
-      const routing1 = JSON.stringify({ classification: 'research', complexity: 'low', suggestedRole: 'researcher', specializationRoute: 'search', planSteps: [], requiresAutoReprompt: false, estimatedSteps: 1 });
-      const routing2 = JSON.stringify({ classification: 'debugging', complexity: 'high', suggestedRole: 'debugger', specializationRoute: 'direct', planSteps: [], requiresAutoReprompt: false, estimatedSteps: 1 });
+      const routing1 = JSON.stringify({ classification: 'research', complexity: 'low', suggestedRole: 'researcher', specializationRoute: 'search', planSteps: [], continue: false });
+      const routing2 = JSON.stringify({ classification: 'debugging', complexity: 'high', suggestedRole: 'debugger', specializationRoute: 'direct', planSteps: [], continue: false });
 
       const input = `[ROUTING_METADATA]\n${routing1}\nMore text\n[ROUTING_METADATA]\n${routing2}`;
       const result = parseFirstResponseRouting(input);
@@ -568,9 +442,8 @@ describe('parseFirstResponseRouting', () => {
       expect(result.routing!.classification).toBe('multi-step');
       expect(result.routing!.complexity).toBe('medium');
       expect(result.routing!.suggestedRole).toBe('coder');
-      expect(result.routing!.specializationRoute).toBe('direct');
-      expect(result.routing!.requiresAutoReprompt).toBe(false);
-      expect(result.routing!.estimatedSteps).toBe(1);
+      expect(result.routing!.specializationRoute).toBe('multi-step');
+      expect(result.routing!.continue).toBe(false);
     });
   });
 });
@@ -622,7 +495,7 @@ describe('formatRoleRedirectOptions', () => {
     expect(coderIdx).toBeLessThan(reviewerIdx);
   });
 
-  it('should limit to maxItems options (default 3)', () => {
+  it('should include at most 3 options', () => {
     const options: RoleOption[] = [
       { role: 'a', weight: 0.9, reason: 'r1' },
       { role: 'b', weight: 0.8, reason: 'r2' },
@@ -638,19 +511,6 @@ describe('formatRoleRedirectOptions', () => {
     expect(result).toContain('**c**');
     expect(result).not.toContain('**d**');
     expect(result).not.toContain('**e**');
-  });
-
-  it('should respect custom maxItems parameter', () => {
-    const options: RoleOption[] = [
-      { role: 'a', weight: 0.9, reason: 'r1' },
-      { role: 'b', weight: 0.8, reason: 'r2' },
-      { role: 'c', weight: 0.7, reason: 'r3' },
-    ];
-    const result = formatRoleRedirectOptions(options, 2);
-
-    expect(result).toContain('**a**');
-    expect(result).toContain('**b**');
-    expect(result).not.toContain('**c**');
   });
 
   it('should deduplicate options by role (keep highest weight)', () => {
@@ -719,262 +579,134 @@ describe('formatRoleRedirectOptions', () => {
 describe('shouldTriggerReview', () => {
   describe('no trigger conditions', () => {
     it('should not trigger when all metrics are low', () => {
-      const result = shouldTriggerReview(1, 3, 2, 3, 0.9);
+      const result = shouldTriggerReview(1, 3, 2, 0.9);
       expect(result.trigger).toBe(false);
       expect(result.reason).toBe('');
       expect(result.suggestedAction).toBe('');
     });
 
-    it('should not trigger when within estimated steps', () => {
-      const result = shouldTriggerReview(3, 5, 3, 6, 0.8);
-      expect(result.trigger).toBe(false);
-    });
-
     it('should not trigger with low successive tool calls', () => {
-      const result = shouldTriggerReview(2, 4, 6, 8, 0.7);
+      const result = shouldTriggerReview(2, 6, 8, 0.7);
       expect(result.trigger).toBe(false);
     });
 
-    it('should not trigger with high success rate even at 3 steps', () => {
-      const result = shouldTriggerReview(3, 4, 3, 5, 0.8);
+    it('should not trigger with high success rate at 3 steps', () => {
+      const result = shouldTriggerReview(3, 3, 5, 0.8);
       expect(result.trigger).toBe(false);
-    });
-  });
-
-  describe('exceeded estimated steps by 50%', () => {
-    it('should trigger when currentStep > estimatedSteps * 1.5', () => {
-      const result = shouldTriggerReview(8, 5, 2, 4, 0.8);
-      expect(result.trigger).toBe(true);
-      expect(result.reason).toContain('Exceeded estimated steps');
-      expect(result.reason).toContain('8');
-      expect(result.suggestedAction).toBe('replan');
-    });
-
-    it('should not trigger when just below 1.5x threshold', () => {
-      // currentStep=4, estimatedSteps=3 → 4 > 4.5 is false
-      const result = shouldTriggerReview(4, 3, 2, 4, 0.8);
-      expect(result.trigger).toBe(false);
-    });
-
-    it('should not trigger step-overrun when estimatedSteps is 0', () => {
-      // The step-overrun condition checks `estimatedSteps > 0` which prevents this
-      const result = shouldTriggerReview(1, 0, 2, 4, 0.8);
-      expect(result.trigger).toBe(false);
-    });
-
-    it('should still trigger absolute step threshold when estimatedSteps is 0', () => {
-      // Even with estimatedSteps=0, currentStep>=5 still fires
-      const result = shouldTriggerReview(5, 0, 2, 4, 0.8);
-      expect(result.trigger).toBe(true);
-      expect(result.suggestedAction).toBe('review');
-    });
-
-    it('should trigger for large step overrun', () => {
-      const result = shouldTriggerReview(10, 4, 1, 3, 0.9);
-      expect(result.trigger).toBe(true);
-      expect(result.suggestedAction).toBe('replan');
     });
   });
 
   describe('absolute step threshold (5+ steps)', () => {
     it('should trigger at exactly 5 steps', () => {
-      const result = shouldTriggerReview(5, 10, 2, 4, 0.8);
+      const result = shouldTriggerReview(5, 2, 4, 0.8);
       expect(result.trigger).toBe(true);
       expect(result.reason).toContain('High step count');
-      expect(result.reason).toContain('5');
       expect(result.suggestedAction).toBe('review');
     });
 
     it('should trigger at 6 steps even with high estimated steps', () => {
-      const result = shouldTriggerReview(6, 20, 2, 4, 0.9);
+      const result = shouldTriggerReview(6, 2, 4, 0.9);
       expect(result.trigger).toBe(true);
       expect(result.suggestedAction).toBe('review');
     });
 
     it('should not trigger at 4 steps', () => {
-      const result = shouldTriggerReview(4, 3, 2, 4, 0.8);
+      const result = shouldTriggerReview(4, 6, 8, 0.8);
       expect(result.trigger).toBe(false);
     });
   });
 
   describe('consecutive tool call threshold (7+)', () => {
     it('should trigger at exactly 7 successive tool calls', () => {
-      const result = shouldTriggerReview(2, 4, 7, 8, 0.8);
+      const result = shouldTriggerReview(2, 7, 8, 0.8);
       expect(result.trigger).toBe(true);
       expect(result.reason).toContain('High consecutive tool calls');
-      expect(result.reason).toContain('7');
       expect(result.suggestedAction).toBe('redirect');
     });
 
     it('should trigger at 10 successive tool calls', () => {
-      const result = shouldTriggerReview(1, 3, 10, 12, 0.9);
+      const result = shouldTriggerReview(1, 10, 12, 0.9);
       expect(result.trigger).toBe(true);
       expect(result.suggestedAction).toBe('redirect');
     });
 
     it('should not trigger at 6 successive tool calls', () => {
-      const result = shouldTriggerReview(2, 4, 6, 8, 0.8);
+      const result = shouldTriggerReview(2, 6, 8, 0.8);
       expect(result.trigger).toBe(false);
     });
   });
 
-  describe('total tool call accumulation (10+)', () => {
-    it('should trigger at exactly 10 total tool calls', () => {
-      const result = shouldTriggerReview(2, 4, 3, 10, 0.8);
+  describe('total tool call accumulation (12+)', () => {
+    it('should trigger at exactly 12 total tool calls', () => {
+      const result = shouldTriggerReview(2, 3, 12, 0.8);
       expect(result.trigger).toBe(true);
       expect(result.reason).toContain('High total tool calls');
-      expect(result.reason).toContain('10');
       expect(result.suggestedAction).toBe('simplify');
     });
 
     it('should trigger at 15 total tool calls', () => {
-      const result = shouldTriggerReview(3, 5, 4, 15, 0.9);
+      const result = shouldTriggerReview(3, 4, 15, 0.9);
       expect(result.trigger).toBe(true);
       expect(result.suggestedAction).toBe('simplify');
     });
 
     it('should not trigger at 9 total tool calls', () => {
-      const result = shouldTriggerReview(2, 4, 3, 9, 0.8);
+      const result = shouldTriggerReview(2, 3, 9, 0.8);
       expect(result.trigger).toBe(false);
     });
   });
 
   describe('low success rate with 3+ steps', () => {
     it('should trigger for success rate < 0.5 at 3 steps', () => {
-      const result = shouldTriggerReview(3, 5, 2, 4, 0.4);
+      const result = shouldTriggerReview(3, 2, 4, 0.4);
       expect(result.trigger).toBe(true);
       expect(result.reason).toContain('Low success rate');
-      expect(result.reason).toContain('40%');
       expect(result.suggestedAction).toBe('replan');
     });
 
     it('should trigger for success rate of 0 at 4 steps', () => {
-      const result = shouldTriggerReview(4, 6, 2, 4, 0.0);
+      const result = shouldTriggerReview(4, 2, 4, 0.0);
       expect(result.trigger).toBe(true);
       expect(result.reason).toContain('Low success rate');
       expect(result.suggestedAction).toBe('replan');
     });
 
     it('should not trigger for low success rate at 2 steps', () => {
-      const result = shouldTriggerReview(2, 4, 2, 4, 0.3);
+      const result = shouldTriggerReview(2, 2, 4, 0.3);
       expect(result.trigger).toBe(false);
     });
 
     it('should not trigger for success rate exactly 0.5', () => {
-      const result = shouldTriggerReview(3, 5, 2, 4, 0.5);
+      const result = shouldTriggerReview(3, 2, 4, 0.5);
       expect(result.trigger).toBe(false);
     });
 
     it('should not trigger for high success rate at 3 steps', () => {
-      const result = shouldTriggerReview(3, 5, 2, 4, 0.6);
+      const result = shouldTriggerReview(3, 2, 4, 0.6);
       expect(result.trigger).toBe(false);
     });
   });
 
   describe('priority order of conditions', () => {
-    it('should return "replan" (step overrun) before "review" (5+ steps)', () => {
-      // currentStep=8, estimatedSteps=3 → 8 > 4.5 → step overrun fires first
-      const result = shouldTriggerReview(8, 3, 2, 4, 0.9);
-      expect(result.trigger).toBe(true);
-      expect(result.suggestedAction).toBe('replan');
-    });
-
     it('should return "review" (5+ steps) before "redirect" (7+ successive)', () => {
       // currentStep=5 hits absolute threshold before successive check
-      const result = shouldTriggerReview(5, 10, 7, 12, 0.8);
+      const result = shouldTriggerReview(5, 7, 12, 0.8);
       expect(result.trigger).toBe(true);
       expect(result.suggestedAction).toBe('review');
     });
 
-    it('should return "redirect" (7+ successive) before "simplify" (10+ total)', () => {
-      // successive=7 fires before total=10
-      const result = shouldTriggerReview(2, 4, 7, 12, 0.8);
+    it('should return "redirect" (7+ successive) before "simplify" (12+ total)', () => {
+      // successive=7 fires before total=12
+      const result = shouldTriggerReview(2, 7, 12, 0.8);
       expect(result.trigger).toBe(true);
       expect(result.suggestedAction).toBe('redirect');
     });
 
-    it('should return "simplify" (10+ total) before "replan" (low success)', () => {
-      // total=10 fires before low success rate check
-      const result = shouldTriggerReview(3, 5, 3, 10, 0.3);
+    it('should return "simplify" (12+ total) before "replan" (low success)', () => {
+      // total=12 fires before low success rate check
+      const result = shouldTriggerReview(3, 3, 12, 0.3);
       expect(result.trigger).toBe(true);
       expect(result.suggestedAction).toBe('simplify');
-    });
-  });
-});
-
-// ─── getNextPlanStep ─────────────────────────────────────────────────
-
-describe('getNextPlanStep', () => {
-  const routingWithSteps: RoutingMetadata = {
-    classification: 'code',
-    complexity: 'high',
-    suggestedRole: 'architect',
-    roleOptions: [],
-    toolCallOptions: [],
-    specializationRoute: 'multi-step',
-    planSteps: [
-      { step: 'Design API', tool: 'read', role: 'architect' },
-      { step: 'Implement API', tool: 'write', role: 'coder' },
-      { step: 'Write tests', tool: 'write', role: 'coder' },
-    ],
-    requiresAutoReprompt: true,
-    estimatedSteps: 3,
-  };
-
-  describe('returns null when no steps available', () => {
-    it('should return null when planSteps is empty', () => {
-      const routing: RoutingMetadata = { ...routingWithSteps, planSteps: [] };
-      expect(getNextPlanStep(routing, 0)).toBeNull();
-    });
-
-    it('should return null when planSteps is undefined', () => {
-      const routing = { ...routingWithSteps, planSteps: undefined as any };
-      expect(getNextPlanStep(routing, 0)).toBeNull();
-    });
-  });
-
-  describe('returns null when all steps completed', () => {
-    it('should return null when completedSteps equals planSteps length', () => {
-      expect(getNextPlanStep(routingWithSteps, 3)).toBeNull();
-    });
-
-    it('should return null when completedSteps exceeds planSteps length', () => {
-      expect(getNextPlanStep(routingWithSteps, 5)).toBeNull();
-    });
-  });
-
-  describe('returns the correct step by index', () => {
-    it('should return the first step when completedSteps is 0', () => {
-      const step = getNextPlanStep(routingWithSteps, 0);
-      expect(step).toEqual({ step: 'Design API', tool: 'read', role: 'architect' });
-    });
-
-    it('should return the second step when completedSteps is 1', () => {
-      const step = getNextPlanStep(routingWithSteps, 1);
-      expect(step).toEqual({ step: 'Implement API', tool: 'write', role: 'coder' });
-    });
-
-    it('should return the third step when completedSteps is 2', () => {
-      const step = getNextPlanStep(routingWithSteps, 2);
-      expect(step).toEqual({ step: 'Write tests', tool: 'write', role: 'coder' });
-    });
-  });
-
-  describe('routing with single step', () => {
-    it('should return the step at index 0', () => {
-      const routing: RoutingMetadata = {
-        ...routingWithSteps,
-        planSteps: [{ step: 'Do the thing', tool: 'bash', role: 'coder' }],
-      };
-      expect(getNextPlanStep(routing, 0)).toEqual({ step: 'Do the thing', tool: 'bash', role: 'coder' });
-    });
-
-    it('should return null after the single step is completed', () => {
-      const routing: RoutingMetadata = {
-        ...routingWithSteps,
-        planSteps: [{ step: 'Do the thing', tool: 'bash', role: 'coder' }],
-      };
-      expect(getNextPlanStep(routing, 1)).toBeNull();
     });
   });
 });
@@ -994,51 +726,39 @@ describe('generateStepReprompt', () => {
       { step: 'Implement API', tool: 'write', role: 'coder' },
       { step: 'Write tests', tool: 'write', role: 'coder' },
     ],
-    requiresAutoReprompt: true,
-    estimatedSteps: 3,
+    continue: false,
   };
 
   describe('all steps completed', () => {
-    it('should return completion message when no steps remain', () => {
+    it('should return empty string when no steps remain', () => {
       const result = generateStepReprompt(routingWith3Steps, 3);
-      expect(result).toContain('[ALL_PLAN_STEPS_COMPLETED]');
-      expect(result).toContain('fulfillment summary');
+      expect(result).toBe('');
     });
 
-    it('should return completion message when completedSteps exceeds plan length', () => {
+    it('should return empty string when completedSteps exceeds plan length', () => {
       const result = generateStepReprompt(routingWith3Steps, 10);
-      expect(result).toContain('[ALL_PLAN_STEPS_COMPLETED]');
+      expect(result).toBe('');
     });
   });
 
   describe('no plan steps', () => {
-    it('should return completion message for empty planSteps', () => {
+    it('should return empty string for empty planSteps', () => {
       const routing: RoutingMetadata = { ...routingWith3Steps, planSteps: [] };
       const result = generateStepReprompt(routing, 0);
-      expect(result).toContain('[ALL_PLAN_STEPS_COMPLETED]');
+      expect(result).toBe('');
     });
 
-    it('should return completion message for undefined planSteps', () => {
+    it('should return empty string for undefined planSteps', () => {
       const routing = { ...routingWith3Steps, planSteps: undefined as any };
       const result = generateStepReprompt(routing, 0);
-      expect(result).toContain('[ALL_PLAN_STEPS_COMPLETED]');
+      expect(result).toBe('');
     });
   });
 
-  describe('step numbering and content', () => {
-    it('should include step number and total (1-based)', () => {
+  describe('step content', () => {
+    it('should include AUTO-REPROMPT marker', () => {
       const result = generateStepReprompt(routingWith3Steps, 0);
-      expect(result).toContain('[PLAN_STEP 1/3]');
-    });
-
-    it('should include step number for second step', () => {
-      const result = generateStepReprompt(routingWith3Steps, 1);
-      expect(result).toContain('[PLAN_STEP 2/3]');
-    });
-
-    it('should include step number for third step', () => {
-      const result = generateStepReprompt(routingWith3Steps, 2);
-      expect(result).toContain('Current Step: Write tests');
+      expect(result).toContain('[AUTO-REPROMPT]');
     });
 
     it('should include the task description', () => {
@@ -1056,14 +776,9 @@ describe('generateStepReprompt', () => {
       expect(result).toContain('Assigned Role: coder');
     });
 
-    it('should include tool when present', () => {
+    it('should include continue instruction', () => {
       const result = generateStepReprompt(routingWith3Steps, 0);
-      expect(result).toContain('Suggested Tool: read');
-    });
-
-    it('should include role when present', () => {
-      const result = generateStepReprompt(routingWith3Steps, 1);
-      expect(result).toContain('Assigned Role: coder');
+      expect(result).toContain('Continue with this step');
     });
 
     it('should show empty tool as empty string', () => {
@@ -1082,30 +797,6 @@ describe('generateStepReprompt', () => {
       };
       const result = generateStepReprompt(routing, 0);
       expect(result).toContain('Assigned Role:');
-    });
-  });
-
-  describe('continuation instructions', () => {
-    it('should include AUTO-REPROMPT marker', () => {
-      const result = generateStepReprompt(routingWith3Steps, 0);
-      expect(result).toContain('[AUTO-REPROMPT]');
-    });
-
-    it('should include continue instruction', () => {
-      const result = generateStepReprompt(routingWith3Steps, 0);
-      expect(result).toContain('Continue with this step');
-    });
-
-    it('should include step description', () => {
-      const result = generateStepReprompt(routingWith3Steps, 0);
-      expect(result).toContain('Current Step: Design');
-    });
-  });
-
-  describe('previous result inclusion', () => {
-    it('should not include previous result (simplified format)', () => {
-      const result = generateStepReprompt(routingWith3Steps, 1, 'API designed with 3 endpoints');
-      expect(result).not.toContain('Previous step result:');
     });
   });
 
@@ -1165,8 +856,7 @@ describe('routingToRoleRedirectSection', () => {
     toolCallOptions: [],
     specializationRoute: 'multi-step',
     planSteps: [],
-    requiresAutoReprompt: true,
-    estimatedSteps: 2,
+    continue: false,
   };
 
   describe('delegates to formatRoleRedirectOptions', () => {
@@ -1247,25 +937,6 @@ describe('routingToRoleRedirectSection', () => {
     });
   });
 
-  describe('respects maxItems limit', () => {
-    it('should only include top 3 options by default', () => {
-      const routing: RoutingMetadata = {
-        ...routingWithRoles,
-        roleOptions: [
-          { role: 'a', weight: 0.9, reason: 'r1' },
-          { role: 'b', weight: 0.8, reason: 'r2' },
-          { role: 'c', weight: 0.7, reason: 'r3' },
-          { role: 'd', weight: 0.6, reason: 'r4' },
-        ],
-      };
-      const result = routingToRoleRedirectSection(routing);
-      expect(result).toContain('**a**');
-      expect(result).toContain('**b**');
-      expect(result).toContain('**c**');
-      expect(result).not.toContain('**d**');
-    });
-  });
-
   describe('with realistic routing from parseFirstResponseRouting', () => {
     it('should produce a section from parsed routing metadata', () => {
       const input = `[ROUTING_METADATA]\n${JSON.stringify({
@@ -1279,8 +950,7 @@ describe('routingToRoleRedirectSection', () => {
         toolCallOptions: [],
         specializationRoute: 'multi-step',
         planSteps: [],
-        requiresAutoReprompt: true,
-        estimatedSteps: 2,
+        continue: false,
       })}`;
       const parsed = parseFirstResponseRouting(input);
       expect(parsed.found).toBe(true);

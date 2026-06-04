@@ -1,0 +1,587 @@
+diff --git a/packages/shared/agent/index.ts b/packages/shared/agent/index.ts
+index bcda9ce2..f9a528d6 100644
+--- a/packages/shared/agent/index.ts
++++ b/packages/shared/agent/index.ts
+@@ -297,6 +297,23 @@ export {
+   type GeneralDomainRoleConfigV4,
+ } from './general-domain-prompts-v4';
+ 
++// Unified Role Selector — single entry point across ALL prompt sets above.
++// Replaces ad-hoc role picking in callers (notably /api/chat) and the
++// misleadingly named `getAllPrompts()` in the supplementary file.
++export {
++  getAllRoleIds,
++  getAllRolePrompts,
++  getRoleSource,
++  pickRoleFromContext,
++  composeUnifiedRolePrompt,
++  selectAndComposeSystemPrompt,
++  type UnifiedRole,
++  type UnifiedRoleInfo,
++  type RoleSource,
++  type PickRoleContext,
++  type ComposeUnifiedOptions,
++} from './unified-role-selector';
++
+ // Prompt Parameters — Optional response modifiers for any role
+ export {
+   // Enums
+diff --git a/packages/shared/agent/unified-role-selector.ts b/packages/shared/agent/unified-role-selector.ts
+new file mode 100644
+index 00000000..2bb67049
+--- /dev/null
++++ b/packages/shared/agent/unified-role-selector.ts
+@@ -0,0 +1,498 @@
++/**
++ * Unified Role Selector
++ *
++ * Consolidates the SIX prompt sets that previously lived as disconnected
++ * islands:
++ *
++ *   1. Core            — SYSTEM_PROMPTS         (system-prompts.ts, 27 roles)
++ *   2. Supplementary   — SUPPLEMENTARY_PROMPTS  (system-prompts-supplementary.ts, 9 roles)
++ *   3. General v1      — GENERAL_PROMPTS        (general-domain-prompts.ts, 12 roles)
++ *   4. General v2      — GENERAL_PROMPTS_V2     (general-domain-prompts-v2.ts, 10 roles)
++ *   5. General v3      — GENERAL_PROMPTS_V3     (general-domain-prompts-v3.ts, 10 roles)
++ *   6. General v4      — GENERAL_PROMPTS_V4     (general-domain-prompts-v4.ts, 8 roles)
++ *
++ * Before this module:
++ *   - `getAllPrompts()` in the supplementary file was misleadingly named
++ *     (returned only supplementary).
++ *   - `role-redirector.analyzeContextAndSuggestRoles()` only knew 9 hard-coded
++ *     core roles via keyword regex.
++ *   - `composeRoleWithTools()` only composed from SYSTEM_PROMPTS sections.
++ *   - The standard `/api/chat` flow only saw the generic VFS editing prompt;
++ *     the rich role prompts were effectively dead code.
++ *
++ * This module provides:
++ *   - `getAllRoleIds()`     — true union across all six sets
++ *   - `getAllRolePrompts()` — true merged record of role -> prompt
++ *   - `pickRoleFromContext()` — keyword-based router across all sets
++ *   - `composeUnifiedRolePrompt()` — dispatches to composeRoleWithTools for
++ *     core (section-aware), raw prompt for the other sets
++ *   - `selectAndComposeSystemPrompt()` — one-shot helper for callers
++ */
++
++import {
++  SYSTEM_PROMPTS,
++  type AgentRole,
++  getSystemPrompt,
++} from './system-prompts';
++import {
++  SUPPLEMENTARY_PROMPTS,
++  type SupplementaryAgentRole,
++  getSupplementaryPrompt,
++} from './system-prompts-supplementary';
++import {
++  GENERAL_PROMPTS,
++  type GeneralDomainRole,
++  getGeneralPrompt,
++} from './general-domain-prompts';
++import {
++  GENERAL_PROMPTS_V2,
++  type GeneralDomainRoleV2,
++  getGeneralPromptV2,
++} from './general-domain-prompts-v2';
++import {
++  GENERAL_PROMPTS_V3,
++  type GeneralDomainRoleV3,
++  getGeneralPromptV3,
++} from './general-domain-prompts-v3';
++import {
++  GENERAL_PROMPTS_V4,
++  type GeneralDomainRoleV4,
++  getGeneralPromptV4,
++} from './general-domain-prompts-v4';
++import { composeRoleWithTools } from './prompt-composer';
++
++// ============================================================================
++// Types
++// ============================================================================
++
++export type UnifiedRole =
++  | AgentRole
++  | SupplementaryAgentRole
++  | GeneralDomainRole
++  | GeneralDomainRoleV2
++  | GeneralDomainRoleV3
++  | GeneralDomainRoleV4;
++
++export type RoleSource = 'core' | 'supplementary' | 'general' | 'general-v2' | 'general-v3' | 'general-v4';
++
++export interface UnifiedRoleInfo {
++  role: UnifiedRole;
++  source: RoleSource;
++}
++
++export interface PickRoleContext {
++  /** The user prompt / task description. */
++  taskDescription?: string;
++  /** Classifier complexity bucket. */
++  complexity?: 'simple' | 'moderate' | 'complex' | string;
++  /** Whether filesystem-edit tools are enabled. Bias toward `coder`. */
++  enableFilesystemEdits?: boolean;
++  /** Recent failure messages (debugger bias). */
++  recentFailures?: string[];
++}
++
++export interface ComposeUnifiedOptions {
++  /** Tool IDs available to the model (passed to composeRoleWithTools). */
++  availableTools?: string[];
++  /** Hard cap on returned prompt length (chars). */
++  maxLength?: number;
++  /** Extra string sections to append. */
++  extras?: string[];
++}
++
++// ============================================================================
++// Core: enumerate all roles across the three sets
++// ============================================================================
++
++const CORE_ROLE_SET = new Set<string>(Object.keys(SYSTEM_PROMPTS));
++const SUP_ROLE_SET = new Set<string>(Object.keys(SUPPLEMENTARY_PROMPTS));
++const GEN_V1_ROLE_SET = new Set<string>(Object.keys(GENERAL_PROMPTS));
++const GEN_V2_ROLE_SET = new Set<string>(Object.keys(GENERAL_PROMPTS_V2));
++const GEN_V3_ROLE_SET = new Set<string>(Object.keys(GENERAL_PROMPTS_V3));
++const GEN_V4_ROLE_SET = new Set<string>(Object.keys(GENERAL_PROMPTS_V4));
++
++export function getAllRoleIds(): UnifiedRole[] {
++  return [
++    ...(Object.keys(SYSTEM_PROMPTS) as AgentRole[]),
++    ...(Object.keys(SUPPLEMENTARY_PROMPTS) as SupplementaryAgentRole[]),
++    ...(Object.keys(GENERAL_PROMPTS) as GeneralDomainRole[]),
++    ...(Object.keys(GENERAL_PROMPTS_V2) as GeneralDomainRoleV2[]),
++    ...(Object.keys(GENERAL_PROMPTS_V3) as GeneralDomainRoleV3[]),
++    ...(Object.keys(GENERAL_PROMPTS_V4) as GeneralDomainRoleV4[]),
++  ];
++}
++
++export function getRoleSource(role: string): RoleSource | null {
++  if (CORE_ROLE_SET.has(role)) return 'core';
++  if (SUP_ROLE_SET.has(role)) return 'supplementary';
++  if (GEN_V1_ROLE_SET.has(role)) return 'general';
++  if (GEN_V2_ROLE_SET.has(role)) return 'general-v2';
++  if (GEN_V3_ROLE_SET.has(role)) return 'general-v3';
++  if (GEN_V4_ROLE_SET.has(role)) return 'general-v4';
++  return null;
++}
++
++/**
++ * Replacement for the misleadingly named `getAllPrompts()` in the
++ * supplementary file (which only returned its own set). This one actually
++ * merges all six prompt sources. Role keys are unique across all sets — a
++ * runtime invariant we verify in tests.
++ */
++export function getAllRolePrompts(): Record<string, string> {
++  return {
++    ...SYSTEM_PROMPTS,
++    ...SUPPLEMENTARY_PROMPTS,
++    ...GENERAL_PROMPTS,
++    ...GENERAL_PROMPTS_V2,
++    ...GENERAL_PROMPTS_V3,
++    ...GENERAL_PROMPTS_V4,
++  };
++}
++
++// ============================================================================
++// Keyword router — extends role-redirector's logic to cover all 3 sets
++// ============================================================================
++
++/**
++ * Role-keyword table. Patterns are matched against a lowercased task string;
++ * the role with the highest match score wins. Patterns are intentionally
++ * narrow to avoid over-triggering on common code words (e.g. we don't claim
++ * `mlEngineer` on the word "model" alone).
++ */
++const ROLE_PATTERNS: Array<{ role: UnifiedRole; patterns: RegExp[] }> = [
++  // Core — strong technical roles
++  { role: 'debugger', patterns: [
++    /\b(stack ?trace|exception|crash|traceback|undefined is not|cannot read property)\b/,
++    /\b(debug|debugging|reproduce|repro|root cause|why does .* fail|fix the bug)\b/,
++  ]},
++  { role: 'architect', patterns: [
++    /\b(architecture|system design|high.?level design|hld|microservices|scalab\w*|tradeoffs?|design pattern)\b/,
++  ]},
++  { role: 'reviewer', patterns: [
++    /\b(code review|review (this|my|the) (code|pr|patch|diff)|audit (this|my|the) code|critique)\b/,
++  ]},
++  { role: 'tester', patterns: [
++    /\b(unit tests?|integration tests?|test (case|suite|coverage)|vitest|jest|pytest|playwright)\b/,
++  ]},
++  { role: 'documenter', patterns: [
++    /\b(documentation|readme|docstring|jsdoc|api docs|user guide|tutorial)\b/,
++  ]},
++  { role: 'securityAuditor', patterns: [
++    /\b(security audit|vulnerabilit\w+|owasp|cve|sql injection|xss|csrf|secret leak)\b/,
++  ]},
++  { role: 'performanceEngineer', patterns: [
++    /\b(performance|optimi[sz]e|bottleneck|profil\w+|throughput|latency|memory leak)\b/,
++  ]},
++  { role: 'devopsEngineer', patterns: [
++    /\b(docker|kubernetes|k8s|terraform|ansible|ci\/?cd|deployment pipeline|helm|nginx config)\b/,
++  ]},
++  { role: 'sre', patterns: [
++    /\b(incident response|on.?call|runbook|sli|slo|capacity planning|chaos test)\b/,
++  ]},
++  { role: 'databaseArchitect', patterns: [
++    /\b(database schema|sql query|normali[sz]ation|indexing|postgres|mongodb|sharding)\b/,
++  ]},
++  { role: 'apiDesigner', patterns: [
++    /\b(rest api|graphql schema|openapi|api design|endpoint design|grpc)\b/,
++  ]},
++  { role: 'uiuxDesigner', patterns: [
++    /\b(ui\/?ux|wireframe|user flow|user experience|figma|design system)\b/,
++  ]},
++  { role: 'codeMigration', patterns: [
++    /\b(migrate from .* to|port from .* to|upgrade from .* to|convert .* to .*)\b/,
++  ]},
++  { role: 'reverseEngineer', patterns: [
++    /\b(reverse engineer|disassemble|decompile|analyze binary|malware analysis)\b/,
++  ]},
++  { role: 'researcher', patterns: [
++    /\b(research|investigate|find out|look into|literature review)\b/,
++  ]},
++  { role: 'planner', patterns: [
++    /\b(plan (this|the|out)|roadmap|break (this )?down|task decomposition|sequence the steps)\b/,
++  ]},
++  { role: 'simplifier', patterns: [
++    /\b(explain (this|like|in plain)|simplify|summari[sz]e|tl;?dr|in simple terms)\b/,
++  ]},
++  { role: 'mentor', patterns: [
++    /\b(teach me|i'?m learning|beginner|how do i (learn|start)|tutorial for beginners)\b/,
++  ]},
++  { role: 'projectManager', patterns: [
++    /\b(project (plan|timeline|milestone)|sprint planning|backlog|kanban|scrum)\b/,
++  ]},
++  { role: 'dataAnalyst', patterns: [
++    /\b(data analysis|analyze (the )?data|csv|pandas|dataframe|aggregate|pivot table)\b/,
++  ]},
++
++  // Supplementary
++  { role: 'mlEngineer', patterns: [
++    /\b(ml pipeline|machine learning|train(ing)? (a |the )?model|fine[- ]?tun\w+|inference|pytorch|tensorflow|hugging ?face|llm fine)\b/,
++  ]},
++  { role: 'accessibilitySpecialist', patterns: [
++    /\b(accessibilit\w+|a11y|wcag|aria|screen reader|keyboard navigation)\b/,
++  ]},
++  { role: 'localizationEngineer', patterns: [
++    /\b(localiz\w+|internationaliz\w+|i18n|l10n|translation|rtl support)\b/,
++  ]},
++  { role: 'buildEngineer', patterns: [
++    /\b(build (system|pipeline|config)|webpack|vite|rollup|esbuild|bundler|monorepo build)\b/,
++  ]},
++  { role: 'growthEngineer', patterns: [
++    /\b(a\/?b test|conversion rate|funnel|analytics event|growth experiment)\b/,
++  ]},
++  { role: 'embeddedEngineer', patterns: [
++    /\b(embedded|microcontroller|arduino|esp32|rtos|firmware|bare metal|iot device)\b/,
++  ]},
++  { role: 'chaosEngineer', patterns: [
++    /\b(chaos engineering|fault injection|resilience test|failure injection)\b/,
++  ]},
++  { role: 'platformEngineer', patterns: [
++    /\b(internal platform|developer platform|golden path|paved road|platform team)\b/,
++  ]},
++  { role: 'blockchainAuditor', patterns: [
++    /\b(smart contract|solidity|web3|defi|nft|blockchain audit)\b/,
++  ]},
++
++  // General v4 (non-coding domains)
++  { role: 'scientist', patterns: [
++    /\b(scientific (method|paper)|hypothesis|peer review|experiment design|p[- ]value)\b/,
++  ]},
++  { role: 'philosopher', patterns: [
++    /\b(philosoph\w+|ethics|epistemolog\w+|metaphysic\w+|moral (argument|theory))\b/,
++  ]},
++  { role: 'economist', patterns: [
++    /\b(economics?|gdp|inflation|monetary policy|microeconomic|macroeconomic|market equilibrium)\b/,
++  ]},
++  { role: 'actuary', patterns: [
++    /\b(actuarial|insurance pricing|risk model|mortality table|reserving)\b/,
++  ]},
++  { role: 'anthropologist', patterns: [
++    /\b(anthropolog\w+|ethnograph\w+|cultural analysis|kinship|ritual)\b/,
++  ]},
++  { role: 'businessAdvisor', patterns: [
++    /\b(business (strategy|plan|model)|market entry|go to market|gtm|competitive analysis)\b/,
++  ]},
++  { role: 'environmentalConsultant', patterns: [
++    /\b(environmental (impact|assessment)|sustainability|esg|carbon footprint|life cycle assessment)\b/,
++  ]},
++  { role: 'investigativeResearcher', patterns: [
++    /\b(investigative report|osint|source verification|fact check|deep dive on)\b/,
++  ]},
++
++  // General v1 (legal/finance/marketing/content/policy/translation)
++  { role: 'legalAnalyst', patterns: [
++    /\b(legal (analysis|review|risk)|contract review|clause|liability|gdpr|nda)\b/,
++  ]},
++  { role: 'financialAnalyst', patterns: [
++    /\b(financial (analysis|model|statement)|valuation|dcf|p&l|cash ?flow|earnings report)\b/,
++  ]},
++  { role: 'businessStrategist', patterns: [
++    /\b(business strateg\w+|competitive strategy|porter|swot|blue ocean)\b/,
++  ]},
++  { role: 'creativeWriter', patterns: [
++    /\b(write (a |an |the )?(story|poem|novel|script|screenplay)|creative writing|fiction|short story)\b/,
++  ]},
++  { role: 'marketingStrategist', patterns: [
++    /\b(marketing (strategy|plan|campaign)|brand positioning|seo strategy|content marketing)\b/,
++  ]},
++  { role: 'uxResearcher', patterns: [
++    /\b(user research|usability (test|study)|user interview|persona|journey map)\b/,
++  ]},
++  { role: 'educator', patterns: [
++    /\b(lesson plan|curriculum|teaching|pedagog\w+|learning objective|classroom)\b/,
++  ]},
++  { role: 'supplyChainAnalyst', patterns: [
++    /\b(supply chain|logistics|procurement|inventory (management|optimi[sz]ation)|warehouse)\b/,
++  ]},
++  { role: 'hrTalentSpecialist', patterns: [
++    /\b(hr|hiring|recruit\w+|talent acquisition|job description|interview question|onboarding)\b/,
++  ]},
++  { role: 'investigativeJournalist', patterns: [
++    /\b(journalism|investigative piece|news article|press freedom|whistleblower)\b/,
++  ]},
++  { role: 'policyAnalyst', patterns: [
++    /\b(public policy|policy (analysis|brief|paper)|regulatory impact|government program)\b/,
++  ]},
++  { role: 'translator', patterns: [
++    /\b(translate (this|the|from|to)|translation|bilingual|locali[sz]ation copy)\b/,
++  ]},
++
++  // General v2 (sales/PR/grants/negotiation/events/real-estate/insurance/chef)
++  { role: 'salesStrategist', patterns: [
++    /\b(sales (strategy|pitch|outreach)|cold email|sales funnel|crm|lead qualification)\b/,
++  ]},
++  { role: 'productManager', patterns: [
++    /\b(product manager|product (roadmap|requirements|spec)|prd|user story|product launch)\b/,
++  ]},
++  { role: 'dataJournalist', patterns: [
++    /\b(data journalism|data story|visuali[sz]e (the )?data for a story|data driven (article|reporting))\b/,
++  ]},
++  { role: 'prSpecialist', patterns: [
++    /\b(press release|public relations|pr crisis|media relations|spokesperson)\b/,
++  ]},
++  { role: 'grantWriter', patterns: [
++    /\b(grant (writing|proposal|application)|funding proposal|rfp response)\b/,
++  ]},
++  { role: 'negotiator', patterns: [
++    /\b(negotiat\w+|batna|deal terms|counteroffer|salary negotiation)\b/,
++  ]},
++  { role: 'eventPlanner', patterns: [
++    /\b(event (planning|logistics)|conference planning|wedding planning|venue selection)\b/,
++  ]},
++  { role: 'realEstateAnalyst', patterns: [
++    /\b(real estate|property valuation|cap rate|reit|rental yield|mls)\b/,
++  ]},
++  { role: 'insuranceAnalyst', patterns: [
++    /\b(insurance (claim|policy|underwriting)|premium calculation|coverage analysis)\b/,
++  ]},
++  { role: 'chef', patterns: [
++    /\b(recipe|cooking|culinary|meal plan|menu design|kitchen technique)\b/,
++  ]},
++
++  // General v3 (sports/music/fashion/urban/agri/psych/history/gis/emergency/maritime)
++  { role: 'sportsAnalyst', patterns: [
++    /\b(sports (analysis|stats)|player performance|scouting report|game strategy|sabermetric)\b/,
++  ]},
++  { role: 'musicProducer', patterns: [
++    /\b(music production|mixing|mastering|daw|ableton|fl studio|song arrangement)\b/,
++  ]},
++  { role: 'fashionDesigner', patterns: [
++    /\b(fashion design|garment|textile|runway|seasonal collection|tech pack)\b/,
++  ]},
++  { role: 'urbanPlanner', patterns: [
++    /\b(urban planning|zoning|land use|transit oriented|smart city)\b/,
++  ]},
++  { role: 'agriculturalSpecialist', patterns: [
++    /\b(agricultur\w+|crop yield|soil health|irrigation|farm management|agronom\w+)\b/,
++  ]},
++  { role: 'psychologist', patterns: [
++    /\b(psycholog\w+|cognitive bias|therapy|mental health|behavioral (analysis|change))\b/,
++  ]},
++  { role: 'historian', patterns: [
++    /\b(historical (analysis|context|event)|primary source|archival research|historiograph\w+)\b/,
++  ]},
++  { role: 'gisCartographer', patterns: [
++    /\b(gis|cartograph\w+|geospatial|shapefile|qgis|arcgis|map projection)\b/,
++  ]},
++  { role: 'emergencyManager', patterns: [
++    /\b(emergency (management|response|preparedness)|disaster recovery plan|evacuation plan|fema)\b/,
++  ]},
++  { role: 'maritimeLogistics', patterns: [
++    /\b(maritime|shipping route|port logistics|freight|container ship|imo regulation)\b/,
++  ]},
++];
++
++/**
++ * Pick the best role for a request across all three prompt sets.
++ *
++ * Returns null when no role pattern matches strongly. Callers should then
++ * fall back to their own default (typically `coder` if filesystem edits are
++ * enabled, otherwise no role prompt at all).
++ */
++export function pickRoleFromContext(ctx: PickRoleContext): UnifiedRoleInfo | null {
++  const text = (ctx.taskDescription || '').toLowerCase();
++
++  // Failure context biases toward debugger.
++  if (ctx.recentFailures && ctx.recentFailures.length >= 2) {
++    return { role: 'debugger', source: 'core' };
++  }
++
++  if (text.length > 0) {
++    let best: { role: UnifiedRole; score: number } | null = null;
++    for (const { role, patterns } of ROLE_PATTERNS) {
++      let score = 0;
++      for (const re of patterns) {
++        if (re.test(text)) score += 1;
++      }
++      if (score > 0 && (!best || score > best.score)) {
++        best = { role, score };
++      }
++    }
++    if (best) {
++      const source = getRoleSource(best.role as string)!;
++      return { role: best.role, source };
++    }
++  }
++
++  // No keyword match: fall back to complexity/tool-availability heuristics.
++  if (ctx.complexity === 'complex') {
++    return { role: 'architect', source: 'core' };
++  }
++  if (ctx.enableFilesystemEdits) {
++    return { role: 'coder', source: 'core' };
++  }
++  return null;
++}
++
++// ============================================================================
++// Composition — dispatch to the right composer per source
++// ============================================================================
++
++const DEFAULT_MAX_LENGTH = 6000;
++
++/**
++ * Compose a system prompt for ANY of the 44 roles.
++ *
++ * - Core roles go through `composeRoleWithTools` so they get section-aware
++ *   composition + dynamic tool block injection.
++ * - Supplementary and general v4 roles are raw strings today (no section
++ *   decomposition exists for them), so we return the raw prompt.
++ */
++export function composeUnifiedRolePrompt(
++  role: UnifiedRole,
++  opts: ComposeUnifiedOptions = {},
++): string {
++  const source = getRoleSource(role as string);
++  const maxLength = opts.maxLength ?? DEFAULT_MAX_LENGTH;
++  let prompt = '';
++
++  const rawForSource = (): string => {
++    switch (source) {
++      case 'core': return getSystemPrompt(role as AgentRole);
++      case 'supplementary': return getSupplementaryPrompt(role as SupplementaryAgentRole);
++      case 'general': return getGeneralPrompt(role as GeneralDomainRole);
++      case 'general-v2': return getGeneralPromptV2(role as GeneralDomainRoleV2);
++      case 'general-v3': return getGeneralPromptV3(role as GeneralDomainRoleV3);
++      case 'general-v4': return getGeneralPromptV4(role as GeneralDomainRoleV4);
++      default: return '';
++    }
++  };
++
++  try {
++    if (source === 'core') {
++      // Core roles support section-aware composition with dynamic tool block.
++      prompt = composeRoleWithTools(role as AgentRole, {
++        availableTools: opts.availableTools || [],
++        extras: opts.extras?.map((s, i) => ({ id: `extra.${i}`, template: s })),
++      });
++    } else if (source) {
++      // Non-core sets are raw strings today (no section decomposition).
++      prompt = rawForSource();
++      if (opts.extras?.length) prompt += '\n\n' + opts.extras.join('\n\n');
++    } else {
++      return '';
++    }
++  } catch {
++    // Best-effort fallback to raw prompt for the source.
++    prompt = rawForSource();
++  }
++
++  return prompt.length > maxLength ? prompt.slice(0, maxLength) : prompt;
++}
++
++/**
++ * One-shot: pick a role from context and compose its prompt.
++ *
++ * Returns `null` when the context doesn't justify a role prompt at all
++ * (e.g. plain non-code chat with no filesystem tools); callers should treat
++ * that as "no role identity, use whatever default system prompt you had".
++ */
++export function selectAndComposeSystemPrompt(
++  ctx: PickRoleContext,
++  opts: ComposeUnifiedOptions = {},
++): (UnifiedRoleInfo & { prompt: string }) | null {
++  const picked = pickRoleFromContext(ctx);
++  if (!picked) return null;
++  const prompt = composeUnifiedRolePrompt(picked.role, opts);
++  if (!prompt) return null;
++  return { ...picked, prompt };
++}
+diff --git a/web/app/api/chat/route.ts b/web/app/api/chat/route.ts
+index fda8c174..9cf2a767 100644
+--- a/web/app/api/chat/route.ts
++++ b/web/app/api/chat/route.ts
+@@ -29,7 +29,8 @@ import {
+   VFS_FILE_EDITING_TOOL_PROMPT,
+   generateDynamicInjection,
+   getOrchestrationModeFromRequest,
+-  executeWithOrchestrationMode
++  executeWithOrchestrationMode,
++  selectAndComposeSystemPrompt,
+ } from '@bing/shared/agent';
+ import { processUnifiedAgentRequest, type UnifiedAgentConfig } from '@/lib/orchestra/unified-agent-service';
+ import { checkProviderHealth } from '@/lib/orchestra/provider-health';
+@@ -792,6 +793,32 @@ export async function POST(request: NextRequest) {
+       chatLogger.debug('Retrieved relevant memories from mem0', { requestId, memoryCount: mem0Result.results.length });
+     }
+     
++    // Pick a role + compose a rich system prompt across ALL prompt sets
++    // (core/supplementary/general v1-v4). Previously /api/chat injected only
++    // the generic VFS_FILE_EDITING_TOOL_PROMPT and the rich role prompts in
++    // packages/shared/agent were dead code on this path.
++    const roleSelection = selectAndComposeSystemPrompt(
++      {
++        taskDescription: userPrompt,
++        complexity: classification.complexity,
++        enableFilesystemEdits,
++      },
++      {
++        availableTools: enableFilesystemEdits
++          ? ['file.read', 'file.write', 'file.append', 'file.delete', 'file.list', 'file.search', 'repo.search', 'web.search']
++          : ['web.search', 'memory.retrieve'],
++        maxLength: 6000,
++      },
++    );
++    if (roleSelection) {
++      chatLogger.debug('Role prompt selected', {
++        requestId,
++        role: roleSelection.role,
++        source: roleSelection.source,
++        promptLength: roleSelection.prompt.length,
++      });
++    }
++
+     const contextualMessages = appendFilesystemContextMessages(
+       processedMessages,
+       attachedFilesystemFiles,
+@@ -800,6 +827,7 @@ export async function POST(request: NextRequest) {
+       workspaceSessionContext,
+       memoryContext,
+       hybridContext,
++      roleSelection?.prompt || '',
+     );
+ 
+     // V1 / Regular LLM: Apply response style modifiers to messages
