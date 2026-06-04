@@ -149,8 +149,13 @@ function initializeFileLogging(config: LoggerConfig) {
       console.log('[Logger] Created logs directory:', logDir);
     }
 
+    // Prevent overwrites on module re-load in dev mode - append or use existing
+    if (writeStream) {
+      console.log('[Logger] File logging already active, reusing existing stream');
+      return;
+    }
     writeStream = fs.createWriteStream(config.logFilePath, {
-      flags: 'w',
+      flags: 'a',  // 'a' = append mode
       encoding: 'utf8',
       autoClose: true,
     });
@@ -347,7 +352,12 @@ export class Logger {
   }
 
   error(message: string, error?: Error | any, data?: any) {
-    const err = error instanceof Error ? error : new Error(String(error));
+    // Auto-detect: if second arg is a plain data object (not an Error), shift to data
+    if (error && typeof error === 'object' && !(error instanceof Error) && data === undefined) {
+      data = error;
+      error = undefined;
+    }
+    const err = error instanceof Error ? error : error !== undefined ? new Error(String(error)) : undefined;
     this.output('error', this.formatEntry('error', message, data, err));
   }
 

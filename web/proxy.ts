@@ -36,6 +36,11 @@ export async function proxy(request: NextRequest) {
   
   const pathname = request.nextUrl.pathname;
   if (MIGRATED_TO_BACKEND.some(route => pathname.startsWith(route))) {
+    // In dev mode, let Next.js handle API routes directly so local changes
+    // to route handlers are picked up immediately instead of hitting a stale backend.
+    if (process.env.NODE_ENV === 'development') {
+      return NextResponse.next();
+    }
     const backendUrl = process.env.BACKEND_URL || 'http://localhost:3001';
     const targetUrl = new URL(pathname, backendUrl);
     

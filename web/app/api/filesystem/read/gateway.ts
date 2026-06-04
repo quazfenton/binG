@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { virtualFilesystem, withAnonSessionCookie } from '@/lib/virtual-filesystem/index.server';
 import { pathSchema } from '@/lib/utils/schemas';
-import { resolveFilesystemOwnerWithFallback } from '../utils';
+import { resolveFilesystemOwnerWithFallback, correctSessionPath } from '../utils';
 
 
 
@@ -106,7 +106,8 @@ export async function POST(req: NextRequest) {
       return withAnonSessionCookie(errorResponse, authResolution);
     }
 
-    const { path: filePath } = validation.data;
+    const { path: rawFilePath } = validation.data;
+    const filePath = await correctSessionPath(ownerId, rawFilePath);
 
     // CRITICAL FIX: Check ban list for previously rejected invalid paths
     // This prevents infinite polling loops from retrying known-bad paths

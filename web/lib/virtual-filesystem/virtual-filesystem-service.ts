@@ -126,7 +126,7 @@ export class VirtualFilesystemService {
       });
     }
 
-    this.workspaceRoot = (options.workspaceRoot || DEFAULT_WORKSPACE_ROOT).replace(/^\/+|\/+$/g, '') || DEFAULT_WORKSPACE_ROOT;
+    this.workspaceRoot = (options.workspaceRoot || DEFAULT_WORKSPACE_ROOT).replace(/\/+$/g, '') || DEFAULT_WORKSPACE_ROOT;
   }
 
   private async initializeFSBridge(): Promise<void> {

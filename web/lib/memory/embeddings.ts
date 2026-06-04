@@ -23,13 +23,7 @@ export async function embed(text: string): Promise<number[]> {
     return EMBED_CACHE.get(key)!;
   }
 
-  // Determine base URL based on environment
-  // Client-side: relative URL works
-  // Server-side: need absolute URL
-  const isServer = typeof window === 'undefined';
-  const baseUrl = isServer
-    ? (process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000')
-    : '';
+  const baseUrl = typeof window !== 'undefined' ? '' : (process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000');
 
   const res = await fetch(`${baseUrl}/api/embed`, {
     method: "POST",
@@ -44,7 +38,7 @@ export async function embed(text: string): Promise<number[]> {
       statusText: res.statusText,
       textLength: text.length,
       textPreview: text.slice(0, 200),
-      baseUrl: isServer ? process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000' : '(client-side)',
+      baseUrl: '(relative)',
       errorBody: errorBody.slice(0, 500),
       headers: Object.fromEntries(res.headers.entries()),
     });

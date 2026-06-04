@@ -7,6 +7,7 @@ import { reflectionEngine } from '@/lib/orchestra/reflection-engine';
 import { executionGraphEngine } from '@bing/shared/agent/execution-graph';
 import { z } from 'zod';
 import { createLogger } from '@/lib/utils/logger';
+import { tolerantJsonParse } from '@/lib/utils/json-tolerant';
 import { contextPackService } from '@/lib/virtual-filesystem/context-pack-service';
 import { detectTemplate, templateToTaskGraph, type TemplateType } from './template-flows';
 import { createLoopDetector, type LoopDetectionResult } from '@bing/shared/agent/loop-detection';
@@ -783,7 +784,7 @@ Return a JSON object:
 
       try {
         const text = result.text.trim().replace(/^```json\n?|\n?```$/g, '');
-        this.currentPlan = JSON.parse(text);
+        this.currentPlan = tolerantJsonParse(text) ?? JSON.parse(text);
       } catch {
         this.currentPlan = { task: userMessage, files: [], execution_order: [] };
       }

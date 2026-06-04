@@ -187,6 +187,17 @@ export default function Settings({
     };
   }, []);
 
+  // Close Settings on Escape key
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
+
   // Save user API keys to localStorage
   const handleSaveApiKeys = async () => {
     if (typeof window !== 'undefined') {

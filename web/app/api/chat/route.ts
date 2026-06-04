@@ -29,7 +29,9 @@ import {
   VFS_FILE_EDITING_TOOL_PROMPT,
   generateDynamicInjection,
   getOrchestrationModeFromRequest,
-  executeWithOrchestrationMode
+  executeWithOrchestrationMode,
+  composeRoleWithTools,
+  type AgentRole,
 } from '@bing/shared/agent';
 import { processUnifiedAgentRequest, type UnifiedAgentConfig } from '@/lib/orchestra/unified-agent-service';
 import { checkProviderHealth } from '@/lib/orchestra/provider-health';
@@ -644,18 +646,21 @@ export async function POST(request: NextRequest) {
     const rawConversationId = typeof conversationId === 'string' && conversationId.trim() ? conversationId.trim() : null;
     
     if (rawConversationId) {
-      // Check if provided conversationId is already a valid sequential session name (e.g., '001')
-      const isSequentialName = /^\d{3}$/.test(rawConversationId);
-      
+      // Extract simple session ID from composite format (e.g. "anon$001" → "001", "12345$002" → "002")
+      // The client always embeds the reserved sequential name after the last '$'
+      const dollarIdx = rawConversationId.lastIndexOf('$');
+      const simpleId = dollarIdx !== -1 ? rawConversationId.slice(dollarIdx + 1) : rawConversationId;
+      const isSequentialName = /^\d{3}$/.test(simpleId);
+
       if (isSequentialName) {
-        // Direct sequential name - use it as-is
-        resolvedConversationId = rawConversationId;
+        // Trust the client-provided session ID — it already reserved this slot via generateSessionName()
+        resolvedConversationId = simpleId;
       } else {
         // Non-sequential ID provided - check if folder exists, otherwise generate new sequential name
-        const folderExists = await sessionNameExists(rawConversationId);
+        const folderExists = await sessionNameExists(simpleId);
         if (folderExists) {
           // Use existing folder (might be legacy composite ID folder)
-          resolvedConversationId = rawConversationId;
+          resolvedConversationId = simpleId;
         } else {
           // Folder doesn't exist - generate new sequential name
           resolvedConversationId = await generateSessionName();
@@ -679,15 +684,15 @@ export async function POST(request: NextRequest) {
     const defaultScopePath = `workspace/sessions/${sanitizePathSegment(resolvedConversationId)}`;
     // Sanitize scopePath to ensure folder names are not corrupted with ownerId prefix
     // e.g., "workspace/sessions/anon:1774710784761_6TB03h8Ow:002" -> "workspace/sessions/002"
-    const rawScopePath = typeof filesystemContext?.scopePath === 'string' && filesystemContext.scopePath.trim()
-      ? filesystemContext.scopePath.trim()
-      : defaultScopePath;
+    // Always prefer defaultScopePath — client may send stale scopePath from a previous
+    // conversation's compositeSessionId persisted in sessionStorage across new chats.
+    const rawScopePath = defaultScopePath;
     
     // Log scopePath for debugging session folder naming issues
     chatLogger.debug('Scope path handling:', {
       rawScopePath,
       defaultScopePath,
-      fromClient: !!filesystemContext?.scopePath,
+      fromClient: false,
       resolvedConversationId,
     });
 
@@ -792,6 +797,19 @@ export async function POST(request: NextRequest) {
       chatLogger.debug('Retrieved relevant memories from mem0', { requestId, memoryCount: mem0Result.results.length });
     }
     
+    // Role-based identity prompt for code requests.
+    // Uses the rich `coder`/`architect`/`debugger` prompts in
+    // packages/shared/agent/system-prompts.ts via composeRoleWithTools,
+    // which were previously dead code on the standard /api/chat path
+    // (only the generic VFS_FILE_EDITING_TOOL_PROMPT was injected).
+    const roleSystemPrompt = buildRoleSystemPromptForRequest({
+      isCodeRequest: classification.isCodeRequest,
+      enableFilesystemEdits,
+      complexity: classification.complexity,
+      userPrompt,
+      responseDepth: body.responseDepth as string | undefined,
+    });
+
     const contextualMessages = appendFilesystemContextMessages(
       processedMessages,
       attachedFilesystemFiles,
@@ -800,6 +818,7 @@ export async function POST(request: NextRequest) {
       workspaceSessionContext,
       memoryContext,
       hybridContext,
+      roleSystemPrompt,
     );
 
     // V1 / Regular LLM: Apply response style modifiers to messages
@@ -1161,7 +1180,7 @@ const config: UnifiedAgentConfig = {
       parameters: t.function.parameters,
     }));
     config.executeTool = async (name: string, args: Record<string, any>) => {
-      const result = await callMCPToolFromAI_SDK(name, args, authenticatedUserId, requestedScopePath);
+      const result = await callMCPToolFromAI_SDK(name, args, authenticatedUserId || filesystemOwnerId, requestedScopePath);
       return {
         success: result.success,
         output: result.output,
@@ -1641,12 +1660,21 @@ const config: UnifiedAgentConfig = {
               emit(SSE_EVENT_TYPES.DONE, {
                 success: result.success,
                 content: finalContent,
+                provider,
+                model: normalizedModel,
                 messageMetadata: {
                   agent: 'unified',
                   mode: result.mode,
+                  provider,
+                  model: normalizedModel,
                   processingSteps,
                   // Include routing metadata so client can auto-continue multi-step flows
                   ...(result.metadata?.routing ? { routing: result.metadata.routing } : {}),
+                  // Pass through metadata flags for client auto-retry and error handling
+                  ...(typeof result.metadata?.anyToolFailed === 'boolean' ? { anyToolFailed: result.metadata.anyToolFailed } : {}),
+                  ...(result.metadata?.isEmptyResponse === true ? { isEmptyResponse: true } : {}),
+                  ...(result.metadata?.emptyReason ? { emptyReason: result.metadata.emptyReason } : {}),
+                  ...(result.metadata?.toolInvocations ? { toolInvocations: result.metadata.toolInvocations } : {}),
                 },
                 data: result,
               });
@@ -1757,8 +1785,28 @@ const config: UnifiedAgentConfig = {
                 enqueue('done', {
                   success: orchestrationResult.success,
                   content: orchestrationResult.response,
-                  metadata: orchestrationResult.metadata,
+                  provider,
+                  model: normalizedModel,
+                  metadata: {
+                    ...orchestrationResult.metadata,
+                    provider,
+                    model: normalizedModel,
+                  },
                 });
+
+                // Emit filesystem event if any files were created/modified by MCP tools
+                const _mcpFileEdits = getRecentMcpFileEdits(resolvedConversationId);
+                if (_mcpFileEdits.length > 0) {
+                  enqueue('filesystem', {
+                    applied: _mcpFileEdits.map(e => ({
+                      path: e.path,
+                      operation: 'mcp-tool',
+                      status: 'applied',
+                    })),
+                    sessionId: resolvedConversationId,
+                  });
+                }
+                clearRecentMcpFileEdits(resolvedConversationId);
 
                 controller.close();
               } catch (error: any) {
@@ -1772,10 +1820,20 @@ const config: UnifiedAgentConfig = {
         }
 
         // Non-streaming response
+        const _mcpFileEdits = getRecentMcpFileEdits(resolvedConversationId);
+        clearRecentMcpFileEdits(resolvedConversationId);
+
         return NextResponse.json({
           success: orchestrationResult.success,
           content: orchestrationResult.response,
           data: orchestrationResult,
+          filesystemEdits: _mcpFileEdits.length > 0 ? {
+            applied: _mcpFileEdits.map(e => ({
+              path: e.path,
+              operation: 'mcp-tool',
+              status: 'applied',
+            })),
+          } : undefined,
         });
       }
 
@@ -4794,6 +4852,63 @@ async function buildHybridWorkspaceContext(
   }
 }
 
+/**
+ * Pick the best role and build a rich system prompt for the request, or return
+ * an empty string for non-code chats. Caps the role prompt at ~6KB to avoid
+ * blowing the context window — the existing CODER/ARCHITECT/DEBUGGER prompts
+ * are already comfortably within that.
+ */
+function buildRoleSystemPromptForRequest(args: {
+  isCodeRequest: boolean;
+  enableFilesystemEdits: boolean;
+  complexity: string;
+  userPrompt: string;
+  responseDepth?: string;
+}): string {
+  // Only inject a rich role prompt for code-flavored requests.
+  if (!args.isCodeRequest && !args.enableFilesystemEdits) {
+    return '';
+  }
+
+  const text = (args.userPrompt || '').toLowerCase();
+
+  let role: AgentRole = 'coder';
+  if (/\b(architecture|architect|design system|system design|high.?level design|hld)\b/.test(text)) {
+    role = 'architect';
+  } else if (/\b(debug|stack ?trace|error|exception|crash|fails?|failing|broken|not working)\b/.test(text)) {
+    role = 'debugger';
+  } else if (/\b(review|audit|critique)\b/.test(text)) {
+    role = 'reviewer';
+  } else if (args.complexity === 'complex' || args.responseDepth === 'comprehensive') {
+    role = 'architect';
+  }
+
+  // Tools the model actually has access to when filesystem edits are enabled.
+  // Keep this list short and accurate — composeRoleWithTools formats them
+  // into a TOOL STRATEGY section.
+  const availableTools = args.enableFilesystemEdits
+    ? [
+        'file.read',
+        'file.write',
+        'file.append',
+        'file.delete',
+        'file.list',
+        'file.search',
+        'repo.search',
+        'web.search',
+      ]
+    : ['web.search', 'memory.retrieve'];
+
+  try {
+    const prompt = composeRoleWithTools(role, { availableTools });
+    // Hard cap as a safety net.
+    return prompt.length > 6000 ? prompt.slice(0, 6000) : prompt;
+  } catch {
+    // If composer fails for any reason, fall back to the raw role prompt.
+    return SYSTEM_PROMPTS[role] || '';
+  }
+}
+
 function appendFilesystemContextMessages(
   messages: LLMMessage[],
   attachedFiles: ChatFilesystemFileContext[],
@@ -4802,8 +4917,9 @@ function appendFilesystemContextMessages(
   workspaceContext: string = '',
   memoryContext: string = '',
   hybridContext: string = '',
+  roleSystemPrompt: string = '',
 ): LLMMessage[] {
-  if (!attachedFiles.length && !allowFileEdits) {
+  if (!attachedFiles.length && !allowFileEdits && !roleSystemPrompt) {
     return messages;
   }
 
@@ -4835,16 +4951,18 @@ function appendFilesystemContextMessages(
     );
   }
 
-  if (chunks.length === 0 && !allowFileEdits) {
+  if (chunks.length === 0 && !allowFileEdits && !roleSystemPrompt) {
     return messages;
   }
 
   const filesystemContextMessage: LLMMessage = {
     role: 'system',
     content: [
+      roleSystemPrompt || '',
+      roleSystemPrompt ? '\n=========================================\n' : '',
       allowFileEdits
         ? 'Virtual filesystem tools are available for this request. Use function calling to read, write, edit, and delete files.'
-        : 'Attached filesystem context for this request:',
+        : (chunks.length > 0 ? 'Attached filesystem context for this request:' : ''),
       '',
       ...chunks,
       '',

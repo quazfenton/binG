@@ -1335,8 +1335,12 @@ export async function callMCPToolFromAI_SDK(
         if (!args || !args.path) validationErrors.push('path: Required');
         if (!args || (!args.content && !args.files)) validationErrors.push('content: Required');
       }
-      if (toolName === 'apply_diff' || toolName === 'batch_write') {
+      if (toolName === 'batch_write') {
         if (!args || (!args.files && !Array.isArray(args.files))) validationErrors.push('files: Required (array)');
+      }
+      if (toolName === 'apply_diff') {
+        if (!args || !args.path) validationErrors.push('path: Required');
+        if (!args || !args.diff) validationErrors.push('diff: Required');
       }
 
       if (validationErrors.length) {

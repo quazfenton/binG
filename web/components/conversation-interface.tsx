@@ -244,16 +244,28 @@ export default function ConversationInterface() {
   // Always start fresh to prevent stale session IDs like "002" from being reused
   const [compositeSessionId, setCompositeSessionId] = useState<string>('');
 
-  // Generate session name on mount (always fresh, never restored)
+  // Generate session name on mount (restore from sessionStorage if available to survive page refresh)
   // FIX: Use composite userId$sessionId format for ALL users (logged-in + anonymous)
   // Anonymous users get "anon$001" format - their data is local-only until they sign up
   // Logged-in users get "12345$001" format - their data persists in the database
   useEffect(() => {
     let cancelled = false;
     if (!compositeSessionId) {
-      // Clear ANY stale sessionStorage to prevent old session IDs from persisting
+      // Restore from sessionStorage to keep VFS files visible across page refreshes
       if (typeof window !== 'undefined') {
-        sessionStorage.removeItem('current_composite_session_id');
+        const storedSessionId = sessionStorage.getItem('current_composite_session_id');
+        if (storedSessionId) {
+          const expectedPrefix = user?.id || 'anon';
+          const storedPrefix = storedSessionId.split('$')[0];
+          if (storedPrefix === expectedPrefix) {
+            // Same user/anon mode — restore to keep files visible
+            setCompositeSessionId(storedSessionId);
+            console.log('[ConversationInterface] Restored composite session ID:', storedSessionId);
+            return;
+          }
+          // Prefix mismatch (user logged in/out) — clear stale
+          sessionStorage.removeItem('current_composite_session_id');
+        }
         sessionStorage.removeItem('current_conversation_id');
       }
 
@@ -1980,6 +1992,23 @@ export default function ConversationInterface() {
     }
   };
 
+  // Targeted retry: resubmit the user prompt that preceded a specific failed message
+  const handleRetryMessage = useCallback((messageId: string) => {
+    const targetIndex = messages.findIndex(m => m.id === messageId);
+    if (targetIndex === -1) return;
+    const msgsBefore = messages.slice(0, targetIndex);
+    const lastUserMsg = [...msgsBefore].reverse().find(m => m.role === 'user');
+    if (!lastUserMsg) return;
+    const lastUserIndex = msgsBefore.lastIndexOf(lastUserMsg);
+    setMessages(messages.slice(0, lastUserIndex + 1));
+    setInput(lastUserMsg.content);
+    setTimeout(() => {
+      handleSubmit(
+        new Event("submit") as unknown as React.FormEvent<HTMLFormElement>,
+      );
+    }, 100);
+  }, [messages, setMessages, setInput, handleSubmit]);
+
   // Handle approval for pending file edits in existing sessions
   const handleApproveEdits = useCallback(async () => {
     if (pendingApprovalDiffs.length === 0) return;
@@ -2170,6 +2199,7 @@ export default function ConversationInterface() {
             setInput={setInput} // Pass setInput to ChatPanel
             onProviderChange={handleProviderChange}
             streamingState={streamingState}
+            onRetryMessage={handleRetryMessage}
           />
         </div>
       </div>

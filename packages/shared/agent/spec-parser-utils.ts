@@ -1,3 +1,5 @@
+import { jsonrepair } from 'jsonrepair';
+
 /**
  * Spec Parser Utilities — shared JSON repair and extraction helpers.
  *
@@ -135,9 +137,15 @@ export function stripJsonComments(raw: string): string {
 }
 
 /**
- * Apply cheap JSON fixups (strip comments + remove trailing commas).
+ * Apply JSON repair using jsonrepair, with legacy fallback for edge cases.
+ * Handles: comments, trailing commas, unquoted keys, single quotes, etc.
  */
 export function tryRepairJson(raw: string): string {
+  try {
+    return jsonrepair(raw);
+  } catch {
+    // Fallback to legacy repair
+  }
   let s = stripJsonComments(raw);
   s = removeTrailingCommas(s);
   return s;

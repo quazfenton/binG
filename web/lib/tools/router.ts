@@ -106,7 +106,10 @@ class VFSProvider implements CapabilityProvider {
       // scope path resolution, and event emission atomically
       const { callMCPToolFromAI_SDK } = await import('../mcp');
       const scopePath = context?.scopePath || input.scopePath;
-      const result = await callMCPToolFromAI_SDK('batch_write', input, ownerId, scopePath);
+      // Inject sessionId into input so callMCPToolFromAI_SDK can use it for VFS event tracking
+      const sessionId = (context as any)?.sessionId || (context as any)?.conversationId || input.sessionId;
+      const batchWriteInput = sessionId ? { ...input, sessionId } : input;
+      const result = await callMCPToolFromAI_SDK('batch_write', batchWriteInput, ownerId, scopePath);
       return {
         success: result.success,
         output: result.output,
@@ -119,7 +122,10 @@ class VFSProvider implements CapabilityProvider {
       // resolution and event emission — avoids the file.write schema mismatch
       const { callMCPToolFromAI_SDK } = await import('../mcp');
       const scopePath = (context as any)?.scopePath || input.scopePath;
-      const result = await callMCPToolFromAI_SDK('create_directory', { path: input.path }, ownerId, scopePath);
+      // Inject sessionId into input for VFS event tracking
+      const sessionId = (context as any)?.sessionId || (context as any)?.conversationId || input.sessionId;
+      const createDirInput = sessionId ? { path: input.path, sessionId } : { path: input.path };
+      const result = await callMCPToolFromAI_SDK('create_directory', createDirInput, ownerId, scopePath);
       if (!result.success) {
         throw new Error(result.error || 'create_directory failed');
       }
@@ -281,7 +287,10 @@ class MCPFilesystemProvider implements CapabilityProvider {
         if (!context.scopePath) {
           console.warn('[MCPFilesystemProvider] Missing scopePath in tool context — VFS files may be written to wrong workspace. Ensure createCapabilityToolExecutor passes a valid scopePath.');
         }
-        const result = await callMCPToolFromAI_SDK(toolName, input, context.userId, context.scopePath);
+        // Inject sessionId from context so trackMcpFileEdit stores the edit for SSE event emission
+        const sessionId = (context as any)?.sessionId || (context as any)?.conversationId || input.sessionId;
+        const enhancedInput = sessionId ? { ...input, sessionId } : input;
+        const result = await callMCPToolFromAI_SDK(toolName, enhancedInput, context.userId, context.scopePath);
       return {
         success: result.success,
         output: result.output,

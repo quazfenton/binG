@@ -471,13 +471,16 @@ export function createBashTool(config: Partial<BashToolConfig> = {}) {
     bash_execute: tool({
       description: 'Execute bash commands in sandboxed environment. Supports pipes, redirects, and complex pipelines. Output is persisted to VFS.',
       inputSchema: z.object({
-        command: z.string().describe('Bash command to execute (e.g., "cat file.txt | grep pattern > output.txt")'),
+        command: z.string().describe('Bash command to execute (e.g., "cat file.txt | grep pattern > output.txt")').optional(),
+        code: z.string().describe('Bash command to execute (alias for command)').optional(),
         workingDir: z.string().optional().describe('Working directory (default: /workspace)'),
         persist: z.boolean().optional().default(true).describe('Persist output to VFS'),
         selfHeal: z.boolean().optional().default(cfg.enableSelfHealing).describe('Enable self-healing on failure'),
         timeout: z.number().optional().default(cfg.defaultTimeout).describe('Timeout in milliseconds'),
       }),
-      execute: async ({ command, workingDir, persist, selfHeal, timeout }, ctx) => {
+      execute: async ({ command, code, workingDir, persist, selfHeal, timeout }, ctx) => {
+        // Accept both 'command' and 'code' parameter names - some LLMs use 'code'
+        const actualCommand = command || code;
         const agentId = (ctx as any).threadId || 'default';
         const wd = workingDir || cfg.workingDir;
 
@@ -488,20 +491,26 @@ export function createBashTool(config: Partial<BashToolConfig> = {}) {
           selfHeal,
         });
 
-        if (!isCommandSafe(command)) {
-          throw new Error(`Command blocked by safety filter: ${command.slice(0, 100)}`);
+        if (!actualCommand) {
+          throw new Error('command is required for bash_execute');
+        }
+
+        const commandToUse = actualCommand;
+
+        if (!isCommandSafe(commandToUse)) {
+          throw new Error(`Command blocked by safety filter: ${commandToUse.slice(0, 100)}`);
         }
 
         // RTK: Optionally rewrite command for token optimization
         // This transforms verbose commands like `git log` to `git log --oneline -20`
-        let rewrittenCommand = command;
+        let rewrittenCommand = commandToUse;
         let rtkCategory: string | null = null;
-        if (cfg.rtkEnableRewrite && canRewrite(command)) {
-          rewrittenCommand = rewriteCommand(command, { enableRewrite: true });
-          rtkCategory = getCommandCategory(command);
-          if (rewrittenCommand !== command) {
+        if (cfg.rtkEnableRewrite && canRewrite(commandToUse)) {
+          rewrittenCommand = rewriteCommand(commandToUse, { enableRewrite: true });
+          rtkCategory = getCommandCategory(commandToUse);
+          if (rewrittenCommand !== commandToUse) {
             logger.info('RTK: Command rewritten', {
-              original: command,
+              original: commandToUse,
               rewritten: rewrittenCommand,
               category: rtkCategory,
             });
@@ -513,7 +522,7 @@ export function createBashTool(config: Partial<BashToolConfig> = {}) {
         if (cfg.getFilesystemState) {
           try {
             const { routeLLMCommand, executeRoutedCommand } = await import('@/lib/terminal/commands/llm-bash-router');
-            routeDecision = routeLLMCommand(command, {
+            routeDecision = routeLLMCommand(commandToUse, {
               getFilesystem: cfg.getFilesystemState,
               onOutput: cfg.onTerminalOutput,
             });

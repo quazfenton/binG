@@ -79,6 +79,21 @@ export function sanitizeMessages(messages: any[], options: SanitizeOptions = {})
         content = [{ type: 'text' as const, text: content }];
       }
 
-      return { role, content };
+      const result: any = { role, content };
+
+      // Preserve tool_calls on assistant messages (needed for multi-step tool use)
+      if (role === 'assistant') {
+        const tc = m?.tool_calls || m?.toolCalls;
+        if (Array.isArray(tc) && tc.length > 0) {
+          result.tool_calls = tc;
+        }
+      }
+
+      // Preserve tool_call_id on tool messages
+      if (role === 'tool' && m?.tool_call_id) {
+        result.tool_call_id = m.tool_call_id;
+      }
+
+      return result;
     });
 }

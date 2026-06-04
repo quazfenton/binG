@@ -59,6 +59,46 @@ describe('message-sanitizer', () => {
     expect((out[0].content as any[])[0].type).toBe('tool-result');
   });
 
+  it('preserves tool_calls on assistant messages', () => {
+    const toolCalls = [{ id: 'call1', type: 'function', function: { name: 'read_file', arguments: '{"path":"test.txt"}' } }];
+    const msgs = [
+      { role: 'user', content: 'read a file' },
+      { role: 'assistant', content: '', tool_calls: toolCalls },
+    ];
+    const out = sanitizeMessages(msgs);
+    expect(out).toHaveLength(2);
+    expect(out[1].role).toBe('assistant');
+    expect(out[1].tool_calls).toEqual(toolCalls);
+  });
+
+  it('preserves tool_call_id on tool messages', () => {
+    const msgs = [
+      { role: 'tool', content: 'File content here', tool_call_id: 'call1' },
+    ];
+    const out = sanitizeMessages(msgs);
+    expect(out).toHaveLength(1);
+    expect(out[0].role).toBe('tool');
+    expect(out[0].tool_call_id).toBe('call1');
+  });
+
+  it('filters out empty assistant messages without content or tool_calls', () => {
+    const msgs = [
+      { role: 'assistant', content: '' }, // no text, no tool_calls
+    ];
+    const out = sanitizeMessages(msgs);
+    expect(out).toHaveLength(0);
+  });
+
+  it('keeps assistant messages with toolCalls (camelCase) variant', () => {
+    const toolCalls = [{ id: 'call1', type: 'function', function: { name: 'read_file', arguments: '{}' } }];
+    const msgs = [
+      { role: 'assistant', content: '', toolCalls: toolCalls },
+    ];
+    const out = sanitizeMessages(msgs);
+    expect(out).toHaveLength(1);
+    expect(out[0].tool_calls).toEqual(toolCalls);
+  });
+
   it('filters out messages with no role at all', () => {
     const msgs = [
       { role: 'user', content: 'hello' },

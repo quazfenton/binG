@@ -1977,7 +1977,7 @@ export function extractFencedBatchWrite(content: string): FileEdit[] {
       const argSlice = blockBody.slice(afterParen, endIdx);
       let files: unknown[] | undefined;
       try {
-        const parsed = JSON.parse(argSlice);
+        const parsed = tolerantJsonParse(argSlice);
         if (Array.isArray(parsed)) files = parsed;
         else if (parsed && typeof parsed === 'object') {
           const obj = parsed as Record<string, unknown>;
@@ -2069,16 +2069,17 @@ export function extractToolTagEdits(content: string): FileEdit[] {
       const jsonStr = afterTag.substring(openBrace, closeIdx + 1);
       if (jsonStr.trim() === '{}') continue;
 
-      const parsed = JSON.parse(jsonStr);
-      if (jsonStr.trim() === '{}') continue;
+      const parsed = tolerantJsonParse(jsonStr) as Record<string, unknown>;
+      if (!parsed) continue;
 
       // Handle batch_write / write_files: { files: [{ path, content }, ...] }
       if (toolName === 'batch_write' || toolName === 'write_files') {
         const files = parsed.files;
         if (Array.isArray(files)) {
           for (const file of files) {
-            const path = file.path;
-            const fileContent = file.content;
+            const fileObj = file as Record<string, unknown>;
+            const path = fileObj.path as string | undefined;
+            const fileContent = fileObj.content as string | undefined;
             if (typeof path === 'string' && path.trim() && typeof fileContent === 'string' && fileContent.trim()) {
               const trimmedPath = path.trim();
               if (isValidExtractedPath(trimmedPath) && !edits.some(e => e.path === trimmedPath)) {
@@ -2097,9 +2098,9 @@ export function extractToolTagEdits(content: string): FileEdit[] {
 
       // Map tool name to action
       let action: FileEdit['action'] = 'write';
-      let contentVal = parsed.content || '';
+      let contentVal = (parsed.content as string) || '';
       if (toolName === 'delete_file') action = 'delete';
-      else if (toolName === 'apply_diff') { action = 'patch'; contentVal = parsed.diff || ''; }
+      else if (toolName === 'apply_diff') { action = 'patch'; contentVal = (parsed.diff as string) || ''; }
       else if (toolName === 'mkdir') action = 'mkdir';
 
       // For write/patch actions, content/diff is required

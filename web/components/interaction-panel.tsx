@@ -406,6 +406,13 @@ const ProviderSelector = React.memo(function ProviderSelector({
                 onChange={(e) => setSearchTerm(e.target.value)}
                 onClick={(e) => e.stopPropagation()}
                 onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                onKeyDown={(e) => {
+                  // Stop Radix UI Select from intercepting typing for its
+                  // built-in typeahead; otherwise Radix captures letter keys
+                  // and navigates to the first matching SelectItem instead of
+                  // letting the input handle the character.
+                  e.stopPropagation();
+                }}
                 className="flex-1 bg-transparent border-none outline-none text-xs text-white/80 placeholder:text-white/30"
               />
               {searchTerm && (
@@ -2644,6 +2651,16 @@ function FileMentionAutocompleteIntegration({
     },
   });
 
+  // Prompt history for up-arrow recall
+  const promptHistoryRef = useRef<string[]>([]);
+  const promptHistoryIndexRef = useRef(-1);
+  const trackedSubmit = useCallback((content: string) => {
+    if (content.trim()) {
+      promptHistoryRef.current = [...promptHistoryRef.current, content.trim()];
+    }
+    onSubmit(content);
+  }, [onSubmit]);
+
   return (
     <>
       <Textarea
@@ -2658,18 +2675,54 @@ function FileMentionAutocompleteIntegration({
           const handled = handleKeyDown(e);
           if (handled) return;
           
+          // ArrowUp/Down prompt history recall (when autocomplete menu is hidden)
+          if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+            const history = promptHistoryRef.current;
+            if (history.length > 0) {
+              e.preventDefault();
+              let idx = promptHistoryIndexRef.current;
+              if (e.key === "ArrowUp") {
+                if (!input.trim()) {
+                  // Start from the end
+                  idx = history.length - 1;
+                } else if (idx > 0) {
+                  idx--;
+                }
+              } else {
+                if (idx < history.length - 1) {
+                  idx++;
+                } else {
+                  // At end of history, restore empty
+                  setInput("");
+                  promptHistoryIndexRef.current = -1;
+                  return;
+                }
+              }
+              promptHistoryIndexRef.current = idx;
+              setInput(history[idx]);
+              return;
+            }
+          }
+          
+          // Reset history index on any other key (user is typing fresh)
+          if (e.key !== "ArrowUp" && e.key !== "ArrowDown" && e.key !== "Enter") {
+            promptHistoryIndexRef.current = -1;
+          }
+          
           // Enter to submit
           if (e.key === "Enter" && !e.shiftKey) {
             e.preventDefault();
             const trimmed = input.trim();
             if (!trimmed) return;
+            // Reset history index on new submission
+            promptHistoryIndexRef.current = -1;
             // If processing and queuing allowed, queue instead of submitting
             if (isProcessing && allowInputWhileProcessing) {
               setPendingInput(trimmed);
               setInput("");
               return;
             }
-            onSubmit(trimmed);
+            trackedSubmit(trimmed);
             setInput("");
           }
         }}

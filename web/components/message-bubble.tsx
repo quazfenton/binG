@@ -6,7 +6,7 @@ import remarkGfm from "remark-gfm"
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter"
 import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism"
 import { Button } from "@/components/ui/button"
-import { Copy, Check, ChevronDown, ChevronUp, Brain, Loader2, SkipForward, Pause, Play, Terminal, ExternalLink, FileCode, Plus, Minus, Eye, Download, CheckCircle, XCircle } from "lucide-react"
+import { Copy, Check, ChevronDown, ChevronUp, Brain, Loader2, SkipForward, Pause, Play, Terminal, ExternalLink, FileCode, Plus, Minus, Eye, Download, CheckCircle, XCircle, RotateCcw } from "lucide-react"
 import type { Message, CodeArtifact } from "@/types"
 import { useEnhancedStreamingDisplay } from "@/hooks/use-enhanced-streaming-display"
 import { useResponsiveLayout, calculateDynamicWidth, getOverflowStrategy } from "@/hooks/use-responsive-layout"
@@ -73,6 +73,7 @@ interface MessageBubbleProps {
   overflow?: 'wrap' | 'scroll' | 'ellipsis'
   onAuthPromptDismiss?: () => void
   userId?: string
+  onRetry?: (messageId: string) => void
 }
 
 /**
@@ -118,7 +119,8 @@ export default function MessageBubble({
   responsive = true,
   overflow,
   onAuthPromptDismiss,
-  userId: _userId
+  userId: _userId,
+  onRetry,
 }: MessageBubbleProps) {
   const [copied, setCopied] = useState(false)
   const [showReasoning, setShowReasoning] = useState(false)
@@ -1457,7 +1459,20 @@ export default function MessageBubble({
                   </div>
                 )}
               </div>
-            )}
+                )}
+
+        {/* Retry button — shown on assistant bubbles that ended with an error and have canRetry flagged */}
+        {!isUser && !isStreaming && onRetry && (message.metadata as any)?.canRetry && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="mt-2 text-xs gap-1.5 text-amber-400/80 hover:text-amber-300 hover:bg-amber-500/10 border border-amber-500/20 hover:border-amber-500/40 transition-all"
+            onClick={() => onRetry(message.id)}
+          >
+            <RotateCcw className="h-3 w-3" />
+            Retry
+          </Button>
+        )}
 
         <Button
           variant="ghost"

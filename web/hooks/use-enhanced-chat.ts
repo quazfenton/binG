@@ -285,33 +285,6 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
     return headers;
   }, [orchestrationMode]);
 
-  // Process next queued prompt after current response completes
-  const processQueue = useCallback(async () => {
-    if (inputQueue.length === 0) {
-      return;
-    }
-    
-    // Get next queued input (FIFO - oldest first)
-    const nextInput = inputQueue[0];
-    
-    console.log('[InputQueue] Processing queued prompt:', {
-      queueLength: inputQueue.length,
-      nextInputPreview: nextInput.substring(0, 50),
-    });
-    
-    // Remove from queue before submitting to prevent re-queueing
-    setInputQueue(prev => prev.slice(1));
-    
-    // Set as current input and submit
-    setInput(nextInput);
-    
-    // Use a small delay to ensure state updates before submit
-    setTimeout(() => { if (!isMountedRef.current) return;
-      const fakeEvent = { preventDefault: () => {}, currentTarget: { reset: () => {} } } as React.FormEvent<HTMLFormElement>;
-      handleSubmit(fakeEvent);
-    }, 50);
-  }, [inputQueue]);
-
   // Helper function to submit with a specific prompt (avoids race condition with setInput)
   const submitWithPrompt = useCallback(async (prompt: string) => {
     if (!prompt.trim()) {
@@ -377,6 +350,29 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
     // Call handleStreamingResponse with the response body
     await handleStreamingResponse(response.body, assistantMessage, abortController);
   }, [isLoading, inputQueue, messagesRef, options, voiceService, setError, setMessages, setIsLoading, buildRequestHeaders]);
+
+  // Process next queued prompt after current response completes
+  const processQueue = useCallback(async () => {
+    if (inputQueue.length === 0) {
+      return;
+    }
+    
+    // Get next queued input (FIFO - oldest first)
+    const nextInput = inputQueue[0];
+    
+    console.log('[InputQueue] Processing queued prompt:', {
+      queueLength: inputQueue.length,
+      nextInputPreview: nextInput.substring(0, 50),
+    });
+    
+    // Remove from queue before submitting to prevent re-queueing
+    setInputQueue(prev => prev.slice(1));
+    
+    // Use submitWithPrompt instead of setInput + handleSubmit to avoid stale
+    // input state issue — handleSubmit reads `input` from its closure (empty
+    // string after clear-on-queue), so the queued prompt would be silently lost.
+    void submitWithPrompt(nextInput);
+  }, [inputQueue, submitWithPrompt]);
 
   const handleSubmit = useCallback(async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -829,6 +825,11 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                     if (raw.processingSteps) metadata.processingSteps = raw.processingSteps;
                     if (raw.routing) metadata.routing = raw.routing;
                     if (raw.toolInvocations) metadata.toolInvocations = raw.toolInvocations;
+                    if (typeof raw.anyToolFailed === 'boolean') metadata.anyToolFailed = raw.anyToolFailed;
+                    if (raw.isEmptyResponse === true) metadata.isEmptyResponse = true;
+                    if (typeof raw.emptyReason === 'string') metadata.emptyReason = raw.emptyReason;
+                    if (typeof raw.sessionId === 'string') metadata.sessionId = raw.sessionId;
+                    if (typeof raw.conversationId === 'string') metadata.conversationId = raw.conversationId;
                     setMessages(prev => prev.map(msg =>
                       msg.id === assistantMessage.id
                         ? { ...msg, metadata: { ...(msg.metadata || {}), ...metadata } }
@@ -898,6 +899,11 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   if (raw.processingSteps) doneMetadata.processingSteps = raw.processingSteps;
                   if (raw.routing) doneMetadata.routing = raw.routing;
                   if (raw.toolInvocations) doneMetadata.toolInvocations = raw.toolInvocations;
+                  if (typeof raw.anyToolFailed === 'boolean') doneMetadata.anyToolFailed = raw.anyToolFailed;
+                  if (raw.isEmptyResponse === true) doneMetadata.isEmptyResponse = true;
+                  if (typeof raw.emptyReason === 'string') doneMetadata.emptyReason = raw.emptyReason;
+                  if (typeof raw.sessionId === 'string') doneMetadata.sessionId = raw.sessionId;
+                  if (typeof raw.conversationId === 'string') doneMetadata.conversationId = raw.conversationId;
 
                   // Also include filesystem info if present
                   if (eventData.filesystem) {
@@ -929,11 +935,37 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   // CRITICAL: Use streamingToolInvocations (local) instead of messagesRef.current
                   // because messagesRef is stale (useEffect hasn't synced when done fires)
                   // FIX: Count only SUCCESSFUL tool invocations - failed ones should trigger retry
+                  // Deep-check: MCP filesystem tools return top-level success:true but
+                  // encode {success:false, error: {code:'PATH_NOT_FOUND', ...}} in output.
+                  const isFailedInvocation = (inv: any) => {
+                    if (!inv?.result) return false;
+                    const r = inv.result;
+                    if (r.success === false) return true;
+                    if (r.error) return true;
+                    if (typeof r.output === 'string') {
+                      try {
+                        const parsed = JSON.parse(r.output);
+                        if (parsed && parsed.success === false) return true;
+                      } catch {}
+                    }
+                    if (r.output && typeof r.output === 'object') {
+                      if (r.output.success === false) return true;
+                      if (typeof r.output.output === 'string') {
+                        try {
+                          const parsed = JSON.parse(r.output.output);
+                          if (parsed && parsed.success === false) return true;
+                        } catch {}
+                      }
+                    }
+                    return false;
+                  };
+                  const isSuccessfulInvocation = (inv: any) => !isFailedInvocation(inv);
+
                   const successfulToolInvocations = (eventData.toolInvocations || eventData.toolCalls || eventData.messageMetadata?.toolInvocations || streamingToolInvocations || []).filter(
-                    (inv: any) => inv.result?.success === true
+                    (inv: any) => isSuccessfulInvocation(inv)
                   );
                   const failedToolInvocations = (eventData.toolInvocations || eventData.toolCalls || eventData.messageMetadata?.toolInvocations || streamingToolInvocations || []).filter(
-                    (inv: any) => inv.result?.success === false
+                    (inv: any) => isFailedInvocation(inv)
                   );
                   const hasSuccessfulToolInvocations = successfulToolInvocations.length > 0;
                   const hasFailedToolInvocations = failedToolInvocations.length > 0;
@@ -1005,11 +1037,15 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   // reuse the same bubble and just keep it in loading state — no
                   // endless bubble spam.
                   if (isEmptyResponse) {
-                    const retryCount = (doneMetadata.retryCount || 0);
+                    // Read retryCount from the bubble's own metadata first (client-managed,
+                    // incremented on each retry) instead of from the server's DONE event,
+                    // which never echoes retryCount back. Without this, retryCount is
+                    // always 0 and the loop retries infinitely.
+                    const assistantRetryCount = (assistantMessage.metadata as any)?.retryCount || 0;
                     const maxRetries = 3;
 
-                    if (retryCount < maxRetries) {
-                      const isFirstRetry = retryCount === 0;
+                    if (assistantRetryCount < maxRetries) {
+                      const isFirstRetry = assistantRetryCount === 0;
 
                       // Find the last user message content
                       const currentMessages = messagesRef.current;
@@ -1019,49 +1055,16 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                       const lastUserMsg = userMessages[userMessages.length - 1];
 
                       if (lastUserMsg?.content) {
-                        console.warn(`[Chat] Empty response detected, auto-retrying (attempt ${retryCount + 1}/${maxRetries})`);
+                        console.warn(`[Chat] Empty response detected, auto-retrying (attempt ${assistantRetryCount + 1}/${maxRetries})`);
 
                         clearTimeout(timeoutId);
 
-                        // CRITICAL FIX: Prevent endless retry bubbles
-                        // Check if there's already a retry bubble for this original message
-                        const existingRetryBubble = currentMessages.find(
-                          msg => msg.id?.startsWith('assistant-retry-') && 
-                                msg.metadata?.originalProvider === doneMetadata.provider
-                        );
-                        
-                        // After max retries, stop and show error instead of creating more bubbles
-                        if (retryCount >= maxRetries) {
-                          console.error(`[Chat] Max retries (${maxRetries}) exceeded, giving up`);
-                          clearTimeout(timeoutId);
-                          setIsLoading(false);
-                          setAgentStatus('completed');
-                          
-                          // Update the original message with an error state instead of retrying
-                          setMessages(prev => prev.map(msg =>
-                            msg.id === assistantMessage.id
-                              ? {
-                                  ...msg,
-                                  content: 'I encountered an issue generating a response. Please try again or use a different provider.',
-                                  metadata: {
-                                    ...(msg.metadata || {}),
-                                    ...doneMetadata,
-                                    isEmptyResponse: false,
-                                    hasError: true,
-                                    errorMessage: 'Max retries exceeded for empty response',
-                                  },
-                                }
-                              : msg
-                          ));
-                          break;
-                        }
-                        
                         const toolContext = buildEmptyResponseRetryContext({
                           toolInvocations: streamingToolInvocations,
                           filesystemEdits: eventData.filesystem,
                           fileEdits: eventData.fileEdits,
-                          provider: doneMetadata.provider,
-                          model: doneMetadata.model,
+                          provider: String(doneMetadata.provider ?? ''),
+                          model: String(doneMetadata.model ?? ''),
                           finishReason: eventData.finishReason,
                         });
 
@@ -1080,22 +1083,22 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                                     ...(msg.metadata || {}),
                                     ...doneMetadata,
                                     isEmptyResponse: true,
-                                    emptyResponseAttempt: retryCount + 1,
-                                    toolInvocations: streamingToolInvocations.length > 0
-                                      ? streamingToolInvocations
-                                      : (msg.metadata as any)?.toolInvocations,
-                                  },
-                                }
-                              : msg
-                          ));
+                                    emptyResponseAttempt: assistantRetryCount + 1,
+                                     toolInvocations: streamingToolInvocations.length > 0
+                                       ? streamingToolInvocations
+                                       : (msg.metadata as any)?.toolInvocations,
+                                   },
+                                 }
+                               : msg
+                           ));
 
-                          retryAssistantMessage = {
-                            id: `assistant-retry-${Date.now()}`,
-                            role: 'assistant',
-                            content: '',
-                            metadata: {
-                              isRetry: true,
-                              retryCount: retryCount + 1,
+                           retryAssistantMessage = {
+                             id: `assistant-retry-${Date.now()}`,
+                             role: 'assistant',
+                             content: '',
+                             metadata: {
+                               isRetry: true,
+                               retryCount: assistantRetryCount + 1,
                               originalProvider: doneMetadata.provider,
                               originalModel: doneMetadata.model,
                               retryContext: toolContext,
@@ -1105,15 +1108,15 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                         } else {
                           // Reuse the existing retry bubble — just clear its content
                           // and bump the retryCount. No new bubble.
-                          retryAssistantMessage = {
-                            id: assistantMessage.id,
-                            role: 'assistant',
-                            content: '',
-                            metadata: {
-                              ...(assistantMessage.metadata || {}),
-                              retryCount: retryCount + 1,
-                              isEmptyResponse: true,
-                              emptyResponseAttempt: retryCount + 1,
+                           retryAssistantMessage = {
+                             id: assistantMessage.id,
+                             role: 'assistant',
+                             content: '',
+                             metadata: {
+                               ...(assistantMessage.metadata || {}),
+                               retryCount: assistantRetryCount + 1,
+                               isEmptyResponse: true,
+                               emptyResponseAttempt: assistantRetryCount + 1,
                               retryContext: toolContext,
                             },
                           };
@@ -1149,8 +1152,8 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                           // Select a rotated provider/model for retry:
                           // Retry 1: Next model from same provider
                           // Retry 2+: Next provider in fallback chain
-                          const origProvider = doneMetadata.provider;
-                          const origModel = doneMetadata.model;
+                          const origProvider = String(doneMetadata.provider ?? '');
+                          const origModel = String(doneMetadata.model ?? '');
                           let selectedProvider = origProvider;
                           let selectedModel = origModel;
 
@@ -1171,7 +1174,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                             deepinfra: ['meta-llama/Meta-Llama-3.1-70B-Instruct', 'mistralai/Mixtral-8x7B-Instruct-v0.1'],
                           };
 
-                          if (retryCount === 0) {
+                          if (assistantRetryCount === 0) {
                             // First retry: try next model from same provider
                             const providerModels = PROVIDER_MODELS[origProvider?.toLowerCase()];
                             if (providerModels && providerModels.length > 1) {
@@ -1202,11 +1205,11 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                               const { getConfiguredFallbackChain } = await import('@/lib/providers/provider-fallback-chains');
                               const fallbackChain = getConfiguredFallbackChain(origProvider);
                               if (fallbackChain.length > 0) {
-                                const providerIdx = (retryCount - 1) % fallbackChain.length;
+                                const providerIdx = (assistantRetryCount - 1) % fallbackChain.length;
                                 selectedProvider = fallbackChain[providerIdx];
                                 const fallbackModels = PROVIDER_MODELS[selectedProvider.toLowerCase()];
                                 selectedModel = fallbackModels?.[0] || 'mistral-small-latest';
-                                console.warn(`[Chat] Rotating to fallback provider: ${selectedProvider}/${selectedModel} (retry ${retryCount + 1})`);
+                                console.warn(`[Chat] Rotating to fallback provider: ${selectedProvider}/${selectedModel} (retry ${assistantRetryCount + 1})`);
                               }
                             } catch {}
                           }
@@ -1298,7 +1301,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   // Process queued prompts AFTER response completes
                   // This ensures queued prompts wait for any auto-retry loops to finish
                   // Only process if we're not in a retry loop (retryCount check)
-                  const isRetrying = (doneMetadata.retryCount || 0) > 0 && isEmptyResponse;
+                  const isRetrying = (Number(doneMetadata.retryCount) || 0) > 0 && isEmptyResponse;
                   if (!isRetrying && inputQueue.length > 0) {
                     console.log('[InputQueue] Response complete, processing next queued prompt:', {
                       queueLength: inputQueue.length,
@@ -1332,7 +1335,10 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   //         (3) skip if response was empty (retry logic handles that).
                   const MAX_STEP_REPROMPTS = 5;
                   const stepRepromptCount = stepRepromptCountRef.current;
-                  const stepReprompt = doneMetadata?.routing?.stepReprompt;
+                  const routing = doneMetadata?.routing as
+                    | { stepReprompt?: string; primaryRole?: string; estimatedSteps?: number; continue?: boolean; suggestedRole?: string; planSteps?: string[]; classification?: string }
+                    | undefined;
+                  const stepReprompt = routing?.stepReprompt;
                   // FIX: Also trigger auto-continue when tools failed, to allow automatic retry
                   // This ensures tool failures get retried automatically rather than showing error to user
                   const shouldRetryForToolFailure = doneMetadata?.anyToolFailed === true;
@@ -1346,8 +1352,8 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   ) {
                     console.log('[StepReprompt] Auto-continuing multi-step flow', {
                       stepRepromptPreview: stepReprompt.slice(0, 80),
-                      primaryRole: doneMetadata?.routing?.primaryRole,
-                      estimatedSteps: doneMetadata?.routing?.estimatedSteps,
+                      primaryRole: routing?.primaryRole,
+                      estimatedSteps: routing?.estimatedSteps,
                       continuationNumber: stepRepromptCount + 1,
                       maxContinuations: MAX_STEP_REPROMPTS,
                     });
@@ -1377,15 +1383,15 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   
                   // Role Redirect: Handle continue=false with planSteps (role handoff)
                   // When LLM finishes planning and wants to hand off to another role
-                  if (!stepReprompt && doneMetadata?.routing && !doneMetadata.routing.continue) {
-                    const { suggestedRole, planSteps, classification } = doneMetadata.routing;
+                  if (!stepReprompt && routing && !routing.continue) {
+                    const { suggestedRole, planSteps, classification } = routing;
                     
                     if (planSteps && planSteps.length > 0 && suggestedRole && stepRepromptCount < MAX_STEP_REPROMPTS) {
                       console.log('[RoleRedirect] Role handoff detected', {
                         suggestedRole,
                         planStepsCount: planSteps.length,
                         classification,
-                        primaryRole: doneMetadata.routing.primaryRole,
+                        primaryRole: routing?.primaryRole,
                       });
                       
                       const rolePrompt = `[ROLE_REDIRECT]\nTarget Role: ${suggestedRole}\nClassification: ${classification}\n\nYour task: Execute the following planned steps.\n\nAvailable steps:\n${planSteps.map((s: any, i: number) => `${i+1}. ${s.step || s} (${s.tool || 'unspecified'})`).join('\n')}\n\nBegin execution with step 1. Use the appropriate tools for each step.`;

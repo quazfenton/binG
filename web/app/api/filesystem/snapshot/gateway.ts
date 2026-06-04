@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { isDesktopMode } from '@bing/platform/env';
 import { fsBridge, isUsingLocalFS } from '@bing/shared/FS/fs-bridge';
+import { stripWorkspacePrefixes } from '@/lib/virtual-filesystem/scope-utils';
 import { resolveFilesystemOwner, virtualFilesystem, withAnonSessionCookie } from '@/lib/virtual-filesystem/index.server';
 import type { FilesystemOwnerResolution } from '@/lib/virtual-filesystem/resolve-filesystem-owner';
 
@@ -239,6 +240,10 @@ export async function GET(req: NextRequest) {
     }
     pathFilter = pathFilter.replace(/\/+$/, '');
 
+    // Normalize pathFilter to match stored file paths (strip workspace/ prefix)
+    // Files are stored with paths like sessions/002/index.html — strip workspace/ prefix
+    pathFilter = stripWorkspacePrefixes(pathFilter) || 'workspace';
+
     // SECURITY: Validate pathFilter with schema before use
     const parseResult = snapshotRequestSchema.safeParse({ path: pathFilter });
     if (!parseResult.success) {
@@ -362,15 +367,18 @@ export async function GET(req: NextRequest) {
       files,
     };
 
-    const latestVersionBeforeSet = latestSeenVersion.get(owner.ownerId) || 0;
-    if (snapshot.version >= latestVersionBeforeSet) {
-      snapshotCache.set(cacheKey, {
-        data: responseData,
-        timestamp: now,
-        etag,
-        version: snapshot.version,
-      });
-    }
+    // Always cache the generated snapshot. The onSnapshotChange listener
+    // (registered at module init) evicts stale entries when a newer version
+    // is written, and the cache read path also checks cached.version against
+    // latestSeenVersion. This avoids the race where a concurrent write bumps
+    // the version between exportWorkspace start and finish, causing every
+    // subsequent request to miss the cache and re-run the full export.
+    snapshotCache.set(cacheKey, {
+      data: responseData,
+      timestamp: now,
+      etag,
+      version: snapshot.version,
+    });
 
     const response = NextResponse.json({
       success: true,

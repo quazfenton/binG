@@ -1,3 +1,4 @@
+import { tolerantJsonParse } from '@/lib/utils/json-tolerant';
 import type { ModelRole } from '../schemas';
 import { createModelWithFallback, type ProviderName } from './provider-fallback';
 import type { LanguageModel } from 'ai';
@@ -23,7 +24,7 @@ const DEFAULT_CONFIGS: Record<ModelRole, ModelConfig> = {
     modelId: 'gpt-4o',
     preferredProvider: 'openai',
     maxTokens: 8000,
-    temperature: 0.4,
+    temperature: 0.2,
   },
   linter: {
     role: 'linter',
@@ -155,7 +156,8 @@ FORMAT:
     });
 
     try {
-      const parsed = JSON.parse(result.text);
+      const parsed = tolerantJsonParse(result.text) as any;
+      if (parsed === undefined) throw new Error('parse failed');
       return parsed;
     } catch {
       console.warn('[ModelRouter] Failed to parse architect response, using fallback');
@@ -226,7 +228,8 @@ If no errors, return: {"errors": [], "passed": true}`;
     });
 
     try {
-      const parsed = JSON.parse(result.text);
+      const parsed = tolerantJsonParse(result.text) as any;
+      if (parsed === undefined) throw new Error('parse failed');
       return parsed;
     } catch {
       console.warn('[ModelRouter] Failed to parse linter response, assuming passed');

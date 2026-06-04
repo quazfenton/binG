@@ -142,7 +142,8 @@ export class KilocodeServer {
 
     const result = validateConfig(apiConfig, apiConfigSchema);
     if (!result.success) {
-      throw new Error(`Invalid Kilocode server configuration: ${(result as any).errors.join(', ')}`);
+      const errors = (result as { success: false; errors: string[] }).errors;
+      throw new Error(`Invalid Kilocode server configuration: ${errors?.join(', ') || 'Unknown validation error'}`);
     }
 
     return merged;

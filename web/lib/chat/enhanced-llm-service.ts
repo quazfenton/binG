@@ -232,6 +232,13 @@ export class EnhancedLLMService {
          models: (PROVIDERS.fireworks?.models || []).map(m => typeof m === 'string' ? m : m.id),
         priority: 13
       },
+      {
+        provider: 'ninerouter',
+        baseUrl: process.env.NINEROUTER_BASE_URL || 'http://ninerouter:3000/v1',
+        apiKey: process.env.NINEROUTER_API_KEY || '',
+         models: (PROVIDERS.ninerouter?.models || []).map(m => typeof m === 'string' ? m : m.id),
+        priority: 14
+      },
     ];
 
     configs.forEach(config => {
@@ -345,6 +352,7 @@ export class EnhancedLLMService {
       'chutes': 'https://llm.chutes.ai/v1',
       'portkey': 'https://api.portkey.ai/v1',
       'zen': process.env.ZEN_BASE_URL || 'https://api.zen.ai/v1',
+      'ninerouter': process.env.NINEROUTER_BASE_URL || 'http://ninerouter:3000/v1',
     };
     return baseUrlMap[provider] || `https://api.${provider}.com/v1`;
   }

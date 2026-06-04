@@ -5,7 +5,6 @@ import { logger } from "hono/logger";
 import path from "node:path";
 import { createServer } from "node:net";
 import { fileURLToPath } from "node:url";
-import chatRoute from "./routes/chat";
 import { mountNextApiRoutes } from "./lib/next-route-loader";
 
 // Prevent unhandled rejections from crashing the process
@@ -65,17 +64,12 @@ const apiDir = path.resolve(__dirname, "..", "..", "web", "app", "api");
 //   "tauri-only"       — files explicitly named *tauri-only*
 // Routes that gate themselves at runtime via process.env.DESKTOP_MODE do
 // NOT need to be listed; they fall through correctly when the env is unset.
-const ROUTE_EXCLUDES = (process.env.BACKEND_ROUTE_EXCLUDES ?? "/desktop/,/chat/")
+const ROUTE_EXCLUDES = (process.env.BACKEND_ROUTE_EXCLUDES ?? "/desktop/")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
 
 await mountNextApiRoutes(app, apiDir, { exclude: ROUTE_EXCLUDES });
-
-// ── Override: keep the streaming-optimised Hono chat route on top ───────
-// This wins over the auto-mounted Next chat/route.ts because Hono honors
-// the most recently registered handler for a path.
-app.route("/api/chat", chatRoute);
 
 // ── Catch-all 404 (json, not html) ──────────────────────────────────────
 app.notFound((c) =>

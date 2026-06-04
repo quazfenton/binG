@@ -1,6 +1,9 @@
+import { jsonrepair } from 'jsonrepair';
+
 /**
  * Tolerant JSON parser for malformed LLM output.
- * Handles: trailing commas, single quotes, unescaped control chars.
+ * Uses jsonrepair to handle trailing commas, single quotes, unquoted keys,
+ * unescaped control chars, comments, and other common LLM malformations.
  *
  * This is a shared utility used by both the VFS MCP tool layer
  * and the text-based file-edit parser to safely parse LLM JSON.
@@ -48,13 +51,10 @@ export function sanitizeJsonString(str: string): string {
 /**
  * Attempt to parse JSON with fallbacks for common LLM malformations.
  *
- * Tries in order:
- * 1. Standard JSON.parse
- * 2. Remove trailing commas
- * 3. Replace single quotes with double quotes
- * 4. Sanitize control characters + parse
- * 5. Sanitize + trailing commas
- * 6. Sanitize + single quotes
+ * Strategy:
+ * 1. Prefix stripping (files=, filesArray=)
+ * 2. jsonrepair (handles unquoted keys, single quotes, trailing commas, comments, etc.)
+ * 3. Fallback: sanitize control chars then jsonrepair
  *
  * @param text - Raw string from LLM output
  * @param sanitize - Whether to attempt control-char sanitization (default: true)
@@ -65,34 +65,29 @@ export function tolerantJsonParse(text: string, sanitize = true): unknown {
   const trimmed = text.trim();
   if (!trimmed) return undefined;
 
-  // Remove "files=" or "files:" prefixes that some LLMs prepend
   let cleaned = trimmed;
   const prefixMatch = cleaned.match(/^(?:files\s*[=:]\s*|filesArray\s*[=:]\s*)/i);
   if (prefixMatch) {
     cleaned = cleaned.substring(prefixMatch[0].length);
   }
 
-  const attempts: Array<() => unknown> = [
-    () => JSON.parse(cleaned),
-    () => JSON.parse(cleaned.replace(/,\s*([}\]])/g, '$1')),
-    () => JSON.parse(cleaned.replace(/'/g, '"')),
-  ];
+  try {
+    const repaired = jsonrepair(cleaned);
+    return JSON.parse(repaired);
+  } catch {
+    // fall through
+  }
 
   if (sanitize) {
-    attempts.push(
-      () => JSON.parse(sanitizeJsonString(cleaned)),
-      () => JSON.parse(sanitizeJsonString(cleaned.replace(/,\s*([}\]])/g, '$1'))),
-      () => JSON.parse(sanitizeJsonString(cleaned.replace(/'/g, '"')))
-    );
-  }
-
-  for (const attempt of attempts) {
     try {
-      return attempt();
+      const sanitized = sanitizeJsonString(cleaned);
+      const repaired = jsonrepair(sanitized);
+      return JSON.parse(repaired);
     } catch {
-      // continue to next attempt
+      // fall through
     }
   }
+
   return undefined;
 }
 

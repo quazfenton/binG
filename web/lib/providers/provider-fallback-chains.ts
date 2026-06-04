@@ -81,14 +81,17 @@ export const PROVIDER_FALLBACK_CHAINS: Record<string, string[]> = {
   pollinations: ['nvidia', 'mistral', 'google', 'openrouter', 'github', 'groq', 'aihubmix', 'together'],
   chatanywhere: ['openai', 'google', 'mistral', 'anthropic', 'nvidia', 'openrouter', 'github'],
   // 9router proxy providers (via QUAZ_API_KEY)
+  ninerouter: ['nvidia', 'mistral', 'google', 'openrouter', 'github', 'groq', 'aihubmix'],
   ollama: ['nvidia', 'mistral', 'google', 'openrouter', 'github', 'groq', 'aihubmix'],
   kiro: ['nvidia', 'mistral', 'google', 'openrouter', 'anthropic', 'github', 'aihubmix'],
 };
+
+const DEFAULT_FALLBACK_CHAIN = ['nvidia', 'mistral', 'google', 'openrouter', 'github', 'groq', 'aihubmix'];
 
 /**
  * Get fallback chain for a provider (raw, unfiltered).
  * Use getConfiguredFallbackChain instead for production fallback chains.
  */
 export function getFallbackChain(provider: string): string[] {
-  return PROVIDER_FALLBACK_CHAINS[provider.toLowerCase()] || [];
+  return PROVIDER_FALLBACK_CHAINS[provider.toLowerCase()] || DEFAULT_FALLBACK_CHAIN;
 }

@@ -331,6 +331,7 @@ export function EnhancedDiffViewer({
   // Auto-detect language from file path
   const detectedLanguage = useMemo(() => {
     if (explicitLanguage) return explicitLanguage;
+    if (!path) return 'text';
     const ext = path.split('.').pop()?.toLowerCase();
     const languageMap: Record<string, string> = {
       ts: 'typescript',

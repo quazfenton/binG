@@ -1104,34 +1104,45 @@ export default function CodePreviewPanel({
     try {
       const targetPath = directoryPath || filesystemCurrentPath;
       manualPreviewPathRef.current = targetPath || null;
-      // Silent - only log on error
       console.log('[Manual Preview] Loading files from:', targetPath);
-      
-      // Get all files from the directory
-      const nodes = await listFilesystemDirectory(targetPath);
+
+      // Use snapshot API to get ALL files at once — bypasses the stale listDirectory cache
+      // that misses files just written (8s LIST_CACHE_TTL_MS in use-virtual-filesystem.ts)
+      const snapshot = await getFilesystemSnapshot(targetPath);
       const files: Record<string, string> = {};
-      
-      // Recursively load files
-      const loadFiles = async (path: string, basePath: string = '') => {
-        const dirNodes = await listFilesystemDirectory(path);
-        for (const node of dirNodes) {
-          // Build relative path from the targetPath (session root)
-          const relativePath = basePath ? `${basePath}/${node.name}` : node.name;
-          if (node.type === 'directory') {
-            await loadFiles(node.path, relativePath);
-          } else {
-            try {
-              const file = await readFilesystemFile(node.path);
-              // Store file even if empty (zero-byte files are valid modules/assets)
-              files[relativePath] = file.content ?? '';
-            } catch (err) {
-              console.warn('Failed to load file:', node.path, err);
+
+      if (snapshot?.files) {
+        for (const file of snapshot.files) {
+          // Strip targetPath prefix: workspace/sessions/001/src/App.tsx -> src/App.tsx
+          const relativePath = file.path.startsWith(targetPath + '/')
+            ? file.path.slice(targetPath.length + 1)
+            : file.path;
+          files[relativePath] = file.content ?? '';
+        }
+      }
+
+      if (Object.keys(files).length === 0) {
+        // Fallback: try the old listDirectory approach if snapshot returns nothing
+        console.warn('[Manual Preview] Snapshot empty, falling back to listDirectory');
+        const nodes = await listFilesystemDirectory(targetPath);
+        const loadFiles = async (path: string, basePath: string = '') => {
+          const dirNodes = await listFilesystemDirectory(path);
+          for (const node of dirNodes) {
+            const relativePath = basePath ? `${basePath}/${node.name}` : node.name;
+            if (node.type === 'directory') {
+              await loadFiles(node.path, relativePath);
+            } else {
+              try {
+                const file = await readFilesystemFile(node.path);
+                files[relativePath] = file.content ?? '';
+              } catch (err) {
+                console.warn('Failed to load file:', node.path, err);
+              }
             }
           }
-        }
-      };
-
-      await loadFiles(targetPath);
+        };
+        await loadFiles(targetPath);
+      }
 
       if (Object.keys(files).length === 0) {
         if (!silent) {
@@ -1229,16 +1240,18 @@ export default function CodePreviewPanel({
 
       // Strip the detected workspace root from file paths for Sandpack
       // Sandpack runners expect files relative to workspace root (e.g., src/App.tsx not my-app/src/App.tsx)
+      // Include ALL files (src, pages, components, etc.) but strip the root prefix where applicable
       const previewRoot = detection.selectedRoot || selectedRoot;
       const previewFiles = previewRoot
         ? Object.fromEntries(
-            Object.entries(files)
-              .filter(([path]) => path.startsWith(`${previewRoot}/`) || path === previewRoot)
-              .map(([path, content]) => {
-                // Strip the root prefix: my-app/src/App.tsx -> src/App.tsx
-                const relativePath = path === previewRoot ? path : path.slice(previewRoot.length + 1);
-                return [relativePath, content];
-              }),
+            Object.entries(files).map(([path, content]) => {
+              // Strip root prefix only if file is under that root; otherwise keep full path
+              // This ensures pages/Contact.tsx is NOT excluded when src/ is the previewRoot
+              const relativePath = path.startsWith(`${previewRoot}/`)
+                ? path.slice(previewRoot.length + 1)
+                : path;
+              return [relativePath, content];
+            }),
           )
         : files;
 

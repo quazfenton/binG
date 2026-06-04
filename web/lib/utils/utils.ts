@@ -1,5 +1,6 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
+import crypto from 'node:crypto';
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -22,10 +23,9 @@ export function secureRandom(): number {
     return array[0] / 0x100000000;
   }
 
-  // Node.js: Use dynamic import for crypto module
+  // Node.js
   if (typeof globalThis.process !== 'undefined' && globalThis.process.versions?.node) {
-    const nodeCrypto = require('crypto');
-    return nodeCrypto.randomBytes(4).readUInt32LE(0) / 0x100000000;
+    return crypto.randomBytes(4).readUInt32LE(0) / 0x100000000;
   }
 
   throw new Error('No secure random number generator available');
@@ -235,13 +235,12 @@ export function generateUUID(): string {
     return `${hex.slice(0, 4).join('')}-${hex.slice(4, 6).join('')}-${hex.slice(6, 8).join('')}-${hex.slice(8, 10).join('')}-${hex.slice(10, 16).join('')}`;
   }
 
-  // Node.js: Use dynamic import
+  // Node.js
   if (typeof globalThis.process !== 'undefined' && globalThis.process.versions?.node) {
-    const nodeCrypto = require('crypto');
-    if (nodeCrypto.randomUUID) {
-      return nodeCrypto.randomUUID();
+    if (crypto.randomUUID) {
+      return crypto.randomUUID();
     }
-    return nodeCrypto.randomBytes(16).toString('hex').replace(/(.{8})(.{4})(.{4})(.{4})(.{12})/, '$1-$2-$3-$4-$5');
+    return crypto.randomBytes(16).toString('hex').replace(/(.{8})(.{4})(.{4})(.{4})(.{12})/, '$1-$2-$3-$4-$5');
   }
 
   throw new Error('No crypto API available');

@@ -23,6 +23,7 @@
  */
 
 import { createLogger } from '@/lib/utils/logger';
+import { tolerantJsonParse } from '@/lib/utils/json-tolerant';
 import { embedBatch } from '@/lib/memory/embeddings';
 import { cosineSimilarity } from '@/lib/vector-memory/similarity';
 import {
@@ -238,7 +239,8 @@ async function extractIntentsFromTask(
     const text = result.text || '';
     const jsonMatch = text.match(/\[[\s\S]*\]/);
     if (jsonMatch) {
-      const parsed = JSON.parse(jsonMatch[0]);
+      const parsed = tolerantJsonParse(jsonMatch[0]);
+      if (parsed === undefined) throw new Error('parse failed');
       if (Array.isArray(parsed)) {
         return parsed
           .filter((p: any) => p.description && typeof p.priority === 'number')

@@ -309,6 +309,23 @@ function generateUniqueName(baseName: string): string {
  * Detect folder structure from response content
  * Returns the single folder name if all files are in one folder
  */
+
+/**
+ * Strip VFS infrastructure prefixes before extracting the project folder name.
+ * LLM may emit "sessions/000/myApp/file.ts" or "workspace/sessions/000/myApp/file.ts".
+ * After stripping, the first segment is the real project folder ("myApp"), not "sessions".
+ */
+function stripVfsPrefixes(path: string): string {
+  return path
+    .replace(/^workspace\/sessions\/[^/]+\//, '')
+    .replace(/^workspace\/sessions\//, '')
+    .replace(/^sessions\/[^/]+\//, '')
+    .replace(/^sessions\//, '');
+}
+
+/** VFS infrastructure names that are never valid project folder names. */
+const RESERVED_VFS_NAMES = new Set(['sessions', 'workspace', 'tmp', 'home', 'public']);
+
 export function detectSingleFolderFromResponse(content: string): string | null {
   if (!content || content.trim().length === 0) return null;
   
@@ -318,7 +335,9 @@ export function detectSingleFolderFromResponse(content: string): string | null {
   const writeRegex = /WRITE\s+<?([^\s<>]+)>?\s*<<<[\s\S]*?>>>/gi;
   let match: RegExpExecArray | null;
   while ((match = writeRegex.exec(content)) !== null) {
-    const path = match[1]?.trim();
+    const raw = match[1]?.trim();
+    if (!raw || !raw.includes('/')) continue;
+    const path = stripVfsPrefixes(raw);
     if (path && path.includes('/')) {
       const folder = path.split('/')[0];
       if (folder && !folder.startsWith('<') && !folder.endsWith('>')) {
@@ -330,28 +349,31 @@ export function detectSingleFolderFromResponse(content: string): string | null {
   // Extract paths from <file_edit path="..."> tags
   const fileEditRegex = /<file_edit\s*path=["']([^"']+)["']/gi;
   while ((match = fileEditRegex.exec(content)) !== null) {
-    const path = match[1]?.trim();
+    const raw = match[1]?.trim();
+    if (!raw || !raw.includes('/')) continue;
+    const path = stripVfsPrefixes(raw);
     if (path && path.includes('/')) {
       const folder = path.split('/')[0];
-      folderSet.add(folder);
+      if (folder) folderSet.add(folder);
     }
   }
   
   // Extract paths from fenced code blocks with filename hints
   const codeBlockRegex = /```[a-zA-Z]*\s*(?:file|path|filename)\s*[:=]\s*([^\n]+)/gi;
   while ((match = codeBlockRegex.exec(content)) !== null) {
-    const path = match[1]?.trim();
+    const raw = match[1]?.trim();
+    if (!raw || !raw.includes('/')) continue;
+    const path = stripVfsPrefixes(raw);
     if (path && path.includes('/')) {
       const folder = path.split('/')[0];
-      folderSet.add(folder);
+      if (folder) folderSet.add(folder);
     }
   }
   
-  // If exactly one folder found, return it
+  // If exactly one folder found, validate and return it
   if (folderSet.size === 1) {
     const folderName = Array.from(folderSet)[0];
-    // Validate folder name (alphanumeric, no special chars)
-    if (/^[a-zA-Z0-9_-]+$/.test(folderName)) {
+    if (/^[a-zA-Z0-9_-]+$/.test(folderName) && !RESERVED_VFS_NAMES.has(folderName.toLowerCase())) {
       return folderName;
     }
   }

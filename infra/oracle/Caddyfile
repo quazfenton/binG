@@ -93,6 +93,9 @@
 
     # noVNC web-based VNC client (on Docker host at 172.18.0.1:6080)
     handle_path /novnc/* {
+        basic_auth {
+            import /data/novnc-auth.txt
+        }
         reverse_proxy 172.18.0.1:6080
     }
 

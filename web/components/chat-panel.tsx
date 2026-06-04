@@ -33,6 +33,7 @@ interface ChatPanelProps {
   onVoiceToggle: (enabled: boolean) => void;
   onProviderChange: (provider: string, model: string) => void;
   streamingState?: GlobalStreamingState;
+  onRetryMessage?: (messageId: string) => void;
 }
 
 export function ChatPanel({
@@ -55,6 +56,7 @@ export function ChatPanel({
   setInput, // Destructure setInput
   onProviderChange,
   streamingState,
+  onRetryMessage,
 }: ChatPanelProps) {
   const { isListening, startListening, stopListening, transcription } =
     useVoiceSettings();
@@ -215,6 +217,7 @@ export function ChatPanel({
                 const sessionId = `display-${m.id}-*`;
                 enhancedBufferManager.cleanup();
               }}
+              onRetry={onRetryMessage}
             />
           );
         })}

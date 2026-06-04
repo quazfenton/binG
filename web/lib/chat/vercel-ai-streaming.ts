@@ -291,12 +291,12 @@ const OPENAI_COMPATIBLE_PROVIDERS: Record<string, OpenAICompatibleConfig> = {
     useChatEndpoint: true,
   },
   ollama: {
-    baseURL: process.env.OLLAMA_BASE_URL || process.env.NINEROUTER_BASE_URL || process.env.NINEROUTER_BASE_URL || 'http://ninerouter:3000/v1',
+    baseURL: process.env.OLLAMA_BASE_URL || process.env.NINEROUTER_BASE_URL || 'http://ninerouter:3000/v1',
     apiKeyEnv: 'NINEROUTER_API_KEY',
     useChatEndpoint: true,
   },
   kiro: {
-    baseURL: process.env.KIRO_BASE_URL || process.env.NINEROUTER_BASE_URL || process.env.NINEROUTER_BASE_URL || 'http://ninerouter:3000/v1',
+    baseURL: process.env.KIRO_BASE_URL || process.env.NINEROUTER_BASE_URL || 'http://ninerouter:3000/v1',
     apiKeyEnv: 'NINEROUTER_API_KEY',
     useChatEndpoint: true,
   },
@@ -516,10 +516,17 @@ function convertMessages(messages: LLMMessage[]): {
     }
 
     if (typeof msg.content === 'string') {
-      chatMessages.push({
+      const entry: any = {
         role: msg.role === 'assistant' ? 'assistant' : msg.role === 'tool' ? 'tool' : 'user',
         content: msg.content,
-      });
+      };
+      if (msg.role === 'assistant' && Array.isArray((msg as any).tool_calls)) {
+        entry.tool_calls = (msg as any).tool_calls;
+      }
+      if (msg.role === 'tool' && (msg as any).tool_call_id) {
+        entry.tool_call_id = (msg as any).tool_call_id;
+      }
+      chatMessages.push(entry);
       continue;
     }
 
@@ -532,10 +539,14 @@ function convertMessages(messages: LLMMessage[]): {
       })
       .join(' ');
 
-    chatMessages.push({
+    const entry: any = {
       role: msg.role === 'assistant' ? 'assistant' : 'user',
       content: textContent,
-    });
+    };
+    if (msg.role === 'assistant' && Array.isArray((msg as any).tool_calls)) {
+      entry.tool_calls = (msg as any).tool_calls;
+    }
+    chatMessages.push(entry);
   }
 
   return {
@@ -1097,15 +1108,24 @@ export async function* streamWithVercelAI(
             // Clear time-to-first-token timeout once we receive any response
             onFirstToken();
             
-            let callArgs = (chunk as any).args || (chunk as any).arguments || {};
+            // AI SDK v6 uses 'input' (parsed object) in fullStream tool-call parts
+            let callArgs = (() => {
+              const raw = (chunk as any).input ?? (chunk as any).args ?? (chunk as any).arguments;
+              if (typeof raw === 'string') {
+                try { return JSON.parse(raw); } catch { return {}; }
+              }
+              return raw || {};
+            })();
             const toolName = (chunk as any).toolName;
             const toolCallId = (chunk as any).toolCallId;
+            const isInvalid = !!(chunk as any).invalid;
 
             // SELF-HEALING: Normalize tool args to fix common LLM mistakes
             // (wrong field names like "filename" → "path", "code" → "content")
             try {
               const { normalizeToolArgs } = await import('../mcp/vfs-mcp-tools');
               callArgs = normalizeToolArgs(toolName, callArgs);
+              (chunk as any).input = callArgs;
               (chunk as any).args = callArgs;
             } catch {
               // Normalization is best-effort
@@ -1140,44 +1160,66 @@ export async function* streamWithVercelAI(
             const hasArgs = !!callArgs && Object.keys(callArgs).length > 0;
             const argsCount = Object.keys(callArgs).length;
 
+            // CRITICAL: Only yield synthetic tool-result if the AI SDK itself
+            // rejected this tool call (invalid=true). In that case no real
+            // tool-result event will follow. When invalid is false/undefined
+            // the AI SDK executed the tool and WILL emit a tool-result — we
+            // must NOT duplicate it with a synthetic result here.
+            const aiSdkRejected = isInvalid;
+
             // Check for validation errors (missing required fields)
-            if (validationError) {
-              chatLogger.error('[TOOL-CALL] ✗ VALIDATION failed — blocking execution', {
+            if (validationError || !hasArgs) {
+              const isArgs = hasArgs;
+              const errorCode = validationError ? 'INVALID_ARGS' : 'EMPTY_ARGS';
+              const errorMsg = validationError
+                ? validationError.message
+                : `Tool "${toolName}" called with empty arguments. Please provide all required fields.`;
+
+              chatLogger.error(`[TOOL-CALL] ✗ ${errorCode} — ${isArgs ? 'validation failed' : 'empty args'}`, {
                 toolCallId,
                 toolName,
-                validationError,
+                validationError: validationError || undefined,
                 severity: 'HIGH',
+                aiSdkRejected,
               });
 
-              // Record validation failure in telemetry
+              // Record failure in telemetry
               if (toolName && modelName) {
-                recordToolCall(modelName, toolName, false, 'INVALID_ARGS');
+                recordToolCall(modelName, toolName, false, errorCode);
               }
 
-              // Yield a synthetic tool-result failure so the model sees the error
-              yield {
-                content: '',
-                isComplete: false,
-                toolInvocations: [{
-                  toolCallId,
-                  toolName,
-                  state: 'result',
-                  args: callArgs,
-                  result: {
-                    success: false,
-                    error: {
-                      code: 'INVALID_ARGS',
-                      message: validationError.message,
-                      retryable: true,
-                      missing: validationError.missing,
-                      expectedSchema: validationError.expectedSchema,
-                      suggestedNextAction: validationError.suggestedNextAction,
+              if (aiSdkRejected) {
+                // No tool-result coming — yield a synthetic failure so the model sees the error
+                yield {
+                  content: '',
+                  isComplete: false,
+                  toolInvocations: [{
+                    toolCallId,
+                    toolName,
+                    state: 'result',
+                    args: callArgs,
+                    result: {
+                      success: false,
+                      error: {
+                        code: errorCode,
+                        message: errorMsg,
+                        retryable: true,
+                        ...(validationError?.missing ? { missing: validationError.missing } : {}),
+                        ...(validationError?.expectedSchema ? { expectedSchema: validationError.expectedSchema } : {}),
+                        ...(validationError?.suggestedNextAction
+                          ? { suggestedNextAction: validationError.suggestedNextAction }
+                          : { suggestedNextAction: `Call ${toolName} again with proper arguments.` }),
+                      },
                     },
-                  },
-                }],
-                timestamp: new Date(),
-              };
-              break;
+                  }],
+                  timestamp: new Date(),
+                };
+                break;
+              }
+
+              // AI SDK DID execute this tool — fall through to cache args and
+              // yield toolCalls; the real tool-result will arrive next and our
+              // tool-result handler will produce the real result.
             }
 
             if (hasArgs) {
@@ -1188,42 +1230,6 @@ export async function* streamWithVercelAI(
                 argsKeys: Object.keys(callArgs),
                 argsPreview: JSON.stringify(callArgs).slice(0, 500),
               });
-            } else {
-              // EMPTY ARGS — block execution, synthesize a failure result
-              chatLogger.error('[TOOL-CALL] ✗ EMPTY args — blocking execution', {
-                toolCallId,
-                toolName,
-                severity: 'HIGH',
-              });
-
-              // Record empty-args as a failure in telemetry
-              if (toolName && modelName) {
-                recordToolCall(modelName, toolName, false, 'EMPTY_ARGS');
-              }
-
-              // Yield a synthetic tool-result failure so the model sees the error
-              // and can retry with correct args
-              yield {
-                content: '',
-                isComplete: false,
-                toolInvocations: [{
-                  toolCallId,
-                  toolName,
-                  state: 'result',
-                  args: callArgs,
-                  result: {
-                    success: false,
-                    error: {
-                      code: 'INVALID_ARGS',
-                      message: `Tool "${toolName}" called with empty arguments. Please provide all required fields.`,
-                      retryable: true,
-                      suggestedNextAction: `Call ${toolName} again with proper arguments.`,
-                    },
-                  },
-                }],
-                timestamp: new Date(),
-              };
-              break;
             }
 
             // Cache args so tool-result can include them (AI SDK doesn't repeat args in result)
@@ -1245,8 +1251,14 @@ export async function* streamWithVercelAI(
           // Recover args from the earlier tool-call event since tool-result doesn't include them
           const resultToolCallId = (chunk as any).toolCallId;
           const cachedArgs = toolCallArgsCache.get(resultToolCallId);
-          const finalArgs = cachedArgs || (chunk as any).args || (chunk as any).arguments || {};
-          const toolResult = (chunk as any).result;
+          const finalArgs = (() => {
+            const raw = cachedArgs ?? (chunk as any).input ?? (chunk as any).args ?? (chunk as any).arguments;
+            if (typeof raw === 'string') {
+              try { return JSON.parse(raw); } catch { return {}; }
+            }
+            return raw || {};
+          })();
+          const toolResult = (chunk as any).output ?? (chunk as any).result;
           const toolName = (chunk as any).toolName;
           const resultSuccess = toolResult?.success ?? (toolResult?.error === undefined);
 
@@ -1817,7 +1829,13 @@ ${healingInstructions}` : healingInstructions)
             yield { content: (chunk as any).text, isComplete: false, timestamp: new Date() };
           } else if (chunk.type === 'tool-call') {
             const fbToolName = (chunk as any).toolName;
-            let fbCallArgs = (chunk as any).args || (chunk as any).arguments || {};
+            let fbCallArgs = (() => {
+              const raw = (chunk as any).input ?? (chunk as any).args ?? (chunk as any).arguments;
+              if (typeof raw === 'string') {
+                try { return JSON.parse(raw); } catch { return {}; }
+              }
+              return raw || {};
+            })();
             // Normalize args in fallback path (same as main path)
             try {
               const { normalizeToolArgs: fbNormalize } = await import('@/lib/orchestra/shared-agent-context');
@@ -1851,7 +1869,11 @@ ${healingInstructions}` : healingInstructions)
                 toolCallId: (chunk as any).toolCallId,
                 toolName: fbResultToolName,
                 state: 'result' as const,
-                args: (chunk as any).args || {},
+                args: (() => {
+                  const r = (chunk as any).input ?? (chunk as any).args;
+                  if (typeof r === 'string') { try { return JSON.parse(r); } catch { return {}; } }
+                  return r || {};
+                })(),
                 result: fbToolResult,
               }],
               timestamp: new Date(),

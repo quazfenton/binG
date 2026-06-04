@@ -1670,6 +1670,17 @@ export function WorkspacePanel() {
                       files: snapshot?.files || [],
                     });
 
+                    // Dispatch cross-panel filesystem update event for code preview panel, etc.
+                    try {
+                      emitFilesystemUpdated({
+                        scopePath: filesystem?.sessionId || 'workspace',
+                        paths: data.data.applied.map((a: any) => a.path),
+                        source: 'sse-filesystem-event',
+                      });
+                    } catch {
+                      // Ignore dispatch errors
+                    }
+
                     toast.success(`Applied ${data.data.applied.length} file changes`);
                   }
                   if (data.data?.errors?.length > 0) {

@@ -822,8 +822,9 @@ export function useVirtualFilesystem(
       return cachedList.nodes;
     }
     
-    // Invalidate snapshot cache when directory changes (not list cache since we're fetching new data)
-    invalidateSnapshotCache(targetPath, ownerId);
+    // Snapshot cache invalidation is handled by filesystem-updated events
+    // and writeFile/deletePath callers — do NOT invalidate here to avoid
+    // redundant API requests
     
     log(`listDirectory: cache miss for "${targetPath}", fetching from API`);
     setIsLoading(true);

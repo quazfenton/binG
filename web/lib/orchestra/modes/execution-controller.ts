@@ -30,6 +30,7 @@
  */
 
 import { createLogger } from '@/lib/utils/logger';
+import { tolerantJsonParse } from '@/lib/utils/json-tolerant';
 import {
   processUnifiedAgentRequest,
   type UnifiedAgentConfig,
@@ -131,7 +132,8 @@ function parseEvaluationResponse(response: string): { score: number; concerns: s
     // Try to extract JSON from the response
     const jsonMatch = response.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
-      const parsed = JSON.parse(jsonMatch[0]);
+      const parsed = tolerantJsonParse(jsonMatch[0]) as Record<string, unknown>;
+      if (parsed === undefined) throw new Error('parse failed');
       return {
         score: typeof parsed.score === 'number' ? parsed.score / 100 : 0.5,
         concerns: Array.isArray(parsed.concerns) ? parsed.concerns : [],

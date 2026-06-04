@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { virtualFilesystem, withAnonSessionCookie } from '@/lib/virtual-filesystem/index.server';
-import { resolveFilesystemOwnerWithFallback, normalizeFilesystemPath } from '../utils';
+import { resolveFilesystemOwnerWithFallback, normalizeFilesystemPath, correctSessionPath } from '../utils';
 
 
 
@@ -260,7 +260,10 @@ export async function GET(req: NextRequest) {
       log(`${COLORS.dim}[${requestId}]${COLORS.reset} Normalized composite session path: ${COLORS.yellow}"${validatedPath}"${COLORS.reset} -> ${COLORS.green}"${normalizedPath}"${COLORS.reset}`);
     }
 
-    const listing = await virtualFilesystem.listDirectory(authenticatedOwnerId, normalizedPath);
+    // Auto-correct stale session paths to the user's active session
+    const correctedPath = await correctSessionPath(authenticatedOwnerId, normalizedPath);
+
+    const listing = await virtualFilesystem.listDirectory(authenticatedOwnerId, correctedPath);
     const duration = Date.now() - startTime;
     
     log(`${COLORS.dim}[${requestId}]${COLORS.reset} Listed ${COLORS.magenta}${listing.nodes.length}${COLORS.reset} entries in ${COLORS.cyan}${duration}ms${COLORS.reset}`);

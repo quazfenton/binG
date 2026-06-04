@@ -598,7 +598,7 @@ export class PlanActVerifyOrchestrator {
               type: 'tool-call' as const,
               toolCallId: tc.id,
               toolName: tc.name,
-              args: tc.arguments,
+              input: tc.arguments,
             });
           }
           conversationHistory.push({ role: 'assistant' as const, content });
@@ -865,7 +865,7 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
         const toolCalls = (result as any).toolCalls?.map((tc: any) => ({
           id: tc.toolCallId,
           name: tc.toolName,
-          arguments: tc.args || {},
+          arguments: tc.args || tc.input || {},
         })) || [];
 
         return {

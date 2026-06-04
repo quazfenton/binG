@@ -17,8 +17,11 @@ import { getProviderForTask, getModelForTask } from '@/lib/config/task-providers
 import { streamWithVercelAI, type VercelStreamOptions } from '@/lib/chat/vercel-ai-streaming';
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import type { LLMMessage } from '@/lib/providers/llm-providers';
+import { createRequire } from 'node:module';
 import { generateId, generateText, tool as createTool } from 'ai';
 import type { Tool } from 'ai';
+
+const _require = createRequire(import.meta.url);
 import {
   buildWorkspaceSnapshot,
   buildAgentSystemPrompt,
@@ -41,12 +44,12 @@ const log = createLogger('MastraAgent');
 // or OpenAI-compatible providers with proper API keys configured.
 let ToolLoopAgent: any = null;
 try {
-  ToolLoopAgent = require('ai').ToolLoopAgent;
+  ToolLoopAgent = _require('ai').ToolLoopAgent;
   log.info('ToolLoopAgent loaded from Vercel AI SDK');
 } catch (error: any) {
   log.warn('ToolLoopAgent not available, using fallback agent loop', {
     error: error.message,
-    aiSdkVersion: require('ai/package.json')?.version || 'unknown',
+    aiSdkVersion: _require('ai/package.json')?.version || 'unknown',
   });
 }
 

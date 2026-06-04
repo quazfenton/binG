@@ -35,6 +35,8 @@ import {
 } from '../session/agent/opencode-engine-service';
 import { isDesktopMode } from "@bing/platform/env";
 import { findOpencodeBinarySync } from "@/lib/drivers/opencode/find-opencode-binary";
+import fs from 'node:fs';
+import nodePath from 'node:path';
 
 // Centralized agent logging, startup capabilities, and health tracking
 import { createAgentLogger, agentLog } from './agent-logger';
@@ -129,8 +131,6 @@ let _hasOpenCodeSDKPackageCache: boolean | undefined;
 function _hasOpenCodeSDKPackageCheck(): boolean {
   if (_hasOpenCodeSDKPackageCache !== undefined) return _hasOpenCodeSDKPackageCache;
   try {
-    const fs = require("fs");
-    const nodePath = require("path");
     const dir = typeof __dirname !== "undefined" ? __dirname : process.cwd();
     // web/lib/orchestra -> web/ -> node_modules/@opencode-ai/sdk
     const sdkPath = nodePath.join(dir, "..", "..", "node_modules", "@opencode-ai", "sdk");
@@ -695,12 +695,18 @@ export async function processUnifiedAgentRequest(
 
         case 'v1-agent-loop': {
           log.info('[UnifiedAgent] → v1-agent-loop mode (PlanActVerify orchestrator)');
-          // Filter system messages from conversationHistory — they belong in the
-          // `system` option of generateText/streamText, NOT in the messages array.
-          // System messages in the messages array violate the AI SDK ModelMessage[] schema
-          // and cause 'messages do not match ModelMessage[] schema' errors in PlanActVerify.callLLM.
+          // Filter system and tool messages from conversationHistory:
+          //   - System messages belong in the `system` option of generateText/streamText,
+          //     NOT in the messages array. Passing them via messages[] triggers AI SDK
+          //     ModelMessage[] schema validation errors in PlanActVerify.callLLM.
+          //   - Tool messages must have array content [{ type: 'tool-result', ... }] per
+          //     the AI SDK ModelMessage[] schema. The route (route.ts:1130) stringifies
+          //     non-string content as JSON, producing string-content tool messages that
+          //     fail schema validation with "Invalid prompt" errors.
+          //     PlanActVerify rebuilds its own conversation history with fresh tool
+          //     results, so stale tool messages from prior executions add no value.
           const filteredHistory = (config.conversationHistory || []).filter(
-            (msg: any) => msg.role !== 'system'
+            (msg: any) => msg.role !== 'system' && msg.role !== 'tool'
           );
           const orchMessages = [
             ...filteredHistory,
@@ -1457,9 +1463,18 @@ async function runOpencodeSDKMode(
 async function runV1Api(config: UnifiedAgentConfig): Promise<UnifiedAgentResult> {
   const startTime = Date.now();
 
-  // Build messages from conversation history + current message
+  // Build messages from conversation history + current message.
+  // Filter out tool-role messages: route.ts:1130 converts non-string content
+  // via JSON.stringify, producing string-content tool messages that violate
+  // the AI SDK ModelMessage[] schema (requires array content with
+  // { type: 'tool-result', ... }). Tool messages from prior turns are also
+  // stale — their tool_call_id references no longer match any live calls.
+  const rawHistory = config.conversationHistory || [];
+  const filteredHistory = rawHistory.filter(
+    (msg: any) => msg.role !== 'tool'
+  );
   const messages: any[] = [
-    ...(config.conversationHistory || []),
+    ...filteredHistory,
     { role: 'user', content: config.userMessage },
   ];
 
@@ -1823,6 +1838,48 @@ function createCapabilityToolExecutor(config: UnifiedAgentConfig) {
     log.warn('No tool executor available', { tool: name, capability: capabilityId });
     return { success: false, output: 'No tool executor available', exitCode: 1 };
   };
+}
+
+/**
+ * Check if a tool invocation result indicates failure, even when the tool
+ * execution itself succeeded. MCP filesystem tools wrap application-level
+ * failures inside `output` as a JSON string (e.g.
+ * `{success:false, exists:false, error: {code:'PATH_NOT_FOUND', ...}}`),
+ * while the top-level `result.success` stays `true` because the function
+ * call didn't throw.
+ *
+ * Detection chain (first match wins):
+ *   Top-level: result.success === false
+ *   Error field: result.error is truthy
+ *   JSON output: typeof result.output === 'string' && parsed.success === false
+ *   Nested output: typeof result.output === 'object' && result.output.output
+ *                  is a JSON string with parsed.success === false
+ */
+function isFailedToolInvocation(inv: { result?: any }): boolean {
+  if (!inv?.result) return false;
+  const r = inv.result;
+  // Direct success flag
+  if (r.success === false) return true;
+  // Error field present
+  if (r.error) return true;
+  // Check output string that might be JSON with success:false
+  if (typeof r.output === 'string') {
+    try {
+      const parsed = JSON.parse(r.output);
+      if (parsed && parsed.success === false) return true;
+    } catch { /* not JSON, ignore */ }
+  }
+  // MCP gateway may nest result in output.output
+  if (r.output && typeof r.output === 'object') {
+    if (r.output.success === false) return true;
+    if (typeof r.output.output === 'string') {
+      try {
+        const parsed = JSON.parse(r.output.output);
+        if (parsed && parsed.success === false) return true;
+      } catch { /* not JSON, ignore */ }
+    }
+  }
+  return false;
 }
 
 /**
@@ -2377,10 +2434,10 @@ async function runV1ApiWithTools(
       // config._toolFailureRetryCount to prevent infinite loops.
       const anyToolFailed =
         toolInvocations.length > 0 &&
-        toolInvocations.some((inv) => inv.result?.success === false);
+        toolInvocations.some(isFailedToolInvocation);
       const allToolsSucceeded =
         toolInvocations.length > 0 &&
-        toolInvocations.every((inv) => inv.result?.success === true);
+        toolInvocations.every((inv) => !isFailedToolInvocation(inv));
       const noToolCalls = toolInvocations.length === 0;
       const responseEmpty = !cleanedResponse || cleanedResponse.trim().length === 0;
       const retryCount = ((config as any)._toolFailureRetryCount as number) || 0;
@@ -2441,17 +2498,18 @@ async function runV1ApiWithTools(
         let userPrompt: string;
         if (anyToolFailed) {
           const failureSummaries = toolInvocations
-            .filter((inv) => inv.result?.success === false)
+            .filter(isFailedToolInvocation)
             .map((inv) => {
               const err = inv.result?.error;
               const errMsg = typeof err === 'string'
                 ? err
                 : (err?.message || JSON.stringify(err) || 'unknown error');
-              const errCode = (typeof err === 'object' && (err as any)?.code) || '';
-              const expectedFields = (typeof err === 'object' && Array.isArray((err as any)?.expectedFields))
-                ? (err as any).expectedFields
+              const errRecord = typeof err === 'object' && err !== null ? (err as Record<string, unknown>) : null;
+              const errCode = (errRecord && typeof errRecord.code === 'string' ? errRecord.code : '') || '';
+              const expectedFields = (errRecord && Array.isArray(errRecord.expectedFields))
+                ? errRecord.expectedFields as string[]
                 : [];
-              const suggestion = (typeof err === 'object' && (err as any)?.suggestedNextAction) || '';
+              const suggestion = (errRecord && typeof errRecord.suggestedNextAction === 'string' ? errRecord.suggestedNextAction : '') || '';
               const missingFields = expectedFields.length > 0
                 ? ` (missing: ${expectedFields.join(', ')})`
                 : '';
@@ -2459,10 +2517,13 @@ async function runV1ApiWithTools(
             });
           const allMissingFields = new Set<string>();
           toolInvocations
-            .filter((inv) => inv.result?.success === false)
+            .filter(isFailedToolInvocation)
             .forEach((inv) => {
-              const fields = (typeof inv.result?.error === 'object' && Array.isArray((inv.result.error as any)?.expectedFields))
-                ? (inv.result.error as any).expectedFields
+              const errorRecord = typeof inv.result?.error === 'object' && inv.result?.error !== null
+                ? (inv.result.error as Record<string, unknown>)
+                : null;
+              const fields: string[] = errorRecord && Array.isArray(errorRecord.expectedFields)
+                ? errorRecord.expectedFields as string[]
                 : [];
               fields.forEach((f: string) => allMissingFields.add(f));
             });
@@ -2606,7 +2667,7 @@ async function runV1ApiWithTools(
             : [],
           ...(routingForClient ? { routing: routingForClient } : {}),
           // Pass anyToolFailed through so client can auto-retry on tool failure
-          ...(toolInvocations.length > 0 && toolInvocations.some(inv => inv.result?.success === false) ? { anyToolFailed: true } : {}),
+          ...(toolInvocations.length > 0 && toolInvocations.some(isFailedToolInvocation) ? { anyToolFailed: true } : {}),
           // Mark friendly-fallback responses as empty so client triggers rotation
           ...(usedFriendlyFallback ? {
             isEmptyResponse: true,

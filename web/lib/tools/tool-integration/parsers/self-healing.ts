@@ -1,3 +1,4 @@
+import { tolerantJsonParse } from '@/lib/utils/json-tolerant';
 import type { ParserToolDefinition, ParsedToolCall } from './types';
 
 export interface SelfHealingToolCallResult {
@@ -254,7 +255,8 @@ Fix the arguments to match the schema. Return ONLY the corrected JSON object, no
 
       // Parse the LLM response as JSON
       try {
-        const healedArgs = JSON.parse(result.text);
+        const healedArgs = tolerantJsonParse(result.text);
+        if (healedArgs === undefined) return null;
         return healedArgs as Record<string, any>;
       } catch {
         return null;
