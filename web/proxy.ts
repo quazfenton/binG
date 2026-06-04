@@ -37,7 +37,7 @@ export async function proxy(request: NextRequest) {
   // vercel.json which rewrites them to the edge worker (shared-ingress.veli0.workers.dev).
   // The edge worker handles CORS, auth, and routing to the OCI backend via KV.
   // Previously /api/chat was rewritten directly to process.env.BACKEND_URL here
-  // with a fallback to localhost:3001 — that broken when BACKEND_URL wasn't set
+  // with a fallback to localhost:3001 — that broke when BACKEND_URL wasn't set
   // in production and duplicated what vercel.json already does.
   const blockedResponse = blockSensitiveFiles(request);
   if (blockedResponse) {

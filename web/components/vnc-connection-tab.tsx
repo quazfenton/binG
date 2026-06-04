@@ -161,10 +161,13 @@ export default function VNCConnectionTab({ onConnectionChange }: VNCConnectionTa
 
   // ==================== Connect: Manual VNC via noVNC ====================
   const connectVNC = useCallback(async () => {
-    if (!activeConnection) return
-    const connName = activeConnection.name
-    const connPassword = activeConnection.password
-    const connQuality = activeConnection.quality
+    // Use the editable form state (newConnection) instead of activeConnection,
+    // so updated host/password/quality values in the form are reflected at connect time.
+    const target = newConnection;
+    if (!target.host || target.protocol === 'e2b') return;
+    const connName = target.name || activeConnection?.name || target.host
+    const connPassword = target.password
+    const connQuality = target.quality
 
     setIsConnecting(true)
 
@@ -173,7 +176,7 @@ export default function VNCConnectionTab({ onConnectionChange }: VNCConnectionTa
       disconnectE2B()
 
       const RFBClass = (await loadRFB()).default
-      const wsUrl = getWsUrl(activeConnection.host, activeConnection.port)
+      const wsUrl = getWsUrl(target.host, target.port)
 
       if (!vncCanvasRef.current) throw new Error('VNC canvas not ready')
 
@@ -251,11 +254,19 @@ export default function VNCConnectionTab({ onConnectionChange }: VNCConnectionTa
 
   const handleDisconnect = useCallback(async () => {
     disconnectRfb()
-    await disconnectE2B()
+    // Use a fresh fetch call rather than the closure-captured disconnectE2B
+    // which may be stale due to its closure over e2bDesktopId.
+    if (e2bDesktopId) {
+      try {
+        await fetch(`/api/desktop/${e2bDesktopId}`, { method: 'DELETE' })
+      } catch {}
+    }
+    setE2bDesktopId('')
+    setE2bStreamUrl('')
     setIsConnected(false)
     setActiveConnection(null)
     toast.success('Disconnected')
-  }, [])
+  }, [e2bDesktopId])
 
   // ==================== Connection Management ====================
   const handleSaveConnection = () => {

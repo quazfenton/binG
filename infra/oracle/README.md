@@ -9,7 +9,7 @@ Single ARM A1 VM (4 OCPU / 24 GB free forever) hosts:
 | `ninerouter`| `router.${DOMAIN}`     | 9Router BYOK / OAuth LLM gateway       |
 | `worker`    | (internal only)        | BullMQ workers (optional, off by default) |
 
-The Vercel frontend stays where it is and only needs two env vars added.
+The Vercel frontend stays where it is. Section 4 below lists the four environment variables needed (BACKEND_URL, NEXT_PUBLIC_BACKEND_URL, NINEROUTER_BASE_URL, NINEROUTER_ADMIN_KEY).
 
 ---
 

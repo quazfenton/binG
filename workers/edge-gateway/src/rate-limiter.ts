@@ -14,9 +14,12 @@ const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
 const ANON_MAX_REQUESTS = 100;
 const AUTH_MAX_REQUESTS = 1000;
 // Sync to KV every 5 minutes (increased from 10s to stay under Cloudflare KV free tier
-// limit of 1,000 writes/day). At 300s per key, a single IP generates ~288 writes/day
-// (vs 8,640/day at 10s). Multiple IPs stay under the limit until ~3 concurrent users.
+// limit of 1,000 writes/day). With the per-minute windowKey, at most one sync fires
+// per window, so a single IP generates ~1,440 writes/day (vs 8,640/day at 10s).
+// Multiple IPs stay under the limit until ~3 concurrent users.
 // Rate limiting is still effective since in-memory counters track between syncs.
+// NOTE: syncToKV must use the CURRENT window key, not the stale counter.windowStart,
+// otherwise the write lands on an already-expired key and is wasted on restart.
 const KV_SYNC_INTERVAL_MS = 300_000;
 
 interface RateLimitResult {
@@ -52,7 +55,13 @@ async function syncToKV(
   counter: Counter,
   windowMs: number
 ): Promise<void> {
-  const windowKey = `ratelimit:${key}:${Math.floor(counter.windowStart / windowMs)}`;
+  // CRITICAL: Use the CURRENT window key, not the stale counter.windowStart.
+  // counter.windowStart is set when the counter was first created (up to 300s ago)
+  // and its window may have already expired. Without this fix, KV writes land on
+  // expired keys and the counters are lost on worker restart, weakening rate-limit
+  // enforcement across isolates.
+  const currentWindow = Math.floor(Date.now() / windowMs);
+  const windowKey = `ratelimit:${key}:${currentWindow}`;
   try {
     await kv.put(windowKey, JSON.stringify(counter), {
       expirationTtl: Math.ceil(windowMs / 1000) + 1, // +1s buffer

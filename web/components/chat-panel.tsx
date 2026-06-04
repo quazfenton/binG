@@ -34,6 +34,7 @@ interface ChatPanelProps {
   onProviderChange: (provider: string, model: string) => void;
   streamingState?: GlobalStreamingState;
   onRetryMessage?: (messageId: string) => void;
+  filesystemScopePath?: string;
 }
 
 export function ChatPanel({
@@ -57,6 +58,7 @@ export function ChatPanel({
   onProviderChange,
   streamingState,
   onRetryMessage,
+  filesystemScopePath,
 }: ChatPanelProps) {
   const { isListening, startListening, stopListening, transcription } =
     useVoiceSettings();
@@ -258,6 +260,7 @@ export function ChatPanel({
         isOpen={isCodePreviewOpen}
         onClose={() => setIsCodePreviewOpen(false)}
         messages={messages}
+        filesystemScopePath={filesystemScopePath}
       />
     </div>
   );

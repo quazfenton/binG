@@ -1979,8 +1979,10 @@ async function runV1ApiWithTools(
   } catch { /* circuit-breaker unavailable */ }
 
   // FIX: Reset circuit breakers on first request of new session to prevent blocking
-  // Track first requests per session to avoid memory leaks
-  const firstRequestKey = `first-${sessionId}`;
+  // Track first requests per provider to avoid memory leaks
+  // Use primaryProvider as the key (not random sessionId) so OPEN circuits
+  // are genuinely reset once per provider per process lifetime, not on every request.
+  const firstRequestKey = `first-${primaryProvider}`;
   if (!(global as any).__circuitBreakerFirstRequest) {
     (global as any).__circuitBreakerFirstRequest = new Set();
   }
@@ -2205,6 +2207,7 @@ async function runV1ApiWithTools(
         if (injected?.healingInstructions) feedbackParts.push(injected.healingInstructions);
         if (injected?.formatGuidance) feedbackParts.push(injected.formatGuidance);
         if (trackerSummary) feedbackParts.push(trackerSummary);
+    if ((config as any)._healingPrompt) feedbackParts.push((config as any)._healingPrompt);
         if (feedbackParts.length > 0) {
           systemContent += '\n\n' + feedbackParts.join('\n\n');
           log.info('\x1b[32m[V1-API-WITH-TOOLS]\x1b[0m 🧠 Injected feedback into system prompt', { 

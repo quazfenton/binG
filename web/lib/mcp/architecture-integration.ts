@@ -14,6 +14,7 @@ import { createHTTPTransport, isValidMCPURL, parseMCPURL, HTTPTransport, registe
 import { startHealthMonitoring } from './health-check'
 import { createLogger } from '../utils/logger';
 import { redactArgsForLogging } from '@/lib/errors/logging-utils';
+import { zodToJsonSchema } from 'zod-to-json-schema';
 // Dynamically imported to avoid pulling Node.js-only deps (database/fs) into client bundle
 import type { BlaxelProvider } from '../sandbox/providers/blaxel-provider'
 import { ArcadeService, getArcadeService } from '../integrations/arcade-service'
@@ -225,6 +226,18 @@ const getBlaxelCodegenToolDefinitions = (): Array<{
 const logger = createLogger('MCP:Integration')
 
 // Redact sensitive or large fields from tool args for logging/tracing
+
+// ── Zod → JSON Schema converter ───────────────────────────────────────────
+// Used defensively for AI SDK tool() objects whose .parameters is a raw Zod
+// schema. This ensures the parameters field is always a valid JSON Schema
+// object when exported in OpenAI-compatible format, regardless of the source.
+function convertToJsonSchema(schema: any): any {
+  if (schema && typeof schema === 'object' && '_def' in schema) {
+    const converted = zodToJsonSchema(schema, { target: 'openApi3' });
+    return converted.$defs?.inner ?? converted;
+  }
+  return schema;
+}
 
 // Guard to prevent redundant reinitialization on every /api/mcp/connect click
 let mcpArch1Initialized = false;
@@ -776,7 +789,7 @@ export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string)
       function: {
         name: name, // Use name directly (already prefixed as bash_execute)
         description: toolDef.description,
-        parameters: toolDef.parameters || (toolDef as any).inputSchema || {},
+        parameters: convertToJsonSchema(toolDef.parameters || (toolDef as any).inputSchema || {}),
       },
     }));
 
@@ -824,7 +837,7 @@ export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string)
         function: {
           name: `mem0_${name}`,
           description: toolDef.description || `Mem0 operation: ${name}`,
-          parameters: toolDef.parameters || (toolDef as any).inputSchema || {} as any,
+          parameters: convertToJsonSchema(toolDef.parameters || (toolDef as any).inputSchema || {}),
         },
       }));
       logger.debug(`Mem0 memory tools available: ${mem0Tools.length} tools`);
@@ -857,6 +870,11 @@ export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string)
           reason: {
             type: 'string',
             description: 'Reasoning for the role switch (e.g., handling high-complexity refactor, debugging error loops).',
+          },
+          recentFailures: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Recent tool execution error messages (system injects these; biases toward debugger role when ≥2 failures).',
           },
         },
         required: ['role', 'reason'],
@@ -1220,7 +1238,8 @@ export async function callMCPToolFromAI_SDK(
   toolName: string,
   args: Record<string, any>,
   userId: string,  // Required for Arcade tools
-  scopePath?: string  // VFS scope path for session-scoped file operations
+  scopePath?: string,  // VFS scope path for session-scoped file operations
+  recentFailures?: string[],  // Recent tool execution errors (≥2 biases toward debugger in role_selection)
 ): Promise<{ success: boolean; output: string; error?: string }> {
   try {
     logger.debug(`Calling MCP tool: ${toolName}`, { args })
@@ -1414,7 +1433,17 @@ export async function callMCPToolFromAI_SDK(
       logger.info('[RoleSelection] Tool invoked', { role: args?.role, reason: args.reason });
 
       const { normalizeAndValidateRole } = await import('@bing/shared/agent');
-      const result = normalizeAndValidateRole(args?.role || '', args?.reason || '');
+      // Merge recentFailures from two sources:
+      // 1. Server-side: passed via callMCPToolFromAI_SDK's recentFailures param (like retryContext.failedToolCalls from chat route)
+      // 2. LLM-side: passed via tool call args (e.g., the LLM observed failures and passes them explicitly)
+      // When both are provided, merge them so the debugger bias fires on combined count.
+      const mergedFailures = [
+        ...(recentFailures || []),
+        ...(args?.recentFailures || []),
+      ];
+      const result = normalizeAndValidateRole(args?.role || '', args?.reason || '', {
+        recentFailures: mergedFailures,
+      });
 
       if (!result.valid) {
         logger.warn('[RoleSelection] Role validation failed', { role: result.roleAdopted, error: result.message });

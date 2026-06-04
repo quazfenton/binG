@@ -532,20 +532,36 @@ function convertMessages(messages: LLMMessage[]): {
     }
 
     // Handle multi-modal content — convert images to text placeholders for now
-    const textContent = msg.content
-      .map(c => {
-        if (c.type === 'text') return c.text || '';
-        if (c.type === 'image_url') return '[Image]';
-        return '';
-      })
-      .join(' ');
+    // Also extract tool-call parts from array content for AI SDK compatibility
+    const textParts: string[] = [];
+    let toolCallsFromContent: any[] = [];
+    for (const c of msg.content) {
+      if (c.type === 'text') {
+        textParts.push(c.text || '');
+      } else if (c.type === 'image_url') {
+        textParts.push('[Image]');
+      } else if (c.type === 'tool-call') {
+        // Extract tool-call parts from content array
+        toolCallsFromContent.push({
+          id: c.toolCallId,
+          name: c.toolName,
+          arguments: c.args || c.arguments || {},
+        });
+      }
+    }
+    const textContent = textParts.join(' ');
 
     const entry: any = {
       role: msg.role === 'assistant' ? 'assistant' : 'user',
       content: textContent,
     };
-    if (msg.role === 'assistant' && Array.isArray((msg as any).tool_calls)) {
+    // Use tool_calls from separate property OR extracted from content array
+    const hasSeparateToolCalls = Array.isArray((msg as any).tool_calls) && (msg as any).tool_calls.length > 0;
+    const hasContentToolCalls = toolCallsFromContent.length > 0;
+    if (msg.role === 'assistant' && hasSeparateToolCalls) {
       entry.tool_calls = (msg as any).tool_calls;
+    } else if (msg.role === 'assistant' && hasContentToolCalls) {
+      entry.tool_calls = toolCallsFromContent;
     }
     chatMessages.push(entry);
   }

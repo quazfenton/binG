@@ -30,8 +30,7 @@
     }
 
     # Nocturne n8n routes (must come before nocturne catch-all)
-    @nocturne_n8n path /nocturne-n8n/*
-    handle @nocturne_n8n {
+    handle_path /nocturne-n8n/* {
         uri strip_prefix /nocturne-n8n
         reverse_proxy nocturne_n8n:5678 {
             flush_interval -1
@@ -39,8 +38,7 @@
     }
 
     # Nocturne backend routes (FastAPI) — all /nocturne/* paths
-    @nocturne path /nocturne/*
-    handle @nocturne {
+    handle_path /nocturne/* {
         uri strip_prefix /nocturne
         reverse_proxy nocturne_backend:8000 {
             flush_interval -1
@@ -52,8 +50,7 @@
     }
 
     # CopaMundial Socket.IO (must be before generic /copa route)
-    @copa_socket path /copa/socket.io/*
-    handle @copa_socket {
+    handle_path /copa/socket.io/* {
         uri strip_prefix /copa
         reverse_proxy copa-app:3000 {
             flush_interval -1
@@ -65,8 +62,7 @@
     }
 
     # CopaMundial routes (Next.js + Socket.IO)
-    @copa path /copa/*
-    handle @copa {
+    handle_path /copa/* {
         uri strip_prefix /copa
         reverse_proxy copa-app:3000 {
             flush_interval -1

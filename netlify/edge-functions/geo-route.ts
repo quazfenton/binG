@@ -8,8 +8,22 @@
 import type { Context } from 'https://edge.netlify.com';
 
 export default async (request: Request, context: Context) => {
+  const backendUrl = Netlify.env.get('ORACLE_BACKEND_URL');
+  if (!backendUrl) {
+    return new Response('Server configuration error: ORACLE_BACKEND_URL not set', { status: 500 });
+  }
+
   const url = new URL(request.url);
-  const target = new URL(url.pathname.replace(/^\/edge/, ''), Netlify.env.get('ORACLE_BACKEND_URL'));
+  // Strip the configured edge function prefix (/netlify/*) to get the clean upstream path.
+  // Must match `path` in both netlify.toml and the config export below.
+  const cleanPath = url.pathname.replace(/^\/netlify/, '');
+
+  // SECURITY: Normalize the path to prevent host override via // prefix.
+  // Request paths starting with // can cause new URL() to treat the path
+  // as a host, enabling open-proxy/SSRF attacks.
+  const normalizedPath = cleanPath.replace(/^\/+/, '/');
+  const target = new URL(normalizedPath, backendUrl);
+
   url.searchParams.forEach((v, k) => target.searchParams.set(k, v));
 
   const upstream = await fetch(target, {
@@ -28,4 +42,4 @@ export default async (request: Request, context: Context) => {
   });
 };
 
-export const config = { path: '/edge/*' };
+export const config = { path: '/netlify/*' };

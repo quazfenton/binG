@@ -2,6 +2,15 @@
 
 All notable changes made in this session are documented below.
 
+## [Unreleased] — Nocturne Scraper Updates
+
+### Added
+- **`nocturne/scraper/partiful_scraper.py`** — New scraper for Partiful event discovery. Includes robust relative-DOM navigation and city-scoped URL mapping (`la`, `dc`, `sf`, `nyc`).
+- **`nocturne/scraper/newsletter_scraper.py` & `newsletter_handler.py`** — New newsletter parsing infrastructure. Provides heuristic-based parsing for event newsletters and a handler to process email inputs into structured event JSONs.
+
+### Improved
+- **`partiful_scraper.py`** — Updated parsing logic to use robust look-back traversing instead of fragile CSS selectors for title and date/time extraction.
+
 ## [Unreleased]
 
 ### Fixed

@@ -10,7 +10,8 @@
       "@bing/shared/*": ["../packages/shared/*"],
       "backend/*": ["src/*"],
       "server-only": ["src/lib/server-only-mock.ts"],
-      "next/server": ["src/lib/next-server-mock.ts"]
+      "next/server": ["src/lib/next-server-mock.ts"],
+    "next/server-cookies": ["src/lib/next-server-mock.ts"]  // Provides NextResponse.cookies for mounted route handlers
     },
     "allowJs": true,
     "skipLibCheck": true,

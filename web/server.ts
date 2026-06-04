@@ -139,8 +139,10 @@ app.prepare().then(startup).then(() => {
       // FIX: Reject if at connection limit
       if (activeWsConnections >= MAX_WS_CONNECTIONS) {
         console.warn(`[VNCProxy] Connection limit reached (${MAX_WS_CONNECTIONS}), rejecting`);
-        (socket as any).writeHead(503, { 'Content-Type': 'text/plain' });
-        socket.end('Service Unavailable: Too many WebSocket connections');
+        // Use socket.write() + end() instead of writeHead(), since upgrade
+        // sockets are net.Socket instances and writeHead() is not a valid method on them.
+        socket.write('HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain\r\n\r\nService Unavailable: Too many WebSocket connections');
+        socket.end();
         return;
       }
 
@@ -159,12 +161,65 @@ app.prepare().then(startup).then(() => {
         return;
       }
 
-      // SECURITY: Block connections to private/internal IP ranges to prevent SSRF
-      const blockedPatterns = /^(127\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|0\.|localhost$|::1$|fe80:)/i;
-      if (blockedPatterns.test(host)) {
+      // VNC proxy bypasses the normal WebSocket authentication flow.
+      // Require authentication token for VNC proxy connections.
+      const authHeader = req.headers['authorization'] || '';
+      const protocolHeader = req.headers['sec-websocket-protocol'] || '';
+      const token = authHeader.startsWith('Bearer ') ? authHeader.substring(7)
+        : (Array.isArray(protocolHeader) ? protocolHeader[0] : protocolHeader).startsWith('Bearer ')
+          ? (Array.isArray(protocolHeader) ? protocolHeader[0] : protocolHeader).substring(7)
+          : null;
+      
+      if (!token) {
+        logger.warn('[VNCProxy] Authentication required but no token provided');
+        socket.destroy();
+        return;
+      }
+      
+      try {
+        const { verifyToken } = await import('@/lib/security/jwt-auth');
+        const payload = verifyToken(token);
+        if (!payload) {
+          logger.warn('[VNCProxy] Invalid token');
+          socket.destroy();
+          return;
+        }
+        logger.info('[VNCProxy] Authenticated VNC proxy connection', { user: (payload as any).userId || (payload as any).sub });
+      } catch (authErr: any) {
+        logger.warn('[VNCProxy] Token validation failed', authErr);
+        socket.destroy();
+        return;
+      }
+
+      // SECURITY: Block connections to private/internal IP ranges to prevent SSRF.
+      // Validate hostname string first, then resolve to IP and check the resolved
+      // IP against private ranges — hostname-only checks are bypassable via DNS
+      // rebinding or internal hostnames that resolve to private IPs.
+      const hostnamePattern = /^(127\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|0\.|localhost$|::1$|fe80:)/i;
+      if (hostnamePattern.test(host)) {
         logger.warn(`[VNCProxy] Blocked internal host: ${host}`);
         socket.destroy();
         return;
+      }
+      
+      // Also resolve the hostname and check IP ranges for defense-in-depth
+      // against hostname-based bypasses.
+      try {
+        const { lookup } = await import('dns/promises');
+        const addresses = await lookup(host, { all: true });
+        for (const addr of addresses) {
+          const ip = addr.address;
+          const isPrivate = /^(127\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|0\.|::1$|fe80:|fc00:|fd00:)/i.test(ip);
+          if (isPrivate) {
+            logger.warn(`[VNCProxy] Blocked host ${host} resolves to private IP ${ip}`);
+            socket.destroy();
+            return;
+          }
+        }
+      } catch (lookupErr) {
+        // DNS lookup failed — still allow the connection but log a warning.
+        // The hostname-level check above already caught literal IPs.
+        logger.warn(`[VNCProxy] DNS lookup failed for ${host}, proceeding with hostname validation only`, lookupErr);
       }
 
       wss.handleUpgrade(req, socket, head, (ws) => {
@@ -193,8 +248,8 @@ app.prepare().then(startup).then(() => {
     // FIX (Bug 6): Enforce maximum concurrent connections
     if (activeWsConnections >= MAX_WS_CONNECTIONS) {
       console.warn(`[WebSocket] Connection limit reached (${MAX_WS_CONNECTIONS}), rejecting`);
-      (socket as any).writeHead(503, { 'Content-Type': 'text/plain' });
-      socket.end('Service Unavailable: Too many WebSocket connections');
+      socket.write('HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain\r\n\r\nService Unavailable: Too many WebSocket connections');
+      socket.end();
       return;
     }
 
@@ -276,7 +331,7 @@ app.prepare().then(startup).then(() => {
       });
 
       // Inactivity timeout: close if idle for 30min
-      let disconnectTimeout: NodeJS.Timeout | null = setTimeout(() => {
+      let disconnectTimeout: ReturnType<typeof setTimeout> | null = setTimeout(() => {
         logger.warn(`[VNCProxy] Inactivity timeout for ${vncHost}:${vncPort}`);
         try { ws.close(4004, 'Inactivity timeout'); } catch {}
         if (!tcpSocket.destroyed) tcpSocket.end();
@@ -300,7 +355,17 @@ app.prepare().then(startup).then(() => {
           const buffered = ws.bufferedAmount;
           if (buffered > 1024 * 1024) {
             tcpSocket.pause();
-            ws.once('drain', () => tcpSocket.resume());
+            // Use a simple poll-based resume instead of ws.once('drain'),
+            // because 'drain' is not a valid backpressure signal for ws WebSocket
+            // instances and the TCP read may never resume otherwise.
+            const resumeCheck = setInterval(() => {
+              if (ws.bufferedAmount <= 512 * 1024) {
+                clearInterval(resumeCheck);
+                if (!tcpSocket.destroyed) tcpSocket.resume();
+              }
+            }, 50);
+            // Safety: clear interval after 10s to prevent leaks
+            setTimeout(() => clearInterval(resumeCheck), 10000);
           }
           ws.send(data);
         }

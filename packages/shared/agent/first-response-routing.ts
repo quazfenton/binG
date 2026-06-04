@@ -118,24 +118,32 @@ export function stripRoutingMarkers(responseText: string): string {
     }
   }
 
-  // 2. Fallback: Remove stand-alone markers and simple JSON blocks if balanced search failed
-  // Use extractFirstJsonObject to robustly handle JSON instead of brittle regex
-  const legacyMatch = cleaned.match(/\[(?:ROUTING_METADATA|ROLE_SELECT)\]/);
-  if (legacyMatch && legacyMatch.index !== undefined) {
-    const jsonBlock = extractFirstJsonObject(cleaned.slice(legacyMatch.index));
+  // 2a. Remove ALL [ROLE_SELECT]/[ROUTING_METADATA] markers (not just the first one).
+  // Use a while loop so later marker blocks don't leak into the cleaned response.
+  const markerRegex = /\[(?:ROUTING_METADATA|ROLE_SELECT)\]/;
+  let markerMatch;
+  while ((markerMatch = cleaned.match(markerRegex)) !== null) {
+    if (markerMatch.index === undefined) break;
+    const jsonBlock = extractFirstJsonObject(cleaned.slice(markerMatch.index));
     if (jsonBlock) {
-      // Find the header if it exists
-      const beforeMarker = cleaned.slice(0, legacyMatch.index);
+      const beforeMarker = cleaned.slice(0, markerMatch.index);
       const headerRegex = /###?\s*$/;
       const cleanedBefore = beforeMarker.replace(headerRegex, '');
       
-      const afterJsonIndex = cleaned.indexOf(jsonBlock, legacyMatch.index) + jsonBlock.length;
+      const afterJsonIndex = cleaned.indexOf(jsonBlock, markerMatch.index) + jsonBlock.length;
       let afterJson = cleaned.slice(afterJsonIndex);
       
       // Remove trailing code fences if present
       afterJson = afterJson.replace(/^\s*```?\s*/, '');
       
       cleaned = cleanedBefore + afterJson;
+    } else {
+      // JSON extraction failed — still strip the marker text so it doesn't leak to users
+      const beforeMarker = cleaned.slice(0, markerMatch.index);
+      const afterMarker = cleaned.slice(markerMatch.index + markerMatch[0].length);
+      const headerRegex = /###?\s*$/;
+      const cleanedBefore = beforeMarker.replace(headerRegex, '');
+      cleaned = cleanedBefore + afterMarker;
     }
   }
 

@@ -73,9 +73,14 @@ runcmd:
   - ufw --force enable
 
   # --- Oracle iptables: open the same ports (Oracle ships a restrictive default) ---
-  - iptables -I INPUT 6 -m state --state NEW -p tcp --dport 80  -j ACCEPT
-  - iptables -I INPUT 6 -m state --state NEW -p tcp --dport 443 -j ACCEPT
-  - netfilter-persistent save || true
+  # Insert at the top of the INPUT chain for 80/443; using -I INPUT 1 avoids
+  # fragility across different base rule sets (e.g. different Oracle base images
+  # may have different numbers of pre-existing rules).
+  - iptables -I INPUT 1 -m state --state NEW -p tcp --dport 80  -j ACCEPT
+  - iptables -I INPUT 1 -m state --state NEW -p tcp --dport 443 -j ACCEPT
+  # Save iptables rules persistently; netfilter-persistent may not be installed
+  # on all base images (Oracle Linux, Ubuntu minimal, etc.) — fall back to iptables-save.
+  - (netfilter-persistent save 2>/dev/null || iptables-save > /etc/iptables/rules.v4 2>/dev/null) || true
 
   # --- Workspace ---
   - mkdir -p /opt/bing

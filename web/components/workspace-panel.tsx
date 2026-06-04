@@ -182,7 +182,7 @@ function MessageBubble({ message, isStreaming }: { message: Message; isStreaming
       </div>
 
       {/* Expand for long messages */}
-      {!isExpanded && message.content.length > 500 && (
+      {!isExpanded && (typeof message.content === 'string' ? message.content.length : JSON.stringify(message.content).length) > 500 && (
         <button
           onClick={() => setIsExpanded(true)}
           className="mt-2 text-xs text-white/50 hover:text-white/80"
@@ -739,6 +739,8 @@ export function WorkspacePanel() {
 
   const [selectedFile, setSelectedFile] = useState<FileNode | null>(null);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
+  // Tracks folders the user has manually collapsed so auto-expand doesn't override them
+  const userCollapsedFoldersRef = useRef<Set<string>>(new Set());
 
   // Chat Thread Management - Multiple simultaneous chat threads
   const [chatThreads, setChatThreads] = useState<ChatThread[]>([]);
@@ -1351,20 +1353,6 @@ export function WorkspacePanel() {
         const snapshot = await vfs.getSnapshot();
         setVfsSnapshot(snapshot);
 
-        // Auto-expand all folders on initial load
-        if (snapshot?.files) {
-          const folders = new Set<string>();
-          snapshot.files.forEach((file: { path: string }) => {
-            const parts = file.path.split("/").filter(Boolean);
-            // Add each folder path to expanded set
-            for (let i = 1; i < parts.length; i++) {
-              const folderPath = "/" + parts.slice(0, i).join("/");
-              folders.add(folderPath);
-            }
-          });
-          setExpandedFolders(folders);
-        }
-
         // Initialize filesystem state with snapshot data
         // Use stable session ID from user session (not Date.now() which changes on refresh)
         const stableSessionId = `session-${getOrCreateAnonymousSessionId()}`;
@@ -1391,6 +1379,31 @@ export function WorkspacePanel() {
     });
     return () => unsubscribe();
   }, [vfs]);
+
+  // Auto-expand all folders whenever the filesystem snapshot changes, while
+  // preserving any folders the user has manually collapsed.
+  // This covers both the initial load and subsequent file additions (e.g., from
+  // onFilesystemUpdated events) so new directories are never hidden by default,
+  // but a folder the user explicitly collapsed stays collapsed on refresh.
+  useEffect(() => {
+    if (vfsSnapshot?.files) {
+      const allFolders = new Set<string>();
+      // Always expand root
+      allFolders.add("/");
+      vfsSnapshot.files.forEach((file: { path: string }) => {
+        const parts = file.path.split("/").filter(Boolean);
+        // Add each ancestor directory path to the expanded set
+        for (let i = 1; i < parts.length; i++) {
+          const folderPath = "/" + parts.slice(0, i).join("/");
+          allFolders.add(folderPath);
+        }
+      });
+      // Remove folders the user has explicitly collapsed
+      const collapsed = userCollapsedFoldersRef.current;
+      const toExpand = new Set([...allFolders].filter(f => !collapsed.has(f)));
+      setExpandedFolders(toExpand);
+    }
+  }, [vfsSnapshot?.files]);
 
   // Build file tree from filesystem
   const fileTree = React.useMemo(() => {
@@ -1455,9 +1468,13 @@ export function WorkspacePanel() {
     setExpandedFolders((prev) => {
       const next = new Set(prev);
       if (next.has(path)) {
+        // Collapsing — remember this so auto-expand doesn't override it
         next.delete(path);
+        userCollapsedFoldersRef.current.add(path);
       } else {
+        // Expanding — clear from collapsed set (user wants to see it)
         next.add(path);
+        userCollapsedFoldersRef.current.delete(path);
       }
       return next;
     });
@@ -3067,6 +3084,17 @@ export function WorkspacePanel() {
                           <Button
                             variant="ghost"
                             size="icon"
+                            onClick={() => {
+                              // Collapse all folders — keep root "/" visible
+                              setExpandedFolders(new Set(["/"]));
+                              // Clear manual collapse tracking so auto-expand works fresh
+                              userCollapsedFoldersRef.current = new Set();
+                            }}
+                            className="h-6 w-6 hover:bg-white/10"
+                            title="Collapse All"
+                          >
+                            <ChevronUp className="h-3 w-3" />
+                          </Button>
                             onClick={async () => {
                               const snapshot = await vfs.getSnapshot();
                               setVfsSnapshot(snapshot);

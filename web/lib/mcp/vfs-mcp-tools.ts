@@ -21,6 +21,7 @@
  */
 
 import { z } from 'zod';
+import { zodToJsonSchema } from 'zod-to-json-schema';
 import { tool } from 'ai';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { virtualFilesystem } from '../virtual-filesystem/virtual-filesystem-service';
@@ -1812,109 +1813,128 @@ export const vfsTools = {
 };
 
 /**
- * Tool metadata map — source of truth for MCP tool definitions.
- * This decouples our MCP protocol layer from the AI SDK's internal tool type,
- * which changes frequently between versions.
+ * Pre-convert a Zod schema to JSON Schema using zod-to-json-schema.
+ *
+ * This avoids storing raw z.ZodType objects in TOOL_DEFS and returning
+ * them as `parameters` — which would serialize to Zod internals ({"_def":...,
+ * "~standard":...}) instead of valid JSON Schema when sent to providers.
+ *
+ * The AI SDK internally uses zod-to-json-schema, but its tool() function
+ * keeps the raw Zod type in .parameters — the conversion only happens later
+ * during serialization. We call it directly here so our exported definitions
+ * contain proper JSON Schema objects from the start.
  */
-const TOOL_META: Record<string, { description: string; parameters: z.ZodType }> = {
+function toJsonSchema(schema: z.ZodType): Record<string, any> {
+  const jsonSchema = zodToJsonSchema(schema, { target: 'openApi3' });
+  // Extract the inner schema (zod-to-json-schema wraps in a $defs container)
+  return (jsonSchema.$defs?.inner ?? jsonSchema) as Record<string, any>;
+}
+
+/**
+ * Tool metadata map — source of truth for VFS tool definitions.
+ * Parameters are stored as JSON Schema objects (converted from Zod via the
+ * AI SDK's built-in converter) so consumers can send them directly to any
+ * OpenAI-compatible provider without additional schema transformation.
+ */
+const TOOL_DEFS: Record<string, { description: string; parameters: Record<string, any> }> = {
   write_file: {
     description: writeFileTool.description,
-    parameters: z.object({
-  path: z.string().describe('Relative path like "src/app.tsx" (no URL, no query string, no leading slash)'),
-  content: z.string().describe('Complete file contents — do not abbreviate or truncate'),
-  commitMessage: z.string().optional().describe('Optional description of the change'),
-    }),
+    parameters: toJsonSchema(z.object({
+      path: z.string().describe('Relative path like "src/app.tsx" (no URL, no query string, no leading slash)'),
+      content: z.string().describe('Complete file contents — do not abbreviate or truncate'),
+      commitMessage: z.string().optional().describe('Optional description of the change'),
+    })),
   },
   apply_diff: {
     description: applyDiffTool.description,
-    parameters: z.object({
-  path: z.string().describe('Relative path like "src/app.tsx" (the file to patch)'),
-  diff: z.string().describe('Unified diff with --- +++ @@ format — include full context lines'),
-  commitMessage: z.string().optional().describe('Optional description of the change'),
-    }),
+    parameters: toJsonSchema(z.object({
+      path: z.string().describe('Relative path like "src/app.tsx" (the file to patch)'),
+      diff: z.string().describe('Unified diff with --- +++ @@ format — include full context lines'),
+      commitMessage: z.string().optional().describe('Optional description of the change'),
+    })),
   },
   read_file: {
     description: readFileTool.description,
-    parameters: z.object({
-  path: z.string().describe('Relative path like "src/app.tsx" (the file to read)'),
-    }),
+    parameters: toJsonSchema(z.object({
+      path: z.string().describe('Relative path like "src/app.tsx" (the file to read)'),
+    })),
   },
   read_files: {
     description: readFilesTool.description,
-    parameters: z.object({
-  paths: z.array(z.string()).min(1).max(20).describe('Array of file paths like ["src/a.ts", "src/b.ts"]'),
-    }),
+    parameters: toJsonSchema(z.object({
+      paths: z.array(z.string()).min(1).max(20).describe('Array of file paths like ["src/a.ts", "src/b.ts"]'),
+    })),
   },
   list_files: {
     description: listFilesTool.description,
-    parameters: z.object({
-  path: z.string().default('/').describe('Directory path to list (default: root, like "/")'),
-  recursive: z.boolean().optional().default(false).describe('Whether to list recursively (default: false)'),
-    }),
+    parameters: toJsonSchema(z.object({
+      path: z.string().default('/').describe('Directory path to list (default: root, like "/")'),
+      recursive: z.boolean().optional().default(false).describe('Whether to list recursively (default: false)'),
+    })),
   },
   search_files: {
     description: searchFilesTool.description,
-    parameters: z.object({
-  query: z.string().describe('Search term or natural language description'),
-  path: z.string().optional().describe('Optional path to search within (e.g. "src/")'),
-  limit: z.number().optional().default(10).describe('Maximum number of results (default: 10)'),
-    }),
+    parameters: toJsonSchema(z.object({
+      query: z.string().describe('Search term or natural language description'),
+      path: z.string().optional().describe('Optional path to search within (e.g. "src/")'),
+      limit: z.number().optional().default(10).describe('Maximum number of results (default: 10)'),
+    })),
   },
   grep_code: {
     description: grepCodeTool.description,
-    parameters: z.object({
-  query: z.string().describe('Regex pattern, e.g. "useState\\(" or "TODO|FIXME"'),
-  path: z.string().optional().describe('Root directory (default: workspace root)'),
-  glob: z.union([z.string(), z.array(z.string())]).optional().describe('File filter, e.g. "*.ts"'),
-  caseInsensitive: z.boolean().optional().default(false),
-  wordRegexp: z.boolean().optional().default(false),
-  fixedString: z.boolean().optional().default(false),
-  contextLines: z.number().optional().default(0),
-  maxResults: z.number().optional().default(100),
-  maxCountPerFile: z.number().optional().default(50),
-    }),
+    parameters: toJsonSchema(z.object({
+      query: z.string().describe('Regex pattern, e.g. "useState\\(" or "TODO|FIXME"'),
+      path: z.string().optional().describe('Root directory (default: workspace root)'),
+      glob: z.union([z.string(), z.array(z.string())]).optional().describe('File filter, e.g. "*.ts"'),
+      caseInsensitive: z.boolean().optional().default(false),
+      wordRegexp: z.boolean().optional().default(false),
+      fixedString: z.boolean().optional().default(false),
+      contextLines: z.number().optional().default(0),
+      maxResults: z.number().optional().default(100),
+      maxCountPerFile: z.number().optional().default(50),
+    })),
   },
   batch_write: {
     description: batchWriteTool.description,
-    parameters: z.object({
-  files: z.array(z.object({
-    path: z.string().describe('Relative file path like "src/utils.ts"'),
-    content: z.string().describe('Complete file contents — do not abbreviate'),
-  })).max(50).describe('Array of {path, content} objects — e.g. [{"path":"src/a.ts","content":"..."}]'),
-  commitMessage: z.string().optional().describe('Optional description of the batch change'),
-    }),
+    parameters: toJsonSchema(z.object({
+      files: z.array(z.object({
+        path: z.string().describe('Relative file path like "src/utils.ts"'),
+        content: z.string().describe('Complete file contents — do not abbreviate'),
+      })).max(50).describe('Array of {path, content} objects — e.g. [{"path":"src/a.ts","content":"..."}]'),
+      commitMessage: z.string().optional().describe('Optional description of the batch change'),
+    })),
   },
   delete_file: {
     description: deleteFileTool.description,
-    parameters: z.object({
-  path: z.string().describe('Relative path like "src/old.ts" (the file or directory to delete)'),
-  reason: z.string().optional().describe('Optional reason for deletion'),
-    }),
+    parameters: toJsonSchema(z.object({
+      path: z.string().describe('Relative path like "src/old.ts" (the file or directory to delete)'),
+      reason: z.string().optional().describe('Optional reason for deletion'),
+    })),
   },
   create_directory: {
     description: createDirectoryTool.description,
-    parameters: z.object({
-  path: z.string().describe('Directory path to create, like "src/components/utils"'),
-    }),
+    parameters: toJsonSchema(z.object({
+      path: z.string().describe('Directory path to create, like "src/components/utils"'),
+    })),
   },
   get_workspace_stats: {
     description: getWorkspaceStatsTool.description,
-    parameters: z.object({}),
+    parameters: toJsonSchema(z.object({})),
   },
 };
 
 /**
  * Get tool definitions in OpenAI format for tool registry.
- * Uses the explicit TOOL_META map instead of relying on the AI SDK's
- * internal Tool type (which has no stable name/parameters/public shape).
+ * Returns pre-converted JSON Schema objects in the `parameters` field
+ * so consumers can send them directly to any OpenAI-compatible provider.
  */
 export function getVFSToolDefinitions() {
-  return Object.entries(TOOL_META).map(([name, meta]) => ({
+  return Object.entries(TOOL_DEFS).map(([name, def]) => ({
     type: 'function' as const,
     function: {
-  name,
-  description: meta.description,
-  parameters: meta.parameters,
+      name,
+      description: def.description,
+      parameters: def.parameters,
     },
   }));
 }

@@ -1367,8 +1367,6 @@ export const PROVIDERS: Record<string, LLMProvider> = {
       'openrouter/openrouter/owl-alpha',
       'openrouter/google/lyria-3-clip-preview',
       'openrouter/arcee-ai/trinity-large-thinking:free',
-      // Nvidia models - removed: ninerouter returns 404 for these
-      // 'nvidia/nemotron-3-super-120b-a12b',
       // Ollama Cloud models
       'ollama/gpt-oss:120b',
       'ollama/kimi-k2.5',
@@ -3496,7 +3494,7 @@ class LLMService {
   ): Promise<LLMResponse> {
     const apiKey = this.getApiKey('ollama', apiKeyOverride);
     if (!apiKey) {
-      throw new Error('Ollama API key not configured. Please set QUAZ_API_KEY in your environment variables.');
+      throw new Error('Ollama API key not configured. Please set NINEROUTER_API_KEY or QUAZ_API_KEY in your environment variables.');
     }
 
     // Use custom base URL if provided (BYOK), otherwise default to local 9router proxy
@@ -3541,7 +3539,7 @@ class LLMService {
   ): AsyncGenerator<StreamingResponse> {
     const apiKey = this.getApiKey('ollama');
     if (!apiKey) {
-      throw new Error('Ollama API key not configured. Please set QUAZ_API_KEY in your environment variables.');
+      throw new Error('Ollama API key not configured. Please set NINEROUTER_API_KEY or QUAZ_API_KEY in your environment variables.');
     }
 
     const ollamaBaseURL =
@@ -3595,7 +3593,7 @@ class LLMService {
   ): Promise<LLMResponse> {
     const apiKey = this.getApiKey('kiro', apiKeyOverride);
     if (!apiKey) {
-      throw new Error('Kiro API key not configured. Please set QUAZ_API_KEY in your environment variables.');
+      throw new Error('Kiro API key not configured. Please set NINEROUTER_API_KEY or QUAZ_API_KEY in your environment variables.');
     }
 
     // Use custom base URL if provided (BYOK), otherwise default to local 9router proxy
@@ -3684,6 +3682,9 @@ class LLMService {
     apiKeyOverride?: string
   ): Promise<LLMResponse> {
     const apiKey = apiKeyOverride || this.getApiKey('ninerouter');
+    if (!apiKey) {
+      throw new Error('9Router API key not configured. Please set NINEROUTER_API_KEY or QUAZ_API_KEY in your environment variables.');
+    }
     if (!this.ninerouter) {
       const { default: OpenAI } = await import('openai');
       this.ninerouter = new OpenAI({ 
@@ -3767,7 +3768,7 @@ class LLMService {
   ): AsyncGenerator<StreamingResponse> {
     const apiKey = this.getApiKey('kiro');
     if (!apiKey) {
-      throw new Error('Kiro API key not configured. Please set QUAZ_API_KEY in your environment variables.');
+      throw new Error('Kiro API key not configured. Please set NINEROUTER_API_KEY or QUAZ_API_KEY in your environment variables.');
     }
 
     const kiroBaseURL =

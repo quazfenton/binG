@@ -23,11 +23,19 @@ const APP_DATA_DIR = 'storage';
  * Handles Unicode characters correctly by encoding to UTF-8 first.
  */
 function base64urlEncode(str: string): string {
-  // Use btoa/atob with manual character replacement, avoids Buffer dependency
-  // Convert UTF-8 characters properly
-  const utf8 = encodeURIComponent(str).replace(/%([0-9A-F]{2})/g, (match, p1) => {
-    return String.fromCharCode(parseInt(p1, 16));
-  });
+  // Use TextEncoder for non-throwing UTF-8 encoding (encodeURIComponent can
+  // throw URIError on lone surrogate inputs like "\uD800").
+  // Fall back to encodeURIComponent if TextEncoder is unavailable.
+  let utf8: string;
+  try {
+    const bytes = new TextEncoder().encode(str);
+    utf8 = String.fromCharCode(...bytes);
+  } catch {
+    // Fallback for environments without TextEncoder
+    utf8 = encodeURIComponent(str).replace(/%([0-9A-F]{2})/g, (_, p1) => {
+      return String.fromCharCode(parseInt(p1, 16));
+    });
+  }
   const base64 = btoa(utf8);
   
   return base64

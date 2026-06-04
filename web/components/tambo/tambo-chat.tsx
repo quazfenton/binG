@@ -109,7 +109,7 @@ export function TamboChat({
               >
                 <p className="text-sm whitespace-pre-wrap">{typeof message.content === 'string' ? message.content : JSON.stringify(message.content, null, 2)}</p>
                 <span className="text-xs opacity-50">
-                  {message.timestamp.toLocaleTimeString()}
+                  {typeof message.timestamp === 'string' ? new Date(message.timestamp).toLocaleTimeString() : message.timestamp.toLocaleTimeString()}
                 </span>
               </div>
             </div>

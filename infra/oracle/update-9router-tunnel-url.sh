@@ -23,6 +23,15 @@ fi
 
 echo "Detected tunnel URL: $TUNNEL_URL"
 
+# SECURITY: Validate TUNNEL_URL in bash BEFORE passing to SQL.
+# The GLOB validation inside sqlite is insufficient because shell variable
+# expansion happens before the heredoc is sent to docker exec, so a crafted
+# URL could inject SQL statements that execute before the GLOB check.
+if ! [[ "$TUNNEL_URL" =~ ^https://[a-zA-Z0-9._-]+\.trycloudflare\.com$ ]]; then
+  echo "Error: Invalid tunnel URL format. Expected https://<name>.trycloudflare.com"
+  exit 1
+fi
+
 # Access 9Router's SQLite database inside the container
 CONTAINER_NAME="bing-ninerouter-1"
 DB_PATH="/root/.9router/9router.db"

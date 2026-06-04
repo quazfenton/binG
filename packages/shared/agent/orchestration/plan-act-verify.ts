@@ -519,6 +519,8 @@ export class PlanActVerifyOrchestrator {
   private validatedConfig: IterationConfig;
   /** SDK tools built via proper adapter (no @ts-expect-error) — P2 #9 */
   private sdkTools: Record<string, Tool> = {};
+  /** Track plan steps for fresh-context iteration */
+  private planSteps: Array<{ action: string; tool?: string }> | null = null;
 
   constructor(private config: OrchestratorConfig) {
     // Validate and normalize configuration with Zod — P2 #9
@@ -547,70 +549,76 @@ export class PlanActVerifyOrchestrator {
 
   /**
    * Executes a task using a Plan -> Act -> Verify -> Respond loop.
+   * Uses plan-driven iteration with fresh context for each phase.
    * Yields SSE-compatible events for UI rendering.
    */
   async *execute(task: string, initialContext: ModelMessage[]): AsyncGenerator<OrchestratorEvent, void, unknown> {
     const controller = new IterationController(this.validatedConfig);
-    const conversationHistory: ModelMessage[] = [...initialContext];
 
     try {
+      // PHASE 1: PLANNING — Fresh context, no accumulated history
       yield { type: 'phase_change', phase: 'planning' };
-
-      // 1. PLANNING PHASE (CrewAI-inspired Planner Agent)
-      const plan = await this.generatePlan(task, conversationHistory);
+      const plan = await this.generatePlan(task, []);
+      this.planSteps = plan;
       yield { type: 'plan_created', plan };
-      conversationHistory.push({ role: 'assistant', content: `Plan:\n${JSON.stringify(plan)}` });
 
-      // 2. ACT PHASE (Multi-step Tool Loop)
+      // PHASE 2: ACT — Iterate over plan steps with fresh context per step
       yield { type: 'phase_change', phase: 'acting' };
-
+      let stepIndex = 0;
       let consecutiveVerificationFailures = 0;
       const MAX_VERIFICATION_FAILURES = 3;
-      const recentToolCalls: string[] = [];
-      const MAX_RECENT_TOOLS = 6;
 
-      while (true) {
+      while (stepIndex < this.planSteps.length) {
         const check = controller.canContinue();
         if (!check.allowed) {
           yield { type: 'warning', message: `Execution stopped: ${check.reason}` };
           break;
         }
 
+        const currentStep = this.planSteps[stepIndex];
         controller.recordStep();
         yield { type: 'iteration_start', iteration: controller.getStats().iterations };
 
-        // Call LLM for next action (Coder Agent) using Vercel AI SDK
-        const llmResponse = await this.callLLM(task, conversationHistory);
+        // Fresh context: only task + current step (no accumulated history)
+        const stepContext = `Task: ${task}\n\nCurrent Step ${stepIndex + 1}/${this.planSteps.length}: ${currentStep.action}`;
+        const llmResponse = await this.callLLM(stepContext, []);
         controller.recordTokens(llmResponse.usage?.totalTokens || 0);
 
-        // Push assistant response to conversation history.
-        // When the model calls tools, we must include tool-call content parts
-        // so the AI SDK can match subsequent tool-result messages to their calls.
-        // Without this, the SDK rejects the schema with:
-        // "The messages do not match the ModelMessage[] schema".
+        // Handle tool calls from LLM
         if (llmResponse.toolCalls?.length) {
-          // Assistant message with tool calls — use array content format
-          const content: any[] = [];
-          if (llmResponse.text) {
-            content.push({ type: 'text' as const, text: llmResponse.text });
+          for (const call of llmResponse.toolCalls) {
+            yield { type: 'tool_call', tool: call.name, args: call.arguments };
+
+            const result = await this.executeToolWithHealing(call.name, call.arguments);
+            const structuredResult = buildToolResult(call.name, call.arguments, result);
+            yield { type: 'tool_result', tool: call.name, result: structuredResult };
           }
-          for (const tc of llmResponse.toolCalls) {
-            content.push({
-              type: 'tool-call' as const,
-              toolCallId: tc.id,
-              toolName: tc.name,
-              input: tc.arguments,
-            });
-          }
-          conversationHistory.push({ role: 'assistant' as const, content });
         } else if (llmResponse.text) {
-          // Text-only assistant response — plain string content is fine
-          conversationHistory.push({ role: 'assistant' as const, content: llmResponse.text });
+          yield { type: 'token', content: llmResponse.text };
         }
 
-        if (llmResponse.done || !llmResponse.toolCalls?.length) {
-          break; // Task complete or no tools to call
+        // PHASE 3: VERIFICATION — Fresh context after each step
+        const modifiedFiles = this.extractModifiedFiles(llmResponse.toolCalls || []);
+        if (modifiedFiles.length > 0) {
+          yield { type: 'phase_change', phase: 'verifying' };
+          const verificationResult = await this.runVerification(modifiedFiles);
+
+          if (!verificationResult.passed) {
+            consecutiveVerificationFailures++;
+            yield { type: 'verification_failed', errors: verificationResult.errors };
+
+            if (consecutiveVerificationFailures >= MAX_VERIFICATION_FAILURES) {
+              yield { type: 'warning', message: `Aborting due to ${MAX_VERIFICATION_FAILURES} consecutive verification failures.` };
+              break;
+            }
+          } else {
+            consecutiveVerificationFailures = 0;
+            yield { type: 'verification_passed' };
+          }
         }
+
+        stepIndex++; // Move to next plan step
+      }
 
         // Execute tools with Self-Healing middleware
         let modifiedFiles: string[] = [];
@@ -674,6 +682,7 @@ export class PlanActVerifyOrchestrator {
 
             // Push the error into conversation history so the LLM can recover.
             // Uses tool-role with array content per AI SDK ModelMessage schema.
+            // CRITICAL: Also include tool_call_id at message level for AI SDK schema compliance.
             conversationHistory.push({
               role: 'tool' as const,
               content: [{
@@ -682,7 +691,8 @@ export class PlanActVerifyOrchestrator {
                 toolName: call.name,
                 output: structuredResult as any,
               }],
-            });
+              tool_call_id: call.id,
+            } as any);
             continue; // Skip execution, let the model retry with corrected args
           }
 
@@ -710,6 +720,7 @@ export class PlanActVerifyOrchestrator {
           // Plain-string content triggers "messages do not match ModelMessage[] schema".
           // Cast structuredResult as any — our custom ToolResult wraps tool outputs
           // with typed fields (success, error, summary, etc.) which the LLM can reason about.
+          // CRITICAL: Also include tool_call_id at message level for AI SDK schema compliance.
           conversationHistory.push({
             role: 'tool' as const,
             content: [{
@@ -718,6 +729,7 @@ export class PlanActVerifyOrchestrator {
               toolName: call.name,
               output: structuredResult as any,
             }],
+            tool_call_id: call.id,
           });
         }
 

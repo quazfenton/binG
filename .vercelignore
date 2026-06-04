@@ -3,7 +3,9 @@
 desktop/
 docs/
 
-**/route.ts
+# NOT **/route.ts — that would break all Next.js API routes!
+# Be specific about which route.ts files to exclude:
+# docs/**/route.ts
 
 # Standard excludes
 

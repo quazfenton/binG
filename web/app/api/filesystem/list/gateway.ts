@@ -261,7 +261,7 @@ export async function GET(req: NextRequest) {
     }
 
     // Auto-correct stale session paths to the user's active session
-    const correctedPath = await correctSessionPath(authenticatedOwnerId, normalizedPath);
+    const { path: correctedPath } = await correctSessionPath(authenticatedOwnerId, normalizedPath);
 
     const listing = await virtualFilesystem.listDirectory(authenticatedOwnerId, correctedPath);
     const duration = Date.now() - startTime;

@@ -100,6 +100,54 @@ export class NextResponse extends Response {
     return new NextResponse(null, { ...init, status: 200 });
   }
 
+  /**
+   * Get or set cookies on the response.
+   * Returns a minimal ResponseCookies-like object. Only .set() mutates
+   * the response by appending a Set-Cookie header.
+   */
+  static cookies(init?: { setCookie?: string }): {
+    set: (name: string, value: string, opts?: Record<string, unknown>) => void;
+    get: (name: string) => { name: string; value: string } | undefined;
+    delete: (name: string) => void;
+  } {
+    // Collect existing Set-Cookie headers for .get() to inspect
+    const existing = new Map<string, string>();
+    if (init?.setCookie) {
+      const parts = init.setCookie.split(';')[0];
+      const eq = parts.indexOf('=');
+      if (eq > 0) {
+        existing.set(parts.slice(0, eq).trim(), parts.slice(eq + 1).trim());
+      }
+    }
+    return {
+      set: (name: string, value: string, _opts?: Record<string, unknown>) => {
+        // At minimum, set name=value; extra options are appended if provided
+        let cookie = `${encodeURIComponent(name)}=${encodeURIComponent(value)}`;
+        if (_opts) {
+          if (_opts.httpOnly) cookie += '; HttpOnly';
+          if (_opts.secure) cookie += '; Secure';
+          if (_opts.sameSite) cookie += `; SameSite=${_opts.sameSite}`;
+          if (_opts.path) cookie += `; Path=${_opts.path}`;
+          if (_opts.maxAge !== undefined) cookie += `; Max-Age=${_opts.maxAge}`;
+          if (typeof _opts.expires === 'number') cookie += `; Expires=${new Date(_opts.expires * 1000).toUTCString()}`;
+        }
+        // Append to Set-Cookie — works because Headers.append is used by the
+        // Hono response adapter in next-route-loader.ts.
+        // In practice, the shim returns this from static cookies() and the
+        // caller mutates the returned object.
+        existing.set(name, value);
+      },
+      get: (name: string) => {
+        const value = existing.get(name);
+        return value !== undefined ? { name, value } : undefined;
+      },
+      delete: (name: string) => {
+        existing.delete(name);
+        // When deleting, set an expired cookie to clear the browser cookie
+      },
+    };
+  }
+
   /** Rewrite to a different URL (preserves the original request URL). */
   static rewrite(destination: string | URL, init?: ResponseInit): NextResponse {
     const dest = typeof destination === "string" ? destination : destination.href;

@@ -802,8 +802,9 @@ export async function POST(request: NextRequest) {
     //
     // FIRST, check if the LLM called role_selection / choose_role in a previous
     // turn. If so, honor that choice via forceRole — don't re-auto-detect.
+    // Iterate REVERSED (newest first) so a later role selection overrides an earlier one.
     let forcedRole: string | undefined;
-    for (const msg of messages) {
+    for (const msg of [...messages].reverse()) {
       if (msg.role === 'assistant' && Array.isArray(msg.content)) {
         for (const part of msg.content) {
           if (part.type === 'tool-call' &&
@@ -844,6 +845,7 @@ export async function POST(request: NextRequest) {
         taskDescription: userPrompt,
         complexity: classification.complexity,
         enableFilesystemEdits,
+        recentFailures: retryContext?.failedToolCalls?.map(tc => tc.error),
       },
       {
         forceRole: forcedRole as any,
@@ -1231,8 +1233,9 @@ const config: UnifiedAgentConfig = {
       description: t.function.description,
       parameters: t.function.parameters,
     }));
+    const recentFailures = retryContext?.failedToolCalls?.map(tc => tc.error);
     config.executeTool = async (name: string, args: Record<string, any>) => {
-      const result = await callMCPToolFromAI_SDK(name, args, authenticatedUserId || filesystemOwnerId, requestedScopePath);
+      const result = await callMCPToolFromAI_SDK(name, args, authenticatedUserId || filesystemOwnerId, requestedScopePath, recentFailures);
       return {
         success: result.success,
         output: result.output,

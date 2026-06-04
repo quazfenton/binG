@@ -40,18 +40,6 @@ bun .agents/skills/context7/scripts/context7.ts lookup "<library-name>" "<query>
 ```
 Returns matching libraries with their Context7 IDs, descriptions, snippet counts, and quality scores. Pick the best match by name relevance, reputation, and benchmark score.
 
-**Fetch docs for a specific query:**
-```bash
-bun Skills/context7/scripts/context7.ts docs <library-id> "<query>"
-```
-Returns documentation and code examples relevant to the query. Use the library ID from a search result.
-
-**One-shot lookup (search + fetch docs):**
-```bash
-bun Skills/context7/scripts/context7.ts lookup "<library-name>" "<query>" --tokens 10000
-```
-Resolves the library and fetches relevant docs in one step. This is the most common workflow.
-
 ### Options
 
 - `--tokens <n>` -- Max tokens of documentation to return (default: 10000). Use lower values (3000-5000) for focused questions, higher (10000-15000) for broad exploration.

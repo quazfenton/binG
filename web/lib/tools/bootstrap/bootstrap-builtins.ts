@@ -110,7 +110,7 @@ export async function registerBuiltInCapabilities(registry: ToolRegistry): Promi
       provider: 'context-pack',
       handler: async (args: any, context: any) => {
         // Normalize ownerId: 'anonymous' -> 'anon:public', 'anon_timestamp' -> 'anon:timestamp'
-        let ownerId = context.userId || 'anon:public';
+        let ownerId = (typeof context.userId === 'string' ? context.userId : 'anon:public');
         if (ownerId.startsWith('anon_')) {
           ownerId = ownerId.replace(/^anon_/, 'anon:');
         } else if (ownerId === 'anonymous') {

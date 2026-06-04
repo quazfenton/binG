@@ -38,7 +38,7 @@ export async function embed(text: string): Promise<number[]> {
       statusText: res.statusText,
       textLength: text.length,
       textPreview: text.slice(0, 200),
-      baseUrl: '(relative)',
+      baseUrl,
       errorBody: errorBody.slice(0, 500),
       headers: Object.fromEntries(res.headers.entries()),
     });

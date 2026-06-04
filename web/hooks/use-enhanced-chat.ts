@@ -638,6 +638,12 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
         accumulatedContentLength: accumulatedContent?.length,
         tokenCount,
       });
+      // CRITICAL: Abort the active stream BEFORE finalizing state so the
+      // streaming reader loop stops and doesn't cause overlapping state
+      // updates or out-of-order message handling.
+      if (!abortController.signal.aborted) {
+        abortController.abort();
+      }
       // CRITICAL FIX: Always finalize the UI state on timeout — even when
       // accumulatedContent is empty. Previously the empty branch did NOTHING,
       // leaving isLoading=true and the bubble blank forever ("frozen UI").

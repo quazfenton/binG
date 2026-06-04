@@ -2200,6 +2200,7 @@ export default function ConversationInterface() {
             onProviderChange={handleProviderChange}
             streamingState={streamingState}
             onRetryMessage={handleRetryMessage}
+            filesystemScopePath={filesystemScopePath}
           />
         </div>
       </div>

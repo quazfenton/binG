@@ -27,7 +27,7 @@ services:
     container_name: bing-backend
     restart: unless-stopped
     ports:
-      - "3001:3001"
+      - "3002:3001"  # Uses 3002 to avoid conflict with Grafana (3001) in base compose
     environment:
       - NODE_ENV=production
       - PORT=3001
@@ -83,7 +83,9 @@ services:
     networks:
       - bing-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      # Use wget since the runtime image does not include curl.
+      # wget returns non-zero on failure; -q for quiet, -O /dev/null to discard output.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:3001/health"]
       interval: 30s
       timeout: 10s
       retries: 3

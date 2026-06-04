@@ -106,15 +106,24 @@ export function normalizeFilesystemPath(path: string): string {
  * If a client requests "workspace/sessions/001/file.txt" but the file only exists
  * under "workspace/sessions/003/file.txt" in their partitioned workspace, this
  * function corrects the path to "workspace/sessions/003/file.txt".
+ * 
+ * Returns an object with the corrected path and, if the file content was already
+ * read during correction, the cached content to avoid a redundant second read.
  */
-export async function correctSessionPath(ownerId: string, filePath: string): Promise<string> {
+export async function correctSessionPath(ownerId: string, filePath: string): Promise<{ path: string; content?: any }> {
   // First, try to read the file at the requested path. If it works, no correction needed.
   try {
-    await virtualFilesystem.readFile(ownerId, filePath);
-    return filePath;
+    const file = await virtualFilesystem.readFile(ownerId, filePath);
+    return { path: filePath, content: file };
   } catch (readError: any) {
-    // If the error is not a "File not found", we should not attempt correction.
     const errorMsg = readError?.message?.toLowerCase() || '';
+    // If the path is a directory (not a file), that's valid — return as-is.
+    // Backend readFile throws "is a directory" for directory paths, which
+    // means the path exists and no session-path correction is needed.
+    if (errorMsg.includes('is a directory') || errorMsg.includes('not a file')) {
+      return { path: filePath };
+    }
+    // If the error is not a "File not found", we should not attempt correction.
     if (!errorMsg.includes('file not found')) {
       // Re-throw the original error.
       throw readError;
@@ -155,10 +164,10 @@ export async function correctSessionPath(ownerId: string, filePath: string): Pro
         }
         const candidatePath = `workspace/sessions/${sessionId}/${relativeSubPath}`;
         try {
-          await virtualFilesystem.readFile(ownerId, candidatePath);
-          // Found the file in another session! Return the corrected path.
+          const file = await virtualFilesystem.readFile(ownerId, candidatePath);
+          // Found the file in another session! Return the corrected path and cached content.
           console.warn(`[VFS] Session path mismatch corrected: "${filePath}" -> "${candidatePath}"`);
-          return candidatePath;
+          return { path: candidatePath, content: file };
         } catch (e) {
           // File not found in this session, try next.
           continue;
@@ -171,5 +180,5 @@ export async function correctSessionPath(ownerId: string, filePath: string): Pro
 
   // If we couldn't find the file in any other session, return the original path.
   // The caller will handle the error appropriately.
-  return filePath;
+  return { path: filePath };
 }

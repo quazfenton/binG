@@ -34,7 +34,7 @@ COPY web/.bing-platform ./web/.bing-platform
 COPY web/.bing-shared ./web/.bing-shared
 
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
-    pnpm install  --filter backend... --filter @bing/shared... --filter @bing/platform...
+    pnpm install --frozen-lockfile --filter backend... --filter @bing/shared... --filter @bing/platform...
 
 # Mock server-only package — throws in Next.js client context but backend runs
 # in pure Node.js where the import should be a no-op.

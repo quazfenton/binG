@@ -61,7 +61,7 @@ export async function registerProjectAnalysisTools(
       provider: 'workspace-analysis',
       handler: async (args: any, context: any) => {
         // Normalize ownerId: 'anonymous' -> 'anon:public', 'anon_timestamp' -> 'anon:timestamp'
-        let ownerId = context.userId || 'anon:public';
+        let ownerId = (typeof context.userId === 'string' ? context.userId : 'anon:public');
         if (ownerId.startsWith('anon_')) {
           ownerId = ownerId.replace(/^anon_/, 'anon:');
         } else if (ownerId === 'anonymous') {
@@ -85,7 +85,7 @@ export async function registerProjectAnalysisTools(
       provider: 'workspace-analysis',
       handler: async (_args: any, context: any) => {
         // Normalize ownerId: 'anonymous' -> 'anon:public', 'anon_timestamp' -> 'anon:timestamp'
-        let ownerId = context.userId || 'anon:public';
+        let ownerId = (typeof context.userId === 'string' ? context.userId : 'anon:public');
         if (ownerId.startsWith('anon_')) {
           ownerId = ownerId.replace(/^anon_/, 'anon:');
         } else if (ownerId === 'anonymous') {
@@ -108,7 +108,7 @@ export async function registerProjectAnalysisTools(
       provider: 'workspace-analysis',
       handler: async (_args: any, context: any) => {
         // Normalize ownerId: 'anonymous' -> 'anon:public', 'anon_timestamp' -> 'anon:timestamp'
-        let ownerId = context.userId || 'anon:public';
+        let ownerId = (typeof context.userId === 'string' ? context.userId : 'anon:public');
         if (ownerId.startsWith('anon_')) {
           ownerId = ownerId.replace(/^anon_/, 'anon:');
         } else if (ownerId === 'anonymous') {
@@ -131,7 +131,7 @@ export async function registerProjectAnalysisTools(
       handler: async (args: any, context: any) => {
         const { virtualFilesystem } = await import('@/lib/virtual-filesystem/virtual-filesystem-service');
         // Normalize ownerId: 'anonymous' -> 'anon:public', 'anon_timestamp' -> 'anon:timestamp'
-        let ownerId = context.userId || 'anon:public';
+        let ownerId = (typeof context.userId === 'string' ? context.userId : 'anon:public');
         if (ownerId.startsWith('anon_')) {
           ownerId = ownerId.replace(/^anon_/, 'anon:');
         } else if (ownerId === 'anonymous') {

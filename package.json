@@ -1,7 +1,7 @@
 {
   "name": "bing",
   "engines": {
-    "node": "20.x",
+    "node": ">=20.9.0",
     "pnpm": ">=9.0.0"
   },
   "packageManager": "pnpm@9.15.4",
@@ -18,7 +18,10 @@
     "start:web": "pnpm --filter web start",
     "type-check": "pnpm --filter web type-check",
     "lint": "pnpm --filter web lint",
-    "test": "pnpm --filter web test && vitest run packages/shared/agent/__tests__ && vitest run test",
+    "test": "pnpm --filter web test && vitest run test/",
+    "test:ci": "pnpm --filter web test",
+    "test:unit": "vitest run",
+
     "env:check": "node scripts/compare-env.mjs web/.env web/.env.example",
     "logs": "node tail-logs.js"
   },

@@ -555,9 +555,7 @@ export const PROVIDERS: Record<string, LLMProviderConfig> = {
       'openrouter/openrouter/owl-alpha',
       'openrouter/google/lyria-3-clip-preview',
       'openrouter/arcee-ai/trinity-large-thinking:free',
-      // Nvidia models
-      'nvidia/minimaxai/minimax-m2.7',
-      'nvidia/z-ai/glm4.7',
+
       // Ollama Cloud models
       'ollama/gpt-oss:120b',
       'ollama/kimi-k2.5',
@@ -565,20 +563,22 @@ export const PROVIDERS: Record<string, LLMProviderConfig> = {
       'ollama/minimax-m2.5',
       'ollama/glm-4.7-flash',
       'ollama/qwen3.5',
-      // Cloudflare Workers AI models
-      'cf/@cf/meta/llama-3.2-1b-instruct',
-      'cf/@cf/meta/llama-3.2-3b-instruct',
-      'cf/@cf/meta/llama-3.1-8b-instruct-fp8-fast',
-      'cf/@cf/meta/llama-3.1-8b-instruct-awq',
-      'cf/@cf/mistralai/mistral-small-3.1-24b-instruct',
-      'cf/@cf/meta/llama-3.1-70b-instruct-fp8-fast',
-      'cf/@cf/meta/llama-3.3-70b-instruct-fp8-fast',
-      'cf/@cf/deepseek-ai/deepseek-r1-distill-qwen-32b',
-      'cf/@cf/moonshotai/kimi-k2.5',
-      'cf/@cf/moonshotai/kimi-k2.6',
-      'cf/@cf/zai-org/glm-4.7-flash',
-      'cf/@cf/qwen/qwq-32b',
-      'cf/@cf/qwen/qwen2.5-coder-32b-instruct',
+      // Cloudflare Workers AI models — DISABLED: ninerouter server forwards cf/ prefix
+      // as-is to Cloudflare, causing "No route for that URI" errors.
+      // Fix needed on ninerouter server: strip cf/ prefix before forwarding to Cloudflare.
+      // 'cf/@cf/meta/llama-3.2-1b-instruct',
+      // 'cf/@cf/meta/llama-3.2-3b-instruct',
+      // 'cf/@cf/meta/llama-3.1-8b-instruct-fp8-fast',
+      // 'cf/@cf/meta/llama-3.1-8b-instruct-awq',
+      // 'cf/@cf/mistralai/mistral-small-3.1-24b-instruct',
+      // 'cf/@cf/meta/llama-3.1-70b-instruct-fp8-fast',
+      // 'cf/@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+      // 'cf/@cf/deepseek-ai/deepseek-r1-distill-qwen-32b',
+      // 'cf/@cf/moonshotai/kimi-k2.5',
+      // 'cf/@cf/moonshotai/kimi-k2.6',
+      // 'cf/@cf/zai-org/glm-4.7-flash',
+      // 'cf/@cf/qwen/qwq-32b',
+      // 'cf/@cf/qwen/qwen2.5-coder-32b-instruct',
       // Mistral models
       'mistral/mistral-large-latest',
       'mistral/codestral',

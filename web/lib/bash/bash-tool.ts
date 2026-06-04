@@ -628,7 +628,7 @@ export function createBashTool(config: Partial<BashToolConfig> = {}) {
 
           // Persist to VFS if requested
           if (persist) {
-            const outputPath = await persistToVFS(cfg.persistToVFS, agentId, command, result);
+            const outputPath = await persistToVFS(cfg.persistToVFS, agentId, actualCommand, result);
             if (outputPath) {
               result.outputPath = outputPath;
             }

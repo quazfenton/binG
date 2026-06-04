@@ -81,20 +81,3 @@ web/check-depth.js
 web/fix-mcp-scope.cjs
 web/fix_logger.py
 web/verify-path-normalization.js
-#   backend/  packages/  web/lib/  web/app/api/chat/chat-helpers.ts
-#   tsconfig.json  package.json  pnpm-lock.yaml  pnpm-workspace.yaml
-# Everything else just inflates the upload tarball.
-node_modules
-**/node_modules
-.next
-**/.next
-web/.next
-.turbo
-**/.turbo
-dist
-**/dist
-build
-**/build
-**/.git
-**/.github
-**/.vscode

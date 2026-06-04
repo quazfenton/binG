@@ -235,7 +235,7 @@ export class EnhancedLLMService {
       {
         provider: 'ninerouter',
         baseUrl: process.env.NINEROUTER_BASE_URL || 'http://ninerouter:3000/v1',
-        apiKey: process.env.NINEROUTER_API_KEY || '',
+        apiKey: process.env.NINEROUTER_API_KEY || process.env.QUAZ_API_KEY || '',
          models: (PROVIDERS.ninerouter?.models || []).map(m => typeof m === 'string' ? m : m.id),
         priority: 14
       },

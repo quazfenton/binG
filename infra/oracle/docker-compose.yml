@@ -28,7 +28,6 @@ services:
       - ninerouter
     networks:
       - edge
-      - shared_edge
 
   backend:
     build:
@@ -38,7 +37,9 @@ services:
     restart: unless-stopped
     ports:
       - "3001:3001"
-    env_file: .env
+    # Use repo-root .env so secrets and config are loaded from where deploy docs
+    # tell operators to create them (see infra/oracle/README.md section 3).
+    env_file: ../../.env
     environment:
       PORT: "3001"
       NODE_ENV: production
@@ -95,5 +96,3 @@ volumes:
 networks:
   edge:
     driver: bridge
-  shared_edge:
-    external: true

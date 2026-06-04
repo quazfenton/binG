@@ -10,10 +10,10 @@
   publish = "netlify/edge"
   edge_functions = "netlify/edge-functions"
 
-# Forward generic /netlify/* admin endpoints; everything else goes to Vercel/Oracle.
+# Forward edge endpoints; everything else goes to Vercel/Oracle.
 [[edge_functions]]
   function = "geo-route"
-  path     = "/edge/*"
+  path     = "/netlify/*"
 
 # Block deployment from accidentally including the heavy backend or web/.
 [functions]

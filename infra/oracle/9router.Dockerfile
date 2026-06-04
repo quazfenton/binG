@@ -7,7 +7,10 @@ FROM node:20-alpine
 RUN apk add --no-cache ca-certificates
 
 # 9router pins react/react-dom 19 — pull peer deps with --legacy-peer-deps to be safe.
-RUN npm install -g --legacy-peer-deps 9router@latest
+# Pin to a specific version for reproducible builds.
+# Update this version after testing a newer release.
+ARG NINEROUTER_VERSION=1.0.0
+RUN npm install -g --legacy-peer-deps 9router@${NINEROUTER_VERSION}
 
 ENV PORT=3000
 ENV NODE_ENV=production

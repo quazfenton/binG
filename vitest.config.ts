@@ -13,7 +13,9 @@ export default defineConfig({
     environment: 'node',
     include: ['test/**/*.test.ts', 'test/**/*.spec.ts', '**/__tests__/**/*.test.ts'],
     exclude: [
-      // All previously-broken tests are now fixed — no exclusions needed
+      'node_modules/',
+      'dist/',
+      '.git/',
     ],
     // Durable resolution for @bing/shared internal exports (avoids editing node_modules)
     server: {

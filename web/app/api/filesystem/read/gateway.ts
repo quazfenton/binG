@@ -107,14 +107,14 @@ export async function POST(req: NextRequest) {
     }
 
     const { path: rawFilePath } = validation.data;
-    const filePath = await correctSessionPath(ownerId, rawFilePath);
+    const { path: correctedPath, content: cachedContent } = await correctSessionPath(ownerId, rawFilePath);
 
     // CRITICAL FIX: Check ban list for previously rejected invalid paths
     // This prevents infinite polling loops from retrying known-bad paths
-    if (INVALID_PATH_BAN.has(filePath)) {
-      const banAge = Date.now() - INVALID_PATH_BAN.get(filePath)!;
+    if (INVALID_PATH_BAN.has(correctedPath)) {
+      const banAge = Date.now() - INVALID_PATH_BAN.get(correctedPath)!;
       if (banAge < BAN_DURATION_MS) {
-        console.debug('[VFS Read] Blocked banned path:', filePath);
+        console.debug('[VFS Read] Blocked banned path:', correctedPath);
         return NextResponse.json(
           {
             success: false,
@@ -124,40 +124,40 @@ export async function POST(req: NextRequest) {
           { status: 429, headers: { 'Retry-After': Math.ceil((BAN_DURATION_MS - banAge) / 1000).toString() } },
         );
       } else {
-        INVALID_PATH_BAN.delete(filePath);
+        INVALID_PATH_BAN.delete(correctedPath);
       }
     }
 
     // DEBUG: Log what path is being requested
-    console.log('[VFS Read] Request received:', { filePath, lastSegment: filePath.split('/').pop() });
+    console.log('[VFS Read] Request received:', { filePath: correctedPath, lastSegment: correctedPath.split('/').pop() });
 
     // CRITICAL FIX: Check for invalid path patterns BEFORE full validation
     // This catches CSS values, SCSS variables, etc. that shouldn't be read
-    const pathSegments = filePath.split('/');
-    const lastSegment = pathSegments[pathSegments.length - 1] || filePath;
+    const pathSegments = correctedPath.split('/');
+    const lastSegment = pathSegments[pathSegments.length - 1] || correctedPath;
 
     // Reject obvious non-file paths immediately and add to ban list
     if (looksLikeCssValueSegment(lastSegment)) {  // CSS values like "0.3s"
-      console.warn('[VFS Read] Rejected CSS value path:', filePath);
-      INVALID_PATH_BAN.set(filePath, Date.now());
+      console.warn('[VFS Read] Rejected CSS value path:', correctedPath);
+      INVALID_PATH_BAN.set(correctedPath, Date.now());
       return NextResponse.json(
         {
           success: false,
           error: 'Invalid path format',
-          details: `Path "${filePath}" appears to be a CSS value, not a valid file path`,
+          details: `Path "${correctedPath}" appears to be a CSS value, not a valid file path`,
         },
         { status: 400 },
       );
     }
 
     if (/^\$/.test(lastSegment)) {  // SCSS variables
-      console.warn('[VFS Read] Rejected SCSS variable path:', filePath);
-      INVALID_PATH_BAN.set(filePath, Date.now());
+      console.warn('[VFS Read] Rejected SCSS variable path:', correctedPath);
+      INVALID_PATH_BAN.set(correctedPath, Date.now());
       return NextResponse.json(
         {
           success: false,
           error: 'Invalid path format',
-          details: `Path "${filePath}" appears to be a SCSS variable, not a valid file path`,
+          details: `Path "${correctedPath}" appears to be a SCSS variable, not a valid file path`,
         },
         { status: 400 },
       );
@@ -165,25 +165,25 @@ export async function POST(req: NextRequest) {
 
     // CRITICAL FIX: Validate path to reject clearly invalid paths
     // This prevents infinite polling loops from invalid paths like "0.3s", ",", "/"
-    const validatedPath = validateReadPath(filePath);
+    const validatedPath = validateReadPath(correctedPath);
     if (!validatedPath) {
-      console.warn('[VFS Read] Rejected invalid path:', filePath.substring(0, 100));
+      console.warn('[VFS Read] Rejected invalid path:', correctedPath.substring(0, 100));
       // Add to ban list to prevent retries
-      INVALID_PATH_BAN.set(filePath, Date.now());
+      INVALID_PATH_BAN.set(correctedPath, Date.now());
       const errorResponse = NextResponse.json(
         {
           success: false,
           error: 'Invalid path format',
-          details: `Path "${filePath.substring(0, 50)}" appears to be a CSS value, operator, or code snippet, not a valid file path`,
+          details: `Path "${correctedPath.substring(0, 50)}" appears to be a CSS value, operator, or code snippet, not a valid file path`,
         },
         { status: 400 },
       );
       return withAnonSessionCookie(errorResponse, authResolution);
     }
 
-    // SECURITY: Always derive ownerId from authenticated request context
-    // Never trust user-supplied ownerId for read operations
-    const file = await virtualFilesystem.readFile(ownerId, validatedPath);
+    // Use cached content if available (avoids a redundant second read)
+    // correctSessionPath already fetched the file to verify its existence
+    const file = cachedContent || await virtualFilesystem.readFile(ownerId, validatedPath);
     const response = NextResponse.json({
       success: true,
       data: {

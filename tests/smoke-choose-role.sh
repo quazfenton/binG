@@ -61,7 +61,24 @@ else
 fi
 
 echo "Step 4: Extract content ..."
-CONTENT=$(jq -r '.text // .content // ""' "$RESPONSE_FILE" 2>/dev/null || true)
+# Try multiple response format fields: .text, .content, .choices[0].message.content, .response, .data.content
+CONTENT=$(jq -r '
+  .text //
+  .content //
+  .choices[0].message.content //
+  .response //
+  .data.content //
+  .data.text //
+  .choices[0].text //
+  .message.content //
+  .data.response //
+  .result //
+  ""
+' "$RESPONSE_FILE" 2>/dev/null || true)
+if [ -z "$CONTENT" ] || [ "$CONTENT" = "null" ]; then
+  # Last resort: extract the longest string field from the top-level response
+  CONTENT=$(jq -r 'to_entries | map(select(.value | type == "string")) | max_by(.value | length) | .value // ""' "$RESPONSE_FILE" 2>/dev/null || true)
+fi
 if [ -z "$CONTENT" ] || [ "$CONTENT" = "null" ]; then
   fail "No content"
 else

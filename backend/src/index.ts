@@ -25,15 +25,26 @@ app.use(
   "/api/*",
   cors({
     origin: (origin) => {
+      // Validate origin: reject null/undefined to prevent accidental open CORS
+      if (!origin) return undefined;
+      
       const allowed = [
         process.env.FRONTEND_URL || "http://localhost:3000",
         process.env.NEXT_PUBLIC_APP_URL,
-        origin?.startsWith('http://localhost') ? origin : undefined,
-        origin?.startsWith('http://127.0.0.1') ? origin : undefined,
       ].filter(Boolean);
+      
+      // Use exact match for localhost/127.0.0.1 to prevent lookalike domains
+      // (e.g. "localhost.evil.com" should NOT be allowed via startsWith)
+      try {
+        const originUrl = new URL(origin);
+        if (['localhost', '127.0.0.1', '0.0.0.0'].includes(originUrl.hostname) ||
+            originUrl.hostname.endsWith('.localhost')) {
+          return origin;
+        }
+      } catch { /* invalid URL, fall through to reject */ }
 
       // Allow *.trycloudflare.com for tunnel access (dynamic subdomain)
-      if (origin?.endsWith('.trycloudflare.com')) {
+      if (origin && origin.endsWith('.trycloudflare.com')) {
         return origin;
       }
 
@@ -64,10 +75,12 @@ const apiDir = path.resolve(__dirname, "..", "..", "web", "app", "api");
 //   "tauri-only"       — files explicitly named *tauri-only*
 // Routes that gate themselves at runtime via process.env.DESKTOP_MODE do
 // NOT need to be listed; they fall through correctly when the env is unset.
-const ROUTE_EXCLUDES = (process.env.BACKEND_ROUTE_EXCLUDES ?? "/desktop/")
-  .split(",")
-  .map((s) => s.trim())
-  .filter(Boolean);
+const BACKEND_ROUTE_EXCLUDES_DEFAULT = ["/desktop/"];
+const ROUTE_EXCLUDES = (() => {
+  const raw = process.env.BACKEND_ROUTE_EXCLUDES;
+  if (!raw) return BACKEND_ROUTE_EXCLUDES_DEFAULT;
+  return raw.split(",").map((s) => s.trim()).filter(Boolean);
+})();
 
 await mountNextApiRoutes(app, apiDir, { exclude: ROUTE_EXCLUDES });
 
@@ -78,9 +91,17 @@ app.notFound((c) =>
 
 async function findAvailablePort(start: number): Promise<number> {
   return new Promise((resolve, reject) => {
+    // Upper bound: reject if port exceeds 65535 (no valid port above this).
+    if (start > 65535) {
+      reject(new Error(`No available port found after scanning up to 65535 (started at ${start})`));
+      return;
+    }
     const srv = createServer();
     srv.listen(start, () => {
       const port = (srv.address() as any).port;
+      // TOCTOU fix: close the probe server then try binding the real server.
+      // If another process grabs the port between probe and bind, the real
+      // serve() call will emit EADDRINUSE — handle that in the retry loop below.
       srv.close(() => resolve(port));
     });
     srv.on('error', (err: NodeJS.ErrnoException) => {
@@ -94,6 +115,39 @@ async function findAvailablePort(start: number): Promise<number> {
 }
 
 const desiredPort = Number(process.env.PORT) || 3001;
-const port = await findAvailablePort(desiredPort);
-console.log(`🚀 binG backend listening on :${port}`);
-serve({ fetch: app.fetch, port });
+
+// Retry loop: bind the real server directly, catching EADDRINUSE.
+// This eliminates the TOCTOU window between probe and bind.
+async function startServer(initialPort: number): Promise<void> {
+  for (let port = initialPort; port <= 65535; port++) {
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const server = serve({ fetch: app.fetch, port });
+        server.on('error', (err: NodeJS.ErrnoException) => {
+          if (err.code === 'EADDRINUSE') {
+            // Port taken, try next one
+            reject(err);
+          } else {
+            reject(err);
+          }
+        });
+        server.on('listening', () => {
+          console.log(`🚀 binG backend listening on :${port}`);
+          resolve();
+        });
+      });
+      return; // Successfully bound
+    } catch (err: any) {
+      if (err?.code === 'EADDRINUSE') continue; // Try next port
+      throw err; // Non-address error — abort
+    }
+  }
+  // Fallback: if we exhausted all ports, try findAvailablePort (legacy probe)
+  // as a last resort (note: still subject to TOCTOU, but unlikely after exhausting 64K ports).
+  const fallbackPort = await findAvailablePort(initialPort);
+  console.log(`🚀 binG backend listening on :${fallbackPort}`);
+  serve({ fetch: app.fetch, port: fallbackPort });
+}
+
+console.warn(`[DEPRECATED] Auto-fallback to a different port (${desiredPort}) can break platform routing/health checks that expect the configured PORT.`);
+await startServer(desiredPort);

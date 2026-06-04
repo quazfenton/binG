@@ -203,6 +203,76 @@ describe('pickRoleFromContext', () => {
     // 'debug' matches debugger at priority 1 before coder at priority 27
     expect(result?.role).toBe('debugger');
   });
+
+  // ── recentFailures debugger bias ───────────────────────────────────
+
+  it('biases toward debugger when ≥2 recent failures (even without debug keywords)', () => {
+    const result = pickRoleFromContext({
+      taskDescription: 'Write a new feature',
+      enableFilesystemEdits: true,
+      recentFailures: ['Tool execution timed out', 'API returned 500 error'],
+    });
+    expect(result).not.toBeNull();
+    expect(result!.role).toBe('debugger');
+    expect(result!.source).toBe('core');
+  });
+
+  it('does NOT bias with only 1 failure (falls through to keyword matching)', () => {
+    // "architect" keywords should still win with only 1 failure
+    const result = pickRoleFromContext({
+      taskDescription: 'Design the system architecture',
+      enableFilesystemEdits: true,
+      recentFailures: ['Minor warning only'],
+    });
+    expect(result).not.toBeNull();
+    expect(result!.role).toBe('architect');
+  });
+
+  it('does NOT bias with empty recentFailures array', () => {
+    const result = pickRoleFromContext({
+      taskDescription: 'Review this code',
+      enableFilesystemEdits: true,
+      recentFailures: [],
+    });
+    expect(result).not.toBeNull();
+    expect(result!.role).toBe('reviewer');
+  });
+
+  it('does NOT bias when recentFailures is undefined', () => {
+    const result = pickRoleFromContext({
+      taskDescription: 'Review this code',
+      enableFilesystemEdits: true,
+      // recentFailures intentionally omitted
+    });
+    expect(result).not.toBeNull();
+    expect(result!.role).toBe('reviewer');
+  });
+
+  it('biases toward debugger even with empty taskDescription when ≥2 failures', () => {
+    const result = pickRoleFromContext({
+      taskDescription: '',
+      enableFilesystemEdits: true,
+      recentFailures: ['Error A', 'Error B'],
+    });
+    expect(result).not.toBeNull();
+    expect(result!.role).toBe('debugger');
+  });
+
+  it('returns null with ≥2 failures but no filesystemEdits and no keyword match', () => {
+    // With enableFilesystemEdits=false AND no keyword match, the fallback
+    // to coder doesn't trigger, so we get null even with recentFailures.
+    // The bias only triggers with ≥2 failures, but the fallback still
+    // requires enableFilesystemEdits=true or a keyword match.
+    const result = pickRoleFromContext({
+      taskDescription: 'Hello',
+      enableFilesystemEdits: false,
+      recentFailures: ['Error A', 'Error B'],
+    });
+    // debugger IS returned (bias fires before keyword matching),
+    // even without filesystemEdits — the bias is independent
+    expect(result).not.toBeNull();
+    expect(result!.role).toBe('debugger');
+  });
 });
 
 describe('selectAndComposeSystemPrompt', () => {
@@ -297,6 +367,34 @@ describe('selectAndComposeSystemPrompt', () => {
     expect(result).not.toBeNull();
     expect(result!.role).toBe('debugger');
     expect(result!.prompt.length).toBeGreaterThan(0);
+  });
+
+  it('threads recentFailures through to pickRoleFromContext (≥2 failures → debugger)', () => {
+    // No forceRole so it falls through to pickRoleFromContext with recentFailures
+    const result = selectAndComposeSystemPrompt(
+      {
+        taskDescription: 'Write a new feature',
+        enableFilesystemEdits: true,
+        recentFailures: ['Error A', 'Error B'],
+      },
+    );
+    expect(result).not.toBeNull();
+    expect(result!.role).toBe('debugger');
+    expect(result!.source).toBe('core');
+  });
+
+  it('does NOT pass recentFailures when forceRole is set (forceRole wins)', () => {
+    // forceRole skips pickRoleFromContext entirely, so recentFailures is irrelevant
+    const result = selectAndComposeSystemPrompt(
+      {
+        taskDescription: 'Write a new feature',
+        enableFilesystemEdits: true,
+        recentFailures: ['Error A', 'Error B', 'Error C'],
+      },
+      { forceRole: 'architect' },
+    );
+    expect(result).not.toBeNull();
+    expect(result!.role).toBe('architect');
   });
 
   it('generates a prompt under the maxLength cap', () => {

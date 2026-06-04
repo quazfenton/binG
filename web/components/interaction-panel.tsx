@@ -389,8 +389,7 @@ const ProviderSelector = React.memo(function ProviderSelector({
       }}>
         <SelectTrigger className="w-full sm:w-[280px] border-white/20" style={{ backgroundColor: 'rgba(255, 255, 255, 0.08)' }}>
           <SelectValue placeholder="Select a model" />
-        </SelectTrigger>
-        <SelectContent onCloseAutoFocus={(e) => e.preventDefault()}>
+        </SelectTrigger>                        <SelectContent onOpenAutoFocus={(e) => e.preventDefault()}>
           {/* Search filter input */}
           <div className="sticky top-0 z-10 px-2 pt-1 pb-1.5 border-b border-white/10 bg-black/90 backdrop-blur-sm"
             onKeyDown={(e) => e.stopPropagation()}
@@ -2655,8 +2654,13 @@ function FileMentionAutocompleteIntegration({
   const promptHistoryRef = useRef<string[]>([]);
   const promptHistoryIndexRef = useRef(-1);
   const trackedSubmit = useCallback((content: string) => {
-    if (content.trim()) {
-      promptHistoryRef.current = [...promptHistoryRef.current, content.trim()];
+    const trimmed = content.trim();
+    if (trimmed) {
+      // Avoid duplicate consecutive entries
+      const history = promptHistoryRef.current;
+      if (history[history.length - 1] !== trimmed) {
+        promptHistoryRef.current = [...history, trimmed];
+      }
     }
     onSubmit(content);
   }, [onSubmit]);
@@ -2682,10 +2686,10 @@ function FileMentionAutocompleteIntegration({
               e.preventDefault();
               let idx = promptHistoryIndexRef.current;
               if (e.key === "ArrowUp") {
-                if (!input.trim()) {
-                  // Start from the end
+                if (idx <= 0) {
+                  // Start from the end (or restart at end after reaching start)
                   idx = history.length - 1;
-                } else if (idx > 0) {
+                } else {
                   idx--;
                 }
               } else {
