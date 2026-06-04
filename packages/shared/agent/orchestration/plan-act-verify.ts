@@ -19,6 +19,7 @@ import { SelfHealingExecutor } from '@/lib/crewai';
 import { getVercelModel } from '@/lib/chat/vercel-ai-streaming';
 import { createLogger } from '@/lib/utils/logger';
 import { createOriginStack, redactArgsForLogging } from '@/lib/errors/logging-utils';
+import { sanitizeMessages } from '@/lib/chat/message-sanitizer';
 
 const log = createLogger('PlanActVerify');
 
@@ -815,9 +816,12 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
    * P2 #9: Uses properly adapted sdkTools (no @ts-expect-error).
    *
    * Includes a retry wrapper: if generateText throws a schema validation error
-   * (e.g. "messages do not match ModelMessage[] schema"), system-role messages
-   * are filtered from history and the call is retried once before giving up.
-   * System messages are always proactively filtered since they must go via
+   * (e.g. "messages do not match ModelMessage[] schema"), the conversation
+   * history is run through `sanitizeMessages` and the call is retried once
+   * before giving up. The sanitizer strips system-role messages, converts
+   * tool-role plain-string content into the required array form, drops
+   * assistant messages with no content and no tool_calls, and coerces any
+   * unknown roles to 'user'. System messages must always go via
    * generateText's `system` param, not the messages array.
    */
   private async callLLM(prompt: string, history: ModelMessage[]) {
@@ -833,19 +837,19 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
 
     const MAX_ATTEMPTS = 2;
     let lastError: any;
-    // Working copy of history — mutated on retry to strip system messages.
+    // Working copy of history — sanitized once up-front (defensive) and again
+    // on retry in case the first attempt exposed another malformed message.
     // Defensive fallback to empty array in case of null/undefined at runtime.
-    let workingHistory = history || [];
+    let workingHistory = sanitizeMessages(history || []) as ModelMessage[];
 
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
       try {
         // Build messages using AI SDK ModelMessage format.
         // System/user/assistant roles accept plain-string content;
         // tool role MUST use content: [{ type: 'tool-result', ... }] array.
-        // System prompt is passed via generateText's `system` param (not in
-        // messages). If a system message leaked into history, the first
-        // attempt will fail with a ModelMessage[] schema error and the
-        // retry below will filter it out.
+        // The system prompt is passed via generateText's `system` param, not
+        // in the messages array; sanitizeMessages() also strips any system
+        // message that leaked in from upstream code paths.
         const messages: ModelMessage[] = [
           ...workingHistory,
           { role: 'user' as const, content: prompt },
@@ -877,19 +881,22 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
       } catch (error: any) {
         lastError = error;
 
-        // Detect AI SDK schema validation errors — the most common cause is
-        // a system-role message in the messages array. Filter system messages
-        // from history and retry once before giving up.
+        // Detect AI SDK schema validation errors. The most common causes are
+        // a system-role message in the messages array, a tool-role message
+        // with plain-string content, an assistant message with empty content
+        // and no tool_calls, or a system-role message appearing AFTER an
+        // assistant turn (which newer providers reject). Re-sanitize the
+        // history (idempotent for already-clean messages) and retry once.
         const isSchemaError =
           error.message?.includes('ModelMessage[]') ||
           error.message?.includes('messages do not match');
 
         if (isSchemaError && attempt < MAX_ATTEMPTS - 1) {
           log.warn(
-            'callLLM: schema validation error, filtering system messages from history and retrying',
+            'callLLM: schema validation error, sanitizing history and retrying',
             { provider, model, error: error.message },
           );
-          workingHistory = workingHistory.filter(m => (m as any).role !== 'system');
+          workingHistory = sanitizeMessages(workingHistory) as ModelMessage[];
           continue;
         }
 

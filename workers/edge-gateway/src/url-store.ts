@@ -17,6 +17,10 @@ import type { Env } from './env';
 export const RUNTIME_BACKEND_KEY = 'runtime:BACKEND_URL';
 const R2_BACKEND_KEY = 'config/backend-url.txt';
 
+// Tracks last time we attempted to write-back from R2 to KV.
+// Used to avoid hammering KV with failed writes when quota is exhausted.
+let lastWriteBackTimeMs = 0;
+
 /**
  * Write the backend URL to both KV and R2.
  * KV is primary — if it fails, we still write to R2 as fallback.
@@ -72,9 +76,15 @@ export async function getBackendUrl(env: Env): Promise<string> {
         const r2Value = await r2Object.text();
         if (r2Value && isValidHttpUrl(r2Value)) {
           console.log('[url-store] Using R2 fallback for backend URL');
-          // Sync to KV if KV failed (best effort)
+          // Best-effort write-back: only attempt to sync R2 → KV every 60s to avoid
+          // hammering KV with failed writes if quota is exhausted (each failed write
+          // may still count toward the 1,000/day free tier limit).
           try {
-            await env.BING_KV.put(RUNTIME_BACKEND_KEY, stripTrailingSlash(r2Value));
+            const now = Date.now();
+            if (now - lastWriteBackTimeMs > 60_000) {
+              lastWriteBackTimeMs = now;
+              await env.BING_KV.put(RUNTIME_BACKEND_KEY, stripTrailingSlash(r2Value));
+            }
           } catch {
             // Ignore - R2 has the value, that's what matters
           }

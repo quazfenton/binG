@@ -74,9 +74,23 @@ export function sanitizeMessages(messages: any[], options: SanitizeOptions = {})
 
       // Tool role MUST have array content per AI SDK ModelMessage schema.
       // Plain-string tool content triggers "messages do not match
-      // ModelMessage[] schema" errors.
+      // ModelMessage[] schema" errors. The SDK requires each part to be a
+      // `tool-result` (or `tool-approval-response`), NOT a generic `text`
+      // part — the union discriminator for tool messages accepts only
+      // tool-result / tool-error / tool-approval-request / tool-approval-
+      // response parts. Convert the string into a `tool-result` part with
+      // the standard output shape. tool_call_id / toolName are preserved
+      // from the source message when present.
       if (role === 'tool' && typeof content === 'string') {
-        content = [{ type: 'text' as const, text: content }];
+        const toolCallId = typeof m?.tool_call_id === 'string' ? m.tool_call_id : '';
+        const toolName = typeof m?.name === 'string' ? m.name : '';
+        content = [{
+          type: 'tool-result' as const,
+          toolCallId,
+          toolName,
+          input: {},
+          output: { type: 'text', value: content },
+        } as any];
       }
 
       const result: any = { role, content };

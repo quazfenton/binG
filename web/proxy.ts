@@ -31,55 +31,14 @@ export async function proxy(request: NextRequest) {
     return response;
   }
 
-  // List of API routes that have been moved to the dedicated backend
-  const MIGRATED_TO_BACKEND = ['/api/chat']; 
-  
-  const pathname = request.nextUrl.pathname;
-  if (MIGRATED_TO_BACKEND.some(route => pathname.startsWith(route))) {
-    // In dev mode, let Next.js handle API routes directly so local changes
-    // to route handlers are picked up immediately instead of hitting a stale backend.
-    if (process.env.NODE_ENV === 'development') {
-      return NextResponse.next();
-    }
-    const backendUrl = process.env.BACKEND_URL || 'http://localhost:3001';
-    const targetUrl = new URL(pathname, backendUrl);
-    
-    // Forward all query parameters
-    request.nextUrl.searchParams.forEach((value, key) => {
-      targetUrl.searchParams.set(key, value);
-    });
-
-    // Create the rewrite response
-    const response = NextResponse.rewrite(targetUrl);
-    
-    // CRITICAL: Validate origin against allowlist before echoing with credentials
-    // Never use '*' with Access-Control-Allow-Credentials
-    const allowedOrigins = new Set([
-      process.env.FRONTEND_URL || 'http://localhost:3000',
-      process.env.NEXT_PUBLIC_APP_URL,
-    ].filter(Boolean));
-    
-    const requestOrigin = request.headers.get('origin');
-    if (requestOrigin && allowedOrigins.has(requestOrigin)) {
-      response.headers.set('Access-Control-Allow-Origin', requestOrigin);
-    } else if (requestOrigin && requestOrigin.startsWith('http://localhost')) {
-      response.headers.set('Access-Control-Allow-Origin', requestOrigin);
-    }
-    // No Origin header or unrecognised origin: omit Access-Control-Allow-Origin
-    // to avoid sending '*' alongside credentials (browsers reject this).
-    
-    response.headers.set('Access-Control-Allow-Credentials', 'true');
-    
-    // Forward Authorization header explicitly (rewrite may strip it)
-    const authHeader = request.headers.get('authorization');
-    if (authHeader) {
-      response.headers.set('X-Forwarded-Authorization', authHeader);
-    }
-    
-    return response;
-  }
-
   // Block access to sensitive files
+  //
+  // NOTE: API routes (/api/*) are NOT intercepted here. They flow through to
+  // vercel.json which rewrites them to the edge worker (shared-ingress.veli0.workers.dev).
+  // The edge worker handles CORS, auth, and routing to the OCI backend via KV.
+  // Previously /api/chat was rewritten directly to process.env.BACKEND_URL here
+  // with a fallback to localhost:3001 — that broken when BACKEND_URL wasn't set
+  // in production and duplicated what vercel.json already does.
   const blockedResponse = blockSensitiveFiles(request);
   if (blockedResponse) {
     return blockedResponse;

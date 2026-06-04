@@ -37,16 +37,19 @@ describe('message-sanitizer', () => {
     expect(out[1].role).toBe('assistant');
   });
 
-  it('converts tool plain-string content to array format', () => {
+  it('converts tool plain-string content to tool-result part', () => {
     const msgs = [
       { role: 'user', content: 'write a file' },
-      { role: 'tool', content: 'File written successfully' },
+      { role: 'tool', content: 'File written successfully', tool_call_id: 'call1' },
     ];
     const out = sanitizeMessages(msgs);
     expect(out).toHaveLength(2);
     expect(out[1].role).toBe('tool');
     expect(Array.isArray(out[1].content)).toBe(true);
-    expect((out[1].content as any[])[0]).toEqual({ type: 'text', text: 'File written successfully' });
+    const part = (out[1].content as any[])[0];
+    expect(part.type).toBe('tool-result');
+    expect(part.toolCallId).toBe('call1');
+    expect(part.output).toEqual({ type: 'text', value: 'File written successfully' });
   });
 
   it('preserves already-array tool content', () => {

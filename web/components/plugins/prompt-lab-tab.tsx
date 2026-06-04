@@ -611,7 +611,11 @@ export default function PromptLabTab() {
                           <p className="text-white/40 mb-1">Input:</p>
                           <p className="mb-2">{result.input}</p>
                           <p className="text-white/40 mb-1">Output:</p>
-                          <p>{result.output}</p>
+                          <p>{typeof result.output === 'string'
+                            ? result.output
+                            : result.output && typeof result.output === 'object'
+                              ? JSON.stringify(result.output, null, 2)
+                              : String(result.output ?? '')}</p>
                         </div>
                       </CardContent>
                     </Card>

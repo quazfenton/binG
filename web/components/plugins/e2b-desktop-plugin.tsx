@@ -295,7 +295,12 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
             } else if (event.type === 'action') {
               appendTerminalOutput(`Agent action: ${event.action}`)
             } else if (event.type === 'result') {
-              appendTerminalOutput(`Result: ${event.result}`)
+              const resultStr = typeof event.result === 'string'
+                ? event.result
+                : event.result && typeof event.result === 'object'
+                  ? JSON.stringify(event.result, null, 2)
+                  : String(event.result ?? '')
+              appendTerminalOutput(`Result: ${resultStr}`)
             } else if (event.type === 'message') {
               appendTerminalOutput(`Agent: ${event.message}`)
             } else if (event.type === 'history') {
@@ -674,7 +679,13 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
                         </div>
                       </div>
                       <div className="text-sm text-gray-300 mt-1">
-                        {item.result.output}
+                        {typeof item.result.output === 'string'
+                          ? item.result.output
+                          : item.result.output === null || item.result.output === undefined
+                            ? ''
+                            : typeof item.result.output === 'object'
+                              ? JSON.stringify(item.result.output, null, 2)
+                              : String(item.result.output)}
                       </div>
                     </div>
                   ))}

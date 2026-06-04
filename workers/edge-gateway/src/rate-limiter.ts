@@ -13,7 +13,11 @@
 const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
 const ANON_MAX_REQUESTS = 100;
 const AUTH_MAX_REQUESTS = 1000;
-const KV_SYNC_INTERVAL_MS = 10_000; // Sync to KV every 10 seconds (was every request)
+// Sync to KV every 5 minutes (increased from 10s to stay under Cloudflare KV free tier
+// limit of 1,000 writes/day). At 300s per key, a single IP generates ~288 writes/day
+// (vs 8,640/day at 10s). Multiple IPs stay under the limit until ~3 concurrent users.
+// Rate limiting is still effective since in-memory counters track between syncs.
+const KV_SYNC_INTERVAL_MS = 300_000;
 
 interface RateLimitResult {
   allowed: boolean;

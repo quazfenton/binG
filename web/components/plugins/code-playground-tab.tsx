@@ -466,9 +466,13 @@ export default function CodePlaygroundTab() {
                       </div>
                     </div>
                     {error ? (
-                      <pre className="text-xs text-red-400 font-mono whitespace-pre-wrap">{error}</pre>
+                      <pre className="text-xs text-red-400 font-mono whitespace-pre-wrap">
+                        {typeof error === 'string' ? error : String(error ?? '')}
+                      </pre>
                     ) : output ? (
-                      <pre className="text-xs text-green-400 font-mono whitespace-pre-wrap">{output}</pre>
+                      <pre className="text-xs text-green-400 font-mono whitespace-pre-wrap">
+                        {typeof output === 'string' ? output : typeof output === 'object' && output ? JSON.stringify(output, null, 2) : String(output ?? '')}
+                      </pre>
                     ) : (
                       <p className="text-xs text-white/40">Output will appear here...</p>
                     )}

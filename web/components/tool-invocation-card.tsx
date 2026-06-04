@@ -69,14 +69,57 @@ export function ToolInvocationCard({ tool, compact = false }: ToolInvocationCard
    * Safely render result content with typeof guards for error/output fields.
    * Prevents runtime crashes from accessing `.error` or `.output` on non-object results
    * or rendering non-string values directly.
+   *
+   * Handles:
+   * - null/undefined result → "No result"
+   * - primitive result (string/number/boolean) → render directly
+   * - object with `error` (string or Error) → red error panel
+   * - object with `output: string` → green success panel with output
+   * - object with `output: object` or no output → green success panel with JSON-stringified body
+   * - circular references → "[Unable to serialize result]" (instead of throwing)
    */
   const renderResultContent = (result: unknown) => {
+    if (result === null || result === undefined) {
+      return (
+        <div className="mt-1 rounded border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-950/30 p-2">
+          <div className="flex items-center gap-1 text-gray-700 dark:text-gray-300 text-xs font-medium mb-1">
+            <CheckCircle className="h-3 w-3" />
+            Execution Success
+          </div>
+          <pre className="whitespace-pre-wrap text-xs text-gray-600 dark:text-gray-400 font-mono">
+            No result returned
+          </pre>
+        </div>
+      );
+    }
+
+    if (typeof result !== 'object') {
+      return (
+        <div className="mt-1 rounded border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/30 p-2">
+          <div className="flex items-center gap-1 text-emerald-700 dark:text-emerald-300 text-xs font-medium mb-1">
+            <CheckCircle className="h-3 w-3" />
+            Execution Success
+          </div>
+          <pre className="whitespace-pre-wrap text-xs text-emerald-600 dark:text-emerald-400 font-mono">
+            {String(result)}
+          </pre>
+        </div>
+      );
+    }
+
     const obj = result as Record<string, unknown>;
     const errorValue = obj?.error;
     const outputValue = obj?.output;
     const hasError = typeof errorValue === 'string' || errorValue instanceof Error;
     const errorText = typeof errorValue === 'string' ? errorValue : errorValue instanceof Error ? errorValue.message : '';
     const hasOutput = typeof outputValue === 'string';
+
+    let serialized: string;
+    try {
+      serialized = JSON.stringify(result, null, 2);
+    } catch {
+      serialized = '[Unable to serialize result]';
+    }
 
     return hasError ? (
       <div className="mt-1 rounded border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-950/30 p-2">
@@ -100,7 +143,7 @@ export function ToolInvocationCard({ tool, compact = false }: ToolInvocationCard
           </pre>
         ) : (
           <pre className="whitespace-pre-wrap text-xs text-emerald-600 dark:text-emerald-400 font-mono">
-            {JSON.stringify(result, null, 2)}
+            {serialized}
           </pre>
         )}
       </div>

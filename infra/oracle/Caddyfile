@@ -79,10 +79,12 @@
     }
 
     # CopaMundial routes (Next.js + Socket.IO at /api/socket)
+    # NOTE: proxying to copa-app (docker-compose.copa.yml) which is healthy.
+    # copamundial-app-1 has a Redis connectivity issue — not used.
     @copa path /copa/*
     handle @copa {
         uri strip_prefix /copa
-        reverse_proxy copamundial-app-1:3000 {
+        reverse_proxy copa-app:3000 {
             flush_interval -1
             transport http {
                 read_timeout  30m

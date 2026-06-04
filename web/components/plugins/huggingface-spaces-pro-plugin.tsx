@@ -824,7 +824,13 @@ export default function HuggingFaceSpacesProPlugin({ onClose }: PluginProps) {
                   />
                   {step.output && (
                     <div className="bg-black/20 rounded p-2 text-xs max-h-32 overflow-y-auto">
-                      <pre className="whitespace-pre-wrap">{step.output}</pre>
+                      <pre className="whitespace-pre-wrap">
+                        {typeof step.output === 'string'
+                          ? step.output
+                          : step.output && typeof step.output === 'object'
+                            ? JSON.stringify(step.output, null, 2)
+                            : String(step.output)}
+                      </pre>
                     </div>
                   )}
                   {idx < workflowSteps.length - 1 && (

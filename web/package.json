@@ -7,8 +7,7 @@
     "node": "22.x"
   },
   "overrides": {
-    "@oxc-workspace/types": "0.103.0",
-    "vm2": ">=3.11.4"
+    "@oxc-workspace/types": "0.103.0"
   },
   "resolutions": {
     "@oxc-workspace/types": "0.103.0"

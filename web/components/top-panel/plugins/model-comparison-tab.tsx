@@ -166,7 +166,13 @@ export default function ModelComparisonTab() {
                     <h4 className="text-sm font-semibold text-white">{model?.name || 'Unknown'}</h4>
                     <span className="text-xs text-white/40">{output.latency}ms</span>
                   </div>
-                  <p className="text-xs text-white/80 whitespace-pre-wrap">{output.output}</p>
+                  <p className="text-xs text-white/80 whitespace-pre-wrap">
+                    {typeof output.output === 'string'
+                      ? output.output
+                      : output.output && typeof output.output === 'object'
+                        ? JSON.stringify(output.output, null, 2)
+                        : String(output.output ?? '')}
+                  </p>
                   <div className="flex items-center gap-3 mt-3 text-xs text-white/40">
                     <span>{output.tokens} tokens</span>
                     <span>${output.cost.toFixed(4)}</span>
