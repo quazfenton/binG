@@ -16,10 +16,20 @@
  * (recent prompts + last response), runs the fast-model pipeline,
  * and returns up to 3 suggestions. The client caches the latest
  * suggestions per message so they persist as the user scrolls up.
+ *
+ * Hardening:
+ *  - Content-Length is checked first to avoid buffering huge bodies
+ *    into memory before parsing.
+ *  - Per-process rate limit (token bucket) prevents a single client
+ *    from burning provider quota.
+ *  - No auth is enforced: the endpoint only consumes conversation
+ *    text the client already saw, and we deliberately want anonymous
+ *    visitors to benefit from suggestions.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { generateNextStepSuggestions } from '@/lib/chat/next-step-suggestions';
+import { createLogger } from '@/lib/utils/logger';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -33,11 +43,75 @@ interface RequestBody {
 const MAX_PROMPTS = 2;
 const MAX_PROMPT_CHARS = 2000;
 const MAX_RESPONSE_CHARS = 8000;
+const MAX_BODY_BYTES = 64 * 1024; // 64 KiB hard cap on request body
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const RATE_LIMIT_MAX_REQUESTS = 20; // 20 req/min per IP
+
+const logger = createLogger('api:chat:next-step-suggestions');
+
+// ----- Rate limit (in-memory token bucket) ---------------------------------
+const buckets = new Map<string, { count: number; resetAt: number }>();
+
+function checkRateLimit(key: string): boolean {
+  const now = Date.now();
+  const bucket = buckets.get(key);
+  if (!bucket || bucket.resetAt < now) {
+    buckets.set(key, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+    return true;
+  }
+  if (bucket.count >= RATE_LIMIT_MAX_REQUESTS) return false;
+  bucket.count++;
+  return true;
+}
+
+function getRateLimitKey(req: NextRequest): string {
+  // Use the first IP in X-Forwarded-For, falling back to a constant so
+  // we never throw on missing headers.
+  const fwd = req.headers.get('x-forwarded-for');
+  if (fwd) return fwd.split(',')[0].trim();
+  const real = req.headers.get('x-real-ip');
+  if (real) return real;
+  return 'anon';
+}
 
 export async function POST(req: NextRequest) {
+  const rateKey = getRateLimitKey(req);
+  if (!checkRateLimit(rateKey)) {
+    return NextResponse.json(
+      { success: false, error: 'Rate limit exceeded' },
+      { status: 429, headers: { 'Retry-After': '60' } },
+    );
+  }
+
+  // Pre-check body size to avoid buffering a huge payload into memory.
+  const contentLength = Number(req.headers.get('content-length') ?? 0);
+  if (contentLength > MAX_BODY_BYTES) {
+    return NextResponse.json(
+      { success: false, error: 'Request body too large' },
+      { status: 413 },
+    );
+  }
+
+  let raw: string;
+  try {
+    raw = await req.text();
+  } catch {
+    return NextResponse.json(
+      { success: false, error: 'Failed to read request body' },
+      { status: 400 },
+    );
+  }
+
+  if (raw.length > MAX_BODY_BYTES) {
+    return NextResponse.json(
+      { success: false, error: 'Request body too large' },
+      { status: 413 },
+    );
+  }
+
   let body: RequestBody;
   try {
-    body = (await req.json()) as RequestBody;
+    body = JSON.parse(raw) as RequestBody;
   } catch {
     return NextResponse.json(
       { success: false, error: 'Invalid JSON body' },
@@ -67,24 +141,42 @@ export async function POST(req: NextRequest) {
       ? lastResponse.slice(0, MAX_RESPONSE_CHARS)
       : lastResponse;
 
+  const messageId =
+    typeof body.messageId === 'string' && body.messageId.length <= 128
+      ? body.messageId
+      : null;
+
+  const start = Date.now();
   try {
     const suggestions = await generateNextStepSuggestions(
       recentPrompts,
       cappedResponse,
+      messageId ? `nextstep-${messageId}` : undefined,
     );
+
+    logger.debug('generated', {
+      messageId,
+      suggestions: suggestions.length,
+      elapsedMs: Date.now() - start,
+    });
 
     return NextResponse.json({
       success: true,
       data: {
         suggestions,
-        messageId: typeof body.messageId === 'string' ? body.messageId : null,
+        messageId,
       },
     });
   } catch (err: any) {
+    logger.warn('generation failed', {
+      messageId,
+      elapsedMs: Date.now() - start,
+      error: err?.message,
+    });
     return NextResponse.json(
       {
         success: false,
-        error: err?.message || 'Failed to generate suggestions',
+        error: 'Failed to generate suggestions',
       },
       { status: 500 },
     );

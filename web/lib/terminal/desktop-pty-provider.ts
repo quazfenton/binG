@@ -10,8 +10,9 @@
  * - resize_pty: Resize terminal
  * - close_pty_session: Close PTY session
  * 
- * Also handles VFS sync - syncs files created/modified/deleted in the
- * real shell back to the virtual filesystem for UI updates.
+ * VFS sync is handled by DesktopFileWatcher — a real filesystem watcher
+ * (fs.watch with polling fallback) that detects actual file events instead
+ * of parsing PTY stdout with regex patterns.
  */
 
 import { 
@@ -28,6 +29,7 @@ import { createLogger } from '@/lib/utils/logger';
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import { getDefaultWorkspaceRoot as getVfsWorkspaceRoot } from '@bing/platform/env';
 import { invoke } from '@/lib/utils/tauri-api-stub';
+import { startFileWatcher, type FileWatcherHandle, type FileChangeType } from '@/lib/terminal/desktop-file-watcher';
 
 const logger = createLogger('DesktopPTY');
 
@@ -109,153 +111,7 @@ export async function requestShellCompletion(
   return [];
 }
 
-// Debounce configuration
-const SYNC_DEBOUNCE_MS = 500; // Wait 500ms after last change before syncing
-const MAX_PENDING_FILES = 10; // Max files to batch in one sync cycle
 
-// Pending sync state - tracks files waiting to be synced
-interface PendingSync {
-  path: string;
-  type: 'create' | 'update' | 'delete';
-  timestamp: number;
-}
-
-let pendingSyncs: Map<string, PendingSync> = new Map<string, PendingSync>();
-let syncTimeout: ReturnType<typeof setTimeout> | null = null;
-let isProcessingSyncs = false;
-
-/**
- * Debounced file sync - queues files for sync and processes in batches
- * Avoids excessive reads during rapid file operations
- */
-function queueFileSync(filePath: string, changeType: 'create' | 'update' | 'delete', workspaceRoot: string): void {
-  // Update or add to pending sync queue
-  pendingSyncs.set(filePath, {
-    path: filePath,
-    type: changeType,
-    timestamp: Date.now(),
-  });
-  
-  logger.debug('Queued file sync', { path: filePath, type: changeType, queueSize: pendingSyncs.size });
-  
-  // Clear existing timeout and set new one
-  if (syncTimeout) {
-    clearTimeout(syncTimeout);
-  }
-  
-  // Process pending syncs after debounce delay
-  syncTimeout = setTimeout(() => {
-    processPendingSyncs(workspaceRoot);
-  }, SYNC_DEBOUNCE_MS);
-}
-
-/**
- * Process all pending file syncs in a batch
- */
-async function processPendingSyncs(workspaceRoot: string): Promise<void> {
-  if (isProcessingSyncs || pendingSyncs.size === 0) {
-    return;
-  }
-  
-  isProcessingSyncs = true;
-  
-  try {
-    // Take up to MAX_PENDING_FILES from the queue
-    const filesToSync = Array.from(pendingSyncs.values()).slice(0, MAX_PENDING_FILES);
-    
-    // Keep only files that weren't synced (in case more came in during processing)
-    for (const file of filesToSync) {
-      pendingSyncs.delete(file.path);
-    }
-    
-    logger.info('Processing pending file syncs', { count: filesToSync.length });
-    
-    // Process deletions first (no read needed)
-    const deletions = filesToSync.filter(f => f.type === 'delete');
-    const createsOrUpdates = filesToSync.filter(f => f.type !== 'delete');
-    
-    for (const sync of deletions) {
-      emitFilesystemUpdated({
-        path: sync.path,
-        paths: [sync.path],
-        type: 'delete',
-        source: 'desktop-pty-sync',
-        sessionId: 'desktop-user',
-        workspaceVersion: Date.now(),
-      });
-    }
-    
-    // Process creates/updates with actual file reads (limited concurrency)
-    const readConcurrencyLimit = 3;
-    for (let i = 0; i < createsOrUpdates.length; i += readConcurrencyLimit) {
-      const batch = createsOrUpdates.slice(i, i + readConcurrencyLimit);
-      await Promise.all(
-        batch.map(sync => syncFileFromLocalFs(sync.path, workspaceRoot))
-      );
-    }
-    
-    // If more files pending, schedule another batch
-    if (pendingSyncs.size > 0) {
-      syncTimeout = setTimeout(() => {
-        processPendingSyncs(workspaceRoot);
-      }, SYNC_DEBOUNCE_MS);
-    }
-  } finally {
-    // Reset processing flag when done or on error
-    if (pendingSyncs.size === 0) {
-      isProcessingSyncs = false;
-    }
-  }
-}
-
-/**
- * Read file content from local filesystem via Tauri invoke API and emit events.
- * This ensures the UI reflects actual file content when files are created/modified in the real shell.
- * Uses Tauri invoke directly (not fs-bridge) to avoid pulling server modules into the client bundle.
- */
-async function syncFileFromLocalFs(filePath: string, workspaceRoot: string): Promise<void> {
-  if (!isDesktopMode()) {
-    return; // Only sync in desktop mode
-  }
-
-  try {
-    // Strip workspace root prefix to get path relative to workspace
-    let relativePath = filePath;
-    if (filePath.startsWith(workspaceRoot + '/')) {
-      relativePath = filePath.slice(workspaceRoot.length + 1);
-    }
-
-    // Read file content directly via Tauri Rust backend
-    const content = await invoke<string>('read_file', {
-      sandboxId: 'desktop-user',
-      filePath,
-    });
-
-    // Skip very large files to avoid performance issues
-    const maxFileSize = 5 * 1024 * 1024; // 5MB
-    if (content.length > maxFileSize) {
-      logger.debug('Skipped sync for large file', { path: filePath, size: content.length });
-      return;
-    }
-
-    // Emit event with content payload so VFS service can update its state.
-    // The content is carried in the `applied` field for VFS to consume.
-    emitFilesystemUpdated({
-      path: filePath,
-      paths: [filePath],
-      type: 'update',
-      source: 'desktop-pty-file-sync',
-      sessionId: 'desktop-user',
-      workspaceVersion: Date.now(),
-      applied: { content, relativePath },
-    });
-
-    logger.debug('Synced file content from local FS via Tauri', { path: filePath, size: content.length });
-  } catch (error) {
-    // File might not exist yet, be binary, or other error — that's OK for detection
-    logger.debug('Could not sync file from local FS', { path: filePath, error: String(error) });
-  }
-}
 
 export interface DesktopPtyOptions {
   cols?: number;
@@ -323,224 +179,21 @@ export async function createDesktopPty(options: DesktopPtyOptions = {}): Promise
   let unlistenOutput: UnlistenFn | null = null;
   let unlistenClose: UnlistenFn | null = null;
 
-  // Track file state to detect changes
-  const knownFiles = new Set<string>();
-  let lastCheckTime = Date.now();
-
-  // Detect file changes from shell commands in PTY output
-  const detectFileChanges = (output: string) => {
-    // Only check periodically to avoid excessive filesystem calls
-    const now = Date.now();
-    if (now - lastCheckTime < 2000) return; // Check every 2 seconds max
-    lastCheckTime = now;
-
-    // Parse commands from output that indicate file changes
-    const commandPatterns = [
-      // touch, mkdir
-      /(?:^|\n)\s*(?:touch|mkdir)\s+([\S]+)/g,
-      // rm (with optional flags)
-      /(?:^|\n)\s*rm\s+(?:-[\w]+\s+)*([\S]+)/g,
-      // cp src dest
-      /(?:^|\n)\s*cp\s+([\S]+)\s+([\S]+)/g,
-      // mv src dest
-      /(?:^|\n)\s*mv\s+([\S]+)\s+([\S]+)/g,
-      // echo > file, printf > file, cat > file
-      /(?:^|\n)\s*(?:echo|printf|cat)\s+.*?>\s*([\S]+)/g,
-      // tee
-      /(?:^|\n)\s*tee\s+([\S]+)/g,
-      // Here-document: cat <<EOF > file ... EOF
-      /(?:^|\n)\s*cat\s+<<\s*(\S+)\s*>\s*([\S]+)/g,
-      // tee here-doc: tee <<EOF ... EOF
-      /(?:^|\n)\s*tee\s+<<\s*(\S+)\s*([\S]+)/g,
-    ];
-
-    // Detect vim/nano saves from terminal output
-    const editorSavePatterns = [
-      // Vim save messages
-      /"([^"]+\.\w+)".*\[New File\]/g,
-      /"([^"]+\.\w+)".*saved/g,
-      /\[ewFile\] ([^\s]+)/g,
-      /Wrote:\s+([^\s]+)/g,
-      // Nano save prompts (when user presses Ctrl+O)
-      /File Name to Write:\s*([^\n]+)/g,
-      /Saved as:\s*([^\n]+)/g,
-      // VS Code / IDE file creation
-      /Created:\s+([^.\n]+\.\w+)/g,
-      /File created:\s+([^.\n]+\.\w+)/g,
-      // Git operations that create/modify files
-      /created file:\s+([^.\n]+\.\w+)/g,
-      /new file:\s+([^.\n]+\.\w+)/g,
-    ];
-
-    const detectedPaths = new Set<string>();
-    
-    for (const pattern of commandPatterns) {
-      let match;
-      while ((match = pattern.exec(output)) !== null) {
-        // Get last group (destination path for cp/mv)
-        const path = match[match.length - 1]
-          .replace(/^\~\//, workspaceRoot + '/')
-          .replace(/^\.\.\//, '');
-        // Skip if it looks like a flag or flag-like
-        if (!path.startsWith('-') && path.length > 1 && !path.includes('*')) {
-          detectedPaths.add(path);
-        }
-      }
+  // === Filesystem watcher: replaces regex-based PTY stdout parsing ===
+  // Uses native fs.watch with polling fallback to detect real filesystem events
+  // instead of guessing file changes from shell output patterns.
+  const fileWatcher = startFileWatcher(
+    workspaceRoot,
+    'desktop-user',
+    (filePath: string, type: FileChangeType) => {
+      fileChangeCallback?.(filePath, type);
     }
+  );
 
-    // Check for deletions (rm command)
-    const deletePattern = /(?:^|\n)\s*rm\s+(?:-[\w]+\s+)*([\S]+)/g;
-    let delMatch;
-    while ((delMatch = deletePattern.exec(output)) !== null) {
-      const path = delMatch[1]
-        .replace(/^\~\//, workspaceRoot + '/')
-        .replace(/^\.\.\//, '');
-      if (!path.startsWith('-') && path.length > 1 && !path.includes('*')) {
-        if (knownFiles.has(path)) {
-          knownFiles.delete(path);
-          if (fileChangeCallback) {
-            fileChangeCallback(path, 'delete');
-          }
-          emitFilesystemUpdated({
-            path,
-            paths: [path],
-            type: 'delete',
-            source: 'desktop-pty-delete',
-            sessionId: 'desktop-user',
-            workspaceVersion: Date.now(),
-          });
-        }
-      }
-    }
-
-    // Report new/modified files and sync content to VFS (debounced)
-    for (const path of detectedPaths) {
-      const changeType = !knownFiles.has(path) ? 'create' : 'update';
-      
-      // Queue file sync with debouncing to avoid excessive reads
-      queueFileSync(path, changeType, workspaceRoot);
-
-      if (!knownFiles.has(path)) {
-        knownFiles.add(path);
-        if (fileChangeCallback) {
-          fileChangeCallback(path, 'create');
-        }
-        emitFilesystemUpdated({
-          path,
-          paths: [path],
-          type: 'create',
-          source: 'desktop-pty-create',
-          sessionId: 'desktop-user',
-          workspaceVersion: Date.now(),
-        });
-      } else {
-        if (fileChangeCallback) {
-          fileChangeCallback(path, 'update');
-        }
-        emitFilesystemUpdated({
-          path,
-          paths: [path],
-          type: 'update',
-          source: 'desktop-pty-update',
-          sessionId: 'desktop-user',
-          workspaceVersion: Date.now(),
-        });
-      }
-    }
-
-    // Check for vim/nano/IDE save patterns and sync content
-    for (const pattern of editorSavePatterns) {
-      let match;
-      while ((match = pattern.exec(output)) !== null) {
-        const path = match[1]
-          .replace(/^~\//, workspaceRoot + '/')
-          .replace(/^\.\.\//, '');
-        // Skip if it looks like a flag or URL
-        if (!path.startsWith('-') && path.length > 1 && 
-            !path.startsWith('http') && !path.includes('://')) {
-          // Queue file sync with debouncing for editor saves
-          const changeType = !knownFiles.has(path) ? 'create' : 'update';
-          queueFileSync(path, changeType, workspaceRoot);
-
-          if (!knownFiles.has(path)) {
-            knownFiles.add(path);
-            if (fileChangeCallback) {
-              fileChangeCallback(path, 'create');
-            }
-            emitFilesystemUpdated({
-              path,
-              paths: [path],
-              type: 'create',
-              source: 'desktop-pty-editor-create',
-              sessionId: 'desktop-user',
-              workspaceVersion: Date.now(),
-            });
-          } else {
-            if (fileChangeCallback) {
-              fileChangeCallback(path, 'update');
-            }
-            emitFilesystemUpdated({
-              path,
-              paths: [path],
-              type: 'update',
-              source: 'desktop-pty-editor-update',
-              sessionId: 'desktop-user',
-              workspaceVersion: Date.now(),
-            });
-          }
-        }
-      }
-    }
-
-    // Detect IDE/tool file watcher events (e.g., VS Code, file watchers)
-    const ideWatcherPatterns = [
-      // VS Code file watcher
-      /\[\w+\]"([^"]+\.\w+)"\s+created/g,
-      /\[fs\]\s+createFile\s+([^.\n]+\.\w+)/g,
-      // Node/npm file creation
-      /created\s+([^.\n]+\.\w+)\s+in\s+\d+ms/g,
-      // File watcher events
-      /(?:added|created|modified):\s+([^.\n]+\.\w+)/gi,
-    ];
-
-    for (const pattern of ideWatcherPatterns) {
-      let match;
-      while ((match = pattern.exec(output)) !== null) {
-        const path = match[1]
-          .replace(/^~\//, workspaceRoot + '/')
-          .replace(/^\.\.\//, '');
-        if (!path.startsWith('-') && path.length > 1 && !path.includes('node_modules')) {
-          // Queue file sync with debouncing for IDE watcher events
-          const changeType = !knownFiles.has(path) ? 'create' : 'update';
-          queueFileSync(path, changeType, workspaceRoot);
-
-          if (!knownFiles.has(path)) {
-            knownFiles.add(path);
-            if (fileChangeCallback) {
-              fileChangeCallback(path, 'create');
-            }
-            emitFilesystemUpdated({
-              path,
-              paths: [path],
-              type: 'create',
-              source: 'desktop-pty-ide-create',
-              sessionId: 'desktop-user',
-              workspaceVersion: Date.now(),
-            });
-          }
-        }
-      }
-    }
-  };
-
-  // Listen for PTY output events from Rust
+  // Listen for PTY output events from Rust (no more regex file detection)
   unlistenOutput = await listen<PtyOutputEvent>('pty-output', (event) => {
     if (event.payload.session_id === sessionId) {
-      if (outputCallback) {
-        outputCallback(event.payload.data);
-      }
-      // Detect file changes from output
-      detectFileChanges(event.payload.data);
+      outputCallback?.(event.payload.data);
     }
   });
 
@@ -576,15 +229,12 @@ export async function createDesktopPty(options: DesktopPtyOptions = {}): Promise
     },
 
     close: async () => {
+      // Stop the filesystem watcher
+      await fileWatcher.stop();
+
       // Clean up listeners
       unlistenOutput?.();
       unlistenClose?.();
-
-      // Clear any pending debounced sync for this session
-      if (syncTimeout) {
-        clearTimeout(syncTimeout);
-        syncTimeout = null;
-      }
 
       if (isDesktopPtyAvailable()) {
         await closePtySession(sessionId);

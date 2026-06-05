@@ -948,65 +948,13 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     id: 'nvidia',
     name: 'NVIDIA NIM',
     models: [
-      // NVIDIA Nemotron models
-      'nvidia/nemotron-4-340b-instruct',
-      'nvidia/nemotron-4-340b-reward',
-      'nvidia/nemotron-3-super-120b-a12b',
-      'nvidia/nemotron-3-nano-30b-a3b',
-      'nvidia/nemotron-nano-12b-v2-vl',
-      // DeepSeek models
-      'deepseek-ai/deepseek-v3.2',
-      'deepseek-ai/deepseek-v3.1',
-      'deepseek-ai/deepseek-v3.1-terminus',
-      'deepseek-ai/deepseek-r1-distill-llama-8b',
-      'deepseek-ai/deepseek-r1-distill-qwen-7b',
-      'deepseek-ai/deepseek-r1-distill-qwen-14b',
-      'deepseek-ai/deepseek-r1-distill-qwen-32b',
-      'deepseek-ai/deepseek-coder-6.7b-instruct',
-      // Meta Llama models
-      'meta/llama-4-maverick-17b-128e-instruct',
-      'meta/llama-3.3-70b-instruct',
-      'meta/llama2-70b',
-      // Mistral models
-      'mistralai/mistral-large-2-instruct',
-      'mistralai/mistral-large-3-675b-instruct-2512',
-      'mistralai/mistral-large',
-      'mistralai/mistral-medium-3-instruct',
-      'mistralai/mistral-7b-instruct-v0.3',
-      'mistralai/mistral-7b-instruct-v0.2',
-      'mistralai/codestral-22b-instruct-v0.1',
-      'mistralai/devstral-2-123b-instruct-2512',
-      'mistralai/magistral-small-2506',
-      'mistralai/mamba-codestral-7b-v0.1',
-      'mistralai/mathstral-7b-v0.1',
-      'mistralai/ministral-14b-instruct-2512',
-      // Google models
-      'google/gemma-3-27b-it',
-      // Baichuan models
-      'baichuan-inc/baichuan2-13b-chat',
-      // BigCode models
-      'bigcode/starcoder2-15b',
-      // Microsoft models
-      'microsoft/phi-4-multimodal-instruct',
-      // Qwen models
+      'z-ai/glm-5.1',
+      'minimaxai/minimax-m2.7',
+      'moonshotai/kimi-k2.6',
+      'deepseek-ai/deepseek-v4-flash',
       'qwen/qwen3.5-122b-a10b',
-      // TII Falcon models
-      'tiiuae/falcon3-7b-instruct',
-      // Writer models
-      'writer/palmyra-creative-122b',
-      // OpenAI models
-      'openai/gpt-oss-120b',
-      // Moonshot models
-      'moonshotai/kimi-k2-instruct',
-      'moonshotai/kimi-k2-instruct-0905',
-      'moonshotai/kimi-k2-thinking',
-      'moonshotai/kimi-k2.5',
-      // MiniMax models
-      'minimaxai/minimax-m2.5',
-      // IBM models
-      'ibm/granite-guardian-3.0-8b',
-      // iGenius models
-      'igenius/colosseum_355b_instruct_16k',
+      'stepfun-ai/step-3.7-flash',
+      'meta/llama-4-maverick-17b-128e-instruct',
     ],
     supportsStreaming: true,
     maxTokens: 128000,
@@ -1543,6 +1491,10 @@ class LLMService {
   private ollama: any = null
   private kiro: any = null
   private chatanywhere: any = null
+  private nvidiaClient: any = null
+  private groqClient: any = null
+  private deepinfraClient: any = null
+  private fireworksClient: any = null
   private ninerouter: any = null
   private composioService: ComposioService | null = null
   private opencodeClient: any = null
@@ -1587,6 +1539,9 @@ class LLMService {
       livekit: { ...this.config.livekit, apiKey: currentEnv.LIVEKIT_API_KEY || this.config.livekit?.apiKey, baseURL: currentEnv.LIVEKIT_BASE_URL || this.config.livekit?.baseURL },
       chatanywhere: { ...this.config.chatanywhere, apiKey: currentEnv.CHATANYWHERE_API_KEY || this.config.chatanywhere?.apiKey, baseURL: currentEnv.CHATANYWHERE_BASE_URL || this.config.chatanywhere?.baseURL || 'https://api.chatanywhere.org' },
       ninerouter: { apiKey: currentEnv.NINEROUTER_API_KEY || currentEnv.QUAZ_API_KEY || '', baseURL: currentEnv.NINEROUTER_BASE_URL || 'http://ninerouter:3000/v1' },
+      groq: { apiKey: currentEnv.GROQ_API_KEY || '', baseURL: currentEnv.GROQ_BASE_URL || 'https://api.groq.com/openai/v1' },
+      deepinfra: { apiKey: currentEnv.DEEPINFRA_API_KEY || '', baseURL: currentEnv.DEEPINFRA_BASE_URL || 'https://api.deepinfra.com/v1/openai' },
+      fireworks: { apiKey: currentEnv.FIREWORKS_API_KEY || '', baseURL: currentEnv.FIREWORKS_BASE_URL || 'https://api.fireworks.ai/v1' },
     };
     
     // Initialize OpenAI
@@ -1690,12 +1645,48 @@ class LLMService {
       })
     }
 
+    // Initialize NVIDIA NIM (uses OpenAI client — NVIDIA NIM is OpenAI-compatible)
+    if (currentEnv.NVIDIA_API_KEY && !this.nvidiaClient) {
+      const OpenAIClass = await getOpenAI()
+      this.nvidiaClient = new OpenAIClass({
+        apiKey: currentEnv.NVIDIA_API_KEY,
+        baseURL: currentEnv.NVIDIA_BASE_URL || 'https://integrate.api.nvidia.com/v1',
+      })
+    }
+
     // Initialize Ninerouter (uses OpenAI client)
     if (config.ninerouter?.apiKey && !this.ninerouter) {
       const OpenAIClass = await getOpenAI()
       this.ninerouter = new OpenAIClass({
         apiKey: config.ninerouter.apiKey,
         baseURL: config.ninerouter.baseURL || 'http://ninerouter:3000/v1'
+      })
+    }
+
+    // Initialize Groq (uses OpenAI client)
+    if (config.groq?.apiKey && !this.groqClient) {
+      const OpenAIClass = await getOpenAI()
+      this.groqClient = new OpenAIClass({
+        apiKey: config.groq.apiKey,
+        baseURL: config.groq.baseURL || 'https://api.groq.com/openai/v1'
+      })
+    }
+
+    // Initialize DeepInfra (uses OpenAI client)
+    if (config.deepinfra?.apiKey && !this.deepinfraClient) {
+      const OpenAIClass = await getOpenAI()
+      this.deepinfraClient = new OpenAIClass({
+        apiKey: config.deepinfra.apiKey,
+        baseURL: config.deepinfra.baseURL || 'https://api.deepinfra.com/v1/openai'
+      })
+    }
+
+    // Initialize Fireworks (uses OpenAI client)
+    if (config.fireworks?.apiKey && !this.fireworksClient) {
+      const OpenAIClass = await getOpenAI()
+      this.fireworksClient = new OpenAIClass({
+        apiKey: config.fireworks.apiKey,
+        baseURL: config.fireworks.baseURL || 'https://api.fireworks.ai/v1'
       })
     }
   }
@@ -1857,8 +1848,20 @@ class LLMService {
           case 'chatanywhere':
             response = await this.generateChatanywhereResponse(model, messages, temperature, maxTokens, requestId, apiKey)
             break;
+          case 'nvidia':
+            response = await this.generateNvidiaResponse(model, messages, temperature, maxTokens, requestId, apiKey)
+            break;
           case 'ninerouter':
             response = await this.generateNinerouterResponse(model, messages, temperature, maxTokens, requestId, apiKey)
+            break;
+          case 'groq':
+            response = await this.generateGroqResponse(model, messages, temperature, maxTokens, requestId, apiKey)
+            break;
+          case 'deepinfra':
+            response = await this.generateDeepinfraResponse(model, messages, temperature, maxTokens, requestId, apiKey)
+            break;
+          case 'fireworks':
+            response = await this.generateFireworksResponse(model, messages, temperature, maxTokens, requestId, apiKey)
             break;
           default:
             throw createLLMError(`Unsupported provider: ${provider}`, {
@@ -2071,8 +2074,32 @@ class LLMService {
             yield chunk;
           }
           break
+        case 'nvidia':
+          for await (const chunk of this.streamNvidiaResponse(model, messages, temperature, maxTokens)) {
+            chunkCount++;
+            yield chunk;
+          }
+          break
         case 'ninerouter':
           for await (const chunk of this.streamNinerouterResponse(model, messages, temperature, maxTokens)) {
+            chunkCount++;
+            yield chunk;
+          }
+          break
+        case 'groq':
+          for await (const chunk of this.streamGroqResponse(model, messages, temperature, maxTokens)) {
+            chunkCount++;
+            yield chunk;
+          }
+          break
+        case 'deepinfra':
+          for await (const chunk of this.streamDeepinfraResponse(model, messages, temperature, maxTokens)) {
+            chunkCount++;
+            yield chunk;
+          }
+          break
+        case 'fireworks':
+          for await (const chunk of this.streamFireworksResponse(model, messages, temperature, maxTokens)) {
             chunkCount++;
             yield chunk;
           }
@@ -3792,6 +3819,75 @@ class LLMService {
     }
   }
 
+  private async generateNvidiaResponse(
+    model: string,
+    messages: LLMMessage[],
+    temperature: number,
+    maxTokens: number,
+    requestId?: string,
+    apiKeyOverride?: string
+  ): Promise<LLMResponse> {
+    if (!this.nvidiaClient) {
+      const OpenAIClass = await getOpenAI();
+      this.nvidiaClient = new OpenAIClass({
+        apiKey: apiKeyOverride || process.env.NVIDIA_API_KEY || '',
+        baseURL: process.env.NVIDIA_BASE_URL || 'https://integrate.api.nvidia.com/v1',
+      });
+    }
+
+    const response = await this.nvidiaClient.chat.completions.create({
+      model,
+      messages: messages as any,
+      temperature,
+      max_tokens: maxTokens,
+    });
+    const toolCalls = this.normalizeOpenAIToolCalls(response.choices[0]?.message?.tool_calls as any[]);
+
+    return {
+      content: response.choices[0]?.message?.content || '',
+      tokensUsed: response.usage?.total_tokens || 0,
+      finishReason: response.choices[0]?.finish_reason || 'stop',
+      timestamp: new Date(),
+      metadata: toolCalls.length ? { toolCalls } : undefined,
+      usage: response.usage
+    };
+  }
+
+  private async *streamNvidiaResponse(
+    model: string,
+    messages: LLMMessage[],
+    temperature: number,
+    maxTokens: number
+  ): AsyncGenerator<StreamingResponse> {
+    if (!this.nvidiaClient) {
+      const OpenAIClass = await getOpenAI();
+      this.nvidiaClient = new OpenAIClass({
+        apiKey: process.env.NVIDIA_API_KEY || '',
+        baseURL: process.env.NVIDIA_BASE_URL || 'https://integrate.api.nvidia.com/v1',
+      });
+    }
+
+    const stream = await this.nvidiaClient.chat.completions.create({
+      model,
+      messages: messages as any,
+      temperature,
+      max_tokens: maxTokens,
+      stream: true,
+    });
+
+    for await (const chunk of stream) {
+      const content = chunk.choices[0]?.delta?.content || '';
+      const finishReason = chunk.choices[0]?.finish_reason || undefined;
+      if (content || finishReason) {
+        yield {
+          content,
+          isComplete: !!finishReason,
+          finishReason,
+        };
+      }
+    }
+  }
+
   /**
    * Sanitize messages for ninerouter subproviders that don't support
    * function calling. gh/ (GitHub Copilot) rejects requests containing
@@ -3895,6 +3991,105 @@ class LLMService {
     for await (const chunk of stream) {
       const content = chunk.choices[0]?.delta?.content;
       if (content) yield content;
+    }
+  }
+
+  private async generateGroqResponse(model: string, messages: LLMMessage[], temperature: number, maxTokens: number, requestId?: string, apiKeyOverride?: string): Promise<LLMResponse> {
+    if (!this.groqClient) {
+      const OpenAIClass = await getOpenAI();
+      this.groqClient = new OpenAIClass({
+        apiKey: apiKeyOverride || process.env.GROQ_API_KEY || '',
+        baseURL: process.env.GROQ_BASE_URL || 'https://api.groq.com/openai/v1',
+      });
+    }
+    const response = await this.groqClient.chat.completions.create({ model, messages: messages as any, temperature, max_tokens: maxTokens });
+    const toolCalls = this.normalizeOpenAIToolCalls(response.choices[0]?.message?.tool_calls as any[]);
+    return {
+      content: response.choices[0]?.message?.content || '',
+      tokensUsed: response.usage?.total_tokens || 0,
+      finishReason: response.choices[0]?.finish_reason || 'stop',
+      timestamp: new Date(),
+      metadata: toolCalls.length ? { toolCalls } : undefined,
+      usage: response.usage
+    };
+  }
+
+  private async *streamGroqResponse(model: string, messages: LLMMessage[], temperature: number, maxTokens: number): AsyncGenerator<StreamingResponse> {
+    if (!this.groqClient) {
+      const OpenAIClass = await getOpenAI();
+      this.groqClient = new OpenAIClass({ apiKey: process.env.GROQ_API_KEY || '', baseURL: process.env.GROQ_BASE_URL || 'https://api.groq.com/openai/v1' });
+    }
+    const stream = await this.groqClient.chat.completions.create({ model, messages: messages as any, temperature, max_tokens: maxTokens, stream: true });
+    for await (const chunk of stream) {
+      const content = chunk.choices[0]?.delta?.content || '';
+      const finishReason = chunk.choices[0]?.finish_reason || undefined;
+      if (content || finishReason) yield { content, isComplete: !!finishReason, finishReason };
+    }
+  }
+
+  private async generateDeepinfraResponse(model: string, messages: LLMMessage[], temperature: number, maxTokens: number, requestId?: string, apiKeyOverride?: string): Promise<LLMResponse> {
+    if (!this.deepinfraClient) {
+      const OpenAIClass = await getOpenAI();
+      this.deepinfraClient = new OpenAIClass({
+        apiKey: apiKeyOverride || process.env.DEEPINFRA_API_KEY || '',
+        baseURL: process.env.DEEPINFRA_BASE_URL || 'https://api.deepinfra.com/v1/openai',
+      });
+    }
+    const response = await this.deepinfraClient.chat.completions.create({ model, messages: messages as any, temperature, max_tokens: maxTokens });
+    const toolCalls = this.normalizeOpenAIToolCalls(response.choices[0]?.message?.tool_calls as any[]);
+    return {
+      content: response.choices[0]?.message?.content || '',
+      tokensUsed: response.usage?.total_tokens || 0,
+      finishReason: response.choices[0]?.finish_reason || 'stop',
+      timestamp: new Date(),
+      metadata: toolCalls.length ? { toolCalls } : undefined,
+      usage: response.usage
+    };
+  }
+
+  private async *streamDeepinfraResponse(model: string, messages: LLMMessage[], temperature: number, maxTokens: number): AsyncGenerator<StreamingResponse> {
+    if (!this.deepinfraClient) {
+      const OpenAIClass = await getOpenAI();
+      this.deepinfraClient = new OpenAIClass({ apiKey: process.env.DEEPINFRA_API_KEY || '', baseURL: process.env.DEEPINFRA_BASE_URL || 'https://api.deepinfra.com/v1/openai' });
+    }
+    const stream = await this.deepinfraClient.chat.completions.create({ model, messages: messages as any, temperature, max_tokens: maxTokens, stream: true });
+    for await (const chunk of stream) {
+      const content = chunk.choices[0]?.delta?.content || '';
+      const finishReason = chunk.choices[0]?.finish_reason || undefined;
+      if (content || finishReason) yield { content, isComplete: !!finishReason, finishReason };
+    }
+  }
+
+  private async generateFireworksResponse(model: string, messages: LLMMessage[], temperature: number, maxTokens: number, requestId?: string, apiKeyOverride?: string): Promise<LLMResponse> {
+    if (!this.fireworksClient) {
+      const OpenAIClass = await getOpenAI();
+      this.fireworksClient = new OpenAIClass({
+        apiKey: apiKeyOverride || process.env.FIREWORKS_API_KEY || '',
+        baseURL: process.env.FIREWORKS_BASE_URL || 'https://api.fireworks.ai/v1',
+      });
+    }
+    const response = await this.fireworksClient.chat.completions.create({ model, messages: messages as any, temperature, max_tokens: maxTokens });
+    const toolCalls = this.normalizeOpenAIToolCalls(response.choices[0]?.message?.tool_calls as any[]);
+    return {
+      content: response.choices[0]?.message?.content || '',
+      tokensUsed: response.usage?.total_tokens || 0,
+      finishReason: response.choices[0]?.finish_reason || 'stop',
+      timestamp: new Date(),
+      metadata: toolCalls.length ? { toolCalls } : undefined,
+      usage: response.usage
+    };
+  }
+
+  private async *streamFireworksResponse(model: string, messages: LLMMessage[], temperature: number, maxTokens: number): AsyncGenerator<StreamingResponse> {
+    if (!this.fireworksClient) {
+      const OpenAIClass = await getOpenAI();
+      this.fireworksClient = new OpenAIClass({ apiKey: process.env.FIREWORKS_API_KEY || '', baseURL: process.env.FIREWORKS_BASE_URL || 'https://api.fireworks.ai/v1' });
+    }
+    const stream = await this.fireworksClient.chat.completions.create({ model, messages: messages as any, temperature, max_tokens: maxTokens, stream: true });
+    for await (const chunk of stream) {
+      const content = chunk.choices[0]?.delta?.content || '';
+      const finishReason = chunk.choices[0]?.finish_reason || undefined;
+      if (content || finishReason) yield { content, isComplete: !!finishReason, finishReason };
     }
   }
 

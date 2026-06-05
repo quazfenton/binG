@@ -40,6 +40,7 @@ import {
   incrementUserWsCount,
   decrementUserWsCount,
 } from '@/lib/terminal/ws-upgrade-handler';
+import { wsPreviewBroadcaster } from '@/lib/terminal/ws-preview-broadcaster';
 
 const logger = createLogger('Server');
 
@@ -143,6 +144,12 @@ app.prepare().then(startup).then(() => {
   // WebSocket server for terminal streaming
   const wss = new WebSocketServer({ noServer: true });
 
+  // WebSocket server for preview dashboard broadcasts
+  const previewWss = new WebSocketServer({ noServer: true });
+
+  // Attach preview broadcaster to the preview WSS
+  wsPreviewBroadcaster.attachToServer(previewWss);
+
   server.on('upgrade', async (req: IncomingMessage, socket, head) => {
     const { pathname, query } = parse(req.url || '', true);
 
@@ -152,8 +159,9 @@ app.prepare().then(startup).then(() => {
     const isTerminalWS = pathname === '/ws' || pathname === '/api/sandbox/terminal/ws';
     const isStreamControl = pathname === '/stream-control';
     const isVncProxy = pathname === '/vnc-proxy';
+    const isPreviewWS = pathname === '/ws/previews';
 
-    if (!isTerminalWS && !isStreamControl && !isVncProxy) {
+    if (!isTerminalWS && !isStreamControl && !isVncProxy && !isPreviewWS) {
       // Not our WebSocket — let Next.js HMR or other WS servers handle it.
       socket.destroy();
       return;
@@ -324,6 +332,21 @@ app.prepare().then(startup).then(() => {
           token,
           anonymousSessionId 
         });
+      });
+    } else if (isPreviewWS) {
+      // Preview dashboard WebSocket — auth handled by the broadcaster
+      let token: string | null = null;
+      const authHeader = req.headers['authorization'];
+      if (authHeader?.startsWith('Bearer ')) token = authHeader.substring(7);
+      if (!token) {
+        const proto = req.headers['sec-websocket-protocol'];
+        const p = Array.isArray(proto) ? proto[0] : proto;
+        if (p?.startsWith('Bearer ')) token = p.substring(7);
+      }
+
+      // Resolve userId in the connection handler (async auth)
+      previewWss.handleUpgrade(req, socket, head, (ws) => {
+        previewWss.emit('connection', ws, req, { token, path: 'previews' });
       });
     } else {
       socket.destroy();

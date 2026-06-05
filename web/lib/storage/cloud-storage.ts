@@ -8,6 +8,14 @@ const FEATURE_FLAGS = {
   R2_ENDPOINT: process.env.R2_ENDPOINT || '',
   R2_BUCKET: process.env.R2_BUCKET || '',
   R2_PUBLIC_URL: process.env.R2_PUBLIC_URL || '',
+  PCLOUD_CLIENT_ID: process.env.PCLOUD_CLIENT_ID || '',
+  PCLOUD_CLIENT_SECRET: process.env.PCLOUD_CLIENT_SECRET || '',
+  PCLOUD_API_HOST: process.env.PCLOUD_API_HOST || 'api.pcloud.com',
+  PCLOUD_REDIRECT_URI: process.env.PCLOUD_REDIRECT_URI || '',
+  STORJ_ACCESS_KEY: process.env.STORJ_ACCESS_KEY || '',
+  STORJ_SECRET_KEY: process.env.STORJ_SECRET_KEY || '',
+  STORJ_ENDPOINT: process.env.STORJ_ENDPOINT || 'https://gateway.storjshare.io',
+  STORJ_BUCKET: process.env.STORJ_BUCKET || '',
   ENABLE_CLOUD_STORAGE: process.env.ENABLE_CLOUD_STORAGE === 'true',
   CLOUD_STORAGE_PROVIDER: process.env.CLOUD_STORAGE_PROVIDER || 'gcp',
   CLOUD_STORAGE_BUCKET: process.env.CLOUD_STORAGE_BUCKET || '',
@@ -557,6 +565,131 @@ class MinIOStorageService implements CloudStorageService {
 }
 
 /**
+ * Storj Decentralized Storage Service
+ *
+ * S3-compatible client pointed at Storj's S3 gateway.
+ * Storj is a decentralized cloud object storage with client-side encryption.
+ * Uses the same @aws-sdk/client-s3 as S3/MinIO/R2 — just a different endpoint.
+ *
+ * Environment variables:
+ *   STORJ_ACCESS_KEY   — Storj access grant or S3 credential access key
+ *   STORJ_SECRET_KEY   — Storj secret key
+ *   STORJ_ENDPOINT     — Storj S3 gateway (default: https://gateway.storjshare.io)
+ *   STORJ_BUCKET       — Storj bucket name (falls back to CLOUD_STORAGE_BUCKET)
+ */
+class StorjStorageService implements CloudStorageService {
+  private client: S3Client;
+  private bucketName: string;
+  private endpoint: string;
+
+  constructor() {
+    this.bucketName = FEATURE_FLAGS.STORJ_BUCKET || FEATURE_FLAGS.CLOUD_STORAGE_BUCKET;
+    this.endpoint = FEATURE_FLAGS.STORJ_ENDPOINT;
+
+    const accessKeyId = FEATURE_FLAGS.STORJ_ACCESS_KEY;
+    const secretAccessKey = FEATURE_FLAGS.STORJ_SECRET_KEY;
+
+    if (!accessKeyId || !secretAccessKey) {
+      throw new Error('Storj storage requires STORJ_ACCESS_KEY and STORJ_SECRET_KEY to be set');
+    }
+
+    if (!this.bucketName) {
+      throw new Error('Storj storage requires either STORJ_BUCKET or CLOUD_STORAGE_BUCKET to be set');
+    }
+
+    this.client = new S3Client({
+      region: 'us-east-1',
+      endpoint: this.endpoint,
+      forcePathStyle: true,
+      credentials: { accessKeyId, secretAccessKey },
+    });
+  }
+
+  private getFullPath(path: string, userId?: string): string {
+    const userPrefix = userId ? `users/${userId}/` : '';
+    return `${userPrefix}${path}`;
+  }
+
+  async upload(file: File, path: string, userId?: string): Promise<string> {
+    if (!FEATURE_FLAGS.ENABLE_CLOUD_STORAGE) throw new Error('Cloud storage is disabled');
+    const fullPath = this.getFullPath(path, userId);
+    try {
+      const currentUsage = await this.getUsage(userId || 'anonymous');
+      if (currentUsage.used + file.size > currentUsage.limit) {
+        throw new Error(`Storage limit exceeded. Max ${Math.round(currentUsage.limit / (1024 * 1024 * 1024))}GB per user.`);
+      }
+      await this.client.send(new PutObjectCommand({
+        Bucket: this.bucketName, Key: fullPath, Body: file, ContentType: file.type,
+        Metadata: { userId: userId || 'anonymous', originalName: file.name, uploadedAt: new Date().toISOString() },
+      }));
+      if (userId) userStorageUsage[userId] = (userStorageUsage[userId] || 0) + file.size;
+      return `${this.endpoint}/${this.bucketName}/${fullPath}`;
+    } catch (error) {
+      console.error('Storj upload failed:', error);
+      throw new Error(`Failed to upload file to Storj: ${(error as Error).message}`);
+    }
+  }
+
+  async download(path: string, userId?: string): Promise<Blob> {
+    if (!FEATURE_FLAGS.ENABLE_CLOUD_STORAGE) throw new Error('Cloud storage is disabled');
+    const fullPath = this.getFullPath(path, userId);
+    try {
+      const response = await this.client.send(new GetObjectCommand({ Bucket: this.bucketName, Key: fullPath }));
+      if (!response.Body) throw new Error('No file content received');
+      return response.Body as Blob;
+    } catch (error) {
+      console.error('Storj download failed:', error);
+      throw new Error(`Failed to download file from Storj: ${(error as Error).message}`);
+    }
+  }
+
+  async delete(path: string, userId?: string): Promise<void> {
+    if (!FEATURE_FLAGS.ENABLE_CLOUD_STORAGE) throw new Error('Cloud storage is disabled');
+    const fullPath = this.getFullPath(path, userId);
+    try {
+      if (userId) {
+        try {
+          const head = await this.client.send(new HeadObjectCommand({ Bucket: this.bucketName, Key: fullPath }));
+          userStorageUsage[userId] = Math.max(0, (userStorageUsage[userId] || 0) - (head.ContentLength || 0));
+        } catch { /* file may not exist */ }
+      }
+      await this.client.send(new DeleteObjectCommand({ Bucket: this.bucketName, Key: fullPath }));
+    } catch (error) {
+      console.error('Storj delete failed:', error);
+      throw new Error(`Failed to delete file from Storj: ${(error as Error).message}`);
+    }
+  }
+
+  async list(prefix?: string, userId?: string): Promise<string[]> {
+    if (!FEATURE_FLAGS.ENABLE_CLOUD_STORAGE) throw new Error('Cloud storage is disabled');
+    const fullPrefix = this.getFullPath(prefix || '', userId);
+    try {
+      const response = await this.client.send(new ListObjectsV2Command({ Bucket: this.bucketName, Prefix: fullPrefix }));
+      return (response.Contents || []).map(obj => obj.Key?.replace(fullPrefix, '').replace(/^\//, '')).filter(Boolean) as string[];
+    } catch (error) {
+      console.error('Storj list failed:', error);
+      throw new Error(`Failed to list files from Storj: ${(error as Error).message}`);
+    }
+  }
+
+  async getSignedUrl(path: string, expiresIn: number = 3600, userId?: string): Promise<string> {
+    if (!FEATURE_FLAGS.ENABLE_CLOUD_STORAGE) throw new Error('Cloud storage is disabled');
+    const fullPath = this.getFullPath(path, userId);
+    try {
+      return await getSignedUrl(this.client, new GetObjectCommand({ Bucket: this.bucketName, Key: fullPath }), { expiresIn });
+    } catch (error) {
+      console.error('Storj signed URL failed:', error);
+      throw new Error(`Failed to generate signed URL for Storj: ${(error as Error).message}`);
+    }
+  }
+
+  async getUsage(userId: string): Promise<{ used: number; limit: number }> {
+    if (!FEATURE_FLAGS.ENABLE_CLOUD_STORAGE) throw new Error('Cloud storage is disabled');
+    return { used: userStorageUsage[userId] || 0, limit: FEATURE_FLAGS.CLOUD_STORAGE_PER_USER_LIMIT_BYTES };
+  }
+}
+
+/**
  * Cloudflare R2 Storage Service
  *
  * S3-compatible client pointed at Cloudflare R2.
@@ -781,6 +914,429 @@ class R2StorageService implements CloudStorageService {
 }
 
 // Keep the existing GCP mock service for development
+class PCloudStorageService implements CloudStorageService {
+  private clientId: string;
+  private clientSecret: string;
+  private apiHost: string;
+  private redirectUri: string;
+  // Per-user token cache: userId -> { accessToken, refreshToken, expiresAt }
+  private tokenCache = new Map<string, { accessToken: string; refreshToken: string; expiresAt: number }>();
+  // Per-user folder ID cache: userId -> root folderId (avoids repeated lookups)
+  private folderCache = new Map<string, number>();
+
+  constructor() {
+    this.clientId = FEATURE_FLAGS.PCLOUD_CLIENT_ID;
+    this.clientSecret = FEATURE_FLAGS.PCLOUD_CLIENT_SECRET;
+    this.apiHost = FEATURE_FLAGS.PCLOUD_API_HOST;
+    this.redirectUri = FEATURE_FLAGS.PCLOUD_REDIRECT_URI;
+
+    if (!this.clientId || !this.clientSecret) {
+      throw new Error('pCloud storage requires PCLOUD_CLIENT_ID and PCLOUD_CLIENT_SECRET to be set');
+    }
+  }
+
+  private baseUrl(): string {
+    return `https://${this.apiHost}`;
+  }
+
+  private async apiCall<T = any>(
+    endpoint: string,
+    params: Record<string, string | number | undefined> = {},
+    userId?: string,
+    method: 'GET' | 'POST' = 'GET',
+    body?: FormData
+  ): Promise<T> {
+    const url = new URL(`${this.baseUrl()}${endpoint}`);
+    const accessToken = userId ? await this.getAccessToken(userId) : undefined;
+
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== undefined && value !== '') {
+        url.searchParams.set(key, String(value));
+      }
+    }
+
+    const headers: Record<string, string> = {};
+    if (accessToken) {
+      headers['Authorization'] = `Bearer ${accessToken}`;
+    }
+
+    const fetchOptions: RequestInit = { method, headers };
+    if (method === 'POST' && body) {
+      // Don't set Content-Type — browser sets it with boundary for FormData
+      fetchOptions.body = body;
+    }
+
+    const response = await fetch(url.toString(), fetchOptions);
+
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      throw new Error(`pCloud API error ${response.status}: ${text}`);
+    }
+
+    const data = await response.json();
+
+    // pCloud returns result: 0 for success
+    if (data.result !== 0) {
+      throw new Error(`pCloud API error: ${data.error || 'Unknown error'} (code ${data.result})`);
+    }
+
+    return data;
+  }
+
+  /**
+   * Exchange an OAuth authorization code for tokens.
+   * Called once during the OAuth callback flow.
+   */
+  async exchangeCode(code: string): Promise<{ accessToken: string; refreshToken: string; userId: string }> {
+    const data = await this.apiCall<{
+      access_token: string;
+      refresh_token?: string;
+      userid: number;
+      expires_in?: number;
+    }>('/oauth2_token', {
+      client_id: this.clientId,
+      client_secret: this.clientSecret,
+      code,
+      grant_type: 'authorization_code',
+    });
+
+    const userId = String(data.userid);
+    const refreshToken = data.refresh_token || '';
+
+    this.tokenCache.set(userId, {
+      accessToken: data.access_token,
+      refreshToken,
+      expiresAt: data.expires_in ? Date.now() + data.expires_in * 1000 : Date.now() + 3600 * 1000,
+    });
+
+    return { accessToken: data.access_token, refreshToken, userId };
+  }
+
+  /**
+   * Get the OAuth authorization URL for the user to visit.
+   */
+  getAuthorizationUrl(state?: string): string {
+    const url = new URL('https://my.pcloud.com/oauth2/authorize');
+    url.searchParams.set('client_id', this.clientId);
+    url.searchParams.set('response_type', 'code');
+    if (this.redirectUri) {
+      url.searchParams.set('redirect_uri', this.redirectUri);
+    }
+    if (state) {
+      url.searchParams.set('state', state);
+    }
+    return url.toString();
+  }
+
+  private async getAccessToken(userId: string): Promise<string> {
+    const cached = this.tokenCache.get(userId);
+    if (cached && cached.expiresAt > Date.now() + 60_000) {
+      return cached.accessToken;
+    }
+
+    // Try refresh if we have a refresh token
+    if (cached?.refreshToken) {
+      try {
+        const data = await this.apiCall<{
+          access_token: string;
+          refresh_token?: string;
+          expires_in?: number;
+        }>('/oauth2_token', {
+          client_id: this.clientId,
+          client_secret: this.clientSecret,
+          refresh_token: cached.refreshToken,
+          grant_type: 'refresh_token',
+        });
+
+        this.tokenCache.set(userId, {
+          accessToken: data.access_token,
+          refreshToken: data.refresh_token || cached.refreshToken,
+          expiresAt: data.expires_in ? Date.now() + data.expires_in * 1000 : Date.now() + 3600 * 1000,
+        });
+
+        return data.access_token;
+      } catch {
+        // Refresh failed — token cache entry is stale, will need re-auth
+        this.tokenCache.delete(userId);
+        throw new Error('pCloud token expired. Please re-authenticate.');
+      }
+    }
+
+    throw new Error('No pCloud token available. Please authenticate first.');
+  }
+
+  /**
+   * Store a token obtained externally (e.g., from DB after OAuth flow).
+   */
+  setToken(userId: string, accessToken: string, refreshToken?: string, expiresIn?: number): void {
+    this.tokenCache.set(userId, {
+      accessToken,
+      refreshToken: refreshToken || '',
+      expiresAt: expiresIn ? Date.now() + expiresIn * 1000 : Date.now() + 3600 * 1000,
+    });
+  }
+
+  /**
+   * Resolve a file/folder path to a pCloud folder ID.
+   * pCloud uses integer IDs, not paths — we walk the tree to resolve.
+   */
+  private async resolveFolder(path: string, userId: string): Promise<number> {
+    const cacheKey = `${userId}:${path}`;
+    if (this.folderCache.has(cacheKey)) {
+      return this.folderCache.get(cacheKey)!;
+    }
+
+    // Start from root (folderId 0)
+    let folderId = 0;
+
+    if (path && path !== '/' && path !== '') {
+      const parts = path.replace(/^\/+/, '').replace(/\/+$/, '').split('/');
+
+      for (const part of parts) {
+        const data = await this.apiCall<{
+          metadata: { contents: Array<{ id: number; name: string; folder: boolean; isfolder: boolean }> };
+        }>('/listfolder', { folderid: folderId }, userId);
+
+        const found = data.metadata?.contents?.find(
+          (item) => item.name === part && (item.folder || item.isfolder)
+        );
+
+        if (!found) {
+          // Create the folder if it doesn't exist
+          const createData = await this.apiCall<{ metadata: { folderid: number } }>(
+            '/createfolderifnotexists',
+            { folderid: folderId, name: part },
+            userId
+          );
+          folderId = createData.metadata?.folderid || 0;
+        } else {
+          folderId = found.id;
+        }
+      }
+    }
+
+    this.folderCache.set(cacheKey, folderId);
+    return folderId;
+  }
+
+  /**
+   * Find a file by name in a folder and return its pCloud file ID.
+   */
+  private async resolveFile(folderId: number, fileName: string, userId: string): Promise<number | null> {
+    const data = await this.apiCall<{
+      metadata: { contents: Array<{ id: number; name: string; folder: boolean; isfolder: boolean }> };
+    }>('/listfolder', { folderid: folderId }, userId);
+
+    const file = data.metadata?.contents?.find(
+      (item) => item.name === fileName && !item.folder && !item.isfolder
+    );
+
+    return file?.id ?? null;
+  }
+
+  // ─── CloudStorageService Implementation ──────────────────────────
+
+  async upload(file: File, path: string, userId?: string): Promise<string> {
+    if (!FEATURE_FLAGS.ENABLE_CLOUD_STORAGE) {
+      throw new Error('Cloud storage is disabled');
+    }
+    if (!userId) {
+      throw new Error('pCloud requires a userId for token management');
+    }
+
+    try {
+      const currentUsage = await this.getUsage(userId);
+      if (currentUsage.used + file.size > currentUsage.limit) {
+        throw new Error(`Storage limit exceeded. Max ${Math.round(currentUsage.limit / (1024 * 1024 * 1024))}GB per user.`);
+      }
+
+      // Resolve parent folder
+      const parts = path.split('/');
+      const fileName = parts.pop() || 'untitled';
+      const folderPath = parts.join('/') || '';
+      const folderId = await this.resolveFolder(folderPath, userId);
+
+      // Upload via multipart
+      const formData = new FormData();
+      formData.append('folderid', String(folderId));
+      formData.append('file', file, fileName);
+
+      const data = await this.apiCall<{ metadata: Array<{ id: number; name: string }> }>(
+        '/uploadfile',
+        {},
+        userId,
+        'POST',
+        formData
+      );
+
+      // Update usage tracking
+      userStorageUsage[userId] = (userStorageUsage[userId] || 0) + file.size;
+
+      const fileId = data.metadata?.[0]?.id;
+      return fileId ? `pcloud://${userId}/${fileId}/${fileName}` : `pcloud://${userId}/unknown/${fileName}`;
+    } catch (error) {
+      console.error('pCloud upload failed:', error);
+      throw new Error(`Failed to upload file to pCloud: ${(error as Error).message}`);
+    }
+  }
+
+  async download(path: string, userId?: string): Promise<Blob> {
+    if (!FEATURE_FLAGS.ENABLE_CLOUD_STORAGE) {
+      throw new Error('Cloud storage is disabled');
+    }
+    if (!userId) {
+      throw new Error('pCloud requires a userId for token management');
+    }
+
+    try {
+      // Resolve file ID from path
+      const parts = path.split('/');
+      const fileName = parts.pop() || '';
+      const folderPath = parts.join('/') || '';
+      const folderId = await this.resolveFolder(folderPath, userId);
+      const fileId = await this.resolveFile(folderId, fileName, userId);
+
+      if (!fileId) {
+        throw new Error(`File not found: ${path}`);
+      }
+
+      // Get download link
+      const linkData = await this.apiCall<{ hosts: string[]; path: string }>(
+        '/getfilelink',
+        { fileid: fileId },
+        userId
+      );
+
+      const host = linkData.hosts?.[0] || this.apiHost;
+      const downloadUrl = `https://${host}${linkData.path}`;
+
+      const response = await fetch(downloadUrl);
+      if (!response.ok) {
+        throw new Error(`Download failed with status ${response.status}`);
+      }
+
+      return await response.blob();
+    } catch (error) {
+      console.error('pCloud download failed:', error);
+      throw new Error(`Failed to download file from pCloud: ${(error as Error).message}`);
+    }
+  }
+
+  async delete(path: string, userId?: string): Promise<void> {
+    if (!FEATURE_FLAGS.ENABLE_CLOUD_STORAGE) {
+      throw new Error('Cloud storage is disabled');
+    }
+    if (!userId) {
+      throw new Error('pCloud requires a userId for token management');
+    }
+
+    try {
+      const parts = path.split('/');
+      const fileName = parts.pop() || '';
+      const folderPath = parts.join('/') || '';
+      const folderId = await this.resolveFolder(folderPath, userId);
+      const fileId = await this.resolveFile(folderId, fileName, userId);
+
+      if (!fileId) {
+        throw new Error(`File not found: ${path}`);
+      }
+
+      await this.apiCall('/deletefile', { fileid: fileId }, userId);
+
+      // Invalidate folder cache for the parent
+      this.folderCache.delete(`${userId}:${folderPath}`);
+
+      // Update usage tracking (approximate — pCloud reports actual usage via userinfo)
+      const usage = await this.getUsage(userId);
+      userStorageUsage[userId] = usage.used;
+    } catch (error) {
+      console.error('pCloud delete failed:', error);
+      throw new Error(`Failed to delete file from pCloud: ${(error as Error).message}`);
+    }
+  }
+
+  async list(prefix?: string, userId?: string): Promise<string[]> {
+    if (!FEATURE_FLAGS.ENABLE_CLOUD_STORAGE) {
+      throw new Error('Cloud storage is disabled');
+    }
+    if (!userId) {
+      throw new Error('pCloud requires a userId for token management');
+    }
+
+    try {
+      const folderId = await this.resolveFolder(prefix || '', userId);
+      const data = await this.apiCall<{
+        metadata: { contents: Array<{ name: string; folder: boolean; isfolder: boolean }> };
+      }>('/listfolder', { folderid: folderId }, userId);
+
+      return (data.metadata?.contents || [])
+        .filter((item) => !item.folder && !item.isfolder)
+        .map((item) => item.name);
+    } catch (error) {
+      console.error('pCloud list failed:', error);
+      throw new Error(`Failed to list files from pCloud: ${(error as Error).message}`);
+    }
+  }
+
+  async getSignedUrl(path: string, expiresIn: number = 3600, userId?: string): Promise<string> {
+    if (!FEATURE_FLAGS.ENABLE_CLOUD_STORAGE) {
+      throw new Error('Cloud storage is disabled');
+    }
+    if (!userId) {
+      throw new Error('pCloud requires a userId for token management');
+    }
+
+    try {
+      const parts = path.split('/');
+      const fileName = parts.pop() || '';
+      const folderPath = parts.join('/') || '';
+      const folderId = await this.resolveFolder(folderPath, userId);
+      const fileId = await this.resolveFile(folderId, fileName, userId);
+
+      if (!fileId) {
+        throw new Error(`File not found: ${path}`);
+      }
+
+      // pCloud getfilelink provides temporary download URLs
+      const linkData = await this.apiCall<{ hosts: string[]; path: string }>(
+        '/getfilelink',
+        { fileid: fileId },
+        userId
+      );
+
+      const host = linkData.hosts?.[0] || this.apiHost;
+      return `https://${host}${linkData.path}`;
+    } catch (error) {
+      console.error('pCloud signed URL failed:', error);
+      throw new Error(`Failed to generate pCloud download URL: ${(error as Error).message}`);
+    }
+  }
+
+  async getUsage(userId: string): Promise<{ used: number; limit: number }> {
+    if (!FEATURE_FLAGS.ENABLE_CLOUD_STORAGE) {
+      throw new Error('Cloud storage is disabled');
+    }
+
+    try {
+      const data = await this.apiCall<{ usedquota: number; quota: number }>('/userinfo', {}, userId);
+      const used = data.usedquota || userStorageUsage[userId] || 0;
+      const limit = data.quota || FEATURE_FLAGS.CLOUD_STORAGE_PER_USER_LIMIT_BYTES;
+
+      // Sync in-memory tracking
+      userStorageUsage[userId] = used;
+
+      return { used, limit };
+    } catch (error) {
+      console.error('pCloud usage check failed:', error);
+      // Fall back to in-memory tracking
+      return {
+        used: userStorageUsage[userId] || 0,
+        limit: FEATURE_FLAGS.CLOUD_STORAGE_PER_USER_LIMIT_BYTES,
+      };
+    }
+  }
+}
+
 class GCPStorageService implements CloudStorageService {
   private bucketName: string;
 
@@ -928,6 +1484,10 @@ export function createCloudStorageService(): CloudStorageService {
       return new MinIOStorageService();
     case 'r2' as any:
       return new R2StorageService();
+    case 'pcloud' as any:
+      return new PCloudStorageService();
+    case 'storj' as any:
+      return new StorjStorageService();
     case 'gcp' as any:
     default:
       return new GCPStorageService() as any;
@@ -946,4 +1506,4 @@ export const cloudStorage = new Proxy({} as CloudStorageService, {
 });
 
 // Export individual services for testing
-export { NextcloudStorageService, S3StorageService, MinIOStorageService, R2StorageService, GCPStorageService };
+export { NextcloudStorageService, S3StorageService, MinIOStorageService, R2StorageService, PCloudStorageService, StorjStorageService, GCPStorageService };

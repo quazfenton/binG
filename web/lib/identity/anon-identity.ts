@@ -18,6 +18,21 @@ const ANON_COOKIE_NAME = 'bing_anon_uid';
 const ANON_COOKIE_DAYS = 365; // ~1 year persistence
 
 /**
+ * SSR placeholder prefix. Distinct enough that no real anon id can ever
+ * collide with it. Server-side code MUST NOT use this value as an
+ * ownerId for any persisted resource — the value is reserved as
+ * "client-only" and will be replaced on hydration.
+ */
+const SSR_PLACEHOLDER_PREFIX = 'anon_ssr_';
+
+/**
+ * Format: `anon_<uuid>` OR `anon_<hex>_<hex>` (legacy timestamp fallback).
+ * Used to reject malformed values coming from old localStorage / cookies
+ * instead of silently re-using garbage.
+ */
+const ANON_ID_PATTERN = /^anon_(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-z]{8,}_[0-9a-z]{6,})$/i;
+
+/**
  * Generate a new anonymous user ID.
  * Uses crypto.randomUUID() if available, falls back to a manual UUID v4.
  */
@@ -63,14 +78,17 @@ function getCookie(name: string): string | null {
  */
 export function getAnonUserId(): string {
   if (typeof window === 'undefined') {
-    // SSR context - return a placeholder. Real ID will be generated on the client.
-    return 'ssr_placeholder';
+    // SSR context - return a clearly-marked placeholder. Real ID will be
+    // generated on the client. Callers MUST NOT persist data keyed on
+    // this value; doing so on the server would create orphan rows tied
+    // to a per-process SSR ID.
+    return SSR_PLACEHOLDER_PREFIX + 'placeholder';
   }
 
   // 1. Try localStorage
   try {
     const stored = localStorage.getItem(ANON_ID_KEY);
-    if (stored && stored.startsWith('anon_')) {
+    if (stored && ANON_ID_PATTERN.test(stored)) {
       // Ensure cookie is in sync (heal if missing)
       if (getCookie(ANON_COOKIE_NAME) !== stored) {
         setCookie(ANON_COOKIE_NAME, stored, ANON_COOKIE_DAYS);
@@ -83,7 +101,7 @@ export function getAnonUserId(): string {
 
   // 2. Try cookie
   const fromCookie = getCookie(ANON_COOKIE_NAME);
-  if (fromCookie && fromCookie.startsWith('anon_')) {
+  if (fromCookie && ANON_ID_PATTERN.test(fromCookie)) {
     try {
       localStorage.setItem(ANON_ID_KEY, fromCookie);
     } catch {

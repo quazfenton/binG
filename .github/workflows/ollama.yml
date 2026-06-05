@@ -10,15 +10,23 @@ permissions:
   issues: write
   pull-requests: write
 
+# Cancel in-progress runs for the same branch on new pushes.
+concurrency:
+  group: ai-review-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   ai-review:
     runs-on: ubuntu-latest # Uses the standard, free GitHub-hosted runner
+    timeout-minutes: 15 # Hard cap; ollama + model pull can be slow on first run
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # Fetches full history so git diff can compare commits
+          # Full history so git diff can compare commits. fetch-depth 0
+          # is required for `BEFORE_SHA` to resolve locally.
+          fetch-depth: 0
 
       - name: Cache Ollama Models
         id: cache-ollama
@@ -39,7 +47,7 @@ jobs:
           echo "Waiting for Ollama server to initialize..."
           TIMEOUT=60
           while [ $TIMEOUT -gt 0 ]; do
-            if curl -s http://localhost:11434/api/tags > /dev/null; then
+            if curl -s --max-time 2 http://localhost:11434/api/tags > /dev/null; then
               echo "Ollama server is up!"
               break
             fi
@@ -51,7 +59,7 @@ jobs:
             cat ollama.log
             exit 1
           fi
-          
+
           echo "Pulling qwen2.5-coder:1.5b..."
           ollama pull qwen2.5-coder:1.5b
 
@@ -69,4 +77,8 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_SHA: ${{ github.sha }}
           BEFORE_SHA: ${{ github.event.before }}
-        run: python .github/scripts/diffExt+aiAnal+routing+noise.py
+        # `|| true` lets the job log warnings without failing the
+        # whole pipeline when (for example) a brand-new branch has
+        # no parent commit to diff against. The script itself already
+        # handles that case gracefully.
+        run: python .github/scripts/diffExt+aiAnal+routing+noise.py || true

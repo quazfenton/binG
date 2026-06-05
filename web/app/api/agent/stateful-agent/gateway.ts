@@ -155,7 +155,7 @@ export async function POST(request: NextRequest) {
         .filter(m => m.role !== 'system')
         .map(m => ({
           role: m.role === 'assistant' ? 'assistant' : 'user',
-          content: typeof m.content === 'string' ? m.content : m.content[0]?.text || '',
+          content: typeof m.content === 'string' ? m.content : Array.isArray(m.content) ? (m.content[0]?.text ?? '') : '',
         }));
 
       const result = streamText({

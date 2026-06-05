@@ -65,23 +65,43 @@ export async function withRetry<T>(
   const opts = { ...DEFAULT_OPTIONS, ...options };
   let lastError: Error | undefined;
 
+  // Validate timeoutMs to prevent NaN causing immediate timeout
+  const effectiveTimeoutMs =
+    opts.timeoutMs && Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0
+      ? opts.timeoutMs
+      : undefined;
+
   for (let attempt = 0; attempt <= opts.maxRetries; attempt++) {
+    let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+
     try {
-      if (opts.timeoutMs && opts.timeoutMs > 0) {
-        // With per-attempt timeout via Promise.race
-        const result = await Promise.race([
-          fn(),
-          new Promise<never>((_, reject) =>
-            setTimeout(
-              () => reject(new Error(`Operation timed out after ${opts.timeoutMs}ms`)),
-              opts.timeoutMs,
-            ),
-          ),
-        ]);
+      if (effectiveTimeoutMs) {
+        // With per-attempt timeout via Promise.race.
+        // Clean up the timeout timer when the function completes to avoid
+        // the timer firing after a successful result.
+        const result = await new Promise<T>((resolve, reject) => {
+          timeoutTimer = setTimeout(
+            () => reject(new Error(`[${opts.name}] Operation timed out after ${effectiveTimeoutMs}ms`)),
+            effectiveTimeoutMs,
+          );
+
+          fn().then(
+            (val) => {
+              clearTimeout(timeoutTimer);
+              resolve(val);
+            },
+            (err) => {
+              clearTimeout(timeoutTimer);
+              reject(err);
+            },
+          );
+        });
         return result;
       }
       return await fn();
     } catch (error: any) {
+      // Ensure timeout timer is cleaned up even on synchronous throws
+      if (timeoutTimer !== undefined) clearTimeout(timeoutTimer);
       lastError = error instanceof Error ? error : new Error(String(error));
 
       if (attempt === opts.maxRetries) {
@@ -91,12 +111,15 @@ export async function withRetry<T>(
         throw lastError;
       }
 
-      // Calculate delay with exponential backoff + optional jitter
+      // Calculate delay with exponential backoff
       const exponentialDelay = Math.min(
         opts.baseDelayMs * Math.pow(2, attempt),
         opts.maxDelayMs,
       );
-      const jitterMs = opts.jitter ? Math.random() * opts.baseDelayMs * 0.3 : 0;
+      // Jitter proportional to the actual (capped) exponential delay, not the base delay.
+      // This keeps the relative jitter meaningful even after multiple backoff doublings
+      // where the base-delay jitter (0.3 * baseDelayMs) would be negligible.
+      const jitterMs = opts.jitter ? Math.random() * exponentialDelay * 0.3 : 0;
       const delayMs = Math.round(exponentialDelay + jitterMs);
 
       log.warn(

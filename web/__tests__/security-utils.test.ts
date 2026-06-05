@@ -102,6 +102,27 @@ describe('Security Utilities', () => {
         expect(result).toBe('/tmp/workspaces/sandbox-123/src/components');
       }
     });
+
+    it('should handle paths with unicode and special characters', () => {
+      const result = safeJoin('/tmp/workspaces', 'sandbox-💻', 'src', 'components');
+      if (process.platform === 'win32') {
+        expect(result).toContain('sandbox-💻');
+        expect(result).toContain('src');
+        expect(result).toContain('components');
+      } else {
+        expect(result).toBe('/tmp/workspaces/sandbox-💻/src/components');
+      }
+    });
+
+    it('should handle paths with spaces and special characters', () => {
+      const result = safeJoin('/tmp/workspaces', 'sand box test', 'file (1).txt');
+      if (process.platform === 'win32') {
+        expect(result).toContain('sand box test');
+        expect(result).toContain('file (1).txt');
+      } else {
+        expect(result).toBe('/tmp/workspaces/sand box test/file (1).txt');
+      }
+    });
   });
 
   describe('isValidResourceId', () => {

@@ -192,6 +192,14 @@ export class PreviewRouter {
     await this.registry.register(registration);
   }
 
+  /**
+   * Unregister a preview from the router (stop proxying to it).
+   * Called when a workspace service stops or a preview is removed.
+   */
+  async unregisterPreview(sandboxId: string, port: number): Promise<void> {
+    await this.registry.unregister(sandboxId, port);
+  }
+
   async shutdown(): Promise<void> {
     await this.registry.shutdown();
     await this.fallback.cleanupStale();

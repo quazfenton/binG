@@ -745,11 +745,28 @@ export async function processUnifiedAgentRequest(
           //     fail schema validation with "Invalid prompt" errors.
           //     PlanActVerify rebuilds its own conversation history with fresh tool
           //     results, so stale tool messages from prior executions add no value.
-          const filteredHistory = (config.conversationHistory || []).filter(
-            (msg: any) => msg.role !== 'system' && msg.role !== 'tool'
-          );
+          //
+          // Extract system message content into config.systemPrompt so the orchestrator
+          // receives workspace context, memory, and role prompt through the `system`
+          // parameter rather than as system-role messages in the array.
+          const rawHistoryForOrch = config.conversationHistory || [];
+          const orchSystemParts: string[] = [];
+          const orchNonSystem: any[] = [];
+          for (const msg of rawHistoryForOrch) {
+            if (msg.role === 'system') {
+              const text = typeof msg.content === 'string'
+                ? msg.content
+                : JSON.stringify(msg.content || '');
+              orchSystemParts.push(text);
+            } else if (msg.role !== 'tool') {
+              orchNonSystem.push(msg);
+            }
+          }
+          if (orchSystemParts.length > 0) {
+            config.systemPrompt = (config.systemPrompt || '') + '\n\n' + orchSystemParts.join('\n\n');
+          }
           const orchMessages = [
-            ...filteredHistory,
+            ...orchNonSystem,
             { role: 'user', content: config.userMessage },
           ];;
           return await runV1Orchestrated(config, orchMessages, startTime);
@@ -1509,12 +1526,30 @@ async function runV1Api(config: UnifiedAgentConfig): Promise<UnifiedAgentResult>
   // the AI SDK ModelMessage[] schema (requires array content with
   // { type: 'tool-result', ... }). Tool messages from prior turns are also
   // stale — their tool_call_id references no longer match any live calls.
+  //
+  // Additionally, strip system-role messages and extract them into
+  // config.systemPrompt so the downstream path (streamWithVercelAI or
+  // enhanced-llm-service) receives them via the `system` parameter — not
+  // inside the messages[] array where they trigger "Invalid prompt: The
+  // messages do not match the ModelMessage[] schema" errors.
   const rawHistory = config.conversationHistory || [];
-  const filteredHistory = rawHistory.filter(
-    (msg: any) => msg.role !== 'tool'
-  );
+  const systemParts: string[] = [];
+  const nonSystemMessages: any[] = [];
+  for (const msg of rawHistory) {
+    if (msg.role === 'system') {
+      const text = typeof msg.content === 'string'
+        ? msg.content
+        : JSON.stringify(msg.content || '');
+      systemParts.push(text);
+    } else if (msg.role !== 'tool') {
+      nonSystemMessages.push(msg);
+    }
+  }
+  if (systemParts.length > 0) {
+    config.systemPrompt = (config.systemPrompt || '') + '\n\n' + systemParts.join('\n\n');
+  }
   const messages: any[] = [
-    ...filteredHistory,
+    ...nonSystemMessages,
     { role: 'user', content: config.userMessage },
   ];
 

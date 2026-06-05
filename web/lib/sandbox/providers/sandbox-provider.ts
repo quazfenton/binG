@@ -271,6 +271,7 @@ export interface PtyConnectOptions {
 export interface SandboxCreateConfig {
   language?: string
   autoStopInterval?: number
+  workspaceDir?: string
   resources?: { cpu?: number; memory?: number }
   envVars?: Record<string, string>
   labels?: Record<string, string>

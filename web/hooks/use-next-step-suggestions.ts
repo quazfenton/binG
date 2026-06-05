@@ -15,13 +15,13 @@
  *    (i.e., content length > 0 OR it has been finalized).
  *  - No `auto-continue` marker is present in the last message.
  *
- * Caching: suggestions are stored per assistant message ID. When a
- * new assistant message arrives, prior suggestions are kept (so
- * chips remain visible as the user scrolls up) but marked as
- * non-interactive.
+ * Caching: suggestions are stored per assistant message ID + content
+ * hash. When a new assistant message arrives, prior suggestions are
+ * kept (so chips remain visible as the user scrolls up) but marked
+ * as non-interactive. We also evict stale entries to bound memory.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Message } from '@/types';
 import { buildApiHeaders } from '@/lib/utils/utils';
 
@@ -42,6 +42,8 @@ interface UseNextStepSuggestionsOptions {
 }
 
 const MAX_RECENT_PROMPTS = 2;
+const MAX_CACHED_MESSAGES = 50;
+const DEBOUNCE_MS = 600;
 
 function hasAutoContinueMarker(message: Message | undefined): boolean {
   if (!message) return false;
@@ -62,6 +64,18 @@ function extractText(message: Message | undefined): string {
   return '';
 }
 
+/**
+ * Cheap stable 32-bit hash for the dedupe key. Not cryptographic;
+ * the goal is only to detect "same content" without re-fetching.
+ */
+function djb2(str: string): string {
+  let h = 5381;
+  for (let i = 0; i < str.length; i++) {
+    h = ((h << 5) + h + str.charCodeAt(i)) | 0;
+  }
+  return (h >>> 0).toString(36);
+}
+
 export function useNextStepSuggestions({
   messages,
   isLoading,
@@ -72,30 +86,89 @@ export function useNextStepSuggestions({
   const [loadingForMessageId, setLoadingForMessageId] = useState<string | null>(
     null,
   );
+  // Track (id|hash) pairs we've already fetched. This guards against
+  // re-fetching when a message id is reused with different content
+  // (e.g., the assistant finalised streaming and replaced the
+  // placeholder content).
   const fetchedRef = useRef<Set<string>>(new Set());
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mountedRef = useRef<boolean>(true);
+
+  // Pre-compute the last assistant message so the effect's dep array
+  // can be a stable primitive (the id + content hash) instead of the
+  // full `messages` array. Re-running the effect on every parent render
+  // is what caused the original debounce reset / fetch thrash.
+  const lastAssistant = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'assistant') return messages[i];
+    }
+    return null;
+  }, [messages]);
+
+  const lastText = useMemo(
+    () => extractText(lastAssistant).trim(),
+    [lastAssistant],
+  );
+  const lastContentHash = useMemo(() => djb2(lastText), [lastText]);
+  const lastAssistantKey = lastAssistant
+    ? `${lastAssistant.id}|${lastContentHash}`
+    : null;
 
   useEffect(() => {
-    // Find the last assistant message
-    const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant');
-    if (!lastAssistant) return;
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, []);
 
-    // Don't re-fetch for the same message
-    if (fetchedRef.current.has(lastAssistant.id)) return;
+  // Evict stale cache entries. Keep only the N most recent assistant
+  // message ids that still appear in `messages`. This bounds memory
+  // for very long sessions.
+  useEffect(() => {
+    setByMessageId((prev) => {
+      const knownIds = new Set(
+        messages.filter((m) => m.role === 'assistant').map((m) => m.id),
+      );
+      // Keep entries still present + the most recent N (to avoid
+      // dropping the chip the user is currently looking at).
+      const entries = Object.entries(prev).sort((a, b) => {
+        // Order by position in `messages` (most recent last)
+        const ai = messages.findIndex((m) => m.id === a[0]);
+        const bi = messages.findIndex((m) => m.id === b[0]);
+        return bi - ai;
+      });
+      const trimmed = entries.slice(0, MAX_CACHED_MESSAGES);
+      const next: SuggestionsByMessage = {};
+      for (const [id, value] of trimmed) {
+        if (knownIds.has(id) || value) next[id] = value;
+      }
+      // Avoid a re-render if nothing actually changed
+      const prevKeys = Object.keys(prev);
+      const nextKeys = Object.keys(next);
+      if (
+        prevKeys.length === nextKeys.length &&
+        nextKeys.every((k) => prev[k] === next[k])
+      ) {
+        return prev;
+      }
+      return next;
+    });
+  }, [messages]);
 
-    // Must be a non-streaming, non-error, no-autocontinue, non-empty turn
+  useEffect(() => {
+    if (!lastAssistant || !lastAssistantKey) return;
     if (isLoading || isStreaming) return;
     if (error) return;
     if (hasAutoContinueMarker(lastAssistant)) return;
-
-    const lastText = extractText(lastAssistant).trim();
     if (!lastText) return;
+    if (fetchedRef.current.has(lastAssistantKey)) return;
 
-    // Debounce to avoid rapid fetches on small UI state changes
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(async () => {
-      if (fetchedRef.current.has(lastAssistant.id)) return;
-      fetchedRef.current.add(lastAssistant.id);
+      if (!mountedRef.current) return;
+      if (fetchedRef.current.has(lastAssistantKey)) return;
+      fetchedRef.current.add(lastAssistantKey);
 
       const recentUserMessages = messages
         .filter((m) => m.role === 'user')
@@ -120,22 +193,31 @@ export function useNextStepSuggestions({
           const suggestions = Array.isArray(payload?.data?.suggestions)
             ? payload.data.suggestions
             : [];
+          if (!mountedRef.current) return;
           setByMessageId((prev) => ({
             ...prev,
             [lastAssistant.id]: suggestions,
           }));
+        } else {
+          // Allow one retry on transient failure (5xx / network)
+          if (!res.ok && res.status >= 500) {
+            fetchedRef.current.delete(lastAssistantKey);
+          }
         }
       } catch {
-        // Silent: suggestions are non-essential
+        // Network error — allow retry next time the effect fires
+        fetchedRef.current.delete(lastAssistantKey);
       } finally {
-        setLoadingForMessageId((cur) => (cur === lastAssistant.id ? null : cur));
+        if (mountedRef.current) {
+          setLoadingForMessageId((cur) => (cur === lastAssistant.id ? null : cur));
+        }
       }
-    }, 600);
+    }, DEBOUNCE_MS);
 
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [messages, isLoading, isStreaming, error]);
+  }, [lastAssistantKey, isLoading, isStreaming, error]);
 
   return {
     byMessageId,

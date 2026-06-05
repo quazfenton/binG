@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+import { GET as affinityStatsGET } from './affinity-stats/gateway';
 import { POST as agentPOST } from './agent/gateway';
 import { GET as clearSessionsGET, POST as clearSessionsPOST } from './clear-sessions/gateway';
 import { GET as daemonGET, POST as daemonPOST, DELETE as daemonDELETE } from './daemon/gateway';
@@ -28,6 +29,7 @@ export async function GET(request: NextRequest) {
   }
 
   switch (segments[2]) {
+    case 'affinity-stats': return affinityStatsGET(request);
     case 'clear-sessions': return clearSessionsGET(request);
     case 'daemon': return daemonGET(request);
     case 'devbox': return devboxGET(request);
@@ -39,7 +41,7 @@ export async function GET(request: NextRequest) {
     case 'terminal-ws': return terminalWsGET(request);
     case 'terminaluse': return terminaluseGET(request);
     default:
-      return NextResponse.json({ error: 'Not found. Use /sandbox/clear-sessions|daemon|devbox|files|pty|session|sync|terminal-stream|terminal-ws|terminaluse' }, { status: 404 });
+      return NextResponse.json({ error: 'Not found. Use /sandbox/affinity-stats|clear-sessions|daemon|devbox|files|pty|session|sync|terminal-stream|terminal-ws|terminaluse' }, { status: 404 });
   }
 }
 

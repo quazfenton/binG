@@ -24,6 +24,7 @@ import { getToolManager } from './index';
 import { getArcadeService } from '../integrations/arcade-service';
 import { getNangoService } from '../integrations/nango-service';
 import path from 'path';
+import os from 'os';
 
 const logger = createLogger('Tools:CapabilityRouter');
 
@@ -315,10 +316,34 @@ class LocalFilesystemProvider implements CapabilityProvider {
   private readonly workspaceRoot: string;
 
   constructor() {
-    // Default to workspace directory, fall back to temp if not configured
-    this.workspaceRoot = process.env.WORKSPACE_DIR ||
-                         process.env.USER_WORKSPACE_ROOT ||
-                         path.join(process.cwd(), 'workspace');
+    // Default to workspace directory, fall back to a SAFE temp directory.
+    //
+    // SECURITY/HYGIENE: Never fall back to a project-relative `workspace/`
+    // directory (e.g. `path.join(process.cwd(), 'workspace')`).
+    //
+    // In web mode, the server is the Next.js dev process whose CWD is the
+    // project root (e.g. `/opt/bing`). Writing to that directory leaks user
+    // VFS content into the repository, showing up in `git status` and
+    // breaking the VFS-as-virtual contract (web mode is supposed to be
+    // in-memory / OPFS / IndexedDB only).
+    //
+    // We always prefer:
+    //   1. Explicit env override (WORKSPACE_DIR / USER_WORKSPACE_ROOT)
+    //   2. A per-process subdirectory under `os.tmpdir()` so concurrent
+    //      processes don't collide and the project tree stays clean.
+    //
+    // NOTE: This provider is constructed eagerly (singleton at module
+    // load) and does NOT have request context. The resolveFilesystemOwner
+    // helper needs a NextRequest, so we cannot scope by user here.
+    // Callers in request scope that need user-scoped workspaces should
+    // either set WORKSPACE_DIR per-request (not yet implemented) or
+    // use the in-memory VFS (web mode default). Server-side callers
+    // should not pass user data through this provider in production
+    // until per-request workspace scoping is wired up.
+    this.workspaceRoot =
+      process.env.WORKSPACE_DIR ||
+      process.env.USER_WORKSPACE_ROOT ||
+      path.join(os.tmpdir(), 'bing-vfs-workspace');
   }
 
   isAvailable(): boolean {

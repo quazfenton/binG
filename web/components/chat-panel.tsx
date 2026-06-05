@@ -91,17 +91,22 @@ export function ChatPanel({
     return null;
   }, [messages]);
 
-  // Send a suggestion as a new user prompt
+  // Send a suggestion as a new user prompt.
+  // We schedule the submit on a microtask boundary so React has a chance
+  // to flush the setInput state before the parent's `handleSubmit`
+  // closure reads it. Using `queueMicrotask` is preferable to
+  // `setTimeout(0)` because it runs before the next paint, giving a
+  // visibly snappier response, and it's a well-defined semantic
+  // boundary (microtask queue) instead of a 4ms timer minimum.
   const handleSuggestionSelect = useCallback(
     (fullText: string) => {
       if (!fullText) return;
       setInput(fullText);
-      // Submit on the next tick so setInput propagates before submit reads it
-      setTimeout(() => {
+      queueMicrotask(() => {
         handleSubmit(
           new Event('submit') as unknown as React.FormEvent<HTMLFormElement>,
         );
-      }, 0);
+      });
     },
     [setInput, handleSubmit],
   );
@@ -220,6 +225,7 @@ export function ChatPanel({
         ref={scrollContainerRef}
         className="flex-1 overflow-y-auto p-2 sm:p-4 space-y-2 overscroll-contain touch-pan-y w-full"
         style={{
+          paddingTop: messages.length > 0 ? "60px" : "120px",
           paddingBottom: "120px",
           WebkitOverflowScrolling: "touch",
           scrollBehavior: "smooth"
@@ -239,9 +245,11 @@ export function ChatPanel({
         )}
 
         {messages.map((m: Message) => {
-          // Check if this is the last assistant message that's currently streaming
-          const lastAssistantMessage = [...messages].reverse().find(msg => msg.role === 'assistant');
-          const isCurrentlyStreaming = isLoading && isStreaming && m.id === lastAssistantMessage?.id;
+          // `lastAssistantId` is memoised above — reuse it to avoid an
+          // O(n²) `[...messages].reverse().find(...)` per message in
+          // the render loop.
+          const isCurrentlyStreaming =
+            isLoading && isStreaming && m.id === lastAssistantId;
 
           // Render next-step suggestions under assistant bubbles only.
           // Chips on the *current last* assistant message are interactive;

@@ -160,17 +160,37 @@ export class MicrosandboxProvider implements SandboxProvider {
       return
     }
     
-    // Handle local sandbox cleanup
-    if (sandboxId.startsWith('local-')) {
-      try {
-        const fs = require('fs').promises
-        const workspacePath = path.resolve(process.cwd(), 'local-workspace', sandboxId)
-        await fs.rm(workspacePath, { recursive: true, force: true })
-        console.log(`[Microsandbox] Cleaned up local sandbox: ${sandboxId}`)
-      } catch (error: any) {
-        console.warn(`[Microsandbox] Failed to cleanup local sandbox ${sandboxId}:`, error.message)
+      // Handle local sandbox cleanup
+      if (sandboxId.startsWith('local-')) {
+        try {
+          const fs = require('fs').promises
+          // SECURITY/HYGIENE: Never resolve against process.cwd() — that would
+          // point at the project root (e.g. /opt/bing) and risk polluting
+          // the source tree. Use the OS temp dir as a safe default, with an
+          // explicit env override.
+          //
+          // SAFETY: Only `local-*` IDs are allowed to be deleted. The
+          // sandboxId is sanitised below in case a caller ever supplies
+          // something exotic (path traversal, etc.).
+          const safeSandboxId = sandboxId.replace(/[^A-Za-z0-9_.-]/g, '_').slice(0, 128)
+          if (safeSandboxId !== sandboxId) {
+            console.warn(`[Microsandbox] Sanitised sandbox id ${sandboxId} → ${safeSandboxId}`)
+          }
+          const localRoot =
+            process.env.LOCAL_SANDBOX_DIR ||
+            require('os').tmpdir() + '/bing-local-sandbox'
+          const workspacePath = path.resolve(localRoot, safeSandboxId)
+          // Defensive: ensure the resolved path is still under `localRoot`.
+          const relative = path.relative(localRoot, workspacePath)
+          if (relative.startsWith('..') || path.isAbsolute(relative)) {
+            throw new Error(`Refusing to delete path outside sandbox root: ${workspacePath}`)
+          }
+          await fs.rm(workspacePath, { recursive: true, force: true })
+          console.log(`[Microsandbox] Cleaned up local sandbox: ${sandboxId}`)
+        } catch (error: any) {
+          console.warn(`[Microsandbox] Failed to cleanup local sandbox ${sandboxId}:`, error.message)
+        }
       }
-    }
   }
 }
 

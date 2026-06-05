@@ -7,7 +7,8 @@
  *   parseCompositeSessionId,
  *   buildToolContextIdentity,
  *   buildScopePath,
- * } from '@/lib/messaging/identity';
+ *   getAnonUserId,
+ * } from '@/lib/identity';
  * ```
  */
 
@@ -35,3 +36,9 @@ export {
   // Tool context helpers
   buildToolContextIdentity,
 } from './composite-session-id';
+
+export {
+  getAnonUserId,
+  clearAnonUserId,
+  hasPersistedIdentity,
+} from './anon-identity';

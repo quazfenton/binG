@@ -19,7 +19,7 @@ const STICKY_KEY_PREFIX = 'vfs-active-backend:';
 function getStickyBackend(ownerId: string): BackendType | null {
   if (typeof window === 'undefined' || !window.localStorage) return null;
   try {
-    return localStorage.getItem(STICKY_KEY_PREFIX + ownerId) as BackendType | null;
+    return window.localStorage.getItem(STICKY_KEY_PREFIX + ownerId) as BackendType | null;
   } catch {
     return null;
   }
@@ -28,7 +28,7 @@ function getStickyBackend(ownerId: string): BackendType | null {
 function setStickyBackend(ownerId: string, backend: BackendType): void {
   if (typeof window === 'undefined' || !window.localStorage) return;
   try {
-    localStorage.setItem(STICKY_KEY_PREFIX + ownerId, backend);
+    window.localStorage.setItem(STICKY_KEY_PREFIX + ownerId, backend);
   } catch {
     // Ignore storage errors
   }
@@ -170,6 +170,25 @@ export class OPFSStorageBackend implements VFSStorageBackend {
    * Probes the other backend and merges any unique files into the active state.
    * This handles the "new device" case where localStorage was wiped but
    * the browser still has the same IndexedDB or OPFS data.
+   *
+   * Merge rules (file-level):
+   *  - If a path exists in `primary`, keep the entry with the newer
+   *    `lastModified` timestamp (ties broken in favor of `primary`).
+   *  - If a path exists only in `other`, copy it to `primary`.
+   *
+   * Trigger rules (workspace-level):
+   *  - Probe the other backend ONLY when the primary is empty. Sticky
+   *    is NOT a gate here: a sticky key on a brand-new install does
+   *    not mean "the other backend is empty" — it just means "we
+   *    have a default for next time". Skipping the probe when
+   *    sticky is set was a bug that caused data loss on first
+   *    load of an OPFS-primary user who also has IDB orphans.
+   *  - When the primary is non-empty we trust it: the user has
+   *    made progress here, the orphans (if any) are stale.
+   *
+   * After a successful merge, the merged state is persisted to the
+   * active backend so the orphan copy can be safely ignored on the
+   * next load.
    */
   private async maybeMergeFromOtherBackend(
     ownerId: string,
@@ -177,11 +196,8 @@ export class OPFSStorageBackend implements VFSStorageBackend {
     other: BackendType
   ): Promise<WorkspaceState> {
     try {
-      // Only merge if primary has no sticky key (i.e., first load on this device)
-      // OR if the primary is empty (recovery scenario)
-      const sticky = getStickyBackend(ownerId);
-      if (sticky && primary.files.size > 0) {
-        return primary; // We have a sticky preference and data, don't merge
+      if (primary.files.size > 0) {
+        return primary; // Trust the active workspace; orphans are stale.
       }
 
       let otherState: WorkspaceState;
@@ -200,11 +216,21 @@ export class OPFSStorageBackend implements VFSStorageBackend {
         return primary;
       }
 
-      // Merge: for each file in 'other', add it to 'primary' if not already present
+      // Merge: for each file in 'other', add it to 'primary' if not
+      // already present, or replace with the newer version.
       let mergedCount = 0;
       for (const [path, file] of otherState.files.entries()) {
         const existing = primary.files.get(path);
-        if (!existing || (file.lastModified > existing.lastModified)) {
+        if (!existing) {
+          primary.files.set(path, file);
+          mergedCount++;
+          continue;
+        }
+        // Compare timestamps defensively (parse to numbers; bad
+        // values fall back to 0 and we keep `existing`).
+        const otherTime = Date.parse(file.lastModified) || 0;
+        const existingTime = Date.parse(existing.lastModified) || 0;
+        if (otherTime > existingTime) {
           primary.files.set(path, file);
           mergedCount++;
         }
@@ -354,19 +380,51 @@ export class OPFSStorageBackend implements VFSStorageBackend {
   }
 
   /**
-   * Delete workspace from OPFS
+   * Delete workspace from BOTH backends to avoid leaving orphans on
+   * a non-sticky backend that the user may have used previously.
+   *
+   * Previously this only cleared OPFS, which silently lost data when
+   * the sticky backend was IDB. The sticky key is also cleared so the
+   * next `loadWorkspace` call can re-probe both backends from scratch.
    */
   async deleteWorkspace(ownerId: string): Promise<void> {
+    const errors: Error[] = [];
+
+    // Clear OPFS first (most common case).
     try {
-      // Clear all data
       await this.core.clear();
       this.initializedWorkspaces.delete(ownerId);
-      
-      console.log('[OPFS Storage] Deleted workspace:', ownerId);
     } catch (error) {
-      console.error('[OPFS Storage] Failed to delete workspace:', error);
-      throw error;
+      errors.push(error instanceof Error ? error : new Error(String(error)));
     }
+
+    // Always also clear IDB to prevent orphan data when the active
+    // backend was IDB. We intentionally don't gate this on the sticky
+    // key because the user requested a hard delete.
+    try {
+      if (!this.idbBackend.isInitialized()) {
+        await this.idbBackend.initialize(ownerId);
+      }
+      await this.idbBackend.clear(ownerId);
+    } catch (error) {
+      errors.push(error instanceof Error ? error : new Error(String(error)));
+    }
+
+    // Forget the sticky choice so the next load re-probes both backends.
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        window.localStorage.removeItem(STICKY_KEY_PREFIX + ownerId);
+      }
+    } catch {
+      // Ignore storage errors
+    }
+    this.failedWorkspaces.delete(ownerId);
+
+    if (errors.length > 0) {
+      console.error('[OPFS Storage] Delete had partial failures:', errors);
+      throw new AggregateError(errors, 'Failed to delete workspace from one or more backends');
+    }
+    console.log('[OPFS Storage] Deleted workspace from all backends:', ownerId);
   }
 
   /**
@@ -389,15 +447,23 @@ export class OPFSStorageBackend implements VFSStorageBackend {
       return await this.core.fileExists(this.metadataFile);
     } catch (error) {
       this.markFailed(ownerId);
-      return this.workspaceExists(ownerId);
+      // Recurse exactly once, with the (now) sticky IDB backend.
+      // Guarded by `shouldUseFallback` to prevent unbounded recursion
+      // if the IDB backend itself fails (e.g. quota exceeded).
+      if (this.shouldUseFallback(ownerId)) {
+        return this.workspaceExists(ownerId);
+      }
+      return false;
     }
   }
 
   /**
-   * List all workspaces
-   * 
-   * Note: This is limited in OPFS as we can't enumerate root directories.
-   * Returns workspaces that have been initialized in this session.
+   * List all workspaces.
+   *
+   * Note: this is limited in OPFS as we can't enumerate root
+   * directories from JS. We currently return only the workspaces
+   * initialised in this session; a future improvement is to scan the
+   * IDB `ownerId` index for workspaces initialised in a prior session.
    */
   async listWorkspaces(): Promise<string[]> {
     return Array.from(this.initializedWorkspaces);

@@ -4,6 +4,7 @@ import { useState, useEffect } from "react"
 import FallbackUI from "../../components/fallback-ui"
 import { startCacheCleanup } from "../../lib/utils/cache"
 import dynamic from "next/dynamic"
+import { Toaster } from "@/components/ui/sonner"
 
 // Dynamically import components to avoid build-time SSR errors
 const TamboWrapper = dynamic(
@@ -31,13 +32,47 @@ const TopPanel = dynamic(
   { ssr: false, loading: () => null }
 )
 
+const PreviewToast = dynamic(
+  () => import("@/components/preview-toast"),
+  { ssr: false, loading: () => null }
+)
+
 export default function ChatBox() {
   const [mounted, setMounted] = useState(false)
+  const [workspaceId, setWorkspaceId] = useState<string | undefined>(undefined)
   const CUSTOM_BG_MEDIA_KEY = "custom_bg_media_url"
 
   useEffect(() => {
     setMounted(true)
     startCacheCleanup()
+
+    // Derive the workspace ID from session storage for preview subscriptions.
+    // Uses the same format as ConversationInterface's filesystemScopePath.
+    //
+    // Polling + storage event listener because:
+    // - sessionStorage changes are same-origin but the 'storage' event only
+    //   fires for OTHER tabs, not the current one
+    // - ConversationInterface updates sessionStorage asynchronously after
+    //   the LLM detects a folder name or generates a new session ID
+    // - A 2s poll interval catches same-tab changes without overhead
+    const deriveWorkspaceId = () => {
+      try {
+        const compositeId = sessionStorage.getItem('current_composite_session_id');
+        if (compositeId) {
+          const dollarIndex = compositeId.lastIndexOf('$');
+          const folder = dollarIndex !== -1 ? compositeId.slice(dollarIndex + 1) : compositeId;
+          setWorkspaceId(`workspace/sessions/${folder}`);
+        }
+      } catch { /* sessionStorage unavailable */ }
+    };
+
+    deriveWorkspaceId();
+    const interval = setInterval(deriveWorkspaceId, 2000);
+    window.addEventListener('storage', deriveWorkspaceId);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('storage', deriveWorkspaceId);
+    };
 
     // Apply background media
     const root = document.documentElement
@@ -87,6 +122,8 @@ export default function ChatBox() {
         <ConversationInterface />
       </ResponseStyleProvider>
       <PWAInstallPrompt />
+      <PreviewToast workspaceId={workspaceId} />
+      <Toaster position="bottom-right" expand={false} richColors closeButton />
     </TamboWrapper>
   )
 }

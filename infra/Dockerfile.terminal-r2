@@ -1,0 +1,68 @@
+# Dockerfile for R2 Terminal Containers
+#
+# Builds an image with s3fs-fuse pre-installed so that ephemeral terminal
+# containers can mount Cloudflare R2 directly as /workspace.
+#
+# Build: docker build -t bing-terminal-r2:latest -f Dockerfile.terminal-r2 .
+#
+# Usage in gateway.ts: container runs the R2 init script which:
+#   1. Writes s3fs credentials from env vars
+#   2. Mounts R2 bucket prefix at /workspace
+#   3. Drops into a safe bash shell with cd-override traps
+
+FROM ubuntu:22.04
+
+# Prevent interactive prompts during build
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install s3fs-fuse, standard dev tools, and common runtimes
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    # s3fs-fuse for R2 mount
+    s3fs \
+    fuse3 \
+    # Standard dev tools
+    bash \
+    curl \
+    wget \
+    git \
+    build-essential \
+    ca-certificates \
+    # Scripting languages (common in terminal use)
+    python3 \
+    python3-pip \
+    python3-venv \
+    nodejs \
+    npm \
+    # Text editors
+    vim \
+    nano \
+    # File utilities
+    unzip \
+    zip \
+    tree \
+    jq \
+    # Process utilities
+    htop \
+    procps \
+    # Networking tools
+    netcat-openbsd \
+    iputils-ping \
+    dnsutils \
+    # Clean up
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create workspace directory with proper permissions
+RUN mkdir -p /workspace /tmp/s3fs-cache && \
+    chmod 755 /workspace && \
+    chmod 1777 /tmp/s3fs-cache
+
+# Set default shell
+ENV SHELL=/bin/bash
+
+# Health check — verifies workspace is FUSE-mounted (not just a bare directory)
+HEALTHCHECK --interval=10s --timeout=5s --start-period=15s --retries=3 \
+    CMD mountpoint -q /workspace || exit 1
+
+# Default command: bash (gateway.ts exec's into container with custom init)
+CMD ["/bin/bash"]

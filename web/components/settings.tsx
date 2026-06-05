@@ -137,6 +137,7 @@ export default function Settings({
   const { config: engineConfig, setEngine: setAgentEngine, resetToDefault: resetEngineToDefault, isOverridden: engineIsOverridden } = useAgentEngine();
   const [textSize, setTextSize] = useState(100);
   const [highContrast, setHighContrast] = useState(false);
+  const [showAuthModal, setShowAuthModal] = useState(false);
   const [screenReader, setScreenReader] = useState(false);
   const [reducedMotion, setReducedMotion] = useState(false);
   const [isReading, setIsReading] = useState(false);
@@ -187,16 +188,23 @@ export default function Settings({
     };
   }, []);
 
-  // Close Settings on Escape key
+  // Close Settings on Escape key. Use capture phase so we fire before any
+  // child component (e.g., modal sub-views) can stop propagation, and also
+  // close any open auth modal first.
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        onClose();
+      if (e.key !== 'Escape') return;
+      if (showAuthModal) {
+        setShowAuthModal(false);
+        setAuthError(null);
+        e.stopPropagation();
+        return;
       }
+      onClose();
     };
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [onClose]);
+    document.addEventListener('keydown', handleKeyDown, true);
+    return () => document.removeEventListener('keydown', handleKeyDown, true);
+  }, [onClose, showAuthModal]);
 
   // Save user API keys to localStorage
   const handleSaveApiKeys = async () => {
@@ -460,7 +468,6 @@ export default function Settings({
   ];
 
   // State for managing auth modal visibility and mode
-  const [showAuthModal, setShowAuthModal] = useState(false);
   const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
   const [authError, setAuthError] = useState<string>('');
 

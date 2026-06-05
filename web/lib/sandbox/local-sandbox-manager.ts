@@ -9,7 +9,7 @@
 
 import { EventEmitter } from 'node:events';
 import { spawn, ChildProcess } from 'child_process';
-import { createWriteStream, mkdirSync, readdirSync, statSync, existsSync } from 'fs';
+import { createWriteStream, mkdirSync, readdirSync, statSync, existsSync, rmSync } from 'fs';
 import { join, resolve, normalize } from 'path';
 import { pipeline } from 'stream/promises';
 import { createReadStream } from 'fs';
@@ -289,8 +289,10 @@ export class SandboxManager extends EventEmitter {
     }
 
     return new Promise((resolve, reject) => {
+      const chunks: string[] = [];
       createReadStream(fullPath, 'utf8')
-        .on('data', (chunk) => resolve(chunk.toString()))
+        .on('data', (chunk) => chunks.push(chunk.toString()))
+        .on('end', () => resolve(chunks.join('')))
         .on('error', reject);
     });
   }
@@ -389,8 +391,9 @@ export class SandboxManager extends EventEmitter {
       const fullPath = join(dir, entry.name);
       if (entry.isDirectory()) {
         await this.clearDirectory(fullPath);
+        rmSync(fullPath, { recursive: true, force: true });
       } else {
-        // Would use fs.promises.rm in production
+        rmSync(fullPath);
       }
     }
   }

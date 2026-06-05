@@ -6,6 +6,7 @@ import { provisionBaseImage, warmPool } from './base-image'
 import { randomUUID } from 'crypto'
 import { quotaManager } from '../management/quota-manager'
 import { createLogger } from '@/lib/utils/logger'
+import { withRetryAndTimeout } from '@/lib/utils/retry'
 import { isDesktopMode } from '@bing/platform/env'
 import { sandboxFilesystemSync } from '@/lib/virtual-filesystem/sync/sandbox-filesystem-sync'
 
@@ -144,34 +145,39 @@ export class SandboxService {
     const provider = await getSandboxProvider(providerType)
     log.debug(`Provider ${providerType} instance obtained, creating sandbox...`)
 
-    // EDGE CASE FIX: Timeout on sandbox creation (default 5 minutes, configurable)
-    const creationTimeoutMs = parseInt(
-      process.env.SANDBOX_CREATION_TIMEOUT_MS || '300000',
-      10,
-    );
+    // EDGE CASE FIX: Enforce timeout on sandbox creation via the shared retry utility.
+    // Replaces hand-rolled Promise.race with withRetryAndTimeout which provides
+    // per-attempt timeout, exponential backoff, and jitter out of the box.
+    // On transient provider failures (e.g. timeout), one automatic retry with
+    // a brief backoff improves resilience without adding user-visible latency.
+    const rawTimeout = process.env.SANDBOX_CREATION_TIMEOUT_MS || '300000';
+    const creationTimeoutMs = (() => {
+      const parsed = parseInt(rawTimeout, 10);
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : 300000;
+    })();
 
     let handle: SandboxHandle | null = null;
     try {
-      handle = await Promise.race([
-        provider.createSandbox({
-          language: config?.language ?? 'typescript',
-          resources: config?.resources ?? this.getDefaultResources(),
-          envVars: {
-            TERM: 'xterm-256color',
-            LANG: 'en_US.UTF-8',
-            ...config?.env,
-          },
-          labels: { userId },
-        }),
-        new Promise<never>((_, reject) =>
-          setTimeout(
-            () => reject(new Error(
-              `Sandbox creation timed out after ${creationTimeoutMs / 1000}s (provider: ${providerType})`,
-            )),
-            creationTimeoutMs,
-          ),
-        ),
-      ]);
+      handle = await withRetryAndTimeout(
+        () =>
+          provider.createSandbox({
+            language: config?.language ?? 'typescript',
+            resources: config?.resources ?? this.getDefaultResources(),
+            envVars: {
+              TERM: 'xterm-256color',
+              LANG: 'en_US.UTF-8',
+              ...config?.env,
+            },
+            labels: { userId },
+          }),
+        creationTimeoutMs,
+        {
+          maxRetries: 1,
+          baseDelayMs: 5000,
+          jitter: true,
+          name: `sandbox-create:${providerType}`,
+        },
+      );
 
       log.debug(`Sandbox created successfully with ID: ${handle.id}`)
 

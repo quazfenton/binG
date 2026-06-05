@@ -52,45 +52,64 @@ function getAction(request: NextRequest): string {
 
 export async function GET(request: NextRequest) {
   const action = getAction(request);
-  
-  switch (action) {
-    case 'me': return meGET(request);
-    case 'session': return sessionGET(request);
-    case 'verify-email': return verifyEmailGET(request);
-    case 'confirm-reset': return confirmResetGET(request);
-    case 'validate': return validateGET(request);
-    case 'arcade-authorize': return arcadeAuthorizeGET(request);
-    case 'arcade-custom-verifier': return arcadeVerifierGET(request);
-    case 'nango-authorize': return nangoAuthorizeGET(request);
-    case 'oauth-callback': return oauthCallbackGET(request);
-    case 'oauth-error': return oauthErrorGET(request);
-    case 'oauth-initiate': return oauthInitiateGET(request);
-    case 'oauth-success': return oauthSuccessGET(request);
-    default:
-      return NextResponse.json({ error: `Action ${action} not found or method not allowed` }, { status: 404 });
+
+  try {
+    switch (action) {
+      case 'me': return await meGET(request);
+      case 'session': return await sessionGET(request);
+      case 'verify-email': return await verifyEmailGET(request);
+      case 'confirm-reset': return await confirmResetGET(request);
+      case 'validate': return await validateGET(request);
+      case 'arcade-authorize': return await arcadeAuthorizeGET(request);
+      case 'arcade-custom-verifier': return await arcadeVerifierGET(request);
+      case 'nango-authorize': return await nangoAuthorizeGET(request);
+      case 'oauth-callback': return await oauthCallbackGET(request);
+      case 'oauth-error': return await oauthErrorGET(request);
+      case 'oauth-initiate': return await oauthInitiateGET(request);
+      case 'oauth-success': return await oauthSuccessGET(request);
+      default:
+        return NextResponse.json({ error: `Action ${action} not found or method not allowed` }, { status: 404 });
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    return NextResponse.json(
+      { error: `Auth dispatch failed: ${message}` },
+      { status: 500 }
+    );
   }
 }
 
 export async function POST(request: NextRequest) {
   const action = getAction(request);
-  
-  switch (action) {
-    case 'login': return loginPOST(request);
-    case 'logout': return logoutPOST(request);
-    case 'register': return registerPOST(request);
-    case 'refresh': return refreshPOST(request);
-    case 'check-email': return checkEmailPOST(request);
-    case 'check-auth0-session': return checkAuth0SessionPOST(request);
-    case 'confirm-reset': return confirmResetPOST(request);
-    case 'reset-password': return resetPasswordPOST(request);
-    case 'send-verification': return sendVerificationPOST(request);
-    case 'validate': return validatePOST(request);
-    case 'mfa-challenge': return mfaChallengePOST(request);
-    case 'mfa-disable': return mfaDisablePOST(request);
-    case 'mfa-setup': return mfaSetupPOST(request);
-    case 'mfa-verify': return mfaVerifyPOST(request);
-    default:
-      return NextResponse.json({ error: `Action ${action} not found or method not allowed` }, { status: 404 });
+
+  try {
+    switch (action) {
+      case 'login': return await loginPOST(request);
+      case 'logout': return await logoutPOST(request);
+      case 'register': return await registerPOST(request);
+      case 'refresh': return await refreshPOST(request);
+      case 'check-email': return await checkEmailPOST(request);
+      case 'check-auth0-session': return await checkAuth0SessionPOST(request);
+      case 'confirm-reset': return await confirmResetPOST(request);
+      case 'reset-password': return await resetPasswordPOST(request);
+      case 'send-verification': return await sendVerificationPOST(request);
+      case 'validate': return await validatePOST(request);
+      case 'mfa-challenge': return await mfaChallengePOST(request);
+      case 'mfa-disable': return await mfaDisablePOST(request);
+      case 'mfa-setup': return await mfaSetupPOST(request);
+      case 'mfa-verify': return await mfaVerifyPOST(request);
+      default:
+        return NextResponse.json({ error: `Action ${action} not found or method not allowed` }, { status: 404 });
+    }
+  } catch (error) {
+    // Safety net: never let an upstream error bubble out as an HTML 500.
+    // Surface it as JSON so the client `safeParseResponse` helper can show
+    // a useful error message.
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    return NextResponse.json(
+      { error: `Auth dispatch failed: ${message}` },
+      { status: 500 }
+    );
   }
 }
 

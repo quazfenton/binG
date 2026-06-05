@@ -2158,16 +2158,16 @@ export default function ConversationInterface() {
           />
           {/* Header showing current provider/model */}
           {!embedMode && (
-            <div className="flex items-center justify-between px-3 py-2 border-b border-white/10 bg-black/30">
+            <div className="flex items-center justify-between px-3 py-2 border-b border-white/10 bg-black/30 shrink-0 z-20 relative flex-shrink-0">
               <div className="text-xs text-white/70 truncate">
                 <span className="mr-2">Provider:</span>
                 <span className="font-medium text-white">
-                  {currentProvider || "â€”"}
+                  {currentProvider || "\u2014"}
                 </span>
                 <span className="mx-2 text-white/40">|</span>
                 <span className="mr-2">Model:</span>
                 <span className="font-medium text-white truncate inline-block max-w-[60%] align-bottom">
-                  {currentModel || "â€”"}
+                  {currentModel || "\u2014"}
                 </span>
               </div>
               {/* Quick open history */}

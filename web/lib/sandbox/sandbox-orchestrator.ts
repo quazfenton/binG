@@ -22,6 +22,7 @@ import { normalizeSessionId } from '../virtual-filesystem/scope-utils';
 import type { SandboxHandle } from './providers/sandbox-provider';
 import { getSandboxProvider, type SandboxProviderType } from './providers';
 import { sandboxFilesystemSync } from '@/lib/virtual-filesystem/sync/sandbox-filesystem-sync';
+import { workspaceFSSnapshotService } from './workspacefs-snapshot-service';
 
 const logger = createLogger('Sandbox:Orchestrator');
 
@@ -50,9 +51,42 @@ export interface MigrationResult {
   error?: string;
 }
 
+// === Workspace Affinity Types ===
+
+/**
+ * An affinity binding keeps a workspace pinned to a specific sandbox provider.
+ * This preserves cache warmth (node_modules, pip cache, venvs) across commands.
+ */
+export interface AffinityBinding {
+  /** Workspace identifier (typically userId + workspace path) */
+  workspaceId: string;
+  /** The provider this workspace is bound to */
+  provider: SandboxProviderType;
+  /** The sandbox handle ID currently serving this workspace */
+  sandboxId: string;
+  /** The workspace directory path on the provider */
+  workspaceDir: string;
+  /** When the binding was created */
+  boundAt: number;
+  /** Last time the binding was used */
+  lastUsedAt: number;
+  /** How long the binding is valid after last use (ms) */
+  ttl: number;
+  /** Number of commands executed under this affinity */
+  commandCount: number;
+}
+
 export class SandboxOrchestrator {
   private warmPool = new Map<SandboxProviderType, SandboxHandle[]>();
   private sessions = new Map<string, OrchestratorSession>();
+
+  // === Workspace Affinity ===
+  /** Maps workspaceId → provider/sandbox binding for cache warmth */
+  private affinityBindings = new Map<string, AffinityBinding>();
+  /** How long an affinity binding is valid after last use (default: 10 min) */
+  private readonly AFFINITY_TTL_MS = parseInt(process.env.SANDBOX_AFFINITY_TTL_MS || '600000', 10);
+  /** Whether workspace affinity is enabled */
+  private readonly AFFINITY_ENABLED = process.env.SANDBOX_AFFINITY_ENABLED !== 'false';
   private readonly WARM_POOL_SIZE = 3;
   private readonly IDLE_TIMEOUT_MS = 5 * 60 * 1000;
   private readonly MIGRATION_CPU_THRESHOLD = 80;
@@ -61,6 +95,7 @@ export class SandboxOrchestrator {
   constructor() {
     void this.initializeWarmPool();
     this.startIdleCleanup();
+    this.startAffinityCleanup();
   }
 
   async getSandbox(options: {
@@ -90,7 +125,28 @@ export class SandboxOrchestrator {
     const routing = await taskRouter.analyzeTask(task);
     const policy = this.normalizePolicyForSandbox(explicitPolicy || risk.recommendedPolicy);
     const providerContext = this.buildTaskContext(routing.type, policy);
-    const provider = await providerRouter.selectOptimalProvider(providerContext);
+
+    // === Workspace Affinity: check for existing provider binding ===
+    const affinityWorkspaceId = `${userId}:${conversationId}`;
+    let affinity: AffinityBinding | null = null;
+    let provider: SandboxProviderType;
+
+    if (this.AFFINITY_ENABLED) {
+      affinity = this.getAffinity(affinityWorkspaceId);
+      if (affinity) {
+        provider = affinity.provider;
+        logger.info('Using affinity-bound provider', {
+          workspaceId: affinityWorkspaceId,
+          provider,
+          commandCount: affinity.commandCount,
+          age: Date.now() - affinity.boundAt,
+        });
+      } else {
+        provider = await providerRouter.selectOptimalProvider(providerContext);
+      }
+    } else {
+      provider = await providerRouter.selectOptimalProvider(providerContext);
+    }
 
     const warmSandbox = await this.getFromWarmPool(provider);
 
@@ -107,7 +163,33 @@ export class SandboxOrchestrator {
       });
 
       if (!session.sandboxHandle) {
-        handle = await this.createSandboxHandle(userId, conversationId, provider, policy);
+        // If affinity is active, reuse the same workspace directory so caches stay warm
+        const affinityWorkspaceDir = this.AFFINITY_ENABLED
+          ? affinity?.workspaceDir
+          : undefined;
+
+        try {
+          handle = await this.createSandboxHandle(
+            userId, conversationId, provider, policy,
+            affinityWorkspaceDir,
+          );
+        } catch (err: any) {
+          // If affinity-bound provider fails, evict the binding and fall back
+          if (this.AFFINITY_ENABLED && affinityWorkspaceDir) {
+            logger.warn('Affinity-bound provider failed, evicting and retrying', {
+              provider,
+              error: err.message,
+            });
+            this.evictAffinity(affinityWorkspaceId);
+            const fallbackProvider = await providerRouter.selectOptimalProvider(providerContext);
+            handle = await this.createSandboxHandle(
+              userId, conversationId, fallbackProvider, policy,
+            );
+            provider = fallbackProvider;
+          } else {
+            throw err;
+          }
+        }
       } else {
         handle = session.sandboxHandle;
       }
@@ -133,11 +215,41 @@ export class SandboxOrchestrator {
     resourceMonitor.startMonitoring(handle.id, provider);
     void this.replenishWarmPool(provider);
 
+    // === Phase 7: Restore workspace FS snapshot if available ===
+    // When a workspace re-binds after affinity expiry, restore cached
+    // dependencies (node_modules, venvs, etc.) from the previous snapshot.
+    if (this.AFFINITY_ENABLED && workspaceFSSnapshotService.hasSnapshot(affinityWorkspaceId)) {
+      try {
+        const restoreResult = await workspaceFSSnapshotService.restoreSnapshot(
+          affinityWorkspaceId,
+          handle,
+          userId,
+        );
+        if (restoreResult.restored) {
+          logger.info('Workspace FS snapshot restored on re-bind', {
+            workspaceId: affinityWorkspaceId,
+            cacheRestored: restoreResult.cacheRestored,
+          });
+        }
+      } catch (err: any) {
+        logger.warn('Failed to restore workspace FS snapshot', {
+          workspaceId: affinityWorkspaceId,
+          error: err.message,
+        });
+      }
+    }
+
+    // === Update workspace affinity ===
+    if (this.AFFINITY_ENABLED) {
+      this.setAffinity(affinityWorkspaceId, provider, handle.id, handle.workspaceDir);
+    }
+
     logger.info('Sandbox session created', {
       sessionId: orchestratorSession.sessionId,
       provider,
       policy,
       riskLevel: risk.level,
+      affinity: this.AFFINITY_ENABLED ? 'active' : 'disabled',
     });
 
     return orchestratorSession;
@@ -157,6 +269,12 @@ export class SandboxOrchestrator {
     }
 
     session.lastActivityAt = Date.now();
+
+    // === Touch workspace affinity to extend its TTL ===
+    if (this.AFFINITY_ENABLED) {
+      const affinityWorkspaceId = `${session.userId}:${session.conversationId}`;
+      this.touchAffinity(affinityWorkspaceId);
+    }
 
     const risk = assessRisk(command);
     if (risk.shouldBlock) {
@@ -440,22 +558,204 @@ export class SandboxOrchestrator {
     }
   }
 
+  // ==========================================================================
+  // Workspace Affinity Methods
+  // ==========================================================================
+
+  /**
+   * Get the affinity binding for a workspace, if still valid.
+   * Returns null if no binding exists or the binding has expired.
+   */
+  getAffinity(workspaceId: string): AffinityBinding | null {
+    const binding = this.affinityBindings.get(workspaceId);
+    if (!binding) return null;
+
+    const now = Date.now();
+    if (now - binding.lastUsedAt > binding.ttl) {
+      // Binding expired — evict it
+      logger.info('Affinity binding expired', {
+        workspaceId,
+        provider: binding.provider,
+        age: now - binding.boundAt,
+        idleMs: now - binding.lastUsedAt,
+      });
+      this.affinityBindings.delete(workspaceId);
+      return null;
+    }
+
+    return binding;
+  }
+
+  /**
+   * Create or update an affinity binding for a workspace.
+   * Subsequent commands for the same workspace will prefer this provider.
+   */
+  setAffinity(
+    workspaceId: string,
+    provider: SandboxProviderType,
+    sandboxId: string,
+    workspaceDir: string,
+  ): void {
+    const existing = this.affinityBindings.get(workspaceId);
+    const commandCount = existing ? existing.commandCount + 1 : 1;
+
+    this.affinityBindings.set(workspaceId, {
+      workspaceId,
+      provider,
+      sandboxId,
+      workspaceDir,
+      boundAt: existing?.boundAt ?? Date.now(),
+      lastUsedAt: Date.now(),
+      ttl: this.AFFINITY_TTL_MS,
+      commandCount,
+    });
+
+    logger.debug('Affinity binding set', {
+      workspaceId,
+      provider,
+      commandCount,
+    });
+  }
+
+  /**
+   * Touch an existing affinity binding to extend its TTL.
+   * Called on each command execution under an active binding.
+   */
+  touchAffinity(workspaceId: string): void {
+    const binding = this.affinityBindings.get(workspaceId);
+    if (binding) {
+      binding.lastUsedAt = Date.now();
+      binding.commandCount++;
+    }
+  }
+
+  /**
+   * Remove an affinity binding.
+   */
+  evictAffinity(workspaceId: string): void {
+    const existed = this.affinityBindings.delete(workspaceId);
+    if (existed) {
+      logger.info('Affinity binding evicted', { workspaceId });
+    }
+  }
+
+  /**
+   * Find an orchestrator session that matches the given workspaceId.
+   * Used during affinity cleanup to locate the user/session for snapshot creation.
+   */
+  private findSessionByWorkspaceId(workspaceId: string): OrchestratorSession | null {
+    // workspaceId format is "userId:conversationId"
+    const [userId, conversationId] = workspaceId.split(':');
+    if (!userId || !conversationId) return null;
+
+    for (const session of this.sessions.values()) {
+      if (session.userId === userId && session.conversationId === conversationId) {
+        return session;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Get affinity statistics for monitoring.
+   */
+  getAffinityStats(): {
+    activeBindings: number;
+    providers: Record<string, number>;
+    totalCommands: number;
+  } {
+    const now = Date.now();
+    const active = Array.from(this.affinityBindings.values())
+      .filter(b => now - b.lastUsedAt <= b.ttl);
+
+    const providerCounts: Record<string, number> = {};
+    let totalCommands = 0;
+    for (const b of active) {
+      providerCounts[b.provider] = (providerCounts[b.provider] || 0) + 1;
+      totalCommands += b.commandCount;
+    }
+
+    return {
+      activeBindings: active.length,
+      providers: providerCounts,
+      totalCommands,
+    };
+  }
+
+  /**
+   * Get affinity configuration for monitoring.
+   */
+  getAffinityConfig(): {
+    enabled: boolean;
+    ttlMs: number;
+  } {
+    return {
+      enabled: this.AFFINITY_ENABLED,
+      ttlMs: this.AFFINITY_TTL_MS,
+    };
+  }
+
+  // ==========================================================================
+  // Affinity-aware idle cleanup
+  // ==========================================================================
+
+  /**
+   * Start periodic cleanup of expired affinity bindings.
+   * Before evicting a binding, snapshots the workspace filesystem
+   * so caches can be restored when the workspace re-binds later.
+   */
+  private startAffinityCleanup(): void {
+    setInterval(async () => {
+      const now = Date.now();
+      for (const [workspaceId, binding] of this.affinityBindings.entries()) {
+        if (now - binding.lastUsedAt > binding.ttl) {
+          // Phase 7: Snapshot workspace filesystem before evicting affinity.
+          // This captures caches (node_modules, venvs, pip cache) so they can
+          // be restored when the workspace re-binds to a new provider later.
+          if (!workspaceFSSnapshotService.hasSnapshot(workspaceId)) {
+            const session = this.findSessionByWorkspaceId(workspaceId);
+            const userId = session?.userId || workspaceId.split(':')[0] || 'unknown';
+            try {
+              await workspaceFSSnapshotService.createSnapshot(
+                workspaceId,
+                userId,
+                binding.sandboxId,
+                binding.provider,
+                binding.workspaceDir,
+              );
+            } catch (err: any) {
+              logger.debug('Workspace FS snapshot skipped (best-effort)', {
+                workspaceId,
+                error: err.message,
+              });
+            }
+          }
+
+          this.evictAffinity(workspaceId);
+        }
+      }
+    }, 60000); // Check every minute
+  }
+
   private async createSandboxHandle(
     userId: string,
     conversationId: string,
     providerType: SandboxProviderType,
     policy: ExecutionPolicy,
+    workspaceDirOverride?: string,
   ): Promise<SandboxHandle> {
     const provider = await getSandboxProvider(providerType);
     const policyConfig = getExecutionPolicyConfig(policy);
     const preferredProviders = getPreferredProviders(policy);
 
     const safeUserId = userId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
-    // CRITICAL FIX: Normalize conversationId before sanitizing for workspace path
-    const simpleSessionId = normalizeSessionId(conversationId) || conversationId; // Use original if normalize returns empty
+    // Use override if provided (affinity reuse) or generate fresh path
+    const simpleSessionId = normalizeSessionId(conversationId) || conversationId;
     const safeConvId = simpleSessionId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
-    const workspaceDir = `/workspace/users/${safeUserId}/sessions/${safeConvId}`;
+    const workspaceDir = workspaceDirOverride || `/workspace/users/${safeUserId}/sessions/${safeConvId}`;
+
     const handle = await provider.createSandbox({
+      workspaceDir,
       language: 'typescript',
       autoStopInterval: 3600,
       envVars: {
@@ -475,8 +775,9 @@ export class SandboxOrchestrator {
         memory: policyConfig.resources?.memory || 2,
       },
     });
+
     await handle.executeCommand(`mkdir -p "${workspaceDir.replace(/(["\\$`])/g, '\\$1')}"`);
-    
+
     // Start VFS sync for bidirectional file sync between VFS database and sandbox
     try {
       sandboxFilesystemSync.startSync(handle.id, userId);
@@ -484,7 +785,7 @@ export class SandboxOrchestrator {
     } catch (syncErr: any) {
       logger.warn('Failed to start VFS sync for orchestrator sandbox:', syncErr.message);
     }
-    
+
     return handle;
   }
 }

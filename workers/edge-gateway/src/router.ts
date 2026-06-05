@@ -2,11 +2,13 @@
  * Request Router
  *
  * Routes incoming requests to the appropriate backend:
+ * - /v1/*           → OCI Backend (ninerouter OpenAI-compatible endpoint)
  * - /api/chat       → OCI Backend (Node.js Hono server)
  * - /api/*          → OCI Backend (or Vercel fallback)
  * - /copa/*         → OCI Backend (CopaMundial via shared tunnel)
  * - /nocturne/*     → OCI Backend (Nocturne via shared tunnel)
  * - /novnc/*        → OCI Backend (noVNC via shared tunnel)
+ * - /*.js,*.css,…   → Vercel Frontend (static assets, 1y cache)
  * - /*              → Vercel Frontend (Next.js)
  *
  * BACKEND_URL resolution order (per-request):

@@ -24,6 +24,7 @@
 
 import { enhancedLLMService } from '@/lib/chat/enhanced-llm-service';
 import { getSpecGenerationModel } from '@/lib/providers/model-ranker';
+import type { LLMResponse } from '@/lib/providers/llm-providers';
 
 export interface NextStepSuggestion {
   /** Short, clickable label (chip text). <= ~48 chars, ideally 2-6 words. */
@@ -175,7 +176,7 @@ export async function generateNextStepSuggestions(
     `nextstep-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 
   try {
-    const response = await enhancedLLMService.generateResponse({
+    const response = (await enhancedLLMService.generateResponse({
       provider: fastModel.provider,
       model: fastModel.model,
       system,
@@ -184,13 +185,14 @@ export async function generateNextStepSuggestions(
       stream: false,
       requestId: reqId,
       temperature: 0.4,
-    } as any);
+    } as any)) as LLMResponse | string | null | undefined;
 
-    // The service can return a string or an object depending on version.
+    // The service can return a string or an `LLMResponse` object. LLMResponse
+    // only has a `content` field — `.text` is dead code (see llm-providers.ts).
     const rawText =
       typeof response === 'string'
         ? response
-        : ((response as any)?.content ?? (response as any)?.text ?? '');
+        : (response?.content ?? '');
 
     const { suggestions } = parseSuggestions(rawText);
     return suggestions;

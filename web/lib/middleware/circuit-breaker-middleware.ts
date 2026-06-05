@@ -62,7 +62,7 @@ const DEFAULT_ROUTE_BREAKER_OPTIONS = {
 export async function withRouteCircuitBreaker(
   routeKey: string,
   handler: () => Promise<NextResponse>,
-  request?: NextRequest,
+  _request?: NextRequest,
 ): Promise<NextResponse> {
   let entry = routeBreakers.get(routeKey);
 
@@ -121,7 +121,10 @@ export async function withRouteCircuitBreaker(
 
 /**
  * Check whether a route's circuit breaker is currently OPEN.
- * Does NOT execute a handler and does NOT modify circuit state.
+ * Does NOT record success/failure and does NOT reset counters.
+ * Note: internally, canExecute() may auto-transition OPEN→HALF_OPEN
+ * when the recovery timeout has elapsed (this is standard circuit breaker
+ * behavior — the first probe after the timeout is allowed through).
  * Use this for pre-flight checks before processing a request.
  *
  * @example
@@ -136,13 +139,17 @@ export function checkRouteCircuitBreaker(routeKey: string): boolean {
   const entry = routeBreakers.get(routeKey);
   if (!entry) return false; // No breaker = assume healthy
 
-  // canExecute() checks state without modifying anything — no counter reset
   return !entry.breaker.canExecute();
 }
 
 /**
  * Record a success or failure for a route's circuit breaker.
  * Call this after the actual downstream call completes to track the outcome.
+ *
+ * IMPORTANT: This cannot close an OPEN circuit on its own — it relies on the
+ * recovery timeout to transition OPEN→HALF_OPEN first. Once in HALF_OPEN,
+ * recording a success will close the circuit and recording a failure will
+ * reopen it. See the CircuitBreaker class for details.
  *
  * @example
  * ```typescript
@@ -226,4 +233,5 @@ export function resetAllRouteCircuitBreakers(): void {
   for (const entry of routeBreakers.values()) {
     entry.breaker.reset();
   }
+  routeBreakers.clear();
 }

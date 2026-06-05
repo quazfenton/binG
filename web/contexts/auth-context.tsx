@@ -1,8 +1,44 @@
 "use client";
-
 import { createContext, useState, useContext, useEffect, ReactNode } from 'react';
 import { FEATURE_FLAGS } from '../.bing-infra-config/config/features';
 import { isDesktopMode } from '@bing/platform/env';
+
+/**
+ * Safely parse a fetch response as JSON, falling back to a text snippet
+ * when the server returns a non-JSON body (e.g. an HTML error page from
+ * the Next.js dev overlay or a reverse proxy). Returns a structured
+ * `{ error, raw }` shape so callers can surface a useful message instead
+ * of a confusing "Unexpected token <" SyntaxError.
+ */
+async function safeParseResponse(
+  response: Response
+): Promise<{ data: any; rawText: string; contentType: string | null }> {
+  const contentType = response.headers.get('content-type');
+  const rawText = await response.text();
+  if (contentType && contentType.includes('application/json')) {
+    try {
+      return { data: JSON.parse(rawText), rawText, contentType };
+    } catch {
+      // Fall through to text handling below.
+    }
+  }
+  // Try JSON anyway — some servers forget to set the content-type.
+  if (rawText && (rawText.trimStart().startsWith('{') || rawText.trimStart().startsWith('['))) {
+    try {
+      return { data: JSON.parse(rawText), rawText, contentType };
+    } catch {
+      // Not JSON.
+    }
+  }
+  // Surface a short snippet of the HTML/text body so users get a useful
+  // diagnostic instead of a generic SyntaxError.
+  const snippet = rawText.replace(/\s+/g, ' ').slice(0, 240);
+  return {
+    data: { error: snippet ? `Server returned non-JSON response (${response.status})` : `Request failed with status ${response.status}` },
+    rawText,
+    contentType,
+  };
+}
 
 interface User {
   id: number;
@@ -227,8 +263,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         credentials: 'include', // Include cookies for session
       });
 
-      const data = await response.json();
-      
+      const { data } = await safeParseResponse(response);
+
       if (!response.ok) {
         throw new Error(data.error || 'Login failed');
       }
@@ -323,7 +359,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         credentials: 'include', // Include cookies for session
       });
 
-      const data = await response.json();
+      const { data } = await safeParseResponse(response);
 
       if (!response.ok) {
         throw new Error(data.error || 'Registration failed');

@@ -30,8 +30,34 @@ import {
   materializeWorkspace,
   watchWorkspaceForChanges,
 } from '@/lib/virtual-filesystem/vfs-workspace-materializer';
-import { syncFileToVfs } from '@/lib/virtual-filesystem/vfs-workspace-materializer';
-import { getDatabase } from '@/lib/database/connection';
+
+import {
+  isR2FuseAvailable,
+  buildR2ContainerInitScript,
+  resolveR2WorkspaceDir,
+  sanitizeUserId,
+  unmountR2FromHost,
+  mountR2OnHost,
+  cleanupOrphanedR2Mounts,
+} from '@/lib/terminal/r2-mount-helper';
+import {
+  buildBwrapSetupCommands,
+  buildChrootSetupCommands,
+  buildDockerOnVMCommands,
+  buildSharedShellSetupCommands,
+  getOracleUserWorkspace,
+  sanitizeOracleUserId,
+  shellSafe,
+  CHROOT_ROOTFS_TARBALL,
+} from '@/lib/terminal/oracle-vm-isolation';
+import {
+  classifyCommand,
+  executeWithRouting,
+  type ExecutionRouterConfig,
+  type ClassifiedCommand,
+} from '@/lib/terminal/execution-router';
+import { virtualPidRegistry } from '@/lib/terminal/virtual-pid-registry';
+import { sandboxOrchestrator } from '@/lib/sandbox/sandbox-orchestrator';
 
 const logger = createLogger('LocalPTY');
 
@@ -244,6 +270,14 @@ interface LocalPtySession {
   vfsWatcher?: { stop: () => void };
   // Real workspace directory on disk (materialized from VFS)
   workspaceDir: string;
+  // R2 Docker mode: indicates R2 mount strategy ('host' | 'container' | null)
+  r2MountStrategy?: 'host' | 'container' | null;
+  // Oracle VM isolation metadata
+  oracleIsolation?: 'bwrap' | 'chroot' | 'docker' | 'shared-shell';
+  // Oracle VM container name for Docker-based isolation (for cleanup)
+  oracleContainerName?: string;
+  // Execution routing: intercept non-trivial commands and route to sandbox providers
+  executionRouterEnabled?: boolean;
 }
 
 // Security: Max sessions per user to prevent resource exhaustion
@@ -260,7 +294,7 @@ const sessions = globalThis.__localPtySessions ??= new Map<string, LocalPtySessi
 // Configuration
 // ============================================================
 
-type IsolationMode = 'off' | 'localhost' | 'unshare' | 'docker' | 'oracle-vm' | 'on';
+type IsolationMode = 'off' | 'localhost' | 'unshare' | 'docker' | 'r2-docker' | 'oracle-vm' | 'on';
 
 /**
  * Read the current isolation mode from the environment.
@@ -275,6 +309,14 @@ function getIsolationMode(): IsolationMode {
 const DOCKER_IMAGE = process.env.LOCAL_PTY_DOCKER_IMAGE || 'node:20-slim';
 const DOCKER_MEMORY = process.env.LOCAL_PTY_DOCKER_MEMORY || '512m';
 const DOCKER_CPU = process.env.LOCAL_PTY_DOCKER_CPU || '1';
+
+// R2 Docker isolation config — s3fs-fuse container with R2 as /workspace
+const R2_DOCKER_IMAGE = process.env.R2_TERMINAL_DOCKER_IMAGE || 'bing-terminal-r2:latest';
+const R2_DOCKER_MEMORY = process.env.R2_TERMINAL_DOCKER_MEMORY || '512m';
+const R2_DOCKER_CPU = process.env.R2_TERMINAL_DOCKER_CPU || '1';
+
+// Execution routing config — enabled via EXECUTION_ROUTING_ENABLED env var
+const EXECUTION_ROUTING_ENABLED = process.env.EXECUTION_ROUTING_ENABLED === 'true';
 
 // Input limits
 const MAX_COLS = 500;
@@ -300,11 +342,19 @@ const cleanupInterval = setInterval(async () => {
   }
 }, CLEANUP_INTERVAL);
 
+// Cleanup orphaned R2 mounts on module load (recover from previous crashes)
+cleanupOrphanedR2Mounts().catch((err) => {
+  logger.warn('[Local PTY] Failed to clean up orphaned R2 mounts on startup', { error: err.message });
+});
+
 // Cleanup on process exit
 if (typeof process !== 'undefined') {
   process.on('exit', () => {
     for (const [id, session] of Array.from(sessions.entries())) {
       try {
+        if (session.r2MountStrategy === 'host') {
+          unmountR2FromHost(session.userId).catch(() => {});
+        }
         session.pty.kill();
       } catch { /* ignore */ }
       // Also close SSH clients for Oracle VM sessions
@@ -314,16 +364,27 @@ if (typeof process !== 'undefined') {
     }
   });
 
-  process.on('SIGTERM', () => {
+  process.on('SIGTERM', async () => {
     clearInterval(cleanupInterval);
-    // Graceful shutdown — kill all sessions
+    // Graceful shutdown — kill all sessions and unmount R2
+    const cleanupPromises: Promise<void>[] = [];
     for (const [id, session] of Array.from(sessions.entries())) {
       try {
         if (session.vfsWatcher) session.vfsWatcher.stop();
+        if (session.r2MountStrategy === 'host') {
+          cleanupPromises.push(unmountR2FromHost(session.userId));
+        }
         if (session.sshClient) session.sshClient.end();
         session.pty.kill();
       } catch { /* ignore */ }
     }
+    // Wait for all R2 unmounts to complete before exiting (with 5s timeout)
+    try {
+      await Promise.race([
+        Promise.all(cleanupPromises),
+        new Promise((r) => setTimeout(r, 5000)),
+      ]);
+    } catch { /* best effort */ }
     process.exit(0);
   });
 }
@@ -339,8 +400,37 @@ async function cleanupSession(id: string, session: LocalPtySession): Promise<voi
       }
     }
 
+    // Clean up workspace services created by this session's daemon commands
+    try {
+      const { workspaceServiceManager } = await import('@/lib/terminal/workspace-service-manager');
+      workspaceServiceManager.clearWorkspace(id);
+    } catch { /* service manager may not be available */ }
+
+    // Unmount R2 from host if this was a host-mounted R2 Docker session
+    if (session.r2MountStrategy === 'host') {
+      try {
+        await unmountR2FromHost(session.userId);
+      } catch (err: any) {
+        logger.warn('[Local PTY] Failed to unmount R2 during cleanup', {
+          sessionId: id,
+          error: err.message,
+        });
+      }
+    }
+
     // Close SSH client for Oracle VM sessions (also kills the pseudo-PTY)
     if (session.sshClient) {
+      // If Oracle Docker isolation, clean up the remote container first
+      if (session.oracleIsolation === 'docker' && session.oracleContainerName) {
+        try {
+          const { execFile } = await import('child_process');
+          // SSH exec to remove the remote Docker container
+          // We use the same SSH client that's already connected
+          await new Promise<void>((resolveC) => {
+            session.sshClient.exec(`docker rm -f ${session.oracleContainerName} 2>/dev/null || true`, () => resolveC());
+          });
+        } catch { /* best effort remote cleanup */ }
+      }
       try {
         session.sshClient.end();
       } catch {
@@ -684,6 +774,17 @@ export async function POST(req: NextRequest) {
       ));
     }
 
+    // === Isolation mode: R2 Docker (s3fs-fuse mount, no VFS sync) ===
+    if (ENABLE_LOCAL_PTY === 'r2-docker') {
+      return addAnonSessionCookie(await createR2DockerPtySession(
+        sessionId,
+        authResult.userId,
+        cols,
+        rows,
+        ptyShell
+      ));
+    }
+
     // === Isolation mode: Docker ===
     if (ENABLE_LOCAL_PTY === 'docker') {
       return addAnonSessionCookie(await createDockerPtySession(
@@ -714,6 +815,385 @@ export async function POST(req: NextRequest) {
       { status: 500 }
     ));
   }
+}
+
+// ============================================================
+// R2 Docker Container Isolation (s3fs-fuse, zero VFS sync)
+// ============================================================
+
+/**
+ * Create a PTY session in a Docker container with R2 mounted as /workspace.
+ *
+ * This is the recommended mode for production terminal use:
+ * - Files are stored directly in Cloudflare R2 (no VFS sync layer)
+ * - No materialization, no polling, no double-write
+ * - The filesystem IS the storage — instant consistency
+ * - Container has FUSE support for s3fs mount
+ * - Falls back to VFS-based Docker mode if R2 is unavailable
+ */
+async function createR2DockerPtySession(
+  sessionId: string,
+  userId: string,
+  cols: number,
+  rows: number,
+  ptyShell: string
+): Promise<NextResponse> {
+  const { spawn } = await import('child_process');
+
+  // Check if R2 is available — fall back to VFS Docker mode if not
+  const r2Available = await isR2FuseAvailable();
+  if (!r2Available) {
+    logger.warn('[Local PTY] R2 FUSE mount unavailable, falling back to VFS Docker mode', {
+      sessionId,
+      userId: sanitizeUserId(userId),
+    });
+    // Fall through to VFS Docker: materialize workspace and use bind-mount
+    const nodePty = await import('node-pty');
+    const workspaceDir = await resolveWorkspaceDir(userId);
+    const vfsWatcher = watchWorkspaceForChanges(userId);
+    return createDockerPtySessionWithVfs(
+      nodePty,
+      sessionId,
+      userId,
+      cols,
+      rows,
+      workspaceDir,
+      ptyShell,
+      vfsWatcher
+    );
+  }
+
+  // Generate unique container name
+  const containerName = `pty-r2-${sessionId.slice(0, 12)}`;
+
+  // Determine the workspace path — /workspace inside container, or host path if host-mount strategy
+  const workspacePath = resolveR2WorkspaceDir(userId);
+
+  // Host-mount strategy: mount R2 on host first
+  const useHostMount = process.env.R2_MOUNT_INSIDE_CONTAINER === 'false';
+  let hostMountPoint: string | null = null;
+
+  if (useHostMount) {
+    try {
+      hostMountPoint = await mountR2OnHost(userId);
+      logger.info('[Local PTY] R2 mounted on host for Docker', {
+        sessionId,
+        userId: sanitizeUserId(userId),
+        mountPoint: hostMountPoint,
+      });
+    } catch (err: any) {
+      logger.error('[Local PTY] Failed to mount R2 on host, falling back to VFS Docker', {
+        error: err.message,
+      });
+      const nodePty = await import('node-pty');
+      const workspaceDir = await resolveWorkspaceDir(userId);
+      const vfsWatcher = watchWorkspaceForChanges(userId);
+      return createDockerPtySessionWithVfs(
+        nodePty,
+        sessionId,
+        userId,
+        cols,
+        rows,
+        workspaceDir,
+        ptyShell,
+        vfsWatcher
+      );
+    }
+  }
+
+  // Build Docker run arguments
+  const dockerArgs = [
+    'run',
+    '-d',
+    '--name', containerName,
+    '--memory', R2_DOCKER_MEMORY,
+    '--cpus', R2_DOCKER_CPU,
+    '--network', 'none',          // No network access (security)
+    '--rm',                        // Auto-remove on exit
+    '--security-opt', 'no-new-privileges', // Prevent privilege escalation
+    '-w', workspacePath,
+    // No need for --cap-add SYS_ADMIN in host-mount mode
+    ...(useHostMount ? [] : ['--cap-add', 'SYS_ADMIN', '--device', '/dev/fuse']),
+    // R2 config as env vars (for container-side mount)
+    '-e', `R2_ACCESS_KEY_ID=${process.env.R2_ACCESS_KEY_ID || ''}`,
+    '-e', `R2_SECRET_ACCESS_KEY=${process.env.R2_SECRET_ACCESS_KEY || ''}`,
+    '-e', `R2_ENDPOINT=${process.env.R2_ENDPOINT || ''}`,
+    '-e', `R2_BUCKET=${process.env.R2_BUCKET || ''}`,
+    '-e', `R2_WORKSPACE_PREFIX=users/${sanitizeUserId(userId)}/workspace/`,
+    '-e', `WORKSPACE_MOUNT=${workspacePath}`,
+    '-e', `SHELL=/bin/bash`,
+  ];
+
+  // Add host-side mount if using that strategy
+  if (useHostMount && hostMountPoint) {
+    dockerArgs.push('-v', `${hostMountPoint}:${workspacePath}:shared`);
+  }
+
+  dockerArgs.push(
+    R2_DOCKER_IMAGE,
+    // Keep container alive — we exec into it for the shell
+    'sleep', 'infinity'
+  );
+
+  return new Promise<NextResponse>((resolve) => {
+    const dockerProcess = spawn('docker', dockerArgs);
+    let containerId = '';
+    let dockerError = '';
+
+    dockerProcess.stdout.on('data', (data) => {
+      containerId = data.toString().trim();
+    });
+
+    dockerProcess.stderr.on('data', (data) => {
+      dockerError += data.toString();
+    });
+
+    dockerProcess.on('error', (err) => {
+      logger.error('[Local PTY] R2 Docker spawn error', { error: err.message });
+      if (hostMountPoint) unmountR2FromHost(userId).catch(() => {});
+      resolve(NextResponse.json(
+        { error: 'Failed to start R2 Docker container', details: err.message, mode: 'sandbox' },
+        { status: 500 }
+      ));
+    });
+
+    dockerProcess.on('close', async (code) => {
+      if (code !== 0 || !containerId) {
+        logger.error('[Local PTY] R2 Docker container failed to start', {
+          error: dockerError,
+          exitCode: code,
+        });
+        if (hostMountPoint) await unmountR2FromHost(userId).catch(() => {});
+        resolve(NextResponse.json(
+          { error: 'Failed to start R2 Docker container', details: dockerError || `Exit code: ${code}`, mode: 'sandbox' },
+          { status: 500 }
+        ));
+        return;
+      }
+
+      logger.info('[Local PTY] R2 Docker container started', { containerId, sessionId });
+
+      // Wait for container to be ready
+      if (!useHostMount) {
+        // Container-side mount: run the init script to mount R2
+        await runR2InitScript(containerId, sessionId);
+      }
+
+      // Verify workspace is ready
+      const ready = await waitForContainerReady(containerId, workspacePath, 15);
+      if (!ready) {
+        logger.error('[Local PTY] R2 Docker container never became ready', { containerId });
+        try { await cleanupDockerContainer(containerId); } catch { /* ignore */ }
+        if (hostMountPoint) await unmountR2FromHost(userId).catch(() => {});
+        resolve(NextResponse.json(
+          { error: 'R2 Docker container failed to initialize workspace', mode: 'sandbox' },
+          { status: 500 }
+        ));
+        return;
+      }
+
+      // Now use node-pty to exec bash into the container
+      const nodePty = await import('node-pty');
+      const safeCols = Math.max(1, Math.min(cols, 500));
+      const safeRows = Math.max(1, Math.min(rows, 200));
+
+      const pty = nodePty.spawn('docker', [
+        'exec', '-i', containerId,
+        '/bin/bash', '-i',
+      ], {
+        name: 'xterm-256color',
+        cols: safeCols,
+        rows: safeRows,
+        cwd: workspacePath,
+        env: {
+          TERM: 'xterm-256color',
+          HOME: workspacePath,
+          PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+          LANG: 'en_US.UTF-8',
+          PS1: '\\[\\033[1;32m\\]➜\\[\\033[0m\\] \\[\\033[36m\\]\\u\\[\\033[0m\\]@\\[\\033[33m\\]workspace\\[\\033[0m\\] \\W \\$ ',
+        },
+      });
+
+      registerSession(sessionId, userId, pty, workspacePath, {
+        dockerContainerId: containerId,
+        r2MountStrategy: useHostMount ? 'host' : 'container',
+        // No VFS watcher — R2 IS the storage, no sync needed
+      });
+
+      // Note: R2 unmount on cleanup is handled by cleanupSession()
+      // via the r2MountStrategy field — no monkey-patching needed.
+
+      logger.info('[Local PTY] R2 Docker session created', {
+        sessionId,
+        userId: sanitizeUserId(userId),
+        containerId,
+        mountStrategy: useHostMount ? 'host' : 'container',
+      });
+
+      resolve(NextResponse.json({
+        sessionId,
+        mode: 'r2-docker',
+        workspaceDir: workspacePath,
+        storage: 'r2',
+        mountStrategy: useHostMount ? 'host' : 'container',
+      }));
+    });
+  });
+}
+
+/**
+ * Run the R2 init script inside the container to mount R2 via s3fs.
+ * Only used when MOUNT_INSIDE_CONTAINER=true (container mounts R2 itself).
+ */
+async function runR2InitScript(containerId: string, sessionId: string): Promise<void> {
+  const { execFile } = await import('child_process');
+  const initScript = buildR2ContainerInitScript();
+
+  return new Promise<void>((resolve) => {
+    // Write the init script to a temp file and pipe it into the container
+    execFile('docker', [
+      'exec', '-i', containerId,
+      '/bin/bash', '-c', initScript,
+    ], { timeout: 30000, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err) {
+        logger.warn('[Local PTY] R2 init script had errors', {
+          containerId,
+          sessionId,
+          error: err.message,
+          stderr: stderr?.slice(0, 500),
+        });
+      } else {
+        logger.info('[Local PTY] R2 init script completed', { containerId, sessionId });
+      }
+      resolve();
+    });
+  });
+}
+
+/**
+ * Wait for the container to become ready (filesystem mounted, shell available).
+ */
+async function waitForContainerReady(
+  containerId: string,
+  workspacePath: string,
+  maxAttempts: number = 15
+): Promise<boolean> {
+  const { execFile } = await import('child_process');
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      await new Promise<void>((resolve, reject) => {
+        execFile('docker', [
+          'exec', containerId,
+          'test', '-d', workspacePath,
+          '-a', '-w', workspacePath,
+        ], { timeout: 5000 }, (err) => {
+          if (err) reject(err);
+          else resolve();
+        });
+      });
+      return true;
+    } catch {
+      await new Promise((r) => setTimeout(r, 500 + attempt * 200));
+    }
+  }
+  return false;
+}
+
+/**
+ * Fallback: create a Docker PTY session using the VFS materialization approach.
+ * Used when R2 is unavailable or the R2 Docker mode fails to initialize.
+ */
+async function createDockerPtySessionWithVfs(
+  nodePty: typeof import('node-pty'),
+  sessionId: string,
+  userId: string,
+  cols: number,
+  rows: number,
+  workspaceDir: string,
+  ptyShell: string,
+  vfsWatcher: { stop: () => void }
+): Promise<NextResponse> {
+  const { spawn } = await import('child_process');
+  const containerName = `pty-${sessionId.slice(0, 12)}`;
+
+  const dockerProcess = spawn('docker', [
+    'run', '-d',
+    '--name', containerName,
+    '--memory', DOCKER_MEMORY,
+    '--cpus', DOCKER_CPU,
+    '--network', 'none',
+    '--rm',
+    '-v', `${workspaceDir}:/workspace`,
+    '-w', '/workspace',
+    DOCKER_IMAGE,
+    'sleep', 'infinity',
+  ]);
+
+  return new Promise<NextResponse>((resolve) => {
+    let containerId = '';
+    let dockerError = '';
+
+    dockerProcess.stdout.on('data', (data) => { containerId = data.toString().trim(); });
+    dockerProcess.stderr.on('data', (data) => { dockerError += data.toString(); });
+
+    dockerProcess.on('error', (err) => {
+      vfsWatcher.stop();
+      resolve(NextResponse.json(
+        { error: 'Failed to start Docker container', details: err.message, mode: 'sandbox' },
+        { status: 500 }
+      ));
+    });
+
+    dockerProcess.on('close', async (code) => {
+      if (code !== 0 || !containerId) {
+        vfsWatcher.stop();
+        resolve(NextResponse.json(
+          { error: 'Failed to start Docker container', details: dockerError || `Exit code: ${code}`, mode: 'sandbox' },
+          { status: 500 }
+        ));
+        return;
+      }
+
+      const ready = await waitForContainerReady(containerId, '/workspace', 10);
+      if (!ready) {
+        try { await cleanupDockerContainer(containerId); } catch { /* ignore */ }
+        vfsWatcher.stop();
+        resolve(NextResponse.json(
+          { error: 'Docker container failed to initialize', mode: 'sandbox' },
+          { status: 500 }
+        ));
+        return;
+      }
+
+      const safeCols = Math.max(1, Math.min(cols, 500));
+      const safeRows = Math.max(1, Math.min(rows, 200));
+
+      const pty = nodePty.spawn('docker', [
+        'exec', '-i', containerId,
+        'bash', '-i',
+      ], {
+        name: 'xterm-256color',
+        cols: safeCols,
+        rows: safeRows,
+        cwd: '/workspace',
+        env: {
+          TERM: 'xterm-256color',
+          HOME: '/workspace',
+          PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+          LANG: 'en_US.UTF-8',
+          PS1: '\\[\\033[1;32m\\]➜\\[\\033[0m\\] \\[\\033[36m\\]\\u\\[\\033[0m\\]@\\[\\033[33m\\]workspace\\[\\033[0m\\] \\W \\$ ',
+        },
+      });
+
+      registerSession(sessionId, userId, pty, workspaceDir, {
+        dockerContainerId: containerId,
+        vfsWatcher,
+      });
+
+      resolve(NextResponse.json({ sessionId, mode: 'docker', workspaceDir }));
+    });
+  });
 }
 
 // ============================================================
@@ -1115,244 +1595,7 @@ cd "$WORKSPACE_ROOT" 2>/dev/null || true
 }
 
 // ============================================================
-// Remote VFS Sync for Oracle VM
-// ============================================================
-
-/**
- * Safely escape a string for use in a remote SSH shell command.
- * Prevents command injection via malicious filenames or workspace paths.
- */
-function shellEscape(s: string): string {
-  // Replace single quotes with '\'' (end quote, escaped quote, start quote)
-  // This is the safest cross-platform shell escape method
-  return `'${s.replace(/'/g, "'\\''")}'`;
-}
-
-/**
- * Poll the remote Oracle VM workspace for file changes and sync them to the VFS database.
- * Uses SSH exec commands to list files and read content.
- * Returns a stop function to cancel the sync loop.
- */
-function startRemoteVfsSync(
-  sshClient: any,
-  userId: string,
-  remoteWorkspace: string,
-  sessionId: string
-): { stop: () => void } {
-  let stopped = false;
-  let execInProgress = false; // Prevent overlapping exec calls
-  const POLL_INTERVAL_MS = 5000; // Check every 5 seconds
-  const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5 MB limit
-  const fileState = new Map<string, { size: number; mtime: string }>();
-
-  // Validate the remote workspace path to prevent command injection
-  const SAFE_PATH_RE = /^[a-zA-Z0-9_./-]+$/;
-  if (!SAFE_PATH_RE.test(remoteWorkspace)) {
-    logger.error('[Local PTY] Unsafe Oracle VM workspace path — VFS sync disabled', {
-      remoteWorkspace,
-    });
-    return { stop: () => {} }; // No-op stop function
-  }
-
-  // Execute a command on the remote VM via the existing SSH client
-  async function execRemote(command: string): Promise<string> {
-    if (stopped || execInProgress) {
-      if (execInProgress) throw new Error('SSH exec already in progress');
-      throw new Error('Remote VFS sync is stopped');
-    }
-
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error('SSH exec timeout'));
-      }, 30000); // 30s timeout per exec
-
-      execInProgress = true;
-      sshClient.exec(command, (err: any, stream: any) => {
-        if (err) {
-          clearTimeout(timeout);
-          execInProgress = false;
-          return reject(err);
-        }
-        let output = '';
-        stream.on('data', (data: Buffer) => { output += data.toString(); });
-        stream.stderr.on('data', () => { /* ignore stderr */ });
-        stream.on('close', (code: number) => {
-          clearTimeout(timeout);
-          execInProgress = false;
-          if (code === 0) resolve(output);
-          else reject(new Error(`Remote command failed with code ${code}`));
-        });
-        stream.on('error', (err: any) => {
-          clearTimeout(timeout);
-          execInProgress = false;
-          reject(err);
-        });
-      });
-    });
-  }
-
-  async function pollRemoteChanges(): Promise<void> {
-    if (stopped) return;
-
-    try {
-      // SECURITY: remoteWorkspace is validated above with SAFE_PATH_RE
-      const escapedWorkspace = shellEscape(remoteWorkspace);
-      // Use find + stat for portable file listing (GNU and BSD compatible)
-      // Limit to 1000 files to prevent resource exhaustion on large directories
-      const fileListOutput = await execRemote(
-        `find ${escapedWorkspace} -type f -exec stat -c '%n\\t%s\\t%Y' {} + 2>/dev/null | head -n 1000 || true`
-      );
-
-      const currentFiles = new Map<string, { size: number; mtime: string }>();
-      const newFiles: string[] = [];
-      const modifiedFiles: string[] = [];
-
-      // Parse the output — stat output is: fullPath\tsize\tmtime
-      for (const line of fileListOutput.trim().split('\n').filter(Boolean)) {
-        const parts = line.split('\t');
-        if (parts.length < 3) continue;
-        const fullPath = parts[0];
-        const sizeStr = parts[1];
-        const mtime = parts[2];
-        const size = parseInt(sizeStr, 10);
-        if (isNaN(size)) continue;
-
-        // Strip the workspace prefix to get relative path
-        const relPath = fullPath.startsWith(remoteWorkspace + '/')
-          ? fullPath.slice(remoteWorkspace.length + 1)
-          : fullPath;
-
-        // SECURITY: Validate relative path — reject traversal attempts
-        if (relPath.startsWith('..') || relPath.startsWith('/') || relPath.includes('\0')) continue;
-
-        // Skip large files
-        if (size > MAX_FILE_SIZE) continue;
-
-        currentFiles.set(relPath, { size, mtime });
-
-        const prevState = fileState.get(relPath);
-        if (!prevState) {
-          newFiles.push(relPath);
-        } else if (mtime !== prevState.mtime || size !== prevState.size) {
-          modifiedFiles.push(relPath);
-        }
-      }
-
-      // Sync new files to VFS
-      for (const filePath of newFiles) {
-        try {
-          // SECURITY: Validate and escape the file path
-          if (!SAFE_PATH_RE.test(filePath)) continue;
-          const escapedPath = shellEscape(filePath);
-          const content = await execRemote(`cat ${escapedWorkspace}/${escapedPath} 2>/dev/null || true`);
-          if (content) {
-            await syncRemoteFileToVfsDirect(userId, filePath, content);
-            const stat = currentFiles.get(filePath)!;
-            fileState.set(filePath, stat);
-          }
-        } catch (err: any) {
-          logger.debug('Failed to sync new remote file', { path: filePath, error: err.message });
-        }
-      }
-
-      // Sync modified files
-      for (const filePath of modifiedFiles) {
-        try {
-          if (!SAFE_PATH_RE.test(filePath)) continue;
-          const escapedPath = shellEscape(filePath);
-          const content = await execRemote(`cat ${escapedWorkspace}/${escapedPath} 2>/dev/null || true`);
-          if (content) {
-            await syncRemoteFileToVfsDirect(userId, filePath, content);
-            const stat = currentFiles.get(filePath)!;
-            fileState.set(filePath, stat);
-          }
-        } catch (err: any) {
-          logger.debug('Failed to sync modified remote file', { path: filePath, error: err.message });
-        }
-      }
-
-      // Detect deleted files
-      for (const [filePath] of fileState) {
-        if (!currentFiles.has(filePath)) {
-          try {
-            await syncFileToVfs(userId, filePath, 'delete');
-          } catch { /* ignore */ }
-          fileState.delete(filePath);
-        }
-      }
-    } catch (err: any) {
-      // SSH exec can fail during cleanup or connection loss — don't spam logs
-      if (!stopped && !err.message?.includes('closed') && !err.message?.includes('timeout')) {
-        logger.debug('Remote VFS sync poll failed', { error: err.message });
-      }
-    }
-  }
-
-  // Initial snapshot
-  pollRemoteChanges().catch(() => {});
-
-  // Start polling
-  const interval = setInterval(() => {
-    if (!execInProgress) {
-      pollRemoteChanges().catch(() => {});
-    }
-  }, POLL_INTERVAL_MS);
-
-  return {
-    stop: () => {
-      stopped = true;
-      clearInterval(interval);
-      logger.info('Remote VFS sync stopped', { sessionId });
-    },
-  };
-}
-
-/**
- * Sync file content directly to VFS database (bypasses local filesystem read).
- * Used for remote files where we already have the content from SSH.
- */
-async function syncRemoteFileToVfsDirect(
-  userId: string,
-  filePath: string,
-  content: string
-): Promise<void> {
-  const normalizedId = userId.replace(/^anon:/, '').replace(/\.\./g, '').replace(/[\\/ \0]/g, '_').substring(0, 255) || '_default';
-
-  try {
-    const db = getDatabase();
-    const ext = require('path').extname(filePath).toLowerCase();
-    const languageMap: Record<string, string> = {
-      '.js': 'javascript', '.jsx': 'javascript', '.ts': 'typescript', '.tsx': 'typescript',
-      '.py': 'python', '.rb': 'ruby', '.go': 'go', '.rs': 'rust',
-      '.html': 'html', '.css': 'css', '.json': 'json', '.md': 'markdown',
-      '.yaml': 'yaml', '.yml': 'yaml', '.xml': 'xml',
-      '.sh': 'shell', '.bash': 'shell', '.ps1': 'powershell',
-      '.sql': 'sql', '.java': 'java', '.cpp': 'cpp', '.c': 'c',
-    };
-    const language = languageMap[ext] || 'plaintext';
-
-    db.prepare(
-      `INSERT OR REPLACE INTO vfs_workspace_files
-       (owner_id, path, content, language, size, version, updated_at)
-       VALUES (?, ?, ?, ?, ?, COALESCE(
-         (SELECT version FROM vfs_workspace_files WHERE owner_id = ? AND path = ?) + 1,
-         1
-       ), datetime('now'))`
-    ).run(normalizedId, filePath, content, language, Buffer.byteLength(content, 'utf-8'), normalizedId, filePath);
-
-    db.prepare(
-      `INSERT OR REPLACE INTO vfs_workspace_meta (owner_id, version, root, updated_at)
-       VALUES (?, COALESCE((SELECT version FROM vfs_workspace_meta WHERE owner_id = ?) + 1, 1), ?, datetime('now'))`
-    ).run(normalizedId, normalizedId, process.env.ORACLE_VM_WORKSPACE || '/home/opc/workspace');
-  } catch (err: any) {
-    if (!err.message?.includes('no such table')) {
-      logger.error('Failed to sync remote file to VFS', { path: filePath, error: err.message });
-    }
-  }
-}
-
-// ============================================================
-// Oracle VM (SSH-based PTY)
+// Oracle VM (Per-User Isolated PTY via SSH)
 // ============================================================
 
 /**
@@ -1373,29 +1616,30 @@ async function createOracleVMPtySession(
   const username = process.env.ORACLE_VM_USER || 'opc';
   const privateKey = process.env.ORACLE_VM_PRIVATE_KEY;
   const privateKeyPath = process.env.ORACLE_VM_KEY_PATH;
-  const workspace = process.env.ORACLE_VM_WORKSPACE || '/home/opc/workspace';
 
   if (!host) {
-    return NextResponse.json(
-      {
-        error: 'Oracle VM is not configured (ORACLE_VM_HOST not set)',
-        hint: 'Set ORACLE_VM_HOST and ORACLE_VM_KEY_PATH in your environment.',
-        mode: 'sandbox',
-      },
-      { status: 503 }
-    );
+    return NextResponse.json({
+      error: 'Oracle VM is not configured (ORACLE_VM_HOST not set)',
+      hint: 'Set ORACLE_VM_HOST and ORACLE_VM_KEY_PATH in your environment.',
+      mode: 'sandbox',
+    }, { status: 503 });
   }
 
   const safeCols = Math.max(1, Math.min(cols, 500));
   const safeRows = Math.max(1, Math.min(rows, 200));
 
+  // Build isolation commands for the per-user workspace
+  const userWorkspace = getOracleUserWorkspace(userId);
+  const bwrapCmds = buildBwrapSetupCommands(userId);
+  const chrootCmds = buildChrootSetupCommands(userId);
+  const dockerCmds = buildDockerOnVMCommands(userId, sessionId);
+  const sharedCmds = buildSharedShellSetupCommands(userId, process.env.ORACLE_VM_WORKSPACE || '/home/opc/workspace');
+
   return new Promise<NextResponse>((resolve) => {
     const client = new Client();
 
     const connectionConfig: any = {
-      host,
-      port,
-      username,
+      host, port, username,
       readyTimeout: 15000,
       keepaliveInterval: 10000,
       keepaliveCountMax: 3,
@@ -1416,85 +1660,85 @@ async function createOracleVMPtySession(
     }
 
     client.on('ready', () => {
-      // STEP 1: Create cd-override script on the remote VM
-      const remoteInitPath = `${workspace}/.binG-temp/_safe_oracle_init.sh`;
-      const mkdirCmd = `mkdir -p '${workspace}/.binG-temp'`;
-      const cdOverrideScript = `#!/bin/bash
-# Safe shell init inside Oracle VM - prevent cd from escaping workspace
-WORKSPACE_ROOT="${workspace}"
+      // Run setup commands BEFORE opening the shell.
+      // Heredoc to avoid shell-injection in command strings.
+      const setupScript = [
+        // Create per-user workspace
+        `mkdir -p ${shellSafe(userWorkspace)}`,
+        `chmod 700 ${shellSafe(userWorkspace)}`,
+        // Try bwrap first, then chroot, then docker, then shared-shell
+        `echo "=== ORACLE_VM_ISOLATION_CHECK ==="`,
+        `if which bwrap >/dev/null 2>&1; then echo "ISOLATION=bwrap";`,
+        `elif [ -f ${shellSafe(CHROOT_ROOTFS_TARBALL || '/opt/rootfs.tar.gz')} ]; then echo "ISOLATION=chroot";`,
+        `elif which docker >/dev/null 2>&1; then echo "ISOLATION=docker";`,
+        `else echo "ISOLATION=shared-shell"; fi`,
+      ].join('\n');
 
-# Custom PS1 to show 'workspace' instead of real path
-PS1='\\[\\033[1;32m\\]➜\\[\\033[0m\\] \\[\\033[36m\\]\\u\\[\\033[0m\\]@\\[\\033[33m\\]workspace\\[\\033[0m\\] \\W \\$ '
-
-# Override cd builtin
-cd() {
-    local target="$1"
-    if [ -z "$target" ]; then
-        builtin cd "$WORKSPACE_ROOT"
-        return $?
-    fi
-    local resolved
-    if [[ "$target" = /* ]]; then
-        resolved="$target"
-    else
-        resolved="$(pwd)/$target"
-    fi
-    resolved="$(cd "$resolved" 2>/dev/null && pwd -P)" || resolved=""
-    if [ -z "$resolved" ]; then
-        local check="$(pwd)/$target"
-        case "$check" in
-            "$WORKSPACE_ROOT"/*) builtin cd "$target"; return $? ;;
-            "$WORKSPACE_ROOT") builtin cd "$target"; return $? ;;
-            *) echo "cd: Path traversal blocked - must stay within workspace" >&2; return 1 ;;
-        esac
-    fi
-    if [[ "$resolved" != "$WORKSPACE_ROOT" && "$resolved" != "$WORKSPACE_ROOT"/* ]]; then
-        echo "cd: Path traversal blocked - must stay within workspace" >&2
-        return 1
-    fi
-    builtin cd "$resolved"
-}
-
-pushd() {
-    local target="$1"
-    local resolved="$(cd "$target" 2>/dev/null && pwd -P)" || resolved=""
-    if [[ "$resolved" != "$WORKSPACE_ROOT" && "$resolved" != "$WORKSPACE_ROOT"/* ]]; then
-        echo "pushd: Path traversal blocked - must stay within workspace" >&2
-        return 1
-    fi
-    builtin pushd "$target"
-}
-
-cd "$WORKSPACE_ROOT" 2>/dev/null || true
-`;
-
-      // Heredoc with single-quoted delimiter passes content literally (no expansion)
-      client.exec(`${mkdirCmd} && cat > '${remoteInitPath}' << 'ENDOFSCRIPT'
-${cdOverrideScript}
-ENDOFSCRIPT
-chmod +x '${remoteInitPath}'`, (err: any, setupStream: any) => {
+      client.exec(setupScript, (err: any, checkStream: any) => {
         if (err) {
-          logger.warn('[Local PTY] Failed to create cd-override script on Oracle VM', { error: err.message });
-          // Continue anyway — cd protection won't be active but shell still works
+          client.end();
+          return resolve(NextResponse.json(
+            { error: `VM setup check failed: ${err.message}`, mode: 'sandbox' },
+            { status: 500 }
+          ));
         }
-        // Consume setup stream output and wait for close
-        setupStream.on('close', () => {
-          // STEP 2: Open interactive shell via exec with cd protection
-          // Use --rcfile to source our init script, -i for interactive
-          client.exec(
-            `bash --rcfile '${remoteInitPath}' -i`,
-            { pty: { term: 'xterm-256color', cols: safeCols, rows: safeRows } },
+
+        let checkOutput = '';
+        checkStream.on('data', (d: Buffer) => { checkOutput += d.toString(); });
+        checkStream.stderr.on('data', () => {});
+        checkStream.on('close', () => {
+          // Determine isolation mode from output
+          const isolMatch = checkOutput.match(/ISOLATION=(\S+)/);
+          const isolation: 'bwrap' | 'chroot' | 'docker' | 'shared-shell' =
+            (isolMatch?.[1] as any) || 'shared-shell';
+
+          logger.info('[Local PTY] Oracle VM isolation mode', { sessionId, isolation, userId: sanitizeOracleUserId(userId) });
+
+          // Build the final shell command based on available isolation
+          let shellCmd: string;
+          let workspacePath: string;
+          let oracleContainerName: string | undefined;
+
+          switch (isolation) {
+            case 'bwrap':
+              shellCmd = bwrapCmds.shellCommand;
+              workspacePath = bwrapCmds.workspacePath;
+              break;
+            case 'chroot': {
+              // Run chroot setup (extract rootfs, bind-mount workspace)
+              const chrootSetup = chrootCmds.setupCommands.join('\n');
+              client.exec(chrootSetup, () => {});
+              shellCmd = chrootCmds.shellCommand;
+              workspacePath = chrootCmds.workspacePath;
+              break;
+            }
+            case 'docker': {
+              // Run Docker setup (create container with workspace bind-mount)
+              const dockerSetup = dockerCmds.setupCommands.join('\n');
+              client.exec(dockerSetup, () => {});
+              shellCmd = dockerCmds.shellCommand;
+              workspacePath = dockerCmds.workspacePath;
+              oracleContainerName = `pty-oracle-${sessionId.slice(0, 12)}`;
+              break;
+            }
+            default:
+              shellCmd = sharedCmds.shellCommand;
+              workspacePath = sharedCmds.workspacePath;
+              break;
+          }
+
+          // Open interactive PTY shell inside the isolated environment
+          client.exec(shellCmd, { pty: { term: 'xterm-256color', cols: safeCols, rows: safeRows } },
             (err: any, stream: any) => {
               if (err) {
                 client.end();
-                logger.error('[Local PTY] Oracle VM shell failed', { error: err.message });
+                logger.error('[Local PTY] Oracle VM isolated shell failed', { error: err.message });
                 return resolve(NextResponse.json(
-                  { error: `Failed to open shell: ${err.message}`, mode: 'sandbox' },
+                  { error: `Failed to open isolated shell: ${err.message}`, mode: 'sandbox' },
                   { status: 500 }
                 ));
               }
 
-              // Create a pseudo-IPty adapter so our existing architecture works
               const sshPty = {
                 pid: 0,
                 onData: (cb: (data: string) => void) => {
@@ -1511,7 +1755,7 @@ chmod +x '${remoteInitPath}'`, (err: any, setupStream: any) => {
                   try { stream.end(); } catch { /* ignore */ }
                   try { client.end(); } catch { /* ignore */ }
                 },
-                waitForConnection: async () => { /* already connected */ },
+                waitForConnection: async () => {},
                 disconnect: async () => {
                   try { stream.end(); } catch { /* ignore */ }
                   try { client.end(); } catch { /* ignore */ }
@@ -1520,29 +1764,24 @@ chmod +x '${remoteInitPath}'`, (err: any, setupStream: any) => {
                 sendInput: async (data: string) => stream.write(data),
               } as unknown as IPty;
 
-              // Start remote VFS sync — polls the Oracle VM workspace for file changes
-              // and syncs them back to the VFS database
-              const remoteVfsSync = startRemoteVfsSync(
-                client,
-                userId,
-                workspace,
-                sessionId
-              );
-
-              registerSession(sessionId, userId, sshPty, workspace, {
+              registerSession(sessionId, userId, sshPty, userWorkspace, {
                 sshClient: client,
-                vfsWatcher: remoteVfsSync,
+                oracleIsolation: isolation,
+                oracleContainerName,
               });
 
-              logger.info('[Local PTY] Oracle VM SSH session created', {
+              logger.info('[Local PTY] Oracle VM isolated session created', {
+                sessionId, host, username, isolation,
+                userId: sanitizeOracleUserId(userId),
+                cols: safeCols, rows: safeRows,
+              });
+
+              resolve(NextResponse.json({
                 sessionId,
-                host,
-                username,
-                cols: safeCols,
-                rows: safeRows,
-              });
-
-              resolve(NextResponse.json({ sessionId, mode: 'oracle-vm', workspaceDir: workspace }));
+                mode: 'oracle-vm',
+                workspaceDir: workspacePath,
+                isolation,
+              }));
             }
           );
         });
@@ -1558,15 +1797,10 @@ chmod +x '${remoteInitPath}'`, (err: any, setupStream: any) => {
     });
 
     client.on('close', () => {
-      logger.debug('[Local PTY] Oracle VM SSH connection closed');
-      // Find and mark the session as exited
       const session = sessions.get(sessionId);
       if (session && !session.exited) {
         session.exited = true;
         session.exitCode = 0;
-        logger.info('[Local PTY] Oracle VM session marked as exited', { sessionId });
-        // Trigger cleanup on next interval — don't call cleanupSession directly
-        // since we're inside an event handler and cleanupSession is async
       }
     });
 
@@ -1585,6 +1819,253 @@ function registerSession(
   workspaceDir: string,
   extras: Partial<Omit<LocalPtySession, 'sessionId' | 'userId' | 'pty' | 'createdAt' | 'exited' | 'exitCode' | 'outputQueue' | 'workspaceDir'>> = {}
 ): void {
+  // Only enable execution routing for oracle-vm and direct (non-docker, non-unshare) isolation modes.
+  // Docker/r2-docker modes already have container-level isolation.
+  // Unshare mode has namespace isolation.
+  const enableRouting = EXECUTION_ROUTING_ENABLED === true &&
+    (!!extras.oracleIsolation || (!extras.dockerContainerId && !extras.unsharePid));
+
+  // === Execution Routing: intercept non-trivial commands ===
+  // Wraps the PTY write method to buffer input until a newline, then classifies
+  // the command. Trivial commands pass through to the real shell; non-trivial
+  // commands (npm install, python scripts, daemons) are routed to pre-warmed
+  // sandbox providers (E2B, Daytona, Sprites) via the SandboxOrchestrator.
+  if (enableRouting) {
+    const originalWrite = pty.write.bind(pty);
+    let inputBuffer = '';
+    let isRouting = false; // prevent re-entry during async routing
+
+    const routerConfig: ExecutionRouterConfig = {
+      userId,
+      conversationId: sessionId,
+      workingDir: workspaceDir,
+      enabled: true,
+      workspaceId: sessionId,
+      onOutput: (text: string) => {
+        // Feed sandbox output back through the session's output queue
+        if (!session.exited) {
+          session.outputQueue.push(text);
+        }
+      },
+      onRoute: (message: string) => {
+        // Show routing notification in the terminal
+        if (!session.exited) {
+          session.outputQueue.push(`\r\n${message}`);
+        }
+      },
+    };
+
+    pty.write = ((data: string): void => {
+      if (isRouting) {
+        // Buffer input while routing — don't silently drop keystrokes
+        inputBuffer += data;
+        return;
+      }
+
+      // Check if this write contains a newline (command submission)
+      if (!data.includes('\r') && !data.includes('\n')) {
+        // No newline — just buffer and pass through
+        inputBuffer += data;
+        originalWrite(data);
+        return;
+      }
+
+      // Newline detected — split by lines to handle multi-line paste
+      const lines = data.split(/\r?\n/);
+      if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
+
+      // Process each complete line
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const isLastLine = i === lines.length - 1 && !data.endsWith('\n') && !data.endsWith('\r');
+
+        if (isLastLine) {
+          // Partial line — buffer it
+          inputBuffer += line;
+          originalWrite(line);
+          continue;
+        }
+
+        inputBuffer += line;
+        const command = inputBuffer.trim();
+        inputBuffer = '';
+
+        // Classify the command
+        const classification = classifyCommand(command);
+
+        // === PID Translation: intercept ps/kill/pgrep for cross-provider process management ===
+        if (classification.category === 'pid-translation') {
+          const baseCmd = classification.baseCommand;
+
+          if (baseCmd === 'kill' || baseCmd === 'pkill') {
+            // Resolve vPID → real PID + provider, then route kill to correct sandbox
+            const parts = command.split(/\s+/);
+            // Parse: kill [-SIGNAL|-9] <pid>, pkill [-SIGNAL] <pattern>
+            let signal = 'SIGTERM';
+            let target: string | undefined;
+
+            for (let p = 1; p < parts.length; p++) {
+              const arg = parts[p];
+              if (arg.startsWith('-')) {
+                const sig = arg.replace(/^-/, '');
+                if (sig === '9') signal = 'SIGKILL';
+                else if (sig === 'l') { /* skip -l flag */ }
+                else if (/^[A-Z]/.test(sig)) signal = sig;
+              } else if (/^\d+$/.test(arg)) {
+                target = arg;
+              } else if (baseCmd === 'pkill' && !target) {
+                target = arg;
+              }
+            }
+
+            if (!target) {
+              // No PID/pattern — pass through to local PTY
+              originalWrite(line + '\r');
+              continue;
+            }
+
+            if (baseCmd === 'pkill') {
+              // pkill by name: find matching vPIDs and kill them all
+              const matches = virtualPidRegistry.findVpidsByCommand(sessionId, target);
+              if (matches.length > 0) {
+                isRouting = true;
+                session.outputQueue.push(`\r\n🔍 pkill: ${matches.length} process(es) matching "${target}"\r\n`);
+
+                Promise.all(matches.map(async (mapping) => {
+                  try {
+                    const killResult = await sandboxOrchestrator.executeInSandbox(
+                      `${mapping.provider}:${mapping.sandboxId}`,
+                      `kill -${signal} ${mapping.realPid}`,
+                    );
+                    if (killResult.exitCode === 0) {
+                      virtualPidRegistry.unregisterProcess(sessionId, mapping.vPid);
+                      session.outputQueue.push(`✓ Killed vPID ${mapping.vPid} (${mapping.command.slice(0, 40)}) [${mapping.provider}]\r\n`);
+                    }
+                  } catch (err: any) {
+                    logger.warn('[Local PTY] pkill failed for vPID', { vPid: mapping.vPid, error: err.message });
+                  }
+                })).finally(() => {
+                  isRouting = false;
+                  originalWrite('\r');
+                });
+              } else {
+                // No virtual PID match — pass through to local PTY
+                originalWrite(line + '\r');
+              }
+              continue;
+            }
+
+            // kill by PID: check if it's a vPID
+            const pidNum = parseInt(target, 10);
+            if (isNaN(pidNum)) {
+              originalWrite(line + '\r');
+              continue;
+            }
+
+            const resolution = virtualPidRegistry.resolveVpid(sessionId, pidNum);
+
+            if (resolution.resolved && resolution.realPid && resolution.provider) {
+              // vPID resolved — route kill to the correct sandbox provider
+              isRouting = true;
+              session.outputQueue.push(
+                `\r\n🔀 kill ${pidNum}: routing to ${resolution.provider} (real PID ${resolution.realPid})\r\n`
+              );
+
+              sandboxOrchestrator.executeInSandbox(
+                `${resolution.provider}:${resolution.sandboxId}`,
+                `kill -${signal} ${resolution.realPid}`,
+              ).then((killResult) => {
+                if (killResult.exitCode === 0) {
+                  virtualPidRegistry.unregisterProcess(sessionId, pidNum);
+                  session.outputQueue.push(
+                    `✓ Killed vPID ${pidNum} (${resolution.command?.slice(0, 40) || 'unknown'}) [${resolution.provider}]\r\n`
+                  );
+                } else {
+                  session.outputQueue.push(
+                    `⚠️  kill failed (exit ${killResult.exitCode}): ${killResult.output.slice(0, 200)}\r\n`
+                  );
+                }
+              }).catch((err: any) => {
+                logger.warn('[Local PTY] Kill routing failed', { vPid: pidNum, error: err.message });
+                session.outputQueue.push(`⚠️  kill routing failed: ${err.message}\r\n`);
+              }).finally(() => {
+                isRouting = false;
+                originalWrite('\r');
+              });
+            } else {
+              // Not a vPID — pass through to local PTY for local kill
+              originalWrite(line + '\r');
+            }
+            continue;
+          }
+
+          // ps, pgrep, pidof: pass through to local PTY (runs locally)
+          // The virtual PID registry auto-registers local processes when ps output is detected
+          originalWrite(line + '\r');
+          continue;
+        }
+
+        if (!classification.routeToSandbox) {
+          // Trivial command — pass through to real PTY
+          originalWrite(line + '\r');
+          continue;
+        }
+
+        // Non-trivial command — route to sandbox provider
+        isRouting = true;
+
+        // Echo the command so the user sees what they typed
+        session.outputQueue.push(`\r\n$ ${command}\r\n`);
+
+        executeWithRouting(command, routerConfig)
+          .then((result) => {
+            if (result.routed) {
+              const duration = result.duration > 1000
+                ? `${(result.duration / 1000).toFixed(1)}s`
+                : `${result.duration}ms`;
+              const warmTag = result.wasPreWarmed ? ' [pre-warmed]' : '';
+              session.outputQueue.push(
+                `\r\n✓ ${result.provider}${warmTag} (${duration}, exit: ${result.exitCode})\r\n`
+              );
+            } else {
+              // Sandbox unavailable — write command to real PTY as fallback
+              originalWrite(line + '\r');
+            }
+          })
+          .catch((err: any) => {
+            logger.error('[Local PTY] Execution routing failed', {
+              command: command.slice(0, 100),
+              error: err.message,
+            });
+            originalWrite(line + '\r');
+          })
+          .finally(() => {
+            isRouting = false;
+            // Trigger PTY shell to re-display its prompt
+            originalWrite('\r');
+          });
+
+        // Only route one command at a time; remaining lines in paste will be
+        // buffered and processed after the current route completes
+        if (i < lines.length - 1) {
+          // Queue remaining lines for processing after routing completes
+          const remaining = lines.slice(i + 1).join('\r');
+          if (remaining) {
+            inputBuffer += remaining;
+            // We'll process them when isRouting becomes false
+          }
+          break;
+        }
+      }
+    }) as IPty['write'];
+
+    logger.info('[Local PTY] Execution routing enabled for session', {
+      sessionId,
+      userId: userId.slice(0, 20),
+      mode: extras.oracleIsolation ? `oracle-vm/${extras.oracleIsolation}` : 'direct',
+    });
+  }
+
   const session: LocalPtySession = {
     sessionId,
     userId,
@@ -1594,6 +2075,7 @@ function registerSession(
     exitCode: undefined,
     outputQueue: [],
     workspaceDir,
+    executionRouterEnabled: enableRouting,
     ...extras,
   };
 

@@ -95,17 +95,17 @@ export function sanitizeMessages(messages: any[], options: SanitizeOptions = {})
 
       const result: any = { role, content };
 
-      // Preserve tool_calls on assistant messages (needed for multi-step tool use)
+      // Preserve toolCalls on assistant messages
       if (role === 'assistant') {
         const tc = m?.tool_calls || m?.toolCalls;
         if (Array.isArray(tc) && tc.length > 0) {
-          result.tool_calls = tc;
+          result.toolCalls = tc;
         }
       }
 
-      // Preserve tool_call_id on tool messages
+      // Preserve toolCallId on tool messages
       if (role === 'tool' && m?.tool_call_id) {
-        result.tool_call_id = m.tool_call_id;
+        result.toolCallId = m.tool_call_id;
       }
 
       return result;

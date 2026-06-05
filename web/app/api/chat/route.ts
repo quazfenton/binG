@@ -2174,7 +2174,7 @@ const config: UnifiedAgentConfig = {
       // Record circuit breaker result: track LLM provider success/failure
       // This is what makes the circuit breaker actually OPEN on real downstream failures
       // (checkRouteCircuitBreaker only checks state; recordRouteCircuitBreakerResult mutates it)
-      if (unifiedResponse.success !== false) {
+      if (unifiedResponse.success === true) {
         void recordRouteCircuitBreakerResult('/api/chat', true);
       } else {
         void recordRouteCircuitBreakerResult('/api/chat', false,

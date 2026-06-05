@@ -47,6 +47,7 @@ import React, {
   useCallback,
   useMemo,
 } from "react";
+import { Project, SyntaxKind } from "ts-morph";
 import { toast } from "sonner";
 
 // Helper to ensure image URLs go through the proxy
@@ -5657,195 +5658,84 @@ const VIEWPORT_WIDTHS = { desktop: "100%", tablet: "768px", mobile: "390px" };
 // ─────────────────────────────────────────────────────────────────────────────
 
 function jsxToCraftNodes(jsxCode: string): Record<string, unknown> {
+  const project = new Project({ useInMemoryFileSystem: true });
+  const sourceFile = project.createSourceFile("temp.tsx", `const Component = () => (${jsxCode});`);
+  
   const nodes: Record<string, unknown> = {};
   let nodeIdCounter = 1;
-  
   const getNextId = () => `node-${nodeIdCounter++}`;
-  
-  function parseStyle(styleStr: string): Record<string, string> {
-    const styles: Record<string, string> = {};
-    if (!styleStr) return styles;
-    
-    styleStr.split(';').forEach(rule => {
-      const [key, ...valueParts] = rule.split(':');
-      if (key && valueParts.length > 0) {
-        const k = key.trim().replace(/-([a-z])/g, (_, c) => c.toUpperCase());
-        const v = valueParts.join(':').trim();
-        if (k && v) styles[k] = v;
-      }
-    });
-    return styles;
-  }
-  
-  function parseJSXElement(tagName: string, props: Record<string, unknown>, children: string[]): Record<string, unknown> {
+
+  const componentMap: Record<string, string> = {
+    'div': 'ContainerCraft',
+    'span': 'TextCraft',
+    'p': 'TextCraft',
+    'h1': 'TextCraft',
+    'h2': 'TextCraft',
+    'h3': 'TextCraft',
+    'button': 'ButtonCraft',
+    'img': 'ImageCraft',
+    'input': 'InputCraft',
+    'section': 'ContainerCraft',
+    'nav': 'NavBarCraft',
+    'header': 'ContainerCraft',
+    'footer': 'ContainerCraft',
+    'main': 'ContainerCraft',
+    'article': 'ContainerCraft',
+    'aside': 'ContainerCraft',
+  };
+
+  function processNode(node: any): string {
     const id = getNextId();
-    const node: Record<string, unknown> = {
-      type: tagName,
-      props: { ...props },
-      nodes: [],
-      linkedNodes: {},
-    };
+    const type = node.getTagNameNode().getText();
+    const craftType = componentMap[type] || 'ContainerCraft';
     
-    if (children.length > 0) {
-      const childElements: Record<string, unknown>[] = [];
-      let textContent = '';
-      
-      children.forEach(child => {
-        const trimmed = child.trim();
-        if (trimmed.startsWith('<') && trimmed.endsWith('>')) {
-          if (textContent) {
-            childElements.push({
-              type: 'text',
-              props: { text: textContent },
-              nodes: [],
-              linkedNodes: {},
-            });
-            textContent = '';
-          }
-          const parsed = parseSimpleJSX(trimmed);
-          if (parsed) childElements.push(parsed);
-        } else if (trimmed) {
-          textContent += (textContent ? ' ' : '') + trimmed;
-        }
-      });
-      
-      if (textContent) {
-        childElements.push({
-          type: 'text',
-          props: { text: textContent },
-          nodes: [],
-          linkedNodes: {},
-        });
-      }
-      
-      node.nodes = childElements.map((c: Record<string, unknown>) => {
-        const childId = c.type === 'text' ? getNextId() : (c.id as string) || getNextId();
-        nodes[childId] = { ...c, id: childId };
-        return childId;
-      });
-    }
-    
-    return { id, ...node };
-  }
-  
-  function parseSimpleJSX(jsx: string): Record<string, unknown> | null {
-    const openTagMatch = jsx.match(/<(\w+)([^>]*)>/);
-    if (!openTagMatch) return null;
-
-    const tagName = openTagMatch[1];
-    const propsStr = openTagMatch[2];
     const props: Record<string, unknown> = {};
-
-    const styleMatch = propsStr.match(/style\s*=\s*["']([^"']*)["']/);
-    if (styleMatch) {
-      props.styles = parseStyle(styleMatch[1]);
-    }
-
-    // Parse className for Tailwind classes
-    const classMatch = propsStr.match(/className\s*=\s*["']([^"']*)["']/);
-    if (classMatch) {
-      const className = classMatch[1];
-      // Initialize styles if not exists
-      if (!props.styles) props.styles = {};
-      // Store as both className and tailwindClasses for compatibility
-      (props.styles as Record<string, string>).className = className;
-      (props.styles as Record<string, string>).tailwindClasses = className;
-    }
-
-    // Parse CSS module classes (e.g., className={styles.container})
-    const moduleClassMatch = propsStr.match(/className\s*=\s*\{([^}]+)\}/);
-    if (moduleClassMatch) {
-      const moduleClass = moduleClassMatch[1].trim();
-      if (!props.styles) props.styles = {};
-      (props.styles as Record<string, string>).moduleClass = moduleClass;
-    }
-
-    const srcMatch = propsStr.match(/src\s*=\s*["']([^"']*)["']/);
-    if (srcMatch) {
-      props.src = srcMatch[1];
-    }
-
-    const altMatch = propsStr.match(/alt\s*=\s*["']([^"']*)["']/);
-    if (altMatch) {
-      props.alt = altMatch[1];
-    }
-
-    const textMatch = jsx.match(/>([^<]*)<\/\w+>/);
-    if (textMatch && tagName !== 'img' && tagName !== 'input' && tagName !== 'br' && tagName !== 'hr') {
-      props.text = textMatch[1].trim();
-    }
-
-    const componentMap: Record<string, string> = {
-      'div': 'ContainerCraft',
-      'span': 'TextCraft',
-      'p': 'TextCraft',
-      'h1': 'TextCraft',
-      'h2': 'TextCraft',
-      'h3': 'TextCraft',
-      'button': 'ButtonCraft',
-      'img': 'ImageCraft',
-      'input': 'InputCraft',
-      'section': 'ContainerCraft',
-      'nav': 'NavBarCraft',
-      'header': 'ContainerCraft',
-      'footer': 'ContainerCraft',
-      'main': 'ContainerCraft',
-      'article': 'ContainerCraft',
-      'aside': 'ContainerCraft',
-    };
-
-    const craftType = componentMap[tagName] || 'ContainerCraft';
-
-    return {
-      type: craftType,
-      resolvedName: craftType,
-      props,
-      nodes: [],
-      linkedNodes: {},
-    };
-  }
-  
-  function extractJSXElements(code: string): string[] {
-    const elements: string[] = [];
-    let depth = 0;
-    let currentStart = -1;
-    
-    for (let i = 0; i < code.length; i++) {
-      if (code[i] === '<' && code[i + 1] !== '/') {
-        if (depth === 0) currentStart = i;
-        depth++;
-      } else if (code[i] === '<' && code[i + 1] === '/') {
-        depth--;
-        if (depth === 0 && currentStart >= 0) {
-          let j = i;
-          while (j < code.length && code[j] !== '>') j++;
-          elements.push(code.slice(currentStart, j + 1));
-          currentStart = -1;
+    node.getAttributes().forEach((attr: any) => {
+        if (attr.getKindName() === 'JsxAttribute') {
+            props[attr.getName()] = attr.getInitializer()?.getText().replace(/['"]/g, '') || true;
         }
-      } else if (code[i] === '/' && code[i + 1] === '>') {
-        depth--;
-        if (depth === 0 && currentStart >= 0) {
-          elements.push(code.slice(currentStart, i + 2));
-          currentStart = -1;
-        }
-      }
-    }
+    });
+
+    const children: string[] = [];
+    node.getDescendantsOfKind(SyntaxKind.JsxElement).forEach((child: any) => {
+        children.push(processNode(child));
+    });
     
-    return elements;
+    // Also handle text content
+    node.getDescendantsOfKind(SyntaxKind.JsxText).forEach((text: any) => {
+        const textContent = text.getText().trim();
+        if(textContent) {
+            const textId = getNextId();
+            nodes[textId] = {
+                type: 'TextCraft',
+                props: { text: textContent },
+                nodes: [],
+                linkedNodes: {},
+                id: textId
+            };
+            children.push(textId);
+        }
+    });
+
+    nodes[id] = {
+        type: craftType,
+        resolvedName: craftType,
+        props: props,
+        nodes: children,
+        linkedNodes: {},
+        id: id
+    };
+    return id;
   }
-  
-  const jsxElements = extractJSXElements(jsxCode);
+
   const rootChildren: string[] = [];
-  
-  jsxElements.forEach(elem => {
-    const parsed = parseSimpleJSX(elem);
-    if (parsed) {
-      const id = getNextId();
-      nodes[id] = { ...parsed, id };
-      rootChildren.push(id);
+  sourceFile.getDescendantsOfKind(SyntaxKind.JsxElement).forEach(el => {
+    // Only pick top-level elements
+    if (el.getParent()?.getKindName() === 'JsxExpression' || el.getParent()?.getKindName() === 'ParenthesizedExpression') {
+        rootChildren.push(processNode(el));
     }
   });
-  
+
   nodes['ROOT'] = {
     type: 'div',
     props: {},
