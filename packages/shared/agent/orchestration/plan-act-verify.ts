@@ -25,6 +25,25 @@ import { CHOOSE_ROLE_DIRECTIVE } from '../system-prompts-dynamic';
 const log = createLogger('PlanActVerify');
 
 /**
+ * Check if an error is an AI SDK ModelMessage[] schema validation error.
+ * These occur when system-role messages leak into the messages array,
+ * tool-role messages have plain-string content, or assistant messages
+ * have empty content with no tool_calls.
+ *
+ * Exported so tests and other modules can reuse this detection logic
+ * without duplicating the fragile string-matching patterns.
+ */
+export function isModelSchemaError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const message = (error as any).message;
+  if (typeof message !== 'string') return false;
+  return (
+    message.includes('ModelMessage[]') ||
+    message.includes('messages do not match')
+  );
+}
+
+/**
  * Redact tool args for safe logging.
  * - Replaces large or sensitive fields (content, body) with <redacted>
  * - Preserves file paths / names when present
@@ -873,11 +892,7 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
         // and no tool_calls, or a system-role message appearing AFTER an
         // assistant turn (which newer providers reject). Re-sanitize the
         // history (idempotent for already-clean messages) and retry once.
-        const isSchemaError =
-          error.message?.includes('ModelMessage[]') ||
-          error.message?.includes('messages do not match');
-
-        if (isSchemaError && attempt < MAX_ATTEMPTS - 1) {
+        if (isModelSchemaError(error) && attempt < MAX_ATTEMPTS - 1) {
           log.warn(
             'callLLM: schema validation error, sanitizing history and retrying',
             { provider, model, error: error.message },
@@ -897,11 +912,7 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
     // system prompt and the user's prompt as a bare message. This
     // sacrifices tool-calling ability but ensures the user gets a
     // response instead of a crash.
-    const isSchemaError =
-      lastError?.message?.includes('ModelMessage[]') ||
-      lastError?.message?.includes('messages do not match');
-
-    if (isSchemaError) {
+    if (isModelSchemaError(lastError)) {
       log.warn(
         'callLLM: both retries failed with schema errors, falling back to plain-text call',
         { provider, model, error: lastError?.message },

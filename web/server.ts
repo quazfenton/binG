@@ -107,6 +107,31 @@ async function startup() {
     // Log MCP tool sources health (fire-and-forget, don't block startup)
     logMCPStartupHealth().catch(e => logger.warn('MCP health check failed', e));
 
+    // Start Composio MCP server (fire-and-forget, don't block startup)
+    if (process.env.COMPOSIO_API_KEY) {
+      import('@/lib/integrations/composio-mcp-service').then(({ createComposioMCPServer }) => {
+        const mcpPort = parseInt(process.env.COMPOSIO_MCP_PORT || '3001', 10);
+        return createComposioMCPServer({
+          apiKey: process.env.COMPOSIO_API_KEY!,
+          serverName: 'composio-tools',
+          serverVersion: '1.0.0',
+          port: mcpPort,
+        });
+      }).then((mcpServer) => {
+        // Store reference for graceful shutdown and API route access
+        (globalThis as any).__composioMcpServer = mcpServer;
+        logger.info(`Composio MCP server started on port ${mcpServer.getServerInfo().port}`);
+
+        // Graceful shutdown on process exit
+        const shutdown = async (signal: string) => {
+          logger.info(`Composio MCP server shutting down (${signal})...`);
+          try { await mcpServer.stop(); } catch {}
+        };
+        process.once('SIGTERM', () => shutdown('SIGTERM'));
+        process.once('SIGINT', () => shutdown('SIGINT'));
+      }).catch(e => logger.warn('Composio MCP server failed to start', e));
+    }
+
   } catch (error) {
     logger.error('Backend initialization failed', error as Error);
     // Don't crash the server, but log the error

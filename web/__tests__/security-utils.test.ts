@@ -52,7 +52,7 @@ describe('Security Utilities', () => {
     it('should prevent path traversal with ..', () => {
       expect(() => {
         safeJoin('/tmp/workspaces', '../../etc/passwd');
-      }).toThrow('Path traversal detected');
+      }).toThrow(/traversal detected/)
     });
 
     it('should prevent path traversal with encoded ..', () => {
@@ -60,7 +60,7 @@ describe('Security Utilities', () => {
       if (process.platform !== 'win32') {
         expect(() => {
           safeJoin('/tmp/workspaces', '..%2F..%2Fetc%2Fpasswd');
-        }).toThrow('Path traversal detected');
+        }).toThrow(/traversal detected/);
       }
     });
 
@@ -88,7 +88,7 @@ describe('Security Utilities', () => {
       // Ensure '/tmp/workspaces-evil' doesn't match '/tmp/workspaces'
       expect(() => {
         safeJoin('/tmp/workspaces', '../../workspaces-evil/file');
-      }).toThrow('Path traversal detected');
+      }).toThrow(/traversal detected/);
     });
 
     it('should allow legitimate nested paths', () => {

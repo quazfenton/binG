@@ -142,12 +142,26 @@ export async function POST(request: NextRequest) {
         sessionId: sessionId || requestId,
       });
 
+      // Extract system messages for the `system` parameter and keep only
+      // user/assistant messages in the messages array. The Vercel AI SDK's
+      // ModelMessage[] schema rejects system-role messages in the array in
+      // some provider configurations — they must be passed via `system`.
+      const systemMessages = messages.filter(m => m.role === 'system');
+      const systemPrompt = systemMessages
+        .map(m => (typeof m.content === 'string' ? m.content : ''))
+        .filter(Boolean)
+        .join('\n\n');
+      const nonSystemMessages = messages
+        .filter(m => m.role !== 'system')
+        .map(m => ({
+          role: m.role === 'assistant' ? 'assistant' : 'user',
+          content: typeof m.content === 'string' ? m.content : m.content[0]?.text || '',
+        }));
+
       const result = streamText({
         model: aiModel,
-        messages: messages.map(m => ({
-          role: m.role as 'user' | 'assistant' | 'system',
-          content: typeof m.content === 'string' ? m.content : m.content[0]?.text || '',
-        })),
+        messages: nonSystemMessages,
+        system: systemPrompt || undefined,
         tools,
         temperature,
         onError: ({ error }) => {

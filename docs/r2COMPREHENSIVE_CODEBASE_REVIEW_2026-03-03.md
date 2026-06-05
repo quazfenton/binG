@@ -1,4 +1,19 @@
-# Comprehensive Codebase Review & Technical Findings
+# ⚠️ ARCHIVED — Comprehensive Codebase Review & Technical Findings
+
+> **STATUS: ARCHIVED** — This document was written March 3, 2026 and is now **3 months out of date**.
+> The codebase has been significantly restructured and most issues have been resolved.
+>
+> **See the refreshed review:** `r2_CODEBASE_REVIEW_STATUS_REFRESH_2026-06-05.md`
+>
+> Key changes since this review:
+> - `lib/backend/` → restructured into `lib/security/`, `lib/terminal/`, `lib/sandbox/`
+> - All Phase 1 (Security) items: FIXED
+> - All Phase 2 (Backend) items: FIXED
+> - All Phase 3 (Provider) items: FIXED
+> - All SDK integrations (Nango, Composio, Arcade): Already complete
+> - Edge case hardening (file limits, timeouts, cleanup, retry, circuit breaker): Added June 2026
+>
+> ---
 
 **Review Date:** March 3, 2026  
 **Reviewer:** AI Assistant  

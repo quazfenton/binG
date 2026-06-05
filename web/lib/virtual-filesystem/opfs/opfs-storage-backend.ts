@@ -3,10 +3,36 @@
  * 
  * Implements VFS persistence interface using OPFS
  * Allows VirtualFilesystemService to use OPFS as storage backend
+ * Falls back to IndexedDB when OPFS is unavailable or fails.
+ * Uses a sticky mechanism to remember the last successful backend
+ * per workspace and avoid data loss from backend flapping.
  */
 
 import { opfsCore, type OPFSCore } from './opfs-core';
+import { indexedDBBackend, IndexedDBBackend } from '../indexeddb-backend';
 import type { VirtualFile } from '../filesystem-types';
+
+type BackendType = 'opfs' | 'indexeddb';
+
+const STICKY_KEY_PREFIX = 'vfs-active-backend:';
+
+function getStickyBackend(ownerId: string): BackendType | null {
+  if (typeof window === 'undefined' || !window.localStorage) return null;
+  try {
+    return localStorage.getItem(STICKY_KEY_PREFIX + ownerId) as BackendType | null;
+  } catch {
+    return null;
+  }
+}
+
+function setStickyBackend(ownerId: string, backend: BackendType): void {
+  if (typeof window === 'undefined' || !window.localStorage) return;
+  try {
+    localStorage.setItem(STICKY_KEY_PREFIX + ownerId, backend);
+  } catch {
+    // Ignore storage errors
+  }
+}
 
 export interface WorkspaceState {
   files: Map<string, VirtualFile>;
@@ -31,21 +57,78 @@ export interface VFSStorageBackend {
  */
 export class OPFSStorageBackend implements VFSStorageBackend {
   private core: OPFSCore;
+  private idbBackend: IndexedDBBackend;
   private initializedWorkspaces = new Set<string>();
+  private failedWorkspaces = new Set<string>();
   private metadataFile = '.vfs-metadata.json';
 
-  constructor(core?: OPFSCore) {
+  constructor(core?: OPFSCore, idbBackend?: IndexedDBBackend) {
     this.core = core || opfsCore;
+    this.idbBackend = idbBackend || indexedDBBackend;
   }
 
   /**
-   * Load workspace state from OPFS
+   * Determine which backend to use. Sticks to the last successful one.
+   * Order of preference:
+   * 1. Last successful backend for this owner (sticky)
+   * 2. IDB if it has stored files and OPFS is not preferred
+   * 3. OPFS if available
+   * 4. IDB as a guaranteed fallback
+   */
+  private selectBackend(ownerId: string): BackendType {
+    // 1. Check sticky memory
+    const sticky = getStickyBackend(ownerId);
+    if (sticky === 'indexeddb' && this.failedWorkspaces.has(ownerId)) {
+      return 'indexeddb';
+    }
+    if (sticky === 'opfs' && !this.failedWorkspaces.has(ownerId) && OPFSStorageBackend.isSupported()) {
+      return 'opfs';
+    }
+
+    // 2. If OPFS is not supported at all, use IDB
+    if (!OPFSStorageBackend.isSupported()) {
+      return 'indexeddb';
+    }
+
+    // 3. If OPFS previously failed for this owner, use IDB
+    if (this.failedWorkspaces.has(ownerId)) {
+      return 'indexeddb';
+    }
+
+    // 4. Default to OPFS
+    return 'opfs';
+  }
+
+  private shouldUseFallback(ownerId: string): boolean {
+    return this.selectBackend(ownerId) === 'indexeddb';
+  }
+
+  private markFailed(ownerId: string): void {
+    this.failedWorkspaces.add(ownerId);
+    this.initializedWorkspaces.delete(ownerId);
+    console.warn(`[VFS Storage] OPFS failed for workspace ${ownerId}, falling back to IndexedDB.`);
+  }
+
+  /**
+   * Load workspace state from OPFS or IndexedDB fallback.
+   * Sticks to the chosen backend to prevent data loss from flapping.
+   * On first load (no sticky key), probes BOTH backends and merges.
    */
   async loadWorkspace(ownerId: string): Promise<WorkspaceState> {
+    const backend = this.selectBackend(ownerId);
+
+    if (backend === 'indexeddb') {
+      setStickyBackend(ownerId, 'indexeddb');
+      const idbState = await this.loadWorkspaceFromIDB(ownerId);
+      // Probe OPFS too in case the user has orphaned files there
+      return this.maybeMergeFromOtherBackend(ownerId, idbState, 'opfs');
+    }
+
     try {
       // Initialize OPFS for this workspace
       await this.core.initialize(ownerId);
       this.initializedWorkspaces.add(ownerId);
+      setStickyBackend(ownerId, 'opfs');
 
       const files = new Map<string, VirtualFile>();
       let version = 0;
@@ -66,16 +149,134 @@ export class OPFSStorageBackend implements VFSStorageBackend {
 
       console.log('[OPFS Storage] Loaded workspace:', ownerId, 'files:', files.size, 'version:', version);
 
-      return {
+      const opfsState: WorkspaceState = {
         files,
         version,
         updatedAt,
         loaded: true,
       };
+      // Probe IDB in case the user has orphaned files there
+      return this.maybeMergeFromOtherBackend(ownerId, opfsState, 'indexeddb');
     } catch (error) {
       console.error('[OPFS Storage] Failed to load workspace:', error);
-      
-      // Return empty workspace on error
+      this.markFailed(ownerId);
+      setStickyBackend(ownerId, 'indexeddb');
+      const idbState = await this.loadWorkspaceFromIDB(ownerId);
+      return this.maybeMergeFromOtherBackend(ownerId, idbState, 'opfs');
+    }
+  }
+
+  /**
+   * Probes the other backend and merges any unique files into the active state.
+   * This handles the "new device" case where localStorage was wiped but
+   * the browser still has the same IndexedDB or OPFS data.
+   */
+  private async maybeMergeFromOtherBackend(
+    ownerId: string,
+    primary: WorkspaceState,
+    other: BackendType
+  ): Promise<WorkspaceState> {
+    try {
+      // Only merge if primary has no sticky key (i.e., first load on this device)
+      // OR if the primary is empty (recovery scenario)
+      const sticky = getStickyBackend(ownerId);
+      if (sticky && primary.files.size > 0) {
+        return primary; // We have a sticky preference and data, don't merge
+      }
+
+      let otherState: WorkspaceState;
+      if (other === 'opfs') {
+        if (!OPFSStorageBackend.isSupported()) return primary;
+        try {
+          otherState = await this.loadWorkspaceFromOPFSInternal(ownerId);
+        } catch {
+          return primary;
+        }
+      } else {
+        otherState = await this.loadWorkspaceFromIDB(ownerId);
+      }
+
+      if (otherState.files.size === 0) {
+        return primary;
+      }
+
+      // Merge: for each file in 'other', add it to 'primary' if not already present
+      let mergedCount = 0;
+      for (const [path, file] of otherState.files.entries()) {
+        const existing = primary.files.get(path);
+        if (!existing || (file.lastModified > existing.lastModified)) {
+          primary.files.set(path, file);
+          mergedCount++;
+        }
+      }
+
+      if (mergedCount > 0) {
+        console.log(`[VFS Storage] Merged ${mergedCount} orphaned files from ${other} into active workspace.`);
+        // Persist the merged state to the primary backend
+        if (primary.files.size > 0) {
+          await this.saveWorkspace(ownerId, primary);
+        }
+      }
+      return primary;
+    } catch (e) {
+      console.warn('[VFS Storage] Merge from other backend failed:', e);
+      return primary;
+    }
+  }
+
+  /**
+   * Internal: Load from OPFS without sticky logic (for probing).
+   */
+  private async loadWorkspaceFromOPFSInternal(ownerId: string): Promise<WorkspaceState> {
+    await this.core.initialize(ownerId);
+    const files = new Map<string, VirtualFile>();
+    let version = 0;
+    let updatedAt = new Date().toISOString();
+    try {
+      const metadataContent = await this.core.readFile(this.metadataFile);
+      const metadata = JSON.parse(metadataContent.content);
+      version = metadata.version || 0;
+      updatedAt = metadata.updatedAt || updatedAt;
+    } catch {
+      // No metadata
+    }
+    await this.loadFilesRecursive('', files);
+    return { files, version, updatedAt, loaded: true };
+  }
+
+  /**
+   * Loads the workspace using the IndexedDB backend.
+   */
+  private async loadWorkspaceFromIDB(ownerId: string): Promise<WorkspaceState> {
+    try {
+      if (!this.idbBackend.isInitialized()) {
+        await this.idbBackend.initialize(ownerId);
+      }
+      const idbFiles = await this.idbBackend.listDirectory(ownerId, '');
+      const files = new Map<string, VirtualFile>();
+      let version = 0;
+
+      for (const file of idbFiles) {
+        if (file.path === this.metadataFile) continue;
+        // Load content individually to get full data
+        try {
+          const fullFile = await this.idbBackend.readFile(ownerId, file.path);
+          files.set(file.path, fullFile);
+          version = Math.max(version, fullFile.version);
+        } catch (e) {
+          // Skip files that fail to read
+        }
+      }
+
+      console.log('[VFS Storage] Loaded workspace from IDB:', ownerId, 'files:', files.size);
+      return {
+        files,
+        version,
+        updatedAt: new Date().toISOString(),
+        loaded: true,
+      };
+    } catch (error) {
+      console.error('[VFS Storage] IDB fallback load failed:', error);
       return {
         files: new Map(),
         version: 0,
@@ -86,9 +287,17 @@ export class OPFSStorageBackend implements VFSStorageBackend {
   }
 
   /**
-   * Save workspace state to OPFS
+   * Save workspace state to OPFS or IndexedDB fallback.
+   * Sticks to the chosen backend to prevent data loss from flapping.
    */
   async saveWorkspace(ownerId: string, state: WorkspaceState): Promise<void> {
+    const backend = this.selectBackend(ownerId);
+
+    if (backend === 'indexeddb') {
+      setStickyBackend(ownerId, 'indexeddb');
+      return this.saveWorkspaceToIDB(ownerId, state);
+    }
+
     try {
       // Initialize OPFS for this workspace if not already done
       if (!this.initializedWorkspaces.has(ownerId)) {
@@ -111,9 +320,35 @@ export class OPFSStorageBackend implements VFSStorageBackend {
         }
       }
 
+      setStickyBackend(ownerId, 'opfs');
       console.log('[OPFS Storage] Saved workspace:', ownerId, 'files:', state.files.size);
     } catch (error) {
       console.error('[OPFS Storage] Failed to save workspace:', error);
+      this.markFailed(ownerId);
+      setStickyBackend(ownerId, 'indexeddb');
+      return this.saveWorkspaceToIDB(ownerId, state);
+    }
+  }
+
+  /**
+   * Saves the workspace using the IndexedDB backend.
+   */
+  private async saveWorkspaceToIDB(ownerId: string, state: WorkspaceState): Promise<void> {
+    try {
+      if (!this.idbBackend.isInitialized()) {
+        await this.idbBackend.initialize(ownerId);
+      }
+      for (const [path, file] of state.files.entries()) {
+        if (!file.isDirectoryMarker) {
+          await this.idbBackend.writeFile(ownerId, path, file.content, {
+            version: file.version,
+            language: file.language,
+          });
+        }
+      }
+      console.log('[VFS Storage] Saved workspace to IDB:', ownerId, 'files:', state.files.size);
+    } catch (error) {
+      console.error('[VFS Storage] IDB fallback save failed:', error);
       throw error;
     }
   }
@@ -138,11 +373,23 @@ export class OPFSStorageBackend implements VFSStorageBackend {
    * Check if workspace exists
    */
   async workspaceExists(ownerId: string): Promise<boolean> {
+    if (this.shouldUseFallback(ownerId)) {
+      try {
+        if (!this.idbBackend.isInitialized()) {
+          await this.idbBackend.initialize(ownerId);
+        }
+        const files = await this.idbBackend.listDirectory(ownerId, '');
+        return files.length > 0;
+      } catch {
+        return false;
+      }
+    }
     try {
       await this.core.initialize(ownerId);
       return await this.core.fileExists(this.metadataFile);
-    } catch {
-      return false;
+    } catch (error) {
+      this.markFailed(ownerId);
+      return this.workspaceExists(ownerId);
     }
   }
 

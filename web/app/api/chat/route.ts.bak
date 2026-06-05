@@ -2171,15 +2171,6 @@ const config: UnifiedAgentConfig = {
       }
 
       let rawResponseContent = unifiedResponse.content || '';
-      // Record circuit breaker result: track LLM provider success/failure
-      // This is what makes the circuit breaker actually OPEN on real downstream failures
-      // (checkRouteCircuitBreaker only checks state; recordRouteCircuitBreakerResult mutates it)
-      if (unifiedResponse.success !== false) {
-        void recordRouteCircuitBreakerResult('/api/chat', true);
-      } else {
-        void recordRouteCircuitBreakerResult('/api/chat', false,
-          new Error(unifiedResponse.data?.error || 'LLM provider returned failure'));
-      }
 
       // CRITICAL FIX: Declare filesystemEdits at function scope to avoid "before initialization" errors
       // This variable is used in both streaming and non-streaming paths, including fallback scenarios
@@ -2426,7 +2417,6 @@ const config: UnifiedAgentConfig = {
           };
 
           responseRouter.routeWithSpecAmplification(specRequest).catch(err => {
-            void recordRouteCircuitBreakerResult('/api/chat/spec-amplification', false, err instanceof Error ? err : new Error(String(err)));
             chatLogger.warn('Post-stream spec amplification failed', { error: err?.message });
           });
         } else {
@@ -3342,7 +3332,6 @@ const config: UnifiedAgentConfig = {
                   };
 
                   responseRouter.routeWithSpecAmplification(specRequest).catch(err => {
-                    void recordRouteCircuitBreakerResult('/api/chat/spec-amplification', false, err instanceof Error ? err : new Error(String(err)));
                     chatLogger.warn('Post-stream spec amplification failed', { error: err?.message });
                   });
                 } else {
@@ -3802,7 +3791,6 @@ const config: UnifiedAgentConfig = {
                   };
 
                   responseRouter.routeWithSpecAmplification(specRequest).catch(err => {
-                    void recordRouteCircuitBreakerResult('/api/chat/spec-amplification', false, err instanceof Error ? err : new Error(String(err)));
                     chatLogger.warn('Post-stream spec amplification failed', { error: err?.message });
                   });
                 } else {

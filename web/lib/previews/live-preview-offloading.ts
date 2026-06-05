@@ -829,8 +829,14 @@ export class LivePreviewOffloading {
     // Detect package manager
     const packageManager = this.detectPackageManager(filePaths);
 
-    // Parse package.json if exists
-    const packageJson = this.parsePackageJson(filesObj['package.json'] || filesObj['/package.json']);
+    // Parse package.json if exists (search anywhere in workspace, not just root)
+    // The agent often writes files into a subdirectory (e.g. webapp/package.json),
+    // so a strict root-only lookup misses nested projects and falls through to
+    // file-extension heuristics for framework/dependency detection.
+    const packageJsonPath = filePaths.find(
+      p => p === 'package.json' || p === '/package.json' || p.endsWith('/package.json')
+    );
+    const packageJson = packageJsonPath ? this.parsePackageJson(filesObj[packageJsonPath]) : null;
 
     // Detect framework
     const framework = this.detectFramework(filePaths, filesObj, packageJson);
@@ -1922,16 +1928,40 @@ root.render(<App />);`,
 
   /**
    * Extract dependencies from package.json
-   * 
-   * CRITICAL: Filters out Node.js-only packages that don't work in browser (Sandpack)
-   * - @vue/server-renderer: SSR only, use vue (client) instead
-   * - crypto, node:stream, etc.: Node.js built-ins not available in browser
+   *
+   * Reads real dependencies + devDependencies from the project's package.json
+   * (located anywhere in `normalizedFiles`, not just the root). Falls back to
+   * framework defaults only when no package.json is present.
+   *
+   * CRITICAL: Caller MUST run the result through `filterDependenciesForBrowser`
+   * because Sandpack does not execute servers / Node.js built-ins. That filter
+   * strips @vue/server-renderer, crypto, fs, node:*, etc. so this raw pass must
+   * include them for it to have anything to filter.
    */
   private getDependencies(detection: ProjectDetection): Record<string, string> {
     const deps: Record<string, string> = {};
 
-    // This would be populated from the actual package.json parsing
-    // For now, return common defaults based on framework
+    // First try to read real package.json from the normalized files.
+    // The package.json may live in a subdirectory (e.g. webapp/package.json),
+    // so search the whole tree rather than only the workspace root.
+    const files = detection.normalizedFiles || {};
+    const packageJsonPath = Object.keys(files).find(
+      p => p === 'package.json' || p === '/package.json' || p.endsWith('/package.json')
+    );
+
+    if (packageJsonPath) {
+      const pkg = this.parsePackageJson(files[packageJsonPath]);
+      if (pkg) {
+        return {
+          ...(pkg.dependencies || {}),
+          ...(pkg.devDependencies || {}),
+        };
+      }
+    }
+
+    // Fallback: hardcoded defaults based on framework when no package.json exists.
+    // CRITICAL FIX: Only include browser-compatible Vue packages.
+    // DO NOT include @vue/server-renderer - it requires Node.js built-ins (node:stream, crypto).
     switch (detection.framework) {
       case 'react':
       case 'next':
@@ -1941,8 +1971,6 @@ root.render(<App />);`,
         break;
       case 'vue':
       case 'nuxt':
-        // CRITICAL FIX: Only include browser-compatible Vue packages
-        // DO NOT include @vue/server-renderer - it requires Node.js built-ins (node:stream, crypto)
         deps['vue'] = 'latest';
         break;
       case 'svelte':

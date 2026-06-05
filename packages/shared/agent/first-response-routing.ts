@@ -79,47 +79,9 @@ export function stripRoutingMarkers(responseText: string): string {
 
   let cleaned = responseText;
 
-  // 1. Remove [ROLE_SELECT] or legacy [ROUTING_METADATA] blocks with balanced JSON
-  const markers = ['[ROLE_SELECT]', '[ROUTING_METADATA]'];
-  for (const marker of markers) {
-    const markerIndex = cleaned.indexOf(marker);
-    if (markerIndex !== -1) {
-      // Find start of JSON object following the marker
-      const afterMarker = cleaned.slice(markerIndex + marker.length);
-      const startBrace = afterMarker.indexOf('{');
-      
-      if (startBrace !== -1) {
-        let depth = 0;
-        let endBraceIndex = -1;
-        // Search for balanced closing brace
-        for (let i = startBrace; i < afterMarker.length; i++) {
-          if (afterMarker[i] === '{') depth++;
-          else if (afterMarker[i] === '}') {
-            depth--;
-            if (depth === 0) {
-              endBraceIndex = i;
-              break;
-            }
-          }
-        }
-        
-        if (endBraceIndex !== -1) {
-          // Found a complete JSON block
-          const before = cleaned.slice(0, markerIndex);
-          const after = afterMarker.slice(endBraceIndex + 1);
-          
-          // Check if there was a ### header before the marker and remove it too
-          const headerRegex = /###?\s*$/;
-          const cleanedBefore = before.replace(headerRegex, '');
-          
-          cleaned = cleanedBefore + after;
-        }
-      }
-    }
-  }
-
-  // 2a. Remove ALL [ROLE_SELECT]/[ROUTING_METADATA] markers (not just the first one).
-  // Use a while loop so later marker blocks don't leak into the cleaned response.
+  // Remove ALL [ROLE_SELECT]/[ROUTING_METADATA] markers and their associated JSON blocks.
+  // A single while loop handles multiple occurrences. The per-marker for-loop was
+  // redundant because the while loop covers all cases.
   const markerRegex = /\[(?:ROUTING_METADATA|ROLE_SELECT)\]/;
   let markerMatch;
   while ((markerMatch = cleaned.match(markerRegex)) !== null) {

@@ -86,7 +86,7 @@ export class SpritesProvider implements SandboxProvider {
     this.defaultRegion = process.env.SPRITES_DEFAULT_REGION || 'iad'
     this.defaultPlan = process.env.SPRITES_DEFAULT_PLAN || 'standard-1'
     this.enableCheckpoints = process.env.SPRITES_ENABLE_CHECKPOINTS !== 'false'
-    this.enableAutoServices = process.env.SPRITES_AUTO_SERVICES === 'true'
+    this.enableAutoServices = process.env.SPRITES_AUTO_SERVICES !== 'false'
     this.enableAutoSuspend = process.env.SPRITES_ENABLE_AUTO_SUSPEND !== 'false'
 
     if (!this.token) {
@@ -166,19 +166,23 @@ export class SpritesProvider implements SandboxProvider {
       // Build create config with auto-suspend services if enabled
       const createConfig: any = {}
 
+      // Configure service for auto-suspend/resume with memory state preservation
+      // This is the recommended Sprites pattern: services with autostart:true
+      // automatically restart when the Sprite wakes from hibernation.
+      // Documentation: https://docs.sprites.dev/working-with-sprites#auto-suspend
+      const services = [{
+        protocol: 'tcp' as const,
+        internal_port: 8080,
+        autostart: true,
+      }]
+
       if (this.enableAutoSuspend) {
-        // Configure service for auto-suspend/resume with memory state preservation
-        // Documentation: https://docs.sprites.dev/working-with-sprites#auto-suspend
-        createConfig.config = {
-          services: [{
-            protocol: 'tcp',
-            internal_port: 8080,
-            autostart: true,
-            autostop: 'suspend', // 'suspend' saves memory state, 'stop' only saves disk
-          }]
-        }
-        console.log(`[Sprites] Auto-suspend enabled for Sprite: ${spriteName}`)
+        services[0] = { ...services[0], autostop: 'suspend' as const } // 'suspend' saves memory state
       }
+
+      createConfig.config = { services }
+
+      console.log(`[Sprites] Services configured for Sprite: ${spriteName} (auto-suspend: ${this.enableAutoSuspend})`)
 
       console.log(`[Sprites] Creating Sprite "${spriteName}" with config:`, JSON.stringify(createConfig, null, 2))
       
@@ -372,8 +376,15 @@ export class SpritesSandboxHandle implements SandboxHandle {
   }
 
   /**
-   * Setup workspace directory structure
-   * Only runs on fresh creation, not on reconnect
+   * Setup workspace directory structure and auto-start services.
+   *
+   * On fresh creation:
+   * - Creates workspace directory structure
+   * - Checks for common development tools
+   * - Creates package cache directories
+   * - Logs auto-start service availability
+   *
+   * On reconnect, workspace setup is skipped (filesystem persists across sessions).
    */
   async setupWorkspace(): Promise<void> {
     if (this.isReconnect) return
@@ -381,13 +392,20 @@ export class SpritesSandboxHandle implements SandboxHandle {
     try {
       // Create workspace directory
       await this.executeCommand(`mkdir -p ${WORKSPACE_DIR}`)
-      
+
       // Set up common development tools if not present
       await this.executeCommand('command -v node >/dev/null 2>&1 || echo "Node not installed"')
-      
+
       // Create package cache directory
       await this.executeCommand('mkdir -p /home/sprite/.npm')
       await this.executeCommand('mkdir -p /home/sprite/.cache')
+
+      // Log that auto-start services are available for user configuration.
+      // Users can call configureService() or createService() to set up services
+      // that will auto-restart when the Sprite wakes from hibernation.
+      if (this.enableAutoServices) {
+        console.log('[Sprites] Auto-start services enabled. Call configureService() to set up services.')
+      }
     } catch (error) {
       console.warn('[Sprites] Workspace setup failed:', error)
       // Non-fatal, continue

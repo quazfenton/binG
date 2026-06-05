@@ -143,47 +143,84 @@ export class SandboxService {
     log.debug(`Creating sandbox with provider ${providerType} for user ${userId}`)
     const provider = await getSandboxProvider(providerType)
     log.debug(`Provider ${providerType} instance obtained, creating sandbox...`)
-    
-     const handle = await provider.createSandbox({
-       language: config?.language ?? 'typescript',
-       resources: config?.resources ?? this.getDefaultResources(),
-       envVars: {
-         TERM: 'xterm-256color',
-         LANG: 'en_US.UTF-8',
-         ...config?.env,
-       },
-       labels: { userId },
-     })
 
-    log.debug(`Sandbox created successfully with ID: ${handle.id}`)
+    // EDGE CASE FIX: Timeout on sandbox creation (default 5 minutes, configurable)
+    const creationTimeoutMs = parseInt(
+      process.env.SANDBOX_CREATION_TIMEOUT_MS || '300000',
+      10,
+    );
 
-    // Cache volume / preloaded packages are best-effort and provider-dependent.
+    let handle: SandboxHandle | null = null;
     try {
-      await setupCacheVolumes(handle)
-    } catch (error: any) {
-      log.warn(`Cache volume setup skipped for provider=${provider.name}: ${error.message}`)
-    }
+      handle = await Promise.race([
+        provider.createSandbox({
+          language: config?.language ?? 'typescript',
+          resources: config?.resources ?? this.getDefaultResources(),
+          envVars: {
+            TERM: 'xterm-256color',
+            LANG: 'en_US.UTF-8',
+            ...config?.env,
+          },
+          labels: { userId },
+        }),
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error(
+              `Sandbox creation timed out after ${creationTimeoutMs / 1000}s (provider: ${providerType})`,
+            )),
+            creationTimeoutMs,
+          ),
+        ),
+      ]);
 
-    if (process.env.SANDBOX_PRELOAD_PACKAGES !== 'false') {
+      log.debug(`Sandbox created successfully with ID: ${handle.id}`)
+
+      // Cache volume / preloaded packages are best-effort and provider-dependent.
       try {
-        await provisionBaseImage(handle)
+        await setupCacheVolumes(handle)
       } catch (error: any) {
-        log.warn(`Base image provisioning failed for provider=${provider.name}: ${error.message}`)
+        log.warn(`Cache volume setup skipped for provider=${provider.name}: ${error.message}`)
       }
-    }
 
-    this.sandboxProviderById.set(handle.id, provider)
-    quotaManager.recordUsage(provider.name)
-    
-    // Start VFS sync for bidirectional file sync between VFS database and sandbox
-    try {
-      sandboxFilesystemSync.startSync(handle.id, userId);
-      log.debug('VFS sync started for sandbox', { sandboxId: handle.id, userId });
-    } catch (syncErr: any) {
-      log.warn('Failed to start VFS sync for sandbox:', syncErr.message);
+      if (process.env.SANDBOX_PRELOAD_PACKAGES !== 'false') {
+        try {
+          await provisionBaseImage(handle)
+        } catch (error: any) {
+          log.warn(`Base image provisioning failed for provider=${provider.name}: ${error.message}`)
+        }
+      }
+
+      this.sandboxProviderById.set(handle.id, provider)
+      quotaManager.recordUsage(provider.name)
+
+      // Start VFS sync for bidirectional file sync between VFS database and sandbox
+      try {
+        sandboxFilesystemSync.startSync(handle.id, userId);
+        log.debug('VFS sync started for sandbox', { sandboxId: handle.id, userId });
+      } catch (syncErr: any) {
+        log.warn('Failed to start VFS sync for sandbox:', syncErr.message);
+      }
+
+      return handle
+    } catch (error: any) {
+      // EDGE CASE FIX: Clean up sandbox on any failure after creation
+      // If handle was created but later steps (cache, image, sync) failed,
+      // destroy the sandbox to prevent orphaned resources.
+      if (handle) {
+        log.warn(
+          `Cleaning up sandbox ${handle.id} after creation failure: ${error.message}`,
+        );
+        try {
+          await provider.destroySandbox(handle.id)
+          this.sandboxProviderById.delete(handle.id)
+        } catch (cleanupErr: any) {
+          log.error(
+            `Failed to cleanup sandbox ${handle.id}: ${cleanupErr.message}`,
+          );
+        }
+      }
+      throw error
     }
-    
-    return handle
   }
 
   private async resolveProviderForSandbox(sandboxId: string): Promise<SandboxProvider> {

@@ -10,12 +10,6 @@
 
 import { tool } from 'ai';
 import { z } from 'zod';
-import { Nango } from '@nangohq/node';
-
-// Initialize Nango client
-const nango = new Nango({
-  secretKey: process.env.NANGO_SECRET_KEY || '',
-});
 
 /**
  * Subscribe to webhooks for a provider

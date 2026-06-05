@@ -1,6 +1,7 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 import crypto from 'node:crypto';
+import { getAnonUserId } from '@/lib/identity/anon-identity';
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -75,26 +76,23 @@ const ANONYMOUS_SESSION_KEY = 'anonymous_session_id';
 const AUTH_TOKEN_KEY = 'token';
 
 /**
- * Get-or-create the anonymous session ID persisted in localStorage.
+ * Get-or-create the anonymous session ID persisted in localStorage AND cookie.
  *
  * This is the **single source of truth** for anonymous identity on the client.
  * Every hook / component that needs an anonymous session ID MUST call this
  * function instead of reimplementing the localStorage logic.
+ *
+ * Persistence strategy (in priority order):
+ *   1. localStorage   — survives refreshes, tab close
+ *   2. Cookie         — survives localStorage clears (e.g., user "Clear Data")
+ *   3. Generated      — created once and persisted to BOTH for max durability
+ *
+ * Delegates to `@/lib/identity/anon-identity` for the actual implementation.
  */
 export function getOrCreateAnonymousSessionId(): string {
   if (typeof window === 'undefined') return 'server-session';
-
-  try {
-    let sessionId = localStorage.getItem(ANONYMOUS_SESSION_KEY);
-    if (!sessionId) {
-      sessionId = generateSecureId('anon');
-      localStorage.setItem(ANONYMOUS_SESSION_KEY, sessionId);
-    }
-    return sessionId;
-  } catch {
-    // localStorage unavailable (Safari private, etc.)
-    return generateSecureId('anon');
-  }
+  // Delegate to the stable anon identity service
+  return getAnonUserId();
 }
 
 /**

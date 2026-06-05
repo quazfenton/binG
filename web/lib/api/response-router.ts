@@ -2077,10 +2077,14 @@ export class ResponseRouter {
         specRequestId,
       })
 
+      // buildSpecPrompt now returns { system, messages } with system separated
+      // to comply with the AI SDK ModelMessage[] schema
+      const specPrompt = buildSpecPrompt(userContent);
       const specPromise = enhancedLLMService.generateResponse({
         provider: fastModel.provider,
         model: fastModel.model,
-        messages: buildSpecPrompt(userContent),
+        system: specPrompt.system,
+        messages: specPrompt.messages,
         maxTokens: 4000,
         stream: false,
         requestId: specRequestId,

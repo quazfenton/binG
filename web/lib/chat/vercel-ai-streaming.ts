@@ -222,6 +222,12 @@ export interface VercelStreamOptions {
   timeoutMs?: number;
   /** Provider-specific settings (e.g., Anthropic cache control) */
   providerOptions?: Record<string, any>;
+  /**
+   * Optional pre-extracted system prompt.
+   * When provided, this takes priority over system-content from messages.
+   * Avoids the fragile round-trip of extract->sanitize->re-attach->re-extract.
+   */
+  system?: string;
 }
 
 /**
@@ -664,6 +670,7 @@ export async function* streamWithVercelAI(
     maxSteps = 12,
     timeoutMs = 120000, // Default 120s timeout
     providerOptions,
+    system: systemOverride,
   } = opts;
 
   const startTime = Date.now();
@@ -712,7 +719,11 @@ export async function* streamWithVercelAI(
 
   try {
     const vercelModel = getVercelModel(provider, modelName, key, url);
-    const { chatMessages, systemPrompt } = convertMessages(msgs);
+    // If the caller provided a pre-extracted system prompt, use it directly.
+    // Otherwise, extract from the messages array via convertMessages().
+    // This avoids the fragile round-trip pattern: extract → sanitize → re-attach → re-extract.
+    const { chatMessages, systemPrompt: extractedSystemPrompt } = convertMessages(msgs);
+    const systemPrompt = systemOverride ?? extractedSystemPrompt;
 
     // Custom provider handling (Zo, etc.)
     const isCustomProvider = provider === 'zo';

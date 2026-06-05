@@ -19,7 +19,7 @@
  */
 
 import { createLogger } from '@/lib/utils/logger';
-import { Spec, buildSpecPrompt, validateSpec, scoreSpec } from '@/lib/orchestra/spec-generator';
+import { Spec, validateSpec, scoreSpec } from '@/lib/orchestra/spec-generator';
 import { chunkSpec, safeParseSpec, mergeDuplicateTasks, filterChunksByQuality, type RefinementChunk } from '../engineers/spec-parser';
 import { getSystemPrompt, type AgentRole } from '@bing/shared/agent/system-prompts';
 import { composeRoleWithTools } from '@bing/shared/agent/prompt-composer';

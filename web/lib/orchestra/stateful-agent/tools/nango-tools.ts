@@ -2,6 +2,8 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { nangoConnectionManager } from './nango-connection';
 import { nangoRateLimiter } from './nango-rate-limit';
+import { getNangoService } from '@/lib/integrations/nango-service';
+import { nangoWebhookTools } from './nango-webhook-tools';
 
 interface NangoProxyOptions {
   method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
@@ -336,10 +338,142 @@ export const nangoNotionTools = {
   } as any),
 };
 
+// ─── Nango Sync Tools (Vercel AI SDK tool() wrappers) ───────────────────────
+export const nangoSyncToolWrappers = {
+  nango_trigger_sync: tool({
+    description: `Trigger a Nango sync to update data from an external API.
+
+    USE CASES:
+    - Sync GitHub issues, pull requests
+    - Sync CRM contacts from HubSpot/Salesforce
+    - Sync files from Google Drive/Dropbox
+    - Trigger continuous data sync
+
+    REQUIRES: Provider config key and sync name`,
+    parameters: z.object({
+      providerConfigKey: z.string().describe('Nango provider config key (e.g., "github", "hubspot")'),
+      syncName: z.string().describe('Name of the sync to trigger'),
+      fullResync: z.boolean().optional().describe('Force full resync (default: false)'),
+      connectionId: z.string().optional().describe('Connection ID (defaults to user ID from context)'),
+    }),
+    execute: async ({ providerConfigKey, syncName, fullResync, connectionId }, ctx: any) => {
+      const service = getNangoService();
+      if (!service) return { success: false as const, error: 'Nango service not configured' };
+      const userId = connectionId || ctx?.userId || 'default';
+      const result = await service.triggerSync(providerConfigKey, userId, syncName, !!fullResync);
+      return result.success
+        ? { success: true as const, jobId: result.jobId, message: `Sync '${syncName}' triggered` }
+        : { success: false as const, error: result.error };
+    },
+  } as any),
+
+  nango_get_sync_status: tool({
+    description: `Get the status of a Nango sync.
+
+    USE CASES:
+    - Check if sync completed successfully
+    - Monitor sync progress
+    - Debug sync failures
+
+    RETURNS: Status (RUNNING/PAUSED/STOPPED/ERROR), last sync date`,
+    parameters: z.object({
+      providerConfigKey: z.string().describe('Nango provider config key'),
+      syncName: z.string().describe('Name of the sync'),
+      connectionId: z.string().optional().describe('Connection ID (defaults to user ID from context)'),
+    }),
+    execute: async ({ providerConfigKey, syncName, connectionId }, ctx: any) => {
+      const service = getNangoService();
+      if (!service) return { success: false as const, error: 'Nango service not configured' };
+      const userId = connectionId || ctx?.userId || 'default';
+      const status = await service.getSyncStatus(userId, providerConfigKey, syncName);
+      return { success: status.status !== 'ERROR', status: status.status, lastSyncDate: status.lastSyncDate };
+    },
+  } as any),
+
+  nango_list_syncs: tool({
+    description: `List all syncs for a provider connection.
+
+    USE CASES:
+    - Discover available syncs
+    - Get sync names for triggering
+    - View sync schedules
+
+    RETURNS: Array of syncs with name, status, last/next sync dates`,
+    parameters: z.object({
+      providerConfigKey: z.string().describe('Nango provider config key'),
+      connectionId: z.string().optional().describe('Connection ID (defaults to user ID from context)'),
+    }),
+    execute: async ({ providerConfigKey, connectionId }, ctx: any) => {
+      const service = getNangoService();
+      if (!service) return { success: false as const, error: 'Nango service not configured', syncs: [] };
+      const userId = connectionId || ctx?.userId || 'default';
+      const syncs = await service.listSyncs(providerConfigKey, userId);
+      return { success: true as const, syncs };
+    },
+  } as any),
+
+  nango_get_records: tool({
+    description: `Get synced records from Nango's cache.
+
+    USE CASES:
+    - Query synced data without calling external API
+    - Get cached records from previous syncs
+    - Access CRM contacts, issues, files
+
+    REQUIRES: Provider config key and model name`,
+    parameters: z.object({
+      providerConfigKey: z.string().describe('Nango provider config key'),
+      syncName: z.string().describe('Sync/model name to query records from'),
+      model: z.string().optional().describe('Specific model name (defaults to syncName)'),
+      connectionId: z.string().optional().describe('Connection ID'),
+    }),
+    execute: async ({ providerConfigKey, syncName, model, connectionId }, ctx: any) => {
+      const service = getNangoService();
+      if (!service) return { success: false as const, error: 'Nango service not configured', records: [] };
+      const userId = connectionId || ctx?.userId || 'default';
+      const records = await service.getRecords(userId, providerConfigKey, syncName, model);
+      return { success: true as const, records, count: records.length };
+    },
+  } as any),
+};
+
+// ─── Nango Action Tools (write operations with OAuth) ─────────────────────
+export const nangoActionToolWrappers = {
+  nango_execute_action: tool({
+    description: `Execute a Nango action (write operation with OAuth).
+
+    USE CASES:
+    - Create records in external APIs
+    - Send messages, create issues
+    - Perform write operations with OAuth
+
+    REQUIRES: Provider config key, action name, and input parameters`,
+    parameters: z.object({
+      providerConfigKey: z.string().describe('Nango provider config key'),
+      actionName: z.string().describe('Name of the action to execute'),
+      input: z.object({}).passthrough().describe('Action input parameters'),
+      connectionId: z.string().optional().describe('Connection ID'),
+    }),
+    execute: async ({ providerConfigKey, actionName, input, connectionId }, ctx: any) => {
+      const service = getNangoService();
+      if (!service) return { success: false as const, error: 'Nango service not configured' };
+      const userId = connectionId || ctx?.userId || 'default';
+      const result = await service.executeAction(userId, providerConfigKey, actionName, input);
+      return result.success
+        ? { success: true as const, data: result.data }
+        : { success: false as const, error: result.error };
+    },
+  } as any),
+};
+
+// ─── Combined Export ──────────────────────────────────────────────────────
 export const nangoTools = {
   ...nangoGitHubTools,
   ...nangoSlackTools,
   ...nangoNotionTools,
+  ...nangoWebhookTools,
+  ...nangoSyncToolWrappers,
+  ...nangoActionToolWrappers,
 };
 
 export type NangoToolName = keyof typeof nangoTools;

@@ -7,55 +7,49 @@
  * @see {@link ../../stateful-agent/agents/stateful-agent.ts} StatefulAgent
  */
 
-import type { AgentStateType } from '../state';
+import type { AgentStateType, LangGraphError } from '../state';
 import { StatefulAgent } from '@/lib/orchestra/stateful-agent/agents';
-import type { SandboxHandle } from '@/lib/sandbox/providers/index';
+import { classifyError, globalErrorTracker, ErrorType } from '@/lib/orchestra/stateful-agent/agents/self-healing';
+
+// ============================================================================
+// ERROR CONTEXT HELPERS
+// ============================================================================
 
 /**
- * Enhanced error interface for better self-healing
+ * Create a typed LangGraphError with self-healing metadata.
+ * Uses classifyError() to determine recoverability and generate suggestions.
  */
-interface EnhancedError {
-  message: string;
-  step: string;
-  timestamp: string;
-  operation?: string;
-  parameters?: any;
-  stack?: string;
-  recoverable: boolean;
-  suggestions?: string[];
-}
-
-/**
- * Helper function to create enhanced error from Error object
- */
-function createEnhancedError(
-  error: any,
+function createLangGraphError(
+  error: unknown,
   step: string,
   operation?: string,
-  parameters?: any
-): EnhancedError {
+  parameters?: Record<string, unknown>
+): LangGraphError {
   const message = error instanceof Error ? error.message : String(error);
   const stack = error instanceof Error ? error.stack : undefined;
+  const errorType = classifyError(error);
 
-  // Determine if error is recoverable
-  const recoverable = !message.includes('fatal') &&
-                      !message.includes('unrecoverable') &&
-                      !message.includes('permission denied');
+  // Track error for pattern analysis
+  const errorObj = error instanceof Error ? error : new Error(String(error));
+  globalErrorTracker.record(errorObj, { step, operation, toolName: operation, parameters });
 
-  // Generate suggestions based on error type
+  // Determine recoverability and suggestions from the error type
+  const recoverable = errorType !== ErrorType.FATAL;
   const suggestions: string[] = [];
-  if (message.includes('not found') || message.includes('404')) {
-    suggestions.push('Check if the file/resource exists before accessing');
-    suggestions.push('Use list_files to discover available resources');
-  } else if (message.includes('permission') || message.includes('unauthorized')) {
-    suggestions.push('Check authentication/authorization settings');
-    suggestions.push('Ensure proper credentials are configured');
-  } else if (message.includes('timeout')) {
-    suggestions.push('Consider breaking the operation into smaller chunks');
-    suggestions.push('Check network connectivity');
-  } else if (message.includes('syntax') || message.includes('parse')) {
-    suggestions.push('Review the code syntax before execution');
-    suggestions.push('Use syntax_check tool before running code');
+
+  if (errorType === ErrorType.TRANSIENT) {
+    suggestions.push('This is a transient error — retrying may resolve it');
+    suggestions.push('Check network connectivity if this persists');
+  } else if (errorType === ErrorType.VALIDATION) {
+    suggestions.push('Check that all required parameters are provided');
+    suggestions.push('Verify parameter types match expected schemas');
+  } else if (errorType === ErrorType.LOGIC) {
+    suggestions.push('The error suggests a logical issue with the approach');
+    suggestions.push('Consider using a different tool or method');
+    suggestions.push('Break the task into smaller steps');
+  } else if (errorType === ErrorType.FATAL) {
+    suggestions.push('This error cannot be recovered from automatically');
+    suggestions.push('Manual intervention may be required');
   }
 
   return {
@@ -64,10 +58,22 @@ function createEnhancedError(
     timestamp: new Date().toISOString(),
     operation,
     parameters,
-    stack,
+    stack: process.env.NODE_ENV === 'development' ? stack : undefined,
     recoverable,
-    suggestions,
+    suggestions: suggestions.length > 0 ? suggestions : undefined,
   };
+}
+
+/**
+ * Extract a clean conversationId from composite sessionId.
+ * Used by all nodes to avoid code duplication.
+ */
+function extractConversationId(sessionId: string): string {
+  if (sessionId.includes('$') || sessionId.includes(':')) {
+    const separator = sessionId.includes('$') ? '$' : ':';
+    return sessionId.slice(sessionId.lastIndexOf(separator) + 1);
+  }
+  return sessionId;
 }
 
 /**
@@ -80,17 +86,14 @@ export async function plannerNode(state: AgentStateType): Promise<Partial<AgentS
   const sessionId = state.sessionId;
   const agent = new StatefulAgent({
     sessionId,
-    // FIX: Extract conversationId from composite sessionId for VFS session scoping
-    conversationId: sessionId?.includes('$') || sessionId?.includes(':')
-      ? sessionId.slice(sessionId.lastIndexOf(sessionId.includes('$') ? '$' : ':') + 1)
-      : sessionId,
-    sandboxHandle: state.sandboxHandle,
+    conversationId: extractConversationId(sessionId),
+    sandboxHandle: state.sandboxHandle as any,
     enforcePlanActVerify: false, // Planner just plans
   });
 
   const lastMessage = state.messages[state.messages.length - 1];
   if (!lastMessage || lastMessage.role !== 'user') {
-    return { next: 'end' };
+    return { next: 'end', status: 'error' as const };
   }
 
   try {
@@ -98,16 +101,18 @@ export async function plannerNode(state: AgentStateType): Promise<Partial<AgentS
 
     return {
       currentPlan: plan,
+      status: 'planning' as const,
       next: 'executor',
     };
   } catch (error) {
     return {
-      errors: [...state.errors, createEnhancedError(
+      errors: [...state.errors, createLangGraphError(
         error,
         'planning',
         'runPlanningPhase',
         { message: lastMessage.content }
       )],
+      status: 'error' as const,
       next: 'end',
     };
   }
@@ -123,11 +128,8 @@ export async function executorNode(state: AgentStateType): Promise<Partial<Agent
   const sessionId = state.sessionId;
   const agent = new StatefulAgent({
     sessionId,
-    // FIX: Extract conversationId from composite sessionId for VFS session scoping
-    conversationId: sessionId?.includes('$') || sessionId?.includes(':')
-      ? sessionId.slice(sessionId.lastIndexOf(sessionId.includes('$') ? '$' : ':') + 1)
-      : sessionId,
-    sandboxHandle: state.sandboxHandle,
+    conversationId: extractConversationId(sessionId),
+    sandboxHandle: state.sandboxHandle as any,
     enforcePlanActVerify: true,
   });
 
@@ -136,18 +138,20 @@ export async function executorNode(state: AgentStateType): Promise<Partial<Agent
 
     return {
       vfs: result.vfs || state.vfs,
-      // @ts-ignore - transactionLog may have legacy format from StatefulAgent
+      // @ts-expect-error - transactionLog type mismatch: StatefulAgent uses number timestamp, LangGraph uses string
       transactionLog: result.transactionLog || state.transactionLog,
+      status: 'editing' as const,
       next: 'verifier',
     };
   } catch (error) {
     return {
-      errors: [...state.errors, createEnhancedError(
+      errors: [...state.errors, createLangGraphError(
         error,
         'execution',
         'runEditingPhase',
-        { plan: state.currentPlan }
+        { plan: state.currentPlan as any }
       )],
+      status: 'error' as const,
       next: 'self-healing',
     };
   }
@@ -163,43 +167,43 @@ export async function verifierNode(state: AgentStateType): Promise<Partial<Agent
   const sessionId = state.sessionId;
   const agent = new StatefulAgent({
     sessionId,
-    // FIX: Extract conversationId from composite sessionId for VFS session scoping
-    conversationId: sessionId?.includes('$') || sessionId?.includes(':')
-      ? sessionId.slice(sessionId.lastIndexOf(sessionId.includes('$') ? '$' : ':') + 1)
-      : sessionId,
-    sandboxHandle: state.sandboxHandle,
+    conversationId: extractConversationId(sessionId),
+    sandboxHandle: state.sandboxHandle as any,
     enforcePlanActVerify: false, // Verifier just reviews
   });
 
   try {
-    const verified = await agent.runVerificationPhase();
+    const verified = await agent.runVerificationPhase() as any;
 
-    // @ts-ignore - verified may have errors property from StatefulAgent
-    const verifiedAny = verified as any;
-    if (verifiedAny && Array.isArray(verifiedAny.errors) && verifiedAny.errors.length > 0) {
+    if (verified && Array.isArray(verified.errors) && verified.errors.length > 0) {
+      const verificationErrors: LangGraphError[] = verified.errors.map((e: any) => ({
+        message: e.message || 'Verification failed',
+        step: 'verification',
+        path: e.path,
+        timestamp: new Date().toISOString(),
+        operation: 'runVerificationPhase',
+        recoverable: true, // Verification errors are usually fixable
+        suggestions: ['Review the code for syntax errors', 'Use apply_diff to fix the issues'],
+      }));
       return {
-        errors: [...(state.errors || []), ...verifiedAny.errors.map((e: any) => ({
-          ...e,
-          step: 'verification',
-          timestamp: new Date().toISOString(),
-          recoverable: true, // Verification errors are usually fixable
-          suggestions: ['Review the code for syntax errors', 'Use apply_diff to fix the issues'],
-        }))],
+        errors: [...state.errors, ...verificationErrors],
+        status: 'verifying' as const,
         next: 'self-healing',
       };
     }
 
     return {
+      status: 'verifying' as const,
       next: 'end',
     };
   } catch (error) {
     return {
-      errors: [...state.errors, createEnhancedError(
+      errors: [...state.errors, createLangGraphError(
         error,
         'verification',
         'runVerificationPhase',
-        { vfs: state.vfs }
       )],
+      status: 'error' as const,
       next: 'self-healing',
     };
   }
@@ -208,23 +212,21 @@ export async function verifierNode(state: AgentStateType): Promise<Partial<Agent
 /**
  * Self-Healing Node
  *
- * Attempts to fix errors.
- * Reuses existing StatefulAgent self-healing phase.
+ * Attempts to fix errors using the self-healing system.
+ * Leverages classifyError() and globalErrorTracker for intelligent recovery.
  */
 export async function selfHealingNode(state: AgentStateType): Promise<Partial<AgentStateType>> {
+  const MAX_RETRIES = 3;
   const sessionId = state.sessionId;
   const agent = new StatefulAgent({
     sessionId,
-    // FIX: Extract conversationId from composite sessionId for VFS session scoping
-    conversationId: sessionId?.includes('$') || sessionId?.includes(':')
-      ? sessionId.slice(sessionId.lastIndexOf(sessionId.includes('$') ? '$' : ':') + 1)
-      : sessionId,
-    sandboxHandle: state.sandboxHandle,
-    maxSelfHealAttempts: 3,
+    conversationId: extractConversationId(sessionId),
+    sandboxHandle: state.sandboxHandle as any,
+    maxSelfHealAttempts: MAX_RETRIES,
   });
 
   // Check if max retries exceeded
-  if (state.retryCount >= 3) {
+  if (state.retryCount >= MAX_RETRIES) {
     return {
       errors: [...state.errors, {
         message: 'Max self-healing attempts exceeded',
@@ -233,44 +235,68 @@ export async function selfHealingNode(state: AgentStateType): Promise<Partial<Ag
         recoverable: false,
         suggestions: ['Try a completely different approach', 'Break the task into smaller steps'],
       }],
+      status: 'error' as const,
       next: 'end',
     };
   }
 
-  try {
-    const healed = await agent.runSelfHealingPhase(state.errors);
+  // Check for recurring errors via global tracker
+  const lastError = state.errors[state.errors.length - 1];
+  if (lastError) {
+    const recurring = globalErrorTracker.isRecurringError(
+      new Error(lastError.message),
+      lastError.step
+    );
+    if (recurring) {
+      console.warn('[LangGraph:SelfHealing] Recurring error detected, adjusting strategy');
+    }
+  }
 
+  try {
+    const healed = await agent.runSelfHealingPhase(state.errors as any) as any;
+
+    const newRetryCount = state.retryCount + 1;
+
+    // If healing still has errors, check if we can continue retrying
     if (healed.errors && healed.errors.length > 0) {
+      const healingErrors: LangGraphError[] = healed.errors.map((e: any) => ({
+        message: e.message || 'Healing attempt failed',
+        step: 'self-healing',
+        timestamp: new Date().toISOString(),
+        operation: 'runSelfHealingPhase',
+        recoverable: newRetryCount < MAX_RETRIES,
+        suggestions: newRetryCount >= MAX_RETRIES
+          ? ['Max retries reached — try a different approach']
+          : ['Retrying with corrected approach'],
+      }));
       return {
         vfs: healed.vfs || state.vfs,
-        // @ts-ignore - transactionLog may have legacy format from StatefulAgent
         transactionLog: healed.transactionLog || state.transactionLog,
-        retryCount: state.retryCount + 1,
-        errors: healed.errors.map((e: any) => ({
-          ...e,
-          step: 'self-healing',
-          timestamp: new Date().toISOString(),
-        })),
-        next: 'self-healing', // Retry
+        retryCount: newRetryCount,
+        errors: healingErrors,
+        status: 'error' as const,
+        next: newRetryCount < MAX_RETRIES ? 'self-healing' : 'end',
       };
     }
 
+    // Healing succeeded — re-verify
     return {
       vfs: healed.vfs || state.vfs,
-      // @ts-ignore - transactionLog may have legacy format from StatefulAgent
       transactionLog: healed.transactionLog || state.transactionLog,
-      retryCount: state.retryCount + 1,
-      next: 'verifier', // Re-verify after healing
+      retryCount: newRetryCount,
+      status: 'verifying' as const,
+      next: 'verifier',
     };
   } catch (error) {
     return {
-      errors: [...state.errors, createEnhancedError(
+      errors: [...state.errors, createLangGraphError(
         error,
         'self-healing',
         'runSelfHealingPhase',
-        { errors: state.errors }
+        { errorCount: state.errors.length }
       )],
       retryCount: state.retryCount + 1,
+      status: 'error' as const,
       next: 'end',
     };
   }

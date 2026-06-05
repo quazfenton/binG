@@ -8,7 +8,60 @@
  */
 
 import { Annotation } from '@langchain/langgraph';
-import type { VfsState } from '../stateful-agent/state';
+import type { VfsState, TransactionLogEntry, PlanJSON, FileModificationIntent, ApprovalRequest } from '../stateful-agent/state';
+
+// ============================================================================
+// TYPED INTERFACES (replacing `any` types)
+// ============================================================================
+
+/** Message in LangGraph conversation history */
+export interface LangGraphMessage {
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  toolCalls?: LangGraphToolCall[];
+  toolResults?: LangGraphToolResult[];
+}
+
+/** Tool call within a message */
+export interface LangGraphToolCall {
+  id: string;
+  name: string;
+  arguments: Record<string, unknown>;
+}
+
+/** Tool result within a message */
+export interface LangGraphToolResult {
+  toolCallId: string;
+  result: unknown;
+}
+
+/** Error tracked in LangGraph state */
+export interface LangGraphError {
+  message: string;
+  path?: string;
+  step: string;
+  timestamp: string;
+  operation?: string;
+  parameters?: Record<string, unknown>;
+  stack?: string;
+  recoverable: boolean;
+  suggestions?: string[];
+}
+
+/** Transaction entry in LangGraph state (string timestamp) */
+export interface LangGraphTransactionEntry {
+  path: string;
+  type: 'UPDATE' | 'CREATE' | 'DELETE';
+  timestamp: string;
+  originalContent?: string;
+  newContent?: string;
+  search?: string;
+  replace?: string;
+}
+
+// ============================================================================
+// AGENT STATE DEFINITION
+// ============================================================================
 
 /**
  * LangGraph-enhanced Agent State
@@ -28,35 +81,25 @@ export const AgentState = Annotation.Root({
   }),
 
   /** Transaction log for shadow commits */
-  transactionLog: Annotation<Array<{
-    path: string;
-    type: 'UPDATE' | 'CREATE' | 'DELETE';
-    timestamp: string;
-    originalContent?: string;
-    newContent?: string;
-    search?: string;
-    replace?: string;
-  }>>({
-    reducer: (left: any[], right: any[]) => [...left, ...right],
+  transactionLog: Annotation<LangGraphTransactionEntry[]>({
+    reducer: (left: LangGraphTransactionEntry[], right: LangGraphTransactionEntry[]) => [...left, ...right],
     default: () => [],
   }),
 
   /** Current execution plan */
-  currentPlan: Annotation<any | undefined>(),
+  currentPlan: Annotation<PlanJSON | null>({
+    default: () => null,
+  }),
 
-  /** Error tracking */
-  errors: Annotation<Array<{
-    message: string;
-    path?: string;
-    step?: number | string;
-    timestamp?: string;
-    operation?: string;
-    parameters?: any;
-    stack?: string;
-    recoverable?: boolean;
-    suggestions?: string[];
-  }>>({
-    reducer: (left: any[], right: any[]) => [...left, ...right],
+  /** Discovery intents from file modification planning */
+  discoveryIntents: Annotation<FileModificationIntent[]>({
+    reducer: (left: FileModificationIntent[], right: FileModificationIntent[]) => [...left, ...right],
+    default: () => [],
+  }),
+
+  /** Error tracking with proper types */
+  errors: Annotation<LangGraphError[]>({
+    reducer: (left: LangGraphError[], right: LangGraphError[]) => [...left, ...right],
     default: () => [],
   }),
 
@@ -66,22 +109,25 @@ export const AgentState = Annotation.Root({
     default: () => 0,
   }),
 
+  /** Agent status phase */
+  status: Annotation<'idle' | 'discovering' | 'planning' | 'editing' | 'verifying' | 'committing' | 'error'>({
+    default: () => 'idle',
+  }),
+
+  /** Sandbox identifier */
+  sandboxId: Annotation<string | null>({
+    default: () => null,
+  }),
+
+  /** Pending approval request */
+  pendingApproval: Annotation<ApprovalRequest | null>({
+    default: () => null,
+  }),
+
   // === Add LangGraph-specific state ===
   /** Message history for LLM interactions */
-  messages: Annotation<Array<{
-    role: 'user' | 'assistant' | 'system';
-    content: string;
-    toolCalls?: Array<{
-      id: string;
-      name: string;
-      arguments: Record<string, any>;
-    }>;
-    toolResults?: Array<{
-      toolCallId: string;
-      result: any;
-    }>;
-  }>>({
-    reducer: (left: any[], right: any[]) => [...left, ...right],
+  messages: Annotation<LangGraphMessage[]>({
+    reducer: (left: LangGraphMessage[], right: LangGraphMessage[]) => [...left, ...right],
     default: () => [],
   }),
 
@@ -92,7 +138,7 @@ export const AgentState = Annotation.Root({
   sessionId: Annotation<string>(),
 
   /** Sandbox handle for code execution */
-  sandboxHandle: Annotation<any | undefined>(),
+  sandboxHandle: Annotation<unknown>(),
 });
 
 /**
@@ -100,44 +146,74 @@ export const AgentState = Annotation.Root({
  */
 export type AgentStateType = typeof AgentState.State;
 
+// ============================================================================
+// STATE CONVERSION FUNCTIONS
+// ============================================================================
+
 /**
  * Convert existing VfsState to LangGraph AgentState
+ * Handles the timestamp type mismatch: VfsState uses number, AgentState uses string.
  */
 export function vfsStateToAgentState(vfsState: VfsState, sessionId: string): AgentStateType {
   return {
     vfs: vfsState.vfs || {},
-    transactionLog: vfsState.transactionLog?.map(entry => ({
-      ...entry,
-      timestamp: entry.timestamp || new Date().toISOString(),
-    })) || [],
+    transactionLog: (vfsState.transactionLog || []).map((entry: TransactionLogEntry): LangGraphTransactionEntry => ({
+      path: entry.path,
+      type: entry.type,
+      timestamp: typeof entry.timestamp === 'number'
+        ? new Date(entry.timestamp).toISOString()
+        : (entry.timestamp || new Date().toISOString()),
+      originalContent: (entry as any).originalContent,
+      newContent: (entry as any).newContent,
+      search: (entry as any).search,
+      replace: (entry as any).replace,
+    })),
     currentPlan: vfsState.currentPlan,
-    errors: vfsState.errors?.map(e => ({
-      ...e,
-      timestamp: typeof e.timestamp === 'number' ? new Date(e.timestamp).toISOString() : (e.timestamp || new Date().toISOString()),
-    })) || [],
+    discoveryIntents: vfsState.discoveryIntents || [],
+    errors: (vfsState.errors || []).map(e => ({
+      message: e.message,
+      path: e.path,
+      step: String(e.step),
+      timestamp: typeof e.timestamp === 'number'
+        ? new Date(e.timestamp).toISOString()
+        : (String(e.timestamp) || new Date().toISOString()),
+      recoverable: true,
+    })),
     retryCount: vfsState.retryCount || 0,
+    status: vfsState.status || 'idle',
+    sandboxId: vfsState.sandboxId,
+    pendingApproval: vfsState.pendingApproval,
     messages: [],
     next: undefined,
     sessionId,
     sandboxHandle: undefined,
-  };
+  } as AgentStateType;
 }
 
 /**
  * Convert LangGraph AgentState back to VfsState
+ * Handles the timestamp type mismatch: AgentState uses string, VfsState uses number.
  */
 export function agentStateToVfsState(agentState: AgentStateType): VfsState {
   return {
     vfs: agentState.vfs,
-    transactionLog: agentState.transactionLog,
+    transactionLog: (agentState.transactionLog || []).map(entry => ({
+      path: entry.path,
+      type: entry.type,
+      timestamp: new Date(entry.timestamp).getTime(),
+    })),
     currentPlan: agentState.currentPlan,
-    // @ts-ignore - error type conversion between string and number timestamp
-    errors: agentState.errors.map(e => ({
-      step: typeof e.step === 'string' ? parseInt(e.step, 10) || 0 : (e.step || 0),
+    discoveryIntents: agentState.discoveryIntents || [],
+    errors: (agentState.errors || []).map(e => ({
+      step: typeof e.step === 'string' ? parseInt(e.step, 10) || 0 : (Number(e.step) || 0),
       path: e.path,
       message: e.message,
-      timestamp: e.timestamp || new Date().toISOString(),
+      timestamp: e.timestamp ? new Date(e.timestamp).getTime() : Date.now(),
     })),
     retryCount: agentState.retryCount,
+    status: agentState.status || 'idle',
+    sandboxId: agentState.sandboxId,
+    sessionId: agentState.sessionId,
+    pendingApproval: agentState.pendingApproval,
   };
 }

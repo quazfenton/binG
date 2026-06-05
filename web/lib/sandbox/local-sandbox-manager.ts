@@ -19,6 +19,10 @@ import { safeJoin, isValidResourceId, validateRelativePath, commandSchema } from
 import { sandboxMetrics } from '../backend/metrics';
 import { secureRandomId } from '@/lib/utils/crypto-random';
 
+// File size limits to prevent memory exhaustion and abuse
+const MAX_WRITE_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
+const MAX_READ_FILE_SIZE = 50 * 1024 * 1024;  // 50 MB
+
 export interface SandboxConfig {
   sandboxId?: string;
   image?: string;
@@ -204,6 +208,15 @@ export class SandboxManager extends EventEmitter {
   }
 
   async writeFile(sandboxId: string, path: string, data: string): Promise<void> {
+    // EDGE CASE FIX: Enforce file size limit to prevent memory exhaustion
+    const byteLength = Buffer.byteLength(data, 'utf8');
+    if (byteLength > MAX_WRITE_FILE_SIZE) {
+      sandboxMetrics.commandExecutions.inc({ status: 'file_too_large' }, 1);
+      throw new Error(
+        `File too large: ${(byteLength / 1024 / 1024).toFixed(1)} MB (max: ${MAX_WRITE_FILE_SIZE / 1024 / 1024} MB)`,
+      );
+    }
+
     const sandbox = await this.getSandbox(sandboxId);
     
     // SECURITY: Validate path is relative and safe
@@ -259,6 +272,21 @@ export class SandboxManager extends EventEmitter {
     // SECURITY: Validate path
     const validatedPath = validateRelativePath(path);
     const fullPath = safeJoin(sandbox.workspace, validatedPath);
+
+    // EDGE CASE FIX: Check file size before reading to prevent OOM on huge files
+    try {
+      const stats = statSync(fullPath);
+      if (stats.size > MAX_READ_FILE_SIZE) {
+        throw new Error(
+          `File too large to read: ${(stats.size / 1024 / 1024).toFixed(1)} MB (max: ${MAX_READ_FILE_SIZE / 1024 / 1024} MB)`,
+        );
+      }
+    } catch (err: any) {
+      if (err.message?.includes('File too large')) throw err;
+      // Only swallow ENOENT (file not found) — let read stream handle it.
+      // Re-throw permission errors and other stat failures.
+      if (err.code !== 'ENOENT') throw err;
+    }
 
     return new Promise((resolve, reject) => {
       createReadStream(fullPath, 'utf8')

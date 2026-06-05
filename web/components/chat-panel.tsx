@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { type Message } from "@/types";
 import { toast } from "sonner";
 import { useVoiceSettings } from "@/lib/voice/use-voice";
@@ -10,6 +10,8 @@ import CodePreviewPanel from "@/components/code-preview-panel";
 import { type LLMProviderConfig } from "@/lib/providers/llm-providers-types";
 import { enhancedBufferManager } from "@/lib/streaming/enhanced-buffer-manager";
 import { GlobalStreamingState } from "@/hooks/use-streaming-state";
+import NextStepSuggestions from "@/components/chat/next-step-suggestions";
+import { useNextStepSuggestions } from "@/hooks/use-next-step-suggestions";
 
 interface ChatPanelProps {
   // Props from useChat in parent (ConversationInterface)
@@ -71,6 +73,38 @@ export function ChatPanel({
   const [hasUserInteracted, setHasUserInteracted] = useState(false);
   const [showWelcomeMessage, setShowWelcomeMessage] = useState(true);
   const [isFading, setIsFading] = useState(false);
+
+  // Next-step suggestions (3 clickable chips under the last assistant bubble)
+  const { byMessageId, loadingForMessageId } = useNextStepSuggestions({
+    messages,
+    isLoading,
+    isStreaming,
+    error,
+  });
+
+  // Identify the last assistant message id; chips on older messages
+  // are still visible (so they persist on scroll) but non-interactive.
+  const lastAssistantId = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'assistant') return messages[i].id;
+    }
+    return null;
+  }, [messages]);
+
+  // Send a suggestion as a new user prompt
+  const handleSuggestionSelect = useCallback(
+    (fullText: string) => {
+      if (!fullText) return;
+      setInput(fullText);
+      // Submit on the next tick so setInput propagates before submit reads it
+      setTimeout(() => {
+        handleSubmit(
+          new Event('submit') as unknown as React.FormEvent<HTMLFormElement>,
+        );
+      }, 0);
+    },
+    [setInput, handleSubmit],
+  );
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -208,19 +242,42 @@ export function ChatPanel({
           // Check if this is the last assistant message that's currently streaming
           const lastAssistantMessage = [...messages].reverse().find(msg => msg.role === 'assistant');
           const isCurrentlyStreaming = isLoading && isStreaming && m.id === lastAssistantMessage?.id;
+
+          // Render next-step suggestions under assistant bubbles only.
+          // Chips on the *current last* assistant message are interactive;
+          // chips on older assistant messages remain visible but become
+          // non-interactive (per spec: lose clickability after a new
+          // superseding message).
+          const showSuggestionsUnderThis = m.role === 'assistant';
+          const suggestionsForThis = showSuggestionsUnderThis
+            ? byMessageId[m.id]
+            : undefined;
+          const isLoadingForThis =
+            showSuggestionsUnderThis && loadingForMessageId === m.id;
+          const isInteractive =
+            showSuggestionsUnderThis && m.id === lastAssistantId;
           
           return (
-            <MessageBubble
-              key={m.id}
-              message={m}
-              isStreaming={isCurrentlyStreaming}
-              onStreamingComplete={() => {
-                // Clean up streaming state when complete
-                const sessionId = `display-${m.id}-*`;
-                enhancedBufferManager.cleanup();
-              }}
-              onRetry={onRetryMessage}
-            />
+            <div key={m.id}>
+              <MessageBubble
+                message={m}
+                isStreaming={isCurrentlyStreaming}
+                onStreamingComplete={() => {
+                  // Clean up streaming state when complete
+                  const sessionId = `display-${m.id}-*`;
+                  enhancedBufferManager.cleanup();
+                }}
+                onRetry={onRetryMessage}
+              />
+              {showSuggestionsUnderThis && (isLoadingForThis || (suggestionsForThis && suggestionsForThis.length > 0)) && (
+                <NextStepSuggestions
+                  suggestions={suggestionsForThis || []}
+                  loading={!!isLoadingForThis}
+                  interactive={isInteractive}
+                  onSelect={handleSuggestionSelect}
+                />
+              )}
+            </div>
           );
         })}
         <div ref={messagesEndRef} />

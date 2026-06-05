@@ -49,13 +49,30 @@ export const HEALING_STRATEGIES: Record<ErrorType, HealingStrategy> = {
   },
 };
 
+/**
+ * Error context for self-healing operations.
+ * Extends the system-wide ErrorContext from lib/utils/error-handler.ts
+ * with orchestration-specific fields.
+ *
+ * @see {@link ../../lib/utils/error-handler.ts} Base ErrorContext
+ */
 export interface ErrorContext {
+  /** Step in the agent workflow (planning, execution, verification, self-healing) */
   step: string;
+  /** The prompt/message being processed when the error occurred */
   prompt?: string;
+  /** The tool being used when the error occurred */
   toolName?: string;
-  parameters?: Record<string, any>;
+  /** Parameters passed to the operation */
+  parameters?: Record<string, unknown>;
+  /** Previous errors in this retry chain */
   previousErrors?: Array<{ message: string; timestamp: Date }>;
+  /** Current attempt number (1-based) */
   attemptNumber?: number;
+  /** Component/operation context for error tracking */
+  operation?: string;
+  /** User ID for error attribution */
+  userId?: string;
 }
 
 export interface HealingResult<T> {

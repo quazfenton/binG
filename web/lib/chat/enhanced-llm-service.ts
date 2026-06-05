@@ -795,14 +795,26 @@ export class EnhancedLLMService {
 
       const vercelProvider = vercelProviderMap[primaryProvider];
 
-      if (vercelProvider) {
-        // Sanitize streaming messages to avoid provider schema rejections.
-        // The sanitizer strips system-role messages (AI SDK forbids them in
-        // the messages array), so we extract system content BEFORE sanitization
-        // and re-attach it afterwards — streamWithVercelAI's internal
-        // convertMessages() will then move it to the `system` parameter of
-        // streamText(), which is the correct place for system prompts.
+      // Extract system messages BEFORE sanitization so they can be passed
+      // via the `system` parameter of streamWithVercelAI's new `system` option.
+      // This avoids the fragile round-trip:
+      //   extract → sanitize → re-attach → convertMessages → re-extract → system param
+      let systemPrompt = '';
+      try {
         const systemMsgs = (processedMessages || []).filter((m: any) => m?.role === 'system');
+        systemPrompt = systemMsgs
+          .map((m: any) => (typeof m.content === 'string' ? m.content : ''))
+          .filter(Boolean)
+          .join('\n\n');
+      } catch { /* best effort */ }
+
+      // Save a copy with system messages for the auto-re-prompt path.
+      // streamWithServerAutoRePrompt builds re-prompt message arrays from
+      // the messages parameter and calls streamWithVercelAI without a system
+      // option, so system content must remain in the messages array for that path.
+      const messagesForAutoRePrompt = [...processedMessages];
+
+      if (vercelProvider) {
         try {
           const { sanitizeMessages } = await import('./message-sanitizer');
           processedMessages = sanitizeMessages(processedMessages || []);
@@ -814,12 +826,6 @@ export class EnhancedLLMService {
               role: (m?.role && m.role !== 'system') ? m.role : 'user',
               content: typeof m?.content === 'string' ? m.content : JSON.stringify(m?.content || ''),
             }));
-        }
-        // Re-attach system messages so streamWithVercelAI's convertMessages()
-        // can extract them to the `system` parameter of streamText().
-        // Without this, context-pack and other system-level instructions are lost.
-        if (systemMsgs.length > 0) {
-          processedMessages = [...systemMsgs, ...processedMessages];
         }
 
         // Build tools if enabled — Vercel AI SDK handles tool calling natively
@@ -1004,6 +1010,7 @@ export class EnhancedLLMService {
           provider: vercelProvider,
           model: llmRequest.model || 'default',
           messages: processedMessages,
+          system: systemPrompt || undefined,
           temperature: llmRequest.temperature || 0.7,
           maxTokens: llmRequest.maxTokens || 4096,
           // Use user's API key if provided, otherwise the provider config's key
@@ -1029,7 +1036,7 @@ export class EnhancedLLMService {
         yield* streamWithServerAutoRePrompt(autoContinueStream, {
           userId: request.userId || 'anonymous',
           conversationId: request.conversationId,
-          messages: processedMessages,
+          messages: messagesForAutoRePrompt,
           tools: vercelTools,
           provider: primaryProvider,
           model: llmRequest.model || 'default',
@@ -1059,22 +1066,20 @@ export class EnhancedLLMService {
         userId: request.userId || 'anonymous',
         conversationId: request.conversationId,
         enableAutoContinue: true,
-      });
+      });        yield* streamWithServerAutoRePrompt(autoContinueStream, {
+          userId: request.userId || 'anonymous',
+          conversationId: request.conversationId,
+          messages: messagesForAutoRePrompt,
+          provider: primaryProvider,
+          model: llmRequest.model || 'default',
+          temperature: llmRequest.temperature || 0.7,
+          maxTokens: llmRequest.maxTokens || 4096,
+          maxRePrompts: 3,
+          signal: request.signal,
+        });
 
-      yield* streamWithServerAutoRePrompt(autoContinueStream, {
-        userId: request.userId || 'anonymous',
-        conversationId: request.conversationId,
-        messages: processedMessages,
-        provider: primaryProvider,
-        model: llmRequest.model || 'default',
-        temperature: llmRequest.temperature || 0.7,
-        maxTokens: llmRequest.maxTokens || 4096,
-        maxRePrompts: 3,
-        signal: request.signal,
-      });
-
-      const streamLatency = Date.now() - streamStartTime;
-      chatLogger.info('Legacy streaming completed successfully', { requestId, provider: primaryProvider, model: llmRequest.model }, {
+        const streamLatency = Date.now() - streamStartTime;
+        chatLogger.info('Legacy streaming completed successfully', { requestId, provider: primaryProvider, model: llmRequest.model }, {
         latencyMs: streamLatency,
       });
     } catch (error) {

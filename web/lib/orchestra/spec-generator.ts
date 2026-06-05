@@ -28,21 +28,31 @@ export interface Spec {
   clarification_questions?: string[]
 }
 
+/** Result of buildSpecPrompt: system prompt separated from user messages */
+export interface SpecPrompt {
+  /** System prompt string (passed via `system` parameter to generateText/streamText) */
+  system: string
+  /** User messages only — no system-role messages in this array */
+  messages: Array<{ role: 'user'; content: string }>
+}
+
 /**
  * Build spec generator prompt
  * 
+ * Returns system prompt separately from user messages to comply with the
+ * AI SDK ModelMessage[] schema, which rejects system-role messages in the
+ * messages array.
+ * 
  * @param userInput - Original user request
  * @param context - Optional additional context
- * @returns Messages array for LLM call
+ * @returns System prompt + user messages (no system messages in array)
  */
 export function buildSpecPrompt(
   userInput: string,
   context?: string
-): Array<{ role: 'system' | 'user'; content: string }> {
-  return [
-    {
-      role: 'system',
-      content: `You are an elite software architect and code quality expert.
+): SpecPrompt {
+  return {
+    system: `You are an elite software architect and code quality expert.
 
 Your job:
 Take a user request and assume an AI gave a mediocre/subpar implementation.
@@ -116,15 +126,16 @@ EXAMPLE OUTPUT:
   ],
   "execution_strategy": "Start with component architecture, then add features incrementally, optimize last",
   "clarification_questions": []
-}`
-    },
-    {
-      role: 'user',
-      content: context 
-        ? `Request: ${userInput}\n\nContext: ${context}`
-        : userInput
-    }
-  ]
+}`,
+    messages: [
+      {
+        role: 'user',
+        content: context 
+          ? `Request: ${userInput}\n\nContext: ${context}`
+          : userInput
+      }
+    ]
+  }
 }
 
 /**
