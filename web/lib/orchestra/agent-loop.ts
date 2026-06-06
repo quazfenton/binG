@@ -26,6 +26,9 @@ Additional capabilities:
 - project_analyze: Detect framework, package manager, recommended commands.
 - project_list_scripts: List all runnable scripts (npm, Makefile, pyproject, cargo, go, etc.).
 - port_status: Check which ports are listening.
+- workspace_graph: Get a structured view of all workspace state (processes, services, ports, previews) with health diagnostics.
+- workspace_graph_diagnostic: Trace service issues to root causes.
+- workspace_graph_find_process: Search for processes by command pattern.
 
 Always write files before trying to run them.
 Report results clearly and concisely.`
@@ -42,11 +45,15 @@ Additional capabilities:
 - project_dependencies: Check installed packages and detect issues.
 - project_structure: Get file tree with semantic understanding.
 - port_status: Check which ports are listening and what processes own them.
+- workspace_graph: Get a structured view of all workspace state (processes, services, ports, previews) with health diagnostics. Use instead of scraping terminal output.
+- workspace_graph_diagnostic: Trace service issues to root causes (service → port → preview → process).
+- workspace_graph_find_process: Search for processes by command pattern.
 
 Always write files before trying to run them.
 When installing packages, use the appropriate package manager (npm, pip, etc.).
 Use project_analyze before running commands to understand the workspace structure.
 For interactive programs (dev servers, TUIs), use terminal_create_session + terminal_get_output with waitForPattern.
+Use workspace_graph to quickly understand what's running before digging into individual processes.
 Report results clearly and concisely.`
 }
 

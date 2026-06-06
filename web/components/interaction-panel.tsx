@@ -389,7 +389,24 @@ const ProviderSelector = React.memo(function ProviderSelector({
       }}>
         <SelectTrigger className="w-full sm:w-[280px] border-white/20" style={{ backgroundColor: 'rgba(255, 255, 255, 0.08)' }}>
           <SelectValue placeholder="Select a model" />
-        </SelectTrigger>                        <SelectContent onOpenAutoFocus={(e) => e.preventDefault()}>
+        </SelectTrigger>                        <SelectContent onOpenAutoFocus={(e) => {
+          // Prevent the default Radix behavior of focusing the first
+          // SelectItem on open. Instead, focus our filter input so the
+          // user can immediately start typing to search. Without this,
+          // focus stays on the trigger button and Radix's built-in
+          // typeahead (handleTypeaheadSearch on SelectContent's outer
+          // div) intercepts single-character keys, jumping the
+          // highlight to the first model starting with that letter
+          // instead of letting the input receive the character and
+          // filter the list.
+          e.preventDefault();
+          // Defer one frame so the input ref is guaranteed to be set
+          // by the time we call focus() (Radix mounts content then
+          // fires onOpenAutoFocus).
+          requestAnimationFrame(() => {
+            searchInputRef.current?.focus();
+          });
+        }}>
           {/* Search filter input */}
           <div className="sticky top-0 z-10 px-2 pt-1 pb-1.5 border-b border-white/10 bg-black/90 backdrop-blur-sm"
             onKeyDown={(e) => e.stopPropagation()}
@@ -411,6 +428,41 @@ const ProviderSelector = React.memo(function ProviderSelector({
                   // and navigates to the first matching SelectItem instead of
                   // letting the input handle the character.
                   e.stopPropagation();
+
+                  if (e.key === "Enter") {
+                    // Enter: select the first visible model that matches
+                    // the current search, if any. Lets the user filter
+                    // by partial name and confirm without reaching for
+                    // the mouse.
+                    const term = searchTerm.toLowerCase().trim();
+                    const firstMatch = availableProviders
+                      .filter((p: any) => p.isAvailable !== false)
+                      .flatMap((p: any) =>
+                        (p.models as Array<ModelConfig | string>)
+                          .map((m) => (typeof m === "string" ? m : m.id))
+                          .filter((id: string) =>
+                            term ? fuzzyMatchModel(id, term) : true,
+                          )
+                          .map((id: string) => ({ providerId: p.id, modelId: id })),
+                      )[0];
+                    if (firstMatch) {
+                      e.preventDefault();
+                      onValueChange(firstMatch.providerId, firstMatch.modelId);
+                    }
+                  } else if (e.key === "Escape") {
+                    // Escape: clear the search if there's text, otherwise
+                    // let the event bubble so Radix can close the dropdown.
+                    if (searchTerm) {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setSearchTerm("");
+                      searchInputRef.current?.focus();
+                    }
+                  } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                    // Let arrow keys reach Radix so the user can move
+                    // from the search input into the filtered list.
+                    e.stopPropagation();
+                  }
                 }}
                 className="flex-1 bg-transparent border-none outline-none text-xs text-white/80 placeholder:text-white/30"
               />

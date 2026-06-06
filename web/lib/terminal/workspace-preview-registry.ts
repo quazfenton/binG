@@ -26,6 +26,7 @@ import type { PortDetectionResult } from '@/lib/previews/enhanced-port-detector'
 import type { SandboxProviderType } from '@/lib/sandbox/providers';
 import { previewRouter } from '@/lib/previews/preview-router';
 
+
 const logger = createLogger('Phase8:PreviewRegistry');
 
 // ============================================================================
@@ -452,7 +453,6 @@ export class WorkspacePreviewRegistry extends EventEmitter {
 
     return { totalPreviews, activePreviews, unreachablePreviews, byProvider };
   }
-
   // ==========================================================================
   // Helpers
   // ==========================================================================

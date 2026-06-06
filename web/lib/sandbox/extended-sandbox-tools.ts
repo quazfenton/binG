@@ -194,13 +194,63 @@ export const PORT_TOOLS: ToolDefinition[] = [
 ];
 
 /**
- * All extended sandbox tools (base + terminal + workspace analysis + port).
+ * Workspace Graph tools — AI-native workspace state querying
+ */
+export const WORKSPACE_GRAPH_TOOLS: ToolDefinition[] = [
+  {
+    name: 'workspace_graph',
+    description: 'Get the full workspace graph — a structured, queryable view of all workspace state. ' +
+      'Returns processes, services, ports, previews, snapshots, and images as typed nodes with ' +
+      'relationship edges and derived diagnostics. Use this INSTEAD of scraping terminal output ' +
+      'to understand what is running in the workspace. Includes service health, port availability, ' +
+      'process state, and snapshot age diagnostics.',
+    parameters: {
+      type: 'object',
+      properties: {
+        workspaceId: { type: 'string', description: 'Workspace ID (defaults to current workspace)' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'workspace_graph_diagnostic',
+    description: 'Get a focused diagnostic trace for a specific service. ' +
+      'Traces service → port → preview → process chain to find root causes. ' +
+      'Use when workspace_graph shows a service issue and you need deeper investigation.',
+    parameters: {
+      type: 'object',
+      properties: {
+        serviceId: { type: 'string', description: 'Service ID to diagnose' },
+        workspaceId: { type: 'string', description: 'Workspace ID (defaults to current)' },
+      },
+      required: ['serviceId'],
+    },
+  },
+  {
+    name: 'workspace_graph_find_process',
+    description: 'Search for processes by command pattern across the workspace. ' +
+      'Returns matching processes plus their related services, ports, and previews. ' +
+      'Use when you need to find a specific process and understand its relationships.',
+    parameters: {
+      type: 'object',
+      properties: {
+        pattern: { type: 'string', description: 'Command pattern to search for (e.g., "node", "npm", "python")' },
+        workspaceId: { type: 'string', description: 'Workspace ID (defaults to current)' },
+      },
+      required: ['pattern'],
+    },
+  },
+];
+
+/**
+ * All extended sandbox tools (base + terminal + workspace analysis + port + workspace graph).
  */
 export const EXTENDED_SANDBOX_TOOLS: ToolDefinition[] = [
   ...ENHANCED_SANDBOX_TOOLS,
   ...TERMINAL_TOOLS,
   ...PROJECT_ANALYSIS_TOOLS,
   ...PORT_TOOLS,
+  ...WORKSPACE_GRAPH_TOOLS,
 ];
 
 /**
@@ -246,6 +296,10 @@ const EXTENDED_TOOL_TO_CAPABILITY: Record<string, string> = {
   project_structure: 'workspace.structure',
   // New port status tool
   port_status: 'terminal.get_port_status',
+  // Workspace graph tools
+  workspace_graph: 'workspace.graph',
+  workspace_graph_diagnostic: 'workspace.graph_diagnostic',
+  workspace_graph_find_process: 'workspace.graph_find_process',
 };
 
 /**
@@ -259,6 +313,6 @@ export function mapToolToCapability(toolName: string): string {
  * Get the description for a tool (for system prompt injection).
  */
 export function getToolDescription(toolName: string): string | undefined {
-  const allTools = [...TERMINAL_TOOLS, ...PROJECT_ANALYSIS_TOOLS, ...PORT_TOOLS];
+  const allTools = [...TERMINAL_TOOLS, ...PROJECT_ANALYSIS_TOOLS, ...PORT_TOOLS, ...WORKSPACE_GRAPH_TOOLS];
   return allTools.find(t => t.name === toolName)?.description;
 }

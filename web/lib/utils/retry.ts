@@ -51,6 +51,20 @@ const DEFAULT_OPTIONS: Required<Omit<RetryOptions, 'onRetry' | 'timeoutMs'>> = {
 };
 
 /**
+ * Sleep for the given number of milliseconds.
+ * Resolves with `void` after the timer fires; safe to `await` in async
+ * pipelines. Used by `withRetry` for its backoff and exported for callers
+ * that need a tiny standalone delay (e.g. polling loops, jitter between
+ * retry attempts, hand-rolled debounce).
+ */
+export function sleep(ms: number): Promise<void> {
+  if (!Number.isFinite(ms) || ms <= 0) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
  * Execute an async function with retry logic and exponential backoff.
  *
  * @param fn - Async function to execute

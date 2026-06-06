@@ -698,10 +698,14 @@ export class PlanActVerifyOrchestrator {
             content: llmResponse.text || '',
           };
           if (llmResponse.toolCalls?.length) {
-            assistantMsg.tool_calls = llmResponse.toolCalls.map((tc: any) => ({
-              id: tc.id,
-              type: 'function' as const,
-              function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
+            // Normalize to CoreToolCall format ({toolCallId, toolName, args})
+            // instead of OpenAI wire format ({id, type: 'function', function:...})
+            // to avoid AI SDK ModelMessage[] schema validation failures with
+            // strict provider adapters (e.g. moonshotai/kimi-k2.6).
+            assistantMsg.toolCalls = llmResponse.toolCalls.map((tc: any) => ({
+              toolCallId: tc.id,
+              toolName: tc.name,
+              args: tc.arguments,
             }));
           }
           stepHistory.push(assistantMsg as ModelMessage);
@@ -804,6 +808,12 @@ export class PlanActVerifyOrchestrator {
   private async generatePlan(task: string, history: ModelMessage[]) {
     const planPrompt = `You are a planning agent. Create a step-by-step execution plan for the following task.
 TASK: ${task}
+
+Use workspace_graph to understand current workspace state before planning:
+- workspace_graph: Get a structured view of all running processes, services, ports, and previews with health diagnostics.
+- workspace_graph_diagnostic: Trace service issues to root causes.
+- workspace_graph_find_process: Search for processes by command pattern.
+
 Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"}]`;
     const response = await this.callLLM(planPrompt, history || []);
     try {
@@ -865,7 +875,12 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
           tools: (Object.keys(this.sdkTools).length > 0 && (this.validatedConfig.provider !== 'ninerouter' || !(this.validatedConfig.model || '').startsWith('gh/'))) ? this.sdkTools : ({} as any),
           system:
             'You are an autonomous AI coding agent. You have tools available to interact with the system.' +
-            '\n\n' + CHOOSE_ROLE_DIRECTIVE,
+            '\n\n' + CHOOSE_ROLE_DIRECTIVE +
+            '\n\n### Workspace State Tools\n' +
+            '- workspace_graph: Get a structured view of all workspace state (processes, services, ports, previews) with health diagnostics. Use to understand what\x27s currently running before planning or making changes.\n' +
+            '- workspace_graph_diagnostic: Trace a specific service\x27s issues to root causes (port conflicts, crashed processes, stale snapshots).\n' +
+            '- workspace_graph_find_process: Search for processes by command pattern across the workspace.\n' +
+            'Use these tools to inspect and verify workspace health before and after making changes.',
           maxSteps: 3,
           maxOutputTokens: 4000,
           temperature: 0.2,

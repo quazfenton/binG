@@ -32,7 +32,7 @@ import {
   executeWithOrchestrationMode,
   selectAndComposeSystemPrompt,
 } from '@bing/shared/agent';
-import { processUnifiedAgentRequest, type UnifiedAgentConfig } from '@/lib/orchestra/unified-agent-service';
+import { processUnifiedAgentRequest, type UnifiedAgentConfig, PROVIDER_DEFAULT_MODELS } from '@/lib/orchestra/unified-agent-service';
 import { checkProviderHealth } from '@/lib/orchestra/provider-health';
 import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp';
 import { mem0Search, buildMem0SystemPrompt, isMem0Configured, mem0Add, prewarmMem0Cache } from '@/lib/powers/mem0-power';
@@ -56,6 +56,7 @@ import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge';
 import { determineExecutionPolicy } from '@/lib/sandbox/types';
 import {
   applySearchReplace,
+  autoCorrectModel,
   pollWithBackoff,
   buildClientVisibleUnifiedResponse,
   chatMessageSchema,
@@ -589,7 +590,8 @@ export async function POST(request: NextRequest) {
 
     // Validate provider and model with caching to avoid repeated lookups
     // Cache validation results for 30 seconds to reduce overhead
-    const validationCacheKey = `${provider}:${model}`;
+    const validationCacheKeyOriginal = `${provider}:${model}`;
+    let validationCacheKey = validationCacheKeyOriginal;
     const cachedValidation = validationCache.get(validationCacheKey);
     const now = Date.now();
     
@@ -619,19 +621,40 @@ export async function POST(request: NextRequest) {
       );
 
       if (!isModelSupported) {
-        chatLogger.error('Model not supported', { requestId, provider, model }, {
-          availableModels: selectedProvider.models.map(m => typeof m === 'string' ? m : (m as any).id),
-        });
-        return NextResponse.json(
-          {
-            error: `Model ${model} is not supported by ${provider}`,
-            availableModels: selectedProvider.models.map(m => typeof m === 'string' ? m : (m as any).id),
-          },
-          { status: 400 },
-        );
+        // Auto-correct the model instead of returning 400.
+        // Returning 400 kills the conversation before provider fallback
+        // chains, empty-response detection, or auto-continue mechanisms
+        // can engage. Instead, find the nearest supported model or
+        // fall back to the provider's default.
+        const availableModelIds = selectedProvider.models.map(m => typeof m === 'string' ? m : (m as any).id);
+        const correctedModel = autoCorrectModel(model, availableModelIds, PROVIDER_DEFAULT_MODELS[provider]);
+
+        if (correctedModel) {
+          chatLogger.warn('Model auto-corrected', { requestId, provider }, {
+            originalModel: model,
+            correctedModel,
+            availableModels: availableModelIds.slice(0, 10),
+          });
+          // Update both model variable AND cache key so subsequent
+          // requests with the original name still pass validation.
+          model = correctedModel;
+          validationCacheKey = `${provider}:${correctedModel}`;
+        } else {
+          // No fallback available — return 400 as last resort
+          chatLogger.error('Model not supported and no fallback available', { requestId, provider, model }, {
+            availableModels: availableModelIds,
+          });
+          return NextResponse.json(
+            {
+              error: `Model ${model} is not supported by ${provider}`,
+              availableModels: availableModelIds,
+            },
+            { status: 400 },
+          );
+        }
       }
 
-      // Cache the validation result with timestamp
+      // Cache the validation result with timestamp (using potentially corrected model)
       validationCache.set(validationCacheKey, { provider, isValid: true, timestamp: now });
     }
 
@@ -3085,7 +3108,8 @@ const config: UnifiedAgentConfig = {
 
                             // FIX: Also emit tool_invocation with actual parsed args
                             // This ensures the UI can display tool calls even when the LLM
-                            // didn't emit structured function calls (e.g., minimax/m2.5:free)
+                            // didn't emit structured function calls (e.g., free-tier or older
+                            // OpenRouter models that return raw XML/JSON instead of tool calls)
                             // Use correct tool based on operation type (write vs patch)
                             const editDiff = edit.diff || (isPatch ? edit.content : '');
                             const toolCallId = streamedEdits?.commitId || (isPatch ? `apply_diff-${Date.now()}-${edit.path}` : `write_file-${Date.now()}-${edit.path}`);

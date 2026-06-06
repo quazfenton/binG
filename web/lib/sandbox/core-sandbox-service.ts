@@ -3,6 +3,7 @@ import { getSandboxProvider, type SandboxProvider, type SandboxHandle, type Sand
 import { saveSession, updateSession, deleteSession } from '../storage/session-store'
 import { setupCacheVolumes } from './dep-cache'
 import { provisionBaseImage, warmPool } from './base-image'
+import { workspaceImageBuilder } from './workspace-image-builder'
 import { randomUUID } from 'crypto'
 import { quotaManager } from '../management/quota-manager'
 import { createLogger } from '@/lib/utils/logger'
@@ -205,6 +206,36 @@ export class SandboxService {
         log.debug('VFS sync started for sandbox', { sandboxId: handle.id, userId });
       } catch (syncErr: any) {
         log.warn('Failed to start VFS sync for sandbox:', syncErr.message);
+      }
+
+      // Phase 7: Auto-synthesize workspace image for instant warm starts.
+      // After base image provisioning + VFS sync, check for dependency files
+      // and pre-build or restore a cached workspace image. Best-effort — errors
+      // are logged but don't prevent the sandbox from being used.
+      // Restore path (checkpoint) is near-instant — completes before user commands.
+      // Build path runs in background since installs are slow anyway.
+      try {
+        const workspaceDir = handle.workspaceDir || '/workspace';
+        workspaceImageBuilder.ensureImage(handle, workspaceDir).then(image => {
+          if (image) {
+            log.info('Workspace image ready', {
+              sandboxId: handle.id,
+              hash: image.hash.slice(0, 12),
+              tools: image.tools,
+              restoredFromCache: image.useCount > 1,
+            });
+          }
+        }).catch((imgErr: any) => {
+          log.warn('Workspace image synthesis skipped', {
+            sandboxId: handle.id,
+            reason: imgErr.message,
+          });
+        });
+      } catch (imgErr: any) {
+        log.warn('Failed to initiate workspace image synthesis', {
+          sandboxId: handle.id,
+          error: imgErr.message,
+        });
       }
 
       return handle

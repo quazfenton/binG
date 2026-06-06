@@ -13,6 +13,9 @@
  *   - fs-edit-schema.sql    → fs_edit_transactions, fs_edit_denials
  *   - approval-requests.sql → approval_requests (human-in-loop variant)
  *   - healing-log.sql       → event_healing_log (self-healing variant)
+ *   - workspace-schema.sql  → workspace_processes, workspace_services,
+ *                             workspace_ports, workspace_env
+ *   - cas-schema.sql        → file_content_blobs (content-addressable storage)
  *
  * Note: The core application tables (users, sessions, conversations, messages, etc.)
  * live in schema.sql, read at runtime by getSchemaSql() in connection.ts — not in this

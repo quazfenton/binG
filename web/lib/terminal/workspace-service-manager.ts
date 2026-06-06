@@ -32,6 +32,7 @@ import { EnhancedPortDetector, type PortDetectionResult } from '@/lib/previews/e
 import { createLogger } from '@/lib/utils/logger';
 import { virtualPidRegistry } from '@/lib/terminal/virtual-pid-registry';
 import { workspacePreviewRegistry } from '@/lib/terminal/workspace-preview-registry';
+
 import type { SandboxProviderType } from '@/lib/sandbox/providers';
 
 const logger = createLogger('WorkspaceServiceManager');
@@ -191,6 +192,8 @@ export class WorkspaceServiceManager {
 
   /**
    * Update service status.
+   * When status transitions to 'crashed', auto-generates workspace graph diagnostics
+   * and logs them at error level.
    */
   updateStatus(serviceId: string, workspaceId: string, status: ServiceStatus, exitCode?: number): void {
     const service = this.getService(serviceId, workspaceId);
@@ -225,6 +228,45 @@ export class WorkspaceServiceManager {
     }
 
     logger.info('Service status updated', { serviceId, status, exitCode });
+
+    // === Auto-diagnose crash via workspace graph ===
+    // When a service crashes, immediately generate workspace graph diagnostics
+    // and log them at error level. This ensures crash diagnostics are surfaced
+    // eagerly rather than waiting for the next query to getWorkspaceGraph().
+    if (status === 'crashed') {
+      this.autoDiagnoseCrash(serviceId, workspaceId, service);
+    }
+  }
+
+  /**
+   * Auto-generate workspace graph diagnostics for a crashed service.
+   * Fire-and-forget — does not block the status update.
+   */
+  private autoDiagnoseCrash(serviceId: string, workspaceId: string, service: WorkspaceService): void {
+    // Lazy import to avoid circular dependencies
+    import('@/lib/workspace/workspace-graph-service')
+      .then(({ workspaceGraphService }) => {
+        const diagnostics = workspaceGraphService.getServiceDiagnostic(workspaceId, serviceId);
+        logger.error('Service crashed — auto-generated workspace graph diagnostics', {
+          serviceId,
+          serviceName: service.name,
+          workspaceId,
+          command: service.command.slice(0, 100),
+          exitCode: service.exitCode,
+          diagnosticCount: diagnostics.length,
+          diagnostics: diagnostics.map(d => ({
+            level: d.level,
+            category: d.category,
+            message: d.message,
+          })),
+        });
+      })
+      .catch((err: any) => {
+        logger.warn('Failed to auto-diagnose service crash via workspace graph', {
+          serviceId,
+          error: err.message,
+        });
+      });
   }
 
   /**
@@ -413,7 +455,6 @@ export class WorkspaceServiceManager {
       crashedCount: services.filter(s => s.status === 'crashed').length,
     };
   }
-
   // ============================================================================
   // Private helpers
   // ============================================================================

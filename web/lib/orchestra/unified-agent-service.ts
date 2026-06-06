@@ -162,6 +162,9 @@ async function resolveDynamicDefaults(): Promise<{ provider: string; model: stri
   let model = process.env.DEFAULT_MODEL || 'mistral-large-latest';
   try {
     const { getModelForRotation, isRateLimited } = await import('../providers/model-ranker');
+
+    // Strategy 1: Cross-provider selection — model-ranker picks the best
+    // provider+model combo from any configured provider.
     const rotation = getModelForRotation();
     if (rotation && !isRateLimited(rotation.provider, rotation.model)) {
       // Also verify circuit isn't open for this provider
@@ -174,6 +177,18 @@ async function resolveDynamicDefaults(): Promise<{ provider: string; model: stri
       if (!circuitOpen) {
         provider = rotation.provider;
         model = rotation.model;
+      }
+    }
+
+    // Strategy 2: If cross-provider selection failed or returned a rate-limited
+    // model, get the best model specifically for the configured default provider.
+    // Uses the providerFilter parameter to scope model-ranker's ranking to a
+    // single provider.
+    if (!rotation || isRateLimited(rotation.provider, rotation.model)) {
+      const providerRotation = getModelForRotation(undefined, provider);
+      if (providerRotation?.model && !isRateLimited(provider, providerRotation.model)) {
+        // Keep the existing provider, update the model
+        model = providerRotation.model;
       }
     }
   } catch { /* model-ranker unavailable */ }
@@ -196,7 +211,7 @@ function invalidateDynamicDefaultsCache(): void {
  * Module-scoped so all execution paths (runV1ApiWithTools, runV1ApiCompletion)
  * can share the same mapping.
  */
-const PROVIDER_DEFAULT_MODELS: Record<string, string> = {
+export const PROVIDER_DEFAULT_MODELS: Record<string, string> = {
   openai: 'gpt-4o',
   anthropic: 'claude-sonnet-4-6-20250514',
   google: 'gemini-2.5-flash',
@@ -762,9 +777,17 @@ export async function processUnifiedAgentRequest(
               orchNonSystem.push(msg);
             }
           }
-          if (orchSystemParts.length > 0) {
-            config.systemPrompt = (config.systemPrompt || '') + '\n\n' + orchSystemParts.join('\n\n');
-          }
+          // NOTE: System messages are intentionally discarded here — not
+          // passed to runV1Orchestrated. The PlanActVerifyOrchestrator
+          // does not accept a separate system-prompt parameter; it receives
+          // all context through the messages array. System-role messages
+          // cannot be included there because they trigger Vercel AI SDK
+          // ModelMessage[] schema validation errors inside callLLM.
+          //
+          // On the fallback path (Phase 2 → runV1Api), system messages
+          // are re-extracted from config.conversationHistory and merged
+          // into the `system` parameter of generateText/streamText, where
+          // the AI SDK accepts them.
           const orchMessages = [
             ...orchNonSystem,
             { role: 'user', content: config.userMessage },
@@ -1545,9 +1568,11 @@ async function runV1Api(config: UnifiedAgentConfig): Promise<UnifiedAgentResult>
       nonSystemMessages.push(msg);
     }
   }
-  if (systemParts.length > 0) {
-    config.systemPrompt = (config.systemPrompt || '') + '\n\n' + systemParts.join('\n\n');
-  }
+  // Build resolved system prompt without mutating config to prevent duplication
+  // when runV1Api is called as a fallback (the same config object is reused).
+  const resolvedSystemPrompt = systemParts.length > 0
+    ? ((config.systemPrompt || '') + '\n\n' + systemParts.join('\n\n'))
+    : config.systemPrompt;
   const messages: any[] = [
     ...nonSystemMessages,
     { role: 'user', content: config.userMessage },
@@ -1573,11 +1598,20 @@ async function runV1Api(config: UnifiedAgentConfig): Promise<UnifiedAgentResult>
   log.info('[V1-API] └─────────────────────────────────────────────');
 
   if (hasToolsForAgent) {
-    // Use agent loop with tools
-    return await runV1ApiWithTools(config, messages, startTime);
+    // Use agent loop with tools — pass modified config copy with resolved system prompt
+    return await runV1ApiWithTools(
+      { ...config, systemPrompt: resolvedSystemPrompt },
+      messages,
+      startTime
+    );
   } else {
-    // Simple completion without tools
-    return await runV1ApiCompletion(config, messages, getLLMProvider(), startTime);
+    // Simple completion without tools — pass modified config copy
+    return await runV1ApiCompletion(
+      { ...config, systemPrompt: resolvedSystemPrompt },
+      messages,
+      getLLMProvider(),
+      startTime
+    );
   }
 }
 
@@ -2008,11 +2042,29 @@ async function runV1ApiWithTools(
 
   // FIX: Normalize model name for Vercel provider by stripping 'vercel:' prefix if present
   function getModelForProvider(providerName: string): string {
-    let model = config.model || primaryModel;
+    const model = config.model || primaryModel;
 
+    // Get first model from provider's own model list (always valid for that provider)
+    // Uses PROVIDERS from the closure scope (dynamic import above)
+    function _getProviderFirstModel(pn: string): string | undefined {
+      const p = PROVIDERS[pn.toLowerCase()];
+      if (p?.models && Array.isArray(p.models) && p.models.length > 0) {
+        const first = p.models[0];
+        return typeof first === 'string' ? first : first?.id;
+      }
+      return undefined;
+    }
 
-    // If no explicit model set, use provider default
-    if (!config.model) return PROVIDER_DEFAULT_MODELS[providerName] || primaryModel;
+    // If no explicit model set, use model-ranker's highest-ranked model first,
+    // then provider default, then first model from provider's own list
+    // CRITICAL: NEVER fall back to primaryModel for a different provider — that leaks
+    // the original provider's model ID to the new provider's API, causing 400 errors.
+    if (!config.model) {
+      // Use model-ranker telemetry to select highest-ranked model for this provider
+      const rotation = mrMod?.getModelForRotation?.(undefined, providerName);
+      if (rotation?.model) return rotation.model;
+      return PROVIDER_DEFAULT_MODELS[providerName] || _getProviderFirstModel(providerName) || model;
+    }
 
     // Check if the model is valid for this provider
     const provider = PROVIDERS[providerName.toLowerCase()];
@@ -2023,9 +2075,12 @@ async function runV1ApiWithTools(
       ).filter(Boolean);
       
       if (supportedModels.includes(model)) return model;
-      // Model not in provider's list — use provider default
-      log.debug(`Model "${model}" not in ${providerName} models list, using default`);
-      return PROVIDER_DEFAULT_MODELS[providerName] || primaryModel;
+      // Model not in provider's list — use model-ranker's highest-ranked or provider's own model
+      // (never leak primaryModel across providers)
+      log.debug(`Model "${model}" not in ${providerName} models list, using provider's own model`);
+      const rotation = mrMod?.getModelForRotation?.(undefined, providerName);
+      if (rotation?.model) return rotation.model;
+      return PROVIDER_DEFAULT_MODELS[providerName] || _getProviderFirstModel(providerName) || model;
     }
 
     // Unknown provider — trust the config model
@@ -2047,6 +2102,7 @@ async function runV1ApiWithTools(
 
   // FIX: Import circuit-breaker and model-ranker for smart provider selection
   let circuitBreakerMgr: any = null;
+  let mrMod: any = null;
   let modelRankerFns: { isRateLimited: (p: string, m: string) => boolean; recordRateLimitError: (p: string, m: string) => void; recordModelAttempt: (p: string, m: string, s: boolean) => void; hasInsufficientTokenLimit?: (p: string, m: string, tokens: number) => boolean; getModelTokenLimit?: (p: string, m: string) => number | undefined; recordModelTokenLimit?: (p: string, m: string, limit: number) => void; recordModelContextLimitError?: (p: string, m: string, limit: number) => void } | null = null;
   try {
     const cbMod = await import('../middleware/circuit-breaker');
@@ -2074,7 +2130,7 @@ async function runV1ApiWithTools(
     firstRequestSet.add(firstRequestKey);
   }
   try {
-    const mrMod = await import('../providers/model-ranker');
+    mrMod = await import('../providers/model-ranker');
     modelRankerFns = {
       isRateLimited: mrMod.isRateLimited,
       recordRateLimitError: mrMod.recordRateLimitError,
@@ -3404,10 +3460,33 @@ async function runV1ApiCompletion(
   // FIX: Map each provider to a model that supports tool calling / function calling.
   // Also: when falling back, check if the model is valid for the target provider.
   const { PROVIDERS } = await import('../providers/llm-providers');
+  let _getModelForRotation: any = null;
+  try {
+    const mrMod = await import('../providers/model-ranker');
+    _getModelForRotation = mrMod.getModelForRotation || null;
+  } catch { /* model-ranker unavailable */ }
 
   function getModelForProvider(providerName: string): string {
-    // If no explicit model set, use provider default
-    if (!config.model) return PROVIDER_DEFAULT_MODELS[providerName] || primaryModel;
+    // Get first model from provider's own model list (always valid for that provider)
+    // Uses PROVIDERS from the closure scope (dynamic import above)
+    function _getProviderFirstModel(pn: string): string | undefined {
+      const p = PROVIDERS[pn.toLowerCase()];
+      if (p?.models && Array.isArray(p.models) && p.models.length > 0) {
+        const first = p.models[0];
+        return typeof first === 'string' ? first : first?.id;
+      }
+      return undefined;
+    }
+
+    // If no explicit model set, use model-ranker's highest-ranked model first,
+    // then provider default, then first model from provider's own list
+    // CRITICAL: NEVER fall back to primaryModel for a different provider
+    if (!config.model) {
+      // Use model-ranker telemetry to select highest-ranked model for this provider
+      const rotation = _getModelForRotation?.(undefined, providerName);
+      if (rotation?.model) return rotation.model;
+      return PROVIDER_DEFAULT_MODELS[providerName] || _getProviderFirstModel(providerName) || config.model;
+    }
 
     // Check if the model is valid for this provider
     const provider = PROVIDERS[providerName.toLowerCase()];
@@ -3418,9 +3497,11 @@ async function runV1ApiCompletion(
       ).filter(Boolean);
       
       if (supportedModels.includes(config.model)) return config.model;
-      // Model not in provider's list — use provider default
+      // Model not in provider's list — use model-ranker's highest-ranked or provider's own model
       log.debug(`Model "${config.model}" not in ${providerName} models list, using default`);
-      return PROVIDER_DEFAULT_MODELS[providerName] || primaryModel;
+      const rotation = _getModelForRotation?.(undefined, providerName);
+      if (rotation?.model) return rotation.model;
+      return PROVIDER_DEFAULT_MODELS[providerName] || _getProviderFirstModel(providerName) || config.model;
     }
 
     // Unknown provider — trust the config model

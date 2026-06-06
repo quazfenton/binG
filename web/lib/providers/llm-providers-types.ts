@@ -576,7 +576,6 @@ export const PROVIDERS: Record<string, LLMProviderConfig> = {
       'openrouter/qwen/qwen3-next-80b-a3b-instruct:free',
       'openrouter/qwen/qwen3-coder:free',
       'openrouter/openrouter/free',
-      'openrouter/minimax/minimax-m2.5:free',
       'openrouter/z-ai/glm-5.1',
       'openrouter/nvidia/nemotron-3-nano-30b-a3b:free',
       'openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
@@ -596,22 +595,22 @@ export const PROVIDERS: Record<string, LLMProviderConfig> = {
       'ollama/minimax-m2.5',
       'ollama/glm-4.7-flash',
       'ollama/qwen3.5',
-      // Cloudflare Workers AI models — DISABLED: ninerouter server forwards cf/ prefix
-      // as-is to Cloudflare, causing "No route for that URI" errors.
-      // Fix needed on ninerouter server: strip cf/ prefix before forwarding to Cloudflare.
-      // 'cf/@cf/meta/llama-3.2-1b-instruct',
-      // 'cf/@cf/meta/llama-3.2-3b-instruct',
-      // 'cf/@cf/meta/llama-3.1-8b-instruct-fp8-fast',
-      // 'cf/@cf/meta/llama-3.1-8b-instruct-awq',
-      // 'cf/@cf/mistralai/mistral-small-3.1-24b-instruct',
-      // 'cf/@cf/meta/llama-3.1-70b-instruct-fp8-fast',
-      // 'cf/@cf/meta/llama-3.3-70b-instruct-fp8-fast',
-      // 'cf/@cf/deepseek-ai/deepseek-r1-distill-qwen-32b',
-      // 'cf/@cf/moonshotai/kimi-k2.5',
-      // 'cf/@cf/moonshotai/kimi-k2.6',
-      // 'cf/@cf/zai-org/glm-4.7-flash',
-      // 'cf/@cf/qwen/qwq-32b',
-      // 'cf/@cf/qwen/qwen2.5-coder-32b-instruct',
+      // Cloudflare Workers AI models — re-enabled after testing confirmed the
+      // ninerouter server correctly handles cf/ routing (tested with 429 responses
+      // from Cloudflare, proving end-to-end connectivity).
+      'cf/@cf/meta/llama-3.2-1b-instruct',
+      'cf/@cf/meta/llama-3.2-3b-instruct',
+      'cf/@cf/meta/llama-3.1-8b-instruct-fp8-fast',
+      'cf/@cf/meta/llama-3.1-8b-instruct-awq',
+      'cf/@cf/mistralai/mistral-small-3.1-24b-instruct',
+      'cf/@cf/meta/llama-3.1-70b-instruct-fp8-fast',
+      'cf/@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+      'cf/@cf/deepseek-ai/deepseek-r1-distill-qwen-32b',
+      'cf/@cf/moonshotai/kimi-k2.5',
+      'cf/@cf/moonshotai/kimi-k2.6',
+      'cf/@cf/zai-org/glm-4.7-flash',
+      'cf/@cf/qwen/qwq-32b',
+      'cf/@cf/qwen/qwen2.5-coder-32b-instruct',
       // Mistral models
       'mistral/mistral-large-latest',
       'mistral/codestral',

@@ -25,6 +25,98 @@ const logger = createLogger('Model:Ranker')
 const triedModels = new Map<string, { lastTryTime: number; successCount: number; failCount: number }>()
 const MODEL_ROTATION_WINDOW_MS = 5 * 60 * 1000 // 5 minutes
 
+/** Per-model telemetry snapshot from chatRequestLogger.getModelPerformance()
+ *  enriched with tool call stats from toolCallTracker.getModelToolStats().
+ *  Used by getModelForRotation's providerFilter path for accurate, model-level
+ *  scoring (latency, failure rate, recency) instead of provider-level estimates.
+ */
+interface ModelTelemetry {
+  avgLatency: number;
+  failureRate: number;
+  lastUpdated: number;
+  totalCalls: number;
+  successRate: number;
+  toolCallScore?: number;
+  toolSuccessRate?: number;
+  avgToolScore?: number;
+  toolCallTotalCalls?: number;
+}
+const _modelTelemetryCache = new Map<string, ModelTelemetry>();
+
+/**
+ * Refresh the per-model telemetry cache by fetching the latest performance data
+ * and tool call stats. Call this periodically (e.g. every 5 minutes) to keep
+ * data current, or call it in tests after seeding telemetry.
+ *
+ * This is a no-op on failure — the scoring logic gracefully falls back to
+ * provider-level estimates when a model isn't in the cache yet.
+ */
+export async function refreshModelTelemetryCache(): Promise<void> {
+  try {
+    const [performance, toolStats] = await Promise.all([
+      chatRequestLogger.getModelPerformance(10),
+      toolCallTracker.getModelToolStats(10).catch(() => []),
+    ]);
+
+    // Index tool stats by provider:model key for O(1) merge
+    const toolStatsMap = new Map<string, { toolCallScore: number; toolSuccessRate: number; avgToolScore: number; toolCallTotalCalls: number }>();
+    for (const ts of toolStats) {
+      toolStatsMap.set(`${ts.provider}:${ts.model}`, {
+        toolCallScore: ts.toolCallScore,
+        toolSuccessRate: ts.toolSuccessRate,
+        avgToolScore: ts.avgToolScore,
+        toolCallTotalCalls: ts.totalToolCalls,
+      });
+    }
+
+    _modelTelemetryCache.clear();
+    for (const p of performance) {
+      const key = `${p.provider}:${p.model}`;
+      const toolData = toolStatsMap.get(key);
+      _modelTelemetryCache.set(key, {
+        avgLatency: p.avgLatency,
+        failureRate: p.failureRate,
+        lastUpdated: p.lastUpdated,
+        totalCalls: p.totalCalls,
+        successRate: p.successRate,
+        toolCallScore: toolData?.toolCallScore,
+        toolSuccessRate: toolData?.toolSuccessRate,
+        avgToolScore: toolData?.avgToolScore,
+        toolCallTotalCalls: toolData?.toolCallTotalCalls,
+      });
+    }
+    logger.debug('Model telemetry cache refreshed', {
+      modelCount: performance.length,
+      toolStatsCount: toolStats.length,
+    });
+  } catch { /* best-effort — fallback to provider-level estimates */ }
+}
+
+// Fire-and-forget: populate cache at module load without blocking the module's
+// synchronous initialization path.
+void refreshModelTelemetryCache();
+
+// Periodic refresh every 5 minutes so the cache tracks changing telemetry
+// (latency shifts, newly recorded failures, fresh tool call stats) without
+// requiring each consumer to know about the refresh mechanism.
+const TELEMETRY_CACHE_REFRESH_MS = 5 * 60 * 1000;
+const _telemetryRefreshInterval = setInterval(
+  () => void refreshModelTelemetryCache(),
+  TELEMETRY_CACHE_REFRESH_MS,
+);
+
+/**
+ * Stop the periodic telemetry cache refresh. Useful in tests to prevent the
+ * interval from running after test teardown, and in environments where the
+ * cache should only be refreshed on demand (e.g. serverless functions).
+ *
+ * After calling this, the cache can still be refreshed manually by calling
+ * `refreshModelTelemetryCache()` directly.
+ */
+export function stopRefreshingModelTelemetryCache(): void {
+  clearInterval(_telemetryRefreshInterval);
+}
+
 // Rate limit circuit breaker: track when a model/provider combo gets 429 errors
 interface RateLimitState {
   last429Time: number
@@ -191,6 +283,8 @@ const STALENESS_PENALTY = 1.2
 const MAX_AGE_MS = 1000 * 60 * 10 // 10 minutes
 const LATENCY_WEIGHT = 0.6
 const FAILURE_WEIGHT_SCORE = 0.4
+const TOOL_WEIGHT = 1.0
+const MIN_TOOL_CALLS_FOR_SCORING = 3
 
 /**
  * Calculate composite score for a model
@@ -210,13 +304,21 @@ export function scoreModel(m: ModelStats): number {
   // Normalize latency (0-1 scale, assuming max 10s latency)
   const normalizedLatency = Math.min(m.avgLatency / 10000, 1)
 
-  // Calculate composite score
-  // We want to maximize success and minimize latency, 
-  // with failures acting as a massive penalty.
-  const score = (
+  // Base score: lower is better
+  let score = (
     (normalizedLatency * LATENCY_WEIGHT) +
     (m.failureRate * FAILURE_WEIGHT)
   ) * staleFactor;
+
+  // Tool call track record: subtract avgToolScore * TOOL_WEIGHT so models
+  // with strong tool success are preferred (avgToolScore = +1 → -1.0 bonus,
+  // avgToolScore = -1 → +1.0 penalty). Confidence scales with the number of
+  // tool call attempts (capped at 10) to avoid over-weighting sparse data.
+  if (m.avgToolScore !== undefined && m.toolCallTotalCalls !== undefined &&
+      m.toolCallTotalCalls >= MIN_TOOL_CALLS_FOR_SCORING) {
+    const toolConfidence = Math.min(m.toolCallTotalCalls / 10, 1);
+    score -= m.avgToolScore * TOOL_WEIGHT * toolConfidence;
+  }
 
   return score;
 }
@@ -460,8 +562,12 @@ export function recordModelAttempt(provider: string, model: string, success: boo
 /**
  * Get next model for rotation (prefers untested/failed models)
  * FIX: Now shares the same provider iteration logic with addConfiguredModels() to avoid inconsistencies
+ *
+ * @param excludeProvider - If set, skip models from this provider
+ * @param providerFilter - If set, ONLY return models from this provider (takes priority over excludeProvider)
+ * @returns The selected provider+model pair, or null if none available
  */
-export function getModelForRotation(excludeProvider?: string): { provider: string; model: string } | null {
+export function getModelForRotation(excludeProvider?: string, providerFilter?: string): { provider: string; model: string } | null {
   const now = Date.now()
   
   // FIX: Use the same iteration logic as addConfiguredModels() to ensure consistency
@@ -476,8 +582,14 @@ export function getModelForRotation(excludeProvider?: string): { provider: strin
   
   for (const [providerName, providerConfig] of Object.entries(PROVIDERS)) {
     if (!providerConfig?.models || !Array.isArray(providerConfig.models)) continue
-    if (excludeProvider && providerName === excludeProvider) continue
-    if (!isProviderConfiguredForTelemetry(providerName)) continue
+    if (providerFilter) {
+      if (providerName !== providerFilter) continue
+      // When filtering to a specific provider, skip the telemetry check —
+      // the caller explicitly requested this provider, so it must be available
+    } else {
+      if (excludeProvider && providerName === excludeProvider) continue
+      if (!isProviderConfiguredForTelemetry(providerName)) continue
+    }
     
     for (const modelName of providerConfig.models) {
       const modelId = typeof modelName === 'string' ? modelName : modelName.id;
@@ -508,12 +620,64 @@ export function getModelForRotation(excludeProvider?: string): { provider: strin
     }
   }
   
-  // Sort by priority (highest first) then shuffle within same priority for variety
-  candidates.sort((a, b) => b.priority - a.priority)
-  
-  // Take a random model from the top candidates to add variety
-  const topCandidates = candidates.filter(c => c.priority === candidates[0]?.priority)
-  const selected = topCandidates[Math.floor(Math.random() * topCandidates.length)]
+  // When filtering to a specific provider, use model ranking scores (latency,
+  // failure rate, recency) to pick the highest-ranked model. Otherwise use the
+  // rotation priority system with random selection for cross-provider variety.
+  let selected: { key: string; provider: string; model: string; priority: number } | undefined;
+
+  if (providerFilter) {
+    // Get provider-level telemetry for latency/failure data
+    let providerLatency = 2000; // default neutral estimate
+    try {
+      const providerScores = resourceTelemetry.getAllScores();
+      const telemetry = providerScores.find(s => s.provider === providerFilter);
+      if (telemetry) {
+        providerLatency = Math.round(telemetry.avgLatencyMs);
+      }
+    } catch { /* resourceTelemetry unavailable */ }
+
+    // Build ModelStats for each candidate merging data from three sources
+    // (priority order): 1. chat-request-logger telemetry cache (most accurate),
+    // 2. in-memory rotation attempt tracking, 3. optimistic defaults for
+    // untested models. Score with scoreModel() (lower = better).
+    const scored = candidates.map(c => {
+      const telemetry = _modelTelemetryCache.get(c.key);
+      const attempt = triedModels.get(c.key);
+      const totalAttempts = (attempt?.successCount || 0) + (attempt?.failCount || 0);
+
+      return {
+        ...c,
+        score: scoreModel({
+          provider: c.provider,
+          model: c.model,
+          // Per-model latency from chat logger, then provider-level, then 2000ms estimate
+          avgLatency: telemetry?.avgLatency ?? providerLatency,
+          // Per-model failure rate from chat logger, then rotation tracking, then 0
+          failureRate: telemetry?.failureRate ?? (totalAttempts > 0 ? (attempt?.failCount || 0) / totalAttempts : 0),
+          // Recency from chat logger, then rotation tracking, then now
+          lastUpdated: telemetry?.lastUpdated ?? attempt?.lastTryTime ?? Date.now(),
+          // Total calls from chat logger, then rotation tracking, then 0
+          totalCalls: telemetry?.totalCalls ?? totalAttempts,
+          // Success rate from chat logger, then rotation tracking, then 1
+          successRate: telemetry?.successRate ?? (totalAttempts > 0 ? (attempt?.successCount || 0) / totalAttempts : 1),
+          // Tool call stats from chat logger telemetry (undefined if unavailable)
+          toolCallScore: telemetry?.toolCallScore,
+          toolSuccessRate: telemetry?.toolSuccessRate,
+          avgToolScore: telemetry?.avgToolScore,
+          toolCallTotalCalls: telemetry?.toolCallTotalCalls,
+        }),
+      };
+    });
+
+    // Sort by score ascending (lower = better) — highest-ranked model first
+    scored.sort((a, b) => a.score - b.score);
+    selected = scored[0];
+  } else {
+    // Existing rotation behavior: sort by priority, then random within top tier
+    candidates.sort((a, b) => b.priority - a.priority);
+    const topCandidates = candidates.filter(c => c.priority === candidates[0]?.priority);
+    selected = topCandidates[Math.floor(Math.random() * topCandidates.length)];
+  }
   
   if (selected) {
     logger.debug('Selected model for rotation', {

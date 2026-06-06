@@ -95,6 +95,7 @@ export const PROVIDER = {
   OAUTH_INTEGRATION: 'oauth-integration' as const,
   TERMINAL: 'terminal' as const,
   PROJECT_ANALYSIS: 'workspace-analysis' as const,
+  WORKSPACE_GRAPH: 'workspace-graph' as const,
 } as const;
 
 export type ProviderIdString = typeof PROVIDER[keyof typeof PROVIDER];
@@ -790,7 +791,7 @@ export const INTEGRATION_CONNECT_CAPABILITY: CapabilityDefinition = {
     provider: z.string(),
     requiresAuth: z.boolean(),
   }),
-  providerPriority: ['composio', 'arcade', 'nango'],
+  providerPriority: ['oauth-integration', 'composio', 'arcade', 'nango'],
   requiresAuth: false, // Connection initiation doesn't require OAuth, but using the tool does
   tags: ['integration', 'oauth', 'connection', 'auth', 'nango', 'composio', 'arcade', 'deprecated'],
   metadata: {
@@ -833,7 +834,7 @@ export const INTEGRATION_LIST_CONNECTIONS_CAPABILITY: CapabilityDefinition = {
     createdAt: z.string(),
     scopes: z.array(z.string()).optional(),
   })),
-  providerPriority: ['composio', 'arcade', 'nango'],
+  providerPriority: ['oauth-integration', 'composio', 'arcade', 'nango'],
   requiresAuth: true,
   tags: ['integration', 'connections', 'oauth', 'list', 'nango', 'composio', 'arcade', 'deprecated'],
 };
@@ -857,7 +858,7 @@ export const INTEGRATION_REVOKE_CAPABILITY: CapabilityDefinition = {
     provider: z.string(),
     revoked: z.boolean(),
   }),
-  providerPriority: ['composio', 'arcade', 'nango'],
+  providerPriority: ['oauth-integration', 'composio', 'arcade', 'nango'],
   requiresAuth: true,
   tags: ['integration', 'revoke', 'disconnect', 'oauth', 'nango', 'composio', 'arcade', 'deprecated'],
 };
@@ -886,7 +887,7 @@ export const INTEGRATION_EXECUTE_CAPABILITY: CapabilityDefinition = {
     authUrl: z.string().optional(),
     connectionId: z.string().optional(),
   }),
-  providerPriority: ['composio', 'arcade', 'nango'],
+  providerPriority: ['oauth-integration', 'composio', 'arcade', 'nango'],
   requiresAuth: true,
   tags: ['integration', 'tool', 'execution', 'oauth', 'nango', 'composio', 'arcade', 'deprecated'],
 };
@@ -915,7 +916,7 @@ export const INTEGRATION_SEARCH_TOOLS_CAPABILITY: CapabilityDefinition = {
     inputSchema: z.object({}).optional(),
     examples: z.array(z.string()).optional(),
   })),
-  providerPriority: ['composio', 'arcade', 'nango'],
+  providerPriority: ['oauth-integration', 'composio', 'arcade', 'nango'],
   requiresAuth: false,
   tags: ['integration', 'search', 'tools', 'discovery', 'nango', 'composio', 'arcade', 'deprecated'],
 };
@@ -944,7 +945,7 @@ export const INTEGRATION_PROXY_CAPABILITY: CapabilityDefinition = {
     headers: z.record(z.string()).optional(),
     error: z.string().optional(),
   }),
-  providerPriority: ['nango', 'arcade'],
+  providerPriority: ['oauth-integration', 'nango', 'arcade'],
   requiresAuth: true,
   tags: ['integration', 'proxy', 'api', 'http', 'nango', 'arcade', 'deprecated'],
 };
@@ -2047,6 +2048,402 @@ export const PROJECT_STRUCTURE_CAPABILITY: CapabilityDefinition = {
 };
 
 // ============================================================================
+// Runtime Broker Capabilities (Phase 8 — Cost/Latency/Capacity-Aware Scheduling)
+// ============================================================================
+
+export const RUNTIME_SELECT_PROVIDER_CAPABILITY: CapabilityDefinition = {
+  id: 'runtime.select_provider',
+  name: 'Select Execution Provider',
+  category: 'sandbox',
+  description: 'Select the optimal sandbox/execution provider based on cost, latency, ' +
+    'capacity, health, quota, and workspace affinity. Replaces static execution policies ' +
+    'with dynamic scheduling. Returns the selected provider with confidence score, ' +
+    'estimated cost, and alternatives.',
+  inputSchema: z.object({
+    interactive: z.boolean().optional().default(true).describe('Interactive user command?'),
+    cpu: z.number().optional().default(1).describe('CPU cores needed'),
+    memory: z.number().optional().default(0.5).describe('Memory GB needed'),
+    gpu: z.boolean().optional().default(false).describe('GPU required?'),
+    expectedDuration: z.number().optional().default(30).describe('Expected duration in seconds'),
+    commandCategory: z.string().optional().describe('Command category for specialization'),
+    workspaceId: z.string().optional().describe('Workspace ID for affinity check'),
+    costSensitivity: z.enum(['low', 'medium', 'high']).optional(),
+    performancePriority: z.enum(['latency', 'throughput', 'balanced']).optional(),
+  }),
+  outputSchema: z.object({
+    success: z.boolean(),
+    decision: z.object({
+      provider: z.string(),
+      confidence: z.number(),
+      estimatedCost: z.number(),
+      currency: z.string(),
+      reasons: z.array(z.string()),
+      alternatives: z.array(z.object({
+        provider: z.string(),
+        score: z.number(),
+        estimatedCost: z.number(),
+        reason: z.string(),
+      })),
+    }),
+  }),
+  providerPriority: ['runtime-broker'],
+  tags: ['runtime', 'broker', 'scheduling', 'phase8', 'cost', 'latency'],
+  metadata: {
+    latency: 'low',
+    cost: 'low',
+    reliability: 0.99,
+  },
+};
+
+export const RUNTIME_COST_ESTIMATE_CAPABILITY: CapabilityDefinition = {
+  id: 'runtime.cost_estimate',
+  name: 'Estimate Execution Cost',
+  category: 'sandbox',
+  description: 'Estimate the cost of running a workload on a specific provider. ' +
+    'Returns CPU, memory, GPU, and base cost breakdown in USD.',
+  inputSchema: z.object({
+    cpu: z.number().optional().default(1).describe('CPU cores'),
+    memory: z.number().optional().default(0.5).describe('Memory GB'),
+    gpu: z.boolean().optional().default(false).describe('GPU required?'),
+    expectedDuration: z.number().optional().default(60).describe('Expected duration in seconds'),
+    provider: z.string().optional().describe('Provider to estimate for (default: daytona)'),
+  }),
+  outputSchema: z.object({
+    success: z.boolean(),
+    estimate: z.object({
+      provider: z.string(),
+      estimatedCost: z.number(),
+      currency: z.string(),
+      breakdown: z.string(),
+      cpuCost: z.number(),
+      memoryCost: z.number(),
+      gpuCost: z.number(),
+      baseCost: z.number(),
+      durationMinutes: z.number(),
+    }),
+  }),
+  providerPriority: ['runtime-broker'],
+  tags: ['runtime', 'cost', 'estimate', 'phase8'],
+  metadata: {
+    latency: 'low',
+    cost: 'low',
+    reliability: 0.99,
+  },
+};
+
+export const RUNTIME_PROVIDER_STATS_CAPABILITY: CapabilityDefinition = {
+  id: 'runtime.provider_stats',
+  name: 'Provider Statistics',
+  category: 'sandbox',
+  description: 'Get aggregate statistics for all sandbox providers: cost models, ' +
+    'latency tiers, health scores, and capacity metrics. Used for observability ' +
+    'and monitoring of the Phase 8 Runtime Broker.',
+  inputSchema: z.object({}),
+  outputSchema: z.object({
+    success: z.boolean(),
+    stats: z.array(z.object({
+      provider: z.string(),
+      costModel: z.object({
+        cpuCostPerMinute: z.number(),
+        memoryCostPerGBMinute: z.number(),
+        gpuCostPerMinute: z.number(),
+        baseCostPerCall: z.number(),
+      }),
+      latency: z.object({
+        avgMs: z.number(),
+        p95Ms: z.number(),
+        tier: z.string(),
+      }),
+      health: z.object({
+        score: z.number(),
+        failureRate: z.number(),
+        shouldDeprioritize: z.boolean(),
+      }),
+      capacity: z.object({
+        quotaRemaining: z.number(),
+        activeRequests: z.number(),
+        queueDepth: z.number(),
+      }),
+    })),
+    summary: z.object({
+      totalProviders: z.number(),
+      healthyProviders: z.number(),
+      cheapestProvider: z.string(),
+      fastestProvider: z.string(),
+    }),
+  }),
+  providerPriority: ['runtime-broker'],
+  tags: ['runtime', 'stats', 'observability', 'phase8', 'monitoring'],
+  metadata: {
+    latency: 'low',
+    cost: 'low',
+    reliability: 0.99,
+  },
+};
+
+// ============================================================================
+// Workspace Image Stats Capability (Phase 7 — Workspace Image Synthesis)
+// ============================================================================
+
+export const WORKSPACE_IMAGE_STATS_CAPABILITY: CapabilityDefinition = {
+  id: 'workspace.image_stats',
+  name: 'Workspace Image Stats',
+  category: 'sandbox',
+  description: 'Get workspace image synthesis statistics: total images, active images, ' +
+    'cache hit rate, estimated storage savings, and runtime breakdown (node/python/rust). ' +
+    'Phase 7: Images are pre-built from dependency lockfiles for instant warm starts.',
+  inputSchema: z.object({}),
+  outputSchema: z.object({
+    totalImages: z.number(),
+    activeImages: z.number(),
+    nodeImages: z.number(),
+    pythonImages: z.number(),
+    totalUseCount: z.number(),
+    totalEstimatedSizeMb: z.number(),
+    enabled: z.boolean(),
+  }),
+  providerPriority: ['workspace-analysis'],
+  tags: ['workspace', 'image', 'synthesis', 'phase7', 'cache', 'warm-start'],
+  metadata: {
+    latency: 'low',
+    cost: 'low',
+    reliability: 0.99,
+  },
+};
+
+// ============================================================================
+// Workspace Affinity Capabilities (Phase 6 — Workspace-to-Provider Binding)
+// ============================================================================
+
+/**
+ * Workspace affinity keeps workspaces bound to specific sandbox providers
+ * with configurable TTL. This preserves cache warmth (node_modules, venvs,
+ * pip cache) across commands, avoiding expensive cold starts.
+ *
+ * Phase 6: Exposes affinity state for observability, monitoring, and
+ * provider selection transparency. The core affinity logic lives in
+ * sandbox-orchestrator.ts (AffinityBinding, getAffinity, setAffinity,
+ * touchAffinity, evictAffinity).
+ */
+export const WORKSPACE_AFFINITY_STATS_CAPABILITY: CapabilityDefinition = {
+  id: 'workspace.affinity_stats',
+  name: 'Workspace Affinity Stats',
+  category: 'sandbox',
+  description: 'Get workspace affinity statistics: active bindings, per-provider distribution, ' +
+    'total commands routed via affinity, and cache warmth efficiency. ' +
+    'Phase 6: Workspace-to-provider binding with TTL preserves cache warmth across commands.',
+  inputSchema: z.object({}),
+  outputSchema: z.object({
+    activeBindings: z.number(),
+    providers: z.record(z.number()),
+    totalCommands: z.number(),
+  }),
+  providerPriority: ['workspace-analysis'],
+  tags: ['workspace', 'affinity', 'phase6', 'binding', 'cache', 'observability'],
+  metadata: {
+    latency: 'low',
+    cost: 'low',
+    reliability: 0.99,
+  },
+};
+
+export const WORKSPACE_AFFINITY_CONFIG_CAPABILITY: CapabilityDefinition = {
+  id: 'workspace.affinity_config',
+  name: 'Workspace Affinity Config',
+  category: 'sandbox',
+  description: 'Get workspace affinity configuration: whether affinity is enabled ' +
+    'and the current TTL (time-to-live) for affinity bindings. ' +
+    'Phase 6: Configurable via SANDBOX_AFFINITY_ENABLED and SANDBOX_AFFINITY_TTL_MS env vars.',
+  inputSchema: z.object({}),
+  outputSchema: z.object({
+    enabled: z.boolean(),
+    ttlMs: z.number(),
+  }),
+  providerPriority: ['workspace-analysis'],
+  tags: ['workspace', 'affinity', 'phase6', 'config', 'ttl'],
+  metadata: {
+    latency: 'low',
+    cost: 'low',
+    reliability: 0.99,
+  },
+};
+
+// ============================================================================
+// WorkspaceFS Capabilities (Phase 9 — R2 + SQL metadata + provider sync layers)
+// ============================================================================
+
+/**
+ * Phase 9: WorkspaceFS sync status — provides visibility into the unified
+ * sync layer coordinating R2 cloud storage, VFS database, and sandbox
+ * filesystems across providers.
+ */
+export const WORKSPACEFS_SYNC_STATUS_CAPABILITY: CapabilityDefinition = {
+  id: 'workspacefs.sync_status',
+  name: 'WorkspaceFS Sync Status',
+  category: 'sandbox',
+  description: 'Get the sync state for a workspace: VFS version, last R2 sync, ' +
+    'last sandbox push, pending conflicts, and whether initial sync is complete. ' +
+    'Phase 9: Unified sync layer with R2 + VFS + sandbox coordination.',
+  inputSchema: z.object({
+    workspaceId: z.string().optional().describe('Workspace identifier (userId:conversationId)'),
+  }),
+  outputSchema: z.object({
+    workspaceId: z.string(),
+    vfsVersion: z.number(),
+    lastR2SyncAt: z.number(),
+    lastSandboxPushAt: z.number(),
+    initialSyncComplete: z.boolean(),
+    fileCount: z.number(),
+    r2Enabled: z.boolean(),
+    pendingConflicts: z.number(),
+  }),
+  providerPriority: ['workspace-analysis'],
+  tags: ['workspace', 'sync', 'phase9', 'r2', 'filesystem', 'observability'],
+  metadata: { latency: 'low', cost: 'low', reliability: 0.99 },
+};
+
+export const WORKSPACEFS_R2_STATUS_CAPABILITY: CapabilityDefinition = {
+  id: 'workspacefs.r2_status',
+  name: 'WorkspaceFS R2 Status',
+  category: 'sandbox',
+  description: 'Check R2 cloud storage configuration and health. ' +
+    'Returns whether R2 is configured, the bucket name, and endpoint. ' +
+    'Phase 9: R2 is used as the durable source of truth for workspace files.',
+  inputSchema: z.object({}),
+  outputSchema: z.object({
+    configured: z.boolean(),
+    bucket: z.string().nullable(),
+    endpoint: z.string().nullable(),
+  }),
+  providerPriority: ['workspace-analysis'],
+  tags: ['workspace', 'r2', 'phase9', 'storage', 'cloud', 'observability'],
+  metadata: { latency: 'low', cost: 'low', reliability: 0.99 },
+};
+
+export const WORKSPACEFS_MIGRATE_CAPABILITY: CapabilityDefinition = {
+  id: 'workspacefs.migrate_workspace',
+  name: 'Migrate Workspace Files',
+  category: 'sandbox',
+  description: 'Sync workspace files from one sandbox provider to another during ' +
+    'cross-provider migration. Pulls latest from VFS (synced from source sandbox), ' +
+    'pushes all files to destination sandbox, and optionally restores from R2. ' +
+    'Phase 9: Enables seamless provider switching without data loss.',
+  inputSchema: z.object({
+    workspaceId: z.string().describe('Workspace identifier'),
+    fromProvider: z.string().describe('Source provider type'),
+    toProvider: z.string().describe('Destination provider type'),
+    sourceSandboxId: z.string().describe('Source sandbox ID'),
+    destSandboxId: z.string().describe('Destination sandbox ID'),
+  }),
+  outputSchema: z.object({
+    success: z.boolean(),
+    fromProvider: z.string(),
+    toProvider: z.string(),
+    filesSynced: z.number(),
+    filesRestoredFromR2: z.number(),
+    errors: z.array(z.string()),
+    duration: z.number(),
+  }),
+  providerPriority: ['workspace-analysis'],
+  tags: ['workspace', 'migration', 'phase9', 'provider', 'sync'],
+  metadata: { latency: 'medium', cost: 'low', reliability: 0.95 },
+};
+
+// ============================================================================
+// Workspace Graph Capabilities (AI-native state querying)
+// ============================================================================
+
+// ============================================================================
+// CAS Stats Capability (Phase 5 — Content-Addressable Storage observability)
+// ============================================================================
+
+export const WORKSPACE_CAS_STATS_CAPABILITY: CapabilityDefinition = {
+  id: 'workspace.cas_stats',
+  name: 'CAS Storage Stats',
+  category: 'memory',
+  description: 'Get content-addressable storage statistics: total blobs, total size, ' +
+    'dedup ratio, cache hit rates, R2 status, and garbage collection metrics. ' +
+    'Use to monitor Phase 5 CAS health and storage efficiency.',
+  inputSchema: z.object({}),
+  outputSchema: z.object({
+    totalBlobs: z.number(),
+    totalSize: z.number(),
+    totalCompressedSize: z.number().nullable(),
+    totalRefs: z.number(),
+    unreferencedBlobs: z.number(),
+    localCacheSize: z.number(),
+    localCacheCount: z.number(),
+    r2Enabled: z.boolean(),
+    dedupRatio: z.number().nullable(),
+  }),
+  providerPriority: ['workspace-analysis'],
+  tags: ['workspace', 'cas', 'storage', 'phase5', 'observability', 'r2'],
+  metadata: {
+    latency: 'low',
+    cost: 'low',
+    reliability: 0.99,
+  },
+};
+
+export const WORKSPACE_GRAPH_CAPABILITY: CapabilityDefinition = {
+  id: 'workspace.graph',
+  name: 'Workspace Graph',    category: 'sandbox',
+  description: 'Get the full workspace graph — a structured, queryable view of all workspace state. ' +
+    'Returns processes, services, ports, previews, snapshots, and images as typed nodes with ' +
+    'relationship edges and derived diagnostics. Use instead of scraping terminal output.',
+  inputSchema: z.object({
+    workspaceId: z.string().optional().describe('Workspace ID (defaults to current)'),
+  }),
+  outputSchema: z.object({
+    workspaceId: z.string(),
+    nodes: z.array(z.any()),
+    edges: z.array(z.any()),
+    summary: z.any(),
+    diagnostics: z.array(z.any()),
+    generatedAt: z.number(),
+  }),
+  providerPriority: ['workspace-graph'],
+  tags: ['workspace', 'graph', 'state', 'diagnostics', 'processes', 'services'],
+};
+
+export const WORKSPACE_GRAPH_DIAGNOSTIC_CAPABILITY: CapabilityDefinition = {
+  id: 'workspace.graph_diagnostic',
+  name: 'Service Diagnostic',    category: 'sandbox',
+  description: 'Get a focused diagnostic trace for a specific service. ' +
+    'Traces service → port → preview → process chain to find root causes.',
+  inputSchema: z.object({
+    serviceId: z.string().describe('Service ID to diagnose'),
+    workspaceId: z.string().optional().describe('Workspace ID (defaults to current)'),
+  }),
+  outputSchema: z.array(z.object({
+    level: z.string(),
+    message: z.string(),
+    relatedNodeIds: z.array(z.string()),
+    category: z.string(),
+  })),
+  providerPriority: ['workspace-graph'],
+  tags: ['workspace', 'service', 'diagnostic', 'troubleshoot'],
+};
+
+export const WORKSPACE_GRAPH_FIND_PROCESS_CAPABILITY: CapabilityDefinition = {
+  id: 'workspace.graph_find_process',
+  name: 'Find Processes',    category: 'sandbox',
+  description: 'Search for processes by command pattern across the workspace. ' +
+    'Returns matching processes plus their related services, ports, and previews.',
+  inputSchema: z.object({
+    pattern: z.string().describe('Command pattern to search for (e.g., "node", "npm", "python")'),
+    workspaceId: z.string().optional().describe('Workspace ID (defaults to current)'),
+  }),
+  outputSchema: z.object({
+    processes: z.array(z.any()),
+    relatedNodes: z.array(z.any()),
+    edges: z.array(z.any()),
+  }),
+  providerPriority: ['workspace-graph'],
+  tags: ['workspace', 'process', 'search', 'find'],
+};
+
+// ============================================================================
 // Desktop Automation Capabilities (agent-desktop integration)
 // ============================================================================
 
@@ -2375,6 +2772,24 @@ export const ALL_CAPABILITIES: CapabilityDefinition[] = [
   PROJECT_LIST_SCRIPTS_CAPABILITY,
   PROJECT_DEPENDENCIES_CAPABILITY,
   PROJECT_STRUCTURE_CAPABILITY,
+  // Workspace Graph (AI-native state querying)
+  WORKSPACE_CAS_STATS_CAPABILITY,
+  // Workspace Affinity (Phase 6 — Workspace-to-provider binding with TTL)
+  WORKSPACE_AFFINITY_STATS_CAPABILITY,
+  WORKSPACE_AFFINITY_CONFIG_CAPABILITY,
+  // Workspace Image Synthesis (Phase 7 — Pre-built images from dependency lockfiles)
+  WORKSPACE_IMAGE_STATS_CAPABILITY,
+  WORKSPACE_GRAPH_CAPABILITY,
+  WORKSPACE_GRAPH_DIAGNOSTIC_CAPABILITY,
+  WORKSPACE_GRAPH_FIND_PROCESS_CAPABILITY,
+  // Runtime Broker (Phase 8 — Cost/Latency/Capacity-Aware Scheduling)
+  RUNTIME_SELECT_PROVIDER_CAPABILITY,
+  RUNTIME_COST_ESTIMATE_CAPABILITY,
+  RUNTIME_PROVIDER_STATS_CAPABILITY,
+  // WorkspaceFS Sync (Phase 9 — R2 + SQL metadata + provider sync layers)
+  WORKSPACEFS_SYNC_STATUS_CAPABILITY,
+  WORKSPACEFS_R2_STATUS_CAPABILITY,
+  WORKSPACEFS_MIGRATE_CAPABILITY,
   // Desktop Automation (agent-desktop integration)
   DESKTOP_SNAPSHOT_CAPABILITY,
   DESKTOP_CLICK_CAPABILITY,

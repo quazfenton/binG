@@ -23,9 +23,15 @@
  *   - execution-router.ts: classifies ps/kill as pid-translation commands
  *   - workspace-service-manager.ts: auto-registers daemon service PIDs
  *   - advanced-terminal-commands.ts: handlers use registry instead of fake data
+ *
+ * Phase 2 (persistence):
+ *   - Workspace tables are created by initializeWorkspaceRuntime() in init.ts
+ *   - registerProcess → INSERT, unregisterProcess → DELETE,
+ *     getProcessList → SELECT so state survives restarts
  */
 
 import { createLogger } from '@/lib/utils/logger';
+import { getDatabase } from '@/lib/database/connection';
 
 const logger = createLogger('VirtualPidRegistry');
 
@@ -106,6 +112,9 @@ export class VirtualPidRegistry {
   /** vPID counters per workspace (monotonically increasing) */
   private counters = new Map<string, number>();
 
+  /** Tracks which workspaces have been hydrated from the database into the in-memory cache. */
+  private loadedWorkspaces = new Set<string>();
+
   /** Base vPID to start counting from (reserve lower numbers for future system processes) */
   private readonly VPID_BASE = 100;
 
@@ -113,6 +122,9 @@ export class VirtualPidRegistry {
    * Register a process and get its virtual PID.
    * If a mapping already exists for this provider+realPid (e.g., from a previous
    * ps scan), it reuses the same vPID.
+   *
+   * Phase 2 (persistence): Also INSERTs/UPDATEs the workspace_processes DB table.
+   * The in-memory Map is the hot cache; DB write is best-effort (errors caught).
    */
   registerProcess(params: {
     workspaceId: string;
@@ -150,6 +162,8 @@ export class VirtualPidRegistry {
         existing.isService = isService || existing.isService;
         existing.serviceId = serviceId || existing.serviceId;
         logger.debug('Updated existing PID mapping', { vPid, realPid, provider, command: command.slice(0, 50) });
+        // Sync update to DB
+        this.syncRegisterToDb(existing);
         return existing;
       }
     }
@@ -184,11 +198,15 @@ export class VirtualPidRegistry {
       workspaceId: workspaceId.slice(0, 16),
     });
 
+    // Persist to DB
+    this.syncRegisterToDb(mapping);
+
     return mapping;
   }
 
   /**
    * Unregister a process by vPID.
+   * Phase 2 (persistence): Also DELETEs from the workspace_processes DB table.
    */
   unregisterProcess(workspaceId: string, vPid: number): boolean {
     const wMap = this.mappings.get(workspaceId);
@@ -204,10 +222,14 @@ export class VirtualPidRegistry {
     // Remove from workspace map
     wMap.delete(vPid);
 
+    // Delete from DB (best-effort)
+    this.syncDeleteFromDb(workspaceId, vPid);
+
     // Clean up empty workspace
     if (wMap.size === 0) {
       this.mappings.delete(workspaceId);
       this.counters.delete(workspaceId);
+      this.loadedWorkspaces.delete(workspaceId);
     }
 
     logger.info('Process unregistered from virtual PID table', {
@@ -445,8 +467,16 @@ export class VirtualPidRegistry {
   /**
    * Get all virtual process mappings for a workspace.
    * Returns processes sorted by vPID.
+   *
+   * Phase 2 (persistence): On first call for a workspace, hydrates the in-memory
+   * cache from the workspace_processes DB table. Subsequent calls serve from cache.
    */
   getProcessList(workspaceId: string): PidMapping[] {
+    // Hydrate from DB on first access if not already in cache
+    if (!this.loadedWorkspaces.has(workspaceId)) {
+      this.hydrateFromDb(workspaceId);
+    }
+
     const wMap = this.mappings.get(workspaceId);
     if (!wMap) return [];
 
@@ -506,6 +536,7 @@ export class VirtualPidRegistry {
 
   /**
    * Clear all mappings for a workspace.
+   * Phase 2 (persistence): Also DELETEs all rows from the workspace_processes DB table.
    */
   clearWorkspace(workspaceId: string): void {
     const wMap = this.mappings.get(workspaceId);
@@ -519,6 +550,17 @@ export class VirtualPidRegistry {
 
     this.mappings.delete(workspaceId);
     this.counters.delete(workspaceId);
+    this.loadedWorkspaces.delete(workspaceId);
+
+    // Delete all rows from DB (best-effort)
+    try {
+      const db = getDatabase();
+      if (db) {
+        db.prepare('DELETE FROM workspace_processes WHERE workspace_id = ?').run(workspaceId);
+      }
+    } catch (error: any) {
+      logger.warn('Failed to delete workspace processes from DB', { workspaceId: workspaceId.slice(0, 16), error: error?.message });
+    }
 
     logger.info('PID registry cleared for workspace', {
       workspaceId: workspaceId.slice(0, 16),
@@ -555,6 +597,140 @@ export class VirtualPidRegistry {
       oldestMapping: now - oldestMapping,
       staleCount,
     };
+  }  // ============================================================================
+  // Database persistence (Phase 2)
+  // ============================================================================
+
+  /**
+   * Hydrate the in-memory cache from the database for a workspace.
+   * Loads all rows from workspace_processes into the in-memory Map + reverse index.
+   * Called automatically by getProcessList() on first access.
+   */
+  private hydrateFromDb(workspaceId: string): void {
+    if (this.loadedWorkspaces.has(workspaceId)) return;
+
+    try {
+      const db = getDatabase();
+      if (!db) {
+        this.loadedWorkspaces.add(workspaceId);
+        return;
+      }
+
+      const rows = db.prepare(
+        'SELECT vpid, real_pid, provider, sandbox_id, command, user, registered_at, last_confirmed_at, is_service, service_id FROM workspace_processes WHERE workspace_id = ? ORDER BY vpid'
+      ).all(workspaceId) as Array<{
+        vpid: number;
+        real_pid: number;
+        provider: string;
+        sandbox_id: string;
+        command: string;
+        user: string | null;
+        registered_at: number;
+        last_confirmed_at: number;
+        is_service: number;
+        service_id: string | null;
+      }>;
+
+      if (rows.length === 0) {
+        this.loadedWorkspaces.add(workspaceId);
+        return;
+      }
+
+      const wMap = this.getOrCreateWorkspace(workspaceId);
+      let maxVPid = this.counters.get(workspaceId) || this.VPID_BASE - 1;
+
+      for (const row of rows) {
+        const mapping: PidMapping = {
+          vPid: row.vpid,
+          realPid: row.real_pid,
+          provider: row.provider,
+          sandboxId: row.sandbox_id,
+          workspaceId,
+          command: row.command,
+          user: row.user || undefined,
+          registeredAt: row.registered_at,
+          lastConfirmedAt: row.last_confirmed_at,
+          isService: row.is_service === 1,
+          serviceId: row.service_id || undefined,
+        };
+
+        wMap.set(mapping.vPid, mapping);
+        this.reverseIndex.set(`${mapping.provider}:${mapping.realPid}`, mapping.vPid);
+
+        if (mapping.vPid > maxVPid) {
+          maxVPid = mapping.vPid;
+        }
+      }
+
+      // Set counter to avoid clashing with existing vPIDs
+      this.counters.set(workspaceId, maxVPid);
+      this.loadedWorkspaces.add(workspaceId);
+
+      logger.debug('Hydrated PID cache from database', {
+        workspaceId: workspaceId.slice(0, 16),
+        count: rows.length,
+        maxVPid,
+      });
+    } catch (error: any) {
+      // If table doesn't exist yet, mark as loaded (empty cache is fine)
+      if (error?.message?.includes('no such table')) {
+        this.loadedWorkspaces.add(workspaceId);
+        return;
+      }
+      logger.warn('Failed to hydrate PID cache from DB', { workspaceId: workspaceId.slice(0, 16), error: error?.message });
+      this.loadedWorkspaces.add(workspaceId); // Don't retry on every call
+    }
+  }
+
+  /**
+   * INSERT or UPDATE a PID mapping in the workspace_processes table.
+   * Best-effort — failures are caught and logged, not thrown.
+   */
+  private syncRegisterToDb(mapping: PidMapping): void {
+    try {
+      const db = getDatabase();
+      if (!db) return;
+
+      db.prepare(
+        `INSERT OR REPLACE INTO workspace_processes
+         (workspace_id, vpid, real_pid, provider, sandbox_id, command, user, registered_at, last_confirmed_at, is_service, service_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        mapping.workspaceId,
+        mapping.vPid,
+        mapping.realPid,
+        mapping.provider,
+        mapping.sandboxId,
+        mapping.command,
+        mapping.user || null,
+        mapping.registeredAt,
+        mapping.lastConfirmedAt,
+        mapping.isService ? 1 : 0,
+        mapping.serviceId || null,
+      );
+    } catch (error: any) {
+      // During development or when running tests, the table may not exist yet
+      if (error?.message?.includes('no such table')) return;
+      logger.warn('Failed to sync PID registration to DB', { vPid: mapping.vPid, error: error?.message });
+    }
+  }
+
+  /**
+   * DELETE a PID mapping from the workspace_processes table.
+   * Best-effort — failures are caught and logged, not thrown.
+   */
+  private syncDeleteFromDb(workspaceId: string, vPid: number): void {
+    try {
+      const db = getDatabase();
+      if (!db) return;
+
+      db.prepare(
+        'DELETE FROM workspace_processes WHERE workspace_id = ? AND vpid = ?'
+      ).run(workspaceId, vPid);
+    } catch (error: any) {
+      if (error?.message?.includes('no such table')) return;
+      logger.warn('Failed to sync PID deletion to DB', { vPid, workspaceId: workspaceId.slice(0, 16), error: error?.message });
+    }
   }
 
   // ============================================================================

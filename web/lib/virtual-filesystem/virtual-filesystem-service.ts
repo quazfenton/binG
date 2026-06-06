@@ -21,6 +21,7 @@ import { VFSBatchOperations } from './vfs-batch-operations';
 import { createGitBackedVFS, getGitBackedVFSForOwner, type GitBackedVFS, type GitVFSOptions } from './git-backed-vfs';
 import { getDatabase } from '@/lib/database/connection';
 import { compress, decompress, isCompressed } from '@/lib/utils/compression';
+import { getContentAddressableStorage } from '@/lib/storage/content-addressable-storage';
 // Caching for repeated directory listings (used by smart-context)
 import { toolResultCache, toolCacheKey } from '@/lib/utils/cache';
 // import { emitFilesystemUpdated } from './sync/sync-events'; // Imported but not used - central emit deferred for now
@@ -34,6 +35,10 @@ const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB per file
 const MAX_TOTAL_WORKSPACE_SIZE = 500 * 1024 * 1024; // 500MB total workspace
 const MAX_FILES_PER_WORKSPACE = 10000;
 const MAX_SEARCH_LIMIT = 100;
+
+// Phase 5 (CAS) threshold: files larger than 4KB get stored in content-addressable store
+// instead of inline in the SQL database. This deduplicates content and enables cheap snapshots.
+const CAS_STORAGE_THRESHOLD = 4096;
 
 export type FilesystemChangeType = 'create' | 'update' | 'delete';
 
@@ -1122,7 +1127,13 @@ export class VirtualFilesystemService {
 
   /**
    * Load workspace from SQLite database.
-   * All workspace file content is stored in the main SQLite database.
+   *
+   * Phase 5 (CAS): File content may be stored either:
+   *   1. Inline in `content` column (legacy, or small files)
+   *   2. In the content-addressable store via `blob_hash` column
+   *
+   * CAS content is fetched on first access and cached in the workspace Map.
+   * Subsequent reads serve from memory without CAS lookup.
    */
   private async ensureWorkspace(ownerId: string): Promise<WorkspaceState> {
     const normalizedOwnerId = this.sanitizeOwnerId(ownerId);
@@ -1149,10 +1160,12 @@ export class VirtualFilesystemService {
 
         // Load files
         const rows = db.prepare(
-          'SELECT path, content, language, size, version, created_at, updated_at FROM vfs_workspace_files WHERE owner_id = ? ORDER BY path'
+          'SELECT path, content, blob_hash, is_compressed, language, size, version, created_at, updated_at FROM vfs_workspace_files WHERE owner_id = ? ORDER BY path'
         ).all(normalizedOwnerId) as Array<{
           path: string;
           content: string;
+          blob_hash: string | null;
+          is_compressed: number;
           language: string;
           size: number;
           version: number;
@@ -1163,12 +1176,23 @@ export class VirtualFilesystemService {
             // FIX: Normalize backslashes to forward slashes when loading from DB.
             // Stale entries from Windows may contain backslashes that break path matching.
             const normalizedPath = row.path.replace(/\\/g, '/');
-            // Decompress content if stored compressed
-            const contentBuffer = Buffer.isBuffer(row.content) ? row.content : Buffer.from(row.content, 'utf-8')
-            const decompressedContent = isCompressed(contentBuffer) ? decompress(contentBuffer).toString('utf-8') : row.content
+
+            // Phase 5 (CAS): Resolve content from blob_hash if content is not stored inline
+            let content = row.content;
+            if (!content && row.blob_hash) {
+              content = ''; // Placeholder — will be hydrated via casPromises loop below
+            } else if (content) {
+              // Always check gzip magic bytes for inline content — handles both legacy
+              // compressed rows (pre-migration) and new rows with is_compressed=1.
+              const contentBuffer = Buffer.isBuffer(content) ? content : Buffer.from(content, 'utf-8');
+              if (isCompressed(contentBuffer)) {
+                content = decompress(contentBuffer).toString('utf-8');
+              }
+            }
+
             return [normalizedPath, {
               path: normalizedPath,
-              content: decompressedContent,
+              content: content || '',
               language: row.language,
               size: row.size,
               version: row.version,
@@ -1178,6 +1202,31 @@ export class VirtualFilesystemService {
               ownerId: normalizedOwnerId, // SECURITY: Track ownership for DB-loaded files
             } as VirtualFile];
           }));
+
+          // Phase 5 (CAS): Fetch all CAS blobs eagerly before returning
+          // This ensures the workspace is fully hydrated on first access.
+          // Uses a separate pending list instead of polluting VirtualFile with transient _blobHash.
+          const casPromises: Promise<void>[] = [];
+          for (const row of rows) {
+            if (!row.content && row.blob_hash) {
+              const normalizedPath = row.path.replace(/\\/g, '/');
+              const file = workspace.files.get(normalizedPath);
+              if (file) {
+                casPromises.push(
+                  getContentAddressableStorage().retrieve(row.blob_hash).then(buf => {
+                    if (buf) {
+                      file.content = buf.toString('utf-8');
+                    }
+                  }).catch(err => {
+                    console.warn('[VFS] Failed to fetch CAS blob on load', { hash: row.blob_hash, path: normalizedPath, error: err.message });
+                  })
+                );
+              }
+            }
+          }
+          if (casPromises.length > 0) {
+            await Promise.all(casPromises);
+          }
 
           workspace.version = meta?.version ?? rows.length;
           workspace.updatedAt = meta?.updated_at ?? new Date().toISOString();
@@ -1249,8 +1298,8 @@ export class VirtualFilesystemService {
       );
       const upsertFile = db.prepare(
         `INSERT OR REPLACE INTO vfs_workspace_files
-         (id, owner_id, path, content, language, size, version, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         (id, owner_id, path, content, blob_hash, is_compressed, language, size, version, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       );
 
       // Wrap everything in a single transaction for atomicity
@@ -1269,10 +1318,32 @@ export class VirtualFilesystemService {
         // 3. Upsert all current files
         for (const [filePath, file] of workspace.files) {
           const id = `${normalizedOwnerId}:${filePath}`;
-          // Compress content before storing
-          const compressedContent = compress(file.content)
-          const contentToStore = compressedContent.length < file.content.length ? compressedContent : file.content
-          upsertFile.run(id, normalizedOwnerId, filePath, contentToStore, file.language, file.size, file.version, file.createdAt || now, now);
+
+          // Phase 5 (CAS): Store large files in content-addressable store
+          // Small files stay inline for fast access (synchronous).
+          // CAS store is async for initial R2 write but synchronous for local cache + hash.
+          // Compute content to store (inline or CAS hash reference)
+          const { contentToStore, blobHash, isCompressedFlag } = (() => {
+            if (file.content.length >= CAS_STORAGE_THRESHOLD) {
+              // Use synchronous store to write to local cache + get hash
+              const hash = getContentAddressableStorage().storeSync(file.content);
+              // Don't store content inline when using CAS — saves SQL space
+              return { contentToStore: '', blobHash: hash, isCompressedFlag: 0 };
+            }
+            // Compress small files inline (backward compatible path)
+            const compressed = compress(file.content);
+            if (compressed.length < file.content.length) {
+              return { contentToStore: compressed, blobHash: null, isCompressedFlag: 1 };
+            }
+            return { contentToStore: file.content, blobHash: null, isCompressedFlag: 0 };
+          })();
+
+          upsertFile.run(
+            id, normalizedOwnerId, filePath,
+            contentToStore, blobHash, isCompressedFlag,
+            file.language, file.size, file.version,
+            file.createdAt || now, now
+          );
         }
       });
 
@@ -1374,8 +1445,8 @@ export class VirtualFilesystemService {
       // 2. Transfer files that don't conflict - use INSERT with processed content
       const transferFile = db.prepare(
         `INSERT OR IGNORE INTO vfs_workspace_files
-         (id, owner_id, path, content, language, size, version, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         (id, owner_id, path, content, blob_hash, is_compressed, language, size, version, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       );
 
       // 3. Transfer meta if target has none
@@ -1387,18 +1458,30 @@ export class VirtualFilesystemService {
 
       // Get all source files
       const sourceFiles = db.prepare(
-        'SELECT path, content, language, size, version, created_at, updated_at FROM vfs_workspace_files WHERE owner_id = ?'
+        'SELECT path, content, blob_hash, is_compressed, language, size, version, created_at, updated_at FROM vfs_workspace_files WHERE owner_id = ?'
       ).all(normalizedFrom) as Array<{
-        path: string; content: string; language: string; size: number; version: number; created_at: string; updated_at: string;
+        path: string; content: string; blob_hash: string | null; is_compressed: number; language: string; size: number; version: number; created_at: string; updated_at: string;
       }>;
 
       for (const file of sourceFiles) {
         if (!existingPaths.has(file.path)) {
           const id = `${normalizedTo}:${file.path}`;
-          // Compress content during transfer if beneficial
-          const compressedContent = compress(file.content)
-          const contentToStore = compressedContent.length < file.content.length ? compressedContent : file.content
-          transferFile.run(id, normalizedTo, file.path, contentToStore, file.language, file.size, file.version, file.created_at, now);
+          // Compute content to store (inline or CAS hash reference)
+          const { contentToStore, blobHash, isCompressedFlag } = (() => {
+            if (file.content && !file.blob_hash && file.content.length >= CAS_STORAGE_THRESHOLD) {
+              const hash = getContentAddressableStorage().storeSync(file.content);
+              return { contentToStore: '', blobHash: hash, isCompressedFlag: 0 };
+            }
+            if (file.content && !file.blob_hash) {
+              const compressed = compress(file.content);
+              if (compressed.length < file.content.length) {
+                return { contentToStore: compressed, blobHash: null, isCompressedFlag: 1 };
+              }
+            }
+            return { contentToStore: file.content, blobHash: file.blob_hash, isCompressedFlag: file.is_compressed };
+          })();
+
+          transferFile.run(id, normalizedTo, file.path, contentToStore, blobHash, isCompressedFlag, file.language, file.size, file.version, file.created_at, now);
           transferredCount++;
         }
       }

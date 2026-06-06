@@ -19,6 +19,7 @@
 
 import { createLogger } from '@/lib/utils/logger';
 import type { SandboxProviderType } from '@/lib/sandbox/providers';
+import { latencyTracker } from '@/lib/sandbox/provider-router';
 
 const logger = createLogger('ExecutionRouter');
 
@@ -504,58 +505,117 @@ export function classifyCommand(command: string): ClassifiedCommand {
 
 /**
  * Map a command category to the optimal sandbox provider type.
- * Uses provider capability profiles to select the best match.
+ *
+ * Phase 8: Delegates to Runtime Broker for cost/latency/capacity-aware
+ * selection instead of hardcoded category→provider mappings.
+ *
+ * Falls back to static mapping when the broker is unavailable.
  */
-export function selectProviderForCategory(category: CommandCategory): SandboxProviderType {
+export async function selectProviderForCategory(
+  category: CommandCategory,
+  options?: { workspaceId?: string; costSensitivity?: 'low' | 'medium' | 'high' },
+): Promise<SandboxProviderType> {
+  try {
+    const { getRuntimeBroker } = await import('../sandbox/runtime-broker');
+    const broker = getRuntimeBroker();
+
+    // Map command category to resource requirements for broker
+    const request = categoryToBrokerRequest(category);
+    if (options?.workspaceId) {
+      request.workspaceId = options.workspaceId;
+    }
+    if (options?.costSensitivity) {
+      request.costSensitivity = options.costSensitivity;
+    }
+
+    const decision = await broker.selectProvider(request);
+    if (decision.provider !== 'local') {
+      return decision.provider as SandboxProviderType;
+    }
+
+    // Broker chose local — fall through to static mapping for cloud default
+  } catch (err: any) {
+    // Broker unavailable — use static fallback
+  }
+
+  return selectProviderForCategoryStatic(category);
+}
+
+/**
+ * Static fallback for provider selection (legacy hardcoded mapping).
+ * Used when Runtime Broker is unavailable.
+ */
+function selectProviderForCategoryStatic(category: CommandCategory): SandboxProviderType {
   switch (category) {
     case 'package-install':
-      // E2B is fast for npm/pip installs
       return 'e2b';
-
     case 'package-build':
     case 'build-compile':
-      // Daytona or CodeSandbox for full build environments
       return 'daytona';
-
     case 'script-execution':
-      // E2B for code execution, Modal for ML
       return 'e2b';
-
     case 'daemon-service':
-      // Sprites for persistent services with auto-restart
       return 'sprites';
-
     case 'network-heavy':
-      // Daytona for network access
       return 'daytona';
-
     case 'git-operation':
-      // E2B is sufficient for git
       return 'e2b';
-
     case 'database':
-      // Daytona for database access
       return 'daytona';
-
     case 'ml-training':
-      // Modal for GPU access
       return 'modal-com';
-
     case 'file-write':
-      // E2B is fine for file operations
       return 'e2b';
-
     case 'file-navigation':
     case 'file-read':
     case 'system-info':
     case 'shell-builtin':
-      // Should never be routed — these are local-only.
-      // If reached, it's a bug in the classifier. Default to E2B as safest general-purpose sandbox.
       return 'e2b';
-
     default:
-      // Default to E2B as the general-purpose provider
       return 'e2b';
+  }
+}
+
+/**
+ * Convert a command category to a RuntimeBrokerRequest.
+ */
+function categoryToBrokerRequest(category: CommandCategory): {
+  interactive: boolean;
+  cpu: number;
+  memory: number;
+  gpu: boolean;
+  expectedDuration: number;
+  commandCategory: string;
+  workspaceId?: string;
+  costSensitivity?: 'low' | 'medium' | 'high';
+} {
+  switch (category) {
+    case 'package-install':
+      return { interactive: false, cpu: 2, memory: 1, gpu: false, expectedDuration: 120, commandCategory: category };
+    case 'package-build':
+    case 'build-compile':
+      return { interactive: false, cpu: 4, memory: 2, gpu: false, expectedDuration: 300, commandCategory: category };
+    case 'script-execution':
+      return { interactive: false, cpu: 2, memory: 1, gpu: false, expectedDuration: 60, commandCategory: category };
+    case 'daemon-service':
+      return { interactive: true, cpu: 2, memory: 1, gpu: false, expectedDuration: 3600, commandCategory: category };
+    case 'network-heavy':
+      return { interactive: false, cpu: 1, memory: 0.5, gpu: false, expectedDuration: 60, commandCategory: category };
+    case 'git-operation':
+      return { interactive: false, cpu: 1, memory: 0.5, gpu: false, expectedDuration: 30, commandCategory: category };
+    case 'database':
+      return { interactive: true, cpu: 2, memory: 2, gpu: false, expectedDuration: 600, commandCategory: category };
+    case 'ml-training':
+      return { interactive: false, cpu: 8, memory: 16, gpu: true, expectedDuration: 3600, commandCategory: category };
+    case 'file-write':
+      return { interactive: false, cpu: 1, memory: 0.5, gpu: false, expectedDuration: 5, commandCategory: category };
+    case 'file-navigation':
+    case 'file-read':
+    case 'system-info':
+    case 'shell-builtin':
+      return { interactive: true, cpu: 1, memory: 0.5, gpu: false, expectedDuration: 5, commandCategory: category };
+    default:
+      return { interactive: true, cpu: 1, memory: 0.5, gpu: false, expectedDuration: 30, commandCategory: 'unknown' };
   }
 }
 
@@ -566,7 +626,9 @@ export function getRoutingDescription(classified: ClassifiedCommand): string {
   if (!classified.routeToSandbox) {
     return `▶ Running locally: ${classified.reason}`;
   }
-  const provider = selectProviderForCategory(classified.category);
+  // Phase 8: Use static fallback for routing description (async broker
+  // resolution would require refactoring this sync helper).
+  const provider = selectProviderForCategoryStatic(classified.category);
   return `⚡ Routed to ${provider} sandbox: ${classified.reason}`;
 }
 
@@ -637,7 +699,9 @@ export async function executeWithRouting(
     };
   }
 
-  const provider = selectProviderForCategory(classification.category);
+  const provider = await selectProviderForCategory(classification.category, {
+    workspaceId: config.workspaceId,
+  });
   const startTime = Date.now();
 
   // Notify the user
@@ -691,6 +755,10 @@ export async function executeWithRouting(
       config.onOutput(result.output);
     }
 
+    // Phase 8: Feed real execution latency back into the latency tracker
+    // so the RuntimeBroker's latency scores improve over time from actual data.
+    latencyTracker.record(provider, duration);
+
     logger.info('Sandbox execution complete', {
       command: command.slice(0, 100),
       provider,
@@ -720,6 +788,10 @@ export async function executeWithRouting(
           result.exitCode === 0 ? 'running' : 'crashed',
           result.exitCode,
         );
+        // Phase 10: When a daemon service crashes, workspaceServiceManager.updateStatus()
+        // automatically triggers workspace graph diagnostics via autoDiagnoseCrash().
+        // The diagnostics (service status, port availability, process traces) are
+        // logged at error level for immediate visibility.
         if (result.output) {
           workspaceServiceManager.feedOutput(service.id, config.workspaceId, result.output);
         }
@@ -746,6 +818,10 @@ export async function executeWithRouting(
     };
   } catch (error: any) {
     const duration = Date.now() - startTime;
+
+    // Record the failed attempt too — high latency on failure signals
+    // provider degradation to the RuntimeBroker's latency scorer.
+    latencyTracker.record(provider, duration);
 
     logger.error('Sandbox execution failed, falling back to local', {
       command: command.slice(0, 100),
@@ -792,7 +868,7 @@ export function shouldRouteCommand(command: string): boolean {
 /**
  * Get the recommended provider for a command without executing it.
  */
-export function getRecommendedProvider(command: string): SandboxProviderType | null {
+export async function getRecommendedProvider(command: string): Promise<SandboxProviderType | null> {
   const result = classifyCommand(command);
   if (!result.routeToSandbox) return null;
   return selectProviderForCategory(result.category);

@@ -99,7 +99,27 @@ export function sanitizeMessages(messages: any[], options: SanitizeOptions = {})
       if (role === 'assistant') {
         const tc = m?.tool_calls || m?.toolCalls;
         if (Array.isArray(tc) && tc.length > 0) {
-          result.toolCalls = tc;
+          // Normalize to CoreToolCall format ({toolCallId, toolName, args})
+          // regardless of whether input is OpenAI wire format or already
+          // normalized. This prevents ModelMessage[] schema validation
+          // failures with strict provider adapters.
+          result.toolCalls = tc.map((call: any) => {
+            if (!call) return call;
+            // Already in CoreToolCall format — pass through
+            if (call.toolCallId || call.toolName) return call;
+            // Convert from OpenAI {id, type: 'function', function: {name, arguments}}
+            let args: any = {};
+            if (typeof call.function?.arguments === 'string') {
+              try { args = JSON.parse(call.function.arguments); } catch { args = {}; }
+            } else {
+              args = call.function?.arguments || call.args || call.input || {};
+            }
+            return {
+              toolCallId: call.id || call.toolCallId,
+              toolName: call.function?.name || call.name || call.toolName,
+              args,
+            };
+          });
         }
       }
 

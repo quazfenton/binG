@@ -549,6 +549,7 @@ export const TOOL_CATEGORIES = {
   terminal: ['terminal_create_session', 'terminal_send_input', 'terminal_get_output', 'terminal_resize', 'terminal_close_session', 'terminal_list_sessions'],
   projectAnalysis: ['project_analyze', 'project_list_scripts', 'project_dependencies', 'project_structure'],
   port: ['port_status'],
+  workspaceGraph: ['workspace_graph', 'workspace_graph_diagnostic', 'workspace_graph_find_process'],
 }
 
 export type ToolName = typeof ENHANCED_SANDBOX_TOOLS[number]['name']

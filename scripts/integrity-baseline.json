@@ -1,0 +1,5 @@
+{
+  "lib/providers/llm-providers.ts": {
+    "min_functions": 50
+  }
+}

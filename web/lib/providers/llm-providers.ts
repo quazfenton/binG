@@ -763,7 +763,6 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     id: 'openrouter',
     name: 'OpenRouter',
     models: [
-      'minimax/minimax-m2.5:free',
       'qwen/qwen3-coder:free',
       'openai/gpt-oss-120b:free',
       'z-ai/glm-4.5-air:free',
@@ -1336,7 +1335,6 @@ export const PROVIDERS: Record<string, LLMProvider> = {
       'openrouter/qwen/qwen3-next-80b-a3b-instruct:free',
       'openrouter/qwen/qwen3-coder:free',
       'openrouter/openrouter/free',
-      'openrouter/minimax/minimax-m2.5:free',
       'openrouter/z-ai/glm-5.1',
       'openrouter/nvidia/nemotron-3-nano-30b-a3b:free',
       'openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
@@ -1353,22 +1351,23 @@ export const PROVIDERS: Record<string, LLMProvider> = {
       'ollama/kimi-k2.5',
       'ollama/minimax-m2.5',
       'ollama/qwen3.5',
-      // Cloudflare Workers AI models — DISABLED: ninerouter server forwards cf/ prefix
-      // as-is to Cloudflare, causing "No route for that URI" errors.
-      // Fix needed on ninerouter server: strip cf/ prefix before forwarding to Cloudflare.
-      // 'cf/@cf/meta/llama-3.2-1b-instruct',
-      // 'cf/@cf/meta/llama-3.2-3b-instruct',
-      // 'cf/@cf/meta/llama-3.1-8b-instruct-fp8-fast',
-      // 'cf/@cf/meta/llama-3.1-8b-instruct-awq',
-      // 'cf/@cf/mistralai/mistral-small-3.1-24b-instruct',
-      // 'cf/@cf/meta/llama-3.1-70b-instruct-fp8-fast',
-      // 'cf/@cf/meta/llama-3.3-70b-instruct-fp8-fast',
-      // 'cf/@cf/deepseek-ai/deepseek-r1-distill-qwen-32b',
-      // 'cf/@cf/moonshotai/kimi-k2.5',
-      // 'cf/@cf/moonshotai/kimi-k2.6',
-      // 'cf/@cf/zai-org/glm-4.7-flash',
-      // 'cf/@cf/qwen/qwq-32b',
-      // 'cf/@cf/qwen/qwen2.5-coder-32b-instruct',
+      // Cloudflare Workers AI models — re-enabled after live testing confirmed
+      // the ninerouter server correctly handles cf/ routing (curl test against
+      // /api/chat with model "cf/@cf/moonshotai/kimi-k2.6" returned a 429 from
+      // Cloudflare, proving end-to-end connectivity through ninerouter)
+      'cf/@cf/meta/llama-3.2-1b-instruct',
+      'cf/@cf/meta/llama-3.2-3b-instruct',
+      'cf/@cf/meta/llama-3.1-8b-instruct-fp8-fast',
+      'cf/@cf/meta/llama-3.1-8b-instruct-awq',
+      'cf/@cf/mistralai/mistral-small-3.1-24b-instruct',
+      'cf/@cf/meta/llama-3.1-70b-instruct-fp8-fast',
+      'cf/@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+      'cf/@cf/deepseek-ai/deepseek-r1-distill-qwen-32b',
+      'cf/@cf/moonshotai/kimi-k2.5',
+      'cf/@cf/moonshotai/kimi-k2.6',
+      'cf/@cf/zai-org/glm-4.7-flash',
+      'cf/@cf/qwen/qwq-32b',
+      'cf/@cf/qwen/qwen2.5-coder-32b-instruct',
       // Mistral models
       'mistral/mistral-large-latest',
       'mistral/codestral',
@@ -1491,10 +1490,12 @@ class LLMService {
   private ollama: any = null
   private kiro: any = null
   private chatanywhere: any = null
-  private nvidiaClient: any = null
+    private nvidiaClient: any = null
   private groqClient: any = null
   private deepinfraClient: any = null
   private fireworksClient: any = null
+  private cloudflareClient: any = null
+  private azureClient: any = null
   private ninerouter: any = null
   private composioService: ComposioService | null = null
   private opencodeClient: any = null
@@ -1542,6 +1543,8 @@ class LLMService {
       groq: { apiKey: currentEnv.GROQ_API_KEY || '', baseURL: currentEnv.GROQ_BASE_URL || 'https://api.groq.com/openai/v1' },
       deepinfra: { apiKey: currentEnv.DEEPINFRA_API_KEY || '', baseURL: currentEnv.DEEPINFRA_BASE_URL || 'https://api.deepinfra.com/v1/openai' },
       fireworks: { apiKey: currentEnv.FIREWORKS_API_KEY || '', baseURL: currentEnv.FIREWORKS_BASE_URL || 'https://api.fireworks.ai/v1' },
+      cloudflare: { apiKey: currentEnv.CLOUDFLARE_API_KEY || '', baseURL: currentEnv.CLOUDFLARE_BASE_URL || '' },
+      azure: { apiKey: currentEnv.AZURE_OPENAI_API_KEY || '', baseURL: currentEnv.AZURE_OPENAI_ENDPOINT || '', apiVersion: currentEnv.AZURE_OPENAI_API_VERSION || '2024-02-15-preview' },
     };
     
     // Initialize OpenAI
@@ -1687,6 +1690,26 @@ class LLMService {
       this.fireworksClient = new OpenAIClass({
         apiKey: config.fireworks.apiKey,
         baseURL: config.fireworks.baseURL || 'https://api.fireworks.ai/v1'
+      })
+    }
+
+    // Initialize Cloudflare (uses OpenAI client)
+    if (config.cloudflare?.apiKey && !this.cloudflareClient) {
+      const OpenAIClass = await getOpenAI()
+      this.cloudflareClient = new OpenAIClass({
+        apiKey: config.cloudflare.apiKey,
+        baseURL: config.cloudflare.baseURL
+      })
+    }
+
+    // Initialize Azure (uses OpenAI client)
+    if (config.azure?.apiKey && !this.azureClient) {
+      const OpenAIClass = await getOpenAI()
+      this.azureClient = new OpenAIClass({
+        apiKey: config.azure.apiKey,
+        baseURL: config.azure.baseURL,
+        defaultQuery: { 'api-version': config.azure.apiVersion },
+        defaultHeaders: { 'api-key': config.azure.apiKey }
       })
     }
   }
@@ -1860,8 +1883,14 @@ class LLMService {
           case 'deepinfra':
             response = await this.generateDeepinfraResponse(model, messages, temperature, maxTokens, requestId, apiKey)
             break;
-          case 'fireworks':
+                    case 'fireworks':
             response = await this.generateFireworksResponse(model, messages, temperature, maxTokens, requestId, apiKey)
+            break;
+          case 'cloudflare':
+            response = await this.generateCloudflareResponse(model, messages, temperature, maxTokens, requestId, apiKey)
+            break;
+          case 'azure':
+            response = await this.generateAzureResponse(model, messages, temperature, maxTokens, requestId, apiKey)
             break;
           default:
             throw createLLMError(`Unsupported provider: ${provider}`, {
@@ -2098,8 +2127,20 @@ class LLMService {
             yield chunk;
           }
           break
-        case 'fireworks':
+                case 'fireworks':
           for await (const chunk of this.streamFireworksResponse(model, messages, temperature, maxTokens)) {
+            chunkCount++;
+            yield chunk;
+          }
+          break
+        case 'cloudflare':
+          for await (const chunk of this.streamCloudflareResponse(model, messages, temperature, maxTokens)) {
+            chunkCount++;
+            yield chunk;
+          }
+          break
+        case 'azure':
+          for await (const chunk of this.streamAzureResponse(model, messages, temperature, maxTokens)) {
             chunkCount++;
             yield chunk;
           }
@@ -2206,8 +2247,12 @@ class LLMService {
         return currentEnv.GROQ_API_KEY || '';
       case 'deepinfra':
         return currentEnv.DEEPINFRA_API_KEY || '';
-      case 'fireworks':
+            case 'fireworks':
         return currentEnv.FIREWORKS_API_KEY || '';
+      case 'cloudflare':
+        return currentEnv.CLOUDFLARE_API_KEY || '';
+      case 'azure':
+        return currentEnv.AZURE_OPENAI_API_KEY || '';
       default:
         return '';
     }
@@ -4086,6 +4131,112 @@ class LLMService {
       this.fireworksClient = new OpenAIClass({ apiKey: process.env.FIREWORKS_API_KEY || '', baseURL: process.env.FIREWORKS_BASE_URL || 'https://api.fireworks.ai/v1' });
     }
     const stream = await this.fireworksClient.chat.completions.create({ model, messages: messages as any, temperature, max_tokens: maxTokens, stream: true });
+    for await (const chunk of stream) {
+      const content = chunk.choices[0]?.delta?.content || '';
+      const finishReason = chunk.choices[0]?.finish_reason || undefined;
+      if (content || finishReason) yield { content, isComplete: !!finishReason, finishReason };
+    }
+  }
+
+  private async generateFireworksResponse(model: string, messages: LLMMessage[], temperature: number, maxTokens: number, requestId?: string, apiKeyOverride?: string): Promise<LLMResponse> {
+    if (!this.fireworksClient) {
+      const OpenAIClass = await getOpenAI();
+      this.fireworksClient = new OpenAIClass({
+        apiKey: apiKeyOverride || process.env.FIREWORKS_API_KEY || '',
+        baseURL: process.env.FIREWORKS_BASE_URL || 'https://api.fireworks.ai/v1',
+      });
+    }
+    const response = await this.fireworksClient.chat.completions.create({ model, messages: messages as any, temperature, max_tokens: maxTokens });
+    const toolCalls = this.normalizeOpenAIToolCalls(response.choices[0]?.message?.tool_calls as any[]);
+    return {
+      content: response.choices[0]?.message?.content || '',
+      tokensUsed: response.usage?.total_tokens || 0,
+      finishReason: response.choices[0]?.finish_reason || 'stop',
+      timestamp: new Date(),
+      metadata: toolCalls.length ? { toolCalls } : undefined,
+      usage: response.usage
+    };
+  }
+
+  private async *streamFireworksResponse(model: string, messages: LLMMessage[], temperature: number, maxTokens: number): AsyncGenerator<StreamingResponse> {
+    if (!this.fireworksClient) {
+      const OpenAIClass = await getOpenAI();
+      this.fireworksClient = new OpenAIClass({ apiKey: process.env.FIREWORKS_API_KEY || '', baseURL: process.env.FIREWORKS_BASE_URL || 'https://api.fireworks.ai/v1' });
+    }
+    const stream = await this.fireworksClient.chat.completions.create({ model, messages: messages as any, temperature, max_tokens: maxTokens, stream: true });
+    for await (const chunk of stream) {
+      const content = chunk.choices[0]?.delta?.content || '';
+      const finishReason = chunk.choices[0]?.finish_reason || undefined;
+      if (content || finishReason) yield { content, isComplete: !!finishReason, finishReason };
+    }
+  }
+
+  private async generateCloudflareResponse(model: string, messages: LLMMessage[], temperature: number, maxTokens: number, requestId?: string, apiKeyOverride?: string): Promise<LLMResponse> {
+    if (!this.cloudflareClient) {
+      const OpenAIClass = await getOpenAI();
+      this.cloudflareClient = new OpenAIClass({
+        apiKey: apiKeyOverride || process.env.CLOUDFLARE_API_KEY || '',
+        baseURL: process.env.CLOUDFLARE_BASE_URL || '',
+      });
+    }
+    const response = await this.cloudflareClient.chat.completions.create({ model, messages: messages as any, temperature, max_tokens: maxTokens });
+    const toolCalls = this.normalizeOpenAIToolCalls(response.choices[0]?.message?.tool_calls as any[]);
+    return {
+      content: response.choices[0]?.message?.content || '',
+      tokensUsed: response.usage?.total_tokens || 0,
+      finishReason: response.choices[0]?.finish_reason || 'stop',
+      timestamp: new Date(),
+      metadata: toolCalls.length ? { toolCalls } : undefined,
+      usage: response.usage
+    };
+  }
+
+  private async *streamCloudflareResponse(model: string, messages: LLMMessage[], temperature: number, maxTokens: number): AsyncGenerator<StreamingResponse> {
+    if (!this.cloudflareClient) {
+      const OpenAIClass = await getOpenAI();
+      this.cloudflareClient = new OpenAIClass({ apiKey: process.env.CLOUDFLARE_API_KEY || '', baseURL: process.env.CLOUDFLARE_BASE_URL || '' });
+    }
+    const stream = await this.cloudflareClient.chat.completions.create({ model, messages: messages as any, temperature, max_tokens: maxTokens, stream: true });
+    for await (const chunk of stream) {
+      const content = chunk.choices[0]?.delta?.content || '';
+      const finishReason = chunk.choices[0]?.finish_reason || undefined;
+      if (content || finishReason) yield { content, isComplete: !!finishReason, finishReason };
+    }
+  }
+
+  private async generateAzureResponse(model: string, messages: LLMMessage[], temperature: number, maxTokens: number, requestId?: string, apiKeyOverride?: string): Promise<LLMResponse> {
+    if (!this.azureClient) {
+      const OpenAIClass = await getOpenAI();
+      this.azureClient = new OpenAIClass({
+        apiKey: apiKeyOverride || process.env.AZURE_OPENAI_API_KEY || '',
+        baseURL: process.env.AZURE_OPENAI_ENDPOINT || '',
+        defaultQuery: { 'api-version': process.env.AZURE_OPENAI_API_VERSION || '2024-02-15-preview' },
+        defaultHeaders: { 'api-key': apiKeyOverride || process.env.AZURE_OPENAI_API_KEY || '' }
+      });
+    }
+    const response = await this.azureClient.chat.completions.create({ model, messages: messages as any, temperature, max_tokens: maxTokens });
+    const toolCalls = this.normalizeOpenAIToolCalls(response.choices[0]?.message?.tool_calls as any[]);
+    return {
+      content: response.choices[0]?.message?.content || '',
+      tokensUsed: response.usage?.total_tokens || 0,
+      finishReason: response.choices[0]?.finish_reason || 'stop',
+      timestamp: new Date(),
+      metadata: toolCalls.length ? { toolCalls } : undefined,
+      usage: response.usage
+    };
+  }
+
+  private async *streamAzureResponse(model: string, messages: LLMMessage[], temperature: number, maxTokens: number): AsyncGenerator<StreamingResponse> {
+    if (!this.azureClient) {
+      const OpenAIClass = await getOpenAI();
+      this.azureClient = new OpenAIClass({ 
+        apiKey: process.env.AZURE_OPENAI_API_KEY || '', 
+        baseURL: process.env.AZURE_OPENAI_ENDPOINT || '',
+        defaultQuery: { 'api-version': process.env.AZURE_OPENAI_API_VERSION || '2024-02-15-preview' },
+        defaultHeaders: { 'api-key': process.env.AZURE_OPENAI_API_KEY || '' }
+      });
+    }
+    const stream = await this.azureClient.chat.completions.create({ model, messages: messages as any, temperature, max_tokens: maxTokens, stream: true });
     for await (const chunk of stream) {
       const content = chunk.choices[0]?.delta?.content || '';
       const finishReason = chunk.choices[0]?.finish_reason || undefined;

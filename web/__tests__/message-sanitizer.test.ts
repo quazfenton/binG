@@ -62,7 +62,7 @@ describe('message-sanitizer', () => {
     expect((out[0].content as any[])[0].type).toBe('tool-result');
   });
 
-  it('preserves tool_calls on assistant messages', () => {
+  it('normalizes OpenAI wire-format tool_calls to CoreToolCall on assistant messages', () => {
     const toolCalls = [{ id: 'call1', type: 'function', function: { name: 'read_file', arguments: '{"path":"test.txt"}' } }];
     const msgs = [
       { role: 'user', content: 'read a file' },
@@ -71,17 +71,77 @@ describe('message-sanitizer', () => {
     const out = sanitizeMessages(msgs);
     expect(out).toHaveLength(2);
     expect(out[1].role).toBe('assistant');
-    expect(out[1].tool_calls).toEqual(toolCalls);
+    // Should be normalized to CoreToolCall format
+    expect(out[1].toolCalls).toEqual([
+      { toolCallId: 'call1', toolName: 'read_file', args: { path: 'test.txt' } },
+    ]);
   });
 
-  it('preserves tool_call_id on tool messages', () => {
+  it('passes through already-normalized CoreToolCall format unchanged', () => {
+    const toolCalls = [{ toolCallId: 'call1', toolName: 'read_file', args: { path: 'test.txt' } }];
+    const msgs = [
+      { role: 'assistant', content: '', toolCalls: toolCalls },
+    ];
+    const out = sanitizeMessages(msgs);
+    expect(out).toHaveLength(1);
+    expect(out[0].toolCalls).toEqual(toolCalls);
+  });
+
+  it('normalizes camelCase toolCalls in OpenAI wire format to CoreToolCall', () => {
+    const toolCalls = [{ id: 'call1', type: 'function', function: { name: 'read_file', arguments: '{}' } }];
+    const msgs = [
+      { role: 'assistant', content: '', toolCalls: toolCalls },
+    ];
+    const out = sanitizeMessages(msgs);
+    expect(out).toHaveLength(1);
+    expect(out[0].toolCalls).toEqual([
+      { toolCallId: 'call1', toolName: 'read_file', args: {} },
+    ]);
+  });
+
+  it('handles malformed arguments JSON in tool_calls gracefully', () => {
+    const toolCalls = [{ id: 'call1', type: 'function', function: { name: 'read_file', arguments: '{invalid json}' } }];
+    const msgs = [
+      { role: 'assistant', content: '', tool_calls: toolCalls },
+    ];
+    const out = sanitizeMessages(msgs);
+    expect(out).toHaveLength(1);
+    expect(out[0].toolCalls).toHaveLength(1);
+    // Malformed JSON should not throw — falls back to {}
+    expect(out[0].toolCalls[0].args).toEqual({});
+  });
+
+  it('handles null/undefined entries in tool_calls array', () => {
+    const toolCalls = [null, { id: 'call2', type: 'function', function: { name: 'write_file', arguments: '{"path":"/tmp/test"}' } }];
+    const msgs = [
+      { role: 'assistant', content: '', tool_calls: toolCalls },
+    ];
+    const out = sanitizeMessages(msgs);
+    expect(out).toHaveLength(1);
+    expect(out[0].toolCalls).toHaveLength(2);
+    expect(out[0].toolCalls[0]).toBeNull(); // null passes through
+    expect(out[0].toolCalls[1].toolName).toBe('write_file');
+  });
+
+  it('handles tool_calls with object-format arguments (not JSON string)', () => {
+    const toolCalls = [{ id: 'call1', type: 'function', function: { name: 'execute_bash', arguments: { command: 'ls' } } }];
+    const msgs = [
+      { role: 'assistant', content: '', tool_calls: toolCalls },
+    ];
+    const out = sanitizeMessages(msgs);
+    expect(out).toHaveLength(1);
+    expect(out[0].toolCalls[0].args).toEqual({ command: 'ls' });
+  });
+
+  it('preserves toolCallId on tool messages (camelCase, AI SDK format)', () => {
     const msgs = [
       { role: 'tool', content: 'File content here', tool_call_id: 'call1' },
     ];
     const out = sanitizeMessages(msgs);
     expect(out).toHaveLength(1);
     expect(out[0].role).toBe('tool');
-    expect(out[0].tool_call_id).toBe('call1');
+    // Sanitizer stores as toolCallId (camelCase) per AI SDK ModelMessage schema
+    expect(out[0].toolCallId).toBe('call1');
   });
 
   it('filters out empty assistant messages without content or tool_calls', () => {
@@ -90,16 +150,6 @@ describe('message-sanitizer', () => {
     ];
     const out = sanitizeMessages(msgs);
     expect(out).toHaveLength(0);
-  });
-
-  it('keeps assistant messages with toolCalls (camelCase) variant', () => {
-    const toolCalls = [{ id: 'call1', type: 'function', function: { name: 'read_file', arguments: '{}' } }];
-    const msgs = [
-      { role: 'assistant', content: '', toolCalls: toolCalls },
-    ];
-    const out = sanitizeMessages(msgs);
-    expect(out).toHaveLength(1);
-    expect(out[0].tool_calls).toEqual(toolCalls);
   });
 
   it('filters out messages with no role at all', () => {

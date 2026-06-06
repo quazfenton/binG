@@ -18,6 +18,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 import { createLogger } from '@/lib/utils/logger';
+import { getContentAddressableStorage } from '@/lib/storage/content-addressable-storage';
 
 const logger = createLogger('VFSWorkspace');
 
@@ -107,13 +108,15 @@ export async function materializeWorkspace(userId: string): Promise<string> {
 
     // Load all files for this owner from the VFS database table
     const rows = db.prepare(
-      `SELECT path, content, language, size, version, created_at, updated_at
+      `SELECT path, content, blob_hash, is_compressed, language, size, version, created_at, updated_at
        FROM vfs_workspace_files
        WHERE owner_id = ?
        ORDER BY path`
     ).all(normalizedId) as Array<{
       path: string;
       content: string;
+      blob_hash: string | null;
+      is_compressed: number;
       language: string;
       size: number;
       version: number;
@@ -122,45 +125,57 @@ export async function materializeWorkspace(userId: string): Promise<string> {
     }>;
 
     // Clean the workspace directory — remove stale files
-    cleanWorkspaceDir(workspaceDir, rows.map(r => r.path));
+    cleanWorkspaceDir(workspaceDir, rows.map(r => r.path));      // Write all VFS files to the real filesystem
+      let fileCount = 0;
+      for (const row of rows) {
+        // Skip directory markers
+        if (row.path.endsWith('/.directory')) continue;
 
-    // Write all VFS files to the real filesystem
-    let fileCount = 0;
-    for (const row of rows) {
-      // Skip directory markers
-      if (row.path.endsWith('/.directory')) continue;
-
-      // SECURITY: Validate the VFS path before materializing
-      if (!isValidVfsPath(row.path)) {
-        logger.warn('Skipping invalid VFS path during materialization', { path: row.path });
-        continue;
-      }
-
-      const fullPath = path.join(workspaceDir, row.path);
-
-      // SECURITY: Ensure the resolved path is inside the workspace
-      try {
-        if (!isPathInsideWorkspace(workspaceDir, fullPath)) {
-          logger.warn('Path traversal detected during materialization', { path: row.path, fullPath });
+        // SECURITY: Validate the VFS path before materializing
+        if (!isValidVfsPath(row.path)) {
+          logger.warn('Skipping invalid VFS path during materialization', { path: row.path });
           continue;
         }
-      } catch {
-        // realpathSync.native can fail if the path doesn't exist yet — that's OK
-        // since we're about to create it. Just verify the parent directory is safe.
-        const parentDir = path.dirname(fullPath);
-        if (!fs.existsSync(parentDir)) {
-          fs.mkdirSync(parentDir, { recursive: true });
-        }
-        // After creating parent, verify again
-        if (!isPathInsideWorkspace(workspaceDir, fullPath)) {
-          logger.warn('Path traversal detected during materialization (post-create check)', { path: row.path });
-          continue;
-        }
-      }
 
-      fs.writeFileSync(fullPath, row.content, 'utf-8');
-      fileCount++;
-    }
+        const fullPath = path.join(workspaceDir, row.path);
+
+        // SECURITY: Ensure the resolved path is inside the workspace
+        try {
+          if (!isPathInsideWorkspace(workspaceDir, fullPath)) {
+            logger.warn('Path traversal detected during materialization', { path: row.path, fullPath });
+            continue;
+          }
+        } catch {
+          // realpathSync.native can fail if the path doesn't exist yet — that's OK
+          // since we're about to create it. Just verify the parent directory is safe.
+          const parentDir = path.dirname(fullPath);
+          if (!fs.existsSync(parentDir)) {
+            fs.mkdirSync(parentDir, { recursive: true });
+          }
+          // After creating parent, verify again
+          if (!isPathInsideWorkspace(workspaceDir, fullPath)) {
+            logger.warn('Path traversal detected during materialization (post-create check)', { path: row.path });
+            continue;
+          }
+        }
+
+        // Phase 5 (CAS): Fetch content from content-addressable store if not stored inline
+        let fileContent = row.content;
+        if (!fileContent && row.blob_hash) {
+          try {
+            const buf = await getContentAddressableStorage().retrieve(row.blob_hash);
+            fileContent = buf ? buf.toString('utf-8') : '';
+          } catch (err: any) {
+            logger.warn('Failed to fetch CAS blob during materialization', {
+              hash: row.blob_hash, path: row.path, error: err.message,
+            });
+            fileContent = '';
+          }
+        }
+
+        fs.writeFileSync(fullPath, fileContent, 'utf-8');
+        fileCount++;
+      }
 
     logger.info('VFS workspace materialized', {
       userId: normalizedId,

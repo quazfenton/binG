@@ -101,3 +101,53 @@ export function buildClientVisibleUnifiedResponse(response: any, visibleContent:
     },
   };
 }
+
+/**
+ * Auto-correction strategies for finding a supported model when the requested
+ * model is not in the provider's model list. Returns the corrected model ID
+ * or undefined if no suitable match is found.
+ */
+export function autoCorrectModel(
+  requestedModel: string,
+  availableModelIds: string[],
+  defaultModel?: string,
+): string | undefined {
+  const model = requestedModel;
+  if (!model) return undefined;
+
+  // Strategy 1: Find a supported model whose ID contains the requested model
+  // as a substring (handles full model name → provider-prefixed ID).
+  let corrected = availableModelIds.find(
+    (mid: string) => mid.toLowerCase().includes(model.toLowerCase())
+  );
+
+  // Strategy 2: Reverse — requested model contains a supported model ID.
+  if (!corrected) {
+    corrected = availableModelIds.find(
+      (mid: string) => model.toLowerCase().includes(mid.toLowerCase())
+    );
+  }
+
+  // Strategy 2.5: Strip trailing version/suffix and try prefix match.
+  // Handles cases like kimi-k2.5 → moonshotai/kimi-k2.6 where only the
+  // version suffix (`.5` vs `.6`) differs.
+  if (!corrected) {
+    const baseModel = model.replace(/[.-]\d+(\.\d+)*$/, '').toLowerCase();
+    if (baseModel && baseModel !== model.toLowerCase()) {
+      corrected = availableModelIds.find(
+        (mid: string) => mid.toLowerCase().includes(baseModel)
+      );
+    }
+  }
+
+  // Strategy 3: Use provider default (if valid) or first available model.
+  if (!corrected) {
+    if (defaultModel && availableModelIds.includes(defaultModel)) {
+      corrected = defaultModel;
+    } else {
+      corrected = availableModelIds[0];
+    }
+  }
+
+  return corrected;
+}

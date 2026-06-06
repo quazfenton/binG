@@ -767,6 +767,11 @@ DECOMPOSED TASKS:
 ${JSON.stringify(this.taskGraph.tasks, null, 2)}
 ` : ''}
 
+AVAILABLE TOOLS:
+- workspace_graph: Get a structured view of all workspace state (processes, services, ports, previews) with health diagnostics. Use this to understand what's currently running before planning changes.
+- workspace_graph_diagnostic: Trace service issues to root causes.
+- workspace_graph_find_process: Search for processes by command pattern.
+
 Return a JSON object:
 {
   "task": "Refined task description",
@@ -874,6 +879,11 @@ ${JSON.stringify(this.currentPlan?.files || [], null, 2)}
 
 CURRENT FILE CONTENTS (VFS):
 ${JSON.stringify(this.vfs, null, 2)}
+
+AVAILABLE TOOLS:
+- workspace_graph: Get a structured view of all workspace state (processes, services, ports, previews) with health diagnostics. Use after making changes to verify service health.
+- workspace_graph_diagnostic: Trace service issues to root causes.
+- workspace_graph_find_process: Search for processes by command pattern.
 
 For each modification, output a tool call to 'applyDiff' with exact search/replace blocks.
 Use 'createFile' for new files.`;
@@ -1538,7 +1548,9 @@ export async function* runStatefulAgentStreaming(
   const messages: Array<{ role: 'user'; content: string }> = [];
   let systemPrompt = '';
   if (workspaceSnapshot && !workspaceSnapshot.includes('unavailable') && !workspaceSnapshot.includes('empty')) {
-    systemPrompt = `### Existing Files in Workspace\n${workspaceSnapshot}\n\nUse ONLY these paths (or new paths you create). Do NOT guess file paths.`;
+    systemPrompt = `### Existing Files in Workspace\n${workspaceSnapshot}\n\nUse ONLY these paths (or new paths you create). Do NOT guess file paths.\n\n### Workspace State Tools\n- workspace_graph: Get a structured view of all workspace state (processes, services, ports, previews) with health diagnostics. Use to understand what's currently running.\n- workspace_graph_diagnostic: Trace service issues to root causes.\n- workspace_graph_find_process: Search for processes by command pattern.`;
+  } else {
+    systemPrompt = `### Workspace State Tools\n- workspace_graph: Get a structured view of all workspace state (processes, services, ports, previews) with health diagnostics. Use to understand what's currently running.\n- workspace_graph_diagnostic: Trace service issues to root causes.\n- workspace_graph_find_process: Search for processes by command pattern.`;
   }
   messages.push({
     role: 'user',

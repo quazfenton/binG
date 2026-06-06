@@ -655,6 +655,7 @@ export default function ConversationInterface() {
     messages,
     input,
     handleSubmit: originalHandleSubmit,
+    submitWithPrompt,
     isLoading,
     error,
     setMessages,
@@ -1969,28 +1970,21 @@ export default function ConversationInterface() {
   }, [messages]);
 
   // Retry function to resend the last user message
-  const handleBYOKRetry = () => {
-    if (messages.length > 0) {
-      // Find the last user message
-      const lastUserMessage = [...messages]
-        .reverse()
-        .find((msg) => msg.role === "user");
-      if (lastUserMessage) {
-        // Remove any assistant messages after the last user message
-        const lastUserIndex = messages.lastIndexOf(lastUserMessage);
-        const messagesToKeep = messages.slice(0, lastUserIndex + 1);
-        setMessages(messagesToKeep);
+  const handleBYOKRetry = useCallback(() => {
+    if (messages.length === 0) return;
+    const lastUserMessage = [...messages]
+      .reverse()
+      .find((msg) => msg.role === "user");
+    if (!lastUserMessage) return;
+    // Remove any assistant messages after the last user message
+    const lastUserIndex = messages.lastIndexOf(lastUserMessage);
+    setMessages(messages.slice(0, lastUserIndex + 1));
 
-        // Resend the last user message
-        setInput(lastUserMessage.content);
-        setTimeout(() => {
-          handleSubmit(
-            new Event("submit") as unknown as React.FormEvent<HTMLFormElement>,
-          );
-        }, 100);
-      }
-    }
-  };
+    // Resend the last user message via submitWithPrompt to avoid the
+    // setInput + setTimeout + handleSubmit stale-input race that would
+    // otherwise silently bail at `if (!input.trim()) return;`.
+    void submitWithPrompt(lastUserMessage.content);
+  }, [messages, setMessages, submitWithPrompt]);
 
   // Targeted retry: resubmit the user prompt that preceded a specific failed message
   const handleRetryMessage = useCallback((messageId: string) => {
@@ -2000,14 +1994,12 @@ export default function ConversationInterface() {
     const lastUserMsg = [...msgsBefore].reverse().find(m => m.role === 'user');
     if (!lastUserMsg) return;
     const lastUserIndex = msgsBefore.lastIndexOf(lastUserMsg);
-    setMessages(messages.slice(0, lastUserIndex + 1));
-    setInput(lastUserMsg.content);
-    setTimeout(() => {
-      handleSubmit(
-        new Event("submit") as unknown as React.FormEvent<HTMLFormElement>,
-      );
-    }, 100);
-  }, [messages, setMessages, setInput, handleSubmit]);
+    setMessages(prev => prev.slice(0, lastUserIndex + 1));
+
+    // Use submitWithPrompt to avoid the stale-input race that causes the
+    // failed bubble to vanish while no new loading bubble ever appears.
+    void submitWithPrompt(lastUserMsg.content);
+  }, [messages, setMessages, submitWithPrompt]);
 
   // Handle approval for pending file edits in existing sessions
   const handleApproveEdits = useCallback(async () => {

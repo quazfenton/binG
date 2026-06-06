@@ -109,9 +109,104 @@ export async function bootstrapToolSystem(config: BootstrapConfig): Promise<Boot
     errors.push(`Built-in capabilities: ${error.message}`);
   }
 
-  // Register workspace analysis tools (always enabled — replaces shallow buildProjectContext)
-  // registerProjectAnalysisTools was removed during reorganization
-  // Skipping workspace analysis tools registration
+  // Phase 5 (CAS): Initialize content-addressable storage early
+  // Ensures the local cache directory and file_content_blobs table exist
+  // before any VFS operations trigger lazy initialization.
+  try {
+    const { getContentAddressableStorage } = await import('../storage/content-addressable-storage');
+    await getContentAddressableStorage().initialize();
+    logger.info('Content-addressable storage initialized (Phase 5 CAS)');
+  } catch (error: any) {
+    logger.warn('Content-addressable storage initialization deferred', error.message);
+    errors.push(`CAS: ${error.message}`);
+  }
+
+  // Phase 8 (Runtime Broker): Initialize the cost/latency/capacity-aware scheduler
+  // This replaces static execution policies with dynamic provider selection.
+  try {
+    const { getRuntimeBroker } = await import('../sandbox/runtime-broker');
+    await getRuntimeBroker().initialize();
+    logger.info('Runtime Broker initialized (Phase 8)');
+  } catch (error: any) {
+    logger.warn('Runtime Broker initialization deferred', error.message);
+    errors.push(`RuntimeBroker: ${error.message}`);
+  }
+
+  // Phase 7 (Workspace Images): Initialize workspace image synthesis
+  // Pre-builds cached images from dependency lockfiles for instant warm starts.
+  try {
+    const { workspaceImageRegistry } = await import('../sandbox/workspace-image-registry');
+    logger.info('Workspace Image Registry initialized (Phase 7)', {
+      enabled: workspaceImageRegistry.isEnabled(),
+    });
+  } catch (error: any) {
+    logger.warn('Workspace Image Registry initialization deferred', error.message);
+    errors.push(`WorkspaceImages: ${error.message}`);
+  }
+
+  // Phase 6 (Workspace Affinity): Initialize workspace-to-provider binding
+  // The SandboxOrchestrator constructor starts the affinity cleanup loop.
+  // This import ensures the singleton is created and the cleanup timer is running.
+  try {
+    const { sandboxOrchestrator } = await import('../sandbox/sandbox-orchestrator');
+    const config = sandboxOrchestrator.getAffinityConfig();
+    logger.info('Workspace Affinity initialized (Phase 6)', {
+      enabled: config.enabled,
+      ttlMs: config.ttlMs,
+    });
+  } catch (error: any) {
+    logger.warn('Workspace Affinity initialization deferred', error.message);
+    errors.push(`Affinity: ${error.message}`);
+  }
+
+  // Phase 9 (WorkspaceFS): Initialize unified R2 + VFS + sandbox sync layer
+  // Provides durable cloud backup, conflict resolution, and cross-provider migration.
+  try {
+    const { workspaceFSSyncService } = await import('../sandbox/workspacefs-sync-service');
+    const r2Status = workspaceFSSyncService.getR2Status();
+    const config = workspaceFSSyncService.getConfig();
+    logger.info('WorkspaceFS Sync initialized (Phase 9)', {
+      enabled: config.enabled,
+      r2Configured: r2Status.configured,
+      r2Bucket: r2Status.bucket || 'none',
+    });
+  } catch (error: any) {
+    logger.warn('WorkspaceFS Sync initialization deferred', error.message);
+    errors.push(`WorkspaceFS: ${error.message}`);
+  }
+
+  // Register workspace analysis tools (always enabled)
+  try {
+    const { registerProjectAnalysisTools } = await import('./bootstrap/bootstrap-project-analysis');
+    const count = await registerProjectAnalysisTools(registry, config);
+    capabilityCount += count;
+    logger.info(`Registered ${count} workspace analysis tools/capabilities`);
+  } catch (error: any) {
+    logger.warn('Workspace analysis tools not available', error.message);
+    errors.push(`Workspace analysis: ${error.message}`);
+  }
+
+  // Register workspace graph tools (always enabled — AI-native workspace state querying)
+  try {
+    const { registerWorkspaceGraphTools } = await import('./bootstrap/bootstrap-workspace-graph');
+    const count = await registerWorkspaceGraphTools(registry, config);
+    toolCount += count;
+    logger.info(`Registered ${count} workspace graph tools`);
+  } catch (error: any) {
+    logger.warn('Workspace graph tools not available', error.message);
+    errors.push(`Workspace graph: ${error.message}`);
+  }
+
+  // Register runtime broker tools (Phase 8 — dynamic provider scheduling)
+  try {
+    const { registerRuntimeBrokerTools } = await import('./bootstrap/bootstrap-runtime-broker');
+    const count = await registerRuntimeBrokerTools(registry, config);
+    toolCount += count;
+    logger.info(`Registered ${count} runtime broker tools`);
+  } catch (error: any) {
+    logger.warn('Runtime broker tools not available', error.message);
+    errors.push(`RuntimeBroker: ${error.message}`);
+  }
 
   // Register MCP tools (if enabled)
   if (config.enableMCP !== false) {

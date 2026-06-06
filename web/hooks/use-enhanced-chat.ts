@@ -28,6 +28,14 @@ export interface UseChatReturn {
   input: string;
   handleInputChange: (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => void;
   handleSubmit: (e: React.FormEvent<HTMLFormElement>) => void;
+  /**
+   * Submit a prompt directly without relying on the `input` state closure.
+   * Use this from retry / queue paths to avoid the stale-input race where
+   * `setInput(...)` hasn't propagated into `handleSubmit`'s closure yet.
+   * If a response is already streaming, the prompt is queued and will be
+   * sent when the current stream completes.
+   */
+  submitWithPrompt: (prompt: string) => Promise<void>;
   isLoading: boolean;
   error: Error | undefined;
   setMessages: (messages: Message[] | ((prev: Message[]) => Message[])) => void;
@@ -110,6 +118,81 @@ function buildEmptyResponseRetryContext(ctx: {
     : `Previous attempt returned empty response with no tool executions.`;
 
   return { summary, failedToolCalls, filesystemChanges };
+}
+
+// Lightweight client-side provider model map for retry rotation.
+// Shared by pre-stream error recovery (handleSubmit catch) and
+// empty-response retry (handleStreamingResponse done event).
+const PROVIDER_MODELS: Record<string, string[]> = {
+  mistral: ['mistral-small-latest', 'mistral-large-latest', 'codestral-latest', 'mistral-medium-latest', 'ministral-3b-latest', 'ministral-8b-latest'],
+  google: ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash', 'gemini-2.5-pro'],
+  openai: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo'],
+  anthropic: ['claude-sonnet-4-20250514', 'claude-opus-4-20250514', 'claude-3-5-sonnet-latest', 'claude-3-5-haiku-latest'],
+  github: ['gpt-4o', 'llama-3.3-70b-instruct', 'phi-4', 'mistral-large-2407', 'mistral-small-2402', 'cohere-command-r-plus-08-2024'],
+  nvidia: ['meta/llama-3.3-70b-instruct', 'meta/llama-3.1-405b-instruct', 'nvidia/nemotron-4-340b-instruct', 'mistralai/mistral-large-2-instruct', 'mistralai/mistral-large-3-675b-instruct-2512', 'deepseek-ai/deepseek-r1'],
+  openrouter: ['mistralai/mistral-small-latest', 'meta-llama/llama-3.3-70b-instruct', 'google/gemini-2.5-flash', 'anthropic/claude-3.5-sonnet', 'openai/gpt-4o'],
+  groq: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768', 'gemma2-9b-it'],
+  together: ['meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo', 'mistralai/Mixtral-8x7B-Instruct-v0.1'],
+  zen: ['zen'],
+  chutes: ['deepseek-ai/DeepSeek-R1-0528', 'meta-llama/Llama-3.3-70B-Instruct'],
+  fireworks: ['accounts/fireworks/models/llama-v3p1-70b-instruct'],
+  deepinfra: ['meta-llama/Meta-Llama-3.1-70B-Instruct', 'mistralai/Mixtral-8x7B-Instruct-v0.1'],
+};
+
+/**
+ * Rotates provider/model for retry attempts.
+ * - Retry 1 (retryCount=0): next model from same provider; falls back to
+ *   first provider in fallback chain if model can't be rotated.
+ * - Retry 2+ (retryCount>=1): cycles through fallback chain providers.
+ */
+export async function rotateProviderModel(
+  origProvider: string,
+  origModel: string,
+  retryCount: number,
+  context: string = 'retry',
+): Promise<{ selectedProvider: string; selectedModel: string }> {
+  let selectedProvider = origProvider || '';
+  let selectedModel = origModel || '';
+
+  if (retryCount === 0 && origProvider) {
+    // First retry: try next model from same provider
+    const providerModels = PROVIDER_MODELS[origProvider.toLowerCase()];
+    if (providerModels && providerModels.length > 1) {
+      const currentIdx = providerModels.indexOf(origModel);
+      const nextIdx = currentIdx >= 0
+        ? (currentIdx + 1) % providerModels.length
+        : 0;
+      selectedModel = providerModels[nextIdx];
+      console.warn(`[Chat] Rotating to next model [${context}]: ${selectedProvider}/${selectedModel}`);
+    }
+    if (selectedProvider === origProvider && selectedModel === origModel) {
+      try {
+        const { getConfiguredFallbackChain } = await import('@/lib/providers/provider-fallback-chains');
+        const fallbackChain = getConfiguredFallbackChain(origProvider);
+        if (fallbackChain.length > 0) {
+          selectedProvider = fallbackChain[0];
+          const fallbackModels = PROVIDER_MODELS[selectedProvider.toLowerCase()];
+          selectedModel = fallbackModels?.[0] || 'mistral-small-latest';
+          console.warn(`[Chat] Falling back to provider [${context}]: ${selectedProvider}/${selectedModel}`);
+        }
+      } catch {}
+    }
+  } else {
+    // Retry 2+: rotate through fallback providers
+    try {
+      const { getConfiguredFallbackChain } = await import('@/lib/providers/provider-fallback-chains');
+      const fallbackChain = getConfiguredFallbackChain(origProvider);
+      if (fallbackChain.length > 0) {
+        const providerIdx = (retryCount - 1) % fallbackChain.length;
+        selectedProvider = fallbackChain[providerIdx];
+        const fallbackModels = PROVIDER_MODELS[selectedProvider.toLowerCase()];
+        selectedModel = fallbackModels?.[0] || 'mistral-small-latest';
+        console.warn(`[Chat] Rotating to fallback provider [${context}]: ${selectedProvider}/${selectedModel} (retry ${retryCount + 1})`);
+      }
+    } catch {}
+  }
+
+  return { selectedProvider, selectedModel };
 }
 
 /**
@@ -424,10 +507,10 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
 
+    const resolvedBody = typeof options.body === 'function'
+      ? options.body()
+      : (options.body || {});
     try {
-      const resolvedBody = typeof options.body === 'function'
-        ? options.body()
-        : (options.body || {});
       const requestBody = {
         messages: [...messagesRef.current, userMessage],
         ...resolvedBody,
@@ -570,6 +653,125 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
       if (err instanceof Error && err.name === 'AbortError') {
         // Request was cancelled
         return;
+      }
+
+      // Auto-retry recoverable pre-stream HTTP errors (400 model validation,
+      // 5xx server errors) with rotated provider/model BEFORE showing the error.
+      // This prevents dead conversation bubbles when the server rejects a
+      // model/provider combo that can be auto-corrected by rotation.
+      const isHttpError = err instanceof Error && /^HTTP (\d{3})/.test(err.message);
+      const statusCode = isHttpError ? parseInt(err.message.match(/^HTTP (\d{3})/)![1], 10) : 0;
+      const isRecoverablePreStream = isHttpError &&
+        statusCode !== 401 && statusCode !== 403 && statusCode !== 429 &&
+        (statusCode === 400 || statusCode >= 500);
+
+      // Check if we have any content accumulated BEFORE attempting retry
+      const currentMessageForRetry = messagesRef.current.find(msg => msg.id === assistantMessage.id);
+      const hasStreamedContent = currentMessageForRetry &&
+        currentMessageForRetry.content &&
+        currentMessageForRetry.content.trim().length > 0;
+
+      if (isRecoverablePreStream && !hasStreamedContent) {
+        const retryCount = (assistantMessage.metadata as any)?.retryCount || 0;
+        const maxRetries = 3;
+
+        if (retryCount < maxRetries) {
+          console.warn(`[Chat] Pre-stream HTTP ${statusCode} error, auto-retrying with rotated provider/model (attempt ${retryCount + 1}/${maxRetries})`);
+
+          const origProvider = String(resolvedBody?.provider ?? '');
+          const origModel = String(resolvedBody?.model ?? '');
+          const { selectedProvider, selectedModel } = await rotateProviderModel(origProvider, origModel, retryCount, 'pre-stream');
+
+          // Create retry message bubble (first retry creates new, subsequent reuse)
+          const isFirstRetry = retryCount === 0;
+          let retryAssistantMessage: Message;
+          if (isFirstRetry) {
+            setMessages(prev => prev.map(msg =>
+              msg.id === assistantMessage.id
+                ? { ...msg, content: '_Retrying with alternate provider/model..._',
+                    metadata: { ...(msg.metadata || {}), retryCount: retryCount + 1, isEmptyResponse: true } }
+                : msg
+            ));
+            retryAssistantMessage = {
+              id: `assistant-retry-${Date.now()}`,
+              role: 'assistant',
+              content: '',
+              metadata: { isRetry: true, retryCount: retryCount + 1, originalProvider: origProvider, originalModel: origModel },
+            };
+            setMessages(prev => [...prev, retryAssistantMessage]);
+          } else {
+            retryAssistantMessage = {
+              ...assistantMessage,
+              content: '',
+              metadata: { ...(assistantMessage.metadata || {}), retryCount: retryCount + 1 },
+            };
+            setMessages(prev => prev.map(msg =>
+              msg.id === assistantMessage.id
+                ? { ...msg, content: '', metadata: retryAssistantMessage.metadata }
+                : msg
+            ));
+          }
+
+          setIsLoading(true);
+          setAgentStatus('thinking');
+          const retryAbortController = new AbortController();
+          abortControllerRef.current = retryAbortController;
+          currentMessageRef.current = retryAssistantMessage;
+
+          try {
+            // Build retry messages from stale messagesRef + in-scope userMessage.
+            // messagesRef.current is stale here — the useEffect that syncs it
+            // hasn't fired yet because React hasn't re-rendered since the
+            // setMessages calls that added userMessage/assistantMessage.
+            // Explicitly append userMessage to ensure the prompt is included.
+            const retryMessages = [...messagesRef.current, userMessage].filter(
+              msg => msg.id !== assistantMessage.id
+            );
+
+            const retryRequestBody = {
+              ...resolvedBody,
+              messages: retryMessages,
+              provider: selectedProvider,
+              model: selectedModel,
+              retryContext: {
+                isPreStreamErrorRetry: true,
+                originalError: err instanceof Error ? err.message : String(err),
+                originalProvider: origProvider,
+                originalModel: origModel,
+                retryProvider: selectedProvider,
+                retryModel: selectedModel,
+              },
+            };
+
+            const retryResponse = await fetch(options.api, {
+              method: 'POST',
+              headers: buildRequestHeaders(),
+              credentials: 'include',
+              body: JSON.stringify(retryRequestBody),
+              signal: retryAbortController.signal,
+            });
+
+            if (!retryResponse.ok || !retryResponse.body) {
+              throw new Error(`Retry failed: HTTP ${retryResponse.status}`);
+            }
+
+            // Success — stream the retry response and return early
+            await handleStreamingResponse(retryResponse.body, retryAssistantMessage, retryAbortController);
+            return;
+          } catch (retryError) {
+            console.error('[Chat] Pre-stream retry failed:', retryError);
+            setMessages(prev => prev.map(msg =>
+              msg.id === retryAssistantMessage.id
+                ? { ...msg, content: '⚠️ _Retry failed. Please try resending your message._',
+                    metadata: { ...msg.metadata, retryFailed: true } }
+                : msg
+            ));
+            setIsLoading(false);
+            setAgentStatus('error');
+            abortControllerRef.current = null;
+            return;
+          }
+        }
       }
 
       const error = err instanceof Error ? err : new Error('Unknown error');
@@ -1157,72 +1359,13 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
 
                           // Select a rotated provider/model for retry:
                           // Retry 1: Next model from same provider
-                          // Retry 2+: Next provider in fallback chain
                           const origProvider = String(doneMetadata.provider ?? '');
                           const origModel = String(doneMetadata.model ?? '');
-                          let selectedProvider = origProvider;
-                          let selectedModel = origModel;
-
-                          // Lightweight client-side provider model map (avoids importing server-only llm-providers.ts)
-                          const PROVIDER_MODELS: Record<string, string[]> = {
-                            mistral: ['mistral-small-latest', 'mistral-large-latest', 'codestral-latest', 'mistral-medium-latest', 'ministral-3b-latest', 'ministral-8b-latest'],
-                            google: ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash', 'gemini-2.5-pro'],
-                            openai: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo'],
-                            anthropic: ['claude-sonnet-4-20250514', 'claude-opus-4-20250514', 'claude-3-5-sonnet-latest', 'claude-3-5-haiku-latest'],
-                            github: ['gpt-4o', 'llama-3.3-70b-instruct', 'phi-4', 'mistral-large-2407', 'mistral-small-2402', 'cohere-command-r-plus-08-2024'],
-                            nvidia: ['meta/llama-3.3-70b-instruct', 'meta/llama-3.1-405b-instruct', 'nvidia/nemotron-4-340b-instruct', 'mistralai/mistral-large-2-instruct', 'mistralai/mistral-large-3-675b-instruct-2512', 'deepseek-ai/deepseek-r1'],
-                            openrouter: ['mistralai/mistral-small-latest', 'meta-llama/llama-3.3-70b-instruct', 'google/gemini-2.5-flash', 'anthropic/claude-3.5-sonnet', 'openai/gpt-4o'],
-                            groq: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768', 'gemma2-9b-it'],
-                            together: ['meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo', 'mistralai/Mixtral-8x7B-Instruct-v0.1'],
-                            zen: ['zen'],
-                            chutes: ['deepseek-ai/DeepSeek-R1-0528', 'meta-llama/Llama-3.3-70B-Instruct'],
-                            fireworks: ['accounts/fireworks/models/llama-v3p1-70b-instruct'],
-                            deepinfra: ['meta-llama/Meta-Llama-3.1-70B-Instruct', 'mistralai/Mixtral-8x7B-Instruct-v0.1'],
-                          };
-
-                          if (assistantRetryCount === 0) {
-                            // First retry: try next model from same provider
-                            const providerModels = PROVIDER_MODELS[origProvider?.toLowerCase()];
-                            if (providerModels && providerModels.length > 1) {
-                              const currentIdx = providerModels.indexOf(origModel);
-                              const nextIdx = currentIdx >= 0
-                                ? (currentIdx + 1) % providerModels.length
-                                : 0;
-                              selectedModel = providerModels[nextIdx];
-                              console.warn(`[Chat] Rotating to next model from same provider: ${selectedProvider}/${selectedModel}`);
-                            }
-
-                            // If model didn't change, use fallback chain's first provider
-                            if (selectedProvider === origProvider && selectedModel === origModel) {
-                              try {
-                                const { getConfiguredFallbackChain } = await import('@/lib/providers/provider-fallback-chains');
-                                const fallbackChain = getConfiguredFallbackChain(origProvider);
-                                if (fallbackChain.length > 0) {
-                                  selectedProvider = fallbackChain[0];
-                                  const fallbackModels = PROVIDER_MODELS[selectedProvider.toLowerCase()];
-                                  selectedModel = fallbackModels?.[0] || 'mistral-small-latest';
-                                  console.warn(`[Chat] Falling back to provider: ${selectedProvider}/${selectedModel}`);
-                                }
-                              } catch {}
-                            }
-                          } else {
-                            // Subsequent retries: rotate through fallback providers
-                            try {
-                              const { getConfiguredFallbackChain } = await import('@/lib/providers/provider-fallback-chains');
-                              const fallbackChain = getConfiguredFallbackChain(origProvider);
-                              if (fallbackChain.length > 0) {
-                                const providerIdx = (assistantRetryCount - 1) % fallbackChain.length;
-                                selectedProvider = fallbackChain[providerIdx];
-                                const fallbackModels = PROVIDER_MODELS[selectedProvider.toLowerCase()];
-                                selectedModel = fallbackModels?.[0] || 'mistral-small-latest';
-                                console.warn(`[Chat] Rotating to fallback provider: ${selectedProvider}/${selectedModel} (retry ${assistantRetryCount + 1})`);
-                              }
-                            } catch {}
-                          }
+                          const { selectedProvider, selectedModel } = await rotateProviderModel(origProvider, origModel, assistantRetryCount, 'empty-response');
 
                           const retryRequestBody = {
-                            messages: [...messagesWithoutEmpty, lastUserMsg],
                             ...resolvedBody,
+                            messages: [...messagesWithoutEmpty, lastUserMsg],
                             // Override provider/model for retry rotation
                             provider: selectedProvider,
                             model: selectedModel,
@@ -2694,9 +2837,10 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
     setMessages,
     stop,
     setInput,
+    submitWithPrompt,
     reload: () => {
       if (messages.length === 0 || isLoading) return;
-      
+
       // Find last user message
       const lastUserMessage = [...messages].reverse().find(m => m.role === 'user');
       if (!lastUserMessage) return;
@@ -2704,17 +2848,13 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
       // Remove any messages after the last user message
       const lastUserIndex = messages.findIndex(m => m.id === lastUserMessage.id);
       const filteredMessages = messages.slice(0, lastUserIndex + 1);
-      
+
       setMessages(filteredMessages);
-      setInput(lastUserMessage.content);
-      
-      // Use setTimeout to allow state update before handleSubmit
-      setTimeout(() => {
-        const mockEvent = {
-          preventDefault: () => {},
-        } as React.FormEvent<HTMLFormElement>;
-        handleSubmit(mockEvent);
-      }, 50);
+
+      // Use submitWithPrompt instead of setInput + setTimeout + handleSubmit
+      // to avoid the stale-input race (handleSubmit reads `input` from its
+      // closure, which can be the previous empty value before setInput commits).
+      void submitWithPrompt(lastUserMessage.content);
     },
     // Agent status for multi-agent display
     agentStatus: {
