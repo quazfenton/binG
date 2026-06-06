@@ -68,7 +68,7 @@ export function createFeedbackEntry(
   severity: FeedbackEntry['severity'] = 'medium'
 ): FeedbackEntry {
   return {
-    id: `fb-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+    id: `fb-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`,
     timestamp: Date.now(),
     type,
     source,

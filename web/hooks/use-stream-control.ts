@@ -96,8 +96,18 @@ export function useStreamControl(options: StreamControlOptions): UseStreamContro
 
   const cleanupRef = useRef<(() => void) | null>(null);
 
+  // Track whether the server actually supports the /stream-control upgrade.
+  // The default `next dev` (Turbopack) does NOT install server.ts's upgrade
+  // handler — only `pnpm dev:ws` (or `pnpm start:ws`) does. We probe once
+  // via a short-lived WebSocket; if it fails synchronously (the browser fires
+  // onerror before onopen) we mark the server as unsupported and skip all
+  // future reconnect attempts. This stops the per-second `[StreamControl]
+  // WebSocket error` spam under `pnpm dev`.
+  const unsupportedRef = useRef(false);
+
   const connect = useCallback(() => {
     if (!streamId || !authToken || !enabled) return;
+    if (unsupportedRef.current) return; // Server doesn't support /stream-control
 
     // Clean up previous connection
     if (reconnectTimerRef.current) {
@@ -114,7 +124,7 @@ export function useStreamControl(options: StreamControlOptions): UseStreamContro
     }
 
     // Connect on the SAME port as the Next.js app (no separate port needed)
-    // Path-based routing: /stream-control is handled by server.ts upgrade handler
+    // Path-based routing: /stream-control is handled by server.ts upgrade handler.
     const protocol = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss' : 'ws';
     const wsHost = typeof window !== 'undefined' ? window.location.host : `localhost:${DEFAULT_WS_PORT}`;
     // FIX: Browser WebSocket API does NOT support custom headers.
@@ -185,26 +195,49 @@ export function useStreamControl(options: StreamControlOptions): UseStreamContro
         setConnected(false);
 
         const wasClean = event.wasClean;
-        console.log('[StreamControl] Disconnected', {
-          streamId,
-          code: event.code,
-          reason: event.reason,
-          wasClean,
-          attempts: reconnectAttemptsRef.current,
-        });
+        if (process.env.NODE_ENV === 'development') {
+          console.log('[StreamControl] Disconnected', {
+            streamId,
+            code: event.code,
+            reason: event.reason,
+            wasClean,
+            attempts: reconnectAttemptsRef.current,
+          });
+        }
 
         // Don't reconnect for intentional closes
         if (event.code === 1000 || event.code === 1001) return;
         if (event.code === 4009) return; // Replaced by new connection
 
+        // If the connection was refused instantly (the `next dev` Turbopack
+        // server doesn't install server.ts's upgrade handler and returns
+        // a 426/socket-destroy in <1s), stop retrying and log once.
+        // `reconnectAttemptsRef === 0` means we never connected once.
+        if (
+          reconnectAttemptsRef.current === 0 &&
+          (event.code === 1006 || event.code === 1015 || event.code === 1002)
+        ) {
+          unsupportedRef.current = true;
+          if (process.env.NODE_ENV === 'development') {
+            console.debug(
+              '[StreamControl] /stream-control unavailable in this dev mode. ' +
+              'Run `pnpm dev:ws` to enable the control WebSocket. ' +
+              'SSE streaming still works without it.',
+            );
+          }
+          return;
+        }
+
         // Auto-reconnect with exponential backoff
         if (reconnectAttemptsRef.current < maxReconnectAttempts && streamId) {
           reconnectAttemptsRef.current++;
           const delay = reconnectDelay * reconnectAttemptsRef.current;
-          console.log('[StreamControl] Reconnecting in', delay, 'ms', {
-            attempt: reconnectAttemptsRef.current,
-            max: maxReconnectAttempts,
-          });
+          if (process.env.NODE_ENV === 'development') {
+            console.log('[StreamControl] Reconnecting in', delay, 'ms', {
+              attempt: reconnectAttemptsRef.current,
+              max: maxReconnectAttempts,
+            });
+          }
 
           reconnectTimerRef.current = setTimeout(() => {
             reconnectTimerRef.current = null;
@@ -217,7 +250,12 @@ export function useStreamControl(options: StreamControlOptions): UseStreamContro
       };
 
       ws.onerror = (event) => {
-        console.error('[StreamControl] WebSocket error', { streamId, event });
+        // Suppress the per-attempt error log when the server is known to
+        // not support the path (e.g., plain `next dev` / Turbopack). The
+        // onclose handler will detect this and flip unsupportedRef.
+        if (!unsupportedRef.current && process.env.NODE_ENV === 'development') {
+          console.error('[StreamControl] WebSocket error', { streamId, event });
+        }
         onError?.('WebSocket connection error');
       };
     } catch (e: any) {

@@ -83,12 +83,17 @@ export function getDefaultWorkspaceRoot(): string | null {
     }
   }
 
-  // Priority 2: Web mode - don't use process.cwd() as it incorrectly
-  // uses the server's cwd (where pnpm dev was run). Use 'workspace/sessions'
-  // as base - user separation is handled by VFS via userID/compositeID.
-  // Check for browser environment explicitly - CLI/standalone runs in Node.js
-  // where window is undefined, so it should fall through to process.cwd()
-  if (typeof window !== 'undefined' && !isDesktopMode() && !isTauriRuntime()) {
+  // Priority 2: Web mode (browser only) - don't use process.cwd()
+  // as it incorrectly picks up the server's working directory (where pnpm dev
+  // was run). Instead use 'workspace/sessions' as the base - user separation
+  // is handled by VFS via userID/compositeID.
+  // This check uses a narrow browser-only condition to avoid accidentally
+  // blocking the CLI/standalone fallback below, which relies on process.cwd().
+  const isInBrowser = typeof window !== 'undefined';
+  // Only treat as web mode when we have a browser window AND are NOT in a
+  // desktop shell AND are NOT in a Tauri runtime. Server-side code (no window)
+  // falls through to the CLI/standalone path below.
+  if (isInBrowser && !isDesktopMode() && !isTauriRuntime()) {
     return 'workspace/sessions';
   }
 

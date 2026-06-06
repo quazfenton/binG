@@ -14,14 +14,35 @@
 
 import { generateText, tool as aiTool, type Tool, type ModelMessage } from 'ai';
 import { z } from 'zod';
+import { normalizeSchemaForAI } from '../tool-schema';
 import { verifyChanges } from '@/lib/orchestra/stateful-agent/agents/verification';
-import { SelfHealingExecutor } from '@/lib/crewai';
 import { getVercelModel } from '@/lib/chat/vercel-ai-streaming';
 import { createLogger } from '@/lib/utils/logger';
 import { createOriginStack, redactArgsForLogging } from '@/lib/errors/logging-utils';
 import { sanitizeMessages } from '@/lib/chat/message-sanitizer';
+import { normalizeAndValidateRole } from '../unified-role-selector';
+import { CHOOSE_ROLE_DIRECTIVE } from '../system-prompts-dynamic';
 
 const log = createLogger('PlanActVerify');
+
+/**
+ * Check if an error is an AI SDK ModelMessage[] schema validation error.
+ * These occur when system-role messages leak into the messages array,
+ * tool-role messages have plain-string content, or assistant messages
+ * have empty content with no tool_calls.
+ *
+ * Exported so tests and other modules can reuse this detection logic
+ * without duplicating the fragile string-matching patterns.
+ */
+export function isModelSchemaError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const message = (error as any).message;
+  if (typeof message !== 'string') return false;
+  return (
+    message.includes('ModelMessage[]') ||
+    message.includes('messages do not match')
+  );
+}
 
 /**
  * Redact tool args for safe logging.
@@ -519,222 +540,238 @@ export class PlanActVerifyOrchestrator {
   private validatedConfig: IterationConfig;
   /** SDK tools built via proper adapter (no @ts-expect-error) — P2 #9 */
   private sdkTools: Record<string, Tool> = {};
+  /** Track plan steps for fresh-context iteration */
+  private planSteps: Array<{ action: string; tool?: string }> | null = null;
 
   constructor(private config: OrchestratorConfig) {
     // Validate and normalize configuration with Zod — P2 #9
     this.validatedConfig = IterationConfigSchema.parse(config.iterationConfig);
 
     // Build SDK tools via proper adapter — P2 #9
-    // Uses aiTool() with typed Zod parameters instead of manual conversion
-    for (const toolDef of config.tools) {
-      const toolName = toolDef.name;
-      if (!toolName) continue;
+    // Uses aiTool() with the Vercel AI SDK's `inputSchema` field. NOTE: the
+    // SDK's `Tool` type uses `inputSchema` (not `parameters`) and the
+    // prepareToolsAndToolChoice normalization reads `tool2.inputSchema` —
+    // if the field is missing, `asSchema(undefined)` falls back to
+    // `{ properties: {}, additionalProperties: false }` with no `type` field,
+    // which Azure OpenAI / OpenAI-compatible providers reject with
+    // "schema must be a JSON Schema of 'type: \"object\"', got 'type: \"None\"'".
+      for (const toolDef of config.tools) {
+        const toolName = toolDef.name;
+        if (!toolName) continue;
 
-      this.sdkTools[toolName] = aiTool({
-        description: toolDef.description || `Execute ${toolName}`,
-        parameters: toolDef.parameters as any,
-        execute: async (args: Record<string, unknown>) => {
-          try {
-            return await config.executeTool(toolName, args);
-          } catch (error: any) {
-            log.error(`Tool ${toolName} execution failed`, { error: error.message });
-            throw error;
-          }
-        },
-      } as any);
-    }
+        // Normalize to a JSON Schema with `type: "object"`. See
+        // `normalizeSchemaForAI` for the full rationale and Zod handling.
+        const normalizedSchema = normalizeSchemaForAI(toolDef.parameters) as Record<string, unknown>;
+
+        this.sdkTools[toolName] = aiTool({
+          description: toolDef.description || `Execute ${toolName}`,
+          inputSchema: normalizedSchema,
+          execute: async (args: Record<string, unknown>) => {
+            try {
+              return await config.executeTool(toolName, args);
+            } catch (error: any) {
+              log.error(`Tool ${toolName} execution failed`, { error: error.message });
+              throw error;
+            }
+          },
+        } as any);
+      }
+
+    // Add built-in choose_role tool — enables dynamic role redirection.
+    // Unlike tools from config.tools, this one is always available regardless
+    // of MCP setup and is self-contained (doesn't delegate to config.executeTool).
+    // The result ({ roleAdopted, rolePrompt, ... }) is stored in conversation
+    // history and consumed upstream by route.ts to force the selected role.
+    this.sdkTools['choose_role'] = aiTool({
+      description: 'Switch the current expert role/persona to better handle task complexity, domain, or failure recovery.',
+      parameters: z.object({
+        role: z.string().describe('The target expert role to adopt (e.g., debugger, architect, reviewer, tester, researcher, coder).'),
+        reason: z.string().describe('Reasoning for the role switch (e.g., handling high-complexity refactor, debugging error loops).'),
+        recentFailures: z.array(z.string()).optional().describe('Recent tool execution error messages for failure-context bias.'),
+      }),
+      execute: async ({ role, reason, recentFailures }: { role: string; reason: string; recentFailures?: string[] }) => {
+        const result = normalizeAndValidateRole(role, reason || '', { recentFailures });
+        return {
+          success: result.valid,
+          roleAdopted: result.roleAdopted,
+          rolePrompt: result.valid ? (result as any).rolePrompt || '' : '',
+          roleSource: result.valid ? (result as any).roleSource || null : null,
+          message: result.message,
+        };
+      },
+    } as any);
   }
 
   /**
    * Executes a task using a Plan -> Act -> Verify -> Respond loop.
+   * Uses plan-driven iteration with fresh context for each phase.
    * Yields SSE-compatible events for UI rendering.
    */
   async *execute(task: string, initialContext: ModelMessage[]): AsyncGenerator<OrchestratorEvent, void, unknown> {
     const controller = new IterationController(this.validatedConfig);
-    const conversationHistory: ModelMessage[] = [...initialContext];
 
     try {
+      // PHASE 1: PLANNING — Use initialContext (conversation history) to seed the planner,
+      // but do NOT accumulate tool-call history across steps.
       yield { type: 'phase_change', phase: 'planning' };
-
-      // 1. PLANNING PHASE (CrewAI-inspired Planner Agent)
-      const plan = await this.generatePlan(task, conversationHistory);
+      const plan = await this.generatePlan(task, initialContext || []);
+      this.planSteps = plan;
       yield { type: 'plan_created', plan };
-      conversationHistory.push({ role: 'assistant', content: `Plan:\n${JSON.stringify(plan)}` });
 
-      // 2. ACT PHASE (Multi-step Tool Loop)
+      // Guard: empty plan — nothing to execute
+      if (!this.planSteps?.length) {
+        yield { type: 'warning', message: 'Generated plan is empty. Nothing to execute.' };
+        yield { type: 'done', response: 'No steps were generated for the given task.', stats: controller.getStats() };
+        return;
+      }
+
+      // PHASE 2: ACT — Iterate over plan steps with fresh context per step
       yield { type: 'phase_change', phase: 'acting' };
-
+      let stepIndex = 0;
       let consecutiveVerificationFailures = 0;
       const MAX_VERIFICATION_FAILURES = 3;
-      const recentToolCalls: string[] = [];
-      const MAX_RECENT_TOOLS = 6;
+      let pendingVerificationFeedback: string | null = null;
 
-      while (true) {
+      // Accumulated conversation history threaded across steps so the LLM
+      // can reference tool results from previous steps instead of starting
+      // from scratch with [] context each time.
+      const stepHistory: ModelMessage[] = [];
+
+      while (stepIndex < this.planSteps.length) {
         const check = controller.canContinue();
         if (!check.allowed) {
           yield { type: 'warning', message: `Execution stopped: ${check.reason}` };
           break;
         }
 
+        const currentStep = this.planSteps[stepIndex];
         controller.recordStep();
         yield { type: 'iteration_start', iteration: controller.getStats().iterations };
 
-        // Call LLM for next action (Coder Agent) using Vercel AI SDK
-        const llmResponse = await this.callLLM(task, conversationHistory);
+        // Fresh context: task + current step + any verification feedback from previous step
+        let stepContext = `Task: ${task}\n\nCurrent Step ${stepIndex + 1}/${this.planSteps.length}: ${currentStep.action}`;
+        if (pendingVerificationFeedback) {
+          stepContext += `\n\nNOTE from previous step verification:\n${pendingVerificationFeedback}`;
+          pendingVerificationFeedback = null;
+        }
+        const llmResponse = await this.callLLM(stepContext, stepHistory);
         controller.recordTokens(llmResponse.usage?.totalTokens || 0);
 
-        // Push assistant response to conversation history.
-        // When the model calls tools, we must include tool-call content parts
-        // so the AI SDK can match subsequent tool-result messages to their calls.
-        // Without this, the SDK rejects the schema with:
-        // "The messages do not match the ModelMessage[] schema".
+        // Track modified files during tool execution
+        const modifiedFiles: string[] = [];
+        // Collect tool execution results for conversation history threading
+        // (paired with assistant tool_calls by matching toolCallId)
+        const toolResultsHistory: Array<{ toolCallId: string; toolName: string; result: any }> = [];
+
         if (llmResponse.toolCalls?.length) {
-          // Assistant message with tool calls — use array content format
-          const content: any[] = [];
-          if (llmResponse.text) {
-            content.push({ type: 'text' as const, text: llmResponse.text });
-          }
-          for (const tc of llmResponse.toolCalls) {
-            content.push({
-              type: 'tool-call' as const,
-              toolCallId: tc.id,
-              toolName: tc.name,
-              input: tc.arguments,
-            });
-          }
-          conversationHistory.push({ role: 'assistant' as const, content });
-        } else if (llmResponse.text) {
-          // Text-only assistant response — plain string content is fine
-          conversationHistory.push({ role: 'assistant' as const, content: llmResponse.text });
-        }
+          for (const call of llmResponse.toolCalls) {
+            yield { type: 'tool_call', tool: call.name, args: call.arguments };
 
-        if (llmResponse.done || !llmResponse.toolCalls?.length) {
-          break; // Task complete or no tools to call
-        }
+            try {
+              // Pre-execution validation: catch empty/missing args before calling tool
+              const validation = validateAndNormalizeArgs(call.name, call.arguments);
+              if (validation.error) {
+                yield { type: 'tool_error', tool: call.name, error: validation.error };
+                // Still record the attempt in history so the model sees the validation failure
+                toolResultsHistory.push({ toolCallId: call.id, toolName: call.name, result: validation.error });
+                continue; // Skip this tool, continue with remaining tools
+              }
 
-        // Execute tools with Self-Healing middleware
-        let modifiedFiles: string[] = [];
-        for (const call of llmResponse.toolCalls) {
-          // Loop safety: Detect repeated identical calls within recent window
-          const callHash = `${call.name}:${JSON.stringify(call.arguments)}`;
-          if (recentToolCalls.filter(h => h === callHash).length >= 3) {
-            yield { type: 'warning', message: `Detected repeated identical tool call: ${call.name}. Aborting loop to prevent infinite cycle.` };
-            break;
-          }
-          recentToolCalls.push(callHash);
-          if (recentToolCalls.length > MAX_RECENT_TOOLS) recentToolCalls.shift();
+              const normalizedArgs = validation.args!;
+              const result = await this.executeToolWithHealing(call.name, normalizedArgs);
+              const structuredResult = buildToolResult(call.name, normalizedArgs, result);
+              yield { type: 'tool_result', tool: call.name, result: structuredResult };
 
-          yield { type: 'tool_call', tool: call.name, args: call.arguments };
+              // Record result for conversation history threading
+              toolResultsHistory.push({ toolCallId: call.id, toolName: call.name, result });
 
-          // Instrumentation: redact and log constructed tool-call payloads to trace origins of malformed calls
-          let _redactedForLog: any = null;
-          try {
-            _redactedForLog = redactArgsForLogging(call.arguments);
-            log.debug('PlanActVerify: constructed tool call', { tool: call.name, redactedArgs: _redactedForLog, stack: (new Error()).stack?.split('\n').slice(1,6) });
-          } catch (e) {
-            log.debug('PlanActVerify: failed to redact tool call args', { tool: call.name });
-          }
-
-          // Persist redacted invocation payload for later aggregation and analysis
-          try {
-            import('@/lib/tools/tool-call-tracker').then(({ toolCallTracker }) => {
-              toolCallTracker.recordInvocationPayload({
-                timestamp: Date.now(),
-                model: this.validatedConfig.model,
-                provider: this.validatedConfig.provider,
-                toolName: call.name,
-                redactedArgs: typeof _redactedForLog === 'string' ? _redactedForLog : JSON.stringify(_redactedForLog || {}),
-                originStack: createOriginStack(),
-                toolCallId: call.id || null,
-              }).catch((err: any) => { log.debug?.('PlanActVerify: recordInvocationPayload failed:', err); });
-            }).catch((err: any) => { log.debug?.('PlanActVerify: recordToolResultTelemetry failed:', err); });
-          } catch (e) {
-            log.debug('PlanActVerify: failed to persist invocation payload', { tool: call.name });
-          }
-
-          let structuredResult: ToolResult;
-
-          // ── Pre-execution argument validation ──────────────────────────
-          // Check required fields and fill sensible defaults BEFORE calling
-          // the tool.  This catches empty path/content/etc. early and gives
-          // the model a structured error it can recover from, rather than
-          // letting the tool itself fail with a cryptic "Path is required".
-          const validation = validateAndNormalizeArgs(call.name, call.arguments);
-          if (validation.error) {
-            // Validation failed — yield a tool_error so the model sees the
-            // structured feedback and can self-heal on the next iteration.
-            structuredResult = {
-              success: false,
-              toolName: call.name,
-              args: call.arguments,
-              error: validation.error,
-              summary: `Pre-execution validation failed: ${validation.error.message}`,
-            };
-            yield { type: 'tool_error', tool: call.name, error: validation.error };
-
-            // Push the error into conversation history so the LLM can recover.
-            // Uses tool-role with array content per AI SDK ModelMessage schema.
-            conversationHistory.push({
-              role: 'tool' as const,
-              content: [{
-                type: 'tool-result' as const,
-                toolCallId: call.id,
-                toolName: call.name,
-                output: structuredResult as any,
-              }],
-            });
-            continue; // Skip execution, let the model retry with corrected args
-          }
-
-          // Use validated/normalized args (with defaults filled) for execution
-          const normalizedArgs = validation.args!;
-
-          try {
-            const rawResult = await this.executeToolWithHealing(call.name, normalizedArgs);
-            // P2 #7: Build structured ToolResult instead of JSON.stringify blob
-            structuredResult = buildToolResult(call.name, normalizedArgs, rawResult);
-            yield { type: 'tool_result', tool: call.name, result: structuredResult };
-
-            if (call.name === 'writeFile' || call.name === 'applyDiff') {
-              modifiedFiles.push(normalizedArgs.path || normalizedArgs.file);
+              // Track files modified by writeFile/applyDiff for verification
+              if ((call.name === 'writeFile' || call.name === 'applyDiff') && normalizedArgs?.path) {
+                modifiedFiles.push(normalizedArgs.path);
+              }
+            } catch (error: any) {
+              // Per-tool resilience: one failure doesn't abort the entire plan
+              const structuredResult = buildToolResult(call.name, call.arguments, undefined, error);
+              yield { type: 'tool_error', tool: call.name, error: structuredResult.error! };
+              // Record the error result so the model can see what went wrong
+              toolResultsHistory.push({ toolCallId: call.id, toolName: call.name, result: { success: false, error: error.message } });
             }
-          } catch (error: any) {
-            // P2 #7: Build structured ToolResult for errors too
-            structuredResult = buildToolResult(call.name, normalizedArgs, undefined, error);
-            yield { type: 'tool_error', tool: call.name, error: structuredResult.error! };
           }
-
-          // P2 #7: Pass structured ToolResult into conversation history
-          // Use AI SDK ToolResultPart format: content must be an array of
-          // { type: 'tool-result', toolCallId, toolName, output } parts.
-          // Plain-string content triggers "messages do not match ModelMessage[] schema".
-          // Cast structuredResult as any — our custom ToolResult wraps tool outputs
-          // with typed fields (success, error, summary, etc.) which the LLM can reason about.
-          conversationHistory.push({
-            role: 'tool' as const,
-            content: [{
-              type: 'tool-result' as const,
-              toolCallId: call.id,
-              toolName: call.name,
-              output: structuredResult as any,
-            }],
-          });
+        } else if (llmResponse.text) {
+          yield { type: 'token', content: llmResponse.text };
         }
 
-        // 3. VERIFICATION PHASE (Critic/Verifier Agent)
+        // ── Thread tool results into conversation history for next step ──
+        if (llmResponse.text || llmResponse.toolCalls?.length) {
+          // 1. Assistant message — the model's response text + any tool calls it made.
+          //    AI SDK v6 requires the AssistantModelMessage content to be a string
+          //    OR an array of content parts. Tool calls MUST be expressed as
+          //    `{ type: 'tool-call', toolCallId, toolName, input }` parts inside
+          //    the content array — NOT a top-level `toolCalls` property and NOT
+          //    using `args`. Using the legacy v4 shape makes the SDK reject the
+          //    history with "messages do not match the ModelMessage[] schema",
+          //    which previously cascaded into the no-tools plain-text fallback.
+          if (llmResponse.toolCalls?.length) {
+            const assistantContent: any[] = [];
+            if (llmResponse.text) {
+              assistantContent.push({ type: 'text' as const, text: llmResponse.text });
+            }
+            for (const tc of llmResponse.toolCalls) {
+              assistantContent.push({
+                type: 'tool-call' as const,
+                toolCallId: tc.id,
+                toolName: tc.name,
+                input: tc.arguments ?? {},
+              });
+            }
+            stepHistory.push({ role: 'assistant' as const, content: assistantContent } as ModelMessage);
+          } else if (llmResponse.text) {
+            // Text-only assistant turn — plain string content is valid.
+            stepHistory.push({ role: 'assistant' as const, content: llmResponse.text } as ModelMessage);
+          }
+
+          // 2. Tool result messages — results from each executed tool.
+          //    AI SDK v6 ToolResultPart requires `output` to be a typed
+          //    ToolResultOutput (`{ type: 'json', value }` / `{ type: 'text', value }`),
+          //    not a bare `result` value. A raw `result` field also fails schema
+          //    validation.
+          if (toolResultsHistory.length > 0) {
+            for (const tr of toolResultsHistory) {
+              stepHistory.push({
+                role: 'tool' as const,
+                content: [{
+                  type: 'tool-result' as const,
+                  toolCallId: tr.toolCallId,
+                  toolName: tr.toolName,
+                  output: { type: 'json' as const, value: (tr.result ?? null) as any },
+                }],
+              } as any);
+            }
+            // Clear for next iteration (reused across the while loop)
+            toolResultsHistory.length = 0;
+          }
+
+          // Guard against unbounded history growth: keep the last N messages
+          const MAX_HISTORY_MESSAGES = 30;
+          if (stepHistory.length > MAX_HISTORY_MESSAGES) {
+            stepHistory.splice(0, stepHistory.length - MAX_HISTORY_MESSAGES);
+          }
+        }
+
+        // PHASE 3: VERIFICATION — After each step, verify modified files
         if (modifiedFiles.length > 0) {
           yield { type: 'phase_change', phase: 'verifying' };
           const verificationResult = await this.runVerification(modifiedFiles);
 
           if (!verificationResult.passed) {
             consecutiveVerificationFailures++;
-            yield { 
-              type: 'verification_failed', 
-              errors: verificationResult.errors.map((e: any) => ({ 
-                file: (e as any).path || 'unknown', 
-                message: (e as any).error || String(e), 
-                suggestion: undefined 
-              })) 
+            yield {
+              type: 'verification_failed',
+              errors: (verificationResult.errors || []).map((e: any) => ({
+                file: e?.path || e?.file || 'unknown',
+                message: e?.error || e?.message || String(e),
+                suggestion: e?.suggestion,
+              })),
             };
 
             if (consecutiveVerificationFailures >= MAX_VERIFICATION_FAILURES) {
@@ -742,18 +779,16 @@ export class PlanActVerifyOrchestrator {
               break;
             }
 
-            // Feed errors back to the ACT loop for self-healing
-            // Use 'user' role for mid-conversation feedback (many providers reject
-            // 'system' messages after tool calls) — CoreMessage user accepts string content
-            conversationHistory.push({
-              role: 'user' as const,
-              content: `Verification failed. Please fix these errors in the next step: ${JSON.stringify(verificationResult.errors)}`
-            });
-            continue;
+            // Store feedback for next iteration — retry same step to fix
+            pendingVerificationFeedback = `Verification failed for step "${currentStep.action}":\n${JSON.stringify(verificationResult.errors)}\nPlease fix these issues.`;
+            continue; // Skip stepIndex++ — retry same step with verification feedback
+          } else {
+            consecutiveVerificationFailures = 0;
+            yield { type: 'verification_passed' };
           }
-          consecutiveVerificationFailures = 0; // Reset on success
-          yield { type: 'verification_passed' };
         }
+
+        stepIndex++; // Move to next plan step
       }
 
       // 4. RESPOND PHASE (with budget check - do not exceed budget even for summarization)
@@ -768,7 +803,7 @@ export class PlanActVerifyOrchestrator {
           message: `Final summarization skipped: ${finalCheck.reason}. Returning partial results.`
         };
         const stats = controller.getStats();
-      yield {
+        yield {
           type: 'done',
           response: `Execution halted: ${finalCheck.reason || 'budget exhausted'}. Consumed ${stats.iterations ?? 0} iterations, ${stats.tokensUsed ?? 0} tokens, ${Math.round((stats.durationMs ?? 0) / 1000)}s. Partial results returned.`,
           stats,
@@ -777,7 +812,10 @@ export class PlanActVerifyOrchestrator {
         return;
       }
 
-      const finalResponse = await this.callLLM("Summarize the final outcome based on the execution history.", conversationHistory);
+      const finalResponse = await this.callLLM(
+        `Summarize the completed work. Plan steps executed: ${this.planSteps.map((s, i) => `${i+1}. ${s.action}`).join('\n')}`,
+        stepHistory
+      );
       controller.recordTokens(finalResponse.usage?.totalTokens || 0);
       yield { type: 'done', response: finalResponse.text, stats: controller.getStats() };
 
@@ -800,8 +838,14 @@ export class PlanActVerifyOrchestrator {
   private async generatePlan(task: string, history: ModelMessage[]) {
     const planPrompt = `You are a planning agent. Create a step-by-step execution plan for the following task.
 TASK: ${task}
+
+Use workspace_graph to understand current workspace state before planning:
+- workspace_graph: Get a structured view of all running processes, services, ports, and previews with health diagnostics.
+- workspace_graph_diagnostic: Trace service issues to root causes.
+- workspace_graph_find_process: Search for processes by command pattern.
+
 Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"}]`;
-    const response = await this.callLLM(planPrompt, []);
+    const response = await this.callLLM(planPrompt, history || []);
     try {
       const parsed = JSON.parse(response.text.match(/\[[\s\S]*\]/)?.[0] || '[]');
       return parsed.length ? parsed : [{ action: task }];
@@ -858,9 +902,19 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
         const result = await generateText({
           model: vercelModel,
           messages,
-          tools: Object.keys(this.sdkTools).length > 0 ? this.sdkTools : undefined,
+          tools: (Object.keys(this.sdkTools).length > 0 && (this.validatedConfig.provider !== 'ninerouter' || !(this.validatedConfig.model || '').startsWith('gh/'))) ? this.sdkTools : ({} as any),
           system:
-            'You are an autonomous AI coding agent. You have tools available to interact with the system.',
+            'You are an autonomous AI coding agent. You have tools available to interact with the system.' +
+            '\n\n' + CHOOSE_ROLE_DIRECTIVE +
+            '\n\n### Workspace State Tools\n' +
+            '- workspace_graph: Get a structured view of all workspace state (processes, services, ports, previews) with health diagnostics. Use to understand what\x27s currently running before planning or making changes.\n' +
+            '- workspace_graph_diagnostic: Trace a specific service\x27s issues to root causes (port conflicts, crashed processes, stale snapshots).\n' +
+            '- workspace_graph_find_process: Search for processes by command pattern across the workspace.\n' +
+            'Use these tools to inspect and verify workspace health before and after making changes.',
+          // Note: AI SDK v6 removed `maxSteps` from generateText options (it is
+          // ignored at runtime and fails the type check). Multi-step execution
+          // is handled by this orchestrator's own plan-step loop, so a single
+          // generation per call is intentional here.
           maxOutputTokens: 4000,
           temperature: 0.2,
         });
@@ -874,7 +928,6 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
 
         return {
           text: result.text || '',
-          done: toolCalls.length === 0,
           toolCalls,
           usage: result.usage || { totalTokens: 0 },
         };
@@ -887,11 +940,7 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
         // and no tool_calls, or a system-role message appearing AFTER an
         // assistant turn (which newer providers reject). Re-sanitize the
         // history (idempotent for already-clean messages) and retry once.
-        const isSchemaError =
-          error.message?.includes('ModelMessage[]') ||
-          error.message?.includes('messages do not match');
-
-        if (isSchemaError && attempt < MAX_ATTEMPTS - 1) {
+        if (isModelSchemaError(error) && attempt < MAX_ATTEMPTS - 1) {
           log.warn(
             'callLLM: schema validation error, sanitizing history and retrying',
             { provider, model, error: error.message },
@@ -901,6 +950,49 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
         }
 
         break; // Non-retryable error, or final attempt exhausted
+      }
+    }
+
+    // ── Plain-text fallback for schema errors ──
+    // If both retries failed due to ModelMessage[] schema errors, the
+    // conversation history is likely corrupted beyond repair. Fall back
+    // to a plain-text call with NO tools and NO history — just the
+    // system prompt and the user's prompt as a bare message. This
+    // sacrifices tool-calling ability but ensures the user gets a
+    // response instead of a crash.
+    if (isModelSchemaError(lastError)) {
+      log.warn(
+        'callLLM: both retries failed with schema errors, falling back to plain-text call',
+        { provider, model, error: lastError?.message },
+      );
+
+      try {
+        const fallbackResult = await generateText({
+          model: vercelModel,
+          messages: [{ role: 'user' as const, content: prompt }],
+          system:
+            'You are an autonomous AI coding agent.' +
+            '\n\n' + CHOOSE_ROLE_DIRECTIVE,
+          // `maxSteps` is not a valid AI SDK v6 option (see note above).
+          maxOutputTokens: 4000,
+          temperature: 0.2,
+        });
+
+        log.info('callLLM: plain-text fallback succeeded', { provider, model });
+
+        return {
+          text: fallbackResult.text || '',
+          toolCalls: [],
+          usage: fallbackResult.usage || { totalTokens: 0 },
+        };
+      } catch (fallbackError: any) {
+        log.error('callLLM: plain-text fallback also failed', {
+          provider,
+          model,
+          error: fallbackError.message,
+        });
+        // Throw the original error — the fallback is best-effort
+        throw lastError;
       }
     }
 

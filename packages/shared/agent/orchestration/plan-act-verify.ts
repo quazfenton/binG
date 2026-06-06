@@ -14,6 +14,7 @@
 
 import { generateText, tool as aiTool, type Tool, type ModelMessage } from 'ai';
 import { z } from 'zod';
+import { normalizeSchemaForAI } from '../tool-schema';
 import { verifyChanges } from '@/lib/orchestra/stateful-agent/agents/verification';
 import { getVercelModel } from '@/lib/chat/vercel-ai-streaming';
 import { createLogger } from '@/lib/utils/logger';
@@ -547,24 +548,34 @@ export class PlanActVerifyOrchestrator {
     this.validatedConfig = IterationConfigSchema.parse(config.iterationConfig);
 
     // Build SDK tools via proper adapter — P2 #9
-    // Uses aiTool() with typed Zod parameters instead of manual conversion
-    for (const toolDef of config.tools) {
-      const toolName = toolDef.name;
-      if (!toolName) continue;
+    // Uses aiTool() with the Vercel AI SDK's `inputSchema` field. NOTE: the
+    // SDK's `Tool` type uses `inputSchema` (not `parameters`) and the
+    // prepareToolsAndToolChoice normalization reads `tool2.inputSchema` —
+    // if the field is missing, `asSchema(undefined)` falls back to
+    // `{ properties: {}, additionalProperties: false }` with no `type` field,
+    // which Azure OpenAI / OpenAI-compatible providers reject with
+    // "schema must be a JSON Schema of 'type: \"object\"', got 'type: \"None\"'".
+      for (const toolDef of config.tools) {
+        const toolName = toolDef.name;
+        if (!toolName) continue;
 
-      this.sdkTools[toolName] = aiTool({
-        description: toolDef.description || `Execute ${toolName}`,
-        parameters: toolDef.parameters as any,
-        execute: async (args: Record<string, unknown>) => {
-          try {
-            return await config.executeTool(toolName, args);
-          } catch (error: any) {
-            log.error(`Tool ${toolName} execution failed`, { error: error.message });
-            throw error;
-          }
-        },
-      } as any);
-    }
+        // Normalize to a JSON Schema with `type: "object"`. See
+        // `normalizeSchemaForAI` for the full rationale and Zod handling.
+        const normalizedSchema = normalizeSchemaForAI(toolDef.parameters) as Record<string, unknown>;
+
+        this.sdkTools[toolName] = aiTool({
+          description: toolDef.description || `Execute ${toolName}`,
+          inputSchema: normalizedSchema,
+          execute: async (args: Record<string, unknown>) => {
+            try {
+              return await config.executeTool(toolName, args);
+            } catch (error: any) {
+              log.error(`Tool ${toolName} execution failed`, { error: error.message });
+              throw error;
+            }
+          },
+        } as any);
+      }
 
     // Add built-in choose_role tool — enables dynamic role redirection.
     // Unlike tools from config.tools, this one is always available regardless
@@ -692,26 +703,38 @@ export class PlanActVerifyOrchestrator {
 
         // ── Thread tool results into conversation history for next step ──
         if (llmResponse.text || llmResponse.toolCalls?.length) {
-          // 1. Assistant message — the model's response text + any tool calls it made
-          const assistantMsg: any = {
-            role: 'assistant' as const,
-            content: llmResponse.text || '',
-          };
+          // 1. Assistant message — the model's response text + any tool calls it made.
+          //    AI SDK v6 requires the AssistantModelMessage content to be a string
+          //    OR an array of content parts. Tool calls MUST be expressed as
+          //    `{ type: 'tool-call', toolCallId, toolName, input }` parts inside
+          //    the content array — NOT a top-level `toolCalls` property and NOT
+          //    using `args`. Using the legacy v4 shape makes the SDK reject the
+          //    history with "messages do not match the ModelMessage[] schema",
+          //    which previously cascaded into the no-tools plain-text fallback.
           if (llmResponse.toolCalls?.length) {
-            // Normalize to CoreToolCall format ({toolCallId, toolName, args})
-            // instead of OpenAI wire format ({id, type: 'function', function:...})
-            // to avoid AI SDK ModelMessage[] schema validation failures with
-            // strict provider adapters (e.g. moonshotai/kimi-k2.6).
-            assistantMsg.toolCalls = llmResponse.toolCalls.map((tc: any) => ({
-              toolCallId: tc.id,
-              toolName: tc.name,
-              args: tc.arguments,
-            }));
+            const assistantContent: any[] = [];
+            if (llmResponse.text) {
+              assistantContent.push({ type: 'text' as const, text: llmResponse.text });
+            }
+            for (const tc of llmResponse.toolCalls) {
+              assistantContent.push({
+                type: 'tool-call' as const,
+                toolCallId: tc.id,
+                toolName: tc.name,
+                input: tc.arguments ?? {},
+              });
+            }
+            stepHistory.push({ role: 'assistant' as const, content: assistantContent } as ModelMessage);
+          } else if (llmResponse.text) {
+            // Text-only assistant turn — plain string content is valid.
+            stepHistory.push({ role: 'assistant' as const, content: llmResponse.text } as ModelMessage);
           }
-          stepHistory.push(assistantMsg as ModelMessage);
 
-          // 2. Tool result messages — results from each executed tool
-          // Collected via toolResultsHistory (populated during execution loop above)
+          // 2. Tool result messages — results from each executed tool.
+          //    AI SDK v6 ToolResultPart requires `output` to be a typed
+          //    ToolResultOutput (`{ type: 'json', value }` / `{ type: 'text', value }`),
+          //    not a bare `result` value. A raw `result` field also fails schema
+          //    validation.
           if (toolResultsHistory.length > 0) {
             for (const tr of toolResultsHistory) {
               stepHistory.push({
@@ -720,7 +743,7 @@ export class PlanActVerifyOrchestrator {
                   type: 'tool-result' as const,
                   toolCallId: tr.toolCallId,
                   toolName: tr.toolName,
-                  result: tr.result,
+                  output: { type: 'json' as const, value: (tr.result ?? null) as any },
                 }],
               } as any);
             }
@@ -742,7 +765,14 @@ export class PlanActVerifyOrchestrator {
 
           if (!verificationResult.passed) {
             consecutiveVerificationFailures++;
-            yield { type: 'verification_failed', errors: verificationResult.errors };
+            yield {
+              type: 'verification_failed',
+              errors: (verificationResult.errors || []).map((e: any) => ({
+                file: e?.path || e?.file || 'unknown',
+                message: e?.error || e?.message || String(e),
+                suggestion: e?.suggestion,
+              })),
+            };
 
             if (consecutiveVerificationFailures >= MAX_VERIFICATION_FAILURES) {
               yield { type: 'warning', message: `Aborting due to ${MAX_VERIFICATION_FAILURES} consecutive verification failures.` };
@@ -881,7 +911,10 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
             '- workspace_graph_diagnostic: Trace a specific service\x27s issues to root causes (port conflicts, crashed processes, stale snapshots).\n' +
             '- workspace_graph_find_process: Search for processes by command pattern across the workspace.\n' +
             'Use these tools to inspect and verify workspace health before and after making changes.',
-          maxSteps: 3,
+          // Note: AI SDK v6 removed `maxSteps` from generateText options (it is
+          // ignored at runtime and fails the type check). Multi-step execution
+          // is handled by this orchestrator's own plan-step loop, so a single
+          // generation per call is intentional here.
           maxOutputTokens: 4000,
           temperature: 0.2,
         });
@@ -940,7 +973,7 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
           system:
             'You are an autonomous AI coding agent.' +
             '\n\n' + CHOOSE_ROLE_DIRECTIVE,
-          maxSteps: 1,
+          // `maxSteps` is not a valid AI SDK v6 option (see note above).
           maxOutputTokens: 4000,
           temperature: 0.2,
         });

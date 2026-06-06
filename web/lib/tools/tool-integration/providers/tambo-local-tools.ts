@@ -2,9 +2,9 @@ import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-s
 import { groupGrepOutput, filterOutput, summarizeCode, estimateTokens } from '@/lib/context/rtk-integration';
 
 // NOTE: Tambo local tools are for server-side tool execution without persistent sessions.
-// Using 'anon:public' for unauthenticated requests is acceptable for development/public use.
+// For unauthenticated requests, a unique anonymous ID is generated per-execution
+// to provide user isolation without requiring authentication.
 // For persistent user sessions, callers should provide authContextUserId.
-const DEFAULT_OWNER = 'anon:public';
 
 /**
  * SECURITY: Get owner from authenticated context, NOT user input
@@ -20,9 +20,9 @@ function getSecureOwner(providedOwnerId: string | undefined, authContextUserId?:
     return `user:${authContextUserId}`;
   }
   
-  // Fallback to anonymous only if no auth context provided
-  // This should only happen in development or for public resources
-  return DEFAULT_OWNER;
+  // Fallback to a unique per-execution anonymous ID for user isolation
+  // Each unauthenticated call gets its own isolated workspace
+  return `anon:tool-${crypto.randomUUID()}`;
 }
 
 export const tamboLocalTools = {

@@ -79,63 +79,33 @@ export function stripRoutingMarkers(responseText: string): string {
 
   let cleaned = responseText;
 
-  // 1. Remove [ROLE_SELECT] or legacy [ROUTING_METADATA] blocks with balanced JSON
-  const markers = ['[ROLE_SELECT]', '[ROUTING_METADATA]'];
-  for (const marker of markers) {
-    const markerIndex = cleaned.indexOf(marker);
-    if (markerIndex !== -1) {
-      // Find start of JSON object following the marker
-      const afterMarker = cleaned.slice(markerIndex + marker.length);
-      const startBrace = afterMarker.indexOf('{');
-      
-      if (startBrace !== -1) {
-        let depth = 0;
-        let endBraceIndex = -1;
-        // Search for balanced closing brace
-        for (let i = startBrace; i < afterMarker.length; i++) {
-          if (afterMarker[i] === '{') depth++;
-          else if (afterMarker[i] === '}') {
-            depth--;
-            if (depth === 0) {
-              endBraceIndex = i;
-              break;
-            }
-          }
-        }
-        
-        if (endBraceIndex !== -1) {
-          // Found a complete JSON block
-          const before = cleaned.slice(0, markerIndex);
-          const after = afterMarker.slice(endBraceIndex + 1);
-          
-          // Check if there was a ### header before the marker and remove it too
-          const headerRegex = /###?\s*$/;
-          const cleanedBefore = before.replace(headerRegex, '');
-          
-          cleaned = cleanedBefore + after;
-        }
-      }
-    }
-  }
-
-  // 2. Fallback: Remove stand-alone markers and simple JSON blocks if balanced search failed
-  // Use extractFirstJsonObject to robustly handle JSON instead of brittle regex
-  const legacyMatch = cleaned.match(/\[(?:ROUTING_METADATA|ROLE_SELECT)\]/);
-  if (legacyMatch && legacyMatch.index !== undefined) {
-    const jsonBlock = extractFirstJsonObject(cleaned.slice(legacyMatch.index));
+  // Remove ALL [ROLE_SELECT]/[ROUTING_METADATA] markers and their associated JSON blocks.
+  // A single while loop handles multiple occurrences. The per-marker for-loop was
+  // redundant because the while loop covers all cases.
+  const markerRegex = /\[(?:ROUTING_METADATA|ROLE_SELECT)\]/;
+  let markerMatch;
+  while ((markerMatch = cleaned.match(markerRegex)) !== null) {
+    if (markerMatch.index === undefined) break;
+    const jsonBlock = extractFirstJsonObject(cleaned.slice(markerMatch.index));
     if (jsonBlock) {
-      // Find the header if it exists
-      const beforeMarker = cleaned.slice(0, legacyMatch.index);
+      const beforeMarker = cleaned.slice(0, markerMatch.index);
       const headerRegex = /###?\s*$/;
       const cleanedBefore = beforeMarker.replace(headerRegex, '');
       
-      const afterJsonIndex = cleaned.indexOf(jsonBlock, legacyMatch.index) + jsonBlock.length;
+      const afterJsonIndex = cleaned.indexOf(jsonBlock, markerMatch.index) + jsonBlock.length;
       let afterJson = cleaned.slice(afterJsonIndex);
       
       // Remove trailing code fences if present
       afterJson = afterJson.replace(/^\s*```?\s*/, '');
       
       cleaned = cleanedBefore + afterJson;
+    } else {
+      // JSON extraction failed — still strip the marker text so it doesn't leak to users
+      const beforeMarker = cleaned.slice(0, markerMatch.index);
+      const afterMarker = cleaned.slice(markerMatch.index + markerMatch[0].length);
+      const headerRegex = /###?\s*$/;
+      const cleanedBefore = beforeMarker.replace(headerRegex, '');
+      cleaned = cleanedBefore + afterMarker;
     }
   }
 
@@ -164,8 +134,8 @@ const DEFAULT_ROUTING: RoutingMetadata = {
  * Extract and parse [ROLE_SELECT] from an LLM response.
  */
 export function parseFirstResponseRouting(responseText: string): ParsedRouting {
-  if (!responseText) {
-    return { found: false, error: 'Empty response' };
+  if (!responseText || typeof responseText !== 'string') {
+    return { found: false, error: 'Empty or non-string response' };
   }
 
   // Support both new and legacy markers; pick the earliest occurrence
@@ -315,6 +285,7 @@ export function routingToRoleRedirectSection(routing: RoutingMetadata): string {
  * Generate a continuation prompt for the next step in the plan.
  */
 export function generateStepReprompt(routing: RoutingMetadata, stepIndex: number): string {
+  if (!routing.planSteps || !Array.isArray(routing.planSteps)) return '';
   const step = routing.planSteps[stepIndex];
   if (!step) return '';
 

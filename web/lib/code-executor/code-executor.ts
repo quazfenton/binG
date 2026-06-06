@@ -48,6 +48,10 @@ export interface CodeExecutionRequest {
   stdin?: string;
   timeout?: number;
   sandboxId?: string;
+  /** Workspace ID for loading workspace-scoped environment variables */
+  workspaceId?: string;
+  /** User ID for loading workspace-scoped environment variables */
+  userId?: string;
 }
 
 export interface CodeExecutionResult {
@@ -77,7 +81,7 @@ function detectDangerousPatterns(code: string): string[] {
  * Execute code in specified language
  */
 export async function executeCode(request: CodeExecutionRequest): Promise<CodeExecutionResult> {
-  const { code, language, stdin, timeout = 10000 } = request;
+  const { code, language, stdin, timeout = 10000, workspaceId, userId } = request;
   const startTime = Date.now();
 
   try {
@@ -106,11 +110,11 @@ export async function executeCode(request: CodeExecutionRequest): Promise<CodeEx
     switch (language) {
       case 'javascript':
       case 'typescript':
-        result = await executeJavaScript(code, timeout);
+        result = await executeJavaScript(code, timeout, workspaceId, userId);
         break;
       
       case 'python':
-        result = await executePython(code, stdin, timeout);
+        result = await executePython(code, stdin, timeout, workspaceId, userId);
         break;
       
       case 'html':
@@ -123,7 +127,7 @@ export async function executeCode(request: CodeExecutionRequest): Promise<CodeEx
         break;
       
       case 'bash':
-        result = await executeBash(code, timeout);
+        result = await executeBash(code, timeout, workspaceId, userId);
         break;
       
       case 'json':
@@ -160,15 +164,19 @@ export async function executeCode(request: CodeExecutionRequest): Promise<CodeEx
  * Falls back to returning a "sandbox unavailable" message rather than
  * falling back to insecure eval().
  */
-async function executeJavaScript(code: string, timeout: number): Promise<CodeExecutionResult> {
+async function executeJavaScript(code: string, timeout: number, workspaceId?: string, userId?: string): Promise<CodeExecutionResult> {
   const startTime = Date.now();
   
   try {
+    // Load workspace environment variables if context is available
+    const envVars = await loadWorkspaceEnv(workspaceId, userId);
+
     // Attempt sandbox-based execution
     const { executeInSandbox } = await import('@/lib/sandbox/code-executor');
     
     const result = await executeInSandbox(code, 'javascript', {
       timeout: Math.min(timeout, 30000), // Hard cap at 30s
+      envVars,
     });
 
     return {
@@ -195,17 +203,38 @@ async function executeJavaScript(code: string, timeout: number): Promise<CodeExe
 }
 
 /**
+ * Load workspace-scoped environment variables for code snippet execution.
+ * Best-effort — returns undefined on any failure or if context is missing.
+ */
+async function loadWorkspaceEnv(workspaceId?: string, userId?: string): Promise<Record<string, string> | undefined> {
+  if (!workspaceId || !userId) return undefined;
+  try {
+    const { getWorkspaceRuntime } = await import('@/lib/terminal/workspace-runtime-service');
+    // workspaceId may already be the canonical form "userId:conversationId" or a bare ID
+    const canonicalId = workspaceId.includes(':') ? workspaceId : `${userId}:${workspaceId}`;
+    const runtime = getWorkspaceRuntime(canonicalId, userId);
+    const env = runtime.getAllEnv();
+    return Object.keys(env).length > 0 ? env : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Execute Python code via sandbox provider
  */
-async function executePython(code: string, stdin: string | undefined, timeout: number): Promise<CodeExecutionResult> {
+async function executePython(code: string, stdin: string | undefined, timeout: number, workspaceId?: string, userId?: string): Promise<CodeExecutionResult> {
   const startTime = Date.now();
 
   try {
+    const envVars = await loadWorkspaceEnv(workspaceId, userId);
+
     const { executeInSandbox } = await import('@/lib/sandbox/code-executor');
     
     const result = await executeInSandbox(code, 'python', {
       input: stdin,
       timeout: Math.min(timeout, 30000),
+      envVars,
     });
 
     return {
@@ -283,7 +312,7 @@ async function executeSQL(code: string, timeout: number): Promise<CodeExecutionR
 /**
  * Execute Bash command via sandbox provider
  */
-async function executeBash(code: string, timeout: number): Promise<CodeExecutionResult> {
+async function executeBash(code: string, timeout: number, workspaceId?: string, userId?: string): Promise<CodeExecutionResult> {
   const startTime = Date.now();
 
   try {
@@ -300,11 +329,15 @@ async function executeBash(code: string, timeout: number): Promise<CodeExecution
       }
     }
 
+    // Load workspace environment variables if context is available
+    const envVars = await loadWorkspaceEnv(workspaceId, userId);
+
     // Attempt sandbox-based execution
     const { executeInSandbox } = await import('@/lib/sandbox/code-executor');
     
     const result = await executeInSandbox(code, 'bash', {
       timeout: Math.min(timeout, 30000),
+      envVars,
     });
 
     return {

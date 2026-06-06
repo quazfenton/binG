@@ -55,7 +55,11 @@ const MAX_WEIGHTED_HISTORY = 20;
 const trackers: Map<string, SuccessiveTracker> = new Map();
 
 /**
- * Get or create tracker for session
+ * Get or create tracker for session.
+ *
+ * IMPORTANT: This function has a side effect — it resets counters that have
+ * expired outside the time window. If you only need to READ the state without
+ * mutation, use `getTrackerReadOnly()` instead.
  */
 export function getTracker(sessionId: string): SuccessiveTracker {
   let tracker = trackers.get(sessionId);
@@ -87,6 +91,14 @@ export function getTracker(sessionId: string): SuccessiveTracker {
   }
   
   return tracker;
+}
+
+/**
+ * Read-only snapshot of tracker state — no side effects (won't reset counters).
+ * Returns undefined if no tracker exists for the session.
+ */
+export function getTrackerReadOnly(sessionId: string): SuccessiveTracker | undefined {
+  return trackers.get(sessionId);
 }
 
 /**

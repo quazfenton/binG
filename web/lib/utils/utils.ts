@@ -180,11 +180,15 @@ export function buildApiHeaders(options?: { json?: boolean }): Record<string, st
  * This function normalizes all these formats to 'anon:xxx' format for consistency.
  * 
  * @param ownerId - The ownerId to normalize
- * @param fallback - Fallback value if ownerId is falsy (default: 'anon:public')
+ * @param fallback - Optional fallback if ownerId is falsy (default: throws if ownerId is empty)
  * @returns Normalized ownerId in 'anon:xxx' format
+ * @throws If ownerId is falsy and no fallback provided, or if ownerId is 'anonymous'
  */
-export function normalizeOwnerId(ownerId: string | undefined | null | false, fallback: string = 'anon:public'): string {
-  if (!ownerId) return fallback;
+export function normalizeOwnerId(ownerId: string | undefined | null | false, fallback?: string): string {
+  if (!ownerId) {
+    if (fallback) return fallback;
+    throw new Error('VFS ownerId is required. Callers must provide a valid ownerId via resolveFilesystemOwner().');
+  }
   
   // 'anon_timestamp_random' -> 'anon:timestamp_random'
   if (ownerId.startsWith('anon_')) {
@@ -196,9 +200,9 @@ export function normalizeOwnerId(ownerId: string | undefined | null | false, fal
     return ownerId.replace(/^anon\$/, 'anon:');
   }
   
-  // 'anonymous' -> 'anon:public'
+  // 'anonymous' is not a valid ownerId — it must be resolved via resolveFilesystemOwner()
   if (ownerId === 'anonymous') {
-    return 'anon:public';
+    throw new Error('"anonymous" is not a valid VFS ownerId. Use resolveFilesystemOwner() to generate a unique anonymous session ID.');
   }
   
   return ownerId;

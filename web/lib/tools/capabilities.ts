@@ -1938,6 +1938,59 @@ export const WORKFLOW_REQUEST_APPROVAL_CAPABILITY: CapabilityDefinition = {
 };
 
 // ============================================================================
+// Workspace Runtime State Capability
+// ============================================================================
+
+/**
+ * Workspace Runtime State — AI-agent queryable view of everything running
+ * in the workspace: processes, services (daemons), preview URLs, and
+ * workspace-scoped environment variables.
+ *
+ * Combines data from:
+ *   - VirtualPidRegistry (processes)
+ *   - WorkspaceServiceManager (services/daemons)
+ *   - WorkspacePreviewRegistry (preview URLs)
+ *   - WorkspaceRuntimeService (env vars + aggregate)
+ *
+ * Use this instead of scraping terminal output with `ps`, `netstat`, or `env`.
+ */
+export const WORKSPACE_RUNTIME_STATE_CAPABILITY: CapabilityDefinition = {
+  id: 'workspace.runtime_state',
+  name: 'Workspace Runtime State',
+  category: 'sandbox',
+  description: 'Get the full runtime state of a workspace: running processes, ' +
+    'daemon services (dev servers, databases, build watchers), detected ports ' +
+    'with preview URLs, and workspace-scoped environment variables. ' +
+    'Returns structured JSON suitable for AI agent consumption. ' +
+    'Use instead of scraping terminal output with ps, netstat, or env.',
+  inputSchema: z.object({
+    workspaceId: z.string().optional()
+      .describe('Workspace identifier (userId:conversationId). Defaults to current context.'),
+  }),
+  outputSchema: z.object({
+    workspaceId: z.string(),
+    userId: z.string(),
+    processes: z.array(z.any()),
+    services: z.array(z.any()),
+    previews: z.array(z.any()),
+    env: z.record(z.string()),
+    stats: z.object({
+      processCount: z.number(),
+      serviceCount: z.number(),
+      runningCount: z.number(),
+      previewCount: z.number(),
+    }),
+  }),
+  providerPriority: ['workspace-analysis'],
+  tags: ['workspace', 'runtime', 'state', 'processes', 'services', 'previews', 'env'],
+  metadata: {
+    latency: 'low',
+    cost: 'low',
+    reliability: 0.99,
+  },
+};
+
+// ============================================================================
 // Export All Capabilities
 // ============================================================================
 
@@ -2773,6 +2826,8 @@ export const ALL_CAPABILITIES: CapabilityDefinition[] = [
   PROJECT_DEPENDENCIES_CAPABILITY,
   PROJECT_STRUCTURE_CAPABILITY,
   // Workspace Graph (AI-native state querying)
+  // Workspace Runtime State (AI-agent queryable workspace state)
+  WORKSPACE_RUNTIME_STATE_CAPABILITY,
   WORKSPACE_CAS_STATS_CAPABILITY,
   // Workspace Affinity (Phase 6 — Workspace-to-provider binding with TTL)
   WORKSPACE_AFFINITY_STATS_CAPABILITY,

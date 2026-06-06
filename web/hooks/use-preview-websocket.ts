@@ -76,6 +76,11 @@ export function usePreviewWebsocket(
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectAttemptsRef = useRef(0);
+  // Set to true when the dev server is plain `next dev` (Turbopack) and
+  // therefore does not install server.ts's /ws/previews upgrade handler.
+  // We detect this on first failed connect and stop retrying forever to
+  // avoid the per-second `Event stream error` spam in the browser console.
+  const unsupportedRef = useRef(false);
   const maxReconnectAttempts = 10;
   const baseReconnectDelay = 3000; // Start at 3s, exponential backoff
 
@@ -110,6 +115,8 @@ export function usePreviewWebsocket(
   }, []);
 
   const connect = useCallback(() => {
+    if (unsupportedRef.current) return; // Server doesn't support /ws/previews
+
     // Clean up previous connection
     if (reconnectTimerRef.current) {
       clearTimeout(reconnectTimerRef.current);
@@ -205,20 +212,42 @@ export function usePreviewWebsocket(
         setConnected(false);
         callbacksRef.current.onConnectionChange?.(false);
 
-        console.log('[PreviewWS] Disconnected', {
-          code: event.code,
-          reason: event.reason,
-          wasClean: event.wasClean,
-        });
+        if (process.env.NODE_ENV === 'development') {
+          console.log('[PreviewWS] Disconnected', {
+            code: event.code,
+            reason: event.reason,
+            wasClean: event.wasClean,
+          });
+        }
 
         // Don't reconnect for intentional closes
         if (event.code === 1000 || event.code === 1001) return;
+
+        // Plain `next dev` (Turbopack) refuses the upgrade immediately
+        // with code 1006 / 1015. Stop retrying after the first instant
+        // failure so the browser console isn't spammed every 3s.
+        if (
+          reconnectAttemptsRef.current === 0 &&
+          (event.code === 1006 || event.code === 1015 || event.code === 1002)
+        ) {
+          unsupportedRef.current = true;
+          if (process.env.NODE_ENV === 'development') {
+            console.debug(
+              '[PreviewToast] /ws/previews unavailable in this dev mode. ' +
+              'Run `pnpm dev:ws` to enable preview WebSocket events. ' +
+              'Previews still register, but the live dashboard toast is disabled.',
+            );
+          }
+          return;
+        }
 
         // Auto-reconnect with exponential backoff
         if (reconnectAttemptsRef.current < maxReconnectAttempts) {
           reconnectAttemptsRef.current++;
           const delay = baseReconnectDelay * Math.pow(1.5, reconnectAttemptsRef.current - 1);
-          console.log(`[PreviewWS] Reconnecting in ${delay}ms (attempt ${reconnectAttemptsRef.current}/${maxReconnectAttempts})`);
+          if (process.env.NODE_ENV === 'development') {
+            console.log(`[PreviewWS] Reconnecting in ${delay}ms (attempt ${reconnectAttemptsRef.current}/${maxReconnectAttempts})`);
+          }
 
           reconnectTimerRef.current = setTimeout(() => {
             reconnectTimerRef.current = null;
@@ -230,8 +259,12 @@ export function usePreviewWebsocket(
       };
 
       ws.onerror = () => {
-        // onclose will fire after this
-        callbacksRef.current.onError?.('WebSocket connection error');
+        // onclose will fire after this. Suppress the per-attempt error log
+        // when the server is known to not support the path; onclose flips
+        // unsupportedRef in that case.
+        if (!unsupportedRef.current) {
+          callbacksRef.current.onError?.('WebSocket connection error');
+        }
       };
     } catch (e: any) {
       console.error('[PreviewWS] Failed to create WebSocket:', e.message);

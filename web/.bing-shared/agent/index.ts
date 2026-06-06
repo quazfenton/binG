@@ -401,6 +401,28 @@ export {
   type PlanStep,
 } from './first-response-routing';
 
+// Unified Role Selector — Single entry point across ALL prompt sets
+// Replaces ad-hoc role picking in callers (notably /api/chat) and the
+// misleadingly named `getAllPrompts()` in the supplementary file.
+export {
+  getAllRoleIds,
+  getAllRolePrompts,
+  getRoleSource,
+  pickRoleFromContext,
+  composeUnifiedRolePrompt,
+  selectAndComposeSystemPrompt,
+  normalizeAndValidateRole,
+  type UnifiedRole,
+  type UnifiedRoleInfo,
+  type RoleSource,
+  type PickRoleOptions,
+  type ComposeUnifiedOptions,
+  type SelectAndComposeOptions,
+  type SelectAndComposeResult,
+  type ValidateAndNormalizeResult,
+  type ValidateAndNormalizeOptions,
+} from './unified-role-selector';
+
 export {
   tryRepairJson,
   extractFirstJsonObject,

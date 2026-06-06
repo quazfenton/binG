@@ -109,12 +109,16 @@ export async function registerBuiltInCapabilities(registry: ToolRegistry): Promi
       capability: 'workspace.bundle',
       provider: 'context-pack',
       handler: async (args: any, context: any) => {
-        // Normalize ownerId: 'anonymous' -> 'anon:public', 'anon_timestamp' -> 'anon:timestamp'
-        let ownerId = (typeof context.userId === 'string' ? context.userId : 'anon:public');
-        if (ownerId.startsWith('anon_')) {
-          ownerId = ownerId.replace(/^anon_/, 'anon:');
-        } else if (ownerId === 'anonymous') {
-          ownerId = 'anon:public';
+        // Validate ownerId — must be a non-empty string from authenticated context.
+        // SECURITY: Never default to a shared fallback like 'anon:public'.
+        const rawOwnerId = context.userId;
+        if (typeof rawOwnerId !== 'string' || !rawOwnerId.trim()) {
+          throw new Error('VFS operations require a valid userId in context. Use resolveFilesystemOwner() to provide one.');
+        }
+        // Normalize format: 'anon_xxx' → 'anon:xxx'
+        const ownerId = rawOwnerId.startsWith('anon_') ? rawOwnerId.replace(/^anon_/, 'anon:') : rawOwnerId;
+        if (ownerId === 'anonymous') {
+          throw new Error('"anonymous" is not a valid VFS ownerId. Use resolveFilesystemOwner() to generate a unique anonymous session ID.');
         }
         const rootPath = args.path || '/';
         return await contextPackService.generateContextPack(ownerId, rootPath, {

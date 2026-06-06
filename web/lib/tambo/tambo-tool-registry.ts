@@ -156,8 +156,13 @@ export function initializeDefaultTools(): void {
 
   // NOTE: Tambo tools are used by AI agents which don't have persistent sessions.
   // For mutating operations (write, delete), ownerId is REQUIRED to prevent cross-session pollution.
-  // For read-only operations, a shared anon workspace is acceptable.
-  const ANON_READONLY_OWNER = 'anon:public';
+  // For read-only operations, a unique anonymous ID is generated per-execution
+  // to provide user isolation without requiring authentication.
+  function generateTamboOwnerId(providedOwnerId?: string): string {
+    if (providedOwnerId) return providedOwnerId;
+    // Each anonymous session gets its own isolated workspace
+    return `anon:tambo-${crypto.randomUUID()}`;
+  }
 
   // Filesystem tools (using API routes for server-side execution)
   tamboToolRegistry.registerMany([
@@ -166,7 +171,7 @@ export function initializeDefaultTools(): void {
       description: 'Read a file from the virtual filesystem',
       inputSchema: z.object({
         path: z.string().describe('File path to read'),
-        ownerId: z.string().optional().describe('Owner ID for persistent sessions (defaults to shared anon:public for agent contexts)'),
+        ownerId: z.string().optional().describe('Owner ID for persistent sessions (generates unique anonymous fallback for agent contexts)'),
       }),
       outputSchema: z.object({
         path: z.string(),
@@ -175,7 +180,7 @@ export function initializeDefaultTools(): void {
         version: z.number(),
       }),
       tool: async ({ path, ownerId }: { path: string; ownerId?: string }) => {
-        const owner = ownerId || ANON_READONLY_OWNER;
+        const owner = generateTamboOwnerId(ownerId);
         const response = await fetch('/api/filesystem/read', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -210,8 +215,8 @@ export function initializeDefaultTools(): void {
         size: z.number(),
       }),
       tool: async ({ path, content, ownerId }: { path: string; content: string; ownerId: string }) => {
-        if (!ownerId || ownerId === ANON_READONLY_OWNER) {
-          throw new Error('ownerId is required for write operations');
+        if (!ownerId || ownerId.startsWith('anon:tambo-')) {
+          throw new Error('a valid ownerId is required for write operations (anonymous fallback not allowed)');
         }
         const owner = ownerId;
         const response = await fetch('/api/filesystem/write', {
@@ -240,7 +245,7 @@ export function initializeDefaultTools(): void {
       description: 'List contents of a directory',
       inputSchema: z.object({
         path: z.string().optional().describe('Directory path (defaults to root)'),
-        ownerId: z.string().optional().describe('Owner ID for persistent sessions (defaults to shared anon:public for agent contexts)'),
+        ownerId: z.string().optional().describe('Owner ID for persistent sessions (generates unique anonymous fallback for agent contexts)'),
       }),
       outputSchema: z.object({
         path: z.string(),
@@ -251,7 +256,7 @@ export function initializeDefaultTools(): void {
         })),
       }),
       tool: async ({ path, ownerId }: { path?: string; ownerId?: string }) => {
-        const owner = ownerId || ANON_READONLY_OWNER;
+        const owner = generateTamboOwnerId(ownerId);
         const queryParams = new URLSearchParams({ path: path || 'workspace', ownerId: owner });
         const response = await fetch(`/api/filesystem/list?${queryParams.toString()}`);
         const result = await response.json();
@@ -281,8 +286,8 @@ export function initializeDefaultTools(): void {
         deletedCount: z.number(),
       }),
       tool: async ({ path, ownerId }: { path: string; ownerId: string }) => {
-        if (!ownerId || ownerId === ANON_READONLY_OWNER) {
-          throw new Error('ownerId is required for delete operations');
+        if (!ownerId || ownerId.startsWith('anon:tambo-')) {
+          throw new Error('a valid ownerId is required for delete operations (anonymous fallback not allowed)');
         }
         const owner = ownerId;
         const response = await fetch('/api/filesystem/delete', {
@@ -307,7 +312,7 @@ export function initializeDefaultTools(): void {
       inputSchema: z.object({
         query: z.string().describe('Search query'),
         path: z.string().optional().describe('Limit search to this path'),
-        ownerId: z.string().optional().describe('Owner ID for persistent sessions (defaults to shared anon:public for agent contexts)'),
+        ownerId: z.string().optional().describe('Owner ID for persistent sessions (generates unique anonymous fallback for agent contexts)'),
       }),
       outputSchema: z.object({
         results: z.array(z.object({
@@ -318,7 +323,7 @@ export function initializeDefaultTools(): void {
         })),
       }),
       tool: async ({ query, path, ownerId }: { query: string; path?: string; ownerId?: string }) => {
-        const owner = ownerId || ANON_READONLY_OWNER;
+        const owner = generateTamboOwnerId(ownerId);
         const queryParams = new URLSearchParams({ q: query, path: path || 'workspace', ownerId: owner });
         const response = await fetch(`/api/filesystem/search?${queryParams.toString()}`);
         const result = await response.json();

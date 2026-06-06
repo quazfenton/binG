@@ -512,7 +512,10 @@ const _defaultToolWeights: Record<string, Record<string, number>> = {
 };
 
 // Mutable tool weights registry for dynamic extension
-let _toolWeights: Record<string, Record<string, number>> = { ..._defaultToolWeights };
+// DEEP clone to avoid mutating _defaultToolWeights when getToolWeights returns references
+let _toolWeights: Record<string, Record<string, number>> = Object.fromEntries(
+  Object.entries(_defaultToolWeights).map(([key, val]) => [key, { ...val }])
+);
 
 /**
  * Register tool weights for a role (extend or override defaults)
@@ -530,7 +533,9 @@ export function registerToolWeights(role: string, weights: Record<string, number
  * Get tool weights for a role (with fallback to defaults)
  */
 export function getToolWeights(role: string): Record<string, number> {
-  return _toolWeights[role] || _defaultToolWeights[role] || {};
+  // Return a shallow copy so callers cannot accidentally mutate the registry
+  const weights = _toolWeights[role] || _defaultToolWeights[role];
+  return weights ? { ...weights } : {};
 }
 
 export function suggestToolsForRole(

@@ -702,7 +702,78 @@ server.registerTool(
 );
 
 // ============================================================================
-// 7. MULTI-AGENT TOOLS (existing registrations)
+// 7. WORKSPACE GRAPH (delegates to workspace-graph provider)
+// ============================================================================
+
+server.registerTool(
+  'workspace.graph',
+  {
+    description: 'Get the full workspace graph — a structured, queryable view of all workspace state. ' +
+      'Returns processes, services, ports, previews, snapshots, and images as typed nodes with ' +
+      'relationship edges and derived diagnostics. Use instead of scraping terminal output.',
+    inputSchema: {
+      workspaceId: z.string().optional().describe('Workspace ID (defaults to current)'),
+    },
+  },
+  async ({ workspaceId }) => {
+    logger.debug('workspace.graph requested', { workspaceId });
+    const result = await executeCapability({
+      capabilityId: 'workspace.graph',
+      input: { workspaceId },
+      userId: MCP_USER_ID,
+    });
+    return result.isError
+      ? { content: result.content, isError: true }
+      : formatSuccess((result as any).data || result);
+  }
+);
+
+server.registerTool(
+  'workspace.graph_diagnostic',
+  {
+    description: 'Get a focused diagnostic trace for a specific service. ' +
+      'Traces service → port → preview → process chain to find root causes.',
+    inputSchema: {
+      serviceId: z.string().describe('Service ID to diagnose'),
+    },
+  },
+  async ({ serviceId }) => {
+    logger.debug('workspace.graph_diagnostic requested', { serviceId });
+    const result = await executeCapability({
+      capabilityId: 'workspace.graph_diagnostic',
+      input: { serviceId },
+      userId: MCP_USER_ID,
+    });
+    return result.isError
+      ? { content: result.content, isError: true }
+      : formatSuccess((result as any).data || result);
+  }
+);
+
+server.registerTool(
+  'workspace.graph_find_process',
+  {
+    description: 'Search for processes by command pattern across the workspace. ' +
+      'Returns matching processes plus their related services, ports, and previews.',
+    inputSchema: {
+      pattern: z.string().describe('Command pattern to search for (e.g., "node", "npm", "python")'),
+    },
+  },
+  async ({ pattern }) => {
+    logger.debug('workspace.graph_find_process requested', { pattern });
+    const result = await executeCapability({
+      capabilityId: 'workspace.graph_find_process',
+      input: { pattern },
+      userId: MCP_USER_ID,
+    });
+    return result.isError
+      ? { content: result.content, isError: true }
+      : formatSuccess((result as any).data || result);
+  }
+);
+
+// ============================================================================
+// 8. MULTI-AGENT TOOLS (existing registrations)
 // ============================================================================
 
 try {

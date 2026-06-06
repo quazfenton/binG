@@ -57,6 +57,11 @@ export class ArcadeService {
   private config: ArcadeConfig;
   private client: any = null;
   private initialized = false;
+  // Set true after the first 401 from the Arcade API. We stop attempting
+  // remote calls (which would just keep returning 401) and surface a clear
+  // warning instead, so the rest of the app keeps working.
+  private disabled = false;
+  private disabledReason: string | null = null;
   private connections = new Map<string, ArcadeConnection>();
   private tools = new Map<string, ArcadeTool>();
 
@@ -134,6 +139,10 @@ export class ArcadeService {
     tags?: string[];
     limit?: number;
   }): Promise<ArcadeTool[]> {
+    if (this.disabled) {
+      return [];
+    }
+
     await this.initialize();
 
     try {
@@ -143,14 +152,35 @@ export class ArcadeService {
       }
 
       const cacheKey = filters?.toolkit ? `toolkit:${filters.toolkit}` : 'all';
-      
+
       if (this.client?.tools) {
         const options = {
           toolkit: filters?.toolkit,
           tags: filters?.tags,
           limit: filters?.limit,
         };
-        const tools = await this.client.tools.list(options);
+        let tools: any[];
+        try {
+          tools = await this.client.tools.list(options);
+        } catch (sdkError: any) {
+          // The Arcade SDK throws an error whose `status` (or `statusCode`)
+          // is the HTTP status from the upstream API. Treat 401 the same as
+          // the HTTP fallback path: disable the service and stop the noise.
+          const status = sdkError?.status ?? sdkError?.statusCode ?? sdkError?.response?.status;
+          if (status === 401) {
+            this.disabled = true;
+            this.disabledReason = 'Invalid API credentials';
+            arcadeServiceDisabled = true;
+            const maskedKey = `${this.config.apiKey.slice(0, 8)}...${this.config.apiKey.slice(-4)}`;
+            console.warn(
+              `[ArcadeService] Disabling: SDK returned 401 (key ${maskedKey}). ` +
+              `Set ARCADE_API_KEY to a valid key and restart the server to re-enable. ` +
+              `Local tools continue to work.`
+            );
+            return [];
+          }
+          throw sdkError;
+        }
         const mappedTools = tools.map((t: any) => ({
           name: t.name,
           description: t.description,
@@ -158,7 +188,7 @@ export class ArcadeService {
           inputSchema: t.input_schema || {},
           requiresAuth: t.requires_auth || false,
         }));
-        
+
         // Populate cache
         if (!filters) {
           this.tools.clear();
@@ -170,7 +200,7 @@ export class ArcadeService {
             this.tools.set(tool.name, tool);
           }
         }
-        
+
         return mappedTools;
       }
 
@@ -191,6 +221,22 @@ export class ArcadeService {
           'Authorization': `Bearer ${this.config.apiKey}`,
         },
       });
+
+      if (response.status === 401) {
+        // The API key is invalid/expired. Disable the service for the rest of
+        // the process lifetime so we don't keep paying the latency + log
+        // noise on every tool call.
+        this.disabled = true;
+        this.disabledReason = 'Invalid API credentials';
+        arcadeServiceDisabled = true;
+        const maskedKey = `${this.config.apiKey.slice(0, 8)}...${this.config.apiKey.slice(-4)}`;
+        console.warn(
+          `[ArcadeService] Disabling: API returned 401 (key ${maskedKey}). ` +
+          `Set ARCADE_API_KEY to a valid key and restart the server to re-enable. ` +
+          `Local tools continue to work.`
+        );
+        return [];
+      }
 
       if (!response.ok) {
         throw new Error(`Failed to get tools: ${response.statusText}`);
@@ -1108,11 +1154,22 @@ export function createArcadeService(config: ArcadeConfig): ArcadeService {
  * Singleton instance
  */
 let arcadeServiceInstance: ArcadeService | null = null;
+// Module-level disabled flag, set when the Arcade API returns 401 (invalid
+// key). Subsequent calls to `getArcadeService()` return null so the rest of
+// the app can short-circuit cleanly without paying the remote-call latency.
+let arcadeServiceDisabled = false;
+
+export function isArcadeServiceDisabled(): boolean {
+  return arcadeServiceDisabled;
+}
 
 /**
  * Get or create Arcade service instance
  */
 export function getArcadeService(): ArcadeService | null {
+  if (arcadeServiceDisabled) {
+    return null;
+  }
   if (!arcadeServiceInstance) {
     const apiKey = process.env.ARCADE_API_KEY?.trim();
     if (!apiKey) {
@@ -1133,6 +1190,9 @@ export function getArcadeService(): ArcadeService | null {
  * Initialize Arcade service
  */
 export function initializeArcadeService(config?: Partial<ArcadeConfig>): ArcadeService | null {
+  if (arcadeServiceDisabled) {
+    return null;
+  }
   if (arcadeServiceInstance) {
     return arcadeServiceInstance;
   }

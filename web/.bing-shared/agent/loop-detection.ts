@@ -177,20 +177,27 @@ export class LoopDetector {
   }
 
   /**
-   * Detect circular patterns in call history
+   * Detect circular patterns in call history.
+   * Checks for repeating sequences of length 2 through 4 over the last 2n calls.
    */
   private detectCircularPattern(): boolean {
     if (this.callHistory.length < 4) return false;
 
-    // Look for patterns like A-B-C-A-B-C
-    const last6 = this.callHistory.slice(-6);
-    if (last6.length < 6) return false;
+    const fingerprint = (r: ToolCallRecord) => `${r.toolName}:${r.argsHash}`;
 
-    const pattern = last6.map(r => `${r.toolName}:${r.argsHash}`).join(',');
-    const first3 = pattern.split(',').slice(0, 3).join(',');
-    const second3 = pattern.split(',').slice(3, 6).join(',');
+    // Try cycle lengths 2, 3, 4
+    for (const cycleLen of [2, 3, 4]) {
+      const needed = cycleLen * 2;
+      if (this.callHistory.length < needed) continue;
 
-    return first3 === second3;
+      const lastN = this.callHistory.slice(-needed);
+      const firstCycle = lastN.slice(0, cycleLen).map(fingerprint).join(',');
+      const secondCycle = lastN.slice(cycleLen, needed).map(fingerprint).join(',');
+
+      if (firstCycle === secondCycle) return true;
+    }
+
+    return false;
   }
 
   /**

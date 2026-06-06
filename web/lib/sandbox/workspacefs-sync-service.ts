@@ -27,7 +27,6 @@ import { createLogger } from '../utils/logger';
 import { virtualFilesystem } from '../virtual-filesystem/virtual-filesystem-service';
 import { sandboxFilesystemSync } from '../virtual-filesystem/sync/sandbox-filesystem-sync';
 import type { SandboxProviderType } from './providers';
-import type { SandboxHandle } from './providers/sandbox-provider';
 
 const logger = createLogger('Phase9:WorkspaceFSSync');
 
@@ -397,7 +396,7 @@ export class WorkspaceFSSyncService {
             switch (resolution) {
               case 'last-writer-wins':
                 // VFS is the last writer (we just exported) — VFS wins
-                if (file.lastModified && file.lastModified > Date.now() - 60000) {
+                if (file.lastModified && new Date(file.lastModified).getTime() > Date.now() - 60000) {
                   await sandboxBridge.writeFile(sandboxId, sandboxPath, file.content);
                   filesSynced++;
                   conflictsResolved++;

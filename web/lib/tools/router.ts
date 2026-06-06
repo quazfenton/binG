@@ -1618,11 +1618,18 @@ class RipgrepProvider implements CapabilityProvider {
       // Use VFS adapter that handles both desktop (native ripgrep) and web (VFS search)
       const { ripgrepVFS } = await import('@/lib/search/ripgrep-vfs-adapter');
       
-      // Normalize ownerId: 'anon_timestamp' -> 'anon:timestamp'
-      let ownerId = context.userId || 'anon:public';
-      if (ownerId.startsWith('anon_')) {
-        ownerId = ownerId.replace(/^anon_/, 'anon:');
+      // Validate ownerId — must be a non-empty string from authenticated context.
+      // SECURITY: Never default to a shared fallback like 'anon:public'.
+      const rawOwnerId = context.userId;
+      if (typeof rawOwnerId !== 'string' || !rawOwnerId.trim()) {
+        return { success: false, error: 'VFS operations require a valid userId in context. Use resolveFilesystemOwner() to provide one.' };
       }
+      // Normalize format: 'anon_xxx' → 'anon:xxx'
+      const ownerId = rawOwnerId.startsWith('anon_') ? rawOwnerId.replace(/^anon_/, 'anon:') : rawOwnerId;
+      if (ownerId === 'anonymous') {
+        return { success: false, error: '"anonymous" is not a valid VFS ownerId. Use resolveFilesystemOwner() to generate a unique anonymous session ID.' };
+      }
+
       const searchPath = input.path;
       const maxResults = input.maxResults || 50;
       const query = input.query;

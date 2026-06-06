@@ -29,11 +29,14 @@ export interface WebLocalPtyOptions {
   rows?: number;
   cwd?: string;
   shell?: string;
+  /** Callback fired when the isolation mode is received or updated via SSE reconnection */
+  onOracleIsolationUpdate?: (isolation: 'podman' | 'bwrap' | 'chroot' | 'docker' | 'shared-shell') => void;
 }
 
 export interface WebLocalPtyInstance {
   sessionId: string;
-  mode: string; // 'direct', 'unshare', 'docker', 'localhost'
+  mode: string; // 'direct', 'unshare', 'docker', 'oracle-vm'
+  oracleIsolation?: 'podman' | 'bwrap' | 'chroot' | 'docker' | 'shared-shell';
   isConnected: boolean;
   writeInput: (data: string) => Promise<void>;
   resize: (cols: number, rows: number) => Promise<void>;
@@ -124,9 +127,12 @@ export async function createWebLocalPty(
       return null;
     }
 
-    const { sessionId, mode } = await response.json();
-    logger.info('Local PTY session created', { sessionId, mode });
+    const data = await response.json();
+    const { sessionId, mode, isolation } = data;
+    logger.info('Local PTY session created', { sessionId, mode, isolation });
 
+    // Store oracleIsolation in a mutable variable so SSE reconnections can update it
+    let currentOracleIsolation = isolation as WebLocalPtyInstance['oracleIsolation'] | undefined;
     let outputCallback: ((data: string) => void) | null = null;
     let closeCallback: (() => void) | null = null;
     let eventSource: EventSource | null = null;
@@ -194,6 +200,14 @@ export async function createWebLocalPty(
             // Already handled during connection wait, but set flag again for safety
             everConnected = true;
             logger.info('Local PTY connected', { sessionId, mode });
+            // Extract isolation mode from SSE reconnection message to keep badge in sync
+            if (msg.data?.oracleIsolation && msg.data.oracleIsolation !== currentOracleIsolation) {
+              currentOracleIsolation = msg.data.oracleIsolation;
+              logger.info('Local PTY oracleIsolation updated via SSE', { sessionId, isolation: currentOracleIsolation });
+              if (options.onOracleIsolationUpdate) {
+                options.onOracleIsolationUpdate(msg.data.oracleIsolation);
+              }
+            }
             break;
 
           case 'pty':
@@ -262,6 +276,7 @@ export async function createWebLocalPty(
     return {
       sessionId,
       mode: mode || 'direct',
+      get oracleIsolation() { return currentOracleIsolation; },
       isConnected: true,
 
       writeInput: async (data: string) => {

@@ -51,3 +51,31 @@ export function initializeWorkspaceRuntime(db?: any): void {
     logger.warn('Workspace runtime DB table init skipped', { reason: error?.message });
   }
 }
+
+/**
+ * Initialize the Workspace Runtime Service for a specific workspace.
+ * Creates the runtime service, triggers DB hydration, and returns it.
+ * Safe to call multiple times — returns cached instance after first call.
+ *
+ * @param workspaceId - Uniquely identifies the workspace
+ * @param userId - The user who owns the workspace
+ * @returns The workspace runtime service instance
+ */
+export async function initializeWorkspaceRuntimeForUser(
+  workspaceId: string,
+  userId: string,
+): Promise<void> {
+  try {
+    const { getWorkspaceRuntime } = await import('./workspace-runtime-service');
+    const runtime = getWorkspaceRuntime(workspaceId, userId);
+    await runtime.hydrate();
+    logger.debug('Workspace runtime hydrated for user', {
+      workspaceId: workspaceId.slice(0, 16),
+    });
+  } catch (error: any) {
+    logger.warn('Failed to initialize workspace runtime for user', {
+      workspaceId: workspaceId.slice(0, 16),
+      error: error.message,
+    });
+  }
+}

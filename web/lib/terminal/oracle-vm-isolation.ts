@@ -198,6 +198,118 @@ export function buildDockerOnVMCommands(userId: string, sessionId: string): {
 }
 
 /**
+ * Build the remote setup commands for a rootless Podman isolated session.
+ *
+ * Rootless Podman provides full container isolation with cgroup resource limits,
+ * seccomp security profiles, and user namespace mapping — without requiring a
+ * root-privileged Docker daemon. Podman is daemonless and designed for rootless
+ * operation by default.
+ *
+ * Features:
+ *   - User namespace isolation (auto via rootless Podman)
+ *   - cgroup v2 resource limits: memory, CPU, PIDs
+ *   - Seccomp security profile (customizable via env var)
+ *   - Network isolation (--network none)
+ *   - No-new-privileges security opt
+ *   - Workspace bind-mount (read-write)
+ *   - Auto-cleanup on session end
+ *
+ * Configuration (via environment variables):
+ *   ORACLE_VM_PODMAN_MEMORY     — Memory limit (default: 512m)
+ *   ORACLE_VM_PODMAN_CPU        — CPU limit (default: 1)
+ *   ORACLE_VM_PODMAN_PIDS_LIMIT — Max processes (default: 100)
+ *   ORACLE_VM_PODMAN_IMAGE      — Container image (default: ubuntu:22.04)
+ *   ORACLE_VM_PODMAN_SECCOMP    — Custom seccomp profile path (optional)
+ *
+ * ## Seccomp Hardening
+ *
+ * A hardened seccomp profile is provided at the project root:
+ *   seccomp/hardened-podman.json
+ *
+ * This profile blocks ~65 dangerous syscalls including:
+ *   - mount/umount — Prevent filesystem mounting
+ *   - kexec_load, kexec_file_load — Prevent loading new kernels
+ *   - pivot_root — Prevent chroot container escapes
+ *   - init_module, finit_module, delete_module — Kernel module manipulation
+ *   - ptrace — Process debugging/tracing (common escape vector)
+ *   - bpf — Berkeley Packet Filter (CVE history in containers)
+ *   - io_uring_* — Async I/O subsystem (relatively new, CVE-prone)
+ *   - fanotify_* — Filesystem event monitoring (escape risk)
+ *   - unshare, setns — Namespace manipulation inside container
+ *   - seccomp — Prevent container from modifying its own filter
+ *   - personality — Execution domain (can break some tools like gcc -m32)
+ *   - perf_event_open — Performance monitoring exploitation
+ *   - userfaultfd — User-space page fault handling (used in some escapes)
+ *   - sethostname, setdomainname — System identity changes
+ *   - reboot, swapon, swapoff — System-level operations
+ *
+ * To use it, copy the profile to the Oracle VM and set the env var:
+ *   scp seccomp/hardened-podman.json opc@<vm>:/home/opc/seccomp/
+ *   export ORACLE_VM_PODMAN_SECCOMP=/home/opc/seccomp/hardened-podman.json
+ *
+ * Then restart the service. All new Podman sessions will apply the profile.
+ *
+ * NOTE: The `personality` syscall is blocked in the hardened profile.
+ * This prevents some cross-architecture execution (e.g., gcc -m32) and
+ * certain runtime code generators. If you encounter "Operation not permitted"
+ * from tools like gcc or JIT compilers, either:
+ *   - Remove "personality" from the blocked syscalls in the JSON, or
+ *   - Create a custom profile without it
+ *
+ * This replaces bwrap as the default isolation mode since it provides
+ * both namespace isolation AND resource enforcement.
+ */
+export function buildRootlessPodmanCommands(userId: string, sessionId: string): {
+  setupCommands: string[];
+  shellCommand: string;
+  workspacePath: string;
+  cleanupCommand: string;
+} {
+  const userWs = getOracleUserWorkspace(userId);
+  const safeWs = shellSafe(userWs);
+  const containerName = `pty-podman-${sessionId.slice(0, 12)}`;
+  const image = process.env.ORACLE_VM_PODMAN_IMAGE || 'ubuntu:22.04';
+  const memoryLimit = process.env.ORACLE_VM_PODMAN_MEMORY || '512m';
+  const cpuLimit = process.env.ORACLE_VM_PODMAN_CPU || '1';
+  const pidsLimit = process.env.ORACLE_VM_PODMAN_PIDS_LIMIT || '100';
+  const seccompProfile = process.env.ORACLE_VM_PODMAN_SECCOMP;
+
+  const seccompArgs = seccompProfile
+    ? `\\
+  --security-opt seccomp=${shellSafe(seccompProfile)}`
+    : '';
+
+  const setupCommands = [
+    `mkdir -p ${safeWs}`,
+    `chmod 700 ${safeWs}`,
+    // Ensure podman is available
+    `which podman >/dev/null 2>&1 || echo "PODMAN_NOT_FOUND"`,
+    // Remove any stale container from previous session
+    `podman rm -f ${containerName} 2>/dev/null || true`,
+    // Start rootless container with workspace bind-mount
+    `podman run -d --name ${containerName} \\`,
+    `  --memory ${memoryLimit} \\`,
+    `  --cpus ${cpuLimit} \\`,
+    `  --pids-limit ${pidsLimit} \\`,
+    `  --network none \\`,
+    `  --security-opt no-new-privileges \\`,
+    `  -v ${safeWs}:/workspace:Z \\`,
+    `  -w /workspace \\`,
+    `${seccompArgs}`,
+    `  ${image} \\`,
+    `  sleep infinity`,
+    // Verify container started
+    `sleep 1`,
+    `podman inspect -f '{{.State.Running}}' ${containerName} 2>/dev/null || echo "PODMAN_FAILED"`,
+  ];
+
+  const shellCommand = `podman exec -i ${containerName} /bin/bash -i`;
+  const cleanupCommand = `podman rm -f ${containerName} 2>/dev/null || true`;
+
+  return { setupCommands, shellCommand, workspacePath: '/workspace', cleanupCommand };
+}
+
+/**
  * Build the fallback shared-shell setup commands (original behavior).
  *
  * This is the least secure option — all users share the same workspace.

@@ -246,11 +246,20 @@ export class VirtualFilesystemService {
       throw new Error(`File not found: ${normalizedPath}`);
     }
 
-    // SECURITY FIX: Verify file ownership
-    // Each file is stored with its ownerId. If a file exists in the workspace but
-    // belongs to a different owner (e.g., from mock DB returning wrong owner data),
-    // we must reject the access to prevent cross-workspace data leakage.
-    if (file.ownerId && file.ownerId !== ownerId) {
+    // SECURITY: Unconditional ownership verification.
+    // Every file MUST track its owner. Files loaded from DB before the ownership
+    // tracking fix (pre-ownerId field) will have undefined ownerId — these are
+    // treated as unverifiable and rejected. Each file is stored with its ownerId
+    // on write (see writeFile). If a file exists in the workspace but belongs to
+    // a different owner, we must reject the access.
+    if (!file.ownerId) {
+      console.error(`[VFS] SECURITY: File has no ownerId — rejecting access to prevent cross-workspace data leakage`, {
+        requestingOwner: ownerId,
+        path: normalizedPath
+      });
+      throw new Error(`File not found: ${normalizedPath}`);
+    }
+    if (file.ownerId !== ownerId) {
       console.warn(`[VFS] SECURITY: Cross-workspace access blocked`, {
         requestingOwner: ownerId,
         fileOwner: file.ownerId,
@@ -1115,11 +1124,14 @@ export class VirtualFilesystemService {
   private sanitizeOwnerId(ownerId: string): string {
     const trimmed = (ownerId || '').trim();
     if (!trimmed) {
-      // WARNING: Empty ownerId should never happen if callers use resolveFilesystemOwner()
-      // Using generateSecureId would cause inconsistent workspace per-request
-      // Caller MUST provide a valid ownerId via resolveFilesystemOwner()
-      console.warn('[VFS] Empty ownerId — files will be written to anon:public workspace. Callers should use resolveFilesystemOwner() at the API route level to resolve the proper owner.');
-      return 'anon:public';
+      // SECURITY: Throw instead of falling back to a shared workspace.
+      // The shared 'anon:public' fallback was the root cause of cross-user
+      // data leakage (user-a writes, user-b reads the same file). Callers
+      // MUST provide a valid ownerId via resolveFilesystemOwner().
+      throw new Error(
+        'VFS ownerId is required. ' +
+        'Use resolveFilesystemOwner() at the API route level to provide a valid ownerId.'
+      );
     }
     if (trimmed.length > 256) return trimmed.slice(0, 256);
     return trimmed;

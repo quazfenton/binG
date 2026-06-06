@@ -204,4 +204,68 @@ describe('sanitizeMessages', () => {
     expect(out).toHaveLength(1);
     expect(out[0].role).toBe('user');
   });
+
+  // ── AI SDK v6 ModelMessage shape regressions ──────────────────────────────
+  // These guard against the exact failure that produced repeated
+  // "messages do not match the ModelMessage[] schema" errors followed by the
+  // no-tools plain-text fallback emitting an unparsed `choose_role(...)` reply.
+
+  it('folds legacy top-level assistant toolCalls into v6 tool-call content parts', () => {
+    const msgs = [
+      {
+        role: 'assistant' as const,
+        content: 'calling a tool',
+        toolCalls: [{ toolCallId: 'tc-1', toolName: 'choose_role', args: { role: 'reviewer' } }],
+      },
+    ];
+    const out = sanitizeMessages(msgs);
+    const asst: any = out.find((m: any) => m.role === 'assistant');
+    // No top-level toolCalls property in v6.
+    expect(asst.toolCalls).toBeUndefined();
+    expect(Array.isArray(asst.content)).toBe(true);
+    const textPart = asst.content.find((p: any) => p.type === 'text');
+    const callPart = asst.content.find((p: any) => p.type === 'tool-call');
+    expect(textPart).toEqual({ type: 'text', text: 'calling a tool' });
+    // ToolCallPart uses `input`, not `args`.
+    expect(callPart).toEqual({
+      type: 'tool-call',
+      toolCallId: 'tc-1',
+      toolName: 'choose_role',
+      input: { role: 'reviewer' },
+    });
+  });
+
+  it('converts OpenAI wire-format assistant tool_calls into v6 tool-call parts', () => {
+    const msgs = [
+      {
+        role: 'assistant' as const,
+        content: '',
+        tool_calls: [
+          { id: 'tc-2', type: 'function', function: { name: 'writeFile', arguments: '{"path":"/a.ts"}' } },
+        ],
+      },
+    ];
+    const out = sanitizeMessages(msgs);
+    const asst: any = out.find((m: any) => m.role === 'assistant');
+    expect(asst.toolCalls).toBeUndefined();
+    const callPart = (asst.content as any[]).find((p: any) => p.type === 'tool-call');
+    expect(callPart.toolCallId).toBe('tc-2');
+    expect(callPart.toolName).toBe('writeFile');
+    expect(callPart.input).toEqual({ path: '/a.ts' });
+  });
+
+  it('normalizes tool-result parts that use a bare `result` field into `output`', () => {
+    const msgs = [
+      {
+        role: 'tool' as const,
+        content: [{ type: 'tool-result', toolCallId: 'tc-3', toolName: 'choose_role', result: { success: false } }],
+      },
+    ];
+    const out = sanitizeMessages(msgs);
+    const toolMsg: any = out.find((m: any) => m.role === 'tool');
+    const part = (toolMsg.content as any[])[0];
+    expect(part.result).toBeUndefined();
+    expect(part.output).toEqual({ type: 'json', value: { success: false } });
+    expect(part.toolCallId).toBe('tc-3');
+  });
 });

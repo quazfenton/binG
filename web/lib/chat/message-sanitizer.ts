@@ -95,32 +95,57 @@ export function sanitizeMessages(messages: any[], options: SanitizeOptions = {})
 
       const result: any = { role, content };
 
-      // Preserve toolCalls on assistant messages
+      // Fold any tool calls into the assistant content array as AI SDK v6
+      // `tool-call` parts. v6 does NOT accept a top-level `toolCalls` property
+      // on assistant ModelMessages — tool calls must be expressed as content
+      // parts of the form `{ type: 'tool-call', toolCallId, toolName, input }`.
+      // Emitting the legacy v4 top-level `toolCalls` shape (or using `args`
+      // instead of `input`) triggers "messages do not match the ModelMessage[]
+      // schema" errors with strict provider adapters.
       if (role === 'assistant') {
         const tc = m?.tool_calls || m?.toolCalls;
         if (Array.isArray(tc) && tc.length > 0) {
-          // Normalize to CoreToolCall format ({toolCallId, toolName, args})
-          // regardless of whether input is OpenAI wire format or already
-          // normalized. This prevents ModelMessage[] schema validation
-          // failures with strict provider adapters.
-          result.toolCalls = tc.map((call: any) => {
-            if (!call) return call;
-            // Already in CoreToolCall format — pass through
-            if (call.toolCallId || call.toolName) return call;
-            // Convert from OpenAI {id, type: 'function', function: {name, arguments}}
-            let args: any = {};
-            if (typeof call.function?.arguments === 'string') {
-              try { args = JSON.parse(call.function.arguments); } catch { args = {}; }
-            } else {
-              args = call.function?.arguments || call.args || call.input || {};
-            }
-            return {
-              toolCallId: call.id || call.toolCallId,
-              toolName: call.function?.name || call.name || call.toolName,
-              args,
-            };
-          });
+          const toolCallParts = tc
+            .filter(Boolean)
+            .map((call: any) => {
+              // Convert from OpenAI {id, type:'function', function:{name, arguments}}
+              // or already-normalized CoreToolCall ({toolCallId, toolName, args/input}).
+              let input: any = {};
+              if (typeof call.function?.arguments === 'string') {
+                try { input = JSON.parse(call.function.arguments); } catch { input = {}; }
+              } else {
+                input = call.input ?? call.args ?? call.function?.arguments ?? {};
+              }
+              return {
+                type: 'tool-call' as const,
+                toolCallId: call.toolCallId || call.id || '',
+                toolName: call.toolName || call.function?.name || call.name || '',
+                input,
+              };
+            });
+
+          const existingParts: any[] = Array.isArray(result.content)
+            ? result.content
+            : (typeof result.content === 'string' && result.content.length > 0
+                ? [{ type: 'text' as const, text: result.content }]
+                : []);
+          result.content = [...existingParts, ...toolCallParts];
         }
+      }
+
+      // Normalize tool-role array content to the v6 ToolResultPart shape.
+      // ToolResultPart requires `output` to be a typed ToolResultOutput
+      // (`{ type: 'json'|'text', value }`); a bare `result`/`value` field on a
+      // `tool-result` part fails schema validation.
+      if (role === 'tool' && Array.isArray(result.content)) {
+        result.content = result.content.map((part: any) => {
+          if (part && part.type === 'tool-result' && part.output === undefined) {
+            const { result: rawResult, value: rawValue, ...rest } = part;
+            const raw = rawResult ?? rawValue ?? null;
+            return { ...rest, output: { type: 'json' as const, value: raw } };
+          }
+          return part;
+        });
       }
 
       // Preserve toolCallId on tool messages

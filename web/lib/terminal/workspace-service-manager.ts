@@ -454,7 +454,111 @@ export class WorkspaceServiceManager {
       runningCount: services.filter(s => s.status === 'running').length,
       crashedCount: services.filter(s => s.status === 'crashed').length,
     };
+  }  // ============================================================================
+  // DB Rehydration
+  // ============================================================================
+
+  /**
+   * Rehydrate in-memory service registry from the workspace_services DB table.
+   * Idempotent — safe to call multiple times. Only loads services for the
+   * given workspaceId. Existing in-memory services with the same ID are
+   * overwritten (DB wins on conflicts).
+   */
+  rehydrate(workspaceId: string): void {
+    try {
+      const { getDatabase } = require('@/lib/database/connection');
+      const db = getDatabase();
+      if (!db) return;
+
+      // Clear existing in-memory entries to prevent stale data accumulation
+      let registry = this.registries.get(workspaceId);
+      if (registry) {
+        registry.clear();
+      } else {
+        registry = new Map();
+        this.registries.set(workspaceId, registry);
+      }
+      const rows = db.prepare(
+        'SELECT * FROM workspace_services WHERE workspace_id = ?'
+      ).all(workspaceId) as Array<{
+        id: string;
+        workspace_id: string;
+        user_id: string;
+        name: string;
+        command: string;
+        working_dir: string;
+        status: string;
+        pid: number | null;
+        provider: string | null;
+        exit_code: number | null;
+        auto_restart: number;
+        env: string | null;
+        sandbox_provider: string | null;
+        sandbox_id: string | null;
+        started_at: number;
+        last_activity_at: number;
+        logs: string;
+      }>;
+
+      for (const row of rows) {
+        let parsedLogs: string[] = [];
+        try {
+          parsedLogs = JSON.parse(row.logs || '[]');
+        } catch { /* default to empty */ }
+
+        let parsedEnv: Record<string, string> | undefined;
+        try {
+          parsedEnv = row.env ? JSON.parse(row.env) : undefined;
+        } catch { /* default to undefined */ }
+
+        // Track the highest ID counter to avoid clashes
+        const idMatch = row.id.match(/-(\d+)$/);
+        if (idMatch) {
+          const idNum = parseInt(idMatch[1], 10);
+          const current = this.idCounters.get(workspaceId) || 0;
+          if (idNum > current) {
+            this.idCounters.set(workspaceId, idNum);
+          }
+        }
+
+        const service: WorkspaceService = {
+          id: row.id,
+          name: row.name,
+          command: row.command,
+          workingDir: row.working_dir,
+          status: row.status as ServiceStatus,
+          ports: [],        // Ports are loaded separately via preview registry
+          pid: row.pid ?? undefined,
+          provider: row.provider ?? undefined,
+          startedAt: row.started_at,
+          lastActivityAt: row.last_activity_at,
+          exitCode: row.exit_code ?? undefined,
+          logs: parsedLogs,
+          autoRestart: row.auto_restart === 1,
+          env: parsedEnv,
+          workspaceId: row.workspace_id,
+          userId: row.user_id,
+          sandboxProvider: row.sandbox_provider as SandboxProviderType | undefined,
+          sandboxId: row.sandbox_id ?? undefined,
+        };
+
+        registry.set(service.id, service);
+      }
+
+      if (rows.length > 0) {
+        logger.debug('Rehydrated services from DB', {
+          workspaceId,
+          count: rows.length,
+        });
+      }
+    } catch (error: any) {
+      logger.warn('Failed to rehydrate services from DB', {
+        workspaceId,
+        error: error.message,
+      });
+    }
   }
+
   // ============================================================================
   // Private helpers
   // ============================================================================

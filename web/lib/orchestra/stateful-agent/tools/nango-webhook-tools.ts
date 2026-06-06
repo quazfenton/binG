@@ -32,7 +32,7 @@ SUPPORTED EVENTS (varies by provider):
 EXAMPLES:
 - GitHub issues: { webhookTypes: ['issue.created', 'issue.updated'] }
 - Gmail messages: { webhookTypes: ['message.new'] }`,
-  parameters: z.object({
+  inputSchema: z.object({
     providerConfigKey: z.string().describe('Nango provider config key'),
     connectionId: z.string().describe('Connection ID for the user'),
     webhookTypes: z.array(z.string()).describe('Array of webhook event types to subscribe to'),
@@ -107,7 +107,7 @@ USE CASES:
 - Stop receiving notifications
 - Clean up webhook subscriptions
 - Change webhook configuration`,
-  parameters: z.object({
+  inputSchema: z.object({
     providerConfigKey: z.string().describe('Nango provider config key'),
     connectionId: z.string().describe('Connection ID for the user'),
     subscriptionId: z.string().describe('Subscription ID to unsubscribe'),
@@ -169,7 +169,7 @@ USE CASES:
 - Audit webhook configuration
 
 RETURNS: Array of subscriptions with types, URLs, and status`,
-  parameters: z.object({
+  inputSchema: z.object({
     providerConfigKey: z.string().describe('Nango provider config key'),
     connectionId: z.string().optional().describe('Connection ID (optional, lists all if not provided)'),
   }),
@@ -240,7 +240,7 @@ USE CASES:
 
 NOTE: This is for processing webhooks received at YOUR endpoint.
 Nango can also process webhooks directly (see subscribe_webhook).`,
-  parameters: z.object({
+  inputSchema: z.object({
     webhookPayload: z.object({}).passthrough().describe('Webhook payload from Nango'),
     webhookSignature: z.string().optional().describe('Webhook signature for verification'),
     expectedProvider: z.string().optional().describe('Expected provider for validation'),
@@ -315,7 +315,7 @@ USE CASES:
 - Integrate with external services
 
 RETURNS: Webhook configuration with URL and secret`,
-  parameters: z.object({
+  inputSchema: z.object({
     providerConfigKey: z.string().describe('Nango provider config key'),
     webhookUrl: z.string().url().describe('Your webhook endpoint URL'),
     webhookTypes: z.array(z.string()).optional().describe('Specific webhook types to forward (forwards all if not provided)'),

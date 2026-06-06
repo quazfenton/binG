@@ -293,6 +293,12 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
     authToken: null, // TODO: Get from your auth system (cookie, session, etc.)
     enabled: !!streamId,
     onNeedMoreTurns: (contextHint, payload) => {
+      // FIX: Check if streamControl (WebSocket) is actually enabled before trusting WS signal
+      // If WebSocket is not enabled, try SSE-based continue via setStreamId (from init event)
+      if (!streamId) {
+        console.warn('[StreamControl] WebSocket not connected, cannot process need_more_turns');
+        return;
+      }
       // Server sent structured continue signal via WebSocket
       const toolSummary = payload?.toolSummary || '';
       const implicitFiles = payload?.implicitFiles || [];
@@ -370,6 +376,8 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
 
   // Helper function to submit with a specific prompt (avoids race condition with setInput)
   const submitWithPrompt = useCallback(async (prompt: string) => {
+    // Reset stepReprompt counter on new prompt submission
+    stepRepromptCountRef.current = 0;
     if (!prompt.trim()) {
       return;
     }
@@ -458,6 +466,8 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
   }, [inputQueue, submitWithPrompt]);
 
   const handleSubmit = useCallback(async (e: React.FormEvent<HTMLFormElement>) => {
+    // Reset stepReprompt counter on new user prompt (new conversation turn)
+    stepRepromptCountRef.current = 0;
     e.preventDefault();
 
     if (!input.trim()) {
@@ -833,6 +843,8 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
     // CRITICAL: Track tool invocations locally during streaming
     // messagesRef.current is stale (useEffect hasn't synced yet when done fires)
     const streamingToolInvocations: Array<{ toolCallId: string; toolName: string; state: string }> = [];
+    // Track whether a 'done' SSE event was received before the stream ended
+    let receivedDoneEvent = false;
 
     // Set up a timeout to ensure we don't get stuck
     const timeoutId = setTimeout(() => { if (!isMountedRef.current) return;
@@ -1068,6 +1080,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   break;
 
                 case 'done':
+                  receivedDoneEvent = true;
                   // Force a final buffer flush to ensure accumulatedContent is complete
                   enhancedBufferManager.completeSession(sessionId);
 
@@ -2460,6 +2473,11 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                 // Fallback (SSE only): LLM embeds [CONTINUE_REQUESTED] in text, server wraps in auto-continue event
                 case 'auto-continue':
                 case 'need_more_turns': {
+                  // Guard: skip if already loading (prevents race condition on rapid auto-continues)
+                  if (isLoading) {
+                    console.log('[Auto-continue] Skipping - already loading');
+                    break;
+                  }
                   const contextHint = eventData.contextHint || '';
                   const toolSummary = eventData.toolSummary || '';
                   const implicitFiles = eventData.implicitFiles || [];
@@ -2603,15 +2621,71 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
           } // End while (eventEndIndex >= 0)
         } // End while (true) - reader loop
 
-        // If we reach here without a 'done' event, consider it complete
+        // If we reach here without a 'done' event, check if tools were interrupted mid-execution
         clearTimeout(timeoutId);
         setIsLoading(false);
+
+        if (!receivedDoneEvent) {
+          const toolNameSet = streamingToolInvocations.length > 0
+            ? [...new Set(streamingToolInvocations.map(i => i.toolName))]
+            : [];
+          const isToolsInterrupted = streamingToolInvocations.length > 0;
+
+          console.warn('[Chat] Stream ended without DONE event', {
+            isToolsInterrupted,
+            toolNames: toolNameSet,
+            toolCount: streamingToolInvocations.length,
+            accumulatedContentLength: accumulatedContent.length,
+          });
+
+          // [Gap #7] Post-loop recovery: if stream ended prematurely with tools but no done event,
+          // indicate recovery is possible by setting autoContinueOnNextStream flag on metadata
+          if (isToolsInterrupted && accumulatedContent.length === 0) {
+            const toolNamesStr = toolNameSet.join(', ');
+            console.log('[Chat] Stream ended with tools but no content - marking for auto-continue recovery', {
+              toolNames: toolNameSet,
+            });
+            setMessages(prev => prev.map(msg =>
+              msg.id === assistantMessage.id
+                ? {
+                    ...msg,
+                    metadata: {
+                      ...(msg.metadata || {}),
+                      streamEndedPrematurely: true,
+                      interruptedAfterToolExecution: true,
+                      toolNames: toolNameSet,
+                      toolCount: streamingToolInvocations.length,
+                      needsAutoContinue: true,
+                    },
+                  }
+                : msg
+            ));
+            // Skip the generic premature end handling below - the needsAutoContinue flag handles it
+          } else {
+          setMessages(prev => prev.map(msg =>
+            msg.id === assistantMessage.id
+              ? {
+                  ...msg,
+                  metadata: {
+                    ...(msg.metadata || {}),
+                    streamEndedPrematurely: true,
+                    interruptedAfterToolExecution: isToolsInterrupted,
+                    ...(isToolsInterrupted ? { toolNames: toolNameSet, toolCount: streamingToolInvocations.length } : {}),
+                  },
+                }
+              : msg
+          ));
+        }
+        }
 
         if (options.onFinish) {
           options.onFinish({
             ...assistantMessage,
             content: accumulatedContent,
-            metadata: assistantMessage.metadata || {}
+            metadata: {
+              ...(assistantMessage.metadata || {}),
+              ...(!receivedDoneEvent ? { streamEndedPrematurely: true } : {}),
+            },
           });
         }
     } catch (streamError) {
@@ -2751,6 +2825,8 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
     }, 180000);
     
     const parser = createNDJSONParser();
+    // Track whether [DONE] marker was received
+    let receivedDoneMarker = false;
 
     try {
       while (true) {
@@ -2768,6 +2844,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
 
           const dataString = line.slice(6).trim();
           if (dataString === '[DONE]') {
+            receivedDoneMarker = true;
             clearTimeout(timeoutId);
             setIsLoading(false);
             if (onFinish) {
@@ -2815,14 +2892,35 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
         reader.releaseLock();
       }
     
-    // If we reach here without a 'done' event
+    // If we reach here without receiving [DONE] marker
     clearTimeout(timeoutId);
     setIsLoading(false);
+
+    if (!receivedDoneMarker) {
+      console.warn('[Chat] V1 stream ended without [DONE] marker', {
+        accumulatedContentLength: accumulatedContent.length,
+      });
+      setMessages(prev => prev.map(msg =>
+        msg.id === assistantMessage.id
+          ? {
+              ...msg,
+              metadata: {
+                ...(msg.metadata || {}),
+                streamEndedPrematurely: true,
+              },
+            }
+          : msg
+      ));
+    }
+
     if (onFinish) {
       onFinish({
         ...assistantMessage,
         content: accumulatedContent,
-        metadata: assistantMessage.metadata || {}
+        metadata: {
+          ...(assistantMessage.metadata || {}),
+          ...(!receivedDoneMarker ? { streamEndedPrematurely: true } : {}),
+        },
       });
     }
   };

@@ -454,6 +454,97 @@ export class WorkspacePreviewRegistry extends EventEmitter {
     return { totalPreviews, activePreviews, unreachablePreviews, byProvider };
   }
   // ==========================================================================
+  // DB Rehydration
+  // ==========================================================================
+
+  /**
+   * Rehydrate in-memory preview registry from the workspace_ports DB table.
+   * Idempotent — safe to call multiple times. Only loads previews for the
+   * given workspaceId. Existing in-memory previews with the same ID are
+   * overwritten (DB wins on conflicts).
+   */
+  rehydrate(workspaceId: string): void {
+    try {
+      const { getDatabase } = require('@/lib/database/connection');
+      const db = getDatabase();
+      if (!db) return;
+
+      // Clear existing in-memory entries to prevent stale data accumulation
+      let registry = this.registries.get(workspaceId);
+      if (registry) {
+        registry.clear();
+      } else {
+        registry = new Map();
+        this.registries.set(workspaceId, registry);
+      }
+      const rows = db.prepare(
+        'SELECT * FROM workspace_ports WHERE workspace_id = ?'
+      ).all(workspaceId) as Array<{
+        id: string;
+        workspace_id: string;
+        service_id: string;
+        service_name: string;
+        port: number;
+        protocol: string;
+        url: string;
+        status: string;
+        provider: string | null;
+        sandbox_id: string | null;
+        confidence: string;
+        framework: string | null;
+        registered_at: number;
+        last_reachable_at: number | null;
+      }>;
+
+      // Track the highest ID counter to avoid clashes
+      let maxIdNum = this.idCounter;
+
+      for (const row of rows) {
+        const idMatch = row.id.match(/(\d+)$/);
+        if (idMatch) {
+          const idNum = parseInt(idMatch[1], 10);
+          if (idNum > maxIdNum) {
+            maxIdNum = idNum;
+          }
+        }
+
+        const preview: WorkspacePreview = {
+          id: row.id,
+          workspaceId: row.workspace_id,
+          serviceId: row.service_id,
+          serviceName: row.service_name,
+          port: row.port,
+          protocol: row.protocol as 'http' | 'https' | 'tcp',
+          url: row.url,
+          status: row.status as PreviewStatus,
+          provider: row.provider as SandboxProviderType | undefined,
+          sandboxId: row.sandbox_id ?? undefined,
+          confidence: row.confidence as 'high' | 'medium' | 'low',
+          framework: row.framework ?? undefined,
+          registeredAt: row.registered_at,
+          lastReachableAt: row.last_reachable_at ?? undefined,
+        };
+
+        registry.set(preview.id, preview);
+      }
+
+      this.idCounter = maxIdNum;
+
+      if (rows.length > 0) {
+        logger.debug('Rehydrated previews from DB', {
+          workspaceId,
+          count: rows.length,
+        });
+      }
+    } catch (error: any) {
+      logger.warn('Failed to rehydrate previews from DB', {
+        workspaceId,
+        error: error.message,
+      });
+    }
+  }
+
+  // ==========================================================================
   // Helpers
   // ==========================================================================
 

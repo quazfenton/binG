@@ -115,6 +115,9 @@ export class TimeoutEscalation {
     });
 
     // Background escalation monitor
+    // Swallow unhandled monitor rejections — if the operation completes before the
+    // monitor fires terminate, Promise.race resolves with the operation and the
+    // monitor rejection is harmless. The outer try/catch handles the operation result.
     const monitorPromise = new Promise<never>((_, reject) => {
       const interval = setInterval(async () => {
         const elapsed = Date.now() - startTime;
@@ -182,6 +185,9 @@ export class TimeoutEscalation {
         clearInterval(interval);
       }, { once: true });
     });
+    
+    // Swallow harmless monitor rejections (see comment above).
+    monitorPromise.catch(() => {/* handled by outer try/catch */});
 
     try {
       // Race operation against escalation monitor

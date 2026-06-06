@@ -20,6 +20,7 @@ import type { LLMMessage } from '@/lib/providers/llm-providers';
 import { createRequire } from 'node:module';
 import { generateId, generateText, tool as createTool } from 'ai';
 import type { Tool } from 'ai';
+import { normalizeSchemaForAI } from '@bing/shared/agent/tool-schema';
 
 const _require = createRequire(import.meta.url);
 import {
@@ -151,8 +152,8 @@ export class AgentLoop {
         for (const tool of this.tools) {
           sdkTools[tool.name] = {
             description: tool.description,
-            // @ts-ignore - parameters is tool-specific and varies by implementation
-            parameters: tool.parameters as any,
+            // AI SDK v6 uses `inputSchema`, not `parameters`.
+            inputSchema: normalizeSchemaForAI(tool.parameters),
             execute: async (args: any) => {
               const result = await tool.execute(args);
               if (!result.success) {
@@ -517,8 +518,8 @@ export class AgentLoop {
     for (const tool of this.tools) {
       vercelTools[tool.name] = createTool({
         description: tool.description,
-        // @ts-ignore AI SDK v6 tool type signature changed frequently
-        parameters: tool.parameters as any,
+        // AI SDK v6 uses `inputSchema`, not `parameters`.
+        inputSchema: normalizeSchemaForAI(tool.parameters),
         // @ts-ignore AI SDK v6 execute signature changed
         execute: async (args: any) => {
           const result = await tool.execute(args);
@@ -914,7 +915,8 @@ export class AgentLoop {
       for (const tool of this.tools) {
         sdkTools[tool.name] = {
           description: tool.description,
-          parameters: tool.parameters as any,
+          // AI SDK v6 uses `inputSchema`, not `parameters`.
+          inputSchema: normalizeSchemaForAI(tool.parameters),
           execute: async (args: any) => {
             log.debug(`Tool executed: ${tool.name}`, args);
             const result = await tool.execute(args);
@@ -1306,8 +1308,8 @@ export class AgentLoop {
       for (const tool of this.tools) {
         vercelTools[tool.name] = createTool({
           description: tool.description,
-          // @ts-ignore - parameters may not be in Tool type but is needed for AI SDK
-          parameters: tool.parameters as any,
+          // AI SDK v6 uses `inputSchema`, not `parameters`.
+          inputSchema: normalizeSchemaForAI(tool.parameters),
           // @ts-ignore AI SDK v6 execute signature changed
           execute: async (args: any) => {
             const result = await tool.execute(args);

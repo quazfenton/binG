@@ -28,6 +28,7 @@ import { chatRequestLogger } from '../chat/chat-request-logger';
 import { extractFileWritesFromLLMResponse, type FileWrite } from '../chat/file-diff-utils';
 import { recordToolCallTelemetry, prepareTelemetryPayload } from '@/lib/errors/logging-utils';
 import { getRecontextSupplement } from '@/lib/memory/cache-exporter';
+import { normalizeSchemaForAI } from '@bing/shared/agent/tool-schema';
 import {
   createOpenCodeEngine,
   type OpenCodeEngineResult,
@@ -1739,9 +1740,11 @@ async function runProgressiveBuildMode(
     const vercelTools: Record<string, any> = {};
     if (config.tools && config.tools.length > 0) {
       for (const tool of config.tools) {
+        // AI SDK v6 reads `tool.inputSchema` (not `parameters`). See
+        // `normalizeSchemaForAI` in `@bing/shared/agent/tool-schema`.
         vercelTools[tool.name] = {
           description: tool.description,
-          parameters: tool.parameters,
+          inputSchema: normalizeSchemaForAI(tool.parameters),
           execute: async (args: Record<string, any>) => {
             const result = await capabilityExecuteTool(tool.name, args);
             return result;
@@ -2213,7 +2216,12 @@ async function runV1ApiWithTools(
         toolDef.name,
         {
           description: toolDef.description,
-          parameters: toolDef.parameters,
+          // AI SDK v6 reads `tool.inputSchema` (not `parameters`). If a JSON
+          // Schema object is passed without an explicit `type`, providers like
+          // Azure OpenAI reject it with "schema must be a JSON Schema of
+          // 'type: \"object\"', got 'type: \"None\"'". See
+          // `normalizeSchemaForAI` in `@bing/shared/agent/tool-schema`.
+          inputSchema: normalizeSchemaForAI(toolDef.parameters),
           execute: async (rawArgs: Record<string, any>) => {
             // Normalize args to fix common LLM mistakes (wrong field names, etc.)
             const args = normalizeToolArgs(toolDef.name, rawArgs) as Record<string, any>;

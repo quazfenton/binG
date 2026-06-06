@@ -23,6 +23,7 @@ import type { SandboxHandle } from './providers/sandbox-provider';
 import { getSandboxProvider, type SandboxProviderType } from './providers';
 import { sandboxFilesystemSync } from '@/lib/virtual-filesystem/sync/sandbox-filesystem-sync';
 import { workspaceFSSnapshotService } from './workspacefs-snapshot-service';
+import { getWorkspaceRuntime } from '@/lib/terminal/workspace-runtime-service';
 
 const logger = createLogger('Sandbox:Orchestrator');
 
@@ -754,11 +755,27 @@ export class SandboxOrchestrator {
     const safeConvId = simpleSessionId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
     const workspaceDir = workspaceDirOverride || `/workspace/users/${safeUserId}/sessions/${safeConvId}`;
 
+    // Load workspace-scoped environment variables and merge into sandbox env.
+    // Skip for warm pool sessions to avoid memory leaks and unnecessary DB queries.
+    let workspaceEnv: Record<string, string> = {};
+    if (userId !== 'warm-pool') {
+      try {
+        const workspaceId = `${userId}:${conversationId}`;
+        const runtime = getWorkspaceRuntime(workspaceId, userId);
+        await runtime.hydrate();
+        workspaceEnv = runtime.getAllEnv();
+      } catch {
+        // Best-effort — workspace env may not be available
+      }
+    }
+
     const handle = await provider.createSandbox({
       workspaceDir,
       language: 'typescript',
       autoStopInterval: 3600,
       envVars: {
+        // Workspace env comes first so the base vars below always win
+        ...workspaceEnv,
         USER_ID: userId,
         CONVERSATION_ID: conversationId,
         EXECUTION_POLICY: policy,

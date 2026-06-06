@@ -1144,8 +1144,10 @@ export const listFilesTool = (tool as any)({
   ),
   execute: async ({ path, recursive = false }) => {
     try {
+  // Default empty path to '/' to prevent LIST_ERROR
+  const resolvedPath = (!path || typeof path !== 'string') ? '/' : path;
   const context = getToolContext();
-  const scopedPath = resolveScopedPath(path);
+  const scopedPath = resolveScopedPath(resolvedPath);
   logger.debug('listFiles', { originalPath: path, scopedPath, recursive, userId: context.userId });
 
   const listing = await virtualFilesystem.listDirectory(context.userId, scopedPath);
@@ -1320,12 +1322,13 @@ export const grepCodeTool = (tool as any)({
       }
       
       // Get ownerId from tool context
-      const context = toolContextStore.getStore();
-      // Normalize ownerId: 'anon_timestamp' -> 'anon:timestamp'
-      let ownerId = context?.userId || 'anon:public';
-      if (ownerId.startsWith('anon_')) {
-        ownerId = ownerId.replace(/^anon_/, 'anon:');
+      const ctx = toolContextStore.getStore();
+      if (!ctx || typeof ctx.userId !== 'string' || !ctx.userId.trim()) {
+        return { success: false, query: args.query, error: 'VFS operations require a valid userId in context. Use initializeVFSTools() to provide one.', matches: [], total: 0 };
       }
+      // Normalize format: 'anon_xxx' → 'anon:xxx'
+      const ownerId = ctx.userId.startsWith('anon_') ? ctx.userId.replace(/^anon_/, 'anon:') : ctx.userId;
+
       
       // Use VFS adapter that handles both desktop (native ripgrep) and web (VFS search)
       const { ripgrepVFS } = await import('../search/ripgrep-vfs-adapter');

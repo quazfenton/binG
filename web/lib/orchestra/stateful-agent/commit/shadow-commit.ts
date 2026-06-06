@@ -631,7 +631,7 @@ export class ShadowCommitManager {
 
 export const commitTool = tool({
   description: 'Commit the current VFS changes to production. This finalizes all pending modifications.',
-  parameters: z.object({
+  inputSchema: z.object({
     session_id: z.string().describe('Session ID for the current agent session'),
     message: z.string().describe('Commit message describing changes'),
     author: z.string().optional().describe('Author of the commit'),
@@ -648,7 +648,7 @@ export const commitTool = tool({
 
 export const rollbackTool = tool({
   description: 'Rollback to a previous commit state',
-  parameters: z.object({
+  inputSchema: z.object({
     session_id: z.string().describe('Session ID'),
     commit_id: z.string().describe('Commit ID to rollback to'),
   }),
@@ -661,7 +661,7 @@ export const rollbackTool = tool({
 
 export const historyTool = tool({
   description: 'Get commit history for a session',
-  parameters: z.object({
+  inputSchema: z.object({
     session_id: z.string().describe('Session ID'),
     limit: z.number().optional().describe('Number of commits to return'),
   }),

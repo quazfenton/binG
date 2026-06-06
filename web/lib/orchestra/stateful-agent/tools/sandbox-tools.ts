@@ -42,7 +42,7 @@ USE CASES:
 - Verify changes after editing
 
 TIP: Use list_files first to discover file paths if you're unsure.`,
-  parameters: z.object({
+  inputSchema: z.object({
     path: z.string().describe('File path relative to workspace root'),
   }),
   execute: async ({ path }: { path: string }, ctx: any) => {
@@ -54,7 +54,7 @@ TIP: Use list_files first to discover file paths if you're unsure.`,
       message: `To read ${path}, ensure you have sandbox context. The ToolExecutor will handle actual file reading.`,
     } as any;
   },
-} as any);
+});
 
 export const listFilesTool = tool({
   description: `List files and directories at the given path.
@@ -69,7 +69,7 @@ EXAMPLE:
   "path": "src/components",
   "pattern": "*.tsx"
 }`,
-  parameters: z.object({
+  inputSchema: z.object({
     path: z.string().optional().describe('Directory path (default: root)'),
     pattern: z.string().optional().describe('Glob pattern to filter files (e.g., "*.ts", "*.tsx")'),
   }),
@@ -81,7 +81,7 @@ EXAMPLE:
       message: 'File listing will be provided by ToolExecutor with sandbox context',
     } as any;
   },
-} as any);
+});
 
 export const createFileTool = tool({
   description: `Create a NEW file in the sandbox workspace.
@@ -92,7 +92,7 @@ USE CASES:
 - Generate test files
 
 IMPORTANT: Only use for NEW files. For existing files, use apply_diff.`,
-  parameters: z.object({
+  inputSchema: z.object({
     path: z.string().describe('File path where the new file will be created'),
     content: z.string().describe('Complete file content'),
   }),
@@ -104,7 +104,7 @@ IMPORTANT: Only use for NEW files. For existing files, use apply_diff.`,
       message: `File creation request for ${path}. ToolExecutor will handle actual creation.`,
     } as any;
   },
-} as any);
+});
 
 export const applyDiffTool = tool({
   description: `Surgically edit a file by replacing specific code blocks.
@@ -129,7 +129,7 @@ TIPS:
 - Include 3-5 lines of context for unique identification
 - Match exact whitespace and indentation
 - Be specific to avoid accidental matches`,
-  parameters: z.object({
+  inputSchema: z.object({
     path: z.string().describe('File path to edit'),
     search: z.string().describe('Exact code to find and replace (include context)'),
     replace: z.string().describe('New code to insert'),
@@ -145,7 +145,7 @@ TIPS:
       message: `Diff application request for ${path}. ToolExecutor will validate and apply the change.`,
     } as any;
   },
-} as any);
+});
 
 export const execShellTool = tool({
   description: `Execute a shell command in the sandbox.
@@ -166,7 +166,7 @@ EXAMPLE:
   "command": "npm run build",
   "cwd": "/workspace/my-workspace"
 }`,
-  parameters: z.object({
+  inputSchema: z.object({
     command: z.string().describe('Shell command to execute'),
     cwd: z.string().optional().describe('Working directory (default: sandbox root)'),
   }),
@@ -178,7 +178,7 @@ EXAMPLE:
       message: `Shell execution request: ${command}. ToolExecutor will execute with security checks.`,
     } as any;
   },
-} as any);
+});
 
 export const syntaxCheckTool = tool({
   description: `Run syntax validation on modified files.
@@ -189,7 +189,7 @@ USE CASES:
 - Validate JSON/YAML files
 
 SUPPORTED: TypeScript, JavaScript, JSON, YAML, HTML, CSS`,
-  parameters: z.object({
+  inputSchema: z.object({
     paths: z.array(z.string()).describe('Array of file paths to check'),
   }),
   execute: async ({ paths }, ctx: any) => {
@@ -199,7 +199,7 @@ SUPPORTED: TypeScript, JavaScript, JSON, YAML, HTML, CSS`,
       message: `Syntax check requested for ${paths.length} files. ToolExecutor will validate.`,
     } as any;
   },
-} as any);
+});
 
 export const requestApprovalTool = tool({
   description: `Request human approval for sensitive operations.
@@ -211,7 +211,7 @@ USE CASES:
 - Creating files with secrets
 
 This tool creates an approval request that must be resolved before proceeding.`,
-  parameters: z.object({
+  inputSchema: z.object({
     action: z.enum(['delete', 'overwrite', 'execute_destructive', 'create_secret', 'outside_workspace']).describe('Type of action requiring approval'),
     target: z.string().describe('Target of the action (file path, command, etc.)'),
     reason: z.string().describe('Why this action is needed'),
@@ -232,7 +232,7 @@ This tool creates an approval request that must be resolved before proceeding.`,
       message: `Waiting for approval to ${action} ${target}`,
     } as any;
   },
-} as any);
+});
 
 export const discoveryTool = tool({
   description: `Analyze workspace files to understand current state.
@@ -243,7 +243,7 @@ USE THIS at the start of any task to:
 - Plan your approach
 
 Call this before making any changes.`,
-  parameters: z.object({
+  inputSchema: z.object({
     files_to_analyze: z.array(z.string()).describe('List of file paths to analyze'),
     proposed_task: z.string().describe('Description of the task you plan to do'),
   }),
@@ -255,7 +255,7 @@ Call this before making any changes.`,
       message: `Discovery phase: Will analyze ${files_to_analyze.length} files for task: ${proposed_task}`,
     } as any;
   },
-} as any);
+});
 
 export const createPlanTool = tool({
   description: `Create a structured plan file - REQUIRED before making edits.
@@ -267,7 +267,7 @@ This tool helps you think through changes systematically:
 4. Plan for rollback if needed
 
 Call this after discovery and before any edits.`,
-  parameters: z.object({
+  inputSchema: z.object({
     task: z.string().describe('Clear description of what needs to be done'),
     files: z.array(z.object({
       path: z.string(),
@@ -290,11 +290,11 @@ Call this after discovery and before any edits.`,
       },
     } as any;
   },
-} as any);
+});
 
 export const commitTool = tool({
   description: 'Commit VFS changes to production storage.',
-  parameters: z.object({
+  inputSchema: z.object({
     session_id: z.string().describe('Session identifier'),
     message: z.string().describe('Commit message describing the changes'),
   }),
@@ -306,11 +306,11 @@ export const commitTool = tool({
       note: 'Commit will be processed by ShadowCommitManager',
     } as any;
   },
-} as any);
+});
 
 export const rollbackTool = tool({
   description: 'Rollback to a previous commit state.',
-  parameters: z.object({
+  inputSchema: z.object({
     session_id: z.string().describe('Session identifier'),
     commit_id: z.string().describe('Commit ID to rollback to'),
   }),
@@ -322,11 +322,11 @@ export const rollbackTool = tool({
       note: 'Rollback will be processed by ShadowCommitManager',
     } as any;
   },
-} as any);
+});
 
 export const historyTool = tool({
   description: 'Get commit history for a session.',
-  parameters: z.object({
+  inputSchema: z.object({
     session_id: z.string().describe('Session identifier'),
     limit: z.number().optional().describe('Maximum number of commits to return (default: 10)'),
   }),
@@ -338,7 +338,7 @@ export const historyTool = tool({
       note: 'History will be retrieved from ShadowCommitManager',
     } as any;
   },
-} as any);
+});
 
 export const allTools = {
   readFile: readFileTool,

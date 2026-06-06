@@ -363,10 +363,52 @@ const ProviderSelector = React.memo(function ProviderSelector({
   onValueChange: (provider: string, model: string) => void;
 }) {
   const [searchTerm, setSearchTerm] = React.useState("");
+  const [isOpen, setIsOpen] = React.useState(false);
   const searchInputRef = React.useRef<HTMLInputElement>(null);
 
-  if (!selectValue || availableProviders.length === 0) return null;
+  // Auto-focus the search input when the dropdown opens.
+  //
+  // Note: Radix Select 2.1.4 hard-codes
+  //   onMountAutoFocus: (event) => { event.preventDefault(); }
+  // inside its FocusScope and does NOT call any user-supplied
+  // `onOpenAutoFocus` prop at runtime (and `onOpenAutoFocus` is not
+  // even in `SelectContentImplProps`). The shadcn-style wrapper that
+  // forwards `onOpenAutoFocus` is therefore a no-op for Select.
+  // We work around it by tracking open state ourselves and
+  // focusing the input on the next animation frame so the content
+  // is mounted and the ref is populated.
+  React.useEffect(() => {
+    if (!isOpen) return;
+    const id = requestAnimationFrame(() => {
+      searchInputRef.current?.focus();
+    });
+    return () => cancelAnimationFrame(id);
+  }, [isOpen]);
 
+  // Defensive re-focus: if the input loses focus while the dropdown
+  // is open (e.g., Radix's internal focus management steals it to
+  // refocus the trigger or a SelectItem on re-render), pull focus
+  // back on the next animation frame. This is a safety net on top
+  // of the per-keystroke preventDefault() in the input's onKeyDown
+  // that blocks the typeahead. Runs at most once per animation
+  // frame regardless of how many focus loss events fire.
+  React.useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+    const id = requestAnimationFrame(() => {
+      if (cancelled) return;
+      const input = searchInputRef.current;
+      if (input && document.activeElement !== input) {
+        input.focus();
+      }
+    });
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(id);
+    };
+  }, [isOpen, searchTerm]);
+
+  if (!selectValue || availableProviders.length === 0) return null;
   // Helper: does a model match the search term? Multi-token fuzzy: each
   // space-separated word must be a case-insensitive substring.
   const matchesSearch = (modelId: string) => fuzzyMatchModel(modelId, searchTerm);
@@ -381,7 +423,7 @@ const ProviderSelector = React.memo(function ProviderSelector({
   return (
     <div className="flex flex-col gap-1 mb-2">
       <div className="flex items-center gap-2 text-xs text-white/60">
-      <Select value={selectValue} onValueChange={(value) => {
+      <Select value={selectValue} onOpenChange={setIsOpen} onValueChange={(value) => {
         if (!value || value === "none") return;
         const [provider, ...modelParts] = value.split(":");
         const model = modelParts.join(":");
@@ -389,28 +431,18 @@ const ProviderSelector = React.memo(function ProviderSelector({
       }}>
         <SelectTrigger className="w-full sm:w-[280px] border-white/20" style={{ backgroundColor: 'rgba(255, 255, 255, 0.08)' }}>
           <SelectValue placeholder="Select a model" />
-        </SelectTrigger>                        <SelectContent onOpenAutoFocus={(e) => {
-          // Prevent the default Radix behavior of focusing the first
-          // SelectItem on open. Instead, focus our filter input so the
-          // user can immediately start typing to search. Without this,
-          // focus stays on the trigger button and Radix's built-in
-          // typeahead (handleTypeaheadSearch on SelectContent's outer
-          // div) intercepts single-character keys, jumping the
-          // highlight to the first model starting with that letter
-          // instead of letting the input receive the character and
-          // filter the list.
-          e.preventDefault();
-          // Defer one frame so the input ref is guaranteed to be set
-          // by the time we call focus() (Radix mounts content then
-          // fires onOpenAutoFocus).
-          requestAnimationFrame(() => {
-            searchInputRef.current?.focus();
-          });
-        }}>
+        </SelectTrigger>                        <SelectContent>
           {/* Search filter input */}
           <div className="sticky top-0 z-10 px-2 pt-1 pb-1.5 border-b border-white/10 bg-black/90 backdrop-blur-sm"
+            // Do NOT call e.preventDefault() on pointerdown here. Doing so
+            // blocks the browser's default focus behavior for the
+            // descendant <input>, so clicking the input field never
+            // focuses it and the user can't type. The stopPropagation
+            // alone is sufficient to keep the click from being
+            // interpreted by Radix as a selection of an underlying
+            // SelectItem.
+            onPointerDown={(e) => e.stopPropagation()}
             onKeyDown={(e) => e.stopPropagation()}
-            onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
           >
             <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-white/5 border border-white/10">
               <Search className="w-3 h-3 text-white/30 flex-shrink-0" />
@@ -421,19 +453,41 @@ const ProviderSelector = React.memo(function ProviderSelector({
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 onClick={(e) => e.stopPropagation()}
-                onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                // Same warning as on the wrapper div above: do NOT
+                // call e.preventDefault() on pointerdown for an <input>.
+                // It blocks the default focus behavior, making the
+                // input unclickable. stopPropagation alone is enough
+                // to keep the click from being interpreted by Radix
+                // as a click outside the SelectContent.
+                onPointerDown={(e) => e.stopPropagation()}
                 onKeyDown={(e) => {
-                  // Stop Radix UI Select from intercepting typing for its
-                  // built-in typeahead; otherwise Radix captures letter keys
-                  // and navigates to the first matching SelectItem instead of
-                  // letting the input handle the character.
-                  e.stopPropagation();
+                  // Radix Select uses composeEventHandlers on the
+                  // SelectContent outer div, which checks
+                  // `event.defaultPrevented` (not stopPropagation) to
+                  // decide whether to run its internal typeahead
+                  // handler. stopPropagation alone does NOT block the
+                  // typeahead — we must also call preventDefault().
+                  // The typeahead, when triggered, calls
+                  // `setTimeout(() => nextItem.ref.current.focus())`
+                  // which steals focus from this input and is the
+                  // root cause of "input stops at 2 characters" and
+                  // "backspace doesn't work" symptoms.
+                  const isModifierKey = e.ctrlKey || e.altKey || e.metaKey;
+                  const isSingleChar = !isModifierKey && e.key.length === 1;
+                  const isArrow = e.key === "ArrowDown" || e.key === "ArrowUp";
+
+                  if (isSingleChar || isArrow) {
+                    e.stopPropagation();
+                    e.preventDefault();
+                  }
 
                   if (e.key === "Enter") {
                     // Enter: select the first visible model that matches
                     // the current search, if any. Lets the user filter
                     // by partial name and confirm without reaching for
                     // the mouse.
+                    e.stopPropagation();
+                    e.preventDefault();
                     const term = searchTerm.toLowerCase().trim();
                     const firstMatch = availableProviders
                       .filter((p: any) => p.isAvailable !== false)
@@ -446,22 +500,17 @@ const ProviderSelector = React.memo(function ProviderSelector({
                           .map((id: string) => ({ providerId: p.id, modelId: id })),
                       )[0];
                     if (firstMatch) {
-                      e.preventDefault();
                       onValueChange(firstMatch.providerId, firstMatch.modelId);
                     }
                   } else if (e.key === "Escape") {
                     // Escape: clear the search if there's text, otherwise
                     // let the event bubble so Radix can close the dropdown.
                     if (searchTerm) {
-                      e.preventDefault();
                       e.stopPropagation();
+                      e.preventDefault();
                       setSearchTerm("");
                       searchInputRef.current?.focus();
                     }
-                  } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-                    // Let arrow keys reach Radix so the user can move
-                    // from the search input into the filtered list.
-                    e.stopPropagation();
                   }
                 }}
                 className="flex-1 bg-transparent border-none outline-none text-xs text-white/80 placeholder:text-white/30"

@@ -904,7 +904,7 @@ Use 'createFile' for new files.`;
 
         additionalTools.run_capability_chain = tool({
           description: `Execute a chain of capabilities in sequence. Use for multi-step workflows. Available: ${availableCapabilities.join(', ')}`,
-          parameters: z.object({
+          inputSchema: z.object({
             name: z.string().describe('Chain name'),
             steps: z.array(z.object({
               capability: z.string().describe('Capability ID (e.g., file.read, sandbox.shell, web.browse)'),
@@ -944,7 +944,7 @@ Use 'createFile' for new files.`;
               return { success: false, error: err.message };
             }
           },
-        } as any);
+        });
       }
 
       const result = await generateText({

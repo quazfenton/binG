@@ -23,8 +23,13 @@ let importFailure: Error | null = null;
 let importInProgress = false; // Lock to prevent race conditions
 
 function getStorage(): Promise<StorageAdapter> {
-  // Always allow retry if the previous attempt failed
-  importFailure = null;
+  // Always allow retry if the previous attempt failed:
+  // reset storagePromise so the next call re-imports instead of
+  // returning the cached rejected promise.
+  if (importFailure) {
+    storagePromise = null;
+    importFailure = null;
+  }
   
   // If an import is already in progress, return the existing promise
   if (importInProgress && storagePromise) {
@@ -39,8 +44,13 @@ function getStorage(): Promise<StorageAdapter> {
     ).catch(err => {
       importFailure = err;
       importInProgress = false;
-      console.error('[Storage] Storage adapter import failed:', err);
-      // Keep storagePromise cached as the rejected promise to avoid retry loop
+      if (process.env.NODE_ENV === 'development') {
+        console.error('[Storage] Storage adapter import failed:', err);
+      } else {
+        console.error('[Storage] Storage adapter import failed:', err instanceof Error ? err.message : String(err));
+      }
+      // getStorage() checks importFailure at the top and resets
+      // storagePromise on the next call, enabling a clean retry.
       throw err;
     });
     

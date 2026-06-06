@@ -106,6 +106,7 @@ const handlePost = async (request: NextRequest, auth: EnhancedAuthResult) => {
       language,
       stdin,
       timeout: Math.min(timeout || 10000, 30000), // Max 30s timeout
+      userId,
     });
 
     // Audit log after execution

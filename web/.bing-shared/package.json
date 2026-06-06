@@ -9,7 +9,9 @@
     "./FS/*": "./FS/*.ts",
     "./lib/*": "./lib/*.ts"
   },
-  "dependencies": {},
+  "dependencies": {
+    "jsonrepair": "^3.14.0"
+  },
   "peerDependencies": {
     "typescript": "^5.0.0"
   }

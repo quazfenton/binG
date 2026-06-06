@@ -17,6 +17,8 @@ export interface TerminalSessionData {
       cpu?: string;
       memory?: string;
     };
+    /** Oracle VM isolation mode (podman, bwrap, chroot, docker, shared-shell) */
+    oracleIsolation?: string;
   };
   lastUsed: number;
 }

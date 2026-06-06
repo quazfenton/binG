@@ -1719,16 +1719,39 @@ export function detectFileReadRequest(llmResponse: string): { files: string[]; c
 }
 
 /**
- * Extract file paths from LLM tool calls (if using structured tool calling)
+ * Set of tool name variants that indicate file/directory reading intent.
+ * These are info-gathering tools that take a path-like argument and should
+ * trigger auto-continue with context pack generation.
+ */
+const FILE_READ_TOOL_VARIANTS = new Set<string>([
+  'read_file', 'readFile', 'file.read',
+  'list_directory', 'list_dir', 'listDirectory', 'listFiles', 'list_files', 'ls', 'file.list',
+  'glob', 'globFiles', 'glob.files',
+]);
+
+/**
+ * Extract file paths from LLM tool calls (if using structured tool calling).
+ * Handles:
+ * - read_file / file.read (path argument)
+ * - list_directory / listFiles / list_dir / ls (path or directory argument)
+ * - glob / globFiles / glob.files (pattern argument)
  */
 export function extractToolCallFileRequests(toolCalls: Array<{ name: string; arguments: Record<string, any> }>): string[] {
   const requestedFiles: string[] = [];
 
   for (const toolCall of toolCalls) {
-    if (toolCall.name === 'read_file' || toolCall.name === 'file.read') {
-      const path = toolCall.arguments?.path;
-      if (path) {
+    if (FILE_READ_TOOL_VARIANTS.has(toolCall.name)) {
+      // Prefer path, fall back to directory for list tools
+      const path = toolCall.arguments?.path || toolCall.arguments?.directory;
+      if (path && typeof path === 'string') {
         requestedFiles.push(path);
+      }
+    }
+    // For glob tools, also extract the pattern
+    if (toolCall.name === 'glob' || toolCall.name === 'globFiles' || toolCall.name === 'glob.files') {
+      const pattern = toolCall.arguments?.pattern;
+      if (pattern && typeof pattern === 'string') {
+        requestedFiles.push(pattern);
       }
     }
   }
@@ -1807,6 +1830,41 @@ export async function autoContinueWithFiles(options: {
 // LRU-style bounded Map to prevent memory leak
 const MAX_CONTINUATION_ENTRIES = 500;
 const conversationContinuationCount = new Map<string, { count: number; lastAccess: number }>();
+
+/**
+ * Set of tool names that are purely information-gathering — the LLM calls these
+ * to browse/read/research but then stops without producing a response.
+ * When these are the only tools called, the stream should never end without
+ * a re-prompt to continue.
+ */
+const INFO_GATHERING_TOOLS = new Set<string>([
+  // File reading
+  'read_file', 'readFile', 'file.read',
+  // Directory listing
+  'list_files', 'listFiles', 'list_directory', 'list_dir', 'ls', 'file.list', 'listDirectory',
+  // Web research
+  'web_search', 'webSearch', 'search', 'web.search',
+  'read_url', 'readUrl', 'fetch_url', 'fetchUrl',
+  // File discovery
+  'glob', 'globFiles', 'glob.files',
+  'file_picker', 'pickFiles', 'file.picker',
+]);
+
+/** Check if a tool name is an information-gathering tool */
+function isInfoGatheringTool(name: string): boolean {
+  return INFO_GATHERING_TOOLS.has(name);
+}
+
+/** Get all tool call names from a list of tool call records */
+function getToolNames(allToolCalls: any[]): string[] {
+  return allToolCalls.map(tc => tc.name);
+}
+
+/** Check if ALL tool calls in a list are info-gathering (no write/execute tools) */
+function allToolsAreInfoGathering(allToolCalls: any[]): boolean {
+  if (allToolCalls.length === 0) return false;
+  return allToolCalls.every(tc => isInfoGatheringTool(tc.name));
+}
 
 function trackConversation(id: string, count: number): void {
   // Evict oldest entries if Map is full
@@ -1909,7 +1967,10 @@ export async function* streamWithAutoContinue(
 
   // Guard: Don't auto-continue if response already has continuation markers
   // (prevents infinite loop if previous continuation already triggered)
-  if (fullResponse.includes('[CONTINUE_REQUESTED]') || fullResponse.includes('[AUTO-CONTINUE]') || fullResponse.includes('[NEXT]')) {
+  // NOTE: [CONTINUE_REQUESTED] is intentionally NOT included here — it's a
+  // legitimate LLM-to-server signal, unlike [NEXT] or [AUTO-CONTINUE] which
+  // are server-to-client markers. The dedicated check below handles it.
+  if (fullResponse.includes('[AUTO-CONTINUE]') || fullResponse.includes('[NEXT]')) {
     logger.debug('Auto-continue: response already contains continuation markers, skipping');
     return;
   }
@@ -2026,40 +2087,44 @@ if (toolCallsForTelemetry.length > 0) {
         return;
       }
 
-      // Auto-continue for list_files: LLM often stops after listing a directory
-      // instead of proceeding to read/modify files. Detect this and nudge it forward.
+      // Auto-continue for info-gathering tools: LLM often stops after reading/listing/searching
+      // instead of proceeding to analyze the results. Detect ANY info-gathering tool as the last
+      // action and nudge the LLM to process what it found.
+      // This covers: read_file, list_files, web_search, read_url, glob, file_picker, and all variants.
       const lastToolCall = allToolCalls[allToolCalls.length - 1];
-      const isListFilesLast = lastToolCall
-        && (lastToolCall.name === 'list_files' || lastToolCall.name === 'listFiles' || lastToolCall.name === 'list_directory')
-        && allToolCalls.filter(tc => tc.name === 'list_files' || tc.name === 'listFiles' || tc.name === 'list_directory').length === allToolCalls.length;
+      const lastToolIsInfoGathering = lastToolCall && isInfoGatheringTool(lastToolCall.name);
+      const allToolsAreInfo = allToolsAreInfoGathering(allToolCalls);
+      const hasContinuationMarker = fullResponse.includes('[NEXT]') || fullResponse.includes('[CONTINUE]') || fullResponse.includes('[AUTO-CONTINUE]');
 
-      if (isListFilesLast && !fullResponse.includes('[NEXT]') && !fullResponse.includes('[CONTINUE]')) {
-        const listArgs = lastToolCall.arguments || {};
-        const listedPath = listArgs.path || listArgs.directory || 'current directory';
-        const recursive = listArgs.recursive ? ' (recursive)' : '';
+      if (lastToolIsInfoGathering && allToolsAreInfo && !hasContinuationMarker) {
+        const toolNames = getToolNames(allToolCalls);
+        const lastArgs = lastToolCall.arguments || {};
+        const lastPath = lastArgs.path || lastArgs.directory || lastArgs.url || lastArgs.file || lastArgs.pattern || 'current location';
+        const toolLabel = lastToolCall.name.replace(/_/g, ' ').replace(/([a-z])([A-Z])/g, '$1 $2');
 
-        logger.info('Auto-continuing: LLM stopped after list_files, prompting to proceed', {
-          path: listedPath,
-          recursive,
+        logger.info('Auto-continuing: LLM stopped after info-gathering tool, prompting to proceed', {
+          toolName: lastToolCall.name,
+          toolNames,
+          path: lastPath,
           continuationCount: continuationCount + 1,
           maxContinuations,
           conversationId,
         });
 
-        // FIX: Update conversation-level counter
         if (conversationId) {
           trackConversation(conversationId, continuationCount + 1);
         }
 
         yield {
-          content: `\n\n[NEXT] The directory listing for \`${listedPath}\`${recursive} is complete. Please proceed with the task — read relevant files, analyze the code, or make the necessary changes based on what you found.`,
+          content: `\n\n[NEXT] The ${toolLabel} for \`${lastPath}\` is complete. Please proceed with the task — analyze the results, read relevant files, or make the necessary changes based on what you found.`,
           isComplete: false,
           timestamp: new Date(),
           metadata: {
             autoContinue: true,
-            reason: 'list_files_completed',
-            listedPath,
-            recursive,
+            reason: 'info_gathering_completed',
+            lastToolName: lastToolCall.name,
+            lastPath,
+            toolNames,
             continuationCount: continuationCount + 1,
             maxContinuations,
           },
@@ -2067,19 +2132,24 @@ if (toolCallsForTelemetry.length > 0) {
         return;
       }
 
-      // Auto-continue for read_file: LLM called read_file but stopped before processing result.
-      // Some models (especially free-tier) don't support multi-step tool calling via maxSteps.
-      // Detect when read_file was the last tool called and no continuation marker was emitted.
-      const isReadFileLast = lastToolCall
-        && (lastToolCall.name === 'read_file' || lastToolCall.name === 'readFile')
-        && allToolCalls.filter(tc => tc.name === 'read_file' || tc.name === 'readFile').length === allToolCalls.length;
+      // Auto-continue for tool-call-only responses (silence detector):
+      // If the LLM made tool calls but produced no text response at all,
+      // it likely means the tool results are pending and the LLM needs
+      // another turn to analyze them. This catches cases that escape the
+      // info-gathering check above (e.g. non-info-gathering tools, or
+      // tool calls that returned but the stream ended before text was produced).
+      const hasToolsButNoText = allToolCalls.length > 0 && !fullResponse.trim();
 
-      if (isReadFileLast && !fullResponse.includes('[NEXT]') && !fullResponse.includes('[CONTINUE]') && !fullResponse.includes('[AUTO-CONTINUE]')) {
-        const readArgs = lastToolCall.arguments || {};
-        const readPath = readArgs.path || readArgs.file || 'unknown file';
+      if (hasToolsButNoText && !hasContinuationMarker) {
+        const toolNames = getToolNames(allToolCalls);
+        const lastArgs = lastToolCall?.arguments || {};
+        const lastPath = lastArgs.path || lastArgs.directory || lastArgs.url || lastArgs.file || lastArgs.pattern || lastArgs.command || 'current tool';
+        const toolLabel = (lastToolCall?.name || 'tool').replace(/_/g, ' ').replace(/([a-z])([A-Z])/g, '$1 $2');
 
-        logger.info('Auto-continuing: LLM stopped after read_file, prompting to process result', {
-          path: readPath,
+        logger.info('Auto-continuing: LLM produced tool calls but no text response', {
+          toolCount: allToolCalls.length,
+          lastToolName: lastToolCall?.name,
+          toolNames,
           continuationCount: continuationCount + 1,
           maxContinuations,
           conversationId,
@@ -2090,13 +2160,15 @@ if (toolCallsForTelemetry.length > 0) {
         }
 
         yield {
-          content: `\n\n[NEXT] The file \`${readPath}\` has been read. Please analyze its contents and continue with the task based on what you found.`,
+          content: `\n\n[NEXT] The ${toolLabel} tool result for \`${lastPath}\` is ready. Please analyze the result and continue with the task based on what you found.`,
           isComplete: false,
           timestamp: new Date(),
           metadata: {
             autoContinue: true,
-            reason: 'read_file_completed',
-            readPath,
+            reason: 'tools_without_text',
+            toolCount: allToolCalls.length,
+            lastToolName: lastToolCall?.name,
+            toolNames,
             continuationCount: continuationCount + 1,
             maxContinuations,
           },
@@ -2247,12 +2319,9 @@ export async function* streamWithServerAutoRePrompt(
   // This happens when tools were executed but the LLM didn't produce a final response
   if (collectedToolResults.length > 0 && rePromptCount < maxRePrompts) {
     // Check if there's a continuation marker that indicates incomplete task
+    // Use the broad INFO_GATHERING_TOOLS set (not just read_file/list_files)
     const needsRePrompt = collectedToolResults.some(tr =>
-      tr.toolName === 'read_file' ||
-      tr.toolName === 'readFile' ||
-      tr.toolName === 'list_files' ||
-      tr.toolName === 'listFiles' ||
-      tr.toolName === 'list_directory'
+      isInfoGatheringTool(tr.toolName)
     );
 
     if (needsRePrompt) {

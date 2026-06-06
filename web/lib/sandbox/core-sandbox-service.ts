@@ -15,9 +15,9 @@ const log = createLogger('SandboxService')
 
 // Create singleton instance for code-executor compatibility
 export const coreSandboxService = {
-  createSandbox: async (config: { language: string; timeout: number }) => {
+  createSandbox: async (config: { language: string; timeout: number; env?: Record<string, string> }) => {
     const service = new SandboxService()
-    const workspace = await service.createWorkspace('temp-user', { language: config.language })
+    const workspace = await service.createWorkspace('temp-user', { language: config.language, env: config.env })
     return {
       id: workspace.sandboxId,
       executeCommand: async (cmd: string) => {

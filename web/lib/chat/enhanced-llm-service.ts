@@ -22,6 +22,7 @@ import { getProviderForTask, getModelForTask } from '../config/task-providers';
 import { normalizeSessionId } from '../virtual-filesystem/scope-utils';
 import { advancedToolCallDispatcher } from '../tools/tool-integration/parsers/dispatcher';
 import { callMCPToolFromAI_SDK, getMCPToolsForAI_SDK } from '../mcp/architecture-integration';
+import { normalizeSchemaForAI } from '@bing/shared/agent/tool-schema';
 import { chatLogger } from './chat-logger'
 import { recordToolCallTelemetry, prepareTelemetryPayload } from '../errors/logging-utils';
 import { chatRequestLogger } from './chat-request-logger';
@@ -881,8 +882,8 @@ export class EnhancedLLMService {
                 if (!vercelTools![toolName]) {
                   vercelTools![toolName] = createTool({
                     description: toolDef.function.description,
-                    parameters: toolDef.function.parameters,
-                    // @ts-expect-error AI SDK v6 tool execute signature changed frequently
+                    // AI SDK v6 uses `inputSchema`, not `parameters`.
+                    inputSchema: normalizeSchemaForAI(toolDef.function.parameters),
                     execute: async (args: Record<string, any>) => {
                       const vfsTool = getVFSTool(toolName);
                       if (!vfsTool) {

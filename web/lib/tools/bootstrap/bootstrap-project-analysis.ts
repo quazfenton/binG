@@ -32,6 +32,7 @@ import {
   WORKSPACEFS_SYNC_STATUS_CAPABILITY,
   WORKSPACEFS_R2_STATUS_CAPABILITY,
   WORKSPACEFS_MIGRATE_CAPABILITY,
+  WORKSPACE_RUNTIME_STATE_CAPABILITY,
   analyzeProject,
   listScripts,
   getDependencies,
@@ -74,6 +75,7 @@ async function registerCapabilityRouterProvider(): Promise<void> {
       'workspacefs.sync_status',
       'workspacefs.r2_status',
       'workspacefs.migrate_workspace',
+      'workspace.runtime_state',
     ],
     isAvailable: async () => {
       try {
@@ -85,12 +87,16 @@ async function registerCapabilityRouterProvider(): Promise<void> {
       }
     },
     execute: async (capabilityId: string, input: any, context: any) => {
-      // Normalize ownerId: 'anonymous' -> 'anon:public', 'anon_timestamp' -> 'anon:timestamp'
-      let ownerId = (typeof context?.userId === 'string' ? context.userId : 'anon:public');
-      if (ownerId.startsWith('anon_')) {
-        ownerId = ownerId.replace(/^anon_/, 'anon:');
-      } else if (ownerId === 'anonymous') {
-        ownerId = 'anon:public';
+      // Validate ownerId — must be a non-empty string from authenticated context.
+      // SECURITY: Never default to a shared fallback like 'anon:public'.
+      const rawOwnerId = context?.userId;
+      if (typeof rawOwnerId !== 'string' || !rawOwnerId.trim()) {
+        throw new Error('VFS operations require a valid userId in context. Use resolveFilesystemOwner() to provide one.');
+      }
+      // Normalize format: 'anon_xxx' → 'anon:xxx'
+      const ownerId = rawOwnerId.startsWith('anon_') ? rawOwnerId.replace(/^anon_/, 'anon:') : rawOwnerId;
+      if (ownerId === 'anonymous') {
+        throw new Error('"anonymous" is not a valid VFS ownerId. Use resolveFilesystemOwner() to generate a unique anonymous session ID.');
       }
 
       try {
@@ -174,6 +180,14 @@ async function registerCapabilityRouterProvider(): Promise<void> {
             );
             break;
           }
+          case 'workspace.runtime_state': {
+            const { getWorkspaceRuntime } = await import('@/lib/terminal/workspace-runtime-service');
+            const wsId = input.workspaceId || `${ownerId}:${context?.conversationId || 'default'}`;
+            const runtime = getWorkspaceRuntime(wsId, ownerId);
+            const state = await runtime.getWorkspaceState();
+            output = state;
+            break;
+          }
           default:
             return { success: false, error: `Unknown capability: ${capabilityId}` };
         }
@@ -213,6 +227,7 @@ export async function registerProjectAnalysisTools(
     WORKSPACEFS_SYNC_STATUS_CAPABILITY,
     WORKSPACEFS_R2_STATUS_CAPABILITY,
     WORKSPACEFS_MIGRATE_CAPABILITY,
+    WORKSPACE_RUNTIME_STATE_CAPABILITY,
   ];
 
   for (const capability of capabilities) {
@@ -227,12 +242,16 @@ export async function registerProjectAnalysisTools(
       capability: 'workspace.analyze',
       provider: 'workspace-analysis',
       handler: async (args: any, context: any) => {
-        // Normalize ownerId: 'anonymous' -> 'anon:public', 'anon_timestamp' -> 'anon:timestamp'
-        let ownerId = (typeof context.userId === 'string' ? context.userId : 'anon:public');
-        if (ownerId.startsWith('anon_')) {
-          ownerId = ownerId.replace(/^anon_/, 'anon:');
-        } else if (ownerId === 'anonymous') {
-          ownerId = 'anon:public';
+        // Validate ownerId — must be a non-empty string from authenticated context.
+        // SECURITY: Never default to a shared fallback like 'anon:public'.
+        const rawOwnerId = context.userId;
+        if (typeof rawOwnerId !== 'string' || !rawOwnerId.trim()) {
+          throw new Error('VFS operations require a valid userId in context. Use resolveFilesystemOwner() to provide one.');
+        }
+        // Normalize format: 'anon_xxx' → 'anon:xxx'
+        const ownerId = rawOwnerId.startsWith('anon_') ? rawOwnerId.replace(/^anon_/, 'anon:') : rawOwnerId;
+        if (ownerId === 'anonymous') {
+          throw new Error('"anonymous" is not a valid VFS ownerId. Use resolveFilesystemOwner() to generate a unique anonymous session ID.');
         }
         return analyzeProject(ownerId, {
           includeDependencies: args.includeDependencies ?? false,
@@ -251,12 +270,16 @@ export async function registerProjectAnalysisTools(
       capability: 'workspace.list_scripts',
       provider: 'workspace-analysis',
       handler: async (_args: any, context: any) => {
-        // Normalize ownerId: 'anonymous' -> 'anon:public', 'anon_timestamp' -> 'anon:timestamp'
-        let ownerId = (typeof context.userId === 'string' ? context.userId : 'anon:public');
-        if (ownerId.startsWith('anon_')) {
-          ownerId = ownerId.replace(/^anon_/, 'anon:');
-        } else if (ownerId === 'anonymous') {
-          ownerId = 'anon:public';
+        // Validate ownerId — must be a non-empty string from authenticated context.
+        // SECURITY: Never default to a shared fallback like 'anon:public'.
+        const rawOwnerId = context.userId;
+        if (typeof rawOwnerId !== 'string' || !rawOwnerId.trim()) {
+          throw new Error('VFS operations require a valid userId in context. Use resolveFilesystemOwner() to provide one.');
+        }
+        // Normalize format: 'anon_xxx' → 'anon:xxx'
+        const ownerId = rawOwnerId.startsWith('anon_') ? rawOwnerId.replace(/^anon_/, 'anon:') : rawOwnerId;
+        if (ownerId === 'anonymous') {
+          throw new Error('"anonymous" is not a valid VFS ownerId. Use resolveFilesystemOwner() to generate a unique anonymous session ID.');
         }
         const scripts = await listScripts(ownerId);
         return { scripts };
@@ -274,12 +297,16 @@ export async function registerProjectAnalysisTools(
       capability: 'workspace.dependencies',
       provider: 'workspace-analysis',
       handler: async (_args: any, context: any) => {
-        // Normalize ownerId: 'anonymous' -> 'anon:public', 'anon_timestamp' -> 'anon:timestamp'
-        let ownerId = (typeof context.userId === 'string' ? context.userId : 'anon:public');
-        if (ownerId.startsWith('anon_')) {
-          ownerId = ownerId.replace(/^anon_/, 'anon:');
-        } else if (ownerId === 'anonymous') {
-          ownerId = 'anon:public';
+        // Validate ownerId — must be a non-empty string from authenticated context.
+        // SECURITY: Never default to a shared fallback like 'anon:public'.
+        const rawOwnerId = context.userId;
+        if (typeof rawOwnerId !== 'string' || !rawOwnerId.trim()) {
+          throw new Error('VFS operations require a valid userId in context. Use resolveFilesystemOwner() to provide one.');
+        }
+        // Normalize format: 'anon_xxx' → 'anon:xxx'
+        const ownerId = rawOwnerId.startsWith('anon_') ? rawOwnerId.replace(/^anon_/, 'anon:') : rawOwnerId;
+        if (ownerId === 'anonymous') {
+          throw new Error('"anonymous" is not a valid VFS ownerId. Use resolveFilesystemOwner() to generate a unique anonymous session ID.');
         }
         return getDependencies(ownerId);
       },
@@ -297,12 +324,16 @@ export async function registerProjectAnalysisTools(
       provider: 'workspace-analysis',
       handler: async (args: any, context: any) => {
         const { virtualFilesystem } = await import('@/lib/virtual-filesystem/virtual-filesystem-service');
-        // Normalize ownerId: 'anonymous' -> 'anon:public', 'anon_timestamp' -> 'anon:timestamp'
-        let ownerId = (typeof context.userId === 'string' ? context.userId : 'anon:public');
-        if (ownerId.startsWith('anon_')) {
-          ownerId = ownerId.replace(/^anon_/, 'anon:');
-        } else if (ownerId === 'anonymous') {
-          ownerId = 'anon:public';
+        // Validate ownerId — must be a non-empty string from authenticated context.
+        // SECURITY: Never default to a shared fallback like 'anon:public'.
+        const rawOwnerId = context.userId;
+        if (typeof rawOwnerId !== 'string' || !rawOwnerId.trim()) {
+          throw new Error('VFS operations require a valid userId in context. Use resolveFilesystemOwner() to provide one.');
+        }
+        // Normalize format: 'anon_xxx' → 'anon:xxx'
+        const ownerId = rawOwnerId.startsWith('anon_') ? rawOwnerId.replace(/^anon_/, 'anon:') : rawOwnerId;
+        if (ownerId === 'anonymous') {
+          throw new Error('"anonymous" is not a valid VFS ownerId. Use resolveFilesystemOwner() to generate a unique anonymous session ID.');
         }
         const workspace = await virtualFilesystem.exportWorkspace(ownerId);
         const filePaths = workspace.files.map(f => f.path);
@@ -408,9 +439,14 @@ export async function registerProjectAnalysisTools(
       provider: 'workspace-analysis',
       handler: async (args: any, context: any) => {
         const { workspaceFSSyncService } = await import('@/lib/sandbox/workspacefs-sync-service');
-        let ownerId = (typeof context?.userId === 'string' ? context.userId : 'anon:public');
-        if (ownerId.startsWith('anon_')) ownerId = ownerId.replace(/^anon_/, 'anon:');
-        else if (ownerId === 'anonymous') ownerId = 'anon:public';
+        const rawOwnerId = context?.userId;
+        if (typeof rawOwnerId !== 'string' || !rawOwnerId.trim()) {
+          throw new Error('VFS operations require a valid userId in context. Use resolveFilesystemOwner() to provide one.');
+        }
+        const ownerId = rawOwnerId.startsWith('anon_') ? rawOwnerId.replace(/^anon_/, 'anon:') : rawOwnerId;
+        if (ownerId === 'anonymous') {
+          throw new Error('"anonymous" is not a valid VFS ownerId. Use resolveFilesystemOwner() to generate a unique anonymous session ID.');
+        }
         const wsId = args.workspaceId || `${ownerId}:${context?.conversationId || 'default'}`;
         return workspaceFSSyncService.getSyncState(wsId, ownerId);
       },
@@ -439,14 +475,45 @@ export async function registerProjectAnalysisTools(
       permissions: [],
     },
     {
+      name: 'workspace:runtime-state',
+      capability: 'workspace.runtime_state',
+      provider: 'workspace-analysis',
+      handler: async (args: any, context: any) => {
+        const { getWorkspaceRuntime } = await import('@/lib/terminal/workspace-runtime-service');
+        const rawOwnerId = context?.userId;
+        if (typeof rawOwnerId !== 'string' || !rawOwnerId.trim()) {
+          throw new Error('VFS operations require a valid userId in context. Use resolveFilesystemOwner() to provide one.');
+        }
+        const ownerId = rawOwnerId.startsWith('anon_') ? rawOwnerId.replace(/^anon_/, 'anon:') : rawOwnerId;
+        if (ownerId === 'anonymous') {
+          throw new Error('"anonymous" is not a valid VFS ownerId. Use resolveFilesystemOwner() to generate a unique anonymous session ID.');
+        }
+        const wsId = args.workspaceId || `${ownerId}:${context?.conversationId || 'default'}`;
+        const runtime = getWorkspaceRuntime(wsId, ownerId);
+        return runtime.getWorkspaceState();
+      },
+      metadata: {
+        latency: 'low',
+        cost: 'low',
+        reliability: 0.99,
+        tags: ['workspace', 'runtime', 'state', 'processes', 'services', 'previews', 'env'],
+      },
+      permissions: [],
+    },
+    {
       name: 'workspacefs:migrate',
       capability: 'workspacefs.migrate_workspace',
       provider: 'workspace-analysis',
       handler: async (args: any, context: any) => {
         const { workspaceFSSyncService } = await import('@/lib/sandbox/workspacefs-sync-service');
-        let ownerId = (typeof context?.userId === 'string' ? context.userId : 'anon:public');
-        if (ownerId.startsWith('anon_')) ownerId = ownerId.replace(/^anon_/, 'anon:');
-        else if (ownerId === 'anonymous') ownerId = 'anon:public';
+        const rawOwnerId = context?.userId;
+        if (typeof rawOwnerId !== 'string' || !rawOwnerId.trim()) {
+          throw new Error('VFS operations require a valid userId in context. Use resolveFilesystemOwner() to provide one.');
+        }
+        const ownerId = rawOwnerId.startsWith('anon_') ? rawOwnerId.replace(/^anon_/, 'anon:') : rawOwnerId;
+        if (ownerId === 'anonymous') {
+          throw new Error('"anonymous" is not a valid VFS ownerId. Use resolveFilesystemOwner() to generate a unique anonymous session ID.');
+        }
         return workspaceFSSyncService.syncForMigration(
           args.workspaceId,
           ownerId,

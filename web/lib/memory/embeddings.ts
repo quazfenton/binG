@@ -1,8 +1,16 @@
 /**
  * embeddings.ts — Embedding generation
- * Calls your Next.js /api/embed route, which proxies to OpenAI or a local model.
+ *
+ * Server-side: calls the shared `lib/memory/embeddings-core.ts` directly to
+ * avoid round-tripping through the HTTP route (which can be 401'd by the
+ * proxy sidecar-token middleware in DESKTOP_MODE).
+ *
+ * Client-side: hits the /api/embed route via a relative URL.
+ *
  * Add a cache layer to avoid re-embedding unchanged content.
  */
+
+import { generateEmbedding } from './embeddings-core';
 
 const EMBED_CACHE = new Map<string, number[]>();
 
@@ -10,9 +18,9 @@ const EMBED_CACHE = new Map<string, number[]>();
 export { EMBED_CACHE };
 
 /**
- * Embeds a text string by calling your Next.js API route.
- * The route should call OpenAI text-embedding-3-small (or equivalent local model).
- * Works both client-side (relative URL) and server-side (absolute URL).
+ * Embeds a text string.
+ * - On the server, calls the shared generator directly.
+ * - In the browser, hits /api/embed via a relative URL.
  */
 export async function embed(text: string): Promise<number[]> {
   // Use full text as cache key — trimming alone could cause collisions
@@ -23,31 +31,49 @@ export async function embed(text: string): Promise<number[]> {
     return EMBED_CACHE.get(key)!;
   }
 
-  const baseUrl = typeof window !== 'undefined' 
-    ? '' 
-    : (process.env.NEXT_PUBLIC_APP_URL || `http://localhost:${process.env.PORT || '3000'}`);
+  let embedding: number[];
 
-  const res = await fetch(`${baseUrl}/api/embed`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text }),
-  });
-
-  if (!res.ok) {
-    const errorBody = await res.text().catch(() => 'Unable to read error body');
-    console.error('[Embeddings] ❌ Embedding API error', {
-      status: res.status,
-      statusText: res.statusText,
-      textLength: text.length,
-      textPreview: text.slice(0, 200),
-      baseUrl,
-      errorBody: errorBody.slice(0, 500),
-      headers: Object.fromEntries(res.headers.entries()),
+  if (typeof window === 'undefined') {
+    // Server-side: call the shared generator directly. Skipping the HTTP
+    // self-call avoids the proxy.ts sidecar-token 401 and the ~10ms
+    // localhost round-trip per embed.
+    try {
+      embedding = await generateEmbedding(text);
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      const errorStack = err instanceof Error ? err.stack : undefined;
+      console.error('[Embeddings] ❌ Server-side embed error', {
+        textLength: text.length,
+        textPreview: text.slice(0, 200),
+        error: errorMsg,
+        stack: errorStack?.split('\n').slice(0, 5).join('\n'),
+      });
+      throw err;
+    }
+  } else {
+    const baseUrl = '';
+    const res = await fetch(`${baseUrl}/api/embed`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
     });
-    throw new Error(`Embedding failed: ${res.status} ${res.statusText}`);
-  }
 
-  const embedding: number[] = await res.json();
+    if (!res.ok) {
+      const errorBody = await res.text().catch(() => 'Unable to read error body');
+      console.error('[Embeddings] ❌ Embedding API error', {
+        status: res.status,
+        statusText: res.statusText,
+        textLength: text.length,
+        textPreview: text.slice(0, 200),
+        baseUrl,
+        errorBody: errorBody.slice(0, 500),
+        headers: Object.fromEntries(res.headers.entries()),
+      });
+      throw new Error(`Embedding failed: ${res.status} ${res.statusText}`);
+    }
+
+    embedding = await res.json();
+  }
 
   EMBED_CACHE.set(key, embedding);
 

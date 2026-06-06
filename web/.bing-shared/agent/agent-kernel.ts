@@ -426,6 +426,13 @@ export class AgentKernel extends EventEmitter {
   }
 
   /**
+   * Get agent by ID (alias for getAgentStatus)
+   */
+  getAgent(agentId: string): Agent | null {
+    return this.agents.get(agentId) || null;
+  }
+
+  /**
    * Get agent status
    */
   getAgentStatus(agentId: string): Agent | null {

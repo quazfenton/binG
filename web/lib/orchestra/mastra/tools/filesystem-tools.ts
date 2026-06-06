@@ -254,19 +254,9 @@ export function createFilesystemTools(
       },
       execute: async ({ path }: { path: string }): Promise<ToolCallResult> => {
         try {
-          if (!path || typeof path !== 'string') {
-            return {
-              success: false,
-              error: {
-                code: 'INVALID_ARGS',
-                message: 'Missing required argument: path',
-                retryable: true,
-                expectedFields: ['path'],
-                suggestedNextAction: 'Call list_directory with a valid directory path string.',
-              },
-            };
-          }
-          const scopedPath = resolveWorkspacePath(workspacePath, path);
+          // Default empty path to workspace root instead of erroring
+          const resolvedPath = (!path || typeof path !== 'string') ? workspacePath : path;
+          const scopedPath = resolveWorkspacePath(workspacePath, resolvedPath);
           const listing = await virtualFilesystem.listDirectory(userId, scopedPath);
           return {
             success: true,

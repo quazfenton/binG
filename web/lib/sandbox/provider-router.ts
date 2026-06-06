@@ -105,8 +105,10 @@ class LatencyTracker {
     metric.avgLatencyMs = this.calculateAverage(metric.recentLatencies);
     metric.p95LatencyMs = this.calculatePercentile(metric.recentLatencies, 95);
     metric.p99LatencyMs = this.calculatePercentile(metric.recentLatencies, 99);
-    // Also record to provider health tracker
-    providerHealthTracker.recordCall(provider, true, latencyMs);
+    // Note: provider health tracking (success/failure recording) is handled
+    // by execution-router.ts which knows the actual outcome. This latency
+    // tracker only tracks timing metrics — don't record success=true here
+    // because it would incorrectly mark failures as successes.
   }
 
   /**

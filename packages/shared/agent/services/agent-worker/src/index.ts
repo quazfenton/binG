@@ -21,6 +21,7 @@ import { getOpenCodeEngine, OpenCodeEngine } from './opencode-engine.js';
 import { executeV2Task } from '@bing/shared/agent/v2-executor';
 import { taskRouter } from '@bing/shared/agent/task-router';
 import { providerRouter, latencyTracker } from '@/lib/sandbox/provider-router';
+import { providerHealthTracker } from '@/lib/sandbox/provider-health';
 import { determineExecutionPolicy } from '@/lib/voice/types';
 import { normalizeSessionId } from '@/lib/virtual-filesystem/scope-utils';
 
@@ -223,6 +224,7 @@ async function runOpenCode(job: Job<AgentJob>): Promise<void> {
 
       if (selectedProvider && (resultData?.agent === 'opencode' || routing.target === 'opencode')) {
         latencyTracker.record(selectedProvider as any, latency);
+        providerHealthTracker.recordCall(selectedProvider, true, latency);
       }
 
       // CRITICAL FIX: Publish done event in separate try-catch to avoid marking successful jobs as failed
@@ -260,6 +262,11 @@ async function runOpenCode(job: Job<AgentJob>): Promise<void> {
       });
     } catch (error: any) {
       const latency = Date.now() - startTime;
+
+      // Record failure in provider health tracker for scoring
+      if (selectedProvider) {
+        providerHealthTracker.recordCall(selectedProvider, false, latency, error.message);
+      }
 
       logger.error('Job failed', {
         jobId,

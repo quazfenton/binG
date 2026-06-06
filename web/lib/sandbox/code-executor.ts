@@ -11,6 +11,8 @@ export interface ExecutionOptions {
   input?: string;
   timeout?: number;
   memoryLimit?: number;
+  /** Environment variables to inject into the sandbox */
+  envVars?: Record<string, string>;
 }
 
 export interface ExecutionResult {
@@ -32,10 +34,11 @@ export async function executeInSandbox(
   const startTime = Date.now();
 
   try {
-    // Create temporary sandbox
+    // Create temporary sandbox with env vars
     const sandbox = await coreSandboxService.createSandbox({
       language: getLanguageTemplate(language),
       timeout: options.timeout || 5000,
+      env: options.envVars,
     });
 
     try {

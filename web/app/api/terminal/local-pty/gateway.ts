@@ -44,6 +44,7 @@ import {
   buildBwrapSetupCommands,
   buildChrootSetupCommands,
   buildDockerOnVMCommands,
+  buildRootlessPodmanCommands,
   buildSharedShellSetupCommands,
   getOracleUserWorkspace,
   sanitizeOracleUserId,
@@ -58,6 +59,7 @@ import {
 } from '@/lib/terminal/execution-router';
 import { virtualPidRegistry } from '@/lib/terminal/virtual-pid-registry';
 import { sandboxOrchestrator } from '@/lib/sandbox/sandbox-orchestrator';
+import { getWorkspaceRuntime } from '@/lib/terminal/workspace-runtime-service';
 
 const logger = createLogger('LocalPTY');
 
@@ -273,7 +275,7 @@ interface LocalPtySession {
   // R2 Docker mode: indicates R2 mount strategy ('host' | 'container' | null)
   r2MountStrategy?: 'host' | 'container' | null;
   // Oracle VM isolation metadata
-  oracleIsolation?: 'bwrap' | 'chroot' | 'docker' | 'shared-shell';
+  oracleIsolation?: 'podman' | 'bwrap' | 'chroot' | 'docker' | 'shared-shell';
   // Oracle VM container name for Docker-based isolation (for cleanup)
   oracleContainerName?: string;
   // Execution routing: intercept non-trivial commands and route to sandbox providers
@@ -420,14 +422,18 @@ async function cleanupSession(id: string, session: LocalPtySession): Promise<voi
 
     // Close SSH client for Oracle VM sessions (also kills the pseudo-PTY)
     if (session.sshClient) {
-      // If Oracle Docker isolation, clean up the remote container first
-      if (session.oracleIsolation === 'docker' && session.oracleContainerName) {
+      // If Oracle podman/docker isolation, clean up the remote container first
+      if ((session.oracleIsolation === 'podman' || session.oracleIsolation === 'docker') && session.oracleContainerName) {
         try {
           const { execFile } = await import('child_process');
           // SSH exec to remove the remote Docker container
           // We use the same SSH client that's already connected
           await new Promise<void>((resolveC) => {
-            session.sshClient.exec(`docker rm -f ${session.oracleContainerName} 2>/dev/null || true`, () => resolveC());
+            // Use podman rm or docker rm depending on isolation mode
+            const rmCmd = session.oracleIsolation === 'podman'
+              ? `podman rm -f ${session.oracleContainerName} 2>/dev/null || true`
+              : `docker rm -f ${session.oracleContainerName} 2>/dev/null || true`;
+            session.sshClient.exec(rmCmd, () => resolveC());
           });
         } catch { /* best effort remote cleanup */ }
       }
@@ -1234,6 +1240,47 @@ async function createDirectPtySession(
   // PATH TRAVERSAL PREVENTION: Safe PowerShell profile (Windows only, null on Unix)
   const safeShell = await createSafeShellWrapper(workspaceDir, ptyShell);
 
+  // === Workspace Env Injection ===
+  // Load workspace-scoped environment variables from the runtime service
+  // and inject them into the shell init script so exports survive reconnects.
+  let workspaceEnvScript = '';
+  try {
+    const runtime = getWorkspaceRuntime(sessionId, userId);
+    workspaceEnvScript = runtime.buildShellInitScript();
+  } catch (err: any) {
+    logger.warn('[Local PTY] Failed to load workspace env', {
+      sessionId,
+      error: err.message,
+    });
+  }
+
+  // If we have workspace env vars, inject them by writing a .workspace_env file
+  // and appending a source command to the safe shell init script.
+  if (workspaceEnvScript) {
+    try {
+      const envFilePath = path.join(workspaceDir, '.workspace_env');
+      await fs.writeFile(envFilePath, workspaceEnvScript + '\n', { mode: 0o600 });
+
+      // Append sourcing to the safe shell init script if it exists
+      const initScriptPath = path.join(workspaceDir, '.binG-temp', '_safe_shell_init.sh');
+      try {
+        await fs.access(initScriptPath);
+        await fs.appendFile(initScriptPath, `\n# Source workspace environment variables\n. '${envFilePath}'\n`);
+      } catch {
+        // Init script doesn't exist (Windows PowerShell) — env will be in PTY env vars instead
+      }
+
+      logger.debug('[Local PTY] Injected workspace env vars into shell init', {
+        sessionId,
+        count: (workspaceEnvScript.match(/^export /gm) || []).length,
+      });
+    } catch (err: any) {
+      logger.warn('[Local PTY] Failed to write workspace env file', {
+        error: err.message,
+      });
+    }
+  }
+
   logger.info('[Local PTY] Spawning PTY process', {
     shell: safeShell?.cmd ?? ptyShell,
     args: safeShell?.args ?? [],
@@ -1630,6 +1677,7 @@ async function createOracleVMPtySession(
 
   // Build isolation commands for the per-user workspace
   const userWorkspace = getOracleUserWorkspace(userId);
+  const podmanCmds = buildRootlessPodmanCommands(userId, sessionId);
   const bwrapCmds = buildBwrapSetupCommands(userId);
   const chrootCmds = buildChrootSetupCommands(userId);
   const dockerCmds = buildDockerOnVMCommands(userId, sessionId);
@@ -1666,9 +1714,11 @@ async function createOracleVMPtySession(
         // Create per-user workspace
         `mkdir -p ${shellSafe(userWorkspace)}`,
         `chmod 700 ${shellSafe(userWorkspace)}`,
-        // Try bwrap first, then chroot, then docker, then shared-shell
+        // Try rootless podman first (offers namespace isolation + cgroup limits),
+        // then bwrap, chroot, docker, shared-shell.
         `echo "=== ORACLE_VM_ISOLATION_CHECK ==="`,
-        `if which bwrap >/dev/null 2>&1; then echo "ISOLATION=bwrap";`,
+        `if which podman >/dev/null 2>&1; then echo "ISOLATION=podman";`,
+        `elif which bwrap >/dev/null 2>&1; then echo "ISOLATION=bwrap";`,
         `elif [ -f ${shellSafe(CHROOT_ROOTFS_TARBALL || '/opt/rootfs.tar.gz')} ]; then echo "ISOLATION=chroot";`,
         `elif which docker >/dev/null 2>&1; then echo "ISOLATION=docker";`,
         `else echo "ISOLATION=shared-shell"; fi`,
@@ -1689,7 +1739,7 @@ async function createOracleVMPtySession(
         checkStream.on('close', () => {
           // Determine isolation mode from output
           const isolMatch = checkOutput.match(/ISOLATION=(\S+)/);
-          const isolation: 'bwrap' | 'chroot' | 'docker' | 'shared-shell' =
+          const isolation: 'podman' | 'bwrap' | 'chroot' | 'docker' | 'shared-shell' =
             (isolMatch?.[1] as any) || 'shared-shell';
 
           logger.info('[Local PTY] Oracle VM isolation mode', { sessionId, isolation, userId: sanitizeOracleUserId(userId) });
@@ -1700,6 +1750,15 @@ async function createOracleVMPtySession(
           let oracleContainerName: string | undefined;
 
           switch (isolation) {
+            case 'podman': {
+              // Run rootless Podman setup (create container with workspace bind-mount)
+              const podmanSetup = podmanCmds.setupCommands.join('\n');
+              client.exec(podmanSetup, () => {});
+              shellCmd = podmanCmds.shellCommand;
+              workspacePath = podmanCmds.workspacePath;
+              oracleContainerName = `pty-podman-${sessionId.slice(0, 12)}`;
+              break;
+            }
             case 'bwrap':
               shellCmd = bwrapCmds.shellCommand;
               workspacePath = bwrapCmds.workspacePath;
@@ -1768,6 +1827,7 @@ async function createOracleVMPtySession(
                 sshClient: client,
                 oracleIsolation: isolation,
                 oracleContainerName,
+                // Include isolation mode in the sandbox info so the UI can render the badge
               });
 
               logger.info('[Local PTY] Oracle VM isolated session created', {
@@ -1819,11 +1879,15 @@ function registerSession(
   workspaceDir: string,
   extras: Partial<Omit<LocalPtySession, 'sessionId' | 'userId' | 'pty' | 'createdAt' | 'exited' | 'exitCode' | 'outputQueue' | 'workspaceDir'>> = {}
 ): void {
-  // Only enable execution routing for oracle-vm and direct (non-docker, non-unshare) isolation modes.
-  // Docker/r2-docker modes already have container-level isolation.
-  // Unshare mode has namespace isolation.
+  // Container-level isolation modes don't need execution routing:
+  //   - Podman: rootless container with full namespace + cgroup isolation
+  //   - Docker/r2-docker: full container isolation via Docker daemon
+  //   - Unshare: user/mount/pid namespace isolation
+  // For oracle-vm with bwrap/chroot/shared-shell, execution routing is useful
+  // because those modes lack resource limits or full namespace isolation.
+  const containerIsolation = !!extras.dockerContainerId || extras.oracleIsolation === 'podman';
   const enableRouting = EXECUTION_ROUTING_ENABLED === true &&
-    (!!extras.oracleIsolation || (!extras.dockerContainerId && !extras.unsharePid));
+    !containerIsolation && !extras.unsharePid;
 
   // === Execution Routing: intercept non-trivial commands ===
   // Wraps the PTY write method to buffer input until a newline, then classifies
@@ -2187,8 +2251,12 @@ export async function GET(req: NextRequest) {
         }
       };
 
-      // Send initial connected message
-      send({ type: 'connected', data: { sessionId } });
+      // Send initial connected message with isolation mode for badge persistence
+      const connectedData: Record<string, unknown> = { sessionId };
+      if (session.oracleIsolation) {
+        connectedData.oracleIsolation = session.oracleIsolation;
+      }
+      send({ type: 'connected', data: connectedData });
 
       // Poll for PTY output with queue
       const pollInterval = setInterval(() => {

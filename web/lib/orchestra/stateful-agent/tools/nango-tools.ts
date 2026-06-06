@@ -87,7 +87,7 @@ export const nangoGitHubTools = {
     - Get repository metadata
 
     RETURNS: Array of repository objects with name, owner, description, etc.`,
-    parameters: z.object({
+    inputSchema: z.object({
       connectionId: z.string().describe('Nango connection ID for GitHub'),
       page: z.number().optional().describe('Page number (default: 1)'),
       per_page: z.number().refine((val) => val <= 100, 'Items per page must be at most 100').optional().describe('Items per page (default: 30, max: 100)'),
@@ -114,7 +114,7 @@ export const nangoGitHubTools = {
     - Track tasks
 
     REQUIRES: Repository owner, repo name, and issue title`,
-    parameters: z.object({
+    inputSchema: z.object({
       connectionId: z.string().describe('Nango connection ID for GitHub'),
       owner: z.string().describe('Repository owner (username or org)'),
       repo: z.string().describe('Repository name'),
@@ -144,7 +144,7 @@ export const nangoGitHubTools = {
     - Contribute to open source
 
     REQUIRES: Owner, repo, title, head branch, base branch`,
-    parameters: z.object({
+    inputSchema: z.object({
       connectionId: z.string().describe('Nango connection ID for GitHub'),
       owner: z.string().describe('Repository owner'),
       repo: z.string().describe('Repository name'),
@@ -175,7 +175,7 @@ export const nangoGitHubTools = {
     - Get file metadata including SHA
 
     RETURNS: File content (decoded from base64) and SHA`,
-    parameters: z.object({
+    inputSchema: z.object({
       connectionId: z.string().describe('Nango connection ID for GitHub'),
       owner: z.string().describe('Repository owner'),
       repo: z.string().describe('Repository name'),
@@ -218,7 +218,7 @@ export const nangoSlackTools = {
     - Reply to threads
 
     REQUIRES: Channel ID (can get from slack_list_channels)`,
-    parameters: z.object({
+    inputSchema: z.object({
       connectionId: z.string().describe('Nango connection ID for Slack'),
       channel: z.string().describe('Slack channel ID (e.g., C0123456789)'),
       text: z.string().describe('Message text'),
@@ -244,7 +244,7 @@ export const nangoSlackTools = {
     - Find channel IDs for sending messages
     - Discover available channels
     - Get channel metadata`,
-    parameters: z.object({
+    inputSchema: z.object({
       connectionId: z.string().describe('Nango connection ID for Slack'),
       limit: z.number().refine((val) => val <= 100, 'Limit must be at most 100').optional().describe('Maximum number of channels (default: 100)'),
     }),
@@ -270,7 +270,7 @@ export const nangoNotionTools = {
     - Find pages by title or content
     - Discover databases
     - Get page IDs for operations`,
-    parameters: z.object({
+    inputSchema: z.object({
       connectionId: z.string().describe('Nango connection ID for Notion'),
       query: z.string().describe('Search query'),
       filter: z.object({
@@ -300,7 +300,7 @@ export const nangoNotionTools = {
     - Create database entries
 
     REQUIRES: Parent page ID (use notion_search to find)`,
-    parameters: z.object({
+    inputSchema: z.object({
       connectionId: z.string().describe('Nango connection ID for Notion'),
       parent_page_id: z.string().describe('Parent page ID'),
       title: z.string().describe('Page title'),
@@ -350,7 +350,7 @@ export const nangoSyncToolWrappers = {
     - Trigger continuous data sync
 
     REQUIRES: Provider config key and sync name`,
-    parameters: z.object({
+    inputSchema: z.object({
       providerConfigKey: z.string().describe('Nango provider config key (e.g., "github", "hubspot")'),
       syncName: z.string().describe('Name of the sync to trigger'),
       fullResync: z.boolean().optional().describe('Force full resync (default: false)'),
@@ -376,7 +376,7 @@ export const nangoSyncToolWrappers = {
     - Debug sync failures
 
     RETURNS: Status (RUNNING/PAUSED/STOPPED/ERROR), last sync date`,
-    parameters: z.object({
+    inputSchema: z.object({
       providerConfigKey: z.string().describe('Nango provider config key'),
       syncName: z.string().describe('Name of the sync'),
       connectionId: z.string().optional().describe('Connection ID (defaults to user ID from context)'),
@@ -399,7 +399,7 @@ export const nangoSyncToolWrappers = {
     - View sync schedules
 
     RETURNS: Array of syncs with name, status, last/next sync dates`,
-    parameters: z.object({
+    inputSchema: z.object({
       providerConfigKey: z.string().describe('Nango provider config key'),
       connectionId: z.string().optional().describe('Connection ID (defaults to user ID from context)'),
     }),
@@ -421,7 +421,7 @@ export const nangoSyncToolWrappers = {
     - Access CRM contacts, issues, files
 
     REQUIRES: Provider config key and model name`,
-    parameters: z.object({
+    inputSchema: z.object({
       providerConfigKey: z.string().describe('Nango provider config key'),
       syncName: z.string().describe('Sync/model name to query records from'),
       model: z.string().optional().describe('Specific model name (defaults to syncName)'),
@@ -448,7 +448,7 @@ export const nangoActionToolWrappers = {
     - Perform write operations with OAuth
 
     REQUIRES: Provider config key, action name, and input parameters`,
-    parameters: z.object({
+    inputSchema: z.object({
       providerConfigKey: z.string().describe('Nango provider config key'),
       actionName: z.string().describe('Name of the action to execute'),
       input: z.object({}).passthrough().describe('Action input parameters'),

@@ -36,6 +36,9 @@ interface TerminalPanelProps {
   isMinimized?: boolean;
 }
 
+/** Oracle VM isolation mode for the terminal session */
+export type OracleIsolationMode = 'podman' | 'bwrap' | 'chroot' | 'docker' | 'shared-shell';
+
 interface SandboxInfo {
   sessionId?: string;
   sandboxId?: string;
@@ -44,6 +47,8 @@ interface SandboxInfo {
     cpu?: string;
     memory?: string;
   };
+  /** Isolation mode for Oracle VM sessions (podman, bwrap, chroot, docker, shared-shell) */
+  oracleIsolation?: OracleIsolationMode;
 }
 
 type TerminalMode = 'local' | 'connecting' | 'pty' | 'sandbox-cmd' | 'editor' | 'command-mode' | 'desktop-pty';
@@ -1482,6 +1487,15 @@ export default function TerminalPanel({
               cols: terminal.cols,
               rows: terminal.rows,
               cwd: localShellCwdRef.current[terminalId] || getDesktopWorkspaceDir() || 'workspace',
+              onOracleIsolationUpdate: (isolation) => {
+                // Use updateTerminalState to trigger a React re-render so the badge updates
+                updateTerminalState(terminalId, {
+                  sandboxInfo: {
+                    ...(terminalsRef.current.find(t => t.id === terminalId)?.sandboxInfo || { status: 'none' }),
+                    oracleIsolation: isolation,
+                  },
+                });
+              },
             });
           }
         } catch (ptyError) {
@@ -1499,6 +1513,10 @@ export default function TerminalPanel({
             termRef.mode = 'desktop-pty';
             termRef.webLocalPtyInstance = webPty;
             termRef.isConnected = true;
+            // Propagate isolation mode from the web PTY (oracle-vm: podman/bwrap/chroot/docker/shared-shell)
+            if (webPty.oracleIsolation) {
+              termRef.sandboxInfo = { ...termRef.sandboxInfo, oracleIsolation: webPty.oracleIsolation };
+            }
 
             // Clear any pre-existing local content before PTY output arrives
             termRef.terminal?.clear();
@@ -2289,6 +2307,24 @@ export default function TerminalPanel({
     }
   }, [isSplitView, terminals.length, createTerminal, initXterm]);
 
+  const isolationBadgeColor: Record<string, string> = {
+    podman: 'bg-orange-500/20 text-orange-400 border-orange-500/30',
+    bwrap: 'bg-cyan-500/20 text-cyan-400 border-cyan-500/30',
+    chroot: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
+    docker: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
+    'shared-shell': 'bg-gray-500/20 text-gray-400 border-gray-500/30',
+  };
+
+  const getIsolationBadge = (oracleIsolation?: OracleIsolationMode) => {
+    if (!oracleIsolation) return null;
+    const color = isolationBadgeColor[oracleIsolation] || 'bg-white/10 text-white/60 border-white/20';
+    return (
+      <span className={`text-[10px] px-1.5 py-0.5 rounded-full border font-medium ${color}`}>
+        {oracleIsolation}
+      </span>
+    );
+  };
+
   const getModeIndicator = (mode: TerminalMode, status: string) => {
     switch (mode) {
       case 'local':
@@ -2343,6 +2379,7 @@ export default function TerminalPanel({
             'bg-blue-400'
           }`} />
           {terminal.name}
+          {terminal.sandboxInfo.oracleIsolation && getIsolationBadge(terminal.sandboxInfo.oracleIsolation)}
         </span>
         {terminals.length > 1 && (
           <button
@@ -2456,6 +2493,12 @@ export default function TerminalPanel({
                 {modeInfo.icon}
                 {modeInfo.text}
               </span>
+              {activeTerminal.sandboxInfo.oracleIsolation && (
+                <>
+                  <span className="text-white/30">|</span>
+                  {getIsolationBadge(activeTerminal.sandboxInfo.oracleIsolation)}
+                </>
+              )}
               {activeTerminal.sandboxInfo.sandboxId && (
                 <>
                   <span className="text-white/30">|</span>

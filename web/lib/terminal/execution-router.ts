@@ -20,6 +20,7 @@
 import { createLogger } from '@/lib/utils/logger';
 import type { SandboxProviderType } from '@/lib/sandbox/providers';
 import { latencyTracker } from '@/lib/sandbox/provider-router';
+import { providerHealthTracker } from '@/lib/sandbox/provider-health';
 
 const logger = createLogger('ExecutionRouter');
 
@@ -759,6 +760,10 @@ export async function executeWithRouting(
     // so the RuntimeBroker's latency scores improve over time from actual data.
     latencyTracker.record(provider, duration);
 
+    // Also feed success signal to the provider health tracker so failure-rate
+    // deprioritization reflects real sandbox outcomes, not just latency spikes.
+    providerHealthTracker.recordCall(provider, true, duration);
+
     logger.info('Sandbox execution complete', {
       command: command.slice(0, 100),
       provider,
@@ -822,6 +827,10 @@ export async function executeWithRouting(
     // Record the failed attempt too — high latency on failure signals
     // provider degradation to the RuntimeBroker's latency scorer.
     latencyTracker.record(provider, duration);
+
+    // Record failure in the provider health tracker so failure-rate-based
+    // deprioritization actually triggers when providers are unreliable.
+    providerHealthTracker.recordCall(provider, false, duration, error.message);
 
     logger.error('Sandbox execution failed, falling back to local', {
       command: command.slice(0, 100),
