@@ -276,6 +276,55 @@ export class WorkspaceImageRegistry {
   }
 
   // ==========================================================================
+  // Dependency Change Detection
+  // ==========================================================================
+
+  /**
+   * Check if a filename is a known dependency file that should trigger
+   * workspace image rebuild when changed.
+   */
+  isDetectedDependency(filename: string): boolean {
+    return LOCKFILE_PATTERNS.some(p => p.filename === filename);
+  }
+
+  /**
+   * Set of workspace IDs that have stale dependency files.
+   * When a dep file changes (via onDependencyFileChanged), the workspace is
+   * marked as stale. On the next ensureImage() call for that workspace,
+   * the image is force-rebuilt regardless of hash matching.
+   *
+   * Uses workspaceId (e.g., `${userId}:${sessionId}`) rather than content hash
+   * because the single-file hash from onDependencyFileChanged will never match
+   * the composite hash computed by ensureImage over all lockfiles.
+   */
+  private staleWorkspaces = new Set<string>();
+
+  /**
+   * Mark a workspace as having stale dependency files.
+   * Called by onDependencyFileChanged() when a dep file changes.
+   */
+  markStaleWorkspace(workspaceId: string): void {
+    this.staleWorkspaces.add(workspaceId);
+    logger.debug('Workspace image marked stale', { workspaceId: workspaceId.slice(0, 16) });
+  }
+
+  /**
+   * Check if a workspace has stale dependency files.
+   * If true, ensureImage() should force a rebuild even if a matching
+   * image exists in the registry.
+   */
+  isWorkspaceStale(workspaceId: string): boolean {
+    return this.staleWorkspaces.has(workspaceId);
+  }
+
+  /**
+   * Clear the stale flag for a workspace (called after image rebuild starts).
+   */
+  clearStaleWorkspace(workspaceId: string): void {
+    this.staleWorkspaces.delete(workspaceId);
+  }
+
+  // ==========================================================================
   // Stats
   // ==========================================================================
 

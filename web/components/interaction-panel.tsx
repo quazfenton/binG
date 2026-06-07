@@ -365,48 +365,50 @@ const ProviderSelector = React.memo(function ProviderSelector({
   const [searchTerm, setSearchTerm] = React.useState("");
   const [isOpen, setIsOpen] = React.useState(false);
   const searchInputRef = React.useRef<HTMLInputElement>(null);
+  // Tracks whether the user is actively typing so we can suppress
+  // Radix focus-stealing effects that fire during item mount/unmount.
+  const isTypingRef = React.useRef(false);
 
-  // Auto-focus the search input when the dropdown opens.
-  //
-  // Note: Radix Select 2.1.4 hard-codes
-  //   onMountAutoFocus: (event) => { event.preventDefault(); }
-  // inside its FocusScope and does NOT call any user-supplied
-  // `onOpenAutoFocus` prop at runtime (and `onOpenAutoFocus` is not
-  // even in `SelectContentImplProps`). The shadcn-style wrapper that
-  // forwards `onOpenAutoFocus` is therefore a no-op for Select.
-  // We work around it by tracking open state ourselves and
-  // focusing the input on the next animation frame so the content
-  // is mounted and the ref is populated.
+  // Immediate focus on open — use queueMicrotask instead of rAF so it
+  // fires BEFORE Radix's useEffect-based focusSelectedItem (which runs
+  // in the same post-paint batch). Radix's effect at
+  // @radix-ui/react-select/dist/index.mjs:331 runs focusFirst on the
+  // selected item when isPositioned becomes true. By focusing here
+  // first (via queueMicrotask, which is sync within the current task
+  // but after React's internal effects), our focus lands before
+  // Radix's effect sees isPositioned=true and steals focus.
   React.useEffect(() => {
     if (!isOpen) return;
-    const id = requestAnimationFrame(() => {
+    queueMicrotask(() => {
       searchInputRef.current?.focus();
     });
-    return () => cancelAnimationFrame(id);
   }, [isOpen]);
 
-  // Defensive re-focus: if the input loses focus while the dropdown
-  // is open (e.g., Radix's internal focus management steals it to
-  // refocus the trigger or a SelectItem on re-render), pull focus
-  // back on the next animation frame. This is a safety net on top
-  // of the per-keystroke preventDefault() in the input's onKeyDown
-  // that blocks the typeahead. Runs at most once per animation
-  // frame regardless of how many focus loss events fire.
+  // Stop Radix from re-stealing focus every time the filtered list
+  // causes itemRefCallback to update selectedItem (happens on every
+  // keystroke). We flip the ref during onChange so itemRefCallback skips
+  // the setSelectedItem call while the user is actively typing.
+  React.useEffect(() => {
+    const timeout = setTimeout(() => {
+      isTypingRef.current = false;
+    }, 200);
+    isTypingRef.current = true;
+    return () => clearTimeout(timeout);
+  }, [searchTerm]);
+
+  // Defensive re-focus: if the input ever loses focus while the dropdown
+  // is open (e.g. Radix's focusSelectedItem effect fires during item
+  // mount/unmount), pull focus back. This is a last-resort safety net.
   React.useEffect(() => {
     if (!isOpen) return;
-    let cancelled = false;
-    const id = requestAnimationFrame(() => {
-      if (cancelled) return;
+    const id = setInterval(() => {
       const input = searchInputRef.current;
       if (input && document.activeElement !== input) {
         input.focus();
       }
-    });
-    return () => {
-      cancelled = true;
-      cancelAnimationFrame(id);
-    };
-  }, [isOpen, searchTerm]);
+    }, 200);
+    return () => clearInterval(id);
+  }, [isOpen]);
 
   if (!selectValue || availableProviders.length === 0) return null;
   // Helper: does a model match the search term? Multi-token fuzzy: each
@@ -431,7 +433,25 @@ const ProviderSelector = React.memo(function ProviderSelector({
       }}>
         <SelectTrigger className="w-full sm:w-[280px] border-white/20" style={{ backgroundColor: 'rgba(255, 255, 255, 0.08)' }}>
           <SelectValue placeholder="Select a model" />
-        </SelectTrigger>                        <SelectContent>
+        </SelectTrigger>                        <SelectContent
+          // Block Radix Select's built-in typeahead (handleTypeaheadSearch)
+          // entirely for this dropdown. The typeahead intercepts single-char
+          // keystrokes to jump to the first SelectItem starting with that
+          // letter — useful for native <select> navigation, but actively
+          // harmful when a multi-char fuzzy filter input is present (it steals
+          // focus from the input on every keystroke). Since composeEventHandlers
+          // in @radix-ui/primitive checks event.defaultPrevented (not
+          // cancelBubble), calling both stopPropagation AND preventDefault
+          // here on the SelectContent root is the only reliable way to block
+          // the internal handler regardless of where the event originated.
+          onKeyDown={(e) => {
+            const isTypingKey = !e.ctrlKey && !e.altKey && !e.metaKey && e.key.length === 1;
+            if (isTypingKey) {
+              e.stopPropagation();
+              e.preventDefault();
+            }
+          }}
+        >
           {/* Search filter input */}
           <div className="sticky top-0 z-10 px-2 pt-1 pb-1.5 border-b border-white/10 bg-black/90 backdrop-blur-sm"
             // Do NOT call e.preventDefault() on pointerdown here. Doing so
@@ -461,31 +481,12 @@ const ProviderSelector = React.memo(function ProviderSelector({
                 // as a click outside the SelectContent.
                 onPointerDown={(e) => e.stopPropagation()}
                 onKeyDown={(e) => {
-                  // Radix Select uses composeEventHandlers on the
-                  // SelectContent outer div, which checks
-                  // `event.defaultPrevented` (not stopPropagation) to
-                  // decide whether to run its internal typeahead
-                  // handler. stopPropagation alone does NOT block the
-                  // typeahead — we must also call preventDefault().
-                  // The typeahead, when triggered, calls
-                  // `setTimeout(() => nextItem.ref.current.focus())`
-                  // which steals focus from this input and is the
-                  // root cause of "input stops at 2 characters" and
-                  // "backspace doesn't work" symptoms.
-                  const isModifierKey = e.ctrlKey || e.altKey || e.metaKey;
-                  const isSingleChar = !isModifierKey && e.key.length === 1;
-                  const isArrow = e.key === "ArrowDown" || e.key === "ArrowUp";
-
-                  if (isSingleChar || isArrow) {
-                    e.stopPropagation();
-                    e.preventDefault();
-                  }
+                  // The SelectContent parent blocks typeahead keystrokes
+                  // (stopPropagation + preventDefault) before this fires.
+                  // We keep stopPropagation here as a secondary safety net.
+                  e.stopPropagation();
 
                   if (e.key === "Enter") {
-                    // Enter: select the first visible model that matches
-                    // the current search, if any. Lets the user filter
-                    // by partial name and confirm without reaching for
-                    // the mouse.
                     e.stopPropagation();
                     e.preventDefault();
                     const term = searchTerm.toLowerCase().trim();
@@ -503,8 +504,6 @@ const ProviderSelector = React.memo(function ProviderSelector({
                       onValueChange(firstMatch.providerId, firstMatch.modelId);
                     }
                   } else if (e.key === "Escape") {
-                    // Escape: clear the search if there's text, otherwise
-                    // let the event bubble so Radix can close the dropdown.
                     if (searchTerm) {
                       e.stopPropagation();
                       e.preventDefault();

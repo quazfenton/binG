@@ -13,7 +13,7 @@
 
 import { enhancedAPIClient, type RequestConfig, type APIResponse } from './enhanced-api-client';
 import { llmService, type LLMRequest, type LLMResponse, type StreamingResponse, type LLMMessage, PROVIDERS } from '../providers/llm-providers';
-import { PROVIDER_FALLBACK_CHAINS } from '../providers/provider-fallback-chains';
+import { PROVIDER_FALLBACK_CHAINS, getConfiguredFallbackChain } from '../providers/provider-fallback-chains';
 import { toolContextManager } from '../tools/tool-context-manager';
 import { getToolManager, TOOL_REGISTRY } from '../tools';
 import { sandboxBridge } from '../sandbox';
@@ -29,7 +29,7 @@ import { chatRequestLogger } from './chat-request-logger';
 import { isCLIProvider } from './vercel-ai-streaming';
 import { recordRateLimitError } from '../providers/model-ranker';
 import { sandboxMetrics } from '@/lib/backend/metrics';
-import { classifyFailure, FailureType } from '@/lib/errors/failure-classifier';
+import { classifyFailure, FailureType, TUNNEL_DNS_ERROR } from '@/lib/errors/failure-classifier';
 
 export interface EnhancedLLMRequest extends LLMRequest {
   fallbackProviders?: string[];
@@ -640,6 +640,104 @@ export class EnhancedLLMService {
           originStack: errorStack,
         }).catch((err) => { chatLogger.debug(`Failed to record error telemetry: ${err}`); });
 
+        // Try fallback chain before giving up to the response-router.
+        // Unlike the streaming path (which already iterates fallbacks),
+        // the non-streaming path was falling back to the response-router's
+        // endpoint chain (original-system → n8n → custom-fallback → etc.),
+        // which are completely different services — not LLM provider fallbacks.
+        // This wires the centralized fallback chain so when the primary
+        // provider fails (e.g., ninerouter tunnel is stale), we immediately
+        // try the configured fallback providers (nvidia, mistral, google, ...)
+        // before handing control back to the response-router.
+        const fallbackChain = getConfiguredFallbackChain(actualProvider);
+        let fallbackAttempted = false;
+
+        if (fallbackChain.length > 0) {
+          for (const fallbackProvider of fallbackChain) {
+            const fallbackConfig = this.getProviderConfigForRequest(fallbackProvider, requestId);
+            if (!fallbackConfig) continue;
+
+            const compatibleModel = this.findCompatibleModel(actualModel, fallbackConfig.models);
+            if (!compatibleModel) continue;
+
+            try {
+              chatLogger.info('Falling back to provider (non-streaming)', {
+                requestId,
+                primaryProvider: actualProvider,
+                fallbackProvider,
+                model: compatibleModel,
+              });
+
+              const fallbackApiKey = apiKeys?.[fallbackProvider] || fallbackConfig.apiKey || undefined;
+              const fallbackRequest = {
+                ...fullRequest,
+                provider: fallbackProvider,
+                model: compatibleModel,
+                apiKey: fallbackApiKey,
+              };
+
+              const response = await this.callProviderWithEnhancedClient(
+                fallbackProvider,
+                fallbackRequest,
+                retryOptions,
+                enableCircuitBreaker,
+                requestId,
+              );
+
+              // Record fallback success telemetry
+              const fallbackLatencyMs = Date.now() - requestStartTime;
+              const { redactedArgs: fallbackArgs, originStack: fallbackStack } = prepareTelemetryPayload({
+                args: {
+                  provider: fallbackProvider,
+                  model: compatibleModel,
+                  latencyMs: fallbackLatencyMs,
+                  contentLength: response.content?.length || 0,
+                  success: true,
+                  fallbackOccurred: true,
+                },
+              });
+              recordToolCallTelemetry({
+                toolCallId: requestId || null,
+                redactedArgs: fallbackArgs,
+                originStack: fallbackStack,
+              }).catch((err) => { chatLogger.debug(`Failed to record fallback telemetry: ${err}`); });
+
+              sandboxMetrics.fallbackSuccessTotal.inc({
+                layer: 'layer1',
+                primary_provider: actualProvider,
+                fallback_provider: fallbackProvider,
+              });
+              chatLogger.info('Fallback provider succeeded (non-streaming)', {
+                requestId,
+                fallbackProvider,
+                model: compatibleModel,
+                latencyMs: fallbackLatencyMs,
+              });
+
+              return await postProcessToolCalls(response);
+            } catch (fallbackError: any) {
+              fallbackAttempted = true;
+              chatLogger.warn('Fallback provider failed (non-streaming)', {
+                requestId,
+                fallbackProvider,
+                error: fallbackError.message,
+              });
+              // Continue to next fallback in chain
+            }
+          }
+        }
+
+        // All fallbacks exhausted (or no fallbacks configured).
+        // Log the failure and re-throw with the original enhanced error
+        // so the response-router can try its own endpoint fallbacks.
+        if (fallbackAttempted) {
+          chatLogger.warn('All fallback providers failed (non-streaming)', {
+            requestId,
+            primaryProvider: actualProvider,
+            attemptedFallbacks: fallbackChain,
+          });
+        }
+
         // Re-throw with categorization so the Orchestrator knows how to handle the retry/fallback
         throw enhancedError;
       }
@@ -1204,6 +1302,11 @@ export class EnhancedLLMService {
           });
 
           const fallbackLatency = Date.now() - streamStartTime;
+          sandboxMetrics.fallbackSuccessTotal.inc({
+            layer: 'layer1',
+            primary_provider: primaryProvider,
+            fallback_provider: fallbackProvider,
+          });
           chatLogger.info('Streaming fallback completed successfully', {
             requestId,
             provider: fallbackProvider,
@@ -1438,6 +1541,12 @@ export class EnhancedLLMService {
       enhancedError.message = `API quota exceeded for ${provider}. Switching to alternative provider.`;
     } else if (msg.includes('408') || msg.includes('504') || msg.includes('timeout')) {
       enhancedError.message = `Request timeout for ${provider}. The system will retry with exponential backoff.`;
+    } else if (TUNNEL_DNS_ERROR.test(msg)) {
+      // trycloudflare/stale-tunnel DNS error: the tunnel endpoint for this
+      // provider is no longer resolving. Mark as PERMANENT so the retry layer
+      // immediately fails over to a different provider instead of retrying 3x.
+      enhancedError.failureType = 'PERMANENT';
+      enhancedError.message = `Tunnel DNS error for ${provider} (stale tunnel). The tunnel endpoint is no longer resolving. Switching to alternative provider.`;
     } else if (msg.includes('network') || msg.includes('fetch') || msg.includes('connection')) {
       enhancedError.message = `Network error connecting to ${provider}. Checking alternative providers.`;
     } else if (msg.includes('500') || msg.includes('502') || msg.includes('503')) {

@@ -89,7 +89,23 @@ HTTP_BODY=$(printf '%s' "$HTTP_RESPONSE" | sed '$d')
 HTTP_CODE=$(printf '%s' "$HTTP_RESPONSE" | tail -n1)
 
 if [ "$HTTP_CODE" = "200" ]; then
-  echo "✅ BACKEND_URL updated"
+  # Validate response body — detect KV/R2 write failures even on HTTP 200
+  if printf '%s' "$HTTP_BODY" | grep -q '"kvSuccess":false'; then
+    if printf '%s' "$HTTP_BODY" | grep -q '"r2Success":false'; then
+      echo "❌ BACKEND_URL update — both KV and R2 writes failed!" >&2
+      echo "   $HTTP_BODY" >&2
+      exit 1
+    fi
+    echo "⚠️  BACKEND_URL updated (R2 only — KV write failed)"
+    echo "   $HTTP_BODY"
+    exit 0
+  fi
+  if printf '%s' "$HTTP_BODY" | grep -q '"r2Success":false'; then
+    echo "⚠️  BACKEND_URL updated (KV only — R2 write failed)"
+    echo "   $HTTP_BODY"
+    exit 0
+  fi
+  echo "✅ BACKEND_URL updated to KV and R2"
   echo "   $HTTP_BODY"
   exit 0
 else

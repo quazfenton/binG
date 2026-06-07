@@ -1093,6 +1093,17 @@ export class VirtualFilesystemService {
       return normalizedPath;
     }
 
+    // FIX: Desktop/CLI mode — workspaceRoot is an absolute filesystem path (e.g. /opt/bing/web).
+    // Relative paths (e.g. "frontend/Dockerfile") are valid children of the filesystem root.
+    // They are NOT traversal because they don't escape the workspaceRoot.
+    // Note: workspacePrefix has leading '/' stripped by .split().filter(Boolean).join('/'),
+    // so we check this.workspaceRoot (which preserves the leading '/') instead.
+    if (this.workspaceRoot.startsWith('/') &&
+        !normalizedPath.startsWith('workspace/') &&
+        !normalizedPath.startsWith('sessions/')) {
+      return normalizedPath;
+    }
+
     console.log('[VFS normalizePath] inputPath:', inputPath, 'workspaceRoot:', this.workspaceRoot, 'normalizedPath:', normalizedPath, 'workspacePrefix:', workspacePrefix);
     
     // Verify the normalized path is within or an ancestor of the workspace root

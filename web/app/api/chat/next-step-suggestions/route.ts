@@ -147,6 +147,28 @@ export async function POST(req: NextRequest) {
       : null;
 
   const start = Date.now();
+
+  // Skip expensive LLM call if the last response was an error.
+  // This prevents wasting ~100s of API quota on a failure that already
+  // returned no useful content. Covers timeouts, 500s, model errors, etc.
+  const errorPatterns = [
+    'timeout', 'timed out', 'error', '500', 'internal server error',
+    'failed', 'unavailable', 'service unavailable', 'rate limit',
+    'rate_limit', 'quota exceeded', 'billing', 'invalid api',
+    'unauthorized', 'connection refused', 'network error',
+  ];
+  const responseLower = cappedResponse.toLowerCase();
+  if (errorPatterns.some((p) => responseLower.includes(p))) {
+    logger.debug('skipping suggestions — lastResponse appears to be an error', {
+      messageId,
+      elapsedMs: Date.now() - start,
+    });
+    return NextResponse.json({
+      success: true,
+      data: { suggestions: [], messageId },
+    });
+  }
+
   try {
     const suggestions = await generateNextStepSuggestions(
       recentPrompts,

@@ -47,6 +47,7 @@ export type SandboxProviderType =
   | 'vercel-sandbox'
   | 'oracle-vm'
   | 'zeroboot'
+  | 'firecracker'
   | 'modal'
   | 'modal-com'
   | 'terminaluse'
@@ -399,6 +400,25 @@ function initializeRegistry() {
     asyncFactory: async () => {
       const { ZerobootProvider } = await import('./zeroboot-provider')
       return new ZerobootProvider()
+    },
+  })
+
+  // Firecracker - Lightweight microVM sandboxes via KVM
+  // Best for: Strong isolation, security-critical workloads, full OS isolation
+  // Each sandbox runs in its own microVM with dedicated kernel
+  // Note: Requires /usr/bin/firecracker or FIRECRACKER_BIN env var
+  providerRegistry.set('firecracker', {
+    provider: null as any as any,
+    priority: 4, // Medium-high priority — strong isolation
+    enabled: true,
+    available: true, // Checked dynamically in isAvailable()
+    healthy: false,
+    initializing: false,
+    initPromise: null,
+    failureCount: 0,
+    asyncFactory: async () => {
+      const { FirecrackerSandboxProvider } = await import('./firecracker-provider')
+      return new FirecrackerSandboxProvider()
     },
   })
 

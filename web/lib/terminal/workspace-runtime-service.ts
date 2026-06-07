@@ -27,6 +27,7 @@ import { virtualPidRegistry } from './virtual-pid-registry';
 import { workspaceServiceManager, type WorkspaceService, type ServiceStatus } from './workspace-service-manager';
 import { workspacePreviewRegistry, type WorkspacePreview, type PreviewStatus } from './workspace-preview-registry';
 import type { PidMapping } from './virtual-pid-registry';
+import { getSecretBroker } from '@/lib/sandbox/secret-broker';
 
 const logger = createLogger('WorkspaceRuntime');
 
@@ -147,7 +148,25 @@ export class WorkspaceRuntimeService {
   /** Set a workspace-scoped environment variable. Persists to DB. */
   setEnv(key: string, value: string): void {
     this.envCache.set(key, value);
-    this.syncEnvToDb(key, value);
+    this.syncEnvToDb(key, value, false);
+  }
+
+  /**
+   * Set a workspace-scoped secret environment variable.
+   * The value is encrypted in the SecretBroker and a placeholder reference
+   * is stored in the env cache. The real value never appears in:
+   * - Sandbox env vars (replaced by __SB__KEY__ placeholder)
+   * - Log output
+   * - Error messages
+   * - Shell $env introspection inside the sandbox
+   */
+  async setSecret(key: string, value: string): Promise<void> {
+    const broker = getSecretBroker();
+    await broker.setSecret(key, value, { ownerId: this.userId });
+    // Store the placeholder reference in the env cache
+    this.envCache.set(key, `__SB__${key}__`);
+    this.syncEnvToDb(key, `__SB__${key}__`, true);
+    logger.debug('Secret env var stored via SecretBroker', { key });
   }
 
   /** Get a workspace-scoped environment variable. */
@@ -220,14 +239,14 @@ export class WorkspaceRuntimeService {
   // DB persistence — Environment Variables
   // ========================================================================
 
-  private syncEnvToDb(key: string, value: string): void {
+  private syncEnvToDb(key: string, value: string, isSecret: boolean = false): void {
     try {
       const db = getDatabase();
       if (!db) return;
       db.prepare(`
         INSERT OR REPLACE INTO workspace_env (workspace_id, key, value, is_secret, updated_at)
-        VALUES (?, ?, ?, 0, ?)
-      `).run(this.workspaceId, key, value, Date.now());
+        VALUES (?, ?, ?, ?, ?)
+      `).run(this.workspaceId, key, value, isSecret ? 1 : 0, Date.now());
     } catch (error: any) {
       logger.warn('Failed to sync env to DB', {
         key,

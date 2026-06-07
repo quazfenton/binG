@@ -323,7 +323,7 @@ export function validateRenamePath(path: string): {
   valid: boolean;
   error?: string;
 } {
-  if (!path || typeof path !== 'string') {
+  if (!path || typeof path !== 'string' || !path.trim()) {
     return { valid: false, error: 'Path must be a non-empty string' };
   }
 

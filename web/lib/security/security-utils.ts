@@ -146,7 +146,7 @@ export function validateRelativePath(
 ): string {
   const { maxLength = 1000, allowExtensions } = options;
 
-  if (!path || typeof path !== 'string') {
+  if (!path || typeof path !== 'string' || !path.trim()) {
     throw new Error('Path must be a non-empty string');
   }
 

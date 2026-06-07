@@ -83,6 +83,7 @@ export class SandboxService {
 
   private inferProviderFromSandboxId(sandboxId: string): SandboxProviderType | null {
     // Explicit prefix matches (highest priority)
+    if (sandboxId.startsWith('firecracker-')) return 'firecracker'
     if (sandboxId.startsWith('daytona-')) return 'daytona'
     if (sandboxId.startsWith('runloop-')) return 'runloop'
     if (sandboxId.startsWith('desktop-')) return 'desktop'
@@ -206,37 +207,36 @@ export class SandboxService {
         log.debug('VFS sync started for sandbox', { sandboxId: handle.id, userId });
       } catch (syncErr: any) {
         log.warn('Failed to start VFS sync for sandbox:', syncErr.message);
-      }
-
-      // Phase 7: Auto-synthesize workspace image for instant warm starts.
-      // After base image provisioning + VFS sync, check for dependency files
-      // and pre-build or restore a cached workspace image. Best-effort — errors
-      // are logged but don't prevent the sandbox from being used.
-      // Restore path (checkpoint) is near-instant — completes before user commands.
-      // Build path runs in background since installs are slow anyway.
-      try {
-        const workspaceDir = handle.workspaceDir || '/workspace';
-        workspaceImageBuilder.ensureImage(handle, workspaceDir).then(image => {
-          if (image) {
-            log.info('Workspace image ready', {
+      }          // Phase 7 (Production): Workspace image synthesis for instant warm starts.
+          // After base image provisioning + VFS sync, check for dependency files
+          // and restore or build a cached workspace image.
+          //
+          // RESTORE PATH: Synchronous and blocking — when a matching image is found
+          // in the registry (checkpoint available), we restore it before returning
+          // the sandbox. This gives the user an instant warm start with all deps
+          // pre-installed. The operation is near-instant (checkpoint restore).
+          //
+          // BUILD PATH: Background (fire-and-forget) — when no matching image exists,
+          // installs run in the background since they take 30-300 seconds. The sandbox
+          // is usable while installs proceed, albeit without the warm-start benefit.
+          try {
+            const workspaceDir = handle.workspaceDir || '/workspace';
+            const image = await workspaceImageBuilder.ensureImage(handle, workspaceDir);
+            if (image) {
+              log.info('Workspace image ready', {
+                sandboxId: handle.id,
+                hash: image.hash.slice(0, 12),
+                tools: image.tools,
+                restoredFromCache: image.useCount > 1,
+              });
+            }
+          } catch (imgErr: any) {
+            log.warn('Workspace image synthesis failed or skipped', {
               sandboxId: handle.id,
-              hash: image.hash.slice(0, 12),
-              tools: image.tools,
-              restoredFromCache: image.useCount > 1,
+              error: imgErr.message,
             });
           }
-        }).catch((imgErr: any) => {
-          log.warn('Workspace image synthesis skipped', {
-            sandboxId: handle.id,
-            reason: imgErr.message,
-          });
-        });
-      } catch (imgErr: any) {
-        log.warn('Failed to initiate workspace image synthesis', {
-          sandboxId: handle.id,
-          error: imgErr.message,
-        });
-      }
+
 
       return handle
     } catch (error: any) {

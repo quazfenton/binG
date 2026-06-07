@@ -35,11 +35,10 @@ id = "57675a898c684724a66a1d85562c4327"
 preview_id = ""
 
 # === R2 Bucket (File Storage — replaces MinIO) ===
-# Created via setup.sh — uncomment when R2 storage is needed
-# [[r2_buckets]]
-# binding = "BING_STORAGE"
-# bucket_name = "bing-storage"
-# preview_bucket_name = "bing-storage-dev"
+[[r2_buckets]]
+binding = "BING_STORAGE"
+bucket_name = "bing-storage"
+preview_bucket_name = "bing-storage-dev"
 
 # === D1 Database (Lightweight SQL — replaces parts of PostgreSQL) ===
 # Created via setup.sh — uncomment when D1 database is needed

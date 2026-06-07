@@ -18,6 +18,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { createLogger } from '../utils/logger';
 import type { ExecutionPolicy } from '../sandbox/types';
+import { predictivePrewarmer } from '@/lib/sandbox/predictive-prewarmer';
 import { registerActiveSession, unregisterActiveSession } from './session-naming';
 import {
   getExecutionPolicyConfig,
@@ -1025,6 +1026,35 @@ export class SessionManager {
       });
 
       logger.info(`Created session ${session.id} for ${userId}:${conversationId} (policy: ${executionPolicy})`);
+
+      // Predictive Prewarming (Phase 10): After session creation, fire off a
+      // background prewarming scan of the VFS. If dependency files are detected
+      // (package.json, requirements.txt, etc.), this proactively builds a cached
+      // workspace image so the first sandbox create for this workspace gets an
+      // instant warm start from a checkpoint restore.
+      //
+      // Fire-and-forget — does not block session creation. The image builder
+      // checks the registry cache first, so this is a no-op if the image was
+      // already built by a previous session or the core-sandbox-service call.
+      const prewarmWorkspaceId = `${userId}:${conversationId}`;
+      predictivePrewarmer.prewarmFromVFS(prewarmWorkspaceId, userId).then(prewarmResult => {
+        if (prewarmResult.imageBuilt) {
+          logger.info('Predictive prewarm built image (session-manager)', {
+            hash: prewarmResult.hash?.slice(0, 12),
+            runtime: prewarmResult.runtime,
+            durationMs: prewarmResult.durationMs,
+          });
+        } else if (prewarmResult.attempted && !prewarmResult.imageBuilt) {
+          logger.debug('Predictive prewarm skipped (image already cached or no deps)', {
+            reason: prewarmResult.error || 'no-op',
+          });
+        }
+      }).catch(prewarmErr => {
+        logger.warn('Predictive prewarming failed (session-manager, non-blocking)', {
+          error: prewarmErr.message,
+        });
+      });
+
       return session;
     } catch (error: any) {
       logger.error(`Failed to create session for ${userId}:${conversationId}`, error);

@@ -1741,17 +1741,10 @@ export function extractToolCallFileRequests(toolCalls: Array<{ name: string; arg
 
   for (const toolCall of toolCalls) {
     if (FILE_READ_TOOL_VARIANTS.has(toolCall.name)) {
-      // Prefer path, fall back to directory for list tools
-      const path = toolCall.arguments?.path || toolCall.arguments?.directory;
+      // Prefer path, fall back to directory for list tools, then pattern for glob
+      const path = toolCall.arguments?.path || toolCall.arguments?.directory || toolCall.arguments?.pattern;
       if (path && typeof path === 'string') {
         requestedFiles.push(path);
-      }
-    }
-    // For glob tools, also extract the pattern
-    if (toolCall.name === 'glob' || toolCall.name === 'globFiles' || toolCall.name === 'glob.files') {
-      const pattern = toolCall.arguments?.pattern;
-      if (pattern && typeof pattern === 'string') {
-        requestedFiles.push(pattern);
       }
     }
   }
@@ -1829,6 +1822,7 @@ export async function autoContinueWithFiles(options: {
 // Track continuation count per conversation to prevent infinite loops across requests
 // LRU-style bounded Map to prevent memory leak
 const MAX_CONTINUATION_ENTRIES = 500;
+const MAX_CONTINUATION_TTL_MS = 5 * 60 * 1000; // 5 minutes — stale entries expire
 const conversationContinuationCount = new Map<string, { count: number; lastAccess: number }>();
 
 /**
@@ -1883,7 +1877,13 @@ export function resetContinuationCounters(): void {
 /** Get current continuation count for a conversation */
 export function getConversationContinuationCount(conversationId: string): number {
   const entry = conversationContinuationCount.get(conversationId);
-  return entry?.count || 0;
+  if (!entry) return 0;
+  // Expire stale entries (e.g. from a previous session) to prevent permanent cap
+  if (Date.now() - entry.lastAccess > MAX_CONTINUATION_TTL_MS) {
+    conversationContinuationCount.delete(conversationId);
+    return 0;
+  }
+  return entry.count;
 }
 
 export async function* streamWithAutoContinue(

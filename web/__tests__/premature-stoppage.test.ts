@@ -348,6 +348,7 @@ function simulateDetectFileReadRequest(llmResponse: string): FileReadRequestResu
 const FILE_READ_TOOL_VARIANTS = new Set<string>([
   'read_file', 'readFile', 'file.read',
   'list_directory', 'list_dir', 'listDirectory', 'listFiles', 'list_files', 'ls', 'file.list',
+  'glob', 'globFiles', 'glob.files',
 ]);
 
 /**
@@ -361,16 +362,10 @@ function simulateExtractToolCallFileRequests(toolCalls: any[]): string[] {
   const requestedFiles: string[] = [];
   for (const tc of toolCalls) {
     if (FILE_READ_TOOL_VARIANTS.has(tc.name)) {
-      const path = tc.arguments?.path || tc.arguments?.directory;
+      // Prefer path, fall back to directory for list tools, then pattern for glob
+      const path = tc.arguments?.path || tc.arguments?.directory || tc.arguments?.pattern;
       if (path && typeof path === 'string') {
         requestedFiles.push(path);
-      }
-    }
-    // Also handle glob tool calls with pattern argument
-    if (tc.name === 'glob' || tc.name === 'globFiles' || tc.name === 'glob.files') {
-      const pattern = tc.arguments?.pattern;
-      if (pattern && typeof pattern === 'string') {
-        requestedFiles.push(pattern);
       }
     }
   }
@@ -2546,6 +2541,300 @@ describe('Premature Stoppage After Info-Gathering Tools', () => {
         expect(result.guardBlocked).toBeNull();
         expect(result.wsConnected).toBe(true);
         expect(result.needsSSEClientFallback).toBe(false);
+      });
+    });
+  });
+  // Edge Cases: Chain Integration (rapid successive, large arrays, cancellation)
+  // --------------------------------------------------------------------------
+  describe('Chain integration edge cases (rapid, large arrays, cancellation)', () => {
+
+    // ----------------------------------------------------------------------
+    // Scenario 1: Rapid successive auto-continue events
+    // ----------------------------------------------------------------------
+    describe('Rapid successive auto-continue events', () => {
+      it('should handle two successive auto-continue events (increment count twice)', () => {
+        const first = simulateChainIntegration(
+          [{ name: 'list_directory', arguments: { path: '/src' } }],
+          '',
+          [{ toolCallId: '1', toolName: 'list_directory', result: { success: true, output: 'files...' } }],
+          { maxContinuations: 3, continuationCount: 0, enableAutoContinue: true, maxRePrompts: 3, rePromptCount: 0 }
+        );
+        expect(first.autoContinued).toBe(true);
+        const second = simulateChainIntegration(
+          [{ name: 'read_file', arguments: { path: 'src/App.tsx' } }],
+          '',
+          [{ toolCallId: '2', toolName: 'read_file', result: { success: true, output: 'content' } }],
+          { maxContinuations: 3, continuationCount: 1, enableAutoContinue: true, maxRePrompts: 3, rePromptCount: 0 }
+        );
+        expect(second.autoContinued).toBe(true);
+        expect(second.serverRePrompted).toBe(true);
+      });
+
+      it('should stop after maxContinuations is reached across rapid successive events', () => {
+        for (let count = 0; count < 3; count++) {
+          const result = simulateChainIntegration(
+            [{ name: 'list_directory', arguments: { path: '/src' } }],
+            '',
+            [{ toolCallId: 'rapid-'.concat(String(count)), toolName: 'list_directory', result: { success: true, output: 'iteration '.concat(String(count)) } }],
+            { maxContinuations: 3, continuationCount: count, enableAutoContinue: true, maxRePrompts: 3, rePromptCount: 0 }
+          );
+          expect(result.autoContinued).toBe(true);
+        }
+        const blocked = simulateChainIntegration(
+          [{ name: 'list_directory', arguments: { path: '/src' } }],
+          '',
+          [{ toolCallId: 'blocked', toolName: 'list_directory', result: { success: true, output: 'blocked' } }],
+          { maxContinuations: 3, continuationCount: 3, enableAutoContinue: true, maxRePrompts: 3, rePromptCount: 0 }
+        );
+        expect(blocked.autoContinued).toBe(false);
+        expect(blocked.serverRePrompted).toBe(true);
+      });
+
+      it('should exhaust server re-prompts before auto-continue expires across rapid events', () => {
+        const first = simulateChainIntegration(
+          [{ name: 'read_file', arguments: { path: 'test.ts' } }],
+          '',
+          [{ toolCallId: '1', toolName: 'read_file', result: { success: true, output: 'content' } }],
+          { maxContinuations: 3, continuationCount: 0, enableAutoContinue: true, maxRePrompts: 3, rePromptCount: 3 }
+        );
+        expect(first.autoContinued).toBe(true);
+        expect(first.serverRePrompted).toBe(false);
+        expect(first.rePromptCount).toBe(3);
+      });
+
+      it('should handle rapid switching between tool types', () => {
+        const tools = ['read_file', 'list_directory', 'web_search', 'read_url', 'glob'];
+        for (let i = 0; i < tools.length; i++) {
+          const toolName = tools[i];
+          const result = simulateChainIntegration(
+            [{ name: toolName, arguments: { path: '/'.concat(toolName) } }],
+            '',
+            [{ toolCallId: 'rapid-'.concat(String(i)), toolName: toolName, result: { success: true, output: 'result '.concat(String(i)) } }],
+            { maxContinuations: 5, continuationCount: i, enableAutoContinue: true, maxRePrompts: 5, rePromptCount: 0 }
+          );
+          expect(result.autoContinued).toBe(true);
+          expect(result.serverRePrompted).toBe(true);
+        }
+      });
+
+      it('should handle auto-continue followed immediately by complete response', () => {
+        const autoContinue = simulateChainIntegration(
+          [{ name: 'read_file', arguments: { path: 'config.ts' } }],
+          '',
+          [{ toolCallId: '1', toolName: 'read_file', result: { success: true, output: 'config content' } }],
+          { maxContinuations: 3, continuationCount: 0, enableAutoContinue: true, maxRePrompts: 3, rePromptCount: 0 }
+        );
+        expect(autoContinue.autoContinued).toBe(true);
+        const complete = simulateChainIntegration(
+          [],
+          'Here is the complete analysis of the configuration.',
+          [],
+          { maxContinuations: 3, continuationCount: 1, enableAutoContinue: true, maxRePrompts: 3, rePromptCount: 0 }
+        );
+        expect(complete.autoContinued).toBe(false);
+        expect(complete.serverRePrompted).toBe(false);
+      });
+    });
+
+    // ----------------------------------------------------------------------
+    // Scenario 2: Very large tool result arrays
+    // ----------------------------------------------------------------------
+    describe('Very large tool result arrays', () => {
+      it('should handle 100 tool results', () => {
+        const largeResults = Array.from({ length: 100 }, (_, i) => ({
+          toolCallId: 'large-'.concat(String(i)),
+          toolName: i % 2 === 0 ? 'read_file' : 'list_directory',
+          result: { success: true, output: 'content '.concat(String(i)) },
+        }));
+        const largeToolCalls = largeResults.map(r => ({
+          name: r.toolName,
+          arguments: { path: '/file-'.concat(r.toolCallId).concat('.ts') },
+        }));
+        const result = simulateChainIntegration(
+          largeToolCalls, '', largeResults,
+          { maxContinuations: 3, continuationCount: 0, enableAutoContinue: true, maxRePrompts: 3, rePromptCount: 0 }
+        );
+        expect(result.autoContinued).toBe(true);
+        expect(result.serverRePrompted).toBe(true);
+      });
+
+      it('should handle 1000 tool results', () => {
+        const largeResults = Array.from({ length: 1000 }, (_, i) => ({
+          toolCallId: 'very-large-'.concat(String(i)),
+          toolName: 'read_file',
+          result: { success: true, output: 'x'.repeat(100) },
+        }));
+        const toolCalls: any[] = [];
+        for (let i = 0; i < 1000; i++) {
+          toolCalls.push({ name: 'read_file', arguments: { path: '/path/to/file-'.concat(String(i)).concat('.ts') } });
+        }
+        const result = simulateChainIntegration(
+          toolCalls, '', largeResults,
+          { maxContinuations: 3, continuationCount: 0, enableAutoContinue: true, maxRePrompts: 3, rePromptCount: 0 }
+        );
+        expect(result.autoContinued).toBe(true);
+        expect(result.serverRePrompted).toBe(true);
+      });
+
+      it('should handle 10000 tool results (stress test)', () => {
+        const toolCalls: any[] = [];
+        const results: Array<{ toolCallId: string; toolName: string; result: any }> = [];
+        for (let i = 0; i < 10000; i++) {
+          toolCalls.push({ name: 'read_file', arguments: { path: 'file-'.concat(String(i)).concat('.ts') } });
+          results.push({ toolCallId: 'stress-'.concat(String(i)), toolName: 'read_file', result: { success: true, output: 'x'.repeat(50) } });
+        }
+        const startTime = Date.now();
+        const result = simulateChainIntegration(
+          toolCalls, '', results,
+          { maxContinuations: 3, continuationCount: 0, enableAutoContinue: true, maxRePrompts: 3, rePromptCount: 0 }
+        );
+        const elapsed = Date.now() - startTime;
+        expect(result.autoContinued).toBe(true);
+        expect(result.serverRePrompted).toBe(true);
+        expect(elapsed).toBeLessThan(5000);
+      });
+
+      it('should handle large tool results with mixed success/failure', () => {
+        const toolCalls: any[] = [];
+        const results: Array<{ toolCallId: string; toolName: string; result: any }> = [];
+        for (let i = 0; i < 500; i++) {
+          toolCalls.push({
+            name: i % 2 === 0 ? 'read_file' : 'execute_shell',
+            arguments: i % 2 === 0 ? { path: 'file-'.concat(String(i)).concat('.ts') } : { command: 'cmd-'.concat(String(i)) },
+          });
+          results.push({
+            toolCallId: 'mixed-'.concat(String(i)),
+            toolName: i % 2 === 0 ? 'read_file' : 'execute_shell',
+            result: { success: i % 3 !== 0, output: 'result '.concat(String(i)) },
+          });
+        }
+        const result = simulateChainIntegration(
+          toolCalls, '', results,
+          { maxContinuations: 3, continuationCount: 0, enableAutoContinue: true, maxRePrompts: 3, rePromptCount: 0 }
+        );
+        expect(result.autoContinued).toBe(true);
+        expect(result.serverRePrompted).toBe(true);
+      });
+
+      it('should handle empty tool results combined with large text response', () => {
+        const largeText = 'The analysis is complete. '.repeat(1000);
+        const result = simulateChainIntegration(
+          [], largeText + '.', [],
+          { maxContinuations: 3, continuationCount: 0, enableAutoContinue: true, maxRePrompts: 3, rePromptCount: 0 }
+        );
+        expect(result.autoContinued).toBe(false);
+        expect(result.serverRePrompted).toBe(false);
+      });
+    });
+
+    // ----------------------------------------------------------------------
+    // Scenario 3: Stream cancellation mid-chain
+    // ----------------------------------------------------------------------
+    describe('Stream cancellation mid-chain (abort signal)', () => {
+      it('should handle cancellation BEFORE auto-continue fires (not complete)', () => {
+        const result = simulateAutoContinueDetection(
+          [{ name: 'read_file', arguments: { path: 'test.ts' } }],
+          'Partial content...', false,
+          { maxContinuations: 3, continuationCount: 0, enableAutoContinue: true }
+        );
+        expect(result.triggered).toBe(false);
+        expect(result.reason).toBe('not_complete_or_empty');
+      });
+
+      it('should handle cancellation AFTER auto-continue fires but before response', () => {
+        const first = simulateChainIntegration(
+          [{ name: 'list_directory', arguments: { path: '/src' } }], '',
+          [{ toolCallId: '1', toolName: 'list_directory', result: { success: true, output: 'listing...' } }],
+          { maxContinuations: 3, continuationCount: 0, enableAutoContinue: true, maxRePrompts: 3, rePromptCount: 0 }
+        );
+        expect(first.autoContinued).toBe(true);
+        const cancelled = simulateAutoContinueDetection(
+          [], '', false,
+          { maxContinuations: 3, continuationCount: 1, enableAutoContinue: true }
+        );
+        expect(cancelled.triggered).toBe(false);
+        expect(cancelled.reason).toBe('not_complete_or_empty');
+      });
+
+      it('should allow continuation later after cancellation', () => {
+        const cancelled = simulateAutoContinueDetection(
+          [{ name: 'read_file', arguments: { path: 'test.ts' } }], '', false,
+          { maxContinuations: 3, continuationCount: 0, enableAutoContinue: true }
+        );
+        expect(cancelled.triggered).toBe(false);
+        const retry = simulateChainIntegration(
+          [{ name: 'read_file', arguments: { path: 'test.ts' } }], '',
+          [{ toolCallId: 'retry', toolName: 'read_file', result: { success: true, output: 'content' } }],
+          { maxContinuations: 3, continuationCount: 0, enableAutoContinue: true, maxRePrompts: 3, rePromptCount: 0 }
+        );
+        expect(retry.autoContinued).toBe(true);
+        expect(retry.serverRePrompted).toBe(true);
+      });
+
+      it('should handle abort with partial tool results', () => {
+        const partialToolCalls = [
+          { name: 'read_file', arguments: { path: 'a.ts' } },
+          { name: 'read_file', arguments: { path: 'b.ts' } },
+          { name: 'read_file', arguments: { path: 'c.ts' } },
+        ];
+        const partialResults = [
+          { toolCallId: 'a', toolName: 'read_file', result: { success: true, output: 'content a' } },
+          { toolCallId: 'b', toolName: 'read_file', result: { success: true, output: 'content b' } },
+        ];
+        const result = simulateChainIntegration(
+          partialToolCalls, '', partialResults,
+          { maxContinuations: 3, continuationCount: 0, enableAutoContinue: true, maxRePrompts: 3, rePromptCount: 0 }
+        );
+        expect(result.autoContinued).toBe(true);
+        expect(result.serverRePrompted).toBe(true);
+      });
+
+      it('should handle cancellation during server re-prompt (no crash)', () => {
+        const result = simulateChainIntegration(
+          [{ name: 'read_file', arguments: { path: 'config.ts' } }], '',
+          [{ toolCallId: '1', toolName: 'read_file', result: { success: true, output: 'config content' } }],
+          { maxContinuations: 3, continuationCount: 0, enableAutoContinue: true, maxRePrompts: 3, rePromptCount: 0 }
+        );
+        expect(result.autoContinued).toBe(true);
+        expect(result.serverRePrompted).toBe(true);
+        const doubleFire = result.events.find(e => e.type === 'double-fire-detected');
+        expect(doubleFire).toBeDefined();
+        expect(result.finalContent.length).toBeGreaterThan(0);
+      });
+
+      it('should handle consecutive cancellations without memory issues', () => {
+        for (let i = 0; i < 5; i++) {
+          const result = simulateAutoContinueDetection(
+            [{ name: 'read_file', arguments: { path: 'cancel-'.concat(String(i)).concat('.ts') } }], '', false,
+            { maxContinuations: 3, continuationCount: 0, enableAutoContinue: true }
+          );
+          expect(result.triggered).toBe(false);
+        }
+        const final = simulateChainIntegration(
+          [{ name: 'read_file', arguments: { path: 'final.ts' } }], '',
+          [{ toolCallId: 'final', toolName: 'read_file', result: { success: true, output: 'done' } }],
+          { maxContinuations: 3, continuationCount: 0, enableAutoContinue: true, maxRePrompts: 3, rePromptCount: 0 }
+        );
+        expect(final.autoContinued).toBe(true);
+        expect(final.serverRePrompted).toBe(true);
+      });
+
+      it('should handle cancellation with no tool results at all', () => {
+        const result = simulateAutoContinueDetection(
+          [], '', false,
+          { maxContinuations: 3, continuationCount: 0, enableAutoContinue: true }
+        );
+        expect(result.triggered).toBe(false);
+        expect(result.reason).toBe('not_complete_or_empty');
+      });
+
+      it('should handle cancellation with partial text content but no tool results', () => {
+        const result = simulateAutoContinueDetection(
+          [], 'Here is the partial content that was streamed', false,
+          { maxContinuations: 3, continuationCount: 0, enableAutoContinue: true }
+        );
+        expect(result.triggered).toBe(false);
+        expect(result.reason).toBe('not_complete_or_empty');
       });
     });
   });

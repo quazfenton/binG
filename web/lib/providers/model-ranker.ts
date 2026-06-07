@@ -510,7 +510,15 @@ function addConfiguredModels(modelMap: Map<string, ModelStats>): void {
 }
 
 /**
- * Check if a provider is configured (has API key) for telemetry purposes
+ * Check if a provider is configured (has API key) for telemetry purposes.
+ *
+ * Uses a hardcoded map of known provider API key env vars. When a new provider
+ * is added to PROVIDERS in llm-providers.ts, its API key env var must also be
+ * added here so its models are visible to the rotation/fallback system.
+ *
+ * Without this, untested models from unlisted providers are invisible to
+ * addConfiguredModels() and getModelForRotation(), creating a feedback loop
+ * where the only models that get ranked are the ones that've already been used.
  */
 function isProviderConfiguredForTelemetry(provider: string): boolean {
   const apiKeyEnvVars: Record<string, string> = {
@@ -528,9 +536,29 @@ function isProviderConfiguredForTelemetry(provider: string): boolean {
     'fireworks': 'FIREWORKS_API_KEY',
     'together': 'TOGETHER_API_KEY',
     'zen': 'ZEN_API_KEY',
+    'ninerouter': 'NINEROUTER_API_KEY',
+    'kiro': 'KIRO_API_KEY',
+    'aihubmix': 'AIHUBMIX_API_KEY',
+    'cloudflare': 'CLOUDFLARE_API_KEY',
+    'cohere': 'COHERE_API_KEY',
+    'replicate': 'REPLICATE_API_KEY',
+    'antigravity': 'ANTIGRAVITY_API_KEY',
+    'ollama': 'OLLAMA_API_KEY',
+    'azure': 'AZURE_API_KEY',
+    'vertex': 'VERTEX_API_KEY',
+    'livekit': 'LIVEKIT_API_KEY',
+    'pollinations': 'POLLINATIONS_API_KEY',
+    'chatanywhere': 'CHATANYWHERE_API_KEY',
   }
   
-  const envVar = apiKeyEnvVars[provider.toLowerCase()]
+  const key = provider.toLowerCase()
+
+  // Special cases where a base URL alone is sufficient (no API key needed)
+  if (key === 'ninerouter') {
+    return !!process.env['NINEROUTER_API_KEY'] || !!process.env['NINEROUTER_BASE_URL']
+  }
+
+  const envVar = apiKeyEnvVars[key]
   return envVar ? !!process.env[envVar] : false
 }
 

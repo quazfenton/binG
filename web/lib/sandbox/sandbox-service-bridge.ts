@@ -321,6 +321,7 @@ export class SandboxServiceBridge {
     if (!sandboxId || typeof sandboxId !== 'string') return null;
 
     // Explicit prefix matches first (highest priority)
+    if (sandboxId.startsWith('firecracker-')) return 'firecracker';
     if (sandboxId.startsWith('daytona-')) return 'daytona';
     if (sandboxId.startsWith('e2b-')) return 'e2b';
     if (sandboxId.startsWith('csb-')) return 'codesandbox';

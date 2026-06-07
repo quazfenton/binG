@@ -28,6 +28,35 @@ import { sandboxBridge } from './sandbox-service-bridge';
 const logger = createLogger('Phase7:ImageBuilder');
 
 // ============================================================================
+// Known Dependency Filenames
+// ============================================================================
+
+/**
+ * Set of filenames that, when created or modified, should trigger
+ * workspace image rebuild. Matches the patterns in workspace-image-registry.ts.
+ */
+export const DEPENDENCY_FILE_NAMES = new Set([
+  'package-lock.json',
+  'pnpm-lock.yaml',
+  'yarn.lock',
+  'bun.lockb',
+  'bun.lock',
+  'requirements.txt',
+  'Pipfile',
+  'Pipfile.lock',
+  'pyproject.toml',
+  'Gemfile',
+  'Gemfile.lock',
+  'Cargo.toml',
+  'go.mod',
+  'composer.lock',
+  'package.json',
+  'composer.json',
+  'go.sum',
+  'Cargo.lock',
+]);
+
+// ============================================================================
 // Workspace Image Builder
 // ============================================================================
 
@@ -101,7 +130,11 @@ export class WorkspaceImageBuilder {
 
     const hash = workspaceImageRegistry.computeLockfileHash(lockfileContents);
 
-    // Step 3: Check for existing image
+    // Step 3: Check for existing image (stale workspace forces rebuild)
+    // We don't have the workspaceId in this context, so we rely on hash-based
+    // freshness check. If the image exists and is not stale at the workspace
+    // level, we restore it. The workspace-level stale check requires the caller
+    // to pass workspaceId — see the onDependencyFileChanged flow for that.
     const image = workspaceImageRegistry.findImage(hash);
     if (image) {
       logger.info('Found matching workspace image, restoring', {
@@ -424,7 +457,73 @@ export class WorkspaceImageBuilder {
     } catch {
       return undefined;
     }
+  }  }
+
+// ==========================================================================
+// Dependency File Change Auto-Trigger
+// ==========================================================================
+
+/**
+ * Called when a dependency file is created or modified in a workspace.
+ * Triggers rebuild of the workspace image so the next sandbox gets
+ * the updated dependencies pre-installed.
+ *
+ * This is the hook that VFS write events should call when a file like
+ * `package.json` or `requirements.txt` is written/updated.
+ *
+ * @param workspaceId - The workspace identifier (e.g., `${userId}:${sessionId}`)
+ * @param filename - The dependency file that changed
+ * @param contents - The new file contents
+ * @param existingImageHash - Optional hash of the current image (to invalidate)
+ * @returns The hash of the newly built image, or null if unchanged/skipped
+ */
+export async function onDependencyFileChanged(
+  workspaceId: string,
+  filename: string,
+  contents: string,
+  existingImageHash?: string,
+): Promise<string | null> {
+  if (!workspaceImageRegistry.isEnabled()) {
+    logger.debug('Image synthesis disabled, skipping dep file change', { filename });
+    return null;
   }
+
+  if (!workspaceImageRegistry.isDetectedDependency(filename)) {
+    return null;
+  }
+
+  // Compute new hash for this single file and check if changed
+  const newHash = workspaceImageRegistry.computeLockfileHash(
+    new Map([[filename, contents]]),
+  );
+
+  // If the hash hasn't changed relative to the existing image, skip
+  if (existingImageHash && existingImageHash === newHash) {
+    logger.debug('Dependency file unchanged, skipping rebuild', { filename });
+    return null;
+  }
+
+  logger.info('Dependency file changed, triggering image rebuild', {
+    workspaceId: workspaceId.slice(0, 16),
+    filename,
+    hash: newHash.slice(0, 12),
+  });
+
+  // Invalidate the old image so the next ensureImage() call rebuilds
+  if (existingImageHash) {
+    workspaceImageRegistry.removeImage(existingImageHash);
+  }    // We can't build the actual image here (no sandbox handle available yet).
+    // Instead, invalidate the existing image so ensureImage() will rebuild.
+    // The next ensureImage() call will read all lockfiles from the sandbox,
+    // compute a fresh composite hash, and find no matching image → rebuild.
+    if (existingImageHash) {
+      workspaceImageRegistry.removeImage(existingImageHash);
+    }
+
+    // Mark the workspace as stale so external callers can request rebuild
+    workspaceImageRegistry.markStaleWorkspace(workspaceId);
+
+    return newHash;
 }
 
 /**

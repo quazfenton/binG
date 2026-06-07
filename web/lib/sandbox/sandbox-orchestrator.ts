@@ -24,6 +24,7 @@ import { getSandboxProvider, type SandboxProviderType } from './providers';
 import { sandboxFilesystemSync } from '@/lib/virtual-filesystem/sync/sandbox-filesystem-sync';
 import { workspaceFSSnapshotService } from './workspacefs-snapshot-service';
 import { getWorkspaceRuntime } from '@/lib/terminal/workspace-runtime-service';
+import { getSecretBroker } from './secret-broker';
 
 const logger = createLogger('Sandbox:Orchestrator');
 
@@ -90,6 +91,10 @@ export class SandboxOrchestrator {
   private readonly AFFINITY_ENABLED = process.env.SANDBOX_AFFINITY_ENABLED !== 'false';
   private readonly WARM_POOL_SIZE = 3;
   private readonly IDLE_TIMEOUT_MS = 5 * 60 * 1000;
+  /** Warm pool sandboxes idle longer than this are destroyed to save costs (default: 15 min) */
+  private readonly WARM_POOL_IDLE_TIMEOUT_MS = parseInt(process.env.WARM_POOL_IDLE_TIMEOUT_MS || '900000', 10);
+  /** Tracks when each warm sandbox was created (handle.id → timestamp) for idle eviction */
+  private warmPoolTimestamps = new Map<string, number>();
   private readonly MIGRATION_CPU_THRESHOLD = 80;
   private readonly MIGRATION_MEMORY_THRESHOLD = 90;
 
@@ -97,6 +102,7 @@ export class SandboxOrchestrator {
     void this.initializeWarmPool();
     this.startIdleCleanup();
     this.startAffinityCleanup();
+    this.startWarmPoolCleanup();
   }
 
   async getSandbox(options: {
@@ -469,6 +475,7 @@ export class SandboxOrchestrator {
     }
 
     const handle = pool.pop()!;
+    this.warmPoolTimestamps.delete(handle.id);
     try {
       await handle.executeCommand('echo health_check');
       return handle;
@@ -481,7 +488,7 @@ export class SandboxOrchestrator {
   private async initializeWarmPool(): Promise<void> {
     logger.info('Initializing warm sandbox pool');
 
-    const providers: SandboxProviderType[] = ['daytona', 'e2b', 'sprites'];
+    const providers: SandboxProviderType[] = ['daytona', 'e2b', 'sprites', 'firecracker'];
 
     for (const provider of providers) {
       this.warmPool.set(provider, []);
@@ -501,7 +508,8 @@ export class SandboxOrchestrator {
           'sandbox-preferred',
         );
         pool.push(handle);
-        logger.debug('Added warm sandbox', { provider, poolSize: pool.length });
+        this.warmPoolTimestamps.set(handle.id, Date.now());
+        logger.debug('Added warm sandbox', { provider, sandboxId: handle.id, poolSize: pool.length });
       } catch (error: any) {
         logger.warn('Failed to create warm sandbox', { provider, error: error.message });
         break;
@@ -509,6 +517,79 @@ export class SandboxOrchestrator {
     }
 
     this.warmPool.set(provider, pool);
+  }
+
+  /**
+   * Periodically evict idle warm pool sandboxes and destroy them to save costs.
+   * Warm sandboxes that haven't been claimed within WARM_POOL_IDLE_TIMEOUT_MS
+   * are destroyed via the provider (e.g. E2B API kill) and removed from the pool.
+   * Any lingering VFS sync intervals are also stopped.
+   */
+  private startWarmPoolCleanup(): void {
+    setInterval(async () => {
+      const cutoff = Date.now() - this.WARM_POOL_IDLE_TIMEOUT_MS;
+
+      for (const [providerType, pool] of this.warmPool.entries()) {
+        if (pool.length === 0) continue;
+
+        // Find handles that have been idle beyond the timeout
+        const stale: SandboxHandle[] = [];
+        for (const handle of pool) {
+          const created = this.warmPoolTimestamps.get(handle.id);
+          if (created !== undefined && created < cutoff) {
+            stale.push(handle);
+          }
+        }
+
+        if (stale.length === 0) continue;
+
+        logger.info('Evicting idle warm sandboxes', {
+          provider: providerType,
+          count: stale.length,
+          poolSize: pool.length,
+        });
+
+        // Remove stale handles from the pool in reverse order (safe splice from end)
+        const staleIds = new Set(stale.map(h => h.id));
+        for (let i = pool.length - 1; i >= 0; i--) {
+          if (staleIds.has(pool[i].id)) {
+            pool.splice(i, 1);
+          }
+        }
+
+        // Stop sync intervals and destroy each stale sandbox
+        // Uses best-effort — if destroy fails (e.g. sandbox already dead), just log and continue.
+        const provider = await getSandboxProvider(providerType).catch(() => null);
+        for (const handle of stale) {
+          // Capture age before deleting timestamp
+          const createdAt = this.warmPoolTimestamps.get(handle.id);
+          this.warmPoolTimestamps.delete(handle.id);
+
+          try {
+            sandboxFilesystemSync.stopSync(handle.id);
+          } catch {
+            // Best-effort — may already be stopped
+          }
+
+          if (provider) {
+            try {
+              await provider.destroySandbox(handle.id);
+              logger.info('Destroyed idle warm sandbox', {
+                provider: providerType,
+                sandboxId: handle.id,
+                ageMs: Date.now() - (createdAt || Date.now()),
+              });
+            } catch (err: any) {
+              logger.warn('Failed to destroy idle warm sandbox (may already be dead)', {
+                provider: providerType,
+                sandboxId: handle.id,
+                error: err.message,
+              });
+            }
+          }
+        }
+      }
+    }, 300000); // Check every 5 minutes
   }
 
   private shouldMigrate(metrics: ResourceMetrics): boolean {
@@ -769,13 +850,20 @@ export class SandboxOrchestrator {
       }
     }
 
+    // Phase 9 (SecretBroker): Virtualize env vars before passing to sandbox.
+    // Real API keys and tokens are replaced with __SB__KEY__ placeholders
+    // that are resolved on-demand at the point of use. This prevents secret
+    // leakage through logs, error messages, or $env introspection.
+    const secretBroker = getSecretBroker();
+    const virtualEnv = secretBroker.virtualizeEnvVars(workspaceEnv, { ownerId: userId });
+
     const handle = await provider.createSandbox({
       workspaceDir,
       language: 'typescript',
       autoStopInterval: 3600,
       envVars: {
-        // Workspace env comes first so the base vars below always win
-        ...workspaceEnv,
+        // Virtualized workspace env (secrets replaced with placeholders)
+        ...virtualEnv,
         USER_ID: userId,
         CONVERSATION_ID: conversationId,
         EXECUTION_POLICY: policy,
@@ -796,11 +884,15 @@ export class SandboxOrchestrator {
     await handle.executeCommand(`mkdir -p "${workspaceDir.replace(/(["\\$`])/g, '\\$1')}"`);
 
     // Start VFS sync for bidirectional file sync between VFS database and sandbox
-    try {
-      sandboxFilesystemSync.startSync(handle.id, userId);
-      logger.info('VFS sync started for orchestrator sandbox', { sandboxId: handle.id, userId });
-    } catch (syncErr: any) {
-      logger.warn('Failed to start VFS sync for orchestrator sandbox:', syncErr.message);
+    // Skip for warm pool sandboxes — they have no user data to sync and would
+    // create perpetual 10s polling intervals that keep sandboxes alive indefinitely.
+    if (userId !== 'warm-pool') {
+      try {
+        sandboxFilesystemSync.startSync(handle.id, userId);
+        logger.info('VFS sync started for orchestrator sandbox', { sandboxId: handle.id, userId });
+      } catch (syncErr: any) {
+        logger.warn('Failed to start VFS sync for orchestrator sandbox:', syncErr.message);
+      }
     }
 
     return handle;

@@ -30,6 +30,7 @@ import { createLogger } from '../utils/logger';
 import { tolerantJsonParse, sanitizeJsonString, findBalancedJsonObject } from '../utils/json-tolerant';
 import { resolveToScopedPath } from '../virtual-filesystem/path-normalizer';
 import { getVfsScopeBasePath, getVfsScopePath } from '../virtual-filesystem/scope-utils';
+import { onDependencyFileChanged } from '../sandbox/workspace-image-builder';
 
 // Re-export for backwards compatibility (other modules may import from here)
 export { tolerantJsonParse, sanitizeJsonString, findBalancedJsonObject };
@@ -514,7 +515,7 @@ export const writeFileTool = (tool as any)({
   ),
   execute: async ({ path, content, commitMessage = 'Write file via MCP tool' }) => {
     try {
-  if (!path || typeof path !== 'string') {
+  if (!path || typeof path !== 'string' || !path.trim()) {
     return { success: false, path, error: 'Path is required' };
   }
   if (content === undefined || content === null) {
@@ -611,6 +612,20 @@ export const writeFileTool = (tool as any)({
     source: 'mcp-tool',
   });
 
+  // Check if the written file is a dependency file that should trigger image rebuild
+  const filename = path.split('/').pop() || '';
+  if (filename && context.userId !== 'default') {
+    const workspaceId = context.sessionId
+      ? `${context.userId}:${context.sessionId}`
+      : context.userId;
+    onDependencyFileChanged(workspaceId, filename, content).catch(err => {
+      logger.warn('Failed to notify image builder of dep file change', {
+        filename,
+        error: err.message,
+      });
+    });
+  }
+
   return {
     success: true,
     path: (result as any).path || path,
@@ -690,7 +705,7 @@ export const applyDiffTool = (tool as any)({
   ),
   execute: async ({ path, diff, commitMessage = 'Applied diff via MCP tool' }) => {
     try {
-  if (!path || typeof path !== 'string') {
+  if (!path || typeof path !== 'string' || !path.trim()) {
     return { success: false, path, error: 'Path is required' };
   }
   if (!diff || typeof diff !== 'string') {
@@ -979,7 +994,7 @@ export const readFileTool = (tool as any)({
   ),
   execute: async ({ path }) => {
     try {
-  if (!path || typeof path !== 'string') {
+  if (!path || typeof path !== 'string' || !path.trim()) {
     return { success: false, path, error: 'Path is required', exists: false };
   }
   const context = getToolContext();
@@ -1145,9 +1160,13 @@ export const listFilesTool = (tool as any)({
   execute: async ({ path, recursive = false }) => {
     try {
   // Default empty path to '/' to prevent LIST_ERROR
-  const resolvedPath = (!path || typeof path !== 'string') ? '/' : path;
+  const resolvedPath = (!path || typeof path !== 'string' || !path.trim()) ? '/' : path;
   const context = getToolContext();
-  const scopedPath = resolveScopedPath(resolvedPath);
+  // Use session-scoped workspace so LLM relative paths (e.g. "web-terminal/terminal-manager/")
+  // resolve to "workspace/sessions/{sessionId}/web-terminal/..." instead of "workspace/...".
+  // The latter fails VFS validation against workspaceRoot = "workspace/sessions".
+  const scopePath = getVfsScopePath({ sessionId: context.sessionId });
+  const scopedPath = resolveScopedPath(resolvedPath, scopePath);
   logger.debug('listFiles', { originalPath: path, scopedPath, recursive, userId: context.userId });
 
   const listing = await virtualFilesystem.listDirectory(context.userId, scopedPath);
@@ -1426,7 +1445,7 @@ export const batchWriteTool = (tool as any)({
       files: z.array(z.object({
         path: z.string().describe('Relative file path like "src/utils.ts"'),
         content: z.string().describe('Complete file contents — do not abbreviate'),
-      })).max(50, 'Cannot write more than 50 files').describe('Array of {path, content} objects — e.g. [{"path":"src/a.ts","content":"..."}]'),
+      })).max(50, 'Cannot write more than 50 files')      .describe('Array of {path, content} objects — e.g. [{"path":"src/a.ts","content":"..."}]'),
       commitMessage: z.string().optional().describe('Optional description of the batch change'),
     }).passthrough()
   ),
@@ -1594,6 +1613,30 @@ export const batchWriteTool = (tool as any)({
     source: 'mcp-tool',
   });
 
+  // Check for dependency files in the batch that should trigger image rebuild
+  // Use the results array to filter for successfully written files only
+  const successPaths = new Set(
+    results.filter(r => r.success).map(r => r.path)
+  );
+  if (context.userId !== 'default') {
+    const workspaceId = context.sessionId
+      ? `${context.userId}:${context.sessionId}`
+      : context.userId;
+    for (const file of scopedFiles) {
+      if (successPaths.has(file.scopedPath)) {
+        const filename = file.path.split('/').pop() || '';
+        if (filename) {
+          onDependencyFileChanged(workspaceId, filename, file.content).catch(err => {
+            logger.warn('Failed to notify image builder of dep file change (batch)', {
+              filename,
+              error: err.message,
+            });
+          });
+        }
+      }
+    }
+  }
+
   return {
     success: failCount === 0,
     results,
@@ -1646,7 +1689,7 @@ export const deleteFileTool = (tool as any)({
   ),
   execute: async ({ path, reason }) => {
     try {
-  if (!path || typeof path !== 'string') {
+  if (!path || typeof path !== 'string' || !path.trim()) {
     return { success: false, path, error: 'Path is required' };
   }
   const context = getToolContext();
@@ -1718,7 +1761,7 @@ export const createDirectoryTool = (tool as any)({
   ),
   execute: async ({ path }) => {
     try {
-  if (!path || typeof path !== 'string') {
+  if (!path || typeof path !== 'string' || !path.trim()) {
     return { success: false, path, error: 'Path is required' };
   }
   const context = getToolContext();

@@ -21,6 +21,7 @@
  */
 
 import { getSandboxProvider, type SandboxProviderType } from '@/lib/sandbox/providers/index';
+import { getSecretBroker } from '@/lib/sandbox/secret-broker';
 import { createLogger } from '@/lib/utils/logger';
 import { executeWithHealing } from '@/lib/chat/bash-self-heal';
 import { rewriteCommand, filterOutput, estimateTokenSavings, hasRewriteRule } from '@/lib/context/rtk-rewriter';
@@ -146,8 +147,15 @@ export class BashToolExecutor {
 
       // Create execute function for healing wrapper
       const executeCommand = async (cmd: string) => {
+        // Phase 9 (SecretBroker): Resolve __SB__KEY__ placeholders in the command
+        // before sending to the sandbox. Secrets were virtualized at sandbox
+        // creation time (see sandbox-orchestrator.ts) but must be resolved here
+        // so the sandbox process receives the actual values.
+        const secretBroker = getSecretBroker();
+        const resolvedCmd = await secretBroker.resolvePlaceholders(cmd, `sandbox:${context.sandboxId}`);
+
         const result = await handle.executeCommand(
-          cmd,
+          resolvedCmd,
           cwd || context.params.cwd,
           timeout || this.config.defaultTimeout
         );

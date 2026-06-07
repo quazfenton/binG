@@ -14144,6 +14144,7 @@ snapshots:
 
   '@bing/shared@file:web/.bing-shared(typescript@5.9.3)':
     dependencies:
+      jsonrepair: 3.14.0
       typescript: 5.9.3
 
   '@blaxel/core@0.2.81(@cfworker/json-schema@4.1.1)(@hey-api/openapi-ts@0.97.0(typescript@5.9.3))(bufferutil@4.1.0)(utf-8-validate@6.0.6)':

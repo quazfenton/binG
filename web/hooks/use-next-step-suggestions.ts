@@ -162,6 +162,11 @@ export function useNextStepSuggestions({
     if (error) return;
     if (hasAutoContinueMarker(lastAssistant)) return;
     if (!lastText) return;
+    // Skip if response looks like an error or is suspiciously short (likely incomplete).
+    // This prevents wasting a ~100s API call on a failure that returned no useful content.
+    const isErrorResponse = /timeout|timed out|error|500|failed|unavailable|rate.limit|quota.exceeded/i.test(lastText);
+    const isIncompleteResponse = lastText.length < 20;
+    if (isErrorResponse || isIncompleteResponse) return;
     if (fetchedRef.current.has(lastAssistantKey)) return;
 
     if (debounceRef.current) clearTimeout(debounceRef.current);

@@ -346,6 +346,9 @@ export class SandboxMetrics {
   public storageDownloadSize: Histogram;
   public storageOperationDuration: Histogram;
 
+  // Fallback metrics
+  public fallbackSuccessTotal: Counter;
+
   // Provider metrics
   public providerInitTotal: Counter;
   public providerInitDuration: Histogram;
@@ -412,6 +415,13 @@ export class SandboxMetrics {
 
     // Quota metrics
     this.quotaViolationsTotal = new Counter('quota_violations_total', 'Total quota violations', ['type']);
+
+    // Fallback metrics
+    this.fallbackSuccessTotal = new Counter(
+      'fallback_success_total',
+      'Total fallback successes by layer',
+      ['layer', 'primary_provider', 'fallback_provider']
+    );
 
     // Circuit breaker metrics
     this.circuitBreakerOperations = new Counter(
@@ -493,6 +503,7 @@ export class SandboxMetrics {
     this.registry.register(this.httpRequestsTotal);
     this.registry.register(this.httpRequestDuration);
     this.registry.register(this.quotaViolationsTotal);
+    this.registry.register(this.fallbackSuccessTotal);
     this.registry.register(this.circuitBreakerOperations);
     this.registry.register(this.circuitBreakerDuration);
     this.registry.register(this.circuitBreakerStateChanges);

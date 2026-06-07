@@ -47,6 +47,8 @@ import { enhanceWithSpec } from '@/lib/engineers/maximalist-spec-enhancer'
 import { n8nAgentService, type N8nAgentRequest, type N8nAgentResponse } from '@/lib/automations/n8n-agent-service'
 import { customFallbackService, type CustomFallbackRequest, type CustomFallbackResponse } from '@/lib/providers/custom-fallback-service'
 import { enhancedLLMService, type EnhancedLLMRequest } from '@/lib/chat/enhanced-llm-service'
+import { getConfiguredFallbackChain } from '@/lib/providers/provider-fallback-chains'
+import { sandboxMetrics } from '@/lib/backend/metrics'
 import { initializeComposioService, getComposioService, type ComposioToolRequest } from '@/lib/integrations/composio-service'
 
 // Import tools
@@ -657,30 +659,96 @@ export class ResponseRouter {
           }
           
           // Non-streaming: use standard generateResponse
-          const response = await enhancedLLMService.generateResponse({
-            messages: req.messages,
-            provider: req.provider,
-            model: req.model,
-            temperature: req.temperature,
-            maxTokens: req.maxTokens,
-            stream: req.stream,
-            userId: req.userId,
-            requestId: req.requestId,
-            conversationId: req.conversationId || req.requestId || `conv_${Date.now()}`,
-            // Pass scopePath for session-scoped file operations
-            scopePath: req.scopePath,
-            // Always enable tools — VFS tools (write_file, read_file, apply_diff) are
-            // always available and the LLM should use them for file operations.
-            enableTools: req.enableTools !== false,
-            enableSandbox: req.enableSandbox ?? (detectedType === 'sandbox' && !!req.userId),
-            isSandboxCommand: detectedType === 'sandbox',
-            apiKeys: req.apiKeys,
-            // Context pack: bundle workspace files into LLM-readable format
-            contextPack: req.contextPack,
-            // Auto-attach relevant files as agent discovers areas to edit
-            autoAttachFiles: req.autoAttachFiles,
-          } as EnhancedLLMRequest)
-          return this.normalizeOriginalResponse(response)
+          // Layer 1 fallback: enhancedLLMService internally iterates the provider
+          // fallback chain (nvidia → mistral → google → ...) when the primary
+          // provider fails. See enhanced-llm-service.ts generateResponse().
+          //
+          // Layer 2 fallback (this layer): if ALL providers in the internal
+          // fallback chain fail, the response-router's original-system endpoint
+          // tries the provider fallback chain AGAIN with the request-level
+          // provider/model before giving up and jumping to n8n/custom-fallback.
+          // This prevents the response-router from falling through to entirely
+          // different endpoint types when a simple provider switch would suffice.
+          try {
+            const response = await enhancedLLMService.generateResponse({
+              messages: req.messages,
+              provider: req.provider,
+              model: req.model,
+              temperature: req.temperature,
+              maxTokens: req.maxTokens,
+              stream: req.stream,
+              userId: req.userId,
+              requestId: req.requestId,
+              conversationId: req.conversationId || req.requestId || `conv_${Date.now()}`,
+              // Pass scopePath for session-scoped file operations
+              scopePath: req.scopePath,
+              // Always enable tools — VFS tools (write_file, read_file, apply_diff) are
+              // always available and the LLM should use them for file operations.
+              enableTools: req.enableTools !== false,
+              enableSandbox: req.enableSandbox ?? (detectedType === 'sandbox' && !!req.userId),
+              isSandboxCommand: detectedType === 'sandbox',
+              apiKeys: req.apiKeys,
+              // Context pack: bundle workspace files into LLM-readable format
+              contextPack: req.contextPack,
+              // Auto-attach relevant files as agent discovers areas to edit
+              autoAttachFiles: req.autoAttachFiles,
+            } as EnhancedLLMRequest)
+            return this.normalizeOriginalResponse(response)
+          } catch (primaryError: any) {
+            // Layer 2: Try the provider fallback chain before control leaves
+            // the original-system endpoint. This catches cases where:
+            // - The enhanced-llm-service internal fallback was exhausted
+            // - The request has apiKeys for alternate providers not in env vars
+            const fallbacks = getConfiguredFallbackChain(req.provider);
+            if (fallbacks.length > 0) {
+              logger.warn('original-system primary failed, trying provider fallback chain', {
+                provider: req.provider,
+                fallbacks,
+                error: primaryError.message,
+              });
+              for (const fallbackProvider of fallbacks) {
+                try {
+                  const fallbackResponse = await enhancedLLMService.generateResponse({
+                    messages: req.messages,
+                    provider: fallbackProvider,
+                    model: req.model,
+                    temperature: req.temperature,
+                    maxTokens: req.maxTokens,
+                    stream: req.stream,
+                    userId: req.userId,
+                    requestId: req.requestId,
+                    conversationId: req.conversationId || req.requestId || `conv_${Date.now()}`,
+                    scopePath: req.scopePath,
+                    enableTools: req.enableTools !== false,
+                    enableSandbox: req.enableSandbox ?? (detectedType === 'sandbox' && !!req.userId),
+                    isSandboxCommand: detectedType === 'sandbox',
+                    apiKeys: req.apiKeys,
+                    contextPack: req.contextPack,
+                    autoAttachFiles: req.autoAttachFiles,
+                  } as EnhancedLLMRequest)
+                  sandboxMetrics.fallbackSuccessTotal.inc({
+                    layer: 'layer2',
+                    primary_provider: req.provider,
+                    fallback_provider: fallbackProvider,
+                  });
+                  logger.info('Provider fallback succeeded (response-router)', {
+                    primaryProvider: req.provider,
+                    fallbackProvider,
+                  });
+                  return this.normalizeOriginalResponse(fallbackResponse)
+                } catch (fallbackError: any) {
+                  logger.warn('Provider fallback failed (response-router)', {
+                    fallbackProvider,
+                    error: fallbackError.message,
+                  });
+                  // Continue to next fallback
+                }
+              }
+            }
+            // All fallbacks exhausted — re-throw so the response-router
+            // moves to the next endpoint in the priority chain
+            throw primaryError;
+          }
         },
       },
       {
@@ -817,36 +885,95 @@ export class ResponseRouter {
             requestId: req.requestId,
             userId: req.userId,
           })
-          // Call LLM without tool/sandbox execution - just get text response
-          const response = await enhancedLLMService.generateResponse({
-            messages: req.messages,
-            provider: req.provider,
-            model: req.model,
-            temperature: req.temperature,
-            maxTokens: req.maxTokens,
-            stream: req.stream,
-            userId: req.userId,
-            requestId: req.requestId,
-            conversationId: req.conversationId || req.requestId || `conv_${Date.now()}`,
-            enableTools: false,  // Disable tools for fallback
-            enableSandbox: false,  // Disable sandbox for fallback
-            isSandboxCommand: false,
-            apiKeys: req.apiKeys,
-            contextPack: req.contextPack,
-            autoAttachFiles: req.autoAttachFiles,
-          } as EnhancedLLMRequest)
-          
-          // Preserve normalized metadata (usage, model, provider) while adding fallback flags
-          const normalized = this.normalizeOriginalResponse(response)
-          return {
-            ...normalized,
-            data: {
-              ...normalized.data,
-              // Include any additional metadata from response if present
-              ...(response as any).metadata,
-              isFallback: true,
-              fallbackReason: 'Specialized endpoints unavailable, using LLM text response',
-            },
+          // Try primary provider, then Layer 2 provider fallback chain
+          try {
+            const response = await enhancedLLMService.generateResponse({
+              messages: req.messages,
+              provider: req.provider,
+              model: req.model,
+              temperature: req.temperature,
+              maxTokens: req.maxTokens,
+              stream: req.stream,
+              userId: req.userId,
+              requestId: req.requestId,
+              conversationId: req.conversationId || req.requestId || `conv_${Date.now()}`,
+              enableTools: false,  // Disable tools for fallback
+              enableSandbox: false,  // Disable sandbox for fallback
+              isSandboxCommand: false,
+              apiKeys: req.apiKeys,
+              contextPack: req.contextPack,
+              autoAttachFiles: req.autoAttachFiles,
+            } as EnhancedLLMRequest)
+
+            // Preserve normalized metadata while adding fallback flags
+            const normalized = this.normalizeOriginalResponse(response)
+            return {
+              ...normalized,
+              data: {
+                ...normalized.data,
+                ...(response as any).metadata,
+                isFallback: true,
+                fallbackReason: 'Specialized endpoints unavailable, using LLM text response',
+              },
+            }
+          } catch (primaryError: any) {
+            // Layer 2: Try the provider fallback chain before returning emergency text
+            const fallbacks = getConfiguredFallbackChain(req.provider)
+            if (fallbacks.length > 0) {
+              logger.warn('emergency-llm-fallback primary failed, trying provider fallback chain', {
+                provider: req.provider,
+                fallbacks,
+                error: primaryError.message,
+              })
+              for (const fallbackProvider of fallbacks) {
+                try {
+                  const fallbackResponse = await enhancedLLMService.generateResponse({
+                    messages: req.messages,
+                    provider: fallbackProvider,
+                    model: req.model,
+                    temperature: req.temperature,
+                    maxTokens: req.maxTokens,
+                    stream: req.stream,
+                    userId: req.userId,
+                    requestId: req.requestId,
+                    conversationId: req.conversationId || req.requestId || `conv_${Date.now()}`,
+                    enableTools: false,
+                    enableSandbox: false,
+                    isSandboxCommand: false,
+                    apiKeys: req.apiKeys,
+                    contextPack: req.contextPack,
+                    autoAttachFiles: req.autoAttachFiles,
+                  } as EnhancedLLMRequest)
+
+                  sandboxMetrics.fallbackSuccessTotal.inc({
+                    layer: 'layer2',
+                    primary_provider: req.provider,
+                    fallback_provider: fallbackProvider,
+                  });
+                  logger.info('Provider fallback succeeded (emergency-llm-fallback)', {
+                    primaryProvider: req.provider,
+                    fallbackProvider,
+                  })
+                  const normalized = this.normalizeOriginalResponse(fallbackResponse)
+                  return {
+                    ...normalized,
+                    data: {
+                      ...normalized.data,
+                      ...(fallbackResponse as any).metadata,
+                      isFallback: true,
+                      fallbackReason: `Provider fallback: ${req.provider} → ${fallbackProvider}`,
+                    },
+                  }
+                } catch (fallbackError: any) {
+                  logger.warn('Provider fallback failed (emergency-llm-fallback)', {
+                    fallbackProvider,
+                    error: fallbackError.message,
+                  })
+                }
+              }
+            }
+            // All fallbacks exhausted — re-throw so response-router falls through to emergency text
+            throw primaryError
           }
         },
       },

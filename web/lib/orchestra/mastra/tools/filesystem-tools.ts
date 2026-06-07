@@ -11,6 +11,7 @@ import { checkCommandSecurity } from '@/lib/terminal/security/terminal-security'
 import { bashToolExecutor } from '@/lib/tools/tool-integration/bash-tool';
 import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-service';
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
+import { onDependencyFileChanged } from '@/lib/sandbox/workspace-image-builder';
 
 export interface ToolCallResult {
   success: boolean;
@@ -202,6 +203,17 @@ export function createFilesystemTools(
             source: 'v2-tool',
           });
 
+          // Check if the written file is a dependency file that should trigger image rebuild
+          const filename = path.split('/').pop() || '';
+          if (filename) {
+            onDependencyFileChanged(userId, filename, content).catch(err => {
+              console.warn('[FilesystemTools] Failed to notify image builder of dep file change', {
+                filename,
+                error: err.message,
+              });
+            });
+          }
+
           return {
             success: true,
             path: file.path,
@@ -255,7 +267,7 @@ export function createFilesystemTools(
       execute: async ({ path }: { path: string }): Promise<ToolCallResult> => {
         try {
           // Default empty path to workspace root instead of erroring
-          const resolvedPath = (!path || typeof path !== 'string') ? workspacePath : path;
+          const resolvedPath = (!path || typeof path !== 'string' || !path.trim()) ? workspacePath : path;
           const scopedPath = resolveWorkspacePath(workspacePath, resolvedPath);
           const listing = await virtualFilesystem.listDirectory(userId, scopedPath);
           return {

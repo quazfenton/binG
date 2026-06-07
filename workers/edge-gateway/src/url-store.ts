@@ -22,11 +22,37 @@ const R2_BACKEND_KEY = 'config/backend-url.txt';
 let lastWriteBackTimeMs = 0;
 
 /**
+ * Queue-based mutex for setBackendUrl to prevent concurrent write races.
+ * Cloudflare Workers share module-level state across concurrent requests —
+ * this serializes writes so KV/R2 stay consistent.
+ *
+ * Each caller chains onto the end of a promise queue. The synchronous
+ * assignment to writeQueue means no two callers can share the same slot.
+ */
+let writeQueue: Promise<void> = Promise.resolve();
+
+/**
  * Write the backend URL to both KV and R2.
  * KV is primary — if it fails, we still write to R2 as fallback.
  * Returns { kvSuccess: boolean, r2Success: boolean }
+ *
+ * Thread-safe: concurrent calls are serialized via queue-based mutex.
  */
 export async function setBackendUrl(env: Env, url: string): Promise<{ kvSuccess: boolean; r2Success: boolean }> {
+  // Chain onto the end of the write queue — safe because the assignment
+  // to writeQueue is synchronous (no preemption between .then and assignment)
+  const myTurn = writeQueue.then(() => {});
+  writeQueue = myTurn;
+  await myTurn;
+
+  try {
+    return await doSetBackendUrl(env, url);
+  } finally {
+    // Release is implicit: the next caller's .then() waits on our work
+  }
+}
+
+async function doSetBackendUrl(env: Env, url: string): Promise<{ kvSuccess: boolean; r2Success: boolean }> {
   let kvSuccess = false;
   let r2Success = false;
 
