@@ -24,6 +24,8 @@ import { getSandboxProvider, type SandboxProviderType } from './providers';
 import { sandboxFilesystemSync } from '@/lib/virtual-filesystem/sync/sandbox-filesystem-sync';
 import { workspaceFSSnapshotService } from './workspacefs-snapshot-service';
 import { getWorkspaceRuntime } from '@/lib/terminal/workspace-runtime-service';
+import { workspaceServiceManager } from '@/lib/terminal/workspace-service-manager';
+import { workspaceReplayService } from '@/lib/workspace/workspace-replay-service';
 import { getSecretBroker } from './secret-broker';
 
 const logger = createLogger('Sandbox:Orchestrator');
@@ -310,6 +312,18 @@ export class SandboxOrchestrator {
     const startTime = Date.now();
     const timeout = options?.timeout || 60000;
 
+    // === Record command start for workspace replay ===
+    const replayWorkspaceId = `${session.userId}:${session.conversationId}`;
+    workspaceReplayService.recordCommandExecution({
+      phase: 'started',
+      workspaceId: replayWorkspaceId,
+      sessionId: session.logicalId,
+      userId: session.userId,
+      command,
+      sandboxId: session.handle.id,
+      provider: session.provider,
+    });
+
     const escalation = timeout <= 15000
       ? ESCALATION_PROFILES.quick
       : timeout <= 60000
@@ -336,6 +350,20 @@ export class SandboxOrchestrator {
     const result = escalationResult.result!;
 
     const duration = Date.now() - startTime;
+
+    // === Record command completion for workspace replay ===
+    workspaceReplayService.recordCommandExecution({
+      phase: 'completed',
+      workspaceId: replayWorkspaceId,
+      sessionId: session.logicalId,
+      userId: session.userId,
+      command,
+      sandboxId: session.handle.id,
+      provider: session.provider,
+      exitCode: result.exitCode ?? (result.success ? 0 : 1),
+      output: result.output || '',
+      durationMs: duration,
+    });
 
     if (options?.onProgress) {
       const updatedMetrics = await resourceMonitor.getResourceUsage(session.handle.id);
@@ -391,9 +419,177 @@ export class SandboxOrchestrator {
         reason,
       });
 
-      const newHandle = await this.createSandboxHandle(session.userId, session.conversationId, toProvider, session.policy);
+      // === Cross-Provider Affinity Migration: Snapshot workspace FS ===
+      // Before abandoning the old sandbox, capture the workspace filesystem
+      // so caches (node_modules, venvs, pip cache, etc.) can be restored on
+      // the new provider. This preserves cache warmth across migrations.
+      const affinityWorkspaceId = `${session.userId}:${session.conversationId}`;
+      const workspaceDir = session.handle.workspaceDir;
+
+      // Stop VFS sync on the old sandbox before migrating away
+      try {
+        sandboxFilesystemSync.stopSync(session.handle.id);
+      } catch {
+        // Best-effort — old sandbox may already be dead
+      }
+
+      // Snapshot the workspace FS from the current (old) sandbox before migration.
+      // This is best-effort — if snapshot fails we still proceed with migration.
+      try {
+        await workspaceFSSnapshotService.createSnapshot(
+          affinityWorkspaceId,
+          session.userId,
+          session.handle.id,
+          fromProvider,
+          workspaceDir,
+        );
+        logger.info('Workspace FS snapshot captured before cross-provider migration', {
+          workspaceId: affinityWorkspaceId,
+          fromProvider,
+        });
+      } catch (snapErr: any) {
+        // Best-effort — migration proceeds even if snapshot fails
+        logger.debug('Workspace FS snapshot before migration skipped', {
+          workspaceId: affinityWorkspaceId,
+          error: snapErr.message,
+        });
+      }
+
+      const newHandle = await this.createSandboxHandle(session.userId, session.conversationId, toProvider, session.policy, workspaceDir);
       resourceMonitor.stopMonitoring(session.handle.id);
       resourceMonitor.startMonitoring(newHandle.id, toProvider);
+
+      // === Cross-Provider Affinity Migration: Restore snapshot and update affinity ===
+      // Restore the workspace FS snapshot to the new sandbox so caches are preserved.
+      if (this.AFFINITY_ENABLED && workspaceFSSnapshotService.hasSnapshot(affinityWorkspaceId)) {
+        try {
+          const restoreResult = await workspaceFSSnapshotService.restoreSnapshot(
+            affinityWorkspaceId,
+            newHandle,
+            session.userId,
+          );
+          if (restoreResult.restored) {
+            logger.info('Workspace FS snapshot restored after cross-provider migration', {
+              workspaceId: affinityWorkspaceId,
+              fromProvider,
+              toProvider,
+              cacheRestored: restoreResult.cacheRestored,
+            });
+          }
+        } catch (restoreErr: any) {
+          // Best-effort — migration succeeded even if restore fails
+          logger.warn('Workspace FS snapshot restore after migration failed (proceeding)', {
+            workspaceId: affinityWorkspaceId,
+            error: restoreErr.message,
+          });
+        }
+      }
+
+      // Update affinity binding to point to the new provider
+      if (this.AFFINITY_ENABLED) {
+        this.setAffinity(affinityWorkspaceId, toProvider, newHandle.id, newHandle.workspaceDir);
+        logger.debug('Affinity binding updated after cross-provider migration', {
+          workspaceId: affinityWorkspaceId,
+          fromProvider,
+          toProvider,
+        });
+      }
+
+      // === Phase 4: Migrate running services to the new provider ===
+      // Restart all running workspace services (npm run dev, python server.py,
+      // etc.) on the new sandbox so they survive the provider switch.
+      const servicesToMigrate = workspaceServiceManager.prepareForMigration(
+        affinityWorkspaceId,
+        toProvider,
+        newHandle.id,
+      );
+
+      if (servicesToMigrate.length > 0) {
+        logger.info('Migrating running services to new provider', {
+          workspaceId: affinityWorkspaceId,
+          count: servicesToMigrate.length,
+          fromProvider,
+          toProvider,
+        });
+
+        for (const service of servicesToMigrate) {
+          try {
+            // Build the restart command: cd to working dir, export any
+            // service-scoped env vars, then run the original command via nohup.
+            // Use sh -c to ensure the $! capture targets the nohup'd process.
+            const safeWorkDir = service.workingDir.replace(/(["\\$`])/g, '\\$1');
+
+            // Inject service-scoped env vars (e.g. PORT=3001) so the restarted
+            // service behaves identically to the original.
+            let envExports = '';
+            if (service.env && Object.keys(service.env).length > 0) {
+              envExports = Object.entries(service.env)
+                .map(([k, v]) => `export ${k.replace(/[^A-Za-z0-9_]/g, '')}="${v.replace(/(["\\$`])/g, '\\$1')}"`)
+                .join('; ') + '; ';
+            }
+
+            const restartCmd = `sh -c 'cd "${safeWorkDir}" && ${envExports}nohup ${service.command} > /tmp/svc-${service.id}.log 2>&1 & echo $!'`;
+            const result = await newHandle.executeCommand(restartCmd, undefined, 15000);
+            const newPid = parseInt((result.output || '').trim(), 10);
+
+            if (newPid && newPid > 0) {
+              workspaceServiceManager.completeServiceMigration(
+                service.id,
+                affinityWorkspaceId,
+                newPid,
+              );
+
+              // Re-detect ports from the new service's startup output.
+              // Brief sleep + tail the log file to capture the startup banner
+              // so port detection can fire and preview URLs get updated.
+              try {
+                const logResult = await newHandle.executeCommand(
+                  `sleep 1 && cat /tmp/svc-${service.id}.log 2>/dev/null || true`,
+                  undefined,
+                  10000,
+                );
+                if (logResult.output) {
+                  workspaceServiceManager.feedOutput(
+                    service.id,
+                    affinityWorkspaceId,
+                    logResult.output,
+                  );
+                }
+              } catch {
+                // Best-effort — port detection will catch up on next output
+              }
+
+              logger.info('Service restarted on new provider', {
+                serviceId: service.id,
+                name: service.name,
+                newPid,
+                toProvider,
+              });
+            } else {
+              workspaceServiceManager.completeServiceMigration(
+                service.id,
+                affinityWorkspaceId,
+                undefined,
+                `Could not parse PID from output: ${(result.output || '').slice(0, 100)}`,
+              );
+            }
+          } catch (restartErr: any) {
+            // Best-effort — log the failure but don't block migration
+            workspaceServiceManager.completeServiceMigration(
+              service.id,
+              affinityWorkspaceId,
+              undefined,
+              restartErr.message,
+            );
+          }
+        }
+
+        logger.info('Service migration batch completed', {
+          workspaceId: affinityWorkspaceId,
+          total: servicesToMigrate.length,
+          toProvider,
+        });
+      }
 
       const oldSessionId = session.sessionId;
       session.handle = newHandle;

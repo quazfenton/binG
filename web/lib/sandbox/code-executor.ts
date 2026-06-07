@@ -7,6 +7,7 @@
 
 import { coreSandboxService } from '@/lib/sandbox/core-sandbox-service';
 import { providerHealthTracker } from './provider-health';
+import { workspaceSessionGraph } from '@/lib/workspace/workspace-session-graph';
 
 export interface ExecutionOptions {
   input?: string;
@@ -54,6 +55,18 @@ export async function executeInSandbox(
       });
 
       const executionTime = Date.now() - startTime;
+
+      // Register execution session in workspace session graph (Gap #4)
+      try {
+        workspaceSessionGraph.registerSession({
+          workspaceId: sandbox.id,
+          userId: 'system',
+          sessionType: 'execution',
+          sessionSubtype: language,
+          sandboxId: sandbox.id,
+          metadata: { code: code.slice(0, 200), executionTime, exitCode: result.exitCode },
+        });
+      } catch { /* Best-effort */ }
 
       // Track provider health for sandbox code execution
       providerHealthTracker.recordCall('core-sandbox', result.exitCode === 0, executionTime, result.error);

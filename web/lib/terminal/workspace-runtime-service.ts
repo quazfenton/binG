@@ -22,12 +22,14 @@
  */
 
 import { createLogger } from '@/lib/utils/logger';
+import { EventEmitter } from 'events';
 import { getDatabase } from '@/lib/database/connection';
 import { virtualPidRegistry } from './virtual-pid-registry';
 import { workspaceServiceManager, type WorkspaceService, type ServiceStatus } from './workspace-service-manager';
 import { workspacePreviewRegistry, type WorkspacePreview, type PreviewStatus } from './workspace-preview-registry';
 import type { PidMapping } from './virtual-pid-registry';
 import { getSecretBroker } from '@/lib/sandbox/secret-broker';
+import { workspaceJobManager } from './workspace-job-manager';
 
 const logger = createLogger('WorkspaceRuntime');
 
@@ -55,7 +57,7 @@ export interface WorkspaceRuntimeState {
 // Workspace Runtime Service
 // ============================================================================
 
-export class WorkspaceRuntimeService {
+export class WorkspaceRuntimeService extends EventEmitter {
   readonly workspaceId: string;
   readonly userId: string;
 
@@ -75,6 +77,7 @@ export class WorkspaceRuntimeService {
   private hydrated = false;
 
   constructor(workspaceId: string, userId: string) {
+    super();
     this.workspaceId = workspaceId;
     this.userId = userId;
     this.pids = virtualPidRegistry;
@@ -100,7 +103,19 @@ export class WorkspaceRuntimeService {
       this.services.rehydrate(this.workspaceId);
       this.previews.rehydrate(this.workspaceId);
       this.loadEnvFromDb();
+      // Rehydrate background jobs (fire-and-forget, logged internally)
+      workspaceJobManager.rehydrate(this.workspaceId).catch((err: any) => {
+        logger.warn('Job rehydration failed for workspace', {
+          workspaceId: this.workspaceId.slice(0, 16),
+          error: err.message,
+        });
+      });
       this.hydrated = true;
+      this.emit('workspace:hydrated', {
+        workspaceId: this.workspaceId,
+        userId: this.userId,
+      });
+      this.notifyGraphChanged();
       logger.debug('Workspace runtime hydrated', {
         workspaceId: this.workspaceId.slice(0, 16),
         services: this.services.listServices(this.workspaceId).length,
@@ -149,6 +164,12 @@ export class WorkspaceRuntimeService {
   setEnv(key: string, value: string): void {
     this.envCache.set(key, value);
     this.syncEnvToDb(key, value, false);
+    this.emit('workspace:env:set', {
+      workspaceId: this.workspaceId,
+      key,
+      isSecret: false,
+    });
+    this.notifyGraphChanged();
   }
 
   /**
@@ -166,6 +187,12 @@ export class WorkspaceRuntimeService {
     // Store the placeholder reference in the env cache
     this.envCache.set(key, `__SB__${key}__`);
     this.syncEnvToDb(key, `__SB__${key}__`, true);
+    this.emit('workspace:env:set', {
+      workspaceId: this.workspaceId,
+      key,
+      isSecret: true,
+    });
+    this.notifyGraphChanged();
     logger.debug('Secret env var stored via SecretBroker', { key });
   }
 
@@ -183,6 +210,11 @@ export class WorkspaceRuntimeService {
   unsetEnv(key: string): void {
     this.envCache.delete(key);
     this.deleteEnvFromDb(key);
+    this.emit('workspace:env:unset', {
+      workspaceId: this.workspaceId,
+      key,
+    });
+    this.notifyGraphChanged();
   }
 
   /**
@@ -228,11 +260,42 @@ export class WorkspaceRuntimeService {
   }
 
   /**
-   * Dispose of this runtime instance — clears in-memory cache.
-   * Called when the workspace is being cleaned up.
+   * Notify the workspace graph that runtime state has changed.
+   * Uses lazy import to avoid circular dependencies.
+   */
+  private notifyGraphChanged(): void {
+    import('@/lib/workspace/workspace-graph-service')
+      .then(({ workspaceGraphService }) => workspaceGraphService.notifyGraphChanged(this.workspaceId))
+      .catch(() => { /* Best-effort */ });
+  }
+
+  /**
+   * Dispose of this runtime instance — clears in-memory cache
+   * and cleans up PID registry entries for the workspace.
    */
   dispose(): void {
+    // Clean up PID registry entries for this workspace
+    try {
+      // Copy the list before iterating — unregisterProcess mutates the registry
+      const processes = [...this.pids.getProcessList(this.workspaceId)];
+      for (const p of processes) {
+        try {
+          this.pids.unregisterProcess(this.workspaceId, p.vPid);
+        } catch {
+          // Best-effort — some entries may already be removed
+        }
+      }
+    } catch {
+      // PID registry cleanup is best-effort
+    }
+
     this.envCache.clear();
+    this.emit('workspace:disposed', {
+      workspaceId: this.workspaceId,
+      userId: this.userId,
+    });
+    this.notifyGraphChanged();
+    this.removeAllListeners();
   }
 
   // ========================================================================
@@ -344,6 +407,7 @@ export async function cleanupWorkspaceRuntimeState(workspaceId: string, userId: 
     try {
       runtime.services.clearWorkspace(workspaceId);
       runtime.previews.clearWorkspace(workspaceId);
+      await workspaceJobManager.clearWorkspace(workspaceId);
 
       // Clear workspace_env from DB
       const db = (await import('@/lib/database/connection')).getDatabase();

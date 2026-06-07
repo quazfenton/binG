@@ -647,32 +647,107 @@ export class ContentAddressableStorage {
   // ==========================================================================
 
   /**
-   * Async write to R2 (fire-and-forget for hot path).
+   * Maximum number of retry attempts for R2 writes.
+   * Configurable via CAS_R2_RETRY_MAX_ATTEMPTS (default: 3).
    */
-  private async writeToR2Async(hash: string, content: Buffer): Promise<void> {
+  private readonly R2_RETRY_MAX_ATTEMPTS = (() => {
+    const raw = process.env.CAS_R2_RETRY_MAX_ATTEMPTS;
+    if (!raw) return 3;
+    const val = parseInt(raw, 10);
+    return isNaN(val) || val < 1 ? 3 : val;
+  })();
+
+  /**
+   * Base delay for exponential backoff in ms.
+   * Configurable via CAS_R2_RETRY_BASE_DELAY_MS (default: 1000 = 1s).
+   */
+  private readonly R2_RETRY_BASE_DELAY_MS = (() => {
+    const raw = process.env.CAS_R2_RETRY_BASE_DELAY_MS;
+    if (!raw) return 1000;
+    const val = parseInt(raw, 10);
+    return isNaN(val) || val < 100 ? 1000 : val;
+  })();
+
+  /**
+   * Async write to R2 with exponential backoff retry.
+   * On failure, retries up to R2_RETRY_MAX_ATTEMPTS times with
+   * exponentially increasing delay (base * 2^attempt).
+   */
+  private async writeToR2WithRetry(hash: string, content: Buffer): Promise<void> {
     if (!this.r2Client || !this.config.r2Bucket) {
-      logger.warn('R2 not configured, skipping async write', { hash });
       return;
     }
 
-    try {
-      const { PutObjectCommand } = await import('@aws-sdk/client-s3');
-      const dataToStore = this.shouldCompress(content) ? compress(content) : content;
+    let lastError: Error | null = null;
 
-      await this.r2Client.send(new PutObjectCommand({
-        Bucket: this.config.r2Bucket,
-        Key: `blobs/${hash}`,
-        Body: dataToStore,
-        ContentType: 'application/octet-stream',
-        Metadata: {
-          originalHash: hash,
-          compressed: dataToStore.length < content.length ? 'true' : 'false',
-        },
-      }));
-    } catch (error: any) {
-      logger.error('R2 write failed for blob', { hash, error: error.message });
-      throw error;
+    for (let attempt = 0; attempt < this.R2_RETRY_MAX_ATTEMPTS; attempt++) {
+      try {
+        const { PutObjectCommand } = await import('@aws-sdk/client-s3');
+        const dataToStore = this.shouldCompress(content) ? compress(content) : content;
+
+        await this.r2Client.send(new PutObjectCommand({
+          Bucket: this.config.r2Bucket,
+          Key: `blobs/${hash}`,
+          Body: dataToStore,
+          ContentType: 'application/octet-stream',
+          Metadata: {
+            originalHash: hash,
+            compressed: dataToStore.length < content.length ? 'true' : 'false',
+          },
+        }));
+
+        // Success — log retries if any occurred
+        if (attempt > 0) {
+          logger.info('R2 write succeeded after retry', {
+            hash,
+            attempt: attempt + 1,
+            totalAttempts: attempt + 1,
+          });
+        }
+        return;
+      } catch (error: any) {
+        lastError = error;
+
+        // Don't retry on permanent errors (auth, bucket not found, quota exceeded)
+        const statusCode = error?.$metadata?.httpStatusCode;
+        if (statusCode === 403 || statusCode === 404 || statusCode === 402) {
+          logger.error('R2 write failed with permanent error (not retrying)', {
+            hash,
+            statusCode,
+            error: error.message,
+          });
+          throw error;
+        }
+
+        if (attempt < this.R2_RETRY_MAX_ATTEMPTS - 1) {
+          const delayMs = this.R2_RETRY_BASE_DELAY_MS * Math.pow(2, attempt);
+          logger.warn('R2 write failed, retrying with backoff', {
+            hash,
+            attempt: attempt + 1,
+            maxAttempts: this.R2_RETRY_MAX_ATTEMPTS,
+            delayMs,
+            error: error.message,
+          });
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+        }
+      }
     }
+
+    // All retries exhausted
+    logger.error('R2 write failed after all retries', {
+      hash,
+      attempts: this.R2_RETRY_MAX_ATTEMPTS,
+      error: lastError?.message,
+    });
+    throw lastError || new Error('R2 write failed');
+  }
+
+  /**
+   * Async write to R2 (fire-and-forget for hot path).
+   * Now uses exponential backoff retry via writeToR2WithRetry.
+   */
+  private async writeToR2Async(hash: string, content: Buffer): Promise<void> {
+    await this.writeToR2WithRetry(hash, content);
   }
 
   // ==========================================================================

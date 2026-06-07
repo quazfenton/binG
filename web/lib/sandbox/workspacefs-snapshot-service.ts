@@ -20,6 +20,7 @@
 import { createLogger } from '../utils/logger';
 import { sandboxBridge } from './sandbox-service-bridge';
 import { virtualFilesystem } from '../virtual-filesystem/virtual-filesystem-service';
+import { getDatabase } from '@/lib/database/connection';
 import type { SandboxProviderType } from './providers';
 import type { SandboxHandle } from './providers/sandbox-provider';
 
@@ -69,6 +70,13 @@ export interface WorkspaceFSSnapshot {
 
   /** Total estimated cache size (for monitoring) */
   estimatedCacheSizeBytes?: number;
+
+  /**
+   * Workspace environment variables at time of snapshot.
+   * Captured so they can be restored alongside the filesystem
+   * when the workspace re-binds to a new provider.
+   */
+  envVars?: Record<string, string>;
 }
 
 /**
@@ -159,6 +167,11 @@ export class WorkspaceFSSnapshotService {
   private pendingSnapshots = new Set<string>();
 
   constructor() {
+    // Rehydrate snapshots from DB on startup (best-effort, non-blocking)
+    this.rehydrateFromDB().catch(err => {
+      logger.warn('Failed to rehydrate snapshots from DB on startup', { error: err.message });
+    });
+
     // Start periodic cleanup of expired snapshots (unref'd so it doesn't prevent exit)
     const cleanupInterval = setInterval(() => this.cleanupExpiredSnapshots(), 120_000);
     cleanupInterval.unref?.();
@@ -278,6 +291,27 @@ export class WorkspaceFSSnapshotService {
       // Best-effort
     }
 
+    // Step 4: Snapshot workspace environment variables
+    // Captures env vars so they survive provider migrations and workspace re-binds.
+    let envVars: Record<string, string> | undefined;
+    try {
+      const { getWorkspaceRuntime } = await import('@/lib/terminal/workspace-runtime-service');
+      const runtime = getWorkspaceRuntime(workspaceId, userId);
+      await runtime.hydrate();
+      envVars = runtime.getAllEnv();
+      if (Object.keys(envVars).length > 0) {
+        logger.debug('Workspace env vars captured in snapshot', {
+          workspaceId,
+          envCount: Object.keys(envVars).length,
+        });
+      }
+    } catch (err: any) {
+      logger.debug('Workspace env vars snapshot skipped (best-effort)', {
+        workspaceId,
+        error: err.message,
+      });
+    }
+
     const snapshot: WorkspaceFSSnapshot = {
       workspaceId,
       userId,
@@ -290,9 +324,13 @@ export class WorkspaceFSSnapshotService {
       fileCount,
       lockFiles,
       estimatedCacheSizeBytes,
+      envVars,
     };
 
     this.snapshots.set(workspaceId, snapshot);
+
+    // Persist to DB for durability across process restarts
+    this.persistSnapshotToDB(snapshot);
 
     logger.info('Workspace FS snapshot created', {
       workspaceId,
@@ -303,6 +341,7 @@ export class WorkspaceFSSnapshotService {
       estimatedCacheMb: estimatedCacheSizeBytes
         ? Math.round(estimatedCacheSizeBytes / (1024 * 1024))
         : undefined,
+      envVarCount: Object.keys(envVars || {}).length,
     });
 
     return snapshot;
@@ -368,6 +407,28 @@ export class WorkspaceFSSnapshotService {
 
     // Clean up the snapshot after restoration (one-time use)
     this.snapshots.delete(workspaceId);
+    this.deleteSnapshotFromDB(workspaceId);
+
+    // Restore workspace environment variables from snapshot
+    if (snapshot.envVars && Object.keys(snapshot.envVars).length > 0) {
+      try {
+        const { getWorkspaceRuntime } = await import('@/lib/terminal/workspace-runtime-service');
+        const runtime = getWorkspaceRuntime(workspaceId, userId);
+        await runtime.hydrate();
+        for (const [key, value] of Object.entries(snapshot.envVars)) {
+          runtime.setEnv(key, value);
+        }
+        logger.info('Workspace env vars restored from snapshot', {
+          workspaceId,
+          envCount: Object.keys(snapshot.envVars).length,
+        });
+      } catch (err: any) {
+        logger.warn('Failed to restore workspace env vars from snapshot', {
+          workspaceId,
+          error: err.message,
+        });
+      }
+    }
 
     return { restored: true, cacheRestored };
   }
@@ -491,6 +552,7 @@ export class WorkspaceFSSnapshotService {
    */
   deleteSnapshot(workspaceId: string): void {
     this.snapshots.delete(workspaceId);
+    this.deleteSnapshotFromDB(workspaceId);
   }
 
   /**
@@ -605,6 +667,7 @@ export class WorkspaceFSSnapshotService {
 
   /**
    * Periodically clean up expired snapshots to prevent memory leaks.
+   * Also prunes expired rows from the DB.
    */
   private cleanupExpiredSnapshots(): void {
     const now = Date.now();
@@ -619,6 +682,153 @@ export class WorkspaceFSSnapshotService {
 
     if (cleaned > 0) {
       logger.debug('Cleaned up expired workspace snapshots', { cleaned });
+    }
+
+    // Also prune expired snapshots from the DB
+    this.pruneExpiredSnapshotsFromDB();
+  }
+
+  // ==========================================================================
+  // DB Persistence (Migration 025: workspace_snapshots table)
+  // ==========================================================================
+
+  /**
+   * Rehydrate snapshots from DB on startup.
+   * Best-effort — silently skips if the table doesn't exist yet or the DB
+   * is unavailable.
+   */
+  private async rehydrateFromDB(): Promise<void> {
+    try {
+      const db = getDatabase();
+      if (!db) return;
+
+      const now = Date.now();
+      const rows = db.prepare(
+        `SELECT workspace_id, user_id, source_provider, source_sandbox_id,
+                workspace_dir, created_at, checkpoint_id, vfs_version,
+                file_count, lock_files_json, estimated_cache_bytes, env_vars_json
+         FROM workspace_snapshots
+         WHERE expires_at > ?`
+      ).all(now) as Array<{
+        workspace_id: string;
+        user_id: string;
+        source_provider: string;
+        source_sandbox_id: string;
+        workspace_dir: string;
+        created_at: number;
+        checkpoint_id: string | null;
+        vfs_version: number;
+        file_count: number;
+        lock_files_json: string;
+        estimated_cache_bytes: number | null;
+        env_vars_json: string | null;
+      }>;
+
+      for (const row of rows) {
+        let lockFiles: WorkspaceLockFiles = {};
+        try { lockFiles = JSON.parse(row.lock_files_json); } catch { /* default */ }
+
+        let envVars: Record<string, string> | undefined;
+        try { envVars = row.env_vars_json ? JSON.parse(row.env_vars_json) : undefined; } catch { /* default */ }
+
+        const snapshot: WorkspaceFSSnapshot = {
+          workspaceId: row.workspace_id,
+          userId: row.user_id,
+          sourceProvider: row.source_provider as SandboxProviderType,
+          sourceSandboxId: row.source_sandbox_id,
+          workspaceDir: row.workspace_dir,
+          createdAt: row.created_at,
+          checkpointId: row.checkpoint_id ?? undefined,
+          vfsVersion: row.vfs_version,
+          fileCount: row.file_count,
+          lockFiles,
+          estimatedCacheSizeBytes: row.estimated_cache_bytes ?? undefined,
+          envVars,
+        };
+
+        this.snapshots.set(snapshot.workspaceId, snapshot);
+      }
+
+      if (rows.length > 0) {
+        logger.info('Rehydrated workspace snapshots from DB', { count: rows.length });
+      }
+    } catch (err: any) {
+      // Table may not exist yet (migration not yet run) — silent skip
+      if (!err.message?.includes('no such table')) {
+        logger.warn('Failed to rehydrate snapshots from DB', { error: err.message });
+      }
+    }
+  }
+
+  /**
+   * Persist a snapshot to the workspace_snapshots DB table.
+   * Best-effort — non-critical for operation.
+   */
+  private persistSnapshotToDB(snapshot: WorkspaceFSSnapshot): void {
+    try {
+      const db = getDatabase();
+      if (!db) return;
+
+      const expiresAt = snapshot.createdAt + this.SNAPSHOT_TTL_MS;
+
+      db.prepare(`
+        INSERT OR REPLACE INTO workspace_snapshots
+          (workspace_id, user_id, source_provider, source_sandbox_id,
+           workspace_dir, created_at, checkpoint_id, vfs_version,
+           file_count, lock_files_json, estimated_cache_bytes, env_vars_json, expires_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        snapshot.workspaceId,
+        snapshot.userId,
+        snapshot.sourceProvider,
+        snapshot.sourceSandboxId,
+        snapshot.workspaceDir,
+        snapshot.createdAt,
+        snapshot.checkpointId ?? null,
+        snapshot.vfsVersion,
+        snapshot.fileCount,
+        JSON.stringify(snapshot.lockFiles),
+        snapshot.estimatedCacheSizeBytes ?? null,
+        snapshot.envVars ? JSON.stringify(snapshot.envVars) : null,
+        expiresAt,
+      );
+    } catch (err: any) {
+      if (err.message?.includes('no such table')) return;
+      logger.warn('Failed to persist snapshot to DB', {
+        workspaceId: snapshot.workspaceId,
+        error: err.message,
+      });
+    }
+  }
+
+  /**
+   * Delete a snapshot from the DB.
+   */
+  private deleteSnapshotFromDB(workspaceId: string): void {
+    try {
+      const db = getDatabase();
+      if (!db) return;
+      db.prepare('DELETE FROM workspace_snapshots WHERE workspace_id = ?').run(workspaceId);
+    } catch {
+      // Best-effort
+    }
+  }
+
+  /**
+   * Prune expired snapshots from the DB.
+   */
+  private pruneExpiredSnapshotsFromDB(): void {
+    try {
+      const db = getDatabase();
+      if (!db) return;
+      const result = db.prepare(
+        'DELETE FROM workspace_snapshots WHERE expires_at <= ?'
+      ).run(Date.now());
+      if (result.changes > 0) {
+        logger.debug('Pruned expired snapshots from DB', { count: result.changes });
+      }
+    } catch {
+      // Best-effort
     }
   }
 }

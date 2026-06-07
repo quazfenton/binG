@@ -28,6 +28,7 @@ import { getSandboxProvider, type SandboxProviderType } from '../../sandbox/prov
 import { quotaManager } from '../../management/quota-manager'
 import type { SandboxHandle } from '../../sandbox/providers/sandbox-provider'
 import { secureRandomId } from '@/lib/utils/crypto-random'
+import { workspaceSessionGraph } from '@/lib/workspace/workspace-session-graph'
 
 const logger = createLogger('Terminal:SessionManager')
 
@@ -461,6 +462,24 @@ export class TerminalSessionManager {
     this.saveSession(session)
     this.activeSessions.set(session.sessionId, session)
 
+    // Register in workspace session graph (Gap #4)
+    try {
+      const graphSessionId = workspaceSessionGraph.registerSession({
+        workspaceId: `user:${userId}`,
+        userId,
+        sessionType: 'shell',
+        sessionSubtype: mode,
+        sandboxId: handle.id,
+        provider: providerType,
+        metadata: { cwd, cols, rows },
+      });
+      if (graphSessionId) {
+        session.metadata = { ...session.metadata, sessionGraphId: graphSessionId };
+      }
+    } catch {
+      // Best-effort — session graph registration is non-critical
+    }
+
     // MED-7 fix: Enhanced audit trail — log session creation with structured metadata
     logger.info(`Created new session for user`, {
       sessionId: session.sessionId,
@@ -516,6 +535,16 @@ export class TerminalSessionManager {
         lastSnapshotReason: reason,
       },
     })
+
+    // Also unregister from workspace session graph (Gap #4)
+    try {
+      const graphSessionId = session.metadata?.sessionGraphId as string | undefined;
+      if (graphSessionId) {
+        workspaceSessionGraph.unregisterSession(graphSessionId, /* close */ false);
+      }
+    } catch {
+      // Best-effort
+    }
 
     this.activeSessions.delete(sessionId)
 

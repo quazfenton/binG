@@ -9,7 +9,12 @@
  *   "localhost" — Only from localhost requests
  *   "unshare"   — Linux user namespace isolation (unshare --user --map-root-user)
  *   "docker"    — Per-session Docker container isolation
- *   "on"        — Direct spawn (dev only, no isolation)
+ *   "on"        — Direct spawn (fallback when unshare unavailable, e.g. macOS)
+ *
+ * Default (when ENABLE_LOCAL_PTY is not set):
+ *   - Linux: "unshare" (rootless container with user/mount/PID namespace isolation)
+ *   - macOS/Windows: "on" (direct spawn, no isolation)
+ *   - Production: "off" (disabled)
  *
  * Endpoints:
  *   POST /api/terminal/local-pty        — Create PTY session
@@ -301,16 +306,49 @@ type IsolationMode = 'off' | 'localhost' | 'unshare' | 'docker' | 'r2-docker' | 
 /**
  * Read the current isolation mode from the environment.
  * Evaluated per-request so that vi.stubEnv() works in tests.
+ *
+ * Default (when ENABLE_LOCAL_PTY is not set):
+ *   - Linux: 'unshare' — rootless container with user/mount/PID namespace isolation
+ *   - macOS/Windows: 'on' — direct spawn (unshare requires Linux)
+ *   - Production: 'off' — disabled
+ *   - ORACLE_VM_HOST set: 'oracle-vm' — remote SSH-based isolation
  */
 function getIsolationMode(): IsolationMode {
-  return (process.env.ENABLE_LOCAL_PTY as IsolationMode) ||
-    (process.env.ORACLE_VM_HOST ? 'oracle-vm' : process.env.NODE_ENV === 'production' ? 'off' : 'on');
+  const envMode = process.env.ENABLE_LOCAL_PTY as IsolationMode;
+  if (envMode) return envMode;
+  if (process.env.ORACLE_VM_HOST) return 'oracle-vm';
+  if (process.env.NODE_ENV === 'production') return 'off';
+  // Phase 1: Default to rootless container isolation on Linux
+  return process.platform === 'linux' ? 'unshare' : 'on';
 }
 
 // Docker isolation config
 const DOCKER_IMAGE = process.env.LOCAL_PTY_DOCKER_IMAGE || 'node:20-slim';
 const DOCKER_MEMORY = process.env.LOCAL_PTY_DOCKER_MEMORY || '512m';
 const DOCKER_CPU = process.env.LOCAL_PTY_DOCKER_CPU || '1';
+/**
+ * Path to a seccomp profile JSON file for Docker container isolation.
+ * Defaults to the project's hardened profile at seccomp/hardened-podman.json.
+ * The profile blocks ~65 dangerous syscalls (unshare, setns, mount, etc.).
+ * Set LOCAL_PTY_DOCKER_SECCOMP="" to disable seccomp filtering.
+ */
+const DOCKER_SECCOMP_PROFILE = (() => {
+  const raw = process.env.LOCAL_PTY_DOCKER_SECCOMP;
+  if (raw === '') return null; // explicitly disabled
+  if (raw) return raw;         // custom path
+  // Default: project-bundled hardened profile (seccomp/ is at repo root, web/ is one level down)
+  const candidates = [
+    path.resolve(process.cwd(), 'seccomp', 'hardened-podman.json'),
+    path.resolve(process.cwd(), '..', 'seccomp', 'hardened-podman.json'),
+  ];
+  for (const p of candidates) {
+    try {
+      fs.accessSync(p, fs.constants.R_OK);
+      return p;
+    } catch { /* try next */ }
+  }
+  return null; // profile not found — skip seccomp
+})();
 
 // R2 Docker isolation config — s3fs-fuse container with R2 as /workspace
 const R2_DOCKER_IMAGE = process.env.R2_TERMINAL_DOCKER_IMAGE || 'bing-terminal-r2:latest';
@@ -325,6 +363,328 @@ const MAX_COLS = 500;
 const MAX_ROWS = 200;
 const MIN_COLS = 10;
 const MIN_ROWS = 5;
+
+// ============================================================
+// Per-Workspace User Namespace Isolation (Phase 1: step 3)
+// ============================================================
+
+/**
+ * Enable per-workspace unique UID/GID mappings via /etc/subuid and
+ * newuidmap/newgidmap. When enabled, each workspace session gets a unique
+ * subuid offset derived from the session ID, using a fork+pipe wrapper
+ * script to properly call newuidmap/newgidmap on the namespace process.
+ *
+ * Requires /etc/subuid and /etc/subgid to have a range configured
+ * (e.g., "user:100000:65536"). Set PTY_UNSHARE_PER_WORKSPACE_UID=true.
+ */
+const UNSHARE_PER_WORKSPACE_UID = process.env.PTY_UNSHARE_PER_WORKSPACE_UID === 'true';
+
+/**
+ * Generate a bash wrapper script that creates a user namespace with
+ * unique per-session UID/GID mappings via newuidmap/newgidmap.
+ *
+ * Flow:
+ *  1. Parse /etc/subuid and /etc/subgid for the current user's range
+ *  2. Derive per-session offset from session ID hash
+ *  3. Create a named pipe for parent-child synchronization
+ *  4. Child: unshare --user --pid (NO --fork!) — $$ reports parent-ns PID
+ *  5. Child signals parent via pipe, parent calls newuidmap/newgidmap
+ *  6. Parent signals child, child execs the real shell
+ *
+ * DESIGN NOTE — why no --fork:
+ *  With unshare --fork, the child process enters a new PID namespace where
+ *  $$ returns 1.  newuidmap MUST receive the PID as seen from the *parent*
+ *  namespace.  Removing --fork keeps the initial process in the parent
+ *  PID namespace (its children get new PIDs), so $$ is the correct PID.
+ *
+ *  Without --fork there is no PID-1 process in the new PID namespace,
+ *  but mounting /proc still works on modern kernels (5.x+).  The exec'd
+ *  shell inherits the parent-ns PID and its children get new-ns PIDs.
+ *
+ * Falls back to --map-root-user if /etc/subuid is not configured.
+ */
+function buildUnshareSubuidWrapperScript(
+  sessionId: string,
+  shellCmd: string,
+  shellArgs: string[],
+): string {
+  const escapedShellCmd = shellCmd.replace(/'/g, "'\\''");
+  const escapedShellArgs = shellArgs.map(a => `'${a.replace(/'/g, "'\\''")}'`).join(' ');
+
+  return `#!/bin/bash
+# Auto-generated unshare wrapper with newuidmap/newgidmap support
+# Session: ${sessionId}
+set -euo pipefail
+
+USER_NAME=$(id -un)
+SESSION_ID="${sessionId}"
+SHELL_CMD='${escapedShellCmd}'
+SHELL_ARGS=(${escapedShellArgs})
+
+# --- Parse /etc/subuid for this user's available range ---
+SUBUID_LINE=$(grep "^\${USER_NAME}:" /etc/subuid 2>/dev/null | head -1 || true)
+SUBGID_LINE=$(grep "^\${USER_NAME}:" /etc/subgid 2>/dev/null | head -1 || true)
+
+if [ -z "$SUBUID_LINE" ] || [ -z "$SUBGID_LINE" ]; then
+    # Fallback: use --map-root-user (no per-workspace isolation)
+    exec unshare --user --map-root-user --mount --pid --fork --mount-proc -- "$SHELL_CMD" "\${SHELL_ARGS[@]}"
+fi
+
+SUBUID_START=$(echo "$SUBUID_LINE" | cut -d: -f2)
+SUBUID_COUNT=$(echo "$SUBUID_LINE" | cut -d: -f3)
+SUBGID_START=$(echo "$SUBGID_LINE" | cut -d: -f2)
+SUBGID_COUNT=$(echo "$SUBGID_LINE" | cut -d: -f3)
+
+# --- Derive per-session offset from session ID hash ---
+HASH=$(echo -n "$SESSION_ID" | cksum | awk '{print $1}')
+MAX_OFFSET=$((SUBUID_COUNT < 65536 ? SUBUID_COUNT : 65536))
+OFFSET=$((HASH % MAX_OFFSET))
+
+MAPPED_UID=$((SUBUID_START + OFFSET))
+MAPPED_GID=$((SUBGID_START + OFFSET))
+
+# --- Create named pipe for synchronization ---
+PIPE_DIR=$(mktemp -d /tmp/unshare-pipe-XXXXXX)
+PIPE_IN="$PIPE_DIR/in"
+PIPE_OUT="$PIPE_DIR/out"
+mkfifo "$PIPE_IN" "$PIPE_OUT"
+trap "rm -rf '$PIPE_DIR'" EXIT
+
+# --- Start child: unshare WITHOUT --fork so $$ is from parent namespace ---
+# Without --fork, the process spawned by unshare keeps its original PID
+# (visible from the parent).  Only its *children* get new PIDs inside the
+# new PID namespace.  This is exactly what we need: newuidmap can address
+# the process by its parent-namespace PID.
+#
+# --mount-proc is omitted because without --fork there is no PID-1 init
+# in the new namespace.  We mount /proc manually after maps are written.
+unshare --user --mount --pid -- /bin/bash -c '
+    # $$ is the PID in the PARENT namespace (no --fork) — correct for newuidmap
+    echo $$ > '"$PIPE_OUT"'
+    # Wait for parent to write uid_map / gid_map
+    read _ < '"$PIPE_IN"'
+    # Mount /proc in the new PID namespace (requires maps to be written first)
+    # Make root rprivate first to prevent mount propagation back to the host
+    mount --make-rprivate / 2>/dev/null || true
+    mount -t proc proc /proc 2>/dev/null || true
+    # Now exec the real shell
+    exec "$0" "$@"
+' "$SHELL_CMD" "\${SHELL_ARGS[@]}" &
+NS_PID=$!
+
+# --- Parent: read the child's parent-namespace PID from the pipe ---
+# This is the same as $! but we read it from the pipe for validation.
+REPORTED_PID=$(cat "$PIPE_OUT")
+
+# Verify the reported PID matches what we expect (belt-and-suspenders)
+if [ "$REPORTED_PID" != "$NS_PID" ]; then
+    NS_PID="$REPORTED_PID"
+fi
+
+# Write setgroups first (must be "deny" before writing gid_map)
+echo "deny" > "/proc/$NS_PID/setgroups" 2>/dev/null || true
+
+# Use newuidmap/newgidmap if available, otherwise write maps directly
+if command -v newuidmap >/dev/null 2>&1; then
+    newuidmap "$NS_PID" "0 $MAPPED_UID 1" || {
+        # Fallback: write uid_map directly
+        echo "0 $MAPPED_UID 1" > "/proc/$NS_PID/uid_map" 2>/dev/null || true
+    }
+    newgidmap "$NS_PID" "0 $MAPPED_GID 1" || {
+        echo "0 $MAPPED_GID 1" > "/proc/$NS_PID/gid_map" 2>/dev/null || true
+    }
+else
+    echo "0 $MAPPED_UID 1" > "/proc/$NS_PID/uid_map" 2>/dev/null || true
+    echo "0 $MAPPED_GID 1" > "/proc/$NS_PID/gid_map" 2>/dev/null || true
+fi
+
+# Signal child: mappings are ready, continue execution
+echo 'go' > "$PIPE_IN"
+
+# Wait for child to finish
+wait $NS_PID
+`;
+}
+
+// ============================================================
+// Cgroups v2 Resource Limits (Phase 1: shared-VM hardening)
+// ============================================================
+
+/** Whether cgroups v2 resource limits are enabled for PTY sessions. */
+const CGROUPS_ENABLED = process.env.PTY_CGROUPS_ENABLED !== 'false'; // on by default
+
+/**
+ * Maximum memory per PTY session in bytes.
+ * Supports K/M/G suffixes (e.g. "512M", "1G").
+ * Default: 512 MiB. Set PTY_CGROUPS_MEMORY_MAX=0 to disable memory limiting.
+ */
+const CGROUPS_MEMORY_MAX = (() => {
+  const raw = (process.env.PTY_CGROUPS_MEMORY_MAX || '512M').toUpperCase();
+  if (raw === '0') return 0;
+  const match = raw.match(/^(\d+(?:\.\d+)?)\s*(K|M|G)?$/);
+  if (!match) return 536870912; // 512M default on parse failure
+  const num = parseFloat(match[1]);
+  const suffix = match[2];
+  if (suffix === 'K') return Math.round(num * 1024);
+  if (suffix === 'M') return Math.round(num * 1024 * 1024);
+  if (suffix === 'G') return Math.round(num * 1024 * 1024 * 1024);
+  return Math.round(num); // raw bytes
+})();
+
+/**
+ * CPU quota per PTY session as a percentage of one CPU (0-100+).
+ * Default: 50 (50% of one CPU). Set PTY_CGROUPS_CPU_PERCENT=0 to disable.
+ * Internally converted to microseconds-per-100ms for cgroups v2 cpu.max.
+ */
+const CGROUPS_CPU_PERCENT = (() => {
+  const raw = process.env.PTY_CGROUPS_CPU_PERCENT || '50';
+  const val = parseFloat(raw);
+  return isNaN(val) ? 50 : Math.max(0, val);
+})();
+
+/**
+ * Maximum number of processes (PIDs) per PTY session.
+ * Default: 128. Set PTY_CGROUPS_PIDS_MAX=0 to disable PID limiting.
+ */
+const CGROUPS_PIDS_MAX = (() => {
+  const raw = process.env.PTY_CGROUPS_PIDS_MAX || '128';
+  const val = parseInt(raw, 10);
+  return isNaN(val) ? 128 : val;
+})();
+
+/** Root cgroup path for bing terminal sessions. */
+const CGROUPS_ROOT = '/sys/fs/cgroup/bing-terminals';
+
+/**
+ * Apply cgroups v2 resource limits to a process and its descendants.
+ *
+ * Creates a per-session cgroup directory under the bing-terminals root,
+ * enables controllers in the parent cgroup's subtree_control, sets
+ * memory.max, cpu.max, and pids.max controllers, then adds the
+ * process PID to the cgroup.
+ *
+ * Best-effort: silently returns if cgroups v2 is unavailable, disabled,
+ * or if the process doesn't have permission to write to the cgroup fs.
+ */
+function applyCgroupLimits(pid: number, sessionId: string): void {
+  if (!CGROUPS_ENABLED) return;
+  if (!pid || pid < 1) return;
+
+  const cgroupPath = `${CGROUPS_ROOT}/${sessionId}`;
+
+  try {
+    // Ensure the parent cgroup exists and has controllers enabled.
+    // In cgroups v2, child cgroups inherit controllers only if the parent
+    // enables them via cgroup.subtree_control.
+    fs.mkdirSync(CGROUPS_ROOT, { recursive: true });
+    const controllers = ['+memory', '+cpu', '+pids'].filter(c => {
+      if (c === '+memory' && CGROUPS_MEMORY_MAX === 0) return false;
+      if (c === '+cpu' && CGROUPS_CPU_PERCENT === 0) return false;
+      if (c === '+pids' && CGROUPS_PIDS_MAX === 0) return false;
+      return true;
+    });
+    if (controllers.length > 0) {
+      try {
+        fs.writeFileSync(`${CGROUPS_ROOT}/cgroup.subtree_control`, controllers.join(' '), 'utf-8');
+      } catch {
+        // Parent cgroup may not be writable — controllers may still be pre-enabled
+      }
+    }
+
+    // Create cgroup directory for this session
+    fs.mkdirSync(cgroupPath, { recursive: true });
+
+    // Set memory limit
+    if (CGROUPS_MEMORY_MAX > 0) {
+      try {
+        fs.writeFileSync(`${cgroupPath}/memory.max`, String(CGROUPS_MEMORY_MAX), 'utf-8');
+      } catch {
+        // memory controller may not be available
+      }
+    }
+
+    // Set CPU quota: CGROUPS_CPU_PERCENT % of one CPU → microseconds per 100ms
+    if (CGROUPS_CPU_PERCENT > 0) {
+      const cpuMax = Math.round(CGROUPS_CPU_PERCENT * 1000); // % → µs per 100ms
+      try {
+        fs.writeFileSync(`${cgroupPath}/cpu.max`, `${cpuMax} 100000`, 'utf-8');
+      } catch {
+        // cpu controller may not be available
+      }
+    }
+
+    // Set PID limit
+    if (CGROUPS_PIDS_MAX > 0) {
+      try {
+        fs.writeFileSync(`${cgroupPath}/pids.max`, String(CGROUPS_PIDS_MAX), 'utf-8');
+      } catch {
+        // pids controller may not be available
+      }
+    }
+
+    // Add the process to the cgroup
+    try {
+      fs.writeFileSync(`${cgroupPath}/cgroup.procs`, String(pid), 'utf-8');
+    } catch (err: any) {
+      // Failed to add process — clean up the cgroup directory
+      try { fs.rmdirSync(cgroupPath); } catch { /* best-effort */ }
+      // Only log if it's not a permission issue (which is expected without root/cgroup delegation)
+      if (err.code !== 'EACCES' && err.code !== 'EPERM') {
+        logger.warn('[Local PTY] Failed to add PID to cgroup', {
+          sessionId,
+          pid,
+          error: err.message,
+        });
+      }
+      return;
+    }
+
+    logger.info('[Local PTY] Cgroup limits applied', {
+      sessionId,
+      pid,
+      memory: CGROUPS_MEMORY_MAX > 0 ? `${(CGROUPS_MEMORY_MAX / 1048576).toFixed(0)}M` : 'unlimited',
+      cpu: CGROUPS_CPU_PERCENT > 0 ? `${CGROUPS_CPU_PERCENT}%` : 'unlimited',
+      pids: CGROUPS_PIDS_MAX > 0 ? CGROUPS_PIDS_MAX : 'unlimited',
+    });
+  } catch (err: any) {
+    // Best-effort: cgroups v2 may not be mounted or accessible
+    if (err.code !== 'ENOENT' && err.code !== 'EACCES') {
+      logger.debug('[Local PTY] Cgroup setup skipped', {
+        sessionId,
+        error: err.message,
+      });
+    }
+  }
+}
+
+/**
+ * Remove the cgroup directory for a session during cleanup.
+ * Kills any remaining processes in the cgroup first, then removes the directory.
+ * Best-effort — silently ignores missing directories or permission errors.
+ */
+function removeCgroupLimits(sessionId: string): void {
+  if (!CGROUPS_ENABLED) return;
+  const cgroupPath = `${CGROUPS_ROOT}/${sessionId}`;
+  try {
+    // Kill any remaining processes in the cgroup before removing the directory
+    try {
+      const procs = fs.readFileSync(`${cgroupPath}/cgroup.procs`, 'utf-8').trim();
+      if (procs) {
+        for (const pidStr of procs.split('\n')) {
+          const p = parseInt(pidStr, 10);
+          if (p > 1) {
+            try { process.kill(p, 'SIGKILL'); } catch { /* process may already be dead */ }
+          }
+        }
+      }
+    } catch {
+      // cgroup.procs may not be readable
+    }
+    fs.rmdirSync(cgroupPath);
+  } catch {
+    // Directory may not exist or may not be empty
+  }
+}
 
 // ============================================================
 // Cleanup
@@ -407,6 +767,9 @@ async function cleanupSession(id: string, session: LocalPtySession): Promise<voi
       const { workspaceServiceManager } = await import('@/lib/terminal/workspace-service-manager');
       workspaceServiceManager.clearWorkspace(id);
     } catch { /* service manager may not be available */ }
+
+    // Clean up cgroups v2 resource limits
+    removeCgroupLimits(id);
 
     // Unmount R2 from host if this was a host-mounted R2 Docker session
     if (session.r2MountStrategy === 'host') {
@@ -917,6 +1280,7 @@ async function createR2DockerPtySession(
     '--network', 'none',          // No network access (security)
     '--rm',                        // Auto-remove on exit
     '--security-opt', 'no-new-privileges', // Prevent privilege escalation
+    ...(DOCKER_SECCOMP_PROFILE ? ['--security-opt', `seccomp=${DOCKER_SECCOMP_PROFILE}`] : []),
     '-w', workspacePath,
     // No need for --cap-add SYS_ADMIN in host-mount mode
     ...(useHostMount ? [] : ['--cap-add', 'SYS_ADMIN', '--device', '/dev/fuse']),
@@ -1329,6 +1693,12 @@ async function createDirectPtySession(
     );
   }
 
+  // Apply cgroups v2 resource limits to direct-spawn sessions too (best-effort)
+  const directPid = (pty as any).pid || (pty as any)._pid;
+  if (directPid && typeof directPid === 'number') {
+    applyCgroupLimits(directPid, sessionId);
+  }
+
   registerSession(sessionId, userId, pty, workspaceDir, {
     vfsWatcher,
   });
@@ -1347,6 +1717,100 @@ async function createDirectPtySession(
 // ============================================================
 // Unshare (Linux user namespace isolation)
 // ============================================================
+
+/**
+ * Create an unshare PTY session using the newuidmap/newgidmap wrapper
+ * script. This provides proper per-workspace UID/GID isolation by
+ * parsing /etc/subuid and /etc/subgid for the current user.
+ *
+ * Falls back to --map-root-user if subuid ranges are not configured.
+ */
+async function createUnsharePtySessionWithSubuid(
+  nodePty: typeof import('node-pty'),
+  sessionId: string,
+  userId: string,
+  cols: number,
+  rows: number,
+  workspaceDir: string,
+  safeShell: NonNullable<Awaited<ReturnType<typeof createSafeShellWrapper>>>,
+): Promise<NextResponse> {
+  // Generate the wrapper script
+  const wrapperScript = buildUnshareSubuidWrapperScript(
+    sessionId,
+    safeShell.cmd,
+    safeShell.args,
+  );
+
+  // Write to a temp file in the workspace
+  const wrapperDir = path.join(workspaceDir, '.binG-temp');
+  const wrapperPath = path.join(wrapperDir, '_unshare_subuid_wrapper.sh');
+  try {
+    await fs.promises.mkdir(wrapperDir, { recursive: true });
+    await fs.promises.writeFile(wrapperPath, wrapperScript, { mode: 0o755 });
+  } catch (err: any) {
+    logger.error('[Local PTY] Failed to write unshare subuid wrapper', { error: err.message });
+    return NextResponse.json(
+      { error: 'Failed to create namespace wrapper', mode: 'sandbox' },
+      { status: 500 },
+    );
+  }
+
+  try {
+    const safeCols = Math.max(1, Math.min(cols, 500));
+    const safeRows = Math.max(1, Math.min(rows, 200));
+
+    // Spawn the wrapper script via bash (it handles the namespace + newuidmap internally)
+    const pty = nodePty.spawn('/bin/bash', [wrapperPath], {
+      name: 'xterm-256color',
+      cols: safeCols,
+      rows: safeRows,
+      cwd: workspaceDir,
+      env: getSafeEnv(workspaceDir),
+    });
+
+    // Get the PID of the bash wrapper for cleanup
+    const unsharePid = (pty as any).pid || (pty as any)._pid;
+
+    // Apply cgroups v2 resource limits (best-effort)
+    if (unsharePid && typeof unsharePid === 'number') {
+      applyCgroupLimits(unsharePid, sessionId);
+    }
+
+    registerSession(sessionId, userId, pty, workspaceDir, { unsharePid });
+
+    logger.info('[Local PTY] Unshare session created with subuid isolation', {
+      sessionId,
+      userId: userId.slice(0, 20),
+    });
+
+    return NextResponse.json({ sessionId, mode: 'unshare', workspaceDir });
+  } catch (error: any) {
+    // Clean up wrapper script on failure
+    try { await fs.promises.unlink(wrapperPath); } catch { /* best-effort */ }
+
+    if (error.message?.includes('ENOENT') || error.message?.includes('unshare')) {
+      return NextResponse.json(
+        {
+          error: 'unshare command not found or not permitted',
+          hint: 'Install util-linux package or enable unprivileged user namespaces: sysctl kernel.unprivileged_userns_clone=1',
+          mode: 'sandbox',
+        },
+        { status: 503 },
+      );
+    }
+    if (error.message?.includes('EPERM') || error.message?.includes('Operation not permitted')) {
+      return NextResponse.json(
+        {
+          error: 'unshare user mapping failed — check /etc/subuid configuration',
+          hint: 'Per-workspace UID isolation requires /etc/subuid and /etc/subgid entries (e.g., "user:100000:65536"). Set PTY_UNSHARE_PER_WORKSPACE_UID=false to disable.',
+          mode: 'sandbox',
+        },
+        { status: 503 },
+      );
+    }
+    throw error;
+  }
+}
 
 async function createUnsharePtySession(
   nodePty: typeof import('node-pty'),
@@ -1378,6 +1842,16 @@ async function createUnsharePtySession(
 
   // PATH TRAVERSAL PREVENTION: Create safe shell wrapper that overrides cd
   const safeShell = await createSafeShellWrapper(workspaceDir, ptyShell);
+
+  // When per-workspace UID is enabled, use a wrapper script that properly
+  // creates the namespace via newuidmap/newgidmap with /etc/subuid ranges.
+  // Otherwise, use unshare --map-root-user directly (existing behavior).
+  if (UNSHARE_PER_WORKSPACE_UID) {
+    return createUnsharePtySessionWithSubuid(
+      nodePty, sessionId, userId, cols, rows, workspaceDir, safeShell
+    );
+  }
+
   const unshareArgs = [
     '--user',
     '--map-root-user',
@@ -1403,6 +1877,11 @@ async function createUnsharePtySession(
     // Get the PID of the unshare process for cleanup
     const unsharePid = (pty as any).pid || (pty as any)._pid;
 
+    // Apply cgroups v2 resource limits (best-effort)
+    if (unsharePid && typeof unsharePid === 'number') {
+      applyCgroupLimits(unsharePid, sessionId);
+    }
+
     registerSession(sessionId, userId, pty, workspaceDir, { unsharePid });
 
     console.log(`[Local PTY] Unshare session created: ${sessionId}`);
@@ -1418,6 +1897,17 @@ async function createUnsharePtySession(
           mode: 'sandbox',
         },
         { status: 503 }
+      );
+    }
+    // If user namespace creation failed with EPERM
+    if (error.message?.includes('EPERM') || error.message?.includes('Operation not permitted')) {
+      return NextResponse.json(
+        {
+          error: 'unshare user mapping failed',
+          hint: 'User namespace creation requires unprivileged user namespaces (kernel.unprivileged_userns_clone=1)',
+          mode: 'sandbox',
+        },
+        { status: 503 },
       );
     }
     throw error;
@@ -1459,6 +1949,8 @@ async function createDockerPtySession(
     '--network',
     'none', // No network access (security)
     '--rm', // Auto-remove on exit
+    '--security-opt', 'no-new-privileges',
+    ...(DOCKER_SECCOMP_PROFILE ? ['--security-opt', `seccomp=${DOCKER_SECCOMP_PROFILE}`] : []),
     // Mount the VFS workspace directory into the container so file changes
     // are visible to the local file watcher
     '-v', `${workspaceDir}:/workspace`,

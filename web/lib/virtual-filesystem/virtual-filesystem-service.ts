@@ -36,9 +36,16 @@ const MAX_TOTAL_WORKSPACE_SIZE = 500 * 1024 * 1024; // 500MB total workspace
 const MAX_FILES_PER_WORKSPACE = 10000;
 const MAX_SEARCH_LIMIT = 100;
 
-// Phase 5 (CAS) threshold: files larger than 4KB get stored in content-addressable store
+// Phase 5 (CAS) threshold: files larger than this get stored in content-addressable store
 // instead of inline in the SQL database. This deduplicates content and enables cheap snapshots.
-const CAS_STORAGE_THRESHOLD = 4096;
+// Configurable via CAS_INLINE_THRESHOLD_BYTES env var (default: 4096 = 4KB).
+// Set to 0 to always use CAS; set to a very large value to never use CAS.
+const CAS_STORAGE_THRESHOLD = (() => {
+  const raw = process.env.CAS_INLINE_THRESHOLD_BYTES;
+  if (raw === undefined || raw === '') return 4096;
+  const val = parseInt(raw, 10);
+  return isNaN(val) || val < 0 ? 4096 : val;
+})();
 
 export type FilesystemChangeType = 'create' | 'update' | 'delete';
 

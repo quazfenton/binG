@@ -25,6 +25,7 @@ import { createLogger } from '@/lib/utils/logger';
 import type { PortDetectionResult } from '@/lib/previews/enhanced-port-detector';
 import type { SandboxProviderType } from '@/lib/sandbox/providers';
 import { previewRouter } from '@/lib/previews/preview-router';
+import { workspaceSessionGraph } from '@/lib/workspace/workspace-session-graph';
 
 
 const logger = createLogger('Phase8:PreviewRegistry');
@@ -279,6 +280,21 @@ export class WorkspacePreviewRegistry extends EventEmitter {
       workspaceId: params.workspaceId,
     });
 
+    // Register in workspace session graph (Gap #4)
+    try {
+      workspaceSessionGraph.registerSession({
+        workspaceId: params.workspaceId,
+        userId: params.workspaceId.split(':')[0] || 'unknown',
+        sessionType: 'preview',
+        sessionSubtype: framework || 'dev-server',
+        sandboxId: params.sandboxId,
+        provider: params.provider,
+        metadata: { port, url, serviceName: params.serviceName },
+      });
+    } catch {
+      // Best-effort
+    }
+
     return preview;
   }
 
@@ -363,6 +379,12 @@ export class WorkspacePreviewRegistry extends EventEmitter {
 
     const deleted = registry.delete(previewId);
     if (deleted) {
+      // Unregister from workspace session graph (Gap #4)
+      try {
+        workspaceSessionGraph.closeWorkspaceSessions(preview.workspaceId);
+      } catch {
+        // Best-effort
+      }
       this.unregisterFromRouter(preview, 'removed');
       this.emit('preview:removed', { preview, workspaceId });
       logger.info('Preview removed', { previewId, workspaceId });

@@ -175,6 +175,22 @@ export async function bootstrapToolSystem(config: BootstrapConfig): Promise<Boot
     errors.push(`WorkspaceFS: ${error.message}`);
   }
 
+  // Phase ∞ (Unified Control Plane): Initialize the workspace lifecycle orchestrator
+  // that wraps all 10 phases under a single create/bind/restore/destroy API.
+  // This is the canonical entry point for workspace orchestration.
+  try {
+    const { workspaceControlPlane } = await import('../workspace/workspace-control-plane');
+    const cpState = await workspaceControlPlane.initialize();
+    logger.info('WorkspaceControlPlane initialized (all phases)', {
+      activeWorkspaces: cpState.activeWorkspaces,
+      affinityBindings: cpState.affinity.activeBindings,
+      snapshots: cpState.snapshots.activeSnapshots,
+    });
+  } catch (error: any) {
+    logger.warn('WorkspaceControlPlane initialization deferred', error.message);
+    errors.push(`ControlPlane: ${error.message}`);
+  }
+
   // Register workspace analysis tools (always enabled)
   try {
     const { registerProjectAnalysisTools } = await import('./bootstrap/bootstrap-project-analysis');

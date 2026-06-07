@@ -132,3 +132,45 @@ CREATE TABLE IF NOT EXISTS workspace_env (
 
 CREATE INDEX IF NOT EXISTS idx_ws_env_workspace
     ON workspace_env(workspace_id);
+
+-- ============================================================================
+-- workspace_jobs
+-- Persists long-running background jobs (training, builds, crawlers, etc.)
+-- so they survive process restarts and can be rehydrated into the
+-- EnhancedBackgroundJobsManager on bootstrap.
+-- Mirrors the EnhancedJob interface from enhanced-background-jobs.ts.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS workspace_jobs (
+    id              TEXT    PRIMARY KEY,
+    workspace_id    TEXT    NOT NULL,
+    user_id         TEXT    NOT NULL,
+    session_id      TEXT,
+    sandbox_id      TEXT    NOT NULL,
+    command         TEXT    NOT NULL,
+    args            TEXT,   -- JSON array of string arguments
+    interval_sec    INTEGER NOT NULL,
+    timeout_sec     INTEGER,
+    description     TEXT,
+    tags            TEXT,   -- JSON array of string tags
+    quota_category  TEXT    NOT NULL DEFAULT 'compute'
+                            CHECK(quota_category IN ('compute','io','api')),
+    max_executions  INTEGER NOT NULL DEFAULT 1000,
+    stop_condition  TEXT,
+    status          TEXT    NOT NULL DEFAULT 'running'
+                            CHECK(status IN ('running','paused','stopped','completed','failed')),
+    created_at      INTEGER NOT NULL,
+    last_executed_at INTEGER,
+    last_error      TEXT,
+    execution_count INTEGER NOT NULL DEFAULT 0,
+    dedup_id        TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_ws_job_workspace
+    ON workspace_jobs(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_ws_job_status
+    ON workspace_jobs(workspace_id, status);
+CREATE INDEX IF NOT EXISTS idx_ws_job_session
+    ON workspace_jobs(session_id) WHERE session_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_ws_job_dedup
+    ON workspace_jobs(dedup_id) WHERE dedup_id IS NOT NULL;

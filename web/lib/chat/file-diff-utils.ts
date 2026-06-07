@@ -211,8 +211,10 @@ export function applySimpleLineDiff(currentContent: string, diffBody: string): s
     } else if (line.startsWith(" ")) {
       // Context line (single space, standard unified diff) - preserve content
       resultLines.push(line.slice(1));
+    } else {
+      // Lines with no diff prefix are preserved as context
+      resultLines.push(line);
     }
-    // Lines with no diff prefix are preserved as context (treat as part of content)
   }
   
   const result = resultLines.join("\n");

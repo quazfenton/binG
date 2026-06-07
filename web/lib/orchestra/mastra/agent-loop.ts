@@ -30,6 +30,7 @@ import {
   recordStepAndCheckLoop,
   type LoopDetectorState,
 } from '@/lib/orchestra/shared-agent-context';
+import { workspaceReplayService } from '@/lib/workspace/workspace-replay-service';
 
 // CoreMessage may not be exported in all AI SDK versions
 // @ts-ignore - CoreMessage is used for type hints but may not be available
@@ -123,6 +124,32 @@ export class AgentLoop {
    */
   setAgency(agency: any): void {
     this.agency = agency;
+  }
+
+  /**
+   * Record an agent action for workspace replay (Gap #8).
+   * Best-effort — failures never block the agent loop.
+   */
+  private recordReplayAction(
+    toolName: string,
+    result: any,
+    success: boolean,
+  ): void {
+    try {
+      const resultPreview = result
+        ? (typeof result === 'string' ? result.slice(0, 300) : JSON.stringify(result).slice(0, 300))
+        : undefined;
+
+      workspaceReplayService.recordAgentAction({
+        workspaceId: this.context.userId,
+        userId: this.context.userId,
+        tool: toolName,
+        success,
+        resultPreview,
+      });
+    } catch {
+      // Best-effort — never throw from replay recording
+    }
   }
 
   constructor(
@@ -250,6 +277,13 @@ export class AgentLoop {
             arguments: chunk.toolInvocation.args,
             result: chunk.toolInvocation.result,
           });
+
+          // Record agent action for workspace replay (Gap #8)
+          this.recordReplayAction(
+            chunk.toolInvocation.toolName,
+            chunk.toolInvocation.result,
+            chunk.toolInvocation.result?.success !== false,
+          );
         } else if (chunk.type === 'reasoning') {
           reasoningChunks.push(chunk.reasoning);
         }
@@ -382,12 +416,19 @@ export class AgentLoop {
           state: 'result',
         }));
       }
-      const results: AgentIterationResult[] = toolInvocations.map((inv: any, idx: number) => ({
-        iteration: idx + 1,
-        tool: inv.toolName,
-        arguments: inv.args,
-        result: inv.result,
-      }));
+      const results: AgentIterationResult[] = toolInvocations.map((inv: any, idx: number) => {
+        const iterResult: AgentIterationResult = {
+          iteration: idx + 1,
+          tool: inv.toolName,
+          arguments: inv.args,
+          result: inv.result,
+        };
+
+        // Record agent action for workspace replay (Gap #8)
+        this.recordReplayAction(inv.toolName, inv.result, true);
+
+        return iterResult;
+      });
 
       // Update conversation history with tool responses
       for (const inv of toolInvocations) {
@@ -588,6 +629,13 @@ export class AgentLoop {
                 arguments: invocation.args,
                 result: invocation.result,
               });
+
+              // Record agent action for workspace replay (Gap #8)
+              this.recordReplayAction(
+                invocation.toolName,
+                invocation.result,
+                invocation.result?.success !== false,
+              );
 
               // Add tool response to conversation
               this.context.conversationHistory.push({
@@ -1235,7 +1283,10 @@ export class AgentLoop {
           arguments: tc.arguments,
           result,
         });
-        
+
+        // Record agent action for workspace replay (Gap #8)
+        this.recordReplayAction(tc.name, result, result?.success !== false);
+
         // Add tool response to conversation
         this.context.conversationHistory.push({
           role: 'tool',

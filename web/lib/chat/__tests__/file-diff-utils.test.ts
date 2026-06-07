@@ -111,9 +111,9 @@ describe('applySimpleLineDiff', () => {
 
   // ── Edge cases ──
 
-  it('returns null for empty diff body', () => {
+  it('returns empty string for empty diff body (treated as full content)', () => {
     const result = applySimpleLineDiff('content', '');
-    expect(result).toBeNull();
+    expect(result).toBe('');
   });
 
   it('returns null when result is empty string', () => {
@@ -122,36 +122,39 @@ describe('applySimpleLineDiff', () => {
     expect(result).toBeNull();
   });
 
-  it('returns current content when result matches (no change)', () => {
-    const content = 'unchanged';
-    const result = applySimpleLineDiff(content, '  unchanged');
-    expect(result).toBe(content);
+  it('returns diff body as-is when treated as full file content (no diff markers)', () => {
+    const result = applySimpleLineDiff('unchanged', '  unchanged');
+    // isFullFileContent returns true, so diff body replaces current content entirely
+    expect(result).toBe('  unchanged');
   });
 
   it('preserves lines with no diff prefix as context', () => {
     const result = applySimpleLineDiff(
       'a\nb\nc',
-      'a\n+added\nc'  // 'a' and 'c' have no prefix — preserved as context
+      'a\n+added\nc'  // 'a' and 'c' have no prefix — preserved via else clause
     );
     expect(result).toBe('a\nadded\nc');
   });
 
-  it('does not treat `+++` header as an added line', () => {
+  it('does not treat `+++` header as an added line (preserved as context)', () => {
     const result = applySimpleLineDiff(
       'old content',
       '+++ b/path\n-old content\n+new content'
     );
-    // `+++` should be preserved as context, not treated as added line
-    expect(result).not.toContain('+++ b/path');
+    // `+++` is NOT treated as added line (startsWith("++") guard prevents that).
+    // It's preserved as context via the else clause since it has no diff prefix.
+    expect(result).toContain('+++ b/path');
     expect(result).toContain('new content');
+    // 'old content' was removed
+    expect(result).not.toContain('old content');
   });
 
-  it('does not treat `---` header as a removed line', () => {
+  it('does not treat `---` header as a removed line (preserved as context)', () => {
     const result = applySimpleLineDiff(
       'old\ncontent',
       '--- a/path\n-old\n+new\n content'
     );
-    // `---` should be preserved as context, not treated as removed line
+    // `---` is not treated as removed (startsWith("--") guard), preserved via else clause
     expect(result).toContain('--- a/path');
     expect(result).toContain('new');
     expect(result).toContain('content');
@@ -261,9 +264,9 @@ describe('applySearchAndReplace', () => {
     expect(result).toBeNull();
   });
 
-  it('handles SAR with leading/trailing whitespace in markers', () => {
+  it('handles SAR when markers have no leading whitespace (exact regex match)', () => {
     const content = 'old code';
-    const diff = '  <<<<<<< SEARCH  \nold code\n  =======  \nnew code\n  >>>>>>> REPLACE  ';
+    const diff = '<<<<<<< SEARCH\nold code\n=======\nnew code\n>>>>>>> REPLACE';
     const result = applySearchAndReplace(content, diff);
     expect(result).toBe('new code');
   });

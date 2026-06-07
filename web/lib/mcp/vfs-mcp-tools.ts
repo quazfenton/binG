@@ -31,6 +31,9 @@ import { tolerantJsonParse, sanitizeJsonString, findBalancedJsonObject } from '.
 import { resolveToScopedPath } from '../virtual-filesystem/path-normalizer';
 import { getVfsScopeBasePath, getVfsScopePath } from '../virtual-filesystem/scope-utils';
 import { onDependencyFileChanged } from '../sandbox/workspace-image-builder';
+import { syncFileChangeToSandbox } from '../virtual-filesystem/sandbox-file-sync-bridge';
+import { workspaceReplayService } from '../workspace/workspace-replay-service';
+import { workspaceSessionGraph } from '../workspace/workspace-session-graph';
 
 // Re-export for backwards compatibility (other modules may import from here)
 export { tolerantJsonParse, sanitizeJsonString, findBalancedJsonObject };
@@ -497,6 +500,32 @@ export function initializeVFSTools(userId: string, sessionId?: string, scopePath
   });
 }
 
+/**
+ * Record a file edit event for workspace replay.
+ * Best-effort — failures never block the file operation.
+ */
+function recordReplayEdit(
+  editAction: 'create' | 'update' | 'delete',
+  toolName: 'write_file' | 'apply_diff' | 'batch_write' | 'delete_file',
+  filePath: string,
+  contentHash?: string,
+  diffSummary?: string,
+): void {
+  const ctx = getToolContext();
+  const workspaceId = ctx.sessionId ? `${ctx.userId}:${ctx.sessionId}` : ctx.userId;
+
+  workspaceReplayService.recordFileEdit({
+    workspaceId,
+    sessionId: ctx.sessionId,
+    userId: ctx.userId,
+    filePath,
+    editAction,
+    toolName,
+    contentHash,
+    diffSummary,
+  });
+}
+
 // ============================================================================
 // Tool Definitions
 // ============================================================================
@@ -637,6 +666,34 @@ export const writeFileTool = (tool as any)({
     content,
     source: 'mcp-tool',
   });
+
+  // Sync file change to attached sandbox (Phase 9: VFS→Sandbox auto-sync)
+  syncFileChangeToSandbox(
+    context.userId,
+    scopedPath,
+    existed ? 'update' : 'create',
+    content,
+  );
+
+  // Record file edit for workspace replay (Gap #8)
+  recordReplayEdit(
+    existed ? 'update' : 'create',
+    'write_file',
+    scopedPath,
+    content ? require('crypto').createHash('sha256').update(content).digest('hex').slice(0, 16) : undefined,
+  );
+
+  // Register editor session in workspace session graph (Gap #4)
+  try {
+    const wsId = context.sessionId ? `${context.userId}:${context.sessionId}` : context.userId;
+    workspaceSessionGraph.registerSession({
+      workspaceId: wsId,
+      userId: context.userId,
+      sessionType: 'editor',
+      sessionSubtype: 'write_file',
+      metadata: { filePath: scopedPath, action: existed ? 'update' : 'create', size: content?.length },
+    });
+  } catch { /* Best-effort */ }
 
   // Check if the written file is a dependency file that should trigger image rebuild
   const filename = path.split('/').pop() || '';
@@ -881,6 +938,30 @@ export const applyDiffTool = (tool as any)({
       metadata: { diff, appliedCount, failedSearches },
     });
 
+    // Sync file change to attached sandbox (Phase 9: VFS→Sandbox auto-sync)
+    syncFileChangeToSandbox(context.userId, scopedPath, 'update', newContent);
+
+    // Record file edit for workspace replay (Gap #8)
+    recordReplayEdit(
+      'update',
+      'apply_diff',
+      scopedPath,
+      undefined,
+      `${appliedCount} replacement(s)${failedSearches.length > 0 ? `, ${failedSearches.length} unmatched` : ''}`,
+    );
+
+    // Register editor session in workspace session graph (Gap #4)
+    try {
+      const wsId = context.sessionId ? `${context.userId}:${context.sessionId}` : context.userId;
+      workspaceSessionGraph.registerSession({
+        workspaceId: wsId,
+        userId: context.userId,
+        sessionType: 'editor',
+        sessionSubtype: 'apply_diff',
+        metadata: { filePath: scopedPath, appliedCount },
+      });
+    } catch { /* Best-effort */ }
+
     // Check if the patched file is a dependency file that should trigger image rebuild
     if (context.userId !== 'default') {
       const workspaceId = context.sessionId
@@ -951,6 +1032,24 @@ export const applyDiffTool = (tool as any)({
     source: 'mcp-tool-diff',
     metadata: { diff },
   });
+
+  // Sync file change to attached sandbox (Phase 9: VFS→Sandbox auto-sync)
+  syncFileChangeToSandbox(context.userId, scopedPath, 'update', newContent);
+
+  // Record file edit for workspace replay (Gap #8)
+  recordReplayEdit('update', 'apply_diff', scopedPath);
+
+  // Register editor session in workspace session graph (Gap #4)
+  try {
+    const wsId = context.sessionId ? `${context.userId}:${context.sessionId}` : context.userId;
+    workspaceSessionGraph.registerSession({
+      workspaceId: wsId,
+      userId: context.userId,
+      sessionType: 'editor',
+      sessionSubtype: 'apply_diff',
+      metadata: { filePath: scopedPath },
+    });
+  } catch { /* Best-effort */ }
 
   // Check if the patched file is a dependency file that should trigger image rebuild
   if (context.userId !== 'default') {
@@ -1671,6 +1770,26 @@ export const batchWriteTool = (tool as any)({
     source: 'mcp-tool',
   });
 
+  // Sync batch file changes to attached sandbox (Phase 9: VFS→Sandbox auto-sync)
+  for (const f of filesWithContent) {
+    syncFileChangeToSandbox(context.userId, f.path, f.type, f.content);
+
+    // Record each file edit for workspace replay (Gap #8)
+    recordReplayEdit(f.type, 'batch_write', f.path);
+  }
+
+  // Register editor session in workspace session graph (Gap #4) — once per batch
+  try {
+    const wsId = context.sessionId ? `${context.userId}:${context.sessionId}` : context.userId;
+    workspaceSessionGraph.registerSession({
+      workspaceId: wsId,
+      userId: context.userId,
+      sessionType: 'editor',
+      sessionSubtype: 'batch_write',
+      metadata: { fileCount: filesWithContent.length },
+    });
+  } catch { /* Best-effort */ }
+
   // Check for dependency files in the batch that should trigger image rebuild
   // Use the results array to filter for successfully written files only
   const successPaths = new Set(
@@ -1764,6 +1883,24 @@ export const deleteFileTool = (tool as any)({
     type: 'delete',
     source: 'mcp-tool',
   });
+
+  // Record file delete for workspace replay (Gap #8)
+  recordReplayEdit('delete', 'delete_file', scopedPath);
+
+  // Register editor session in workspace session graph (Gap #4)
+  try {
+    const wsId = context.sessionId ? `${context.userId}:${context.sessionId}` : context.userId;
+    workspaceSessionGraph.registerSession({
+      workspaceId: wsId,
+      userId: context.userId,
+      sessionType: 'editor',
+      sessionSubtype: 'delete_file',
+      metadata: { filePath: scopedPath, reason },
+    });
+  } catch { /* Best-effort */ }
+
+  // Sync file deletion to attached sandbox (Phase 9: VFS→Sandbox auto-sync)
+  syncFileChangeToSandbox(context.userId, scopedPath, 'delete');
 
   // If the deleted file is a dependency file (package.json, requirements.txt, etc.),
   // invalidate the workspace image so the next sandbox rebuilds with updated deps.

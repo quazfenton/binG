@@ -22,12 +22,17 @@
  * @see lib/sandbox/workspace-image-registry.ts — Image state
  */
 
+import { EventEmitter } from 'events';
 import { createLogger } from '@/lib/utils/logger';
 import { virtualPidRegistry } from '@/lib/terminal/virtual-pid-registry';
 import { workspaceServiceManager } from '@/lib/terminal/workspace-service-manager';
 import { workspacePreviewRegistry } from '@/lib/terminal/workspace-preview-registry';
 import { workspaceFSSnapshotService } from '@/lib/sandbox/workspacefs-snapshot-service';
 import { workspaceImageRegistry } from '@/lib/sandbox/workspace-image-registry';
+import { serviceHealthMonitor } from '@/lib/terminal/service-health-monitor';
+import { workspaceJobManager } from '@/lib/terminal/workspace-job-manager';
+import type BetterSqlite3 from 'better-sqlite3';
+import { execSchemaFile } from '@/lib/database/schema';
 
 const logger = createLogger('Phase10:WorkspaceGraph');
 
@@ -43,7 +48,8 @@ export type GraphNodeType =
   | 'preview'
   | 'snapshot'
   | 'image'
-  | 'file';
+  | 'file'
+  | 'job';
 
 /** A single node in the workspace graph */
 export interface GraphNode {
@@ -108,6 +114,10 @@ export interface WorkspaceGraph {
     activePreviews: number;
     /** Total processes tracked */
     totalProcesses: number;
+    /** Running background jobs */
+    runningJobs: number;
+    /** Failed background jobs */
+    failedJobs: number;
   };
   /** Diagnostic messages — derived state that AI can act on */
   diagnostics: GraphDiagnostic[];
@@ -125,16 +135,317 @@ export interface GraphDiagnostic {
   /** Human-readable message */
   message: string;
   /** Which node IDs are involved */
-  relatedNodeIds: string[];
-  /** Category of the diagnostic */
-  category: 'service_health' | 'port_availability' | 'process_state' | 'snapshot_status' | 'image_status' | 'general';
+  relatedNodeIds: string[];    /** Category of the diagnostic */
+  category: 'service_health' | 'port_availability' | 'process_state' | 'snapshot_status' | 'image_status' | 'health_check' | 'job_health' | 'general';
 }
 
 // ============================================================================
 // Workspace Graph Service
 // ============================================================================
 
-export class WorkspaceGraphService {
+export class WorkspaceGraphService extends EventEmitter {
+  // ==========================================================================
+  // Graph History (Phase 10 gap closure)
+  // ==========================================================================
+
+  private historyDb: BetterSqlite3.Database | null = null;
+  private historyInitialized = false;
+  private historyStmtInsert: BetterSqlite3.Statement | null = null;
+  private historyStmtQuery: BetterSqlite3.Statement | null = null;
+  private historyStmtRecent: BetterSqlite3.Statement | null = null;
+  private historyStmtPrune: BetterSqlite3.Statement | null = null;
+  private historyStmtCount: BetterSqlite3.Statement | null = null;
+  private historyRecordingTimer: ReturnType<typeof setInterval> | null = null;
+  private historyPruneTimer: ReturnType<typeof setInterval> | null = null;
+  private autoRecordWorkspaces = new Set<string>();
+
+  /** How often to auto-record snapshots for active workspaces */
+  private static readonly HISTORY_RECORD_INTERVAL_MS = 60_000; // 1 minute
+  /** How often to prune old snapshots */
+  private static readonly HISTORY_PRUNE_INTERVAL_MS = 60 * 60_000; // 1 hour
+  /** Max age of snapshots before pruning (keep 7 days) */
+  private static readonly HISTORY_MAX_AGE_MS = 7 * 24 * 60 * 60_000;
+  /** Max snapshots per workspace before evicting oldest */
+  private static readonly HISTORY_MAX_PER_WORKSPACE = 1000;
+
+  private initHistory(): void {
+    if (this.historyInitialized && this.historyDb) return;
+    try {
+      const { getDatabase } = require('@/lib/database/connection');
+      this.historyDb = getDatabase();
+      if (!this.historyDb) return;
+
+      execSchemaFile(this.historyDb, '024_workspace_graph_history');
+
+      this.historyStmtInsert = this.historyDb.prepare(`
+        INSERT INTO workspace_graph_history
+          (workspace_id, snapshot_data, summary_json, diagnostic_count,
+           running_services, active_previews, total_nodes, recorded_at, change_reason)
+        VALUES
+          (@workspaceId, @snapshotData, @summaryJson, @diagnosticCount,
+           @runningServices, @activePreviews, @totalNodes, @recordedAt, @changeReason)
+      `);
+
+      this.historyStmtQuery = this.historyDb.prepare(`
+        SELECT * FROM workspace_graph_history
+        WHERE workspace_id = ?
+        ORDER BY recorded_at DESC
+        LIMIT ?
+      `);
+
+      this.historyStmtRecent = this.historyDb.prepare(`
+        SELECT * FROM workspace_graph_history
+        WHERE workspace_id = ? AND recorded_at > ?
+        ORDER BY recorded_at DESC
+      `);
+
+      this.historyStmtPrune = this.historyDb.prepare(`
+        DELETE FROM workspace_graph_history
+        WHERE workspace_id = ? AND recorded_at < ?
+      `);
+
+      this.historyStmtCount = this.historyDb.prepare(`
+        SELECT COUNT(*) as count FROM workspace_graph_history WHERE workspace_id = ?
+      `);
+
+      // Start timers
+      this.historyRecordingTimer = setInterval(
+        () => this.recordAllActiveWorkspaces(),
+        WorkspaceGraphService.HISTORY_RECORD_INTERVAL_MS,
+      );
+      this.historyRecordingTimer.unref?.();
+
+      this.historyPruneTimer = setInterval(
+        () => this.pruneOldSnapshots(),
+        WorkspaceGraphService.HISTORY_PRUNE_INTERVAL_MS,
+      );
+      this.historyPruneTimer.unref?.();
+
+      // Auto-record on graph changes for workspaces with active subscribers
+      this.on('graph:changed', (workspaceId: string) => {
+        this.autoRecordWorkspaces.add(workspaceId);
+      });
+
+      this.historyInitialized = true;
+      logger.info('Workspace graph history initialized');
+    } catch (err: any) {
+      logger.warn('Workspace graph history unavailable', { error: err.message });
+    }
+  }
+
+  /**
+   * Record a snapshot of the workspace graph for historical comparison.
+   *
+   * @param workspaceId - The workspace to snapshot
+   * @param changeReason - Why the snapshot was recorded (manual, periodic, on_change)
+   */
+  recordGraphSnapshot(workspaceId: string, changeReason: string = 'manual'): number | null {
+    this.initHistory();
+    if (!this.historyDb || !this.historyStmtInsert) return null;
+
+    try {
+      const graph = this.getWorkspaceGraph(workspaceId);
+      const snapshotData = JSON.stringify({ nodes: graph.nodes, edges: graph.edges });
+      const summaryJson = JSON.stringify(graph.summary);
+      const now = Date.now();
+
+      this.historyStmtInsert.run({
+        workspaceId,
+        snapshotData,
+        summaryJson,
+        diagnosticCount: graph.diagnostics.length,
+        runningServices: graph.summary.runningServices,
+        activePreviews: graph.summary.activePreviews,
+        totalNodes: graph.summary.totalNodes,
+        recordedAt: now,
+        changeReason,
+      });
+
+      // Evict oldest if over max per workspace
+      const countRow = this.historyStmtCount?.get(workspaceId) as any;
+      if (countRow && countRow.count > WorkspaceGraphService.HISTORY_MAX_PER_WORKSPACE) {
+        const oldestRow = this.historyDb.prepare(
+          'SELECT id, recorded_at FROM workspace_graph_history WHERE workspace_id = ? ORDER BY recorded_at ASC LIMIT 1'
+        ).get(workspaceId) as any;
+        if (oldestRow) {
+          this.historyDb.prepare('DELETE FROM workspace_graph_history WHERE id = ?').run(oldestRow.id);
+        }
+      }
+
+      return now;
+    } catch (err: any) {
+      logger.warn('Failed to record graph snapshot', { workspaceId, error: err.message });
+      return null;
+    }
+  }
+
+  /**
+   * Get graph history snapshots for a workspace.
+   *
+   * @param workspaceId - The workspace
+   * @param options - since (timestamp), until (timestamp), limit (max results)
+   */
+  getGraphHistory(workspaceId: string, options?: {
+    since?: number;
+    until?: number;
+    limit?: number;
+  }): Array<{
+    id: number;
+    workspaceId: string;
+    summary: WorkspaceGraph['summary'];
+    diagnosticCount: number;
+    runningServices: number;
+    activePreviews: number;
+    totalNodes: number;
+    recordedAt: number;
+    changeReason: string;
+  }> {
+    this.initHistory();
+    if (!this.historyDb) return [];
+
+    try {
+      let rows: any[];
+
+      if (options?.since && this.historyStmtRecent) {
+        rows = this.historyStmtRecent.all(workspaceId, options.since) as any[];
+      } else if (this.historyStmtQuery) {
+        rows = this.historyStmtQuery.all(workspaceId, options?.limit || 100) as any[];
+      } else {
+        return [];
+      }
+
+      return rows
+        .filter((r: any) => !options?.until || r.recorded_at <= options.until)
+        .map((r: any) => {
+          let summary: WorkspaceGraph['summary'] | undefined;
+          try {
+            summary = JSON.parse(r.summary_json);
+          } catch { /* skip */ }
+
+          return {
+            id: r.id,
+            workspaceId: r.workspace_id,
+            summary: summary!,
+            diagnosticCount: r.diagnostic_count,
+            runningServices: r.running_services,
+            activePreviews: r.active_previews,
+            totalNodes: r.total_nodes,
+            recordedAt: r.recorded_at,
+            changeReason: r.change_reason,
+          };
+        });
+    } catch (err: any) {
+      logger.warn('Failed to query graph history', { workspaceId, error: err.message });
+      return [];
+    }
+  }
+
+  /**
+   * Compare two graph snapshots and return what changed.
+   *
+   * Returns a diff showing added/removed/changed nodes and summary deltas.
+   */
+  getGraphDiff(workspaceId: string, fromId: number, toId: number): {
+    from: { id: number; recordedAt: number };
+    to: { id: number; recordedAt: number };
+    summaryDelta: Record<string, { from: number; to: number; delta: number }>;
+    nodesAdded: number;
+    nodesRemoved: number;
+    newServices: string[];
+    stoppedServices: string[];
+    newPreviews: string[];
+  } | null {
+    this.initHistory();
+    if (!this.historyDb) return null;
+
+    try {
+      const fromRow = this.historyDb.prepare(
+        'SELECT * FROM workspace_graph_history WHERE id = ?'
+      ).get(fromId) as any;
+      const toRow = this.historyDb.prepare(
+        'SELECT * FROM workspace_graph_history WHERE id = ?'
+      ).get(toId) as any;
+
+      if (!fromRow || !toRow) return null;
+
+      const fromSummary: WorkspaceGraph['summary'] = JSON.parse(fromRow.summary_json);
+      const toSummary: WorkspaceGraph['summary'] = JSON.parse(toRow.summary_json);
+
+      // Build summary delta
+      const summaryKeys = ['totalNodes', 'runningServices', 'stoppedServices', 'activePreviews', 'totalProcesses', 'runningJobs', 'failedJobs'];
+      const summaryDelta: Record<string, { from: number; to: number; delta: number }> = {};
+      for (const key of summaryKeys) {
+        const fromVal = (fromSummary as any)[key] || 0;
+        const toVal = (toSummary as any)[key] || 0;
+        summaryDelta[key] = { from: fromVal, to: toVal, delta: toVal - fromVal };
+      }
+
+      // Parse node lists for service/preview name comparison
+      let fromData: any, toData: any;
+      try { fromData = JSON.parse(fromRow.snapshot_data); } catch { return null; }
+      try { toData = JSON.parse(toRow.snapshot_data); } catch { return null; }
+
+      const fromNodeIds = new Set<string>((fromData.nodes || []).map((n: any) => n.id));
+      const toNodeIds = new Set<string>((toData.nodes || []).map((n: any) => n.id));
+
+      const nodesAdded = (toData.nodes || []).filter((n: any) => !fromNodeIds.has(n.id));
+      const nodesRemoved = (fromData.nodes || []).filter((n: any) => !toNodeIds.has(n.id));
+
+      return {
+        from: { id: fromId, recordedAt: fromRow.recorded_at },
+        to: { id: toId, recordedAt: toRow.recorded_at },
+        summaryDelta,
+        nodesAdded: nodesAdded.length,
+        nodesRemoved: nodesRemoved.length,
+        newServices: nodesAdded.filter((n: any) => n.type === 'service').map((n: any) => n.label),
+        stoppedServices: nodesRemoved.filter((n: any) => n.type === 'service').map((n: any) => n.label),
+        newPreviews: nodesAdded.filter((n: any) => n.type === 'preview').map((n: any) => n.label),
+      };
+    } catch (err: any) {
+      logger.warn('Failed to compute graph diff', { workspaceId, fromId, toId, error: err.message });
+      return null;
+    }
+  }
+
+  /**
+   * Prune old graph snapshots beyond the max age.
+   */
+  pruneOldSnapshots(maxAgeMs: number = WorkspaceGraphService.HISTORY_MAX_AGE_MS): number {
+    this.initHistory();
+    if (!this.historyDb) return 0;
+
+    try {
+      const cutoff = Date.now() - maxAgeMs;
+      const result = this.historyDb.prepare(
+        'DELETE FROM workspace_graph_history WHERE recorded_at < ?'
+      ).run(cutoff);
+      const deleted = (result as any).changes || 0;
+      if (deleted > 0) {
+        logger.debug(`Pruned ${deleted} old graph history snapshots`);
+      }
+      return deleted;
+    } catch {
+      return 0;
+    }
+  }
+
+  /**
+   * Record snapshots for all workspaces with recent graph activity.
+   * Called periodically by the recording timer.
+   */
+  private recordAllActiveWorkspaces(): void {
+    const workspaceIds = Array.from(this.autoRecordWorkspaces);
+    for (const workspaceId of workspaceIds) {
+      try {
+        this.recordGraphSnapshot(workspaceId, 'periodic');
+      } catch {
+        // Best-effort per workspace
+      }
+    }
+    // Reset — will be re-populated by next graph:changed events
+    this.autoRecordWorkspaces.clear();
+  }
+
   // ==========================================================================
   // Public API
   // ==========================================================================
@@ -158,6 +469,10 @@ export class WorkspaceGraphService {
     // Pass service nodes to avoid redundant listServices() call
     const snapshotNodes = this.collectSnapshotNodes(workspaceId, serviceNodes.nodes);
     const imageNodes = this.collectImageNodes(workspaceId);
+    const jobNodes = this.collectJobNodes(workspaceId);
+
+    // Infer cross-service dependency edges (Phase 10: service dependency graph)
+    const dependencyEdges = this.inferServiceDependencyEdges(workspaceId, serviceNodes.nodes);
 
     nodes.push(
       ...processNodes.nodes,
@@ -165,6 +480,7 @@ export class WorkspaceGraphService {
       ...previewNodes.nodes,
       ...snapshotNodes.nodes,
       ...imageNodes.nodes,
+      ...jobNodes.nodes,
     );
 
     edges.push(
@@ -173,6 +489,8 @@ export class WorkspaceGraphService {
       ...previewNodes.edges,
       ...snapshotNodes.edges,
       ...imageNodes.edges,
+      ...jobNodes.edges,
+      ...dependencyEdges,
     );
 
     // Derive diagnostics
@@ -180,12 +498,15 @@ export class WorkspaceGraphService {
       ...this.deriveServiceDiagnostics(serviceNodes.nodes, previewNodes.nodes),
       ...this.deriveProcessDiagnostics(processNodes.nodes),
       ...this.deriveSnapshotDiagnostics(snapshotNodes.nodes),
+      ...this.deriveHealthDiagnostics(workspaceId, serviceNodes.nodes),
+      ...this.deriveJobDiagnostics(jobNodes.nodes),
+      ...this.deriveDependencyDiagnostics(serviceNodes.nodes, dependencyEdges),
     );
 
     // Build type breakdown
     const byType: Record<GraphNodeType, number> = {
       process: 0, service: 0, port: 0, preview: 0,
-      snapshot: 0, image: 0, file: 0,
+      snapshot: 0, image: 0, file: 0, job: 0,
     };
     for (const node of nodes) {
       byType[node.type] = (byType[node.type] || 0) + 1;
@@ -193,6 +514,7 @@ export class WorkspaceGraphService {
 
     const serviceNodeList = nodes.filter(n => n.type === 'service');
     const previewNodeList = nodes.filter(n => n.type === 'preview');
+    const jobNodeList = nodes.filter(n => n.type === 'job');
 
     const graph: WorkspaceGraph = {
       workspaceId,
@@ -207,6 +529,8 @@ export class WorkspaceGraphService {
         ).length,
         activePreviews: previewNodeList.filter(n => n.status === 'active').length,
         totalProcesses: processNodes.nodes.length,
+        runningJobs: jobNodeList.filter(n => n.status === 'running').length,
+        failedJobs: jobNodeList.filter(n => n.status === 'failed').length,
       },
       diagnostics,
       generatedAt: Date.now(),
@@ -400,6 +724,9 @@ export class WorkspaceGraphService {
       for (const s of services) {
         const nodeId = `service:${s.id}`;
 
+        // Collect health status for this service
+        const health = serviceHealthMonitor.getServiceHealth(s.id);
+
         nodes.push({
           id: nodeId,
           type: 'service',
@@ -418,6 +745,13 @@ export class WorkspaceGraphService {
             autoRestart: s.autoRestart,
             sandboxProvider: s.sandboxProvider,
             sandboxId: s.sandboxId,
+            // Health check data (from service-health-monitor)
+            health: health ? {
+              healthy: health.healthy,
+              consecutiveFailures: health.consecutiveFailures,
+              lastCheckedAt: health.lastCheckedAt,
+              lastError: health.lastError,
+            } : null,
           },
           updatedAt: s.lastActivityAt,
         });
@@ -582,6 +916,211 @@ export class WorkspaceGraphService {
     return { nodes, edges };
   }
 
+  private collectJobNodes(workspaceId: string): {
+    nodes: GraphNode[]; edges: GraphEdge[];
+  } {
+    const nodes: GraphNode[] = [];
+    const edges: GraphEdge[] = [];
+
+    try {
+      const jobs = workspaceJobManager.listJobs(workspaceId);
+      for (const job of jobs) {
+        const nodeId = `job:${job.id}`;
+
+        nodes.push({
+          id: nodeId,
+          type: 'job',
+          label: job.description || job.command.slice(0, 60),
+          status: job.status,
+          properties: {
+            jobId: job.id,
+            command: job.command,
+            args: job.args,
+            sandboxId: job.sandboxId,
+            sessionId: job.sessionId,
+            intervalSec: job.intervalSec,
+            timeoutSec: job.timeoutSec,
+            tags: job.tags,
+            quotaCategory: job.quotaCategory,
+            maxExecutions: job.maxExecutions,
+            stopCondition: job.stopCondition,
+            createdAt: job.createdAt,
+            lastExecutedAt: job.lastExecutedAt,
+            lastError: job.lastError,
+            executionCount: job.executionCount,
+          },
+          updatedAt: job.lastExecutedAt || job.createdAt,
+        });
+      }
+    } catch (err: any) {
+      logger.debug('Failed to collect job nodes', { workspaceId, error: err.message });
+    }
+
+    return { nodes, edges };
+  }
+
+  // ==========================================================================
+  // Service Dependency Inference (Phase 10 gap closure)
+  // ==========================================================================
+
+  /** Frontend dev server port ranges */
+  private static readonly FRONTEND_PORTS = new Set([3000, 3001, 4200, 5173, 8080, 8081]);
+  /** Backend API port ranges */
+  private static readonly BACKEND_PORTS = new Set([3002, 4000, 5000, 8000, 9000]);
+  /** Database/service port ranges */
+  private static readonly DATABASE_PORTS = new Set([3306, 5432, 6379, 27017, 9092, 9200]);
+
+  /**
+   * Infer cross-service dependency edges by scanning each service's logs
+   * for references to other services' ports.
+   *
+   * If service A's logs contain references to service B's port (e.g. "localhost:8000"),
+   * a `related_service` edge A → B is created, indicating A depends on B.
+   */
+  private inferServiceDependencyEdges(
+    workspaceId: string,
+    serviceNodes: GraphNode[],
+  ): GraphEdge[] {
+    const edges: GraphEdge[] = [];
+    const seen = new Set<string>(); // dedup key: "sourceId:targetId"
+
+    // Build a map of port → service for quick lookup
+    const portToService = new Map<number, GraphNode>();
+    for (const node of serviceNodes) {
+      const ports = (node.properties?.ports as Array<{ port: number }>) || [];
+      for (const p of ports) {
+        portToService.set(p.port, node);
+      }
+    }
+
+    // For each service, scan its logs for references to other services' ports
+    for (const sourceNode of serviceNodes) {
+      const sourcePorts = (sourceNode.properties?.ports as Array<{ port: number }>) || [];
+      const sourcePortSet = new Set(sourcePorts.map(p => p.port));
+
+      // Get the service's logs from the service manager
+      const serviceId = sourceNode.properties?.serviceId as string | undefined;
+      if (!serviceId) continue;
+
+      let logs: string[] = [];
+      try {
+        logs = workspaceServiceManager.getServiceLogs(serviceId, workspaceId, 200);
+      } catch {
+        // Logs may not be available — skip
+      }
+
+      // Scan logs for port references like "localhost:8000", ":5432", "0.0.0.0:6379"
+      if (logs.length > 0) {
+        const logText = logs.join(' ');
+        const portPattern = /(?:\d{1,3}\.){3}\d{1,3}:(\d{3,5})|localhost:(\d{3,5})|:\s*(\d{3,5})/g;
+        let match: RegExpExecArray | null;
+        while ((match = portPattern.exec(logText)) !== null) {
+          const portStr = match[1] || match[2] || match[3];
+          const port = parseInt(portStr, 10);
+          if (!isNaN(port) && portToService.has(port) && !sourcePortSet.has(port)) {
+            const targetNode = portToService.get(port)!;
+            if (targetNode.id !== sourceNode.id) {
+              const key = `${sourceNode.id}:${targetNode.id}`;
+              if (!seen.has(key)) {
+                seen.add(key);
+                edges.push({
+                  sourceId: sourceNode.id,
+                  targetId: targetNode.id,
+                  type: 'related_service',
+                  label: `depends on port ${port}`,
+                });
+              }
+            }
+          }
+        }
+      }
+
+      // Port-based heuristic: frontend ports → first backend port
+      // If log analysis didn't find anything for a service on a frontend port,
+      // infer it may depend on a backend service (common monorepo pattern).
+      // Only infer ONE dependency to avoid false positives.
+      if (!edges.some(e => e.sourceId === sourceNode.id)) {
+        for (const sp of sourcePorts) {
+          if (WorkspaceGraphService.FRONTEND_PORTS.has(sp.port)) {
+            for (const [bPort, backendNode] of portToService.entries()) {
+              if (WorkspaceGraphService.BACKEND_PORTS.has(bPort) && backendNode.id !== sourceNode.id) {
+                const key = `${sourceNode.id}:${backendNode.id}`;
+                if (!seen.has(key)) {
+                  seen.add(key);
+                  edges.push({
+                    sourceId: sourceNode.id,
+                    targetId: backendNode.id,
+                    type: 'related_service',
+                    label: `inferred frontend→backend (ports ${sp.port}→${bPort})`,
+                  });
+                  break; // Only one inferred dependency per frontend service
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    return edges;
+  }
+
+  /**
+   * Derive diagnostics from inferred service dependencies.
+   * Warns when a service depends on another that is unhealthy.
+   */
+  private deriveDependencyDiagnostics(
+    serviceNodes: GraphNode[],
+    dependencyEdges: GraphEdge[],
+  ): GraphDiagnostic[] {
+    const diagnostics: GraphDiagnostic[] = [];
+
+    if (dependencyEdges.length === 0) return diagnostics;
+
+    // Build label + status lookup for services
+    const nodeMap = new Map<string, { label: string; status: string }>();
+    for (const node of serviceNodes) {
+      nodeMap.set(node.id, { label: node.label, status: node.status || 'unknown' });
+    }
+
+    // Check each dependency edge
+    for (const edge of dependencyEdges) {
+      if (edge.type !== 'related_service') continue;
+
+      const target = nodeMap.get(edge.targetId);
+      const sourceLabel = nodeMap.get(edge.sourceId)?.label ?? edge.sourceId;
+
+      // Warn if a dependency is crashed or stopped
+      if (target?.status === 'crashed') {
+        diagnostics.push({
+          level: 'error',
+          message: `Service "${sourceLabel}" depends on "${target.label}" which is crashed`,
+          relatedNodeIds: [edge.sourceId, edge.targetId],
+          category: 'service_health',
+        });
+      } else if (target?.status === 'stopped') {
+        diagnostics.push({
+          level: 'warning',
+          message: `Service "${sourceLabel}" depends on "${target.label}" which is stopped`,
+          relatedNodeIds: [edge.sourceId, edge.targetId],
+          category: 'service_health',
+        });
+      }
+    }
+
+    // Info: summarize discovered dependencies
+    if (dependencyEdges.length > 0) {
+      diagnostics.push({
+        level: 'info',
+        message: `Discovered ${dependencyEdges.length} service dependency edge(s) in workspace`,
+        relatedNodeIds: dependencyEdges.flatMap(e => [e.sourceId, e.targetId]),
+        category: 'general',
+      });
+    }
+
+    return diagnostics;
+  }
+
   // ==========================================================================
   // Diagnostic Derivation
   // ==========================================================================
@@ -674,6 +1213,163 @@ export class WorkspaceGraphService {
     }
 
     return diagnostics;
+  }
+
+  /**
+   * Derive diagnostics from service health check data.
+   * Surfaces health monitor state so AI agents can act on unhealthy services.
+   */
+  private deriveHealthDiagnostics(
+    workspaceId: string,
+    serviceNodes: GraphNode[],
+  ): GraphDiagnostic[] {
+    const diagnostics: GraphDiagnostic[] = [];
+
+    // Collect health for all services in the workspace.
+    // Only generate diagnostics for running services — crashed/stopped services
+    // are already covered by deriveServiceDiagnostics().
+    const runningNodeIds = new Set(
+      serviceNodes.filter(n => n.status === 'running').map(n => n.properties?.serviceId),
+    );
+    const allHealth = serviceHealthMonitor.getWorkspaceHealth(workspaceId);
+
+    for (const health of allHealth) {
+      // Skip non-running services (already diagnosed by deriveServiceDiagnostics)
+      if (!runningNodeIds.has(health.serviceId)) continue;
+
+      const svcNode = serviceNodes.find(
+        n => n.properties?.serviceId === health.serviceId,
+      );
+
+      if (!health.healthy && health.consecutiveFailures > 0) {
+        if (health.consecutiveFailures >= 3) {
+          diagnostics.push({
+            level: 'error',
+            message: `Service "${svcNode?.label ?? health.serviceId}" failed ${health.consecutiveFailures} consecutive health checks` +
+              (health.lastError ? ` (${health.lastError})` : ''),
+            relatedNodeIds: svcNode ? [svcNode.id] : [],
+            category: 'health_check',
+          });
+        } else {
+          diagnostics.push({
+            level: 'warning',
+            message: `Service "${svcNode?.label ?? health.serviceId}" failed ${health.consecutiveFailures} health check(s)`,
+            relatedNodeIds: svcNode ? [svcNode.id] : [],
+            category: 'health_check',
+          });
+        }
+      }
+    }
+
+    // Warn only if running services exist but haven't been health-checked yet
+    const runningNodes = serviceNodes.filter(n => n.status === 'running');
+    if (allHealth.length === 0 && runningNodes.length > 0) {
+      diagnostics.push({
+        level: 'info',
+        message: `${runningNodes.length} service(s) running but health monitor hasn't checked them yet (first cycle may be pending)`,
+        relatedNodeIds: runningNodes.map(n => n.id),
+        category: 'health_check',
+      });
+    }
+
+    return diagnostics;
+  }
+
+  /**
+   * Derive diagnostics from workspace background jobs.
+   * Surfaces failed, stalled, and long-running jobs so AI agents can act.
+   */
+  private deriveJobDiagnostics(
+    jobNodes: GraphNode[],
+  ): GraphDiagnostic[] {
+    const diagnostics: GraphDiagnostic[] = [];
+
+    for (const job of jobNodes) {
+      if (job.status === 'failed') {
+        diagnostics.push({
+          level: 'error',
+          message: `Background job "${job.label}" failed` +
+            (job.properties?.lastError ? `: ${job.properties.lastError}` : ''),
+          relatedNodeIds: [job.id],
+          category: 'job_health',
+        });
+      }
+
+      if (job.status === 'running') {
+        const createdAt = job.properties?.createdAt as number | undefined;
+        const lastExecutedAt = job.properties?.lastExecutedAt as number | undefined;
+        const executionCount = job.properties?.executionCount as number | undefined;
+        if (createdAt && executionCount === 0 && (Date.now() / 1000 - createdAt) > 300) {
+          diagnostics.push({
+            level: 'warning',
+            message: `Background job "${job.label}" has been running for ${Math.round((Date.now() / 1000 - createdAt) / 60)}min with no executions yet`,
+            relatedNodeIds: [job.id],
+            category: 'job_health',
+          });
+        }
+        if (lastExecutedAt && executionCount && executionCount > 0) {
+          const elapsed = Date.now() / 1000 - lastExecutedAt;
+          const intervalSec = job.properties?.intervalSec as number | undefined;
+          if (intervalSec && elapsed > intervalSec * 3) {
+            diagnostics.push({
+              level: 'warning',
+              message: `Background job "${job.label}" may be stalled — last execution was ${Math.round(elapsed / 60)}min ago (interval: ${intervalSec}s)`,
+              relatedNodeIds: [job.id],
+              category: 'job_health',
+            });
+          }
+        }
+      }
+    }
+
+    return diagnostics;
+  }
+  // ==========================================================================
+  // Change Notification (Phase 10: real-time graph updates)
+  // ==========================================================================
+
+  /**
+   * Notify listeners that the workspace graph has changed.
+   * This enables real-time push-based updates via WebSocket instead of polling.
+   */
+  notifyGraphChanged(workspaceId: string): void {
+    this.emit('graph:changed', workspaceId);
+  }
+
+  /**
+   * Subscribe to graph changes for a workspace.
+   * Returns an unsubscribe function.
+   */
+  onGraphChanged(workspaceId: string, listener: () => void): () => void {
+    const handler = (changedId: string) => {
+      if (changedId === workspaceId) listener();
+    };
+    this.on('graph:changed', handler);
+    return () => this.off('graph:changed', handler);
+  }
+
+  /** Track graph summary hashes per workspace for change detection. Size-bound to prevent unbounded growth. */
+  private lastGraphHashes = new Map<string, string>();
+  /** Maximum number of workspace hash entries before eviction */
+  private static readonly MAX_HASH_ENTRIES = 1000;
+
+  /**
+   * Get the current graph only if it has changed since last call for this workspace.
+   * Returns null if no change detected. Used by the WebSocket broadcaster.
+   */
+  getWorkspaceGraphIfChanged(workspaceId: string): WorkspaceGraph | null {
+    const graph = this.getWorkspaceGraph(workspaceId);
+    const hash = JSON.stringify(graph.summary);
+    const prev = this.lastGraphHashes.get(workspaceId);
+
+    // Evict oldest entry if at capacity and adding a new key
+    if (!this.lastGraphHashes.has(workspaceId) && this.lastGraphHashes.size >= WorkspaceGraphService.MAX_HASH_ENTRIES) {
+      const oldestKey = this.lastGraphHashes.keys().next().value;
+      if (oldestKey) this.lastGraphHashes.delete(oldestKey);
+    }
+    this.lastGraphHashes.set(workspaceId, hash);
+
+    return hash !== prev ? graph : null;
   }
 }
 

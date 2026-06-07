@@ -141,10 +141,28 @@ export class WorkspaceFSSyncService {
   /** How long to retain sync state in memory after last activity */
   private readonly STATE_RETENTION_MS = 3600_000; // 1 hour
 
+  /** Interval for background R2 sync (ms). Default: 5 minutes. */
+  private readonly BACKGROUND_SYNC_INTERVAL_MS = parseInt(
+    process.env.WORKSPACEFS_BACKGROUND_SYNC_INTERVAL_MS || '300000',
+    10,
+  );
+
+  /** Whether background periodic sync to R2 is enabled. */
+  private readonly BACKGROUND_SYNC_ENABLED =
+    process.env.WORKSPACEFS_BACKGROUND_SYNC_ENABLED !== 'false';
+
+  /** Timer handle for background sync. */
+  private backgroundSyncTimer?: ReturnType<typeof setInterval>;
+
   constructor() {
     // Periodic cleanup of stale sync states
     const cleanup = setInterval(() => this.cleanupStaleStates(), 300_000);
     cleanup.unref?.();
+
+    // Start background R2 sync if configured
+    if (this.BACKGROUND_SYNC_ENABLED && this.ENABLED) {
+      this.startBackgroundSync();
+    }
   }
 
   // ==========================================================================
@@ -739,6 +757,129 @@ export class WorkspaceFSSyncService {
         this.syncStates.delete(workspaceId);
       }
     }
+  }
+
+  // ==========================================================================
+  // Background Sync (Periodic VFS → R2)
+  // ==========================================================================
+
+  /**
+   * Start periodic background sync of all active workspaces to R2.
+   *
+   * This ensures durable cloud backups even when no explicit fullSync()
+   * calls are triggered by migration or user action. The interval is
+   * configurable via WORKSPACEFS_BACKGROUND_SYNC_INTERVAL_MS (default 5min).
+   *
+   * Each cycle syncs only workspaces with recent activity (last R2 sync
+   * within the retention window) to avoid re-syncing stale workspaces.
+   */
+  private startBackgroundSync(): void {
+    if (this.backgroundSyncTimer) return;
+
+    logger.info('Starting background VFS→R2 sync', {
+      intervalMs: this.BACKGROUND_SYNC_INTERVAL_MS,
+    });
+
+    // Run first sync after a short delay to let workspaces initialize,
+    // then continue on the regular interval.
+    setTimeout(() => {
+      this.syncAllActiveWorkspaces().catch((err) => {
+        logger.warn('Initial background sync cycle failed', { error: err.message });
+      });
+    }, 30_000);
+
+    this.backgroundSyncTimer = setInterval(() => {
+      this.syncAllActiveWorkspaces().catch((err) => {
+        logger.warn('Background sync cycle failed', { error: err.message });
+      });
+    }, this.BACKGROUND_SYNC_INTERVAL_MS);
+
+    // Allow the timer to not keep the process alive (unref for Node.js)
+    this.backgroundSyncTimer.unref?.();
+  }
+
+  /**
+   * Stop the background sync timer.
+   */
+  stopBackgroundSync(): void {
+    if (this.backgroundSyncTimer) {
+      clearInterval(this.backgroundSyncTimer);
+      this.backgroundSyncTimer = undefined;
+      logger.info('Background VFS→R2 sync stopped');
+    }
+  }
+
+  /**
+   * Sync all active workspaces to R2 in a single cycle.
+   *
+   * Only syncs workspaces that:
+   *   1. Have R2 enabled
+   *   2. Have had recent activity (within the retention window)
+   *
+   * Each workspace sync runs sequentially to avoid overwhelming
+   * the R2 upload bandwidth with concurrent bulk uploads.
+   */
+  private async syncAllActiveWorkspaces(): Promise<void> {
+    const r2Config = getR2Config();
+    if (!r2Config.enabled) return;
+
+    const cutoff = Date.now() - this.STATE_RETENTION_MS;
+    const activeStates: WorkspaceSyncState[] = [];
+
+    // Collect workspaces with recent activity
+    for (const state of this.syncStates.values()) {
+      if (
+        state.r2Enabled &&
+        (state.lastR2SyncAt >= cutoff || state.lastSandboxPushAt >= cutoff)
+      ) {
+        activeStates.push(state);
+      }
+    }
+
+    if (activeStates.length === 0) return;
+
+    const startTime = Date.now();
+    let totalSynced = 0;
+    let totalErrors = 0;
+
+    // Sync sequentially to avoid overwhelming R2
+    for (const state of activeStates) {
+      try {
+        const result = await this.syncVFSToR2(
+          state.workspaceId,
+          state.userId,
+          state,
+        );
+        totalSynced += result.filesSynced;
+        if (!result.success) totalErrors++;
+
+        this.updateSyncState(state.workspaceId, {
+          lastR2SyncAt: Date.now(),
+        });
+      } catch (err: any) {
+        totalErrors++;
+        logger.debug('Background R2 sync failed for workspace', {
+          workspaceId: state.workspaceId.slice(0, 16),
+          error: err.message,
+        });
+      }
+    }
+
+    const durationMs = Date.now() - startTime;
+
+    logger.info('Background VFS→R2 sync cycle complete', {
+      workspaces: activeStates.length,
+      filesSynced: totalSynced,
+      errors: totalErrors,
+      durationMs,
+    });
+  }
+
+  /**
+   * Check if background sync is running.
+   */
+  isBackgroundSyncRunning(): boolean {
+    return !!this.backgroundSyncTimer;
   }
 }
 

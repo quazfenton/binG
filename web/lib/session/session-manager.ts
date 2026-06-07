@@ -20,6 +20,7 @@ import { createLogger } from '../utils/logger';
 import type { ExecutionPolicy } from '../sandbox/types';
 import { predictivePrewarmer } from '@/lib/sandbox/predictive-prewarmer';
 import { registerActiveSession, unregisterActiveSession } from './session-naming';
+import { workspaceSessionGraph } from '@/lib/workspace/workspace-session-graph';
 import {
   getExecutionPolicyConfig,
   requiresCloudSandbox,
@@ -124,6 +125,9 @@ export interface Session {
   // Background Jobs tracking
   backgroundJobs?: Map<string, EnhancedJob>;
   executionGraphId?: string;
+
+  // Session graph tracking (Gap #4)
+  sessionGraphId?: string;
 }
 
 interface SessionMetrics {
@@ -326,6 +330,26 @@ export class SessionManager {
         } catch (e: unknown) {
           // Ignore cleanup errors
         }
+      }
+
+      // Close session in workspace session graph (Gap #4)
+      try {
+        if (session.sessionGraphId) {
+          workspaceSessionGraph.unregisterSession(session.sessionGraphId, /* close */ true);
+        }
+      } catch {
+        // Best-effort
+      }
+
+      // Destroy workspace in unified control plane (Phase ∞)
+      // Cleans up affinity, VFS sync, services, snapshots, runtime state, and
+      // session graph entries. Best-effort — non-critical for session cleanup.
+      try {
+        const { workspaceControlPlane } = await import('@/lib/workspace/workspace-control-plane');
+        const wsId = `${userId}:${conversationId}`;
+        await workspaceControlPlane.destroy(wsId);
+      } catch {
+        // Best-effort
       }
 
       // Remove from tracking maps
@@ -799,6 +823,19 @@ export class SessionManager {
   }
 
   /**
+   * Infer the provider type from a sandbox handle by checking its ID prefix.
+   * Best-effort — returns undefined if we can't determine the provider.
+   */
+  private async inferProviderFromHandle(handle: SandboxHandle): Promise<any> {
+    try {
+      const { sandboxBridge } = await import('../sandbox/sandbox-service-bridge');
+      return sandboxBridge.inferProviderFromSandboxId(handle.id);
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
    * Auto-fetch workspace runtime state on session reconnect.
    * Best-effort, fire-and-forget — hydrates runtime registries so the
    * workspace.runtime_state capability returns fresh data immediately.
@@ -1046,6 +1083,45 @@ export class SessionManager {
 
       // Register session as active for cleanup tracking
       registerActiveSession(conversationId);
+
+      // Register in workspace session graph (Gap #4)
+      try {
+        const wsId = `${userId}:${conversationId}`;
+        const graphSessionId = workspaceSessionGraph.registerSession({
+          workspaceId: wsId,
+          userId,
+          sessionType: 'agent',
+          sessionSubtype: config.mode || 'opencode',
+          sandboxId: sandboxHandle?.id,
+          provider: null,
+          metadata: {
+            executionPolicy,
+            nullclawEnabled: config.enableNullclaw,
+            mcpEnabled: config.enableMcp,
+          },
+        });
+        if (graphSessionId) {
+          session.sessionGraphId = graphSessionId;
+        }
+      } catch {
+        // Best-effort
+      }
+
+      // Register in unified workspace control plane (Phase ∞)
+      // Tracks the workspace so get(), list(), and destroy() work. The session
+      // manager already handles sandbox creation — this is a lightweight
+      // registration with the provider/sandbox/dir info.
+      try {
+        const { workspaceControlPlane } = await import('@/lib/workspace/workspace-control-plane');
+        const wsId = `${userId}:${conversationId}`;
+        workspaceControlPlane.register(wsId, userId, {
+          provider: sandboxHandle ? (await this.inferProviderFromHandle(sandboxHandle)) : undefined,
+          sandboxId: sandboxHandle?.id,
+          workspaceDir: workspacePath,
+        });
+      } catch {
+        // Best-effort — control plane registration is non-critical
+      }
 
       if (!this.userSessions.has(userId)) {
         this.userSessions.set(userId, new Set());
