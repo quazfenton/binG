@@ -846,8 +846,20 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
     // Track whether a 'done' SSE event was received before the stream ended
     let receivedDoneEvent = false;
 
-    // Set up a timeout to ensure we don't get stuck
-    const timeoutId = setTimeout(() => { if (!isMountedRef.current) return;
+    // Track timeoutId via ref so it can be reset from event handlers
+    const timeoutRef = { current: null as ReturnType<typeof setTimeout> | null };
+
+    /**
+     * Reset the streaming timeout — clears any existing timeout and sets a new one.
+     * Extends the window whenever file edits or other activity events are received,
+     * so the timeout only fires when the server has truly gone silent.
+     */
+    function resetStreamingTimeout() {
+      if (timeoutRef.current !== null) {
+        clearTimeout(timeoutRef.current);
+      }
+      timeoutRef.current = setTimeout(() => {
+        if (!isMountedRef.current) return;
       console.warn('[Chat] Streaming timeout after 3min, finalizing', {
         accumulatedContentLength: accumulatedContent?.length,
         tokenCount,
@@ -894,6 +906,10 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
         setTimeout(() => processQueue(), 100);
       }
     }, 180000); // 3 minute timeout
+    }
+
+    // Set initial streaming timeout (will be extended on activity)
+    resetStreamingTimeout();
 
     // Set up enhanced buffer manager for smooth rendering
     const sessionId = assistantMessage.id;
@@ -1032,6 +1048,8 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   break;
 
                 case 'primary_done':
+                  // Extend streaming timeout — primary response completed but stream stays open for background refinement
+                  resetStreamingTimeout();
                   // Primary response completed, but stream stays open for background refinement
                   // Update metadata but DON'T close the stream or call onFinish yet
                   if (eventData.messageMetadata) {
@@ -1065,6 +1083,8 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   break;
 
                 case 'primary_response':
+                  // Extend streaming timeout — spec enhancement content still flowing
+                  resetStreamingTimeout();
                   // Primary response content from spec enhancement routing
                   // eventData contains: { content, timestamp }
                   // Note: File edits in primary response are handled server-side via applyFilesystemEditsFromResponse
@@ -1278,7 +1298,8 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                       if (lastUserMsg?.content) {
                         console.warn(`[Chat] Empty response detected, auto-retrying (attempt ${assistantRetryCount + 1}/${maxRetries})`);
 
-                        clearTimeout(timeoutId);
+                        clearTimeout(timeoutRef.current);
+                        timeoutRef.current = null;
 
                         const toolContext = buildEmptyResponseRetryContext({
                           toolInvocations: streamingToolInvocations,
@@ -1456,7 +1477,8 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   }
 
                   // Streaming complete (all background tasks finished) - ONLY if not retrying
-                  clearTimeout(timeoutId);
+                  clearTimeout(timeoutRef.current);
+                  timeoutRef.current = null;
                   setIsLoading(false);
                   setAgentStatus('completed');
                   
@@ -1582,7 +1604,8 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                     console.warn('V2 execution failed, will retry with v1 mode:', eventData);
 
                     // Clear timeout from failed V2 stream
-                    clearTimeout(timeoutId);
+                    clearTimeout(timeoutRef.current);
+                    timeoutRef.current = null;
 
                     // Reuse handleStreamingResponse for v1 fallback
                     await handleV1Fallback(assistantMessage, abortController);
@@ -1613,7 +1636,8 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   });
 
                   enhancedBufferManager.completeSession(sessionId);
-                  clearTimeout(timeoutId);
+                  clearTimeout(timeoutRef.current);
+                  timeoutRef.current = null;
 
                   setMessages(prev => prev.map(msg =>
                     msg.id === assistantMessage.id
@@ -1659,6 +1683,9 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   }
 
                 case 'filesystem':
+                  // Extend streaming timeout — filesystem activity means server is still working
+                  resetStreamingTimeout();
+
                   setMessages(prev => prev.map(msg =>
                     msg.id === assistantMessage.id
                       ? {
@@ -1682,6 +1709,9 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   break;
 
                 case 'diffs': {
+                  // Extend streaming timeout — diff activity means server is still working
+                  resetStreamingTimeout();
+
                   // Handle git-style diffs for client sync
                   // eventData contains: { files: [{ path, diff, changeType }], count, requestId }
                   const diffFiles = eventData.files as Array<{ path: string; diff: string; changeType: string }> || [];
@@ -1736,6 +1766,9 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                 }
 
                 case 'reasoning':
+                  // Extend streaming timeout — reasoning means the LLM is still actively processing
+                  resetStreamingTimeout();
+
                   if (eventData.reasoning) {
                     setMessages(prev => prev.map(msg =>
                       msg.id === assistantMessage.id
@@ -1764,6 +1797,9 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   break;
 
                 case 'file_edit':
+                  // Extend streaming timeout — file edit activity means server is still working
+                  resetStreamingTimeout();
+
                   // Progressive file edit detected during streaming
                   // eventData contains: { path, status, operation, content, diff, timestamp }
                   // CRITICAL FIX: Handle corrected data format from backend
@@ -1906,6 +1942,9 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   break;
 
                 case 'spec_amplification':
+                  // Extend streaming timeout — spec amplification can run for many iterations
+                  resetStreamingTimeout();
+
                   // Spec amplification lifecycle event
                   // eventData contains: { stage, fastModel, specScore, sectionsGenerated, currentIteration, totalIterations, currentSection, error, timestamp, filesystem, content, taskId, taskTitle }
                   setAgentActivity(prev => ({
@@ -2622,7 +2661,8 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
         } // End while (true) - reader loop
 
         // If we reach here without a 'done' event, check if tools were interrupted mid-execution
-        clearTimeout(timeoutId);
+        clearTimeout(timeoutRef.current);
+timeoutRef.current = null;
         setIsLoading(false);
 
         if (!receivedDoneEvent) {
@@ -2689,7 +2729,8 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
           });
         }
     } catch (streamError) {
-      clearTimeout(timeoutId);
+      clearTimeout(timeoutRef.current);
+timeoutRef.current = null;
       if (streamError instanceof Error && streamError.name !== 'AbortError') {
         throw streamError;
       }
@@ -2846,6 +2887,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
           if (dataString === '[DONE]') {
             receivedDoneMarker = true;
             clearTimeout(timeoutId);
+
             setIsLoading(false);
             if (onFinish) {
               onFinish({
@@ -2894,6 +2936,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
     
     // If we reach here without receiving [DONE] marker
     clearTimeout(timeoutId);
+
     setIsLoading(false);
 
     if (!receivedDoneMarker) {

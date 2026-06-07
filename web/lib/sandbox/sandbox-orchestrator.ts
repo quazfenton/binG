@@ -277,6 +277,15 @@ export class SandboxOrchestrator {
 
     session.lastActivityAt = Date.now();
 
+    // Resolve __SB__ placeholders in the command so sandbox-scoped secrets
+    // (like API keys injected via SecretBroker) are available at execution time.
+    try {
+      const broker = getSecretBroker();
+      command = await broker.resolvePlaceholders(command, `sandbox:${session.sessionId}`);
+    } catch {
+      // Best-effort — if placeholder resolution fails, proceed with original command
+    }
+
     // === Touch workspace affinity to extend its TTL ===
     if (this.AFFINITY_ENABLED) {
       const affinityWorkspaceId = `${session.userId}:${session.conversationId}`;

@@ -22,6 +22,7 @@ import {
 import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-service';
 import { sandboxFilesystemSync } from '../virtual-filesystem/sync/sandbox-filesystem-sync';
 import { sandboxPersistenceManager } from '../storage/persistence-manager';
+import { getSecretBroker } from './secret-broker';
 import { DaemonManager } from './daemon-manager';
 import { getPreviewManager, PreviewManager } from './preview-manager';
 
@@ -194,6 +195,16 @@ export class SandboxServiceBridge {
   async executeCommand(sandboxId: string, command: string, cwd?: string) {
     await this.ensureVirtualFilesystemMounted(sandboxId);
     await this.ensureInitialized();
+
+    // Resolve __SB__ placeholders so sandbox-scoped secrets
+    // (API keys injected via SecretBroker) are available at execution time.
+    try {
+      const broker = getSecretBroker();
+      command = await broker.resolvePlaceholders(command, `sandbox:${sandboxId}`);
+    } catch {
+      // Best-effort — proceed with original command if resolution fails
+    }
+
     return this.sandboxService.executeCommand(sandboxId, command, cwd);
   }
 

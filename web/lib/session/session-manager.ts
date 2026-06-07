@@ -192,6 +192,16 @@ export class SessionManager {
     if (existing && existing.state !== 'initializing' && existing.state !== 'error') {
       logger.debug(`Returning existing session for ${key}`);
       this.updateActivity(existing.id);
+
+      // Auto-fetch workspace runtime state on reconnect — fire-and-forget
+      // to hydrate process, service, port, and env registries so the
+      // workspace.runtime_state capability returns fresh data immediately.
+      this.fetchRuntimeStateOnReconnect(userId, conversationId).catch(err => {
+        logger.debug('Runtime state auto-fetch skipped (non-blocking)', {
+          error: err.message,
+        });
+      });
+
       return existing;
     }
 
@@ -786,6 +796,32 @@ export class SessionManager {
 
   private getSessionKey(userId: string, conversationId: string): string {
     return `${userId}$${conversationId}`;
+  }
+
+  /**
+   * Auto-fetch workspace runtime state on session reconnect.
+   * Best-effort, fire-and-forget — hydrates runtime registries so the
+   * workspace.runtime_state capability returns fresh data immediately.
+   */
+  private async fetchRuntimeStateOnReconnect(userId: string, conversationId: string): Promise<void> {
+    try {
+      const workspaceId = `${userId}:${conversationId}`;
+
+      // Dynamic import to avoid circular deps
+      const { getWorkspaceRuntime } = await import('@/lib/terminal/workspace-runtime-service');
+      const runtime = getWorkspaceRuntime(workspaceId, userId);
+      await runtime.hydrate();
+
+      const state = await runtime.getWorkspaceState();
+      logger.info('Runtime state auto-fetched on reconnect', {
+        workspaceId,
+        processes: state.stats?.processCount ?? 0,
+        services: state.stats?.serviceCount ?? 0,
+        previews: state.stats?.previewCount ?? 0,
+      });
+    } catch {
+      // Best-effort — workspace runtime may not be available
+    }
   }
 
   private startCleanupTimer(): void {

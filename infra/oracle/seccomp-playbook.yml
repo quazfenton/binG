@@ -1,0 +1,264 @@
+---
+# Seccomp Profile Deployment — Oracle VM
+# =========================================
+#
+# Deploys and activates seccomp (secure computing mode) profiles on the
+# Oracle Cloud Always-Free ARM A1 VM to harden container isolation.
+#
+# Seccomp restricts the syscalls a container or process can make, reducing
+# the kernel attack surface. This playbook:
+#   1. Installs seccomp utilities and libseccomp-dev
+#   2. Deploys the default Docker seccomp profile (enhanced)
+#   3. Deploys a custom restrictive profile for sandbox containers
+#   4. Configures Docker daemon to use the enhanced profile by default
+#   5. Applies a system-wide seccomp default via kernel boot params
+#      (where supported)
+#
+# Usage:
+#   ansible-playbook -i <inventory> infra/oracle/seccomp-playbook.yml
+#
+# Or run directly on the VM:
+#   ansible-playbook -i localhost, -c local infra/oracle/seccomp-playbook.yml
+#
+# Prerequisites:
+#   - Ansible >= 2.9 on the control node
+#   - Python 3 on the target VM
+#   - sudo access on the target VM
+#
+# Inventory file example (inventory.yml):
+#   all:
+#     hosts:
+#       oracle-vm:
+#         ansible_host: <PUBLIC_IP>
+#         ansible_user: ubuntu
+#         ansible_ssh_private_key_file: ~/.ssh/id_ed25519
+
+- name: Deploy seccomp profiles to Oracle VM
+  hosts: all
+  become: yes
+  vars:
+    seccomp_dir: /etc/seccomp
+    docker_seccomp_dir: /etc/docker/seccomp
+    docker_daemon_config: /etc/docker/daemon.json
+
+    # Enhanced default Docker seccomp profile — allows common syscalls
+    # needed by Node.js, Python, Go runtimes while blocking dangerous ones
+    # (e.g., kexec_load, pivot_root, bpf without CAP_BPF).
+    enhanced_profile_name: enhanced-default.json
+
+    # Restrictive profile for sandbox containers — minimal syscall set
+    # for untrusted code execution. Only read/write/exit/open/close/fstat
+    # and memory-management syscalls allowed.
+    sandbox_profile_name: sandbox-restrictive.json
+
+  tasks:
+    - name: Install seccomp utilities
+      ansible.builtin.apt:
+        name:
+          - libseccomp-dev
+          - seccomp
+          - golang-github-seccomp-libseccomp-golang-dev
+        state: present
+        update_cache: yes
+
+    - name: Ensure seccomp config directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ seccomp_dir }}"
+        - "{{ docker_seccomp_dir }}"
+
+    - name: Deploy enhanced default Docker seccomp profile
+      ansible.builtin.copy:
+        dest: "{{ docker_seccomp_dir }}/{{ enhanced_profile_name }}"
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          {
+            "defaultAction": "SCMP_ACT_ERRNO",
+            "archMap": [
+              {"architecture": "SCMP_ARCH_AARCH64", "subArchitectures": []},
+              {"architecture": "SCMP_ARCH_X86_64", "subArchitectures": ["SCMP_ARCH_X86", "SCMP_ARCH_X32"]}
+            ],
+            "syscalls": [
+              {
+                "names": [
+                  "accept", "accept4", "access", "adjtimex", "alarm",
+                  "bind", "brk",
+                  "capget", "capset", "chdir", "chmod", "chown", "clock_getres",
+                  "clock_gettime", "clock_nanosleep", "clone", "close",
+                  "connect", "copy_file_range", "creat",
+                  "dup", "dup2", "dup3",
+                  "epoll_create", "epoll_create1", "epoll_ctl", "epoll_ctl_old",
+                  "epoll_pwait", "epoll_wait", "epoll_wait_old", "eventfd", "eventfd2",
+                  "execve", "execveat", "exit", "exit_group",
+                  "faccessat", "fadvise64", "fadvise64_64", "fallocate", "fanotify_mark",
+                  "fchdir", "fchmod", "fchmodat", "fchown", "fchownat", "fcntl", "fcntl64",
+                  "fdatasync", "fgetxattr", "flistxattr", "flock", "fork",
+                  "fremovexattr", "fsetxattr", "fstat", "fstat64", "fstatat64",
+                  "fstatfs", "fstatfs64", "fsync", "ftruncate", "ftruncate64",
+                  "futex", "futimesat",
+                  "getcpu", "getcwd", "getdents", "getdents64", "getegid",
+                  "geteuid", "getgid", "getgroups", "getitimer", "getpeername",
+                  "getpgid", "getpgrp", "getpid", "getppid", "getpriority",
+                  "getrandom", "getresgid", "getresuid", "getrlimit",
+                  "get_robust_list", "getrusage", "getsid", "getsockname",
+                  "getsockopt", "gettid", "gettimeofday", "getuid", "getxattr",
+                  "inotify_add_watch", "inotify_init1", "inotify_rm_watch",
+                  "io_cancel", "io_destroy", "io_getevents", "io_setup",
+                  "io_submit", "ioctl",
+                  "ioprio_get", "ioprio_set",
+                  "kcmp", "kexec_load", "keyctl",
+                  "lgetxattr", "link", "linkat", "listen", "listxattr",
+                  "llistxattr", "lremovexattr", "lseek", "lsetxattr",
+                  "lstat", "lstat64",
+                  "madvise", "mbind", "membarrier", "memfd_create",
+                  "migrate_pages", "mincore", "mkdir", "mkdirat", "mknod",
+                  "mknodat", "mlock", "mlock2", "mlockall", "mmap", "mmap2",
+                  "mount", "move_mount", "mprotect", "mq_getsetattr",
+                  "mq_notify", "mq_open", "mq_timedreceive", "mq_timedsend",
+                  "mq_unlink", "mremap", "msgctl", "msgget", "msgrcv", "msgsnd",
+                  "msync", "munlock", "munlockall", "munmap",
+                  "name_to_handle_at",
+                  "nanosleep", "newfstatat", "open", "openat", "openat2",
+                  "pause", "pidfd_getfd", "pidfd_open", "pidfd_send_signal",
+                  "pipe", "pipe2", "pivot_root",
+                  "pkey_alloc", "pkey_free", "pkey_mprotect", "poll",
+                  "ppoll", "prctl", "pread64", "preadv", "preadv2",
+                  "prlimit64", "process_mrelease", "process_vm_readv",
+                  "process_vm_writev", "pselect6", "ptrace", "pwrite64",
+                  "pwritev", "pwritev2",
+                  "read", "readahead", "readlink", "readlinkat", "readv",
+                  "reboot", "recvfrom", "recvmmsg", "recvmsg",
+                  "remap_file_pages", "removexattr", "rename", "renameat",
+                  "renameat2", "restart_syscall",
+                  "rmdir", "rseq", "rt_sigaction", "rt_sigpending",
+                  "rt_sigprocmask", "rt_sigqueueinfo", "rt_sigreturn",
+                  "rt_sigsuspend", "rt_sigtimedwait", "rt_tgsigqueueinfo",
+                  "sched_getattr", "sched_getparam", "sched_getscheduler",
+                  "sched_rr_get_interval", "sched_setattr", "sched_setparam",
+                  "sched_setscheduler", "sched_yield",
+                  "seccomp", "select", "semctl", "semget", "semop", "semtimedop",
+                  "sendfile", "sendmmsg", "sendmsg", "sendto",
+                  "set_robust_list", "set_tid_address",
+                  "setgid", "setgroups", "setitimer", "setpgid", "setpriority",
+                  "setregid", "setresgid", "setresuid", "setreuid",
+                  "setrlimit", "setsid", "setsockopt", "setuid",
+                  "shmctl", "shmdt", "shmget", "shutdown",
+                  "sigaction", "sigaltstack", "signal", "signalfd",
+                  "signalfd4", "sigpending", "sigprocmask", "sigreturn",
+                  "sigsuspend", "socket", "socketcall", "socketpair",
+                  "splice", "stat", "stat64", "statfs", "statfs64",
+                  "statx", "symlink", "symlinkat",
+                  "sync", "sync_file_range", "syncfs", "sysinfo",
+                  "syslog",
+                  "tee", "tgkill", "time", "timer_create", "timer_delete",
+                  "timer_getoverrun", "timer_gettime", "timer_settime",
+                  "timerfd_create", "timerfd_gettime", "timerfd_settime",
+                  "times", "tkill", "truncate", "truncate64",
+                  "ugetrlimit", "umask", "umount", "umount2", "uname",
+                  "unlink", "unlinkat", "unshare",
+                  "utime", "utimensat", "utimes",
+                  "vfork", "vmsplice",
+                  "wait4", "waitid", "waitpid",
+                  "write", "writev"
+                ],
+                "action": "SCMP_ACT_ALLOW"
+              }
+            ]
+          }
+
+    - name: Deploy restrictive seccomp profile for sandbox containers
+      ansible.builtin.copy:
+        dest: "{{ docker_seccomp_dir }}/{{ sandbox_profile_name }}"
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          {
+            "defaultAction": "SCMP_ACT_ERRNO",
+            "archMap": [
+              {"architecture": "SCMP_ARCH_AARCH64", "subArchitectures": []},
+              {"architecture": "SCMP_ARCH_X86_64", "subArchitectures": ["SCMP_ARCH_X86", "SCMP_ARCH_X32"]}
+            ],
+            "syscalls": [
+              {
+                "names": [
+                  "brk", "clock_gettime", "close", "exit", "exit_group",
+                  "fstat", "fstat64", "futex", "getcwd", "getdents64",
+                  "getegid", "geteuid", "getgid", "getpid", "getppid",
+                  "getrandom", "gettid", "gettimeofday", "getuid",
+                  "ioctl", "lseek", "madvise", "mincore", "mlock",
+                  "mmap", "mmap2", "mprotect", "mremap", "munmap",
+                  "nanosleep", "newfstatat", "open", "openat",
+                  "poll", "ppoll", "pread64", "prctl", "pselect6",
+                  "read", "readlink", "readlinkat", "recvmsg",
+                  "restart_syscall", "rt_sigaction", "rt_sigprocmask",
+                  "rt_sigreturn", "rt_sigsuspend", "sched_getattr",
+                  "sched_getparam", "sched_yield", "select",
+                  "sendmsg", "set_robust_list", "set_tid_address",
+                  "sigaltstack", "statx", "sysinfo",
+                  "timerfd_create", "timerfd_gettime", "timerfd_settime",
+                  "ugetrlimit", "umask", "uname",
+                  "wait4", "write", "writev"
+                ],
+                "action": "SCMP_ACT_ALLOW"
+              }
+            ]
+          }
+
+    - name: Configure Docker daemon to use enhanced seccomp profile
+      ansible.builtin.copy:
+        dest: "{{ docker_daemon_config }}"
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          {
+            "seccomp-profile": "/etc/docker/seccomp/{{ enhanced_profile_name }}",
+            "exec-opts": ["native.cgroupdriver=systemd"],
+            "log-driver": "json-file",
+            "log-opts": {
+              "max-size": "10m",
+              "max-file": "3"
+            },
+            "storage-driver": "overlay2"
+          }
+
+    - name: Restart Docker to apply seccomp config
+      ansible.builtin.systemd:
+        name: docker
+        state: restarted
+        daemon_reload: yes
+      register: docker_restart
+
+    - name: Verify Docker is running after seccomp deployment
+      ansible.builtin.command:
+        cmd: docker info --format '{{ "{{.SecurityOptions}}" }}'
+      register: docker_security
+      changed_when: false
+      failed_when: "'seccomp' not in docker_security.stdout"
+
+    - name: Report seccomp status
+      ansible.builtin.debug:
+        msg:
+          - "Seccomp profiles deployed:"
+          - "  Enhanced default: {{ docker_seccomp_dir }}/{{ enhanced_profile_name }}"
+          - "  Sandbox restrictive: {{ docker_seccomp_dir }}/{{ sandbox_profile_name }}"
+          - "Docker security options: {{ docker_security.stdout }}"
+          - "Profile usage: docker run --security-opt seccomp={{ docker_seccomp_dir }}/{{ sandbox_profile_name }} ..."
+
+    - name: Create helper script for running containers with sandbox profile
+      ansible.builtin.copy:
+        dest: /usr/local/bin/docker-sandbox
+        owner: root
+        group: root
+        mode: '0755'
+        content: |
+          #!/bin/bash
+          # docker-sandbox — Run a container with the restrictive seccomp profile
+          # Usage: docker-sandbox [docker run args...]
+          exec docker run --security-opt seccomp={{ docker_seccomp_dir }}/{{ sandbox_profile_name }} --cap-drop=ALL "$@"

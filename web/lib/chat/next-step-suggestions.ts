@@ -122,7 +122,7 @@ function parseSuggestions(raw: string): NextStepSuggestionsResult {
   // --- Attempt 2: extract individual { "label": ..., "fullText": ... } objects ---
   // Catches suggestions that were cut mid-JSON or wrapped in code fences, etc.
   const extracted = extractSuggestionsFromRaw(raw);
-  return { suggestions: extracted;
+  return { suggestions: extracted };
 }
 
 /**

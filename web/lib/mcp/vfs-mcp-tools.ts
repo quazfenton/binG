@@ -65,11 +65,31 @@ function normalizeFilePath(inputPath: string): string {
   let p = inputPath;
   // Strip leading `./` (repeated)
   while (p.startsWith('./')) p = p.slice(2);
-  // Reject directory traversal
-  if (p.includes('..')) {
-    // Best-effort: remove the traversal segments
-    p = p.split('/').filter(s => s !== '..' && s !== '.').join('/');
+
+  // Strip leading `~/` (Unix home directory shorthand).
+  // In the VFS context there is no home directory, so treat the `~`
+  // segment as if the user meant a relative path.
+  if (p.startsWith('~/')) p = p.slice(2);
+
+  // Properly resolve `..` (parent directory) and `.` (current directory) segments.
+  // The old code just filtered out `..` without removing the parent directory
+  // segment, e.g. "src/components/../utils/helper.ts" became
+  // "src/components/utils/helper.ts" (WRONG) instead of "src/utils/helper.ts".
+  if (p.includes('..') || p.includes('/.')) {
+    const segments = p.split('/');
+    const resolved: string[] = [];
+    for (const seg of segments) {
+      if (seg === '..') {
+        // Walk up one directory — pop the last resolved segment
+        if (resolved.length > 0) resolved.pop();
+      } else if (seg !== '.' && seg !== '') {
+        // Skip `.` and empty segments (from double slashes)
+        resolved.push(seg);
+      }
+    }
+    p = resolved.join('/');
   }
+
   // Strip leading `/` (absolute path → make relative)
   if (p.startsWith('/')) p = p.slice(1);
   return p;
@@ -222,6 +242,12 @@ const TOOL_NAME_ALIASES: Record<string, string> = {
   writetofile: 'write_file',
   create_file: 'write_file',
   writetotext: 'write_file',
+  // Short verb aliases — LLMs sometimes use these bare verbs
+  write: 'write_file',
+  read: 'read_file',
+  edit: 'apply_diff',
+  delete: 'delete_file',
+  create: 'write_file',
   applydiff: 'apply_diff',
   patch: 'apply_diff',
   readfile: 'read_file',
@@ -855,6 +881,22 @@ export const applyDiffTool = (tool as any)({
       metadata: { diff, appliedCount, failedSearches },
     });
 
+    // Check if the patched file is a dependency file that should trigger image rebuild
+    if (context.userId !== 'default') {
+      const workspaceId = context.sessionId
+        ? `${context.userId}:${context.sessionId}`
+        : context.userId;
+      const filename = path.split('/').pop() || '';
+      if (filename) {
+        onDependencyFileChanged(workspaceId, filename, newContent).catch(err => {
+          logger.warn('Failed to notify image builder of dep file change (SAR diff)', {
+            filename,
+            error: err.message,
+          });
+        });
+      }
+    }
+
     return {
       success: true,
       path: result.path,
@@ -909,6 +951,22 @@ export const applyDiffTool = (tool as any)({
     source: 'mcp-tool-diff',
     metadata: { diff },
   });
+
+  // Check if the patched file is a dependency file that should trigger image rebuild
+  if (context.userId !== 'default') {
+    const workspaceId = context.sessionId
+      ? `${context.userId}:${context.sessionId}`
+      : context.userId;
+    const filename = path.split('/').pop() || '';
+    if (filename) {
+      onDependencyFileChanged(workspaceId, filename, newContent).catch(err => {
+        logger.warn('Failed to notify image builder of dep file change (diff)', {
+          filename,
+          error: err.message,
+        });
+      });
+    }
+  }
 
   return {
     success: true,
@@ -1238,7 +1296,7 @@ export const searchFilesTool = (tool as any)({
   ),
   execute: async ({ query, path, limit = 10 }) => {
     try {
-  if (!query || typeof query !== 'string') {
+  if (!query || typeof query !== 'string' || !query.trim()) {
     return { success: false, query, error: 'Query is required', files: [], total: 0 };
   }
   const context = getToolContext();
@@ -1706,6 +1764,23 @@ export const deleteFileTool = (tool as any)({
     type: 'delete',
     source: 'mcp-tool',
   });
+
+  // If the deleted file is a dependency file (package.json, requirements.txt, etc.),
+  // invalidate the workspace image so the next sandbox rebuilds with updated deps.
+  if (context.userId !== 'default') {
+    const workspaceId = context.sessionId
+      ? `${context.userId}:${context.sessionId}`
+      : context.userId;
+    const filename = path.split('/').pop() || '';
+    if (filename) {
+      onDependencyFileChanged(workspaceId, filename, '').catch(err => {
+        logger.warn('Failed to notify image builder of dep file deletion', {
+          filename,
+          error: err.message,
+        });
+      });
+    }
+  }
 
   return {
     success: true,

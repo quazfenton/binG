@@ -1634,7 +1634,7 @@ class RipgrepProvider implements CapabilityProvider {
       const maxResults = input.maxResults || 50;
       const query = input.query;
       
-      if (!query || typeof query !== 'string') {
+      if (!query || typeof query !== 'string' || !query.trim()) {
         return { success: false, error: 'Query is required' };
       }
 

@@ -71,6 +71,9 @@ async function deleteMistralSession(sandboxId: string): Promise<void> {
 }
 
 const mistralSessions = new Map<string, MistralSession>()
+// In-memory store for workspace-scoped env vars per sandbox, injected into
+// every command execution so Mistral code interpreter sees workspace env.
+const sandboxEnvVars = new Map<string, Record<string, string>>()
 
 export class MistralCodeInterpreterProvider implements SandboxProvider {
   readonly name = 'mistral'
@@ -90,7 +93,7 @@ export class MistralCodeInterpreterProvider implements SandboxProvider {
     this.model = process.env.MISTRAL_CODE_INTERPRETER_MODEL || 'mistral-medium-latest'
   }
 
-  async createSandbox(_config: SandboxCreateConfig): Promise<SandboxHandle> {
+  async createSandbox(config: SandboxCreateConfig): Promise<SandboxHandle> {
     const sandboxId = `mistral-${randomUUID()}`
     const session: MistralSession = {
       sandboxId,
@@ -98,6 +101,12 @@ export class MistralCodeInterpreterProvider implements SandboxProvider {
       lastActive: Date.now(),
     }
     mistralSessions.set(sandboxId, session)
+
+    // Store workspace-scoped env vars so they get injected into every command
+    if (config.envVars && Object.keys(config.envVars).length > 0) {
+      sandboxEnvVars.set(sandboxId, { ...config.envVars })
+    }
+
     await saveMistralSession(sandboxId, session)
     return new MistralCodeInterpreterSandboxHandle(sandboxId, this.client, this.model)
   }
@@ -137,6 +146,7 @@ export class MistralCodeInterpreterProvider implements SandboxProvider {
 
   async destroySandbox(sandboxId: string): Promise<void> {
     mistralSessions.delete(sandboxId)
+    sandboxEnvVars.delete(sandboxId)
     await deleteMistralSession(sandboxId)
   }
 }
@@ -247,14 +257,31 @@ class MistralCodeInterpreterSandboxHandle implements SandboxHandle {
   }
 
   private buildCommandPrompt(command: string, cwd: string): string {
-    return [
+    const parts: string[] = [
       'Run the following command in code interpreter and return ONLY JSON.',
       'Use a shell execution method from Python (subprocess).',
       `Working directory: ${cwd}`,
-      'JSON schema: {"success": boolean, "exitCode": number, "output": string}',
-      'No markdown fences, no explanations, no extra keys.',
-      `COMMAND: ${command}`,
-    ].join('\n')
+    ]
+
+    // Inject workspace-scoped env vars so the code interpreter has access to
+    // the same environment variables as other sandbox providers.
+    const env = sandboxEnvVars.get(this.id)
+    if (env && Object.keys(env).length > 0) {
+      const exports = Object.entries(env)
+        .filter(([_, v]) => typeof v === 'string')
+        .map(([k, v]) => `${k}=${v.replace(/'/g, "'\\''")}`)
+      if (exports.length > 0) {
+        parts.push('Environment variables (prepend to command):')
+        parts.push(exports.map(e => `  export ${e}`).join('\n'))
+        parts.push(`Execute with env: ${exports.join(' ')} ${command}`)
+      }
+    }
+
+    parts.push('JSON schema: {"success": boolean, "exitCode": number, "output": string}')
+    parts.push('No markdown fences, no explanations, no extra keys.')
+    parts.push(`COMMAND: ${command}`)
+
+    return parts.join('\n')
   }
 }
 

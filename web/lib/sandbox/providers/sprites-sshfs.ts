@@ -32,7 +32,7 @@ const execFilePromise = promisify(execFile)
  * SECURITY: Prevents command injection via spriteName parameter
  */
 function validateSpriteName(name: string): string {
-  if (!name || typeof name !== 'string') {
+  if (!name || typeof name !== 'string' || !name.trim()) {
     throw new Error('Sprite name is required')
   }
 

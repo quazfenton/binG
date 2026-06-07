@@ -196,6 +196,7 @@ The codebase has made **significant progress** on the cloud workstation vision f
 - `onDependencyFileChanged()` — Auto-trigger rebuild when dep files are modified
 - `hasPendingRebuild()` / `markPendingRebuild()` — Infrastructure for VFS hook integration
 - DEPENDENCY_FILE_NAMES exported set for external watchers
+- **`onDependencyFileChanged()` wired into `delete_file`, `apply_diff` (SAR + unified diff)** — image rebuild triggers on dep file deletion and surgical edits too
 
 **Notable details:**
 - Lockfile patterns support 14 dependency types across 7 runtimes
@@ -203,6 +204,7 @@ The codebase has made **significant progress** on the cloud workstation vision f
 - Build path remains fire-and-forget (install can take 30-300s)
 - Pending rebuild markers prevent using stale images after dep file change
 - Provider checkpoint used for fast image snapshots
+- **`predictivePrewarmer.prewarmFromVFS()` moved from core-sandbox-service to session-manager** (fires earlier, at session creation)
 
 ---
 
@@ -331,7 +333,22 @@ Additional supporting tables:
 
 ---
 
-## Next 5 Steps (Highest Impact)
+## Additional Completed Items
+
+| Item | Status | Details |
+|------|--------|---------|
+| **Workspace env injection in code-executor.ts** | ✅ Already done | `loadWorkspaceEnv()` already injects workspace env vars for JS, Python, Bash snippets |
+| **workspace.runtime_state capability** | ✅ Already wired | Defined in `capabilities.ts`, registered in `bootstrap-project-analysis.ts` with full CapabilityRouter provider, tool handler exposed |
+| **Mistral code interpreter env injection** | ✅ Done | `sandboxEnvVars` Map + env var injection in `buildCommandPrompt()` — stored from `createSandbox(config.envVars)` |
+| **providerHealthTracker.recordCall() in code-executor** | ✅ Done | Added to `executeInSandbox()` success and failure paths in `lib/sandbox/code-executor.ts` |
+| **Runtime state auto-fetch on reconnect** | ✅ Done | `fetchRuntimeStateOnReconnect()` hydrates workspace runtime when session reconnects via `session-manager.ts` |
+| **Seccomp deployment playbook** | ✅ Done | Ansible playbook at `infra/oracle/seccomp-playbook.yml` — deploys enhanced default + restrictive sandbox profiles |
+| **Trim guard fixes (vfs-mcp-tools, router)** | ✅ Done | `!query.trim()` guard added to `searchFilesTool` (vfs-mcp-tools.ts) and `RipgrepProvider.query` (router.ts) to reject empty whitespace-only strings |
+| **Trim guard audit (sprites-sshfs, session-naming)** | ✅ Done | Pattern search for `!name`, `!id`, `!key`, `!url` guards without `.trim()` — fixed `!name` in `sprites-sshfs.ts` and `session-naming.ts` |
+
+---
+
+## Next Steps (Highest Impact)
 
 Based on the review, the five most impactful next steps are:
 

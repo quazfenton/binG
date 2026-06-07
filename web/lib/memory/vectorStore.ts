@@ -62,7 +62,14 @@ class VectorDB extends Dexie {
 
 let _db: VectorDB | null = null;
 
+function isIndexedDBAvailable(): boolean {
+  return typeof indexedDB !== 'undefined';
+}
+
 function getDB(): VectorDB {
+  if (!isIndexedDBAvailable()) {
+    throw new Error('IndexedDB not available on this platform (likely server-side)');
+  }
   if (!_db) _db = new VectorDB();
   return _db;
 }

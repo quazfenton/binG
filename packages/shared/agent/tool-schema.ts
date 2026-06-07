@@ -21,6 +21,7 @@
  */
 
 import { zodToJsonSchema } from 'zod-to-json-schema';
+import { jsonSchema } from '@ai-sdk/provider-utils';
 
 const PROVIDER_OBJECT_SCHEMA: Record<string, unknown> = {
   type: 'object',
@@ -36,9 +37,9 @@ const PROVIDER_OBJECT_SCHEMA: Record<string, unknown> = {
  *  - A plain JSON Schema object (preserved as-is, or with `type: "object"` injected)
  *  - `null` / `undefined` / non-object (returns a minimal valid object schema)
  */
-export function normalizeSchemaForAI(rawSchema: unknown): Record<string, unknown> {
+export function normalizeSchemaForAI(rawSchema: unknown): any {
   if (!rawSchema || typeof rawSchema !== 'object') {
-    return { ...PROVIDER_OBJECT_SCHEMA };
+    return jsonSchema({ ...PROVIDER_OBJECT_SCHEMA });
   }
 
   const schema = rawSchema as Record<string, unknown>;
@@ -56,14 +57,14 @@ export function normalizeSchemaForAI(rawSchema: unknown): Record<string, unknown
     if (!inner.type) {
       inner.type = 'object';
     }
-    return inner;
+    return jsonSchema(inner);
   }
 
   // Plain JSON Schema object: ensure it has `type: "object"` so strict providers
   // (Azure OpenAI, pollinations, etc.) don't reject it as `type: "None"`.
   if (!schema.type) {
-    return { type: 'object', ...schema };
+    return jsonSchema({ type: 'object', ...schema });
   }
 
-  return schema;
+  return jsonSchema(schema);
 }

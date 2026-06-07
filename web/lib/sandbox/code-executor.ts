@@ -6,6 +6,7 @@
  */
 
 import { coreSandboxService } from '@/lib/sandbox/core-sandbox-service';
+import { providerHealthTracker } from './provider-health';
 
 export interface ExecutionOptions {
   input?: string;
@@ -31,9 +32,7 @@ export async function executeInSandbox(
   language: string,
   options: ExecutionOptions = {}
 ): Promise<ExecutionResult> {
-  const startTime = Date.now();
-
-  try {
+  const startTime = Date.now();    try {
     // Create temporary sandbox with env vars
     const sandbox = await coreSandboxService.createSandbox({
       language: getLanguageTemplate(language),
@@ -56,6 +55,9 @@ export async function executeInSandbox(
 
       const executionTime = Date.now() - startTime;
 
+      // Track provider health for sandbox code execution
+      providerHealthTracker.recordCall('core-sandbox', result.exitCode === 0, executionTime, result.error);
+
       return {
         output: result.output || '',
         error: result.error,
@@ -68,6 +70,8 @@ export async function executeInSandbox(
     }
   } catch (error: any) {
     const executionTime = Date.now() - startTime;
+
+    providerHealthTracker.recordCall('core-sandbox', false, executionTime, error.message || 'Execution failed');
 
     return {
       output: '',

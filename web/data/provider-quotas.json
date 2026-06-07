@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "updatedAt": "2026-06-07T00:18:44.367Z",
+  "updatedAt": "2026-06-07T02:11:22.549Z",
   "quotas": {
     "composio": {
       "monthlyLimit": 20000,
@@ -46,7 +46,7 @@
     },
     "e2b": {
       "monthlyLimit": 1000,
-      "currentUsage": 500,
+      "currentUsage": 506,
       "resetDate": "2026-07-01T00:00:00.000Z",
       "isDisabled": false,
       "resetPeriod": "monthly"

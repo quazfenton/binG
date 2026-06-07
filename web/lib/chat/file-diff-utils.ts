@@ -156,6 +156,16 @@ export function isFullFileContent(content: string): boolean {
 /**
  * Apply simple line-based diff to content
  * Handles both diffs (+/- markers) and full file content
+ *
+ * Supports multiple diff line formats:
+ *   "+ content"   (Claude-style: + then space then content)
+ *   "+content"    (standard unified diff: + then content)
+ *   "- content"   (Claude-style: - then space then content)
+ *   "-content"    (standard unified diff: - then content)
+ *   "  content"   (Claude-style context: two spaces then content)
+ *   " content"    (standard unified diff context: one space then content)
+ *   "@@ -1,3 +1,4 @@"  (hunk header — skipped)
+ *   anything else → preserved as context line
  */
 export function applySimpleLineDiff(currentContent: string, diffBody: string): string | null {
   // Check if this looks like full file content (not a diff)
@@ -180,18 +190,29 @@ export function applySimpleLineDiff(currentContent: string, diffBody: string): s
 
   const resultLines: string[] = [];
   for (const line of diffLines) {
-    // CRITICAL FIX: Check raw prefix first before any trimming
-    // This prevents misclassifying context lines that start with + or -
-    if (line.startsWith("+ ")) {
-      // Added line - keep content without the marker
-      resultLines.push(line.slice(2));
-    } else if (line.startsWith("- ")) {
-      // Removed line - skip it
+    // Skip @@ hunk headers (e.g., "@@ -1,5 +1,6 @@")
+    if (line.startsWith('@@')) {
+      continue;
+    }
+
+    // CRITICAL: Check raw prefix first before any trimming.
+    // Order matters: check two-space first so "  " doesn't accidentally
+    // match the single-space branch.
+    if (line.startsWith("+ ") || (line.startsWith("+") && line.length > 1 && !line.startsWith("++"))) {
+      // Added line ("+ " Claude-style OR "+content" unified diff) - keep content without the marker
+      const skip = line.startsWith("+ ") ? 2 : 1;
+      resultLines.push(line.slice(skip));
+    } else if (line.startsWith("- ") || (line.startsWith("-") && line.length > 1 && !line.startsWith("--"))) {
+      // Removed line ("- " Claude-style OR "-content" unified diff) - skip it
       continue;
     } else if (line.startsWith("  ")) {
-      // Context line (starts with exactly two spaces) - preserve content
+      // Context line (two spaces, Claude-style) - preserve content
       resultLines.push(line.slice(2));
+    } else if (line.startsWith(" ")) {
+      // Context line (single space, standard unified diff) - preserve content
+      resultLines.push(line.slice(1));
     }
+    // Lines with no diff prefix are preserved as context (treat as part of content)
   }
   
   const result = resultLines.join("\n");
@@ -200,6 +221,69 @@ export function applySimpleLineDiff(currentContent: string, diffBody: string): s
     return currentContent;
   }
   return result;
+}
+
+/**
+ * Apply search-and-replace format diff (<<<<<<< SEARCH / ======= / >>>>>>> REPLACE).
+ *
+ * Many LLMs send this format instead of unified diffs. It works by finding the
+ * SEARCH block in the current content and replacing it with the REPLACE block.
+ *
+ * Supports multiple SEARCH/REPLACE blocks in a single diff body.
+ * Falls back to trimmed-end matching when exact match fails.
+ */
+export function applySearchAndReplace(currentContent: string, diffBody: string): string | null {
+  // Case-insensitive: handle SEARCH, Search, search, and similarly for REPLACE
+  const sarPattern = /<<<+\s*SEARCH\s*\n([\s\S]*?)\n={3,}\n([\s\S]*?)\n>>>+\s*REPLACE/gi;
+
+  if (!sarPattern.test(diffBody)) {
+    return null;
+  }
+
+  // Reset lastIndex after .test()
+  sarPattern.lastIndex = 0;
+
+  let newContent = currentContent;
+  let match: RegExpExecArray | null;
+  let appliedCount = 0;
+
+  while ((match = sarPattern.exec(diffBody)) !== null) {
+    const searchStr = match[1];
+    const replaceStr = match[2];
+
+    if (newContent.includes(searchStr)) {
+      // Exact match — direct replacement
+      newContent = newContent.replace(searchStr, replaceStr);
+      appliedCount++;
+    } else {
+      // Try trimmed-end matching (ignores trailing whitespace differences)
+      const trimmedSearch = searchStr.split('\n').map(l => l.trimEnd()).join('\n');
+      const trimmedContent = newContent.split('\n').map(l => l.trimEnd()).join('\n');
+      const idx = trimmedContent.indexOf(trimmedSearch);
+
+      if (idx !== -1) {
+        // Find the original-content boundaries that correspond to this trimmed match
+        const lines = newContent.split('\n');
+        const searchLines = searchStr.split('\n');
+        const startLine = trimmedContent.substring(0, idx).split('\n').length - 1;
+        const endLine = startLine + searchLines.length;
+        const originalSlice = lines.slice(startLine, endLine).join('\n');
+        newContent = newContent.replace(originalSlice, replaceStr);
+        appliedCount++;
+      }
+      // If neither exact nor trimmed match, skip this block (don't fail the whole diff)
+    }
+  }
+
+  if (appliedCount === 0) {
+    console.warn('[applySearchAndReplace] No SEARCH blocks matched current content', {
+      blocksFound: (diffBody.match(sarPattern) || []).length,
+      contentLength: currentContent.length,
+    });
+    return null;
+  }
+
+  return newContent;
 }
 
 /**
@@ -290,8 +374,30 @@ export function applyDiffToContent(currentContent: string, path: string, diffBod
     return diffBody;
   }
 
+  // Strategy 0.5: Search-and-replace format (<<<<<<< SEARCH / ======= / >>>>>>> REPLACE)
+  // Many LLMs send this format instead of unified diffs.
+  // MUST come BEFORE the malformed-content safety check below, because
+  // SAR format has no +/−/@@ diff markers and would be rejected otherwise.
+  if (/<<<+\s*SEARCH/i.test(diffBody)) {
+    const sarResult = applySearchAndReplace(currentContent, diffBody);
+    if (sarResult !== null) {
+      // SAFETY CHECK: Verify result is not empty unless original was empty
+      if (sarResult.trim().length === 0 && currentContent.trim().length > 0) {
+        console.warn('[applyDiffToContent] Search-and-replace would empty non-empty file, rejecting', {
+          path,
+          diffPreviewLength: Math.min(diffBody.length, 200),
+        });
+        return null;
+      }
+      return sarResult;
+    }
+    // If SAR detection flag is set but applySearchAndReplace returned null,
+    // the format was probably malformed — fall through to other strategies.
+  }
+
   // SAFETY CHECK: Reject if diffBody has no diff markers AND doesn't look like a complete file
-  // This prevents accidental overwrites from malformed content
+  // This prevents accidental overwrites from malformed content.
+  // Search-and-replace format (handled above) is exempted.
   if (!hasRealDiffMarkers && !hasUnifiedDiffHeader && diffBody.length > 100 && !looksLikeCompleteFile(diffBody)) {
     // Long content with no diff markers and no file structure - likely malformed
     console.warn('[applyDiffToContent] Content appears malformed (no diff markers, not recognizable file), rejecting for safety', {

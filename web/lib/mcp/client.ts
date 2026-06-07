@@ -556,8 +556,9 @@ export class MCPClient extends EventEmitter {
     return new Promise((resolve, reject) => {
       try {
         const url = new URL(this.config.url!);
-        const eventSource = new EventSource(url.toString());
+        const eventSource = typeof EventSource !== 'undefined' ? new EventSource(url.toString()) : null;
 
+        if (!eventSource) { reject(new Error('EventSource not available on this platform')); return; }
         eventSource.onopen = () => {
           console.log(`[MCPClient] SSE connection opened to ${url}`);
           resolve();

@@ -458,7 +458,7 @@ export async function generateSessionName(
  */
 export async function sessionNameExists(name: string): Promise<boolean> {
   // Guard against undefined/null names to prevent URL parsing failures
-  if (!name || typeof name !== 'string') {
+  if (!name || typeof name !== 'string' || !name.trim()) {
     return false;
   }
   

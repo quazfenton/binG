@@ -342,14 +342,28 @@ function simulateDetectFileReadRequest(llmResponse: string): FileReadRequestResu
 }
 
 /**
- * Tool name variants that indicate file/directory reading intent.
- * These are info-gathering tools that take a path-like argument.
+ * Tools that are information-gathering but NOT file/directory read operations.
+ * These are excluded when deriving FILE_READ_TOOL_VARIANTS from INFO_GATHERING_TOOLS.
  */
-const FILE_READ_TOOL_VARIANTS = new Set<string>([
-  'read_file', 'readFile', 'file.read',
-  'list_directory', 'list_dir', 'listDirectory', 'listFiles', 'list_files', 'ls', 'file.list',
-  'glob', 'globFiles', 'glob.files',
+const NON_FILE_READ_INFO_GATHERING_TOOLS = new Set<string>([
+  'web_search', 'webSearch', 'search', 'web.search',
+  'read_url', 'readUrl', 'fetch_url', 'fetchUrl',
+  'file_picker', 'pickFiles', 'file.picker',
 ]);
+
+/**
+ * Tool name variants that indicate file/directory reading intent.
+ * Derived from INFO_GATHERING_TOOLS by excluding NON_FILE_READ_INFO_GATHERING_TOOLS.
+ * This makes the subset relationship explicit — FILE_READ_TOOL_VARIANTS ⊆ INFO_GATHERING_TOOLS.
+ */
+const FILE_READ_TOOL_VARIANTS = new Set<string>(
+  [...INFO_GATHERING_TOOLS].filter(t => !NON_FILE_READ_INFO_GATHERING_TOOLS.has(t))
+);
+
+/** Runtime assertion: FILE_READ_TOOL_VARIANTS is a subset of INFO_GATHERING_TOOLS */
+if (![...FILE_READ_TOOL_VARIANTS].every(t => INFO_GATHERING_TOOLS.has(t))) {
+  throw new Error('FILE_READ_TOOL_VARIANTS must be a subset of INFO_GATHERING_TOOLS');
+}
 
 /**
  * Simulates extractToolCallFileRequests() from smart-context.ts.

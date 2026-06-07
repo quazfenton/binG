@@ -2304,7 +2304,8 @@ const config: UnifiedAgentConfig = {
             agentToolStreamingResult = {
               agentLoop,
               task: v1AgentPrompt,
-              timeout: LLM_AGENT_TOOLS_TIMEOUT_MS,
+              // Use 5-minute timeout for streaming path — long-running file edits and spec enhancement
+              timeout: Math.max(LLM_AGENT_TOOLS_TIMEOUT_MS, 300000),
             };
           } else {
             // Use non-streaming execution (backward compatible)
@@ -3489,12 +3490,22 @@ const config: UnifiedAgentConfig = {
 
               try {
                 const { agentLoop, task, timeout } = agentToolStreamingResult;
+                const timeoutController = new AbortController();
                 let agentTimeoutId: NodeJS.Timeout | null = null;
 
-                // Set up timeout for entire streaming operation
-                const timeoutPromise = new Promise((_, reject) => {
-                  agentTimeoutId = setTimeout(() => reject(new Error('Agent tools timeout')), timeout);
-                });
+                // Extensible timeout — resets on every chunk so the stream is only
+                // aborted if the server goes completely silent for `timeout` ms.
+                const resetAgentTimeout = () => {
+                  if (agentTimeoutId !== null) {
+                    clearTimeout(agentTimeoutId);
+                  }
+                  agentTimeoutId = setTimeout(() => {
+                    timeoutController.abort(new Error('Agent tools timeout'));
+                  }, timeout);
+                };
+
+                // Set initial timeout
+                resetAgentTimeout();
 
                   // Stream from agent
                 const streamPromise = (async () => {
@@ -3534,7 +3545,10 @@ const config: UnifiedAgentConfig = {
                   };
                   
                   for await (const chunk of agentLoop.executeTaskStreaming(task)) {
-                    if (request.signal?.aborted) return;
+                    if (request.signal?.aborted || timeoutController.signal.aborted) return;
+
+                    // Reset timeout on every chunk — server is actively making progress
+                    resetAgentTimeout();
 
                     // Transform chunk to SSE format
                     if (chunk.type === 'tool-invocation') {
@@ -3738,9 +3752,27 @@ const config: UnifiedAgentConfig = {
                 })();
 
                 try {
-                  await Promise.race([streamPromise, timeoutPromise]);
+                  // Race stream against abort signal — timeout fires via AbortController
+                  // when resetAgentTimeout expires (no chunks for `timeout` ms).
+                  // This ensures we don't hang forever if the agent generator stalls.
+                  // Inside the for-await loop, resetAgentTimeout() extends the window
+                  // on every chunk so active streams are never interrupted.
+                  await Promise.race([
+                    streamPromise,
+                    new Promise((_, reject) => {
+                      if (timeoutController.signal.aborted) {
+                        reject(timeoutController.signal.reason);
+                        return;
+                      }
+                      timeoutController.signal.addEventListener('abort', () => {
+                        reject(timeoutController.signal.reason);
+                      }, { once: true });
+                    }),
+                  ]);
                 } finally {
-                  if (agentTimeoutId) clearTimeout(agentTimeoutId);
+                  if (agentTimeoutId !== null) {
+                    clearTimeout(agentTimeoutId);
+                  }
                 }
 
                 const streamDuration = Date.now() - streamStartTime;

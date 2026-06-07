@@ -83,11 +83,14 @@ export async function registerMCPTools(registry: ToolRegistry, config: Bootstrap
       }
     }
 
-    // Try to connect to MCP CLI (local)
-    if (mcpCliPort) {
+    // Try to connect to MCP CLI (local) — requires both MCP_CLI_PORT and MCP_CLI_COMMAND
+    const mcpCliCommand = process.env.MCP_CLI_COMMAND;
+    if (mcpCliPort && mcpCliCommand) {
       try {
         const client = new MCPClient({
           type: 'stdio',
+          command: mcpCliCommand,
+          args: (process.env.MCP_CLI_ARGS || '').split(' ').filter(Boolean),
           port: parseInt(mcpCliPort),
         } as any);
 
