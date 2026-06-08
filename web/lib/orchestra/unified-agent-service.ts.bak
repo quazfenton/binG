@@ -17,7 +17,6 @@ import type { ToolResult } from '../sandbox/types';
 import type { LLMProvider } from '../sandbox/providers/llm-provider';
 import { getLLMProvider } from '../sandbox/providers/llm-factory';
 import { getCircuitStateName } from '../middleware/circuit-breaker';
-import { is530Blacklisted, handleProviderError, reset530Counter } from './provider-530-tracker';
 
 // Wire in centralized tool system for all execution paths (v1, v2, streaming, non-Mastra)
 import { initToolSystem, executeToolCapability, hasToolCapability, isToolSystemReady } from '@/lib/tools';
@@ -2070,10 +2069,7 @@ async function runV1ApiWithTools(
       return PROVIDER_DEFAULT_MODELS[providerName] || _getProviderFirstModel(providerName) || model;
     }
 
-    // FIX: When falling back FROM ninerouter TO a different provider (nvidia, mistral, etc.),
-    // the model from ninerouter (e.g. "nvidia/minimaxai/minimax-m2.7") is NOT valid for the
-    // fallback provider. If the model isn't in the provider's list, use model-ranker to pick
-    // the best model for that provider. NEVER pass the primary's model to a fallback provider.
+    // Check if the model is valid for this provider
     const provider = PROVIDERS[providerName.toLowerCase()];
     if (provider?.models && Array.isArray(provider.models) && provider.models.length > 0) {
       // Normalize models to handle both string and object formats
@@ -2083,12 +2079,11 @@ async function runV1ApiWithTools(
       
       if (supportedModels.includes(model)) return model;
       // Model not in provider's list — use model-ranker's highest-ranked or provider's own model
+      // (never leak primaryModel across providers)
       log.debug(`Model "${model}" not in ${providerName} models list, using provider's own model`);
       const rotation = mrMod?.getModelForRotation?.(undefined, providerName);
       if (rotation?.model) return rotation.model;
-      // FIX: NEVER return the primary's model for a different provider.
-      // Use provider default or first model instead.
-      return PROVIDER_DEFAULT_MODELS[providerName] || _getProviderFirstModel(providerName) || PROVIDER_DEFAULT_MODELS[providerName];
+      return PROVIDER_DEFAULT_MODELS[providerName] || _getProviderFirstModel(providerName) || model;
     }
 
     // Unknown provider — trust the config model
@@ -2150,46 +2145,6 @@ async function runV1ApiWithTools(
     };
   } catch { /* model-ranker unavailable */ }
 
-  // FIX: Run RAG retrieval ONCE per request, not per provider.
-  // Moving this outside the provider loop saves ~7-364ms × N providers.
-  let ragContext = '';
-  try {
-    const ragResult = await runRetrievalPipeline(config.userMessage, {
-      topK: 3,
-      coarseTopN: 10,
-      minQuality: 0.3,
-      includeSource: false,
-      maxTokens: 1500,
-    });
-    if (ragResult.hasResults) {
-      ragContext = ragResult.context;
-      log.info('[V1-API-WITH-TOOLS] RAG knowledge injected', {
-        chunks: ragResult.chunks.length,
-        tokens: ragResult.estimatedTokens,
-        avgScore: ragResult.metadata.avgScore.toFixed(3),
-        durationMs: ragResult.metadata.durationMs,
-      });
-    }
-  } catch (error) {
-    // FIX: Track tool failure for feedback injection
-    const failureEntry = createFeedbackEntry(
-      'failure',
-      `RAG retrieval failed: ${error instanceof Error ? error.message : String(error)}`,
-      'tool_execution',
-      { error: String(error) },
-      'medium'
-    );
-    feedbackContext.turnNumber++;
-    addFeedback(feedbackContext, failureEntry);
-    log.info('[Feedback-Inject] RAG failure tracked', {
-      severity: failureEntry.severity,
-    });
-
-    log.warn('[V1-API-WITH-TOOLS] RAG retrieval failed, continuing without it', {
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
-
   // Try each provider in order — with circuit-breaker and rate-limit awareness
   for (const providerName of uniqueProviders) {
     const modelForProvider = getModelForProvider(providerName);
@@ -2197,7 +2152,6 @@ async function runV1ApiWithTools(
     // FIX: Skip providers with open circuit breakers (unless first request of session)
     if (circuitBreakerMgr) {
       const breaker = circuitBreakerMgr.getBreaker(providerName);
-    if (is530Blacklisted(providerName)) { log.warn("530 BLACKLISTED, skipping " + providerName); continue; }
       if (breaker.getState() === 'OPEN' && breaker.getRetryAfter() > 0) {
         // On first request of session, reset OPEN circuit instead of skipping
         if (isFirstRequestThisSession) {
@@ -2320,8 +2274,44 @@ async function runV1ApiWithTools(
 
     const llmMessages: any[] = [];
 
-    // RAG context is now computed once per request (above the provider loop).
-    // Reused across all provider fallback attempts — no redundant retrieval.
+    // RAG Knowledge Retrieval — inject relevant knowledge into system prompt
+    let ragContext = '';
+    try {
+      const ragResult = await runRetrievalPipeline(config.userMessage, {
+        topK: 3,
+        coarseTopN: 10,
+        minQuality: 0.3,
+        includeSource: false,
+        maxTokens: 1500,
+      });
+      if (ragResult.hasResults) {
+        ragContext = ragResult.context;
+        log.info('[V1-API-WITH-TOOLS] RAG knowledge injected', {
+          chunks: ragResult.chunks.length,
+          tokens: ragResult.estimatedTokens,
+          avgScore: ragResult.metadata.avgScore.toFixed(3),
+          durationMs: ragResult.metadata.durationMs,
+        });
+      }
+    } catch (error) {
+      // FIX: Track tool failure for feedback injection
+      const failureEntry = createFeedbackEntry(
+        'failure',
+        `RAG retrieval failed: ${error instanceof Error ? error.message : String(error)}`,
+        'tool_execution',
+        { error: String(error) },
+        'medium'
+      );
+      feedbackContext.turnNumber++;
+      addFeedback(feedbackContext, failureEntry);
+      log.info('[Feedback-Inject] RAG failure tracked', {
+        severity: failureEntry.severity,
+      });
+
+      log.warn('[V1-API-WITH-TOOLS] RAG retrieval failed, continuing without it', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
 
     // Pre-build workspace snapshot to give the model real file paths
     let workspaceSnippet = '';
@@ -2949,7 +2939,6 @@ async function runV1ApiWithTools(
       };
     } catch (error: any) {
       lastError = error;
-      handleProviderError(providerName, error);
 
       // FIX: Record failure in circuit-breaker and model-ranker so failing providers
       // get de-ranked and circuit-breaker trips after repeated failures
@@ -3543,7 +3532,6 @@ async function runV1ApiCompletion(
 
   // Try each provider in order using same pattern as enhanced-llm-service.ts
   for (const providerName of uniqueProviders) {
-    if (is530Blacklisted(providerName)) { log.warn("530 BLACKLISTED in completion, skipping " + providerName); continue; }
     const modelForProvider = getModelForProvider(providerName);
     try {
       log.info('[V1-API-COMPLETION] ┌─ ATTEMPT ───────────────────');
@@ -3790,7 +3778,6 @@ return {
       };
     } catch (error: any) {
       lastError = error;
-      handleProviderError(providerName, error);
 
       // FIX: Invalidate cache so subsequent requests pick a different provider
       invalidateDynamicDefaultsCache();

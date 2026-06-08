@@ -26,7 +26,8 @@ import type { VirtualFile, VirtualFilesystemNode } from './filesystem-types';
 import { createLogger } from '@/lib/utils/logger';
 import { estimateTokens } from '@/lib/context/contextBuilder';
 import { stripScopePrefixForDisplay } from './path-normalizer';
-import { detectIncompleteResponse } from '@bing/shared/agent/feedback-injection';
+import { detectNeedsMoreTurns } from '@/lib/chat/auto-continue-detector';
+import type { DetectableResult } from '@/lib/chat/auto-continue-detector';
 import { recordToolCallTelemetry, prepareTelemetryPayload } from '@/lib/errors/logging-utils';
 
 const logger = createLogger('SmartContext');
@@ -1862,22 +1863,6 @@ if (![...FILE_READ_TOOL_VARIANTS].every(t => INFO_GATHERING_TOOLS.has(t))) {
   throw new Error('FILE_READ_TOOL_VARIANTS must be a subset of INFO_GATHERING_TOOLS');
 }
 
-/** Check if a tool name is an information-gathering tool */
-function isInfoGatheringTool(name: string): boolean {
-  return INFO_GATHERING_TOOLS.has(name);
-}
-
-/** Get all tool call names from a list of tool call records */
-function getToolNames(allToolCalls: any[]): string[] {
-  return allToolCalls.map(tc => tc.name);
-}
-
-/** Check if ALL tool calls in a list are info-gathering (no write/execute tools) */
-function allToolsAreInfoGathering(allToolCalls: any[]): boolean {
-  if (allToolCalls.length === 0) return false;
-  return allToolCalls.every(tc => isInfoGatheringTool(tc.name));
-}
-
 function trackConversation(id: string, count: number): void {
   // Evict oldest entries if Map is full
   if (conversationContinuationCount.size >= MAX_CONTINUATION_ENTRIES) {
@@ -1943,6 +1928,10 @@ export async function* streamWithAutoContinue(
   let fullResponse = '';
   const allToolCalls: any[] = [];
   let isComplete = false;
+  // Track toolCallId values for deduplication — tools may appear in both
+  // toolCalls (request) and toolInvocations (result) chunks from the SDK;
+  // we de-dupe by toolCallId to prevent double-counting.
+  const seenToolCallIds = new Set<string>();
 
   for await (const chunk of generator) {
     yield chunk; // Pass through to caller
@@ -1957,17 +1946,45 @@ export async function* streamWithAutoContinue(
       fullResponse += chunk.content;
     }
 
-    // Collect tool calls
+    // Collect tool calls (requests, no result yet)
     if (chunk.toolCalls && Array.isArray(chunk.toolCalls)) {
-      allToolCalls.push(...chunk.toolCalls);
+      for (const tc of chunk.toolCalls) {
+        const callId = tc.id || tc.toolCallId;
+        if (callId) {
+          if (seenToolCallIds.has(callId)) continue; // already got result for this call
+          seenToolCallIds.add(callId);
+        }
+        allToolCalls.push(tc);
+      }
     }
+
+    // Collect tool invocations (results) — preserve result + state so
+    // detectNeedsMoreTurns sees accurate success/failure data.
     if (chunk.toolInvocations && Array.isArray(chunk.toolInvocations)) {
       for (const invocation of chunk.toolInvocations) {
         if (invocation.toolCallId && invocation.toolName) {
+          // Dedup: if this toolCallId was already seen in toolCalls,
+          // update the existing entry with result/state instead of adding a duplicate.
+          if (seenToolCallIds.has(invocation.toolCallId)) {
+            const existingIdx = allToolCalls.findIndex(
+              tc => tc.id === invocation.toolCallId || tc.toolCallId === invocation.toolCallId
+            );
+            if (existingIdx >= 0) {
+              allToolCalls[existingIdx] = {
+                ...allToolCalls[existingIdx],
+                result: invocation.result,
+                state: invocation.state,
+              };
+            }
+            continue;
+          }
+          seenToolCallIds.add(invocation.toolCallId);
           allToolCalls.push({
             id: invocation.toolCallId,
             name: invocation.toolName,
             arguments: invocation.args || invocation.arguments || {},
+            result: invocation.result,
+            state: invocation.state,
           });
         }
       }
@@ -2105,127 +2122,83 @@ if (toolCallsForTelemetry.length > 0) {
         return;
       }
 
-      // Auto-continue for info-gathering tools: LLM often stops after reading/listing/searching
-      // instead of proceeding to analyze the results. Detect ANY info-gathering tool as the last
-      // action and nudge the LLM to process what it found.
-      // This covers: read_file, list_files, web_search, read_url, glob, file_picker, and all variants.
-      const lastToolCall = allToolCalls[allToolCalls.length - 1];
-      const lastToolIsInfoGathering = lastToolCall && isInfoGatheringTool(lastToolCall.name);
-      const allToolsAreInfo = allToolsAreInfoGathering(allToolCalls);
+      // ═══════════════════════════════════════════════════════════════════════
+      // MULTI-FACTOR DETECTION (detectNeedsMoreTurns)
+      // ═══════════════════════════════════════════════════════════════════════
+      // Replaces three separate heuristic blocks (info-gathering tool check,
+      // tool-call-only silence detector, and incomplete response detection)
+      // with the shared auto-continue-detector's 14-signal engine.
+      //
+      // The detector covers all three cases above plus:
+      //   - read-then-stall / deep-research-loop (info-gathering)
+      //   - empty-after-tools (tools without text)
+      //   - incomplete-thought / mid-sentence-cutoff / unclosed-code-block (incomplete)
+      //   - failure-cascade, write-verify-loop, announced-next-step,
+      //     step-enumeration, planned-multi-step, single-write-silent,
+      //     diff-no-explanation, edits-mismatch
+      // ═══════════════════════════════════════════════════════════════════════
+
+      // Build a DetectableResult from the accumulated stream state
       const hasContinuationMarker = fullResponse.includes('[NEXT]') || fullResponse.includes('[CONTINUE]') || fullResponse.includes('[AUTO-CONTINUE]');
 
-      if (lastToolIsInfoGathering && allToolsAreInfo && !hasContinuationMarker) {
-        const toolNames = getToolNames(allToolCalls);
-        const lastArgs = lastToolCall.arguments || {};
-        const lastPath = lastArgs.path || lastArgs.directory || lastArgs.url || lastArgs.file || lastArgs.pattern || 'current location';
-        const toolLabel = lastToolCall.name.replace(/_/g, ' ').replace(/([a-z])([A-Z])/g, '$1 $2');
+      if (!hasContinuationMarker) {
+        const detectableResult: DetectableResult = {
+          success: isComplete,
+          response: fullResponse,
+          steps: allToolCalls.map((tc: any) => ({
+            toolName: tc.name || tc.toolName || 'unknown',
+            args: tc.arguments || tc.args || {},
+            result: tc.result || { success: tc.state === 'result' },
+          })),
+        };
 
-        logger.info('Auto-continuing: LLM stopped after info-gathering tool, prompting to proceed', {
-          toolName: lastToolCall.name,
-          toolNames,
-          path: lastPath,
-          continuationCount: continuationCount + 1,
-          maxContinuations,
-          conversationId,
-        });
+        const detection = detectNeedsMoreTurns(detectableResult);
 
-        if (conversationId) {
-          trackConversation(conversationId, continuationCount + 1);
-        }
+        if (detection.needsMoreTurns) {
+          // Use the detector's contextual reprompt when available,
+          // fall back to generic signal-based prompt
+          const reprompt = detection.suggestedReprompt || (
+            detection.signals.includes('announced-next-step') || detection.signals.includes('planned-multi-step')
+              ? `You outlined next steps. Now execute them — make the necessary changes without re-describing the plan.`
+              : `Continue from where you left off. Complete the task by making file changes or providing your final response.`
+          );
 
-        yield {
-          content: `\n\n[NEXT] The ${toolLabel} for \`${lastPath}\` is complete. Please proceed with the task — analyze the results, read relevant files, or make the necessary changes based on what you found.`,
-          isComplete: false,
-          timestamp: new Date(),
-          metadata: {
-            autoContinue: true,
-            reason: 'info_gathering_completed',
-            lastToolName: lastToolCall.name,
-            lastPath,
-            toolNames,
+          logger.info('Auto-continuing: multi-factor detector fired', {
+            signals: detection.signals,
+            confidence: detection.confidence,
+            responseLength: fullResponse.length,
+            toolCallCount: allToolCalls.length,
             continuationCount: continuationCount + 1,
             maxContinuations,
-          },
-        };
-        return;
-      }
+            conversationId,
+          });
 
-      // Auto-continue for tool-call-only responses (silence detector):
-      // If the LLM made tool calls but produced no text response at all,
-      // it likely means the tool results are pending and the LLM needs
-      // another turn to analyze them. This catches cases that escape the
-      // info-gathering check above (e.g. non-info-gathering tools, or
-      // tool calls that returned but the stream ended before text was produced).
-      const hasToolsButNoText = allToolCalls.length > 0 && !fullResponse.trim();
+          if (conversationId) {
+            trackConversation(conversationId, continuationCount + 1);
+          }
 
-      if (hasToolsButNoText && !hasContinuationMarker) {
-        const toolNames = getToolNames(allToolCalls);
-        const lastArgs = lastToolCall?.arguments || {};
-        const lastPath = lastArgs.path || lastArgs.directory || lastArgs.url || lastArgs.file || lastArgs.pattern || lastArgs.command || 'current tool';
-        const toolLabel = (lastToolCall?.name || 'tool').replace(/_/g, ' ').replace(/([a-z])([A-Z])/g, '$1 $2');
+          // Determine the right prefix marker based on the dominant signal
+          const hasIncompleteSignal = detection.signals.some(s =>
+            ['incomplete-thought', 'mid-sentence-cutoff', 'unclosed-code-block'].includes(s)
+          );
+          const prefix = hasIncompleteSignal ? '[CONTINUE]' : '[NEXT]';
 
-        logger.info('Auto-continuing: LLM produced tool calls but no text response', {
-          toolCount: allToolCalls.length,
-          lastToolName: lastToolCall?.name,
-          toolNames,
-          continuationCount: continuationCount + 1,
-          maxContinuations,
-          conversationId,
-        });
-
-        if (conversationId) {
-          trackConversation(conversationId, continuationCount + 1);
+          yield {
+            content: `\n\n${prefix} ${reprompt}${hasIncompleteSignal ? `\n\nLast 200 characters of your response:\n${fullResponse.slice(-200)}` : ''}`,
+            isComplete: false,
+            timestamp: new Date(),
+            metadata: {
+              autoContinue: true,
+              reason: 'multi_factor_detection',
+              signals: detection.signals,
+              confidence: detection.confidence,
+              detectorReprompt: reprompt,
+              continuationCount: continuationCount + 1,
+              maxContinuations,
+            },
+          };
+          return;
         }
-
-        yield {
-          content: `\n\n[NEXT] The ${toolLabel} tool result for \`${lastPath}\` is ready. Please analyze the result and continue with the task based on what you found.`,
-          isComplete: false,
-          timestamp: new Date(),
-          metadata: {
-            autoContinue: true,
-            reason: 'tools_without_text',
-            toolCount: allToolCalls.length,
-            lastToolName: lastToolCall?.name,
-            toolNames,
-            continuationCount: continuationCount + 1,
-            maxContinuations,
-          },
-        };
-        return;
-      }
-
-      // Auto-continue for incomplete responses
-      // Detect when LLM stopped mid-sentence, mid-code-block, or mid-structure
-      const incompleteDetection = detectIncompleteResponse(fullResponse);
-
-      if (incompleteDetection.detected && incompleteDetection.confidence >= 0.5) {
-        logger.info('Auto-continuing: detected incomplete response', {
-          reason: incompleteDetection.reason,
-          confidence: incompleteDetection.confidence,
-          responseLength: fullResponse.length,
-          continuationCount: continuationCount + 1,
-          maxContinuations,
-          conversationId,
-        });
-
-        if (conversationId) {
-          trackConversation(conversationId, continuationCount + 1);
-        }
-
-        yield {
-          content: `\n\n[CONTINUE] Your previous response appears incomplete (${incompleteDetection.reason}). Please complete it.\n\nLast 200 characters of your response:\n${fullResponse.slice(-200)}`,
-          isComplete: false,
-          timestamp: new Date(),
-          metadata: {
-            autoContinue: true,
-            reason: 'incomplete_response',
-            incompleteReason: incompleteDetection.reason,
-            confidence: incompleteDetection.confidence,
-            continuationCount: continuationCount + 1,
-            maxContinuations,
-          },
-        };
-        return;
       }
     } catch (error: any) {
       logger.warn('Auto-continue check failed', { error: error.message });
@@ -2290,19 +2263,29 @@ export async function* streamWithServerAutoRePrompt(
   } = options;
 
   let rePromptCount = 0;
-  const collectedToolResults: Array<{ toolCallId: string; toolName: string; result: any }> = [];
+  let fullResponse = '';
+  const collectedToolResults: Array<{ toolCallId: string; toolName: string; args: Record<string, any>; result: any }> = [];
 
   // First pass: consume the original stream
   for await (const chunk of generator) {
     yield chunk;
 
+    // Accumulate response text for multi-factor detection
+    if (chunk.content && typeof chunk.content === 'string') {
+      fullResponse += chunk.content;
+    }
+
     // Collect tool invocations for potential re-prompt
+    // Preserve both args (from the original call) and result (from execution)
+    // so detectNeedsMoreTurns can evaluate args-based signals like
+    // read-then-stall (uses lastStep.args.path) and write-verify-loop (path comparison).
     if (chunk.toolInvocations && Array.isArray(chunk.toolInvocations)) {
       for (const inv of chunk.toolInvocations) {
         if (inv.state === 'result' && inv.toolCallId && inv.toolName) {
           collectedToolResults.push({
             toolCallId: inv.toolCallId,
             toolName: inv.toolName,
+            args: inv.args || inv.arguments || {},
             result: inv.result,
           });
         }
@@ -2336,20 +2319,32 @@ export async function* streamWithServerAutoRePrompt(
   // After stream completes: check if we need to re-prompt
   // This happens when tools were executed but the LLM didn't produce a final response
   if (collectedToolResults.length > 0 && rePromptCount < maxRePrompts) {
-    // Check if there's a continuation marker that indicates incomplete task
-    // Use the broad INFO_GATHERING_TOOLS set (not just read_file/list_files)
-    const needsRePrompt = collectedToolResults.some(tr =>
-      isInfoGatheringTool(tr.toolName)
-    );
+    // Use multi-factor detection (detectNeedsMoreTurns) instead of the old
+    // single-signal `isInfoGatheringTool` check. This evaluates all 14 signals
+    // including: read-then-stall, failure-cascade, announced-next-step,
+    // incomplete-thought, mid-sentence-cutoff, single-write-silent, etc.
+    const detectableResult: DetectableResult = {
+      success: true,
+      response: fullResponse,
+      steps: collectedToolResults.map(tr => ({
+        toolName: tr.toolName,
+        args: tr.args || {},
+        result: { success: tr.result?.success !== false, output: tr.result?.output },
+      })),
+    };
 
-    if (needsRePrompt) {
-      logger.info('Server-side re-prompt needed: tools executed without final LLM response', {
+    const detection = detectNeedsMoreTurns(detectableResult);
+
+    if (detection.needsMoreTurns) {
+      logger.info('Server-side re-prompt needed: multi-factor detector fired', {
+        signals: detection.signals,
+        confidence: detection.confidence,
         toolResults: collectedToolResults.map(t => t.toolName),
         rePromptCount: rePromptCount + 1,
       });
       // Record telemetry for re-prompt trigger
       const { redactedArgs, originStack } = prepareTelemetryPayload(
-        { rePromptTriggered: true, toolNames: collectedToolResults.map(t => t.toolName), rePromptCount: rePromptCount + 1, maxRePrompts: options.maxRePrompts },
+        { rePromptTriggered: true, signals: detection.signals, confidence: detection.confidence, toolNames: collectedToolResults.map(t => t.toolName), rePromptCount: rePromptCount + 1, maxRePrompts: options.maxRePrompts },
         { maxStringLength: 200, maxObjectProps: 5, maxArrayItems: 5 }
       );
       recordToolCallTelemetry({

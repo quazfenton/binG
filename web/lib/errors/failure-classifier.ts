@@ -10,7 +10,8 @@ export type FailureType = 'PERMANENT' | 'TRANSIENT' | 'RECOVERABLE' | 'CRASH' | 
 // the Cloudflare edge, or presents as a DNS resolution failure (ENOTFOUND, EAI_AGAIN)
 // when the tunnel domain no longer resolves. These are permanent for the provider's
 // current endpoint — retrying the same tunnel will produce the same error.
-export const TUNNEL_DNS_ERROR = /530|1016|trycloudflare|cloudflare.*(?:dns|tunnel)|ENOTFOUND|EAI_AGAIN|getaddrinfo.*(?:tunnel|cloudflare)|fetch.*failed.*tunnel/i;
+// Also matches rewritten messages from enhanced-llm-service (e.g. "Tunnel DNS error").
+export const TUNNEL_DNS_ERROR = /530|1016|trycloudflare|cloudflare.*(?:dns|tunnel)|ENOTFOUND|EAI_AGAIN|getaddrinfo.*(?:tunnel|cloudflare)|fetch.*failed.*tunnel|tunnel.*dns.*error|stale.*tunnel|backend.*unavailable/i;
 
 const CLI_ERROR_PATTERNS = {
   PERMANENT: /ENOENT|not found|No such file|command not found/i,

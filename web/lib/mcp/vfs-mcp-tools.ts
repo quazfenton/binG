@@ -1323,10 +1323,10 @@ export const listFilesTool = (tool as any)({
   // resolve to "workspace/sessions/{sessionId}/web-terminal/..." instead of "workspace/...".
   // The latter fails VFS validation against workspaceRoot = "workspace/sessions".
   const scopePath = getVfsScopePath({ sessionId: context.sessionId });
-  const scopedPath = resolveScopedPath(resolvedPath, scopePath);
+  const scopedPath = resolveScopedPath(resolvedPath);
   logger.debug('listFiles', { originalPath: path, scopedPath, recursive, userId: context.userId });
 
-  const listing = await virtualFilesystem.listDirectory(context.userId, scopedPath);
+  const listing = await (virtualFilesystem as any).listDirectory(context.userId, scopedPath);
   
   return {
     success: true,
@@ -2083,7 +2083,7 @@ export const vfsTools = {
  * contain proper JSON Schema objects from the start.
  */
 function toJsonSchema(schema: z.ZodType): Record<string, any> {
-  const jsonSchema = zodToJsonSchema(schema, { target: 'openApi3' });
+  const jsonSchema = zodToJsonSchema(schema, { target: 'openApi3' }) as any;
   // Extract the inner schema (zod-to-json-schema wraps in a $defs container)
   return (jsonSchema.$defs?.inner ?? jsonSchema) as Record<string, any>;
 }

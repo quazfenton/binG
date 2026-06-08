@@ -282,6 +282,11 @@ const OPENAI_COMPATIBLE_PROVIDERS: Record<string, OpenAICompatibleConfig> = {
     apiKeyEnv: 'FIREWORKS_API_KEY',
     useChatEndpoint: true,
   },
+  xai: {
+    baseURL: process.env.XAI_BASE_URL || 'https://api.x.ai/v1',
+    apiKeyEnv: 'XAI_API_KEY',
+    useChatEndpoint: true,
+  },
   anyscale: {
     baseURL: process.env.ANYSCALE_BASE_URL || 'https://api.endpoints.anyscale.com/v1',
     apiKeyEnv: 'ANYSCALE_API_KEY',
@@ -405,6 +410,7 @@ export function getVercelModel(
     'together': 'TOGETHER_API_KEY',
     'groq': 'GROQ_API_KEY',
     'fireworks': 'FIREWORKS_API_KEY',
+    'xai': 'XAI_API_KEY',
     'anyscale': 'ANYSCALE_API_KEY',
     'deepinfra': 'DEEPINFRA_API_KEY',
     'lepton': 'LEPTON_API_KEY',
@@ -548,10 +554,11 @@ function convertMessages(messages: LLMMessage[]): {
         textParts.push('[Image]');
       } else if (c.type === 'tool-call') {
         // Extract tool-call parts from content array
+        const toolCall = c as any;
         toolCallsFromContent.push({
-          id: c.toolCallId,
-          name: c.toolName,
-          arguments: c.args || c.arguments || {},
+          id: toolCall.toolCallId,
+          name: toolCall.toolName,
+          arguments: toolCall.args || toolCall.arguments || {},
         });
       }
     }

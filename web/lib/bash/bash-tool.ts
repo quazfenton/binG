@@ -575,7 +575,9 @@ export function createBashTool(config: Partial<BashToolConfig> = {}) {
         }
 
         // PATCH 1: Intercept text editor commands (vim/nano/emacs) — they'd hang the PTY
-        const editorResult = await handleTextEditorCommand(command, wd) as any;
+        // Use commandToUse (which merges 'command' and 'code' params) to support
+        // both parameter names — some LLMs send the command as 'code'.
+        const editorResult = await handleTextEditorCommand(commandToUse, wd) as any;
         if (editorResult) {
           logger.info('Text editor command intercepted', { editor: editorResult.editor, filePath: editorResult.filePath });
           return {

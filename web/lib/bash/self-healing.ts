@@ -67,8 +67,8 @@ const DANGEROUS_PATTERNS = [
   'dd if=/dev/zero',
   'chmod -R 777 /',
   'chown -R root:root /',
-  'wget.*\\|.*bash', // Download and execute
-  'curl.*\\|.*bash',
+  'wget.*\\|.*(?:ba)?sh', // Download and execute
+  'curl.*\\|.*(?:ba)?sh',
   'rm.*--no-preserve-root',
 ];
 

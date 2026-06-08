@@ -276,6 +276,27 @@ export function startFileWatcher(
 
   // === Start watching ===
 
+  // Declare handle first so async IIFE can reference it
+  const handle: FileWatcherHandle = {
+    get isActive() { return !stopped; },
+    stop: async () => {
+      if (stopped) return;
+      stopped = true;
+
+      if (debounceTimer) {
+        clearTimeout(debounceTimer);
+        debounceTimer = null;
+      }
+
+      if (pollInterval) {
+        clearInterval(pollInterval);
+        pollInterval = null;
+      }
+
+      logger.info('File watcher stopped', { workspaceRoot: normalizedRoot });
+    },
+  };
+
   // Use an async IIFE to handle watcher initialization since startFileWatcher is synchronous
   (async () => {
     // Build initial snapshot
@@ -398,26 +419,6 @@ export function startFileWatcher(
       }
     }, POLL_FALLBACK_INTERVAL_MS);
   }
-
-  const handle: FileWatcherHandle = {
-    get isActive() { return !stopped; },
-    stop: async () => {
-      if (stopped) return;
-      stopped = true;
-
-      if (debounceTimer) {
-        clearTimeout(debounceTimer);
-        debounceTimer = null;
-      }
-
-      if (pollInterval) {
-        clearInterval(pollInterval);
-        pollInterval = null;
-      }
-
-      logger.info('File watcher stopped', { workspaceRoot: normalizedRoot });
-    },
-  };
 
   return handle;
 }

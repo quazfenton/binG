@@ -134,7 +134,7 @@ export async function executorNode(state: AgentStateType): Promise<Partial<Agent
   });
 
   try {
-    const result = await agent.runEditingPhase(state.currentPlan);
+    const result = await agent.runEditingPhase(state.currentPlan as any);
 
     return {
       vfs: result.vfs || state.vfs,

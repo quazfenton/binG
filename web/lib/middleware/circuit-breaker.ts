@@ -1,3 +1,5 @@
+import { TUNNEL_DNS_ERROR } from '../errors/failure-classifier';
+
 /**
  * Smart Circuit Breaker Pattern Implementation
  *
@@ -81,11 +83,19 @@ function getTier(providerId: string): ReliabilityTier {
 // Failure classification
 // ---------------------------------------------------------------------------
 
-export type FailureKind = 'hard' | 'rate-limit' | 'timeout' | 'transient';
+export type FailureKind = 'hard' | 'rate-limit' | 'timeout' | 'transient' | 'origin-unreachable';
 
 function classifyError(error: any): FailureKind {
   const msg = (error?.message || '').toLowerCase();
   const status = error?.status || error?.statusCode || 0;
+
+  // 530/1016: Cloudflare origin unreachable — the upstream tunnel is dead.
+  // These should open the circuit breaker quickly (2 failures at weight 3.5).
+  // Also check the error message for tunnel DNS errors since the edge-gateway
+  // Worker may convert 530→502, hiding the real status code.
+  if (status === 530 || status === 1016 || TUNNEL_DNS_ERROR.test(msg)) {
+    return 'origin-unreachable';
+  }
 
   if (status === 429 || msg.includes('rate limit') || msg.includes('quota')) {
     return 'rate-limit';
@@ -108,6 +118,7 @@ const FAILURE_WEIGHT: Record<FailureKind, number> = {
   timeout: 0.7,
   transient: 0.5,
   'rate-limit': 0.3,
+  'origin-unreachable': 3.5,  // 2 failures → 7.0 → opens for normal tier (threshold 7)
 };
 
 // ---------------------------------------------------------------------------
@@ -201,7 +212,7 @@ export class CircuitBreaker {
       rejectedRequests: 0,
       stateChanges: 0,
       weightedFailureScore: 0,
-      failuresByKind: { hard: 0, 'rate-limit': 0, timeout: 0, transient: 0 },
+      failuresByKind: { hard: 0, 'rate-limit': 0, timeout: 0, transient: 0, 'origin-unreachable': 0 },
     };
   }
 

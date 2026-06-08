@@ -33,15 +33,15 @@ const log = createLogger('Tools:Loader');
 
 /**
  * Directory where core capability SKILL.md files live.
- * Resolved relative to process.cwd() so it works in both dev and production.
+ * Uses __dirname (this file is at web/lib/tools/) so path is always correct
+ * regardless of process.cwd().
  */
-const CORE_CAPABILITIES_DIR_SEGMENTS = ['web', 'lib', 'tools', 'base'];
-
 function resolveCoreCapabilitiesDir(): string {
   // Avoid importing `path` at the module level — some bundlers tree-shake
   // it aggressively. Use runtime require/inline instead.
   const path = require('path') as typeof import('path');
-  return path.join(process.cwd(), ...CORE_CAPABILITIES_DIR_SEGMENTS);
+  // __dirname is .../web/lib/tools, so path.join(__dirname, 'base') = .../web/lib/tools/base
+  return path.join(__dirname, 'base');
 }
 
 // ============================================================================

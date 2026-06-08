@@ -1375,7 +1375,13 @@ export const PROVIDERS: Record<string, LLMProvider> = {
       'mistral/codestral-latest',
       'mistral/mistral-medium-latest',
       // NVIDIA NIM models
+      'nvidia/z-ai/glm-5.1',
       'nvidia/minimaxai/minimax-m2.7',
+      'nvidia/moonshotai/kimi-k2.6',
+      'nvidia/deepseek-ai/deepseek-v4-flash',
+      'nvidia/qwen/qwen3.5-122b-a10b',
+      'nvidia/stepfun-ai/step-3.7-flash',
+      'nvidia/meta/llama-4-maverick-17b-128e-instruct',
       // Ollama Cloud models
       'ollama/glm-4.7-flash',
       // Opencode Free models
@@ -4098,39 +4104,6 @@ class LLMService {
       this.deepinfraClient = new OpenAIClass({ apiKey: process.env.DEEPINFRA_API_KEY || '', baseURL: process.env.DEEPINFRA_BASE_URL || 'https://api.deepinfra.com/v1/openai' });
     }
     const stream = await this.deepinfraClient.chat.completions.create({ model, messages: messages as any, temperature, max_tokens: maxTokens, stream: true });
-    for await (const chunk of stream) {
-      const content = chunk.choices[0]?.delta?.content || '';
-      const finishReason = chunk.choices[0]?.finish_reason || undefined;
-      if (content || finishReason) yield { content, isComplete: !!finishReason, finishReason };
-    }
-  }
-
-  private async generateFireworksResponse(model: string, messages: LLMMessage[], temperature: number, maxTokens: number, requestId?: string, apiKeyOverride?: string): Promise<LLMResponse> {
-    if (!this.fireworksClient) {
-      const OpenAIClass = await getOpenAI();
-      this.fireworksClient = new OpenAIClass({
-        apiKey: apiKeyOverride || process.env.FIREWORKS_API_KEY || '',
-        baseURL: process.env.FIREWORKS_BASE_URL || 'https://api.fireworks.ai/v1',
-      });
-    }
-    const response = await this.fireworksClient.chat.completions.create({ model, messages: messages as any, temperature, max_tokens: maxTokens });
-    const toolCalls = this.normalizeOpenAIToolCalls(response.choices[0]?.message?.tool_calls as any[]);
-    return {
-      content: response.choices[0]?.message?.content || '',
-      tokensUsed: response.usage?.total_tokens || 0,
-      finishReason: response.choices[0]?.finish_reason || 'stop',
-      timestamp: new Date(),
-      metadata: toolCalls.length ? { toolCalls } : undefined,
-      usage: response.usage
-    };
-  }
-
-  private async *streamFireworksResponse(model: string, messages: LLMMessage[], temperature: number, maxTokens: number): AsyncGenerator<StreamingResponse> {
-    if (!this.fireworksClient) {
-      const OpenAIClass = await getOpenAI();
-      this.fireworksClient = new OpenAIClass({ apiKey: process.env.FIREWORKS_API_KEY || '', baseURL: process.env.FIREWORKS_BASE_URL || 'https://api.fireworks.ai/v1' });
-    }
-    const stream = await this.fireworksClient.chat.completions.create({ model, messages: messages as any, temperature, max_tokens: maxTokens, stream: true });
     for await (const chunk of stream) {
       const content = chunk.choices[0]?.delta?.content || '';
       const finishReason = chunk.choices[0]?.finish_reason || undefined;

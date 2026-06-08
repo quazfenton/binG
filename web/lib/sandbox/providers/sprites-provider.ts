@@ -170,7 +170,12 @@ export class SpritesProvider implements SandboxProvider {
       // This is the recommended Sprites pattern: services with autostart:true
       // automatically restart when the Sprite wakes from hibernation.
       // Documentation: https://docs.sprites.dev/working-with-sprites#auto-suspend
-      const services = [{
+      const services: Array<{
+        protocol: 'tcp';
+        internal_port: number;
+        autostart: boolean;
+        autostop?: 'suspend';
+      }> = [{
         protocol: 'tcp' as const,
         internal_port: 8080,
         autostart: true,

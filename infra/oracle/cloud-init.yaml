@@ -64,24 +64,14 @@ runcmd:
   - DEBIAN_FRONTEND=noninteractive apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
   - usermod -aG docker ubuntu
 
-  # --- Firewall: only 22, 80, 443 reachable from internet ---
+  # --- Firewall: only SSH reachable from internet ---
+  # Ports 80/443/3000/3001 are NOT opened — cloudflared tunnel handles all
+  # public traffic via outbound-only connection. The shared-ingress Cloudflare
+  # Worker proxies API/chat/nocturne/copa traffic through the tunnel.
   - ufw default deny incoming
   - ufw default allow outgoing
   - ufw allow 22/tcp
-  - ufw allow 80/tcp
-  - ufw allow 443/tcp
   - ufw --force enable
-
-  # --- Oracle iptables: open the same ports (Oracle ships a restrictive default) ---
-  # Insert at the top of the INPUT chain for 80/443; using -I INPUT 1 avoids
-  # fragility across different base rule sets (e.g. different Oracle base images
-  # may have different numbers of pre-existing rules).
-  - iptables -I INPUT 1 -m state --state NEW -p tcp --dport 80  -j ACCEPT
-  - iptables -I INPUT 1 -m state --state NEW -p tcp --dport 443 -j ACCEPT
-  # Save iptables rules persistently; netfilter-persistent may not be installed
-  # on all base images (Oracle Linux, Ubuntu minimal, etc.) — fall back to iptables-save.
-  # Create /etc/iptables/ first since it doesn't exist without the iptables-persistent package.
-  - (netfilter-persistent save 2>/dev/null || (mkdir -p /etc/iptables && iptables-save > /etc/iptables/rules.v4 2>/dev/null)) || true
 
   # --- Workspace ---
   - mkdir -p /opt/bing

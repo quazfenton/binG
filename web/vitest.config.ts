@@ -166,6 +166,10 @@ export default defineConfig({
   },
   resolve: {
     alias: {
+      // Mock server-only — it throws when imported outside of a Next.js
+      // Server Component, which breaks vitest tests that import modules
+      // that reference it (directly or transitively).
+      'server-only': path.resolve(__dirname, '__mocks__/server-only.ts'),
       '@': path.resolve(__dirname, './'),
       '@/app': path.resolve(__dirname, './app'),
       '@bing/platform': path.resolve(__dirname, '../packages/platform/src'),

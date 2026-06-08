@@ -11,6 +11,8 @@
  *
  * Returns empty string during build/Edge where fs access is unavailable.
  */
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 // Module-level cache — read each file once
 const _cache: Record<string, string> = {};

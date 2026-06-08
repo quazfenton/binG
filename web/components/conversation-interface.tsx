@@ -1924,12 +1924,6 @@ export default function ConversationInterface() {
       };
     }
 
-    // Drive the input field so the user sees what was sent, but submit the
-    // request via submitWithPrompt to avoid the stale-closure race that
-    // caused `handleSubmit` to bail at `if (!input.trim()) return;` after
-    // dev-server restarts. (The closure read here was an empty string even
-    // though setInput(content) was called in the same microtask.)
-    setInput(content);
     try {
       await submitWithPrompt(content);
     } finally {

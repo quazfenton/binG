@@ -38,6 +38,9 @@ interface RequestBody {
   recentPrompts?: string[];
   lastResponse?: string;
   messageId?: string;
+  /** True only when prior turns produced at least one successful file edit.
+   *  When absent/false the endpoint skips the LLM call and returns 0 suggestions. */
+  hasFileEdits?: boolean;
 }
 
 const MAX_PROMPTS = 2;
@@ -129,11 +132,18 @@ export async function POST(req: NextRequest) {
   const lastResponse =
     typeof body.lastResponse === 'string' ? body.lastResponse : '';
 
+  // Skip suggestions entirely when the prior turn produced no file edits.
+  // The LLM cannot suggest meaningful next steps if the conversation
+  // only contains chat (no files were touched) or all turns failed.
+  if (!body.hasFileEdits) {
+    return NextResponse.json({ success: true, suggestions: [] });
+  }
+
+  const lastResponse =
+    typeof body.lastResponse === 'string' ? body.lastResponse : '';
+
   if (!lastResponse.trim()) {
-    return NextResponse.json(
-      { success: false, error: 'lastResponse is required' },
-      { status: 400 },
-    );
+    return NextResponse.json({ success: false, error: 'lastResponse is required' }, { status: 400 });
   }
 
   const cappedResponse =

@@ -1,4 +1,7 @@
-# Caddy 2 — HTTP reverse proxy (no TLS until we have a domain).
+# Caddy 2 — HTTP reverse proxy (no TLS — handled at Cloudflare edge via tunnel).
+# Only reachable on Docker internal network via cloudflared (http://caddy:80).
+# No host port mappings — Oracle public IP is locked down.
+#
 # Routes based on URL path prefixes:
 #   /api/*, /health*  → bing backend (Hono orchestrator)
 #   /novnc/*          → noVNC web-based VNC client (on Docker host)
@@ -6,13 +9,6 @@
 #   /nocturne-n8n/*   → nocturne n8n automation
 #   /copa/*           → CopaMundial (Next.js + Socket.IO)
 #   /*                → 9Router (LLM gateway)
-#
-# When you get a domain:
-#   api.yourdomain.com → backend:3001
-#   router.yourdomain.com → ninerouter:3000
-#   nocturne.yourdomain.com → nocturne_backend:8000
-#   copa.yourdomain.com → copa-app:3000
-#   Then add { email your@email } block back for auto-TLS
 
 :80 {
     encode zstd gzip

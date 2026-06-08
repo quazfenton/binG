@@ -154,13 +154,13 @@ export async function POST(request: NextRequest) {
       const nonSystemMessages = messages
         .filter(m => m.role !== 'system')
         .map(m => ({
-          role: m.role === 'assistant' ? 'assistant' : 'user',
+          role: m.role === 'assistant' ? 'assistant' as const : 'user' as const,
           content: typeof m.content === 'string' ? m.content : Array.isArray(m.content) ? (m.content[0]?.text ?? '') : '',
         }));
 
       const result = streamText({
         model: aiModel,
-        messages: nonSystemMessages,
+        messages: nonSystemMessages as any,
         system: systemPrompt || undefined,
         tools,
         temperature,

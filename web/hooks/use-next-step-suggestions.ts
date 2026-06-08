@@ -180,6 +180,24 @@ export function useNextStepSuggestions({
         .slice(-MAX_RECENT_PROMPTS)
         .map(extractText);
 
+      // Only call suggestions when prior turns produced file edits.
+      // Without edits the LLM has nothing to build on and suggestions
+      // are generic chitchat waste.
+      const hadFileEdits = messages
+        .filter((m) => m.role === 'assistant')
+        .slice(-3) // check last few turns
+        .some((m) => {
+          const toolCalls = (m as any).tool_calls as Array<{ name: string }> | undefined;
+          if (!toolCalls?.length) return false;
+          const EDIT_TOOLS = new Set([
+            'write', 'edit', 'create', 'str_replace_edit',
+            'notebook_edit', 'file_write', 'filesystem_write',
+          ]);
+          return toolCalls.some((tc) => EDIT_TOOLS.has(tc.name));
+        });
+
+      if (!hadFileEdits) return;
+
       setLoadingForMessageId(lastAssistant.id);
       try {
         const res = await fetch('/api/chat/next-step-suggestions', {
@@ -190,6 +208,7 @@ export function useNextStepSuggestions({
             recentPrompts: recentUserMessages,
             lastResponse: lastText,
             messageId: lastAssistant.id,
+            hasFileEdits,
           }),
         });
 

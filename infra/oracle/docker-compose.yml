@@ -14,11 +14,9 @@ services:
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"
-    # No DOMAIN/ACME_EMAIL until we have a real domain for TLS
+    # No host port mappings — cloudflared connects via Docker DNS (http://caddy:80).
+    # The Caddy :80 listener is reachable only on the Docker internal network.
+    # Direct HTTP access to the Oracle public IP is blocked.
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
@@ -35,8 +33,7 @@ services:
       dockerfile: backend/Dockerfile
     image: bing-backend:latest
     restart: unless-stopped
-    ports:
-      - "3001:3001"
+    # No host port — reachable only via Caddy proxy on Docker internal network.
     # Use repo-root .env so secrets and config are loaded from where deploy docs
     # tell operators to create them (see infra/oracle/README.md section 3).
     env_file: ../../.env
@@ -59,8 +56,7 @@ services:
       dockerfile: 9router.Dockerfile
     image: bing-9router:latest
     restart: unless-stopped
-    ports:
-      - "3000:3000"
+    # No host port — reachable only via Caddy proxy on Docker internal network.
     environment:
       PORT: "3000"
       NODE_ENV: production

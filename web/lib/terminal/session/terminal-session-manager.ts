@@ -117,9 +117,14 @@ const CLEANUP_INTERVAL_MS = 30 * 60 * 1000 // 30 minutes
 // MED-4 fix: Per-user session limit to prevent session hoarding
 const MAX_SESSIONS_PER_USER = parseInt(process.env.MAX_TERMINAL_SESSIONS_PER_USER || '5', 10) || 5;
 
-// Initialize SQLite
+// Initialize SQLite.
+// NOTE: The relative require() below is a string literal so webpack resolves it
+// at bundle time to the correct file.  It only fails in raw Node [eval] context
+// where the cwd is the project root instead of the file's directory.  The
+// fallback use of in-memory store is acceptable for that environment.
 try {
-  const { default: getDatabase } = require('../../database/connection') as { default: () => BetterSqlite3.Database }
+  const dbModule = require('../../database/connection');
+  const getDatabase = (dbModule.default || dbModule) as unknown as () => BetterSqlite3.Database;
   db = getDatabase()
 
   // Create terminal_sessions table

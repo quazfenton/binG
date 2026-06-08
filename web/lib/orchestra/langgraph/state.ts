@@ -8,7 +8,8 @@
  */
 
 import { Annotation } from '@langchain/langgraph';
-import type { VfsState, TransactionLogEntry, PlanJSON, FileModificationIntent, ApprovalRequest } from '../stateful-agent/state';
+import type { VfsState } from '../stateful-agent/state';
+import type { TransactionLogEntry, PlanJSON, FileModificationIntent, ApprovalRequest } from '../stateful-agent/schemas';
 
 // ============================================================================
 // TYPED INTERFACES (replacing `any` types)
@@ -88,6 +89,7 @@ export const AgentState = Annotation.Root({
 
   /** Current execution plan */
   currentPlan: Annotation<PlanJSON | null>({
+    reducer: (left: PlanJSON | null, right: PlanJSON | null) => right,
     default: () => null,
   }),
 
@@ -111,16 +113,19 @@ export const AgentState = Annotation.Root({
 
   /** Agent status phase */
   status: Annotation<'idle' | 'discovering' | 'planning' | 'editing' | 'verifying' | 'committing' | 'error'>({
+    reducer: (left: string, right: string) => right as any,
     default: () => 'idle',
   }),
 
   /** Sandbox identifier */
   sandboxId: Annotation<string | null>({
+    reducer: (left: string | null, right: string | null) => right,
     default: () => null,
   }),
 
   /** Pending approval request */
   pendingApproval: Annotation<ApprovalRequest | null>({
+    reducer: (left: ApprovalRequest | null, right: ApprovalRequest | null) => right,
     default: () => null,
   }),
 
@@ -132,13 +137,22 @@ export const AgentState = Annotation.Root({
   }),
 
   /** Next node to execute (for conditional edges) */
-  next: Annotation<string | undefined>(),
+  next: Annotation<string | undefined>({
+    reducer: (left: string | undefined, right: string | undefined) => right,
+    default: () => undefined,
+  }),
 
   /** Session ID for state isolation */
-  sessionId: Annotation<string>(),
+  sessionId: Annotation<string>({
+    reducer: (left: string, right: string) => right,
+    default: () => '',
+  }),
 
   /** Sandbox handle for code execution */
-  sandboxHandle: Annotation<unknown>(),
+  sandboxHandle: Annotation<unknown>({
+    reducer: (left: unknown, right: unknown) => right,
+    default: () => undefined,
+  }),
 });
 
 /**
@@ -200,7 +214,7 @@ export function agentStateToVfsState(agentState: AgentStateType): VfsState {
     transactionLog: (agentState.transactionLog || []).map(entry => ({
       path: entry.path,
       type: entry.type,
-      timestamp: new Date(entry.timestamp).getTime(),
+      timestamp: entry.timestamp,
     })),
     currentPlan: agentState.currentPlan,
     discoveryIntents: agentState.discoveryIntents || [],

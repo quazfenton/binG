@@ -314,6 +314,7 @@ export class TaskClassifier {
       const { createMistral } = await import('@ai-sdk/mistral');
       const { createOpenAI } = await import('@ai-sdk/openai');
       const { createGoogleGenerativeAI } = await import('@ai-sdk/google');
+      const { createAnthropic } = await import('@ai-sdk/anthropic');
 
       // Build model from the ranked provider
       // Use explicit cases — unknown providers fall back safely to mistral-small-latest
@@ -336,8 +337,7 @@ switch (fastModelProvider) {
         model = createMistral({ apiKey: process.env.MISTRAL_API_KEY || '' })(fastModelName);
         break;
       case 'anthropic':
-        // Using OpenAI SDK as a generic fallback for providers not explicitly supported
-        model = createOpenAI({ apiKey: process.env.ANTHROPIC_API_KEY || '' })(fastModelName);
+        model = createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY || '' })(fastModelName);
         break;
       case 'groq':
         model = createOpenAI({ apiKey: process.env.GROQ_API_KEY || '' })(fastModelName);

@@ -17,7 +17,7 @@ vi.mock('@/lib/chat/enhanced-llm-service', () => ({
 }));
 
 // Import after mocking
-import { executeSuperMode, generateSuperModePhases, shouldEnableSuperMode, DEFAULT_SUPER_MODE_CONFIG } from '../spec-super-mode';
+import { executeSuperMode, generateSuperModePhases, shouldEnableSuperMode, DEFAULT_SUPER_MODE_CONFIG } from '../../engineers/spec-super-mode';
 
 describe('Super Mode Execution', () => {
   beforeEach(() => {

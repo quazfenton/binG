@@ -1,6 +1,11 @@
 // Vitest setup file - runs before each test file
 import { vi } from 'vitest';
 
+// Mock 'server-only' module — this module throws when imported outside of
+// a Next.js server component context, which breaks any test that imports
+// a module referencing it (directly or transitively).
+vi.mock('server-only', () => ({}));
+
 // Force mock database usage during tests to avoid schema initialization issues
 process.env.SKIP_DB_INIT = 'true';
 process.env.SKIP_DB_INIT_TEMP = 'true';

@@ -695,18 +695,17 @@ export default function InteractionPanel({
     return validValues.includes(currentValue) ? currentValue : "";
   }, [currentProvider, currentModel, availableProviders]);
 
-  // Effect to restore pending input when processing completes
-  // Don't auto-submit - user may have clicked Stop, so restore as draft for user to decide
+  // Keep a ref to onSubmit so the effect doesn't depend on an unstable inline callback
+  const onSubmitRef = useRef(onSubmit);
+  onSubmitRef.current = onSubmit;
+
+  // Effect to auto-submit pending input when processing completes
   useEffect(() => {
     if (!isProcessing && pendingInput) {
-      // Restore pending input to the input field instead of auto-submitting
-      // This allows users to review/edit before manually sending after a Stop
-      if (!input.trim()) {
-        setInput(pendingInput);
-      }
+      onSubmitRef.current(pendingInput);
       setPendingInput(null);
     }
-  }, [isProcessing, pendingInput, input, setInput]);
+  }, [isProcessing, pendingInput]);
 
   // Expose a way to clear pending input from parent (e.g., when user manually sends)
   const clearPendingInput = useCallback(() => {

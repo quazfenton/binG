@@ -2207,11 +2207,15 @@ export class ResponseRouter {
       // buildSpecPrompt now returns { system, messages } with system separated
       // to comply with the AI SDK ModelMessage[] schema
       const specPrompt = buildSpecPrompt(userContent);
+      // EnhancedLLMRequest doesn't have a top-level 'system' property.
+      // Prepend the system prompt as a system-role message instead.
+      const specMessages = specPrompt.system
+        ? [{ role: 'system' as const, content: specPrompt.system }, ...specPrompt.messages]
+        : specPrompt.messages;
       const specPromise = enhancedLLMService.generateResponse({
         provider: fastModel.provider,
         model: fastModel.model,
-        system: specPrompt.system,
-        messages: specPrompt.messages,
+        messages: specMessages,
         maxTokens: 4000,
         stream: false,
         requestId: specRequestId,

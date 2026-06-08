@@ -63,6 +63,7 @@ import {
   chatRequestSchema,
 } from './chat-helpers';
 import { applyPromptModifiers, getPreset, PROMPT_PRESETS, generateDebugHeaderValue, emitTelemetryEvent, type PromptParameters } from '@bing/shared/agent/prompt-parameters';
+import { stripRoutingMarkers } from '@bing/shared/agent/first-response-routing';
 
 // Force Node.js runtime for Daytona SDK compatibility
 
@@ -855,10 +856,11 @@ export async function POST(request: NextRequest) {
     for (const msg of [...messages].reverse()) {
       if (msg.role === 'assistant' && Array.isArray(msg.content)) {
         for (const part of msg.content) {
-          if (part.type === 'tool-call' &&
-              (part.toolName === 'role_selection' || part.toolName === 'choose_role') &&
-              part.input?.role?.trim?.()) {
-            forcedRole = part.input.role.trim();
+          const toolPart = part as { type: string; toolName?: string; input?: { role?: { trim?: () => string } } };
+          if (toolPart.type === 'tool-call' &&
+              (toolPart.toolName === 'role_selection' || toolPart.toolName === 'choose_role') &&
+              toolPart.input?.role?.trim?.()) {
+            forcedRole = toolPart.input.role.trim();
             break;
           }
         }
@@ -869,10 +871,11 @@ export async function POST(request: NextRequest) {
           const parsed = JSON.parse(msg.content);
           if (Array.isArray(parsed)) {
             for (const part of parsed) {
-              if (part.type === 'tool-call' &&
-                  (part.toolName === 'role_selection' || part.toolName === 'choose_role') &&
-                  part.input?.role?.trim?.()) {
-                forcedRole = part.input.role.trim();
+              const toolPart = part as { type: string; toolName?: string; input?: { role?: { trim?: () => string } } };
+              if (toolPart.type === 'tool-call' &&
+                  (toolPart.toolName === 'role_selection' || toolPart.toolName === 'choose_role') &&
+                  toolPart.input?.role?.trim?.()) {
+                forcedRole = toolPart.input.role.trim();
                 break;
               }
             }
@@ -969,7 +972,7 @@ export async function POST(request: NextRequest) {
       (agentMode === 'auto' && (
         process.env.V2_AGENT_ENABLED === 'true' ||
         process.env.OPENCODE_CONTAINERIZED === 'true' ||
-        isCodeRequestAuto  // Auto-detect code requests and route to V2
+        (process.env.AUTO_ROUTE_CODE_TO_V2 === 'true' && isCodeRequestAuto)
       ));
 
     if (wantsV2) {
@@ -1273,7 +1276,14 @@ const config: UnifiedAgentConfig = {
         }
         return undefined;
       })(),
-    };
+    } as any;
+
+    // Per-request auto-continue control: client can set maxAutoContinueTurns
+    // in the request body to cap server-side rounds (0 = disable).
+    // Propagated via a private property read by processUnifiedAgentRequest.
+    if (typeof (body as any)?.maxAutoContinueTurns === 'number') {
+      (config as any)._maxAutoContinueTurns = Math.max(0, (body as any).maxAutoContinueTurns);
+    }
 
     const tools = await getMCPToolsForAI_SDK(authenticatedUserId, task);
     config.tools = tools.map(t => ({
@@ -1756,13 +1766,13 @@ const config: UnifiedAgentConfig = {
               // Prefer the server-cleaned response (markers stripped, simulated-turn
                 // truncation applied) over the raw streaming buffer. Falls back to the
                 // buffer only if the server didn't return text (shouldn't happen).
-              const finalContent = (typeof result.response === 'string' && result.response.trim())
+              const finalContent = stripRoutingMarkers((typeof result.response === 'string' && result.response.trim())
                 ? result.response
-                : streamingContentBuffer;
+                : streamingContentBuffer);
 
               emit(SSE_EVENT_TYPES.DONE, {
                 success: result.success,
-                content: finalContent,
+                content: stripRoutingMarkers(finalContent),
                 provider,
                 model: normalizedModel,
                 messageMetadata: {
@@ -1838,7 +1848,7 @@ const config: UnifiedAgentConfig = {
 
       // Check if custom orchestration mode is selected via header
       // This applies to ALL chat requests, not just integration pipeline requests
-      const orchestrationMode = getOrchestrationModeFromRequest(request);
+      const orchestrationMode = getOrchestrationModeFromRequest(request as any);
 
       if (orchestrationMode !== 'task-router') {
         // User has selected a custom orchestration mode

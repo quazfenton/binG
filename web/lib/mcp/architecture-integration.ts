@@ -233,7 +233,7 @@ const logger = createLogger('MCP:Integration')
 // object when exported in OpenAI-compatible format, regardless of the source.
 function convertToJsonSchema(schema: any): any {
   if (schema && typeof schema === 'object' && '_def' in schema) {
-    const converted = zodToJsonSchema(schema, { target: 'openApi3' });
+    const converted = zodToJsonSchema(schema, { target: 'openApi3' }) as any;
     return converted.$defs?.inner ?? converted;
   }
   return schema;

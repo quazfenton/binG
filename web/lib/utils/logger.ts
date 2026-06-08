@@ -134,13 +134,47 @@ if (typeof window === 'undefined' && typeof process !== 'undefined') {
 // FILE LOGGING SETUP
 // ============================================================================
 
+// Lazily-initialised fs module reference — hoisted to module scope to avoid
+// `require('fs')` in the hot path (output() runs on every log line).
+// The inner `typeof window !== 'undefined'` guard is required so Next.js
+// webpack can statically analyse and tree-shake the `require('fs')` out of
+// client bundles — a bare try/catch alone is NOT enough for tree-shaking.
+let _fs: any = null;
+function _getFs(): any {
+  if (!_fs) {
+    if (typeof window !== 'undefined') return null;
+    try { _fs = require('fs'); } catch { return null; }
+  }
+  return _fs;
+}
+
+// Raw file descriptor for synchronous, guaranteed-disk-persistence writes.
+// Using a raw fd + fs.writeSync + fs.fsyncSync ensures every log line hits
+// disk immediately — no Node.js stream buffer (16 KB default) and no OS page
+// cache delay.  This fixes the long-standing issue where run.log drops lines
+// during normal operation and loses everything buffered on process termination.
+let logFd: number | null = null;
+
+// Kept for backward-compatible null checks; redirects to logFd internally.
 let writeStream: any = null;
+
+// ── Log Rotation State ──────────────────────────────────────────────────
+// Rotation is triggered when the file exceeds maxFileSize (MB).  Rather than
+// stat() on every write we accumulate a byte counter and only check when it
+// crosses a threshold (every ~256 KB).  Rotation stops at maxFiles (delete
+// oldest, rename chain, open fresh).
+let _rotationBytesWritten = 0;
+const _ROTATION_CHECK_INTERVAL = 256 * 1024; // 256 KB
+let _rotationMaxSizeBytes = 10 * 1024 * 1024; // 10 MB default
+let _rotationMaxFiles = 5;
+let _rotationLogPath = '';
 
 function initializeFileLogging(config: LoggerConfig) {
   if (typeof window !== 'undefined' || !config.logToFile) return;
 
   try {
-    const fs = require('fs');
+    const fs = _getFs();
+    if (!fs) return;
     const path = require('path');
 
     const logDir = path.dirname(config.logFilePath!);
@@ -149,26 +183,129 @@ function initializeFileLogging(config: LoggerConfig) {
       console.log('[Logger] Created logs directory:', logDir);
     }
 
-    // Prevent overwrites on module re-load in dev mode - append or use existing
-    if (writeStream) {
-      console.log('[Logger] File logging already active, reusing existing stream');
+    // Prevent double-open on module re-load in dev mode.
+    if (logFd !== null) {
+      console.log('[Logger] File logging already active, reusing fd');
       return;
     }
-    writeStream = fs.createWriteStream(config.logFilePath, {
-      flags: 'a',  // 'a' = append mode
-      encoding: 'utf8',
-      autoClose: true,
-    });
 
-    writeStream.on('error', (err: Error) => {
-      console.error('[Logger] File write error:', err.message);
-    });
+    // Store rotation config at module level for the hot path.
+    _rotationLogPath = config.logFilePath!;
+    _rotationMaxSizeBytes = (config.maxFileSize || 10) * 1024 * 1024;
+    _rotationMaxFiles = config.maxFiles || 5;
 
-    writeStream.on('open', () => {
-      console.log('[Logger] File logging enabled:', config.logFilePath);
-    });
+    // Open raw fd for append — no stream buffering, every write goes to the OS
+    // and fsyncSync pushes it through to disk.
+    logFd = fs.openSync(config.logFilePath, 'a');
+
+    // Keep writeStream truthy so existing `if (writeStream)` guards work.
+    writeStream = { fd: logFd, destroyed: false };
+
+    console.log('[Logger] File logging enabled (sync fd):', config.logFilePath);
   } catch (error: any) {
     console.error('[Logger] Failed to initialize file logging:', error.message);
+  }
+}
+
+/**
+ * Rotate the log file when it exceeds maxFileSize.
+ *
+ * Rotation chain (for maxFiles=5):
+ *   1. Delete  run.log.4  (oldest)
+ *   2. Rename  run.log.3 → run.log.4
+ *   3. Rename  run.log.2 → run.log.3
+ *   4. Rename  run.log.1 → run.log.2
+ *   5. Rename  run.log   → run.log.1
+ *   6. Open fresh run.log
+ *
+ * All operations are synchronous — no risk of interleaved writes between
+ * close and reopen (Node.js is single-threaded event loop).
+ */
+function _rotateLogFile(): void {
+  if (!_rotationLogPath || _rotationMaxFiles <= 0) return;
+
+  const fs = _getFs();
+  if (!fs) return;
+
+  // 1. Close and fsync current fd
+  if (logFd !== null) {
+    try {
+      fs.fsyncSync(logFd);
+      fs.closeSync(logFd);
+    } catch {
+      // Best effort — file may already be closed / removed.
+    }
+    logFd = null;
+    writeStream = null;
+  }
+
+  try {
+    // 2. Delete the oldest rotation file (run.log.N-1)
+    const oldestPath = `${_rotationLogPath}.${_rotationMaxFiles - 1}`;
+    if (fs.existsSync(oldestPath)) {
+      fs.unlinkSync(oldestPath);
+    }
+
+    // 3. Shift the chain: run.log.N-2 → run.log.N-1, ... , run.log.1 → run.log.2
+    for (let i = _rotationMaxFiles - 2; i >= 1; i--) {
+      const src = `${_rotationLogPath}.${i}`;
+      const dst = `${_rotationLogPath}.${i + 1}`;
+      if (fs.existsSync(src)) {
+        fs.renameSync(src, dst);
+      }
+    }
+
+    // 4. Rename current run.log → run.log.1
+    if (fs.existsSync(_rotationLogPath)) {
+      fs.renameSync(_rotationLogPath, `${_rotationLogPath}.1`);
+    }
+  } catch (rotateErr: any) {
+    console.error('[Logger] Rotation rename chain failed:', rotateErr.message);
+    // Continue — we'll still try to reopen.
+  }
+
+  // 5. Open fresh run.log
+  try {
+    logFd = fs.openSync(_rotationLogPath, 'a');
+    writeStream = { fd: logFd, destroyed: false };
+    _rotationBytesWritten = 0;
+  } catch (openErr: any) {
+    console.error('[Logger] Failed to reopen log after rotation:', openErr.message);
+    logFd = null;
+    writeStream = null;
+  }
+}
+
+/**
+ * Check if rotation is needed — only stats when the byte counter crosses the
+ * check-interval threshold, avoiding a stat syscall on every log line.
+ */
+function _checkRotation(bytesJustWritten: number): void {
+  if (!_rotationLogPath || _rotationMaxFiles <= 0 || _rotationMaxSizeBytes <= 0) return;
+
+  _rotationBytesWritten += bytesJustWritten;
+
+  // Cap the check interval so small maxFileSize values don't cause massive
+  // overshoot (e.g. a 100 KB limit shouldn't wait for 256 KB before checking).
+  const effectiveInterval = Math.min(_ROTATION_CHECK_INTERVAL, Math.max(_rotationMaxSizeBytes / 4, 4096));
+  if (_rotationBytesWritten < effectiveInterval) return;
+
+  // Reset counter BEFORE stat so writes during this synchronous block
+  // restart counting from 0 post-rotation.
+  _rotationBytesWritten = 0;
+
+  if (logFd === null) return;
+
+  const fs = _getFs();
+  if (!fs) return;
+
+  try {
+    const stat = fs.fstatSync(logFd);
+    if (stat.size >= _rotationMaxSizeBytes) {
+      _rotateLogFile();
+    }
+  } catch {
+    // File might not exist yet or fd may be invalid — skip rotation.
   }
 }
 
@@ -298,9 +435,21 @@ export class Logger {
 
     const logLine = parts.join(' ');
 
-    // Write to file if enabled (server-side only)
-    if (writeStream) {
-      writeStream.write(JSON.stringify(entry) + '\n');
+    // Write to file if enabled (server-side only).
+    // Uses raw fd + fs.writeSync + fs.fsyncSync to guarantee every line
+    // hits disk immediately — no Node.js stream buffer, no OS page-cache delay.
+    if (logFd !== null) {
+      try {
+        const fs = _getFs();
+        if (!fs) return;
+        const line = JSON.stringify(entry) + '\n';
+        const lineBytes = Buffer.byteLength(line);
+        fs.writeSync(logFd, line);
+        fs.fsyncSync(logFd);
+        _checkRotation(lineBytes);
+      } catch {
+        // Best effort — don't crash the app over a log write failure.
+      }
     }
 
     // Also output to console
@@ -386,9 +535,7 @@ export class Logger {
    * Flush and close file streams (call before process exit)
    */
   destroy() {
-    if (writeStream) {
-      writeStream.end();
-    }
+    _closeLogFd();
   }
 }
 
@@ -425,17 +572,39 @@ export function configureLogger(config: Partial<LoggerConfig>) {
 }
 
 /**
- * Flush all log streams and cleanup (call before process exit)
+ * Close and fsync the log file descriptor — call before process exit.
+ * Guarantees all written data reaches disk before the process terminates.
+ * Nullifies logFd BEFORE attempting close so that a leaked fd won't be
+ * written to by subsequent calls (e.g. if closeSync throws).
  */
-export function flushLogs(): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(() => {
-      if (writeStream) {
-        writeStream.end();
-      }
-      resolve();
-    }, 100);
-  });
+function _closeLogFd(): void {
+  if (logFd === null) return;
+  const fd = logFd;
+  logFd = null;
+  if (writeStream) writeStream.destroyed = true;
+  try {
+    const fs = _getFs();
+    if (!fs) return;
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+  } catch {
+    // Best effort — fd may leak but state is clean.
+  }
+}
+
+/**
+ * Flush all log streams synchronously — call before process exit.
+ */
+export function flushLogs(): void {
+  _closeLogFd();
+}
+
+/**
+ * Async variant kept for backward compatibility.
+ */
+export function flushLogsAsync(): Promise<void> {
+  _closeLogFd();
+  return Promise.resolve();
 }
 
 // ============================================================================
@@ -459,36 +628,39 @@ export const loggers = {
 
 // Only register process handlers in Node.js runtime (not Edge Runtime)
 if (typeof process !== 'undefined' && typeof window === 'undefined' && process.env.NEXT_RUNTIME !== 'edge') {
+  // process.on('exit') fires when the event loop empties. At that point
+  // async operations won't complete, but our sync fsync+close will.
   process.on('exit', () => {
-    if (writeStream) {
-      writeStream.end();
-    }
+    _closeLogFd();
   });
 
-  process.on('SIGINT', async () => {
-    await flushLogs();
+  // Signal handlers MUST be synchronous — Node.js does NOT await async
+  // handlers before exit.  Our _closeLogFd is fully synchronous (fsyncSync
+  // + closeSync) so data is guaranteed on disk before process.exit().
+  process.on('SIGINT', () => {
+    console.error('[Logger] SIGINT received — flushing logs before exit');
+    _closeLogFd();
     process.exit(0);
   });
 
-  process.on('SIGTERM', async () => {
-    await flushLogs();
+  process.on('SIGTERM', () => {
+    console.error('[Logger] SIGTERM received — flushing logs before exit');
+    _closeLogFd();
     process.exit(0);
   });
 
-  // Only add process event listeners once to prevent memory leaks
-  // Check if listeners already exist before adding
   if (process.listenerCount('uncaughtException') === 0) {
-    process.on('uncaughtException', async (err) => {
-      console.error('Uncaught Exception:', err);
-      await flushLogs();
+    process.on('uncaughtException', (err) => {
+      console.error('[Logger] Uncaught Exception:', err);
+      _closeLogFd();
       process.exit(1);
     });
   }
 
   if (process.listenerCount('unhandledRejection') === 0) {
-    process.on('unhandledRejection', async (reason, promise) => {
-      console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-      await flushLogs();
+    process.on('unhandledRejection', (reason) => {
+      console.error('[Logger] Unhandled Rejection:', reason);
+      _closeLogFd();
       process.exit(1);
     });
   }

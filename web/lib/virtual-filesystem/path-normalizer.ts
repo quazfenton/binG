@@ -155,12 +155,16 @@ export function normalizeLLMPath(
   // 4d: Strip bare "sessions/{id}/..." — but only if it looks like a session ID
   //     (numeric 3-digit, or alphanumeric stock word) followed by more path segments.
   //     This prevents stripping a legitimate folder named "sessions/".
-  const sessionsMatch = p.match(/^sessions\/([^/]+)\/(.+)$/);
+  //     FIX: Also handle "sessions/002" without trailing content — the LLM
+  //     sometimes references the session directory itself. When the scope already
+  //     covers that session, treat it as root-of-scope ('.') to avoid double-prepend.
+  //     Previously: sessions/002 → resolveScopedPath returns workspace/sessions/002/sessions/002
+  const sessionsMatch = p.match(/^sessions\/([^/]+)(?:\/(.+))?$/);
   if (sessionsMatch) {
     const possibleSessionId = sessionsMatch[1];
     // Only strip if the session ID segment looks like a VFS session ID
     if (/^\d{3}$/.test(possibleSessionId) || /^[a-z]+-?\d*$/i.test(possibleSessionId)) {
-      p = sessionsMatch[2];
+      p = sessionsMatch[2] || '';
     }
   }
 

@@ -42,6 +42,8 @@ import {
   type SessionCheckpoint,
 } from '../storage/session-store';
 
+import { circuitBreakerManager } from '@/lib/middleware/circuit-breaker';
+
 const logger = createLogger('Session:Manager');
 
 // ============================================================================
@@ -175,6 +177,7 @@ export class SessionManager {
     this.enableQuotaEnforcement = process.env.OPENCODE_ENFORCE_QUOTA === 'true';
 
     this.startCleanupTimer();
+    this.startHeartbeat();
   }
 
   // ============================================================================
@@ -209,8 +212,12 @@ export class SessionManager {
       return existing;
     }
 
-    // Create new session
-    logger.info(`Creating new session for ${key}`);
+    // Create new session — reset circuit breakers for fresh conversation state
+    // Circuit breakers accumulate failure scores across conversations globally;
+    // resetting on new session prevents stale failures from blocking the first
+    // LLM call of a brand-new conversation.
+    logger.info(`Creating new session for ${key} — resetting circuit breakers`);
+    circuitBreakerManager.resetAll();
     const session = await this.createSession(userId, conversationId, config);
     this.sessions.set(key, session);
 
@@ -861,14 +868,49 @@ export class SessionManager {
     }
   }
 
+  private heartbeatTimer?: NodeJS.Timeout;
+
+  /** Emit a periodic heartbeat log so we can distinguish normal idle from
+   *  a premature/crash shutdown.  The run.log no longer showing heartbeats
+   *  means the process exited (normally or abnormally) around the last one. */
+  private startHeartbeat(): void {
+    this.heartbeatTimer = setInterval(() => {
+      logger.info('Heartbeat — process alive', {
+        uptimeMs: Date.now() - globalThis.processStartTime,
+        sessions: this.sessions.size,
+        activeSessions: this.sessionsById.size,
+        memoryMb: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+      });
+    }, 60_000);
+    this.heartbeatTimer.unref();
+  }
+
   private startCleanupTimer(): void {
     this.cleanupTimer = setInterval(() => {
       this.cleanupIdleSessions();
     }, 5 * 60 * 1000);
 
-    process.on('beforeExit', () => this.shutdown());
-    process.on('SIGTERM', () => this.shutdown());
-    process.on('SIGINT', () => this.shutdown());
+    // Record process start time so heartbeat can report uptime
+    (globalThis as any).processStartTime ??= Date.now();
+
+    process.on('beforeExit', (code) => {
+      logger.warn('beforeExit received', { code, reason: 'process beforeExit' });
+      this.shutdown();
+    });
+    process.on('SIGTERM', () => {
+      logger.warn('SIGTERM received — shutting down', { uptimeMs: Date.now() - ((globalThis as any).processStartTime || Date.now()) });
+      this.shutdown();
+    });
+    process.on('SIGINT', () => {
+      logger.warn('SIGINT received — shutting down', { uptimeMs: Date.now() - ((globalThis as any).processStartTime || Date.now()) });
+      this.shutdown();
+    });
+    process.on('unhandledRejection', (reason) => {
+      logger.error('Unhandled rejection — may cause premature shutdown', {
+        reason: reason instanceof Error ? reason.message : String(reason),
+        stack: reason instanceof Error ? reason.stack : undefined,
+      });
+    });
   }
 
   private async cleanupIdleSessions(): Promise<void> {
@@ -1178,10 +1220,14 @@ export class SessionManager {
    * Shutdown session manager and cleanup all sessions
    */
   async shutdown(): Promise<void> {
-    logger.info('Shutting down session manager...');
+    const uptimeMs = Date.now() - ((globalThis as any).processStartTime || Date.now());
+    logger.info('Shutting down session manager...', { uptimeMs, uptimeSec: Math.round(uptimeMs / 1000) });
 
     if (this.cleanupTimer) {
       clearInterval(this.cleanupTimer);
+    }
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
     }
 
     const keys = Array.from(this.sessions.keys());

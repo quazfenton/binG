@@ -101,7 +101,8 @@ export function extractRedirect(command: string): { command: string; outputFile?
 
   // Match output redirection: > or >> (but not >> as part of other operators)
   // We want the LAST output redirect in case of multiple redirects
-  const redirectRegex = /([^|;&]+)(>>?)\s*([^\s|;&]+)/g;
+  // CRITICAL: Exclude > from command characters so >> is not split across groups
+  const redirectRegex = /([^|;&>]+)(>>?)\s*([^\s|;&]+)/g;
   let lastMatch: RegExpExecArray | null = null;
   let match: RegExpExecArray | null;
   
@@ -196,8 +197,9 @@ export function extractInputRedirect(command: string): { command: string; inputF
   );
 
   // Reconstruct command without the input redirect
-  const commandWithoutRedirect = unquotedCommand
-    .slice(0, match.index) + unquotedCommand.slice(match.index + match[0].length);
+  // Use match[1] (the part before <) as the command — slicing the whole match out
+  // breaks when the redirect is at position 0 (removes the entire string).
+  const commandWithoutRedirect = match[1].trim();
   
   const finalCommand = commandWithoutRedirect.replace(
     new RegExp(`${placeholderChar}(\\d+)${placeholderChar}`, 'g'),

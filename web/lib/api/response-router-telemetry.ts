@@ -136,17 +136,24 @@ export async function initializeTelemetry(customConfig?: Partial<TelemetryConfig
     const NodeTracerProvider = sdkTraceNode.NodeTracerProvider
     const BatchSpanProcessor = sdkTraceBase.BatchSpanProcessor
     const OTLPTraceExporter = exporterTraceOtlp.OTLPTraceExporter
-    const Resource = (resources as any).default || (resources as any).Resource
+    // FIX: Try all known export shapes for Resource class across SDK versions.
+    // @opentelemetry/resources v1.x exports Resource as named export, but some
+    // bundlers/versions expose it as `.default` or as a getter on the namespace.
+    const ResourceCtor = (
+      (resources as any).Resource ??
+      (resources as any).default?.Resource ??
+      (resources as any).default
+    );
     const SemanticResourceAttributes = semanticConventions.SemanticResourceAttributes
     const MeterProvider = sdkMetrics.MeterProvider
 
-    if (!Resource) {
+    if (!ResourceCtor) {
       throw new Error('Resource class not found in @opentelemetry/resources')
     }
 
     // Create tracer provider
     const provider = new NodeTracerProvider({
-      resource: new Resource({
+      resource: new ResourceCtor({
         [SemanticResourceAttributes.SERVICE_NAME]: config.serviceName,
         [SemanticResourceAttributes.SERVICE_VERSION]: config.serviceVersion,
         [SemanticResourceAttributes.DEPLOYMENT_ENVIRONMENT]: config.environment,
@@ -177,7 +184,7 @@ export async function initializeTelemetry(customConfig?: Partial<TelemetryConfig
 
     // Create meter provider
     const meterProvider = new MeterProvider({
-      resource: new Resource({
+      resource: new ResourceCtor({
         [SemanticResourceAttributes.SERVICE_NAME]: config.serviceName,
       }),
     })
