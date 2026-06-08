@@ -1,0 +1,324 @@
+# Instincts generated from https://github.com/quazfenton/binG
+# Generated: 2026-06-08T20:16:24.239Z
+# Version: 2.0
+# NOTE: This file supplements (does not replace) any existing curated instincts.
+# High-confidence manually curated instincts should be preserved alongside these.
+
+---
+id: binG-commit-length
+trigger: "when writing a commit message"
+confidence: 0.6
+domain: git
+source: repo-analysis
+source_repo: https://github.com/quazfenton/binG
+---
+
+# BinG Commit Length
+
+## Action
+
+Write moderate-length commit messages (~63 characters)
+
+## Evidence
+
+- Average commit message length: 63 chars
+- Based on 1 commits
+
+---
+id: binG-naming-files
+trigger: "when creating a new file"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/quazfenton/binG
+---
+
+# BinG Naming Files
+
+## Action
+
+Use kebab-case naming convention
+
+## Evidence
+
+- Analyzed file naming patterns in repository
+- Dominant pattern: kebab-case
+
+---
+id: binG-import-relative
+trigger: "when importing modules"
+confidence: 0.75
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/quazfenton/binG
+---
+
+# BinG Import Relative
+
+## Action
+
+Use relative imports for project files
+
+## Evidence
+
+- Import analysis shows relative import pattern
+- Example: import { x } from '../lib/x'
+
+---
+id: binG-export-style
+trigger: "when exporting from a module"
+confidence: 0.7
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/quazfenton/binG
+---
+
+# BinG Export Style
+
+## Action
+
+Prefer named exports
+
+## Evidence
+
+- Export pattern analysis
+- Dominant style: named
+
+---
+id: binG-test-separate
+trigger: "when writing tests"
+confidence: 0.8
+domain: testing
+source: repo-analysis
+source_repo: https://github.com/quazfenton/binG
+---
+
+# BinG Test Separate
+
+## Action
+
+Place tests in the tests/ or __tests__/ directory, mirroring src structure
+
+## Evidence
+
+- Separate test directory pattern detected
+- Tests live in dedicated test folders
+
+---
+id: binG-workflow-multi-package-dependency-upgrade
+trigger: "when doing multi package dependency upgrade"
+confidence: 0.6
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/quazfenton/binG
+---
+
+# BinG Workflow Multi Package Dependency Upgrade
+
+## Action
+
+Follow the multi-package-dependency-upgrade workflow:
+1. Identify outdated dependencies in each package.
+2. Update the version in package.json for each affected package.
+3. Regenerate package-lock.json or pnpm-lock.yaml for each updated package.
+4. Commit all updated package.json and lock files together.
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~2x per month
+- Files: */package.json, */package-lock.json, */pnpm-lock.yaml
+
+---
+id: bing-instinct-file-naming
+trigger: "When creating a new file in the repository"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: quazfenton/binG
+---
+
+# Bing Instinct File Naming
+
+## Action
+
+Name the file using kebab-case (e.g., my-component.ts)
+
+## Evidence
+
+- Pattern in codeStyle.namingConventions.files
+
+---
+id: bing-instinct-function-naming
+trigger: "When defining a new function"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: quazfenton/binG
+---
+
+# Bing Instinct Function Naming
+
+## Action
+
+Name the function using camelCase (e.g., fetchData)
+
+## Evidence
+
+- Pattern in codeStyle.namingConventions.functions
+
+---
+id: bing-instinct-class-naming
+trigger: "When creating a new class"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: quazfenton/binG
+---
+
+# Bing Instinct Class Naming
+
+## Action
+
+Name the class using PascalCase (e.g., UserService)
+
+## Evidence
+
+- Pattern in codeStyle.namingConventions.classes
+
+---
+id: bing-instinct-constant-naming
+trigger: "When defining a constant value"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: quazfenton/binG
+---
+
+# Bing Instinct Constant Naming
+
+## Action
+
+Name the constant using SCREAMING_SNAKE_CASE (e.g., API_URL)
+
+## Evidence
+
+- Pattern in codeStyle.namingConventions.constants
+
+---
+id: bing-instinct-import-style
+trigger: "When importing modules in TypeScript files"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: quazfenton/binG
+---
+
+# Bing Instinct Import Style
+
+## Action
+
+Use relative import paths (e.g., import { foo } from '../foo')
+
+## Evidence
+
+- Pattern in codeStyle.importStyle
+
+---
+id: bing-instinct-export-style
+trigger: "When exporting functions, classes, or constants"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: quazfenton/binG
+---
+
+# Bing Instinct Export Style
+
+## Action
+
+Use named exports (e.g., export { foo })
+
+## Evidence
+
+- Pattern in codeStyle.exportStyle
+
+---
+id: bing-instinct-test-location
+trigger: "When adding or updating tests"
+confidence: 0.8
+domain: testing
+source: repo-analysis
+source_repo: quazfenton/binG
+---
+
+# Bing Instinct Test Location
+
+## Action
+
+Place test files in a separate directory from source code
+
+## Evidence
+
+- Pattern in architecture.folderStructure.testLocation
+
+---
+id: bing-instinct-commit-format
+trigger: "When writing a commit message"
+confidence: 0.7
+domain: git
+source: repo-analysis
+source_repo: quazfenton/binG
+---
+
+# Bing Instinct Commit Format
+
+## Action
+
+Use a freeform commit message without a required prefix
+
+## Evidence
+
+- Pattern in commits.type
+- No prefixes in commits.prefixes
+
+---
+id: bing-instinct-commit-length
+trigger: "When composing a commit message"
+confidence: 0.7
+domain: git
+source: repo-analysis
+source_repo: quazfenton/binG
+---
+
+# Bing Instinct Commit Length
+
+## Action
+
+Keep the commit message concise, around 60 characters on average
+
+## Evidence
+
+- Pattern in commits.averageLength
+
+---
+id: bing-instinct-multi-package-dependency-upgrade
+trigger: "When dependencies need to be updated across multiple packages in the monorepo"
+confidence: 0.95
+domain: workflow
+source: repo-analysis
+source_repo: quazfenton/binG
+---
+
+# Bing Instinct Multi Package Dependency Upgrade
+
+## Action
+
+Identify outdated dependencies, update package.json in each affected package, regenerate lock files, and commit all changes together
+
+## Evidence
+
+- multi-package-dependency-upgrade workflow definition
+- Example commit: 'Bump the npm_and_yarn group across 6 directories with 6 updates'
+- Pattern in files: */package.json, */package-lock.json, */pnpm-lock.yaml
+
