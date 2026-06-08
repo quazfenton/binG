@@ -17,6 +17,7 @@ import type { ToolResult } from '../sandbox/types';
 import type { LLMProvider } from '../sandbox/providers/llm-provider';
 import { getLLMProvider } from '../sandbox/providers/llm-factory';
 import { getCircuitStateName } from '../middleware/circuit-breaker';
+import { is530Blacklisted, handleProviderError, reset530Counter } from './provider-530-tracker';
 
 // Wire in centralized tool system for all execution paths (v1, v2, streaming, non-Mastra)
 import { initToolSystem, executeToolCapability, hasToolCapability, isToolSystemReady } from '@/lib/tools';
@@ -144,6 +145,11 @@ function _hasOpenCodeSDKPackageCheck(): boolean {
 const _hasOpenCodeSDKPackage = _hasOpenCodeSDKPackageCheck();
 
 const log = createLogger('UnifiedAgentService');
+
+// SelfHeal carry-forward cache: stores the provider+model that succeeded
+// on the most recent attempt so SelfHeal retries can skip dead providers.
+let _selfHealProvider: string | null = null;
+let _selfHealModel: string | null = null;
 
 /**
  * Resolve dynamic default provider/model using model-ranker.
@@ -875,6 +881,21 @@ export async function processUnifiedAgentRequest(
       nextAction: roleSelection.specializationRoute
     });
   }
+
+    // FIX: Surface orchestrator fatal errors to user before silent Phase 2 transition.
+    // PlanActVerify returns success:true even on fatal errors (budgetExhausted, steps.length===0).
+    // The user would see a silent text-mode fallback with no indication the orchestrator crashed.
+    if (result.metadata?.budgetExhausted && config.onStreamChunk && (mode === 'v1-agent-loop' || mode === 'execution-controller')) {
+      try {
+        config.onStreamChunk(JSON.stringify({
+          type: 'error',
+          error: 'Orchestrator exhausted budget',
+          detail: result.error || result.metadata?.orchestratorError || 'Orchestrator failed after max attempts',
+          mode: mode,
+          timestamp: Date.now(),
+        }));
+      } catch { /* best effort */ }
+    }
 
     if (isAutoMode && result.success && (result.steps?.length ?? 0) === 0 && !roleSelection?.continue) {
       log.info('[PhaseTransition] No tools used in Phase 1, entering Phase 2 fallback (text-mode)');
@@ -2027,6 +2048,11 @@ async function runV1ApiWithTools(
   const _dynamicDefaults = await resolveDynamicDefaults();
   const primaryProvider = config.provider || _dynamicDefaults.provider;
   const primaryModel = config.model || _dynamicDefaults.model;
+  // FIX: Reset SelfHeal cache at start of each request to prevent cross-request
+  // leakage. Without this, a prior request's fallback provider could silently
+  // replace a healthy primary in a different request's SelfHeal retry.
+  _selfHealProvider = null;
+  _selfHealModel = null;
   const requestId = `unified-v1-tools-${Date.now()}`;
 
   log.info('[V1-API-WITH-TOOLS] │ primaryProvider:', primaryProvider);
@@ -2066,10 +2092,13 @@ async function runV1ApiWithTools(
       // Use model-ranker telemetry to select highest-ranked model for this provider
       const rotation = mrMod?.getModelForRotation?.(undefined, providerName);
       if (rotation?.model) return rotation.model;
-      return PROVIDER_DEFAULT_MODELS[providerName] || _getProviderFirstModel(providerName) || model;
+      return PROVIDER_DEFAULT_MODELS[providerName] || _getProviderFirstModel(providerName);
     }
 
-    // Check if the model is valid for this provider
+    // FIX: When falling back FROM ninerouter TO a different provider (nvidia, mistral, etc.),
+    // the model from ninerouter (e.g. "nvidia/minimaxai/minimax-m2.7") is NOT valid for the
+    // fallback provider. If the model isn't in the provider's list, use model-ranker to pick
+    // the best model for that provider. NEVER pass the primary's model to a fallback provider.
     const provider = PROVIDERS[providerName.toLowerCase()];
     if (provider?.models && Array.isArray(provider.models) && provider.models.length > 0) {
       // Normalize models to handle both string and object formats
@@ -2079,11 +2108,12 @@ async function runV1ApiWithTools(
       
       if (supportedModels.includes(model)) return model;
       // Model not in provider's list — use model-ranker's highest-ranked or provider's own model
-      // (never leak primaryModel across providers)
       log.debug(`Model "${model}" not in ${providerName} models list, using provider's own model`);
       const rotation = mrMod?.getModelForRotation?.(undefined, providerName);
       if (rotation?.model) return rotation.model;
-      return PROVIDER_DEFAULT_MODELS[providerName] || _getProviderFirstModel(providerName) || model;
+      // FIX: NEVER return the primary's model for a different provider.
+      // Use provider default or first model instead.
+      return PROVIDER_DEFAULT_MODELS[providerName] || _getProviderFirstModel(providerName) || PROVIDER_DEFAULT_MODELS[providerName];
     }
 
     // Unknown provider — trust the config model
@@ -2145,6 +2175,46 @@ async function runV1ApiWithTools(
     };
   } catch { /* model-ranker unavailable */ }
 
+  // FIX: Run RAG retrieval ONCE per request, not per provider.
+  // Moving this outside the provider loop saves ~7-364ms × N providers.
+  let ragContext = '';
+  try {
+    const ragResult = await runRetrievalPipeline(config.userMessage, {
+      topK: 3,
+      coarseTopN: 10,
+      minQuality: 0.3,
+      includeSource: false,
+      maxTokens: 1500,
+    });
+    if (ragResult.hasResults) {
+      ragContext = ragResult.context;
+      log.info('[V1-API-WITH-TOOLS] RAG knowledge injected', {
+        chunks: ragResult.chunks.length,
+        tokens: ragResult.estimatedTokens,
+        avgScore: ragResult.metadata.avgScore.toFixed(3),
+        durationMs: ragResult.metadata.durationMs,
+      });
+    }
+  } catch (error) {
+    // FIX: Track tool failure for feedback injection
+    const failureEntry = createFeedbackEntry(
+      'failure',
+      `RAG retrieval failed: ${error instanceof Error ? error.message : String(error)}`,
+      'tool_execution',
+      { error: String(error) },
+      'medium'
+    );
+    feedbackContext.turnNumber++;
+    addFeedback(feedbackContext, failureEntry);
+    log.info('[Feedback-Inject] RAG failure tracked', {
+      severity: failureEntry.severity,
+    });
+
+    log.warn('[V1-API-WITH-TOOLS] RAG retrieval failed, continuing without it', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
   // Try each provider in order — with circuit-breaker and rate-limit awareness
   for (const providerName of uniqueProviders) {
     const modelForProvider = getModelForProvider(providerName);
@@ -2152,6 +2222,7 @@ async function runV1ApiWithTools(
     // FIX: Skip providers with open circuit breakers (unless first request of session)
     if (circuitBreakerMgr) {
       const breaker = circuitBreakerMgr.getBreaker(providerName);
+    if (is530Blacklisted(providerName)) { log.warn("530 BLACKLISTED, skipping " + providerName); continue; }
       if (breaker.getState() === 'OPEN' && breaker.getRetryAfter() > 0) {
         // On first request of session, reset OPEN circuit instead of skipping
         if (isFirstRequestThisSession) {
@@ -2274,44 +2345,8 @@ async function runV1ApiWithTools(
 
     const llmMessages: any[] = [];
 
-    // RAG Knowledge Retrieval — inject relevant knowledge into system prompt
-    let ragContext = '';
-    try {
-      const ragResult = await runRetrievalPipeline(config.userMessage, {
-        topK: 3,
-        coarseTopN: 10,
-        minQuality: 0.3,
-        includeSource: false,
-        maxTokens: 1500,
-      });
-      if (ragResult.hasResults) {
-        ragContext = ragResult.context;
-        log.info('[V1-API-WITH-TOOLS] RAG knowledge injected', {
-          chunks: ragResult.chunks.length,
-          tokens: ragResult.estimatedTokens,
-          avgScore: ragResult.metadata.avgScore.toFixed(3),
-          durationMs: ragResult.metadata.durationMs,
-        });
-      }
-    } catch (error) {
-      // FIX: Track tool failure for feedback injection
-      const failureEntry = createFeedbackEntry(
-        'failure',
-        `RAG retrieval failed: ${error instanceof Error ? error.message : String(error)}`,
-        'tool_execution',
-        { error: String(error) },
-        'medium'
-      );
-      feedbackContext.turnNumber++;
-      addFeedback(feedbackContext, failureEntry);
-      log.info('[Feedback-Inject] RAG failure tracked', {
-        severity: failureEntry.severity,
-      });
-
-      log.warn('[V1-API-WITH-TOOLS] RAG retrieval failed, continuing without it', {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
+    // RAG context is now computed once per request (above the provider loop).
+    // Reused across all provider fallback attempts — no redundant retrieval.
 
     // Pre-build workspace snapshot to give the model real file paths
     let workspaceSnippet = '';
@@ -2557,6 +2592,9 @@ async function runV1ApiWithTools(
       }
 
       if (providerName !== primaryProvider) {
+      // FIX: Save successful provider/model for SelfHeal retries to skip dead primary
+      _selfHealProvider = providerName;
+      _selfHealModel = modelForProvider;
         log.info(`V1 API (with tools): Fallback provider succeeded`, {
           primaryProvider,
           primaryModel,
@@ -2719,9 +2757,33 @@ async function runV1ApiWithTools(
 
       const shouldRetry = retryCount < MAX_TOOL_FAILURE_RETRIES && (
         (responseEmpty && (anyToolFailed || noToolCalls)) ||
-        successfulToolsButSilent ||
-        responseIncomplete
-      );
+        
+
+      // FIX: When tools succeeded but produced no text, skip the expensive SelfHeal retry.
+      // Instead return tool results with isEmptyResponse:true — the client auto-continue
+      // will handle the follow-up turn ("summarize what you got") more efficiently.
+      if ( {
+        log.info("[SelfHeal] Tools succeeded but silent — deferring to client auto-continue");
+        return {
+          success: true,
+          response: "",
+          mode: "v1-api",
+          steps: toolInvocations.map(inv => ({
+            toolName: inv.toolName,
+            args: inv.args,
+            result: inv.result,
+          })),
+          totalSteps: toolInvocations.length,
+          metadata: {
+            provider: providerName,
+            model: modelForProvider,
+            duration: Date.now() - startTime,
+            isEmptyResponse: true,
+            emptyReason: "tools-succeeded-but-silent",
+            successfulTools: toolInvocations.map(inv => inv.toolName),
+          },
+        };
+      }
 
       if (shouldRetry) {
         // Build FeedbackEntry objects from tool failures and accumulate into
@@ -2799,7 +2861,7 @@ async function runV1ApiWithTools(
           // but included for future-proofing when both conditions may coexist.
           feedbackMsg = `[INCOMPLETE-RESPONSE-FEEDBACK] ${incompleteDetection.prompt}\n\nYour response was truncated or cut off. Please complete your thought and provide a full answer.${injectedFeedback.correctionSection}${injectedFeedback.formatGuidance}`;
           userPrompt = 'Please complete your previous response. Start from where you left off or restate your answer clearly.';
-        } else if (successfulToolsButSilent) {
+        } else if ( {
           // Tools ran successfully but the model produced zero follow-up text.
           // Give it the executed tool list so it can summarize for the user.
           const successSummary = toolInvocations
@@ -2875,7 +2937,9 @@ async function runV1ApiWithTools(
         ];
 
         try {
-          const retryResult = await runV1ApiWithTools(config, retryMessages, startTime);
+          // FIX: Carry forward last successful provider/model so SelfHeal retries skip dead primary
+          const retryConfig = _selfHealProvider ? { ...config, provider: _selfHealProvider, model: _selfHealModel || config.model } : config;
+          const retryResult = await runV1ApiWithTools(retryConfig, retryMessages, startTime);
           // If the retry produced something, use it. Otherwise fall through to
           // the friendly fallback below so the user still sees a message.
           if (retryResult.response && retryResult.response.trim() && retryResult.response !== 'No response generated') {
@@ -2939,6 +3003,7 @@ async function runV1ApiWithTools(
       };
     } catch (error: any) {
       lastError = error;
+      handleProviderError(providerName, error);
 
       // FIX: Record failure in circuit-breaker and model-ranker so failing providers
       // get de-ranked and circuit-breaker trips after repeated failures
@@ -3091,6 +3156,19 @@ async function runV1ApiWithTools(
     primaryProvider,
     primaryModel,
   ).catch(() => {});
+
+  // FIX: Emit error chunk to user so they see a failure instead of blank screen.
+  if (config.onStreamChunk) {
+    try {
+      config.onStreamChunk(JSON.stringify({
+        type: "error",
+        error: "All providers failed",
+        detail: lastError?.message || "All configured LLM providers exhausted",
+        providersTried: uniqueProviders,
+        timestamp: Date.now(),
+      }));
+    } catch { /* best effort */ }
+  }
 
   throw lastError || new Error('V1 API tool loop failed');
 }
@@ -3493,7 +3571,7 @@ async function runV1ApiCompletion(
       // Use model-ranker telemetry to select highest-ranked model for this provider
       const rotation = _getModelForRotation?.(undefined, providerName);
       if (rotation?.model) return rotation.model;
-      return PROVIDER_DEFAULT_MODELS[providerName] || _getProviderFirstModel(providerName) || config.model;
+      return PROVIDER_DEFAULT_MODELS[providerName] || _getProviderFirstModel(providerName) || PROVIDER_DEFAULT_MODELS[providerName];
     }
 
     // Check if the model is valid for this provider
@@ -3509,7 +3587,7 @@ async function runV1ApiCompletion(
       log.debug(`Model "${config.model}" not in ${providerName} models list, using default`);
       const rotation = _getModelForRotation?.(undefined, providerName);
       if (rotation?.model) return rotation.model;
-      return PROVIDER_DEFAULT_MODELS[providerName] || _getProviderFirstModel(providerName) || config.model;
+      return PROVIDER_DEFAULT_MODELS[providerName] || _getProviderFirstModel(providerName) || PROVIDER_DEFAULT_MODELS[providerName];
     }
 
     // Unknown provider — trust the config model
@@ -3532,6 +3610,7 @@ async function runV1ApiCompletion(
 
   // Try each provider in order using same pattern as enhanced-llm-service.ts
   for (const providerName of uniqueProviders) {
+    if (is530Blacklisted(providerName)) { log.warn("530 BLACKLISTED in completion, skipping " + providerName); continue; }
     const modelForProvider = getModelForProvider(providerName);
     try {
       log.info('[V1-API-COMPLETION] ┌─ ATTEMPT ───────────────────');
@@ -3778,6 +3857,7 @@ return {
       };
     } catch (error: any) {
       lastError = error;
+      handleProviderError(providerName, error);
 
       // FIX: Invalidate cache so subsequent requests pick a different provider
       invalidateDynamicDefaultsCache();
@@ -3813,6 +3893,19 @@ return {
   const latencyMs = Date.now() - startTime;
 
   log.error('[V1-API-COMPLETION] ┌─ ALL PROVIDERS FAILED ─────────');
+  // FIX: Emit error chunk to user so they see a failure instead of blank screen.
+  if (config.onStreamChunk) {
+    try {
+      config.onStreamChunk(JSON.stringify({
+        type: "error",
+        error: "All providers failed",
+        detail: lastError?.message || "All configured LLM providers exhausted",
+        providersTried: uniqueProviders,
+        timestamp: Date.now(),
+      }));
+    } catch { /* best effort */ }
+  }
+
   log.error('[V1-API-COMPLETION] │ providers tried:', uniqueProviders);
   log.error('[V1-API-COMPLETION] │ lastError:', lastError?.message);
   log.error('[V1-API-COMPLETION] └─────────────────────────────────');

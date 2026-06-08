@@ -30,6 +30,7 @@ import { isCLIProvider } from './vercel-ai-streaming';
 import { recordRateLimitError } from '../providers/model-ranker';
 import { sandboxMetrics } from '@/lib/backend/metrics';
 import { classifyFailure, FailureType, TUNNEL_DNS_ERROR } from '@/lib/errors/failure-classifier';
+import { is530Blacklisted, handleProviderError } from '@/lib/orchestra/provider-530-tracker';
 
 export interface EnhancedLLMRequest extends LLMRequest {
   fallbackProviders?: string[];
@@ -655,6 +656,12 @@ export class EnhancedLLMService {
 
         if (fallbackChain.length > 0) {
           for (const fallbackProvider of fallbackChain) {
+            // FIX: Skip providers blacklisted for 2+ consecutive 530 errors
+            if (is530Blacklisted(fallbackProvider)) {
+              chatLogger.warn('530 BLACKLISTED in enhanced-llm-service, skipping fallback', { fallbackProvider });
+              continue;
+            }
+
             const fallbackConfig = this.getProviderConfigForRequest(fallbackProvider, requestId);
             if (!fallbackConfig) continue;
 
@@ -716,9 +723,10 @@ export class EnhancedLLMService {
               });
 
               return await postProcessToolCalls(response);
-            } catch (fallbackError: any) {
-              fallbackAttempted = true;
-              chatLogger.warn('Fallback provider failed (non-streaming)', {
+        } catch (fallbackError: any) {
+          fallbackAttempted = true;
+          handleProviderError(fallbackProvider, fallbackError);
+          chatLogger.warn('Fallback provider failed (non-streaming)', {
                 requestId,
                 fallbackProvider,
                 error: fallbackError.message,

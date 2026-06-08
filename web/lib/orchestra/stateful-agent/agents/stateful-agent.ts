@@ -1,5 +1,5 @@
 import { getVercelModel } from '../../../chat/vercel-ai-streaming';
-import { streamText, generateObject, type Tool as CoreTool } from 'ai';
+import { streamText, generateText, stepCountIs, type Tool as CoreTool, Output } from 'ai';
 import type { SandboxHandle } from '@/lib/sandbox/providers/sandbox-provider';
 import type { ProjectServices } from '@/lib/context/project-context';
 import { ToolExecutor } from '../tools/tool-executor';
@@ -830,10 +830,10 @@ Respond with valid JSON matching this schema:
 }`;
 
     try {
-      const result = await generateObject({
+      const result = await generateText({
         model: this.getModel(),
         prompt: decompositionPrompt,
-        schema: TaskGraphSchema,
+        output: Output.object({ schema: TaskGraphSchema }),
         maxOutputTokens: 1500,
       });
 
@@ -1567,7 +1567,7 @@ export async function* runStatefulAgentStreaming(
     system: systemPrompt,
     messages: sanitizedMessages,
     tools: toolDefs,
-    maxSteps,
+    stopWhen: stepCountIs(maxSteps),
     onChunk: ({ chunk }) => {
       if (chunk.type === 'text-delta' && (chunk as any).textDelta) {
         options?.onChunk?.((chunk as any).textDelta);

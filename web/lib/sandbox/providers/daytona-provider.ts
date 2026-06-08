@@ -194,6 +194,21 @@ export class DaytonaProvider implements SandboxProvider {
     const sandbox = await this.client.get(sandboxId)
     await sandbox.delete()
   }
+
+  async listSandboxes(): Promise<Array<{ id: string; name?: string; state?: string; labels?: Record<string, string> }>> {
+    try {
+      const result = await this.client.list()
+      return (result?.items || []).map((sbx: any) => ({
+        id: sbx.id,
+        name: sbx.name,
+        state: sbx.state,
+        labels: sbx.labels,
+      }))
+    } catch (error) {
+      console.error('[Daytona] Failed to list sandboxes:', error)
+      return []
+    }
+  }
 }
 
 import { SandboxSecurityManager } from '../security-manager'

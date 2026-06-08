@@ -6,16 +6,15 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { toolContextStore, getVFSToolDefinitions, getVFSTool, vfsTools } from '../../lib/mcp/vfs-mcp-tools';
+import { toolContextStore, getVFSToolDefinitions, getVFSTool, vfsTools, setToolContext, writeFileTool, batchWriteTool } from '../../lib/mcp/vfs-mcp-tools';
 
 describe('VFS MCP Tools', () => {
   beforeEach(() => {
-    // Reset context before each test
-    toolContextStore.exit();
+    toolContextStore.disable();
   });
 
   afterEach(() => {
-    toolContextStore.exit();
+    toolContextStore.disable();
   });
 
   describe('toolContextStore', () => {
@@ -25,7 +24,6 @@ describe('VFS MCP Tools', () => {
     });
 
     it('should return context after setToolContext', () => {
-      const { setToolContext } = require('./vfs-mcp-tools');
       setToolContext({ userId: 'test-user', sessionId: 'test-session', scopePath: 'workspace/sessions/001' });
       const ctx = toolContextStore.getStore();
       expect(ctx).toBeDefined();
@@ -75,7 +73,7 @@ describe('VFS MCP Tools', () => {
     it('should return tool by name', () => {
       const writeTool = getVFSTool('write_file');
       expect(writeTool).toBeDefined();
-      expect(writeTool?.description).toContain('Create a new file');
+      expect(writeTool?.description).toContain('Create or overwrite a file');
     });
 
     it('should return undefined for unknown tool', () => {
@@ -106,8 +104,6 @@ describe('VFS MCP Tools', () => {
 
   describe('write_file tool execute', () => {
     it('should return error when content is undefined', async () => {
-      const { writeFileTool } = require('./vfs-mcp-tools');
-
       // Set context via toolContextStore.run
       const result = await toolContextStore.run(
         { userId: 'test-user', sessionId: 'test-session', scopePath: 'workspace' },
@@ -121,8 +117,6 @@ describe('VFS MCP Tools', () => {
     });
 
     it('should return error when content is null', async () => {
-      const { writeFileTool } = require('./vfs-mcp-tools');
-
       const result = await toolContextStore.run(
         { userId: 'test-user', sessionId: 'test-session', scopePath: 'workspace' },
         async () => {
@@ -137,8 +131,6 @@ describe('VFS MCP Tools', () => {
 
   describe('batch_write tool execute', () => {
     it('should return error when files array is empty', async () => {
-      const { batchWriteTool } = require('./vfs-mcp-tools');
-
       const result = await toolContextStore.run(
         { userId: 'test-user', sessionId: 'test-session', scopePath: 'workspace' },
         async () => {
@@ -151,8 +143,6 @@ describe('VFS MCP Tools', () => {
     });
 
     it('should return error when files is undefined', async () => {
-      const { batchWriteTool } = require('./vfs-mcp-tools');
-
       const result = await toolContextStore.run(
         { userId: 'test-user', sessionId: 'test-session', scopePath: 'workspace' },
         async () => {
@@ -161,7 +151,7 @@ describe('VFS MCP Tools', () => {
       );
 
       expect(result.success).toBe(false);
-      expect(result.error).toContain('No files provided');
+      expect(result.error).toContain('Failed to parse files argument');
     });
   });
 });

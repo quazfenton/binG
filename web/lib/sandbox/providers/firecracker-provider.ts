@@ -14,6 +14,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import type {
   SandboxProvider,
   SandboxHandle,
@@ -226,25 +227,27 @@ export class FirecrackerSandboxProvider implements SandboxProvider {
   }
 
   /**
-   * Check if Firecracker is available.
-   * Relies on FIRECRACKER_BIN env var or dev/test mode.
-   * The actual binary check is done at runtime by FirecrackerRuntime constructor.
-   * Avoids synchronous filesystem I/O for ESM/Next.js webpack compatibility.
+   * Check if Firecracker is actually available on this host.
+   * Verifies the binary exists AND KVM is accessible — avoids the previous
+   * bug where dev mode always returned true, causing 30s timeouts when
+   * Firecracker wasn't installed.
    */
   isAvailable(): boolean {
-    // Primary: FIRECRACKER_BIN env var is the authoritative config
-    if (process.env.FIRECRACKER_BIN) {
-      return true;
+    // FIRECRACKER_BIN env var is the authoritative config
+    const bin = process.env.FIRECRACKER_BIN || '/usr/bin/firecracker';
+    const jailerBin = process.env.JAILER_BIN || '/usr/bin/jailer';
+
+    // Verify the Firecracker and jailer binaries exist on disk
+    if (!existsSync(bin) || !existsSync(jailerBin)) {
+      return false;
     }
 
-    // Development/test: assume available
-    if (process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test') {
-      return true;
+    // Verify KVM device is accessible (required for microVM creation)
+    if (!existsSync('/dev/kvm')) {
+      return false;
     }
 
-    // Production without explicit config: not available
-    // The user must set FIRECRACKER_BIN to enable Firecracker
-    return false;
+    return true;
   }
 
   async healthCheck(): Promise<{ healthy: boolean; latency?: number; details?: any }> {
@@ -282,6 +285,7 @@ export class FirecrackerSandboxProvider implements SandboxProvider {
     // Create the VM with resource limits
     const vm = await this.runtime.createVM(sandboxId, {
       cpuCount,
+      kernelImagePath: process.env.FIRECRACKER_KERNEL_IMAGE || undefined,
       memorySize: memSizeMiB,
     });
 

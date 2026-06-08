@@ -12,6 +12,9 @@ export interface SandboxProvider {
 
   /** Health check - verifies API connectivity and sandbox creation capability */
   healthCheck?(): Promise<{ healthy: boolean; latency?: number; details?: any }>
+
+  /** List all active sandboxes for orphan cleanup */
+  listSandboxes?(): Promise<Array<{ id: string; name?: string; state?: string; labels?: Record<string, string> }>>
 }
 
 export interface SandboxHandle {

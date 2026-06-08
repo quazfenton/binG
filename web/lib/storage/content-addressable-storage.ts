@@ -80,12 +80,13 @@ interface CASConfig {
   compressBlobs: boolean;
   /** Compression threshold in bytes (default: 512 — same as compression.ts) */
   compressThreshold: number;
-  /** GC interval in ms (default: 1 hour). Set to 0 to disable periodic GC. */
+  /** GC interval in ms (default: 10 minutes). Set to 0 to disable periodic GC. */
   gcIntervalMs: number;
   /** Initial delay before first GC run in ms (default: 5 minutes — lets app stabilize) */
-  gcInitialDelayMs: number;
-  /** Max age in hours before an unreferenced blob is eligible for GC (default: 24) */
+  gcInitialDelayMs: number;    /** Max age in hours before an unreferenced blob is eligible for GC (default: 24) */
   gcMaxAgeHours: number;
+    /** Memory pressure threshold: cache usage % that triggers an immediate GC (default: 80) */
+  gcMemoryPressureThreshold: number;
 }
 
 function loadConfig(): CASConfig {
@@ -108,9 +109,10 @@ function loadConfig(): CASConfig {
     r2Enabled,
     compressBlobs: true,
     compressThreshold: 512,
-    gcIntervalMs: parseInt(process.env.CAS_GC_INTERVAL_MS || '3600000', 10),
+    gcIntervalMs: parseInt(process.env.CAS_GC_INTERVAL_MS || '600000', 10),
     gcInitialDelayMs: parseInt(process.env.CAS_GC_INITIAL_DELAY_MS || '300000', 10),
     gcMaxAgeHours: parseInt(process.env.CAS_GC_MAX_AGE_HOURS || '24', 10),
+    gcMemoryPressureThreshold: parseInt(process.env.CAS_GC_MEMORY_PRESSURE_PCT || '80', 10),
   };
 }
 
@@ -577,7 +579,8 @@ export class ContentAddressableStorage {
       const dataToWrite = this.shouldCompress(content) ? compress(content) : content;
       writeFileSync(cachePath, dataToWrite);
 
-      // Enforce cache size limit
+      // Enforce cache size limit + trigger memory-pressure GC if needed.
+      // Merged into a single scan to avoid double readdirSync+statSync.
       this.enforceCacheSize();
     } catch (error: any) {
       logger.warn('Failed to write to local cache', { hash, error: error.message });
@@ -585,7 +588,10 @@ export class ContentAddressableStorage {
   }
 
   /**
-   * Evict least-recently-accessed blobs from local cache if over limit.
+   * Evict least-recently-accessed blobs from local cache if over limit, and
+   * trigger a memory-pressure garbage collection run if the cache is approaching
+   * the configured threshold. Both operations share a single readdirSync+statSync
+   * scan to avoid redundant I/O on the hot write path.
    */
   private enforceCacheSize(): void {
     const maxBytes = this.config.cacheSizeMb * 1024 * 1024;
@@ -605,19 +611,41 @@ export class ContentAddressableStorage {
 
       let totalSize = entries.reduce((sum, e) => sum + e.size, 0);
 
-      if (totalSize <= maxBytes) return;
+      // ── Cache eviction: evict oldest when over the size limit ──────────────
+      if (totalSize > maxBytes) {
+        // Sort by access time (oldest first) and evict until under limit (with 10% headroom)
+        const ordered = entries.sort((a, b) => a.atimeMs - b.atimeMs);
+        const targetSize = Math.floor(maxBytes * 0.9);
 
-      // Sort by access time (oldest first) and evict until under limit (with 10% headroom)
-      const ordered = entries.sort((a, b) => a.atimeMs - b.atimeMs);
-      const targetSize = Math.floor(maxBytes * 0.9);
+        for (const entry of ordered) {
+          if (totalSize <= targetSize) break;
+          try {
+            unlinkSync(join(this.config.cacheDir, entry.name));
+            totalSize -= entry.size;
+          } catch {
+            // Concurrent access — skip
+          }
+        }
+      }
 
-      for (const entry of ordered) {
-        if (totalSize <= targetSize) break;
-        try {
-          unlinkSync(join(this.config.cacheDir, entry.name));
-          totalSize -= entry.size;
-        } catch {
-          // Concurrent access — skip
+      // ── Memory-pressure GC: fire if approaching threshold ─────────────────
+      const thresholdPct = this.config.gcMemoryPressureThreshold;
+      if (thresholdPct > 0) {
+        const usagePct = maxBytes > 0 ? (totalSize / maxBytes) * 100 : 0;
+        if (usagePct >= thresholdPct) {
+          // Fire-and-forget async GC with a shorter maxAge (1h) for pressure.
+          this.garbageCollect(1).then(result => {
+            if (result.removed > 0) {
+              logger.info('Memory-pressure GC triggered', {
+                usagePct: Math.round(usagePct),
+                thresholdPct,
+                removed: result.removed,
+                freedBytes: result.freedBytes,
+              });
+            }
+          }).catch((error: any) => {
+            logger.warn('Memory-pressure GC failed', { error: error.message });
+          });
         }
       }
     } catch {

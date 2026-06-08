@@ -711,7 +711,7 @@ export const writeFileTool = (tool as any)({
 
   return {
     success: true,
-    path: (result as any).path || path,
+    path: reverseNormalizePath(path, scopedPath),
     size: content.length,
     message: (result as any).message || `File written successfully`,
     version: (result as any).version ?? 1,
@@ -980,7 +980,7 @@ export const applyDiffTool = (tool as any)({
 
     return {
       success: true,
-      path: result.path,
+      path: reverseNormalizePath(path, scopedPath),
       message: `Search-and-replace applied: ${appliedCount} replacement(s)${failedSearches.length > 0 ? `, ${failedSearches.length} unmatched` : ''}`,
       version: result.version,
       appliedCount,
@@ -1069,7 +1069,7 @@ export const applyDiffTool = (tool as any)({
 
   return {
     success: true,
-    path: result.path,
+    path: reverseNormalizePath(path, scopedPath),
     message: 'Diff applied successfully',
     version: result.version,
   };
@@ -1330,11 +1330,11 @@ export const listFilesTool = (tool as any)({
   
   return {
     success: true,
-    path: listing.path,
+    path: reverseNormalizePath(path, scopedPath),
     nodes: listing.nodes.map(node => ({
   type: node.type,
   name: node.name,
-  path: node.path,
+  path: reverseNormalizePath(node.path, node.path),
   language: node.language,
   size: node.size,
   lastModified: node.lastModified,
@@ -1416,7 +1416,7 @@ export const searchFilesTool = (tool as any)({
     success: true,
     query,
     files: files.map((file: any) => ({
-  path: file.path,
+  path: reverseNormalizePath(file.path, file.path),
   name: file.name,
   language: file.language,
   score: file.score,
@@ -1727,14 +1727,14 @@ export const batchWriteTool = (tool as any)({
       userId: context.userId,
       version: result?.version,
     });
-    return { path: file.scopedPath, success: true, version: result.version };
+    return { path: reverseNormalizePath(file.path, file.scopedPath), success: true, version: result.version };
   } catch (error: any) {
     logger.error('batchWrite: single file failed', {
       scopedPath: file.scopedPath,
       error: error.message,
       stack: error.stack,
     });
-    return { path: file.scopedPath, success: false, error: error.message };
+    return { path: reverseNormalizePath(file.path, file.scopedPath), success: false, error: error.message };
   }
     })
   );
@@ -1921,7 +1921,7 @@ export const deleteFileTool = (tool as any)({
 
   return {
     success: true,
-    path: scopedPath,
+    path: reverseNormalizePath(path, scopedPath),
     deletedCount: result.deletedCount,
     message: `Deleted: ${reason || 'MCP tool request'}`,
   };
@@ -1995,7 +1995,7 @@ export const createDirectoryTool = (tool as any)({
 
   return {
     success: true,
-    path: result.path,
+    path: reverseNormalizePath(path, scopedPath),
     createdAt: result.createdAt,
     message: `Directory created: ${path}`,
   };

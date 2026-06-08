@@ -32,9 +32,8 @@ import {
 } from '@/lib/orchestra/shared-agent-context';
 import { workspaceReplayService } from '@/lib/workspace/workspace-replay-service';
 
-// CoreMessage may not be exported in all AI SDK versions
-// @ts-ignore - CoreMessage is used for type hints but may not be available
-import type { CoreMessage } from 'ai';
+// ModelMessage is the v6 replacement for CoreMessage.
+import type { ModelMessage } from 'ai';
 
 const log = createLogger('MastraAgent');
 
@@ -254,7 +253,7 @@ export class AgentLoop {
 
       // Build messages with system prompt (passed via system param, not messages array)
       const systemPrompt = this.buildSystemPrompt();
-      const messages: CoreMessage[] = this.context.conversationHistory
+      const messages: ModelMessage[] = this.context.conversationHistory
         .filter(m => m.role !== 'system')
         .map(m => ({
           role: m.role,
@@ -393,7 +392,7 @@ export class AgentLoop {
 
       // Build messages with system prompt (passed via system param, not messages array)
       const systemPrompt = this.buildSystemPrompt();
-      const messages: CoreMessage[] = this.context.conversationHistory
+      const messages: ModelMessage[] = this.context.conversationHistory
         .filter(m => m.role !== 'system')
         .map(m => ({
           role: m.role,
@@ -1326,7 +1325,7 @@ export class AgentLoop {
       
       // Build messages with tool results (system is handled by streamWithVercelAI's convertMessages)
       const systemPrompt = this.buildSystemPrompt();
-      const messages: CoreMessage[] = [
+      const messages: ModelMessage[] = [
         { role: 'system', content: systemPrompt },
         ...this.context.conversationHistory
           .filter(m => m.role !== 'system')

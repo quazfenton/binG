@@ -6,7 +6,7 @@
  */
 
 import { secureRandom } from '../utils';
-import { generateObject } from 'ai';
+import { generateText, Output } from 'ai';
 import { z } from 'zod';
 
 export interface ReflectionPerspective {
@@ -205,10 +205,10 @@ Provide specific, actionable improvements and rate your confidence (0-1).
     }
 
     try {
-      const result = await generateObject({
+      const result = await generateText({
         model,
         prompt: analysisPrompt,
-        schema: ReflectionOutputSchema,
+        output: Output.object({ schema: ReflectionOutputSchema }),
         maxOutputTokens: 500,
         temperature: 0.1,
       });

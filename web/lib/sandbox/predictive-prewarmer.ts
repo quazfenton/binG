@@ -57,6 +57,15 @@ export interface PrewarmResult {
 // Predictive Prewarmer
 // ============================================================================
 
+// FIX: Module-level flag to track whether any sandbox has actually been requested
+// by a user. Predictive prewarming should only fire for users who have demonstrated
+// intent to use sandboxes — otherwise we waste provider resources on idle sessions.
+let _hasRequestedSandbox = false;
+
+export function notifySandboxRequested(): void {
+  _hasRequestedSandbox = true;
+}
+
 export class PredictivePrewarmer {
   /** Whether predictive prewarming is enabled */
   private readonly ENABLED = process.env.PREDICTIVE_PREWARM_ENABLED !== 'false';
@@ -90,6 +99,17 @@ export class PredictivePrewarmer {
     userId: string,
   ): Promise<PrewarmResult> {
     if (!this.ENABLED || !workspaceImageRegistry.isEnabled()) {
+      return { attempted: false, imageBuilt: false };
+    }
+
+    // FIX: Skip prewarming if no sandbox has been requested in this process lifetime.
+    // Creating a sandbox, provisioning deps, and building a checkpoint image only to
+    // destroy it immediately wastes provider resources when the user has no active
+    // sandbox sessions. Wait until a sandbox is actually requested before prewarming.
+    if (!_hasRequestedSandbox) {
+      logger.debug('Skipping predictive prewarming — no sandbox requested yet', {
+        workspaceId: workspaceId.slice(0, 16),
+      });
       return { attempted: false, imageBuilt: false };
     }
 

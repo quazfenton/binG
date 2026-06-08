@@ -723,21 +723,23 @@ export class EnhancedBackgroundJobsManager extends EventEmitter {
 
     try {
       // Use LLM to evaluate stop condition
-      const { generateObject } = await import('ai');
+      const { generateText, Output } = await import('ai');
       const { z } = await import('zod');
 
-      // generateObject requires a LanguageModel provider object, not a string
+      // generateText with Output.object requires a LanguageModel provider object, not a string
       const model = this.stateManager.getModel?.();
       if (!model) {
         logger.warn('Stop condition evaluation skipped: no model configured', { jobId: job.jobId });
         return false;
       }
 
-      const result = await generateObject({
+      const result = await generateText({
         model,
-        schema: z.object({
-          shouldStop: z.boolean().describe('Whether the job should stop based on the condition'),
-          reason: z.string().describe('Reason for the decision'),
+        output: Output.object({
+          schema: z.object({
+            shouldStop: z.boolean().describe('Whether the job should stop based on the condition'),
+            reason: z.string().describe('Reason for the decision'),
+          }),
         }),
         messages: [
           {

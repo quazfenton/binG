@@ -101,6 +101,8 @@ export class SandboxOrchestrator {
   private readonly MIGRATION_MEMORY_THRESHOLD = 90;
 
   constructor() {
+    if ((globalThis as any).__sandboxOrchestratorInited) return;
+    (globalThis as any).__sandboxOrchestratorInited = true;
     void this.initializeWarmPool();
     this.startIdleCleanup();
     this.startAffinityCleanup();
@@ -697,7 +699,31 @@ export class SandboxOrchestrator {
 
     for (const provider of providers) {
       this.warmPool.set(provider, []);
+      // Clean up orphaned sandboxes from previous server instances
+      await this.cleanupOrphanedWarmPool(provider);
       await this.replenishWarmPool(provider);
+    }
+  }
+
+  private async cleanupOrphanedWarmPool(provider: SandboxProviderType): Promise<void> {
+    try {
+      const prov = await getSandboxProvider(provider);
+      if (!prov.listSandboxes) return;
+      const sandboxes = await prov.listSandboxes();
+      const orphaned = sandboxes.filter(
+        (sbx) => sbx.labels?.createdBy === 'sandbox-orchestrator'
+      );
+      if (orphaned.length === 0) return;
+      logger.info('Cleaning up orphaned sandboxes', { provider, count: orphaned.length });
+      for (const sbx of orphaned) {
+        try {
+          await prov.destroySandbox(sbx.id);
+        } catch {
+          // Best-effort — sandbox may already be gone
+        }
+      }
+    } catch {
+      // Best-effort — provider may not support listing
     }
   }
 
@@ -1086,7 +1112,11 @@ export class SandboxOrchestrator {
       },
     });
 
-    await handle.executeCommand(`mkdir -p "${workspaceDir.replace(/(["\\$`])/g, '\\$1')}"`);
+    const sandboxRoot = handle.workspaceDir || '/';
+    const sandboxWorkspaceDir = workspaceDir.startsWith(sandboxRoot)
+      ? workspaceDir
+      : `${sandboxRoot.replace(/\/+$/, '')}${workspaceDir}`;
+    await handle.executeCommand(`mkdir -p "${sandboxWorkspaceDir.replace(/(["\\$`])/g, '\\$1')}"`);
 
     // Start VFS sync for bidirectional file sync between VFS database and sandbox
     // Skip for warm pool sandboxes — they have no user data to sync and would

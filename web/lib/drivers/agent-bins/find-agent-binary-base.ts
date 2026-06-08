@@ -228,6 +228,30 @@ function resolveBinaryPath(config: AgentBinaryConfig, maxCommandAttempts: number
     return normalizePath(envValue);
   }
 
+  // FIX: Short-circuit on server — agent binaries (claude, opencode, pi, etc.)
+  // never exist on the server. Skip the costly command-based detection and
+  // default path checks to save ~200ms per agent type on startup.
+  const isServerSide = typeof window === 'undefined' && !process.env.CI;
+  if (isServerSide) {
+    // Only check explicit env var and npm global (which may exist in containers)
+    const cache = getCache(config.name);
+    if (cache.npmPrefix === undefined) {
+      cache.npmPrefix = resolveNpmPrefix();
+    }
+    if (cache.npmPrefix) {
+      const isWindows = process.platform === 'win32';
+      const npmPath = isWindows
+        ? normalizePath(join(cache.npmPrefix, config.npmWrapperWindows || `${config.binName}.cmd`))
+        : normalizePath(join(cache.npmPrefix, 'bin', config.binName));
+      if (existsSync(npmPath)) {
+        logger.info(`Found at npm global: ${npmPath}`);
+        return npmPath;
+      }
+    }
+    logger.debug(`Server-side: skipping command detection for ${config.name} binary`);
+    return null;
+  }
+
   // Step 2: Command-based detection
   const commands = buildDetectionCommands(config.binName);
   let attempts = 0;

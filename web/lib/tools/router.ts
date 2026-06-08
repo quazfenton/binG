@@ -2453,13 +2453,13 @@ export class CapabilityRouter {
     capability: CapabilityDefinition,
   ): Promise<Record<string, unknown> | null> {
     try {
-      const { generateObject } = await import('ai');
+      const { generateText, Output } = await import('ai');
 
       // Use a fast, cheap model for healing
       const { createMistral } = await import('@ai-sdk/mistral');
       const model = createMistral({ apiKey: process.env.MISTRAL_API_KEY || '' })('mistral-small-latest');
 
-      const { object } = await generateObject({
+      const result = await generateText({
         model,
         prompt: `A tool call failed. Fix the input arguments.
 
@@ -2472,12 +2472,12 @@ Expected Schema:
 ${JSON.stringify(capability.inputSchema, null, 2)}
 
 Return ONLY the corrected input object as JSON.`,
-        schema: capability.inputSchema,
+        output: Output.object({ schema: capability.inputSchema }),
         maxOutputTokens: 500,
         temperature: 0.1,
       });
 
-      return object as Record<string, unknown>;
+      return result.object as Record<string, unknown>;
     } catch (healError: any) {
       logger.debug(`[CapabilityRouter] Self-heal attempt failed for ${capabilityId}: ${healError.message}`);
       return null;

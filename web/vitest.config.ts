@@ -124,8 +124,6 @@ export const UNIMPLEMENTED_MODULE_TEST_PATTERNS = [
   '**/__tests__/e2e/workflow-integration.test.ts',
   // LLM tool integration — requires LLM API keys
   '**/__tests__/integration/llm-tool-integration.test.ts',
-  // MCP VFS tools — requires MCP server
-  '**/__tests__/mcp/vfs-mcp-tools.test.ts',
   // Bash self-heal terminal — requires node-pty
   '**/__tests__/bash-selfheal-terminal.test.ts',
   // Security comprehensive — imports from missing modules

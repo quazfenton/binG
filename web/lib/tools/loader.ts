@@ -32,16 +32,51 @@ const log = createLogger('Tools:Loader');
 // ============================================================================
 
 /**
- * Directory where core capability SKILL.md files live.
- * Uses __dirname (this file is at web/lib/tools/) so path is always correct
- * regardless of process.cwd().
+ * Resolve the directory where core capability SKILL.md files live.
+ *
+ * In development (tsx / ts-node), __dirname correctly resolves to
+ * `.../web/lib/tools/`. In Next.js production builds, the compiled
+ * output in `.next/` has a different directory structure, so __dirname
+ * resolves to a build-time path instead of the runtime source tree.
+ *
+ * This function tries multiple strategies in order:
+ *   1. Environment variable CORE_CAPABILITIES_DIR (explicit override)
+ *   2. __dirname-based (works in dev/raw Node.js)
+ *   3. process.cwd() relative to project root (works when running from /app or /opt/bing)
+ *   4. process.cwd() relative to web/ subdirectory
  */
 function resolveCoreCapabilitiesDir(): string {
-  // Avoid importing `path` at the module level — some bundlers tree-shake
-  // it aggressively. Use runtime require/inline instead.
   const path = require('path') as typeof import('path');
-  // __dirname is .../web/lib/tools, so path.join(__dirname, 'base') = .../web/lib/tools/base
-  return path.join(__dirname, 'base');
+
+  // Strategy 1: explicit env override
+  if (process.env.CORE_CAPABILITIES_DIR) {
+    return path.resolve(process.env.CORE_CAPABILITIES_DIR);
+  }
+
+  // Strategy 2: __dirname-based (dev mode, raw Node.js)
+  // __dirname is .../web/lib/tools, so join 'base' = .../web/lib/tools/base
+  const dirnamePath = path.join(__dirname, 'base');
+
+  // Strategy 3: process.cwd() relative to project root (containerized / Docker)
+  // In production containers, the working directory is typically /app or /opt/bing
+  const cwdPath = path.join(process.cwd(), 'web/lib/tools/base');
+
+  // Strategy 4: process.cwd() might be inside web/ itself
+  const cwdWebPath = path.join(process.cwd(), 'lib/tools/base');
+
+  // Try to find the first path that actually exists on disk.
+  // We avoid importing fs at module level — do it lazily here.
+  try {
+    const fs = require('fs') as typeof import('fs');
+    if (fs.existsSync(dirnamePath)) return dirnamePath;
+    if (fs.existsSync(cwdPath)) return cwdPath;
+    if (fs.existsSync(cwdWebPath)) return cwdWebPath;
+  } catch {
+    // fs not available (edge runtime) — fall through to return the default
+  }
+
+  // Default: return __dirname-based (will produce the warning at call site)
+  return dirnamePath;
 }
 
 // ============================================================================

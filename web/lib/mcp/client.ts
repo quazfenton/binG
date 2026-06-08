@@ -69,10 +69,189 @@ interface MCPNotification {
   params?: any
 }
 
+// ============================================================================
+// Node.js EventSource Polyfill (uses built-in fetch for SSE)
+// ============================================================================
+
+/**
+ * A minimal EventSource-compatible implementation for Node.js.
+ * Uses the built-in `fetch` API (available in Node 18+) to connect to
+ * Server-Sent Events endpoints when the browser `EventSource` global is
+ * not available.
+ *
+ * Implements the subset of the EventSource API used by connectSSE:
+ *   onopen, onerror, onmessage, addEventListener, close()
+ */
+class NodeEventSource {
+  private url: string;
+  private controller: AbortController;
+  private listeners: Map<string, Set<(event: any) => void>> = new Map();
+
+  onopen: (() => void) | null = null;
+  onerror: ((event: any) => void) | null = null;
+  onmessage: ((event: any) => void) | null = null;
+
+  /** @internal exposed for testing */
+  CONNECTING = 0;
+  OPEN = 1;
+  CLOSED = 2;
+  readyState: number = 0;
+
+  constructor(url: string) {
+    this.url = url;
+    this.controller = new AbortController();
+    this.connect();
+  }
+
+  private async connect(): Promise<void> {
+    try {
+      const response = await fetch(this.url, {
+        signal: this.controller.signal,
+        headers: {
+          'Accept': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+        },
+      });
+
+      if (!response.ok) {
+        const err = new Error(`SSE HTTP ${response.status}: ${response.statusText}`);
+        this.onerror?.(err);
+        return;
+      }
+
+      this.readyState = 1; // OPEN
+      this.onopen?.();
+
+      const reader = response.body?.getReader();
+      if (!reader) {
+        this.onerror?.(new Error('SSE response has no readable body'));
+        return;
+      }
+
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let lastEventType = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+
+        // SSE parser: split on double-newline (event boundary)
+        const parts = buffer.split('\n\n');
+        buffer = parts.pop() || '';
+
+        for (const part of parts) {
+          if (!part.trim()) continue;
+
+          let data = '';
+          const lines = part.split('\n');
+          for (const line of lines) {
+            if (line.startsWith('event: ')) {
+              lastEventType = line.slice(7).trim();
+            } else if (line.startsWith('data: ')) {
+              data += line.slice(6) + '\n';
+            } else if (line.startsWith('data:')) {
+              data += line.slice(5) + '\n';
+            } else if (line === '') {
+              // blank line within event — preserve
+              data += '\n';
+            }
+          }
+
+          if (data.endsWith('\n')) {
+            data = data.slice(0, -1);
+          }
+
+          if (data) {
+            const event = { data, type: lastEventType || 'message' };
+            // Dispatch to type-specific listeners (addEventListener)
+            const specificListeners = this.listeners.get(event.type);
+            if (specificListeners) {
+              for (const listener of specificListeners) {
+                listener(event);
+              }
+            }
+            // Dispatch to onmessage for 'message' type events
+            if (event.type === 'message' || !event.type) {
+              this.onmessage?.(event);
+            }
+            lastEventType = '';
+          }
+        }
+      }
+    } catch (err: any) {
+      if (err.name !== 'AbortError') {
+        this.onerror?.(err);
+      }
+    } finally {
+      this.readyState = 2; // CLOSED
+    }
+  }
+
+  addEventListener(type: string, listener: (event: any) => void): void {
+    if (!this.listeners.has(type)) {
+      this.listeners.set(type, new Set());
+    }
+    this.listeners.get(type)!.add(listener);
+  }
+
+  close(): void {
+    this.controller.abort();
+    this.readyState = 2; // CLOSED
+  }
+}
+
+// ============================================================================
+// Simple HTTP fetch helper for SSE-based POST requests
+// ============================================================================
+
+/**
+ * Send a JSON-RPC message to an MCP server via HTTP POST (used for SSE transport).
+ */
+async function ssePost(
+  endpointUrl: string,
+  body: string,
+  authToken?: string,
+  timeout: number = 10000,
+): Promise<void> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+  try {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (authToken) {
+      headers['Authorization'] = `Bearer ${authToken}`;
+    }
+
+    const response = await fetch(endpointUrl, {
+      method: 'POST',
+      headers,
+      body,
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`SSE POST returned HTTP ${response.status}: ${response.statusText}`);
+    }
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+// ============================================================================
+// MCP Client
+// ============================================================================
+
 /**
  * MCP Client class for connecting to and interacting with MCP servers
  */
 export class MCPClient extends EventEmitter {
+  private eventSourceInstance: { close: () => void } | null = null;
+  private sseEndpoint: string = '';
   private config: MCPTransportConfig
   private connectionInfo: MCPConnectionInfo
   private requestId: number = 0
@@ -556,24 +735,56 @@ export class MCPClient extends EventEmitter {
     return new Promise((resolve, reject) => {
       try {
         const url = new URL(this.config.url!);
-        const eventSource = typeof EventSource !== 'undefined' ? new EventSource(url.toString()) : null;
 
-        if (!eventSource) { reject(new Error('EventSource not available on this platform')); return; }
+        // Create EventSource — use the native browser API if available,
+        // otherwise fall back to the Node.js fetch-based polyfill.
+        const eventSource: any =
+          typeof EventSource !== 'undefined'
+            ? new EventSource(url.toString())
+            : new NodeEventSource(url.toString());
+
+        let isConnected = false;
         eventSource.onopen = () => {
           console.log(`[MCPClient] SSE connection opened to ${url}`);
+          isConnected = true;
           resolve();
         };
 
-        eventSource.onerror = (error) => {
-          console.error('[MCPClient] SSE connection error:', error);
-          reject(new Error(`SSE connection failed: ${JSON.stringify(error)}`));
+        eventSource.onerror = (error: any) => {
+          if (!isConnected) {
+            // Initial connection failed — reject so the caller can retry
+            reject(new Error(`SSE connection failed: ${error?.message || JSON.stringify(error)}`));
+            return;
+          }
+          // Stream error after successful connection — just warn (server may reconnect)
+          console.warn('[MCPClient] SSE stream error — will attempt reconnect');
         };
 
-        eventSource.addEventListener('message', (event) => {
+        // Listen for the MCP 'endpoint' event which tells us where to POST
+        // JSON-RPC requests. Standard SSE MCP transport sends this as the
+        // very first event after connecting.
+        eventSource.addEventListener('endpoint', (event: any) => {
+          if (event.data) {
+            const endpointUrl = event.data.trim();
+            if (endpointUrl) {
+              // Resolve relative URLs against the SSE base URL
+              try {
+                this.sseEndpoint = new URL(endpointUrl, url).toString();
+              } catch {
+                this.sseEndpoint = endpointUrl;
+              }
+              console.log(`[MCPClient] SSE endpoint discovered: ${this.sseEndpoint}`);
+            }
+          }
+        });
+
+        eventSource.addEventListener('message', (event: any) => {
           if (event.data) {
             this.handleMessage(event.data);
           }
         });
+
+        this.eventSourceInstance = eventSource;
 
         this.on('disconnected', () => {
           eventSource.close();
@@ -625,11 +836,11 @@ export class MCPClient extends EventEmitter {
           ws.close();
         });
 
-        this.sendRequest = (request: MCPRequest) => {
+        this._wsSendRequest = (request: MCPRequest) => {
           ws.send(JSON.stringify(request));
         };
 
-        this.sendNotification = (notification: MCPNotification) => {
+        this._wsSendNotification = (notification: MCPNotification) => {
           ws.send(JSON.stringify(notification));
         };
 
@@ -685,7 +896,11 @@ export class MCPClient extends EventEmitter {
         timeout: timeoutId,
       })
 
-      this.sendRequest(request)
+      this.sendRequest(request).catch((err) => {
+        clearTimeout(timeoutId)
+        this.pendingRequests.delete(id)
+        reject(err)
+      })
     })
   }
 
@@ -695,25 +910,53 @@ export class MCPClient extends EventEmitter {
       method,
       params,
     }
-    this.sendNotification(notification)
+    await this.sendNotification(notification)
   }
 
-  private sendRequest(request: MCPRequest): void {
-    if (!this.process?.stdin) {
-      throw new Error('Not connected')
+  /** WebSocket send override — set by connectWebSocket */
+  private _wsSendRequest: ((request: MCPRequest) => void) | null = null;
+  private _wsSendNotification: ((notification: MCPNotification) => void) | null = null;
+
+  private async sendRequest(request: MCPRequest): Promise<void> {
+    if (this._wsSendRequest) {
+      // WebSocket transport
+      this._wsSendRequest(request);
+    } else if (this.config.type === 'sse' && this.sseEndpoint) {
+      // SSE transport: POST JSON-RPC to the discovered endpoint
+      await ssePost(
+        this.sseEndpoint,
+        JSON.stringify(request) + '\n',
+        this.config.authToken,
+        this.config.timeout,
+      );
+    } else if (this.process?.stdin) {
+      // stdio transport: write to stdin
+      const message = JSON.stringify(request) + '\n';
+      this.process.stdin.write(message);
+    } else {
+      throw new Error('Not connected');
     }
-    
-    const message = JSON.stringify(request) + '\n'
-    this.process.stdin.write(message)
   }
 
-  private sendNotification(notification: MCPNotification): void {
-    if (!this.process?.stdin) {
-      throw new Error('Not connected')
+  private async sendNotification(notification: MCPNotification): Promise<void> {
+    if (this._wsSendNotification) {
+      // WebSocket transport
+      this._wsSendNotification(notification);
+    } else if (this.config.type === 'sse' && this.sseEndpoint) {
+      // SSE transport: POST JSON-RPC to the discovered endpoint
+      await ssePost(
+        this.sseEndpoint,
+        JSON.stringify(notification) + '\n',
+        this.config.authToken,
+        this.config.timeout,
+      );
+    } else if (this.process?.stdin) {
+      // stdio transport: write to stdin
+      const message = JSON.stringify(notification) + '\n';
+      this.process.stdin.write(message);
+    } else {
+      throw new Error('Not connected');
     }
-    
-    const message = JSON.stringify(notification) + '\n'
-    this.process.stdin.write(message)
   }
 
   private handleMessage(data: string): void {

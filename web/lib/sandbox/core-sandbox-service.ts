@@ -4,6 +4,7 @@ import { saveSession, updateSession, deleteSession } from '../storage/session-st
 import { setupCacheVolumes } from './dep-cache'
 import { provisionBaseImage, warmPool } from './base-image'
 import { workspaceImageBuilder } from './workspace-image-builder'
+import { notifySandboxRequested } from './predictive-prewarmer'
 import { randomUUID } from 'crypto'
 import { quotaManager } from '../management/quota-manager'
 import { createLogger } from '@/lib/utils/logger'
@@ -424,6 +425,12 @@ export class SandboxService {
     }
 
     log.info(`Workspace session created: ${session.sessionId} (sandbox: ${handle.id})`)
+    
+    // FIX: Notify the prewarmer that a sandbox has been requested, enabling
+    // predictive prewarming for subsequent sessions.
+    try {
+      notifySandboxRequested();
+    } catch { /* non-critical */ }
     
     // Save session to store
     try {

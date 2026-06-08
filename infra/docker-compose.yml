@@ -140,6 +140,14 @@ services:
       - WORKSPACE_DIR=/tmp/workspaces
       - RUNTIME_TYPE=${RUNTIME_TYPE:-process}
 
+      # Firecracker microVM sandboxing
+      - FIRECRACKER_BIN=${FIRECRACKER_BIN:-/firecracker/bin/firecracker}
+      - JAILER_BIN=${JAILER_BIN:-/firecracker/bin/jailer}
+      - FIRECRACKER_BASE_DIR=${FIRECRACKER_BASE_DIR:-/tmp/firecracker}
+      - FIRECRACKER_WORKSPACE_DIR=${FIRECRACKER_WORKSPACE_DIR:-/tmp/firecracker-workspaces}
+      - FIRECRACKER_KERNEL_IMAGE=${FIRECRACKER_KERNEL_IMAGE:-/firecracker/kernel/vmlinux.bin}
+      - FIRECRACKER_ROOTFS_IMAGE=${FIRECRACKER_ROOTFS_IMAGE:-/firecracker/rootfs/rootfs.ext4}
+
       # Authentication
       - JWT_SECRET=${JWT_SECRET:?JWT_SECRET required}
       - JWT_ALGORITHM=${JWT_ALGORITHM:-HS256}
@@ -177,6 +185,22 @@ services:
     volumes:
       - app-workspaces:/tmp/workspaces
       - app-snapshots:/tmp/snapshots
+      - firecracker-bin:/firecracker:ro  # Firecracker binaries + kernel (requires firecracker profile)
+    # Firecracker microVM support — requires firecracker-setup profile + KVM host.
+    # NOTE: These elevated privileges (KVM, NET_ADMIN, SYS_ADMIN) apply to the app
+    # container unconditionally. On hosts without KVM, /dev/kvm is silently ignored
+    # by Docker. On non-Firecracker deployments, remove this block for least-privilege.
+    #
+    # The firecracker-setup service creates a 512MiB ext4 Alpine rootfs image at
+    # /firecracker/rootfs/rootfs.ext4. The runtime copies this base image into each
+    # VM's private directory on creation so every microVM gets its own writable copy.
+    devices:
+      - /dev/kvm:/dev/kvm
+    cap_add:
+      - NET_ADMIN
+      - SYS_ADMIN
+    security_opt:
+      - apparmor:unconfined
     depends_on:
       agent-gateway:
         condition: service_healthy
@@ -449,6 +473,156 @@ services:
       - "com.bing.nullclaw.enabled=${NULLCLAW_ENABLED:-true}"
 
   # ===========================================
+  # Firecracker Setup (Optional - Downloads binaries + kernel for microVM sandboxes)
+  # ===========================================
+  # Downloads Firecracker VMM, jailer, and a compatible Linux kernel to shared
+  # volumes so the app service can create microVM-isolated sandboxes via KVM.
+  #
+  # REQUIREMENTS:
+  # - Linux host with KVM enabled (/dev/kvm)
+  # - Hardware virtualization support (VT-x/AMD-V)
+  # - ~150MB disk for binaries + kernel image
+  #
+  # USAGE:
+  #   docker compose --profile firecracker up -d firecracker-setup
+  #   docker compose up -d app  (app mounts the firecracker-bin volume)
+  firecracker-setup:
+    image: alpine:3.21
+    container_name: bing-firecracker-setup
+    restart: "no"
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        echo "[firecracker-setup] Downloading Firecracker v1.10.1 binaries..."
+        mkdir -p /firecracker/bin /firecracker/kernel
+
+        # Download Firecracker VMM binary
+        if [ ! -f /firecracker/bin/firecracker ]; then
+          ARCH=$(uname -m)
+          wget -q -O /firecracker/bin/firecracker \
+            https://github.com/firecracker-microvm/firecracker/releases/download/v1.10.1/firecracker-v1.10.1-$${ARCH}
+          chmod +x /firecracker/bin/firecracker
+        fi
+
+        # Download Jailer binary
+        if [ ! -f /firecracker/bin/jailer ]; then
+          ARCH=$(uname -m)
+          wget -q -O /firecracker/bin/jailer \
+            https://github.com/firecracker-microvm/firecracker/releases/download/v1.10.1/jailer-v1.10.1-$${ARCH}
+          chmod +x /firecracker/bin/jailer
+        fi
+
+        # Download Firecracker-compatible Linux kernel (vmlinux)
+        if [ ! -f /firecracker/kernel/vmlinux.bin ]; then
+          ARCH=$(uname -m)
+          wget -q -O /firecracker/kernel/vmlinux.bin \
+            "https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.10/$${ARCH}/vmlinux-5.10.225"
+        fi
+
+        # ---- Rootfs: Create Alpine ext4 image ----
+        if [ ! -f /firecracker/rootfs/rootfs.ext4 ]; then
+          # Install prerequisites (only needed when building the rootfs)
+          apk add --no-cache e2fsprogs curl
+          mkdir -p /firecracker/rootfs
+          echo "[firecracker-setup] Creating Alpine rootfs image (512MiB)..."
+
+          ROOTFS_DIR=$(mktemp -d)
+          ARCH=$(uname -m)
+
+          # Map uname arch to Alpine release naming
+          case "$${ARCH}" in
+            x86_64)  ALPINE_ARCH="x86_64"  ;;
+            aarch64) ALPINE_ARCH="aarch64" ;;
+            *)       echo "[firecracker-setup] Unsupported arch: $${ARCH}"; exit 1 ;;
+          esac
+
+          # Download and extract Alpine mini rootfs tarball
+          echo "[firecracker-setup] Downloading Alpine mini rootfs (v3.21)..."
+          curl -fsSL \
+            "https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/${ALPINE_ARCH}/alpine-minirootfs-3.21.3-${ALPINE_ARCH}.tar.gz" \
+            | tar xz -C "$${ROOTFS_DIR}"
+
+          # ---- Configure rootfs with Dropbear SSH server for guest agent ----
+          echo "[firecracker-setup] Configuring rootfs with Dropbear SSH server..."
+
+          # Set up Alpine APK repositories
+          mkdir -p "$${ROOTFS_DIR}/etc/apk"
+          echo "https://dl-cdn.alpinelinux.org/alpine/v3.21/main" > "$${ROOTFS_DIR}/etc/apk/repositories"
+          echo "https://dl-cdn.alpinelinux.org/alpine/v3.21/community" >> "$${ROOTFS_DIR}/etc/apk/repositories"
+
+          # Install openrc + dropbear into the rootfs
+          # --initdb ensures the APK database is initialized inside the target root
+          apk add --root "$${ROOTFS_DIR}" --initdb --no-cache \
+            openrc dropbear busybox-initscripts 2>&1 | tail -3
+
+          # Generate dropbear host keys on the host container, copy into rootfs
+          mkdir -p /tmp/dropbear-keys
+          dropbearkey -t ed25519 -f /tmp/dropbear-keys/dropbear_ed25519_host_key 2>&1 | tail -1
+          dropbearkey -t rsa -f /tmp/dropbear-keys/dropbear_rsa_host_key 2>&1 | tail -1
+          mkdir -p "$${ROOTFS_DIR}/etc/dropbear"
+          cp /tmp/dropbear-keys/* "$${ROOTFS_DIR}/etc/dropbear/"
+          chmod 600 "$${ROOTFS_DIR}/etc/dropbear/"*
+          rm -rf /tmp/dropbear-keys
+
+          # Create /root/.ssh for authorized key injection per VM
+          mkdir -p "$${ROOTFS_DIR}/root/.ssh"
+          chmod 700 "$${ROOTFS_DIR}/root/.ssh"
+          # Placeholder — FirecrackerRuntime injects the runtime's public key via debugfs
+          # before each VM starts, so every VM gets a unique authorized key.
+          touch "$${ROOTFS_DIR}/root/.ssh/authorized_keys"
+          chmod 600 "$${ROOTFS_DIR}/root/.ssh/authorized_keys"
+
+          # Enable the boot-time 'local' service so the startup script runs
+          mkdir -p "$${ROOTFS_DIR}/etc/runlevels/default"
+          ln -sf /etc/init.d/local "$${ROOTFS_DIR}/etc/runlevels/default/local"
+
+          # Create the VM startup script (runs after boot via OpenRC local service)
+          mkdir -p "$${ROOTFS_DIR}/etc/local.d"
+          cat > "$${ROOTFS_DIR}/etc/local.d/firecracker.start" << 'VMSCRIPT'
+#!/bin/sh
+# Firecracker VM startup — configures network and starts Dropbear SSH
+# The kernel's ip= boot param assigns the IP; we just bring the link up.
+ip link set lo up 2>/dev/null || true
+ip link set eth0 up 2>/dev/null || true
+
+# Start Dropbear SSH server for host-to-VM command execution
+/usr/sbin/dropbear -E -r /etc/dropbear/dropbear_ed25519_host_key 2>&1 | \
+  logger -t dropbear &
+
+# Signal that the VM is ready (visible in VM console / serial log)
+echo "[firecracker-vm] SSH guest agent started on eth0"
+VMSCRIPT
+          chmod +x "$${ROOTFS_DIR}/etc/local.d/firecracker.start"
+
+          # Create a sparse ext4 image and populate it from the rootfs directory
+          echo "[firecracker-setup] Creating ext4 filesystem..."
+          truncate -s 512M /firecracker/rootfs/rootfs.ext4
+          mkfs.ext4 -F -d "$${ROOTFS_DIR}" /firecracker/rootfs/rootfs.ext4
+
+          # Clean up temp files
+          rm -rf "$${ROOTFS_DIR}"
+          echo "[firecracker-setup] Rootfs image created: /firecracker/rootfs/rootfs.ext4"
+        fi
+
+        echo "[firecracker-setup] Done. All assets installed to /firecracker/"
+        ls -lh /firecracker/bin/ /firecracker/kernel/ /firecracker/rootfs/
+
+        # Keep container alive so the volume stays mounted for other services
+        echo "[firecracker-setup] Idling to keep volume available..."
+        tail -f /dev/null
+    volumes:
+      - firecracker-bin:/firecracker
+    profiles:
+      - firecracker
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+
+  # ===========================================
   # Zeroboot (Optional - KVM-based Code Execution)
   # ===========================================
   # Sub-millisecond VM sandboxes for untrusted code execution.
@@ -538,6 +712,8 @@ volumes:
   postgres-data:
     driver: local
   nullclaw-config:
+    driver: local
+  firecracker-bin:
     driver: local
   zeroboot-templates:
     driver: local

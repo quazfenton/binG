@@ -277,7 +277,7 @@ export class E2BProvider implements SandboxProvider {
   /**
    * List all active sandboxes
    */
-  async listSandboxes(): Promise<Array<{ id: string; template: string; createdAt: Date }>> {
+  async listSandboxes(): Promise<Array<{ id: string; name?: string; state?: string; labels?: Record<string, string> }>> {
     if (!this.apiKey) {
       return []
     }
@@ -289,10 +289,12 @@ export class E2BProvider implements SandboxProvider {
       const Sandbox = this.e2bModule.Sandbox
 
       const sandboxes = await Sandbox.list()
+      if (!Array.isArray(sandboxes)) return []
       return sandboxes.map((sbx: any) => ({
         id: sbx.sandboxId,
-        template: sbx.template,
-        createdAt: new Date(sbx.startedAt),
+        name: sbx.template,
+        state: sbx.running ? 'running' : 'stopped',
+        labels: sbx.metadata,
       }))
     } catch (error) {
       console.error('[E2BProvider] Failed to list sandboxes:', error)

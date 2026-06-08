@@ -146,6 +146,11 @@ const _hasOpenCodeSDKPackage = _hasOpenCodeSDKPackageCheck();
 
 const log = createLogger('UnifiedAgentService');
 
+// SelfHeal carry-forward cache: stores the provider+model that succeeded
+// on the most recent attempt so SelfHeal retries can skip dead providers.
+let _selfHealProvider: string | null = null;
+let _selfHealModel: string | null = null;
+
 /**
  * Resolve dynamic default provider/model using model-ranker.
  * Shared across all execution paths to avoid hardcoding 'mistral'/'mistral-large-latest'.
@@ -876,6 +881,21 @@ export async function processUnifiedAgentRequest(
       nextAction: roleSelection.specializationRoute
     });
   }
+
+    // FIX: Surface orchestrator fatal errors to user before silent Phase 2 transition.
+    // PlanActVerify returns success:true even on fatal errors (budgetExhausted, steps.length===0).
+    // The user would see a silent text-mode fallback with no indication the orchestrator crashed.
+    if (result.metadata?.budgetExhausted && config.onStreamChunk && (mode === 'v1-agent-loop' || mode === 'execution-controller')) {
+      try {
+        config.onStreamChunk(JSON.stringify({
+          type: 'error',
+          error: 'Orchestrator exhausted budget',
+          detail: result.error || result.metadata?.orchestratorError || 'Orchestrator failed after max attempts',
+          mode: mode,
+          timestamp: Date.now(),
+        }));
+      } catch { /* best effort */ }
+    }
 
     if (isAutoMode && result.success && (result.steps?.length ?? 0) === 0 && !roleSelection?.continue) {
       log.info('[PhaseTransition] No tools used in Phase 1, entering Phase 2 fallback (text-mode)');
@@ -1907,14 +1927,222 @@ async function runProgressiveBuildMode(
  *
  * Expanded capability map covers: file operations, bash/terminal, search/glob, MCP tools
  */
+/**
+ * Pre-execution argument validation schemas.
+ * When the LLM generates a tool call with empty/missing required fields,
+ * we catch it here and return a structured error the model can recover from
+ * — avoiding blind "{ success: false, duration: 0 }" failures that waste the
+ * budget and produce no visible output.
+ */
+const TOOL_VALIDATION_SCHEMAS: Record<
+  string,
+  { required: string[]; defaults?: Record<string, any>; help: string }
+> = {
+  write_file: {
+    required: ['path', 'content'],
+    defaults: {},
+    help: 'write_file requires: path (string) — file path relative to workspace, content (string) — complete file content',
+  },
+  // Alias: edit_file uses same args as write_file
+  edit_file: {
+    required: ['path', 'content'],
+    defaults: {},
+    help: 'edit_file requires: path (string) — file path relative to workspace, content (string) — complete file content',
+  },
+  read_file: {
+    required: ['path'],
+    defaults: {},
+    help: 'read_file requires: path (string) — file path relative to workspace',
+  },
+  read_files: {
+    required: ['paths'],
+    defaults: {},
+    help: 'read_files requires: paths (array of strings) — file paths to read',
+  },
+  list_files: {
+    required: ['path'],
+    defaults: { path: '/' },
+    help: 'list_files requires: path (string) — directory path, defaults to "/" (workspace root)',
+  },
+  list_directory: {
+    required: ['path'],
+    defaults: { path: '/' },
+    help: 'list_directory requires: path (string) — directory path, defaults to "/" (workspace root)',
+  },
+  delete_file: {
+    required: ['path'],
+    defaults: {},
+    help: 'delete_file requires: path (string) — file path to delete',
+  },
+  batch_write: {
+    required: ['files'],
+    defaults: {},
+    help: 'batch_write requires: files (array) — array of { path, content } objects',
+  },
+  create_directory: {
+    required: ['path'],
+    defaults: {},
+    help: 'create_directory requires: path (string) — directory path to create',
+  },
+  mkdir: {
+    required: ['path'],
+    defaults: {},
+    help: 'mkdir requires: path (string) — directory path to create',
+  },
+  apply_diff: {
+    required: ['path', 'diff'],
+    defaults: {},
+    help: 'apply_diff requires: path (string) — file to patch, diff (string) — unified diff content',
+  },
+  str_replace: {
+    required: ['path', 'oldString', 'newString'],
+    defaults: {},
+    help: 'str_replace requires: path (string) — file to edit, oldString (string) — exact text to replace, newString (string) — replacement text',
+  },
+  execute_bash: {
+    required: ['command'],
+    defaults: {},
+    help: 'execute_bash requires: command (string) — shell command to run',
+  },
+  // Aliases for execute_bash — small free models commonly call these with empty args
+  bash: {
+    required: ['command'],
+    defaults: {},
+    help: 'bash requires: command (string) — shell command to run',
+  },
+  shell: {
+    required: ['command'],
+    defaults: {},
+    help: 'shell requires: command (string) — shell command to run',
+  },
+  run: {
+    required: ['command'],
+    defaults: {},
+    help: 'run requires: command (string) — shell command to run',
+  },
+  execute: {
+    required: ['command'],
+    defaults: {},
+    help: 'execute requires: command (string) — shell command to run',
+  },
+  execute_command: {
+    required: ['command'],
+    defaults: {},
+    help: 'execute_command requires: command (string) — shell command to run',
+  },
+  exec_shell: {
+    required: ['command'],
+    defaults: {},
+    help: 'exec_shell requires: command (string) — shell command to run',
+  },
+  search_files: {
+    required: ['query'],
+    defaults: {},
+    help: 'search_files requires: query (string) — search pattern or text',
+  },
+  grep_code: {
+    required: ['query'],
+    defaults: {},
+    help: 'grep_code requires: query (string) — search pattern',
+  },
+};
+
+/**
+ * Validate tool arguments before execution.
+ * Catches empty/missing required fields and returns a structured error
+ * so the LLM can retry with valid args instead of silently failing.
+ */
+function validateToolArgs(
+  toolName: string,
+  args: Record<string, any> | null | undefined,
+): { valid: true; args: Record<string, any> } | { valid: false; error: string; help: string } {
+  const schema = TOOL_VALIDATION_SCHEMAS[toolName];
+  if (!schema) return { valid: true, args: args || {} };
+
+  if (!args || typeof args !== 'object') {
+    return {
+      valid: false,
+      error: `Tool "${toolName}" called with no arguments.`,
+      help: schema.help,
+    };
+  }
+
+  // Apply defaults first, then overlay provided args
+  const normalized: Record<string, any> = { ...(schema.defaults || {}), ...args };
+
+  const missing: string[] = [];
+  const empty: string[] = [];
+
+  for (const field of schema.required) {
+    if (!(field in normalized)) {
+      missing.push(field);
+    } else {
+      const val = normalized[field];
+      const isEmpty =
+        val === null ||
+        val === undefined ||
+        (typeof val === 'string' && val.trim() === '') ||
+        (Array.isArray(val) && val.length === 0);
+
+      if (isEmpty) {
+        const defaultVal = schema.defaults?.[field];
+        if (defaultVal !== undefined) {
+          normalized[field] = defaultVal;
+        } else {
+          empty.push(field);
+        }
+      }
+    }
+  }
+
+  if (missing.length > 0) {
+    return {
+      valid: false,
+      error: `Tool "${toolName}" is missing required fields: ${missing.join(', ')}.`,
+      help: schema.help,
+    };
+  }
+
+  if (empty.length > 0) {
+    return {
+      valid: false,
+      error: `Tool "${toolName}" has empty values for required fields: ${empty.join(', ')}.`,
+      help: schema.help,
+    };
+  }
+
+  return { valid: true, args: normalized };
+}
+
 function createCapabilityToolExecutor(config: UnifiedAgentConfig) {
   return async (name: string, rawArgs: Record<string, any>): Promise<ToolResult> => {
     // Normalize args through shared alias resolver
-    const args = normalizeToolArgs(name, rawArgs) as Record<string, any>;
+    const normalizedArgs = normalizeToolArgs(name, rawArgs) as Record<string, any>;
+
+    // Pre-execution arg validation: catch empty/missing required fields before
+    // the tool fails silently with { success: false, duration: 0 }. Returns a
+    // structured error message with help text the LLM can use to recover.
+    const validation = validateToolArgs(name, normalizedArgs);
+    if (!validation.valid) {
+      // Narrow the union type to the failure branch
+      const err = validation as { valid: false; error: string; help: string };
+      log.warn('[ToolValidation] Rejected invalid tool args', {
+        tool: name,
+        error: err.error,
+      });
+      return {
+        success: false,
+        output: `${err.error} ${err.help}`,
+        exitCode: 1,
+      };
+    }
+    // Narrow to the success branch
+    const args = (validation as { valid: true; args: Record<string, any> }).args;
+
     const capabilityMap: Record<string, string> = {
       'file_operation': 'file.read', 'read_file': 'file.read', 'write_file': 'file.write',
       'edit_file': 'file.write', 'delete_file': 'file.delete', 'list_directory': 'file.list',
-      'list_dir': 'file.list', 'ls': 'file.list',
+      'list_dir': 'file.list', 'ls': 'file.list', 'list_files': 'file.list',
       'search_files': 'file.search', 'grep': 'file.search', 'glob': 'file.search', 'find': 'file.search',
       'execute_bash': 'sandbox.execute', 'execute_command': 'sandbox.execute', 'execute': 'sandbox.execute',
       'bash': 'sandbox.execute', 'shell': 'sandbox.execute', 'terminal': 'sandbox.execute', 'run': 'sandbox.execute',
@@ -1927,6 +2155,46 @@ function createCapabilityToolExecutor(config: UnifiedAgentConfig) {
       'batchwrite': 'file.batch_write', 'writefiles': 'file.batch_write',
       'create_directory': 'file.create_directory', 'mkdir': 'file.create_directory',
       'search_code': 'file.search', 'grep_code': 'file.search',
+      // Workspace stats
+      'get_workspace_stats': 'workspace.stats',
+      // Computer use tools
+      'computer_use_click': 'computer_use.click',
+      'computer_use_type': 'computer_use.type',
+      'computer_use_screenshot': 'computer_use.screenshot',
+      'computer_use_scroll': 'computer_use.scroll',
+      // Git tools (beyond clone/search)
+      'git_status': 'repo.git', 'git_commit': 'repo.commit', 'git_push': 'repo.push',
+      'git_pull': 'repo.pull',
+      // Code execution
+      'run_code': 'code.run',
+      // MCP tool listing
+      'mcp_list_tools': 'mcp.list', 'mcp_call_tool': 'mcp.call',
+      // File sync
+      'sync_files': 'file.sync',
+      // Process management
+      'start_process': 'process.start', 'stop_process': 'process.stop', 'list_processes': 'process.list',
+      // Preview / port forwarding
+      'get_previews': 'preview.get', 'forward_port': 'preview.forward_port',
+      // Terminal tools
+      'terminal_create_session': 'terminal.create_session',
+      'terminal_send_input': 'terminal.send_input',
+      'terminal_get_output': 'terminal.get_output',
+      'terminal_resize': 'terminal.resize',
+      'terminal_close_session': 'terminal.close_session',
+      'terminal_list_sessions': 'terminal.list_sessions',
+      // Project analysis tools
+      'project_analyze': 'workspace.analyze',
+      'project_list_scripts': 'workspace.list_scripts',
+      'project_dependencies': 'workspace.dependencies',
+      'project_structure': 'workspace.structure',
+      // Port status
+      'port_status': 'terminal.get_port_status',
+      // Workspace graph tools
+      'workspace_graph': 'workspace.graph',
+      'workspace_graph_diagnostic': 'workspace.graph_diagnostic',
+      'workspace_graph_find_process': 'workspace.graph_find_process',
+      // Legacy mappings (from extended-sandbox-tools EXTENDED_TOOL_TO_CAPABILITY)
+      'exec_shell': 'sandbox.shell',
     };
 
     const capabilityId = capabilityMap[name] || name;
@@ -2028,6 +2296,11 @@ async function runV1ApiWithTools(
   const _dynamicDefaults = await resolveDynamicDefaults();
   const primaryProvider = config.provider || _dynamicDefaults.provider;
   const primaryModel = config.model || _dynamicDefaults.model;
+  // FIX: Reset SelfHeal cache at start of each request to prevent cross-request
+  // leakage. Without this, a prior request's fallback provider could silently
+  // replace a healthy primary in a different request's SelfHeal retry.
+  _selfHealProvider = null;
+  _selfHealModel = null;
   const requestId = `unified-v1-tools-${Date.now()}`;
 
   log.info('[V1-API-WITH-TOOLS] │ primaryProvider:', primaryProvider);
@@ -2067,7 +2340,7 @@ async function runV1ApiWithTools(
       // Use model-ranker telemetry to select highest-ranked model for this provider
       const rotation = mrMod?.getModelForRotation?.(undefined, providerName);
       if (rotation?.model) return rotation.model;
-      return PROVIDER_DEFAULT_MODELS[providerName] || _getProviderFirstModel(providerName) || model;
+      return PROVIDER_DEFAULT_MODELS[providerName] || _getProviderFirstModel(providerName);
     }
 
     // FIX: When falling back FROM ninerouter TO a different provider (nvidia, mistral, etc.),
@@ -2258,7 +2531,12 @@ async function runV1ApiWithTools(
     const loopState = createLoopDetectorState();
 
     const aiSdkTools = Object.fromEntries(
-      (config.tools || []).map((toolDef: any) => [
+      // FIX: Exclude 'choose_role' from config.tools — it's registered separately
+      // below with its own execute handler (chooseRoleCapability). Without this
+      // filter, the loop wraps choose_role through capabilityExecuteTool which
+      // doesn't know it, and the !aiSdkTools['choose_role'] guard below becomes
+      // a no-op since the entry already exists.
+      (config.tools || []).filter((td: any) => td.name !== 'choose_role').map((toolDef: any) => [
         toolDef.name,
         {
           description: toolDef.description,
@@ -2477,12 +2755,29 @@ async function runV1ApiWithTools(
           lastTools: recentTools.map(t => t.toolName),
         });
 
-        // Build continuation with the full conversation context so the model
-        // can see what it already read and act on that information.
+        // Build context-aware continuation prompt that includes tool result
+        // summaries so the model knows what it already learned.
+        const toolResultsSummary = toolInvocations
+          .slice(-6) // Last 6 tools to avoid bloat
+          .map(t => {
+            const resultStr = typeof t.result?.output === 'string'
+              ? t.result.output.slice(0, 400)
+              : typeof t.result === 'string'
+                ? t.result.slice(0, 400)
+                : '';
+            return `[${t.toolName}]: ${resultStr || '(completed)'}`;
+          })
+          .join('\n');
+        const continuationPrompt = toolResultsSummary
+          ? `You previously ran these tools and got these results:
+${toolResultsSummary}
+
+Based on what you have learned, continue working on the original task. Take the necessary actions using the available tools.`
+          : 'Based on the information you have gathered, continue working on the original task. Take the necessary actions using the available tools.';
         const contMessages = [
           ...llmMessages,
           { role: 'assistant', content: response },
-          { role: 'user', content: 'Based on the information you have gathered, continue working on the original task. Take the necessary actions using the available tools.' },
+          { role: 'user', content: continuationPrompt },
         ];
 
         try {
@@ -2567,6 +2862,9 @@ async function runV1ApiWithTools(
       }
 
       if (providerName !== primaryProvider) {
+      // FIX: Save successful provider/model for SelfHeal retries to skip dead primary
+      _selfHealProvider = providerName;
+      _selfHealModel = modelForProvider;
         log.info(`V1 API (with tools): Fallback provider succeeded`, {
           primaryProvider,
           primaryModel,
@@ -2728,10 +3026,109 @@ async function runV1ApiWithTools(
       const successfulToolsButSilent = responseEmpty && allToolsSucceeded;
 
       const shouldRetry = retryCount < MAX_TOOL_FAILURE_RETRIES && (
-        (responseEmpty && (anyToolFailed || noToolCalls)) ||
-        successfulToolsButSilent ||
-        responseIncomplete
+        (responseEmpty && (anyToolFailed || noToolCalls)) || responseIncomplete
       );
+        
+
+      // FIX: When tools succeeded but the model produced no follow-up text, run
+      // ONE server-side continuation turn that injects the ACTUAL tool results
+      // into the prompt. Each streamWithVercelAI call is stateless, so the tool
+      // outputs are not otherwise visible to the next turn — deferring to a
+      // generic client auto-continue ("continue working") left the model with no
+      // context, producing another silent tool call or a useless short reply.
+      // Bounded to a single extra turn; a deterministic summary guarantees the
+      // user never sees an empty response.
+      if (successfulToolsButSilent) {
+        log.info("[SelfHeal] Tools succeeded but silent — running server-side continuation with tool-result context");
+
+        // Embed the real tool results (truncated) so the model knows what it got.
+        const toolResultsSummary = toolInvocations.map((inv) => {
+          let resultStr: string;
+          try {
+            const raw = inv.result?.output ?? inv.result;
+            resultStr = typeof raw === 'string' ? raw : JSON.stringify(raw);
+          } catch {
+            resultStr = String(inv.result);
+          }
+          if (resultStr && resultStr.length > 4000) {
+            resultStr = resultStr.slice(0, 4000) + '…[truncated]';
+          }
+          return `Tool: ${inv.toolName}\nArguments: ${JSON.stringify(inv.args)}\nResult: ${resultStr}`;
+        }).join('\n\n');
+
+        const continuationPrompt =
+          `You called the following tool(s) and received their results:\n\n${toolResultsSummary}\n\n` +
+          `Now continue the user's original request using these results. If further tool ` +
+          `calls are needed, make them. When finished, ALWAYS provide a clear, concise text ` +
+          `response to the user — never reply with silence.`;
+
+        const continuationMessages = [
+          ...llmMessages,
+          { role: 'user', content: continuationPrompt },
+        ];
+
+        let contResponse = '';
+        try {
+          const { streamWithVercelAI: streamAI } = await import('../chat/vercel-ai-streaming');
+          for await (const chunk of streamAI({
+            provider: providerName,
+            model: modelForProvider,
+            messages: continuationMessages as any,
+            temperature: config.temperature || 0.7,
+            maxTokens: config.maxTokens || 65536,
+            maxSteps: config.maxSteps || 15,
+            tools: aiSdkTools,
+            toolCallStreaming: true,
+          })) {
+            if (chunk.content) {
+              contResponse += chunk.content;
+              config.onStreamChunk?.(chunk.content);
+            }
+            if (chunk.toolInvocations) {
+              for (const inv of chunk.toolInvocations) {
+                if (inv.state !== 'result') continue;
+                toolInvocations.push({
+                  toolCallId: inv.toolCallId,
+                  toolName: inv.toolName,
+                  args: (inv.args as Record<string, any>) || {},
+                  result: inv.result ?? { success: false, error: 'Tool result was undefined' },
+                });
+              }
+            }
+          }
+        } catch (contErr: any) {
+          log.warn('[SelfHeal] Server-side continuation failed', { error: contErr?.message });
+        }
+
+        // Deterministic fallback: never return an empty bubble to the user.
+        if (!contResponse.trim()) {
+          const toolNames = [...new Set(toolInvocations.map(i => i.toolName))].join(', ');
+          contResponse = `I gathered information using: ${toolNames}. Let me know how you'd like to proceed.`;
+          log.info('[SelfHeal] Continuation still silent — returning deterministic summary');
+        } else {
+          log.info('[SelfHeal] Server-side continuation produced text', { length: contResponse.length });
+        }
+
+        const cleanedContinuation = stripRoutingMarkers(truncateAtFirstRouting(contResponse));
+        return {
+          success: true,
+          response: cleanedContinuation,
+          mode: "v1-api",
+          steps: toolInvocations.map(inv => ({
+            toolName: inv.toolName,
+            args: inv.args,
+            result: inv.result,
+          })),
+          totalSteps: toolInvocations.length,
+          metadata: {
+            provider: providerName,
+            model: modelForProvider,
+            duration: Date.now() - startTime,
+            successfulTools: toolInvocations.map(inv => inv.toolName),
+            serverSideContinuation: true,
+          },
+        };
+      }
 
       if (shouldRetry) {
         // Build FeedbackEntry objects from tool failures and accumulate into
@@ -2885,7 +3282,9 @@ async function runV1ApiWithTools(
         ];
 
         try {
-          const retryResult = await runV1ApiWithTools(config, retryMessages, startTime);
+          // FIX: Carry forward last successful provider/model so SelfHeal retries skip dead primary
+          const retryConfig = _selfHealProvider ? { ...config, provider: _selfHealProvider, model: _selfHealModel || config.model } : config;
+          const retryResult = await runV1ApiWithTools(retryConfig, retryMessages, startTime);
           // If the retry produced something, use it. Otherwise fall through to
           // the friendly fallback below so the user still sees a message.
           if (retryResult.response && retryResult.response.trim() && retryResult.response !== 'No response generated') {
@@ -3103,6 +3502,19 @@ async function runV1ApiWithTools(
     primaryModel,
   ).catch(() => {});
 
+  // FIX: Emit error chunk to user so they see a failure instead of blank screen.
+  if (config.onStreamChunk) {
+    try {
+      config.onStreamChunk(JSON.stringify({
+        type: "error",
+        error: "All providers failed",
+        detail: lastError?.message || "All configured LLM providers exhausted",
+        providersTried: uniqueProviders,
+        timestamp: Date.now(),
+      }));
+    } catch { /* best effort */ }
+  }
+
   throw lastError || new Error('V1 API tool loop failed');
 }
 
@@ -3149,7 +3561,7 @@ async function runV1Orchestrated(
     iterationConfig: {
       maxIterations: config.maxSteps || parseInt(process.env.LLM_AGENT_TOOLS_MAX_ITERATIONS || '15', 10),
       maxTokens: config.maxTokens || 32000,
-      maxDurationMs: parseInt(process.env.LLM_AGENT_TOOLS_TIMEOUT_MS || '60000', 10),
+      maxDurationMs: parseInt(process.env.LLM_AGENT_TOOLS_TIMEOUT_MS || '300000', 10),
       provider: resolvedProvider,
       model: resolvedModel,
     },
@@ -3504,7 +3916,7 @@ async function runV1ApiCompletion(
       // Use model-ranker telemetry to select highest-ranked model for this provider
       const rotation = _getModelForRotation?.(undefined, providerName);
       if (rotation?.model) return rotation.model;
-      return PROVIDER_DEFAULT_MODELS[providerName] || _getProviderFirstModel(providerName) || config.model;
+      return PROVIDER_DEFAULT_MODELS[providerName] || _getProviderFirstModel(providerName) || PROVIDER_DEFAULT_MODELS[providerName];
     }
 
     // Check if the model is valid for this provider
@@ -3520,7 +3932,7 @@ async function runV1ApiCompletion(
       log.debug(`Model "${config.model}" not in ${providerName} models list, using default`);
       const rotation = _getModelForRotation?.(undefined, providerName);
       if (rotation?.model) return rotation.model;
-      return PROVIDER_DEFAULT_MODELS[providerName] || _getProviderFirstModel(providerName) || config.model;
+      return PROVIDER_DEFAULT_MODELS[providerName] || _getProviderFirstModel(providerName) || PROVIDER_DEFAULT_MODELS[providerName];
     }
 
     // Unknown provider — trust the config model
@@ -3826,6 +4238,19 @@ return {
   const latencyMs = Date.now() - startTime;
 
   log.error('[V1-API-COMPLETION] ┌─ ALL PROVIDERS FAILED ─────────');
+  // FIX: Emit error chunk to user so they see a failure instead of blank screen.
+  if (config.onStreamChunk) {
+    try {
+      config.onStreamChunk(JSON.stringify({
+        type: "error",
+        error: "All providers failed",
+        detail: lastError?.message || "All configured LLM providers exhausted",
+        providersTried: uniqueProviders,
+        timestamp: Date.now(),
+      }));
+    } catch { /* best effort */ }
+  }
+
   log.error('[V1-API-COMPLETION] │ providers tried:', uniqueProviders);
   log.error('[V1-API-COMPLETION] │ lastError:', lastError?.message);
   log.error('[V1-API-COMPLETION] └─────────────────────────────────');

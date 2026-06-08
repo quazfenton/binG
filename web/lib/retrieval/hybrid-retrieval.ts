@@ -253,8 +253,13 @@ export async function retrieveHybrid(
 ): Promise<HybridRetrievalResult> {
   const warnings: string[] = [];
 
+  // FIX: Short-circuit symbol retrieval on server — IndexedDB is never available
+  // in Node.js, so the primary path always fails wasting ~500ms per request.
+  // Skip directly to smart-context when we know IndexedDB won't work.
+  const isServerSide = typeof indexedDB === 'undefined';
+
   // ── Primary: AST-based symbol retrieval ─────────────────────────────────────
-  if (opts.projectId) {
+  if (opts.projectId && !isServerSide) {
     try {
       const searchOpts: SearchOptions = {
         projectId: opts.projectId,

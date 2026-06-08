@@ -16,6 +16,7 @@
 
 import {
   streamText,
+  stepCountIs,
   extractReasoningMiddleware,
   smoothStream,
   type Tool,
@@ -819,7 +820,12 @@ export async function* streamWithVercelAI(
       temperature: temp,
       maxOutputTokens: maxT,
       maxRetries,
-      maxSteps,
+      // AI SDK v6 removed `maxSteps` from streamText; the multi-step tool loop
+      // is now controlled via `stopWhen`. Without this the SDK defaults to
+      // stepCountIs(1) — the model emits a tool call, the SDK runs the tool,
+      // then STOPS before the model can read the result and produce text,
+      // yielding responseLength: 0 (the "silent tool call" failure).
+      stopWhen: stepCountIs(maxSteps),
       abortSignal: effectiveSignal,
       toolCallStreaming,
       ...(transforms.length > 0 ? { experimental_transform: transforms } : {}),
@@ -1604,7 +1610,8 @@ ${healingInstructions}` : healingInstructions)
                 temperature: temp,
                 maxOutputTokens: maxT,
                 maxRetries: 0,
-                maxSteps,
+                // v6: use stopWhen instead of the removed `maxSteps` option.
+                stopWhen: stepCountIs(maxSteps),
                 abortSignal: effectiveSignal,
                 experimental_telemetry: {
                   isEnabled: false,
@@ -1788,7 +1795,8 @@ ${healingInstructions}` : healingInstructions)
           temperature: temp,
           maxOutputTokens: maxT,
           maxRetries: 0,
-          maxSteps,
+          // v6: use stopWhen instead of the removed `maxSteps` option.
+          stopWhen: stepCountIs(maxSteps),
           abortSignal: effectiveSignal,
           toolCallStreaming,
           experimental_telemetry: {
