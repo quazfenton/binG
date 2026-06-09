@@ -19,6 +19,12 @@
  * app failures when the package is not installed.
  */
 
+// Suppress verbose HTTP request logging from axios/got internals
+if (process.env.DEBUG && process.env.DEBUG.includes('http')) {
+  const debugVal = process.env.DEBUG;
+  process.env.DEBUG = debugVal.split(',').filter(ns => !['http', 'axios', 'e2b'].includes(ns.trim())).join(',');
+}
+
 import { resolve, relative, join, dirname } from 'node:path'
 import { readFile } from 'node:fs/promises'
 import { quotaManager } from '../../management/quota-manager'
@@ -174,7 +180,7 @@ export class E2BProvider implements SandboxProvider {
         ? (E2B_TEMPLATE_MAP[config.language] || this.defaultTemplate)
         : this.defaultTemplate
 
-      console.log(`[E2BProvider] Creating sandbox - Language: "${config.language || 'default'}", Template: "${template}", User: ${config.labels?.userId || 'unknown'}`)
+      console.log(`[E2BProvider] Creating sandbox - Language: "${config.language || 'default'}", Template: "${template}"`)
 
       // Build sandbox options
       const sandboxOpts: E2BSandboxOpts = {
@@ -187,8 +193,6 @@ export class E2BProvider implements SandboxProvider {
           ...config.envVars,
         },
       }
-
-      console.log(`[E2BProvider] Sandbox options:`, JSON.stringify({ template, timeout: this.defaultTimeout, hasMetadata: !!config.labels, hasEnvVars: !!config.envVars }, null, 2))
 
       // Create sandbox
       const sandbox: E2BSandboxType = await Sandbox.create(sandboxOpts)

@@ -27,7 +27,6 @@ export interface TaskConfig {
   output_file?: string;
   output_json?: z.ZodSchema | Record<string, any> | boolean;
   output_pydantic?: z.ZodSchema | Record<string, any> | boolean;
-  create_directory?: boolean;
   human_input?: boolean;
   max_iter?: number;
   tools?: string[];
@@ -87,7 +86,6 @@ export class Task {
   public readonly output_file?: string;
   public readonly output_json?: z.ZodSchema | Record<string, any> | boolean;
   public readonly output_pydantic?: z.ZodSchema | Record<string, any> | boolean;
-  public readonly create_directory: boolean;
   public readonly human_input?: boolean;
   public readonly max_iter?: number;
   public readonly tools?: string[];
@@ -107,7 +105,6 @@ export class Task {
     this.output_file = config.output_file;
     this.output_json = config.output_json;
     this.output_pydantic = config.output_pydantic;
-    this.create_directory = config.create_directory !== false;
     this.human_input = config.human_input;
     this.max_iter = config.max_iter;
     this.tools = config.tools;
@@ -325,9 +322,7 @@ export class Task {
   private async saveToFile(filePath: string, content: string): Promise<void> {
     const fs = await import('fs/promises');
     const path = await import('path');
-    if (this.create_directory) {
-      await fs.mkdir(path.dirname(filePath), { recursive: true });
-    }
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
     await fs.writeFile(filePath, content, 'utf-8');
   }
 }

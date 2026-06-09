@@ -292,16 +292,6 @@ const TOOL_VALIDATION_SCHEMAS: Record<
     defaults: {},
     help: 'file.delete requires: path (string) — file path to delete',
   },
-  createDirectory: {
-    required: ['path'],
-    defaults: {},
-    help: 'createDirectory requires: path (string) — directory path to create. Use listFiles("/") to browse existing directories first.',
-  },
-  create_directory: {
-    required: ['path'],
-    defaults: {},
-    help: 'create_directory requires: path (string) — directory path to create. Use listFiles("/") to browse existing directories first.',
-  },
   mkdir: {
     required: ['path'],
     defaults: {},

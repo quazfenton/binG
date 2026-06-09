@@ -275,6 +275,13 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
   // Tracks consecutive stepReprompt auto-continues to prevent infinite loops
   const stepRepromptCountRef = useRef(0);
   const isMountedRef = useRef(true);
+  // Stores partial tool invocations from a timed-out/truncated response so the
+  // next user message can include them in retryContext.timeoutRecovery, allowing
+  // the LLM to resume where it left off without re-reading files or re-doing work.
+  const timeoutRecoveryRef = useRef<{
+    toolInvocations: Array<{ toolName: string; args?: any; success: boolean; error?: string }>;
+    partialResponse?: string;
+  } | null>(null);
 
   // Track mount state to prevent stale callbacks
   useEffect(() => {
@@ -430,6 +437,14 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
       body: JSON.stringify({
         messages: [...messagesRef.current, userMessage],
         ...(typeof options.body === 'function' ? options.body() : options.body || {}),
+        ...(timeoutRecoveryRef.current ? {
+          retryContext: {
+            isEmptyResponseRetry: true,
+            originalError: 'Previous response timed out',
+            timeoutRecovery: timeoutRecoveryRef.current,
+            toolExecutionSummary: `Previous response timed out after ${timeoutRecoveryRef.current.toolInvocations.length} tool call(s).`,
+          },
+        } : {}),
       }),
       signal: abortController.signal,
     });
@@ -438,6 +453,8 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
       throw new Error(`HTTP ${response.status}`);
     }
 
+    // Clear timeout recovery ref on successful request (new data streaming in)
+    timeoutRecoveryRef.current = null;
     // Call handleStreamingResponse with the response body
     await handleStreamingResponse(response.body, assistantMessage, abortController);
   }, [isLoading, inputQueue, messagesRef, options, voiceService, setError, setMessages, setIsLoading, buildRequestHeaders]);
@@ -524,7 +541,17 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
       const requestBody = {
         messages: [...messagesRef.current, userMessage],
         ...resolvedBody,
+        ...(timeoutRecoveryRef.current ? {
+          retryContext: {
+            isEmptyResponseRetry: true,
+            originalError: 'Previous response timed out',
+            timeoutRecovery: timeoutRecoveryRef.current,
+            toolExecutionSummary: `Previous response timed out after ${timeoutRecoveryRef.current.toolInvocations.length} tool call(s).`,
+          },
+        } : {}),
       };
+    // Clear timeout recovery ref on new request
+    timeoutRecoveryRef.current = null;
 
       const response = await fetch(options.api, {
         method: 'POST',
@@ -843,6 +870,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
     // CRITICAL: Track tool invocations locally during streaming
     // messagesRef.current is stale (useEffect hasn't synced yet when done fires)
     const streamingToolInvocations: Array<{ toolCallId: string; toolName: string; state: string }> = [];
+
     // Track whether a 'done' SSE event was received before the stream ended
     let receivedDoneEvent = false;
 
@@ -870,6 +898,25 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
       if (!abortController.signal.aborted) {
         abortController.abort();
       }
+
+      // Save partial tool invocations for timeout recovery on next request
+      if (streamingToolInvocations.length > 0) {
+        timeoutRecoveryRef.current = {
+          toolInvocations: streamingToolInvocations.map(function(t) {
+            return {
+              toolName: t.toolName,
+              success: false,
+              error: 'timed out before result',
+            };
+          }),
+          partialResponse: accumulatedContent ? accumulatedContent.slice(0, 1000) : undefined,
+        };
+        console.warn('[Chat] Saved timeout recovery context', {
+          toolCount: streamingToolInvocations.length,
+          partialResponseLength: accumulatedContent?.length,
+        });
+      }
+
       // CRITICAL FIX: Always finalize the UI state on timeout — even when
       // accumulatedContent is empty. Previously the empty branch did NOTHING,
       // leaving isLoading=true and the bubble blank forever ("frozen UI").
@@ -905,7 +952,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
       if (inputQueue.length > 0) {
         setTimeout(() => processQueue(), 100);
       }
-    }, 180000); // 3 minute timeout
+    }, 120000); // 2 minute timeout (reduced from 3min)
     }
 
     // Set initial streaming timeout (will be extended on activity)
@@ -1145,6 +1192,39 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   if (typeof raw.emptyReason === 'string') doneMetadata.emptyReason = raw.emptyReason;
                   if (typeof raw.sessionId === 'string') doneMetadata.sessionId = raw.sessionId;
                   if (typeof raw.conversationId === 'string') doneMetadata.conversationId = raw.conversationId;
+
+                  // NEW: Detect server-side truncated response (wasTruncated / partialToolResults)
+                  // The server emits these metadata flags in runV1ApiWithTools when the response
+                  // was cut off (budget exhausted, timeout, etc.) but tools made partial progress.
+                  // Save the partial results to timeoutRecoveryRef so the next user message can
+                  // include them in retryContext.timeoutRecovery, allowing the LLM to resume.
+                  if (raw.wasTruncated === true || (Array.isArray(raw.partialToolResults) && raw.partialToolResults.length > 0)) {
+                    const partialTools = Array.isArray(raw.partialToolResults) ? raw.partialToolResults : [];
+                    timeoutRecoveryRef.current = {
+                      toolInvocations: partialTools.length > 0
+                        ? partialTools.map(function(inv: any) {
+                            return {
+                              toolName: inv.toolName || 'unknown',
+                              args: inv.args || inv.params,
+                              success: inv.success !== false,
+                              error: inv.error || (inv.success === false ? 'truncated response' : undefined),
+                            };
+                          })
+                        : streamingToolInvocations.map(function(t) {
+                            return {
+                              toolName: t.toolName,
+                              success: false,
+                              error: 'truncated response',
+                            };
+                          }),
+                      partialResponse: doneContent ? doneContent.slice(0, 1000) : undefined,
+                    };
+                    console.warn('[Chat] Server-side truncated response detected, saved recovery context', {
+                      toolCount: timeoutRecoveryRef.current.toolInvocations.length,
+                      partialToolsInMetadata: Array.isArray(raw.partialToolResults),
+                      partialResponseLength: doneContent?.length,
+                    });
+                  }
 
                   // Also include filesystem info if present
                   if (eventData.filesystem) {

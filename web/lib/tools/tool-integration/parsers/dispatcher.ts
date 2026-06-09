@@ -83,7 +83,7 @@ function editsToToolCalls(edits: Array<{ path: string; content?: string; action?
     write: 'filesystem.write_file',
     patch: 'filesystem.apply_diff',
     delete: 'filesystem.delete_file',
-    mkdir: 'filesystem.create_directory',
+
   };
 
   return edits.map(edit => ({

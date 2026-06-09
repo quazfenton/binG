@@ -17,7 +17,6 @@
  * - search_files: Search across files
  * - batch_write: Write multiple files at once
  * - delete_file: Delete a file
- * - create_directory: Create a directory
  */
 
 import { z } from 'zod';
@@ -196,13 +195,7 @@ export function normalizeToolArgs(toolName: string, raw: unknown): any {
       const commitMessage = alias(['commitMessage', 'commit_message', 'message']);
       return { files, commitMessage };
     }
-    case 'create_directory':
-    case 'createdirectory':
-    case 'mkdir': {
-      const path = alias(['path', 'directory', 'dir', 'folder', 'name']);
-      const normalizedPath = typeof path === 'string' ? normalizeFilePath(path) : path;
-      return { path: normalizedPath };
-    }
+
     case 'search_files':
     case 'searchfiles':
     case 'search': {
@@ -264,8 +257,7 @@ const TOOL_NAME_ALIASES: Record<string, string> = {
   writefiles: 'batch_write',
   deletefile: 'delete_file',
   remove_file: 'delete_file',
-  createdirectory: 'create_directory',
-  mkdir: 'create_directory',
+
 };
 
 /**
@@ -316,7 +308,6 @@ export function normalizeToolCall(raw: unknown): NormalizedToolCall | null {
     apply_diff: ['path', 'diff'],
     read_file: ['path'],
     delete_file: ['path'],
-    create_directory: ['path'],
     batch_write: ['files'],
   };
   const required = requiredFields[canonicalTool];
@@ -719,19 +710,10 @@ export const writeFileTool = (tool as any)({
     } catch (error: any) {
   const msg = error.message || 'Failed to write file';
   logger.error('writeFile failed', { path, error: msg });
-  const isParentMissing = /not found|enoent|does not exist|no such/i.test(msg);
   return {
     success: false,
     path,
-    error: isParentMissing
-      ? {
-          code: 'PARENT_NOT_FOUND',
-          message: `Cannot write "${path}" — parent directory may not exist.`,
-          retryable: true,
-          attemptedPath: path,
-          suggestedNextAction: `Call create_directory for the parent path first, then retry write_file.`,
-        }
-      : { code: 'WRITE_ERROR', message: msg, retryable: false },
+    error: { code: 'WRITE_ERROR', message: msg, retryable: false },
   };
     }
   },
@@ -1946,69 +1928,7 @@ export const deleteFileTool = (tool as any)({
   },
 });
 
-/**
- * create_directory - Create a directory in the VFS
- */
-export const createDirectoryTool = (tool as any)({
-  description: [
-    'Create a directory in the Virtual File System. Parent directories are created automatically.',
-    '',
-    'Arguments:',
-    '  • path (string) — directory path to create like "src/components/utils"',
-    '',
-    'Examples of correct usage:',
-    '  create_directory(path="src/components")',
-    '  create_directory(path="tests/unit")',
-    '',
-    'Common mistakes to avoid:',
-    '  ✗ createDirectory(path=...)  → Use create_directory (underscore, not camelCase)',
-    '  ✗ mkdir(path=...)  → Use create_directory, not mkdir',
-    '  ✗ create_directory(directory=...)  → Use path, not directory or dir or folder or name',
-  ].join('\n'),
-  parameters: z.preprocess(
-    (raw) => normalizeToolArgs('create_directory', raw),
-    z.object({
-      path: z.string().describe('Directory path to create, like "src/components/utils"'),
-    }).passthrough()
-  ),
-  execute: async ({ path }) => {
-    try {
-  if (!path || typeof path !== 'string' || !path.trim()) {
-    return { success: false, path, error: 'Path is required' };
-  }
-  const context = getToolContext();
 
-  // Resolve path relative to session scope
-  const scopedPath = resolveScopedPath(path);
-  logger.debug('createDirectory', { originalPath: path, scopedPath, userId: context.userId });
-
-  const result = await virtualFilesystem.createDirectory(context.userId, scopedPath);
-
-  // Emit create event for directory (type: 'create' for consistency)
-  await emitFileEvent({
-    userId: context.userId,
-    sessionId: context.sessionId,
-    path: scopedPath,
-    type: 'create',
-    source: 'mcp-tool-directory',
-  });
-
-  return {
-    success: true,
-    path: reverseNormalizePath(path, scopedPath),
-    createdAt: result.createdAt,
-    message: `Directory created: ${path}`,
-  };
-    } catch (error: any) {
-  logger.error('createDirectory failed', { path, error: error.message });
-  return {
-    success: false,
-    path,
-    error: error.message,
-  };
-    }
-  },
-});
 
 /**
  * get_workspace_stats - Get workspace statistics
@@ -2066,7 +1986,7 @@ export const vfsTools = {
   grep_code: grepCodeTool as any as VFSExtendedTool,
   batch_write: batchWriteTool as any as VFSExtendedTool,
   delete_file: deleteFileTool as any as VFSExtendedTool,
-  create_directory: createDirectoryTool as any as VFSExtendedTool,
+
   get_workspace_stats: getWorkspaceStatsTool as any as VFSExtendedTool,
 };
 
@@ -2169,12 +2089,7 @@ const TOOL_DEFS: Record<string, { description: string; parameters: Record<string
       reason: z.string().optional().describe('Optional reason for deletion'),
     })),
   },
-  create_directory: {
-    description: createDirectoryTool.description,
-    parameters: toJsonSchema(z.object({
-      path: z.string().describe('Directory path to create, like "src/components/utils"'),
-    })),
-  },
+
   get_workspace_stats: {
     description: getWorkspaceStatsTool.description,
     parameters: toJsonSchema(z.object({})),

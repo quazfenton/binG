@@ -140,21 +140,32 @@ export async function executeToolCapability(
   if (!options?.skipCache && isIdempotentCapability(capabilityId)) {
     const cached = toolResultCache.get(cacheKey);
     if (cached) {
-      log.debug(`Cache hit for ${capabilityId}`);
+      log.verbose(`[Cache] HIT ${capabilityId} ${params.path || params.query || ''}`);
       return {
         success: true,
         output: cached,
         exitCode: 0,
       };
     }
+    log.verbose(`[Cache] MISS ${capabilityId} ${params.path || params.query || ''}`);
   }
 
   try {
     const result = await routerInstance.execute(capabilityId, params, context as any);
 
-    // Cache successful results for idempotent capabilities
-    if (!options?.skipCache && isIdempotentCapability(capabilityId)) {
+    // Only cache truly successful results — don't cache failures or dual-status responses
+    if (!options?.skipCache && isIdempotentCapability(capabilityId) && result.success) {
       toolResultCache.set(cacheKey, result, options?.ttl);
+      log.verbose(`[Cache] STORED ${capabilityId} ${params.path || params.query || ''}`);
+    }
+
+    if (!result.success) {
+      return {
+        success: false,
+        error: result.error || 'Unknown error',
+        output: result.output,
+        exitCode: 1,
+      };
     }
 
     return {

@@ -101,7 +101,7 @@ export const fileCache = new Cache(200); // For file contents
 export const projectCache = new Cache(50); // For workspace structures
 
 // Tool-specific caches
-export const toolResultCache = new Cache(500); // For tool execution results
+export const toolResultCache = new Cache(2000); // For tool execution results (increased from 500 to reduce eviction during long sessions)
 export const toolMetadataCache = new Cache(200); // For tool metadata
 
 // Utility functions for common caching patterns

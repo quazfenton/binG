@@ -64,7 +64,7 @@ export interface CapabilityProvider {
 class VFSProvider implements CapabilityProvider {
   readonly id = 'vfs';
   readonly name = 'Virtual Filesystem';
-  readonly capabilities = ['file.read', 'file.write', 'file.append', 'file.delete', 'file.list', 'file.search', 'file.batch_write', 'file.create_directory', 'memory.context', 'workspace.getChanges'];
+  readonly capabilities = ['file.read', 'file.write', 'file.append', 'file.delete', 'file.list', 'file.search', 'file.batch_write', 'memory.context', 'workspace.getChanges'];
 
   isAvailable(): boolean {
     return true;
@@ -111,27 +111,16 @@ class VFSProvider implements CapabilityProvider {
       const sessionId = (context as any)?.sessionId || (context as any)?.conversationId || input.sessionId;
       const batchWriteInput = sessionId ? { ...input, sessionId } : input;
       const result = await callMCPToolFromAI_SDK('batch_write', batchWriteInput, ownerId, scopePath);
-      return {
-        success: result.success,
-        output: result.output,
-        error: result.error,
-      };
-    },
-
-    'file.create_directory': async (ownerId, input, context) => {
-      // Delegate to the MCP create_directory tool which handles scope path
-      // resolution and event emission — avoids the file.write schema mismatch
-      const { callMCPToolFromAI_SDK } = await import('../mcp');
-      const scopePath = (context as any)?.scopePath || input.scopePath;
-      // Inject sessionId into input for VFS event tracking
-      const sessionId = (context as any)?.sessionId || (context as any)?.conversationId || input.sessionId;
-      const createDirInput = sessionId ? { path: input.path, sessionId } : { path: input.path };
-      const result = await callMCPToolFromAI_SDK('create_directory', createDirInput, ownerId, scopePath);
-      if (!result.success) {
-        throw new Error(result.error || 'create_directory failed');
+      // Check both top-level success AND dual-status pattern
+      const innerFailure = result.output && typeof result.output === 'object' && result.output.success === false;
+      if (!result.success || innerFailure) {
+        const errorMsg = result.error || (result.output?.error) || 'batch_write failed';
+        throw new Error(errorMsg);
       }
       return result.output;
     },
+
+
 
     'file.append': async (ownerId, input, context) => {
       const { virtualFilesystem } = await import('../virtual-filesystem/virtual-filesystem-service');
@@ -252,7 +241,7 @@ class VFSProvider implements CapabilityProvider {
 class MCPFilesystemProvider implements CapabilityProvider {
   readonly id = 'mcp-filesystem';
   readonly name = 'MCP Filesystem';
-  readonly capabilities = ['file.read', 'file.write', 'file.append', 'file.delete', 'file.list', 'file.search', 'file.batch_write', 'file.create_directory'];
+  readonly capabilities = ['file.read', 'file.write', 'file.append', 'file.delete', 'file.list', 'file.search', 'file.batch_write'];
 
   isAvailable(): boolean {
     // Check if MCP server is configured
@@ -275,7 +264,6 @@ class MCPFilesystemProvider implements CapabilityProvider {
       'file.list': 'list_directory',
       'file.search': 'search_files',
       'file.batch_write': 'batch_write',
-      'file.create_directory': 'create_directory',
     };
 
     const toolName = toolMap[capabilityId];
@@ -2417,6 +2405,21 @@ export class CapabilityRouter {
         const result = await provider.execute(capabilityId, input, context);
 
         if (result.success) {
+          // Check for dual-status pattern: { success: true, output: { success: false, error: '...' } }
+          // Some providers wrap inner failures as "successful" outer results, which would
+          // silently swallow the actual error. Detect and surface this correctly.
+          const outputObj = result.output;
+          const isDualStatusFailure =
+            outputObj && typeof outputObj === 'object' && !Array.isArray(outputObj) &&
+            outputObj.success === false;
+
+          if (isDualStatusFailure) {
+            const innerError = (outputObj as any).error || 'Inner operation failed';
+            errors.push(`${provider.name}: ${innerError} (dual-status failure)`);
+            logger.debug(`[CapabilityRouter] Dual-status failure from ${provider.name} for ${capabilityId}: ${innerError}`);
+            continue; // Try next provider instead of returning a false-positive success
+          }
+
           logger.debug(`[CapabilityRouter] ${capabilityId} succeeded via ${provider.name} (score: ${score})`);
           return {
             ...result,

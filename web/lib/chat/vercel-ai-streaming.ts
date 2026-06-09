@@ -30,6 +30,7 @@ import type { StreamingResponse, LLMMessage } from '../providers/llm-providers';
 import { chatLogger } from './chat-logger';
 
 import { getProviderForModel } from './openai-compat-wrapper';
+import { getConfiguredFallbackChain } from '../providers/provider-fallback-chains';
 import { tokenTracker } from '../middleware/ai-caching';
 import { createReasoningMiddleware, withRetry, createSmoothStream, isTokenLimitError, handleTokenLimitError } from '../middleware/ai-middleware';
 import { recordToolCall, shouldForceTextMode } from '../tools/tool-call-telemetry';
@@ -219,7 +220,11 @@ export interface VercelStreamOptions {
   smoothStreaming?: boolean;
   maxRetries?: number;
   maxSteps?: number;
-  /** Request timeout in milliseconds (default: 120s) */
+  /**
+   * Request timeout in milliseconds.
+   * Defaults to LLM_STREAM_TIMEOUT_MS env var, or 60000 (60s) if unset.
+   * Controls both TTFT (time-to-first-token) and rolling idle timeout.
+   */
   timeoutMs?: number;
   /** Provider-specific settings (e.g., Anthropic cache control) */
   providerOptions?: Record<string, any>;
@@ -229,6 +234,14 @@ export interface VercelStreamOptions {
    * Avoids the fragile round-trip of extract->sanitize->re-attach->re-extract.
    */
   system?: string;
+  /**
+   * Speculative fallback timeout in ms.
+   * After this many ms of silence (no first token), a fallback provider stream
+   * is started in parallel. Whichever provider emits a chunk first wins.
+   * Defaults to LLM_STREAM_SPECULATIVE_MS env var, or 20000 (20s).
+   * Set to 0 to disable speculative fallback.
+   */
+  speculativeFallbackMs?: number;
 }
 
 /**
@@ -608,6 +621,143 @@ function getReasoningTag(provider: string): { tagName: string; separator?: strin
 }
 
 /**
+ * Wraps an async generator with speculative fallback support.
+ *
+ * Starts iterating the primary generator. If no chunk arrives within
+ * `speculativeMs`, a fallback generator is created (from `createFallback`)
+ * and the two are raced — the first to yield a chunk wins.
+ *
+ * The slower stream's underlying connection is aborted immediately so
+ * API credits are not wasted on the loser.
+ *
+ * The winner's chunks are transparently yielded. `onFallbackWin` is called
+ * when the fallback wins, allowing the caller to update metadata.
+ * `onLoser` is called with timing info for the loser, allowing the caller
+ * to record telemetry (e.g. model-ranker failure, latency tracking).
+ */
+async function* withSpeculativeFallback<T>(
+  primaryGen: AsyncGenerator<T>,
+  options: {
+    speculativeMs: number;
+    /**
+     * Creates the fallback generator. Returns an object with:
+     * - gen: the async generator to race
+     * - abort: function to abort the fallback stream (called if primary wins)
+     */
+    createFallback: () => { gen: AsyncGenerator<T>; abort: () => void };
+    /** Called when fallback wins — should provide a way to abort the primary */
+    abortPrimary: () => void;
+    onFallbackWin?: () => void;
+    /**
+     * Called whenever a loser is determined. Reports which stream lost
+     * and how long it was running before being aborted.
+     */
+    onLoser?: (info: { source: 'primary' | 'fallback'; latencyMs: number }) => void;
+    signal?: AbortSignal;
+  }
+): AsyncGenerator<T> {
+  const { speculativeMs, createFallback, abortPrimary, signal } = options;
+  const primaryIt = primaryGen[Symbol.asyncIterator]();
+
+  // Stores the result from the first primaryIt.next() call so if the
+  // speculative timeout fires but the primary produces a chunk between
+  // the timeout and fallback setup, we don't orphan (i.e. lose) that chunk.
+  let firstPrimaryResult: IteratorResult<T> | null = null;
+
+  // Track when the speculative timeout fires so we can report the loser's latency.
+  // `speculativeStartTime` ≈ the moment the primary was supposed to have first
+  // produced output; anything after this is dead time from the primary.
+  let speculativeStartTime = 0;
+  let fallbackCreateTime = 0;
+
+  // Race: first primary chunk vs speculative timeout
+  const first = await Promise.race([
+    primaryIt.next().then(r => {
+      firstPrimaryResult = r;
+      return { type: 'chunk' as const, value: r };
+    }),
+    new Promise<{ type: 'timeout' }>(resolve =>
+      setTimeout(() => {
+        speculativeStartTime = Date.now();
+        resolve({ type: 'timeout' });
+      }, speculativeMs)
+    ),
+  ]);
+
+  if (first.type === 'timeout') {
+    // Primary was silent for speculativeMs — start fallback
+    let fallbackResult: { gen: AsyncGenerator<T>; abort: () => void };
+    try {
+      fallbackResult = createFallback();
+      fallbackCreateTime = Date.now();
+    } catch {
+      // Fallback setup failed — continue with primary
+      if (firstPrimaryResult && !firstPrimaryResult.done) {
+        yield firstPrimaryResult.value;
+      }
+      while (true) {
+        if (signal?.aborted) return;
+        const n = await primaryIt.next();
+        if (n.done) return;
+        yield n.value;
+      }
+      return;
+    }
+
+    const fallbackIt = fallbackResult.gen[Symbol.asyncIterator]();
+
+    // Race first chunks from both streams
+    const winner = await Promise.race([
+      firstPrimaryResult
+        ? Promise.resolve({ ...firstPrimaryResult, source: 'primary' as const })
+        : primaryIt.next().then(r => ({ ...r, source: 'primary' as const })),
+      fallbackIt.next().then(r => ({ ...r, source: 'fallback' as const })),
+    ]);
+
+    if (winner.done) return;
+
+    // ABORT THE LOSER immediately to stop wasting API credits
+    if (winner.source === 'fallback') {
+      abortPrimary();
+      // Loser = primary. Approximate total time primary was running:
+      // speculativeMs + time from timeout expiry to now.
+      const primaryLatency = Date.now() - speculativeStartTime + speculativeMs;
+      options.onLoser?.({ source: 'primary', latencyMs: primaryLatency });
+      options.onFallbackWin?.();
+    } else {
+      fallbackResult.abort();
+      // Loser = fallback. Time from when fallback was created to now.
+      const fallbackLatency = Date.now() - fallbackCreateTime;
+      options.onLoser?.({ source: 'fallback', latencyMs: fallbackLatency });
+    }
+
+    yield winner.value;
+
+    // Continue with the winner
+    const winnerIt = winner.source === 'primary' ? primaryIt : fallbackIt;
+    while (true) {
+      if (signal?.aborted) return;
+      const next = await winnerIt.next();
+      if (next.done) return;
+      yield next.value;
+    }
+  }
+
+  // Primary won before speculative timeout fired — yield first chunk and continue
+  if (first.value && !first.value.done) {
+    yield first.value.value;
+  }
+
+  // Continue with remaining primary chunks
+  while (true) {
+    if (signal?.aborted) return;
+    const next = await primaryIt.next();
+    if (next.done) return;
+    yield next.value;
+  }
+}
+
+/**
  * Stream using Vercel AI SDK
  *
  * Unified streaming interface supporting all providers with:
@@ -676,7 +826,8 @@ export async function* streamWithVercelAI(
     smoothStreaming = true,
     maxRetries = 0,
     maxSteps = 12,
-    timeoutMs = 120000, // Default 120s timeout
+    timeoutMs = parseInt(process.env.LLM_STREAM_TIMEOUT_MS || '60000', 10), // Default 60s timeout (streaming only, overridable via LLM_STREAM_TIMEOUT_MS env var)
+    speculativeFallbackMs = parseInt(process.env.LLM_STREAM_SPECULATIVE_MS || '20000', 10), // Default 20s, 0 to disable
     providerOptions,
     system: systemOverride,
   } = opts;
@@ -701,6 +852,7 @@ export async function* streamWithVercelAI(
       signal.addEventListener('abort', () => {
         timeoutController?.abort(signal.reason);
         if (ttftTimeoutId) clearTimeout(ttftTimeoutId);
+        if (idleTimeoutId) clearTimeout(idleTimeoutId);
       }, { once: true });
     }
     
@@ -723,6 +875,25 @@ export async function* streamWithVercelAI(
         ttftTimeoutId = null;
       }
     }
+  };
+
+  // Rolling idle timeout: resets on every chunk (text, tool call, reasoning, etc.)
+  // Once the first token arrives, the TTFT is replaced by this rolling timeout.
+  // If no activity arrives for `idleTimeoutMs`, we abort -- this prevents hung
+  // streams while allowing arbitrarily long multi-tool sessions.
+  let idleTimeoutId: NodeJS.Timeout | null = null;
+  const IDLE_TIMEOUT_MS = timeoutMs;
+
+  const resetIdleTimeout = () => {
+    if (idleTimeoutId) {
+      clearTimeout(idleTimeoutId);
+    }
+    if (!timeoutController) return;
+    idleTimeoutId = setTimeout(() => {
+      if (!timeoutController?.signal.aborted) {
+        timeoutController.abort(new Error(`No activity for ${IDLE_TIMEOUT_MS}ms (idle timeout)`));
+      }
+    }, IDLE_TIMEOUT_MS);
   };
 
   try {
@@ -752,6 +923,8 @@ export async function* streamWithVercelAI(
           if (chunk.type === 'text-delta') {
             // Clear time-to-first-token timeout once we receive content
             onFirstToken();
+            // Reset rolling idle timeout - activity detected
+            resetIdleTimeout();
             
             yield {
               content: chunk.textDelta,
@@ -1043,19 +1216,143 @@ export async function* streamWithVercelAI(
 
     const result = streamText(streamOptions);
 
+    // ── Speculative fallback race ─────────────────────────────────────────
+    // If the primary provider is silent for `speculativeFallbackMs`, start a
+    // fallback provider stream in parallel. Whichever emits a chunk first wins.
+    let actualProvider = provider;
+    let actualModel = modelName;
+    let fallbackResultRef: { result: any } | null = null;
+    // Shared state for loser telemetry: the createFallback closure sets these
+    // so onFallbackWin and onLoser can read them without re-resolving.
+    const fbResolved = {
+      provider: '',
+      model: '',
+    };
+    // Populated by onLoser so the final metadata chunk can include loser details
+    // alongside the winner for full observability.
+    let speculativeLoserInfo: {
+      provider: string;
+      model: string;
+      latencyMs: number;
+    } | null = null;
+
+    const streamToIterate = (speculativeFallbackMs > 0 && !isCustomProvider)
+      ? withSpeculativeFallback(result.fullStream, {
+          speculativeMs: speculativeFallbackMs,
+          createFallback: () => {
+            const fbChain = getConfiguredFallbackChain(provider);
+            if (fbChain.length === 0) {
+              throw new Error('No fallback provider configured');
+            }
+            fbResolved.provider = fbChain[0];
+            const currentEnv: any = typeof process !== 'undefined' ? process.env : {};
+            fbResolved.model = currentEnv.FAST_MODEL || currentEnv.DEFAULT_MODEL || 'mistral-small-latest';
+            const fbVercelModel = getVercelModel(fbResolved.provider, fbResolved.model);
+
+            // Create a dedicated abort controller so the fallback stream can be
+            // cancelled immediately if the primary wins the race.
+            const fbController = new AbortController();
+
+            const fbStreamOpts: any = {
+              model: fbVercelModel,
+              messages: chatMessages,
+              temperature: temp,
+              maxOutputTokens: maxT,
+              maxRetries: 0,
+              stopWhen: stepCountIs(maxSteps),
+              toolCallStreaming,
+              abortSignal: fbController.signal,
+            };
+            if (systemPrompt) fbStreamOpts.system = systemPrompt;
+            if (tools && Object.keys(tools).length > 0) fbStreamOpts.tools = tools;
+
+            chatLogger.warn('[SPEC-FALLBACK] Starting speculative fallback stream', {
+              primaryProvider: provider,
+              primaryModel: modelName,
+              fallbackProvider: fbResolved.provider,
+              fallbackModel: fbResolved.model,
+              silenceMs: speculativeFallbackMs,
+            });
+
+            const fbResult = streamText(fbStreamOpts);
+            fallbackResultRef = { result: fbResult };
+            return { gen: fbResult.fullStream, abort: () => fbController.abort() };
+          },
+          abortPrimary: () => {
+            if (timeoutController && !timeoutController.signal.aborted) {
+              timeoutController.abort(new Error('Speculative fallback: primary lost the race'));
+            }
+          },
+          onFallbackWin: () => {
+            // Use the shared fbResolved values (already set by createFallback)
+            actualProvider = fbResolved.provider || 'unknown';
+            actualModel = fbResolved.model;
+            chatLogger.warn('[SPEC-FALLBACK] 🏁 Fallback provider won the race', {
+              primaryProvider: provider,
+              primaryModel: modelName,
+              winner: actualProvider,
+              winnerModel: actualModel,
+            });
+          },
+          onLoser: async (info: { source: 'primary' | 'fallback'; latencyMs: number }) => {
+            if (info.source === 'primary') {
+              // Primary lost — record its failure in model-ranker so the
+              // stalling provider gets penalised for future selection.
+              try {
+                const { recordModelAttempt } = await import('@/lib/providers/model-ranker');
+                recordModelAttempt(provider, modelName, false).catch(() => {});
+              } catch { /* model-ranker import is best-effort */ }
+              speculativeLoserInfo = {
+                provider,
+                model: modelName,
+                latencyMs: info.latencyMs,
+              };
+              chatLogger.warn('[SPEC-FALLBACK] Primary recorded as loser', {
+                loserProvider: provider,
+                loserModel: modelName,
+                loserLatencyMs: info.latencyMs,
+              });
+            } else {
+              // Fallback lost — record its failure.
+              try {
+                const { recordModelAttempt } = await import('@/lib/providers/model-ranker');
+                recordModelAttempt(fbResolved.provider, fbResolved.model, false).catch(() => {});
+              } catch { /* model-ranker import is best-effort */ }
+              speculativeLoserInfo = {
+                provider: fbResolved.provider,
+                model: fbResolved.model,
+                latencyMs: info.latencyMs,
+              };
+              chatLogger.warn('[SPEC-FALLBACK] Fallback recorded as loser', {
+                loserProvider: fbResolved.provider,
+                loserModel: fbResolved.model,
+                loserLatencyMs: info.latencyMs,
+              });
+            }
+          },
+          signal: signal, // user's signal only — NOT effectiveSignal (which includes timeoutController that gets aborted when fallback wins)
+        })
+      : result.fullStream;
+
     // Stream events including text, reasoning, and tool calls
     let reasoningContent = '';
     let textContent = ''; // Track text for two-phase FC fallback
     let consecutiveToolFailures = 0; // Track consecutive tool call failures for Phase 3 model-capability fallback
     const FC_MODEL_FALLBACK_THRESHOLD = 2; // Trigger Phase 3 reliable-model retry after this many consecutive failures
 
-    for await (const chunk of result.fullStream) {
-      if (effectiveSignal?.aborted) return;
+    // CRITICAL: Iterate the potentially-wrapped stream for speculative fallback support.
+    // If the primary was silent for 20s+, the fallback generator transparently takes over.
+    // Abort check uses the user's signal (not effectiveSignal) so that aborting the primary
+    // controller (when fallback wins) doesn't kill the merged generator mid-stream.
+    for await (const chunk of streamToIterate) {
+      if (signal?.aborted) return;
 
       switch (chunk.type as string) {
         case 'text-delta': {
           // Clear time-to-first-token timeout once we receive content
           onFirstToken();
+          // Reset rolling idle timeout - activity detected
+          resetIdleTimeout();
 
           const deltaText = (chunk as any).text ?? '';
           textContent += deltaText; // Track for two-phase FC fallback
@@ -1071,6 +1368,8 @@ export async function* streamWithVercelAI(
         case 'reasoning-start': {
           // Clear time-to-first-token timeout once we receive any response
           onFirstToken();
+          // Reset rolling idle timeout - activity detected
+          resetIdleTimeout();
           
           // reasoning-start contains reasoning content in text property for some providers
           const reasoningText = (chunk as any).text ?? '';
@@ -1125,6 +1424,8 @@ export async function* streamWithVercelAI(
         case 'tool-call': {
             // Clear time-to-first-token timeout once we receive any response
             onFirstToken();
+            // Reset rolling idle timeout - activity detected
+            resetIdleTimeout();
             
             // AI SDK v6 uses 'input' (parsed object) in fullStream tool-call parts
             let callArgs = (() => {
@@ -1160,7 +1461,6 @@ export async function* streamWithVercelAI(
                 'read_file': ['path'],
                 'list_files': ['path'],
                 'delete_file': ['path'],
-                'create_directory': ['path'],
                 'batch_write': ['files'],
                 'apply_diff': ['path', 'diff'],
                 'execute_bash': ['command'],
@@ -1398,14 +1698,16 @@ export async function* streamWithVercelAI(
       }
     }
 
-    // Get final usage and metadata
-    const usage = await result.usage;
-    const finishReason = (await result.finishReason) || 'stop';
-    const toolCalls = await result.toolCalls;
-    const steps = await result.steps;
+    // Get final usage and metadata (from the winner's result if speculative fallback was used)
+    const finalResult = fallbackResultRef?.result || result;
+    const usage = await finalResult.usage;
+    const finishReason = (await finalResult.finishReason) || 'stop';
+    const toolCalls = await finalResult.toolCalls;
+    const steps = await finalResult.steps;
 
     // Cleanup timeout
     if (ttftTimeoutId) clearTimeout(ttftTimeoutId);
+        if (idleTimeoutId) clearTimeout(idleTimeoutId);
 
     // Collect all tool calls from steps (multi-step support)
     const allToolCalls: Array<{ id: string; name: string; arguments: Record<string, any> }> = [];
@@ -1464,7 +1766,7 @@ export async function* streamWithVercelAI(
         // result alone and let the upper-layer SelfHeal retry with feedback instead.
         const supportsFC = (vercelModel as any)?.supports?.functionCalling;
         const FILE_EDIT_TOOLS = new Set([
-          'write_file', 'batch_write', 'apply_diff', 'create_directory', 'delete_file',
+          'write_file', 'batch_write', 'apply_diff', 'delete_file',
         ]);
         const availableToolNames = Object.keys(tools);
         const failedToolNames = allToolCalls
@@ -1720,10 +2022,30 @@ ${healingInstructions}` : healingInstructions)
       timestamp: new Date(),
       metadata: {
         vercelAI: true,
-        provider,
-        model: modelName,
+        provider: actualProvider,
+        model: actualModel,
+        // Explicit `actualProvider`/`actualModel` fields for route.ts compatibility
+        // (the route handler checks streamChunk.metadata.actualProvider to detect
+        //  fallback-driven provider changes during streaming).
+        actualProvider,
+        actualModel,
         latencyMs: Date.now() - startTime,
         steps: steps?.length || 0,
+        ...(actualProvider !== provider
+          ? {
+              speculativeFallback: true,
+              originalProvider: provider,
+              originalModel: modelName,
+            }
+          : {}),
+        // Include loser details when a speculative fallback was used
+        ...(speculativeLoserInfo
+          ? {
+              speculativeLoserProvider: speculativeLoserInfo.provider,
+              speculativeLoserModel: speculativeLoserInfo.model,
+              speculativeLoserLatencyMs: speculativeLoserInfo.latencyMs,
+            }
+          : {}),
       },
     };
 
@@ -1921,6 +2243,7 @@ ${healingInstructions}` : healingInstructions)
       } catch (fallbackError: any) {
         // Cleanup timeout
         if (ttftTimeoutId) clearTimeout(ttftTimeoutId);
+        if (idleTimeoutId) clearTimeout(idleTimeoutId);
 
         chatLogger.error('Fallback streaming also failed', {
           requestId,
@@ -1941,6 +2264,7 @@ ${healingInstructions}` : healingInstructions)
 
     // Cleanup timeout
     if (ttftTimeoutId) clearTimeout(ttftTimeoutId);
+        if (idleTimeoutId) clearTimeout(idleTimeoutId);
 
     error.metadata = {
       ...error.metadata,

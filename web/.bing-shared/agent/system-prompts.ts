@@ -3475,8 +3475,6 @@ export const VFS_FILE_EDITING_TOOL_PROMPT = [
   '• batch_write(files, commitMessage?) — Write multiple files at once. The files parameter accepts an array of {path, content} objects.',
   '  Correct: batch_write(files=[{path:"a.py",content:"..."},{path:"b.py",content:"..."}])',
   '  Wrong: batch_write(files="[{...}]"), batch_write(items=[...]) — do NOT stringify, use files not items',
-  '• create_directory(path) — Create a directory (parent dirs created automatically).',
-  '  Correct: create_directory(path="src/components")',
   '  Wrong: createDirectory(...), mkdir(...)',
   '',
   'CRITICAL RULES:',

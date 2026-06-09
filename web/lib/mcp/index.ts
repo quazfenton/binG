@@ -132,7 +132,6 @@ export {
   searchFilesTool,
   batchWriteTool,
   deleteFileTool,
-  createDirectoryTool,
   getWorkspaceStatsTool,
   getVFSToolDefinitions,
   getVFSTool,

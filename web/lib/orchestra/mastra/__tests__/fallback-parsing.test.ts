@@ -111,20 +111,6 @@ write_file({ "path": "index.js", "content": "console.log(\"hello\")" })`;
       expect(toolCalls[0].arguments.path).toBe('src');
     });
 
-    it('should handle create_directory tool call', async () => {
-      const { AgentLoop } = await import('../agent-loop');
-      const agent = new AgentLoop('test-user', 'test-path', 5, {}, 'test-model');
-      const parseTextToolCalls = (agent as any).parseTextToolCalls.bind(agent);
-      
-      const text = 'Creating directory: create_directory({ "path": "src/components" })';
-      
-      const toolCalls = await parseTextToolCalls(text);
-      
-      expect(toolCalls).toHaveLength(1);
-      expect(toolCalls[0].name).toBe('create_directory');
-      expect(toolCalls[0].arguments.path).toBe('src/components');
-    });
-
     it('should handle delete_file tool call', async () => {
       const { AgentLoop } = await import('../agent-loop');
       const agent = new AgentLoop('test-user', 'test-path', 5, {}, 'test-model');

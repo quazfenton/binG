@@ -229,7 +229,7 @@ ${extra}
 1. ALWAYS use function calls for tools — never output JSON or text like "[Tool: write_file]".
 2. Use ONLY paths from the file listing above, or new paths you are creating. Do NOT guess paths.
 3. Before editing an unfamiliar file, read it first with read_file.
-4. Use create_directory before writing files into a new directory.
+4. write_file and batch_write automatically create parent directories.
 5. Prefer minimal, surgical edits. Read → understand → write the smallest correct change.
 6. If a tool fails, read the error carefully. Do NOT retry the exact same call — try a different approach.
 7. After 2 failures on the same path, call list_directory on the parent to discover what actually exists.

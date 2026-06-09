@@ -5,7 +5,7 @@
  * with proper schema preservation, type safety, and priority-based filtering.
  */
 
-import { tool, type Tool, type ToolCallOptions } from 'ai';
+import { tool, type Tool, type ToolExecutionOptions } from 'ai';
 import { z } from 'zod';
 import { chatLogger } from './chat-logger';
 import type { ToolExecutionContext } from './vercel-ai-streaming';
@@ -154,9 +154,18 @@ async function createMCPToolSet(context: ToolExecutionContext): Promise<Record<s
   const tools: Record<string, Tool> = {};
   
   try {
-    const mcpTools = await getMCPToolsForAI_SDK(context.userId, '');
+    // Pass the user's actual message as taskFilter so the existing
+    // task-aware filtering in getMCPToolsForAI_SDK() can decide which
+    // tools are relevant (Arcade tools for web tasks, provider tools
+    // for sandbox/computer-use tasks, etc.). Falls back to undefined
+    // on the first request before any user message is sent.
+    const mcpTools = await getMCPToolsForAI_SDK(context.userId, context.lastUserMessage);
     for (const mcpTool of mcpTools) {
       const name = mcpTool.function.name;
+      // Blaxel codegen and Nullclaw messaging/automation tools are
+      // bloated and rarely needed. Filter them unconditionally — they
+      // remain accessible through direct getMCPToolsForAI_SDK() calls.
+      if (name.startsWith('blaxel_') || name.startsWith('nullclaw_')) continue;
       tools[name] = tool({
         description: mcpTool.function.description,
         inputSchema: mcpTool.function.parameters || z.object({}),
@@ -209,6 +218,193 @@ function createCapabilityChainTool(context: ToolExecutionContext): Record<string
 }
 
 // ============================================================================
+// Task-Aware Additive Capability Filtering
+// ============================================================================
+
+/**
+ * Task groups define which capabilities to load when the user's message
+ * mentions certain topics. Instead of starting from all 80+ capabilities
+ * and subtracting (which causes broad keywords like "search" to match 6+
+ * loosely-related tools), we start from empty and only ADD capabilities
+ * whose group keywords match the message.
+ *
+ * Each group has a set of keywords and a list of capability patterns to
+ * add when any keyword matches. Patterns support wildcards: "terminal.*"
+ * matches all ids starting with "terminal.".
+ *
+ * Falls back to all capabilities when nothing matches, so the LLM is
+ * never stranded.
+ */
+type TaskGroup = { keywords: string[]; add: string[] };
+
+const TASK_GROUPS: TaskGroup[] = [
+  {
+    keywords: ['search', 'grep', 'find', 'codebase', 'lookup', 'locate', 'ripgrep'],
+    add: ['repo.search'],
+  },
+  {
+    keywords: ['run', 'execute', 'eval', 'interpreter', 'python', 'javascript', 'script', 'snippet'],
+    add: ['sandbox.execute'],
+  },
+  {
+    keywords: ['shell', 'bash', 'command', 'exec', 'cli', 'cmd'],
+    add: ['bash.execute', 'sandbox.session'],
+  },
+  {
+    keywords: ['commit', 'push', 'pull', 'clone', 'git', 'branch', 'merge', 'rebase', 'stash', 'version control'],
+    add: ['repo.git'],
+  },
+  {
+    keywords: ['browse', 'scrape', 'url', 'http', 'fetch', 'webpage', 'web page', 'crawl'],
+    add: ['web.browse', 'web.fetch', 'web.search'],
+  },
+  {
+    keywords: ['discord', 'telegram', 'dm', 'direct message', 'send message', 'message'],
+    add: ['automation.discord', 'automation.telegram'],
+  },
+  {
+    keywords: ['task', 'todo', 'plan', 'steps', 'schedule', 'track', 'checklist'],
+    add: ['task.*', 'workflow.discovery', 'workflow.plan'],
+  },
+  {
+    keywords: ['desktop', 'click', 'screenshot', 'snapshot', 'window', 'screen', 'type text', 'keyboard', 'clipboard', 'app'],
+    add: ['desktop.*', 'computer_use.*'],
+  },
+  {
+    keywords: ['terminal', 'pty', 'interactive', 'tui'],
+    add: ['terminal.*'],
+  },
+  {
+    keywords: ['process', 'daemon', 'background', 'kill', 'ps', 'bg job'],
+    add: ['process.stop', 'process.list', 'terminal.start_process', 'terminal.stop_process', 'terminal.list_processes'],
+  },
+  {
+    keywords: ['port', 'preview', 'forward', 'listen', 'expose'],
+    add: ['preview.*', 'terminal.get_port_status'],
+  },
+  {
+    keywords: ['memory', 'remember', 'store', 'recall', 'cache', 'remember this'],
+    add: ['memory.*'],
+  },
+  {
+    keywords: ['workspace', 'sync', 'migrate', 'r2', 'storage', 'affinity', 'image', 'cas'],
+    add: ['workspace.*', 'workspacefs.*', 'workspace.graph', 'workspace.graph_diagnostic', 'workspace.graph_find_process'],
+  },
+  {
+    keywords: ['analyze', 'detect', 'framework', 'dependency', 'structure', 'stats'],
+    add: ['repo.analyze', 'workspace.analyze', 'workspace.structure', 'workspace.stats', 'workspace.list_scripts'],
+  },
+  {
+    keywords: ['bundle', 'context', 'repomix', 'export', 'project context'],
+    add: ['workspace.bundle'],
+  },
+  {
+    keywords: ['diff', 'syntax', 'ast', 'refactor', 'check', 'lint', 'validate', 'format'],
+    add: ['code.ast_diff', 'code.syntax_check', 'workspace.getChanges'],
+  },
+  {
+    keywords: ['provider', 'cost', 'runtime', 'broker', 'estimate'],
+    add: ['runtime.*'],
+  },
+  {
+    keywords: ['graph', 'diagnostic', 'diagnose', 'troubleshoot', 'state', 'runtime state'],
+    add: ['workspace.graph', 'workspace.graph_diagnostic', 'workspace.graph_find_process', 'workspace.runtime_state'],
+  },
+  {
+    keywords: ['mcp', 'tool list', 'list tools'],
+    add: ['mcp.*'],
+  },
+  {
+    keywords: ['workflow', 'automation', 'pipeline', 'cron', 'trigger'],
+    add: ['automation.workflow', 'workflow.*', 'task.schedule', 'task.status', 'task.cancel'],
+  },
+  {
+    keywords: ['batch', 'atomic', 'multiple files', 'write multiple'],
+    add: ['file.batch_write'],
+  },
+  {
+    keywords: ['changes', 'sync client', 'file sync', 'get changes'],
+    add: ['file.sync', 'workspace.getChanges'],
+  },
+  {
+    keywords: ['approval', 'human', 'confirm', 'hitl', 'human in the loop'],
+    add: ['workflow.request_approval'],
+  },
+  {
+    keywords: ['history', 'rollback', 'undo', 'restore', 'revert', 'snapshot'],
+    add: ['workflow.history', 'workflow.rollback', 'workflow.commit'],
+  },
+  {
+    keywords: ['list', 'ls', 'dir', 'read', 'write', 'edit', 'file', 'create file', 'delete file', 'append', 'cat'],
+    add: [], // file.* is always covered by VFS — nothing extra needed
+  },
+];
+
+/**
+ * Filter capabilities by task relevance using additive task groups.
+ * Starts from empty and only adds capabilities whose task-group keywords
+ * match the user's message. This avoids the broad-match problem where
+ * common words like "search" or "run" load 15+ loosely-related tools.
+ *
+ * Falls back to all capabilities when no message or no groups match.
+ */
+function filterCapabilitiesByTask(
+  capabilities: readonly CapabilityDefinition[],
+  userMessage: string | undefined
+): CapabilityDefinition[] {
+  if (!userMessage) return [...capabilities];
+
+  const lower = userMessage.toLowerCase();
+
+  // Collect capability patterns that match the user's message
+  const matchedPatterns = new Set<string>();
+
+  for (const group of TASK_GROUPS) {
+    if (group.keywords.some(kw => lower.includes(kw.toLowerCase()))) {
+      for (const pattern of group.add) {
+        matchedPatterns.add(pattern);
+      }
+    }
+  }
+
+  // If nothing matched (e.g. "hi", "thanks", "yes"), load everything
+  if (matchedPatterns.size === 0) {
+    chatLogger.debug('[TaskFilter] No task groups matched — loading all capabilities', {
+      messagePreview: lower.slice(0, 80),
+    });
+    return [...capabilities];
+  }
+
+  // Expand wildcard patterns and collect matching capability IDs
+  const expandedIds = new Set<string>();
+  for (const pattern of matchedPatterns) {
+    if (pattern.endsWith('.*')) {
+      const prefix = pattern.slice(0, -2);
+      for (const cap of capabilities) {
+        if (cap.id.startsWith(prefix)) expandedIds.add(cap.id);
+      }
+    } else {
+      expandedIds.add(pattern);
+    }
+  }
+
+  const result = capabilities.filter(cap => expandedIds.has(cap.id));
+
+  const skipped = capabilities.length - result.length;
+  if (skipped > 0) {
+    chatLogger.debug('[TaskFilter] Additive match', {
+      total: capabilities.length,
+      included: result.length,
+      skipped,
+      patterns: matchedPatterns.size,
+      ids: expandedIds.size,
+    });
+  }
+
+  return result;
+}
+
+// ============================================================================
 // Main Entry Points
 // ============================================================================
 
@@ -232,12 +428,33 @@ export function createToolSet(
   }
 
   if (priority.includes('capability')) {
-    for (const cap of ALL_CAPABILITIES) {
+    // Task-aware filtering: only load capabilities whose keywords match the
+    // user's message (same pattern as powersRegistry.matchByTriggers()).
+    // Falls back to all capabilities when no message or no match, so the
+    // LLM always has at least some tools available.
+    const capsToLoad = filterCapabilitiesByTask(ALL_CAPABILITIES, context.lastUserMessage);
+
+    for (const cap of capsToLoad) {
       if (allowedCapabilities.length > 0 && !allowedCapabilities.includes(cap.id)) continue;
       if (excludedTools.includes(cap.id) || excludedTools.includes(cap.id.replace(/\./g, '_'))) continue;
+      // VFS tools (write_file, read_file, etc.) already cover file.* capabilities with
+      // richer descriptions and better error handling. Skip duplicates to save ~1,400-3,500
+      // tokens per request from sending redundant schemas to the LLM.
+      if (priority.includes('vfs') && cap.id.startsWith('file.')) continue;
       const toolName = cap.id.replace(/\./g, '_');
       sourceTools.capability[toolName] = createCapabilityTool(cap, context);
     }
+  }
+
+  // Log capability filter summary at info level so we can verify
+  // token savings at runtime (debug-level detail is in filterCapabilitiesByTask).
+  // Subtract file.* caps from the baseline since they're always skipped by VFS dedup
+  // — this way the log only reflects task-filtering savings, not VFS dedup.
+  const capCount = Object.keys(sourceTools.capability).length;
+  const fileCapsTotal = ALL_CAPABILITIES.filter(c => c.id.startsWith('file.')).length;
+  const baseline = priority.includes('vfs') ? ALL_CAPABILITIES.length - fileCapsTotal : ALL_CAPABILITIES.length;
+  if (capCount < baseline) {
+    chatLogger.info('[ToolSet] Capability task filter: loaded ' + capCount + '/' + baseline + ' (' + (baseline - capCount) + ' filtered by task)');
   }
 
   if (includeCapabilityChain) {

@@ -44,7 +44,6 @@ describe('VFS MCP Tools', () => {
       expect(names).toContain('search_files');
       expect(names).toContain('batch_write');
       expect(names).toContain('delete_file');
-      expect(names).toContain('create_directory');
       expect(names).toContain('get_workspace_stats');
     });
 
@@ -91,7 +90,6 @@ describe('VFS MCP Tools', () => {
       expect(vfsTools.search_files).toBeDefined();
       expect(vfsTools.batch_write).toBeDefined();
       expect(vfsTools.delete_file).toBeDefined();
-      expect(vfsTools.create_directory).toBeDefined();
       expect(vfsTools.get_workspace_stats).toBeDefined();
     });
 

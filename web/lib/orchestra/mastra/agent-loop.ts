@@ -1159,12 +1159,6 @@ export class AgentLoop {
       directToolCalls.push({ name: 'delete_file', arguments: { path: match[1] } });
     }
     
-    // Pattern 3: create_directory({ "path": "..." })
-    const mkdirMatches = text.matchAll(/create_directory\(\s*\{\s*"path"\s*:\s*"([^"]+)"/g);
-    for (const match of mkdirMatches) {
-      directToolCalls.push({ name: 'create_directory', arguments: { path: match[1] } });
-    }
-    
     // Pattern 4: list_directory({ "path": "..." })
     const listDirMatches = text.matchAll(/list_directory\(\s*\{\s*"path"\s*:\s*"([^"]+)"/g);
     for (const match of listDirMatches) {
@@ -1218,7 +1212,6 @@ export class AgentLoop {
       let toolName: string = edit.action || 'write_file';
       if (edit.action === 'write') toolName = 'write_file';
       else if (edit.action === 'patch') toolName = 'apply_diff';
-      else if (edit.action === 'mkdir') toolName = 'create_directory';
       else if (edit.action === 'delete') toolName = 'delete_file';
 
       // Deduplicate by tool name + path

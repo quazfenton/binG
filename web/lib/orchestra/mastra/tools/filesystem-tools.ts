@@ -234,7 +234,6 @@ export function createFilesystemTools(
                 retryable: true,
                 attemptedPath: path,
                 parentPath,
-                suggestedNextAction: `Call create_directory("${parentPath}") first, then retry write_file.`,
               },
             };
           }
@@ -307,40 +306,7 @@ export function createFilesystemTools(
       },
     },
 
-    {
-      name: 'create_directory',
-      description: 'Create a new directory (including parent directories if needed)',
-      parameters: {
-        type: 'object',
-        properties: {
-          path: {
-            type: 'string',
-            description: 'Directory path to create (e.g., "src/components")',
-          },
-        },
-        required: ['path'],
-      },
-      execute: async ({ path }: { path: string }): Promise<ToolCallResult> => {
-        try {
-          // Scope the path to workspace
-          const scopedPath = resolveWorkspacePath(workspacePath, path);
-          // Create directory by writing a .keep file (VFS creates parent dirs automatically)
-          const keepFilePath = `${scopedPath}/.keep`;
-          await virtualFilesystem.writeFile(userId, keepFilePath, '');
-          return {
-            success: true,
-            path: scopedPath,
-            message: `Directory created: ${scopedPath}`,
-          };
-        } catch (error: any) {
-          const { formatToolError } = await import('@/lib/orchestra/shared-agent-context');
-          return {
-            success: false,
-            error: formatToolError('create_directory', error, { path }),
-          };
-        }
-      },
-    },
+
 
     {
       name: 'delete_file',

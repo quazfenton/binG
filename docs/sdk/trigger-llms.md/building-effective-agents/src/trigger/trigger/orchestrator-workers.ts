@@ -1,6 +1,6 @@
 import { openai } from "@ai-sdk/openai";
 import { batch, logger, task } from "@trigger.dev/sdk/v3";
-import { CoreMessage, generateText } from "ai";
+import { ModelMessage, generateText } from "ai";
 
 // Define types for our workers' outputs
 interface Claim {
@@ -26,7 +26,7 @@ export const extractClaims = task({
   id: "extract-claims",
   run: async ({ article }: { article: string }) => {
     try {
-      const messages: CoreMessage[] = [
+      const messages: ModelMessage[] = [
         {
           role: "system",
           content:

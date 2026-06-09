@@ -225,7 +225,7 @@ export function ChatPanel({
         ref={scrollContainerRef}
         className="flex-1 overflow-y-auto p-2 sm:p-4 space-y-2 overscroll-contain touch-pan-y w-full"
         style={{
-          paddingTop: messages.length > 0 ? "60px" : "120px",
+          paddingTop: "12px",
           paddingBottom: "120px",
           WebkitOverflowScrolling: "touch",
           scrollBehavior: "smooth"

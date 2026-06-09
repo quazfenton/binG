@@ -206,27 +206,6 @@ export const FILE_LIST_CAPABILITY: CapabilityDefinition = {
   tags: ['file', 'list', 'directory', 'filesystem', 'ls'],
 };
 
-export const FILE_SEARCH_CAPABILITY: CapabilityDefinition = {
-  id: 'file.search',
-  name: 'Search Files',
-  category: 'file',
-  description: 'Search for files by name pattern, content, or metadata.',
-  inputSchema: z.object({
-    query: z.string().describe('Search query'),
-    path: z.string().optional().describe('Root path to search'),
-    type: z.enum(['name', 'content', 'both']).optional().default('name'),
-    maxResults: z.number().optional().default(50),
-  }),
-  outputSchema: z.array(z.object({
-    path: z.string(),
-    matches: z.array(z.object({
-      line: z.number(),
-      content: z.string(),
-    })).optional(),
-  })),
-  providerPriority: ['ripgrep', 'blaxel', 'local-fs'],
-  tags: ['file', 'search', 'find', 'grep'],
-};
 
 // ============================================================================
 // Sandbox Capabilities
@@ -236,11 +215,13 @@ export const SANDBOX_EXECUTE_CAPABILITY: CapabilityDefinition = {
   id: 'sandbox.execute',
   name: 'Execute Code',
   category: 'sandbox',
-  description: 'Execute code in an isolated sandbox environment. Supports multiple languages and provides execution context.',
+  description: 'Execute code in an isolated sandbox environment. Supports multiple languages with args, stdin, and execution context (dependencies, env vars, working dir). Replaces the deprecated code.run.',
   inputSchema: z.object({
     code: z.string().describe('Code to execute'),
-    language: z.enum(['javascript', 'typescript', 'python', 'bash', 'rust', 'go']).describe('Programming language'),
-    timeout: z.number().optional().default(30000),
+    language: z.enum(['javascript', 'typescript', 'python', 'bash', 'rust', 'go', 'java', 'r', 'cpp']).describe('Programming language'),
+    args: z.array(z.string()).optional().describe('Command-line arguments'),
+    stdin: z.string().optional().describe('Standard input'),
+    timeout: z.number().optional().default(30000).describe('Timeout in milliseconds'),
     context: z.object({
       dependencies: z.array(z.string()).optional(),
       envVars: z.record(z.string()).optional(),
@@ -271,39 +252,6 @@ export const SANDBOX_EXECUTE_CAPABILITY: CapabilityDefinition = {
   tags: ['sandbox', 'execute', 'code', 'run', 'eval'],
 };
 
-export const SANDBOX_SHELL_CAPABILITY: CapabilityDefinition = {
-  id: 'sandbox.shell',
-  name: 'Run Shell Command',
-  category: 'sandbox',
-  description: 'Execute a shell command in the sandbox environment with full terminal access.',
-  inputSchema: z.object({
-    command: z.string().describe('Shell command to execute'),
-    cwd: z.string().optional().describe('Working directory'),
-    env: z.record(z.string()).optional().describe('Environment variables'),
-    timeout: z.number().optional().default(60000),
-  }),
-  outputSchema: z.object({
-    success: z.boolean(),
-    stdout: z.string(),
-    stderr: z.string(),
-    exitCode: z.number(),
-  }),
-  // Provider priority aligned with provider-router.ts profiles
-  // Best for: fullstack-app, computer-use, general
-  providerPriority: [
-    'opencode-v2',      // Local OpenCode (primary)
-    'daytona',          // Best for fullstack, computer-use
-    'e2b',              // Desktop support
-    'sprites',          // Persistent with services
-    'codesandbox',      // Full-stack support
-    'microsandbox',     // General purpose
-    'opensandbox',      // General purpose
-    'mistral',          // General purpose
-    'blaxel',           // Batch/agent
-    'webcontainer',     // Limited shell
-  ],
-  tags: ['sandbox', 'shell', 'bash', 'terminal', 'exec'],
-};
 
 export const SANDBOX_SESSION_CAPABILITY: CapabilityDefinition = {
   id: 'sandbox.session',
@@ -419,13 +367,14 @@ export const REPO_SEARCH_CAPABILITY: CapabilityDefinition = {
   id: 'repo.search',
   name: 'Search Repository',
   category: 'repo',
-  description: 'Search codebase using multiple methods: text search (ripgrep), semantic search (embeddings), or tool-based search (blaxel).',
+  description: 'Search codebase using multiple methods: text search (ripgrep), semantic search (embeddings), or tool-based search (blaxel). Replaces the deprecated file.search and repo.semantic-search — use method=auto for automatic routing.',
   inputSchema: z.object({
     query: z.string().describe('Search query'),
     path: z.string().optional().describe('Path to search in'),
     method: z.enum(['text', 'semantic', 'tool', 'auto']).optional().default('auto'),
     type: z.enum(['file', 'code', 'docs', 'all']).optional().default('all'),
     limit: z.number().optional().default(20),
+    similarityThreshold: z.number().optional().describe('Minimum similarity score (0-1). Only used with method "semantic".'),
   }),
   outputSchema: z.array(z.object({
     path: z.string(),
@@ -458,105 +407,6 @@ export const REPO_GIT_CAPABILITY: CapabilityDefinition = {
   tags: ['repo', 'git', 'version-control', 'commit'],
 };
 
-export const REPO_CLONE_CAPABILITY: CapabilityDefinition = {
-  id: 'repo.clone',
-  name: 'Clone Repository',
-  category: 'repo',
-  description: 'Clone a Git repository into the workspace.',
-  inputSchema: z.object({
-    url: z.string().describe('Repository URL'),
-    path: z.string().optional().describe('Destination path'),
-    username: z.string().optional().describe('Username for auth'),
-    password: z.string().optional().describe('Password/token for auth'),
-    branch: z.string().optional().describe('Branch to checkout'),
-    depth: z.number().optional().describe('Clone depth (shallow)'),
-    recursive: z.boolean().optional().default(false).describe('Clone submodules'),
-  }),
-  outputSchema: z.object({
-    success: z.boolean(),
-    path: z.string(),
-    error: z.string().optional(),
-  }),
-  providerPriority: ['git-helper', 'opencode-v2'],
-  tags: ['repo', 'git', 'clone', 'clone'],
-};
-
-export const REPO_COMMIT_CAPABILITY: CapabilityDefinition = {
-  id: 'repo.commit',
-  name: 'Git Commit',
-  category: 'repo',
-  description: 'Commit changes to the repository.',
-  inputSchema: z.object({
-    message: z.string().describe('Commit message'),
-    authorName: z.string().optional().describe('Author name'),
-    authorEmail: z.string().optional().describe('Author email'),
-    files: z.array(z.string()).optional().describe('Files to commit'),
-    cwd: z.string().optional().describe('Working directory'),
-  }),
-  outputSchema: z.object({
-    success: z.boolean(),
-    hash: z.string().optional(),
-    error: z.string().optional(),
-  }),
-  providerPriority: ['git-helper', 'opencode-v2'],
-  tags: ['repo', 'git', 'commit'],
-};
-
-export const REPO_PUSH_CAPABILITY: CapabilityDefinition = {
-  id: 'repo.push',
-  name: 'Git Push',
-  category: 'repo',
-  description: 'Push commits to remote repository.',
-  inputSchema: z.object({
-    remote: z.string().optional().default('origin').describe('Remote name'),
-    branch: z.string().optional().describe('Branch name'),
-    username: z.string().optional().describe('Username for auth'),
-    password: z.string().optional().describe('Password/token for auth'),
-    force: z.boolean().optional().default(false).describe('Force push'),
-    cwd: z.string().optional().describe('Working directory'),
-  }),
-  outputSchema: z.object({
-    success: z.boolean(),
-    error: z.string().optional(),
-  }),
-  providerPriority: ['git-helper', 'opencode-v2'],
-  tags: ['repo', 'git', 'push'],
-};
-
-export const REPO_PULL_CAPABILITY: CapabilityDefinition = {
-  id: 'repo.pull',
-  name: 'Git Pull',
-  category: 'repo',
-  description: 'Pull changes from remote repository.',
-  inputSchema: z.object({
-    cwd: z.string().optional().describe('Working directory'),
-  }),
-  outputSchema: z.object({
-    success: z.boolean(),
-  }),
-  providerPriority: ['git-helper', 'opencode-v2'],
-  tags: ['repo', 'git', 'pull'],
-};
-
-export const REPO_SEMANTIC_SEARCH_CAPABILITY: CapabilityDefinition = {
-  id: 'repo.semantic-search',
-  name: 'Semantic Code Search',
-  category: 'repo',
-  description: 'Search codebase using semantic similarity (embeddings-based).',
-  inputSchema: z.object({
-    query: z.string().describe('Search query'),
-    path: z.string().optional().describe('Path to search in'),
-    limit: z.number().optional().default(10),
-    similarityThreshold: z.number().optional().describe('Minimum similarity score'),
-  }),
-  outputSchema: z.array(z.object({
-    content: z.string(),
-    score: z.number(),
-    source: z.string().optional(),
-  })),
-  providerPriority: ['embedding-search', 'blaxel'],
-  tags: ['repo', 'search', 'semantic', 'embedding', 'ai-search'],
-};
 
 export const WORKSPACE_GET_CHANGES_CAPABILITY: CapabilityDefinition = {
   id: 'workspace.getChanges',
@@ -759,205 +609,15 @@ export const AUTOMATION_WORKFLOW_CAPABILITY: CapabilityDefinition = {
 // or oauthIntegration from lib/oauth/index.ts instead.
 // ============================================================================
 
-/**
- * @deprecated Use `toolAuthManager.initiateConnection()` from `lib/services/tool-authorization-manager.ts`
- * or `oauthIntegration.connect()` from `lib/oauth/index.ts` instead.
- * 
- * Migration guide:
- * ```typescript
- * // Old
- * await executeCapability('integration.connect', { provider: 'gmail', userId }, context);
- * 
- * // New
- * import { toolAuthManager } from '@/lib/tools/tool-authorization-manager';
- * const result = await toolAuthManager.initiateConnection(userId, 'gmail');
- * ```
- */
-export const INTEGRATION_CONNECT_CAPABILITY: CapabilityDefinition = {
-  id: 'integration.connect',
-  name: 'Connect Third-Party Service',
-  category: 'automation',
-  description: 'DEPRECATED: Use toolAuthManager.initiateConnection() instead. Initiate OAuth connection to third-party services (Google, GitHub, Slack, etc.) via Nango, Composio, or Arcade. Returns authorization URL for user consent.',
-  inputSchema: z.object({
-    provider: z.string().describe('Provider config key (e.g., "gmail", "github", "slack", "notion")'),
-    userId: z.string().describe('User identifier'),
-    redirectUrl: z.string().optional().describe('Redirect URL after authorization'),
-    scopes: z.array(z.string()).optional().describe('OAuth scopes to request'),
-  }),
-  outputSchema: z.object({
-    success: z.boolean(),
-    authUrl: z.string().optional(),
-    connectionId: z.string().optional(),
-    provider: z.string(),
-    requiresAuth: z.boolean(),
-  }),
-  providerPriority: ['oauth-integration', 'composio', 'arcade', 'nango'],
-  requiresAuth: false, // Connection initiation doesn't require OAuth, but using the tool does
-  tags: ['integration', 'oauth', 'connection', 'auth', 'nango', 'composio', 'arcade', 'deprecated'],
-  metadata: {
-    latency: 'low',
-    cost: 'low',
-    reliability: 0.99,
-  },
-  permissions: ['oauth:connect'],
-};
-
-/**
- * @deprecated Use `toolAuthManager.listConnections()` from `lib/services/tool-authorization-manager.ts`
- * or `oauthIntegration.listConnections()` from `lib/oauth/index.ts` instead.
- * 
- * Migration guide:
- * ```typescript
- * // Old
- * await executeCapability('integration.list_connections', { userId }, context);
- * 
- * // New
- * import { toolAuthManager } from '@/lib/tools/tool-authorization-manager';
- * const result = await toolAuthManager.listConnections(userId);
- * ```
- */
-export const INTEGRATION_LIST_CONNECTIONS_CAPABILITY: CapabilityDefinition = {
-  id: 'integration.list_connections',
-  name: 'List User Connections',
-  category: 'automation',
-  description: 'DEPRECATED: Use toolAuthManager.listConnections() instead. List all active OAuth connections for a user across providers (Nango, Composio, Arcade).',
-  inputSchema: z.object({
-    userId: z.string().describe('User identifier'),
-    provider: z.string().optional().describe('Filter by provider (optional)'),
-  }),
-  outputSchema: z.array(z.object({
-    id: z.string(),
-    provider: z.string(),
-    providerConfigKey: z.string(),
-    connectionId: z.string(),
-    status: z.enum(['active', 'inactive', 'expired']),
-    createdAt: z.string(),
-    scopes: z.array(z.string()).optional(),
-  })),
-  providerPriority: ['oauth-integration', 'composio', 'arcade', 'nango'],
-  requiresAuth: true,
-  tags: ['integration', 'connections', 'oauth', 'list', 'nango', 'composio', 'arcade', 'deprecated'],
-};
-
-/**
- * @deprecated Use `toolAuthManager.revokeConnection()` from `lib/services/tool-authorization-manager.ts`
- * or `oauthIntegration.revoke()` from `lib/oauth/index.ts` instead.
- */
-export const INTEGRATION_REVOKE_CAPABILITY: CapabilityDefinition = {
-  id: 'integration.revoke',
-  name: 'Revoke Connection',
-  category: 'automation',
-  description: 'DEPRECATED: Use toolAuthManager.revokeConnection() instead. Revoke OAuth connection to a third-party service.',
-  inputSchema: z.object({
-    provider: z.string().describe('Provider config key'),
-    userId: z.string().describe('User identifier'),
-    connectionId: z.string().optional().describe('Specific connection ID to revoke'),
-  }),
-  outputSchema: z.object({
-    success: z.boolean(),
-    provider: z.string(),
-    revoked: z.boolean(),
-  }),
-  providerPriority: ['oauth-integration', 'composio', 'arcade', 'nango'],
-  requiresAuth: true,
-  tags: ['integration', 'revoke', 'disconnect', 'oauth', 'nango', 'composio', 'arcade', 'deprecated'],
-};
-
-/**
- * @deprecated Tool execution is handled via existing tool execution flow.
- * Use `toolContextManager.processToolRequest()` or `getToolManager().executeTool()` instead.
- */
-export const INTEGRATION_EXECUTE_CAPABILITY: CapabilityDefinition = {
-  id: 'integration.execute',
-  name: 'Execute Third-Party Tool',
-  category: 'automation',
-  description: 'DEPRECATED: Use toolContextManager.processToolRequest() or getToolManager().executeTool() instead. Execute a tool/action from a connected third-party service (send email, create issue, post message, etc.). Handles OAuth token refresh automatically.',
-  inputSchema: z.object({
-    provider: z.string().describe('Provider config key (e.g., "gmail", "github", "slack")'),
-    action: z.string().describe('Tool/action name (e.g., "send_email", "create_issue", "post_message")'),
-    userId: z.string().describe('User identifier'),
-    params: z.record(z.any()).describe('Action-specific parameters'),
-    connectionId: z.string().optional().describe('Existing connection ID (optional, will use default)'),
-  }),
-  outputSchema: z.object({
-    success: z.boolean(),
-    output: z.any().optional(),
-    error: z.string().optional(),
-    requiresAuth: z.boolean().optional(),
-    authUrl: z.string().optional(),
-    connectionId: z.string().optional(),
-  }),
-  providerPriority: ['oauth-integration', 'composio', 'arcade', 'nango'],
-  requiresAuth: true,
-  tags: ['integration', 'tool', 'execution', 'oauth', 'nango', 'composio', 'arcade', 'deprecated'],
-};
-
-/**
- * @deprecated Use `toolAuthManager.getAvailableTools()` or direct provider SDK calls instead.
- */
-export const INTEGRATION_SEARCH_TOOLS_CAPABILITY: CapabilityDefinition = {
-  id: 'integration.search_tools',
-  name: 'Search Available Tools',
-  category: 'automation',
-  description: 'DEPRECATED: Use toolAuthManager.getAvailableTools() or direct provider SDK calls instead. Search available tools across all integration providers (Nango, Composio, Arcade) by query, category, or provider.',
-  inputSchema: z.object({
-    query: z.string().describe('Search query'),
-    provider: z.string().optional().describe('Filter by provider (nango, composio, arcade)'),
-    category: z.string().optional().describe('Filter by category (e.g., "crm", "email", "productivity")'),
-    requiresAuth: z.boolean().optional().describe('Filter by auth requirement'),
-    limit: z.number().optional().default(20),
-  }),
-  outputSchema: z.array(z.object({
-    name: z.string(),
-    description: z.string(),
-    provider: z.string(),
-    toolkit: z.string().optional(),
-    requiresAuth: z.boolean(),
-    inputSchema: z.object({}).optional(),
-    examples: z.array(z.string()).optional(),
-  })),
-  providerPriority: ['oauth-integration', 'composio', 'arcade', 'nango'],
-  requiresAuth: false,
-  tags: ['integration', 'search', 'tools', 'discovery', 'nango', 'composio', 'arcade', 'deprecated'],
-};
-
-/**
- * @deprecated Use direct provider SDK calls (Nango proxy, Arcade execute) instead.
- */
-export const INTEGRATION_PROXY_CAPABILITY: CapabilityDefinition = {
-  id: 'integration.proxy',
-  name: 'Proxy API Request',
-  category: 'automation',
-  description: 'DEPRECATED: Use direct provider SDK calls instead. Make authenticated API requests to third-party services via Nango/Arcade proxy. Handles OAuth token injection automatically.',
-  inputSchema: z.object({
-    provider: z.string().describe('Provider config key'),
-    userId: z.string().describe('User identifier'),
-    endpoint: z.string().describe('API endpoint (e.g., "/users", "/repos/{owner}/{repo}")'),
-    method: z.enum(['GET', 'POST', 'PUT', 'DELETE', 'PATCH']).optional().default('GET'),
-    headers: z.record(z.string()).optional().describe('Custom headers'),
-    params: z.record(z.any()).optional().describe('Query parameters'),
-    data: z.any().optional().describe('Request body'),
-  }),
-  outputSchema: z.object({
-    success: z.boolean(),
-    status: z.number().optional(),
-    data: z.any().optional(),
-    headers: z.record(z.string()).optional(),
-    error: z.string().optional(),
-  }),
-  providerPriority: ['oauth-integration', 'nango', 'arcade'],
-  requiresAuth: true,
-  tags: ['integration', 'proxy', 'api', 'http', 'nango', 'arcade', 'deprecated'],
-};
-
 export const BASH_CAPABILITY: CapabilityDefinition = {
   id: 'bash.execute',
   name: 'Bash Command Execution',
   category: 'sandbox',
-  description: 'Execute bash commands in sandboxed environment with automatic error recovery (self-healing)',
+  description: 'Execute bash commands in sandboxed environment with automatic error recovery (self-healing). Replaces the deprecated sandbox.shell — includes env vars support.',
   inputSchema: z.object({
     command: z.string().describe('Bash command to execute (e.g., "cat file.txt | grep pattern")'),
     cwd: z.string().optional().describe('Working directory (relative to workspace root)'),
+    env: z.record(z.string()).optional().describe('Environment variables'),
     timeout: z.number().optional().default(30000).describe('Timeout in milliseconds'),
     enableHealing: z.boolean().optional().default(true).describe('Enable automatic error recovery'),
   }),
@@ -1371,25 +1031,6 @@ export const TASK_GET_UNFINISHED_CAPABILITY: CapabilityDefinition = {
 // Process Management Capabilities
 // ============================================================================
 
-export const PROCESS_START_CAPABILITY: CapabilityDefinition = {
-  id: 'process.start',
-  name: 'Start Background Process',
-  category: 'sandbox',
-  description: 'Start a background process with optional output capture.',
-  inputSchema: z.object({
-    command: z.string().describe('Command to run'),
-    background: z.boolean().optional().default(true),
-    captureOutput: z.boolean().optional().default(true),
-  }),
-  outputSchema: z.object({
-    success: z.boolean(),
-    pid: z.number().optional(),
-    logFile: z.string().optional(),
-    error: z.string().optional(),
-  }),
-  providerPriority: ['opencode-v2', 'daytona', 'local-fs'],
-  tags: ['process', 'start', 'background', 'daemon'],
-};
 
 export const PROCESS_STOP_CAPABILITY: CapabilityDefinition = {
   id: 'process.stop',
@@ -1705,27 +1346,6 @@ export const FILE_SYNC_CAPABILITY: CapabilityDefinition = {
 // Code Capabilities
 // ============================================================================
 
-export const CODE_RUN_CAPABILITY: CapabilityDefinition = {
-  id: 'code.run',
-  name: 'Run Code',
-  category: 'sandbox',
-  description: 'Execute code snippet with stdin support. Multi-language with temp file fallback.',
-  inputSchema: z.object({
-    code: z.string().describe('Code to execute'),
-    language: z.enum(['python', 'javascript', 'typescript', 'go', 'rust', 'java', 'r', 'cpp']).describe('Language'),
-    args: z.array(z.string()).optional().describe('Command-line arguments'),
-    stdin: z.string().optional().describe('Standard input'),
-    timeout: z.number().optional().default(30).describe('Timeout in seconds'),
-  }),
-  outputSchema: z.object({
-    success: z.boolean(),
-    stdout: z.string(),
-    stderr: z.string(),
-    exitCode: z.number(),
-  }),
-  providerPriority: ['opencode-v2', 'e2b', 'daytona', 'codesandbox'],
-  tags: ['code', 'run', 'execute', 'interpreter'],
-};
 
 export const CODE_AST_DIFF_CAPABILITY: CapabilityDefinition = {
   id: 'code.ast_diff',
@@ -2734,22 +2354,18 @@ export const ALL_CAPABILITIES: CapabilityDefinition[] = [
   FILE_APPEND_CAPABILITY,
   FILE_DELETE_CAPABILITY,
   FILE_LIST_CAPABILITY,
-  FILE_SEARCH_CAPABILITY,
   FILE_SYNC_CAPABILITY,
   FILE_BATCH_WRITE_CAPABILITY,
   // Sandbox
   SANDBOX_EXECUTE_CAPABILITY,
-  SANDBOX_SHELL_CAPABILITY,
   SANDBOX_SESSION_CAPABILITY,
   BASH_CAPABILITY,
-  CODE_RUN_CAPABILITY,
   // Computer Use
   COMPUTER_USE_CLICK_CAPABILITY,
   COMPUTER_USE_TYPE_CAPABILITY,
   COMPUTER_USE_SCREENSHOT_CAPABILITY,
   COMPUTER_USE_SCROLL_CAPABILITY,
   // Process Management
-  PROCESS_START_CAPABILITY,
   PROCESS_STOP_CAPABILITY,
   PROCESS_LIST_CAPABILITY,
   // Terminal / PTY
@@ -2773,11 +2389,6 @@ export const ALL_CAPABILITIES: CapabilityDefinition[] = [
   // Repo
   REPO_SEARCH_CAPABILITY,
   REPO_GIT_CAPABILITY,
-  REPO_CLONE_CAPABILITY,
-  REPO_COMMIT_CAPABILITY,
-  REPO_PUSH_CAPABILITY,
-  REPO_PULL_CAPABILITY,
-  REPO_SEMANTIC_SEARCH_CAPABILITY,
   REPO_ANALYZE_CAPABILITY,
   // MCP
   MCP_LIST_TOOLS_CAPABILITY,
@@ -2795,13 +2406,6 @@ export const ALL_CAPABILITIES: CapabilityDefinition[] = [
   AUTOMATION_DISCORD_CAPABILITY,
   AUTOMATION_TELEGRAM_CAPABILITY,
   AUTOMATION_WORKFLOW_CAPABILITY,
-  // OAuth Integration (Nango/Composio/Arcade)
-  INTEGRATION_CONNECT_CAPABILITY,
-  INTEGRATION_EXECUTE_CAPABILITY,
-  INTEGRATION_LIST_CONNECTIONS_CAPABILITY,
-  INTEGRATION_REVOKE_CAPABILITY,
-  INTEGRATION_SEARCH_TOOLS_CAPABILITY,
-  INTEGRATION_PROXY_CAPABILITY,
   // Task Scheduling (trigger.dev integration)
   SCHEDULE_TASK_CAPABILITY,
   TASK_STATUS_CAPABILITY,

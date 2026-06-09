@@ -1,6 +1,13 @@
 import { Daytona } from '@daytonaio/sdk'
 import { resolve, relative } from 'node:path'
 import type { ToolResult, PreviewInfo } from '../types'
+
+// Suppress verbose HTTP request logging from axios/got internals
+if (process.env.DEBUG && process.env.DEBUG.includes('http')) {
+  const debugVal = process.env.DEBUG;
+  process.env.DEBUG = debugVal.split(',').filter(ns => !['http', 'axios', 'daytona'].includes(ns.trim())).join(',');
+}
+
 import { validatePreviewInfo } from '../types'
 import type {
   SandboxProvider,
@@ -119,7 +126,7 @@ export class DaytonaProvider implements SandboxProvider {
     };
     const image = imageMap[config.language ?? 'typescript'] || 'node:20-slim'
 
-    console.log(`[Daytona] Creating sandbox - Language: "${config.language || 'default'}", Image: "${image}", User: ${config.labels?.userId || 'unknown'}`)
+    console.log(`[Daytona] Creating sandbox - Language: "${config.language || 'default'}", Image: "${image}"`)
 
     // Build sandbox creation params
     const createParams: any = {
@@ -133,15 +140,6 @@ export class DaytonaProvider implements SandboxProvider {
       },
       labels: config.labels,
     }
-
-    console.log(`[Daytona] Sandbox params:`, JSON.stringify({
-      image,
-      autoStopInterval: createParams.autoStopInterval,
-      resources: createParams.resources,
-      hasEnvVars: !!config.envVars,
-      hasLabels: !!config.labels,
-      useCache: USE_PERSISTENT_CACHE,
-    }, null, 2))
 
     // Add persistent cache volume if enabled.
     // IMPORTANT: volumeId must be a real Daytona volume UUID, NOT a human-readable name.

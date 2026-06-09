@@ -9,8 +9,7 @@
  * 5. delete_file
  * 6. list_files
  * 7. search_files
- * 8. create_directory
- * 9. Tool argument population
+ * 8. Tool argument population
  * 10. Tool call continuation (auto-continue when LLM stops mid-response)
  * 11. Correct tool choice (no infinite loops, no premature termination)
  * 12. Proper error handling in VFS tools
@@ -390,36 +389,6 @@ async function testNoInfiniteLoopOrPrematureEnd() {
   }
 }
 
-// ─── Test: create_directory via LLM ───────────────────────────────────────────────
-
-async function testCreateDirectoryViaLLM() {
-  logSection('VFS-TEST 8: create_directory via LLM');
-
-  const result = await sendChat(
-    'Use create_directory to make a folder called project/src/components in the workspace.',
-    { mode: 'enhanced', stream: false }
-  );
-
-  log('INFO', 'VFS8', 'create_directory response', {
-    contentLength: result.content?.length || 0,
-    toolCallsCount: result.toolCalls?.length || 0,
-    contentPreview: (result.content || '').substring(0, 200),
-  });
-
-  await new Promise(r => setTimeout(r, 2000));
-
-  const snap = await snapshot('project/src');
-  const hasComponents = snap.files.some(f => f.path && f.path.includes('components'));
-
-  if (hasComponents) {
-    log('PASS', 'VFS8', 'Directory was created');
-    return { passed: true };
-  } else {
-    log('FAIL', 'VFS8', 'Directory was not created', { files: snap.files.map(f => f.path) });
-    return { passed: false };
-  }
-}
-
 // ─── Test: Tool argument population ───────────────────────────────────────────────
 
 async function testToolArgumentPopulation() {
@@ -501,7 +470,6 @@ async function runAllTests() {
       testListFilesViaLLM,
       testSearchFilesViaLLM,
       testNoInfiniteLoopOrPrematureEnd,
-      testCreateDirectoryViaLLM,
       testToolArgumentPopulation,
       testRepeatedDiff,
     ];

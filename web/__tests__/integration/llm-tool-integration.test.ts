@@ -28,7 +28,7 @@ import {
   applyDiffTool,
   readFileTool,
   deleteFileTool,
-  createDirectoryTool,
+
   listFilesTool,
   searchFilesTool,
   toolContextStore,
@@ -509,7 +509,6 @@ export const main = () => {
       expect(names).toContain('search_files');
       expect(names).toContain('batch_write');
       expect(names).toContain('delete_file');
-      expect(names).toContain('create_directory');
       expect(names).toContain('get_workspace_stats');
     });
 
@@ -533,7 +532,6 @@ export const main = () => {
       expect(vfsTools.read_file).toBeDefined();
       expect(vfsTools.apply_diff).toBeDefined();
       expect(vfsTools.delete_file).toBeDefined();
-      expect(vfsTools.create_directory).toBeDefined();
       expect(vfsTools.list_files).toBeDefined();
       expect(vfsTools.search_files).toBeDefined();
       expect(vfsTools.get_workspace_stats).toBeDefined();
@@ -646,13 +644,6 @@ Let me know if you need anything else.`;
         content: '   \n  \n   ',
       });
       // Whitespace-only content is valid — it's still content
-      expect(result.success).toBe(true);
-    });
-
-    it('handles create_directory for nested paths', async () => {
-      const result = await runTool(createDirectoryTool, {
-        path: 'workspace/sessions/999/a/b/c/d',
-      });
       expect(result.success).toBe(true);
     });
 

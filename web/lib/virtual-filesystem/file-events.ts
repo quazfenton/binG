@@ -318,9 +318,7 @@ export function emitEventFromToolResult(
       });
       break;
 
-    case 'create_directory':
-      // Directories don't need the same level of tracking
-      break;
+
   }
 }
 

@@ -543,6 +543,35 @@ export async function POST(request: NextRequest) {
         retryEnhancementParts.push(`\n[RETRY CONTEXT] ${retryContext.toolExecutionSummary}`);
       }
 
+      // NEW: Timeout recovery context — partial results from a truncated response
+      if ((retryContext as any).timeoutRecovery?.toolInvocations?.length > 0) {
+        const toolInvocations = (retryContext as any).timeoutRecovery.toolInvocations;
+        const succeeded = toolInvocations.filter((t: any) => t.success !== false);
+        const filesRead = toolInvocations
+          .filter((t: any) => t.toolName === 'read_file' || t.toolName === 'file.read')
+          .map((t: any) => t.args?.path || t.args?.paths?.[0] || 'unknown')
+          .filter(Boolean);
+
+        const recoveryParts: string[] = [
+          `\n[TIMEOUT RECOVERY] The previous response was interrupted before completion.`,
+          `The following progress was made and should NOT be repeated:`,
+        ];
+
+        if (succeeded.length > 0) {
+          recoveryParts.push(`\n- ${succeeded.length} tool call(s) completed successfully`);
+        }
+        if (filesRead.length > 0) {
+          recoveryParts.push(`\n- Files already read: ${[...new Set(filesRead)].join(', ')}`);
+          recoveryParts.push(`\n  DO NOT re-read these files. Use the cached results.`);
+        }
+        if ((retryContext as any).timeoutRecovery.partialResponse) {
+          recoveryParts.push(`\n- Partial response before interruption: ${(retryContext as any).timeoutRecovery.partialResponse.slice(0, 500)}`);
+        }
+
+        recoveryParts.push(`\n\nContinue from where you left off. Resume the task without redoing completed work.`);
+        retryEnhancementParts.push(recoveryParts.join('\n'));
+      }
+
       if (retryContext.failedToolCalls && retryContext.failedToolCalls.length > 0) {
         const failedDetails = retryContext.failedToolCalls
           .slice(0, 5)
@@ -1286,11 +1315,19 @@ const config: UnifiedAgentConfig = {
     }
 
     const tools = await getMCPToolsForAI_SDK(authenticatedUserId, task);
-    config.tools = tools.map(t => ({
-      name: t.function.name,
-      description: t.function.description,
-      parameters: t.function.parameters,
-    }));
+    // Unconditionally exclude bloat tools (Blaxel codegen, Nullclaw
+    // messaging/automation) from config.tools — same filter as
+    // createMCPToolSet() in vercel-ai-tools.ts.
+    config.tools = tools
+      .filter(t => {
+        const name = t.function.name;
+        return !name.startsWith('blaxel_') && !name.startsWith('nullclaw_');
+      })
+      .map(t => ({
+        name: t.function.name,
+        description: t.function.description,
+        parameters: t.function.parameters,
+      }));
     const recentFailures = retryContext?.failedToolCalls?.map(tc => tc.error);
     config.executeTool = async (name: string, args: Record<string, any>) => {
       const result = await callMCPToolFromAI_SDK(name, args, authenticatedUserId || filesystemOwnerId, requestedScopePath, recentFailures);
@@ -2315,15 +2352,17 @@ const config: UnifiedAgentConfig = {
               agentLoop,
               task: v1AgentPrompt,
               // Use 5-minute timeout for streaming path — long-running file edits and spec enhancement
-              timeout: Math.max(LLM_AGENT_TOOLS_TIMEOUT_MS, 300000),
+              timeout: Math.max(LLM_AGENT_TOOLS_TIMEOUT_MS, 600000),
             };
           } else {
             // Use non-streaming execution (backward compatible)
-            // Set timeout for agent execution with proper cleanup
+            // Use generous timeout (same as streaming path). Fine-grained idle
+            // timeout enforcement happens inside the orchestrator/agent loop.
+            const V1_TIMEOUT_MS = Math.max(LLM_AGENT_TOOLS_TIMEOUT_MS, 600000);
             let agentTimeoutId: NodeJS.Timeout | null = null;
             const agentPromise = agentLoop.executeTask(v1AgentPrompt);
             const timeoutPromise = new Promise((_, reject) => {
-              agentTimeoutId = setTimeout(() => reject(new Error('Agent tools timeout')), LLM_AGENT_TOOLS_TIMEOUT_MS);
+              agentTimeoutId = setTimeout(() => reject(new Error('Agent tools timeout')), V1_TIMEOUT_MS);
             });
 
             try {

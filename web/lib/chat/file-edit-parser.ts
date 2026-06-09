@@ -1088,7 +1088,6 @@ export function extractFileEdits(content: string): FileEdit[] {
     (content.includes('"tool"') && content.includes('"arguments"')) ||
     /write_file\s*\(\s*\{/.test(content) ||
     /delete_file\s*\(\s*\{/.test(content) ||
-    /create_directory\s*\(\s*\{/.test(content) ||
     /apply_diff\s*\(\s*\{/.test(content) ||
     /\[Tool:/.test(content) ||
     content.includes('<|tool_call_begin|>') ||
@@ -1179,7 +1178,7 @@ export function extractFileEdits(content: string): FileEdit[] {
   //   { "path": "...", "content": "..." }
   //   ```
   // O(1) gate: only when a known tool name appears as plain text AND there's a code block
-  const FILE_TOOL_NAMES = ['batch_write', 'write_file', 'write_files', 'delete_file', 'apply_diff', 'create_directory'];
+  const FILE_TOOL_NAMES = ['batch_write', 'write_file', 'write_files', 'delete_file', 'apply_diff'];
   const hasToolName = FILE_TOOL_NAMES.some(t => new RegExp(`^${t}\\b`, 'mi').test(content));
   const hasFencedBlock = /```[\w-]*\s*\n/i.test(content); // Match ANY language tag (parser safely skips non-JSON)
   if (hasToolName && hasFencedBlock) {
@@ -3233,7 +3232,7 @@ export function sanitizeFileEditTags(content: string): string {
   // Strategy: find each "tool": marker, locate its enclosing { } via balanced brace
   // counting, then remove the entire JSON object. This avoids regex backtracking.
   if (sanitized.includes('"tool"') && sanitized.includes('"arguments"')) {
-    const fileToolNames = ['write_file', 'write_files', 'batch_write', 'apply_diff', 'delete_file', 'read_file', 'list_files', 'search_files', 'create_directory', 'get_workspace_stats'];
+    const fileToolNames = ['write_file', 'write_files', 'batch_write', 'apply_diff', 'delete_file', 'read_file', 'list_files', 'search_files', 'get_workspace_stats'];
     let searchFrom = 0;
     while (searchFrom < sanitized.length) {
       const toolIdx = sanitized.indexOf('"tool"', searchFrom);

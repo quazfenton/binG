@@ -283,25 +283,6 @@ async function testDeleteFile() {
   return { passed: false, error: data };
 }
 
-async function testMkdir() {
-  console.log('\n📂 Test: create_directory...');
-  const body = {
-    jsonrpc: '2.0',
-    id: 1,
-    method: 'tools/call',
-    params: { name: 'create_directory', arguments: { path: 'test-subdir' } }
-  };
-  
-  const { data } = await fetchJson(`${BASE_URL}/api/mcp`, { method: 'POST', body: JSON.stringify(body) });
-  
-  if (data.result) {
-    const result = JSON.parse(data.result.content[0].text);
-    console.log(`  ✅ Created dir: ${result.success}`);
-    return { passed: true, details: result };
-  }
-  return { passed: false, error: data };
-}
-
 async function runAllTests() {
   console.log('='.repeat(60));
   console.log('COMPREHENSIVE E2E V2 TEST SUITE');
@@ -326,8 +307,6 @@ async function runAllTests() {
   results.push({ name: 'MCP apply_diff', ...await testApplyDiff() });
   results.push({ name: 'MCP get_workspace_stats', ...await testWorkspaceStats() });
   results.push({ name: 'MCP delete_file', ...await testDeleteFile() });
-  results.push({ name: 'MCP create_directory', ...await testMkdir() });
-  
   console.log('\n--- LLM Tests ---');
   
   results.push({ name: 'Streaming chat', ...await testStreamingChat() });

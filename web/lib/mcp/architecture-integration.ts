@@ -600,8 +600,12 @@ export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string)
       blaxelTools = allBlaxelTools.filter(tool => {
         const name = (tool.function?.name || '').toLowerCase();
         if (name.includes('search') || name.includes('grep')) return needsCodeSearch;
-        if (name.includes('codegen') || name.includes('apply') || name.includes('reapply')) return needsCodegen;
-        return true;
+        if (name.includes('apply') || name.includes('reapply')) return needsCodegen;
+        // Exclude generic utility tools (listDir, readFileRange, rerank) —
+        // they only match 'codegen' substring and leak in on any message
+        // containing 'generate'/'create'/'implement'. These are handled
+        // by native VFS/capability tools with richer descriptions.
+        return false;
       });
     } else {
       blaxelTools = allBlaxelTools;
@@ -688,7 +692,7 @@ export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string)
         const name = (tool.function?.name || '').toLowerCase();
         if (name.includes('discord') || name.includes('telegram') || name.includes('send')) return needsMessaging;
         if (name.includes('browse') || name.includes('automate')) return needsBrowse;
-        return true;
+        return false; // Exclude tools not matching any task keyword
       });
     } else {
       nullclawTools = filteredTools;
@@ -846,43 +850,9 @@ export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string)
     logger.debug('Mem0 tools not available:', error.message);
   }
 
-  // NEW: Include role_selection tool — enables dynamic role switching for task complexity
-  // Uses the unified-role-selector (76 roles, 6 prompt sets) to compose the new role's prompt.
-  const roleSelectionTools: Array<{
-    type: 'function'
-    function: {
-      name: string
-      description?: string
-      parameters: any
-    }
-  }> = [{
-    type: 'function' as const,
-    function: {
-      name: 'role_selection',
-      description: 'Switch the current expert role/persona to better handle task complexity, domain, or failure recovery. The system will re-inject the appropriate role prompt for subsequent turns.',
-      parameters: {
-        type: 'object',
-        properties: {
-          role: {
-            type: 'string',
-            description: 'The target expert role to adopt. Choose from roles like: architect, coder, debugger, reviewer, tester, researcher, documenter, planner, securityAuditor, devopsEngineer, performanceEngineer, sre, databaseArchitect, apiDesigner, uiuxDesigner, dataAnalyst, mlEngineer, projectManager, mentor, refiner, simplifier, translator, and other domain-specific roles.',
-          },
-          reason: {
-            type: 'string',
-            description: 'Reasoning for the role switch (e.g., handling high-complexity refactor, debugging error loops).',
-          },
-          recentFailures: {
-            type: 'array',
-            items: { type: 'string' },
-            description: 'Recent tool execution error messages (system injects these; biases toward debugger role when ≥2 failures).',
-          },
-        },
-        required: ['role', 'reason'],
-      },
-    },
-  }];
-
-  // NEW: Include web_search tool — enables web search via SearXNG or DuckDuckGo
+  // Include web_search tool — enables web search via SearXNG or DuckDuckGo
+  // Note: role_selection is omitted from the MCP tool assembly — choose_role in the AI SDK
+  // toolset (vercel-ai-tools.ts) is the canonical implementation.
   const webSearchTools: Array<{
     type: 'function'
     function: {
@@ -912,7 +882,7 @@ export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string)
     },
   }];
 
-  const tools = [...nativeTools, ...cachedMCPorterTools, ...blaxelTools, ...arcadeTools, ...providerTools, ...nullclawTools, ...composioTools, ...gitTools, ...vfsTools, ...bashTools, ...mem0Tools, ...remoteTools, ...roleSelectionTools, ...webSearchTools]
+  const tools = [...nativeTools, ...cachedMCPorterTools, ...blaxelTools, ...arcadeTools, ...providerTools, ...nullclawTools, ...composioTools, ...gitTools, ...vfsTools, ...bashTools, ...mem0Tools, ...remoteTools, ...webSearchTools]
 
   const elapsed = Date.now() - callStart;
 
@@ -934,7 +904,6 @@ export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string)
     bash: bashTools.length,
     mem0: mem0Tools.length,
     remote: remoteTools.length,
-    roleSelection: roleSelectionTools.length,
     webSearch: webSearchTools.length,
   })
 
@@ -1245,7 +1214,7 @@ export async function callMCPToolFromAI_SDK(
     logger.debug(`Calling MCP tool: ${toolName}`, { args })
 
     // Tools that should never be cached but trigger invalidation
-    const writeTools = ['write_file', 'batch_write', 'apply_diff', 'create_directory', 'delete_file', 'move_file'];
+    const writeTools = ['write_file', 'batch_write', 'apply_diff', 'delete_file', 'move_file'];
     const cacheEnabled = !writeTools.includes(toolName);
     
     // Helper: invalidate caches when files change
@@ -1428,51 +1397,10 @@ export async function callMCPToolFromAI_SDK(
       };
     }
 
-    // NEW: Check if it's the role_selection tool
-    if (toolName === 'role_selection') {
-      logger.info('[RoleSelection] Tool invoked', { role: args?.role, reason: args.reason });
-
-      const { normalizeAndValidateRole } = await import('@bing/shared/agent');
-      // Merge recentFailures from two sources:
-      // 1. Server-side: passed via callMCPToolFromAI_SDK's recentFailures param (like retryContext.failedToolCalls from chat route)
-      // 2. LLM-side: passed via tool call args (e.g., the LLM observed failures and passes them explicitly)
-      // When both are provided, merge them so the debugger bias fires on combined count.
-      const llmRecentFailures = Array.isArray(args?.recentFailures)
-        ? args.recentFailures
-        : [];
-      const mergedFailures = [
-        ...(recentFailures || []),
-        ...llmRecentFailures,
-      ];
-      const result = normalizeAndValidateRole(args?.role || '', args?.reason || '', {
-        recentFailures: mergedFailures,
-      });
-
-      if (!result.valid) {
-        logger.warn('[RoleSelection] Role validation failed', { role: result.roleAdopted, error: result.message });
-        return {
-          success: true,
-          output: JSON.stringify({
-            success: false,
-            roleAdopted: result.roleAdopted,
-            message: result.message,
-          }),
-        };
-      }
-
-      return {
-        success: true,
-        output: JSON.stringify({
-          success: true,
-          roleAdopted: result.roleAdopted,
-          rolePrompt: result.rolePrompt,
-          roleSource: result.roleSource,
-          message: result.message,
-        }),
-      };
-    }
-
-    // NEW: Check if it's the web_search tool
+    // Check if it's the web_search tool
+    // Note: role_selection is handled by choose_role in the AI SDK toolset (vercel-ai-tools.ts),
+    // not via the MCP path. The route handler maps both names, so choose_role goes through
+    // the AI SDK execute path, not through callMCPToolFromAI_SDK.
     if (toolName === 'web_search') {
       logger.info('[WebSearch] Tool invoked', { query: args.query, limit: args.limit });
       try {

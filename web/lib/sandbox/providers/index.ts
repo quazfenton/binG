@@ -584,20 +584,17 @@ export async function getSandboxProvider(type?: SandboxProviderType): Promise<Sa
 
   // Already initialized and healthy — return immediately
   if (entry.provider && entry.healthy) {
-    log.debug(`Provider ${providerType} already initialized and healthy`)
     return entry.provider
   }
 
   // Race condition prevention: if already initializing, wait for the existing attempt
   if (entry.initializing && entry.initPromise) {
-    log.debug(`Provider ${providerType} initialization in progress, waiting...`)
     return entry.initPromise
   }
 
   // Start initialization with retry logic
   entry.initializing = true
   const initStartTime = Date.now();
-  log.debug(`Starting initialization for provider ${providerType}`)
 
   entry.initPromise = (async () => {
     let lastError: Error | undefined

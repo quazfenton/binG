@@ -40,14 +40,14 @@ import { detectIncompleteResponse } from '@bing/shared/agent/feedback-injection'
 export const WRITE_TOOL_NAMES = new Set([
   'write_file', 'edit_file', 'apply_diff', 'applydiff',
   'delete_file', 'batch_write', 'write_files',
-  'batchwrite', 'writefiles', 'create_directory', 'mkdir',
+  'batchwrite', 'writefiles',
   'str_replace', 'replace_in_file',
   'execute_bash', 'execute_command', 'execute', 'bash',
   'shell', 'terminal', 'run',
   'sandbox_execute', 'sandbox_shell', 'sandbox_session',
   'mcp_tool', 'mcp_execute',
   // Canonical capability-style names
-  'file.write', 'file.delete', 'file.batch_write', 'file.create_directory',
+  'file.write', 'file.delete', 'file.batch_write',
 ]);
 
 /** Tools that only gather information (count as "reads") */

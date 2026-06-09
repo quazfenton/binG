@@ -245,14 +245,14 @@ export const PROVIDER_DEFAULT_MODELS: Record<string, string> = {
 const WRITE_TOOL_NAMES = new Set([
   'write_file', 'edit_file', 'apply_diff', 'applydiff',
   'delete_file', 'batch_write', 'write_files',
-  'batchwrite', 'writefiles', 'create_directory', 'mkdir',
+  'batchwrite', 'writefiles',
   'str_replace', 'replace_in_file',
   'execute_bash', 'execute_command', 'execute', 'bash',
   'shell', 'terminal', 'run',
   'sandbox_execute', 'sandbox_shell', 'sandbox_session',
   'mcp_tool', 'mcp_execute',
   // Canonical capability-style names
-  'file.write', 'file.delete', 'file.batch_write', 'file.create_directory',
+  'file.write', 'file.delete', 'file.batch_write',
 ]);
 
 const READ_ONLY_TOOL_NAMES = new Set([
@@ -1979,11 +1979,6 @@ const TOOL_VALIDATION_SCHEMAS: Record<
     defaults: {},
     help: 'batch_write requires: files (array) — array of { path, content } objects',
   },
-  create_directory: {
-    required: ['path'],
-    defaults: {},
-    help: 'create_directory requires: path (string) — directory path to create',
-  },
   mkdir: {
     required: ['path'],
     defaults: {},
@@ -2114,6 +2109,116 @@ function validateToolArgs(
   return { valid: true, args: normalized };
 }
 
+
+/**
+ * Redact tool arguments for logging — replaces content fields with their
+ * length to avoid dumping full file contents into logs, while preserving
+ * paths, names, and other structural metadata for debugging.
+ */
+function redactToolArgs(name: string, args: Record<string, any>): Record<string, any> {
+  if (!args || typeof args !== 'object') return args;
+  const redacted: Record<string, any> = {};
+  for (const [key, val] of Object.entries(args)) {
+    if (key === 'content' || key === 'contents' || key === 'diff' || key === 'patch') {
+      // Log content length and a small preview instead of the full content
+      if (typeof val === 'string') {
+        const preview = val.length > 80 ? val.slice(0, 80) + '...' : val;
+        redacted[key] = `[${val.length} chars] ${preview}`;
+      } else {
+        redacted[key] = `[${typeof val}]`;
+      }
+    } else if (key === 'files' && Array.isArray(val)) {
+      // Log file count and individual paths (no content)
+      redacted[key] = val.map((f: any) => {
+        if (f && typeof f === 'object') {
+          const p = f.path || f.file || '(unknown)';
+          const cLen = f.content ? f.content.length : 0;
+          return `{path:"${p}", content:[${cLen} chars]}`;
+        }
+        return f;
+      });
+    } else if (key === 'command' && typeof val === 'string' && val.length > 120) {
+      redacted[key] = val.slice(0, 120) + '...';
+    } else if (key === 'paths' && Array.isArray(val)) {
+      redacted[key] = `[${val.length} files: ${val.slice(0, 10).join(', ')}${val.length > 10 ? ', ...' : ''}]`;
+    } else {
+      redacted[key] = val;
+    }
+  }
+  return redacted;
+}
+
+/**
+ * Log a tool call result with redacted args through both the server log
+ * and (if available) the SSE stream to the client.
+ */
+function logToolCall(
+  toolName: string,
+  rawArgs: Record<string, any>,
+  result: { success: boolean; output?: string; error?: any; exitCode?: number },
+  durationMs: number,
+  onStreamChunk?: (chunk: string) => void,
+): void {
+  const redactedArgs = redactToolArgs(toolName, rawArgs || {});
+  
+  // Extract error details - handle both string and object error shapes
+  let errorDetail: string | undefined;
+  let errorCode: string | undefined;
+  if (result.success === false) {
+    if (typeof result.error === 'string') {
+      errorDetail = result.error;
+    } else if (result.error && typeof result.error === 'object') {
+      errorDetail = (result.error as any).message || JSON.stringify(result.error);
+      errorCode = (result.error as any).code;
+    } else if (result.output && typeof result.output === 'string') {
+      // Check for nested JSON failure (the "dual-status" pattern)
+      try {
+        const parsed = JSON.parse(result.output);
+        if (parsed && parsed.success === false) {
+          errorDetail = parsed.error?.message || parsed.error || result.output.slice(0, 200);
+          errorCode = parsed.error?.code;
+        } else {
+          errorDetail = result.output.slice(0, 200);
+        }
+      } catch {
+        errorDetail = result.output.slice(0, 200);
+      }
+    } else {
+      errorDetail = 'Unknown error';
+    }
+  }
+
+  // Server-side log: one line per tool call with structured metadata
+  log.info(
+    result.success
+      ? `[ToolOK]  ${toolName} (${durationMs}ms)`
+      : `[ToolERR] ${toolName} (${durationMs}ms)`,
+    {
+      tool: toolName,
+      durationMs,
+      success: result.success,
+      exitCode: result.exitCode,
+      args: redactedArgs,
+      ...(errorDetail ? { error: errorDetail, errorCode } : {}),
+    },
+  );
+
+  // SSE event for client-side display (if streaming is available)
+  if (onStreamChunk) {
+    try {
+      onStreamChunk(JSON.stringify({
+        type: 'tool_result',
+        tool: toolName,
+        success: result.success,
+        exitCode: result.exitCode ?? (result.success ? 0 : 1),
+        durationMs,
+        args: redactedArgs,
+        ...(errorDetail ? { error: errorDetail, errorCode } : {}),
+      }));
+    } catch { /* best effort */ }
+  }
+}
+
 function createCapabilityToolExecutor(config: UnifiedAgentConfig) {
   return async (name: string, rawArgs: Record<string, any>): Promise<ToolResult> => {
     // Normalize args through shared alias resolver
@@ -2153,7 +2258,6 @@ function createCapabilityToolExecutor(config: UnifiedAgentConfig) {
       // VFS batch/file tools — route through capability system so userId/scopePath are threaded
       'batch_write': 'file.batch_write', 'write_files': 'file.batch_write',
       'batchwrite': 'file.batch_write', 'writefiles': 'file.batch_write',
-      'create_directory': 'file.create_directory', 'mkdir': 'file.create_directory',
       'search_code': 'file.search', 'grep_code': 'file.search',
       // Workspace stats
       'get_workspace_stats': 'workspace.stats',
@@ -2200,16 +2304,20 @@ function createCapabilityToolExecutor(config: UnifiedAgentConfig) {
     const capabilityId = capabilityMap[name] || name;
 
     if (await hasToolCapability(capabilityId)) {
+      const toolStartTime = Date.now();
       log.debug('Executing tool via capability', { tool: name, capability: capabilityId });
       // FIX: Pass conversationId as sessionId for VFS session scoping
       // Also pass scopePath for proper VFS file operation scoping
-      const result = await executeToolCapability(capabilityId, args, {
+      const capResult = await executeToolCapability(capabilityId, args, {
         userId: config.userId || 'system',
         sessionId: config.conversationId,  // FIX: Session scoping for VFS
         scopePath: config.conversationId ? `workspace/sessions/${config.conversationId}` : undefined,  // FIX: VFS scope path
         workspaceId: config.projectContext?.id,
       });
-      return { success: result.success, output: (result.output as string) || result.error, exitCode: result.exitCode };
+      const toolDuration = Date.now() - toolStartTime;
+      const toolResult: ToolResult = { success: capResult.success, output: (capResult.output as string) || capResult.error, exitCode: capResult.exitCode };
+      logToolCall(name, rawArgs, toolResult, toolDuration, config.onStreamChunk);
+      return toolResult;
     }
 
     log.debug('Capability not found, falling back to original executor', { tool: name, capability: capabilityId });
@@ -2236,7 +2344,7 @@ function createCapabilityToolExecutor(config: UnifiedAgentConfig) {
  *   Nested output: typeof result.output === 'object' && result.output.output
  *                  is a JSON string with parsed.success === false
  */
-function isFailedToolInvocation(inv: { result?: any }): boolean {
+function isFailedToolInvocation(inv: { result?: any; toolName?: string }): boolean {
   if (!inv?.result) return false;
   const r = inv.result;
   // Direct success flag
@@ -2252,11 +2360,25 @@ function isFailedToolInvocation(inv: { result?: any }): boolean {
   }
   // MCP gateway may nest result in output.output
   if (r.output && typeof r.output === 'object') {
-    if (r.output.success === false) return true;
+    if (r.output.success === false) {
+      log.warn('[ToolNestedFail] Detected nested success=false in output object', {
+        tool: inv.toolName,
+        nestedError: (r.output as any).error,
+        nestedErrorCode: (r.output as any).error?.code,
+      });
+      return true;
+    }
     if (typeof r.output.output === 'string') {
       try {
         const parsed = JSON.parse(r.output.output);
-        if (parsed && parsed.success === false) return true;
+        if (parsed && parsed.success === false) {
+          log.warn('[ToolNestedFail] Detected nested success=false in output.output JSON', {
+            tool: inv.toolName,
+            nestedError: parsed.error,
+            nestedErrorCode: parsed.error?.code,
+          });
+          return true;
+        }
       } catch { /* not JSON, ignore */ }
     }
   }
@@ -3320,6 +3442,36 @@ Based on what you have learned, continue working on the original task. Take the 
         ? cleanedResponse
         : (response && response.trim() ? response : (toolFailureMessage || ''));
 
+      // ── Tool execution summary ──
+      const totalTools = toolInvocations.length;
+      const failedTools = toolInvocations.filter((inv: any) => isFailedToolInvocation(inv)).length;
+      const succeededTools = totalTools - failedTools;
+      log.info('[ToolSummary] Tool execution complete', {
+        totalCalls: totalTools,
+        succeeded: succeededTools,
+        failed: failedTools,
+        durationMs: duration,
+        provider: providerName,
+        model: modelForProvider,
+        toolList: toolInvocations.slice(0, 20).map((inv: any) => ({
+          name: inv.toolName,
+          success: !isFailedToolInvocation(inv),
+          durationMs: inv.result?.durationMs,
+        })),
+      });
+      // Emit summary SSE event
+      if (config.onStreamChunk) {
+        try {
+          config.onStreamChunk(JSON.stringify({
+            type: 'tool_summary',
+            totalCalls: totalTools,
+            succeeded: succeededTools,
+            failed: failedTools,
+            durationMs: duration,
+          }));
+        } catch { /* best effort */ }
+      }
+
       return {
         success: true,
         response: finalResponse,
@@ -3343,6 +3495,18 @@ Based on what you have learned, continue working on the original task. Take the 
             emptyReason: anyToolFailed
               ? 'tool calls failed and SelfHeal retry did not recover'
               : 'no text and no successful tools after SelfHeal',
+          } : {}),
+          // Signal truncated results: tools made progress but response cut off
+          // Client can use this to include partial results in retryContext
+          ...(toolInvocations.length > 0 && usedFriendlyFallback ? {
+            wasTruncated: true,
+            partialToolResults: toolInvocations.slice(0, 30).map(function(inv) {
+              return {
+                toolName: inv.toolName,
+                success: !isFailedToolInvocation(inv),
+                hasResult: !!inv.result,
+              };
+            }),
           } : {}),
         },
       };
@@ -3382,7 +3546,8 @@ Based on what you have learned, continue working on the original task. Take the 
               model: modelForProvider,
               error: error.message
             });
-            // Skip recording as failure - this wasn't the model's fault
+            // Short-circuit: controller closed - all remaining providers will also fail
+            break;  // Skip recording as failure - this wasn't the model's fault
           } else {
             // Only record actual model failures
             modelRankerFns.recordModelAttempt(providerName, modelForProvider, false);
@@ -3561,7 +3726,7 @@ async function runV1Orchestrated(
     iterationConfig: {
       maxIterations: config.maxSteps || parseInt(process.env.LLM_AGENT_TOOLS_MAX_ITERATIONS || '15', 10),
       maxTokens: config.maxTokens || 32000,
-      maxDurationMs: parseInt(process.env.LLM_AGENT_TOOLS_TIMEOUT_MS || '300000', 10),
+      maxDurationMs: parseInt(process.env.LLM_AGENT_TOOLS_TIMEOUT_MS || '600000', 10),
       provider: resolvedProvider,
       model: resolvedModel,
     },
