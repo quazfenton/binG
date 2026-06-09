@@ -38,7 +38,7 @@ const log = createLogger('execute-capability');
 const IDEMPOTENT_CAPABILITIES = new Set([
   'file.read',
   'file.list',
-  'file.search',
+  'repo.search',
   'workspace.getChanges',
   'memory.context',
   'sandbox.info',
@@ -55,7 +55,7 @@ function generateToolCacheKey(capabilityId: string, params: Record<string, unkno
       return toolCacheKey.fileRead(params.path as string, params.hash as string | undefined);
     case 'file.list':
       return toolCacheKey.fileList(params.path as string);
-    case 'file.search':
+    case 'repo.search':
       return toolCacheKey.fileSearch(params.query as string, params.path as string | undefined);
     case 'sandbox.info':
       return toolCacheKey.sandboxInfo(params.sandboxId as string);
@@ -140,14 +140,14 @@ export async function executeToolCapability(
   if (!options?.skipCache && isIdempotentCapability(capabilityId)) {
     const cached = toolResultCache.get(cacheKey);
     if (cached) {
-      log.verbose(`[Cache] HIT ${capabilityId} ${params.path || params.query || ''}`);
+      log.debug(`[Cache] HIT ${capabilityId} ${params.path || params.query || ''}`);
       return {
         success: true,
         output: cached,
         exitCode: 0,
       };
     }
-    log.verbose(`[Cache] MISS ${capabilityId} ${params.path || params.query || ''}`);
+    log.debug(`[Cache] MISS ${capabilityId} ${params.path || params.query || ''}`);
   }
 
   try {
@@ -156,7 +156,7 @@ export async function executeToolCapability(
     // Only cache truly successful results — don't cache failures or dual-status responses
     if (!options?.skipCache && isIdempotentCapability(capabilityId) && result.success) {
       toolResultCache.set(cacheKey, result, options?.ttl);
-      log.verbose(`[Cache] STORED ${capabilityId} ${params.path || params.query || ''}`);
+      log.debug(`[Cache] STORED ${capabilityId} ${params.path || params.query || ''}`);
     }
 
     if (!result.success) {

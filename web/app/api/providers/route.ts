@@ -60,9 +60,15 @@ export async function GET(request: NextRequest) {
       },
     });
   } catch (error) {
-    console.error("Error fetching providers:", error);
+    // Surface the actual error details — dynamic import failures, module init errors,
+    // or SDK loading failures are all silently swallowed by the generic message.
+    const errMsg = error instanceof Error ? error.message : String(error);
+    const errStack = error instanceof Error ? error.stack : undefined;
+    console.error("Error fetching providers:", errMsg, errStack?.split('\n').slice(0, 3).join('\n'));
+    // Only expose error details in development — in production, return generic message
+    const isDev = process.env.NODE_ENV === 'development';
     return NextResponse.json(
-      { error: "Failed to fetch available providers" },
+      { error: "Failed to fetch available providers", ...(isDev ? { detail: errMsg } : {}) },
       { status: 500 },
     );
   }

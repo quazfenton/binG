@@ -930,7 +930,7 @@ export async function POST(request: NextRequest) {
       {
         forceRole: forcedRole as any,
         availableTools: enableFilesystemEdits
-          ? ['file.read', 'file.write', 'file.append', 'file.delete', 'file.list', 'file.search', 'repo.search', 'web.search']
+          ? ['file.read', 'file.write', 'file.append', 'file.delete', 'file.list', 'repo.search', 'web.search']
           : ['web.search', 'memory.retrieve'],
         maxLength: 6000,
       },

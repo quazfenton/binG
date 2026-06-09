@@ -373,8 +373,11 @@ export function useVirtualFilesystem(
   // Initialize OPFS on mount if enabled
   useEffect(() => {
     if (useOPFS && typeof window !== 'undefined') {
-      // Use authenticated userId for OPFS workspace when available
-      const opfsOwnerId = options?.userId || getSessionId();
+      // Use authenticated userId for OPFS workspace when available.
+      // Use getOwnerId() (not getSessionId()) so the OPFS workspace is keyed
+      // by user identity, not session number. This prevents data wiping when
+      // navigating between session folders (e.g., 000 → 002) for the same user.
+      const opfsOwnerId = options?.userId || getOwnerId();
 
       // Check if OPFS is supported
       if (!OPFSAdapter.isSupported()) {
@@ -454,7 +457,7 @@ export function useVirtualFilesystem(
         opfsAdapter.disable().catch(console.error);
       }
     };
-  }, [useOPFS, logWarn, options?.userId, options?.compositeSessionId, getSessionId]);
+  }, [useOPFS, logWarn, options?.userId, options?.compositeSessionId, getOwnerId]);
 
   // Track online status
   useEffect(() => {

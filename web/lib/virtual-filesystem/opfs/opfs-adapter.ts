@@ -327,9 +327,14 @@ export class OPFSAdapter {
   }
 
   /**
-   * Check if OPFS is currently enabled
+   * Check if OPFS is currently enabled (OPFS or IndexedDB fallback)
    */
   isEnabled(): boolean {
+    // When using IndexedDB fallback, the OPFS core won't be initialized,
+    // but the adapter IS enabled and functional via the fallback backend.
+    if (this.usingFallback) {
+      return this.enabled && this.fallbackBackend?.isInitialized() === true;
+    }
     return this.enabled && this.core.isInitialized();
   }
 
@@ -353,6 +358,12 @@ export class OPFSAdapter {
       return file;
     }
 
+    // Use IndexedDB fallback when OPFS is unavailable
+    if (this.usingFallback && this.fallbackBackend) {
+      console.log('[OPFS] Read from IndexedDB fallback:', path);
+      return this.fallbackBackend.readFile(ownerId, path);
+    }
+
     try {
       // Try OPFS first (instant read)
       const opfsFile = await this.core.readFile(path);
@@ -367,7 +378,7 @@ export class OPFSAdapter {
         content: opfsFile.content,
         language: this.detectLanguage(path),
         lastModified: new Date(opfsFile.lastModified).toISOString(),
-        createdAt: new Date(opfsFile.lastModified).toISOString(), // Use lastModified as fallback
+        createdAt: new Date(opfsFile.lastModified).toISOString(),
         version: versions?.opfs || 1,
         size: opfsFile.size,
       };
@@ -425,6 +436,15 @@ export class OPFSAdapter {
       };
     }
 
+    // Use IndexedDB fallback when OPFS is unavailable
+    if (this.usingFallback && this.fallbackBackend) {
+      console.log('[OPFS] Write to IndexedDB fallback:', path);
+      const idbFile = await this.fallbackBackend.writeFile(ownerId, path, content, { language });
+      // Still queue for server sync even when using IndexedDB
+      this.queueWrite(ownerId, path, content, idbFile.version);
+      return idbFile;
+    }
+
     // Write to OPFS instantly
     const opfsResult = await this.core.writeFile(path, content);
 
@@ -457,7 +477,15 @@ export class OPFSAdapter {
    */
   async deleteFile(ownerId: string, path: string): Promise<void> {
     if (!this.enabled) {
-      throw new OPFSError('Delete requires OPFS to be enabled');
+      throw new OPFSError('Delete requires storage backend to be enabled');
+    }
+
+    // Use IndexedDB fallback when OPFS is unavailable
+    if (this.usingFallback && this.fallbackBackend) {
+      console.log('[OPFS] Delete from IndexedDB fallback:', path);
+      await this.fallbackBackend.deleteFile(ownerId, path);
+      this.fileVersions.delete(path);
+      return;
     }
 
     // Delete from OPFS
@@ -498,8 +526,21 @@ export class OPFSAdapter {
    */
   async listDirectory(path: string): Promise<OPFSDirectoryEntry[]> {
     if (!this.enabled) {
-      console.warn('[OPFS] listDirectory called but OPFS not enabled - returning empty array');
+      console.warn('[OPFS] listDirectory called but storage not enabled - returning empty array');
       return [];
+    }
+
+    // Use IndexedDB fallback when OPFS is unavailable
+    if (this.usingFallback && this.fallbackBackend) {
+      console.log('[OPFS] List directory from IndexedDB fallback:', path);
+      const files = await this.fallbackBackend.listDirectory(this.ownerId!, path);
+      return files.map((f): OPFSDirectoryEntry => ({
+        name: f.path.split('/').pop() || f.path,
+        path: f.path,
+        type: 'file',
+        size: f.size,
+        lastModified: Date.parse(f.lastModified),
+      }));
     }
 
     try {

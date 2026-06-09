@@ -29,6 +29,7 @@
 export { isFullFileContent } from './file-diff-utils';
 export { stripHeredocBodies } from './bash-file-commands';
 import { tolerantJsonParse, findBalancedJsonObject as findBalancedJson } from '../utils/json-tolerant';
+import { stripJsonToolObjects } from './strip-json-tool-objects';
 
 // Import for local use
 import { stripHeredocBodies as maskHeredocs } from './bash-file-commands';
@@ -3287,6 +3288,13 @@ export function sanitizeAssistantDisplayContent(content: string): string {
   if (!content) return '';
 
   let next = sanitizeFileEditTags(content);
+
+  // Strip JSON tool call/result objects that leak into display content.
+  // These are handled separately from the XML/heredoc formats in sanitizeFileEditTags
+  // because they require balanced brace scanning for nested JSON in content fields.
+  if (next.includes("\"type\":") || next.includes("\"tool\":\"")) {
+    next = stripJsonToolObjects(next);
+  }
 
   if (next.includes('<thought>') && next.includes('</thought>')) {
     next = next.replace(/<thought>[\s\S]{0,5000}?<\/thought>/gi, '');

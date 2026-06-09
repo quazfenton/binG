@@ -118,7 +118,7 @@ async function findAvailablePort(start: number): Promise<number> {
   });
 }
 
-const desiredPort = Number(process.env.PORT) || 3001;
+const desiredPort = Number(process.env.PORT) || 3000;
 
 // Retry loop: bind the real server directly, catching EADDRINUSE.
 // This eliminates the TOCTOU window between probe and bind.

@@ -1,4 +1,8 @@
-# Docker Compose Modes Configuration
+# ╔══════════════════════════════════════════════════════════════╗
+# ║  ⚠️  NOT PRODUCTION — see infra/oracle/docker-compose.yml  ║
+# ╚══════════════════════════════════════════════════════════════╝
+#
+# Docker Compose Modes Configuration (standard vs opencode profiles)
 # Note: 'version' key removed - obsolete in Compose v2+
 
 services:

@@ -32,6 +32,25 @@ import { createHash } from 'crypto';
 const MAX_IMAGE_SIZE = 25 * 1024 * 1024; // 25MB max image size (increased for high-res generated images)
 const FETCH_TIMEOUT = 15000; // 15 second timeout (increased for larger images)
 
+// Transparent 1x1 PNG — returned instead of JSON errors to prevent browser retry storms.
+// When a CSS background-image or <img> tag receives JSON instead of valid image data,
+// the browser retries indefinitely, flooding the proxy. A valid PNG stops the loop.
+// 68 bytes, base64-encoded.
+const TRANSPARENT_PNG_B64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+const TRANSPARENT_PNG = Buffer.from(TRANSPARENT_PNG_B64, 'base64');
+
+/** Return a transparent 1x1 PNG instead of an error — stops browser retry storms */
+function transparentErrorResponse(extraHeaders?: Record<string, string>, status = 200): NextResponse {
+  const headers: Record<string, string> = {
+    'Content-Type': 'image/png',
+    'Cache-Control': 'public, max-age=60',
+    'Access-Control-Allow-Origin': '*',
+    'X-Cache': 'ERROR',
+    ...extraHeaders,
+  };
+  return new NextResponse(TRANSPARENT_PNG, { status, headers });
+}
+
 // Allowed image content types
 // NOTE: SVG is intentionally excluded - it's active content (can execute scripts)
 // and poses XSS risks when served from same origin. See security audit notes.
@@ -64,6 +83,49 @@ let cacheTotalBytes = 0;
 let cacheHits = 0;
 let cacheMisses = 0;
 let cacheEvictions = 0;
+
+// Negative cache for upstream error responses (rate limits, server errors).
+// Prevents infinite retry loops: when the upstream returns 429/403/500, we
+// cache the error for a short window so repeated requests from the same
+// <img> tag don't hammer the origin with fresh requests on every retry.
+interface NegativeCacheEntry {
+  status: number;
+  errorMessage: string;
+  cachedAt: number;
+}
+const NEGATIVE_CACHE = new Map<string, NegativeCacheEntry>();
+const NEGATIVE_CACHE_TTL = 60_000; // 1 minute — long enough to break retry storms
+const NEGATIVE_CACHE_MAX_SIZE = 500; // guard against unbounded memory growth
+
+// Cleanup expired negative cache entries (runs on the same interval as main cache)
+function cleanupNegativeCache(): void {
+  const now = Date.now();
+  for (const [key, entry] of NEGATIVE_CACHE.entries()) {
+    if (now - entry.cachedAt > NEGATIVE_CACHE_TTL) {
+      NEGATIVE_CACHE.delete(key);
+    }
+  }
+  // Enforce size cap with LRU eviction
+  if (NEGATIVE_CACHE.size > NEGATIVE_CACHE_MAX_SIZE) {
+    const entries = Array.from(NEGATIVE_CACHE.entries())
+      .sort((a, b) => a[1].cachedAt - b[1].cachedAt);
+    const toDelete = entries.slice(0, entries.length - NEGATIVE_CACHE_MAX_SIZE);
+    for (const [key] of toDelete) NEGATIVE_CACHE.delete(key);
+  }
+}
+
+/** Set a negative cache entry and return error response headers */
+function setNegativeCache(cacheKey: string, status: number, errorMessage: string): Record<string, string> {
+  NEGATIVE_CACHE.set(cacheKey, { status, errorMessage, cachedAt: Date.now() });
+  const headers: Record<string, string> = {
+    'Cache-Control': `public, max-age=${Math.ceil(NEGATIVE_CACHE_TTL / 1000)}`,
+    'Access-Control-Allow-Origin': '*',
+  };
+  if (status === 429) {
+    headers['Retry-After'] = String(Math.ceil(NEGATIVE_CACHE_TTL / 1000));
+  }
+  return headers;
+}
 
 const CACHE_CONTROL_IMMUTABLE = 'public, max-age=31536000, immutable';
 const CACHE_CONTROL_REVALIDATE = 'public, max-age=86400, stale-while-revalidate=3600';
@@ -262,6 +324,7 @@ function setCachedImage(cacheKey: string, data: ArrayBuffer, contentType: string
 if (typeof global !== 'undefined' && !(global as any).__imageProxyCacheInterval) {
   (global as any).__imageProxyCacheInterval = setInterval(() => {
     cleanupCache();
+    cleanupNegativeCache();
   }, 5 * 60 * 1000);
 }
 
@@ -354,6 +417,24 @@ export async function GET(request: NextRequest) {
   // Generate cache key
   const cacheKey = getCacheKey(imageUrl);
 
+  // Check negative cache first — if we recently got an error from upstream
+  // for this URL, return the cached error to break retry storms
+  const negativeEntry = NEGATIVE_CACHE.get(cacheKey);
+  if (negativeEntry) {
+    if (Date.now() - negativeEntry.cachedAt < NEGATIVE_CACHE_TTL) {
+      console.log('[Image Proxy] Negative cache hit (rate-limited/error):', safeLogUrl(imageUrl), negativeEntry.status);
+      const headers: Record<string, string> = {
+        ...setNegativeCache(cacheKey, negativeEntry.status, negativeEntry.errorMessage),
+        'X-Cache': 'HIT-NEGATIVE',
+      };
+      // Return transparent PNG instead of JSON — CSS background-image retries
+      // indefinitely on non-image responses, causing request storms.
+      return transparentErrorResponse(headers, negativeEntry.status);
+    }
+    // Expired — remove and fall through to fresh fetch
+    NEGATIVE_CACHE.delete(cacheKey);
+  }
+
   // Check in-memory cache first
   const cached = getCachedImage(cacheKey);
 
@@ -430,14 +511,16 @@ export async function GET(request: NextRequest) {
     if (response.status === 301 || response.status === 302 || response.status === 303 || response.status === 307 || response.status === 308) {
       const location = response.headers.get('location');
       if (!location) {
-        return NextResponse.json({ error: 'Redirect without Location header' }, { status: 502 });
+        const negHeaders = setNegativeCache(cacheKey, 502, 'Redirect without Location header');
+        return transparentErrorResponse(negHeaders);
       }
       // Resolve relative redirects
       const redirectUrl = location.startsWith('http') ? location : new URL(location, imageUrl).toString();
       // Re-validate the redirect target the same way as the original URL
       const redirectValidation = validateImageUrl(redirectUrl);
       if (!redirectValidation.valid) {
-        return NextResponse.json({ error: `Redirect target failed SSRF check: ${redirectValidation.error}` }, { status: 403 });
+        const negHeaders = setNegativeCache(cacheKey, 403, `Redirect target failed SSRF check: ${redirectValidation.error}`);
+        return transparentErrorResponse(negHeaders);
       }
       let redirectIp: string | null = null;
       try {
@@ -452,7 +535,8 @@ export async function GET(request: NextRequest) {
         }
       } catch {
         // DNS failure on redirect target — reject it
-        return NextResponse.json({ error: 'Redirect target DNS resolution failed' }, { status: 502 });
+        const dnsNegHeaders = setNegativeCache(cacheKey, 502, 'Redirect target DNS resolution failed');
+        return transparentErrorResponse(dnsNegHeaders);
       }
       console.log('[Image Proxy] Following redirect:', safeLogUrl(redirectUrl));
       // Fetch the redirect target with the same manual redirect policy
@@ -466,13 +550,13 @@ export async function GET(request: NextRequest) {
       clearTimeout(redirectTimeoutId);
       // Re-check redirect chain recursively (one level is sufficient for most cases)
       if (redirectResponse.status === 301 || redirectResponse.status === 302 || redirectResponse.status === 303 || redirectResponse.status === 307 || redirectResponse.status === 308) {
-        return NextResponse.json({ error: 'Too many redirects' }, { status: 502 });
+        const tooManyHeaders = setNegativeCache(cacheKey, 502, 'Too many redirects');
+        return transparentErrorResponse(tooManyHeaders);
       }
       if (!redirectResponse.ok) {
-        return NextResponse.json(
-          { error: `Failed to fetch image: ${redirectResponse.status} ${redirectResponse.statusText}` },
-          { status: redirectResponse.status }
-        );
+        const redirectErrMsg = `Failed to fetch image: ${redirectResponse.status} ${redirectResponse.statusText}`;
+        const redirNegHeaders = setNegativeCache(cacheKey, redirectResponse.status, redirectErrMsg);
+        return transparentErrorResponse(redirNegHeaders);
       }
       const contentType = redirectResponse.headers.get('content-type') || 'image/jpeg';
       // Normalize content type by removing charset/parameters and converting to lowercase
@@ -509,10 +593,12 @@ export async function GET(request: NextRequest) {
     }
 
     if (!response.ok) {
-      return NextResponse.json(
-        { error: `Failed to fetch image: ${response.status} ${response.statusText}` },
-        { status: response.status }
-      );
+      // Cache the error in negative cache to break immediate retry loops.
+      // Without this, every <img> tag retry triggers a fresh upstream fetch,
+      // which turns a single 429 into unbounded retries hammering the origin.
+      const errorMsg = `Failed to fetch image: ${response.status} ${response.statusText}`;
+      const negHeaders = setNegativeCache(cacheKey, response.status, errorMsg);
+      return transparentErrorResponse(negHeaders);
     }
 
     // Get the content type
@@ -568,15 +654,11 @@ export async function GET(request: NextRequest) {
     });
   } catch (error: any) {
     if (error.name === 'AbortError') {
-      return NextResponse.json(
-        { error: 'Request timeout' },
-        { status: 408 }
-      );
+      const negHeaders = setNegativeCache(cacheKey, 408, 'Request timeout');
+      return transparentErrorResponse(negHeaders);
     }
     console.error('[Image Proxy] Error fetching image:', safeLogUrl(imageUrl), error);
-    return NextResponse.json(
-      { error: 'Failed to proxy image' },
-      { status: 500 }
-    );
+    const negHeaders = setNegativeCache(cacheKey, 500, 'Failed to proxy image');
+    return transparentErrorResponse(negHeaders);
   }
 }

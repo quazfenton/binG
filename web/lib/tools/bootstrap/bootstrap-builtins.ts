@@ -2,10 +2,10 @@
  * Register Built-in Capabilities
  *
  * Registers core capabilities that are always available:
- * - File operations (read, write, delete, list, search)
- * - Sandbox operations (execute, shell, session)
+ * - File operations (read, write, append, delete, list)
+ * - Sandbox operations (execute, session, bash)
  * - Web operations (browse, search)
- * - Repo operations (search, git, clone, etc.)
+ * - Repo operations (search, git, analyze)
  * - Memory operations (store, retrieve)
  * - Automation operations (Discord, Telegram, workflow)
  */

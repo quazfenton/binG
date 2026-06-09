@@ -893,24 +893,50 @@ export class SessionManager {
     // Record process start time so heartbeat can report uptime
     (globalThis as any).processStartTime ??= Date.now();
 
-    process.on('beforeExit', (code) => {
-      logger.warn('beforeExit received', { code, reason: 'process beforeExit' });
-      this.shutdown();
-    });
-    process.on('SIGTERM', () => {
-      logger.warn('SIGTERM received — shutting down', { uptimeMs: Date.now() - ((globalThis as any).processStartTime || Date.now()) });
-      this.shutdown();
-    });
-    process.on('SIGINT', () => {
-      logger.warn('SIGINT received — shutting down', { uptimeMs: Date.now() - ((globalThis as any).processStartTime || Date.now()) });
-      this.shutdown();
-    });
-    process.on('unhandledRejection', (reason) => {
-      logger.error('Unhandled rejection — may cause premature shutdown', {
-        reason: reason instanceof Error ? reason.message : String(reason),
-        stack: reason instanceof Error ? reason.stack : undefined,
+    // Signal handlers only in production — in dev mode, Next.js HMR/Turbopack
+    // sends SIGTERM/SIGINT during normal restarts, and hijacking them causes
+    // premature session destruction.  The 'exit' event in logger.ts handles
+    // log flushing regardless.
+    if (process.env.NODE_ENV === 'production') {
+      process.on('beforeExit', (code) => {
+        logger.warn('beforeExit received', { code, reason: 'process beforeExit' });
+        this.shutdown();
       });
-    });
+      process.on('SIGTERM', () => {
+        logger.warn('SIGTERM received — shutting down', { uptimeMs: Date.now() - ((globalThis as any).processStartTime || Date.now()) });
+        this.shutdown();
+      });
+      process.on('SIGINT', () => {
+        logger.warn('SIGINT received — shutting down', { uptimeMs: Date.now() - ((globalThis as any).processStartTime || Date.now()) });
+        this.shutdown();
+      });
+      process.on('unhandledRejection', (reason) => {
+        logger.error('Unhandled rejection — may cause premature shutdown', {
+          reason: reason instanceof Error ? reason.message : String(reason),
+          stack: reason instanceof Error ? reason.stack : undefined,
+        });
+      });
+    }
+  }
+
+  /**
+   * Parse a session key into userId and conversationId.
+   *
+   * Session key format: "userId$conversationId" (modern) or "userId:conversationId" (legacy).
+   * SECURITY: Use indexOf (FIRST separator) not lastIndexOf, because:
+   * - userId is system-controlled and NEVER contains $ or :
+   * - conversationId MAY contain user-provided $ or : (e.g., folder named "my$workspace")
+   * - The FIRST separator is always our system separator
+   */
+  private parseSessionKey(key: string): { userId: string; conversationId: string } {
+    const dollarIndex = key.indexOf('$');
+    const colonIndex = key.indexOf(':');
+    if (dollarIndex !== -1 && (colonIndex === -1 || dollarIndex < colonIndex)) {
+      return { userId: key.slice(0, dollarIndex), conversationId: key.slice(dollarIndex + 1) };
+    } else if (colonIndex !== -1) {
+      return { userId: key.slice(0, colonIndex), conversationId: key.slice(colonIndex + 1) };
+    }
+    return { userId: key, conversationId: '' };
   }
 
   private async cleanupIdleSessions(): Promise<void> {
@@ -927,28 +953,7 @@ export class SessionManager {
 
     for (const key of toRemove) {
       try {
-        // Session key format: "userId$conversationId" (modern) or "userId:conversationId" (legacy)
-        // SECURITY: Use indexOf (FIRST separator) not lastIndexOf, because:
-        // - userId is system-controlled and NEVER contains $ or :
-        // - conversationId MAY contain user-provided $ or : (e.g., folder named "my$workspace")
-        // - The FIRST separator is always our system separator
-        const dollarIndex = key.indexOf('$');
-        const colonIndex = key.indexOf(':');
-
-        let userId: string, conversationId: string;
-        if (dollarIndex !== -1 && (colonIndex === -1 || dollarIndex < colonIndex)) {
-          // $ appears first (or only $ exists) — modern format
-          userId = key.slice(0, dollarIndex);
-          conversationId = key.slice(dollarIndex + 1);
-        } else if (colonIndex !== -1) {
-          // : appears first (or only : exists) — legacy format
-          userId = key.slice(0, colonIndex);
-          conversationId = key.slice(colonIndex + 1);
-        } else {
-          // No separator found — treat entire key as userId with empty conversationId
-          userId = key;
-          conversationId = '';
-        }
+        const { userId, conversationId } = this.parseSessionKey(key);
         // Bug 5 fix: destroy sandbox VM before removing session from memory
         const _sess = this.sessions.get(key);
         if (_sess?.sandboxId) {
@@ -1235,27 +1240,7 @@ export class SessionManager {
 
     for (const key of keys) {
       try {
-        // Session key format: "userId$conversationId" (modern) or "userId:conversationId" (legacy)
-        // SECURITY: Use indexOf (FIRST separator) not lastIndexOf, because:
-        // - userId is system-controlled and NEVER contains $ or :
-        // - conversationId MAY contain user-provided $ or : (e.g., folder named "my$workspace")
-        // - The FIRST separator is always our system separator
-        const dollarIndex = key.indexOf('$');
-        const colonIndex = key.indexOf(':');
-
-        let userId: string, conversationId: string;
-        if (dollarIndex !== -1 && (colonIndex === -1 || dollarIndex < colonIndex)) {
-          // $ appears first (or only $ exists) — modern format
-          userId = key.slice(0, dollarIndex);
-          conversationId = key.slice(dollarIndex + 1);
-        } else if (colonIndex !== -1) {
-          // : appears first (or only : exists) — legacy format
-          userId = key.slice(0, colonIndex);
-          conversationId = key.slice(colonIndex + 1);
-        } else {
-          userId = key;
-          conversationId = '';
-        }
+        const { userId, conversationId } = this.parseSessionKey(key);
         await this.destroySession(userId, conversationId);
       } catch (error: any) {
         logger.error(`Failed to cleanup session during shutdown`, error);

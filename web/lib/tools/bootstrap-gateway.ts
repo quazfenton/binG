@@ -43,7 +43,7 @@ export async function registerGatewayTools(): Promise<number> {
 
     logger.info(`Registered ${count} tools from MCP gateway at ${gatewayUrl}`);
   } catch (error: any) {
-    logger.warn('Failed to register MCP gateway tools', error.message);
+    logger.debug('Failed to register MCP gateway tools (optional infrastructure)', error.message);
   }
 
   return count;
@@ -71,6 +71,6 @@ export async function unregisterGatewayTools(): Promise<void> {
 
     logger.info(`Unregistered ${gatewayTools.length} gateway tools`);
   } catch (error: any) {
-    logger.warn('Failed to unregister gateway tools', error.message);
+    logger.debug('Failed to unregister gateway tools (optional infrastructure)', error.message);
   }
 }

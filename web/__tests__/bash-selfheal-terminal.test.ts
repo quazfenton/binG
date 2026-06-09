@@ -354,8 +354,8 @@ describe('cwd Resolution: VFS scopedPath → Real Path', () => {
 
 describe('Capability Router cwd Pass-Through', () => {
   it('sandbox.shell capability accepts cwd in input schema', async () => {
-    const { SANDBOX_SHELL_CAPABILITY } = await import('@/lib/tools/capabilities');
-    const result = SANDBOX_SHELL_CAPABILITY.inputSchema.safeParse({
+    const { BASH_CAPABILITY } = await import('@/lib/tools/capabilities');
+    const result = BASH_CAPABILITY.inputSchema.safeParse({
       command: 'npm run dev',
       cwd: 'workspace/sessions/002',
     });
@@ -364,16 +364,16 @@ describe('Capability Router cwd Pass-Through', () => {
   });
 
   it('sandbox.shell capability cwd is optional', async () => {
-    const { SANDBOX_SHELL_CAPABILITY } = await import('@/lib/tools/capabilities');
-    const result = SANDBOX_SHELL_CAPABILITY.inputSchema.safeParse({
+    const { BASH_CAPABILITY } = await import('@/lib/tools/capabilities');
+    const result = BASH_CAPABILITY.inputSchema.safeParse({
       command: 'ls -la',
     });
     expect(result.success).toBe(true);
   });
 
   it('sandbox.shell rejects invalid cwd types', async () => {
-    const { SANDBOX_SHELL_CAPABILITY } = await import('@/lib/tools/capabilities');
-    const result = SANDBOX_SHELL_CAPABILITY.inputSchema.safeParse({
+    const { BASH_CAPABILITY } = await import('@/lib/tools/capabilities');
+    const result = BASH_CAPABILITY.inputSchema.safeParse({
       command: 'ls',
       cwd: 123, // Should be string
     });

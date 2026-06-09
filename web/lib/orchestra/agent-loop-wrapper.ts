@@ -126,7 +126,7 @@ export class AgentLoopWrapper {
     }
 
     // 3. Command validation for shell capabilities
-    if (capabilityId === 'sandbox.shell' || capabilityId === 'process.start') {
+    if (capabilityId === 'sandbox.shell' || capabilityId === 'bash.execute' || capabilityId === 'process.start') {
       const cmdValidation = this.validateCommand(args);
       if (!cmdValidation.valid) {
         return {
@@ -192,7 +192,7 @@ export class AgentLoopWrapper {
    * Map capability ID to rate limit bucket
    */
   private getRateBucket(capabilityId: string): 'commands' | 'fileOps' | 'codeExecution' | 'gitOps' | 'processOps' {
-    if (capabilityId.startsWith('sandbox.shell') || capabilityId.startsWith('process.')) return 'commands';
+    if (capabilityId.startsWith('sandbox.shell') || capabilityId === 'bash.execute' || capabilityId.startsWith('process.')) return 'commands';
     if (capabilityId.startsWith('file.') || capabilityId.startsWith('code.ast_diff') || capabilityId.startsWith('code.syntax_check')) return 'fileOps';
     if (capabilityId.startsWith('code.run') || capabilityId.startsWith('sandbox.execute')) return 'codeExecution';
     if (capabilityId.startsWith('repo.')) return 'gitOps';
@@ -205,7 +205,7 @@ export class AgentLoopWrapper {
   private evaluateHITL(capabilityId: string, args: Record<string, any>): { blocked: boolean; reason?: string } {
     const enforceHitl = process.env.ENFORCE_HITL === 'true';
 
-    if (capabilityId === 'sandbox.shell' || capabilityId === 'process.start') {
+    if (capabilityId === 'sandbox.shell' || capabilityId === 'bash.execute' || capabilityId === 'process.start') {
       const cmd = args.command || '';
       const riskLevel = cmd.includes('rm -rf') || cmd.includes('sudo') ? 'high' : 'medium';
 

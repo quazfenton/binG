@@ -1,4 +1,8 @@
-# Docker Compose for V2 Agent Architecture
+# ╔══════════════════════════════════════════════════════════════╗
+# ║  ⚠️  NOT PRODUCTION — see infra/oracle/docker-compose.yml  ║
+# ╚══════════════════════════════════════════════════════════════╝
+#
+# Docker Compose for V2 Agent Architecture (alternative/dev)
 #
 # Advanced Multi-Agent Architecture (Cursor/Devin-style):
 # ┌─────────────┐     ┌──────────────┐     ┌─────────────────┐

@@ -139,9 +139,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: true, suggestions: [] });
   }
 
-  const lastResponse =
-    typeof body.lastResponse === 'string' ? body.lastResponse : '';
-
   if (!lastResponse.trim()) {
     return NextResponse.json({ success: false, error: 'lastResponse is required' }, { status: 400 });
   }

@@ -79,7 +79,7 @@ export async function registerMCPTools(registry: ToolRegistry, config: Bootstrap
         await client.disconnect();
         logger.info(`Registered ${count} MCP tools from gateway`);
       } catch (error: any) {
-        logger.warn('Failed to connect to MCP gateway', error.message);
+        logger.debug('Failed to connect to MCP gateway (optional infrastructure)', error.message);
       }
     }
 
@@ -133,7 +133,7 @@ export async function registerMCPTools(registry: ToolRegistry, config: Bootstrap
         await client.disconnect();
         logger.info(`Registered ${count} MCP CLI tools`);
       } catch (error: any) {
-        logger.warn('Failed to connect to MCP CLI', error.message);
+        logger.debug('Failed to connect to MCP CLI (optional infrastructure)', error.message);
       }
     }
   } catch (error: any) {
@@ -166,7 +166,7 @@ function mapMCPToolToCapability(toolName: string): string {
     return 'file.list';
   }
   if (lowercaseName.includes('search') && lowercaseName.includes('file')) {
-    return 'file.search';
+    return 'repo.search';
   }
 
   // Shell operations
@@ -178,17 +178,8 @@ function mapMCPToolToCapability(toolName: string): string {
   if (lowercaseName.includes('git')) {
     return 'repo.git';
   }
-  if (lowercaseName.includes('clone')) {
-    return 'repo.clone';
-  }
-  if (lowercaseName.includes('commit')) {
-    return 'repo.commit';
-  }
-  if (lowercaseName.includes('push')) {
-    return 'repo.push';
-  }
-  if (lowercaseName.includes('pull')) {
-    return 'repo.pull';
+  if (lowercaseName.includes('clone') || lowercaseName.includes('commit') || lowercaseName.includes('push') || lowercaseName.includes('pull')) {
+    return 'repo.git';
   }
 
   // Default: generic execution

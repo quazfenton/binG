@@ -17,7 +17,7 @@
  * const chain = createCapabilityChain([
  *   { capability: 'file.read', config: { path: 'src/index.ts' } },
  *   { capability: 'file.write', config: { path: 'src/index.ts', content: '...' } },
- *   { capability: 'sandbox.shell', config: { command: 'npm test' } },
+ *   { capability: 'bash.execute', config: { command: 'npm test' } },
  * ]);
  *
  * const result = await chain.execute();

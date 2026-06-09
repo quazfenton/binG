@@ -1,4 +1,9 @@
-# Docker Compose for V2 Agent Production
+# ╔══════════════════════════════════════════════════════════════╗
+# ║  ⚠️  NOT PRODUCTION — see infra/oracle/docker-compose.yml  ║
+# ║  (despite its name, the real production config is oracle/)   ║
+# ╚══════════════════════════════════════════════════════════════╝
+#
+# Docker Compose for V2 Agent Production (alternative/Traefik-based)
 # Single entry point with reverse proxy
 # All internal services isolated
 

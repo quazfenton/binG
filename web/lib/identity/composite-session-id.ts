@@ -11,10 +11,12 @@
  * - Authentication/authorization
  * - File path construction
  *
- * Format: `${userId}$${sessionId}` (e.g., "1$004", "anon$alpha-2")
+ * Format: `${userId}$${sessionId}` (e.g., "1$004", "anon_<uuid>$alpha-2")
  *
  * @module
  */
+
+import { getOrCreateAnonymousSessionId } from '@/lib/utils/utils';
 
 // ============================================
 // Types
@@ -39,12 +41,12 @@ export interface CompositeSessionId {
  * Parse a composite session ID into its components.
  *
  * @param input - May be composite ("1$004") or simple ("004")
- * @param defaultUserId - Fallback userId if input is simple (e.g., "anon")
+ * @param defaultUserId - Fallback userId if input is simple (defaults to getOrCreateAnonymousSessionId())
  * @returns Parsed composite session ID object
  */
 export function parseCompositeSessionId(
   input: string | undefined,
-  defaultUserId: string = 'anon',
+  defaultUserId: string = getOrCreateAnonymousSessionId(),
 ): CompositeSessionId {
   if (!input || !input.trim()) {
     const composite = `${defaultUserId}$000`;
@@ -137,7 +139,7 @@ export function extractSimpleSessionId(input: string | undefined): string {
  */
 export function extractUserIdFromComposite(
   input: string | undefined,
-  defaultUserId: string = 'anon',
+  defaultUserId: string = getOrCreateAnonymousSessionId(),
 ): string {
   if (!input || !input.trim()) return defaultUserId;
 
@@ -292,7 +294,7 @@ export interface ToolContextIdentity {
  */
 export function buildToolContextIdentity(
   input: string | undefined,
-  defaultUserId: string = 'anon',
+  defaultUserId: string = getOrCreateAnonymousSessionId(),
 ): ToolContextIdentity {
   const parsed = parseCompositeSessionId(input, defaultUserId);
 

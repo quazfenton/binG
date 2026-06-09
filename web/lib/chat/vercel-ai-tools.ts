@@ -248,7 +248,11 @@ const TASK_GROUPS: TaskGroup[] = [
   },
   {
     keywords: ['shell', 'bash', 'command', 'exec', 'cli', 'cmd'],
-    add: ['bash.execute', 'sandbox.session'],
+    add: ['bash.execute'],
+  },
+  {
+    keywords: ['sandbox', 'session', 'container', 'workspace'],
+    add: ['sandbox.session'],
   },
   {
     keywords: ['commit', 'push', 'pull', 'clone', 'git', 'branch', 'merge', 'rebase', 'stash', 'version control'],
@@ -335,8 +339,19 @@ const TASK_GROUPS: TaskGroup[] = [
     add: ['workflow.history', 'workflow.rollback', 'workflow.commit'],
   },
   {
-    keywords: ['list', 'ls', 'dir', 'read', 'write', 'edit', 'file', 'create file', 'delete file', 'append', 'cat'],
-    add: [], // file.* is always covered by VFS — nothing extra needed
+    keywords: ['read', 'write', 'edit', 'file', 'create file', 'delete file', 'append', 'cat', 'save'],
+    add: [
+      'file.read', 'file.write', 'file.append', 'file.delete',
+      'file.batch_write', 'code.ast_diff',
+    ],
+  },
+  {
+    keywords: ['list', 'ls', 'dir', 'show files', 'tree', 'browse files'],
+    add: ['file.list', 'workspace.structure'],
+  },
+  {
+    keywords: ['sync', 'transfer', 'copy files', 'move files'],
+    add: ['file.sync', 'workspace.getChanges', 'workspacefs.sync_status'],
   },
 ];
 

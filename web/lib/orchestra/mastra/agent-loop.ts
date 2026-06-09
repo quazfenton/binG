@@ -253,7 +253,7 @@ export class AgentLoop {
 
       // Build messages with system prompt (passed via system param, not messages array)
       const systemPrompt = this.buildSystemPrompt();
-      const messages: ModelMessage[] = this.context.conversationHistory
+      const messages: any[] = this.context.conversationHistory
         .filter(m => m.role !== 'system')
         .map(m => ({
           role: m.role,
@@ -392,7 +392,7 @@ export class AgentLoop {
 
       // Build messages with system prompt (passed via system param, not messages array)
       const systemPrompt = this.buildSystemPrompt();
-      const messages: ModelMessage[] = this.context.conversationHistory
+      const messages: any[] = this.context.conversationHistory
         .filter(m => m.role !== 'system')
         .map(m => ({
           role: m.role,
@@ -1318,7 +1318,7 @@ export class AgentLoop {
       
       // Build messages with tool results (system is handled by streamWithVercelAI's convertMessages)
       const systemPrompt = this.buildSystemPrompt();
-      const messages: ModelMessage[] = [
+      const continuationMessages: any[] = [
         { role: 'system', content: systemPrompt },
         ...this.context.conversationHistory
           .filter(m => m.role !== 'system')
@@ -1332,7 +1332,7 @@ export class AgentLoop {
       // Add tool result messages
       for (const tc of allToolCalls) {
         if (tc.isFallback) {
-          messages.push({
+          continuationMessages.push({
             role: 'tool',
             content: JSON.stringify(tc.result),
             toolCallId: tc.toolCallId,
@@ -1341,7 +1341,7 @@ export class AgentLoop {
       }
       
       // Ask for final response
-      messages.push({
+      continuationMessages.push({
         role: 'user',
         content: 'The tool execution is complete. Please provide your final response to the user.',
       });
@@ -1368,7 +1368,7 @@ export class AgentLoop {
       // Stream the continuation
       let continuationText = '';
       for await (const chunk of this.executeLLMStreaming(
-        messages.map(m => ({ role: m.role as any, content: m.content })),
+        continuationMessages.map((m: any) => ({ role: m.role as any, content: m.content })),
         vercelTools
       )) {
         if (chunk.content) {

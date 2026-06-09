@@ -64,7 +64,7 @@ export interface CapabilityProvider {
 class VFSProvider implements CapabilityProvider {
   readonly id = 'vfs';
   readonly name = 'Virtual Filesystem';
-  readonly capabilities = ['file.read', 'file.write', 'file.append', 'file.delete', 'file.list', 'file.search', 'file.batch_write', 'memory.context', 'workspace.getChanges'];
+  readonly capabilities = ['file.read', 'file.write', 'file.append', 'file.delete', 'file.list', 'file.batch_write', 'memory.context', 'workspace.getChanges'];
 
   isAvailable(): boolean {
     return true;
@@ -112,9 +112,9 @@ class VFSProvider implements CapabilityProvider {
       const batchWriteInput = sessionId ? { ...input, sessionId } : input;
       const result = await callMCPToolFromAI_SDK('batch_write', batchWriteInput, ownerId, scopePath);
       // Check both top-level success AND dual-status pattern
-      const innerFailure = result.output && typeof result.output === 'object' && result.output.success === false;
+      const innerFailure = result.output && typeof result.output === 'object' && !Array.isArray(result.output) && (result.output as any).success === false;
       if (!result.success || innerFailure) {
-        const errorMsg = result.error || (result.output?.error) || 'batch_write failed';
+        const errorMsg = result.error || ((result.output as any)?.error) || 'batch_write failed';
         throw new Error(errorMsg);
       }
       return result.output;
@@ -153,33 +153,6 @@ class VFSProvider implements CapabilityProvider {
           size: node.size,
           lastModified: node.lastModified,
         })),
-      };
-    },
-
-    'file.search': async (ownerId, input, context) => {
-      // Use ripgrep-vfs-adapter for better performance (10-100x faster)
-      const { ripgrepVFS } = await import('../search/ripgrep-vfs-adapter');
-      
-      const result = await ripgrepVFS({
-        query: input.query,
-        ownerId,
-        path: input.path,
-        maxResults: input.limit || 50,
-        fixedString: false, // Allow regex by default
-        caseInsensitive: false,
-      });
-      
-      // Convert to expected format
-      return {
-        results: result.matches.map(m => ({
-          path: m.path,
-          name: m.path.split('/').pop() || m.path,
-          language: '', // Not available from ripgrep
-          score: 100, // All matches are relevant
-          snippet: m.content,
-          lastModified: new Date().toISOString(),
-        })),
-        total: result.matches.length,
       };
     },
 
@@ -241,7 +214,7 @@ class VFSProvider implements CapabilityProvider {
 class MCPFilesystemProvider implements CapabilityProvider {
   readonly id = 'mcp-filesystem';
   readonly name = 'MCP Filesystem';
-  readonly capabilities = ['file.read', 'file.write', 'file.append', 'file.delete', 'file.list', 'file.search', 'file.batch_write'];
+  readonly capabilities = ['file.read', 'file.write', 'file.append', 'file.delete', 'file.list', 'file.batch_write'];
 
   isAvailable(): boolean {
     // Check if MCP server is configured
@@ -262,7 +235,6 @@ class MCPFilesystemProvider implements CapabilityProvider {
       'file.append': 'append_file',
       'file.delete': 'delete_file',
       'file.list': 'list_directory',
-      'file.search': 'search_files',
       'file.batch_write': 'batch_write',
     };
 
@@ -298,7 +270,7 @@ class MCPFilesystemProvider implements CapabilityProvider {
 class LocalFilesystemProvider implements CapabilityProvider {
   readonly id = 'local-fs';
   readonly name = 'Local Filesystem';
-  readonly capabilities = ['file.read', 'file.write', 'file.append', 'file.delete', 'file.list', 'file.search'];
+  readonly capabilities = ['file.read', 'file.write', 'file.append', 'file.delete', 'file.list'];
   
   // SECURITY: Base directory restriction for file operations
   private readonly workspaceRoot: string;
@@ -505,43 +477,6 @@ class LocalFilesystemProvider implements CapabilityProvider {
           return { success: true, output: results };
         }
 
-        case 'file.search': {
-          // SECURITY: Validate search directory
-          const searchInput = input.path || this.workspaceRoot;
-          const pathValidation = this.validatePath(searchInput);
-          if (!pathValidation.valid) {
-            return { success: false, error: pathValidation.error };
-          }
-          const searchDir = pathValidation.resolvedPath!;
-          const results: any[] = [];
-
-          const searchRecursive = async (dir: string, depth: number) => {
-            if (depth > 5 || results.length >= (input.maxResults || 50)) return;
-
-            try {
-              const entries = await fs.readdir(dir, { withFileTypes: true });
-              for (const entry of entries) {
-                const fullPath = path.join(dir, entry.name);
-
-                // SECURITY: Ensure we don't traverse outside workspace during recursion
-                const childValidation = this.validatePath(fullPath);
-                if (!childValidation.valid) continue;
-
-                if (entry.name.toLowerCase().includes(input.query.toLowerCase())) {
-                  results.push({ path: fullPath });
-                  if (results.length >= (input.maxResults || 50)) break;
-                }
-                if (entry.isDirectory() && !entry.name.startsWith('.')) {
-                  await searchRecursive(fullPath, depth + 1);
-                }
-              }
-            } catch { /* ignore permission errors */ }
-          };
-
-          await searchRecursive(searchDir, 0);
-          return { success: true, output: results };
-        }
-
         default:
           return { success: false, error: `Unknown capability: ${capabilityId}` };
       }
@@ -557,7 +492,7 @@ class LocalFilesystemProvider implements CapabilityProvider {
 class OpenCodeV2Provider implements CapabilityProvider {
   readonly id = 'opencode-v2';
   readonly name = 'OpenCode V2';
-  readonly capabilities = ['sandbox.execute', 'sandbox.shell', 'sandbox.session', 'repo.git'];
+  readonly capabilities = ['sandbox.execute', 'bash.execute', 'sandbox.session', 'repo.git'];
 
   isAvailable(): boolean {
     return process.env.V2_AGENT_ENABLED === 'true' || process.env.OPENCODE_CONTAINERIZED === 'true';
@@ -590,7 +525,7 @@ class OpenCodeV2Provider implements CapabilityProvider {
         sandboxHandle: session.sandboxHandle,
       });
 
-      if (capabilityId === 'sandbox.execute' || capabilityId === 'sandbox.shell') {
+      if (capabilityId === 'sandbox.execute' || capabilityId === 'bash.execute') {
         const command = capabilityId === 'sandbox.execute'
           ? `run ${input.language} code: ${input.code}`
           : input.command;
@@ -654,10 +589,10 @@ class OpenCodeV2Provider implements CapabilityProvider {
           systemPrompt,
           maxSteps: 8,
           executeTool: async (name: string, args: Record<string, any>): Promise<any> => {
-            // exec_shell / sandbox.shell must NOT go through the capability router
+            // exec_shell / bash.execute / sandbox.shell must NOT go through the capability router
             // because that would route back to OpenCodeV2Provider → infinite recursion.
             // Instead, execute directly on the provider.
-            if (name === 'exec_shell' || name === 'sandbox.shell' || name === 'sandbox.execute') {
+            if (name === 'exec_shell' || name === 'sandbox.shell' || name === 'sandbox.execute' || name === 'bash.execute') {
               const cmd = args.command || args.code || '';
               const cwd = args.cwd || resolvedCwd;
               const timeout = args.timeout || 30;
@@ -1022,7 +957,7 @@ class ContextPackProvider implements CapabilityProvider {
 class EmbeddingSearchProvider implements CapabilityProvider {
   readonly id = 'embedding-search';
   readonly name = 'Embedding Search';
-  readonly capabilities = ['repo.search', 'repo.semantic-search'];
+  readonly capabilities = ['repo.search'];
 
   async isAvailable(): Promise<boolean> {
     // Check if embeddings are configured
@@ -1040,6 +975,7 @@ class EmbeddingSearchProvider implements CapabilityProvider {
       const kb = new KnowledgeBase();
 
       if (capabilityId === 'repo.semantic-search' || input.semantic) {
+        // Fallback: semantic search still handled for backward compat
         // Use semantic search via knowledge base
         const limit = input.limit || 10;
         const results = await kb.search(input.query, limit);
@@ -1075,7 +1011,7 @@ class EmbeddingSearchProvider implements CapabilityProvider {
 class GitHelperProvider implements CapabilityProvider {
   readonly id = 'git-helper';
   readonly name = 'Git Helper';
-  readonly capabilities = ['repo.git', 'repo.clone', 'repo.commit', 'repo.push', 'repo.pull'];
+  readonly capabilities = ['repo.git'];
 
   isAvailable(): boolean {
     return process.env.E2B_API_KEY !== undefined || process.env.OPENCODE_CONTAINERIZED === 'true';
@@ -1104,88 +1040,93 @@ class GitHelperProvider implements CapabilityProvider {
       const git = new E2BGitHelper(session.sandboxHandle);
 
       switch (capabilityId) {
-        case 'repo.clone': {
-          // Input validation
-          if (!input.url) {
-            return { success: false, error: 'Missing required field: url' };
-          }
-          const result = await git.clone({
-            url: input.url,
-            path: input.path,
-            username: input.username,
-            password: input.password,
-            branch: input.branch,
-            depth: input.depth,
-            recursive: input.recursive,
-          });
-          return {
-            success: result.success,
-            output: result,
-            error: result.error,
-          };
-        }
-
-        case 'repo.commit': {
-          // Input validation
-          if (!input.message) {
-            return { success: false, error: 'Missing required field: message' };
-          }
-          const result = await git.commit({
-            message: input.message,
-            authorName: input.authorName,
-            authorEmail: input.authorEmail,
-            files: input.files,
-          }, input.cwd);
-          return {
-            success: result.success,
-            output: result,
-            error: result.error,
-          };
-        }
-
-        case 'repo.push': {
-          // Input validation - remote and branch optional but recommended
-          if (!input.remote && !input.branch) {
-            return { success: false, error: 'Missing required field: remote or branch' };
-          }
-          const result = await git.push({
-            remote: input.remote,
-            branch: input.branch,
-            username: input.username,
-            password: input.password,
-            force: input.force,
-          }, input.cwd);
-          return {
-            success: result.success,
-            output: result,
-            error: result.error,
-          };
-        }
-
-        case 'repo.pull': {
-          const result = await git.pull(input.cwd);
-          return {
-            success: result,
-            output: { success: result },
-          };
-        }
-
         case 'repo.git': {
-          // Input validation - command is required for generic git
-          if (!input.command) {
-            return { success: false, error: 'Missing required field: command' };
+          // Input validated by Zod discriminatedUnion before reaching here.
+          // Each sub-command is strongly typed.
+          switch (input.command) {
+            case 'clone': {
+              if (!input.url) {
+                return { success: false, error: 'Missing required field: url' };
+              }
+              const cloneResult = await git.clone({
+                url: input.url,
+                path: input.path,
+                username: input.username,
+                password: input.password,
+                branch: input.branch,
+                depth: input.depth,
+                recursive: input.recursive,
+              });
+              return {
+                success: cloneResult.success,
+                output: cloneResult,
+                error: cloneResult.error,
+              };
+            }
+
+            case 'commit': {
+              if (!input.message) {
+                return { success: false, error: 'Missing required field: message' };
+              }
+              const commitResult = await git.commit({
+                message: input.message,
+                authorName: input.authorName,
+                authorEmail: input.authorEmail,
+                files: input.files,
+              }, input.cwd);
+              return {
+                success: commitResult.success,
+                output: commitResult,
+                error: commitResult.error,
+              };
+            }
+
+            case 'push': {
+              const pushResult = await git.push({
+                remote: input.remote,
+                branch: input.branch,
+                username: input.username,
+                password: input.password,
+                force: input.force,
+              }, input.cwd);
+              return {
+                success: pushResult.success,
+                output: pushResult,
+                error: pushResult.error,
+              };
+            }
+
+            case 'pull': {
+              const pullResult = await git.pull(input.cwd);
+              return {
+                success: pullResult,
+                output: { success: pullResult },
+              };
+            }
+
+            default: {
+              // Generic git commands: status, diff, branch, log, stash.
+              // For diff with files: git diff -- file1 file2
+              const cwd = input.cwd || session.workspacePath;
+              let cmdString: string;
+              if (input.command === 'diff' && input.files?.length) {
+                cmdString = `git diff -- ${input.files.join(' ')}`;
+              } else if (['status', 'diff', 'branch', 'log', 'stash'].includes(input.command)) {
+                cmdString = `git ${input.command}`;
+              } else {
+                cmdString = input.command;
+              }
+              const execResult = await session.sandboxHandle.executeCommand(cmdString, cwd);
+              return {
+                success: execResult.success,
+                output: {
+                  stdout: execResult.output,
+                  exitCode: execResult.exitCode,
+                },
+                error: execResult.success ? undefined : execResult.output,
+              };
+            }
           }
-          // Generic git command
-          const cwd = input.cwd || session.workspacePath;
-          const result = await session.sandboxHandle.executeCommand(input.command, cwd);
-          return {
-            success: result.success,
-            output: {
-              stdout: result.output,
-              exitCode: result.exitCode,
-            },
-            error: result.success ? undefined : result.output,
-          };
         }
 
         default:
@@ -1590,7 +1531,7 @@ class MemoryServiceProvider implements CapabilityProvider {
 class RipgrepProvider implements CapabilityProvider {
   readonly id = 'ripgrep';
   readonly name = 'Ripgrep';
-  readonly capabilities = ['file.search', 'repo.search'];
+  readonly capabilities = ['repo.search'];
 
   async isAvailable(): Promise<boolean> {
     // Always available - uses VFS adapter that falls back gracefully
@@ -2480,7 +2421,7 @@ Return ONLY the corrected input object as JSON.`,
         temperature: 0.1,
       });
 
-      return result.object as Record<string, unknown>;
+      return (result as any).object as Record<string, unknown>;
     } catch (healError: any) {
       logger.debug(`[CapabilityRouter] Self-heal attempt failed for ${capabilityId}: ${healError.message}`);
       return null;

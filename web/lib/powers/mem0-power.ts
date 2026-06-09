@@ -982,6 +982,13 @@ export const mem0PowerManifest = {
  * Build Vercel AI tools from the mem0 power
  */
 export async function buildMem0Tools(context: { userId?: string; sessionId?: string } = {}) {
+  // Skip if Mem0 is not configured — tools would silently fail anyway.
+  // The isMem0Configured() check gates on MEM0_API_KEY presence + circuit breaker state.
+  if (!isMem0Configured()) {
+    log.debug('Mem0 not configured — skipping memory tools (set MEM0_API_KEY to enable)');
+    return {};
+  }
+
   const { tool } = await import('ai');
 
   const userId = context.userId || 'default-user';

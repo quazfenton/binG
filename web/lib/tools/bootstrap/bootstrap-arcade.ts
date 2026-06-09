@@ -124,7 +124,7 @@ function mapArcadeToolToCapability(toolName: string, toolkit: string): string {
   if (lowercaseToolkit.includes('github')) {
     if (lowercaseName.includes('issue')) return 'repo.git';
     if (lowercaseName.includes('pr') || lowercaseName.includes('pull')) return 'repo.git';
-    if (lowercaseName.includes('commit')) return 'repo.commit';
+    if (lowercaseName.includes('commit')) return 'repo.git';
     if (lowercaseName.includes('file')) return 'file.read';
   }
 

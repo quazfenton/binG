@@ -18,7 +18,7 @@
  * // Execute with learning
  * const result = await agency.execute({
  *   task: 'Create a React component',
- *   capabilities: ['file.read', 'file.write', 'sandbox.shell'],
+ *   capabilities: ['file.read', 'file.write', 'bash.execute'],
  * });
  *
  * // Agency learns from success/failure
@@ -221,7 +221,7 @@ export class BootstrappedAgency {
   private selectOptimalCapabilities(task: string): string[] {
     if (!this.config.enableAdaptiveSelection) {
       // Return default capabilities
-      return ['file.read', 'file.write', 'sandbox.shell'];
+      return ['file.read', 'file.write', 'bash.execute'];
     }
 
     // Find similar past tasks
@@ -241,7 +241,7 @@ export class BootstrappedAgency {
     }
 
     // Not enough data, use default
-    return ['file.read', 'file.write', 'sandbox.shell'];
+    return ['file.read', 'file.write', 'bash.execute'];
   }
 
   /**
@@ -280,7 +280,7 @@ export class BootstrappedAgency {
       case 'file.append':
         if (extractedPath) return { path: extractedPath, content: task };
         throw new Error(`Cannot auto-execute ${capabilityId}: no target path found in task`);
-      case 'sandbox.shell':
+      case 'bash.execute':
         return { command: task };
       case 'sandbox.execute':
         return { code: task, language: 'bash' as const };
@@ -391,9 +391,9 @@ export class BootstrappedAgency {
               case 'file.write':
                 return { result: 'File operations completed' };
               case 'code-execution':
-              case 'sandbox.shell':
+              case 'bash.execute':
               case 'sandbox.execute':
-                return { result: 'Code execution completed' };
+                return { result: 'Shell/code execution completed' };
               case 'git-operations':
                 return { result: 'Git operations completed' };
               case 'web-research':
@@ -458,7 +458,7 @@ export class BootstrappedAgency {
           case 'file.write':
             return { success: true, data: { result: 'File operations completed' } };
           case 'code-execution':
-          case 'sandbox.shell':
+          case 'bash.execute':
           case 'sandbox.execute':
             return { success: true, data: { result: 'Code execution completed' } };
           case 'git-operations':
@@ -637,7 +637,7 @@ export class BootstrappedAgency {
     const successfulTasks = similarTasks.filter(t => t.success);
     
     if (successfulTasks.length === 0) {
-      return ['file.read', 'file.write', 'sandbox.shell'];
+      return ['file.read', 'file.write', 'bash.execute'];
     }
 
     // Count capability frequency in successful tasks
@@ -789,14 +789,14 @@ export class BootstrappedAgency {
    */
   getLearnedCapabilities(task: string, limit: number = 5): string[] {
     if (!this.config.enableAdaptiveSelection) {
-      return ['file.read', 'file.write', 'sandbox.shell'];
+      return ['file.read', 'file.write', 'bash.execute'];
     }
 
     const similarTasks = this.findSimilarTasks(task, 20);
 
     if (similarTasks.length < (this.config.minExecutionsForAdaptation || 5)) {
       // Not enough data — return defaults
-      return ['file.read', 'file.write', 'sandbox.shell'];
+      return ['file.read', 'file.write', 'bash.execute'];
     }
 
     const successfulCapabilities = this.extractSuccessfulCapabilities(similarTasks);

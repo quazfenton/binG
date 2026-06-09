@@ -907,7 +907,7 @@ Use 'createFile' for new files.`;
           inputSchema: z.object({
             name: z.string().describe('Chain name'),
             steps: z.array(z.object({
-              capability: z.string().describe('Capability ID (e.g., file.read, sandbox.shell, web.browse)'),
+              capability: z.string().describe('Capability ID (e.g., file.read, bash.execute, web.browse)'),
               args: z.record(z.any()).describe('Arguments for this capability'),
             })).describe('Sequence of capabilities to execute'),
             stopOnFailure: z.boolean().optional().default(false).describe('Whether to stop the chain if a step fails'),
@@ -1330,15 +1330,15 @@ Provide only the corrected code, no explanation.`;
       caps.add('file.list');
     }
     if (execution.toolMetrics?.byTool?.searchFiles?.count > 0) {
-      caps.add('file.search');
+      caps.add('repo.search');
     }
 
     // Shell executions (sandbox shell, terminal commands)
     if (execution.toolMetrics?.byTool?.execShell?.count > 0) {
-      caps.add('sandbox.shell');
+      caps.add('bash.execute');
     }
     if (execution.toolMetrics?.byTool?.runCommand?.count > 0) {
-      caps.add('sandbox.shell');
+      caps.add('bash.execute');
     }
 
     // Sandbox execution
@@ -1457,7 +1457,7 @@ Provide only the corrected code, no explanation.`;
    */
   getLearnedCapabilities(task: string, limit: number = 5): string[] {
     if (!this.enableBootstrappedAgency || !this.agency) {
-      return ['file.read', 'file.write', 'sandbox.shell'];
+      return ['file.read', 'file.write', 'bash.execute'];
     }
     return this.agency.getLearnedCapabilities(task, limit);
   }

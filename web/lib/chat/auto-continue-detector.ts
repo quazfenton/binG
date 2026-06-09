@@ -48,6 +48,7 @@ export const WRITE_TOOL_NAMES = new Set([
   'mcp_tool', 'mcp_execute',
   // Canonical capability-style names
   'file.write', 'file.delete', 'file.batch_write',
+  'bash.execute',
 ]);
 
 /** Tools that only gather information (count as "reads") */
@@ -57,7 +58,8 @@ export const READ_ONLY_TOOL_NAMES = new Set([
   'search_code', 'grep_code',
   'web_search', 'web_fetch',
   // Canonical capability-style names
-  'file.read', 'file.list', 'file.search',
+  'file.read', 'file.list',
+  'repo.search',
 ]);
 
 // ── Types ─────────────────────────────────────────────────────────────────

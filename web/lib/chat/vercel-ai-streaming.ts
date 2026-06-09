@@ -1237,7 +1237,7 @@ export async function* streamWithVercelAI(
     } | null = null;
 
     const streamToIterate = (speculativeFallbackMs > 0 && !isCustomProvider)
-      ? withSpeculativeFallback(result.fullStream, {
+      ? withSpeculativeFallback(result.fullStream as any, {
           speculativeMs: speculativeFallbackMs,
           createFallback: () => {
             const fbChain = getConfiguredFallbackChain(provider);
@@ -1276,7 +1276,7 @@ export async function* streamWithVercelAI(
 
             const fbResult = streamText(fbStreamOpts);
             fallbackResultRef = { result: fbResult };
-            return { gen: fbResult.fullStream, abort: () => fbController.abort() };
+            return { gen: fbResult.fullStream as any, abort: () => fbController.abort() };
           },
           abortPrimary: () => {
             if (timeoutController && !timeoutController.signal.aborted) {
@@ -1300,7 +1300,7 @@ export async function* streamWithVercelAI(
               // stalling provider gets penalised for future selection.
               try {
                 const { recordModelAttempt } = await import('@/lib/providers/model-ranker');
-                recordModelAttempt(provider, modelName, false).catch(() => {});
+                void recordModelAttempt(provider, modelName, false);
               } catch { /* model-ranker import is best-effort */ }
               speculativeLoserInfo = {
                 provider,
@@ -1316,7 +1316,7 @@ export async function* streamWithVercelAI(
               // Fallback lost — record its failure.
               try {
                 const { recordModelAttempt } = await import('@/lib/providers/model-ranker');
-                recordModelAttempt(fbResolved.provider, fbResolved.model, false).catch(() => {});
+                void recordModelAttempt(fbResolved.provider, fbResolved.model, false);
               } catch { /* model-ranker import is best-effort */ }
               speculativeLoserInfo = {
                 provider: fbResolved.provider,
@@ -1344,8 +1344,9 @@ export async function* streamWithVercelAI(
     // If the primary was silent for 20s+, the fallback generator transparently takes over.
     // Abort check uses the user's signal (not effectiveSignal) so that aborting the primary
     // controller (when fallback wins) doesn't kill the merged generator mid-stream.
-    for await (const chunk of streamToIterate) {
+    for await (const streamChunk of streamToIterate) {
       if (signal?.aborted) return;
+      const chunk = streamChunk as any;
 
       switch (chunk.type as string) {
         case 'text-delta': {

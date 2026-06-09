@@ -391,13 +391,61 @@ export const REPO_GIT_CAPABILITY: CapabilityDefinition = {
   id: 'repo.git',
   name: 'Git Operations',
   category: 'repo',
-  description: 'Perform Git operations: commit, push, pull, branch, status, diff, etc.',
-  inputSchema: z.object({
-    command: z.enum(['status', 'diff', 'commit', 'push', 'pull', 'branch', 'log', 'stash']).describe('Git command'),
-    args: z.record(z.union([z.string(), z.array(z.string())])).optional(),
-    message: z.string().optional().describe('Commit message'),
-    files: z.array(z.string()).optional().describe('Files to stage'),
-  }),
+  description: 'Perform Git operations. Replaces the deprecated repo.clone, repo.commit, repo.push, and repo.pull. Each command has its own strongly-typed parameters — no generic args record needed.',
+  inputSchema: z.discriminatedUnion('command', [
+    z.object({
+      command: z.literal('status'),
+      cwd: z.string().optional().describe('Working directory'),
+    }),
+    z.object({
+      command: z.literal('diff'),
+      files: z.array(z.string()).optional().describe('Files to diff'),
+      cwd: z.string().optional().describe('Working directory'),
+    }),
+    z.object({
+      command: z.literal('commit'),
+      message: z.string().describe('Commit message'),
+      files: z.array(z.string()).optional().describe('Files to stage'),
+      authorName: z.string().optional().describe('Author name'),
+      authorEmail: z.string().optional().describe('Author email'),
+      cwd: z.string().optional().describe('Working directory'),
+    }),
+    z.object({
+      command: z.literal('push'),
+      remote: z.string().optional().default('origin').describe('Remote name'),
+      branch: z.string().optional().describe('Branch name'),
+      username: z.string().optional().describe('Username for auth'),
+      password: z.string().optional().describe('Password/token for auth'),
+      force: z.boolean().optional().default(false).describe('Force push'),
+      cwd: z.string().optional().describe('Working directory'),
+    }),
+    z.object({
+      command: z.literal('pull'),
+      cwd: z.string().optional().describe('Working directory'),
+    }),
+    z.object({
+      command: z.literal('clone'),
+      url: z.string().describe('Repository URL'),
+      path: z.string().optional().describe('Destination path'),
+      username: z.string().optional().describe('Username for auth'),
+      password: z.string().optional().describe('Password/token for auth'),
+      branch: z.string().optional().describe('Branch to checkout'),
+      depth: z.number().optional().describe('Clone depth (shallow)'),
+      recursive: z.boolean().optional().default(false).describe('Clone submodules'),
+    }),
+    z.object({
+      command: z.literal('branch'),
+      cwd: z.string().optional().describe('Working directory'),
+    }),
+    z.object({
+      command: z.literal('log'),
+      cwd: z.string().optional().describe('Working directory'),
+    }),
+    z.object({
+      command: z.literal('stash'),
+      cwd: z.string().optional().describe('Working directory'),
+    }),
+  ]),
   outputSchema: z.object({
     success: z.boolean(),
     output: z.string(),
@@ -1195,12 +1243,13 @@ export const TERMINAL_START_PROCESS_CAPABILITY: CapabilityDefinition = {
   id: 'terminal.start_process',
   name: 'Start Process',
   category: 'sandbox',
-  description: 'Start a background process in the sandbox. ' +
-    'Use for non-interactive long-running tasks: dev servers, build watchers, database servers.',
+  description: 'Start a background process in the sandbox with optional output capture. ' +
+    'Use for non-interactive long-running tasks: dev servers, build watchers, database servers. Replaces the deprecated process.start.',
   inputSchema: z.object({
     command: z.string().describe('Command to execute'),
     cwd: z.string().optional().describe('Working directory'),
     env: z.record(z.string()).optional().describe('Environment variables'),
+    captureOutput: z.boolean().optional().default(true).describe('Capture stdout/stderr for later retrieval'),
     timeout: z.number().optional().default(60000).describe('Execution timeout in ms'),
   }),
   outputSchema: z.object({

@@ -521,6 +521,23 @@ initializeRegistry()
 
 const MAX_RETRIES = 3
 
+/**
+ * Permanent errors that should NEVER be retried — skipping retries saves time
+ * and avoids noisy logs. These indicate environment/configuration problems
+ * that retrying cannot fix (e.g., missing Node.js built-ins, broken imports).
+ */
+const PERMANENT_INIT_ERROR_PATTERNS = [
+  'ERR_UNKNOWN_BUILTIN_MODULE',   // Node version incompatible (e.g. node:child_process/promises)
+  'ERR_MODULE_NOT_FOUND',         // ESM module not found
+  'Cannot find module',           // CommonJS require() failed
+  'MODULE_NOT_FOUND',              // Generic module resolution error
+];
+
+function isPermanentInitError(error: Error): boolean {
+  const msg = error.message || '';
+  return PERMANENT_INIT_ERROR_PATTERNS.some(p => msg.includes(p));
+}
+
 function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
@@ -625,8 +642,15 @@ export async function getSandboxProvider(type?: SandboxProviderType): Promise<Sa
         return entry.provider
       } catch (error: any) {
         lastError = error
-        entry.failureCount++
 
+        // Skip retries for permanent errors (e.g. missing Node built-in modules).
+        // Retrying will never help — fail fast to avoid noisy retry spam.
+        if (isPermanentInitError(error)) {
+          log.error(`Provider ${providerType} initialization failed with permanent error (not retrying): ${error.message}`)
+          break
+        }
+
+        entry.failureCount++
         log.error(`Provider ${providerType} initialization failed (attempt ${attempt}/${MAX_RETRIES}): ${error.message}`)
 
         // Record failed initialization metrics

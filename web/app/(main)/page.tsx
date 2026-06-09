@@ -5,6 +5,7 @@ import FallbackUI from "../../components/fallback-ui"
 import { startCacheCleanup } from "../../lib/utils/cache"
 import dynamic from "next/dynamic"
 import { Toaster } from "@/components/ui/sonner"
+import { isBackgroundUrlAllowed } from "@/lib/utils/url-validation"
 
 // Dynamically import components to avoid build-time SSR errors
 const TamboWrapper = dynamic(
@@ -81,31 +82,32 @@ export default function ChatBox() {
     const mediaUrl = (saved || fallback || "").trim()
 
     if (mediaUrl) {
-      try {
-        const url = new URL(mediaUrl)
-        if (url.protocol !== 'https:') {
-          console.warn('[Page] Blocked non-HTTPS background URL')
-          return
-        }
-
-        const hostname = url.hostname.toLowerCase()
-        const blockedPatterns = [
-          'localhost', '127.', '10.', '192.168.', '172.16.', '172.17.', '172.18.',
-          '172.19.', '172.20.', '172.21.', '172.22.', '172.23.', '172.24.', '172.25.',
-          '172.26.', '172.27.', '172.28.', '172.29.', '172.30.', '172.31.',
-          '169.254.', '0.0.0.0', '.local', '.internal', 'metadata'
-        ]
-
-        if (blockedPatterns.some(pattern => hostname.includes(pattern))) {
-          console.warn('[Page] Blocked unsafe background URL:', mediaUrl)
-          return
-        }
-      } catch (e) {
-        console.warn('[Page] Invalid background URL:', mediaUrl)
+      // Use shared validation from url-validation.ts — consistent with Settings.tsx
+      // Uses anchored regexes that won't false-positive on hostnames like cdn10.example.com
+      if (!isBackgroundUrlAllowed(mediaUrl)) {
+        console.warn('[Page] Blocked unsafe background URL:', mediaUrl)
         return
       }
 
       const proxiedUrl = `/api/image-proxy?url=${encodeURIComponent(mediaUrl)}`
+
+      // Preload via <link rel="preload"> to warm the image-proxy cache before CSS url()
+      // tries to fetch. <link rel="preload"> is more reliable than <img> for warming the
+      // browser cache — it fires immediately with high priority and works even though the
+      // element is never rendered in the viewport.
+      //
+      // Without preloading, if the proxy's upstream fetch (e.g., pinimg.com) fails on the
+      // first cold-start request, the negative cache stores a transparent PNG for 60 seconds
+      // and the background stays blank until Settings re-triggers a fresh fetch.
+      const preloadLink = document.createElement('link')
+      preloadLink.rel = 'preload'
+      preloadLink.as = 'image'
+      preloadLink.href = proxiedUrl
+      document.head.appendChild(preloadLink)
+
+      // Only set the CSS property after preload is queued. If the preload fails,
+      // the CSS url() will still attempt a fetch (which may also fail), but having
+      // the preload queued first gives it a head start to warm the cache.
       root.style.setProperty("--app-bg-media", `url("${proxiedUrl}")`)
       root.style.setProperty("--app-bg-media-opacity", "0.12")
     }

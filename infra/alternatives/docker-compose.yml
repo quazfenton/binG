@@ -1,4 +1,12 @@
-# Production Docker Compose Configuration
+# ╔══════════════════════════════════════════════════════════════╗
+# ║  ⚠️  NOT PRODUCTION — see infra/oracle/docker-compose.yml  ║
+# ╚══════════════════════════════════════════════════════════════╝
+#
+# Full-stack alternative compose (Grafana, Prometheus, MinIO, etc.)
+# All services with host port mappings for bare-metal / local deployment.
+# The Oracle VM production deploy uses infra/oracle/docker-compose.yml instead.
+#
+# Originally: Production Docker Compose Configuration
 # Orchestrates all binG backend services
 # Note: 'version' key removed - obsolete in Compose v2+
 

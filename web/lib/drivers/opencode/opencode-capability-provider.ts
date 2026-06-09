@@ -58,9 +58,10 @@ export class OpencodeCapabilityProvider {
     // File capabilities
     'file.read',
     'file.list',
-    'file.search',
-    'file.search_text',
-    'file.search_symbols',
+    // Repo capabilities
+    'repo.search',
+    'repo.search_text',
+    'repo.search_symbols',
     // Session capabilities
     'session.create',
     'session.prompt',
@@ -107,11 +108,11 @@ export class OpencodeCapabilityProvider {
         result = await this.executeFileRead(params as { path: string })
       } else if (capability === 'file.list') {
         result = await this.executeFileList(params as { path?: string })
-      } else if (capability === 'file.search') {
-        result = await this.executeFileSearch(params as { query: string; type?: 'file' | 'directory'; limit?: number })
-      } else if (capability === 'file.search_text') {
-        result = await this.executeFileSearchText(params as { pattern: string; path?: string; maxResults?: number })
-      } else if (capability === 'file.search_symbols') {
+      } else if (capability === 'repo.search') {
+        result = await this.executeRepoSearch(params as { query: string; type?: 'file' | 'directory'; limit?: number })
+      } else if (capability === 'repo.search_text') {
+        result = await this.executeRepoSearchText(params as { pattern: string; path?: string; maxResults?: number })
+      } else if (capability === 'repo.search_symbols') {
         result = await this.executeFileSearchSymbols(params as { query: string })
       }
       // Session capabilities

@@ -460,8 +460,8 @@ describe('buildProjectContext', () => {
 
 describe('Capability Router cwd Resolution', () => {
   it('sandbox.shell capability accepts cwd in input schema', async () => {
-    const { SANDBOX_SHELL_CAPABILITY } = await import('@/lib/tools/capabilities');
-    const result = SANDBOX_SHELL_CAPABILITY.inputSchema.safeParse({
+    const { BASH_CAPABILITY } = await import('@/lib/tools/capabilities');
+    const result = BASH_CAPABILITY.inputSchema.safeParse({
       command: 'npm run dev',
       cwd: 'workspace/sessions/002',
     });

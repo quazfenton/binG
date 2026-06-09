@@ -261,8 +261,78 @@ const READ_ONLY_TOOL_NAMES = new Set([
   'search_code', 'grep_code',
   'web_search', 'web_fetch',
   // Canonical capability-style names
-  'file.read', 'file.list', 'file.search',
+  'file.read', 'file.list',
 ]);
+
+/**
+ * Classify a provider error into permanent vs transient vs rate-limit.
+ * Permanent errors (missing API key, invalid auth, model not found) should
+ * skip the provider immediately and derank it heavily — retrying will never
+ * help. Rate-limit errors should back off longer. Transient errors (5xx,
+ * network, timeout) should retry normally on the next provider.
+ *
+ * Returns 'permanent' | 'rate_limit' | 'transient'.
+ */
+function classifyProviderError(error: any): 'permanent' | 'rate_limit' | 'transient' {
+  const msg = String(error?.message || '').toLowerCase();
+  const status = error?.status || error?.statusCode || 0;
+
+  // Permanent: missing credentials, invalid auth, bad config
+  if (
+    status === 401 || status === 403 ||
+    msg.includes('api key is missing') ||
+    msg.includes('invalid api key') ||
+    msg.includes('invalid x-api-key') ||
+    msg.includes('unauthorized') ||
+    msg.includes('forbidden') ||
+    msg.includes('authentication failed') ||
+    msg.includes('not authorized') ||
+    msg.includes('insufficient_quota') ||
+    msg.includes('billing issue') ||
+    msg.includes('model not found') ||
+    msg.includes('model does not exist') ||
+    msg.includes('no such model') ||
+    msg.includes('invalid model') ||
+    msg.includes('model not supported')
+  ) {
+    return 'permanent';
+  }
+
+  // Rate limit: 429 or explicit rate-limit messaging
+  if (
+    status === 429 ||
+    msg.includes('rate limit') ||
+    msg.includes('too many requests') ||
+    msg.includes('quota exceeded')
+  ) {
+    return 'rate_limit';
+  }
+
+  // Everything else: transient (5xx, timeout, network, abort, etc.)
+  return 'transient';
+}
+
+/**
+ * Track providers that have permanently failed in this request.
+ * Once a provider returns a permanent error, we skip it in subsequent
+ * fallback iterations. Resets per-request.
+ */
+const _sessionPermanentFailures = new Set<string>();
+
+/** Reset permanent failure tracking at the start of each request. */
+function resetSessionPermanentFailures(): void {
+  _sessionPermanentFailures.clear();
+}
+
+/** Mark a provider as permanently failed for this request context. */
+function markProviderPermanentlyFailed(providerName: string): void {
+  _sessionPermanentFailures.add(providerName);
+}
+
+/** Check if a provider has permanently failed for this request. */
+function isProviderPermanentlyFailed(providerName: string): boolean {
+  return _sessionPermanentFailures.has(providerName);
+}
 
 export interface UnifiedAgentConfig {
   // Core
@@ -2248,17 +2318,17 @@ function createCapabilityToolExecutor(config: UnifiedAgentConfig) {
       'file_operation': 'file.read', 'read_file': 'file.read', 'write_file': 'file.write',
       'edit_file': 'file.write', 'delete_file': 'file.delete', 'list_directory': 'file.list',
       'list_dir': 'file.list', 'ls': 'file.list', 'list_files': 'file.list',
-      'search_files': 'file.search', 'grep': 'file.search', 'glob': 'file.search', 'find': 'file.search',
+      'search_files': 'repo.search', 'grep': 'repo.search', 'glob': 'repo.search', 'find': 'repo.search',
       'execute_bash': 'sandbox.execute', 'execute_command': 'sandbox.execute', 'execute': 'sandbox.execute',
       'bash': 'sandbox.execute', 'shell': 'sandbox.execute', 'terminal': 'sandbox.execute', 'run': 'sandbox.execute',
-      'sandbox_execute': 'sandbox.execute', 'sandbox_shell': 'sandbox.shell', 'sandbox_session': 'sandbox.session',
+      'sandbox_execute': 'sandbox.execute', 'sandbox_shell': 'bash.execute', 'sandbox_session': 'sandbox.session',
       'mcp_tool': 'mcp.execute', 'mcp_execute': 'mcp.execute',
-      'git': 'repo.git', 'git_clone': 'repo.clone', 'git_search': 'repo.search',
+      'git': 'repo.git', 'git_clone': 'repo.git', 'git_search': 'repo.search',
       'web_search': 'web.search', 'web_fetch': 'web.fetch',
       // VFS batch/file tools — route through capability system so userId/scopePath are threaded
       'batch_write': 'file.batch_write', 'write_files': 'file.batch_write',
       'batchwrite': 'file.batch_write', 'writefiles': 'file.batch_write',
-      'search_code': 'file.search', 'grep_code': 'file.search',
+      'search_code': 'repo.search', 'grep_code': 'repo.search',
       // Workspace stats
       'get_workspace_stats': 'workspace.stats',
       // Computer use tools
@@ -2267,10 +2337,10 @@ function createCapabilityToolExecutor(config: UnifiedAgentConfig) {
       'computer_use_screenshot': 'computer_use.screenshot',
       'computer_use_scroll': 'computer_use.scroll',
       // Git tools (beyond clone/search)
-      'git_status': 'repo.git', 'git_commit': 'repo.commit', 'git_push': 'repo.push',
-      'git_pull': 'repo.pull',
+      'git_status': 'repo.git', 'git_commit': 'repo.git', 'git_push': 'repo.git',
+      'git_pull': 'repo.git',
       // Code execution
-      'run_code': 'code.run',
+      'run_code': 'sandbox.execute',
       // MCP tool listing
       'mcp_list_tools': 'mcp.list', 'mcp_call_tool': 'mcp.call',
       // File sync
@@ -2298,7 +2368,7 @@ function createCapabilityToolExecutor(config: UnifiedAgentConfig) {
       'workspace_graph_diagnostic': 'workspace.graph_diagnostic',
       'workspace_graph_find_process': 'workspace.graph_find_process',
       // Legacy mappings (from extended-sandbox-tools EXTENDED_TOOL_TO_CAPABILITY)
-      'exec_shell': 'sandbox.shell',
+      'exec_shell': 'bash.execute',
     };
 
     const capabilityId = capabilityMap[name] || name;
@@ -2423,6 +2493,7 @@ async function runV1ApiWithTools(
   // replace a healthy primary in a different request's SelfHeal retry.
   _selfHealProvider = null;
   _selfHealModel = null;
+  resetSessionPermanentFailures();
   const requestId = `unified-v1-tools-${Date.now()}`;
 
   log.info('[V1-API-WITH-TOOLS] │ primaryProvider:', primaryProvider);
@@ -2607,6 +2678,13 @@ async function runV1ApiWithTools(
       }
     }
 
+
+    // Skip providers that permanently failed earlier in this request (e.g. missing API key,
+    // invalid auth, model not found). Retrying will never help — skip to save time.
+    if (isProviderPermanentlyFailed(providerName)) {
+      log.debug("[V1-API-WITH-TOOLS] │ provider: " + providerName + " skipped — permanently failed earlier in this request");
+      continue;
+    }
     // FIX: Skip models that are rate-limited per model-ranker
     if (modelRankerFns?.isRateLimited(providerName, modelForProvider)) {
       log.warn('[V1-API-WITH-TOOLS] ┌─ RATE LIMITED ────────────────');
@@ -3530,6 +3608,19 @@ Based on what you have learned, continue working on the original task. Take the 
         try {
           const status = error?.status || error?.statusCode || 0;
           const errorMessage = (error.message || '').toLowerCase();
+          // If this is a permanent error (missing API key, invalid auth, model not found),
+          // skip model-ranker recording entirely — the provider is misconfigured, not
+          // performing poorly. Mark it so subsequent iterations skip it immediately.
+          const errorClass = classifyProviderError(error);
+          if (errorClass === "permanent") {
+            markProviderPermanentlyFailed(providerName);
+            log.error("[V1-API-WITH-TOOLS] ┌─ PERMANENT ERROR ────────────");
+            log.error("[V1-API-WITH-TOOLS] │ provider: " + providerName + " — permanently failed, will not retry");
+            log.error("[V1-API-WITH-TOOLS] │ error: " + error.message);
+            log.error("[V1-API-WITH-TOOLS] │ remaining: " + (uniqueProviders.slice(uniqueProviders.indexOf(providerName) + 1).filter(p => !isProviderPermanentlyFailed(p)).join(", ") || "NONE"));
+            log.error("[V1-API-WITH-TOOLS] └───────────────────────────────");
+            continue;
+          }
           
           // DON'T derank for client timeout/stream errors - these are not model failures
           // "Controller is already closed" = client disconnected (3min timeout, user action, etc.)
@@ -3584,7 +3675,6 @@ Based on what you have learned, continue working on the original task. Take the 
           }
         } catch { /* ignore model-ranker recording errors */ }
       }
-
       log.warn('[V1-API-WITH-TOOLS] ┌─ ATTEMPT FAILED ────────────');
       log.warn('[V1-API-WITH-TOOLS] │ provider:', providerName);
       log.warn('[V1-API-WITH-TOOLS] │ model:', modelForProvider);

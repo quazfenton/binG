@@ -208,7 +208,7 @@ export function useNextStepSuggestions({
             recentPrompts: recentUserMessages,
             lastResponse: lastText,
             messageId: lastAssistant.id,
-            hasFileEdits,
+            hasFileEdits: hadFileEdits,
           }),
         });
 

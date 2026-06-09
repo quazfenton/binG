@@ -164,7 +164,7 @@ If yes to >2, you're in complex territory.
 |---------------|---------------|-----------|
 | file.read | reviewer | Understanding code |
 | file.write | coder | Implementation |
-| file.search | researcher | Finding patterns |
+| repo.search | researcher | Finding patterns |
 | sandbox.execute | specialist | Execution expertise |
 | web.search | researcher | Information gathering |
 | web.browse | researcher | Deep analysis |

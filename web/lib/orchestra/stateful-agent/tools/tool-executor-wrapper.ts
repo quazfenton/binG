@@ -91,6 +91,7 @@ export class ToolExecutorWrapper {
     'file.apply_diff': 15000,
     'code.ast_diff': 15000,
     'sandbox.shell': 120000,
+    'bash.execute': 120000,
     'code.syntax_check': 30000,
     'workflow.discovery': 60000,
     'workflow.plan': 30000,
@@ -139,7 +140,7 @@ export class ToolExecutorWrapper {
       }
 
       // Command security for shell capabilities
-      if (capabilityId === 'sandbox.shell' && args.command) {
+      if ((capabilityId === 'sandbox.shell' || capabilityId === 'bash.execute') && args.command) {
         const blocked = this.isCommandBlocked(args.command);
         if (blocked) {
           return { success: false, error: `Blocked dangerous command: ${args.command}`, blocked: true };

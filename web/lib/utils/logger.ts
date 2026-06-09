@@ -626,7 +626,15 @@ export const loggers = {
 // REGISTER CLEANUP HANDLERS (server-side Node.js runtime only)
 // ============================================================================
 
-// Only register process handlers in Node.js runtime (not Edge Runtime)
+// Only register process handlers in Node.js runtime (not Edge Runtime).
+//
+// IMPORTANT: We do NOT install SIGTERM/SIGINT/uncaughtException handlers in
+// development mode because Next.js dev server (Turbopack/HMR) relies on these
+// signals for its own lifecycle management.  Installing process.exit() here
+// would kill the dev server before it can recover or restart.
+//
+// The process.on('exit') handler below is safe in all modes — it only flushes
+// the log fd when the process is ALREADY shutting down.
 if (typeof process !== 'undefined' && typeof window === 'undefined' && process.env.NEXT_RUNTIME !== 'edge') {
   // process.on('exit') fires when the event loop empties. At that point
   // async operations won't complete, but our sync fsync+close will.
@@ -634,35 +642,37 @@ if (typeof process !== 'undefined' && typeof window === 'undefined' && process.e
     _closeLogFd();
   });
 
-  // Signal handlers MUST be synchronous — Node.js does NOT await async
-  // handlers before exit.  Our _closeLogFd is fully synchronous (fsyncSync
-  // + closeSync) so data is guaranteed on disk before process.exit().
-  process.on('SIGINT', () => {
-    console.error('[Logger] SIGINT received — flushing logs before exit');
-    _closeLogFd();
-    process.exit(0);
-  });
-
-  process.on('SIGTERM', () => {
-    console.error('[Logger] SIGTERM received — flushing logs before exit');
-    _closeLogFd();
-    process.exit(0);
-  });
-
-  if (process.listenerCount('uncaughtException') === 0) {
-    process.on('uncaughtException', (err) => {
-      console.error('[Logger] Uncaught Exception:', err);
+  // Only register aggressive cleanup handlers in production.
+  // In dev mode Next.js manages its own signal handling and we must
+  // not interfere by calling process.exit().
+  if (process.env.NODE_ENV === 'production') {
+    process.on('SIGINT', () => {
+      console.error('[Logger] SIGINT received — flushing logs before exit');
       _closeLogFd();
-      process.exit(1);
+      process.exit(0);
     });
-  }
 
-  if (process.listenerCount('unhandledRejection') === 0) {
-    process.on('unhandledRejection', (reason) => {
-      console.error('[Logger] Unhandled Rejection:', reason);
+    process.on('SIGTERM', () => {
+      console.error('[Logger] SIGTERM received — flushing logs before exit');
       _closeLogFd();
-      process.exit(1);
+      process.exit(0);
     });
+
+    if (process.listenerCount('uncaughtException') === 0) {
+      process.on('uncaughtException', (err) => {
+        console.error('[Logger] Uncaught Exception:', err);
+        _closeLogFd();
+        process.exit(1);
+      });
+    }
+
+    if (process.listenerCount('unhandledRejection') === 0) {
+      process.on('unhandledRejection', (reason) => {
+        console.error('[Logger] Unhandled Rejection:', reason);
+        _closeLogFd();
+        process.exit(1);
+      });
+    }
   }
 }
 

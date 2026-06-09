@@ -83,17 +83,14 @@ export function getDefaultWorkspaceRoot(): string | null {
     }
   }
 
-  // Priority 2: Web mode (browser only) - don't use process.cwd()
-  // as it incorrectly picks up the server's working directory (where pnpm dev
-  // was run). Instead use 'workspace/sessions' as the base - user separation
-  // is handled by VFS via userID/compositeID.
-  // This check uses a narrow browser-only condition to avoid accidentally
-  // blocking the CLI/standalone fallback below, which relies on process.cwd().
-  const isInBrowser = typeof window !== 'undefined';
-  // Only treat as web mode when we have a browser window AND are NOT in a
-  // desktop shell AND are NOT in a Tauri runtime. Server-side code (no window)
-  // falls through to the CLI/standalone path below.
-  if (isInBrowser && !isDesktopMode() && !isTauriRuntime()) {
+  // Priority 2: Web mode — both browser AND server-side.
+  // On the server, process.cwd() picks up the Next.js dev server's working
+  // directory (e.g. /opt/bing/web), which leaks the real filesystem path
+  // into the VFS. The VFS should use virtual paths in web mode regardless
+  // of whether the code runs in the browser (client) or on the server.
+  // Desktop/CLI mode (DESKTOP_MODE=true) still falls through to Priority 3
+  // for real-filesystem access.
+  if (!isDesktopMode() && !isTauriRuntime()) {
     return 'workspace/sessions';
   }
 

@@ -12,9 +12,9 @@
  *     "where is", "grep for", etc.).
  *   - NOT injected into the system prompt — preserves prompt caching.
  *   - Actions map to existing capabilities:
- *     - `search` → file.search (ripgrep-powered text/regex search)
- *     - `glob`   → file.search with type=name (file name pattern matching)
- *     - `semantic` → repo.semantic-search (embedding-based search)
+ *     - `search` → repo.search (ripgrep-powered text/regex search)
+ *     - `glob`   → repo.search with type=name (file name pattern matching)
+ *     - `semantic` → repo.search (embedding-based search, unified under repo.search)
  *   - Caching: results are cached via `toolResultCache` / `toolCacheKey.fileSearch`
  *     in lib/cache.ts to avoid redundant searches across the same session.
  *   - Indexing: for large repos, the repo-index indexer (lib/repo-index/indexer.ts)
@@ -106,7 +106,7 @@ export const codeSearchPowerManifest: PowerManifest = {
   },
   /** Capability IDs that this auto-inject power subsumes.
    *  Prevents duplicate registration in loadCapabilitiesAsPowers(). */
-  coversCapabilityIds: ['file.search', 'repo.search', 'repo.semantic-search'],
+  coversCapabilityIds: ['repo.search'],
   source: 'core',
   enabled: true,
   autoInject: true,

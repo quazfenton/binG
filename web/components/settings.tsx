@@ -379,24 +379,23 @@ export default function Settings({
     { id: 'none', name: 'None', url: '' },
   ];
 
-  // Warm cache for preset backgrounds on mount (preload images)
+  // Warm cache only for the currently active background (not all presets).
+  // Preloading all presets floods the image-proxy on mount and can trigger
+  // upstream rate limits (e.g., imgur 429), which then get negative-cached
+  // and cause blank backgrounds across all presets.
   useEffect(() => {
     if (typeof window === 'undefined') return;
     
-    // Preload preset backgrounds with valid URLs
-    const validPresets = PRESET_BACKGROUNDS.filter(p => p.url && p.url.trim());
-    
-    validPresets.forEach((preset) => {
-      // Create image proxy URL for caching
-      const proxiedUrl = `/api/image-proxy?url=${encodeURIComponent(preset.url)}`;
-      
-      // Preload image to warm the server-side cache
-      // Use document.createElement to avoid conflict with Next.js Image import
+    // Only preload the default background (set via env var) — not all presets.
+    // Aggressive preloading floods the image proxy and triggers upstream rate limits.
+    const defaultUrl = process.env.NEXT_PUBLIC_BG_MEDIA_URL;
+    if (defaultUrl && defaultUrl.trim()) {
+      const proxiedUrl = `/api/image-proxy?url=${encodeURIComponent(defaultUrl)}`;
       const img = document.createElement('img');
       img.src = proxiedUrl;
-      img.loading = 'lazy'; // Don't block page load
-      console.log(`[Settings] Preloading background: ${preset.name}`);
-    });
+      // NOTE: Do NOT set loading='lazy' — images not in the DOM are never
+      // considered "near the viewport", so lazy loading prevents the preload.
+    }
   }, []);
   
   // Get saved backgrounds from localStorage
@@ -416,18 +415,17 @@ export default function Settings({
     const backgrounds = getSavedBackgrounds();
     setSavedBackgrounds(backgrounds);
     
-    // Warm cache for saved backgrounds
+    // Only preload the most recently saved background — not all of them.
+    // Preloading all saved backgrounds floods the image proxy and can trigger
+    // upstream rate limits (e.g., imgur 429), causing blank backgrounds.
     if (typeof window !== 'undefined' && backgrounds.length > 0) {
-      backgrounds.forEach((bg) => {
-        if (bg.url && bg.url.trim()) {
-          const proxiedUrl = `/api/image-proxy?url=${encodeURIComponent(bg.url)}`;
-          // Use document.createElement to avoid conflict with Next.js Image import
-          const img = document.createElement('img');
-          img.src = proxiedUrl;
-          img.loading = 'lazy';
-          console.log(`[Settings] Preloading saved background: ${bg.name}`);
-        }
-      });
+      const latest = backgrounds[0];
+      if (latest.url && latest.url.trim()) {
+        const proxiedUrl = `/api/image-proxy?url=${encodeURIComponent(latest.url)}`;
+        const img = document.createElement('img');
+        img.src = proxiedUrl;
+        // NOTE: Do NOT set loading='lazy' — prevents preload for non-DOM images.
+      }
     }
   }, []);
   
@@ -530,9 +528,14 @@ export default function Settings({
     if (typeof window === "undefined") return;
     const saved = localStorage.getItem(CUSTOM_BG_MEDIA_KEY) || "";
     setCustomBgUrl(saved);
-    // Preserve env-provided/default media when no custom URL is saved.
+    // Apply saved custom URL if present; otherwise fall back to the env-provided default.
     if (saved.trim()) {
       applyCustomBackgroundMedia(saved);
+    } else {
+      const defaultUrl = process.env.NEXT_PUBLIC_BG_MEDIA_URL;
+      if (defaultUrl && defaultUrl.trim()) {
+        applyCustomBackgroundMedia(defaultUrl);
+      }
     }
 
     const savedUserBg = localStorage.getItem(USER_BUBBLE_BG_KEY) || "";

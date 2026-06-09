@@ -255,8 +255,8 @@ export default function ConversationInterface() {
       if (typeof window !== 'undefined') {
         const storedSessionId = sessionStorage.getItem('current_composite_session_id');
         if (storedSessionId) {
-          const expectedPrefix = user?.id || 'anon';
-          const storedPrefix = storedSessionId.split('$')[0];
+          const expectedPrefix = user?.id || getOrCreateAnonymousSessionId();
+          const storedPrefix = storedSessionId.indexOf('$') !== -1 ? storedSessionId.slice(0, storedSessionId.indexOf('$')) : storedSessionId;
           if (storedPrefix === expectedPrefix) {
             // Same user/anon mode — restore to keep files visible
             setCompositeSessionId(storedSessionId);
@@ -277,9 +277,12 @@ export default function ConversationInterface() {
             setCompositeSessionId(compositeId);
             console.log('[ConversationInterface] Using composite session ID (authenticated):', compositeId);
           } else {
-            // Anonymous user: composite format "anon$sessionNumber" (e.g., "anon$001")
-            // Data is local-only until user signs up to migrate it
-            const compositeId = `anon$${newId}`;
+            // Anonymous user: composite format "anonUserId$sessionNumber" (e.g., "anon_<uuid>$001")
+            // Uses the unique anonymous user ID (from getOrCreateAnonymousSessionId)
+            // to avoid collisions between different anonymous users.
+            // Data is local-only until user signs up to migrate it.
+            const anonUserId = getOrCreateAnonymousSessionId();
+            const compositeId = `${anonUserId}$${newId}`;
             setCompositeSessionId(compositeId);
             console.log('[ConversationInterface] Using composite session ID (anonymous):', compositeId);
           }

@@ -1,5 +1,9 @@
+# ╔══════════════════════════════════════════════════════════════╗
+# ║  ⚠️  NOT PRODUCTION — see infra/oracle/docker-compose.yml  ║
+# ╚══════════════════════════════════════════════════════════════╝
+#
 # ============================================================
-#  binG Hono Backend — Docker Compose Override
+#  binG Hono Backend — Docker Compose Override (alternative)
 # ============================================================
 # Adds the dedicated Hono API server to the OCI deployment.
 # The main docker-compose.yml has `app` (Next.js frontend) but

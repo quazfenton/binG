@@ -144,10 +144,10 @@ export async function registerTauriTools(registry: ToolRegistry): Promise<number
   });
   count++;
 
-  // file.search → uses executeCommand for find
+  // file.search → uses executeCommand for find (mapped to repo.search)
   await registry.registerTool({
-    name: 'tauri:file.search',
-    capability: 'file.search',
+    name: 'tauri:repo.search',
+    capability: 'repo.search',
     provider: 'tauri-invoke',
     handler: async (args: { query: string; path?: string; type?: string }) => {
       const searchPath = args.path || '.';
@@ -175,10 +175,10 @@ export async function registerTauriTools(registry: ToolRegistry): Promise<number
   // Sandbox Capabilities (native shell via Tauri)
   // ============================================================================
 
-  // sandbox.shell → tauriInvoke.executeCommand
+  // bash.execute → tauriInvoke.executeCommand
   await registry.registerTool({
-    name: 'tauri:sandbox.shell',
-    capability: 'sandbox.shell',
+    name: 'tauri:bash.execute',
+    capability: 'bash.execute',
     provider: 'tauri-invoke',
     handler: async (args: { command: string; cwd?: string; env?: Record<string, string>; timeout?: number }) => {
       const result = await tauriInvoke.executeCommand('desktop', args.command, args.cwd, args.timeout);
@@ -234,7 +234,7 @@ export async function registerTauriTools(registry: ToolRegistry): Promise<number
   // system.info → tauriInvoke.getSystemInfo
   await registry.registerTool({
     name: 'tauri:system.info',
-    capability: 'sandbox.shell',
+    capability: 'bash.execute',
     provider: 'tauri-invoke',
     handler: async () => {
       const info = await tauriInvoke.getSystemInfo();
@@ -261,7 +261,7 @@ export async function registerTauriTools(registry: ToolRegistry): Promise<number
   // system.resources → tauriInvoke.getResourceUsage
   await registry.registerTool({
     name: 'tauri:system.resources',
-    capability: 'sandbox.shell',
+    capability: 'bash.execute',
     provider: 'tauri-invoke',
     handler: async () => {
       const usage = await tauriInvoke.getResourceUsage();

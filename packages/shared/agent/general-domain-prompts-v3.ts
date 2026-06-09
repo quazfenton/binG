@@ -60,7 +60,7 @@ const RESEARCH_TOOL_STRATEGY = `
 - **file.write** — Create new files: reports, analyses, proposals, documentation
 - **file.append** — Add to existing files: logs, ongoing notes, cumulative reports
 - **file.list** — Explore directories: find existing documents, understand organization
-- **file.search** — Search file contents: find specific information across collections
+- **repo.search** — Search file contents and code: find specific information across collections
 
 ## Data Analysis — Compute and Visualize
 - **sandbox.execute** — Run Python/R code for: statistical analysis, chart generation, data modeling, calculations

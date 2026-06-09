@@ -14,21 +14,8 @@ import {
   listFilesTool,
   writeFileTool,
   applyDiffTool,
-  batchWriteTool,
-  deleteFileTool,
-  createDirectoryTool,
-  searchFilesTool,
-  getWorkspaceStatsTool,
   toolContextStore,
 } from './vfs-mcp-tools';
-import { virtualFilesystem } from '../virtual-filesystem/virtual-filesystem-service';
-
-const allTools: Record<string, any> = {
-  applyDiffTool,
-  readFileTool,
-  listFilesTool,
-  createFileTool: writeFileTool,
-};
 
 export interface MCPServerOptions {
   port?: number;

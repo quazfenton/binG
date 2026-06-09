@@ -1,3 +1,7 @@
+# ╔══════════════════════════════════════════════════╗
+# ║  ⚠️  NOT PRODUCTION — local development only    ║
+# ╚══════════════════════════════════════════════════╝
+#
 # Development Docker Compose Configuration
 # Optimized for local development with hot-reload
 # Note: 'version' key removed - obsolete in Compose v2+

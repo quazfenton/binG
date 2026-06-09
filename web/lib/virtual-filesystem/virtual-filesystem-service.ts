@@ -1029,7 +1029,20 @@ export class VirtualFilesystemService {
 
   private normalizePath(inputPath: string): string {
     const rawPath = (inputPath || '').replace(/\\/g, '/').trim();
+    // When given the root path or empty, return the workspace root.
+    // For desktop mode, this is the real filesystem path (e.g. /opt/bing/web).
+    // For web mode, this should be a virtual path (e.g. 'workspace' or
+    // 'workspace/sessions') — the getDefaultWorkspaceRoot() in env.ts handles
+    // this distinction (returns process.cwd() for desktop, 'workspace/sessions'
+    // for web). If workspaceRoot is still a real filesystem path on web
+    // (legacy), fall back to 'workspace' to avoid leaking server paths.
     if (!rawPath || rawPath === '/') {
+      // Safety: if workspaceRoot looks like an absolute filesystem path but
+      // we're NOT in desktop mode, use a virtual fallback.
+      // Matches the 'workspace/sessions' default from getDefaultWorkspaceRoot().
+      if (!isDesktopMode() && (this.workspaceRoot.startsWith('/') || this.workspaceRoot.includes('\\'))) {
+        return 'workspace/sessions';
+      }
       return this.workspaceRoot;
     }
 

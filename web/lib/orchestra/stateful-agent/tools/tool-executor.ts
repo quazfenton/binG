@@ -34,7 +34,7 @@ export class ToolExecutor {
     createFile: 'file.write',
     applyDiff: 'file.apply_diff',
     astDiff: 'code.ast_diff',
-    execShell: 'sandbox.shell',
+    execShell: 'bash.execute',
     syntaxCheck: 'code.syntax_check',
   };
 

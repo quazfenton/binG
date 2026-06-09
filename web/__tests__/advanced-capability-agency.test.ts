@@ -48,7 +48,7 @@ describe('BootstrappedAgency — Learning & Adaptation', () => {
     // We just check that the agency records the execution
     const result = await agency.execute({
       task: 'Create and list files',
-      capabilities: ['file.write', 'sandbox.shell'],
+      capabilities: ['file.write', 'bash.execute'],
     });
 
     expect(result).toHaveProperty('success');
@@ -61,7 +61,7 @@ describe('BootstrappedAgency — Learning & Adaptation', () => {
     for (let i = 0; i < 5; i++) {
       await agency.execute({
         task: 'Create a React component file',
-        capabilities: ['file.write', 'sandbox.shell'],
+        capabilities: ['file.write', 'bash.execute'],
       });
     }
 
@@ -138,7 +138,7 @@ describe('BootstrappedAgency — Learning & Adaptation', () => {
         id: `exec-old-${i}`,
         taskId: `task-old-${i}`,
         task: 'Old task',
-        capabilities: ['sandbox.shell'],
+        capabilities: ['bash.execute'],
         chainUsed: false,
         success: false,
         duration: 5000,
@@ -258,7 +258,7 @@ import {
   getCapability,
   FILE_READ_CAPABILITY,
   FILE_WRITE_CAPABILITY,
-  SANDBOX_SHELL_CAPABILITY,
+  BASH_CAPABILITY,
   SANDBOX_EXECUTE_CAPABILITY,
   WEB_BROWSE_CAPABILITY,
   REPO_SEARCH_CAPABILITY,
@@ -308,9 +308,9 @@ describe('Capability Definitions', () => {
     expect(fileRead).toBeDefined();
     expect(fileRead.id).toBe('file.read');
 
-    const sandboxShell = getCapability('sandbox.shell');
-    expect(sandboxShell).toBeDefined();
-    expect(sandboxShell.id).toBe('sandbox.shell');
+    const bashExec = getCapability('bash.execute');
+    expect(bashExec).toBeDefined();
+    expect(bashExec.id).toBe('bash.execute');
   });
 
   it('getCapability returns undefined for unknown capability', () => {
@@ -318,11 +318,10 @@ describe('Capability Definitions', () => {
     expect(unknown).toBeUndefined();
   });
 
-  it('sandbox.shell capability has correct provider priority', () => {
-    const shell = SANDBOX_SHELL_CAPABILITY;
-    expect(shell.providerPriority[0]).toBe('opencode-v2');
-    expect(shell.providerPriority).toContain('daytona');
-    expect(shell.providerPriority).toContain('e2b');
+  it('bash.execute capability has correct provider priority', () => {
+    const shell = BASH_CAPABILITY;
+    expect(shell.providerPriority).toContain('bash');
+    expect(shell.providerPriority).toContain('sandbox');
   });
 
   it('sandbox.execute capability includes multiple language options', () => {
@@ -380,8 +379,8 @@ describe('Natural Language → Capability Selection', () => {
     expect(result.success).toBe(true);
   });
 
-  it('LLM can map "run npm install" to sandbox.shell', () => {
-    const cap = getCapability('sandbox.shell');
+  it('LLM can map "run npm install" to bash.execute', () => {
+    const cap = getCapability('bash.execute');
     expect(cap).toBeDefined();
 
     const input = { command: 'npm install', cwd: '/workspace' };
@@ -389,11 +388,11 @@ describe('Natural Language → Capability Selection', () => {
     expect(result.success).toBe(true);
   });
 
-  it('LLM can map "search for TODO comments" to file.search', () => {
-    const cap = getCapability('file.search');
+  it('LLM can map "search for TODO comments" to repo.search', () => {
+    const cap = getCapability('repo.search');
     expect(cap).toBeDefined();
 
-    const input = { query: 'TODO', type: 'content' as const };
+    const input = { query: 'TODO', type: 'code' as const };
     const result = cap!.inputSchema.safeParse(input);
     expect(result.success).toBe(true);
   });
@@ -407,20 +406,20 @@ describe('Natural Language → Capability Selection', () => {
     expect(result.success).toBe(true);
   });
 
-  it('LLM can map "clone the GitHub repo" to repo.clone', () => {
-    const cap = getCapability('repo.clone');
+  it('LLM can map "clone the GitHub repo" to repo.git', () => {
+    const cap = getCapability('repo.git');
     expect(cap).toBeDefined();
 
-    const input = { url: 'https://github.com/user/repo.git', recursive: true };
+    const input = { command: 'clone' as const, url: 'https://github.com/user/repo.git', recursive: true };
     const result = cap!.inputSchema.safeParse(input);
     expect(result.success).toBe(true);
   });
 
-  it('LLM can map "commit changes with message" to repo.commit', () => {
-    const cap = getCapability('repo.commit');
+  it('LLM can map "commit changes with message" to repo.git', () => {
+    const cap = getCapability('repo.git');
     expect(cap).toBeDefined();
 
-    const input = { message: 'Fix: resolve login bug', files: ['src/auth.ts'] };
+    const input = { command: 'commit' as const, message: 'Fix: resolve login bug', files: ['src/auth.ts'] };
     const result = cap!.inputSchema.safeParse(input);
     expect(result.success).toBe(true);
   });
@@ -429,8 +428,8 @@ describe('Natural Language → Capability Selection', () => {
     // "Create a new component and add it to the index"
     const steps = [
       { capability: 'file.write', input: { path: 'src/components/Button.tsx', content: '...' } },
-      { capability: 'sandbox.shell', input: { command: 'npm run build' } },
-      { capability: 'repo.commit', input: { message: 'Add Button component' } },
+      { capability: 'bash.execute', input: { command: 'npm run build' } },
+      { capability: 'repo.git', input: { command: 'commit', message: 'Add Button component' } },
     ];
 
     for (const step of steps) {
@@ -443,14 +442,14 @@ describe('Natural Language → Capability Selection', () => {
 
   it('rejects invalid inputs that LLM might produce', () => {
     // LLM might forget required fields
-    const shellCap = getCapability('sandbox.shell');
+    const shellCap = getCapability('bash.execute');
     const badInput = {}; // Missing 'command'
     const result = shellCap!.inputSchema.safeParse(badInput);
     expect(result.success).toBe(false);
   });
 
   it('handles LLM-provided optional fields correctly', () => {
-    const shellCap = getCapability('sandbox.shell');
+    const shellCap = getCapability('bash.execute');
     const input = {
       command: 'ls -la',
       cwd: '/workspace/src',
@@ -478,14 +477,19 @@ describe('Capability Provider Priority & Routing', () => {
     expect(cap!.providerPriority).toContain('daytona');
   });
 
-  it('sandbox.shell prioritizes full-stack providers', () => {
-    const cap = getCapability('sandbox.shell');
+  it('sandbox.execute provider priority remains correct', () => {
+    const cap = getCapability('sandbox.execute');
     expect(cap).toBeDefined();
     expect(cap!.providerPriority[0]).toBe('opencode-v2');
-    expect(cap!.providerPriority[1]).toBe('daytona');
+    expect(cap!.providerPriority).toContain('e2b');
+    expect(cap!.providerPriority).toContain('daytona');
   });
 
-  it('file operations prioritize VFS for web mode', () => {
+  it('bash.execute priorities self-healing and sandbox', () => {
+    const cap = getCapability('bash.execute');
+    expect(cap).toBeDefined();
+    expect(cap!.providerPriority).toContain('bash');
+    expect(cap!.providerPriority).toContain('sandbox');
     const fileRead = getCapability('file.read');
     expect(fileRead).toBeDefined();
     expect(fileRead!.providerPriority).toContain('mcp-filesystem');
@@ -538,13 +542,13 @@ describe('VFS Provider — File Capability Execution', () => {
 
 import {
   FILE_READ_CAPABILITY,
-  SANDBOX_SHELL_CAPABILITY,
+  BASH_CAPABILITY,
   SANDBOX_EXECUTE_CAPABILITY,
 } from '@/lib/tools/capabilities';
 
 describe('Local PTY + Capability Integration', () => {
   it('sandbox.shell capability input matches what local PTY expects', () => {
-    const cap = SANDBOX_SHELL_CAPABILITY;
+    const cap = BASH_CAPABILITY;
 
     // These are the exact fields local PTY route accepts
     const validInput = {
@@ -652,7 +656,7 @@ describe('Bootstrapped Agency — Natural Language Prompt Understanding', () => 
     await agency.execute({ task: 'Create a file', capabilities: ['file.write'] });
     await agency.execute({ task: 'Read a file', capabilities: ['file.read'] });
     await agency.execute({ task: 'List directory', capabilities: ['file.list'] });
-    await agency.execute({ task: 'Run shell command', capabilities: ['sandbox.shell'] });
+    await agency.execute({ task: 'Run shell command', capabilities: ['bash.execute'] });
 
     const metrics = agency.getMetrics();
     expect(metrics.totalExecutions).toBe(4);
@@ -660,7 +664,7 @@ describe('Bootstrapped Agency — Natural Language Prompt Understanding', () => 
     // All four capabilities should be tracked
     expect(metrics.mostUsedCapabilities.size).toBeGreaterThanOrEqual(1);
 
-    // Some capabilities may fail if their providers aren't available (e.g. sandbox.shell
+    // Some capabilities may fail if their providers aren't available (e.g. bash.execute
     // depends on OpenCode which may not be configured). The agency still records them.
     // Verify that learning still works regardless of individual success/failure.
     const learned = agency.getLearnedCapabilities('Create a file');
@@ -693,7 +697,7 @@ describe('Edge Cases — Capabilities & Agency', () => {
     const results = await Promise.all([
       agency.execute({ task: 'Task A', capabilities: ['file.write'] }),
       agency.execute({ task: 'Task B', capabilities: ['file.read'] }),
-      agency.execute({ task: 'Task C', capabilities: ['sandbox.shell'] }),
+      agency.execute({ task: 'Task C', capabilities: ['bash.execute'] }),
     ]);
 
     expect(results.length).toBe(3);
@@ -703,7 +707,7 @@ describe('Edge Cases — Capabilities & Agency', () => {
 
   it('capability schemas reject dangerous inputs', () => {
     // Command injection attempt
-    const shellCap = getCapability('sandbox.shell');
+    const shellCap = getCapability('bash.execute');
     const badInput = { command: 'rm -rf / && echo pwned' };
     // Schema accepts it (validation is the router's job), but the test confirms
     // the schema doesn't silently transform dangerous commands
@@ -744,7 +748,7 @@ describe('Natural Language → Terminal Shell Initiation', () => {
   it('LLM "open a terminal" maps to local PTY creation', () => {
     // The local PTY API accepts POST requests that create shell sessions
     // This tests that the capability system has the right schema
-    const cap = SANDBOX_SHELL_CAPABILITY;
+    const cap = BASH_CAPABILITY;
 
     // "Open a terminal" → minimal shell request
     const input = { command: 'bash' };
@@ -753,7 +757,7 @@ describe('Natural Language → Terminal Shell Initiation', () => {
   });
 
   it('LLM "run the tests" maps to shell with test command', () => {
-    const cap = SANDBOX_SHELL_CAPABILITY;
+    const cap = BASH_CAPABILITY;
 
     const input = {
       command: 'npm test',
@@ -765,7 +769,7 @@ describe('Natural Language → Terminal Shell Initiation', () => {
   });
 
   it('LLM "start the dev server" maps to shell with background command', () => {
-    const cap = SANDBOX_SHELL_CAPABILITY;
+    const cap = BASH_CAPABILITY;
 
     const input = {
       command: 'npm run dev &',
@@ -777,7 +781,7 @@ describe('Natural Language → Terminal Shell Initiation', () => {
   });
 
   it('LLM "install dependencies" maps to shell with package manager', () => {
-    const cap = SANDBOX_SHELL_CAPABILITY;
+    const cap = BASH_CAPABILITY;
 
     const input = { command: 'npm install' };
     const result = cap.inputSchema.safeParse(input);

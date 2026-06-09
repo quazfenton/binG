@@ -68,7 +68,7 @@ You have access to these capabilities — use them strategically:
 - **file.write** — Write/create files. Use for: drafting documents, reports, proposals, translations
 - **file.append** — Append to files. Use for: adding to logs, ongoing documents, meeting notes
 - **file.list** — List directory contents. Use for: finding existing documents, understanding file organization
-- **file.search** — Search files by content. Use for: finding specific information across document collections
+- **repo.search** — Search file contents and code. Use for: finding specific information across document collections
 
 ## Data Analysis
 - **sandbox.execute** — Run Python/R code in isolation. Use for: data analysis, statistical modeling, chart generation, financial calculations
