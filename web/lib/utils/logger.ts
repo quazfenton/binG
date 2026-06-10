@@ -188,6 +188,10 @@ let logFd: number | null = null;
 // Kept for backward-compatible null checks; redirects to logFd internally.
 let writeStream: any = null;
 
+// Track whether we've already printed the "logging enabled" message
+// to avoid spamming the console on re-initializations.
+let _hasLoggedInitMessage = false;
+
 // ── Log Rotation State ──────────────────────────────────────────────────
 // Rotation is triggered when the file exceeds maxFileSize (MB).  Rather than
 // stat() on every write we accumulate a byte counter and only check when it
@@ -198,6 +202,12 @@ const _ROTATION_CHECK_INTERVAL = 256 * 1024; // 256 KB
 let _rotationMaxSizeBytes = 10 * 1024 * 1024; // 10 MB default
 let _rotationMaxFiles = 5;
 let _rotationLogPath = '';
+
+// Independent counter for file-existence checks (decoupled from rotation).
+// Checks every ~64 KB to catch externally deleted log files faster than
+// waiting for the rotation interval (which can be up to 256 KB).
+let _existsCheckCounter = 0;
+const _EXISTS_CHECK_INTERVAL = 64 * 1024; // 64 KB
 
 function initializeFileLogging(config: LoggerConfig) {
   if (typeof window !== 'undefined' || !config.logToFile) return;
@@ -215,8 +225,36 @@ function initializeFileLogging(config: LoggerConfig) {
 
     // Prevent double-open on module re-load in dev mode.
     if (logFd !== null) {
-      console.log('[Logger] File logging already active, reusing fd');
-      return;
+      // Verify the fd is still valid — the underlying file may have been
+      // deleted externally (e.g. user rm'd run.log to clear noise).
+      // If the file no longer exists, close the stale fd and reopen.
+      try {
+        const stat = fs.fstatSync(logFd);
+        // fd is valid, file still exists (or is unlinked but inode lives on).
+        // Check if the path still points to the same inode.
+        if (fs.existsSync(config.logFilePath)) {
+          const pathStat = fs.statSync(config.logFilePath);
+          if (pathStat.ino === stat.ino) {
+            // File still exists at the expected path — reuse fd.
+            if (!_hasLoggedInitMessage) {
+              console.log('[Logger] File logging already active, reusing fd');
+              _hasLoggedInitMessage = true;
+            }
+            return;
+          }
+        }
+        // File was deleted externally or replaced — close stale fd and reopen.
+        console.warn('[Logger] Log file was deleted or replaced externally, reopening...');
+        try { fs.fsyncSync(logFd); fs.closeSync(logFd); } catch {}
+        logFd = null;
+        writeStream = null;
+      } catch (statErr: any) {
+        // fd is invalid (EBADF) — close and reopen.
+        console.warn('[Logger] Stale log fd detected, reopening...', statErr.message);
+        try { fs.closeSync(logFd as any); } catch {}
+        logFd = null;
+        writeStream = null;
+      }
     }
 
     // Store rotation config at module level for the hot path.
@@ -231,7 +269,10 @@ function initializeFileLogging(config: LoggerConfig) {
     // Keep writeStream truthy so existing `if (writeStream)` guards work.
     writeStream = { fd: logFd, destroyed: false };
 
-    console.log('[Logger] File logging enabled (sync fd):', config.logFilePath);
+    if (!_hasLoggedInitMessage) {
+      console.log('[Logger] File logging enabled (sync fd):', config.logFilePath);
+      _hasLoggedInitMessage = true;
+    }
   } catch (error: any) {
     console.error('[Logger] Failed to initialize file logging:', error.message);
   }
@@ -250,6 +291,10 @@ function initializeFileLogging(config: LoggerConfig) {
  *
  * All operations are synchronous — no risk of interleaved writes between
  * close and reopen (Node.js is single-threaded event loop).
+ *
+ * Handles the case where run.log was deleted externally: if the file
+ * doesn't exist at the expected path, skips the rename chain and opens
+ * a fresh file directly.
  */
 function _rotateLogFile(): void {
   if (!_rotationLogPath || _rotationMaxFiles <= 0) return;
@@ -270,23 +315,25 @@ function _rotateLogFile(): void {
   }
 
   try {
-    // 2. Delete the oldest rotation file (run.log.N-1)
-    const oldestPath = `${_rotationLogPath}.${_rotationMaxFiles - 1}`;
-    if (fs.existsSync(oldestPath)) {
-      fs.unlinkSync(oldestPath);
-    }
-
-    // 3. Shift the chain: run.log.N-2 → run.log.N-1, ... , run.log.1 → run.log.2
-    for (let i = _rotationMaxFiles - 2; i >= 1; i--) {
-      const src = `${_rotationLogPath}.${i}`;
-      const dst = `${_rotationLogPath}.${i + 1}`;
-      if (fs.existsSync(src)) {
-        fs.renameSync(src, dst);
-      }
-    }
-
-    // 4. Rename current run.log → run.log.1
+    // Only perform the rename chain if the file exists.
+    // If it was deleted externally, skip straight to opening a fresh file.
     if (fs.existsSync(_rotationLogPath)) {
+      // 2. Delete the oldest rotation file (run.log.N-1)
+      const oldestPath = `${_rotationLogPath}.${_rotationMaxFiles - 1}`;
+      if (fs.existsSync(oldestPath)) {
+        fs.unlinkSync(oldestPath);
+      }
+
+      // 3. Shift the chain: run.log.N-2 → run.log.N-1, ... , run.log.1 → run.log.2
+      for (let i = _rotationMaxFiles - 2; i >= 1; i--) {
+        const src = `${_rotationLogPath}.${i}`;
+        const dst = `${_rotationLogPath}.${i + 1}`;
+        if (fs.existsSync(src)) {
+          fs.renameSync(src, dst);
+        }
+      }
+
+      // 4. Rename current run.log → run.log.1
       fs.renameSync(_rotationLogPath, `${_rotationLogPath}.1`);
     }
   } catch (rotateErr: any) {
@@ -299,10 +346,48 @@ function _rotateLogFile(): void {
     logFd = fs.openSync(_rotationLogPath, 'a');
     writeStream = { fd: logFd, destroyed: false };
     _rotationBytesWritten = 0;
+    _existsCheckCounter = 0;
   } catch (openErr: any) {
     console.error('[Logger] Failed to reopen log after rotation:', openErr.message);
     logFd = null;
     writeStream = null;
+  }
+}
+
+/**
+ * Check if the log file has been deleted externally.
+ * If so, close the stale fd and reopen — data written to the deleted
+ * inode would be lost when the process exits.
+ */
+function _recoverFromDeletedLogFile(): void {
+  if (!_rotationLogPath || logFd === null) return;
+
+  const fs = _getFs();
+  if (!fs) return;
+
+  try {
+    // If the file exists at its expected path, verify the inode matches.
+    if (fs.existsSync(_rotationLogPath)) {
+      const pathStat = fs.statSync(_rotationLogPath);
+      const fdStat = fs.fstatSync(logFd);
+      if (pathStat.ino === fdStat.ino) return; // Same inode — file is fine.
+    }
+    // File was deleted or replaced externally.
+    // Close the stale fd (data stored in invisible inode is already lost)
+    // and reopen a fresh fd at the expected path.
+    const oldFd = logFd;
+    logFd = null;
+    if (writeStream) writeStream.destroyed = true;
+    writeStream = null;
+    try { fs.fsyncSync(oldFd); fs.closeSync(oldFd); } catch {}
+
+    console.warn('[Logger] Log file was deleted externally — reopening at', _rotationLogPath);
+    logFd = fs.openSync(_rotationLogPath, 'a');
+    writeStream = { fd: logFd, destroyed: false };
+    _rotationBytesWritten = 0;
+  } catch (e: any) {
+    // If recovery fails, leave logFd null — logging falls back to console only.
+    console.error('[Logger] Failed to recover from deleted log file at', _rotationLogPath, ':', e.message);
   }
 }
 
@@ -468,6 +553,8 @@ export class Logger {
     // Write to file if enabled (server-side only).
     // Uses raw fd + fs.writeSync + fs.fsyncSync to guarantee every line
     // hits disk immediately — no Node.js stream buffer, no OS page-cache delay.
+    // Also periodically checks if the log file was deleted externally
+    // and auto-recovers by reopening a fresh fd.
     if (logFd !== null) {
       try {
         const fs = _getFs();
@@ -477,6 +564,14 @@ export class Logger {
         fs.writeSync(logFd, line);
         fs.fsyncSync(logFd);
         _checkRotation(lineBytes);
+        // Periodically verify the log file still exists at its path.
+        // Uses an independent counter (64 KB) decoupled from rotation (256 KB)
+        // so deleted files are detected within ~100 lines rather than ~500.
+        _existsCheckCounter += lineBytes;
+        if (_existsCheckCounter >= _EXISTS_CHECK_INTERVAL) {
+          _existsCheckCounter = 0;
+          _recoverFromDeletedLogFile();
+        }
       } catch {
         // Best effort — don't crash the app over a log write failure.
       }

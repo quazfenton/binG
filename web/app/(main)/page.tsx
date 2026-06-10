@@ -42,6 +42,7 @@ export default function ChatBox() {
   const [mounted, setMounted] = useState(false)
   const [workspaceId, setWorkspaceId] = useState<string | undefined>(undefined)
   const CUSTOM_BG_MEDIA_KEY = "custom_bg_media_url"
+  const CUSTOM_BG_SPEED_KEY = "custom_bg_speed"
 
   useEffect(() => {
     setMounted(true)
@@ -89,7 +90,10 @@ export default function ChatBox() {
         return
       }
 
-      const proxiedUrl = `/api/image-proxy?url=${encodeURIComponent(mediaUrl)}`
+      const savedSpeed = parseFloat(typeof window !== "undefined" ? localStorage.getItem(CUSTOM_BG_SPEED_KEY) || process.env.NEXT_PUBLIC_BG_MEDIA_SPEED || '0.5' : process.env.NEXT_PUBLIC_BG_MEDIA_SPEED || '0.5')
+      const speed = savedSpeed > 0 ? savedSpeed : 1
+      let proxiedUrl = `/api/image-proxy?url=${encodeURIComponent(mediaUrl)}`
+      if (speed !== 1) proxiedUrl += `&speed=${speed}`
 
       // Preload via <link rel="preload"> to warm the image-proxy cache before CSS url()
       // tries to fetch. <link rel="preload"> is more reliable than <img> for warming the

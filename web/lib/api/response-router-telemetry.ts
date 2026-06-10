@@ -42,6 +42,14 @@ let config: TelemetryConfig = { ...defaultConfig }
 let otelTracer: any = null
 let otelMeter: any = null
 
+// Cached OTel instruments — created once and reused across all 5s ticks.
+// Previously exportMetrics() called createCounter/createHistogram on every
+// interval, allocating new objects each time. These are lazily initialized
+// on the first export after otelMeter becomes available.
+let _cachedRequestCounter: any = null
+let _cachedRequestDuration: any = null
+let _cachedErrorCounter: any = null
+
 // ============================================================================
 // Metrics
 // ============================================================================
@@ -191,6 +199,10 @@ export async function initializeTelemetry(customConfig?: Partial<TelemetryConfig
       meterProviderAny.register()
     }
     otelMeter = meterProvider.getMeter(config.serviceName)
+    // Reset cached instruments so they're re-created for the new meter
+    _cachedRequestCounter = null
+    _cachedRequestDuration = null
+    _cachedErrorCounter = null
 
     logger.info('OpenTelemetry initialized', {
       serviceName: config.serviceName,
@@ -218,32 +230,35 @@ function startMetricsExport(): void {
 }
 
 /**
- * Export metrics to OpenTelemetry
+ * Export metrics to OpenTelemetry.
+ * Instruments are created once and cached — no per-tick allocations.
  */
 function exportMetrics(): void {
   if (!otelMeter) return
 
   try {
-    // Create counters and histograms
-    const requestCounter = otelMeter.createCounter('router.requests.total', {
-      description: 'Total number of requests',
-    })
-    const requestDuration = otelMeter.createHistogram('router.requests.duration', {
-      description: 'Request duration in milliseconds',
-    })
-    const errorCounter = otelMeter.createCounter('router.errors.total', {
-      description: 'Total number of errors',
-    })
+    // Lazy-init: create counters/histograms once, reuse across all ticks
+    if (!_cachedRequestCounter) {
+      _cachedRequestCounter = otelMeter.createCounter('router.requests.total', {
+        description: 'Total number of requests',
+      })
+      _cachedRequestDuration = otelMeter.createHistogram('router.requests.duration', {
+        description: 'Request duration in milliseconds',
+      })
+      _cachedErrorCounter = otelMeter.createCounter('router.errors.total', {
+        description: 'Total number of errors',
+      })
+    }
 
-    // Record metrics
-    requestCounter.add(metrics.requestCount)
+    // Record metrics using cached instruments
+    _cachedRequestCounter.add(metrics.requestCount)
     if (metrics.requestDuration.length > 0) {
       const avgDuration = metrics.requestDuration.reduce((a, b) => a + b, 0) / metrics.requestDuration.length
-      requestDuration.record(avgDuration)
+      _cachedRequestDuration.record(avgDuration)
     }
-    errorCounter.add(metrics.requestErrors)
-
-    logger.debug('Metrics exported to OpenTelemetry')
+    _cachedErrorCounter.add(metrics.requestErrors)
+    // No per-tick log here — logMetricsSummary() already handles meaningful
+    // change-detected logging, avoiding 5-second interval spam.
   } catch (error: any) {
     logger.warn('Failed to export metrics:', error.message)
   }

@@ -7,11 +7,10 @@
  *
  * Each prompt is production-grade with tool-aware instructions referencing
  * the actual registered capabilities from bootstrap-builtins.ts:
- *   - file.read, file.write, file.append, file.delete, file.list, file.search
- *   - sandbox.execute, sandbox.shell, sandbox.session
+ *   - file.read, file.write, file.append, file.delete, file.list
+ *   - sandbox.execute, bash.execute, sandbox.session
  *   - web.browse, web.search
- *   - repo.search, repo.git, repo.clone, repo.commit, repo.push, repo.pull,
- *     repo.semantic-search, repo.analyze
+ *   - repo.search, repo.git, repo.analyze
  *   - memory.store, memory.retrieve
  *   - workspace.bundle, workspace.getChanges
  *   - automation.discord, automation.telegram, automation.workflow
@@ -59,7 +58,6 @@ const ACTUAL_TOOL_REFERENCE = `
 - **file.write**({path, content, encoding?, createDirs: true, atomic?, append?}) — Write/create files
 - **file.append**({path, content}) — Append to existing files: logs, cumulative reports, ongoing notes
 - **file.list**({path, pattern?, recursive?, includeHidden?}) — Explore directories, find existing documents
-- **file.search**({query, path?, type: 'name'|'content'|'both', maxResults?}) — Find specific info across file collections
 - **file.delete**({path, recursive?, force?}) — Clean up temporary files
 
 ## Web Intelligence
@@ -69,13 +67,13 @@ const ACTUAL_TOOL_REFERENCE = `
 
 ## Computation & Analysis
 - **sandbox.execute**({code, language: 'javascript'|'typescript'|'python'|'bash'|'rust'|'go', timeout?, context?}) — Run code in isolated environment
-- **sandbox.shell**({command, cwd?, env?, timeout?}) — Execute shell commands, run system tools, pipe data
+- **bash.execute**({command, cwd?, env?, timeout?}) — Execute shell commands with env vars, timeout
 - **sandbox.session**({action: 'create'|'resume'|'pause'|'destroy'|'status', sessionId?, config?}) — Persistent working environments
 
 ## Repository & Knowledge
 - **repo.search**({query, path?, method: 'text'|'semantic'|'tool'|'auto', type?, limit?}) — Search codebase with multiple methods
-- **repo.git**({command: 'status'|'diff'|'commit'|'push'|'pull'|'branch'|'log'|'stash', args?, message?, files?}) — Version control operations
-- **repo.semantic-search**({query, path?, limit?, similarityThreshold?}) — Find conceptually related content
+- **repo.git**({command: 'status'|'diff'|'commit'|'push'|'pull'|'clone'|'branch'|'log'|'stash', ...}) — Version control operations with strongly-typed args per sub-command
+- **repo.search**({query, path?, method?, type?, limit?, similarityThreshold?}) — Multi-method search with optional semantic mode
 - **repo.analyze**({path, depth?, includeStats?}) — Repository structure, language breakdown, dependencies
 - **workspace.bundle**({path?, format: 'markdown'|'xml'|'json'|'plain', includePatterns?, excludePatterns?, ...}) — Generate complete workspace context
 - **workspace.getChanges**({maxFiles?, ownerId?}) — Get git-style diffs of recent changes
@@ -156,7 +154,7 @@ ${ACTUAL_TOOL_REFERENCE}
 ### Document Analysis
 1. **file.read** — Read any documents you've collected: reports, filings, data exports
 2. **file.list** — Explore collections of gathered documents
-3. **file.search** — Search across all gathered documents for specific claims, names, dates
+3. **repo.search** — Search across all gathered documents for specific claims, names, dates
 4. **file.write** — Write intelligence reports, source logs, finding summaries
 5. **file.append** — Build cumulative research logs as investigation progresses
 
@@ -503,7 +501,7 @@ ${ACTUAL_TOOL_REFERENCE}
 3. **web.fetch** — Quick lookups on stock prices, market data, economic indicators
 4. **file.read** — Read existing business plans, financial statements, org charts, strategy docs
 5. **file.list** — Explore available business documents, reports, presentations
-6. **file.search** — Find specific information across the client's document collection
+6. **repo.search** — Find specific information across the client's document collection
 
 ## Financial & Operational Analysis
 1. **sandbox.execute** — Run Python for financial modeling and analysis:

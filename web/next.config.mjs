@@ -101,6 +101,19 @@ const nextConfig = {
       'date-fns',
       'lodash',
     ],
+    // Turbopack aliases — replaces server-only npm packages leaking into
+    // client bundles with no-op stubs. (Webpack equivalents are in the
+    // webpack() function below; Turbopack ignores that section entirely.)
+    turbo: {
+      resolveAlias: {
+        'server-only': './lib/utils/server-only-stub.ts',
+        'mcporter': './lib/utils/empty-module.ts',
+        'modal': './lib/utils/empty-module.ts',
+        'tar': './lib/utils/empty-module.ts',
+        'node-fetch': './lib/utils/empty-module.ts',
+        '@daytonaio/sdk': './lib/utils/empty-module.ts',
+      },
+    },
   },
   compiler: {
     removeConsole: process.env.NODE_ENV === 'production'
@@ -405,6 +418,20 @@ const nextConfig = {
 
       config.resolve.alias = {
         ...config.resolve.alias,
+        // Prevent 'server-only' from throwing at build time when transitively
+        // imported by client components (e.g., bash-tool.ts → index.server.ts).
+        // Replaced with a no-op stub — Node.js APIs are already stubbed to false
+        // by the resolve.fallback config above.
+        'server-only': resolve(projectRoot, 'lib/utils/server-only-stub.ts'),
+        // Server-only npm packages that leak into client bundles via
+        // transitive imports. Each requires Node.js built-ins (fs, net,
+        // child_process) unavailable in browser contexts. Replaced with
+        // a no-op proxy stub to prevent chunk generation errors.
+        'mcporter': resolve(projectRoot, 'lib/utils/empty-module.ts'),
+        'modal': resolve(projectRoot, 'lib/utils/empty-module.ts'),
+        'tar': resolve(projectRoot, 'lib/utils/empty-module.ts'),
+        'node-fetch': resolve(projectRoot, 'lib/utils/empty-module.ts'),
+        '@daytonaio/sdk': resolve(projectRoot, 'lib/utils/empty-module.ts'),
         'node:crypto': false,
         'node:fs': false,
         'node:path': false,
@@ -427,7 +454,19 @@ const nextConfig = {
           Buffer: ['buffer', 'Buffer'],
           buffer: ['buffer', 'Buffer'],
           process: 'process/browser',
-        })
+        }),
+        // Replace server-only npm packages (mcporter, modal, tar, node-fetch,
+        // @daytonaio/sdk) leaking into client bundles with a no-op proxy stub.
+        // Handles both main entry and subpath imports (e.g., node-fetch/src/...).
+        // Client-only: server builds keep the real packages.
+        new webpack.NormalModuleReplacementPlugin(
+          /^(mcporter|modal|tar|node-fetch)(\/.*)?$/,
+          resolve(projectRoot, 'lib/utils/empty-module.ts')
+        ),
+        new webpack.NormalModuleReplacementPlugin(
+          /^@daytonaio\/sdk(\/.*)?$/,
+          resolve(projectRoot, 'lib/utils/empty-module.ts')
+        )
       );
     }
 

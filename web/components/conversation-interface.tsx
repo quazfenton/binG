@@ -19,6 +19,7 @@ import { useChatHistory } from "@/hooks/use-chat-history";
 import { voiceService } from "@/lib/voice/voice-service";
 import { toast } from "sonner";
 import type { LLMProviderConfig } from "@/lib/providers/llm-providers-types";
+import { PROVIDERS as ALL_PROVIDERS } from "@/lib/providers/llm-providers-types";
 import { enhancedBufferManager } from "@/lib/streaming/enhanced-buffer-manager";
 import { useStreamingState } from "@/hooks/use-streaming-state";
 import { useAuth } from "@/contexts/auth-context";
@@ -390,15 +391,26 @@ export default function ConversationInterface() {
     }
   }, []);
 
-  // Re-merge user API keys into available providers (marks them as available)
+  // Merge user API keys into available providers.
+  // Marks server-known providers as available, and adds any providers from
+  // the static PROVIDERS list that have a user key but weren't sent by the server.
   const refreshProviderAvailability = useCallback((providers: LLMProviderConfig[], userKeys: Record<string, string>) => {
     if (Object.keys(userKeys).length === 0) return providers;
-    return providers.map((p) => {
+    const serverIds = new Set(providers.map(p => p.id));
+    const merged = providers.map((p) => {
       if (userKeys[p.id]) {
         return { ...p, isAvailable: true };
       }
       return p;
     });
+    // Add providers from the static list that have a user key but aren't in the server response
+    for (const [id, key] of Object.entries(userKeys)) {
+      if (!key) continue;
+      if (!serverIds.has(id) && ALL_PROVIDERS[id]) {
+        merged.push({ ...ALL_PROVIDERS[id], isAvailable: true });
+      }
+    }
+    return merged;
   }, []);
 
   // Initial load on mount
@@ -419,6 +431,13 @@ export default function ConversationInterface() {
         if (data.success) {
           let providers: LLMProviderConfig[] = data.data.providers || [];
           providers = providers.map((p) => (newKeys[p.id] ? { ...p, isAvailable: true } : p));
+          const serverIds = new Set(providers.map(p => p.id));
+          for (const [id, key] of Object.entries(newKeys)) {
+            if (!key) continue;
+            if (!serverIds.has(id) && ALL_PROVIDERS[id]) {
+              providers.push({ ...ALL_PROVIDERS[id], isAvailable: true });
+            }
+          }
           setAvailableProviders(providers);
         }
       } catch (e) {

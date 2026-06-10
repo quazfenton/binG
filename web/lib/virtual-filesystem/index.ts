@@ -74,5 +74,8 @@ export const __VFS_SERVER_EXPORTS = [
   'watchFiles',
 ];
 
-// Re-export virtualFilesystem for backward compatibility
-export { virtualFilesystem } from './virtual-filesystem-service';
+// Note: Do NOT re-export the server-only virtualFilesystem here.
+// Server-only exports live in index.server.ts and must be dynamically imported
+// from server components or API routes, e.g.:
+//   const { virtualFilesystem } = await import('@/lib/virtual-filesystem/index.server');
+// This file (index.ts) intentionally only exports client-safe types and helpers.

@@ -10,6 +10,9 @@
  * - createBashTool: tool creation, schema validation, full execution flow
  * - Utility: extractOutputFiles
  * - Config: default values, custom merging, env var parsing
+ * - Shell metacharacter detection matrix: full 12-char regex coverage
+ * - Heredoc execution: quoted/unquoted delimiters, HTML, unicode, edge cases
+ * - Multi-line script execution: scripts, loops, conditionals, \r\n endings
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -1266,5 +1269,495 @@ describe('bash-tool — Configuration Defaults', () => {
     const tool = createBashTool(customConfig);
     // Tool should be created with custom config merged
     expect(tool.bash_execute).toBeDefined();
+  });
+});
+
+// ============================================================================
+// SECTION 9: hasShellMetacharacters regex — Full Detection Matrix
+// ============================================================================
+// The regex /[;&|`()$<>'"\n\r]/ determines whether executeBashCommand uses
+// bash -c (shell interpretation) vs direct spawn (split on whitespace).
+// We test each character class member individually, plus combinations.
+
+describe('bash-tool — Shell Metacharacter Detection Matrix', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // Character: ; (command separator)
+  it('uses bash -c when command contains semicolon (;)', async () => {
+    const mockProc = makeMockSpawn({ stdout: '/tmp\n/tmp\n' });
+    mockSpawn.mockReturnValue(mockProc);
+
+    await executeBashCommand('cd /tmp; pwd');
+
+    expect(mockSpawn).toHaveBeenCalledWith(
+      'bash',
+      ['-c', 'cd /tmp; pwd'],
+      expect.anything()
+    );
+  });
+
+  // Character: & (background / && chaining)
+  it('uses bash -c when command contains ampersand (&)', async () => {
+    const mockProc = makeMockSpawn({ stdout: 'ok\n' });
+    mockSpawn.mockReturnValue(mockProc);
+
+    await executeBashCommand('mkdir -p /tmp/dir && echo done');
+
+    expect(mockSpawn).toHaveBeenCalledWith(
+      'bash',
+      ['-c', 'mkdir -p /tmp/dir && echo done'],
+      expect.anything()
+    );
+  });
+
+  // Character: | (pipe)
+  it('uses bash -c when command contains pipe (|)', async () => {
+    const mockProc = makeMockSpawn({ stdout: 'match\n' });
+    mockSpawn.mockReturnValue(mockProc);
+
+    await executeBashCommand('cat file.txt | grep pattern');
+
+    expect(mockSpawn).toHaveBeenCalledWith(
+      'bash',
+      ['-c', 'cat file.txt | grep pattern'],
+      expect.anything()
+    );
+  });
+
+  // Character: ` (backtick / command substitution)
+  it('uses bash -c when command contains backtick (`)', async () => {
+    const mockProc = makeMockSpawn({ stdout: 'file\n' });
+    mockSpawn.mockReturnValue(mockProc);
+
+    await executeBashCommand('echo `which node`');
+
+    expect(mockSpawn).toHaveBeenCalledWith(
+      'bash',
+      ['-c', 'echo `which node`'],
+      expect.anything()
+    );
+  });
+
+  // Character: ( and ) (subshell)
+  it('uses bash -c when command contains parentheses ((...))', async () => {
+    const mockProc = makeMockSpawn({ stdout: 'test\n' });
+    mockSpawn.mockReturnValue(mockProc);
+
+    await executeBashCommand('(cd /tmp && ls)');
+
+    expect(mockSpawn).toHaveBeenCalledWith(
+      'bash',
+      ['-c', '(cd /tmp && ls)'],
+      expect.anything()
+    );
+  });
+
+  // Character: $ (variable expansion)
+  it('uses bash -c when command contains dollar sign ($)', async () => {
+    const mockProc = makeMockSpawn({ stdout: '/home/user\n' });
+    mockSpawn.mockReturnValue(mockProc);
+
+    await executeBashCommand('echo $HOME');
+
+    expect(mockSpawn).toHaveBeenCalledWith(
+      'bash',
+      ['-c', 'echo $HOME'],
+      expect.anything()
+    );
+  });
+
+  // Character: < (input redirect)
+  it('uses bash -c when command contains input redirect (<)', async () => {
+    const mockProc = makeMockSpawn({ stdout: 'content\n' });
+    mockSpawn.mockReturnValue(mockProc);
+
+    await executeBashCommand('cat < input.txt');
+
+    expect(mockSpawn).toHaveBeenCalledWith(
+      'bash',
+      ['-c', 'cat < input.txt'],
+      expect.anything()
+    );
+  });
+
+  // Character: > (output redirect)
+  it('uses bash -c when command contains output redirect (>)', async () => {
+    const mockProc = makeMockSpawn({ stdout: '' });
+    mockSpawn.mockReturnValue(mockProc);
+
+    await executeBashCommand('echo hello > output.txt');
+
+    expect(mockSpawn).toHaveBeenCalledWith(
+      'bash',
+      ['-c', 'echo hello > output.txt'],
+      expect.anything()
+    );
+  });
+
+  // Character: ' (single quote)
+  it('uses bash -c when command contains single quotes (\')', async () => {
+    const mockProc = makeMockSpawn({ stdout: 'hello world\n' });
+    mockSpawn.mockReturnValue(mockProc);
+
+    await executeBashCommand("echo 'hello world'");
+
+    expect(mockSpawn).toHaveBeenCalledWith(
+      'bash',
+      ['-c', "echo 'hello world'"],
+      expect.anything()
+    );
+  });
+
+  // Character: " (double quote)
+  it('uses bash -c when command contains double quotes (")', async () => {
+    const mockProc = makeMockSpawn({ stdout: 'hello world\n' });
+    mockSpawn.mockReturnValue(mockProc);
+
+    await executeBashCommand('echo "hello world"');
+
+    expect(mockSpawn).toHaveBeenCalledWith(
+      'bash',
+      ['-c', 'echo "hello world"'],
+      expect.anything()
+    );
+  });
+
+  // Character: \n (newline — multi-line / heredoc)
+  it('uses bash -c when command contains newline (\\n)', async () => {
+    const mockProc = makeMockSpawn({ stdout: 'line1\nline2\n' });
+    mockSpawn.mockReturnValue(mockProc);
+
+    const cmd = 'echo line1\necho line2';
+    await executeBashCommand(cmd);
+
+    expect(mockSpawn).toHaveBeenCalledWith(
+      'bash',
+      ['-c', cmd],
+      expect.anything()
+    );
+  });
+
+  // Character: \r (carriage return — e.g. classic Mac line endings)
+  it('uses bash -c when command contains carriage return (\\r)', async () => {
+    const mockProc = makeMockSpawn({ stdout: 'line1\rline2\r' });
+    mockSpawn.mockReturnValue(mockProc);
+
+    // Isolated \r without \n — confirms \r alone triggers bash -c
+    const cmd = 'echo line1\recho line2';
+    await executeBashCommand(cmd);
+
+    expect(mockSpawn).toHaveBeenCalledWith(
+      'bash',
+      ['-c', cmd],
+      expect.anything()
+    );
+  });
+
+  // Negative: Simple commands use direct spawn (no bash -c)
+  it('uses direct spawn for commands without metacharacters', async () => {
+    const mockProc = makeMockSpawn({ stdout: 'test\n' });
+    mockSpawn.mockReturnValue(mockProc);
+
+    await executeBashCommand('echo hello world');
+
+    expect(mockSpawn).toHaveBeenCalledWith(
+      'echo',
+      ['hello', 'world'],
+      expect.anything()
+    );
+  });
+
+  // Negative: Another simple command
+  it('uses direct spawn for ls -la', async () => {
+    const mockProc = makeMockSpawn({ stdout: 'file1\nfile2\n' });
+    mockSpawn.mockReturnValue(mockProc);
+
+    await executeBashCommand('ls -la /tmp');
+
+    expect(mockSpawn).toHaveBeenCalledWith(
+      'ls',
+      ['-la', '/tmp'],
+      expect.anything()
+    );
+  });
+
+  // Combination: Multiple metacharacters in one command
+  it('uses bash -c for complex commands with multiple metacharacters', async () => {
+    const mockProc = makeMockSpawn({ stdout: 'filtered\n' });
+    mockSpawn.mockReturnValue(mockProc);
+
+    await executeBashCommand('cat file.txt | grep "pattern" > output.txt');
+
+    expect(mockSpawn).toHaveBeenCalledWith(
+      'bash',
+      ['-c', 'cat file.txt | grep "pattern" > output.txt'],
+      expect.anything()
+    );
+  });
+});
+
+// ============================================================================
+// SECTION 10: Heredoc Execution
+// ============================================================================
+// Heredocs are the primary use case for multi-line command support.
+// They require bash -c wrapping so that << and the delimiter are interpreted
+// by bash, not treated as literal arguments to cat/echo/etc.
+
+describe('bash-tool — Heredoc Execution', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('uses bash -c for heredoc with single-quoted delimiter', async () => {
+    const mockProc = makeMockSpawn({ stdout: '' });
+    mockSpawn.mockReturnValue(mockProc);
+
+    const cmd = `cat > /tmp/test.txt << 'EOF'
+hello world
+EOF`;
+
+    await executeBashCommand(cmd);
+
+    expect(mockSpawn).toHaveBeenCalledWith(
+      'bash',
+      ['-c', cmd],
+      expect.anything()
+    );
+  });
+
+  it('uses bash -c for heredoc with unquoted delimiter', async () => {
+    const mockProc = makeMockSpawn({ stdout: '' });
+    mockSpawn.mockReturnValue(mockProc);
+
+    const cmd = `cat > /tmp/test.txt << EOF
+hello world
+EOF`;
+
+    await executeBashCommand(cmd);
+
+    expect(mockSpawn).toHaveBeenCalledWith(
+      'bash',
+      ['-c', cmd],
+      expect.anything()
+    );
+  });
+
+  it('uses bash -c for heredoc with HTML content and special characters', async () => {
+    const mockProc = makeMockSpawn({ stdout: '' });
+    mockSpawn.mockReturnValue(mockProc);
+
+    // Exact command the LLM tried that triggered the original bug
+    const cmd = `cat > index.html << 'HTMLEOF'
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Test & Demo</title>
+</head>
+<body>
+  <h1>Hello World</h1>
+  <p>Special chars: < > & " '</p>
+</body>
+</html>
+HTMLEOF`;
+
+    await executeBashCommand(cmd);
+
+    expect(mockSpawn).toHaveBeenCalledWith(
+      'bash',
+      ['-c', cmd],
+      expect.anything()
+    );
+  });
+
+  it('uses bash -c for heredoc with dashes (<<-) for indented delimiter', async () => {
+    const mockProc = makeMockSpawn({ stdout: '' });
+    mockSpawn.mockReturnValue(mockProc);
+
+    const cmd = `cat > /tmp/test.txt <<- EOF
+	indented content
+	EOF`;
+
+    await executeBashCommand(cmd);
+
+    expect(mockSpawn).toHaveBeenCalledWith(
+      'bash',
+      ['-c', cmd],
+      expect.anything()
+    );
+  });
+
+  it('uses bash -c for heredoc feeding stdin to non-cat commands', async () => {
+    const mockProc = makeMockSpawn({ stdout: 'hello world\n' });
+    mockSpawn.mockReturnValue(mockProc);
+
+    const cmd = `grep "world" << 'EOF'
+hello world
+foo bar
+EOF`;
+
+    await executeBashCommand(cmd);
+
+    expect(mockSpawn).toHaveBeenCalledWith(
+      'bash',
+      ['-c', cmd],
+      expect.anything()
+    );
+  });
+
+  it('uses bash -c for heredoc with unicode content', async () => {
+    const mockProc = makeMockSpawn({ stdout: '' });
+    mockSpawn.mockReturnValue(mockProc);
+
+    const cmd = `cat > /tmp/unicode.txt << 'EOF'
+こんにちは世界
+🚀 🌍 ✨
+äöüß ñ
+EOF`;
+
+    await executeBashCommand(cmd);
+
+    expect(mockSpawn).toHaveBeenCalledWith(
+      'bash',
+      ['-c', cmd],
+      expect.anything()
+    );
+  });
+
+  it('uses bash -c for heredoc with empty content', async () => {
+    const mockProc = makeMockSpawn({ stdout: '' });
+    mockSpawn.mockReturnValue(mockProc);
+
+    const cmd = `cat > /tmp/empty.txt << 'EOF'
+EOF`;
+
+    await executeBashCommand(cmd);
+
+    expect(mockSpawn).toHaveBeenCalledWith(
+      'bash',
+      ['-c', cmd],
+      expect.anything()
+    );
+  });
+});
+
+// ============================================================================
+// SECTION 11: Multi-Line Script Execution
+// ============================================================================
+// Multi-line scripts without explicit shell metacharacters (like pipes or
+// redirects) should still be wrapped in bash -c because they contain \n.
+// Without bash -c, a multi-line command would be split on whitespace and
+// spawn 'echo' with args ['line1', 'echo', 'line2'] which would fail.
+
+describe('bash-tool — Multi-Line Script Execution', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('uses bash -c for multi-line echo commands', async () => {
+    const mockProc = makeMockSpawn({ stdout: 'line one\nline two\nline three\n' });
+    mockSpawn.mockReturnValue(mockProc);
+
+    const cmd = 'echo "line one"\necho "line two"\necho "line three"';
+
+    await executeBashCommand(cmd);
+
+    expect(mockSpawn).toHaveBeenCalledWith(
+      'bash',
+      ['-c', cmd],
+      expect.anything()
+    );
+  });
+
+  it('uses bash -c for multi-line variable assignments and commands', async () => {
+    const mockProc = makeMockSpawn({ stdout: '/tmp/output.txt\n' });
+    mockSpawn.mockReturnValue(mockProc);
+
+    const cmd = 'OUTPUT=/tmp/output.txt\necho $OUTPUT';
+
+    await executeBashCommand(cmd);
+
+    expect(mockSpawn).toHaveBeenCalledWith(
+      'bash',
+      ['-c', cmd],
+      expect.anything()
+    );
+  });
+
+  it('uses bash -c for multi-line script with cd and subsequent commands', async () => {
+    const mockProc = makeMockSpawn({ stdout: '/tmp\n' });
+    mockSpawn.mockReturnValue(mockProc);
+
+    const cmd = 'cd /tmp\npwd';
+
+    await executeBashCommand(cmd);
+
+    expect(mockSpawn).toHaveBeenCalledWith(
+      'bash',
+      ['-c', cmd],
+      expect.anything()
+    );
+  });
+
+  it('uses bash -c for multi-line script with comments', async () => {
+    const mockProc = makeMockSpawn({ stdout: 'hello\n' });
+    mockSpawn.mockReturnValue(mockProc);
+
+    const cmd = '# This is a comment\necho "hello"';
+
+    await executeBashCommand(cmd);
+
+    expect(mockSpawn).toHaveBeenCalledWith(
+      'bash',
+      ['-c', cmd],
+      expect.anything()
+    );
+  });
+
+  it('uses bash -c for multi-line script with if/then/fi', async () => {
+    const mockProc = makeMockSpawn({ stdout: 'yes\n' });
+    mockSpawn.mockReturnValue(mockProc);
+
+    const cmd = 'if true; then\n  echo "yes"\nfi';
+
+    await executeBashCommand(cmd);
+
+    expect(mockSpawn).toHaveBeenCalledWith(
+      'bash',
+      ['-c', cmd],
+      expect.anything()
+    );
+  });
+
+  it('uses bash -c for multi-line script with for loop', async () => {
+    const mockProc = makeMockSpawn({ stdout: 'a\nb\nc\n' });
+    mockSpawn.mockReturnValue(mockProc);
+
+    const cmd = 'for x in a b c; do\n  echo $x\ndone';
+
+    await executeBashCommand(cmd);
+
+    expect(mockSpawn).toHaveBeenCalledWith(
+      'bash',
+      ['-c', cmd],
+      expect.anything()
+    );
+  });
+
+  it('uses bash -c for Windows-style line endings (\\r\\n)', async () => {
+    const mockProc = makeMockSpawn({ stdout: 'first\r\nsecond\r\n' });
+    mockSpawn.mockReturnValue(mockProc);
+
+    const cmd = 'echo first\r\necho second';
+
+    await executeBashCommand(cmd);
+
+    expect(mockSpawn).toHaveBeenCalledWith(
+      'bash',
+      ['-c', cmd],
+      expect.anything()
+    );
   });
 });

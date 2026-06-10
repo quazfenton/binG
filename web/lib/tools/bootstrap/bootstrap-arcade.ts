@@ -48,11 +48,18 @@ export async function registerArcadeTools(registry: ToolRegistry, config: Bootst
 
   try {
     // Import Arcade service
-    const { getArcadeService } = await import('../../integrations/arcade-service');
+    const { getArcadeService, isArcadeServiceDisabled } = await import('../../integrations/arcade-service');
     const arcadeService = getArcadeService();
 
     if (!arcadeService) {
-      logger.debug('Arcade service not available');
+      if (isArcadeServiceDisabled()) {
+        logger.warn(
+          'Arcade service disabled due to 401 (invalid API key). ' +
+          'Fix ARCADE_API_KEY and call reenableArcadeService() to retry, or restart the server.'
+        );
+      } else {
+        logger.debug('Arcade service not available (not yet initialized or no key)');
+      }
       return 0;
     }
 
@@ -60,7 +67,7 @@ export async function registerArcadeTools(registry: ToolRegistry, config: Bootst
     const tools = await arcadeService.getTools({ limit: 200 });
 
     if (!tools || tools.length === 0) {
-      logger.warn('No tools returned from Arcade');
+      // Detailed warning is now emitted inside arcadeService.getTools()
       return 0;
     }
 

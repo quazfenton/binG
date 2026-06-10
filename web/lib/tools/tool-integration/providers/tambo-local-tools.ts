@@ -29,10 +29,23 @@ export const tamboLocalTools = {
   /**
    * SECURITY: ownerId parameter is IGNORED - owner derived from auth context
    */
-  readFile: async ({ path, ownerId }: { path: string; ownerId?: string }, authContextUserId?: string) => {
+  readFile: async ({ path, ownerId, startLine, endLine }: { path: string; ownerId?: string; startLine?: number; endLine?: number }, authContextUserId?: string) => {
+    if (!path || typeof path !== 'string') {
+      throw new Error('path is required and must be a non-empty string');
+    }
     const owner = getSecureOwner(ownerId, authContextUserId);
     const file = await virtualFilesystem.readFile(owner, path);
-    return { path: file.path, content: file.content, language: file.language, version: file.version };
+    const hasLineRange = startLine != null || endLine != null;
+    const content = hasLineRange
+      ? file.content.split('\n').slice((startLine ?? 1) - 1, endLine ?? file.content.split('\n').length).join('\n')
+      : file.content;
+    return {
+      path: file.path, content, language: file.language, version: file.version,
+      ...(hasLineRange ? {
+        totalLines: file.content.split('\n').length,
+        lineRangeRequested: true,
+      } : {}),
+    };
   },
 
   /**
@@ -48,6 +61,57 @@ export const tamboLocalTools = {
     }
     const file = await virtualFilesystem.writeFile(owner, path, content, undefined, writeOptions);
     return { path: file.path, version: file.version, language: file.language, size: file.size };
+  },
+
+  /**
+   * Replace text in a file using exact string matching.
+   * SECURITY: ownerId parameter is IGNORED - owner derived from auth context
+   */
+  strReplace: async ({ path, oldString, newString, allowMultiple, ownerId }: { path: string; oldString: string; newString: string; allowMultiple?: boolean; ownerId?: string }, authContextUserId?: string) => {
+    if (!path || typeof path !== 'string') {
+      throw new Error('path is required and must be a non-empty string');
+    }
+    if (!oldString && oldString !== '') {
+      throw new Error('oldString is required');
+    }
+    const owner = getSecureOwner(ownerId, authContextUserId);
+    const file = await virtualFilesystem.readFile(owner, path);
+    const content = file.content;
+
+    // Count occurrences (single split for both count and replacement)
+    const parts = content.split(oldString);
+    const occurrences = parts.length - 1;
+    if (occurrences === 0) {
+      return {
+        success: false,
+        path: file.path,
+        replacements: 0,
+        error: `String not found in ${path}: "${oldString.length > 80 ? oldString.slice(0, 80) + '...' : oldString}"`,
+      };
+    }
+    if (!allowMultiple && occurrences > 1) {
+      return {
+        success: false,
+        path: file.path,
+        replacements: 0,
+        error: `Found ${occurrences} occurrences of the string in ${path}, but allowMultiple is false. Use allowMultiple=true to replace all, or provide a more specific string.`,
+      };
+    }
+
+    // Perform replacement
+    const replacements = allowMultiple ? occurrences : 1;
+    const newContent = allowMultiple
+      ? parts.join(newString)
+      : content.replace(oldString, newString);
+
+    await virtualFilesystem.writeFile(owner, path, newContent, file.language);
+
+    return {
+      success: true,
+      path: file.path,
+      replacements,
+      content: newContent,
+    };
   },
 
   /**

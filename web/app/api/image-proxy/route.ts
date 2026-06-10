@@ -27,6 +27,7 @@ import ipaddr from 'ipaddr.js';
 import { validateImageUrl, isHostnameSafe } from '@/lib/utils/image-loader';
 import { sanitizeUrlInput } from '@/lib/utils/sanitize';
 import { createHash } from 'crypto';
+import { modifyGifSpeed } from '@/lib/utils/gif-speed';
 
 // Configuration
 const MAX_IMAGE_SIZE = 25 * 1024 * 1024; // 25MB max image size (increased for high-res generated images)
@@ -36,7 +37,7 @@ const FETCH_TIMEOUT = 15000; // 15 second timeout (increased for larger images)
 // When a CSS background-image or <img> tag receives JSON instead of valid image data,
 // the browser retries indefinitely, flooding the proxy. A valid PNG stops the loop.
 // 68 bytes, base64-encoded.
-const TRANSPARENT_PNG_B64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+const TRANSPARENT_PNG_B64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII=';
 const TRANSPARENT_PNG = Buffer.from(TRANSPARENT_PNG_B64, 'base64');
 
 /** Return a transparent 1x1 PNG instead of an error — stops browser retry storms */
@@ -164,10 +165,10 @@ function safeLogUrl(url: string): string {
 }
 
 /**
- * Generate cache key from URL
+ * Generate cache key from URL and optional speed parameter
  */
-function getCacheKey(url: string): string {
-  return createHash('sha256').update(url).digest('hex');
+function getCacheKey(url: string, speed: number = 1): string {
+  return createHash('sha256').update(`${url}::speed=${speed}`).digest('hex');
 }
 
 /**
@@ -371,6 +372,8 @@ function isPrivateIP(ip: string): boolean {
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   let imageUrl = searchParams.get('url');
+  const speed = parseFloat(searchParams.get('speed') || '1');
+  const speedParam = speed > 0 && speed !== 1 ? speed : 1;
 
   if (!imageUrl) {
     return NextResponse.json(
@@ -414,8 +417,8 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  // Generate cache key
-  const cacheKey = getCacheKey(imageUrl);
+  // Generate cache key (includes speed for GIF speed variants)
+  const cacheKey = getCacheKey(imageUrl, speedParam);
 
   // Check negative cache first — if we recently got an error from upstream
   // for this URL, return the cached error to break retry storms
@@ -579,9 +582,15 @@ export async function GET(request: NextRequest) {
       if (arrayBuffer.byteLength > MAX_IMAGE_SIZE) {
         return NextResponse.json({ error: `Image too large (max ${MAX_IMAGE_SIZE / 1024 / 1024}MB)` }, { status: 400 });
       }
-      const etag = createHash('sha256').update(new Uint8Array(arrayBuffer)).digest('hex').substring(0, 16);
-      setCachedImage(cacheKey, arrayBuffer, contentType, etag, imageUrl);
-      return new NextResponse(arrayBuffer, {
+
+      // Apply GIF speed modification
+      const body = speedParam !== 1 && normalizedContentType === 'image/gif'
+        ? modifyGifSpeed(arrayBuffer, speedParam)
+        : arrayBuffer;
+
+      const etag = createHash('sha256').update(new Uint8Array(body)).digest('hex').substring(0, 16);
+      setCachedImage(cacheKey, body, contentType, etag, imageUrl);
+      return new NextResponse(body, {
         headers: {
           'Content-Type': contentType,
           'Cache-Control': getCacheControlHeader(imageUrl),
@@ -636,14 +645,19 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Generate ETag from content hash
-    const etag = createHash('sha256').update(new Uint8Array(arrayBuffer)).digest('hex').substring(0, 16);
+    // Apply GIF speed modification — slow down / speed up frame delays
+    const body = speedParam !== 1 && normalizedContentType === 'image/gif'
+      ? modifyGifSpeed(arrayBuffer, speedParam)
+      : arrayBuffer;
+
+    // Generate ETag from content hash (after potential GIF speed modification)
+    const etag = createHash('sha256').update(new Uint8Array(body)).digest('hex').substring(0, 16);
 
     // Store in cache for future requests
-    setCachedImage(cacheKey, arrayBuffer, contentType, etag, imageUrl);
+    setCachedImage(cacheKey, body, contentType, etag, imageUrl);
 
     // Return the image with appropriate headers
-    return new NextResponse(arrayBuffer, {
+    return new NextResponse(body, {
       headers: {
         'Content-Type': contentType,
         'Cache-Control': getCacheControlHeader(imageUrl),

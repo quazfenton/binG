@@ -1,100 +1,93 @@
 import { NextRequest, NextResponse } from "next/server";
-import { PROVIDER_DEFAULT_MODELS } from "@/lib/providers/provider-default-models";
+import { PROVIDERS } from "@/lib/providers/llm-providers-types";
 
-
-
-// Use dynamic import to avoid pulling AWS SDK into client bundle
-// The PROVIDERS constant and llmService are server-only
-let _providersCache: any = null;
-let _cacheTime = 0;
 const CACHE_TTL_MS = 300000;
+let _cache: { data: any; time: number } | null = null;
+
+const ENV_VAR_MAP: Record<string, string | string[]> = {
+  openai: 'OPENAI_API_KEY',
+  anthropic: 'ANTHROPIC_API_KEY',
+  google: 'GOOGLE_API_KEY',
+  cohere: 'COHERE_API_KEY',
+  together: 'TOGETHER_API_KEY',
+  replicate: 'REPLICATE_API_TOKEN',
+  portkey: 'PORTKEY_API_KEY',
+  mistral: 'MISTRAL_API_KEY',
+  zen: 'ZEN_API_KEY',
+  pollinations: '',  // free, no key needed
+  openrouter: 'OPENROUTER_API_KEY',
+  chutes: 'CHUTES_API_KEY',
+  nvidia: 'NVIDIA_API_KEY',
+  groq: 'GROQ_API_KEY',
+  deepinfra: 'DEEPINFRA_API_KEY',
+  fireworks: 'FIREWORKS_API_KEY',
+  composio: 'COMPOSIO_API_KEY',
+  vercel: 'VERCEL_API_KEY',
+  livekit: 'LIVEKIT_API_KEY',
+  chatanywhere: 'CHATANYWHERE_API_KEY',
+  aihubmix: 'AIHUBMIX_API_KEY',
+  github: ['GITHUB_MODELS_API_KEY', 'AZURE_OPENAI_API_KEY'],
+  ninerouter: 'NINEROUTER_API_KEY',
+  kiro: ['QUAZ_API_KEY', 'NINEROUTER_API_KEY'],
+  ollama: ['QUAZ_API_KEY', 'NINEROUTER_API_KEY'],
+  opencode: ['OPENCODE_HOSTNAME', 'OPENCODE_PORT'],
+  'opencode-cli': 'OPENCODE_CLI_BASE_URL',
+  amp: 'AMP_BASE_URL',
+  codex: 'CODEX_BASE_URL',
+  kilocode: 'KILO_BASE_URL',
+  pi: 'PI_BASE_URL',
+  'claude-code': 'CLAUDE_CODE_BASE_URL',
+};
+
+function checkEnv(name: string | string[]): boolean {
+  const keys = Array.isArray(name) ? name : [name];
+  return keys.some(k => k && !!process.env[k]);
+}
+
+function isProviderAvailable(id: string): boolean {
+  const entry = ENV_VAR_MAP[id];
+  if (entry === '') return true;  // free providers always available
+  if (!entry) return false;
+  return checkEnv(entry);
+}
 
 export async function GET(request: NextRequest) {
-  try {
-    const now = Date.now();
-
-    // Return cached result if available and not expired
-    if (_providersCache && (now - _cacheTime) < CACHE_TTL_MS) {
-      return NextResponse.json(_providersCache, {
-        headers: {
-          'Cache-Control': 'public, max-age=300, stale-while-revalidate=600',
-        },
-      });
-    }
-
-    // Dynamic import — server-side only, avoids client bundle contamination
-    const { PROVIDERS, llmService } = await import('@/lib/providers/llm-providers');
-    const availableProviderIds = new Set(
-      llmService.getAvailableProviders().map((p: any) => p.id)
-    );
-
-    const allProviders = (Object.values(PROVIDERS) as any[])
-      .map((provider: any) => ({
-        id: provider.id,
-        name: provider.name,
-        models: provider.models,
-        supportsStreaming: provider.supportsStreaming,
-        maxTokens: provider.maxTokens,
-        description: provider.description,
-        isAvailable: availableProviderIds.has(provider.id)
-      }));
-
-    const sortedProviders = allProviders.sort((a: any, b: any) => {
-      if (a.isAvailable && !b.isAvailable) return -1;
-      if (!a.isAvailable && b.isAvailable) return 1;
-      return 0;
+  const now = Date.now();
+  if (_cache && now - _cache.time < CACHE_TTL_MS) {
+    return NextResponse.json(_cache.data, {
+      headers: { 'Cache-Control': 'public, max-age=300, stale-while-revalidate=600' },
     });
-
-    _providersCache = {
-      success: true,
-      data: {
-        providers: sortedProviders,
-        defaultProvider: process.env.DEFAULT_LLM_PROVIDER || "mistral",
-        defaultModel: process.env.DEFAULT_MODEL || "mistral-large-latest",
-      },
-    };
-    _cacheTime = now;
-
-    return NextResponse.json(_providersCache, {
-      headers: {
-        'Cache-Control': 'public, max-age=300, stale-while-revalidate=600',
-      },
-    });
-  } catch (error) {
-    // Surface the actual error details — dynamic import failures, module init errors,
-    // or SDK loading failures are all silently swallowed by the generic message.
-    const errMsg = error instanceof Error ? error.message : String(error);
-    const errStack = error instanceof Error ? error.stack : undefined;
-    console.error("Error fetching providers:", errMsg, errStack?.split('\n').slice(0, 3).join('\n'));
-    // Only expose error details in development — in production, return generic message
-    const isDev = process.env.NODE_ENV === 'development';
-    // Fallback: return static providers when dynamic import fails
-    try {
-      const staticProviders = Object.entries(PROVIDER_DEFAULT_MODELS).map(([id, defaultModel]) => ({
-        id,
-        name: id,
-        models: [defaultModel],
-        supportsStreaming: true,
-        maxTokens: 4096,
-        description: id + ' (static fallback)',
-        isAvailable: !!process.env[(id.toUpperCase() + '_API_KEY')],
-      }));
-      return NextResponse.json({
-        success: true,
-        data: {
-          providers: staticProviders,
-          defaultProvider: process.env.DEFAULT_LLM_PROVIDER || 'mistral',
-          defaultModel: process.env.DEFAULT_MODEL || 'mistral-large-latest',
-        },
-        _fallback: true,
-      }, {
-        headers: { 'Cache-Control': 'public, max-age=60, stale-while-revalidate=300' },
-      });
-    } catch {
-      return NextResponse.json(
-        { error: "Failed to fetch available providers", ...(isDev ? { detail: errMsg } : {}) },
-        { status: 500 },
-      );
-    }
   }
+
+  const allProviders = Object.values(PROVIDERS).map(p => ({
+    id: p.id,
+    name: p.name,
+    models: p.models.map((m: any) => (typeof m === 'string' ? m : m.id)),
+    subProviders: (p as any).subProviders,
+    supportsStreaming: p.supportsStreaming,
+    maxTokens: p.maxTokens,
+    description: p.description,
+    isAvailable: isProviderAvailable(p.id),
+  }));
+
+  const sortedProviders = allProviders.sort((a, b) => {
+    if (a.isAvailable && !b.isAvailable) return -1;
+    if (!a.isAvailable && b.isAvailable) return 1;
+    return 0;
+  });
+
+  const data = {
+    success: true,
+    data: {
+      providers: sortedProviders,
+      defaultProvider: process.env.DEFAULT_LLM_PROVIDER || "mistral",
+      defaultModel: process.env.DEFAULT_MODEL || "mistral-large-latest",
+    },
+  };
+
+  _cache = { data, time: now };
+
+  return NextResponse.json(data, {
+    headers: { 'Cache-Control': 'public, max-age=300, stale-while-revalidate=600' },
+  });
 }

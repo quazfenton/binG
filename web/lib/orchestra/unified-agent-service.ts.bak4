@@ -4871,13 +4871,6 @@ async function attemptFallback(
   log.info('[Fallback] │ fallbackOrder:', fallbackOrder);
   log.info('[Fallback] └───────────────────────────────────────────');
 
-  // Hoist circuit breaker import outside the loop -- dynamic import
-  // is expensive and we only need it once for all fallback modes.
-  let _fbCBM: any = null;
-  try {
-    const _mod = await import("../middleware/circuit-breaker");
-    _fbCBM = _mod.circuitBreakerManager;
-  } catch { /* circuit breaker unavailable -- proceed without */ }
   // Try each fallback mode
   for (const fallbackMode of fallbackOrder) {
     // Reset client disconnect flag before each fallback attempt -
@@ -4886,16 +4879,14 @@ async function attemptFallback(
 
     // Check circuit breaker for this fallback mode - skip if OPEN
     try {
-      if (_fbCBM) {
-        const _fbBreaker = _fbCBM.getBreaker(fallbackMode);
-        if (_fbBreaker && _fbBreaker.getState() === "OPEN") {
-          log.warn("[Fallback] Skipping - circuit breaker OPEN", { fallbackMode });
-          visitedModes.add(fallbackMode);
-          continue;
-        }
+      const { circuitBreakerManager: _fbCBM } = await import("../middleware/circuit-breaker");
+      const _fbBreaker = _fbCBM.getBreaker(fallbackMode);
+      if (_fbBreaker && _fbBreaker.getState() === "OPEN") {
+        log.warn("[Fallback] Skipping - circuit breaker OPEN", { fallbackMode });
+        visitedModes.add(fallbackMode);
+        continue;
       }
-    } catch { /* circuit breaker check failed -- proceed */ }
-
+    } catch { /* circuit breaker unavailable - proceed */ }
     try {
       log.info('[Fallback] ┌─ TRYING FALLBACK ──────────────────');
       log.info('[Fallback] │ fallbackMode:', fallbackMode);

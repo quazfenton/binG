@@ -24,8 +24,8 @@
  * // Run custom script
  * const result = await runProductiveScript('custom', {
  *   steps: [
- *     { capability: 'sandbox.shell', config: { command: 'npm install' } },
- *     { capability: 'sandbox.shell', config: { command: 'npm run build' } },
+ *     { capability: 'bash.execute', config: { command: 'npm install' } },
+ *     { capability: 'bash.execute', config: { command: 'npm run build' } },
  *   ],
  * });
  * ```
@@ -85,12 +85,12 @@ const SCRIPT_TEMPLATES: Record<ScriptType, ScriptDefinition> = {
     parallel: false,
     steps: [
       {
-        capability: 'sandbox.shell',
+        capability: 'bash.execute',
         config: { command: 'npm install', cwd: '{projectPath}' },
         description: 'Install dependencies',
       },
       {
-        capability: 'sandbox.shell',
+        capability: 'bash.execute',
         config: { command: 'npm run build', cwd: '{projectPath}' },
         description: 'Run build',
       },
@@ -102,7 +102,7 @@ const SCRIPT_TEMPLATES: Record<ScriptType, ScriptDefinition> = {
     parallel: false,
     steps: [
       {
-        capability: 'sandbox.shell',
+        capability: 'bash.execute',
         config: { command: 'npm test', cwd: '{projectPath}' },
         description: 'Run tests',
       },
@@ -114,7 +114,7 @@ const SCRIPT_TEMPLATES: Record<ScriptType, ScriptDefinition> = {
     parallel: false,
     steps: [
       {
-        capability: 'sandbox.shell',
+        capability: 'bash.execute',
         config: { command: 'npm run lint', cwd: '{projectPath}' },
         description: 'Run linter',
       },
@@ -126,7 +126,7 @@ const SCRIPT_TEMPLATES: Record<ScriptType, ScriptDefinition> = {
     parallel: false,
     steps: [
       {
-        capability: 'sandbox.shell',
+        capability: 'bash.execute',
         config: { command: 'npm run typecheck', cwd: '{projectPath}' },
         description: 'Run type check',
       },
@@ -138,12 +138,12 @@ const SCRIPT_TEMPLATES: Record<ScriptType, ScriptDefinition> = {
     parallel: false,
     steps: [
       {
-        capability: 'sandbox.shell',
+        capability: 'bash.execute',
         config: { command: 'npm run build', cwd: '{projectPath}' },
         description: 'Build for production',
       },
       {
-        capability: 'sandbox.shell',
+        capability: 'bash.execute',
         config: { command: 'npm run deploy', cwd: '{projectPath}' },
         description: 'Deploy',
       },
@@ -155,7 +155,7 @@ const SCRIPT_TEMPLATES: Record<ScriptType, ScriptDefinition> = {
     parallel: false,
     steps: [
       {
-        capability: 'sandbox.shell',
+        capability: 'bash.execute',
         config: { command: 'npm install', cwd: '{projectPath}' },
         description: 'Install dependencies',
       },
@@ -167,7 +167,7 @@ const SCRIPT_TEMPLATES: Record<ScriptType, ScriptDefinition> = {
     parallel: false,
     steps: [
       {
-        capability: 'sandbox.shell',
+        capability: 'bash.execute',
         config: { command: 'npm run clean', cwd: '{projectPath}' },
         description: 'Clean build artifacts',
       },
@@ -179,7 +179,7 @@ const SCRIPT_TEMPLATES: Record<ScriptType, ScriptDefinition> = {
     parallel: false,
     steps: [
       {
-        capability: 'sandbox.shell',
+        capability: 'bash.execute',
         config: { command: 'npm run dev', cwd: '{projectPath}' },
         description: 'Start dev server',
       },

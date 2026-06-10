@@ -42,7 +42,10 @@ export class SandboxSecurityManager {
     'eval ', 'source ', '. ',
   ];
 
-  private static readonly SHELL_METADATA_CHARS = ['`', '$', '\n', '\r'];
+  // NOTE: \n and \r are intentionally NOT blocked — they are required for heredocs,
+  // multi-line scripts, and other legitimate bash use cases. Security against
+  // command injection is handled by DANGEROUS_COMMAND_PARTIALS and schema validation.
+  private static readonly SHELL_METADATA_CHARS = ['`', '$'];
 
 
   // Input size limits

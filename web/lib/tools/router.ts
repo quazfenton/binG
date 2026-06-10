@@ -28,6 +28,21 @@ import os from 'os';
 
 const logger = createLogger('Tools:CapabilityRouter');
 
+/**
+ * Slice file content to a line range (1-based, inclusive).
+ * Used by file.read providers to support partial file reads.
+ */
+export function sliceLines(content: string, startLine?: number, endLine?: number): string {
+  if (startLine == null && endLine == null) return content;
+  const lines = content.split('\n');
+  // Clamp startLine to >= 1 to prevent JavaScript slice() wrap-around
+  // (e.g. startLine=0 → start=-1 → slice(-1) returns the last element, not the first)
+  const safeStartLine = startLine != null ? Math.max(1, startLine) : 1;
+  const start = safeStartLine - 1;
+  const end = endLine != null ? endLine : lines.length;
+  return lines.slice(start, end).join('\n');
+}
+
 // ============================================================================
 // Provider Adapters
 // ============================================================================
@@ -64,7 +79,7 @@ export interface CapabilityProvider {
 class VFSProvider implements CapabilityProvider {
   readonly id = 'vfs';
   readonly name = 'Virtual Filesystem';
-  readonly capabilities = ['file.read', 'file.write', 'file.append', 'file.delete', 'file.list', 'file.batch_write', 'memory.context', 'workspace.getChanges'];
+  readonly capabilities = ['file.read', 'file.write', 'file.append', 'file.delete', 'file.list', 'file.batch_write', 'file.str_replace', 'memory.context', 'workspace.getChanges'];
 
   isAvailable(): boolean {
     return true;
@@ -76,13 +91,19 @@ class VFSProvider implements CapabilityProvider {
     'file.read': async (ownerId, input, context) => {
       const { virtualFilesystem } = await import('../virtual-filesystem/virtual-filesystem-service');
       const file = await virtualFilesystem.readFile(ownerId, input.path);
+      const hasLineRange = input.startLine != null || input.endLine != null;
+      const content = sliceLines(file.content, input.startLine, input.endLine);
       return {
-        content: file.content,
+        content,
         path: file.path,
         language: file.language,
         size: file.size,
         version: file.version,
         lastModified: file.lastModified,
+        ...(hasLineRange ? {
+          totalLines: file.content.split('\n').length,
+          lineRangeRequested: true,
+        } : {}),
       };
     },
 
@@ -120,9 +141,50 @@ class VFSProvider implements CapabilityProvider {
       return result.output;
     },
 
+    'file.str_replace': async (ownerId, input, context) => {
+      const { virtualFilesystem } = await import('../virtual-filesystem/virtual-filesystem-service');
+      const { path: filePath, oldString, newString, allowMultiple } = input;
 
+      // Read current file
+      const file = await virtualFilesystem.readFile(ownerId, filePath);
+      const content = file.content;
 
-    'file.append': async (ownerId, input, context) => {
+      // Count occurrences (single split for both count and replacement)
+      const parts = content.split(oldString);
+      const occurrences = parts.length - 1;
+      if (occurrences === 0) {
+        return {
+          success: false,
+          path: filePath,
+          replacements: 0,
+          error: `String not found in ${filePath}: "${oldString.length > 80 ? oldString.slice(0, 80) + '...' : oldString}"`,
+        };
+      }
+      if (!allowMultiple && occurrences > 1) {
+        return {
+          success: false,
+          path: filePath,
+          replacements: 0,
+          error: `Found ${occurrences} occurrences of the string in ${filePath}, but allowMultiple is false. Use allowMultiple=true to replace all, or provide a more specific string.`,
+        };
+      }
+
+      // Perform replacement
+      const replacements = allowMultiple ? occurrences : 1;
+      const newContent = allowMultiple
+        ? parts.join(newString)
+        : content.replace(oldString, newString);
+
+      // Write back
+      await virtualFilesystem.writeFile(ownerId, filePath, newContent, file.language);
+
+      return {
+        success: true,
+        path: filePath,
+        replacements,
+        content: newContent,
+      };
+    }, 'file.append': async (ownerId, input, context) => {
       const { virtualFilesystem } = await import('../virtual-filesystem/virtual-filesystem-service');
       const file = await virtualFilesystem.writeFile(
         ownerId,
@@ -214,7 +276,7 @@ class VFSProvider implements CapabilityProvider {
 class MCPFilesystemProvider implements CapabilityProvider {
   readonly id = 'mcp-filesystem';
   readonly name = 'MCP Filesystem';
-  readonly capabilities = ['file.read', 'file.write', 'file.append', 'file.delete', 'file.list', 'file.batch_write'];
+  readonly capabilities = ['file.read', 'file.write', 'file.append', 'file.delete', 'file.list', 'file.batch_write', 'file.str_replace'];
 
   isAvailable(): boolean {
     // Check if MCP server is configured
@@ -236,6 +298,7 @@ class MCPFilesystemProvider implements CapabilityProvider {
       'file.delete': 'delete_file',
       'file.list': 'list_directory',
       'file.batch_write': 'batch_write',
+      'file.str_replace': 'str_replace',
     };
 
     const toolName = toolMap[capabilityId];
@@ -270,7 +333,7 @@ class MCPFilesystemProvider implements CapabilityProvider {
 class LocalFilesystemProvider implements CapabilityProvider {
   readonly id = 'local-fs';
   readonly name = 'Local Filesystem';
-  readonly capabilities = ['file.read', 'file.write', 'file.append', 'file.delete', 'file.list'];
+  readonly capabilities = ['file.read', 'file.write', 'file.append', 'file.delete', 'file.list', 'file.str_replace'];
   
   // SECURITY: Base directory restriction for file operations
   private readonly workspaceRoot: string;
@@ -355,16 +418,25 @@ class LocalFilesystemProvider implements CapabilityProvider {
           }
           const safePath = pathValidation.resolvedPath!;
 
-          const content = await fs.readFile(safePath, input.encoding || 'utf-8');
+          const rawContent = await fs.readFile(safePath, input.encoding || 'utf-8');
           const stats = await fs.stat(safePath);
+          const hasLineRange = input.startLine != null || input.endLine != null;
+          const isString = typeof rawContent === 'string';
+          const slicedContent = isString
+            ? sliceLines(rawContent, input.startLine, input.endLine)
+            : rawContent;
           return {
             success: true,
             output: {
-              content: typeof content === 'string' ? content : content.toString('base64'),
+              content: isString ? slicedContent as string : (slicedContent as Buffer).toString('base64'),
               encoding: input.encoding || 'utf-8',
               size: stats.size,
               exists: true,
               path: safePath,
+              ...(hasLineRange && isString ? {
+                totalLines: (rawContent as string).split('\n').length,
+                lineRangeRequested: true,
+              } : {}),
             },
           };
         }
@@ -475,6 +547,42 @@ class LocalFilesystemProvider implements CapabilityProvider {
           }
 
           return { success: true, output: results };
+        }
+
+        case 'file.str_replace': {
+          const pathValidation = this.validatePath(input.path);
+          if (!pathValidation.valid) {
+            return { success: false, error: pathValidation.error };
+          }
+          const safePath = pathValidation.resolvedPath!;
+          const rawContent = await fs.readFile(safePath, 'utf-8');
+          const content = rawContent as string;
+          const { oldString, newString, allowMultiple } = input;
+
+          const occurrences = content.split(oldString).length - 1;
+          if (occurrences === 0) {
+            return {
+              success: false,
+              error: `String not found in ${input.path}: "${oldString.length > 80 ? oldString.slice(0, 80) + '...' : oldString}"`,
+            };
+          }
+          if (!allowMultiple && occurrences > 1) {
+            return {
+              success: false,
+              error: `Found ${occurrences} occurrences, but allowMultiple is false. Use allowMultiple=true or provide a more specific string.`,
+            };
+          }
+
+          const replacements = allowMultiple ? occurrences : 1;
+          const newContent = allowMultiple
+            ? content.split(oldString).join(newString)
+            : content.replace(oldString, newString);
+
+          await fs.writeFile(safePath, newContent, 'utf-8');
+          return {
+            success: true,
+            output: { success: true, path: safePath, replacements, content: newContent },
+          };
         }
 
         default:

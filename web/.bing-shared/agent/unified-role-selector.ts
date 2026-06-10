@@ -916,7 +916,7 @@ export function normalizeAndValidateRole(
         forceRole: trimmedRole as UnifiedRole,
         availableTools: options?.availableTools ?? [
           'file.read', 'file.write', 'file.append', 'file.delete',
-          'file.list', 'file.search', 'repo.search', 'web.search',
+          'file.list', 'repo.search', 'web.search',
         ],
         maxLength: options?.maxLength ?? 6000,
       },

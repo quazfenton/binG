@@ -8,7 +8,6 @@
 
 import { tool } from 'ai';
 import { z } from 'zod';
-import { virtualFilesystem } from '@/lib/virtual-filesystem/index.server';
 import { createLogger } from '@/lib/utils/logger';
 import {
   BashExecutionEvent,
@@ -37,6 +36,11 @@ export function isCommandSafe(command: string): boolean {
 }
 
 const logger = createLogger('Bash:Tool');
+
+async function getVirtualFilesystem() {
+  const mod = await import('@/lib/virtual-filesystem/index.server');
+  return mod.virtualFilesystem;
+}
 
 // ============================================================================
 // Configuration
@@ -275,8 +279,10 @@ export async function executeBashCommand(
     // where && causes rm to execute unconditionally.
     
     // Detect shell metacharacters and quoting — any of these means we need bash -c
-    // for proper shell interpretation (quotes, pipes, redirects, substitution, etc.)
-    const hasShellMetacharacters = /[;&|`()$<>'"]/.test(command);
+    // for proper shell interpretation (quotes, pipes, redirects, substitution, etc.).
+    // Also detect multi-line commands (\n, \r) which require bash -c for heredocs
+    // and multi-line scripts.
+    const hasShellMetacharacters = /[;&|`()$<>'"\n\r]/.test(command);
     
     let spawnArgs: string[];
     
@@ -430,7 +436,7 @@ async function persistToVFS(
     ].join('\n');
 
     // Write to VFS
-    await virtualFilesystem.writeFile(agentId, outputPath, output);
+    await (await getVirtualFilesystem()).writeFile(agentId, outputPath, output);
 
     logger.info('Persisted bash output to VFS', { outputPath });
 
@@ -449,7 +455,7 @@ async function getVFSSnapshot(
   workingDir: string
 ): Promise<string[]> {
   try {
-    const listing = await virtualFilesystem.listDirectory(agentId, workingDir);
+    const listing = await (await getVirtualFilesystem()).listDirectory(agentId, workingDir);
     return listing.nodes.map(node => node.path);
   } catch (error: any) {
     logger.warn('Failed to get VFS snapshot', error.message);
@@ -469,11 +475,11 @@ export function createBashTool(config: Partial<BashToolConfig> = {}) {
 
   return {
     bash_execute: tool({
-      description: 'Execute bash commands in sandboxed environment. Supports pipes, redirects, and complex pipelines. Output is persisted to VFS.',
+      description: 'Execute bash commands in the sandbox. Use for file operations (create, read, write, delete), navigating directories, running scripts, installing packages, and any shell task. Supports pipes, redirects, multi-line heredocs, and complex pipelines. Output is persisted to VFS.\n\nEXAMPLES:\n  Create files:  echo "content" > file.txt  |  cat > file.txt << EOF  |  mkdir -p src/components\n  Read files:    cat file.txt  |  grep pattern file.txt\n  Navigate:      mkdir -p src/components  |  cd src && pwd\n  Build/Test:    npm install  |  npm test  |  npx tsc --noEmit',
       inputSchema: z.object({
         command: z.string().describe('Bash command to execute (e.g., "cat file.txt | grep pattern > output.txt")').optional(),
         code: z.string().describe('Bash command to execute (alias for command)').optional(),
-        workingDir: z.string().optional().describe('Working directory (default: /workspace)'),
+        workingDir: z.string().optional().describe('Working directory. Default is /workspace — you are already there. Only set this if you need a different directory.'),
         persist: z.boolean().optional().default(true).describe('Persist output to VFS'),
         selfHeal: z.boolean().optional().default(cfg.enableSelfHealing).describe('Enable self-healing on failure'),
         timeout: z.number().optional().default(cfg.defaultTimeout).describe('Timeout in milliseconds'),
@@ -832,7 +838,7 @@ export function registerVFSSyncHook(): void {
           ? filePath.replace(/^\/+/, '')
           : `${scopePath}/${filePath}`;
 
-        await virtualFilesystem.writeFile(
+        await (await getVirtualFilesystem()).writeFile(
           ctx.userId || 'anonymous',
           vfsPath,
           content,

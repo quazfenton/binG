@@ -62,13 +62,14 @@ interface SettingsProps {
 }
 
 const CUSTOM_BG_MEDIA_KEY = "custom_bg_media_url";
+const CUSTOM_BG_SPEED_KEY = "custom_bg_speed";
 const USER_BUBBLE_BG_KEY = "user_bubble_bg";
 const USER_BUBBLE_TEXT_KEY = "user_bubble_text";
 const ASSISTANT_BUBBLE_BG_KEY = "assistant_bubble_bg";
 const ASSISTANT_BUBBLE_TEXT_KEY = "assistant_bubble_text";
 const ASSISTANT_BUBBLE_BORDER_KEY = "assistant_bubble_border";
 
-const applyCustomBackgroundMedia = async (value: string) => {
+const applyCustomBackgroundMedia = async (value: string, speed: number = 1) => {
   if (typeof document === "undefined") return;
   const root = document.documentElement;
   if (!value) {
@@ -86,7 +87,10 @@ const applyCustomBackgroundMedia = async (value: string) => {
 
   // Use image proxy for external URLs to bypass CORS/hotlinking restrictions
   // The proxy will perform additional server-side SSRF validation
-  const proxiedUrl = `/api/image-proxy?url=${encodeURIComponent(value)}`;
+  let proxiedUrl = `/api/image-proxy?url=${encodeURIComponent(value)}`;
+  if (speed !== 1) {
+    proxiedUrl += `&speed=${speed}`;
+  }
   root.style.setProperty("--app-bg-media", `url("${proxiedUrl}")`);
   root.style.setProperty("--app-bg-media-opacity", "0.12");
 };
@@ -145,6 +149,7 @@ export default function Settings({
   const [speechVolume, setSpeechVolume] = useState(0.8);
   const [isListening, setIsListening] = useState(false);
   const [customBgUrl, setCustomBgUrl] = useState("");
+  const [bgSpeed, setBgSpeed] = useState(parseFloat(process.env.NEXT_PUBLIC_BG_MEDIA_SPEED || '0.5'));
   const [userBubbleBg, setUserBubbleBg] = useState("rgba(0, 0, 0, 0.85)");
   const [userBubbleText, setUserBubbleText] = useState("#ffffff");
   const [assistantBubbleBg, setAssistantBubbleBg] = useState("#000000");
@@ -527,14 +532,16 @@ export default function Settings({
   useEffect(() => {
     if (typeof window === "undefined") return;
     const saved = localStorage.getItem(CUSTOM_BG_MEDIA_KEY) || "";
+    const savedSpeed = parseFloat(localStorage.getItem(CUSTOM_BG_SPEED_KEY) || process.env.NEXT_PUBLIC_BG_MEDIA_SPEED || '0.5');
     setCustomBgUrl(saved);
+    setBgSpeed(savedSpeed);
     // Apply saved custom URL if present; otherwise fall back to the env-provided default.
     if (saved.trim()) {
-      applyCustomBackgroundMedia(saved);
+      applyCustomBackgroundMedia(saved, savedSpeed);
     } else {
       const defaultUrl = process.env.NEXT_PUBLIC_BG_MEDIA_URL;
       if (defaultUrl && defaultUrl.trim()) {
-        applyCustomBackgroundMedia(defaultUrl);
+        applyCustomBackgroundMedia(defaultUrl, savedSpeed);
       }
     }
 
@@ -671,16 +678,18 @@ export default function Settings({
       new URL(trimmed);
       if (typeof window !== "undefined") {
         localStorage.setItem(CUSTOM_BG_MEDIA_KEY, trimmed);
+        localStorage.setItem(CUSTOM_BG_SPEED_KEY, String(bgSpeed));
         saveToBackgroundHistory(trimmed, bgUrlName || undefined);
         
         // Warm cache for the new custom background
-        const proxiedUrl = `/api/image-proxy?url=${encodeURIComponent(trimmed)}`;
+        let proxiedUrl = `/api/image-proxy?url=${encodeURIComponent(trimmed)}`;
+        if (bgSpeed !== 1) proxiedUrl += `&speed=${bgSpeed}`;
         // Use document.createElement to avoid conflict with Next.js Image import
         const img = document.createElement('img');
         img.src = proxiedUrl;
         console.log('[Settings] Preloading custom background:', trimmed);
       }
-      applyCustomBackgroundMedia(trimmed);
+      applyCustomBackgroundMedia(trimmed, bgSpeed);
       toast.success("Custom ambient background applied");
       setBgUrlName("");
     } catch {
@@ -700,9 +709,10 @@ export default function Settings({
     if (url) {
       if (typeof window !== "undefined") {
         localStorage.setItem(CUSTOM_BG_MEDIA_KEY, url);
+        localStorage.setItem(CUSTOM_BG_SPEED_KEY, String(bgSpeed));
         if (name) saveToBackgroundHistory(url, name);
       }
-      applyCustomBackgroundMedia(url);
+      applyCustomBackgroundMedia(url, bgSpeed);
       toast.success(`${name || 'Background'} applied`);
     } else {
       handleClearCustomBg();
@@ -1054,6 +1064,32 @@ export default function Settings({
                 )}
               </div>
             )}
+
+            {/* GIF Speed Control */}
+            <div className="space-y-2 pt-2">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="bg-speed" className="text-xs text-white/70">
+                  GIF Speed
+                </Label>
+                <span className="text-xs text-white/50 font-mono">
+                  {bgSpeed === 1 ? 'Normal' : `${bgSpeed.toFixed(1)}x`}
+                </span>
+              </div>
+              <Slider
+                id="bg-speed"
+                value={[bgSpeed]}
+                min={0.1}
+                max={3}
+                step={0.1}
+                onValueChange={(value) => setBgSpeed(value[0])}
+                className="w-full"
+              />
+              <div className="flex justify-between text-[10px] text-white/30">
+                <span>Slower</span>
+                <span>Normal</span>
+                <span>Faster</span>
+              </div>
+            </div>
           </div>
         </div>
 

@@ -9,9 +9,13 @@
 import { BashFailureContext, CommandRepair, FixMemory } from './bash-event-schema';
 import { executeBashCommand } from './bash-tool';
 import { createLogger } from '@/lib/utils/logger';
-import { virtualFilesystem } from '@/lib/virtual-filesystem/index.server';
 
 const logger = createLogger('Bash:SelfHealing');
+
+async function getVirtualFilesystem() {
+  const mod = await import('@/lib/virtual-filesystem/index.server');
+  return mod.virtualFilesystem;
+}
 
 // ============================================================================
 // Error Classification
@@ -388,7 +392,7 @@ export async function findKnownFix(
     let memories: FixMemory[] = [];
     
     try {
-      const file = await virtualFilesystem.readFile(agentId, memoryPath);
+    const file = await (await getVirtualFilesystem()).readFile(agentId, memoryPath);
       memories = JSON.parse(file.content);
     } catch (error: any) {
       // File doesn't exist yet
@@ -429,7 +433,7 @@ export async function storeFix(
     let memories: FixMemory[] = [];
     
     try {
-      const file = await virtualFilesystem.readFile(agentId, memoryPath);
+      const file = await (await getVirtualFilesystem()).readFile(agentId, memoryPath);
       memories = JSON.parse(file.content);
     } catch (error: any) {
       // File doesn't exist yet
@@ -466,7 +470,7 @@ export async function storeFix(
     }
 
     // Persist
-    await virtualFilesystem.writeFile(agentId, memoryPath, JSON.stringify(memories, null, 2));
+    await (await getVirtualFilesystem()).writeFile(agentId, memoryPath, JSON.stringify(memories, null, 2));
 
     logger.debug('Stored fix in memory', {
       pattern,

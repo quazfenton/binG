@@ -371,25 +371,29 @@ describe('Tool Activity Tracking', () => {
   });
 
   it('should detect tool chain breaks', () => {
+    // Two reads in a row: the first read is followed by another read,
+    // not an action — this IS a tool chain break.
+    // Uses realistic tool names (lowercase, matching actual tool calls).
     const toolActivity = [
-      { type: 'Read', followedByAction: false },
-      { type: 'Read', followedByAction: false },
+      { type: 'read_file', followedByAction: false },
+      { type: 'read_file', followedByAction: false },
     ];
     
-    // Mark read without immediate follow-up, but exclude last tool in cycle
+    // Mark read without immediate follow-up (mirrors execution-controller.ts)
     for (let i = 0; i < toolActivity.length - 1; i++) {
-      if (/read|get|list/i.test(toolActivity[i].type)) {
+      if (/read|get|list|search|scan/i.test(toolActivity[i].type)) {
         const nextTool = toolActivity[i + 1].type;
-        toolActivity[i].followedByAction = !/read|get|list/i.test(nextTool);
+        toolActivity[i].followedByAction = !/read|get|list|search|scan/i.test(nextTool);
       }
     }
     
-    // Check for tool breaks (read without follow-up), excluding the last tool
-    const hasToolBreak = toolActivity.slice(0, -1).some(t => 
-      t.type.toLowerCase().includes('read') && !t.followedByAction
+    // detectToolBreak in execution-controller.ts checks the FULL array
+    // with case-sensitive `t.type.includes('read')`.
+    const hasToolBreak = toolActivity.some(t =>
+      t.type.includes('read') && !t.followedByAction
     );
     
-    expect(hasToolBreak).toBe(false); // Last read doesn't count as break within cycle
+    expect(hasToolBreak).toBe(true);
   });
 
   it('should allow cross-cycle followedByAction detection', () => {

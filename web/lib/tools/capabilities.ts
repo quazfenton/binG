@@ -108,17 +108,21 @@ export const FILE_READ_CAPABILITY: CapabilityDefinition = {
   id: 'file.read',
   name: 'Read File',
   category: 'file',
-  description: 'Read contents of a file from the filesystem. Supports various encodings and can return raw content or parsed data.',
+  description: 'Read contents of a file from the filesystem. Supports line ranges for reading partial files and various encodings.',
   inputSchema: z.object({
     path: z.string().describe('File path to read'),
     encoding: z.enum(['utf-8', 'base64', 'binary']).optional().default('utf-8'),
     maxBytes: z.number().optional().describe('Maximum bytes to read'),
+    startLine: z.number().int().min(1).optional().describe('First line to return (1-based, inclusive). Omit to read from line 1.'),
+    endLine: z.number().int().min(1).optional().describe('Last line to return (1-based, inclusive). Omit to read to end of file.'),
   }),
   outputSchema: z.object({
     content: z.string(),
     encoding: z.string(),
     size: z.number(),
     exists: z.boolean(),
+    totalLines: z.number().optional().describe('Total lines in the full file (present when startLine/endLine used)'),
+    lineRangeRequested: z.boolean().optional().describe('True when the returned content is a partial line range'),
   }),
   providerPriority: ['mcp-filesystem', 'local-fs', 'vfs'],
   tags: ['file', 'read', 'filesystem', 'io'],
@@ -661,10 +665,10 @@ export const BASH_CAPABILITY: CapabilityDefinition = {
   id: 'bash.execute',
   name: 'Bash Command Execution',
   category: 'sandbox',
-  description: 'Execute bash commands in sandboxed environment with automatic error recovery (self-healing). Replaces the deprecated sandbox.shell — includes env vars support.',
+  description: 'Execute bash commands in sandboxed environment with automatic error recovery (self-healing). Use for file operations (create, read, write, delete), navigating directories, running scripts, installing packages, and any shell task. Supports pipes, redirects, multi-line heredocs, and complex pipelines. Replaces the deprecated sandbox.shell — includes env vars support.\n\nEXAMPLES: Create files with echo "content" > file.txt or heredocs; Read with cat/grep; Navigate with ls/mkdir/cd; Build/test with npm/npx.',
   inputSchema: z.object({
     command: z.string().describe('Bash command to execute (e.g., "cat file.txt | grep pattern")'),
-    cwd: z.string().optional().describe('Working directory (relative to workspace root)'),
+    cwd: z.string().optional().describe('Working directory. Default is /workspace — you are already there. Only set this if you need a different directory.'),
     env: z.record(z.string()).optional().describe('Environment variables'),
     timeout: z.number().optional().default(30000).describe('Timeout in milliseconds'),
     enableHealing: z.boolean().optional().default(true).describe('Enable automatic error recovery'),
@@ -1467,6 +1471,35 @@ export const FILE_BATCH_WRITE_CAPABILITY: CapabilityDefinition = {
   }),
   providerPriority: ['mcp-filesystem', 'vfs', 'local-fs'],
   tags: ['file', 'batch', 'write', 'atomic'],
+};
+
+// ============================================================================
+// Str Replace Capability (line-based text replacement)
+// ============================================================================
+
+export const FILE_STR_REPLACE_CAPABILITY: CapabilityDefinition = {
+  id: 'file.str_replace',
+  name: 'String Replace in File',
+  category: 'file',
+  description: 'Replace text in a file using exact string matching. ' +
+    'Finds oldString and replaces it with newString. ' +
+    'Returns error if oldString is not unique (multiple matches with allowMultiple=false) ' +
+    'or not found. Use for targeted edits without rewriting the entire file.',
+  inputSchema: z.object({
+    path: z.string().describe('File path to edit'),
+    oldString: z.string().min(1).describe('Exact string to find and replace'),
+    newString: z.string().describe('Replacement string (can be empty to delete)'),
+    allowMultiple: z.boolean().optional().default(false).describe('If true, replace all occurrences. If false (default), replace exactly one occurrence and error if >1 matches.'),
+  }),
+  outputSchema: z.object({
+    success: z.boolean(),
+    path: z.string(),
+    replacements: z.number().describe('Number of replacements made'),
+    content: z.string().optional().describe('Full new file content after replacement'),
+    error: z.string().optional(),
+  }),
+  providerPriority: ['vfs', 'local-fs', 'mcp-filesystem'],
+  tags: ['file', 'replace', 'edit', 'patch', 'string', 'modify'],
 };
 
 // ============================================================================
@@ -2405,6 +2438,7 @@ export const ALL_CAPABILITIES: CapabilityDefinition[] = [
   FILE_LIST_CAPABILITY,
   FILE_SYNC_CAPABILITY,
   FILE_BATCH_WRITE_CAPABILITY,
+  FILE_STR_REPLACE_CAPABILITY,
   // Sandbox
   SANDBOX_EXECUTE_CAPABILITY,
   SANDBOX_SESSION_CAPABILITY,

@@ -56,7 +56,7 @@ export function isModelSchemaError(error: unknown): boolean {
 const IterationConfigSchema = z.object({
   maxIterations: z.number().min(1).max(100).default(20),
   maxTokens: z.number().min(100).max(1_000_000).default(100_000),
-  maxDurationMs: z.number().min(1000).max(600_000).default(300_000), // 5 min default
+  maxDurationMs: z.number().min(1000).max(3_600_000).default(300_000), // 5 min default (rolling idle timeout)
   provider: z.string().default('openai'),
   model: z.string().default('gpt-4o'),
 });
@@ -491,6 +491,13 @@ export class IterationController {
   private iterations = 0;
   private tokensUsed = 0;
   private startTime = Date.now();
+  /**
+   * Rolling/reset-on-activity timeout tracker.
+   * Reset on every successful step, token recording, or tool execution.
+   * The timeout fires only when NO activity occurs within maxDurationMs,
+   * allowing arbitrarily long sessions as long as the model makes progress.
+   */
+  private lastActivityTime = Date.now();
 
   constructor(private config: IterationConfig) {}
 
@@ -501,18 +508,31 @@ export class IterationController {
     if (this.tokensUsed >= this.config.maxTokens) {
       return { allowed: false, reason: 'Token budget exhausted' };
     }
-    if (Date.now() - this.startTime >= this.config.maxDurationMs) {
-      return { allowed: false, reason: 'Time budget exhausted' };
+    // Rolling/reset-on-activity timeout: checks idle time since last activity,
+    // NOT total elapsed wall-clock time. This allows long-running multi-tool
+    // sessions as long as the model is actively making progress.
+    if (Date.now() - this.lastActivityTime >= this.config.maxDurationMs) {
+      return { allowed: false, reason: 'Time budget exhausted (no activity detected)' };
     }
     return { allowed: true };
   }
 
+  /**
+   * Mark activity — resets the idle timeout timer.
+   * Call this after any meaningful progress: tool execution, LLM response, etc.
+   */
+  recordActivity() {
+    this.lastActivityTime = Date.now();
+  }
+
   recordStep() {
     this.iterations++;
+    this.recordActivity();
   }
 
   recordTokens(tokens: number) {
     this.tokensUsed += tokens;
+    this.recordActivity();
   }
 
   getStats() {
@@ -664,11 +684,15 @@ export class PlanActVerifyOrchestrator {
                 yield { type: 'tool_error', tool: call.name, error: validation.error };
                 // Still record the attempt in history so the model sees the validation failure
                 toolResultsHistory.push({ toolCallId: call.id, toolName: call.name, result: validation.error });
+                // Even validation failures represent activity — reset idle timer
+                controller.recordActivity();
                 continue; // Skip this tool, continue with remaining tools
               }
 
               const normalizedArgs = validation.args!;
               const result = await this.executeToolWithHealing(call.name, normalizedArgs);
+              // Reset idle timer after each successful tool execution
+              controller.recordActivity();
               const structuredResult = buildToolResult(call.name, normalizedArgs, result);
               yield { type: 'tool_result', tool: call.name, result: structuredResult };
 
@@ -685,6 +709,8 @@ export class PlanActVerifyOrchestrator {
               yield { type: 'tool_error', tool: call.name, error: structuredResult.error! };
               // Record the error result so the model can see what went wrong
               toolResultsHistory.push({ toolCallId: call.id, toolName: call.name, result: { success: false, error: error.message } });
+              // Errors are still activity — don't let error handling trigger idle timeout
+              controller.recordActivity();
             }
           }
         } else if (llmResponse.text) {

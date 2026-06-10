@@ -296,7 +296,7 @@ server.registerTool(
 );
 
 server.registerTool(
-  'file.search',
+  'repo.search',
   {
     description: 'Search files by name pattern, content, or metadata.',
     inputSchema: {
@@ -307,9 +307,9 @@ server.registerTool(
     },
   },
   async ({ query, path, type, maxResults }) => {
-    logger.debug('file.search requested', { query, path, type, maxResults });
+    logger.debug('repo.search requested', { query, path, type, maxResults });
     const result = await executeCapability({
-      capabilityId: 'file.search',
+      capabilityId: 'repo.search',
       input: { query, path, type, maxResults },
       userId: MCP_USER_ID,
     });
@@ -324,7 +324,7 @@ server.registerTool(
 // ============================================================================
 
 server.registerTool(
-  'sandbox.shell',
+  'bash.execute',
   {
     description: 'Execute a shell command in the sandbox workspace. ' +
       'Use for installing packages, running scripts, compiling code, or any CLI operation. ' +
@@ -336,9 +336,9 @@ server.registerTool(
     },
   },
   async ({ command, cwd, timeout }) => {
-    logger.debug('sandbox.shell requested', { command, cwd });
+    logger.debug('bash.execute requested', { command, cwd });
     const result = await executeCapability({
-      capabilityId: 'sandbox.shell',
+      capabilityId: 'bash.execute',
       input: { command, cwd, timeout },
       userId: MCP_USER_ID,
     });

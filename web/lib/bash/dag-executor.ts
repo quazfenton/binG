@@ -6,12 +6,16 @@
 
 import { DAG, DAGNode, DAGExecutionResult, createDAG } from './bash-event-schema';
 import { executeBashCommand } from './bash-tool';
-import { virtualFilesystem } from '@/lib/virtual-filesystem/index.server';
 import { createLogger } from '@/lib/utils/logger';
 import { recordToolCallTelemetry, prepareTelemetryPayload, createOriginStack } from '@/lib/errors/logging-utils';
 import { optimizeDAG, validateDAG } from './dag-compiler';
 
 const logger = createLogger('Bash:DAGExecutor');
+
+async function getVirtualFilesystem() {
+  const mod = await import('@/lib/virtual-filesystem/index.server');
+  return mod.virtualFilesystem;
+}
 
 // ============================================================================
 // Execution Context
@@ -74,7 +78,7 @@ export async function executeNode(
       if (bashNode.outputs && bashNode.outputs.length > 0) {
         for (const outputPath of bashNode.outputs) {
           try {
-            await virtualFilesystem.writeFile(
+          await (await getVirtualFilesystem()).writeFile(
               ctx.agentId,
               outputPath,
               result.stdout
@@ -207,7 +211,7 @@ export async function executeDAG(
       if (node.outputs) {
         for (const outputPath of node.outputs) {
           try {
-            const file = await virtualFilesystem.readFile(ctx.agentId, outputPath);
+            const file = await (await getVirtualFilesystem()).readFile(ctx.agentId, outputPath);
             outputs[outputPath] = file.content;
           } catch (error: any) {
             logger.debug('Output file not yet available', { outputPath });
@@ -387,7 +391,7 @@ export async function executeDAGParallel(
           if (node?.outputs) {
             for (const outputPath of node.outputs) {
               try {
-                const file = await virtualFilesystem.readFile(ctx.agentId, outputPath);
+                const file = await (await getVirtualFilesystem()).readFile(ctx.agentId, outputPath);
                 outputs[outputPath] = file.content;
               } catch (error: any) {
                 logger.debug('Output file not yet available', { outputPath });

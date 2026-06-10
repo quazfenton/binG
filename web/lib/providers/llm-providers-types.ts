@@ -92,13 +92,17 @@ export const PROVIDERS: Record<string, LLMProviderConfig> = {
       'openai/gpt-oss-120b',
       'openai/gpt-5.2',
       'openai/gpt-5.2-codex',
+      'openai/gpt-4o',
       'google/gemini-3.1-flash-lite-preview',
       'google/gemini-3.1-pro',
+      'google/gemini-2.5-flash',
       'meta-llama/llama-4-maverick',
       'meta-llama/llama-4-scout',
       'mistral/mistral-large-2',
+      'mistral/mistral-large',
       'mistral/mistral-small-3.2',
       'anthropic/claude-sonnet-4-6',
+      'anthropic/claude-sonnet-4',
       'anthropic/claude-opus-4-6-thinking',
     ],
     apiKeyEnv: 'OPENROUTER_API_KEY',
@@ -113,7 +117,10 @@ export const PROVIDERS: Record<string, LLMProviderConfig> = {
       'gemini-3.1-flash-lite-preview',
       'gemini-3.1-flash',
       'gemini-3-pro',
+      'gemini-2.5-pro',
+      'gemini-2.5-flash',
       'gemini-2.5-flash-lite',
+      'gemini-1.5-pro',
     ],
     apiKeyEnv: 'GOOGLE_API_KEY',
     description: 'Google Gemini — fast, multimodal, large context',
@@ -150,6 +157,18 @@ export const PROVIDERS: Record<string, LLMProviderConfig> = {
     supportsStreaming: true,
     supportsFunctionCalling: false,
   },
+  groq: {
+    id: 'groq',
+    name: 'Groq',
+    models: [
+      'llama-3.3-70b-versatile',
+      'mixtral-8x7b-32768',
+      'gemma2-9b-it',
+    ],
+    apiKeyEnv: 'GROQ_API_KEY',
+    description: 'Groq ultra-fast inference',
+    supportsStreaming: true,
+  },
   nvidia: {
     id: 'nvidia',
     name: 'NVIDIA NIM',
@@ -161,6 +180,9 @@ export const PROVIDERS: Record<string, LLMProviderConfig> = {
       'qwen/qwen3.5-122b-a10b',
       'stepfun-ai/step-3.7-flash',
       'meta/llama-4-maverick-17b-128e-instruct',
+      'meta/llama-3.1-405b-instruct',
+      'meta/llama-3.3-70b-instruct',
+      'mistralai/mistral-large-2-instruct',
       'nvidia/z-ai/glm-5.1',
       'nvidia/minimaxai/minimax-m2.7',
       'nvidia/moonshotai/kimi-k2.6',
@@ -189,6 +211,7 @@ export const PROVIDERS: Record<string, LLMProviderConfig> = {
       'gpt-4o',
       'gpt-4o-mini',
       'gpt-4-turbo',
+      'gpt-3.5-turbo',
       'o1',
       'o1-mini',
     ],
@@ -213,8 +236,12 @@ export const PROVIDERS: Record<string, LLMProviderConfig> = {
     name: 'Anthropic',
     models: [
       'claude-sonnet-4-6',
+      'claude-sonnet-4-5',
+      'claude-sonnet-4-20250514',
       'claude-opus-4-6-thinking',
+      'claude-opus-4-20250514',
       'claude-3.5-sonnet',
+      'claude-3-5-sonnet-latest',
       'claude-3.5-haiku',
     ],
     apiKeyEnv: 'ANTHROPIC_API_KEY',
@@ -240,7 +267,9 @@ export const PROVIDERS: Record<string, LLMProviderConfig> = {
     name: 'Together AI',
     models: [
       'meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo',
+      'meta-llama/Llama-3.3-70B-Instruct-Turbo',
       'mistralai/Mixtral-8x22B-Instruct-v0.1',
+      'mistralai/Mixtral-8x7B-Instruct-v0.1',
     ],
     apiKeyEnv: 'TOGETHER_API_KEY',
     description: 'Together AI — open-source model inference',
@@ -653,8 +682,6 @@ export function providerSupportsFunctionCalling(providerId: string): boolean {
   return PROVIDERS[providerId]?.supportsFunctionCalling ?? false;
 }
 
-/**
- * Re-export CLI provider utilities for client-side filtering.
- * These are safe to import on the client since they only check env vars server-side.
- */
-export { CLI_PROVIDERS, isCLIProvider, isCLIProviderConfigured } from '../chat/vercel-ai-streaming';
+/* CLI_PROVIDERS, isCLIProvider, isCLIProviderConfigured — import directly from
+ * lib/chat/vercel-ai-streaming if needed. Re-exporting from here would make
+ * Turbopack follow the server-only dependency chain in the client bundle. */

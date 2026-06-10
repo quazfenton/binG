@@ -309,7 +309,7 @@ export class TaskClassifier {
       }
 
       // Quick LLM-based scope estimation
-      const { generateObject } = await import('ai');
+      const { generateText, Output } = await import('ai');
       const { z } = await import('zod');
       const { createMistral } = await import('@ai-sdk/mistral');
       const { createOpenAI } = await import('@ai-sdk/openai');
@@ -358,19 +358,21 @@ switch (fastModelProvider) {
         }
     }
 
-    const result = await generateObject({
+    const result = await generateText({
       model,
       prompt: `Estimate task scope. Respond with JSON only. No extra text. Do not include any text before or after the JSON object.
 
 {"estimatedFiles": <number>, "estimatedSteps": <number>, "requiresResearch": <true|false>, "requiresTesting": <true|false>, "riskLevel": "low"|"medium"|"high"}
 
 Task: ${message.substring(0, 500)}`,
-      schema: z.object({
-        estimatedFiles: z.number(),
-        estimatedSteps: z.number(),
-        requiresResearch: z.boolean(),
-        requiresTesting: z.boolean(),
-        riskLevel: z.enum(['low', 'medium', 'high']),
+      output: Output.object({
+        schema: z.object({
+          estimatedFiles: z.number(),
+          estimatedSteps: z.number(),
+          requiresResearch: z.boolean(),
+          requiresTesting: z.boolean(),
+          riskLevel: z.enum(['low', 'medium', 'high']),
+        }),
       }),
       maxOutputTokens: 200,
     });

@@ -178,6 +178,15 @@ function extractPromptSignals(prompt: string): {
     if (ext) extensions.add(`.${ext}`);
   }
 
+  // Detect @mentions and extract filenames (plain, no line range)
+  for (const match of prompt.matchAll(atMentionPattern)) {
+    hasAtMention = true;
+    const mentionedFile = match[1];
+    atMentionedFiles.push(mentionedFile);
+    possiblePaths.push(mentionedFile.toLowerCase());
+    const ext = mentionedFile.split('.').pop();
+    if (ext) extensions.add(`.${ext}`);
+  }
 
   // Detect @mentions and extract filenames (plain, no line range)
   // Pattern: @filename.ext or @path/to/file.ext
@@ -1127,15 +1136,13 @@ export async function generateSmartContext(options: SmartContextOptions): Promis
       // Apply line range slicing if requested for this file
       const range = effectiveFileRanges.get(filePath.toLowerCase()) || effectiveFileRanges.get(filePath);
       if (range) {
-        const originalLineCount = file.content.split('\n').length;
         const sliced = sliceLinesLocal(
           file.content,
           range.startLine,
           range.endLine
         );
-        const result = { ...file, content: sliced, originalLineCount };
-        fileContentCache.set(filePath, result);
-        return result;
+        fileContentCache.set(filePath, { ...file, content: sliced });
+        return { ...file, content: sliced };
       }
       fileContentCache.set(filePath, file);
       return file;
@@ -1641,10 +1648,7 @@ function truncateContent(content: string, maxLines: number): string {
 function sliceLinesLocal(content: string, startLine?: number, endLine?: number): string {
   if (startLine == null && endLine == null) return content;
   const lines = content.split('\n');
-  // Clamp startLine to >= 1 to prevent JavaScript slice() wrap-around
-  // (e.g. startLine=0 → start=-1 → slice(-1) returns the last element, not the first)
-  const safeStartLine = startLine != null ? Math.max(1, startLine) : 1;
-  const start = safeStartLine - 1;
+  const start = (startLine ?? 1) - 1;
   const end = endLine != null ? endLine : lines.length;
   return lines.slice(start, end).join('\n');
 }
@@ -1732,10 +1736,8 @@ function formatBundle(
       const ext = s.file.path.split('.').pop() || '';
       const lineCount = s.file.content.split('\n').length;
       const range = fileRanges?.get(s.file.path.toLowerCase()) || fileRanges?.get(s.file.path);
-      // Use originalLineCount (set by getCachedFile when slicing) for accurate totals
-      const totalCount = (s.file as any).originalLineCount ?? lineCount;
       const rangeLabel = range
-        ? ` (attached, lines ${range.startLine}–${range.endLine ?? 'end'} of ${totalCount} total)`
+        ? ` (attached, lines ${range.startLine}–${range.endLine ?? 'end'} of ${lineCount} total)`
         : ` (attached, ${lineCount} lines)`;
       md += `### \`${stripScopePrefix(s.file.path)}\`${rangeLabel}\n\n`;
       md += `\`\`\`${ext}\n${addLineNumbers(s.file.content)}\n\`\`\`\n\n`;
@@ -1750,10 +1752,8 @@ function formatBundle(
       const reasons = s.score.reasons.length > 0 ? ` (${s.score.reasons.join(', ')})` : '';
       const lineCount = s.file.content.split('\n').length;
       const range = fileRanges?.get(s.file.path.toLowerCase()) || fileRanges?.get(s.file.path);
-      // Use originalLineCount for accurate totals when content was sliced
-      const totalCount = (s.file as any).originalLineCount ?? lineCount;
       const rangeSuffix = range
-        ? ` (lines ${range.startLine}–${range.endLine ?? 'end'} of ${totalCount} total)`
+        ? ` (lines ${range.startLine}–${range.endLine ?? 'end'} of ${lineCount} total)`
         : ` (${lineCount} lines)`;
       md += `### \`${stripScopePrefix(s.file.path)}\`${reasons}${rangeSuffix}\n\n`;
       md += `\`\`\`${ext}\n${addLineNumbers(s.file.content)}\n\`\`\`\n\n`;

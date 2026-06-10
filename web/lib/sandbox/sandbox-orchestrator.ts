@@ -172,18 +172,21 @@ export class SandboxOrchestrator {
 
     const warmSandbox = await this.getFromWarmPool(provider);
 
+    // Always get or create a session so sandbox-file-sync-bridge can
+    // find the active sandbox via sessionManager.getUserSessions().
+    // Previously only created in the non-warm path, leaving warm sandbox
+    // users with "No active sandbox for user, skipping file sync" on every file op.
+    const session = await sessionManager.getOrCreateSession(userId, conversationId, {
+      executionPolicy: policy,
+      userId,
+      conversationId,
+    });
+
     let handle: SandboxHandle;
     if (warmSandbox) {
       logger.info('Using warm sandbox from pool', { provider });
       handle = warmSandbox;
     } else {
-      logger.info('Creating new session via session-manager', { provider, policy });
-      const session = await sessionManager.getOrCreateSession(userId, conversationId, {
-        executionPolicy: policy,
-        userId,
-        conversationId,
-      });
-
       if (!session.sandboxHandle) {
         // If affinity is active, reuse the same workspace directory so caches stay warm
         const affinityWorkspaceDir = this.AFFINITY_ENABLED
