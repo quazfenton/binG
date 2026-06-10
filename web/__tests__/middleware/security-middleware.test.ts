@@ -24,7 +24,7 @@ import {
   sanitizePathForLogging,
   FilesystemOperationSchema,
   DEFAULT_FILESYSTEM_CONFIG,
-} from '@/lib/middleware/filesystem-security';
+} from '@/lib/security/filesystem-security';
 import {
   validateCommand,
   validateCommandArgs,

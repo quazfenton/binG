@@ -1371,10 +1371,14 @@ export function WorkspacePanel() {
   // Listen for filesystem updates from Monaco editor saves
   useEffect(() => {
     const unsubscribe = onFilesystemUpdated(async (event) => {
-      // Refresh VFS snapshot when Monaco editor saves a file
+      // Refresh VFS snapshot when a file is saved
       const snapshot = await vfs.getSnapshot();
       if (snapshot?.files) {
         setVfsSnapshot(snapshot);
+      }
+      // Keep filesystem.version in sync so VersionHistoryPanel shows the correct currentVersion
+      if (event.detail?.workspaceVersion !== undefined) {
+        setFilesystem(prev => prev ? { ...prev, version: event.detail.workspaceVersion } : prev);
       }
     });
     return () => unsubscribe();

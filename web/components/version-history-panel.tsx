@@ -5,6 +5,7 @@ import { History, Clock, RotateCcw, FileCode, CheckCircle, XCircle, Loader2, Che
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
 import { buildApiHeaders } from '@/lib/utils/utils';
+import { onFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 
 export interface VersionHistory {
   version: number;
@@ -97,6 +98,15 @@ export function VersionHistoryPanel({
     if (!sessionId || !isExpanded) return;
     const interval = setInterval(fetchVersions, 10000);
     return () => clearInterval(interval);
+  }, [sessionId, isExpanded, fetchVersions]);
+
+  // Refresh version history when filesystem-updated events fire (writes via LLM/API)
+  useEffect(() => {
+    if (!sessionId || !isExpanded) return;
+    const unsubscribe = onFilesystemUpdated(() => {
+      fetchVersions();
+    });
+    return unsubscribe;
   }, [sessionId, isExpanded, fetchVersions]);
 
   const handleRollback = useCallback(async (version: number) => {

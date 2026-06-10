@@ -87,7 +87,7 @@ describe('POST /api/terminal/local-pty', () => {
     vi.stubEnv('ENABLE_LOCAL_PTY', 'off');
     vi.stubEnv('NODE_ENV', 'development');
 
-    const { POST } = await import('@/app/api/terminal/local-pty/route');
+    const { POST } = await import('@/app/api/terminal/local-pty/gateway');
     const req = new NextRequest('http://localhost/api/terminal/local-pty', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -106,7 +106,7 @@ describe('POST /api/terminal/local-pty', () => {
   it('returns 503 when not localhost in localhost mode', async () => {
     vi.stubEnv('ENABLE_LOCAL_PTY', 'localhost');
 
-    const { POST } = await import('@/app/api/terminal/local-pty/route');    const req = new NextRequest('http://example.com/api/terminal/local-pty', {
+    const { POST } = await import('@/app/api/terminal/local-pty/gateway');    const req = new NextRequest('http://example.com/api/terminal/local-pty', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json',
       host: 'example.com',
@@ -126,7 +126,7 @@ describe('POST /api/terminal/local-pty', () => {
     vi.stubEnv('ENABLE_LOCAL_PTY', 'localhost');
     vi.stubEnv('NODE_ENV', 'development');
 
-    const { POST } = await import('@/app/api/terminal/local-pty/route');
+    const { POST } = await import('@/app/api/terminal/local-pty/gateway');
     const req = new NextRequest('http://localhost:3000/api/terminal/local-pty', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', host: 'localhost:3000' },
@@ -145,7 +145,7 @@ describe('POST /api/terminal/local-pty', () => {
     vi.stubEnv('ENABLE_LOCAL_PTY', 'on');
     vi.stubEnv('NODE_ENV', 'development');
 
-    const { POST } = await import('@/app/api/terminal/local-pty/route');
+    const { POST } = await import('@/app/api/terminal/local-pty/gateway');
     const req = new NextRequest('http://localhost/api/terminal/local-pty', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -164,7 +164,7 @@ describe('POST /api/terminal/local-pty', () => {
     vi.stubEnv('ENABLE_LOCAL_PTY', 'on');
     vi.stubEnv('NODE_ENV', 'development');
 
-    const { POST } = await import('@/app/api/terminal/local-pty/route');
+    const { POST } = await import('@/app/api/terminal/local-pty/gateway');
     const req = new NextRequest('http://localhost/api/terminal/local-pty', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -184,7 +184,7 @@ describe('POST /api/terminal/local-pty', () => {
     vi.stubEnv('ENABLE_LOCAL_PTY', 'on');
     vi.stubEnv('NODE_ENV', 'development');
 
-    const { POST } = await import('@/app/api/terminal/local-pty/route');
+    const { POST } = await import('@/app/api/terminal/local-pty/gateway');
     const req = new NextRequest('http://localhost/api/terminal/local-pty', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -205,7 +205,7 @@ describe('POST /api/terminal/local-pty', () => {
     vi.stubEnv('ENABLE_LOCAL_PTY', 'on');
     vi.stubEnv('NODE_ENV', 'development');
 
-    const { POST } = await import('@/app/api/terminal/local-pty/route');
+    const { POST } = await import('@/app/api/terminal/local-pty/gateway');
 
     // Create 5 sessions (MAX_SESSIONS_PER_USER)
     for (let i = 0; i < 5; i++) {
@@ -238,7 +238,7 @@ describe('POST /api/terminal/local-pty', () => {
 
 describe('GET /api/terminal/local-pty', () => {
   it('returns 400 without sessionId', async () => {
-    const { GET } = await import('@/app/api/terminal/local-pty/route');
+    const { GET } = await import('@/app/api/terminal/local-pty/gateway');
     const req = new NextRequest('http://localhost/api/terminal/local-pty');
 
     const res = await GET(req);
@@ -248,7 +248,7 @@ describe('GET /api/terminal/local-pty', () => {
   });
 
   it('returns 404 for unknown session', async () => {
-    const { GET } = await import('@/app/api/terminal/local-pty/route');
+    const { GET } = await import('@/app/api/terminal/local-pty/gateway');
     const req = new NextRequest('http://localhost/api/terminal/local-pty?sessionId=unknown');
 
     const res = await GET(req);
@@ -260,7 +260,7 @@ describe('GET /api/terminal/local-pty', () => {
     vi.stubEnv('NODE_ENV', 'development');
 
     // First create a session
-    const { POST } = await import('@/app/api/terminal/local-pty/route');    const postReq = new NextRequest('http://localhost/api/terminal/local-pty', {
+    const { POST } = await import('@/app/api/terminal/local-pty/gateway');    const postReq = new NextRequest('http://localhost/api/terminal/local-pty', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ cols: 80, rows: 24 }),
@@ -270,7 +270,7 @@ describe('GET /api/terminal/local-pty', () => {
     const { sessionId } = await postRes.json();
 
     // Now GET the SSE stream
-    const { GET } = await import('@/app/api/terminal/local-pty/route');
+    const { GET } = await import('@/app/api/terminal/local-pty/gateway');
     const req = new NextRequest(`http://localhost/api/terminal/local-pty?sessionId=${sessionId}`);
     const res = await GET(req);
 
@@ -288,7 +288,7 @@ describe('GET /api/terminal/local-pty', () => {
 
 describe('POST /api/terminal/local-pty/input', () => {
   it('returns 415 for non-JSON Content-Type', async () => {
-    const { POST } = await import('@/app/api/terminal/local-pty/input/route');
+    const { POST } = await import('@/app/api/terminal/local-pty/input/gateway');
     const req = new NextRequest('http://localhost/api/terminal/local-pty/input', {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain' },
@@ -302,7 +302,7 @@ describe('POST /api/terminal/local-pty/input', () => {
   });
 
   it('returns 400 for missing sessionId', async () => {
-    const { POST } = await import('@/app/api/terminal/local-pty/input/route');
+    const { POST } = await import('@/app/api/terminal/local-pty/input/gateway');
     const req = new NextRequest('http://localhost/api/terminal/local-pty/input', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -314,7 +314,7 @@ describe('POST /api/terminal/local-pty/input', () => {
   });
 
   it('returns 400 for missing data', async () => {
-    const { POST } = await import('@/app/api/terminal/local-pty/input/route');
+    const { POST } = await import('@/app/api/terminal/local-pty/input/gateway');
     const req = new NextRequest('http://localhost/api/terminal/local-pty/input', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -326,7 +326,7 @@ describe('POST /api/terminal/local-pty/input', () => {
   });
 
   it('returns 404 for unknown session', async () => {
-    const { POST } = await import('@/app/api/terminal/local-pty/input/route');
+    const { POST } = await import('@/app/api/terminal/local-pty/input/gateway');
     const req = new NextRequest('http://localhost/api/terminal/local-pty/input', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -341,7 +341,7 @@ describe('POST /api/terminal/local-pty/input', () => {
     // First create a session
     vi.stubEnv('ENABLE_LOCAL_PTY', 'on');
     vi.stubEnv('NODE_ENV', 'development');
-    const { POST: createPost } = await import('@/app/api/terminal/local-pty/route');
+    const { POST: createPost } = await import('@/app/api/terminal/local-pty/gateway');
     const createReq = new NextRequest('http://localhost/api/terminal/local-pty', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -351,7 +351,7 @@ describe('POST /api/terminal/local-pty/input', () => {
     const { sessionId } = await createRes.json();
 
     // Now try to write too much data
-    const { POST: inputPost } = await import('@/app/api/terminal/local-pty/input/route');
+    const { POST: inputPost } = await import('@/app/api/terminal/local-pty/input/gateway');
     const req = new NextRequest('http://localhost/api/terminal/local-pty/input', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -376,7 +376,7 @@ describe('POST /api/terminal/local-pty/input', () => {
 
 describe('POST /api/terminal/local-pty/resize', () => {
   it('returns 415 for non-JSON Content-Type', async () => {
-    const { POST } = await import('@/app/api/terminal/local-pty/resize/route');
+    const { POST } = await import('@/app/api/terminal/local-pty/resize/gateway');
     const req = new NextRequest('http://localhost/api/terminal/local-pty/resize', {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain' },
@@ -388,7 +388,7 @@ describe('POST /api/terminal/local-pty/resize', () => {
   });
 
   it('returns 400 for missing cols', async () => {
-    const { POST } = await import('@/app/api/terminal/local-pty/resize/route');
+    const { POST } = await import('@/app/api/terminal/local-pty/resize/gateway');
     const req = new NextRequest('http://localhost/api/terminal/local-pty/resize', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -400,7 +400,7 @@ describe('POST /api/terminal/local-pty/resize', () => {
   });
 
   it('returns 400 for out-of-range dimensions', async () => {
-    const { POST } = await import('@/app/api/terminal/local-pty/resize/route');
+    const { POST } = await import('@/app/api/terminal/local-pty/resize/gateway');
     const req = new NextRequest('http://localhost/api/terminal/local-pty/resize', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

@@ -87,7 +87,7 @@ import {
   RemoteFilesystemAdapter,
   createFilesystemAdapter,
   createAutoFilesystemAdapter,
-} from '@/lib/pi/pi-filesystem';
+} from '@/lib/drivers/pi/pi-filesystem';
 import type { PiFilesystemAdapter, PiDirEntry } from '@/lib/pi/pi-types';
 
 import { isDesktopMode, isLocalExecution } from '@bing/platform/env';

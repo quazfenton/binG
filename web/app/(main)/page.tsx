@@ -42,7 +42,7 @@ export default function ChatBox() {
   const [mounted, setMounted] = useState(false)
   const [workspaceId, setWorkspaceId] = useState<string | undefined>(undefined)
   const CUSTOM_BG_MEDIA_KEY = "custom_bg_media_url"
-  const CUSTOM_BG_SPEED_KEY = "custom_bg_speed"
+  const CUSTOM_BG_SPEEDS_KEY = "custom_bg_speeds"
 
   useEffect(() => {
     setMounted(true)
@@ -68,14 +68,6 @@ export default function ChatBox() {
       } catch { /* sessionStorage unavailable */ }
     };
 
-    deriveWorkspaceId();
-    const interval = setInterval(deriveWorkspaceId, 2000);
-    window.addEventListener('storage', deriveWorkspaceId);
-    return () => {
-      clearInterval(interval);
-      window.removeEventListener('storage', deriveWorkspaceId);
-    };
-
     // Apply background media
     const root = document.documentElement
     const saved = typeof window !== "undefined" && localStorage.getItem(CUSTOM_BG_MEDIA_KEY)
@@ -90,8 +82,8 @@ export default function ChatBox() {
         return
       }
 
-      const savedSpeed = parseFloat(typeof window !== "undefined" ? localStorage.getItem(CUSTOM_BG_SPEED_KEY) || process.env.NEXT_PUBLIC_BG_MEDIA_SPEED || '0.5' : process.env.NEXT_PUBLIC_BG_MEDIA_SPEED || '0.5')
-      const speed = savedSpeed > 0 ? savedSpeed : 1
+      const speedMap = typeof window !== "undefined" ? JSON.parse(localStorage.getItem(CUSTOM_BG_SPEEDS_KEY) || '{}') : {}
+      const speed = speedMap[mediaUrl] || 1
       let proxiedUrl = `/api/image-proxy?url=${encodeURIComponent(mediaUrl)}`
       if (speed !== 1) proxiedUrl += `&speed=${speed}`
 
@@ -115,6 +107,14 @@ export default function ChatBox() {
       root.style.setProperty("--app-bg-media", `url("${proxiedUrl}")`)
       root.style.setProperty("--app-bg-media-opacity", "0.12")
     }
+
+    deriveWorkspaceId();
+    const interval = setInterval(deriveWorkspaceId, 2000);
+    window.addEventListener('storage', deriveWorkspaceId);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('storage', deriveWorkspaceId);
+    };
   }, [])
 
   if (!mounted) {

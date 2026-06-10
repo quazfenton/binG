@@ -1171,12 +1171,12 @@ export default function ConversationInterface() {
 
           const selection = fromPersisted || fromServer || fromFirst;
           if (selection) {
-            // Always update if we have a valid selection and current is not set or not in available providers
-            const providerAvailable = providers.some(p => p.id === selection.provider);
-            if (!currentProvider || !providerAvailable) {
+            // Check if current provider/model combo is valid among the available providers
+            const currentIsValid = currentProvider && currentModel && providers.some(p =>
+              p.id === currentProvider && (p.models as string[]).includes(currentModel)
+            );
+            if (!currentIsValid) {
               setCurrentProvider(selection.provider);
-            }
-            if (!currentModel || !providers.find(p => p.id === selection.provider)?.models.includes(selection.model)) {
               setCurrentModel(selection.model);
             }
           }

@@ -498,3 +498,344 @@ describe('Unified Diff Generation', () => {
     expect(diffs).toHaveLength(0);
   });
 });
+
+// =============================================================================
+// Line Range Detection Tests (extractPromptSignals)
+// =============================================================================
+
+describe('Line Range Detection', () => {
+  let extractPromptSignals: (prompt: string) => {
+    extensions: Set<string>;
+    keywords: Set<string>;
+    possiblePaths: string[];
+    hasAtMention: boolean;
+    atMentionedFiles: string[];
+    fileRanges: Map<string, { startLine: number; endLine?: number }>;
+  };
+
+  beforeEach(async () => {
+    vi.resetModules();
+    registerFSMocks();
+    const mod = await import('@/lib/virtual-filesystem/smart-context');
+    extractPromptSignals = mod.extractPromptSignals;
+  });
+
+  // ─── Pattern 1: @mention with line range (@file.ts:50-100) ──────────
+
+  describe('@mention with line range (@file.ts:50-100)', () => {
+    it('should parse @mention with range (dash)', () => {
+      const result = extractPromptSignals('Fix the bug in @App.tsx:50-100');
+      expect(result.hasAtMention).toBe(true);
+      expect(result.atMentionedFiles).toContain('App.tsx');
+      expect(result.fileRanges.size).toBe(1);
+
+      const range = result.fileRanges.get('app.tsx');
+      expect(range).toBeDefined();
+      expect(range!.startLine).toBe(50);
+      expect(range!.endLine).toBe(100);
+    });
+
+    it('should parse @mention with single line (no dash)', () => {
+      const result = extractPromptSignals('Check @utils/helpers.ts:42');
+      expect(result.hasAtMention).toBe(true);
+      expect(result.atMentionedFiles).toContain('utils/helpers.ts');
+      expect(result.fileRanges.size).toBe(1);
+
+      const range = result.fileRanges.get('utils/helpers.ts');
+      expect(range).toBeDefined();
+      expect(range!.startLine).toBe(42);
+      expect(range!.endLine).toBeUndefined();
+    });
+
+    it('should parse multiple @mentions with line ranges', () => {
+      const result = extractPromptSignals(
+        'Look at @App.tsx:10-20 and @utils.ts:50'
+      );
+      expect(result.hasAtMention).toBe(true);
+      expect(result.fileRanges.size).toBe(2);
+
+      const range1 = result.fileRanges.get('app.tsx');
+      expect(range1).toBeDefined();
+      expect(range1!.startLine).toBe(10);
+      expect(range1!.endLine).toBe(20);
+
+      const range2 = result.fileRanges.get('utils.ts');
+      expect(range2).toBeDefined();
+      expect(range2!.startLine).toBe(50);
+      expect(range2!.endLine).toBeUndefined();
+    });
+
+    it('should store fileRanges keys as lowercase', () => {
+      const result = extractPromptSignals('Check @App.TSX:5-15');
+      expect(result.fileRanges.has('app.tsx')).toBe(true);
+      expect(result.fileRanges.has('App.TSX')).toBe(false);
+    });
+
+    it('should add @mentioned file extension to extensions set', () => {
+      const result = extractPromptSignals('Check @App.tsx:5-15');
+      expect(result.extensions.has('.tsx')).toBe(true);
+    });
+
+    it('should add @mentioned file path to possiblePaths', () => {
+      const result = extractPromptSignals('Check @App.tsx:5-15');
+      expect(result.possiblePaths.map(p => p.toLowerCase())).toContain('app.tsx');
+    });
+  });
+
+  // ─── Pattern 2: "file.ts lines 50-100" ──────────────────────────────
+
+  describe('text "file.ts lines 50-100"', () => {
+    it('should parse "file.ts lines 50-100" with dash range', () => {
+      const result = extractPromptSignals('Look at App.tsx lines 50-100 for the bug.');
+      expect(result.fileRanges.size).toBe(1);
+
+      const range = result.fileRanges.get('app.tsx');
+      expect(range).toBeDefined();
+      expect(range!.startLine).toBe(50);
+      expect(range!.endLine).toBe(100);
+    });
+
+    it('should parse "file.ts line 50" (singular, single line)', () => {
+      const result = extractPromptSignals('Check utils.ts line 42 for the helper.');
+      expect(result.fileRanges.size).toBe(1);
+
+      const range = result.fileRanges.get('utils.ts');
+      expect(range).toBeDefined();
+      expect(range!.startLine).toBe(42);
+      expect(range!.endLine).toBeUndefined();
+    });
+
+    it('should parse "file.ts lines 50 - 100" with spaces around dash', () => {
+      const result = extractPromptSignals('See config.json lines 10 - 20 for settings.');
+      expect(result.fileRanges.size).toBe(1);
+
+      const range = result.fileRanges.get('config.json');
+      expect(range).toBeDefined();
+      expect(range!.startLine).toBe(10);
+      expect(range!.endLine).toBe(20);
+    });
+
+    it('should add the file to possiblePaths', () => {
+      const result = extractPromptSignals('App.tsx lines 50-100');
+      expect(result.possiblePaths.map(p => p.toLowerCase())).toContain('app.tsx');
+    });
+
+    it('should not override existing fileRanges entry from @mention', () => {
+      const result = extractPromptSignals(
+        '@App.tsx:10-20 and App.tsx lines 50-100'
+      );
+      expect(result.fileRanges.size).toBe(1);
+      // @mention should win (parsed first)
+      const range = result.fileRanges.get('app.tsx');
+      expect(range).toBeDefined();
+      expect(range!.startLine).toBe(10);
+      expect(range!.endLine).toBe(20);
+    });
+  });
+
+  // ─── Pattern 3: "read lines 50-100 of file.ts" ──────────────────────
+
+  describe('text "read lines 50-100 of file.ts"', () => {
+    it('should parse "read lines 50-100 of file.ts" with dash range', () => {
+      const result = extractPromptSignals(
+        'Please read lines 50-100 of App.tsx for the component.'
+      );
+      expect(result.fileRanges.size).toBe(1);
+
+      const range = result.fileRanges.get('app.tsx');
+      expect(range).toBeDefined();
+      expect(range!.startLine).toBe(50);
+      expect(range!.endLine).toBe(100);
+    });
+
+    it('should parse "read lines 50 of file.ts" (single line)', () => {
+      const result = extractPromptSignals('Read lines 42 of utils.ts.');
+      expect(result.fileRanges.size).toBe(1);
+
+      const range = result.fileRanges.get('utils.ts');
+      expect(range).toBeDefined();
+      expect(range!.startLine).toBe(42);
+      expect(range!.endLine).toBeUndefined();
+    });
+
+    it('should parse with "show" verb', () => {
+      const result = extractPromptSignals('Show lines 10-30 of config.json');
+      expect(result.fileRanges.size).toBe(1);
+
+      const range = result.fileRanges.get('config.json');
+      expect(range).toBeDefined();
+      expect(range!.startLine).toBe(10);
+      expect(range!.endLine).toBe(30);
+    });
+
+    it('should parse with "get" verb', () => {
+      const result = extractPromptSignals('Get lines 5-15 of styles.css');
+      expect(result.fileRanges.size).toBe(1);
+
+      const range = result.fileRanges.get('styles.css');
+      expect(range).toBeDefined();
+      expect(range!.startLine).toBe(5);
+      expect(range!.endLine).toBe(15);
+    });
+
+    it('should parse with "fetch" verb', () => {
+      const result = extractPromptSignals('Fetch lines 1-10 of index.ts');
+      expect(result.fileRanges.size).toBe(1);
+
+      const range = result.fileRanges.get('index.ts');
+      expect(range).toBeDefined();
+      expect(range!.startLine).toBe(1);
+      expect(range!.endLine).toBe(10);
+    });
+
+    it('should parse with "from" preposition', () => {
+      const result = extractPromptSignals('Read lines 20-40 from helpers.py');
+      expect(result.fileRanges.size).toBe(1);
+
+      const range = result.fileRanges.get('helpers.py');
+      expect(range).toBeDefined();
+      expect(range!.startLine).toBe(20);
+      expect(range!.endLine).toBe(40);
+    });
+
+    it('should parse with "in" preposition', () => {
+      const result = extractPromptSignals('Read lines 30-60 in main.rs');
+      expect(result.fileRanges.size).toBe(1);
+
+      const range = result.fileRanges.get('main.rs');
+      expect(range).toBeDefined();
+      expect(range!.startLine).toBe(30);
+      expect(range!.endLine).toBe(60);
+    });
+
+    it('should add the file to possiblePaths', () => {
+      const result = extractPromptSignals('Read lines 10-20 of App.tsx');
+      expect(result.possiblePaths.map(p => p.toLowerCase())).toContain('app.tsx');
+    });
+
+    it('should not override existing fileRanges entry from @mention', () => {
+      const result = extractPromptSignals(
+        '@App.tsx:5-15 and read lines 50-100 of App.tsx'
+      );
+      expect(result.fileRanges.size).toBe(1);
+      const range = result.fileRanges.get('app.tsx');
+      expect(range!.startLine).toBe(5); // @mention wins
+    });
+  });
+
+  // ─── Pattern 4: bare colon "file.ts:50-100" ─────────────────────────
+
+  describe('bare colon "file.ts:50-100"', () => {
+    it('should parse bare colon with dash range', () => {
+      const result = extractPromptSignals('Look at App.tsx:50-100 for the issue.');
+      expect(result.fileRanges.size).toBe(1);
+
+      const range = result.fileRanges.get('app.tsx');
+      expect(range).toBeDefined();
+      expect(range!.startLine).toBe(50);
+      expect(range!.endLine).toBe(100);
+    });
+
+    it('should parse bare colon with single line', () => {
+      const result = extractPromptSignals('Check utils.ts:42.');
+      expect(result.fileRanges.size).toBe(1);
+
+      const range = result.fileRanges.get('utils.ts');
+      expect(range).toBeDefined();
+      expect(range!.startLine).toBe(42);
+      expect(range!.endLine).toBeUndefined();
+    });
+
+    it('should parse bare colon with path', () => {
+      const result = extractPromptSignals('See src/components/Header.tsx:5-25');
+      expect(result.fileRanges.size).toBe(1);
+
+      const range = result.fileRanges.get('src/components/header.tsx');
+      expect(range).toBeDefined();
+      expect(range!.startLine).toBe(5);
+      expect(range!.endLine).toBe(25);
+    });
+
+    it('should not override existing @mention range', () => {
+      const result = extractPromptSignals(
+        '@App.tsx:10-20 also App.tsx:50-100'
+      );
+      expect(result.fileRanges.size).toBe(1);
+      // @mention parsed first, wins
+      const range = result.fileRanges.get('app.tsx');
+      expect(range!.startLine).toBe(10);
+      expect(range!.endLine).toBe(20);
+    });
+
+    it('should not match colon without word boundary (e.g., URL port)', () => {
+      const result = extractPromptSignals('Open localhost:3000/app');
+      // localhost:3000 is not a file reference with extension
+      expect(result.fileRanges.size).toBe(0);
+    });
+
+    it('should add the file to possiblePaths', () => {
+      const result = extractPromptSignals('App.tsx:50-100');
+      expect(result.possiblePaths.map(p => p.toLowerCase())).toContain('app.tsx');
+    });
+  });
+
+  // ─── Edge Cases ──────────────────────────────────────────────────────
+
+  describe('edge cases', () => {
+    it('should handle empty prompt', () => {
+      const result = extractPromptSignals('');
+      expect(result.fileRanges.size).toBe(0);
+      expect(result.hasAtMention).toBe(false);
+      expect(result.atMentionedFiles).toEqual([]);
+    });
+
+    it('should reject bare colon with line 0 (not a valid range)', () => {
+      // Bare colon pattern: App.tsx:0-10 → bareColonRangePattern matches,
+      // but start > 0 guard rejects it. No @ prefix so @mention pattern won't fire.
+      const result = extractPromptSignals('Check App.tsx:0-10');
+      expect(result.fileRanges.size).toBe(0);
+    });
+
+    it('should handle mixed patterns in one prompt', () => {
+      const result = extractPromptSignals(
+        'Check @App.tsx:5-15, also helpers.ts lines 20-30, ' +
+        'and read lines 40-50 of utils.ts, plus config.json:1-5'
+      );
+      expect(result.fileRanges.size).toBe(4);
+
+      expect(result.fileRanges.get('app.tsx')!.startLine).toBe(5);
+      expect(result.fileRanges.get('helpers.ts')!.startLine).toBe(20);
+      expect(result.fileRanges.get('utils.ts')!.startLine).toBe(40);
+      expect(result.fileRanges.get('config.json')!.startLine).toBe(1);
+    });
+
+    it('should handle files with hyphens in their name', () => {
+      const result = extractPromptSignals('Look at @my-component.tsx:10-20');
+      expect(result.hasAtMention).toBe(true);
+      expect(result.atMentionedFiles).toContain('my-component.tsx');
+      expect(result.fileRanges.has('my-component.tsx')).toBe(true);
+    });
+
+    it('should not match non-file patterns with colons', () => {
+      const result = extractPromptSignals(
+        'The time is 12:30 and version is 2.0:latest'
+      );
+      expect(result.fileRanges.size).toBe(0);
+    });
+
+    it('should only match filename portion of Windows-style paths', () => {
+      // Backslashes are NOT in the character class [\w\-/.], so the full path
+      // won't match. However, \b at schema boundaries means 'Header.tsx:10-20'
+      // (the basename) still matches the bare colon pattern.
+      const result = extractPromptSignals(
+        'Check src\\components\\Header.tsx:10-20'
+      );
+      // Captures just the basename portion after the last backslash
+      expect(result.fileRanges.size).toBe(1);
+      const range = result.fileRanges.get('header.tsx');
+      expect(range).toBeDefined();
+      expect(range!.startLine).toBe(10);
+      expect(range!.endLine).toBe(20);
+    });
+  });
+});

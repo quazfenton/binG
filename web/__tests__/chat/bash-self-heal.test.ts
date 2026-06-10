@@ -16,7 +16,7 @@ import {
 } from '@/lib/chat/bash-self-heal';
 
 // Mock LLM service so repairWithLLM doesn't make real API calls
-vi.mock('@/lib/chat/llm-providers', () => ({
+vi.mock('@/lib/providers/llm-providers', () => ({
   llmService: {
     generateResponse: vi.fn().mockResolvedValue({ content: '' }),
   },
@@ -241,7 +241,7 @@ describe('Bash Self-Healing', () => {
       // We mock llmService (different module) so that repairWithLLM receives
       // it through its own import, unlike same-module vi.mock which can't
       // intercept internal calls in ESM.
-      const { llmService } = await import('@/lib/chat/llm-providers');
+      const { llmService } = await import('@/lib/providers/llm-providers');
       vi.mocked(llmService.generateResponse).mockResolvedValueOnce({
         content: 'rm -rf /',
       });

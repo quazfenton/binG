@@ -1,46 +1,46 @@
 {
   "version": 1,
-  "updatedAt": "2026-05-31T05:04:52.389Z",
+  "updatedAt": "2026-06-10T04:34:07.518Z",
   "quotas": {
     "brevo": {
       "monthlyLimit": 9000,
       "currentUsage": 9,
-      "resetDate": "2026-06-01T00:00:00.000Z",
+      "resetDate": "2026-07-01T00:00:00.000Z",
       "isDisabled": true,
       "priority": 1
     },
     "mailersend": {
       "monthlyLimit": 3000,
       "currentUsage": 0,
-      "resetDate": "2026-06-01T04:00:00.000Z",
+      "resetDate": "2026-07-01T00:00:00.000Z",
       "isDisabled": true,
       "priority": 2
     },
     "resend": {
       "monthlyLimit": 3000,
       "currentUsage": 0,
-      "resetDate": "2026-06-01T00:00:00.000Z",
+      "resetDate": "2026-07-01T00:00:00.000Z",
       "isDisabled": true,
       "priority": 2
     },
     "sendgrid": {
       "monthlyLimit": 3000,
       "currentUsage": 0,
-      "resetDate": "2026-06-01T00:00:00.000Z",
+      "resetDate": "2026-07-01T00:00:00.000Z",
       "isDisabled": true,
       "priority": 3
     },
     "smtp": {
       "monthlyLimit": 10000,
       "currentUsage": 0,
-      "resetDate": "2026-06-01T00:00:00.000Z",
+      "resetDate": "2026-07-01T00:00:00.000Z",
       "isDisabled": true,
       "priority": 4
     },
     "e2b": {
       "monthlyLimit": 1000,
       "currentUsage": 0,
-      "resetDate": "2026-06-01",
+      "resetDate": "2026-07-01T00:00:00.000Z",
       "isDisabled": false,
       "priority": 5
     }

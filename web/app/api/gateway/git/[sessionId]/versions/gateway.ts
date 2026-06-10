@@ -38,6 +38,9 @@ export async function GET(
       requestId: Math.random().toString(36).slice(2, 8),
     });
     const ownerId = authResolution.ownerId;
+    console.log('[Git Versions] Resolved ownerId:', ownerId, 'source:', authResolution.source, 'anonSessionId:', authResolution.anonSessionId);
+    console.log('[Git Versions] Cookie present:', !!request.cookies.get('anon-session-id')?.value);
+    console.log('[Git Versions] Header present:', !!request.headers.get('x-anonymous-session-id'));
 
     // Shadow commits store:
     //   owner_id   = full owner string (e.g. "anon:timestamp_randomid")
@@ -65,6 +68,7 @@ export async function GET(
         created_at: string;
         transactions: string | null;
       }>;
+      console.log('[Git Versions] Query result:', rows.length, 'rows for ownerId:', fullOwnerId);
 
       const versions = rows.map(row => {
         let paths: string[] = [];
@@ -139,6 +143,7 @@ export async function GET(
     return withAnonSessionCookie(response, authResolution);
   } catch (error) {
     console.error('[Git Versions] Error:', error);
+    console.error('[Git Versions] Error details:', error instanceof Error ? error.stack : String(error));
     // Don't leak internal error details to clients
     return NextResponse.json(
       { error: 'Failed to fetch versions', versions: [] },

@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { sliceLines } from '../router';
+import { sliceLines } from '@/lib/utils/slice-lines';
 
 // =============================================================================
 // sliceLines Unit Tests

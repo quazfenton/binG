@@ -62,7 +62,23 @@ interface SettingsProps {
 }
 
 const CUSTOM_BG_MEDIA_KEY = "custom_bg_media_url";
-const CUSTOM_BG_SPEED_KEY = "custom_bg_speed";
+const CUSTOM_BG_SPEEDS_KEY = "custom_bg_speeds";
+
+/** Read a URL's stored speed from the per-URL map (default 1). */
+function getStoredSpeed(url: string): number {
+  try {
+    const map: Record<string, number> = JSON.parse(localStorage.getItem(CUSTOM_BG_SPEEDS_KEY) || '{}');
+    return map[url] ?? 1;
+  } catch { return 1; }
+}
+/** Write a URL's speed to the per-URL map. */
+function setStoredSpeed(url: string, speed: number): void {
+  try {
+    const map: Record<string, number> = JSON.parse(localStorage.getItem(CUSTOM_BG_SPEEDS_KEY) || '{}');
+    map[url] = speed;
+    localStorage.setItem(CUSTOM_BG_SPEEDS_KEY, JSON.stringify(map));
+  } catch { /* ignore write errors */ }
+}
 const USER_BUBBLE_BG_KEY = "user_bubble_bg";
 const USER_BUBBLE_TEXT_KEY = "user_bubble_text";
 const ASSISTANT_BUBBLE_BG_KEY = "assistant_bubble_bg";
@@ -149,7 +165,7 @@ export default function Settings({
   const [speechVolume, setSpeechVolume] = useState(0.8);
   const [isListening, setIsListening] = useState(false);
   const [customBgUrl, setCustomBgUrl] = useState("");
-  const [bgSpeed, setBgSpeed] = useState(parseFloat(process.env.NEXT_PUBLIC_BG_MEDIA_SPEED || '0.5'));
+  const [bgSpeed, setBgSpeed] = useState(1);
   const [userBubbleBg, setUserBubbleBg] = useState("rgba(0, 0, 0, 0.85)");
   const [userBubbleText, setUserBubbleText] = useState("#ffffff");
   const [assistantBubbleBg, setAssistantBubbleBg] = useState("#000000");
@@ -532,17 +548,13 @@ export default function Settings({
   useEffect(() => {
     if (typeof window === "undefined") return;
     const saved = localStorage.getItem(CUSTOM_BG_MEDIA_KEY) || "";
-    const savedSpeed = parseFloat(localStorage.getItem(CUSTOM_BG_SPEED_KEY) || process.env.NEXT_PUBLIC_BG_MEDIA_SPEED || '0.5');
     setCustomBgUrl(saved);
-    setBgSpeed(savedSpeed);
-    // Apply saved custom URL if present; otherwise fall back to the env-provided default.
-    if (saved.trim()) {
-      applyCustomBackgroundMedia(saved, savedSpeed);
-    } else {
-      const defaultUrl = process.env.NEXT_PUBLIC_BG_MEDIA_URL;
-      if (defaultUrl && defaultUrl.trim()) {
-        applyCustomBackgroundMedia(defaultUrl, savedSpeed);
-      }
+    // Determine the active URL: saved custom URL, or env-provided default
+    const mediaUrl = saved.trim() || (process.env.NEXT_PUBLIC_BG_MEDIA_URL || "").trim();
+    if (mediaUrl) {
+      const storedSpeed = getStoredSpeed(mediaUrl);
+      setBgSpeed(storedSpeed);
+      applyCustomBackgroundMedia(mediaUrl, storedSpeed);
     }
 
     const savedUserBg = localStorage.getItem(USER_BUBBLE_BG_KEY) || "";
@@ -678,7 +690,7 @@ export default function Settings({
       new URL(trimmed);
       if (typeof window !== "undefined") {
         localStorage.setItem(CUSTOM_BG_MEDIA_KEY, trimmed);
-        localStorage.setItem(CUSTOM_BG_SPEED_KEY, String(bgSpeed));
+        setStoredSpeed(trimmed, bgSpeed);
         saveToBackgroundHistory(trimmed, bgUrlName || undefined);
         
         // Warm cache for the new custom background
@@ -709,10 +721,12 @@ export default function Settings({
     if (url) {
       if (typeof window !== "undefined") {
         localStorage.setItem(CUSTOM_BG_MEDIA_KEY, url);
-        localStorage.setItem(CUSTOM_BG_SPEED_KEY, String(bgSpeed));
         if (name) saveToBackgroundHistory(url, name);
       }
-      applyCustomBackgroundMedia(url, bgSpeed);
+      // Load the URL's stored speed (or 1 if none)
+      const speed = getStoredSpeed(url);
+      setBgSpeed(speed);
+      applyCustomBackgroundMedia(url, speed);
       toast.success(`${name || 'Background'} applied`);
     } else {
       handleClearCustomBg();
@@ -1075,13 +1089,20 @@ export default function Settings({
                   {bgSpeed === 1 ? 'Normal' : `${bgSpeed.toFixed(1)}x`}
                 </span>
               </div>
-              <Slider
+               <Slider
                 id="bg-speed"
                 value={[bgSpeed]}
                 min={0.1}
                 max={3}
                 step={0.1}
                 onValueChange={(value) => setBgSpeed(value[0])}
+                onValueCommit={([speed]) => {
+                  const url = customBgUrl.trim() || (process.env.NEXT_PUBLIC_BG_MEDIA_URL || "").trim();
+                  if (url) {
+                    setStoredSpeed(url, speed);
+                    applyCustomBackgroundMedia(url, speed);
+                  }
+                }}
                 className="w-full"
               />
               <div className="flex justify-between text-[10px] text-white/30">

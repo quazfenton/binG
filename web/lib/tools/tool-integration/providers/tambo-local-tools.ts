@@ -36,13 +36,14 @@ export const tamboLocalTools = {
     const owner = getSecureOwner(ownerId, authContextUserId);
     const file = await virtualFilesystem.readFile(owner, path);
     const hasLineRange = startLine != null || endLine != null;
+    const allLines = file.content.split('\n');
     const content = hasLineRange
-      ? file.content.split('\n').slice((startLine ?? 1) - 1, endLine ?? file.content.split('\n').length).join('\n')
+      ? allLines.slice((startLine ?? 1) - 1, endLine ?? allLines.length).join('\n')
       : file.content;
     return {
       path: file.path, content, language: file.language, version: file.version,
       ...(hasLineRange ? {
-        totalLines: file.content.split('\n').length,
+        totalLines: allLines.length,
         lineRangeRequested: true,
       } : {}),
     };

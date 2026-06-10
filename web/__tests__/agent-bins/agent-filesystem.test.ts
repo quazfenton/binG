@@ -13,7 +13,7 @@ import {
   type AgentFilesystem,
   type AgentFsMode,
   type DirEntry,
-} from '@/lib/agent-bins/agent-filesystem';
+} from '@/lib/drivers/agent-bins/agent-filesystem';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import os from 'node:os';

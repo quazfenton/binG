@@ -25,26 +25,13 @@ import { getArcadeService } from '../integrations/arcade-service';
 import { getNangoService } from '../integrations/nango-service';
 import path from 'path';
 import os from 'os';
+import { sliceLines } from '../utils/slice-lines';
 
 const logger = createLogger('Tools:CapabilityRouter');
 
-/**
- * Slice file content to a line range (1-based, inclusive).
- * Used by file.read providers to support partial file reads.
- */
-export function sliceLines(content: string, startLine?: number, endLine?: number): string {
-  if (startLine == null && endLine == null) return content;
-  const lines = content.split('\n');
-  // Clamp startLine to >= 1 to prevent JavaScript slice() wrap-around
-  // (e.g. startLine=0 → start=-1 → slice(-1) returns the last element, not the first)
-  const safeStartLine = startLine != null ? Math.max(1, startLine) : 1;
-  const start = safeStartLine - 1;
-  const end = endLine != null ? endLine : lines.length;
-  return lines.slice(start, end).join('\n');
-}
+// Re-export for backward compatibility with consumers importing from '../tools/router'
+export { sliceLines };
 
-// ============================================================================
-// Provider Adapters
 // ============================================================================
 
 /**

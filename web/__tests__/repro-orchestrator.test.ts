@@ -9,7 +9,7 @@ vi.mock('@/lib/utils/logger', () => ({ createLogger: (_name: string) => ({ debug
 vi.mock('@/lib/database/schema', () => ({ execSchemaFile: (_db: any, _name: string) => {} }));
 
 import { PlanActVerifyOrchestrator } from '../../packages/shared/agent/orchestration/plan-act-verify';
-import { toolCallTracker } from '../lib/chat/tool-call-tracker';
+import { toolCallTracker } from '@/lib/tools/tool-call-tracker';
 
 describe('orchestrator reproduction harness', () => {
   it('captures constructed tool calls and aggregates redacted payloads', async () => {

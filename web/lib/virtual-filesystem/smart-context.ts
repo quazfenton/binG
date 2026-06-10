@@ -26,6 +26,7 @@ import type { VirtualFile, VirtualFilesystemNode } from './filesystem-types';
 import { createLogger } from '@/lib/utils/logger';
 import { estimateTokens } from '@/lib/context/contextBuilder';
 import { stripScopePrefixForDisplay } from './path-normalizer';
+import { sliceLines } from '@/lib/utils/slice-lines';
 import { detectNeedsMoreTurns } from '@/lib/chat/auto-continue-detector';
 import type { DetectableResult } from '@/lib/chat/auto-continue-detector';
 import { recordToolCallTelemetry, prepareTelemetryPayload } from '@/lib/errors/logging-utils';
@@ -143,7 +144,7 @@ const SCORE_THRESHOLDS = {
 /**
  * Extract file-related signals from user prompt
  */
-function extractPromptSignals(prompt: string): {
+export function extractPromptSignals(prompt: string): {
   extensions: Set<string>;
   keywords: Set<string>;
   possiblePaths: string[];
@@ -1128,7 +1129,7 @@ export async function generateSmartContext(options: SmartContextOptions): Promis
       const range = effectiveFileRanges.get(filePath.toLowerCase()) || effectiveFileRanges.get(filePath);
       if (range) {
         const originalLineCount = file.content.split('\n').length;
-        const sliced = sliceLinesLocal(
+        const sliced = sliceLines(
           file.content,
           range.startLine,
           range.endLine
@@ -1632,21 +1633,6 @@ function truncateContent(content: string, maxLines: number): string {
   const lines = content.split('\n');
   if (lines.length <= maxLines) return content;
   return lines.slice(0, maxLines).join('\n') + `\n\n... (${lines.length - maxLines} more lines truncated)`;
-}
-
-/**
- * Locally slice file content to a line range (1-based, inclusive).
- * Same logic as router.ts sliceLines but defined here to avoid circular imports.
- */
-function sliceLinesLocal(content: string, startLine?: number, endLine?: number): string {
-  if (startLine == null && endLine == null) return content;
-  const lines = content.split('\n');
-  // Clamp startLine to >= 1 to prevent JavaScript slice() wrap-around
-  // (e.g. startLine=0 → start=-1 → slice(-1) returns the last element, not the first)
-  const safeStartLine = startLine != null ? Math.max(1, startLine) : 1;
-  const start = safeStartLine - 1;
-  const end = endLine != null ? endLine : lines.length;
-  return lines.slice(start, end).join('\n');
 }
 
 /**

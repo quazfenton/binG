@@ -135,8 +135,8 @@ vi.mock('@/lib/oauth/connections', () => ({
 
 import { NextRequest } from 'next/server';
 import { POST as spawnPOST, GET as spawnGET } from '@/app/api/spawn/route';
-import { GET as agentGET, POST as agentPOST, DELETE as agentDELETE } from '@/app/api/spawn/[id]/route';
-import { GET as eventsGET } from '@/app/api/spawn/[id]/events/route';
+import { GET as agentGET, POST as agentPOST, DELETE as agentDELETE } from '@/app/api/spawn/[id]/gateway';
+import { GET as eventsGET } from '@/app/api/spawn/[id]/events/gateway';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Helpers

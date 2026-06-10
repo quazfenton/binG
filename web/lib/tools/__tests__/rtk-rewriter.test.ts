@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { rewriteCommand, filterOutput, hasRewriteRule, estimateTokenSavings } from '.../tools/rtk-rewriter';
+import { rewriteCommand, filterOutput, hasRewriteRule, estimateTokenSavings } from '../../context/rtk-rewriter';
 
 describe('RTK Rewriter', () => {
   describe('rewriteCommand', () => {

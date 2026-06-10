@@ -1169,11 +1169,13 @@ export async function processUnifiedAgentRequest(
     });
     return {
       success: false,
-      response: '',
+      response: 'I\'m sorry, I wasn\'t able to process your request. All available AI providers and execution modes were exhausted. This can happen due to API key issues, rate limits, or network problems. Please try again in a moment, or check that your API keys are configured correctly.',
       mode,
       error: error instanceof Error ? error.message : String(error),
       metadata: {
         duration: Date.now() - startTime,
+        triedModes: Array.from(triedModes),
+        allProvidersFailed: true,
       },
     };
   }
@@ -2539,7 +2541,8 @@ function createCapabilityToolExecutor(config: UnifiedAgentConfig) {
 
       // FIX 12: Detect scope/permission violations — mark them so the agent loop
       // does NOT trigger provider fallback. These are app-level errors.
-      const capOutput = (capResult.output as string) || capResult.error || "";
+      const capOutputRaw = capResult.output ?? capResult.error ?? "";
+      const capOutput = typeof capOutputRaw === 'string' ? capOutputRaw : JSON.stringify(capOutputRaw);
       const isScopeViolation =
         capOutput.includes("PATH_NOT_FOUND") ||
         capOutput.includes("outside the allowed scope") ||
@@ -3843,6 +3846,8 @@ Based on what you have learned, continue working on the original task. Take the 
           const isExplicitClientAbort =
             errorMessage.includes('cancelled') ||
             errorMessage.includes('client disconnected') ||
+
+            errorMessage.includes('Controller is already closed') ||
             (error.name === 'AbortError' &&
               !errorMessage.includes('timeout') &&
               !errorMessage.includes('No activity') &&

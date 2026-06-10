@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { Cache, toolResultCache, toolCacheKey } from '../../cache'
+import { Cache, toolResultCache, toolCacheKey } from '../../utils/cache'
 import { invalidateToolCache, getToolCacheStats, executeToolCapability } from '../execute-capability'
 
 describe('Tool Caching', () => {
