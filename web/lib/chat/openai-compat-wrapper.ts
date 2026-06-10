@@ -20,6 +20,7 @@
 import { createOpenAI } from '@ai-sdk/openai';
 import { generateText as generateTextOriginal } from 'ai';
 import { chatLogger } from './chat-logger';
+import { shouldDeprioritize } from './llm-provider-health';
 
 /**
  * Provider compatibility layer
@@ -378,6 +379,12 @@ export async function* streamZoAPI(
  */
 export function getProviderForModel(providerName: string, model: string) {
   const currentEnv: any = typeof process !== 'undefined' ? process.env : {};
+
+  // Self-correcting: skip providers the health tracker has flagged as bad.
+  if (shouldDeprioritize(providerName)) {
+    chatLogger.warn('Skipping deprioritized provider', { provider: providerName, model });
+    throw new Error(`Unsupported or unknown provider: ${providerName}`);
+  }
 
   // Check if it's a custom provider requiring wrapper
   if (CUSTOM_PROVIDERS[providerName]) {

@@ -18,6 +18,7 @@ import { createNDJSONParser } from '@/lib/utils/ndjson-parser';
 import { streamStateManager } from '@/lib/streaming/stream-state-manager';
 import { notifyStreamComplete, notifyNeedMoreTurns } from '@/lib/streaming/stream-control-handler';
 import type { LLMMessage, StreamingResponse } from "@/lib/providers/llm-providers";
+import { verifyJwt } from "@bing/shared/auth/jwt";
 import { checkRateLimit } from '@/lib/middleware/rate-limiter';
 import { checkRouteCircuitBreaker, recordRouteCircuitBreakerResult } from '@/lib/middleware/circuit-breaker-middleware';
 import { createFilesystemTools, createAgentLoop } from '@/lib/orchestra/mastra/index';
@@ -275,6 +276,25 @@ const THIRD_PARTY_OAUTH_RE =
   /\b(my\s+)?gmail|(my\s+)?google\s+(drive|sheets|docs|calendar)|slack|discord|twitter|x\s*api|notion|zoom|hubspot|salesforce|shopify|stripe|pipedrive|airtable|jira|confluence|trello|dropbox|onedrive|box\s*file|aws\s*s3|s3\s*bucket|heroku|vercel|netlify|railway|render\s*static|cloudflare\s*pages|figma|miro|miroboard|(my|our)\s+github\s+(repo|branch|pr|issue|organization|team)/i
 
 export async function POST(request: NextRequest) {
+  // Auth via short-lived JWT issued by the edge-gateway Worker via 302 redirect.
+  // Bypasses the Worker wall-clock cap by streaming directly from the backend.
+  const _redirectToken = new URL(request.url).searchParams.get('token');
+  if (_redirectToken) {
+    const _verified = await verifyJwt(_redirectToken, process.env.JWT_SECRET || '');
+    if (!_verified.valid) {
+      return NextResponse.json(
+        { error: 'Unauthorized', reason: _verified.error || 'invalid' },
+        { status: 401, headers: { 'Access-Control-Allow-Origin': '*' } },
+      );
+    }
+    // Attach userId from sub claim to request headers for downstream use
+    const _userId = (_verified.payload?.sub as string) || '';
+    const _forwardedHeaders = new Headers(request.headers);
+    _forwardedHeaders.set('x-user-id', _userId);
+    request = new NextRequest(request.url, { headers: _forwardedHeaders, method: request.method, body: request.body });
+  }
+
+
   const requestStartTime = Date.now();
   const requestId = generateSecureId('chat');
 
@@ -6183,6 +6203,25 @@ async function applyFilesystemEditsFromResponse(input: {
 }
 
 export async function GET(request: NextRequest) {
+  // Auth via short-lived JWT issued by the edge-gateway Worker via 302 redirect.
+  // Bypasses the Worker wall-clock cap by streaming directly from the backend.
+  const _redirectToken = new URL(request.url).searchParams.get('token');
+  if (_redirectToken) {
+    const _verified = await verifyJwt(_redirectToken, process.env.JWT_SECRET || '');
+    if (!_verified.valid) {
+      return NextResponse.json(
+        { error: 'Unauthorized', reason: _verified.error || 'invalid' },
+        { status: 401, headers: { 'Access-Control-Allow-Origin': '*' } },
+      );
+    }
+    // Attach userId from sub claim to request headers for downstream use
+    const _userId = (_verified.payload?.sub as string) || '';
+    const _forwardedHeaders = new Headers(request.headers);
+    _forwardedHeaders.set('x-user-id', _userId);
+    request = new NextRequest(request.url, { headers: _forwardedHeaders, method: request.method, body: request.body });
+  }
+
+
   // Precompile warmup: Initialize LLM providers on first GET request
   // This ensures the route is ready for subsequent POST requests without cold start
   const url = new URL(request.url);
@@ -6264,17 +6303,20 @@ async function handleError(
 }
 
 // Handle preflight requests for CORS
-export async function OPTIONS(request: NextRequest) {
-  return new Response(null, {
-    status: 200,
+  // CORS preflight: don't require a token; return 204 with CORS headers so the
+  // browser can follow the cross-origin 302 redirect from the edge-gateway Worker.
+  return new NextResponse(null, {
+    status: 204,
     headers: {
-      "Access-Control-Allow-Origin": process.env.NEXT_PUBLIC_APP_URL || '',
-      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type, Authorization, x-anonymous-session-id",
-      "Vary": "Origin",
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-user-id',
+      'Access-Control-Max-Age': '86400',
     },
   });
 }
+
+
 
 
 

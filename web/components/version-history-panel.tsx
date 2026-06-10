@@ -47,12 +47,14 @@ export function VersionHistoryPanel({
       return;
     }
 
+    console.log('[VersionHistory] Fetching versions for sessionId:', sessionId);
     setIsLoading(true);
     try {
       const response = await fetch(`/api/gateway/git/${sessionId}/versions?limit=20`, {
         headers: buildApiHeaders(),
         credentials: 'include',
       });
+      console.log('[VersionHistory] Response status:', response.status);
 
       // Handle auth/session errors gracefully
       if (response.status === 401 || response.status === 403) {
@@ -69,6 +71,10 @@ export function VersionHistoryPanel({
 
       const data = await response.json();
       const fetchedVersions = data.versions || [];
+      console.log('[VersionHistory] Fetched versions:', fetchedVersions.length, 'by:', data.by);
+      if (data.versions && data.versions.length > 0) {
+        console.log('[VersionHistory] First version:', data.versions[0]);
+      }
       setVersions(fetchedVersions);
 
       // Track the highest workspace_version from shadow commits

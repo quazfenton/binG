@@ -356,9 +356,27 @@ export interface InjectedFeedback {
 }
 
 /**
- * Inject feedback into prompt context
+ * Maximum total characters for injected feedback in the system prompt.
+ * Feedback injection grows with each fallback (more failure entries → more
+ * analysis text → longer system prompt → higher latency → more timeouts →
+ * more fallbacks). This cap breaks the vicious cycle by limiting how much
+ * feedback text can accumulate in the prompt.
  */
-export function injectFeedback(context: FeedbackContext): InjectedFeedback {
+const MAX_INJECTED_FEEDBACK_CHARS = 1800;
+
+/**
+ * Inject feedback into prompt context.
+ *
+ * @param context - The feedback context with accumulated failures/corrections.
+ * @param maxOutputChars - Optional cap on total output chars (default 1800).
+ *   Set lower (e.g. 600) when deep in a fallback chain to prevent the vicious
+ *   cycle: more failures → longer injected feedback → longer prompt → higher
+ *   latency → timeout → more fallbacks.
+ */
+export function injectFeedback(
+  context: FeedbackContext,
+  maxOutputChars: number = MAX_INJECTED_FEEDBACK_CHARS,
+): InjectedFeedback {
   const { recentFailures, corrections, accumulatedFeedback } = context;
   
   if (recentFailures.length === 0 && corrections.length === 0) {
@@ -368,53 +386,74 @@ export function injectFeedback(context: FeedbackContext): InjectedFeedback {
       formatGuidance: '',
     };
   }
-  
+
+  // When deep in a fallback chain (many recent failures), reduce the
+  // number of entries we process. Each entry adds ~150-300 chars of
+  // analysis text. Processing all 5 entries + 3 healing sections easily
+  // blows past 2000 chars, growing the system prompt and making the next
+  // attempt more likely to time out.
+  const maxCorrectionEntries = maxOutputChars >= 1200 ? 3 : (maxOutputChars >= 600 ? 2 : 1);
+  const maxHealingEntries = maxOutputChars >= 1200 ? 2 : (maxOutputChars >= 600 ? 1 : 0);
+
   // Cache analyzeFailure results to avoid redundant computation
   const failureAnalyses = new Map<FeedbackEntry, FailureAnalysis>();
   for (const failure of recentFailures) {
     failureAnalyses.set(failure, analyzeFailure(failure));
   }
-  
+
+  // Track total chars to enforce the cap
+  let totalChars = 0;
+
   // Build correction section
   let correctionSection = '';
-  if (recentFailures.length > 0) {
+  if (recentFailures.length > 0 && maxCorrectionEntries > 0) {
     correctionSection += '\n## Feedback & Corrections\n';
     correctionSection += 'Address the following issues from previous attempts:\n\n';
+    totalChars += correctionSection.length;
 
-    for (const failure of recentFailures.slice(-5)) { // Last 5 failures
+    for (const failure of recentFailures.slice(-maxCorrectionEntries)) {
       const analysis = failureAnalyses.get(failure);
       if (!analysis) continue;
-      correctionSection += `### ${failure.type.toUpperCase()} (${failure.source})\n`;
-      correctionSection += `${analysis.rootCause}\n`;
-      correctionSection += `**Fix:** ${analysis.healingApproach}\n\n`;
+      const entry = `### ${failure.type.toUpperCase()} (${failure.source})\n${analysis.rootCause}\n**Fix:** ${analysis.healingApproach}\n\n`;
+      if (totalChars + entry.length > maxOutputChars) break;
+      correctionSection += entry;
+      totalChars += entry.length;
     }
   }
   
-  // Build healing instructions
-  let healingInstructions = '\n## Healing Instructions\n';
-  healingInstructions += 'Apply these steps to recover from failures:\n\n';
+  // Build healing instructions (skip entirely if budget is very tight)
+  let healingInstructions = '';
+  if (maxHealingEntries > 0 && totalChars < maxOutputChars) {
+    healingInstructions += '\n## Healing Instructions\n';
+    healingInstructions += 'Apply these steps to recover from failures:\n\n';
+    totalChars += healingInstructions.length;
 
-  for (const failure of recentFailures.slice(-3)) {
-    const analysis = failureAnalyses.get(failure);
-    if (!analysis) continue;
-    healingInstructions += `1. ${analysis.correctionPrompt.instruction}\n`;
-    analysis.correctionPrompt.healingSteps.forEach(step => {
-      healingInstructions += `   - ${step}\n`;
-    });
+    for (const failure of recentFailures.slice(-maxHealingEntries)) {
+      const analysis = failureAnalyses.get(failure);
+      if (!analysis) continue;
+      const entry = `1. ${analysis.correctionPrompt.instruction}\n` +
+        analysis.correctionPrompt.healingSteps.map(step => `   - ${step}\n`).join('');
+      if (totalChars + entry.length > maxOutputChars) break;
+      healingInstructions += entry;
+      totalChars += entry.length;
+    }
   }
   
-  // Build format guidance
+  // Build format guidance (only if budget allows)
   let formatGuidance = '';
-  const uniqueCategories = [...new Set(recentFailures.map(f => {
-    const analysis = failureAnalyses.get(f);
-    return analysis?.category;
-  }).filter(Boolean))];
-  if (uniqueCategories.includes('format_mismatch')) {
-    formatGuidance = '\n## Format Requirements\n';
-    formatGuidance += 'IMPORTANT: Ensure response matches expected format.\n';
-    formatGuidance += '- Validate structure before returning\n';
-    formatGuidance += '- Include required fields\n';
-    formatGuidance += '- Match protocol specifications\n';
+  if (totalChars < maxOutputChars) {
+    const uniqueCategories = [...new Set(recentFailures.map(f => {
+      const analysis = failureAnalyses.get(f);
+      return analysis?.category;
+    }).filter(Boolean))];
+    if (uniqueCategories.includes('format_mismatch')) {
+      formatGuidance = '\n## Format Requirements\n';
+      formatGuidance += 'IMPORTANT: Ensure response matches expected format.\n';
+      formatGuidance += '- Validate structure before returning\n';
+      formatGuidance += '- Include required fields\n';
+      formatGuidance += '- Match protocol specifications\n';
+      totalChars += formatGuidance.length;
+    }
   }
   
   // Build role redirect section — ALWAYS active (response-embedded routing).
@@ -455,6 +494,21 @@ export function injectFeedback(context: FeedbackContext): InjectedFeedback {
     formatGuidance,
     roleRedirectSection,
   };
+}
+
+/**
+ * Get the injection budget for a feedback context based on fallback depth.
+ *
+ * Prevents the vicious cycle where more fallbacks → more feedback → longer
+ * prompts → higher latency → more timeouts → more fallbacks.
+ *
+ * Tiered by turnNumber (cumulative fallback/retry count):
+ *   - 0-1: 1800 chars (full healing context)
+ *   - 2-3: 900 chars (moderate — just corrections, skip healing instructions)
+ *   - 4+:  400 chars (minimal — single error summary only)
+ */
+export function getFeedbackInjectionBudget(context: FeedbackContext): number {
+  return context.turnNumber <= 1 ? 1800 : context.turnNumber <= 3 ? 900 : 400;
 }
 
 /**
@@ -673,7 +727,14 @@ export function detectHealingTrigger(
 }
 
 /**
- * Generate re-prompt with healing context
+ * Generate re-prompt with healing context.
+ *
+ * NOTE: Does NOT call injectFeedback() internally. The caller is responsible
+ * for injecting feedback separately and can combine the healing prompt with
+ * the injected feedback as needed. This avoids double-injection: the original
+ * design called injectFeedback() both here AND at the call site (lines ~4204,
+ * ~4728 in unified-agent-service.ts), which doubled the feedback text in the
+ * system prompt and accelerated the vicious cycle.
  */
 export function generateHealingPrompt(
   trigger: HealingTrigger,
@@ -687,15 +748,6 @@ export function generateHealingPrompt(
   
   if (triggerPrompt) {
     healingPrompt += `Directive: ${triggerPrompt}\n\n`;
-  }
-  
-  // Add accumulated feedback context
-  const injected = injectFeedback(context);
-  healingPrompt += injected.correctionSection;
-  healingPrompt += injected.healingInstructions;
-  healingPrompt += injected.formatGuidance;
-  if (injected.roleRedirectSection) {
-    healingPrompt += injected.roleRedirectSection;
   }
   
   // Add original task context

@@ -2,10 +2,15 @@ import { Daytona } from '@daytonaio/sdk'
 import { resolve, relative } from 'node:path'
 import type { ToolResult, PreviewInfo } from '../types'
 
-// Suppress verbose HTTP request logging from axios/got internals
-if (process.env.DEBUG && process.env.DEBUG.includes('http')) {
+// Suppress verbose HTTP request logging from axios/got/follow-redirects internals
+// follow-redirects logs full request options (including auth headers) via debug("follow-redirects")
+if (process.env.DEBUG) {
+  const sensitiveNamespaces = ['http', 'axios', 'daytona', 'follow-redirects', 'needle'];
   const debugVal = process.env.DEBUG;
-  process.env.DEBUG = debugVal.split(',').filter(ns => !['http', 'axios', 'daytona'].includes(ns.trim())).join(',');
+  const hasSensitive = sensitiveNamespaces.some(ns => debugVal.includes(ns));
+  if (hasSensitive && debugVal.split(',').length > 1) {
+    process.env.DEBUG = debugVal.split(',').filter(ns => !sensitiveNamespaces.includes(ns.trim())).join(',');
+  }
 }
 
 import { validatePreviewInfo } from '../types'

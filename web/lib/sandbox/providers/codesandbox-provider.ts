@@ -138,7 +138,6 @@ export class CodeSandboxProvider implements SandboxProvider {
       }
 
       console.log(`[CodeSandbox] Creating sandbox - User: ${config.labels?.userId || 'unknown'}, Template: ${createOpts.id}, Privacy: ${this.privacy || 'default'}`)
-      console.log('[CodeSandbox] Create options:', JSON.stringify(createOpts, null, 2))
 
       const sandbox: CSBSandbox = await sdk.sandboxes.create(createOpts)
       console.log(`[CodeSandbox] ✓ Created sandbox ${sandbox.id}`)

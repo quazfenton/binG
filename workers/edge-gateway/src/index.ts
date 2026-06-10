@@ -19,7 +19,7 @@
  *   POST /admin/backend-url-fallback
  *     R2-only fallback when KV put quota is exceeded
  */
-import { authenticateRequest } from './auth';
+import { authenticateRequest, signJwt } from './auth';
 import { checkIpRateLimit, checkRateLimit } from './rate-limiter';
 import { routeRequest } from './router';
 import { setBackendUrl } from './url-store';
@@ -279,7 +279,60 @@ export default {
       // upstream `fetch` body, so streaming responses can run for the
       // full request lifetime (up to CF's hard 30 min cap on enterprise,
       // ~10 min on paid, ~5 min on free — all far beyond what we need).
-      const proxyResponse = await fetch(target.url, {
+      // ── 302 redirect for streaming chat endpoints ──────────────────────
+      // Bypasses the Worker wall-clock cap (30s on Free plan) by handing
+      // the streaming connection off to the backend. Worker still does
+      // auth, rate limiting, and KV URL resolution. The client then
+      // streams directly from the backend with a short-lived signed JWT.
+      const isChatStreamPath = url.pathname.startsWith('/api/chat') ||
+                                url.pathname.startsWith('/v1/chat/completions');
+      if (isChatStreamPath) {
+        // (1) CORS preflight
+        if (request.method === 'OPTIONS') {
+          return new Response(null, { status: 204, headers: CORS_HEADERS });
+        }
+        // (2) Auth check
+        const auth = await authenticateRequest(request, env);
+        if (!auth.authenticated) {
+          return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+            status: 401,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          });
+        }
+        // (3) Rate limit
+        const ipLimit = await checkIpRateLimit(request, env);
+        if (!ipLimit.allowed) {
+          return new Response(JSON.stringify({ error: 'Rate limit exceeded' }), {
+            status: 429,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          });
+        }
+        // (4) Resolve backend URL (env wins, KV is fallback for tunnel URL updates)
+        const backendUrl = (env.BACKEND_URL && env.BACKEND_URL.length > 0)
+          ? env.BACKEND_URL
+          : (await getBackendUrl(env));
+        if (!backendUrl) {
+          return new Response(JSON.stringify({ error: 'Backend URL not configured' }), {
+            status: 503,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          });
+        }
+        // (5) Sign a 5-minute JWT for the redirect
+        const jwtSecret = env.JWT_SECRET || 'fallback-dev-secret-change-me';
+        const token = await signJwt(
+          { sub: auth.userId || 'anonymous', exp: Date.now() + 5 * 60 * 1000, scope: 'chat:stream' },
+          jwtSecret,
+        );
+        // (6) Return 302 redirect
+        const qs = url.search ? url.search + '&' : '?';
+        const location = `${backendUrl}${url.pathname}${qs}token=${encodeURIComponent(token)}`;
+        return new Response(null, {
+          status: 302,
+          headers: { ...CORS_HEADERS, Location: location },
+        });
+      }
+
+            const proxyResponse = await fetch(target.url, {
         method: request.method,
         headers: proxyHeaders,
         body: request.method !== 'GET' && request.method !== 'HEAD' ? proxiedRequest.body : undefined,

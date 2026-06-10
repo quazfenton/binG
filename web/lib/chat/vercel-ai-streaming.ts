@@ -28,6 +28,7 @@ import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createMistral } from '@ai-sdk/mistral';
 import type { StreamingResponse, LLMMessage } from '../providers/llm-providers';
 import { chatLogger } from './chat-logger';
+import { recordCall } from './llm-provider-health';
 
 import { getProviderForModel } from './openai-compat-wrapper';
 import { getConfiguredFallbackChain } from '../providers/provider-fallback-chains';
@@ -256,22 +257,9 @@ interface OpenAICompatibleConfig {
   useChatEndpoint?: boolean;
 }
 
-/**
- * Per-provider timeout overrides (in ms).
- * Some providers (e.g., free-tier NVIDIA, OpenRouter free models) are
- * significantly slower than others and need longer timeouts. Otherwise
- * they consistently trigger TTFT/idle timeouts and get deranked.
- * Key: provider name (lowercase). Value: timeout in ms.
- * Falls back to LLM_STREAM_TIMEOUT_MS (default 60s) when unset.
- */
-const PROVIDER_TIMEOUT_OVERRIDES: Record<string, number> = {
-  'nvidia': 120000,       // NVIDIA free-tier models can be very slow
-  'openrouter': 120000,    // OpenRouter free models have variable latency
-  'groq': 90000,           // Groq can be slow on first request
-  'together': 150000,      // Together AI free tier
-  'deepinfra': 150000,     // DeepInfra free tier
-  'chutes': 120000,        // Chutes free tier
-};
+// PROVIDER_TIMEOUT_OVERRIDES removed — replaced by the self-correcting derank loop in llm-provider-health.ts.
+// Slow providers are now detected dynamically (3+ bad calls in last 5min) and moved to the end of the
+// fallback chain in getConfiguredFallbackChain(), instead of being given extra timeout budget here.
 
 /**
  * Configuration for all OpenAI-compatible providers.
@@ -453,15 +441,30 @@ export function getVercelModel(
 
   // Check for custom providers requiring compatibility wrapper first
   if (provider === 'zo') {
+    // Self-correcting: when the primary provider is deprioritized, walk the chain to find the next healthy provider.
     try {
       chatLogger.info('Using Zo compatibility wrapper', { provider, model });
-      const zoProvider = getProviderForModel('zo', model || 'zo');
-      return zoProvider;
+      return getProviderForModel('zo', model || 'zo');
     } catch (error: any) {
-      chatLogger.warn('Zo wrapper failed, will use fallback', {
+      chatLogger.warn('Zo wrapper failed, walking fallback chain', {
         error: error.message,
+        provider,
       });
-      // Fall through to OpenAI fallback
+      const chain = getConfiguredFallbackChain(provider);
+      for (let i = 1; i < chain.length; i++) {
+        try {
+          chatLogger.info('Trying fallback chain entry', { provider: chain[i], index: i });
+          return getProviderForModel(chain[i], model);
+        } catch (chainError: any) {
+          chatLogger.warn('Chain entry failed, continuing', {
+            provider: chain[i],
+            error: chainError.message,
+          });
+          // continue to next chain entry
+        }
+      }
+      // All chain entries failed — re-throw original error
+      throw error;
     }
   }
 
@@ -591,6 +594,8 @@ export async function preflightProviderHealthCheck(
   const baseUrl = resolveProviderBaseUrl(provider, userBaseURL);
   if (!baseUrl) {
     // Can't determine base URL — assume reachable (don't block)
+    // Self-correcting: feeds the llm-provider-health rolling window so next request can derank this provider if it's been bad.
+    recordCall(provider, true, 0);
     return { reachable: true, latencyMs: 0 };
   }
 
@@ -612,12 +617,16 @@ export async function preflightProviderHealthCheck(
       redirect: 'manual',
     });
     clearTimeout(timeoutId);
+    // Self-correcting: feeds the llm-provider-health rolling window so next request can derank this provider if it's been bad.
+    recordCall(provider, true, Date.now() - startTime);
     return { reachable: true, latencyMs: Date.now() - startTime };
   } catch {
     clearTimeout(timeoutId);
     // Any failure (TypeError for DNS, connection refused, timeout, TLS error)
     // means the endpoint is unreachable. We don't distinguish between
     // different failure modes — they all mean "skip this provider".
+    // Self-correcting: feeds the llm-provider-health rolling window so next request can derank this provider if it's been bad.
+    recordCall(provider, false, Date.now() - startTime, 'unreachable');
     return { reachable: false, latencyMs: Date.now() - startTime };
   }
 }
@@ -927,13 +936,7 @@ export async function* streamWithVercelAI(
     smoothStreaming = true,
     maxRetries = 0,
     maxSteps = 12,
-    timeoutMs = (() => {
-      // Check per-provider timeout override first
-      const providerOverride = PROVIDER_TIMEOUT_OVERRIDES[provider];
-      if (providerOverride) return providerOverride;
-      // Fall back to env var or default
-      return parseInt(process.env.LLM_STREAM_TIMEOUT_MS || '60000', 10);
-    })(), // Default 60s TTFT timeout; per-provider overrides for slow providers (nvidia, openrouter, etc.)
+    timeoutMs = parseInt(process.env.LLM_STREAM_TIMEOUT_MS || '60000', 10), // Flat 60s for all providers. Per-provider tuning removed; replaced by the self-correcting derank loop in llm-provider-health.ts.
     speculativeFallbackMs = parseInt(process.env.LLM_STREAM_SPECULATIVE_MS || '20000', 10), // Default 20s, 0 to disable
     providerOptions,
     system: systemOverride,
@@ -1472,9 +1475,8 @@ export async function* streamWithVercelAI(
             // Add TTFT timeout to fallback too — prevents hanging if fallback provider also stalls.
             // This is a TTFT-only guard: cleared by onFallbackWin once the fallback produces
             // its first chunk. NOT a hard lifetime cap (avoids premature cutoff of long tool calls).
-            // Use fallback provider's own timeout override, not the primary's
-            const fbTimeoutMs = PROVIDER_TIMEOUT_OVERRIDES[fbResolved.provider] ||
-              parseInt(process.env.LLM_STREAM_TIMEOUT_MS || '60000', 10);
+            // Use fallback provider's own timeout override, not the primary's            // Flat 60s for fallback too. Per-provider tuning removed; replaced by the self-correcting derank loop in llm-provider-health.ts.
+            const fbTimeoutMs = parseInt(process.env.LLM_STREAM_TIMEOUT_MS || '60000', 10);
             fbTimeoutId = setTimeout(() => {
               if (!fbController.signal.aborted) {
                 fbController.abort(new Error(`No response from fallback provider within ${fbTimeoutMs}ms (fallback TTFT timeout)`));

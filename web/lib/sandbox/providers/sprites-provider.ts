@@ -189,7 +189,7 @@ export class SpritesProvider implements SandboxProvider {
 
       console.log(`[Sprites] Services configured for Sprite: ${spriteName} (auto-suspend: ${this.enableAutoSuspend})`)
 
-      console.log(`[Sprites] Creating Sprite "${spriteName}" with config:`, JSON.stringify(createConfig, null, 2))
+      console.log(`[Sprites] Creating Sprite "${spriteName}"`)
       
       // Create Sprite with config
       const sprite = await client.createSprite(spriteName, createConfig)

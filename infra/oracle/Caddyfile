@@ -27,17 +27,26 @@
     }
 
     # 9Router dashboard API routes (must come before /api/* catch-all)
+    # NOTE: The Host header is passed through as the original tunnel host so
+    #       9Router returns dashboard configuration for the correct hostname.
+    #       The -l flag is just --log (server logs), NOT "require localhost".
     @ninerouter_api path /api/auth/* /api/keys* /api/settings* /api/combos* /api/init /api/locale /api/tags /api/pricing /api/tunnel/* /api/cli-tools/* /api/usage/* /api/oauth/* /api/mcp/* /api/provider-nodes/* /api/proxy-pools/* /api/translator/* /api/version* /api/media-providers/* /api/shutdown
     handle @ninerouter_api {
         reverse_proxy ninerouter:3000 {
             flush_interval -1
-            # 9Router -l flag requires Host: localhost — pass it explicitly
-            header_up Host "localhost"
+            # Pass through the original Host so 9Router scopes config to the real hostname
+            header_up Host {http.request.host}
             header_up X-Forwarded-Proto "https"
-            header_up X-Forwarded-Host {host}
+            header_up X-Forwarded-Host {http.request.host}
             header_up X-Real-IP {remote_host}
             # Caddy already manages X-Forwarded-For; avoid overriding here
             # to preserve proxy-chain information in multi-hop deployments.
+
+            # Cookie handling for tunnel access — same as catch-all handler below.
+            # Without stripping Domain, 9Router sets Domain=<original-ip> which
+            # browsers refuse to send to *.trycloudflare.com, making dashboard empty.
+            header_down Set-Cookie "; Domain=[^;]*" ";"
+            header_down Set-Cookie "Domain=[^;]*; " ""
         }
     }
 
@@ -102,7 +111,9 @@
     handle {
         reverse_proxy ninerouter:3000 {
             flush_interval -1
-            # 9Router -l flag requires Host: localhost — pass it explicitly
+            # 9Router -l flag is just --log (server logs). Keep Host: localhost
+            # here for /v1/chat/completions compatibility — the dashboard's HTML
+            # is also served here but uses relative URLs so Host doesn't matter.
             header_up Host "localhost"
             header_up X-Forwarded-Proto "https"
             header_up X-Forwarded-Host {host}

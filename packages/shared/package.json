@@ -7,7 +7,17 @@
     "./agent/*": "./agent/*.ts",
     "./FS": "./FS/index.ts",
     "./FS/*": "./FS/*.ts",
-    "./lib/*": "./lib/*.ts"
+    "./lib/*": "./lib/*.ts",
+    "./auth": {
+      "types": "./auth/jwt.ts",
+      "default": "./auth/jwt.ts"
+    },
+    "./auth/jwt": {
+      "types": "./auth/jwt.ts",
+      "import": "./auth/jwt.ts",
+      "require": "./auth/jwt.ts",
+      "default": "./auth/jwt.ts"
+    }
   },
   "peerDependencies": {
     "typescript": "^5.0.0"

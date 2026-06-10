@@ -13,6 +13,16 @@ All notable changes made in this session are documented below.
 
 ## [Unreleased]
 
+### Changed
+- **Replaced `PROVIDER_TIMEOUT_OVERRIDES` (per-provider hard-kill timeouts) with the self-correcting derank loop.** Slow providers are now detected dynamically from observed outcomes and moved to the end of the fallback chain, instead of being given extra timeout budget.
+  - New module: `web/lib/chat/llm-provider-health.ts` — `recordCall(provider, success, latencyMs, errorType?)`, `shouldDeprioritize(provider)` (true after 3+ bad calls in last 5min), `getHealthScore(provider)` (0-1 ratio), 5min rolling window, in-memory `Map<provider, ProviderHealthState>`.
+  - Wired into `preflightProviderHealthCheck` (3 return sites in `web/lib/chat/vercel-ai-streaming.ts`) — every health check now feeds the rolling window via `recordCall(provider, reachable, latencyMs, errorType?)`.
+  - Wired into `getProviderForModel` in `web/lib/chat/openai-compat-wrapper.ts` — throws `Unsupported or unknown provider` if `shouldDeprioritize(providerName)` is true.
+  - Wired into `getConfiguredFallbackChain` in `web/lib/providers/provider-fallback-chains.ts` — deranked providers are sorted to the end of the returned chain (preserving relative order within healthy and within unhealthy).
+  - Catch block at `web/lib/chat/vercel-ai-streaming.ts:480` now walks the chain on throw (calls `getConfiguredFallbackChain(provider)` and iterates from index 1) instead of falling through to a hardcoded OpenAI fallback.
+  - `timeoutMs` and `fbTimeoutMs` are now flat 60s for all providers (env var `LLM_STREAM_TIMEOUT_MS`); per-provider tuning removed.
+  - 11 unit tests added in `web/lib/chat/__tests__/llm-provider-health.test.ts` (all pass); smoke test in `web/__tests__/chat/derank-loop.test.ts` (4/6 pass, 2 need follow-up).
+
 ### Fixed
 
 #### `packages/shared/agent/workforce-state.ts`

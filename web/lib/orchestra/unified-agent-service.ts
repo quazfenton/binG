@@ -61,6 +61,7 @@ import {
   detectHealingTrigger,
   detectIncompleteResponse,
   generateHealingPrompt,
+  getFeedbackInjectionBudget,
   type FeedbackContext,
 } from '@bing/shared/agent/feedback-injection';
 import {
@@ -162,6 +163,33 @@ let _cachedDynamicDefaults: { provider: string; model: string } | null = null;
 let _dynamicDefaultsTimestamp = 0;
 const DYNAMIC_DEFAULTS_TTL_MS = 30_000; // Re-check every 30s
 
+/**
+ * Check if a provider has a non-empty API key in the environment.
+ * Mirrors provider-fallback-chains.ts PROVIDER_API_KEY_ENV but also handles
+ * special cases (ninerouter/ollama/kiro via QUAZ_API_KEY, vercel/livekit).
+ */
+function providerHasConfiguredApiKey(provider: string): boolean {
+  const envVarMap: Record<string, string> = {
+    openai: 'OPENAI_API_KEY', anthropic: 'ANTHROPIC_API_KEY',
+    google: 'GOOGLE_API_KEY', mistral: 'MISTRAL_API_KEY',
+    openrouter: 'OPENROUTER_API_KEY', chutes: 'CHUTES_API_KEY',
+    github: 'GITHUB_MODELS_API_KEY', nvidia: 'NVIDIA_API_KEY',
+    groq: 'GROQ_API_KEY', together: 'TOGETHER_API_KEY',
+    fireworks: 'FIREWORKS_API_KEY', deepinfra: 'DEEPINFRA_API_KEY',
+    zen: 'ZEN_API_KEY', portkey: 'PORTKEY_API_KEY',
+    cloudflare: 'CLOUDFLARE_API_KEY', cohere: 'COHERE_API_KEY',
+    aihubmix: 'AIHUBMIX_API_KEY', livekit: 'LIVEKIT_API_KEY',
+    pollinations: 'POLLINATIONS_API_KEY', chatanywhere: 'CHATANYWHERE_API_KEY',
+    vercel: 'VERCEL_API_KEY',
+    ninerouter: 'NINEROUTER_API_KEY',
+    ollama: 'NINEROUTER_API_KEY', kiro: 'NINEROUTER_API_KEY',
+  };
+  const envVar = envVarMap[provider.toLowerCase()];
+  if (!envVar) return false;
+  const val = process.env[envVar];
+  return typeof val === 'string' && val.trim().length > 0;
+}
+
 async function resolveDynamicDefaults(): Promise<{ provider: string; model: string }> {
   const now = Date.now();
   if (_cachedDynamicDefaults && (now - _dynamicDefaultsTimestamp) < DYNAMIC_DEFAULTS_TTL_MS) {
@@ -176,24 +204,43 @@ async function resolveDynamicDefaults(): Promise<{ provider: string; model: stri
     // provider+model combo from any configured provider.
     const rotation = getModelForRotation();
     if (rotation && !isRateLimited(rotation.provider, rotation.model)) {
+      // Verify the provider has a configured API key — model-ranker's
+      // isProviderConfiguredForTelemetry uses a loose truthy check, but
+      // we need a strict non-empty-string check to avoid selecting
+      // providers whose env vars are set to empty strings or placeholders.
+      // Verify the provider has a configured API key — model-ranker's
+      // isProviderConfiguredForTelemetry uses a loose truthy check, but
+      // we need a strict non-empty-string check to avoid selecting
+      // providers whose env vars are set to empty strings or placeholders.
+      // If the check fails, null out rotation so Strategy 2 can run.
+      let apiKeyValid = providerHasConfiguredApiKey(rotation.provider);
+      if (!apiKeyValid) {
+        log.warn('[DynamicDefaults] Model-ranker selected provider without API key, falling back', {
+          selectedProvider: rotation.provider,
+          selectedModel: rotation.model,
+        });
+        rotation.provider = '';  // Marker to trigger Strategy 2
+      }
+
       // Also verify circuit isn't open for this provider
-      let circuitOpen = false;
-      try {
-        const { circuitBreakerManager } = await import('../middleware/circuit-breaker');
-        const breaker = circuitBreakerManager.getBreaker(rotation.provider);
-        circuitOpen = breaker.getState() === 'OPEN';
-      } catch { /* circuit-breaker unavailable, assume not open */ }
-      if (!circuitOpen) {
-        provider = rotation.provider;
-        model = rotation.model;
+      if (apiKeyValid) {
+        let circuitOpen = false;
+        try {
+          const { circuitBreakerManager } = await import('../middleware/circuit-breaker');
+          const breaker = circuitBreakerManager.getBreaker(rotation.provider);
+          circuitOpen = breaker.getState() === 'OPEN';
+        } catch { /* circuit-breaker unavailable, assume not open */ }
+        if (!circuitOpen) {
+          provider = rotation.provider;
+          model = rotation.model;
+        }
       }
     }
 
-    // Strategy 2: If cross-provider selection failed or returned a rate-limited
-    // model, get the best model specifically for the configured default provider.
-    // Uses the providerFilter parameter to scope model-ranker's ranking to a
-    // single provider.
-    if (!rotation || isRateLimited(rotation.provider, rotation.model)) {
+    // Strategy 2: If cross-provider selection failed, returned a rate-limited
+    // model, or the selected provider lacked an API key, get the best model
+    // specifically for the configured default provider.
+    if (!rotation || !rotation.provider || isRateLimited(rotation.provider, rotation.model)) {
       const providerRotation = getModelForRotation(undefined, provider);
       if (providerRotation?.model && !isRateLimited(provider, providerRotation.model)) {
         // Keep the existing provider, update the model
@@ -201,6 +248,32 @@ async function resolveDynamicDefaults(): Promise<{ provider: string; model: stri
       }
     }
   } catch { /* model-ranker unavailable */ }
+
+  // Final safety net: if the selected provider has no API key, fall back to
+  // the first available provider from the standard fallback chain.
+  // Uses top-level imports (PROVIDER_DEFAULT_MODELS and getConfiguredFallbackChain
+  // are imported at module level) — no dynamic imports needed here.
+  if (!providerHasConfiguredApiKey(provider)) {
+    log.warn('[DynamicDefaults] Default provider lacks API key, scanning fallback chain', {
+      provider,
+    });
+    try {
+      const chain = getConfiguredFallbackChain(provider);
+      for (const fbProvider of chain) {
+        if (providerHasConfiguredApiKey(fbProvider)) {
+          provider = fbProvider;
+          model = PROVIDER_DEFAULT_MODELS[fbProvider] || 'default';
+          log.warn('[DynamicDefaults] Selected fallback provider from chain', {
+            originalProvider: process.env.LLM_PROVIDER || 'mistral',
+            fallbackProvider: fbProvider,
+            model,
+          });
+          break;
+        }
+      }
+    } catch { /* best effort */ }
+  }
+
   _cachedDynamicDefaults = { provider, model };
   _dynamicDefaultsTimestamp = now;
   return { provider, model };
@@ -698,8 +771,12 @@ type V1RouteDecision = {
 function classifyV1Route(config: UnifiedAgentConfig): V1RouteDecision {
   const rawTask = extractRawUserTask(config.userMessage || '').trim();
 
+  // Count ALL tools including choose_role — it is a real routing tool with
+  // a dedicated handler in the orchestrator (registered at line ~2989).
+  // Excluding it meant agentic tasks that only had choose_role available
+  // were always routed to the less-resilient v1-api path.
   const externalTools = (config.tools || []).filter(
-    (t: any) => t?.name && t.name !== 'choose_role'
+    (t: any) => t?.name
   );
   const hasExternalTools = externalTools.length > 0;
 
@@ -2555,7 +2632,7 @@ function createCapabilityToolExecutor(config: UnifiedAgentConfig) {
         : "";
 
       const toolDuration = Date.now() - toolStartTime;
-      const toolResult: ToolResult = { success: capResult.success, output: ((capResult.output as string) || capResult.error || "") + scopeNote, exitCode: capResult.exitCode };
+      const toolResult: ToolResult = { success: capResult.success, output: (typeof capOutputRaw === 'string' ? capOutputRaw : JSON.stringify(capOutputRaw)) + scopeNote, exitCode: capResult.exitCode };
       logToolCall(name, rawArgs, toolResult, toolDuration, config.onStreamChunk);
       return toolResult;
     }
@@ -3563,8 +3640,8 @@ Based on what you have learned, continue working on the original task. Take the 
           }
         }
 
-        // Use full feedback injection module for richer healing context
-        const injectedFeedback = injectFeedback(enrichedContext);
+        const injectedFeedback = injectFeedback(enrichedContext, getFeedbackInjectionBudget(enrichedContext));
+        const injectedFeedback = injectFeedback(enrichedContext, getFeedbackInjectionBudget(enrichedContext));
 
         log.info('\x1b[32m[V1-API-WITH-TOOLS]\x1b[0m [SelfHeal] 🩹 Injected feedback for retry', {
           failures: feedbackContext.recentFailures.length,
@@ -3835,11 +3912,11 @@ Based on what you have learned, continue working on the original task. Take the 
             continue;
           }
           
-          // "Controller is already closed" = client disconnected (3min timeout, user action, etc.)
-          // FIX: Only mark client as disconnected for EXPLICIT client-side aborts.
-          // Internal timeouts (idle timeout, TTFT timeout) also close the controller
-          // but should NOT kill ALL remaining provider fallback attempts.
-          // Distinguish: 'aborted' is too broad (catches internal timeouts). Narrow to:
+          // "Controller is already closed" = stream controller dead (idle timeout,
+          // TTFT timeout, client disconnect). Once closed, NO provider can write
+          // to it — so we MUST stop the fallback loop. Continuing would just
+          // burn through all providers with the same error.
+          // Distinguish: narrow to explicit signals that indicate the controller is dead:
           //   - 'cancelled'                  → explicit user/programmatic cancellation
           //   - 'client disconnected'        → explicit client stream close
           //   - AbortError WITHOUT timeout   → user-initiated abort (not internal timeout)
@@ -4129,7 +4206,7 @@ async function runV1Orchestrated(
       (config as any)._healingPrompt = healingPrompt;
     }
 
-    const injectedFeedback = injectFeedback(feedbackContext);
+    const injectedFeedback = injectFeedback(feedbackContext, getFeedbackInjectionBudget(feedbackContext));
     const trackerSummary = generateTrackerSummary(sessionId);
 
     (config as any)._injectedFeedback = injectedFeedback;
@@ -4651,9 +4728,8 @@ async function runV1ApiCompletion(
       if (healingTrigger.detected) {
         log.info('[AutoHealing-Completion] Healing trigger detected', { reason: healingTrigger.reason, healingMode: healingTrigger.healingMode });
         const healingPrompt = generateHealingPrompt(healingTrigger, feedbackContext, config.userMessage);
-        (config as any)._healingPrompt = healingPrompt;
-        // FIX: Inject dynamic feedback and tracker summary for self-routing
-        const injectedFeedback = injectFeedback(feedbackContext);
+        // Inject dynamic feedback for self-routing./
+        const injectedFeedback = injectFeedback(feedbackContext, getFeedbackInjectionBudget(feedbackContext));
         const trackerSummary = generateTrackerSummary(sessionId);
         (config as any)._injectedFeedback = injectedFeedback;
         (config as any)._trackerSummary = trackerSummary;

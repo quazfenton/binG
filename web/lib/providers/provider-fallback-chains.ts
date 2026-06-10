@@ -1,3 +1,5 @@
+import { shouldDeprioritize } from '../chat/llm-provider-health';
+
 /**
  * Provider Fallback Chains
  *
@@ -50,10 +52,20 @@ export function isProviderConfigured(provider: string): boolean {
 /**
  * Get fallback chain for a provider, filtered to only configured providers.
  * This prevents trying providers that don't have their API keys set.
+ *
+ * Self-correcting: providers with 3+ bad calls in the last 5min are moved to the end
+ * of the chain so the primary pick prefers healthy ones. This replaces per-provider
+ * timeout tuning — slow/failing providers are deranked dynamically based on observed
+ * outcomes, not by hardcoded per-provider timeouts.
  */
 export function getConfiguredFallbackChain(provider: string): string[] {
   const chain = PROVIDER_FALLBACK_CHAINS[provider.toLowerCase()] || [];
-  return chain.filter(p => isProviderConfigured(p));
+  const configured = chain.filter(p => isProviderConfigured(p));
+  // Sort deranked providers to the end while preserving relative order
+  return [
+    ...configured.filter(p => !shouldDeprioritize(p)),
+    ...configured.filter(p => shouldDeprioritize(p)),
+  ];
 }
 
 export const PROVIDER_FALLBACK_CHAINS: Record<string, string[]> = {
