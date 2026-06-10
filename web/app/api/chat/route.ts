@@ -32,7 +32,8 @@ import {
   executeWithOrchestrationMode,
   selectAndComposeSystemPrompt,
 } from '@bing/shared/agent';
-import { processUnifiedAgentRequest, type UnifiedAgentConfig, PROVIDER_DEFAULT_MODELS } from '@/lib/orchestra/unified-agent-service';
+import { processUnifiedAgentRequest, type UnifiedAgentConfig } from '@/lib/orchestra/unified-agent-service';
+import { PROVIDER_DEFAULT_MODELS } from '@/lib/providers/provider-default-models';
 import { checkProviderHealth } from '@/lib/orchestra/provider-health';
 import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp';
 import { mem0Search, buildMem0SystemPrompt, isMem0Configured, mem0Add, prewarmMem0Cache } from '@/lib/powers/mem0-power';
@@ -1476,16 +1477,18 @@ const config: UnifiedAgentConfig = {
 
                 // Track tool call success/failure in telemetry for model ranking
                 // Uses generated toolCallId for deduplication
+                // FIX: Use provider/normalizedModel from outer scope — actualModel
+                // and actualProvider are never set in the unified-agent streaming path.
                 if (toolName) {
                   import('@/lib/tools/tool-call-tracker').then(({ toolCallTracker }) => {
                     toolCallTracker.recordToolCall({
-                      model: actualModel,
-                      provider: actualProvider,
+                      model: normalizedModel || model,
+                      provider: provider || 'unknown',
                       toolName,
                       success: result?.success !== false,
                       error: typeof result?.error === 'string' ? result.error : result?.error instanceof Error ? result.error.message : undefined,
                       timestamp: Date.now(),
-                      conversationId,
+                      conversationId: resolvedConversationId,
                       toolCallId: `agent-${toolName}-${Date.now()}`,
                     });
                   }).catch(() => {});
@@ -5227,6 +5230,7 @@ async function storeConversationInMem0(
 
     const cleanResponse = (responseContent || '').trim();
     if (!lastUser && !cleanResponse) {
+      chatLogger.debug('[Mem0] Skipping storage — no user message and no response content', { requestId });
       return;
     }
 
@@ -5252,6 +5256,12 @@ async function storeConversationInMem0(
 
     // Need at least one user + one assistant message for a meaningful memory
     if (turnPair.length < 2) {
+      chatLogger.debug('[Mem0] Skipping storage — incomplete turn pair', {
+        requestId,
+        hasUser: !!lastUser,
+        hasResponse: !!cleanResponse,
+        tailIsResponse,
+      });
       return;
     }
 

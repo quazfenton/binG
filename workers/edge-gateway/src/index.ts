@@ -24,7 +24,113 @@ import { checkIpRateLimit, checkRateLimit } from './rate-limiter';
 import { routeRequest } from './router';
 import { setBackendUrl } from './url-store';
 import { handleFileRequest } from './r2-storage';
+import { TraceLog } from './trace-log';
 import type { Env } from './env';
+
+// ─── Path-Filtered Observability ──────────────────────────────────────
+//
+// Only trace these high-value API paths — the Bing project has high-volume
+// polling (file checks, SSE heartbeats, static asset fetches) that would
+// burn through the free tier's 100k req/day quota at 100% sampling.
+// Platform-level observability (wrangler.toml) is set to head_sampling_rate=0
+// so we handle filtering entirely in code via console.log.
+//
+const TRACED_PATTERNS: RegExp[] = [
+  // ── AI / Copilot ────────────────────────────────────────────
+  /^\/v1\/chat\/completions/,   // OpenAI-compatible AI calls
+  /^\/api\/chat/,                // Hono server chat
+
+  // ── CopaMundial & Nocturne ──────────────────────────────────
+  /^\/copa\//,                   // CopaMundial API
+  /^\/nocturne\//,              // Nocturne API
+
+  // ── Bing: Virtual Filesystem (VFS) operations ───────────────
+  /^\/api\/filesystem\/read/,
+  /^\/api\/filesystem\/write/,
+  /^\/api\/filesystem\/list/,
+  /^\/api\/filesystem\/delete/,
+  /^\/api\/filesystem\/mkdir/,
+  /^\/api\/filesystem\/move/,
+  /^\/api\/filesystem\/rename/,
+  /^\/api\/filesystem\/search/,
+  /^\/api\/filesystem\/snapshot/,
+  /^\/api\/filesystem\/diffs/,
+  /^\/api\/filesystem\/rollback/,
+  /^\/api\/filesystem\/commits/,
+  /^\/api\/filesystem\/create-file/,
+  /^\/api\/filesystem\/import/,
+  /^\/api\/filesystem\/context-pack/,
+  /^\/api\/filesystem\/events\/push/,
+
+  // ── Bing: Auth ───────────────────────────────────────────────
+  /^\/api\/auth\/login/,
+  /^\/api\/auth\/register/,
+  /^\/api\/auth\/session/,
+  /^\/api\/auth\/password-reset/,
+
+  // ── Bing: Sandbox operations ────────────────────────────────
+  /^\/api\/sandbox\/session/,
+  /^\/api\/sandbox\/agent/,
+  /^\/api\/sandbox\/terminal/,
+  /^\/api\/sandbox\/lifecycle/,
+  /^\/api\/sandbox\/execute/,
+
+  // ── Bing: Terminal / PTY ────────────────────────────────────
+  /^\/api\/terminal\/local-pty/,
+  /^\/api\/terminal\/previews\/events/,
+];
+
+/**
+ * Returns true if this request path should be traced/logged.
+ * Health checks are throttled — only log ~1 in 50 to avoid quota burn.
+ */
+function shouldTrace(pathname: string, isHealth: boolean): boolean {
+  // Health checks: noisy, low-value — sample at ~2%
+  if (isHealth) {
+    return Math.random() < 0.02;
+  }
+  // High-value API paths: always trace
+  return TRACED_PATTERNS.some(p => p.test(pathname));
+}
+
+/**
+ * Lightweight structured trace for observed requests.
+ * Only fires for high-value paths (see TRACED_PATTERNS above).
+ *
+ * Dual-write strategy:
+ *   1. console.log() — feeds Cloudflare tail / Logpush (primary observability)
+ *   2. R2 persistence via TraceLog — durable storage independent of platform
+ *
+ * R2 failure is non-fatal — TraceLog buffers entries and retries on next write.
+ */
+function traceRequest(method: string, pathname: string, extra?: Record<string, unknown>): void {
+  const entry: Record<string, unknown> = {
+    ts: new Date().toISOString(),
+    method: method.toUpperCase(),
+    path: pathname,
+    ...extra,
+  };
+  // writeTraceLog handles console.log + R2 dual-write
+  writeTraceLog(entry as any);
+}
+
+// TraceLog instance — initialized lazily so we don't require TRACE_R2 to exist
+let _traceLog: TraceLog | null = null;
+function getTraceLog(env: Env): TraceLog {
+  if (!_traceLog) {
+    _traceLog = new TraceLog(env.TRACE_R2);
+  }
+  return _traceLog;
+}
+function writeTraceLog(entry: {
+  ts: string;
+  method: string;
+  path: string;
+  [key: string]: unknown;
+}): void {
+  if (!_traceLog) return;
+  _traceLog.write(entry as any);
+}
 
 // CORS headers applied to all responses
 const CORS_HEADERS: Record<string, string> = {
@@ -42,7 +148,20 @@ const SECURITY_HEADERS: Record<string, string> = {
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
+    // Initialize trace logger (requires env — safe to call on every request;
+    // subsequent calls return the cached instance)
+    void getTraceLog(env);
+
     const url = new URL(request.url);
+    const isHealthPath = url.pathname === '/health' || url.pathname === '/api/health' || url.pathname === '/copa/api/health' || url.pathname === '/nocturne/api/health';
+    const doTrace = shouldTrace(url.pathname, isHealthPath);
+
+    if (doTrace) {
+      traceRequest(request.method, url.pathname, {
+        cfCountry: request.headers.get('cf-ipcountry') ?? '??',
+        userAgent: request.headers.get('user-agent') ?? '',
+      });
+    }
 
     // ─── Health Check ────────────────────────────────────────────────
     if (url.pathname === '/health' || url.pathname === '/api/health') {
@@ -185,13 +304,28 @@ export default {
         responseHeaders.set('Cache-Control', `public, max-age=${target.ttl}, s-maxage=${target.ttl}`);
       }
 
-      return new Response(proxyResponse.body, {
+      const responseBody = proxyResponse.body;
+
+      if (doTrace) {
+        traceRequest(request.method, url.pathname, {
+          upstreamStatus: proxyResponse.status,
+          upstreamStatusText: proxyResponse.statusText,
+          contentType: proxyResponse.headers.get('content-type') ?? '',
+        });
+      }
+
+      return new Response(responseBody, {
         status: proxyResponse.status,
         statusText: proxyResponse.statusText,
         headers: responseHeaders,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
+
+      if (doTrace) {
+        traceRequest(request.method, url.pathname, { error: message });
+      }
+
       return new Response(JSON.stringify({
         error: 'Backend unavailable',
         detail: message,

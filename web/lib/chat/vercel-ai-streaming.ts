@@ -221,8 +221,7 @@ export interface VercelStreamOptions {
   maxRetries?: number;
   maxSteps?: number;
   /**
-   * Request timeout in milliseconds.
-   * Defaults to LLM_STREAM_TIMEOUT_MS env var, or 60000 (60s) if unset.
+   * Request timeout in milliseconds.    * Defaults to LLM_STREAM_TIMEOUT_MS env var, or 60000 (60s) if unset.
    * Controls both TTFT (time-to-first-token) and rolling idle timeout.
    */
   timeoutMs?: number;
@@ -256,6 +255,23 @@ interface OpenAICompatibleConfig {
   /** Use Chat Completions API (.chat) instead of Responses API (default) */
   useChatEndpoint?: boolean;
 }
+
+/**
+ * Per-provider timeout overrides (in ms).
+ * Some providers (e.g., free-tier NVIDIA, OpenRouter free models) are
+ * significantly slower than others and need longer timeouts. Otherwise
+ * they consistently trigger TTFT/idle timeouts and get deranked.
+ * Key: provider name (lowercase). Value: timeout in ms.
+ * Falls back to LLM_STREAM_TIMEOUT_MS (default 60s) when unset.
+ */
+const PROVIDER_TIMEOUT_OVERRIDES: Record<string, number> = {
+  'nvidia': 120000,       // NVIDIA free-tier models can be very slow
+  'openrouter': 120000,    // OpenRouter free models have variable latency
+  'groq': 90000,           // Groq can be slow on first request
+  'together': 150000,      // Together AI free tier
+  'deepinfra': 150000,     // DeepInfra free tier
+  'chutes': 120000,        // Chutes free tier
+};
 
 /**
  * Configuration for all OpenAI-compatible providers.
@@ -518,6 +534,91 @@ export function getVercelModel(
       const error = new Error(`Unsupported provider for Vercel AI SDK: ${provider}`);
       chatLogger.error('Unsupported provider', { provider, model });
       throw error;
+  }
+}
+
+/**
+ * Resolve the API base URL for a provider.
+ * Mirrors the logic in getVercelModel but returns only the URL so it can be
+ * used for health-checking without initialising the full SDK model object.
+ * Returns null when the provider is unknown or custom (no base URL to check).
+ */
+function resolveProviderBaseUrl(provider: string, userBaseURL?: string): string | null {
+  const currentEnv: any = typeof process !== 'undefined' ? process.env : {};
+
+  // OpenAI-compatible providers (from the OPENAI_COMPATIBLE_PROVIDERS map)
+  if (provider !== 'openai' && provider !== 'anthropic' && provider !== 'google' && provider !== 'mistral' && provider !== 'vercel') {
+    const config = OPENAI_COMPATIBLE_PROVIDERS[provider];
+    if (config) return userBaseURL || config.baseURL;
+    // Unknown provider — can't determine a base URL to ping
+    return null;
+  }
+
+  // Direct Vercel AI SDK providers
+  switch (provider) {
+    case 'openai':
+      return userBaseURL || currentEnv.OPENAI_BASE_URL || 'https://api.openai.com/v1';
+    case 'anthropic':
+      return userBaseURL || currentEnv.ANTHROPIC_BASE_URL || 'https://api.anthropic.com';
+    case 'google':
+      return userBaseURL || currentEnv.GOOGLE_BASE_URL || 'https://generativelanguage.googleapis.com';
+    case 'mistral':
+      return userBaseURL || currentEnv.MISTRAL_BASE_URL || 'https://api.mistral.ai/v1';
+    case 'vercel':
+      return userBaseURL || currentEnv.VERCEL_BASE_URL || 'https://api.vercel.com/v1';
+    default:
+      return null;
+  }
+}
+
+/**
+ * Pre-fetch health check: pings the provider endpoint with a short timeout
+ * to quickly detect unreachable providers (DNS failure, connection refused,
+ * TLS handshake timeout) before attempting the full streamText request.
+ *
+ * Start this as a speculative promise early in the request flow so it runs
+ * in parallel with synchronous setup code (model resolution, message
+ * conversion, etc.). Await the result right before the streamText call.
+ *
+ * When the endpoint is unreachable the caller should fail fast and let the
+ * fallback chain skip to the next provider rather than waiting 30s for the
+ * TTFT timeout.
+ */
+export async function preflightProviderHealthCheck(
+  provider: string,
+  userBaseURL?: string,
+): Promise<{ reachable: boolean; latencyMs: number }> {
+  const baseUrl = resolveProviderBaseUrl(provider, userBaseURL);
+  if (!baseUrl) {
+    // Can't determine base URL — assume reachable (don't block)
+    return { reachable: true, latencyMs: 0 };
+  }
+
+  const startTime = Date.now();
+  const HEALTH_CHECK_TIMEOUT_MS = 5000; // 5s — must be fast to be worthwhile
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => {
+    controller.abort(new Error('Health check timed out'));
+  }, HEALTH_CHECK_TIMEOUT_MS);
+
+  try {
+    // Use HEAD with minimal overhead — we only need to know if the host is
+    // reachable (DNS resolves, TCP handshake completes), not whether it
+    // returns a valid API response. Don't follow redirects to keep it
+    // lightweight and avoid hitting auth-gated endpoints.
+    await fetch(baseUrl, {
+      method: 'HEAD',
+      signal: controller.signal,
+      redirect: 'manual',
+    });
+    clearTimeout(timeoutId);
+    return { reachable: true, latencyMs: Date.now() - startTime };
+  } catch {
+    clearTimeout(timeoutId);
+    // Any failure (TypeError for DNS, connection refused, timeout, TLS error)
+    // means the endpoint is unreachable. We don't distinguish between
+    // different failure modes — they all mean "skip this provider".
+    return { reachable: false, latencyMs: Date.now() - startTime };
   }
 }
 
@@ -826,7 +927,13 @@ export async function* streamWithVercelAI(
     smoothStreaming = true,
     maxRetries = 0,
     maxSteps = 12,
-    timeoutMs = parseInt(process.env.LLM_STREAM_TIMEOUT_MS || '60000', 10), // Default 60s timeout (streaming only, overridable via LLM_STREAM_TIMEOUT_MS env var)
+    timeoutMs = (() => {
+      // Check per-provider timeout override first
+      const providerOverride = PROVIDER_TIMEOUT_OVERRIDES[provider];
+      if (providerOverride) return providerOverride;
+      // Fall back to env var or default
+      return parseInt(process.env.LLM_STREAM_TIMEOUT_MS || '60000', 10);
+    })(), // Default 60s TTFT timeout; per-provider overrides for slow providers (nvidia, openrouter, etc.)
     speculativeFallbackMs = parseInt(process.env.LLM_STREAM_SPECULATIVE_MS || '20000', 10), // Default 20s, 0 to disable
     providerOptions,
     system: systemOverride,
@@ -834,6 +941,13 @@ export async function* streamWithVercelAI(
 
   const startTime = Date.now();
   const requestId = `vercel-ai-${Date.now()}`;
+
+  // Start pre-fetch health check speculatively — runs in parallel with
+  // synchronous setup (getVercelModel, convertMessages, build streamOptions).
+  // If the provider endpoint is unreachable we fail fast in ~5s instead of
+  // waiting 30s for the TTFT timeout.
+  const healthCheckPromise = preflightProviderHealthCheck(provider, url);
+
   // Cache for tool call arguments - scoped to this stream invocation to prevent cross-request leaks
   const toolCallArgsCache = new Map<string, any>();
   let useCompatibilityFallback = false;
@@ -843,6 +957,20 @@ export async function* streamWithVercelAI(
   let ttftTimeoutId: NodeJS.Timeout | null = null;
   let timeoutController: AbortController | null = null;
   let firstTokenReceived = false;
+  
+  // ── Activity tracker for differentiated timeout diagnostics ──────────
+  // Tracks what was happening when a timeout fires, so we can distinguish:
+  //   - No initial token ever received (TTFT timeout)
+  //   - Mid-stream after partial text (idle timeout with text)
+  //   - Mid-stream after tool call (idle timeout waiting for tool result)
+  //   - Mid-stream after successful tool result (should be rare — dynamic extension)
+  let lastActivityTime = Date.now();
+  let lastActivityType: 'ttft-waiting' | 'text' | 'tool-call' | 'tool-result' | 'reasoning' | 'step' = 'ttft-waiting';
+  let lastActivityDetail: string = '';  // e.g. tool name, token preview
+  let toolCallCount = 0;                // total tool calls made
+  let toolResultSuccessCount = 0;       // successful tool results
+  let toolResultFailCount = 0;          // failed tool results
+  let totalTokensReceived = 0;          // total text tokens received
 
   if (timeoutMs > 0) {
     timeoutController = new AbortController();
@@ -859,7 +987,21 @@ export async function* streamWithVercelAI(
     // Set time-to-first-token timeout
     ttftTimeoutId = setTimeout(() => {
       if (!firstTokenReceived) {
-        timeoutController?.abort(new Error(`No response within ${timeoutMs}ms (time-to-first-token timeout)`));
+        const ttftLatencyMs = Date.now() - startTime;
+        chatLogger.warn('[TIMEOUT-TTFT] No first token received', {
+          provider,
+          model: modelName,
+          timeoutMs,
+          ttftLatencyMs,
+          timeoutCategory: 'NO_INITIAL_TOKEN',
+          startTime,
+          healthCheckPassed: true,
+        });
+        timeoutController?.abort(new Error(
+          `No response within ${timeoutMs}ms (time-to-first-token timeout). ` +
+          `Provider=${provider}, model=${modelName}, elapsed=${ttftLatencyMs}ms. ` +
+          `Possible causes: provider outage, incorrect API key, model unavailability, or network issue.`
+        ));
       }
     }, timeoutMs);
   }
@@ -884,16 +1026,68 @@ export async function* streamWithVercelAI(
   let idleTimeoutId: NodeJS.Timeout | null = null;
   const IDLE_TIMEOUT_MS = timeoutMs;
 
-  const resetIdleTimeout = () => {
+  // Dynamic extension multiplier: when a successful tool result arrives, the
+  // idle timeout gets extended by 2x to give the model time to process the
+  // result and produce the next step without being cut off mid-thought.
+  const TOOL_SUCCESS_EXTENSION_MULTIPLIER = 2;
+  let activeExtensionMultiplier = 1;
+
+  const resetIdleTimeout = (extensionMultiplier?: number) => {
     if (idleTimeoutId) {
       clearTimeout(idleTimeoutId);
     }
     if (!timeoutController) return;
+    const effectiveMultiplier = extensionMultiplier ?? activeExtensionMultiplier;
+    const effectiveTimeout = IDLE_TIMEOUT_MS * effectiveMultiplier;
     idleTimeoutId = setTimeout(() => {
       if (!timeoutController?.signal.aborted) {
-        timeoutController.abort(new Error(`No activity for ${IDLE_TIMEOUT_MS}ms (idle timeout)`));
+        // ── Differentiated timeout diagnostics ────────────────────────────
+        // Log detailed activity context to distinguish between timeout causes:
+        //   - No initial token ever received (TTFT handled separately, but this guards
+        //     the case where TTFT was set to 0 or cleared but no first token arrived)
+        //   - Mid-stream after partial text: lastActivityType='text', X tokens received
+        //   - Mid-stream after tool call: lastActivityType='tool-call', Y tool calls made
+        //   - Mid-stream waiting for tool result: lastActivityType='tool-call' with
+        //     no tool-result seen yet (tool execution taking too long)
+        //   - After successful tool result but model went silent: lastActivityType='tool-result'
+        const timeSinceLastActivity = Date.now() - lastActivityTime;
+        const diagnosticMsg = [
+          `No activity for ${effectiveTimeout}ms (idle timeout)`,
+          `lastActivityType=${lastActivityType}`,
+          `lastActivityDetail="${lastActivityDetail}"`,
+          `timeSinceLastActivity=${timeSinceLastActivity}ms`,
+          `firstTokenReceived=${firstTokenReceived}`,
+          `totalTokens=${totalTokensReceived}`,
+          `toolCalls=${toolCallCount}`,
+          `toolResultsOK=${toolResultSuccessCount}`,
+          `toolResultsFAIL=${toolResultFailCount}`,
+          `extensionMultiplier=${effectiveMultiplier}`,
+          `timeoutMs=${IDLE_TIMEOUT_MS}`,
+        ].join(' | ');
+        chatLogger.warn('[TIMEOUT] ' + diagnosticMsg, {
+          provider,
+          model: modelName,
+          timeoutCategory: firstTokenReceived
+            ? (lastActivityType === 'tool-call' ? 'MID_STREAM_TOOL_CALL'
+              : lastActivityType === 'tool-result' ? 'POST_TOOL_RESULT'
+              : lastActivityType === 'text' ? 'MID_STREAM_TEXT'
+              : 'MID_STREAM_OTHER')
+            : 'NO_INITIAL_TOKEN',
+          lastActivityType,
+          lastActivityDetail,
+          timeSinceLastActivity,
+          firstTokenReceived,
+          totalTokensReceived,
+          toolCallCount,
+          toolResultSuccessCount,
+          toolResultFailCount,
+          extensionMultiplier: effectiveMultiplier,
+          effectiveTimeout,
+          idleTimeoutMs: IDLE_TIMEOUT_MS,
+        });
+        timeoutController.abort(new Error(diagnosticMsg));
       }
-    }, IDLE_TIMEOUT_MS);
+    }, effectiveTimeout);
   };
 
   try {
@@ -1214,6 +1408,24 @@ export async function* streamWithVercelAI(
       streamOptions.providerOptions = providerOptions;
     }
 
+    // Await the health check before calling streamText. By this point the
+    // promise has had ~200ms+ to resolve (while getVercelModel, convertMessages,
+    // tools setup, and options building ran synchronously). If the endpoint
+    // is unreachable we throw now rather than waiting for the TTFT timeout.
+    const healthResult = await healthCheckPromise;
+    if (!healthResult.reachable) {
+      chatLogger.warn('[HEALTH-CHECK] Provider endpoint unreachable, failing fast', {
+        provider,
+        model: modelName,
+        latencyMs: healthResult.latencyMs,
+      });
+      throw new Error(
+        `Provider "${provider}" endpoint is unreachable ` +
+        `(pre-fetch health check failed after ${healthResult.latencyMs}ms). ` +
+        `Check network connectivity or DNS resolution for ${resolveProviderBaseUrl(provider, url)}.`
+      );
+    }
+
     const result = streamText(streamOptions);
 
     // ── Speculative fallback race ─────────────────────────────────────────
@@ -1236,6 +1448,11 @@ export async function* streamWithVercelAI(
       latencyMs: number;
     } | null = null;
 
+    // Shared ref so createFallback and onFallbackWin can both access the fallback timeout.
+    // The timeout is a TTFT-only guard (cleared on first chunk / when fallback wins),
+    // NOT a hard lifetime cap — prevents premature cutoff of long tool-calling sessions.
+    let fbTimeoutId: NodeJS.Timeout | null = null;
+
     const streamToIterate = (speculativeFallbackMs > 0 && !isCustomProvider)
       ? withSpeculativeFallback(result.fullStream as any, {
           speculativeMs: speculativeFallbackMs,
@@ -1252,6 +1469,17 @@ export async function* streamWithVercelAI(
             // Create a dedicated abort controller so the fallback stream can be
             // cancelled immediately if the primary wins the race.
             const fbController = new AbortController();
+            // Add TTFT timeout to fallback too — prevents hanging if fallback provider also stalls.
+            // This is a TTFT-only guard: cleared by onFallbackWin once the fallback produces
+            // its first chunk. NOT a hard lifetime cap (avoids premature cutoff of long tool calls).
+            // Use fallback provider's own timeout override, not the primary's
+            const fbTimeoutMs = PROVIDER_TIMEOUT_OVERRIDES[fbResolved.provider] ||
+              parseInt(process.env.LLM_STREAM_TIMEOUT_MS || '60000', 10);
+            fbTimeoutId = setTimeout(() => {
+              if (!fbController.signal.aborted) {
+                fbController.abort(new Error(`No response from fallback provider within ${fbTimeoutMs}ms (fallback TTFT timeout)`));
+              }
+            }, fbTimeoutMs);
 
             const fbStreamOpts: any = {
               model: fbVercelModel,
@@ -1276,7 +1504,13 @@ export async function* streamWithVercelAI(
 
             const fbResult = streamText(fbStreamOpts);
             fallbackResultRef = { result: fbResult };
-            return { gen: fbResult.fullStream as any, abort: () => fbController.abort() };
+            return {
+              gen: fbResult.fullStream as any,
+              abort: () => {
+                if (fbTimeoutId) { clearTimeout(fbTimeoutId); fbTimeoutId = null; }
+                fbController.abort();
+              },
+            };
           },
           abortPrimary: () => {
             if (timeoutController && !timeoutController.signal.aborted) {
@@ -1284,6 +1518,11 @@ export async function* streamWithVercelAI(
             }
           },
           onFallbackWin: () => {
+            // Clear the TTFT guard now that the fallback is producing — this is NOT a hard
+            // lifetime cap. The rolling idle timeout on the main controller (or the fallback's
+            // own stream completion) will handle the long-running case.
+            if (fbTimeoutId) { clearTimeout(fbTimeoutId); fbTimeoutId = null; }
+
             // Use the shared fbResolved values (already set by createFallback)
             actualProvider = fbResolved.provider || 'unknown';
             actualModel = fbResolved.model;
@@ -1352,10 +1591,19 @@ export async function* streamWithVercelAI(
         case 'text-delta': {
           // Clear time-to-first-token timeout once we receive content
           onFirstToken();
+          // Update activity tracker
+          lastActivityTime = Date.now();
+          lastActivityType = 'text';
+          const deltaText = (chunk as any).text ?? '';
+          lastActivityDetail = deltaText.slice(0, 60);
+          totalTokensReceived += deltaText.length;
+          // Decay extension multiplier: if the model is actively producing text
+          // (not waiting for a tool result), reset to 1x so we don't accumulate
+          // inflated timeouts across multiple tool rounds.
+          activeExtensionMultiplier = 1;
           // Reset rolling idle timeout - activity detected
           resetIdleTimeout();
 
-          const deltaText = (chunk as any).text ?? '';
           textContent += deltaText; // Track for two-phase FC fallback
 
           yield {
@@ -1369,6 +1617,9 @@ export async function* streamWithVercelAI(
         case 'reasoning-start': {
           // Clear time-to-first-token timeout once we receive any response
           onFirstToken();
+          // Update activity tracker
+          lastActivityTime = Date.now();
+          lastActivityType = 'reasoning';
           // Reset rolling idle timeout - activity detected
           resetIdleTimeout();
           
@@ -1387,7 +1638,10 @@ export async function* streamWithVercelAI(
         case 'reasoning': {
           // Handle reasoning chunks emitted as 'reasoning' (not just 'reasoning-start')
           // Some providers emit reasoning as a continuous stream of 'reasoning' events
+          lastActivityTime = Date.now();
+          lastActivityType = 'reasoning';
           const reasoningText = (chunk as any).text ?? (chunk as any).delta ?? '';
+          lastActivityDetail = reasoningText.slice(0, 40) || '';
           reasoningContent += reasoningText;
           yield {
             content: '',
@@ -1400,7 +1654,10 @@ export async function* streamWithVercelAI(
 
         case 'reasoning-delta': {
           // Handle reasoning-delta for providers that emit incremental reasoning
+          lastActivityTime = Date.now();
+          lastActivityType = 'reasoning';
           const reasoningText = (chunk as any).text ?? (chunk as any).delta ?? '';
+          lastActivityDetail = reasoningText.slice(0, 40) || '';
           reasoningContent += reasoningText;
           yield {
             content: '',
@@ -1413,6 +1670,9 @@ export async function* streamWithVercelAI(
 
         case 'reasoning-end': {
           // Handle reasoning-end to mark reasoning completion
+          lastActivityTime = Date.now();
+          lastActivityType = 'reasoning';
+          lastActivityDetail = '[reasoning-end]';
           yield {
             content: '',
             isComplete: false,
@@ -1425,8 +1685,17 @@ export async function* streamWithVercelAI(
         case 'tool-call': {
             // Clear time-to-first-token timeout once we receive any response
             onFirstToken();
-            // Reset rolling idle timeout - activity detected
-            resetIdleTimeout();
+            // Update activity tracker
+            lastActivityTime = Date.now();
+            lastActivityType = 'tool-call';
+            lastActivityDetail = (chunk as any).toolName || '';
+            toolCallCount++;
+            // Dynamically extend idle timeout: tool execution (bash, file ops) can
+            // take longer than the normal idle window. We extend by 2x so the model
+            // has time to produce tool calls, the tool executor runs, and the result
+            // comes back — without the idle timeout firing mid-execution.
+                        activeExtensionMultiplier = TOOL_SUCCESS_EXTENSION_MULTIPLIER;
+resetIdleTimeout(TOOL_SUCCESS_EXTENSION_MULTIPLIER);
             
             // AI SDK v6 uses 'input' (parsed object) in fullStream tool-call parts
             let callArgs = (() => {
@@ -1567,6 +1836,32 @@ export async function* streamWithVercelAI(
         }
 
         case 'tool-result': {
+          // Clear time-to-first-token timeout and reset rolling idle timeout.
+          // A tool-result signifies the tool execution completed successfully —
+          // the stream is alive and well. Without this reset, long multi-tool
+          // workflows (read file → process → apply edits) get cut off because
+          // the idle timeout fires during tool execution.
+          onFirstToken();
+          // Update activity tracker
+          lastActivityTime = Date.now();
+          const trName = (chunk as any).toolName || '';
+          lastActivityType = 'tool-result';
+          lastActivityDetail = trName;
+          // Dynamically extend idle timeout: after a successful tool result, the
+          // model needs time to read the result and produce the next step. Extending
+          // by 2x prevents premature cutoff during multi-step reasoning.
+          const trResult = (chunk as any).result;
+          const trSuccess = trResult?.success ?? (trResult?.error === undefined);
+          if (trSuccess) {
+            toolResultSuccessCount++;
+            activeExtensionMultiplier = TOOL_SUCCESS_EXTENSION_MULTIPLIER;
+            resetIdleTimeout(TOOL_SUCCESS_EXTENSION_MULTIPLIER);
+          } else {
+            toolResultFailCount++;
+            activeExtensionMultiplier = 1;
+            resetIdleTimeout();
+          }
+
           // Recover args from the earlier tool-call event since tool-result doesn't include them
           const resultToolCallId = (chunk as any).toolCallId;
           const cachedArgs = toolCallArgsCache.get(resultToolCallId);
@@ -1692,9 +1987,20 @@ export async function* streamWithVercelAI(
 
         case 'step-start':
         case 'step-finish':
+          // Step transitions mark the start/end of a multi-step tool calling round.
+          // Reset the idle timeout so long workflows with many tool rounds are not
+          // cut off — each new step is evidence the stream is actively processing.
+          onFirstToken();
+          // Update activity tracker
+          lastActivityTime = Date.now();
+          lastActivityType = 'step';
+          lastActivityDetail = '';
+          activeExtensionMultiplier = 1;
+          resetIdleTimeout();
+          break;
         case 'start':
         case 'finish':
-          // Skip these event types - handled elsewhere
+          // Skip these event types — handled elsewhere
           break;
       }
     }

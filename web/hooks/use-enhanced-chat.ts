@@ -53,6 +53,8 @@ export interface UseChatReturn {
   // Model and provider tracking
   currentModel?: string;
   currentProvider?: string;
+  // Set metadata to attach to the next user message (e.g., attached file names)
+  setUserMessageMeta: (meta: Record<string, any> | null) => void;
   // Agent activity for experimental panel
   agentActivity?: any;
   setAgentActivity?: (activity: any) => void;
@@ -283,6 +285,12 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
     partialResponse?: string;
   } | null>(null);
 
+  // Holds metadata to attach to the next user message created by
+  // submitWithPrompt or handleSubmit (e.g., attached file names).
+  // The caller sets this ref before calling submit/handle, and the
+  // user-message constructor reads + clears it in a single tick.
+  const userMessageMetaRef = useRef<Record<string, any> | null>(null);
+
   // Track mount state to prevent stale callbacks
   useEffect(() => {
     isMountedRef.current = true;
@@ -405,10 +413,13 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
       return;
     }
 
+    const userMeta = userMessageMetaRef.current;
+    userMessageMetaRef.current = null;
     const userMessage: Message = {
       id: `user-${Date.now()}`,
       role: 'user',
       content: prompt.trim(),
+      ...(userMeta ? { metadata: userMeta } : {}),
     };
 
     const assistantMessage: Message = {
@@ -509,10 +520,13 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
       return;
     }
 
+    const userMeta = userMessageMetaRef.current;
+    userMessageMetaRef.current = null;
     const userMessage: Message = {
       id: `user-${Date.now()}`,
       role: 'user',
       content: input.trim(),
+      ...(userMeta ? { metadata: userMeta } : {}),
     };
 
     const assistantMessage: Message = {
@@ -869,7 +883,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
 
     // CRITICAL: Track tool invocations locally during streaming
     // messagesRef.current is stale (useEffect hasn't synced yet when done fires)
-    const streamingToolInvocations: Array<{ toolCallId: string; toolName: string; state: string }> = [];
+    const streamingToolInvocations: Array<{ toolCallId: string; toolName: string; state: string; error?: string; result?: any }> = [];
 
     // Track whether a 'done' SSE event was received before the stream ended
     let receivedDoneEvent = false;
@@ -1085,6 +1099,13 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
 
                 case 'token':
                 case 'data':
+                  // Extend streaming timeout — token activity means the server is
+                  // actively streaming text. Without this, the initial 120s timeout
+                  // set at stream start is never extended by normal token flow, so
+                  // long responses (>120s wall-clock time) get prematurely cut off
+                  // with "⚠️ Response timed out — partial content shown above" even
+                  // though tokens were flowing the entire time.
+                  resetStreamingTimeout();
                   if (eventData.content) {
                     // Feed to enhanced buffer manager instead of direct state update
                     enhancedBufferManager.processChunk(sessionId, eventData.content);
@@ -1614,18 +1635,63 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                     stepRepromptCount < MAX_STEP_REPROMPTS &&
                     inputQueue.length === 0
                   ) {
-                    console.log('[StepReprompt] Auto-continuing multi-step flow', {
-                      stepRepromptPreview: stepReprompt.slice(0, 80),
+                    // FIX: Enhance stepReprompt with tool failure context when anyToolFailed is true
+                  // This gives the LLM visibility into what went wrong, so it can retry with
+                  // corrected tool calls instead of repeating the same failure.
+                  let enhancedReprompt = stepReprompt;
+                  if (shouldRetryForToolFailure) {
+                    // Deduplicate by toolCallId — eventData from the done event may contain
+                    // the same tool invocations already tracked in streamingToolInvocations.
+                    // Without dedup, buildEmptyResponseRetryContext double-counts failures.
+                    const seenIds = new Set<string>();
+                    const mergedToolInvocations = [
+                      ...(eventData.toolInvocations || eventData.messageMetadata?.toolInvocations || []),
+                      ...streamingToolInvocations.filter(inv => {
+                        if (seenIds.has(inv.toolCallId)) return false;
+                        seenIds.add(inv.toolCallId);
+                        return true;
+                      }),
+                    ];
+                    const toolFailureContext = buildEmptyResponseRetryContext({
+                      toolInvocations: mergedToolInvocations,
+                      filesystemEdits: eventData.filesystem,
+                      fileEdits: eventData.fileEdits,
+                      provider: String(doneMetadata.provider ?? ''),
+                      model: String(doneMetadata.model ?? ''),
+                      finishReason: eventData.finishReason,
+                    });
+                    if (toolFailureContext.failedToolCalls.length > 0) {
+                      enhancedReprompt = `[TOOL FAILURES DETECTED] The previous step had tool failures.
+
+${toolFailureContext.summary}
+
+` +
+                        `Failed tools: ${toolFailureContext.failedToolCalls.map(t => t.name).join(', ')}
+` +
+                        `Filesystem: ${toolFailureContext.filesystemChanges.applied} applied, ${toolFailureContext.filesystemChanges.failed} failed
+
+` +
+                        `Original instruction:
+${stepReprompt}`;
+                      console.warn('[StepReprompt] Enhanced with tool failure context:', {
+                        failedTools: toolFailureContext.failedToolCalls.map(t => ({ name: t.name, error: t.error })),
+                        continuationNumber: stepRepromptCountRef.current + 1,
+                      });
+                    }
+                  }
+                  console.log('[StepReprompt] Auto-continuing multi-step flow', {
+                      stepRepromptPreview: enhancedReprompt.slice(0, 80),
                       primaryRole: routing?.primaryRole,
                       estimatedSteps: routing?.estimatedSteps,
                       continuationNumber: stepRepromptCount + 1,
                       maxContinuations: MAX_STEP_REPROMPTS,
+                      hasToolFailureContext: shouldRetryForToolFailure,
                     });
                   
                     // Set input and submit after state settles
                     // Increment counter so subsequent DONE events know how many auto-continues happened
                     stepRepromptCountRef.current++;
-                    setInput(stepReprompt);
+                    setInput(enhancedReprompt);
                     setTimeout(() => {
                       if (!isMountedRef.current) return;
                       // FIX: Add error handling for auto-continue request failures
@@ -2266,6 +2332,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                 case 'spec_refinement':
                   // Spec section refinement progress
                   // eventData contains: { section, tasks, progress, content, timestamp }
+                  // Extend streaming timeout — spec refinement is long-running server activity\                  resetStreamingTimeout();
                   setAgentActivity(prev => ({
                     ...prev,
                     status: 'processing',
@@ -2283,6 +2350,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                 case 'dag_task_status':
                   // DAG task execution status
                   // eventData contains: { tasks, overallProgress, activeTasks, timestamp }
+                  // Extend streaming timeout — DAG task execution is ongoing server activity\                  resetStreamingTimeout();
                   setAgentActivity(prev => ({
                     ...prev,
                     status: 'processing',
@@ -2301,12 +2369,17 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   // This is similar to tool_invocation but emitted during streaming when
                   // the model calls a tool before execution completes
 
+                  // Extend streaming timeout — tool execution is ongoing server activity
+                  resetStreamingTimeout();
+
                   // CRITICAL: Track locally for done event detection (messagesRef is stale)
                   if (!streamingToolInvocations.find(inv => inv.toolCallId === eventData.toolCallId)) {
                     streamingToolInvocations.push({
                       toolCallId: eventData.toolCallId,
                       toolName: eventData.toolName,
                       state: eventData.state || 'call',
+                      error: eventData.error || eventData.result?.error,
+                      result: eventData.result,
                     });
                   }
 
@@ -2365,11 +2438,14 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                 case 'tool_invocation':
                   // CRITICAL: Track locally for done event detection (messagesRef is stale)
                   const existingLocalIdx = streamingToolInvocations.findIndex(inv => inv.toolCallId === eventData.toolCallId);
+                  // Extend streaming timeout — tool invocation activity means server is still processing\                  resetStreamingTimeout();
                   if (existingLocalIdx === -1) {
                     streamingToolInvocations.push({
                       toolCallId: eventData.toolCallId,
                       toolName: eventData.toolName,
                       state: eventData.state || 'result',
+                      error: eventData.error || eventData.result?.error,
+                      result: eventData.result,
                     });
                   } else {
                     // Update state if already exists
@@ -2471,6 +2547,8 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   break;
                 
                 case 'step':
+                  // Extend streaming timeout — step activity indicates active server processing
+                  resetStreamingTimeout();
                   setMessages(prev => prev.map(msg => {
                     if (msg.id !== assistantMessage.id) return msg;
                     const existing = Array.isArray((msg.metadata as any)?.processingSteps)
@@ -2521,6 +2599,8 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
 
                 case 'git:commit':
                   // Git commit event - update version
+                  // Extend streaming timeout — git operations are ongoing server activity
+                  resetStreamingTimeout();
                   if (eventData.version) {
                     setCurrentVersion(eventData.version);
                   }
@@ -2552,6 +2632,8 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
 
                 case 'git:rollback':
                   // Git rollback event
+                  // Extend streaming timeout — git rollback is ongoing server activity
+                  resetStreamingTimeout();
                   if (eventData.version) {
                     setCurrentVersion(eventData.version);
                   }
@@ -2593,6 +2675,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                 case 'auto-continue':
                 case 'need_more_turns': {
                   // Guard: skip if already loading (prevents race condition on rapid auto-continues)
+                  // Extend streaming timeout — auto-continue means server is still processing\                  resetStreamingTimeout();
                   if (isLoading) {
                     console.log('[Auto-continue] Skipping - already loading');
                     break;
@@ -2664,6 +2747,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                 // Server detected this and sent a [NEXT] nudge to proceed
                 case 'next': {
                   const nextContent = eventData.content || '';
+                  // Extend streaming timeout — next step means active server processing\                  resetStreamingTimeout();
                   const reason = eventData.reason || '';
                   const listedPath = eventData.listedPath || '';
 
@@ -2697,6 +2781,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
 
                 // Orchestration progress events from mode handlers
                 case 'orchestration_progress':
+                  // Extend streaming timeout — orchestration is ongoing server activity\                  resetStreamingTimeout();
                   // Update agent activity with orchestration progress
                   setAgentActivity(prev => ({
                     ...prev,
@@ -3059,6 +3144,9 @@ timeoutRef.current = null;
     stop,
     setInput,
     submitWithPrompt,
+    setUserMessageMeta: (meta: Record<string, any> | null) => {
+      userMessageMetaRef.current = meta;
+    },
     reload: () => {
       if (messages.length === 0 || isLoading) return;
 

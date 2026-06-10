@@ -695,7 +695,7 @@ type V1RouteDecision = {
  *     intent over real code/workspace. When in doubt, prefer the more resilient
  *     v1-api path.
  */
-export function classifyV1Route(config: UnifiedAgentConfig): V1RouteDecision {
+function classifyV1Route(config: UnifiedAgentConfig): V1RouteDecision {
   const rawTask = extractRawUserTask(config.userMessage || '').trim();
 
   const externalTools = (config.tools || []).filter(
@@ -4865,10 +4865,6 @@ async function attemptFallback(
 
   // Try each fallback mode
   for (const fallbackMode of fallbackOrder) {
-    // Reset client disconnect flag before each fallback attempt.\
-    // The previous mode may have set _clientDisconnected (e.g. user abort),\
-    // but a different mode with a fresh provider may still succeed.\
-    _clientDisconnected = false;
     try {
       log.info('[Fallback] ┌─ TRYING FALLBACK ──────────────────');
       log.info('[Fallback] │ fallbackMode:', fallbackMode);

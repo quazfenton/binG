@@ -199,19 +199,40 @@ function isDaytonaReadinessTimeoutError(err: unknown): boolean {
   )
 }
 
+/** Maximum warm sandboxes across the entire pool (overridable via env var). */
+const MAX_WARM = parsePositiveInt(process.env.SANDBOX_WARM_POOL_MAX, 6)
+
 export class WarmPool {
-  private poolSize: number
+  /**
+   * Dynamic function that returns the current max pool size.
+   * Default: scales with active acquired sandboxes, starting at 0 (lazy).
+   * Formula: Math.min(MAX_WARM, Math.ceil(activeAcquiredCount * 0.5))
+   */
+  private getMaxPoolSize: () => number
   private refillThreshold: number
   private pool: PoolEntry[] = []
   private provisioningCount = 0
   private started = false
   private totalCreated = 0
   private refillSuspendedUntil = 0
+  /** Tracks sandboxes currently in use (acquired but not yet released). */
+  private activeAcquiredCount = 0
+  /** Set of sandbox IDs acquired from this pool — release() only acts on known IDs. */
+  private acquiredIds = new Set<string>()
 
-  constructor(options?: { poolSize?: number; refillThreshold?: number }) {
-    this.poolSize = options?.poolSize
-      ?? parsePositiveInt(process.env.SANDBOX_WARM_POOL_SIZE, 1)
+  constructor(options?: { refillThreshold?: number }) {
     this.refillThreshold = options?.refillThreshold ?? 1
+    // Default dynamic sizing: scale with active sessions, start at 0
+    this.getMaxPoolSize = () => Math.min(MAX_WARM, Math.ceil(this.activeAcquiredCount * 0.5))
+  }
+
+  /**
+   * Set a custom dynamic function for the max warm pool size.
+   * Called before refill to determine how many sandboxes to pre-warm.
+   * Overrides the default scaling formula (activeAcquiredCount * 0.5).
+   */
+  setDynamicMaxSize(fn: () => number): void {
+    this.getMaxPoolSize = fn
   }
 
   async acquire(userId: string): Promise<SandboxHandle> {
@@ -224,6 +245,8 @@ export class WarmPool {
     // Try to take a pre-provisioned sandbox
     const entry = this.pool.shift()
     if (entry) {
+      this.activeAcquiredCount++
+      this.acquiredIds.add(entry.handle.id)
       this.totalCreated++
       this.maybeRefill()
       return entry.handle
@@ -231,14 +254,21 @@ export class WarmPool {
 
     // Pool empty — create and provision on demand
     const handle = await this.createAndProvision()
+    this.activeAcquiredCount++
+    this.acquiredIds.add(handle.id)
     this.totalCreated++
     this.maybeRefill()
     return handle
   }
 
-  release(_sandboxId: string): void {
-    // Sandboxes are not returned to the pool; mark as destroyed.
-    // Actual destruction is handled by the caller / SandboxService.
+  release(sandboxId: string): void {
+    // Only decrement if this sandbox was actually acquired from the warm pool.
+    // Sandboxes created directly via the provider chain should not affect the counter.
+    if (this.acquiredIds.delete(sandboxId)) {
+      if (this.activeAcquiredCount > 0) {
+        this.activeAcquiredCount--
+      }
+    }
   }
 
   getStatus(): { available: number; provisioning: number; total: number } {
@@ -260,7 +290,8 @@ export class WarmPool {
 
   private refillPool(): void {
     if (Date.now() < this.refillSuspendedUntil) return
-    const needed = this.poolSize - this.pool.length - this.provisioningCount
+    const targetSize = this.getMaxPoolSize()
+    const needed = targetSize - this.pool.length - this.provisioningCount
     for (let i = 0; i < needed; i++) {
       this.provisionOne()
     }

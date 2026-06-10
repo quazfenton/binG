@@ -24,6 +24,11 @@ export interface Env {
   // R2 bucket (file storage) — optional, not bound until [[r2_buckets]] configured
   BING_STORAGE?: R2Bucket;
 
+  // R2 bucket (structured trace logs) — writes [TRACE] lines to R2 for durable persistence
+  // Uncomment [[r2_buckets]] binding in wrangler.toml to enable.
+  // Layout: traces/YYYY-MM-DD/HH/MM-{random}.ndjson (NDJSON, one entry per line)
+  TRACE_R2?: R2Bucket;
+
   // D1 database (lightweight SQL) — optional, not bound until [[d1_databases]] configured
   BING_DB?: D1Database;
 }

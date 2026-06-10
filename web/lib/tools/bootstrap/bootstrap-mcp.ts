@@ -47,7 +47,29 @@ export async function registerMCPTools(registry: ToolRegistry, config: Bootstrap
           authToken: process.env.MCP_GATEWAY_AUTH_TOKEN,
         } as any);
 
-        await client.connect();
+
+        // Retry connection with exponential backoff (up to ~15s total)
+        // MCP gateway may still be starting up when the main server boots.
+        let lastError: Error | null = null;
+        for (let attempt = 0; attempt < 4; attempt++) {
+          try {
+            await client.connect();
+            lastError = null;
+            break; // Connected successfully
+          } catch (err: any) {
+            lastError = err;
+            if (attempt < 3) {
+              const delay = Math.min(1000 * Math.pow(2, attempt), 8000);
+              logger.debug('[MCP-Bootstrap] Retrying gateway connection', {
+                attempt: attempt + 1,
+                delayMs: delay,
+                error: err.message,
+              });
+              await new Promise(r => setTimeout(r, delay));
+            }
+          }
+        }
+        if (lastError) throw lastError;
 
         // List available tools
         const tools = await client.listTools();

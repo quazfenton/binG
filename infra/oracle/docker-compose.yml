@@ -14,9 +14,6 @@ services:
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
-    # No host port mappings — cloudflared connects via Docker DNS (http://caddy:80).
-    # The Caddy :80 listener is reachable only on the Docker internal network.
-    # Direct HTTP access to the Oracle public IP is blocked.
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
@@ -33,21 +30,39 @@ services:
       dockerfile: backend/Dockerfile
     image: bing-backend:latest
     restart: unless-stopped
-    # No host port — reachable only via Caddy proxy on Docker internal network.
-    # Use repo-root .env so secrets and config are loaded from where deploy docs
-    # tell operators to create them (see infra/oracle/README.md section 3).
     env_file: ../../.env
     environment:
       PORT: "3001"
       NODE_ENV: production
-      # Backend talks to 9router on the internal docker network
       NINEROUTER_BASE_URL: http://ninerouter:3000/v1
       NINEROUTER_API_KEY: ${NINEROUTER_API_KEY}
       KIRO_BASE_URL: http://ninerouter:3000/v1
-      # Exclude client-only route files that crash the backend
       BACKEND_ROUTE_EXCLUDES: "/desktop/"
+      # S3/MinIO storage for VFS snapshots and file uploads
+      STORAGE_TYPE: ${STORAGE_TYPE:-s3}
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      S3_BUCKET: ${S3_BUCKET:-ephemeral-snapshots}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      # Aliases read by cloud-storage.ts S3StorageService
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      # CAS (Content-Addressable Storage) — R2_* env vars for blob storage, points to MinIO
+      R2_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+      R2_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      R2_ENDPOINT: http://minio:9000
+      R2_BUCKET: ${CAS_R2_BUCKET:-cas-blobs}
+      R2_PUBLIC_URL: ${MINIO_PUBLIC_URL:-}
+      ENABLE_CLOUD_STORAGE: "true"
+      CAS_R2_BUCKET: ${CAS_R2_BUCKET:-cas-blobs}
+      CAS_CACHE_DIR: /tmp/cas-cache
+      CAS_CACHE_SIZE_MB: "512"
     depends_on:
-      - ninerouter
+      ninerouter:
+        condition: service_started
+      minio:
+        condition: service_healthy
     networks: [edge]
 
   ninerouter:
@@ -56,38 +71,73 @@ services:
       dockerfile: 9router.Dockerfile
     image: bing-9router:latest
     restart: unless-stopped
-    # No host port — reachable only via Caddy proxy on Docker internal network.
     environment:
       PORT: "3000"
       NODE_ENV: production
-      # 9router auth: INITIAL_PASSWORD seeds the dashboard password on first init
-      # (only honored when the data volume is empty). JWT_SECRET signs session tokens.
-      # NINEROUTER_ADMIN_KEY is kept for downstream consumers (backend/Vercel) that
-      # call 9router programmatically with an X-Admin-Key header.
       INITIAL_PASSWORD: ${NINEROUTER_ADMIN_KEY}
       JWT_SECRET: ${JWT_SECRET}
       NINEROUTER_ADMIN_KEY: ${NINEROUTER_ADMIN_KEY}
     volumes:
-      # 9router persists its SQLite DB and config under $HOME/.9router (i.e. /root/.9router
-      # in this image since it runs as root). Mount the named volume there so the dashboard
-      # password and saved configuration survive container recreation.
       - ninerouter_data:/root/.9router
     networks: [edge]
 
   cloudflared:
     image: cloudflare/cloudflared:latest
     restart: unless-stopped
-    # Creates a tunnel from Cloudflare edge → http://caddy:80
-    # Provides a *.trycloudflare.com URL with automatic HTTPS
     command: tunnel --url http://caddy:80
     depends_on:
       - caddy
     networks: [edge]
 
+  # ===========================================
+  # MinIO (S3-Compatible Object Storage)
+  # ===========================================
+  minio:
+    image: minio/minio:latest
+    container_name: bing-minio
+    restart: unless-stopped
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # Console UI
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    volumes:
+      - minio-data:/data
+    command: server /data --console-address ":9001"
+    networks:
+      - edge
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+
+  # Creates required MinIO buckets on startup (runs once then exits)
+  minio-init:
+    image: minio/mc:latest
+    container_name: bing-minio-init
+    restart: "no"
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: /bin/sh
+    command: >
+      -c "mc alias set minio http://minio:9000 ${MINIO_ROOT_USER:-minioadmin} ${MINIO_ROOT_PASSWORD:-minioadmin} && mc mb minio/ephemeral-snapshots --ignore-existing && mc mb minio/cas-blobs --ignore-existing && mc anonymous set public minio/cas-blobs && echo 'MinIO buckets ready'"
+    networks:
+      - edge
+
 volumes:
   caddy_data:
   caddy_config:
   ninerouter_data:
+  minio-data:
 
 networks:
   edge:

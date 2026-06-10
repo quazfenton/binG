@@ -19,17 +19,17 @@ export function ToolInvocationCard({ tool, compact = false }: ToolInvocationCard
         return {
           icon: <Loader2 className="h-3 w-3 animate-spin" />,
           label: 'Preparing...',
-          bg: 'bg-gray-800/50 dark:bg-gray-900/50',
-          border: 'border-gray-700/50 dark:border-gray-800',
-          text: 'text-gray-400',
+          bg: 'bg-black/30 backdrop-blur-sm',
+          border: 'border-white/10',
+          text: 'text-white/50',
         };
       case 'call':
         return {
           icon: <Terminal className="h-3 w-3" />,
           label: 'Executing...',
-          bg: 'bg-gray-800/50 dark:bg-gray-900/50',
-          border: 'border-blue-800/50 dark:border-blue-900',
-          text: 'text-blue-400',
+          bg: 'bg-black/30 backdrop-blur-sm',
+          border: 'border-white/10',
+          text: 'text-white/60',
         };
       case 'result':
         const result = tool.result as Record<string, unknown>;
@@ -37,17 +37,17 @@ export function ToolInvocationCard({ tool, compact = false }: ToolInvocationCard
           return {
             icon: <XCircle className="h-3 w-3" />,
             label: 'Failed',
-            bg: 'bg-gray-800/50 dark:bg-gray-900/50',
-            border: 'border-red-800/50 dark:border-red-900',
-            text: 'text-red-400',
+            bg: 'bg-black/30 backdrop-blur-sm',
+            border: 'border-red-900/60',
+            text: 'text-red-400/90',
           };
         }
         return {
           icon: <CheckCircle className="h-3 w-3" />,
           label: 'Completed',
-          bg: 'bg-gray-800/50 dark:bg-gray-900/50',
-          border: 'border-emerald-800/50 dark:border-emerald-900',
-          text: 'text-emerald-400',
+          bg: 'bg-black/30 backdrop-blur-sm',
+          border: 'border-white/10',
+          text: 'text-white/50',
         };
     }
   };
@@ -71,24 +71,24 @@ export function ToolInvocationCard({ tool, compact = false }: ToolInvocationCard
   const renderResultContent = (result: unknown) => {
     if (result === null || result === undefined) {
       return (
-        <div className="mt-1 rounded border border-gray-700 bg-gray-900/50 p-2">
-          <div className="flex items-center gap-1 text-gray-400 text-xs font-medium mb-1">
+        <div className="mt-1 rounded border border-white/5 bg-black/20 p-2">
+          <div className="flex items-center gap-1 text-white/50 text-xs font-medium mb-1">
             <CheckCircle className="h-3 w-3" />
             Execution Success
           </div>
-          <pre className="whitespace-pre-wrap text-xs text-gray-500 font-mono">No result returned</pre>
+          <pre className="whitespace-pre-wrap text-xs text-white/30 font-mono">No result returned</pre>
         </div>
       );
     }
 
     if (typeof result !== 'object') {
       return (
-        <div className="mt-1 rounded border border-gray-700 bg-gray-900/50 p-2">
-          <div className="flex items-center gap-1 text-gray-400 text-xs font-medium mb-1">
+        <div className="mt-1 rounded border border-white/5 bg-black/20 p-2">
+          <div className="flex items-center gap-1 text-white/50 text-xs font-medium mb-1">
             <CheckCircle className="h-3 w-3" />
             Execution Success
           </div>
-          <pre className="whitespace-pre-wrap text-xs text-gray-400 font-mono">{String(result)}</pre>
+          <pre className="whitespace-pre-wrap text-xs text-white/60 font-mono">{String(result)}</pre>
         </div>
       );
     }
@@ -109,23 +109,23 @@ export function ToolInvocationCard({ tool, compact = false }: ToolInvocationCard
 
     if (hasError) {
       return (
-        <div className="mt-1 rounded border border-red-800 bg-red-950/50 p-2">
-          <div className="flex items-center gap-1 text-red-400 text-xs font-medium mb-1">
+        <div className="mt-1 rounded border border-red-900/40 bg-red-950/30 p-2">
+          <div className="flex items-center gap-1 text-red-400/80 text-xs font-medium mb-1">
             <AlertCircle className="h-3 w-3" />
             Execution Error
           </div>
-          <pre className="whitespace-pre-wrap text-xs text-red-400 font-mono">{errorText}</pre>
+          <pre className="whitespace-pre-wrap text-xs text-red-400/70 font-mono">{errorText}</pre>
         </div>
       );
     }
 
     return (
-      <div className="mt-1 rounded border border-emerald-800 bg-emerald-950/50 p-2">
-        <div className="flex items-center gap-1 text-emerald-400 text-xs font-medium mb-1">
+      <div className="mt-1 rounded border border-white/5 bg-black/20 p-2">
+        <div className="flex items-center gap-1 text-white/50 text-xs font-medium mb-1">
           <CheckCircle className="h-3 w-3" />
           Execution Success
         </div>
-        <pre className="whitespace-pre-wrap text-xs text-emerald-400 font-mono">
+        <pre className="whitespace-pre-wrap text-xs text-white/60 font-mono">
           {hasOutput ? outputValue : serialized}
         </pre>
       </div>
@@ -133,14 +133,14 @@ export function ToolInvocationCard({ tool, compact = false }: ToolInvocationCard
   };
 
   return (
-    <div className={`rounded-lg border transition-all duration-200 ${config.bg} ${config.border} ${tool.state === 'call' ? 'animate-pulse-subtle' : ''}`}>
+    <div className={`rounded-lg border backdrop-blur-lg transition-all duration-200 ${config.bg} ${config.border} ${tool.state === 'call' ? 'animate-pulse-subtle' : ''}`}>
       <div className="px-3 py-2">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2 min-w-0">
             <span className={config.text}>{config.icon}</span>
             <span className={`text-xs font-mono ${config.text} shrink-0`}>{tool.toolName}</span>
             {pathContent && (
-              <span className="text-xs font-mono text-gray-500 dark:text-gray-400 truncate">{pathContent}</span>
+              <span className="text-xs font-mono text-white/40 truncate">{pathContent}</span>
             )}
           </div>
           <div className="flex items-center gap-2 shrink-0">
@@ -161,7 +161,7 @@ export function ToolInvocationCard({ tool, compact = false }: ToolInvocationCard
             <div className="text-[10px] uppercase tracking-wider opacity-60 mb-1">
               {isVFSTool ? 'File' : 'Code'}
             </div>
-            <pre className="max-h-64 overflow-auto rounded bg-gray-900/90 p-3 text-xs font-mono text-gray-100 whitespace-pre-wrap">
+            <pre className="max-h-64 overflow-auto rounded bg-black/40 p-3 text-xs font-mono text-white/80 whitespace-pre-wrap">
               {codeContent || contentPreview || diffPreview}
             </pre>
           </div>
@@ -172,7 +172,7 @@ export function ToolInvocationCard({ tool, compact = false }: ToolInvocationCard
             {tool.args && Object.keys(tool.args).length > 0 && !hasCodeBlock && (
               <div>
                 <span className="text-[10px] uppercase tracking-wider opacity-60">Arguments</span>
-                <pre className="mt-1 max-h-32 overflow-auto rounded bg-black/30 p-2 text-[11px] font-mono text-gray-300 whitespace-pre-wrap">
+                <pre className="mt-1 max-h-32 overflow-auto rounded bg-black/40 p-2 text-[11px] font-mono text-white/60 whitespace-pre-wrap">
                   {JSON.stringify(tool.args, null, 2)}
                 </pre>
               </div>

@@ -63,6 +63,8 @@ interface ProviderEntry {
   initializing: boolean
   initPromise: Promise<SandboxProvider> | null
   failureCount: number
+  /** Timestamp of the last init failure. Used to throttle retries. */
+  lastInitFailureTime?: number
   circuitBreaker?: CircuitBreaker
   factory?: () => SandboxProvider
   asyncFactory?: () => Promise<SandboxProvider>
@@ -522,6 +524,14 @@ initializeRegistry()
 const MAX_RETRIES = 3
 
 /**
+ * Minimum time between repeated initialization attempts for a failed provider.
+ * Prevents duplicate init cycles when getCandidateProviderTypes() probes all
+ * providers on every workspace creation and each getSandboxProvider() call retries
+ * the full init loop (MAX_RETRIES with exponential backoff).
+ */
+const INIT_FAILURE_COOLDOWN_MS = 60_000 // 1 minute
+
+/**
  * Permanent errors that should NEVER be retried — skipping retries saves time
  * and avoids noisy logs. These indicate environment/configuration problems
  * that retrying cannot fix (e.g., missing Node.js built-ins, broken imports).
@@ -604,6 +614,22 @@ export async function getSandboxProvider(type?: SandboxProviderType): Promise<Sa
     return entry.provider
   }
 
+  // === FAILURE COOLDOWN: skip re-init if the last failure was recent ===
+  // Prevents duplicate provider init cycles when getCandidateProviderTypes()
+  // probes ALL providers on every workspace/session creation and each
+  // getSandboxProvider() call would otherwise retry the full init loop.
+  const lastFailure = entry.lastInitFailureTime ?? 0
+  if (!entry.provider && !entry.healthy && lastFailure > 0) {
+    const elapsed = Date.now() - lastFailure
+    if (elapsed < INIT_FAILURE_COOLDOWN_MS) {
+      log.debug(`Provider ${providerType} init throttled (cooldown: ${Math.round(elapsed / 1000)}s / ${INIT_FAILURE_COOLDOWN_MS / 1000}s)`)
+      throw new Error(
+        `Provider ${providerType} is unavailable (initialization failed ${Math.round(elapsed / 1000)}s ago). ` +
+        `Retry after ${Math.round((INIT_FAILURE_COOLDOWN_MS - elapsed) / 1000)}s.`
+      )
+    }
+  }
+
   // Race condition prevention: if already initializing, wait for the existing attempt
   if (entry.initializing && entry.initPromise) {
     return entry.initPromise
@@ -663,12 +689,15 @@ export async function getSandboxProvider(type?: SandboxProviderType): Promise<Sa
         }
       }
     }
-    // All retries exhausted
+    // All retries exhausted — record failure timestamp so subsequent
+    // getSandboxProvider() calls skip the retry loop during cooldown.
     entry.available = false
     entry.healthy = false
     entry.initializing = false
     entry.initPromise = null
-    log.error(`Provider ${providerType} failed after ${MAX_RETRIES} attempts: ${lastError?.message}`)
+    entry.lastInitFailureTime = Date.now()
+
+    log.error(`Provider ${providerType} failed after ${MAX_RETRIES} attempts: ${lastError?.message} (cooldown: ${INIT_FAILURE_COOLDOWN_MS / 1000}s)`)
     throw new Error(
       `Failed to initialize provider ${providerType} after ${MAX_RETRIES} attempts: ${lastError?.message}. ` +
       `Check that required environment variables are set.`

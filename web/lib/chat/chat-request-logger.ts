@@ -134,7 +134,7 @@ export class ChatRequestLogger {
     } catch (error) {
       console.warn('[ChatRequestLogger] DB init failed, logging disabled:', error);
       this.db = null;
-      this.initialized = false;
+      this.initialized = true; // Prevent infinite retry loops on every call
     }
   }
 

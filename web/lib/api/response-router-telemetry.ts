@@ -136,67 +136,26 @@ export async function initializeTelemetry(customConfig?: Partial<TelemetryConfig
     const NodeTracerProvider = sdkTraceNode.NodeTracerProvider
     const BatchSpanProcessor = sdkTraceBase.BatchSpanProcessor
     const OTLPTraceExporter = exporterTraceOtlp.OTLPTraceExporter
-    // FIX: Try all known export shapes for Resource class across SDK versions.
-    // @opentelemetry/resources v1.x exports Resource as named export.
-    // v2.x changed to export from '@opentelemetry/resources/build/src/Resource'
-    // or as a property on the default export. Some bundlers flatten differently.
-    // Uses `let` so the internal-path fallback can reassign it.
-    let ResourceCtor = (
-      (resources as any).Resource ??
-      (resources as any).default?.Resource ??
-      (resources as any).default ??
-      null
-    );
+    // @opentelemetry/resources v2.x uses resourceFromAttributes() factory instead
+    // of a Resource constructor. Use the v2.x API directly — no fallback chain needed.
+    const { resourceFromAttributes } = resources as { resourceFromAttributes: (attrs: Record<string, string>) => any }
     const MeterProvider = sdkMetrics.MeterProvider
 
-    if (!ResourceCtor || typeof ResourceCtor !== 'function') {
-      // One more attempt: try loading the Resource from the SDK's internal path
-      try {
-        const resourcesInternal = await import('@opentelemetry/resources/build/src/Resource');
-        ResourceCtor = (resourcesInternal as any).Resource ?? (resourcesInternal as any).default ?? null;
-      } catch { /* last resort failed */ }
+    // Semantic conventions: use ATTR_* constants from v1.28.0
+    const { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION, ATTR_DEPLOYMENT_ENVIRONMENT } = semanticConventions as any;
+    const serviceNameAttr = ATTR_SERVICE_NAME ?? 'service.name';
+    const serviceVersionAttr = ATTR_SERVICE_VERSION ?? 'service.version';
+    const deployEnvAttr = ATTR_DEPLOYMENT_ENVIRONMENT ?? 'deployment.environment';
 
-      if (!ResourceCtor || typeof ResourceCtor !== 'function') {
-        // Last resort: try @opentelemetry/resources/build/src/detect-resources (v2.x path)
-        try {
-          const detect = await import('@opentelemetry/resources/build/src/detect-resources');
-          ResourceCtor = (detect as any).Resource ?? null;
-        } catch { /* last resort failed */ }
-      }
-
-      if (!ResourceCtor || typeof ResourceCtor !== 'function') {
-        throw new Error('Resource class not found in @opentelemetry/resources (tried v1.x, v2.x, and internal paths)');
-      }
-    }
-
-    // Build resource attributes — use the modern SEMATTRS if available,
-    // otherwise fall back to SemanticResourceAttributes (deprecated in v2.x)
-    const semanticAttrs = semanticConventions.SemanticResourceAttributes ?? semanticConventions;
-    const serviceNameAttr = semanticAttrs.SERVICE_NAME ?? 'service.name';
-    const serviceVersionAttr = semanticAttrs.SERVICE_VERSION ?? 'service.version';
-    const deployEnvAttr = semanticAttrs.DEPLOYMENT_ENVIRONMENT ?? 'deployment.environment';
-
-    // Create tracer provider
+    // Create tracer provider using v2.x resourceFromAttributes factory
     let provider: any;
-    try {
-      provider = new NodeTracerProvider({
-        resource: new ResourceCtor({
-          [serviceNameAttr]: config.serviceName,
-          [serviceVersionAttr]: config.serviceVersion,
-          [deployEnvAttr]: config.environment,
-        }),
-      });
-    } catch (ctorError: any) {
-      // Some SDK versions expose Resource as a factory (not a constructor)
-      // Try calling it as a factory function instead
-      provider = new NodeTracerProvider({
-        resource: ResourceCtor({
-          [serviceNameAttr]: config.serviceName,
-          [serviceVersionAttr]: config.serviceVersion,
-          [deployEnvAttr]: config.environment,
-        }),
-      });
-    }
+    provider = new NodeTracerProvider({
+      resource: resourceFromAttributes({
+        [serviceNameAttr]: config.serviceName,
+        [serviceVersionAttr]: config.serviceVersion,
+        [deployEnvAttr]: config.environment,
+      }),
+    });
 
     // Add exporter if OTLP endpoint configured
     if (process.env.OTEL_EXPORTER_OTLP_ENDPOINT) {
@@ -220,22 +179,12 @@ export async function initializeTelemetry(customConfig?: Partial<TelemetryConfig
     }
     otelTracer = provider.getTracer(config.serviceName, config.serviceVersion)
 
-    // Create meter provider
-    let meterProvider: any;
-    try {
-      meterProvider = new MeterProvider({
-        resource: new ResourceCtor({
-          [serviceNameAttr]: config.serviceName,
-        }),
-      });
-    } catch {
-      // Factory fallback for v2.x SDK
-      meterProvider = new MeterProvider({
-        resource: ResourceCtor({
-          [serviceNameAttr]: config.serviceName,
-        }),
-      });
-    }
+    // Create meter provider using v2.x resourceFromAttributes factory
+    const meterProvider = new MeterProvider({
+      resource: resourceFromAttributes({
+        [serviceNameAttr]: config.serviceName,
+      }),
+    });
     // New SDK API - register is optional
     const meterProviderAny = meterProvider as any
     if (meterProviderAny.register) {

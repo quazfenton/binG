@@ -24,6 +24,7 @@ import { initToolSystem, executeToolCapability, hasToolCapability, isToolSystemR
 
 import { runAgentLoop as runV2AgentLoop } from './agent-loop';
 import { ModalClient, maybeUseModal, getModalClient } from '@/lib/modal/modal-client';
+import { PROVIDER_DEFAULT_MODELS } from '../providers/provider-default-models';
 import { getConfiguredFallbackChain } from '../providers/provider-fallback-chains';
 import { chatRequestLogger } from '../chat/chat-request-logger';
 import { extractFileWritesFromLLMResponse, type FileWrite } from '../chat/file-diff-utils';
@@ -124,6 +125,7 @@ import {
   ingestRule,
   ingestAntiPattern,
 } from '@/lib/rag/retrieval';
+import { mem0Add, isMem0Configured } from '@/lib/powers/mem0-power';
 
 // Does the @opencode-ai/sdk package exist in node_modules?
 // Cached at module load so checkStartupCapabilities() can use it cheaply.
@@ -213,29 +215,7 @@ function invalidateDynamicDefaultsCache(): void {
   _dynamicDefaultsTimestamp = 0;
 }
 
-/**
- * Default models for each provider when no specific model is configured.
- * Module-scoped so all execution paths (runV1ApiWithTools, runV1ApiCompletion)
- * can share the same mapping.
- */
-export const PROVIDER_DEFAULT_MODELS: Record<string, string> = {
-  openai: 'gpt-4o',
-  anthropic: 'claude-sonnet-4-6-20250514',
-  google: 'gemini-2.5-flash',
-  mistral: 'mistral-large-latest',  // Large supports tools, small doesn't
-  openrouter: 'meta-llama/llama-3.3-70b-instruct',
-  github: 'llama-3.3-70b-instruct',
-  nvidia: 'nvidia/nemotron-4-340b-instruct',
-  groq: 'llama-3.3-70b-versatile',
-  together: 'meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo',
-  zen: 'zen',
-  portkey: 'openrouter/auto',
-  chutes: 'meta-llama/Llama-3.3-70B-Instruct',
-  fireworks: 'accounts/fireworks/models/llama-v3p1-70b-instruct',
-  deepinfra: 'meta-llama/Meta-Llama-3.1-70B-Instruct',
-  anyscale: 'meta-llama/Meta-Llama-3.1-70B-Instruct',
-  lepton: 'llama3-70b',
-};
+
 
 /**
  * Exact-name sets from the capability map (createCapabilityToolExecutor)
@@ -275,7 +255,13 @@ const READ_ONLY_TOOL_NAMES = new Set([
  */
 function classifyProviderError(error: any): 'permanent' | 'rate_limit' | 'transient' {
   const msg = String(error?.message || '').toLowerCase();
-  const status = error?.status || error?.statusCode || 0;
+  // Try all common SDK property locations for HTTP status:
+  //   error.status          — Vercel AI SDK / many Node.js clients
+  //   error.statusCode      — raw fetch / OpenAI Node SDK
+  //   error.status_code     — snake_case convention (Pydantic, FastAPI)
+  //   error.response.status — axios / nock / supertest / fetch wrappers
+  //   error.code            — some SDKs encode HTTP status as "code"
+  const status = error?.status || error?.statusCode || error?.status_code || error?.response?.status || error?.code || 0;
 
   // Permanent: missing credentials, invalid auth, bad config
   if (
@@ -333,6 +319,77 @@ function markProviderPermanentlyFailed(providerName: string): void {
 function isProviderPermanentlyFailed(providerName: string): boolean {
   return _sessionPermanentFailures.has(providerName);
 }
+
+/**
+ * Flag: client has disconnected (controller closed, abort, etc.).
+ * When true, skip ALL provider fallback loops. Resets per-request.
+ */
+let _clientDisconnected = false;
+
+/** Reset the client disconnect flag at the start of each request. */
+function resetClientDisconnected(): void {
+  _clientDisconnected = false;
+}
+
+/** Mark the client as disconnected. */
+function markClientDisconnected(errorOrReason?: Error | string): void {
+  const errOrReason = errorOrReason;
+  const reason = typeof errOrReason === 'string'
+    ? errOrReason
+    : errOrReason?.message || 'unknown reason';
+
+  // Timeout-induced disconnects are provider-specific — the controller closed
+  // because THIS provider took too long. A different provider may respond
+  // quickly. Do NOT set the global _clientDisconnected flag for timeouts.
+  const isTimeout = reason.includes('timeout') || reason.includes('No activity') || reason.includes('No response');
+
+  if (isTimeout) {
+    // Timeout: skip this provider, but allow fallback to next provider.
+    // Do NOT set _clientDisconnected — the fallback loop needs to try other providers.
+    log.warn("[ClientDisconnected] ⏱ Timeout - stream closed on THIS provider, allowing fallback to next", {
+      reason,
+      category: 'timeout',
+      errorName: errOrReason && typeof errOrReason === 'object' && 'name' in errOrReason ? (errOrReason as Error).name : typeof errOrReason,
+    });
+    return; // Do NOT set _clientDisconnected for timeouts
+  }
+
+  _clientDisconnected = true;
+  const errorName = errOrReason && typeof errOrReason === 'object' && 'name' in errOrReason
+    ? (errOrReason as Error).name
+    : typeof errOrReason;
+  
+  // Differentiated logging to distinguish user-initiated disconnects from server errors.
+  // Timeouts are handled above (do NOT set _clientDisconnected for timeouts).
+  const isUserAbort = reason.includes('aborted') || reason.includes('cancelled') || reason.includes('user');
+  const isServerError = reason.includes('5') || reason.includes('server error') || reason.includes('internal');
+  
+  if (isUserAbort) {
+    log.warn("[ClientDisconnected] 🚫 User abort - stream closed, skipping remaining provider attempts", {
+      reason,
+      category: 'user_abort',
+      errorName,
+    });
+  } else if (isServerError) {
+    log.warn("[ClientDisconnected] 🔴 Server error - stream closed, skipping remaining provider attempts", {
+      reason,
+      category: 'server_error',
+      errorName,
+    });
+  } else {
+    log.warn("[ClientDisconnected] ❓ Unknown cause - stream closed, skipping all provider attempts", {
+      reason,
+      category: 'unknown',
+      errorName,
+    });
+  }
+}
+
+/** Check if client has disconnected. */
+function isClientDisconnected(): boolean {
+  return _clientDisconnected;
+}
+
 
 export interface UnifiedAgentConfig {
   // Core
@@ -566,26 +623,19 @@ async function determineMode(config: UnifiedAgentConfig): Promise<{
     return { mode: 'mastra-workflow' };
   }
 
-  // Simple chat detection: short, non-code, conversational messages route to v1-api
-  // instead of v1-agent-loop. The orchestrator (PlanActVerify) is designed for
-  // multi-step code/agentic tasks and can fail on simple requests due to the
-  // ModelMessage[] schema validation in callLLM when stepHistory accumulates
-  // tool-call messages. Simple chat goes directly through the LLM API without
-  // the orchestrator, which is faster and avoids this schema issue.
-  const userMsg = (config.userMessage || '').trim();
-  const isSimpleChat =
-    userMsg.length > 0 &&
-    userMsg.length < 200 &&
-    !/\b(create|build|implement|refactor|code|file|app|function|class|api|component|page|dashboard|fix|add|change|update|write|edit|make|install|setup|config|test|deploy|migrate|scaffold|generate|init|start|new)\b/i.test(userMsg);
-
-  if (isSimpleChat) {
-    log.info('[AutoMode] → v1-api (simple chat detected, bypassing orchestrator)');
-    return { mode: 'v1-api' as const };
-  }
-
-  // Default to PlanActVerify orchestrator for all tasks.
-  log.info('[AutoMode] → v1-agent-loop (PlanActVerify default)');
-  return { mode: 'v1-agent-loop' as const };
+  // V1 auto-routing: pick between v1-api (the resilient provider-fallback path)
+  // and v1-agent-loop (PlanActVerify orchestrator) based on the RAW user task
+  // and tool availability. See classifyV1Route for the full rationale — notably
+  // it classifies the de-augmented task and only escalates to the orchestrator
+  // when there are real tools AND genuine agentic intent, so a long but
+  // conversational prompt no longer lands on the less-resilient orchestrator.
+  const decision = classifyV1Route(config);
+  log.info('[AutoMode] ┌─ V1 ROUTE DECISION ──────────────────────');
+  log.info('[AutoMode] │ mode:', decision.mode);
+  log.info('[AutoMode] │ reason:', decision.reason);
+  log.info('[AutoMode] │ signals:', JSON.stringify(decision.signals));
+  log.info('[AutoMode] └──────────────────────────────────────────');
+  return { mode: decision.mode };
 }
 
 /**
@@ -611,6 +661,98 @@ function extractRawUserTask(userMessage: string): string {
   }
 
   return task || userMessage.slice(0, 200);
+}
+
+type V1RouteDecision = {
+  mode: 'v1-api' | 'v1-agent-loop';
+  reason: string;
+  signals: Record<string, unknown>;
+};
+
+/**
+ * Classify an auto-mode request into one of the two v1 execution paths.
+ *
+ * Replaces the prior length+keyword "isSimpleChat" heuristic, which had two
+ * structural flaws:
+ *   1. It classified `config.userMessage`, which the route augments with
+ *      workspace/memory/system context before the real "TASK:\n..." block. That
+ *      pushed almost every request past the length threshold and tripped the
+ *      keyword regex, so nearly everything defaulted to the orchestrator.
+ *   2. It treated v1-agent-loop as the "default/higher" mode even though the
+ *      PlanActVerify orchestrator has *weaker* provider-level fallback than
+ *      runV1ApiWithTools (no circuit-breaker rotation, rate-limit skip, 413
+ *      guard, or self-heal retry). A 2-char "hi" got the resilient path while a
+ *      longer prompt got the less-resilient one.
+ *
+ * Design:
+ *   - Classify the RAW user task via extractRawUserTask().
+ *   - The orchestrator only adds value when it can actually drive tools across
+ *     multiple steps. It executes tools via createCapabilityToolExecutor, so it
+ *     only needs `config.tools` populated (config.executeTool is supplied
+ *     internally). 'choose_role' is a built-in routing tool and does not count
+ *     as real agentic capability.
+ *   - Be conservative: only pick v1-agent-loop on genuine agentic / multi-step
+ *     intent over real code/workspace. When in doubt, prefer the more resilient
+ *     v1-api path.
+ */
+function classifyV1Route(config: UnifiedAgentConfig): V1RouteDecision {
+  const rawTask = extractRawUserTask(config.userMessage || '').trim();
+
+  const externalTools = (config.tools || []).filter(
+    (t: any) => t?.name && t.name !== 'choose_role'
+  );
+  const hasExternalTools = externalTools.length > 0;
+
+  const signals = {
+    rawLength: rawTask.length,
+    hasExternalTools,
+    toolCount: externalTools.length,
+    hasCodeFence: /```|~~~/.test(rawTask),
+    hasFilePath:
+      /[\w./-]+\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs|java|rb|php|c|cpp|h|json|md|css|scss|html|yml|yaml|sql|sh|toml|env)\b/i.test(
+        rawTask
+      ),
+    hasWorkspaceNoun:
+      /\b(file|files|folder|directory|repo|repository|workspace|project|module|service|api|component|page|dashboard|route|endpoint|database|schema|migration|test|tests|build|deploy)\b/i.test(
+        rawTask
+      ),
+    hasMutationVerb:
+      /\b(create|build|implement|refactor|add|change|update|write|edit|make|install|setup|configure|deploy|migrate|scaffold|generate|init|initialize|rename|delete|remove|wire|integrate)\b/i.test(
+        rawTask
+      ),
+    hasMultiStep:
+      /(\band then\b|\bafter that\b|\bafterwards\b|\bfirst\b.*\bthen\b|\bnext\b|\bfinally\b|step\s*\d|^\s*\d+[.)])/im.test(
+        rawTask
+      ),
+    hasDiagnosticVerb:
+      /\b(fix|debug|investigate|diagnose|trace|resolve|repair|troubleshoot)\b/i.test(rawTask),
+  };
+
+  // Without external tools the orchestrator degrades to a plain (less resilient)
+  // LLM call — always prefer v1-api.
+  if (!hasExternalTools) {
+    return { mode: 'v1-api', reason: 'no_external_tools', signals };
+  }
+
+  // Empty task → nothing to orchestrate.
+  if (signals.rawLength === 0) {
+    return { mode: 'v1-api', reason: 'empty_task', signals };
+  }
+
+  // Strong agentic intent: a mutation/diagnostic over real code/workspace, or an
+  // explicit multi-step plan touching files/workspace. Bare verbs like "write a
+  // poem" or "fix this sentence" lack the code/workspace signal and stay v1-api.
+  const stronglyAgentic =
+    (signals.hasMutationVerb &&
+      (signals.hasFilePath || signals.hasWorkspaceNoun || signals.hasCodeFence)) ||
+    (signals.hasMultiStep && (signals.hasFilePath || signals.hasWorkspaceNoun)) ||
+    (signals.hasDiagnosticVerb && (signals.hasWorkspaceNoun || signals.hasFilePath));
+
+  if (stronglyAgentic) {
+    return { mode: 'v1-agent-loop', reason: 'agentic_task_with_tools', signals };
+  }
+
+  return { mode: 'v1-api', reason: 'not_agentic_enough', signals };
 }
 
 /**
@@ -967,7 +1109,17 @@ export async function processUnifiedAgentRequest(
       } catch { /* best effort */ }
     }
 
-    if (isAutoMode && result.success && (result.steps?.length ?? 0) === 0 && !roleSelection?.continue) {
+    // Guard against double-fallback: runV1Orchestrated may already have cascaded
+    // to runV1Api internally (budget exhaustion / orchestration failure / empty
+    // content). In that case result.mode/metadata reflect the fallback and we
+    // must not run runV1Api a second time.
+    const alreadyFellBack =
+      result.mode !== mode ||
+      result.metadata?.fallbackFrom != null ||
+      result.metadata?.fallbackReason != null ||
+      result.metadata?.fallbackChain != null;
+
+    if (isAutoMode && !alreadyFellBack && result.success && (result.steps?.length ?? 0) === 0 && !roleSelection?.continue) {
       log.info('[PhaseTransition] No tools used in Phase 1, entering Phase 2 fallback (text-mode)');
       
       // For orchestrated modes, retry with text-only fallback
@@ -2384,8 +2536,23 @@ function createCapabilityToolExecutor(config: UnifiedAgentConfig) {
         scopePath: config.conversationId ? `workspace/sessions/${config.conversationId}` : undefined,  // FIX: VFS scope path
         workspaceId: config.projectContext?.id,
       });
+
+      // FIX 12: Detect scope/permission violations — mark them so the agent loop
+      // does NOT trigger provider fallback. These are app-level errors.
+      const capOutput = (capResult.output as string) || capResult.error || "";
+      const isScopeViolation =
+        capOutput.includes("PATH_NOT_FOUND") ||
+        capOutput.includes("outside the allowed scope") ||
+        capOutput.includes("SCOPE_VIOLATION") ||
+        capOutput.includes("PERMISSION_DENIED") ||
+        capOutput.includes("ACCESS_DENIED") ||
+        capOutput.includes("not permitted");
+      const scopeNote = isScopeViolation
+        ? " [SCOPE_ERROR: scope violation, not a provider failure. Changing LLM providers will not fix this.]"
+        : "";
+
       const toolDuration = Date.now() - toolStartTime;
-      const toolResult: ToolResult = { success: capResult.success, output: (capResult.output as string) || capResult.error, exitCode: capResult.exitCode };
+      const toolResult: ToolResult = { success: capResult.success, output: ((capResult.output as string) || capResult.error || "") + scopeNote, exitCode: capResult.exitCode };
       logToolCall(name, rawArgs, toolResult, toolDuration, config.onStreamChunk);
       return toolResult;
     }
@@ -2494,6 +2661,8 @@ async function runV1ApiWithTools(
   _selfHealProvider = null;
   _selfHealModel = null;
   resetSessionPermanentFailures();
+  resetClientDisconnected();
+
   const requestId = `unified-v1-tools-${Date.now()}`;
 
   log.info('[V1-API-WITH-TOOLS] │ primaryProvider:', primaryProvider);
@@ -2658,6 +2827,12 @@ async function runV1ApiWithTools(
 
   // Try each provider in order — with circuit-breaker and rate-limit awareness
   for (const providerName of uniqueProviders) {
+    // GUARD: If client disconnected, skip ALL provider attempts.
+    if (isClientDisconnected()) {
+      log.warn("[V1-API] Client already disconnected - breaking provider loop immediately");
+      break;
+    }
+
     const modelForProvider = getModelForProvider(providerName);
 
     // FIX: Skip providers with open circuit breakers (unless first request of session)
@@ -3139,24 +3314,59 @@ Based on what you have learned, continue working on the original task. Take the 
 
       // RAG: Log successful trajectory to knowledge store for future retrieval
       if (toolCallTelemetry.length > 0 && toolCallTelemetry.every(t => t.success)) {
-        try {
-          const toolCallSummary = toolCallTelemetry
-            .map(t => `${t.toolName}(${JSON.stringify(t.args).slice(0, 100)})`)
-            .join('\n');
-          await ingestTrajectory({
-            task: config.userMessage.slice(0, 500),
-            toolCalls: toolCallSummary,
-            model: `${providerName}/${modelForProvider}`,
-            quality: 1.0 - (toolInvocations.length * 0.05), // Slightly lower quality for more retries
+        const msg = config.userMessage?.trim() ?? '';
+        const isContinuation = /^(continue|finish|go on|keep going|keep?|yes|yeah|ok|okay|do it|proceed|next|more)$/i.test(msg);
+        const isFrustration = /(wh(y|at).*(stop|doing|happen)|(are|were).*done|terrible|awful|useless|bad|wrong|fail)/i.test(msg);
+        const isTooShort = msg.length < 3;
+        if (!isContinuation && !isFrustration && !isTooShort) {
+          try {
+            const toolCallSummary = toolCallTelemetry
+              .map(t => `${t.toolName}(${JSON.stringify(t.args).slice(0, 100)})`)
+              .join('\n');
+            await ingestTrajectory({
+              task: msg.slice(0, 500),
+              toolCalls: toolCallSummary,
+              model: `${providerName}/${modelForProvider}`,
+              quality: 1.0 - (toolInvocations.length * 0.05),
+            });
+            log.info('[RAG] Trajectory logged', {
+              taskType: 'tool_execution',
+              toolCount: toolCallTelemetry.length,
+              model: `${providerName}/${modelForProvider}`,
+            });
+          } catch (error) {
+            log.warn('[RAG] Failed to log trajectory', {
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        } else {
+          log.debug('[RAG] Skipped trajectory — user message is not a meaningful task', {
+            reason: isContinuation ? 'continuation' : isFrustration ? 'frustration' : 'too_short',
           });
-          log.info('[RAG] Trajectory logged', {
-            taskType: 'tool_execution',
-            toolCount: toolCallTelemetry.length,
-            model: `${providerName}/${modelForProvider}`,
-          });
-        } catch (error) {
-          log.warn('[RAG] Failed to log trajectory', {
-            error: error instanceof Error ? error.message : String(error),
+        }
+      }
+
+      // Mem0: Store conversation turn for future memory retrieval
+      if (isMem0Configured() && response) {
+        const userMsg = config.userMessage?.trim() ?? '';
+        const cleanResponse = response.trim();
+        if (userMsg && cleanResponse) {
+          const ownerId = config.userId || config.filesystemOwnerId || 'default';
+          mem0Add({
+            messages: [
+              { role: 'user' as const, content: userMsg.slice(0, 8000) },
+              { role: 'assistant' as const, content: cleanResponse.slice(0, 8000) },
+            ],
+            userId: ownerId,
+            sessionId: config.conversationId,
+          }).then(result => {
+            if (result.success) {
+              log.debug('[Mem0] Conversation turn stored', { requestId, userId: ownerId });
+            } else {
+              log.warn('[Mem0] Failed to store conversation turn', { requestId, error: result.error });
+            }
+          }).catch(err => {
+            log.warn('[Mem0] Failed to store conversation turn (non-critical)', { requestId, error: err.message });
           });
         }
       }
@@ -3622,16 +3832,29 @@ Based on what you have learned, continue working on the original task. Take the 
             continue;
           }
           
-          // DON'T derank for client timeout/stream errors - these are not model failures
           // "Controller is already closed" = client disconnected (3min timeout, user action, etc.)
-          const isClientError = 
-            errorMessage.includes('controller is already closed') ||
-            errorMessage.includes('aborted') ||
+          // FIX: Only mark client as disconnected for EXPLICIT client-side aborts.
+          // Internal timeouts (idle timeout, TTFT timeout) also close the controller
+          // but should NOT kill ALL remaining provider fallback attempts.
+          // Distinguish: 'aborted' is too broad (catches internal timeouts). Narrow to:
+          //   - 'cancelled'                  → explicit user/programmatic cancellation
+          //   - 'client disconnected'        → explicit client stream close
+          //   - AbortError WITHOUT timeout   → user-initiated abort (not internal timeout)
+          const isExplicitClientAbort =
             errorMessage.includes('cancelled') ||
             errorMessage.includes('client disconnected') ||
-            error.name === 'AbortError';
+            (error.name === 'AbortError' &&
+              !errorMessage.includes('timeout') &&
+              !errorMessage.includes('No activity') &&
+              !errorMessage.includes('No response'));
           
-          if (isClientError) {
+          if (isExplicitClientAbort) {
+            // Set global flag: no subsequent provider attempts (or agent loop iterations)
+            // should try any more providers — the response stream is gone.
+                        markClientDisconnected(error?.message || errorMessage);;
+          }
+
+          if (isExplicitClientAbort) {
             log.warn('[V1-API-WITH-TOOLS] Client timeout/disconnect - NOT deranking model', {
               provider: providerName,
               model: modelForProvider,
@@ -3829,12 +4052,25 @@ async function runV1Orchestrated(
   let firstResponseContent: string | null = null; 
   let stepsCount = 0;
   let budgetExhausted = false;
+  // Resilience tracking: the orchestrator catches its own fatal errors and yields
+  // a `warning` followed by a non-empty "I encountered an error..." done event,
+  // so a thrown-error catch would never fire. Track the warning explicitly and
+  // count streamed text so we can safely cascade to the resilient v1-api path
+  // without double-streaming a second answer.
+  let orchestrationFailed = false;
+  let streamedTextLength = 0;
   const steps: any[] = [];
 
   try {
     for await (const event of orchestrator.execute(config.userMessage, messages)) {
       if (config.onStreamChunk && event.type === 'token') {
+        streamedTextLength += event.content?.length || 0;
         config.onStreamChunk(event.content);
+      }
+
+      if (event.type === 'warning' && /orchestration failed/i.test((event as any).message || '')) {
+        orchestrationFailed = true;
+        log.warn('[runV1Orchestrated] Orchestrator reported failure', { message: (event as any).message });
       }
 
       if (event.type === 'done') {
@@ -3968,20 +4204,38 @@ async function runV1Orchestrated(
     const roleSelectMeta = (config as any)._roleSelectMetadata as RoutingMetadata | undefined;
     const routingForClient = roleSelectMeta ? buildRoutingMetadataForClient(roleSelectMeta) : undefined;
 
-    // If budget was exhausted during orchestration, fall back to v1-api for a simpler completion
-    if (budgetExhausted) {
-      log.warn('[runV1Orchestrated] Budget exhausted during orchestration, falling back to v1-api');
+    // Cascade to the resilient v1-api path when the orchestrator degraded:
+    //   - budget exhausted, OR
+    //   - it caught a fatal error (warning + sentinel done response), OR
+    //   - it produced empty content and streamed nothing visible to the client.
+    // The streamedTextLength guard prevents emitting a second answer on top of
+    // already-streamed orchestrator output. We never override an active
+    // role-select auto-continue flow (roleSelectMeta.continue).
+    const contentEmpty = !cleanedResponse || !cleanedResponse.trim();
+    const shouldFallbackToV1Api =
+      !roleSelectMeta?.continue &&
+      (budgetExhausted ||
+        orchestrationFailed ||
+        (contentEmpty && streamedTextLength === 0));
+    const fallbackReason = budgetExhausted
+      ? 'budget_exhausted'
+      : orchestrationFailed
+        ? 'orchestration_failed'
+        : 'empty_response';
+
+    if (shouldFallbackToV1Api) {
+      log.warn('[runV1Orchestrated] Orchestrator degraded, falling back to v1-api', { fallbackReason, streamedTextLength });
       try {
         const fallbackResult = await runV1Api(config);
-        log.info('[runV1Orchestrated] v1-api fallback completed after budget exhaustion');
+        log.info('[runV1Orchestrated] v1-api fallback completed', { fallbackReason });
         return {
           ...fallbackResult,
           metadata: {
             ...fallbackResult.metadata,
-            budgetExhausted: true,
+            budgetExhausted,
             originalOrchResponse: cleanedResponse.slice(0, 200) + (cleanedResponse.length > 200 ? '...' : ''),
             fallbackFrom: 'v1-agent-loop',
-            fallbackReason: 'budget_exhausted',
+            fallbackReason,
             ...(routingForClient ? { routing: routingForClient } : {}),
             ...(roleSelectMeta ? { roleSelection: {
               classification: roleSelectMeta.classification,
@@ -4008,7 +4262,8 @@ async function runV1Orchestrated(
               ...chainResult,
               metadata: {
                 ...chainResult.metadata,
-                budgetExhausted: true,
+                budgetExhausted,
+                fallbackReason,
                 originalOrchResponse: cleanedResponse,
                 fallbackChain: ['v1-agent-loop', 'v1-api', chainResult.mode],
 ...(routingForClient ? { routing: routingForClient } : {}),
@@ -4040,7 +4295,8 @@ async function runV1Orchestrated(
             model,
             duration,
             orchestrator: true,
-            budgetExhausted: true,
+            budgetExhausted,
+            fallbackReason,
             fallbackFailed: true,
             originalOrchResponse: cleanedResponse.slice(0, 200) + (cleanedResponse.length > 200 ? '...' : ''),
             ...(routingForClient ? { routing: routingForClient } : {}),
@@ -4210,6 +4466,12 @@ async function runV1ApiCompletion(
 
   // Try each provider in order using same pattern as enhanced-llm-service.ts
   for (const providerName of uniqueProviders) {
+    // GUARD: If client disconnected, skip ALL provider attempts.
+    if (isClientDisconnected()) {
+      log.warn("[V1-API] Client already disconnected - breaking provider loop immediately");
+      break;
+    }
+
     if (is530Blacklisted(providerName)) { log.warn("530 BLACKLISTED in completion, skipping " + providerName); continue; }
     const modelForProvider = getModelForProvider(providerName);
     try {
@@ -4539,6 +4801,14 @@ async function attemptFallback(
   const visitedModes = new Set(triedModes);
   visitedModes.add(failedMode);
 
+  // Early return: if client disconnected (user abort), skip entire fallback chain.
+  // Timeouts don't set the flag (see markClientDisconnected), so this only
+  // triggers for explicit user cancellations.
+  if (isClientDisconnected()) {
+    log.info("[Fallback] Client disconnected - skipping fallback chain");
+    return null;
+  }
+
   log.info('[Fallback] ┌─ ATTEMPTING FALLBACK ──────────────────');
   log.info('[Fallback] │ failedMode:', failedMode);
   log.info('[Fallback] │ error:', error instanceof Error ? error.message : String(error));
@@ -4603,6 +4873,20 @@ async function attemptFallback(
 
   // Try each fallback mode
   for (const fallbackMode of fallbackOrder) {
+    // Reset client disconnect flag before each fallback attempt -
+    // safety net for server errors/unknowns that set the flag.
+    _clientDisconnected = false;
+
+    // Check circuit breaker for this fallback mode - skip if OPEN
+    try {
+      const { circuitBreakerManager: _fbCBM } = await import("../middleware/circuit-breaker");
+      const _fbBreaker = _fbCBM.getBreaker(fallbackMode);
+      if (_fbBreaker && _fbBreaker.getState() === "OPEN") {
+        log.warn("[Fallback] Skipping - circuit breaker OPEN", { fallbackMode });
+        visitedModes.add(fallbackMode);
+        continue;
+      }
+    } catch { /* circuit breaker unavailable - proceed */ }
     try {
       log.info('[Fallback] ┌─ TRYING FALLBACK ──────────────────');
       log.info('[Fallback] │ fallbackMode:', fallbackMode);

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { PROVIDER_DEFAULT_MODELS } from "@/lib/providers/provider-default-models";
 
 
 
@@ -67,9 +68,33 @@ export async function GET(request: NextRequest) {
     console.error("Error fetching providers:", errMsg, errStack?.split('\n').slice(0, 3).join('\n'));
     // Only expose error details in development — in production, return generic message
     const isDev = process.env.NODE_ENV === 'development';
-    return NextResponse.json(
-      { error: "Failed to fetch available providers", ...(isDev ? { detail: errMsg } : {}) },
-      { status: 500 },
-    );
+    // Fallback: return static providers when dynamic import fails
+    try {
+      const staticProviders = Object.entries(PROVIDER_DEFAULT_MODELS).map(([id, defaultModel]) => ({
+        id,
+        name: id,
+        models: [defaultModel],
+        supportsStreaming: true,
+        maxTokens: 4096,
+        description: id + ' (static fallback)',
+        isAvailable: !!process.env[(id.toUpperCase() + '_API_KEY')],
+      }));
+      return NextResponse.json({
+        success: true,
+        data: {
+          providers: staticProviders,
+          defaultProvider: process.env.DEFAULT_LLM_PROVIDER || 'mistral',
+          defaultModel: process.env.DEFAULT_MODEL || 'mistral-large-latest',
+        },
+        _fallback: true,
+      }, {
+        headers: { 'Cache-Control': 'public, max-age=60, stale-while-revalidate=300' },
+      });
+    } catch {
+      return NextResponse.json(
+        { error: "Failed to fetch available providers", ...(isDev ? { detail: errMsg } : {}) },
+        { status: 500 },
+      );
+    }
   }
 }

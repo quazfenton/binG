@@ -119,10 +119,9 @@ export class SecretBroker {
       this.key = createHash('sha256').update(rawKey).digest();
     } else {
       // Generate an ephemeral key — valid only for this process lifetime
-      logger.warn(
-        'No encryption key configured for SecretBroker. ' +
-        'Secrets will use an ephemeral key that is lost on restart. ' +
-        'Set SECRET_BROKER_KEY or APP_SECRET environment variable.',
+      logger.debug(
+        'No encryption key configured for SecretBroker — using ephemeral key (valid for this process lifetime). ' +
+        'Set SECRET_BROKER_KEY or APP_SECRET environment variable for persistent encryption across restarts.',
       );
       this.key = randomBytes(32);
     }

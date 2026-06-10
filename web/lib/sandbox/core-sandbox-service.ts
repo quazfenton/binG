@@ -40,6 +40,7 @@ export const coreSandboxService = {
       const provider = await service['resolveProviderForSandbox'](sandboxId)
       await provider.destroySandbox(sandboxId)
       service['sandboxProviderById'].delete(sandboxId)
+      warmPool.release(sandboxId)
       log.info(`Sandbox destroyed via singleton: ${sandboxId}`)
       return { success: true }
     } catch (error: any) {
@@ -251,6 +252,7 @@ export class SandboxService {
         try {
           await provider.destroySandbox(handle.id)
           this.sandboxProviderById.delete(handle.id)
+          warmPool.release(handle.id)
         } catch (cleanupErr: any) {
           log.error(
             `Failed to cleanup sandbox ${handle.id}: ${cleanupErr.message}`,
@@ -442,6 +444,7 @@ export class SandboxService {
         const provider = await this.resolveProviderForSandbox(handle.id)
         await provider.destroySandbox(handle.id)
         this.sandboxProviderById.delete(handle.id)
+        warmPool.release(handle.id)
       } catch (cleanupError: any) {
         log.error(`Failed to cleanup sandbox after session save failure: ${cleanupError.message}`)
       }
@@ -490,6 +493,7 @@ export class SandboxService {
     const provider = await this.resolveProviderForSandbox(sandboxId)
     await provider.destroySandbox(sandboxId)
     this.sandboxProviderById.delete(sandboxId)
+    warmPool.release(sandboxId)
     updateSession(sessionId, { status: 'closed' })
     deleteSession(sessionId)
   }

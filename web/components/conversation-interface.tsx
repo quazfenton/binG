@@ -665,6 +665,7 @@ export default function ConversationInterface() {
     stop,
     setInput, // Destructure setInput from enhanced chat hook
     reload,
+    setUserMessageMeta,
   } = useEnhancedChat({
     api: "/api/chat",
     orchestrationMode: orchestrationConfig.mode,
@@ -1925,6 +1926,12 @@ export default function ConversationInterface() {
         applyFileEdits: true,
         scopePath: filesystemScopePath,
       };
+    }
+
+    // Pass attached file names as user message metadata for display in bubble
+    const fileNames = Object.keys(refreshedFiles);
+    if (fileNames.length > 0) {
+      setUserMessageMeta({ attachedFiles: fileNames });
     }
 
     try {

@@ -148,6 +148,36 @@ function _getFs(): any {
   return _fs;
 }
 
+// ── Force stdout/stderr to unbuffered (line-buffered) mode ───────────
+//
+// When Node.js detects that stdout is piped to a file (non-TTY), it
+// switches from line-buffered to block-buffered mode with an 8 KB buffer.
+// This means console.log() output that accumulates less than 8 KB is
+// silently dropped when the process is killed by Ctrl+C — the buffer
+// never gets flushed.
+//
+// Calling setBlocking(true) on the underlying _handle forces the stream
+// to write synchronously on every call, eliminating the 8 KB buffer.
+// The cost is slightly lower throughput for bulk output, but for a dev
+// server this is negligible and correctness (no lost output) wins.
+//
+// We only activate this when stdout/stderr is NOT a TTY (piped to file
+// or log collector), since that is the only scenario where the 8 KB
+// block buffer causes data loss on Ctrl+C.  When stdout is a terminal,
+// Node.js already uses line-buffered mode, so setBlocking is unnecessary.
+if (typeof process !== 'undefined' && typeof window === 'undefined') {
+  try {
+    if (!(process.stdout as any).isTTY && (process.stdout as any)._handle?.setBlocking) {
+      (process.stdout as any)._handle.setBlocking(true);
+    }
+    if (!(process.stderr as any).isTTY && (process.stderr as any)._handle?.setBlocking) {
+      (process.stderr as any)._handle.setBlocking(true);
+    }
+  } catch {
+    // Best effort — some runtimes (Edge, Deno, etc.) don't have _handle.
+  }
+}
+
 // Raw file descriptor for synchronous, guaranteed-disk-persistence writes.
 // Using a raw fd + fs.writeSync + fs.fsyncSync ensures every log line hits
 // disk immediately — no Node.js stream buffer (16 KB default) and no OS page
@@ -642,37 +672,77 @@ if (typeof process !== 'undefined' && typeof window === 'undefined' && process.e
     _closeLogFd();
   });
 
-  // Only register aggressive cleanup handlers in production.
-  // In dev mode Next.js manages its own signal handling and we must
-  // not interfere by calling process.exit().
-  if (process.env.NODE_ENV === 'production') {
-    process.on('SIGINT', () => {
+  // ── SIGINT/SIGTERM handlers (ALL environments, including dev) ──────
+  //
+  // In production: flush logs AND exit — there is no framework managing
+  // the process lifecycle so we must do it ourselves.
+  //
+  // In dev mode:    flush logs only — calling process.exit() here would
+  // fight Next.js / Turbopack's own lifecycle management.  But we MUST
+  // still fsync+close the log fd so the OS page cache is flushed before
+  // the framework terminates the process.  Without this, pressing Ctrl+C
+  // in dev regularly loses the last ~1–2 seconds of log data.
+  //
+  // We also flush stdout/stderr synchronously — when output is piped to
+  // a file Node.js switches from line-buffered to 8 KB block-buffered
+  // mode, and Ctrl+C kills the process before the buffer empties.
+
+  const _flushAndMaybeExit = (shouldExit: boolean, exitCode: number) => {
+    _closeLogFd();
+    if (shouldExit) {
+      process.exit(exitCode);
+    }
+  };
+
+  // SIGINT (Ctrl+C / terminal interrupt) — register unconditionally.
+  process.on('SIGINT', () => {
+    const isDev = process.env.NODE_ENV !== 'production';
+    if (!isDev) {
       console.error('[Logger] SIGINT received — flushing logs before exit');
-      _closeLogFd();
-      process.exit(0);
-    });
+    }
+    _flushAndMaybeExit(!isDev, 0);
+  });
 
-    process.on('SIGTERM', () => {
+  // SIGTERM (kill / service stop)
+  process.on('SIGTERM', () => {
+    const isDev = process.env.NODE_ENV !== 'production';
+    if (!isDev) {
       console.error('[Logger] SIGTERM received — flushing logs before exit');
-      _closeLogFd();
-      process.exit(0);
+    }
+    _flushAndMaybeExit(!isDev, 0);
+  });
+
+  // SIGHUP — terminal hangup (ssh disconnect, terminal close).
+  // In dev mode, flush but don't exit — Next.js may recover from a
+  // terminal reattach or the user just closed the terminal window.
+  try {
+    process.on('SIGHUP', () => {
+      _flushAndMaybeExit(process.env.NODE_ENV === 'production', 0);
     });
+  } catch {
+    // SIGHUP may not exist on Windows — ignore.
+  }
 
-    if (process.listenerCount('uncaughtException') === 0) {
-      process.on('uncaughtException', (err) => {
-        console.error('[Logger] Uncaught Exception:', err);
-        _closeLogFd();
-        process.exit(1);
-      });
-    }
+  // Uncaught exceptions — flush + exit (production only).
+  // In development mode, Next.js / Turbopack manages its own uncaught
+  // exception handling (error overlay, HMR recovery). Calling
+  // process.exit() here would kill the dev server before Next.js can
+  // display the error or recover, making debugging much harder.
+  if (process.env.NODE_ENV === 'production' && process.listenerCount('uncaughtException') === 0) {
+    process.on('uncaughtException', (err) => {
+      console.error('[Logger] Uncaught Exception:', err);
+      _flushAndMaybeExit(true, 1);
+    });
+  }
 
-    if (process.listenerCount('unhandledRejection') === 0) {
-      process.on('unhandledRejection', (reason) => {
-        console.error('[Logger] Unhandled Rejection:', reason);
-        _closeLogFd();
-        process.exit(1);
-      });
-    }
+  // Unhandled rejections — flush + exit (production only).
+  // Same reasoning: in dev mode, let Next.js handle these gracefully
+  // (error overlay / recovery) rather than hard-exiting.
+  if (process.env.NODE_ENV === 'production' && process.listenerCount('unhandledRejection') === 0) {
+    process.on('unhandledRejection', (reason) => {
+      console.error('[Logger] Unhandled Rejection:', reason);
+      _flushAndMaybeExit(true, 1);
+    });
   }
 }
 

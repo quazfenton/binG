@@ -27,6 +27,7 @@ import { getWorkspaceRuntime } from '@/lib/terminal/workspace-runtime-service';
 import { workspaceServiceManager } from '@/lib/terminal/workspace-service-manager';
 import { workspaceReplayService } from '@/lib/workspace/workspace-replay-service';
 import { getSecretBroker } from './secret-broker';
+import { autoSuspendService } from './auto-suspend-service';
 
 const logger = createLogger('Sandbox:Orchestrator');
 
@@ -91,7 +92,17 @@ export class SandboxOrchestrator {
   private readonly AFFINITY_TTL_MS = parseInt(process.env.SANDBOX_AFFINITY_TTL_MS || '600000', 10);
   /** Whether workspace affinity is enabled */
   private readonly AFFINITY_ENABLED = process.env.SANDBOX_AFFINITY_ENABLED !== 'false';
-  private readonly WARM_POOL_SIZE = 3;
+  /** Maximum warm sandboxes per provider (overridable via SANDBOX_WARM_POOL_MAX env var). */
+  private readonly WARM_POOL_MAX = parseInt(process.env.SANDBOX_WARM_POOL_MAX || '6', 10) || 6;
+  /**
+   * Dynamic warm pool size — scales with active sessions.
+   * Starts at 0 (lazy), grows to ceil(activeSessions * 0.5), capped at WARM_POOL_MAX.
+   * A session-only sandbox is created on first demand; warm pool pre-warms extras.
+   */
+  private get WARM_POOL_SIZE(): number {
+    const active = this.sessions.size;
+    return Math.min(this.WARM_POOL_MAX, Math.ceil(active * 0.5));
+  }
   private readonly IDLE_TIMEOUT_MS = 5 * 60 * 1000;
   /** Warm pool sandboxes idle longer than this are destroyed to save costs (default: 15 min) */
   private readonly WARM_POOL_IDLE_TIMEOUT_MS = parseInt(process.env.WARM_POOL_IDLE_TIMEOUT_MS || '900000', 10);
@@ -224,6 +235,13 @@ export class SandboxOrchestrator {
 
     this.sessions.set(orchestratorSession.logicalId, orchestratorSession);
     resourceMonitor.startMonitoring(handle.id, provider);
+
+    // Link sandbox to user session so sandbox-file-sync-bridge can find it.
+    // Without this, every file op (write_file, apply_diff) logs
+    // "No active sandbox for user, skipping file sync" — the sandbox exists
+    // but the session manager doesn't know about it.
+    sessionManager.setSandbox(session.id, handle.id, provider, handle);
+
     void this.replenishWarmPool(provider);
 
     // === Phase 7: Restore workspace FS snapshot if available ===
@@ -685,6 +703,8 @@ export class SandboxOrchestrator {
     this.warmPoolTimestamps.delete(handle.id);
     try {
       await handle.executeCommand('echo health_check');
+      // Track activity so auto-suspend knows this sandbox is still in use
+      autoSuspendService.trackActivity(handle.id);
       return handle;
     } catch {
       logger.warn('Warm sandbox unhealthy, discarding', { provider });
@@ -693,7 +713,7 @@ export class SandboxOrchestrator {
   }
 
   private async initializeWarmPool(): Promise<void> {
-    logger.info('Initializing warm sandbox pool');
+    logger.info('Initializing warm sandbox pool (lazy — will scale on demand)');
 
     const providers: SandboxProviderType[] = ['daytona', 'e2b', 'sprites', 'firecracker'];
 
@@ -701,7 +721,15 @@ export class SandboxOrchestrator {
       this.warmPool.set(provider, []);
       // Clean up orphaned sandboxes from previous server instances
       await this.cleanupOrphanedWarmPool(provider);
-      await this.replenishWarmPool(provider);
+      // Register provider with auto-suspend service so warm pool sandboxes
+      // can be hibernated instead of destroyed when idle
+      try {
+        const prov = await getSandboxProvider(provider);
+        autoSuspendService.registerProvider(provider, prov);
+      } catch {
+        // Best-effort — provider may not support this environment
+      }
+      // No eager creation — pool starts empty and scales on first getSandbox() call
     }
   }
 
@@ -802,20 +830,38 @@ export class SandboxOrchestrator {
             // Best-effort — may already be stopped
           }
 
-          if (provider) {
-            try {
-              await provider.destroySandbox(handle.id);
-              logger.info('Destroyed idle warm sandbox', {
+          // Hibernate instead of destroy — preserves state via auto-suspend
+          // so sandboxes can be quickly resumed when demand returns
+          try {
+            const suspended = await autoSuspendService.suspendSandbox(handle.id, 'idle');
+            if (suspended) {
+              logger.info('Hibernated idle warm sandbox (state preserved)', {
                 provider: providerType,
                 sandboxId: handle.id,
                 ageMs: Date.now() - (createdAt || Date.now()),
               });
-            } catch (err: any) {
-              logger.warn('Failed to destroy idle warm sandbox (may already be dead)', {
+            } else if (provider) {
+              // Fallback: provider doesn't support suspension, destroy instead
+              await provider.destroySandbox(handle.id);
+              logger.info('Destroyed idle warm sandbox (hibernation not supported)', {
                 provider: providerType,
                 sandboxId: handle.id,
-                error: err.message,
+                ageMs: Date.now() - (createdAt || Date.now()),
               });
+            }
+          } catch (err: any) {
+            // Last resort: destroy if hibernation fails
+            logger.warn('Failed to hibernate idle warm sandbox, destroying', {
+              provider: providerType,
+              sandboxId: handle.id,
+              error: err.message,
+            });
+            if (provider) {
+              try {
+                await provider.destroySandbox(handle.id);
+              } catch {
+                // Sandbox may already be dead
+              }
             }
           }
         }

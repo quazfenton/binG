@@ -58,6 +58,7 @@ COPY web/deprecated ./web/deprecated
 # The next-route-loader auto-mounts every web/app/api/**/route.ts at startup.
 # Copy the full API tree so dynamic route discovery works in production.
 COPY web/app/api ./web/app/api
+COPY web/components ./web/components
 COPY tsconfig.json ./tsconfig.json
 
 # tsx runs TS at runtime — no build step needed.

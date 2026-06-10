@@ -15,7 +15,7 @@
     "allowJs": true,
     "baseUrl": "./",
     "paths": {
-      "@/*": ["./*"]
+      "@/*": ["./*", "web/*"]
     }
   },
   "include": ["**/*.ts", "**/*.tsx"],

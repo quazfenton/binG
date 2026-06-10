@@ -81,20 +81,28 @@ export class ArcadeService {
     }
 
     try {
-      // Try dynamic import for Arcade SDK
-      const { Arcade } = await import('@arcadeai/arcadejs');
+      let sdkImportError: any = null;
 
-      this.client = new Arcade({
-        apiKey: this.config.apiKey,
-        baseURL: this.config.baseUrl,
-      });
-
-      this.initialized = true;
-      console.log('[ArcadeService] Initialized with SDK');
+      try {
+        const { Arcade } = await import('@arcadeai/arcadejs');
+        this.client = new Arcade({
+          apiKey: this.config.apiKey,
+          ...(this.config.baseUrl ? { baseURL: this.config.baseUrl } : {}),
+        });
+        this.initialized = true;
+        console.log('[ArcadeService] Initialized with SDK');
+      } catch (importError: any) {
+        sdkImportError = importError;
+        console.warn(
+          `[ArcadeService] Arcade SDK import failed: ${importError.message}. ` +
+          `Falling back to HTTP API. ` +
+          `Make sure @arcadeai/arcadejs is installed: npm install @arcadeai/arcadejs`
+        );
+        this.initialized = true;
+      }
     } catch (error: any) {
-      console.warn('[ArcadeService] Arcade SDK not available, using HTTP API');
-      // Fallback to HTTP API
-      this.initialized = true;
+      console.error('[ArcadeService] initialize failed:', error.message);
+      this.initialized = false;
     }
   }
 
@@ -110,8 +118,9 @@ export class ArcadeService {
         return toolkits.map((t: any) => t.name);
       }
 
-      // HTTP fallback
-      const response = await fetch(`${this.config.baseUrl || 'https://api.arcade.dev'}/v1/toolkits`, {
+// HTTP fallback — use the same baseUrl the SDK would use
+      const baseUrl = this.config.baseUrl || 'https://api.arcade.dev';
+      const response = await fetch(`${baseUrl}/v1/toolkits`, {
         headers: {
           'Authorization': `Bearer ${this.config.apiKey}`,
         },
@@ -174,8 +183,8 @@ export class ArcadeService {
             const maskedKey = `${this.config.apiKey.slice(0, 8)}...${this.config.apiKey.slice(-4)}`;
             console.warn(
               `[ArcadeService] Disabling: SDK returned 401 (key ${maskedKey}). ` +
-              `Set ARCADE_API_KEY to a valid key and restart the server to re-enable. ` +
-              `Local tools continue to work.`
+              `Fix ARCADE_API_KEY and call reenableArcadeService() to re-enable, ` +
+              `or restart the server. Local tools continue to work.`
             );
             return [];
           }
@@ -232,8 +241,8 @@ export class ArcadeService {
         const maskedKey = `${this.config.apiKey.slice(0, 8)}...${this.config.apiKey.slice(-4)}`;
         console.warn(
           `[ArcadeService] Disabling: API returned 401 (key ${maskedKey}). ` +
-          `Set ARCADE_API_KEY to a valid key and restart the server to re-enable. ` +
-          `Local tools continue to work.`
+          `Fix ARCADE_API_KEY and call reenableArcadeService() to re-enable, ` +
+          `or restart the server. Local tools continue to work.`
         );
         return [];
       }
@@ -262,7 +271,17 @@ export class ArcadeService {
           this.tools.set(tool.name, tool);
         }
       }
-      
+
+      if (mappedTools.length === 0) {
+        console.warn(
+          `[ArcadeService] getTools returned 0 tools. ` +
+          `This may mean: (1) no tools are enabled in your Arcade account, ` +
+          `(2) the toolkit filter "${filters?.toolkit}" matched nothing, or ` +
+          `(3) the API returned an empty list. ` +
+          `Check your Arcade dashboard at https://arcade.dev/tools`
+        );
+      }
+
       return mappedTools;
     } catch (error: any) {
       console.error('[ArcadeService] getTools failed:', error.message);
@@ -1161,6 +1180,16 @@ let arcadeServiceDisabled = false;
 
 export function isArcadeServiceDisabled(): boolean {
   return arcadeServiceDisabled;
+}
+
+/**
+ * Re-enable Arcade service after it was disabled (e.g., after fixing invalid API key).
+ * Call this after setting a valid ARCADE_API_KEY env var to re-initialize the service.
+ */
+export function reenableArcadeService(): void {
+  arcadeServiceDisabled = false;
+  arcadeServiceInstance = null;
+  console.log('[ArcadeService] Re-enabled — service will re-initialize on next use');
 }
 
 /**

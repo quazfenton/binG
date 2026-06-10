@@ -107,6 +107,31 @@ export function clearRecentMcpFileEdits(sessionId?: string): void {
 }
 
 /**
+ * Subscriber mechanism for server-side cache invalidation and other
+ * cross-cutting concerns. When any file operation emits an event via
+ * emitFileEvent(), all registered subscribers are notified.
+ *
+ * This allows the tool result cache (in architecture-integration.ts) to
+ * invalidate list_files/read_file caches regardless of how the file was
+ * modified — whether via MCP tools, bash_execute, direct VFS APIs, or
+ * OPFS sync — without having to modify each individual code path.
+ */
+export type FileEventCallback = (event: EmitFileEventOptions) => void;
+const fileEventSubscribers: FileEventCallback[] = [];
+
+/**
+ * Register a subscriber to receive all file events.
+ * Returns an unsubscribe function.
+ */
+export function onFileEvent(callback: FileEventCallback): () => void {
+  fileEventSubscribers.push(callback);
+  return () => {
+    const idx = fileEventSubscribers.indexOf(callback);
+    if (idx !== -1) fileEventSubscribers.splice(idx, 1);
+  };
+}
+
+/**
  * File event types - consistent across MCP, VFS, and desktop
  */
 export type FileEventType = 'create' | 'update' | 'delete';
@@ -154,6 +179,17 @@ export async function emitFileEvent(options: EmitFileEventOptions): Promise<void
   } = options;
 
   try {
+    // ── 0. Notify registered subscribers FIRST ───────────────────────────
+    // Data-integrity subscribers (e.g., cache invalidation) must fire even
+    // if the UI event emission or session tracking fails below.
+    for (const subscriber of fileEventSubscribers) {
+      try {
+        subscriber(options);
+      } catch (subError: any) {
+        logger.warn('File event subscriber failed', { path, type, error: subError.message });
+      }
+    }
+
     // Track file edits from MCP tool execution for spec amplification.
     // When files are modified via function calling (not text-based file edit markers),
     // the spec amplification system needs to know about these changes.
@@ -196,9 +232,6 @@ export async function emitFileEvent(options: EmitFileEventOptions): Promise<void
       await trackSessionFiles(sessionId, [syntheticMessage]);
       logger.debug('Session file tracked', { sessionId, path, type });
     }
-
-    // 3. For updates with diff, we could emit additional events
-    // The enhanced-diff-viewer can pick up from the filesystem-updated event's applied/previousContent
 
   } catch (error: any) {
     // Don't fail the file operation if event emission fails

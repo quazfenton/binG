@@ -23,6 +23,8 @@ import { initializeNullclaw, isNullclawAvailable, getNullclawMode } from '@bing/
 import { normalizeSessionId, getVfsScopeBasePath, getVfsScopePath } from '../virtual-filesystem/scope-utils';
 // Tool caching for repeated operations
 import { toolResultCache, toolCacheKey, contentHash } from '../utils/cache';
+// VFS file events — broadcast mechanism for cache invalidation
+import { onFileEvent } from '../virtual-filesystem/file-events';
 // Dynamically imported to avoid pulling Node.js-only deps (fs, database) into client bundle
 // import { standaloneGitTools } from '../tools/git-tools'
 
@@ -237,6 +239,43 @@ function convertToJsonSchema(schema: any): any {
     return converted.$defs?.inner ?? converted;
   }
   return schema;
+}
+
+// ── Tool result cache invalidation ────────────────────────────────────────
+// Module-level function extracted from the inline closure in callMCPToolFromAI_SDK
+// so it can also be used by the file-event subscriber (registered below).
+// Invalidates tool result cache entries for a given file path, including
+// all parent directory listings and root list caches.
+function invalidateToolResultCache(path?: string): void {
+  if (path) {
+    const pathKey = toolCacheKey.fileRead(path);
+    toolResultCache.delete(pathKey);
+    // Also invalidate parent directory listings
+    const segments = path.split('/');
+    for (let i = 1; i < segments.length; i++) {
+      const parentPath = segments.slice(0, i).join('/') || '.';
+      toolResultCache.delete(toolCacheKey.fileList(parentPath));
+    }
+  }
+  // Invalidate root list cache on any write
+  toolResultCache.delete(toolCacheKey.fileList('.'));
+  toolResultCache.delete(toolCacheKey.fileList('/'));
+}
+
+// ── VFS file-event subscriber for cache invalidation ─────────────────────
+// This is the broadcast mechanism: ANY file change that emits a VFS event
+// (via emitFileEvent in file-events.ts) will invalidate the toolResultCache
+// for the affected path, regardless of how the file was modified.
+// Coverage includes bash_execute, direct VFS APIs, OPFS sync, and more —
+// without having to add manual invalidation to each code path.
+let cacheInvalidationRegistered = false;
+function ensureCacheInvalidationRegistered(): void {
+  if (cacheInvalidationRegistered) return;
+  cacheInvalidationRegistered = true;
+  onFileEvent((event) => {
+    invalidateToolResultCache(event.path);
+  });
+  logger.debug('[MCP-Cache] Registered VFS file-event subscriber for tool result cache invalidation');
 }
 
 // Guard to prevent redundant reinitialization on every /api/mcp/connect click
@@ -1217,22 +1256,9 @@ export async function callMCPToolFromAI_SDK(
     const writeTools = ['write_file', 'batch_write', 'apply_diff', 'delete_file', 'move_file'];
     const cacheEnabled = !writeTools.includes(toolName);
     
-    // Helper: invalidate caches when files change
-    const invalidateFileCache = (path?: string) => {
-      if (path) {
-        const pathKey = toolCacheKey.fileRead(path);
-        toolResultCache.delete(pathKey);
-        // Also invalidate parent directory listings
-        const segments = path.split('/');
-        for (let i = 1; i < segments.length; i++) {
-          const parentPath = segments.slice(0, i).join('/') || '.';
-          toolResultCache.delete(toolCacheKey.fileList(parentPath));
-        }
-      }
-      // Invalidate root list cache on any write
-      toolResultCache.delete(toolCacheKey.fileList('.'));
-      toolResultCache.delete(toolCacheKey.fileList('/'));
-    };
+    
+    // Ensure VFS file-event subscriber is registered (first MCP tool call only)
+    ensureCacheInvalidationRegistered();
 
     // Build cache key at function scope for read-only operations
     let cacheKey: string | null = null;
@@ -1383,7 +1409,7 @@ export async function callMCPToolFromAI_SDK(
       // Invalidate caches after write operations
       if (!cacheEnabled && (result as any)?.success !== false) {
         const affectedPath = args?.path || args?.files?.[0]?.path;
-        invalidateFileCache(affectedPath);
+        invalidateToolResultCache(affectedPath);
       } else if (cacheEnabled && cacheKey) {
         // Cache read-only operations
         const ttl = (toolName === 'read_file') ? 10000 : 60000;
@@ -1516,7 +1542,7 @@ export async function callMCPToolFromAI_SDK(
 
       // Invalidate caches after native tool writes
       if (!cacheEnabled && nativeResult.success) {
-        invalidateFileCache(args?.path);
+        invalidateToolResultCache(args?.path);
       }
 
       return {
@@ -1530,7 +1556,7 @@ export async function callMCPToolFromAI_SDK(
     
     // Invalidate caches after mcporter tool writes  
     if (!cacheEnabled && mcporterResult.success) {
-      invalidateFileCache(args?.path);
+      invalidateToolResultCache(args?.path);
     }
     logger.debug(`mcporter tool result: ${toolName}`, { success: mcporterResult.success })
     return mcporterResult

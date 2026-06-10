@@ -40,6 +40,15 @@ binding = "BING_STORAGE"
 bucket_name = "bing-storage"
 preview_bucket_name = "bing-storage-dev"
 
+# === R2 Bucket (Structured Trace Logs) ===
+# Writes [TRACE] filtered log lines to R2 for durable persistence.
+# Layout: traces/YYYY-MM-DD/HH/MM-{random}.ndjson (NDJSON, one entry per line)
+# This is a SEPARATE bucket from BING_STORAGE so trace logs don't mix with user files.
+[[r2_buckets]]
+binding = "TRACE_R2"
+bucket_name = "trace-logs"
+preview_bucket_name = "trace-logs-dev"
+
 # === D1 Database (Lightweight SQL — replaces parts of PostgreSQL) ===
 # Created via setup.sh — uncomment when D1 database is needed
 # [[d1_databases]]
@@ -55,7 +64,20 @@ preview_bucket_name = "bing-storage-dev"
 #   { pattern = "api.bing.dev/*", zone_id = "" },  # ⚠️ Set your zone_id after adding domain
 # ]
 
-# === Logging ===
+# === Observability ===
+# Platform-level (wrangler.toml) is DISABLED — path-filtered logging is
+# implemented in src/index.ts so only high-value API paths are traced.
+# The Bing project has high-volume polling (file checks, SSE, static assets)
+# that would exhaust the free tier's 100k req/day quota at 100% sampling.
+#
+# Traced paths (code-level, console.log only):
+#   /v1/chat/completions  — AI API calls
+#   /api/chat             — Hono server chat
+#   /copa/*               — CopaMundial API
+#   /nocturne/*           — Nocturne API
+#   /novnc/*              — noVNC sessions
+#
+# All other paths are silent (no platform log/trace emitted).
 [observability]
 enabled = true
-head_sampling_rate = 0.1
+head_sampling_rate = 0  # Disable platform sampling — code handles filtering

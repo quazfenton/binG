@@ -6,7 +6,7 @@ import remarkGfm from "remark-gfm"
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter"
 import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism"
 import { Button } from "@/components/ui/button"
-import { Copy, Check, ChevronDown, ChevronUp, Brain, Loader2, SkipForward, Pause, Play, Terminal, ExternalLink, FileCode, Plus, Minus, Eye, Download, CheckCircle, XCircle, RotateCcw } from "lucide-react"
+import { Copy, Check, ChevronDown, ChevronUp, Brain, Loader2, SkipForward, Pause, Play, Terminal, ExternalLink, FileCode, Plus, Minus, Eye, Download, CheckCircle, XCircle, RotateCcw, Paperclip } from "lucide-react"
 import type { Message, CodeArtifact } from "@/types"
 import { useEnhancedStreamingDisplay } from "@/hooks/use-enhanced-streaming-display"
 import { useResponsiveLayout, calculateDynamicWidth, getOverflowStrategy } from "@/hooks/use-responsive-layout"
@@ -992,13 +992,30 @@ export default function MessageBubble({
           {isUser ? (typeof message.content === 'string' ? message.content : JSON.stringify(message.content, null, 2)) : mainContent}
         </ReactMarkdown>
 
+        {/* Attached Files Indicator - shown below user messages when files were attached */}
+        {isUser && message.metadata?.attachedFiles && Array.isArray(message.metadata.attachedFiles) && message.metadata.attachedFiles.length > 0 && (
+          <div className="mt-2 pt-2 border-t border-white/10">
+            <div className="flex flex-wrap gap-1.5">
+              {message.metadata.attachedFiles.map((fileName: string, idx: number) => (
+                <span
+                  key={idx}
+                  className="inline-flex items-center gap-1 text-[11px] text-white/50 bg-white/5 px-2 py-0.5 rounded"
+                >
+                  <Paperclip className="w-3 h-3" />
+                  {fileName.split('/').pop() || fileName}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Model Used - shown below assistant messages, outside ReactMarkdown, not copyable */}
-        {!isUser && message.modelName && (
+        {!isUser && (message.modelName || (message.metadata as any)?.modelName || (message.metadata as any)?.model) && (
           <div className="mt-2 pt-2 border-t border-white/10">
             <span className="inline-flex items-center gap-1.5 text-[11px] text-white/70 font-medium">
               <span className="opacity-50">via</span>
               <span className="bg-white/10 px-1.5 py-0.5 rounded text-white/80">
-                {message.modelName}
+                {message.modelName || (message.metadata as any)?.modelName || (message.metadata as any)?.model}
               </span>
             </span>
           </div>

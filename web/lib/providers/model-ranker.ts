@@ -85,9 +85,35 @@ export async function refreshModelTelemetryCache(): Promise<void> {
         toolCallTotalCalls: toolData?.toolCallTotalCalls,
       });
     }
+    // Supplement with in-memory tool call telemetry (from vercel-ai-streaming.ts path).
+    // The in-memory store captures tool calls from the main streaming code path
+    // that may not have been written to the SQLite-backed toolCallTracker yet.
+    // Keys are model-only (no provider prefix), so we search cache entries by suffix.
+    let inMemorySupplementCount = 0;
+    try {
+      const inMemoryTelemetry = getToolCallTelemetrySummary();
+      for (const [memModel, summary] of Object.entries(inMemoryTelemetry)) {
+        if (!summary || summary.totalCalls === 0) continue;
+        // Search cache for entries matching this model name (any provider)
+        for (const [cacheKey, cached] of _modelTelemetryCache) {
+          if (!cacheKey.endsWith(`:${memModel}`)) continue;
+          // Only override tool stats if in-memory has more recent/abundant data
+          if (!cached.toolCallTotalCalls || summary.totalCalls > cached.toolCallTotalCalls) {
+            const successRate = summary.successCount / summary.totalCalls;
+            cached.toolSuccessRate = successRate;
+            cached.toolCallTotalCalls = summary.totalCalls;
+            cached.avgToolScore = successRate * 2 - 1; // Map 0-1 to -1..+1
+            cached.toolCallScore = summary.successCount - summary.failureCount;
+            inMemorySupplementCount++;
+          }
+        }
+      }
+    } catch { /* best-effort — in-memory telemetry is supplementary */ }
+
     logger.debug('Model telemetry cache refreshed', {
       modelCount: performance.length,
       toolStatsCount: toolStats.length,
+      inMemorySupplementCount,
     });
   } catch { /* best-effort — fallback to provider-level estimates */ }
 }
@@ -744,12 +770,15 @@ export async function getModelStatsFromTelemetry(): Promise<ModelStats[]> {
     modelMap.set(key, stat)
   })
 
-  // Enrich with in-memory tool call telemetry (supplements DB-backed tracker)
+  // Enrich with in-memory tool call telemetry (supplements DB-backed tracker).
+  // Keys are model-only (no provider prefix), so search by suffix against
+  // the modelMap's provider:model format.
   try {
     const inMemoryTelemetry = getToolCallTelemetrySummary()
-    for (const [key, summary] of Object.entries(inMemoryTelemetry)) {
-      const existing = modelMap.get(key)
-      if (existing && summary.totalCalls > 0) {
+    for (const [memModel, summary] of Object.entries(inMemoryTelemetry)) {
+      if (!summary || summary.totalCalls === 0) continue;
+      for (const [key, existing] of modelMap) {
+        if (!key.endsWith(`:${memModel}`)) continue;
         // Only override tool stats if in-memory has more recent data
         if (!existing.toolSuccessRate || summary.totalCalls > (existing.toolCallTotalCalls || 0)) {
           const successRate = summary.successCount / summary.totalCalls
