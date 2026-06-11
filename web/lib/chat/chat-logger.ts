@@ -1,3 +1,7 @@
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('Chat:Logger');
+
 /**
  * Chat API Structured Logger
  * 
@@ -90,16 +94,16 @@ class ChatLogger {
 
     switch (level) {
       case 'debug':
-        console.debug(logMessage, logData && Object.keys(logData).length > 0 ? logData : '');
+        logger.debug(logMessage, logData && Object.keys(logData).length > 0 ? logData : '');
         break;
       case 'info':
-        console.info(logMessage, logData && Object.keys(logData).length > 0 ? logData : '');
+        logger.info(logMessage, logData && Object.keys(logData).length > 0 ? logData : '');
         break;
       case 'warn':
-        console.warn(logMessage, logData && Object.keys(logData).length > 0 ? logData : '');
+        logger.warn(logMessage, logData && Object.keys(logData).length > 0 ? logData : '');
         break;
       case 'error':
-        console.error(logMessage, logData && Object.keys(logData).length > 0 ? logData : '');
+        logger.error(logMessage, logData && Object.keys(logData).length > 0 ? logData : '');
         break;
     }
   }

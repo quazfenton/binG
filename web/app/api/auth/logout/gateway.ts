@@ -7,6 +7,9 @@ import { deleteSessionsByUserId } from '@/lib/storage/session-store';
 import { revokeToken, extractTokenFromHeader } from '@/lib/security/jwt-auth';
 import { authCache } from '@/lib/auth/request-auth';
 import { csrfCheckOrReject } from '@/lib/auth/csrf';
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('Auth:Logout');
 
 export async function POST(request: NextRequest) {
   try {
@@ -25,9 +28,9 @@ export async function POST(request: NextRequest) {
       if (sandboxSession?.sandboxId) {
         try {
           await sandboxBridge.destroyWorkspace(sessionId, sandboxSession.sandboxId);
-          console.log('[Logout] Sandbox destroyed:', sandboxSession.sandboxId);
+          logger.info('[Logout] Sandbox destroyed:', sandboxSession.sandboxId);
         } catch (error) {
-          console.error('[Logout] Failed to destroy sandbox:', error);
+          logger.error('[Logout] Failed to destroy sandbox:', error);
           // Continue with logout even if sandbox destruction fails
         }
       }
@@ -36,14 +39,14 @@ export async function POST(request: NextRequest) {
       const authResult = await authService.validateSession(sessionId);
       if (authResult.user?.id) {
         await deleteSessionsByUserId(String(authResult.user.id));
-        console.log('[Logout] All sessions deleted for user:', authResult.user.id);
+        logger.info('[Logout] All sessions deleted for user:', authResult.user.id);
 
         // MED-5 fix: Log logout event
         try {
           const { logLogout } = await import('@/lib/auth/auth-audit-logger');
           await logLogout(String(authResult.user.id), request);
         } catch (auditError) {
-          console.warn('[Logout] Audit log failed:', auditError);
+          logger.warn('[Logout] Audit log failed:', auditError);
         }
       }
       
@@ -57,9 +60,9 @@ export async function POST(request: NextRequest) {
     if (token) {
       try {
         await revokeToken(token);
-        console.log('[Logout] JWT token revoked');
+        logger.info('[Logout] JWT token revoked');
       } catch (error) {
-        console.warn('[Logout] Failed to revoke JWT token:', error);
+        logger.warn('[Logout] Failed to revoke JWT token:', error);
       }
     }
 
@@ -85,7 +88,7 @@ export async function POST(request: NextRequest) {
     return response;
 
   } catch (error) {
-    console.error('Logout API error:', error);
+    logger.error('Logout API error:', error);
     return NextResponse.json(
       { success: false, error: 'Internal server error' },
       { status: 500 }

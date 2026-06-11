@@ -687,15 +687,24 @@ export function createBashTool(config: Partial<BashToolConfig> = {}) {
           }
         }
 
+          // RTK visibility: prepend a notice when command was rewritten so the
+          // LLM caller sees the actual command that was executed, avoiding confusion
+          // when `ls -la` silently becomes `ls -F` but output doesn't match expectations.
+          let finalOutput = filteredOutput;
+          if (rewrittenCommand !== commandToUse && rtkCategory) {
+            const rtkHeader = `[RTK: "${commandToUse}" → "${rewrittenCommand}"]\n`;
+            finalOutput = rtkHeader + filteredOutput;
+          }
+
           return {
             success: result.success,
-            output: filteredOutput,
+            output: finalOutput,
             error: result.stderr,
             exitCode: result.exitCode,
             duration: result.duration,
             outputPath: result.outputPath,
             // RTK metadata
-            rtkRewritten: rewrittenCommand !== command ? rewrittenCommand : undefined,
+            rtkRewritten: rewrittenCommand !== commandToUse ? rewrittenCommand : undefined,
             rtkCategory,
             rtkStats,
           };

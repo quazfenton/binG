@@ -1,0 +1,135 @@
+# Caddy 2 — HTTP reverse proxy (no TLS — handled at Cloudflare edge via tunnel).
+# Only reachable on Docker internal network via cloudflared (http://caddy:80).
+# No host port mappings — Oracle public IP is locked down.
+#
+# Routes based on URL path prefixes:
+#   /api/*, /health*  → bing backend (Hono orchestrator)
+#   /novnc/*          → noVNC web-based VNC client (on Docker host)
+#   /nocturne/*       → nocturne FastAPI backend
+#   /nocturne-n8n/*   → nocturne n8n automation
+#   /copa/*           → CopaMundial (Next.js + Socket.IO)
+#   /*                → 9Router (LLM gateway)
+
+:80 {
+    encode zstd gzip
+
+    # Health check → backend (rewrite /health → /api/health)
+    @health path /health*
+    handle @health {
+        uri replace /health /api/health
+        reverse_proxy backend:3001 {
+            flush_interval -1
+            transport http {
+                read_timeout  30m
+                write_timeout 30m
+            }
+        }
+    }
+
+    # 9Router dashboard API routes (must come before /api/* catch-all)
+    # NOTE: The Host header is passed through as the original tunnel host so
+    #       9Router returns dashboard configuration for the correct hostname.
+    #       The -l flag is just --log (server logs), NOT "require localhost".
+    @ninerouter_api path /api/auth/* /api/keys* /api/settings* /api/combos* /api/init /api/locale /api/tags /api/pricing /api/tunnel/* /api/cli-tools/* /api/usage/* /api/oauth/* /api/mcp/* /api/provider-nodes/* /api/proxy-pools/* /api/translator/* /api/version* /api/media-providers/* /api/shutdown
+    handle @ninerouter_api {
+        reverse_proxy ninerouter:3000 {
+            flush_interval -1
+            # Pass through the original Host so 9Router scopes config to the real hostname
+            header_up Host {http.request.host}
+            header_up X-Forwarded-Proto "https"
+            header_up X-Forwarded-Host {http.request.host}
+            header_up X-Real-IP {remote_host}
+            # Caddy already manages X-Forwarded-For; avoid overriding here
+            # to preserve proxy-chain information in multi-hop deployments.
+
+            # Cookie handling for tunnel access — same as catch-all handler below.
+            # Without stripping Domain, 9Router sets Domain=<original-ip> which
+            # browsers refuse to send to *.trycloudflare.com, making dashboard empty.
+            header_down Set-Cookie "; Domain=[^;]*" ";"
+            header_down Set-Cookie "Domain=[^;]*; " ""
+        }
+    }
+
+    # All other API routes → backend (no path mangling)
+    @bing_api path /api/*
+    handle @bing_api {
+        reverse_proxy backend:3001 {
+            flush_interval -1
+            transport http {
+                read_timeout  30m
+                write_timeout 30m
+            }
+        }
+    }
+
+    # Nocturne n8n routes (must come before nocturne catch-all)
+    # Use handle_path to also match the bare prefix /nocturne-n8n (without trailing path)
+    # handle_path automatically strips the matched prefix — no manual uri strip_prefix needed.
+    handle_path /nocturne-n8n/* {
+        reverse_proxy nocturne_n8n:5678 {
+            flush_interval -1
+        }
+    }
+
+    # Nocturne backend routes (FastAPI) — all /nocturne/* paths
+    # Use handle_path to also match the bare prefix /nocturne (without trailing path)
+    # handle_path automatically strips the matched prefix — no manual uri strip_prefix needed.
+    handle_path /nocturne/* {
+        reverse_proxy nocturne_backend:8000 {
+            flush_interval -1
+            transport http {
+                read_timeout  5m
+                write_timeout 5m
+            }
+        }
+    }
+
+    # CopaMundial routes (Next.js + Socket.IO at /api/socket)
+    # NOTE: proxying to copa-app (docker-compose.copa.yml) which is healthy.
+    # copamundial-app-1 has a Redis connectivity issue — not used.
+    # handle_path automatically strips the matched prefix — no manual uri strip_prefix needed.
+    handle_path /copa/* {
+        reverse_proxy copa-app:3000 {
+            flush_interval -1
+            transport http {
+                read_timeout  30m
+                write_timeout 30m
+            }
+        }
+    }
+
+    # noVNC web-based VNC client (on Docker host at 172.18.0.1:6080)
+    # handle_path matches both /novnc and /novnc/*
+    handle_path /novnc/* {
+        basic_auth {
+            import /data/novnc-auth.txt
+        }
+        reverse_proxy 172.18.0.1:6080
+    }
+
+    # Everything else goes to 9router dashboard
+    handle {
+        reverse_proxy ninerouter:3000 {
+            flush_interval -1
+            # 9Router -l flag is just --log (server logs). Keep Host: localhost
+            # here for /v1/chat/completions compatibility — the dashboard's HTML
+            # is also served here but uses relative URLs so Host doesn't matter.
+            header_up Host "localhost"
+            header_up X-Forwarded-Proto "https"
+            header_up X-Forwarded-Host {host}
+            header_up X-Real-IP {remote_host}
+            # Caddy already manages X-Forwarded-For; avoid overriding here
+            # to preserve proxy-chain information in multi-hop deployments.
+
+            # Cookie handling for tunnel access:
+            # Stripping Domain is SAFE - it makes cookies "host-only" which is
+            # MORE restrictive than domain-scoped cookies. Host-only cookies are
+            # only sent to the exact hostname, not shared across subdomains.
+            # Without stripping, 9Router sets Domain=IP which browsers refuse
+            # to send to *.trycloudflare.com (different domain).
+            # Regex strips ANY Domain attribute regardless of value.
+            header_down Set-Cookie "; Domain=[^;]*" ";"
+            header_down Set-Cookie "Domain=[^;]*; " ""
+        }
+    }
+}

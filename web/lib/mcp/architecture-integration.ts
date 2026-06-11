@@ -1533,7 +1533,18 @@ export async function callMCPToolFromAI_SDK(
       }
     }
 
-    const nativeResult = await mcpToolRegistry.callTool(toolName, args)
+    // Bare tool names need server-prefix qualification for MCP registry lookup
+    let qualifiedName = toolName;
+    if (!toolName.includes(':')) {
+      const allTools = mcpToolRegistry.getAllTools();
+      const matched = allTools.find(t => t.tool.name === toolName);
+      if (matched) {
+        qualifiedName = `${matched.serverId}:${toolName}`;
+      } else {
+        logger.warn(`[MCP] Bare tool name "${toolName}" not found in any MCP server — will fail registry lookup`, { toolName, availableTools: allTools.map(t => t.tool.name) });
+      }
+    }
+    const nativeResult = await mcpToolRegistry.callTool(qualifiedName, args)
     if (nativeResult.success || !nativeResult.isError || !nativeResult.content.includes('Tool not found')) {
       logger.debug(`MCP tool result: ${toolName}`, {
         success: nativeResult.success,

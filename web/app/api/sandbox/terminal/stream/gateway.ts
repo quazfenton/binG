@@ -3,7 +3,10 @@ import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge';
 import { terminalManager } from '@/lib/terminal/terminal-manager';
 import { sandboxEvents } from '@/lib/sandbox/sandbox-events';
+import { createLogger } from '@/lib/utils/logger';
 import { randomUUID } from 'crypto';
+
+const logger = createLogger('API:Sandbox:TerminalStream');
 
 
 
@@ -69,7 +72,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ connectionToken, expiresAt });
   } catch (error) {
-    console.error('[Terminal Token] Error:', error);
+    logger.error('[Terminal Token] Error:', error);
     return NextResponse.json({ error: 'Failed to generate connection token' }, { status: 500 });
   }
 }
@@ -173,21 +176,21 @@ export async function GET(req: NextRequest) {
           unsubscribeEvents();
           // FIX: Log cleanup failures for debugging instead of silently ignoring
           terminalManager.disconnectTerminal(sessionId).catch((err: any) => {
-            console.warn('Terminal disconnect cleanup failed:', err?.message);
+            logger.warn('Terminal disconnect cleanup failed:', err?.message);
           });
         };
 
         const setupPty = async () => {
           try {
-            console.log('[Terminal Stream] Creating PTY session...', { sessionId, sandboxId });
+            logger.info('[Terminal Stream] Creating PTY session...', { sessionId, sandboxId });
             // Always create (or replace) the PTY session; TerminalManager will clean up any existing connection
             await terminalManager.createTerminalSession(sessionId, sandboxId, onData, onPortDetected);
-            console.log('[Terminal Stream] PTY session created successfully');
+            logger.info('[Terminal Stream] PTY session created successfully');
             send({ type: 'connected', data: { sessionId, sandboxId } });
           } catch (err) {
             const msg = err instanceof Error ? err.message : 'Failed to connect to terminal';
-            console.error('[Terminal Stream] PTY session creation failed:', err);
-            console.error('[Terminal Stream] Error stack:', err instanceof Error ? err.stack : 'N/A');
+            logger.error('[Terminal Stream] PTY session creation failed:', err);
+            logger.error('[Terminal Stream] Error stack:', err instanceof Error ? err.stack : 'N/A');
             send({ type: 'error', data: `PTY creation failed: ${msg}` });
             // Clean up ping interval and subscriptions to prevent leaks
             cleanup?.();
@@ -215,7 +218,7 @@ export async function GET(req: NextRequest) {
       },
     });
   } catch (error) {
-    console.error('[Terminal Stream] Error:', error);
+    logger.error('[Terminal Stream] Error:', error);
     return new Response(JSON.stringify({ error: 'Failed to establish terminal stream' }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' },

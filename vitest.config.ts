@@ -6,6 +6,10 @@ export default defineConfig({
     alias: {
       // Main alias: maps @/* to web/* for tests importing web modules
       '@': path.resolve(__dirname, 'web'),
+      // Point @bing/shared directly at the source so vitest's Node ESM loader
+      // doesn't trip on the package.json exports conditions. This is test-only
+      // and does not affect production builds (Wrangler uses its own resolver).
+      '@bing/shared': path.resolve(__dirname, 'packages/shared'),
     },
   },
   test: {

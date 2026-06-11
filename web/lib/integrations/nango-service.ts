@@ -15,6 +15,9 @@
  */
 
 import { z } from 'zod';
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('Integration:Nango');
 
 export interface NangoConfig {
   secretKey: string;
@@ -91,9 +94,9 @@ export class NangoService {
       });
 
       this.initialized = true;
-      console.log('[NangoService] Initialized with SDK');
+      logger.info('[NangoService] Initialized with SDK');
     } catch (error: any) {
-      console.warn('[NangoService] Nango SDK not available, using HTTP API');
+      logger.warn('[NangoService] Nango SDK not available, using HTTP API');
       // Fallback to HTTP API
       this.initialized = true;
     }
@@ -130,7 +133,7 @@ export class NangoService {
       const data = await response.json();
       return data.connections || [];
     } catch (error: any) {
-      console.error('[NangoService] getConnections failed:', error.message);
+      logger.error('[NangoService] getConnections failed:', error.message);
       return [];
     }
   }
@@ -186,7 +189,7 @@ export class NangoService {
       this.connections.set(cacheKey, connection);
       return connection;
     } catch (error: any) {
-      console.error('[NangoService] getConnection failed:', error.message);
+      logger.error('[NangoService] getConnection failed:', error.message);
       return null;
     }
   }
@@ -245,7 +248,7 @@ export class NangoService {
         headers: Object.fromEntries(response.headers.entries()),
       };
     } catch (error: any) {
-      console.error('[NangoService] proxy failed:', error.message);
+      logger.error('[NangoService] proxy failed:', error.message);
       throw error;
     }
   }
@@ -311,7 +314,7 @@ export class NangoService {
         connectionId: connection.id,
       };
     } catch (error: any) {
-      console.error('[NangoService] executeTool failed:', error.message);
+      logger.error('[NangoService] executeTool failed:', error.message);
       return {
         success: false,
         error: error.message,
@@ -339,7 +342,7 @@ export class NangoService {
         connection_id: userId,
       }).toString();
     } catch (error: any) {
-      console.error('[NangoService] getAuthUrl failed:', error.message);
+      logger.error('[NangoService] getAuthUrl failed:', error.message);
       return `${this.config.host}/oauth/connect?provider_config_key=${providerConfigKey}&connection_id=${userId}`;
     }
   }
@@ -381,7 +384,7 @@ export class NangoService {
       const data = await response.json();
       return data.connections || [];
     } catch (error: any) {
-      console.error('[NangoService] getConnectedAccounts failed:', error.message);
+      logger.error('[NangoService] getConnectedAccounts failed:', error.message);
       return [];
     }
   }
@@ -439,7 +442,7 @@ export class NangoService {
         status: 'pending',
       };
     } catch (error: any) {
-      console.error('[NangoService] createConnection failed:', error.message);
+      logger.error('[NangoService] createConnection failed:', error.message);
       return {
         redirectUrl: '',
         status: 'failed',
@@ -484,7 +487,7 @@ export class NangoService {
 
       return false;
     } catch (error: any) {
-      console.error('[NangoService] deleteConnection failed:', error.message);
+      logger.error('[NangoService] deleteConnection failed:', error.message);
       return false;
     }
   }
@@ -517,7 +520,7 @@ export class NangoService {
       const data = await response.json();
       return data.providers || [];
     } catch (error: any) {
-      console.error('[NangoService] getProviders failed:', error.message);
+      logger.error('[NangoService] getProviders failed:', error.message);
       return [];
     }
   }
@@ -565,7 +568,7 @@ export class NangoService {
       const data = await response.json();
       return data.records || [];
     } catch (error: any) {
-      console.error('[NangoService] getRecords failed:', error.message);
+      logger.error('[NangoService] getRecords failed:', error.message);
       return [];
     }
   }
@@ -662,7 +665,7 @@ export class NangoService {
         jobId: result?.jobId,
       };
     } catch (error: any) {
-      console.error('[NangoService] startSync failed:', error.message);
+      logger.error('[NangoService] startSync failed:', error.message);
       return {
         success: false,
         error: error.message,
@@ -725,7 +728,7 @@ export class NangoService {
         error: status.error,
       };
     } catch (error: any) {
-      console.error('[NangoService] getSyncStatus failed:', error.message);
+      logger.error('[NangoService] getSyncStatus failed:', error.message);
       return {
         status: null,
         error: error.message,
@@ -807,7 +810,7 @@ export class NangoService {
         data: result,
       };
     } catch (error: any) {
-      console.error('[NangoService] executeAction failed:', error.message);
+      logger.error('[NangoService] executeAction failed:', error.message);
       return {
         success: false,
         error: error.message,
@@ -865,7 +868,7 @@ export class NangoService {
       const data = await response.json();
       return data.syncs || [];
     } catch (error: any) {
-      console.error('[NangoService] listSyncs failed:', error.message);
+      logger.error('[NangoService] listSyncs failed:', error.message);
       return [];
     }
   }
@@ -933,7 +936,7 @@ export class NangoService {
         webhookId: data.id,
       };
     } catch (error: any) {
-      console.error('[NangoService] createWebhook failed:', error.message);
+      logger.error('[NangoService] createWebhook failed:', error.message);
       return {
         success: false,
         error: error.message,
@@ -973,7 +976,7 @@ export class NangoService {
       const data = await response.json();
       return data.webhooks || [];
     } catch (error: any) {
-      console.error('[NangoService] listWebhooks failed:', error.message);
+      logger.error('[NangoService] listWebhooks failed:', error.message);
       return [];
     }
   }
@@ -1000,7 +1003,7 @@ export class NangoService {
 
       return response.ok;
     } catch (error: any) {
-      console.error('[NangoService] deleteWebhook failed:', error.message);
+      logger.error('[NangoService] deleteWebhook failed:', error.message);
       return false;
     }
   }
@@ -1046,7 +1049,7 @@ export class NangoService {
 
       return response.ok;
     } catch (error: any) {
-      console.error('[NangoService] setRetentionPolicies failed:', error.message);
+      logger.error('[NangoService] setRetentionPolicies failed:', error.message);
       return false;
     }
   }
@@ -1086,7 +1089,7 @@ export class NangoService {
 
       return await response.json();
     } catch (error: any) {
-      console.error('[NangoService] getRetentionPolicies failed:', error.message);
+      logger.error('[NangoService] getRetentionPolicies failed:', error.message);
       return null;
     }
   }
@@ -1131,7 +1134,7 @@ export class NangoService {
 
       return response.ok;
     } catch (error: any) {
-      console.error('[NangoService] updateConnectionMetadata failed:', error.message);
+      logger.error('[NangoService] updateConnectionMetadata failed:', error.message);
       return false;
     }
   }
@@ -1165,7 +1168,7 @@ export class NangoService {
 
       return await response.json();
     } catch (error: any) {
-      console.error('[NangoService] getConnectionMetadata failed:', error.message);
+      logger.error('[NangoService] getConnectionMetadata failed:', error.message);
       return null;
     }
   }

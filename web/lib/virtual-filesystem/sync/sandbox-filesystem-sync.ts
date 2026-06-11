@@ -18,6 +18,10 @@ import { sandboxBridge } from '../../sandbox/sandbox-service-bridge';
 import { virtualFilesystem } from '../virtual-filesystem-service';
 import { emitFilesystemUpdated } from './sync-events';
 
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('VFS:SandboxSync');
+
 // ============================================================================
 // Comprehensive sync exclusion patterns — all languages
 // Prevents syncing node_modules, Python venvs, caches, build outputs, etc.
@@ -266,7 +270,7 @@ class SandboxFilesystemSync {
     // Use byte count for accurate size (TextEncoder gives actual bytes, not UTF-16 chars)
     const byteSize = new TextEncoder().encode(content).length;
     if (byteSize > this.MAX_FILE_SIZE_BYTES) {
-      console.log(`[SandboxSync] Skipped large file (>5MB): ${byteSize} bytes`);
+      logger.info(`[SandboxSync] Skipped large file (>5MB): ${byteSize} bytes`);
       return true;
     }
     return false;
@@ -294,13 +298,13 @@ class SandboxFilesystemSync {
     for (const [path, { content }] of changes) {
       try {
         await virtualFilesystem.writeFile(userId, path, content);
-        console.log(`[SandboxSync] Coalesced write: ${path}`);
+        logger.info(`[SandboxSync] Coalesced write: ${path}`);
       } catch (err) {
-        console.warn(`[SandboxSync] Failed to flush coalesced change for ${path}:`, err instanceof Error ? err.message : err);
+        logger.warn(`[SandboxSync] Failed to flush coalesced change for ${path}:`, err instanceof Error ? err.message : err);
       }
     }
     
-    console.log(`[SandboxSync] Flushed ${changes.size} coalesced file changes to VFS`);
+    logger.info(`[SandboxSync] Flushed ${changes.size} coalesced file changes to VFS`);
   }
   
   /**
@@ -326,7 +330,7 @@ class SandboxFilesystemSync {
     
     const lastDelete = this.recentlyDeletedFiles.get(path);
     if (lastDelete && now - lastDelete < this.DELETE_DEDUP_WINDOW_MS) {
-      console.log(`[SandboxSync] Dedup: Skipping duplicate delete for ${path}`);
+      logger.info(`[SandboxSync] Dedup: Skipping duplicate delete for ${path}`);
       return true;
     }
     this.recentlyDeletedFiles.set(path, now);
@@ -362,7 +366,7 @@ class SandboxFilesystemSync {
     const timer = setTimeout(async () => {
       const sessionPaths = this.pendingSessionSyncs.get(sessionId);
       if (sessionPaths && sessionPaths.size > 0) {
-        console.log(`[SandboxSync] Session ${sessionId} debounce fired for ${sessionPaths.size} paths`);
+        logger.info(`[SandboxSync] Session ${sessionId} debounce fired for ${sessionPaths.size} paths`);
         // Process the queued paths
         this.pendingSessionSyncs.delete(sessionId);
       }
@@ -374,7 +378,7 @@ class SandboxFilesystemSync {
 
   startSync(sandboxId: string, userId: string): void {
     if (!this.enabled) {
-      console.warn('[SandboxSync] Sync is disabled via SANDBOX_SYNC_ENABLED');
+      logger.warn('[SandboxSync] Sync is disabled via SANDBOX_SYNC_ENABLED');
       return;
     }
 
@@ -384,7 +388,7 @@ class SandboxFilesystemSync {
     // When running as a dev fallback (no container), sync is skipped to avoid polluting
     // the Next.js app's directory or syncing to the wrong database.
     if (sandboxId.startsWith('local-') && process.env.LOCAL_SANDBOX_HAS_DB !== 'true') {
-      console.log(`[SandboxSync] Skipping sync for local fallback sandbox: ${sandboxId} (no container DB)`);
+      logger.info(`[SandboxSync] Skipping sync for local fallback sandbox: ${sandboxId} (no container DB)`);
       return;
     }
 
@@ -392,26 +396,26 @@ class SandboxFilesystemSync {
     const pollingConfig = getPollingConfig(sandboxId);
     
     if (!pollingConfig.enabled) {
-      console.log(`[SandboxSync] Polling disabled for sandbox: ${sandboxId}`);
+      logger.info(`[SandboxSync] Polling disabled for sandbox: ${sandboxId}`);
       return;
     }
 
     if (this.syncIntervals.has(sandboxId)) {
-      console.warn(`[SandboxSync] Sync already running for sandbox ${sandboxId}`);
+      logger.warn(`[SandboxSync] Sync already running for sandbox ${sandboxId}`);
       return;
     }
 
     // Use sandbox-specific interval or default
     const intervalMs = pollingConfig.intervalMs ?? this.syncIntervalMs;
-    console.log(`[SandboxSync] Starting sync for ${sandboxId} (interval: ${intervalMs}ms, type: ${pollingConfig.intervalMs ? 'optimized' : 'standard'})`);
+    logger.info(`[SandboxSync] Starting sync for ${sandboxId} (interval: ${intervalMs}ms, type: ${pollingConfig.intervalMs ? 'optimized' : 'standard'})`);
 
     // ✅ FIX: Perform initial sync immediately so files are available when terminal connects
     (async () => {
       try {
         await this.syncVFSToSandbox(sandboxId, userId);
-        console.log(`[SandboxSync] Initial sync completed for sandbox ${sandboxId}`);
+        logger.info(`[SandboxSync] Initial sync completed for sandbox ${sandboxId}`);
       } catch (err) {
-        console.warn(
+        logger.warn(
           `[SandboxSync] Initial sync error for sandbox ${sandboxId}:`,
           err instanceof Error ? err.message : err,
         );
@@ -423,7 +427,7 @@ class SandboxFilesystemSync {
         await this.syncSandboxToVFS(sandboxId, userId);
         await this.syncVFSToSandbox(sandboxId, userId);
       } catch (err) {
-        console.warn(
+        logger.warn(
           `[SandboxSync] Periodic sync error for sandbox ${sandboxId}:`,
           err instanceof Error ? err.message : err,
         );
@@ -440,7 +444,7 @@ class SandboxFilesystemSync {
       clearInterval(interval);
       this.syncIntervals.delete(sandboxId);
       this.lastSyncVersions.delete(sandboxId);
-      console.log(`[SandboxSync] Stopped sync for sandbox ${sandboxId}`);
+      logger.info(`[SandboxSync] Stopped sync for sandbox ${sandboxId}`);
     }
     
     // Clean up knownFiles for this sandbox (memory leak fix)
@@ -456,7 +460,7 @@ class SandboxFilesystemSync {
     try {
       entries = await sandboxBridge.listDirectory(sandboxId, workspaceDir);
     } catch (err) {
-      console.warn(
+      logger.warn(
         `[SandboxSync] Cannot list sandbox ${sandboxId} directory:`,
         err instanceof Error ? err.message : err,
       );
@@ -523,7 +527,7 @@ class SandboxFilesystemSync {
     const finalDeletedFiles = Array.from(deletedFilesSet);
     
     if (finalDeletedFiles.length > 0) {
-      console.log(`[SandboxSync] Detected ${finalDeletedFiles.length} deleted files in sandbox ${sandboxId}:`, finalDeletedFiles);
+      logger.info(`[SandboxSync] Detected ${finalDeletedFiles.length} deleted files in sandbox ${sandboxId}:`, finalDeletedFiles);
       // Emit delete events (deduped)
       if (typeof window !== 'undefined') {
         const deduplicatedDeletes = finalDeletedFiles.filter(f => !this.shouldSkipDuplicateDelete(f));
@@ -579,7 +583,7 @@ class SandboxFilesystemSync {
           });
         }
       } catch (err) {
-        console.warn(
+        logger.warn(
           `[SandboxSync] Failed to sync file ${file.name} from sandbox ${sandboxId}:`,
           err instanceof Error ? err.message : err,
         );
@@ -599,7 +603,7 @@ class SandboxFilesystemSync {
           workspaceVersion: undefined,
           sessionId: sandboxId,
         });
-        console.log(`[SandboxSync] Emitted filesystem-updated event for ${deduplicatedPaths.length} files (coalesced)`);
+        logger.info(`[SandboxSync] Emitted filesystem-updated event for ${deduplicatedPaths.length} files (coalesced)`);
       }
     }
   }
@@ -609,7 +613,7 @@ class SandboxFilesystemSync {
     try {
       currentVersion = await virtualFilesystem.getWorkspaceVersion(userId);
     } catch (err) {
-      console.warn(
+      logger.warn(
         `[SandboxSync] Cannot get VFS version for user ${userId}:`,
         err instanceof Error ? err.message : err,
       );
@@ -623,7 +627,7 @@ class SandboxFilesystemSync {
     try {
       snapshot = await virtualFilesystem.exportWorkspace(userId);
     } catch (err) {
-      console.warn(
+      logger.warn(
         `[SandboxSync] Cannot export VFS workspace for user ${userId}:`,
         err instanceof Error ? err.message : err,
       );
@@ -649,7 +653,7 @@ class SandboxFilesystemSync {
       try {
         await sandboxBridge.writeFile(sandboxId, sandboxPath, file.content);
       } catch (err) {
-        console.warn(
+        logger.warn(
           `[SandboxSync] Failed to write ${file.path} to sandbox ${sandboxId}:`,
           err instanceof Error ? err.message : err,
         );
@@ -657,7 +661,7 @@ class SandboxFilesystemSync {
     }
 
     this.lastSyncVersions.set(sandboxId, currentVersion);
-    console.log(`[SandboxSync] VFS → Sandbox: synced ${snapshot.files.length} files to sandbox ${sandboxId}`);
+    logger.info(`[SandboxSync] VFS → Sandbox: synced ${snapshot.files.length} files to sandbox ${sandboxId}`);
   }
 
   stopAll(): void {
@@ -682,7 +686,7 @@ class SandboxFilesystemSync {
     this.recentlyDeletedFiles.clear();
     this.pendingFileChanges.clear();
     
-    console.log('[SandboxSync] All sync intervals stopped');
+    logger.info('[SandboxSync] All sync intervals stopped');
   }
 }
 

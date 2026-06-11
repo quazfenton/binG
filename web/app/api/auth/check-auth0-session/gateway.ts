@@ -11,6 +11,9 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { auth0 } from '@/lib/auth/auth0';
 import { getLocalUserIdFromAuth0, mapAuth0UserId } from '@/lib/oauth/connections';
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('Auth:CheckAuth0Session');
 
 export const dynamic = 'force-dynamic';
 
@@ -31,16 +34,16 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Invalid Auth0 session' }, { status: 400 });
     }
 
-    console.log('[Auth0 Session Check] Found Auth0 session for user');
+    logger.info('[Auth0 Session Check] Found Auth0 session for user');
 
     // Get or create local user mapping
     let localUserId: string | null = null;
     
     try {
       localUserId = await getLocalUserIdFromAuth0(auth0UserId);
-      console.log('[Auth0 Session Check] getLocalUserIdFromAuth0 returned:', localUserId);
+      logger.info('[Auth0 Session Check] getLocalUserIdFromAuth0 returned:', localUserId);
     } catch (mapError: any) {
-      console.error('[Auth0 Session Check] getLocalUserIdFromAuth0 error:', mapError.message);
+      logger.error('[Auth0 Session Check] getLocalUserIdFromAuth0 error:', mapError.message);
       // Continue - we'll try to find by email
     }
 
@@ -57,7 +60,7 @@ export async function POST(request: NextRequest) {
             // Map existing user to Auth0
             await mapAuth0UserId(userRow.id, auth0UserId);
             localUserId = String(userRow.id);
-            console.log('[Auth0 Session Check] Mapped existing user to Auth0:', localUserId);
+            logger.info('[Auth0 Session Check] Mapped existing user to Auth0:', localUserId);
           } else {
             // Create new user via register - OAuth users bypass email verification
             // since Google/Auth0 already verified their email
@@ -77,11 +80,11 @@ export async function POST(request: NextRequest) {
             if (registerResult.success && registerResult.user) {
               localUserId = String(registerResult.user.id);
               await mapAuth0UserId(localUserId, auth0UserId);
-              console.log('[Auth0 Session Check] Created new user and mapped to Auth0:', localUserId);
+              logger.info('[Auth0 Session Check] Created new user and mapped to Auth0:', localUserId);
               // Note: register() sets requiresVerification but we bypass it for OAuth users
               // by creating a session immediately below
             } else {
-              console.error('[Auth0 Session Check] Register failed:', registerResult.error);
+              logger.error('[Auth0 Session Check] Register failed:', registerResult.error);
               return NextResponse.json({ error: 'Failed to create user: ' + registerResult.error }, { status: 500 });
             }
           }
@@ -89,7 +92,7 @@ export async function POST(request: NextRequest) {
           return NextResponse.json({ error: 'Database not available' }, { status: 500 });
         }
       } catch (dbError: any) {
-        console.error('[Auth0 Session Check] Database error:', dbError.message);
+        logger.error('[Auth0 Session Check] Database error:', dbError.message);
         return NextResponse.json({ error: 'Database error: ' + dbError.message }, { status: 500 });
       }
     }
@@ -113,7 +116,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: 'Failed to create session' }, { status: 500 });
       }
 
-      console.log('[Auth0 Session Check] Created local session for user:', localUserId);
+      logger.info('[Auth0 Session Check] Created local session for user:', localUserId);
 
       // Get user info
       const user = await authService.getUserById(localUserId);
@@ -131,7 +134,7 @@ export async function POST(request: NextRequest) {
           userId: user.id.toString(),
         });
       } catch (tokenError) {
-        console.error('[Auth0 Session Check] Token generation failed:', tokenError);
+        logger.error('[Auth0 Session Check] Token generation failed:', tokenError);
         return NextResponse.json({ error: 'Failed to generate access token' }, { status: 500 });
       }
 
@@ -161,11 +164,11 @@ export async function POST(request: NextRequest) {
 
       return response;
     } catch (sessionError: any) {
-      console.error('[Auth0 Session Check] Session creation error:', sessionError.message);
+      logger.error('[Auth0 Session Check] Session creation error:', sessionError.message);
       return NextResponse.json({ error: 'Failed to create session' }, { status: 500 });
     }
   } catch (error: any) {
-    console.error('[Auth0 Session Check] Error:', error);
+    logger.error('[Auth0 Session Check] Error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

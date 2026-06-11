@@ -821,7 +821,7 @@ async function cleanupSession(id: string, session: LocalPtySession): Promise<voi
       session.pty.kill();
     }
   } catch (err) {
-    console.warn(`[Local PTY] Session ${id} cleanup error:`, err instanceof Error ? err.message : err);
+    logger.warn(`[Local PTY] Session ${id} cleanup error:`, err instanceof Error ? err.message : err);
   }
   sessions.delete(id);
 }
@@ -832,7 +832,7 @@ async function cleanupDockerContainer(containerId: string): Promise<void> {
     // SECURITY: Use execFile (not exec) to prevent command injection
     execFile('docker', ['rm', '-f', containerId], { timeout: 10000 }, (err) => {
       if (err) {
-        console.warn(`[Local PTY] Docker cleanup failed ${containerId}:`, err.message);
+        logger.warn(`[Local PTY] Docker cleanup failed ${containerId}:`, err.message);
       }
       resolve();
     });
@@ -1178,7 +1178,7 @@ export async function POST(req: NextRequest) {
       ptyShell
     ));
   } catch (error: any) {
-    console.error('[Local PTY] Failed to create session:', error);
+    logger.error('[Local PTY] Failed to create session:', error);
     return addAnonSessionCookie(NextResponse.json(
       { error: 'Failed to create PTY session', details: error.message },
       { status: 500 }
@@ -1884,7 +1884,7 @@ async function createUnsharePtySession(
 
     registerSession(sessionId, userId, pty, workspaceDir, { unsharePid });
 
-    console.log(`[Local PTY] Unshare session created: ${sessionId}`);
+    logger.info(`[Local PTY] Unshare session created: ${sessionId}`);
 
     return NextResponse.json({ sessionId, mode: 'unshare', workspaceDir });
   } catch (error: any) {
@@ -1973,7 +1973,7 @@ async function createDockerPtySession(
     });
 
     dockerProcess.on('error', (err) => {
-      console.error('[Local PTY] Docker spawn error:', err.message);
+      logger.error('[Local PTY] Docker spawn error:', err.message);
       resolve(
         NextResponse.json(
           {
@@ -1989,7 +1989,7 @@ async function createDockerPtySession(
 
     dockerProcess.on('close', async (code) => {
       if (code !== 0 || !containerId) {
-        console.error('[Local PTY] Docker container failed to start:', dockerError);
+        logger.error('[Local PTY] Docker container failed to start:', dockerError);
         resolve(
           NextResponse.json(
             {
@@ -2004,7 +2004,7 @@ async function createDockerPtySession(
         return;
       }
 
-      console.log(`[Local PTY] Docker container started: ${containerId}`);
+      logger.info(`[Local PTY] Docker container started: ${containerId}`);
 
       // Wait for container to be fully ready (shell may not be available immediately)
       const { execFile } = await import('child_process');
@@ -2027,7 +2027,7 @@ async function createDockerPtySession(
       }
 
       if (!ready) {
-        console.error(`[Local PTY] Docker container ${containerId} never became ready`);
+        logger.error(`[Local PTY] Docker container ${containerId} never became ready`);
         // Cleanup
         try {
           await cleanupDockerContainer(containerId);

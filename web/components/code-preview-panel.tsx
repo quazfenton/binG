@@ -66,6 +66,7 @@ import {
   type PreviewMode,
   type AppFramework,
 } from "@/lib/previews/live-preview-offloading";
+import { createLogger } from '@/lib/utils/logger';
 
 // Import Preview Error Boundary
 import { PreviewErrorBoundary } from "./preview-error-boundary";
@@ -1104,7 +1105,7 @@ export default function CodePreviewPanel({
     try {
       const targetPath = directoryPath || filesystemCurrentPath;
       manualPreviewPathRef.current = targetPath || null;
-      console.log('[Manual Preview] Loading files from:', targetPath);
+      logger.info('[Manual Preview] Loading files from:', targetPath);
 
       // Use snapshot API to get ALL files at once — bypasses the stale listDirectory cache
       // that misses files just written (8s LIST_CACHE_TTL_MS in use-virtual-filesystem.ts)
@@ -1123,7 +1124,7 @@ export default function CodePreviewPanel({
 
       if (Object.keys(files).length === 0) {
         // Fallback: try the old listDirectory approach if snapshot returns nothing
-        console.warn('[Manual Preview] Snapshot empty, falling back to listDirectory');
+        logger.warn('[Manual Preview] Snapshot empty, falling back to listDirectory');
         const nodes = await listFilesystemDirectory(targetPath);
         const loadFiles = async (path: string, basePath: string = '') => {
           const dirNodes = await listFilesystemDirectory(path);
@@ -1136,7 +1137,7 @@ export default function CodePreviewPanel({
                 const file = await readFilesystemFile(node.path);
                 files[relativePath] = file.content ?? '';
               } catch (err) {
-                console.warn('Failed to load file:', node.path, err);
+                logger.warn('Failed to load file:', node.path, err);
               }
             }
           }
@@ -1297,7 +1298,7 @@ export default function CodePreviewPanel({
       }
     } catch (error: any) {
       logError(`[handleManualPreview] failed`, error);
-      console.error('[Manual Preview] Error:', error);
+      logger.error('[Manual Preview] Error:', error);
       if (!silent) {
         toast.error('Failed to load preview: ' + error.message);
       }
@@ -1909,7 +1910,7 @@ export default function CodePreviewPanel({
         }
       } catch (error) {
         logError(`[filesystem-updated] refresh failed`, error);
-        console.error('[CodePreview] Event refresh error:', error);
+        logger.error('[CodePreview] Event refresh error:', error);
       }
     };
 
@@ -2216,7 +2217,7 @@ export default function CodePreviewPanel({
       const result = resultLines.join("\n");
       return result || originalContent;
     } catch (e) {
-      console.warn("Failed to apply diff, returning original content");
+      logger.warn("Failed to apply diff, returning original content");
       return originalContent;
     }
   };
@@ -2236,7 +2237,7 @@ export default function CodePreviewPanel({
 
       // Ensure a filename is always set, even if it's a default one.
       if (!finalFilename) {
-        console.error(
+        logger.error(
           "Filename is unexpectedly null or undefined after cleaning.",
         );
         continue; // Skip this block if filename is missing
@@ -2323,7 +2324,7 @@ export default function CodePreviewPanel({
             else if (pkg.packageManager.includes("bun")) packageManager = "bun";
           }
         } catch (e) {
-          console.warn("Failed to parse package.json");
+          logger.warn("Failed to parse package.json");
         }
       }
 
@@ -2441,10 +2442,10 @@ export default function CodePreviewPanel({
           zip.file(relativePath, file.content || '');
         }
         
-        console.log('[Download] Added', vfsFiles.length, 'files from VFS');
+        logger.info('[Download] Added', vfsFiles.length, 'files from VFS');
       }
     } catch (err) {
-      console.warn('[Download] Failed to get VFS files, using fallback:', err);
+      logger.warn('[Download] Failed to get VFS files, using fallback:', err);
     }
 
     // Fallback to workspace structure if VFS failed or empty
@@ -2523,7 +2524,7 @@ Generated on: ${new Date().toLocaleString()}
       URL.revokeObjectURL(url);
       toast.success("Download started!");
     } catch (error) {
-      console.error("Download failed:", error);
+      logger.error("Download failed:", error);
       toast.error("Failed to download ZIP file");
     }
   };
@@ -2758,7 +2759,7 @@ Generated on: ${new Date().toLocaleString()}
             }
           }
         } catch (parseError) {
-          console.warn('[CodePreview] Failed to parse package.json:', parseError);
+          logger.warn('[CodePreview] Failed to parse package.json:', parseError);
           // Fall through to regex detection
         }
       }
@@ -2823,7 +2824,7 @@ Generated on: ${new Date().toLocaleString()}
             const hasRequire = /require\(['"][^'"]+['"]\)/.test(content);
             
             if (hasRequire) {
-              console.log(`[Sandpack] Transforming require() statements in ${path}`);
+              logger.info(`[Sandpack] Transforming require() statements in ${path}`);
               // Convert CommonJS require to ES6 import (basic transformation)
               transformedContent = transformedContent.replace(
                 /const\s+(\w+)\s*=\s*require\(['"]([^'"]+)['"]\)/g,
@@ -3023,7 +3024,7 @@ export default app;`,
             default:
               // vanilla or unknown framework - use index.js
               sandpackFiles["src/index.js"] = {
-                code: `console.log('Hello from ${framework}!');`,
+                code: `logger.info('Hello from ${framework}!');`,
               };
               sandpackFiles["index.html"] = {
                 code: `<!doctype html>
@@ -3313,6 +3314,8 @@ createApp(App).mount('#app');` };
               default:
                 filesCopy["src/index.jsx"] = { code: `import React from 'react';
 import ReactDOM from 'react-dom/client';
+
+const logger = createLogger('UI:CodePreviewPanel');
 
 function App() {
   return (
@@ -4156,7 +4159,7 @@ root.render(<App />);` };
                   }
                 } catch (err: any) {
                   lastError = err;
-                  console.warn(`CDN ${cdn} failed, trying next...`);
+                  logger.warn(`CDN ${cdn} failed, trying next...`);
                   continue;
                 }
               }
@@ -4221,7 +4224,7 @@ root.render(<App />);` };
 
               setIsPyodideLoading(false);
             } catch (err: any) {
-              console.error('Failed to load Pyodide:', err);
+              logger.error('Failed to load Pyodide:', err);
               setPyodideOutput(prev => prev + `❌ Failed to load Pyodide: ${err.message}\n`);
               setIsPyodideLoading(false);
             }
@@ -5711,7 +5714,7 @@ root.render(<App />);` };
     try {
       ${processScriptForInline(jsFile.code)}
     } catch (e) {
-      console.error('Error executing JavaScript:', e);
+      logger.error('Error executing JavaScript:', e);
       document.getElementById('content').innerHTML = '<p style="color: red;">Error: ' + e.message + '</p>';
     }
   </script>`
@@ -5723,7 +5726,7 @@ root.render(<App />);` };
     try {
       ${processScriptForInline(tsFile.code)}
     } catch (e) {
-      console.error('Error executing TypeScript:', e);
+      logger.error('Error executing TypeScript:', e);
     }
   </script>`
       : ""
@@ -5906,7 +5909,7 @@ root.render(<App />);` };
             title="Live Preview"
             sandbox="allow-scripts allow-same-origin allow-modals allow-forms allow-popups allow-downloads"
             referrerPolicy="no-referrer"
-            onError={(e) => console.error("Iframe error", e)}
+            onError={(e) => logger.error("Iframe error", e)}
           />
         </div>
       );
@@ -5959,7 +5962,7 @@ root.render(<App />);` };
               fileCount: Object.keys(projectData.files || {}).length,
             });
           } catch (error) {
-            console.error("Error parsing workspace structure:", error);
+            logger.error("Error parsing workspace structure:", error);
           }
         }
       }
@@ -6511,7 +6514,7 @@ root.render(<App />);` };
                                       className="h-6 px-1 text-[10px]"
                                       onClick={() => {
                                         // View diff details - could show modal
-                                        console.log('Diff details:', diff.diff);
+                                        logger.info('Diff details:', diff.diff);
                                       }}
                                     >
                                       View

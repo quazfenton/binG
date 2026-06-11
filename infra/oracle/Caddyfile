@@ -6,6 +6,7 @@
 #   /api/*, /health*  → bing backend (Hono orchestrator)
 #   /nocturne/*       → nocturne FastAPI backend
 #   /copa/*           → CopaMundial (Next.js + Socket.IO)
+#   /novnc/*        → noVNC web-based VNC client (on Docker host, basic_auth required)
 #   /*                → 9Router (LLM gateway)
 
 :80 {
@@ -88,6 +89,31 @@
     }
 
     # Everything else goes to 9router dashboard
+    # noVNC web-based VNC client (websockify on docker host, port 6080).
+    # Hop chain: trycloudflare edge -> cloudflared tunnel -> Caddy -> 172.18.0.1:6080.
+    #   172.18.0.1 = docker bridge gateway of `nocturne_nocturne_internal`,
+    #   the second network bing-caddy-1 is attached to. If you move bing-caddy-1
+    #   to a different network, update this IP (or switch to host.docker.internal).
+    # basic_auth required because the tunnel is public. Regenerate the file in the
+    # volume with: scripts/seed-novnc-auth.sh
+    # handle_path strips the /novnc prefix, so websockify receives the unprefixed
+    # path (e.g. /vnc_lite.html, not /novnc/vnc_lite.html).
+    handle_path /novnc/* {
+        basic_auth {
+            import /data/novnc-auth.txt
+        }
+        reverse_proxy 172.18.0.1:6080 {
+            flush_interval -1
+            transport http {
+                # WebSocket VNC sessions can stay idle for hours; keep both ends open.
+                # 2m matches Cloudflare edge 100s idle timeout plus a ~20s buffer.
+                dial_timeout  10s
+                read_timeout  2m
+                write_timeout 2m
+            }
+        }
+    }
+
     handle {
         reverse_proxy ninerouter:3000 {
             flush_interval -1

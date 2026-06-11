@@ -12,6 +12,10 @@ import { opfsCore, type OPFSCore } from './opfs-core';
 import { indexedDBBackend, IndexedDBBackend } from '../indexeddb-backend';
 import type { VirtualFile } from '../filesystem-types';
 
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('VFS:OPFSStorage');
+
 type BackendType = 'opfs' | 'indexeddb';
 
 const STICKY_KEY_PREFIX = 'vfs-active-backend:';
@@ -106,7 +110,7 @@ export class OPFSStorageBackend implements VFSStorageBackend {
   private markFailed(ownerId: string): void {
     this.failedWorkspaces.add(ownerId);
     this.initializedWorkspaces.delete(ownerId);
-    console.warn(`[VFS Storage] OPFS failed for workspace ${ownerId}, falling back to IndexedDB.`);
+    logger.warn(`[VFS Storage] OPFS failed for workspace ${ownerId}, falling back to IndexedDB.`);
   }
 
   /**
@@ -147,7 +151,7 @@ export class OPFSStorageBackend implements VFSStorageBackend {
       // Walk directory tree and load all files
       await this.loadFilesRecursive('', files);
 
-      console.log('[OPFS Storage] Loaded workspace:', ownerId, 'files:', files.size, 'version:', version);
+      logger.info('[OPFS Storage] Loaded workspace:', ownerId, 'files:', files.size, 'version:', version);
 
       const opfsState: WorkspaceState = {
         files,
@@ -158,7 +162,7 @@ export class OPFSStorageBackend implements VFSStorageBackend {
       // Probe IDB in case the user has orphaned files there
       return this.maybeMergeFromOtherBackend(ownerId, opfsState, 'indexeddb');
     } catch (error) {
-      console.error('[OPFS Storage] Failed to load workspace:', error);
+      logger.error('[OPFS Storage] Failed to load workspace:', error);
       this.markFailed(ownerId);
       setStickyBackend(ownerId, 'indexeddb');
       const idbState = await this.loadWorkspaceFromIDB(ownerId);
@@ -237,7 +241,7 @@ export class OPFSStorageBackend implements VFSStorageBackend {
       }
 
       if (mergedCount > 0) {
-        console.log(`[VFS Storage] Merged ${mergedCount} orphaned files from ${other} into active workspace.`);
+        logger.info(`[VFS Storage] Merged ${mergedCount} orphaned files from ${other} into active workspace.`);
         // Persist the merged state to the primary backend
         if (primary.files.size > 0) {
           await this.saveWorkspace(ownerId, primary);
@@ -245,7 +249,7 @@ export class OPFSStorageBackend implements VFSStorageBackend {
       }
       return primary;
     } catch (e) {
-      console.warn('[VFS Storage] Merge from other backend failed:', e);
+      logger.warn('[VFS Storage] Merge from other backend failed:', e);
       return primary;
     }
   }
@@ -294,7 +298,7 @@ export class OPFSStorageBackend implements VFSStorageBackend {
         }
       }
 
-      console.log('[VFS Storage] Loaded workspace from IDB:', ownerId, 'files:', files.size);
+      logger.info('[VFS Storage] Loaded workspace from IDB:', ownerId, 'files:', files.size);
       return {
         files,
         version,
@@ -302,7 +306,7 @@ export class OPFSStorageBackend implements VFSStorageBackend {
         loaded: true,
       };
     } catch (error) {
-      console.error('[VFS Storage] IDB fallback load failed:', error);
+      logger.error('[VFS Storage] IDB fallback load failed:', error);
       return {
         files: new Map(),
         version: 0,
@@ -347,9 +351,9 @@ export class OPFSStorageBackend implements VFSStorageBackend {
       }
 
       setStickyBackend(ownerId, 'opfs');
-      console.log('[OPFS Storage] Saved workspace:', ownerId, 'files:', state.files.size);
+      logger.info('[OPFS Storage] Saved workspace:', ownerId, 'files:', state.files.size);
     } catch (error) {
-      console.error('[OPFS Storage] Failed to save workspace:', error);
+      logger.error('[OPFS Storage] Failed to save workspace:', error);
       this.markFailed(ownerId);
       setStickyBackend(ownerId, 'indexeddb');
       return this.saveWorkspaceToIDB(ownerId, state);
@@ -372,9 +376,9 @@ export class OPFSStorageBackend implements VFSStorageBackend {
           });
         }
       }
-      console.log('[VFS Storage] Saved workspace to IDB:', ownerId, 'files:', state.files.size);
+      logger.info('[VFS Storage] Saved workspace to IDB:', ownerId, 'files:', state.files.size);
     } catch (error) {
-      console.error('[VFS Storage] IDB fallback save failed:', error);
+      logger.error('[VFS Storage] IDB fallback save failed:', error);
       throw error;
     }
   }
@@ -421,10 +425,10 @@ export class OPFSStorageBackend implements VFSStorageBackend {
     this.failedWorkspaces.delete(ownerId);
 
     if (errors.length > 0) {
-      console.error('[OPFS Storage] Delete had partial failures:', errors);
+      logger.error('[OPFS Storage] Delete had partial failures:', errors);
       throw new AggregateError(errors, 'Failed to delete workspace from one or more backends');
     }
-    console.log('[OPFS Storage] Deleted workspace from all backends:', ownerId);
+    logger.info('[OPFS Storage] Deleted workspace from all backends:', ownerId);
   }
 
   /**
@@ -509,7 +513,7 @@ export class OPFSStorageBackend implements VFSStorageBackend {
               size: fileData.size,
             });
           } catch (error) {
-            console.warn('[OPFS Storage] Failed to load file:', entry.path, error);
+            logger.warn('[OPFS Storage] Failed to load file:', entry.path, error);
           }
         } else if (entry.type === 'directory' && !entry.name.startsWith('.')) {
           await this.loadFilesRecursive(entry.path, files);
@@ -517,7 +521,7 @@ export class OPFSStorageBackend implements VFSStorageBackend {
       }
     } catch (error: any) {
       if (error.name !== 'NotFoundError') {
-        console.warn('[OPFS Storage] Failed to list directory:', path, error);
+        logger.warn('[OPFS Storage] Failed to list directory:', path, error);
       }
     }
   }

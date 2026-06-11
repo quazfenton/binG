@@ -108,9 +108,20 @@ export function sanitizeExtractedPath(
     .replace(/^['"`]+/, '')
     .replace(/['"`]+$/, '')
     .replace(/,+$/, '')
+    // Strip JSON structural remnants: trailing `}`, `]`, `},`, `],`
+    .replace(/[}\]]+,?\s*$/, '')
+    // Strip leading `{` or `[`
+    .replace(/^[{\[],?\s*/, '')
+    // Strip content after colon (key-value pair remnants like `"path": "/foo"` → `"/foo"`)
+    .replace(/^['"]?\w+['"]?\s*:\s*/, '')
     .trim();
 
   if (!path) return null;
+
+  // Reject paths that are too short after cleanup (likely remnants, not real paths)
+  if (path.length < 2) return null;
+  // Reject paths still containing JSON structural characters
+  if (/[{}[\]"']/.test(path)) return null;
 
   if (options.isFolder) {
     path = path.replace(/\/+$/, '');
@@ -3275,7 +3286,11 @@ export function sanitizeFileEditTags(content: string): string {
   sanitized = sanitized.replace(/===\s*COMMANDS_START\s*===([\s\S]*?)===\s*COMMANDS_END\s*===/gi, '');
 
   // Normalize spacing
-  sanitized = sanitized.replace(/\n{3,}/g, '\n\n').trim();
+  // NOTE: .trim() is NOT used here because it strips leading/trailing spaces
+  // that may be the only separation between words after XML/JSON tags are
+  // removed. Only collapse excessive newlines and trim leading/trailing newlines.
+  sanitized = sanitized.replace(/\n{3,}/g, '\n\n');
+  sanitized = sanitized.replace(/^\n+/, '').replace(/\n+$/, '');
 
   return sanitized;
 }

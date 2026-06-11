@@ -29,6 +29,9 @@ import { toolResultCache, toolCacheKey } from '@/lib/utils/cache';
 // Default configuration - use DESKTOP_WORKSPACE_ROOT for desktop mode
 // Priority: window.__SIDECAR_CONFIG__ (Tauri) > DESKTOP_WORKSPACE_ROOT > INITIAL_CWD > 'workspace'
 import { getDesktopWorkspaceDir } from '@/lib/utils/desktop-env';
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('VFS:Service');
 const DEFAULT_WORKSPACE_ROOT = getDesktopWorkspaceDir();
 const MAX_PATH_LENGTH = 1024;
 const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB per file
@@ -132,7 +135,7 @@ export class VirtualFilesystemService {
       // Mark as attempting initialization to prevent race condition
       (this as any)._fsBridgeInitializing = true;
       this.initializeFSBridge().catch(err => {
-        console.warn('[VFS] FS Bridge initialization deferred:', err.message);
+        logger.warn('[VFS] FS Bridge initialization deferred:', err.message);
       }).finally(() => {
         (this as any)._fsBridgeInitializing = false;
       });
@@ -168,9 +171,9 @@ export class VirtualFilesystemService {
       // Register handler for external file watch events to emit global sync events
       this.registerWatchEventHandler();
       
-      console.log('[VFS] FS Bridge initialized for desktop mode');
+      logger.info('[VFS] FS Bridge initialized for desktop mode');
     } catch (err: any) {
-      console.warn('[VFS] FS Bridge initialization failed:', err.message);
+      logger.warn('[VFS] FS Bridge initialization failed:', err.message);
     }
   }
   
@@ -180,7 +183,7 @@ export class VirtualFilesystemService {
    */
   private registerWatchEventHandler(): void {
     const watchHandler = (event: FileSystemWatchEvent) => {
-      console.log('[VFS] External file change event received', { 
+      logger.info('[VFS] External file change event received', { 
         type: event.type, 
         paths: event.paths 
       });
@@ -242,7 +245,7 @@ export class VirtualFilesystemService {
       }
     }
     
-    console.log('[VFS] readFile called', { ownerId, filePath });
+    logger.info('[VFS] readFile called', { ownerId, filePath });
     const workspace = await this.ensureWorkspace(ownerId);
     const normalizedPath = this.normalizePath(filePath);
     const file = workspace.files.get(normalizedPath);
@@ -260,14 +263,14 @@ export class VirtualFilesystemService {
     // on write (see writeFile). If a file exists in the workspace but belongs to
     // a different owner, we must reject the access.
     if (!file.ownerId) {
-      console.error(`[VFS] SECURITY: File has no ownerId — rejecting access to prevent cross-workspace data leakage`, {
+      logger.error(`[VFS] SECURITY: File has no ownerId — rejecting access to prevent cross-workspace data leakage`, {
         requestingOwner: ownerId,
         path: normalizedPath
       });
       throw new Error(`File not found: ${normalizedPath}`);
     }
     if (file.ownerId !== ownerId) {
-      console.warn(`[VFS] SECURITY: Cross-workspace access blocked`, {
+      logger.warn(`[VFS] SECURITY: Cross-workspace access blocked`, {
         requestingOwner: ownerId,
         fileOwner: file.ownerId,
         path: normalizedPath
@@ -328,7 +331,7 @@ export class VirtualFilesystemService {
       }
     }
     
-    console.log('[VFS] writeFile called', { ownerId, filePath, contentLength: content?.length, append: options?.append });
+    logger.info('[VFS] writeFile called', { ownerId, filePath, contentLength: content?.length, append: options?.append });
     const workspace = await this.ensureWorkspace(ownerId);
     const normalizedPath = this.normalizePath(filePath);
     const previous = workspace.files.get(normalizedPath);
@@ -365,7 +368,7 @@ export class VirtualFilesystemService {
         // File was modified very recently - potential conflict
         // In tests: only warn if < 50ms (likely race condition)
         // In production: warn if < 1000ms (potential concurrent user edits)
-        console.warn('[VFS] Potential concurrent modification:', filePath, {
+        logger.warn('[VFS] Potential concurrent modification:', filePath, {
           timeSinceLastWrite,
           previousVersion: previous.version,
           threshold,
@@ -895,7 +898,7 @@ export class VirtualFilesystemService {
   }
 
   async getWorkspaceVersion(ownerId: string): Promise<number> {
-    console.log('[VFS] getWorkspaceVersion called', { ownerId });
+    logger.info('[VFS] getWorkspaceVersion called', { ownerId });
     const workspace = await this.ensureWorkspace(ownerId);
     return workspace.version;
   }
@@ -1109,7 +1112,7 @@ export class VirtualFilesystemService {
     // If workspacePrefix is a simple session ID (no slashes), allow any relative path
     // This allows paths like "portfolio-app" when workspaceRoot is "002"
     if (isSessionRoot) {
-      console.log('[VFS normalizePath] Session root mode - allowing relative path:', normalizedPath);
+      logger.info('[VFS normalizePath] Session root mode - allowing relative path:', normalizedPath);
       return normalizedPath;
     }
 
@@ -1124,7 +1127,7 @@ export class VirtualFilesystemService {
       return normalizedPath;
     }
 
-    console.log('[VFS normalizePath] inputPath:', inputPath, 'workspaceRoot:', this.workspaceRoot, 'normalizedPath:', normalizedPath, 'workspacePrefix:', workspacePrefix);
+    logger.info('[VFS normalizePath] inputPath:', inputPath, 'workspaceRoot:', this.workspaceRoot, 'normalizedPath:', normalizedPath, 'workspacePrefix:', workspacePrefix);
     
     // Verify the normalized path is within or an ancestor of the workspace root
     // When workspacePrefix is empty (no workspace root set), any non-empty relative path is valid
@@ -1132,7 +1135,7 @@ export class VirtualFilesystemService {
       ? true
       : normalizedPath.startsWith(workspacePrefix + '/') || normalizedPath === workspacePrefix;
     const isAncestor = workspacePrefix.startsWith(normalizedPath + '/');
-    console.log('[VFS normalizePath] isWithin:', isWithin, 'isAncestor:', isAncestor);
+    logger.info('[VFS normalizePath] isWithin:', isWithin, 'isAncestor:', isAncestor);
     if (!isWithin && !isAncestor) {
       throw new Error(`Path traversal beyond workspace root: ${inputPath}`);
     }
@@ -1261,7 +1264,7 @@ export class VirtualFilesystemService {
                       file.content = buf.toString('utf-8');
                     }
                   }).catch(err => {
-                    console.warn('[VFS] Failed to fetch CAS blob on load', { hash: row.blob_hash, path: normalizedPath, error: err.message });
+                    logger.warn('[VFS] Failed to fetch CAS blob on load', { hash: row.blob_hash, path: normalizedPath, error: err.message });
                   })
                 );
               }
@@ -1281,7 +1284,7 @@ export class VirtualFilesystemService {
         if (msg.includes('no such table') || msg.includes('SQLITE_ERROR')) {
           // No-op — workspace stays empty
         } else {
-          console.warn(`[VFS] Failed to load workspace for ${normalizedOwnerId}:`, msg);
+          logger.warn(`[VFS] Failed to load workspace for ${normalizedOwnerId}:`, msg);
         }
       }
     }
@@ -1301,7 +1304,7 @@ export class VirtualFilesystemService {
           "UPDATE vfs_workspace_files SET path = REPLACE(path, '\\\\', '/') WHERE owner_id = ? AND path LIKE '%\\\\%'"
         );
         normalizePaths.run(normalizedOwnerId);
-        console.log(`[VFS] Normalized ${backslashCount} backslash path(s) for owner ${normalizedOwnerId}`);
+        logger.info(`[VFS] Normalized ${backslashCount} backslash path(s) for owner ${normalizedOwnerId}`);
         // Invalidate in-memory cache so reload picks up corrected paths
         this.workspaces.delete(normalizedOwnerId);
       }
@@ -1395,7 +1398,7 @@ export class VirtualFilesystemService {
       // Re-enable auto-commit after persist completes
       await this.flushBatchMode(normalizedOwnerId);
     } catch (error: any) {
-      console.error('[VFS] DB persist failed:', {
+      logger.error('[VFS] DB persist failed:', {
         ownerId: normalizedOwnerId,
         error: error.message,
       });
@@ -1696,7 +1699,7 @@ class GitBackedVFSProxy {
           });
         } catch (err: any) {
           // File may not exist or read may fail — log warning so we know if originalContent is missing from the git commit
-          console.warn('[VFS] Could not read file content before DELETE for git tracking', { path: node.path, error: err?.message || String(err) });
+          logger.warn('[VFS] Could not read file content before DELETE for git tracking', { path: node.path, error: err?.message || String(err) });
         }
       }
     }

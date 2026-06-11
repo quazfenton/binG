@@ -278,9 +278,13 @@ const THIRD_PARTY_OAUTH_RE =
 export async function POST(request: NextRequest) {
   // Auth via short-lived JWT issued by the edge-gateway Worker via 302 redirect.
   // Bypasses the Worker wall-clock cap by streaming directly from the backend.
+  // Prefer WORKER_JWT_SECRET (set by the edge-gateway Worker in production) —
+  // distinct from the internal JWT_SECRET (used for app/route session auth)
+  // for defense-in-depth isolation. The JWT_SECRET fallback is local-dev only;
+  // in production WORKER_JWT_SECRET must be set in both Worker and backend.
   const _redirectToken = new URL(request.url).searchParams.get('token');
   if (_redirectToken) {
-    const _verified = await verifyJwt(_redirectToken, process.env.JWT_SECRET || '');
+    const _verified = await verifyJwt(_redirectToken, process.env.WORKER_JWT_SECRET ?? process.env.JWT_SECRET ?? '');
     if (!_verified.valid) {
       return NextResponse.json(
         { error: 'Unauthorized', reason: _verified.error || 'invalid' },
@@ -317,6 +321,36 @@ export async function POST(request: NextRequest) {
   // Anonymous chat is allowed, but tools/sandbox require authenticated userId.
   const authResult = await resolveRequestAuth(request, { allowAnonymous: true });
   const userId = authResult.userId || 'anonymous';
+
+  // ─── Per-user hard rate limit (1000 req/min) ─────────────────────
+  // Skips for anonymous users (their cap is enforced via the IP-based
+  // limiter + the Worker's WAF rule). Authenticated users get a global
+  // per-userId cap that's consistent across server instances when a
+  // Redis/KV store is attached to the limiter.
+  if (authResult.success && userId && !userId.startsWith('anon:')) {
+    const { perUserRateLimiter, PerUserRateLimiter } = await import('@/lib/middleware/per-user-rate-limiter');
+    const rl = await perUserRateLimiter.check(userId);
+    if (!rl.allowed) {
+      chatLogger.warn('Per-user rate limit exceeded', { requestId, userId }, {
+        retryAfterSec: rl.retryAfterSec,
+        source: rl.source,
+      });
+      return NextResponse.json(
+        {
+          success: false,
+          error: `Rate limit exceeded: 1000 requests per minute per user. Try again in ${rl.retryAfterSec}s.`,
+          retryAfter: rl.retryAfterSec,
+        },
+        {
+          status: 429,
+          headers: {
+            'Retry-After': String(rl.retryAfterSec),
+            ...PerUserRateLimiter.headers(rl, 1000),
+          },
+        },
+      );
+    }
+  }
 
   chatLogger.debug('Anonymous request (no auth token/session)', { requestId, userId }, {
     authSuccess: authResult.success,
@@ -1366,7 +1400,7 @@ const config: UnifiedAgentConfig = {
     if (useUnifiedAgentStream) {
       const streamBody = new ReadableStream({
           async start(controller) {
-            const emit = createSSEEmitter(controller);
+            const emit = createSSEEmitter(controller, request.signal);
             const processingSteps: Array<{
               step: string;
               status: 'started' | 'completed' | 'failed';
@@ -5810,7 +5844,12 @@ async function applyFilesystemEditsFromResponse(input: {
           existedBefore = false;
         }
 
-        const patchedContent = applyUnifiedDiffToContent(currentContent, targetPath, diffOperation.diff);
+        let patchedContent = applyUnifiedDiffToContent(currentContent, targetPath, diffOperation.diff);
+        if (patchedContent === null) {
+          // Fallback: try multi-strategy applyDiffToContent (search/replace, fuzzy, etc.)
+          const { applyDiffToContent } = await import('@/lib/chat/file-diff-utils');
+          patchedContent = applyDiffToContent(currentContent, targetPath, diffOperation.diff);
+        }
         if (patchedContent === null) {
           // DEBUG: Log why diff application failed
           console.error('[DIFF-APPLY] Failed to apply diff', {
@@ -5821,7 +5860,7 @@ async function applyFilesystemEditsFromResponse(input: {
             currentContentPreview: currentContent.slice(0, 200),
             existedBefore,
           });
-          result.errors.push(`Failed to apply unified diff for ${targetPath}: patch could not be applied`);
+          result.errors.push(`Failed to apply diff for ${targetPath}: all strategies exhausted`);
           continue;
         }
         const file = await virtualFilesystem.writeFile(input.ownerId, targetPath, patchedContent);
@@ -6207,7 +6246,7 @@ export async function GET(request: NextRequest) {
   // Bypasses the Worker wall-clock cap by streaming directly from the backend.
   const _redirectToken = new URL(request.url).searchParams.get('token');
   if (_redirectToken) {
-    const _verified = await verifyJwt(_redirectToken, process.env.JWT_SECRET || '');
+    const _verified = await verifyJwt(_redirectToken, process.env.WORKER_JWT_SECRET ?? process.env.JWT_SECRET ?? '');
     if (!_verified.valid) {
       return NextResponse.json(
         { error: 'Unauthorized', reason: _verified.error || 'invalid' },
@@ -6302,7 +6341,8 @@ async function handleError(
   });
 }
 
-// Handle preflight requests for CORS
+export async function OPTIONS(request: NextRequest) {
+  // Handle preflight requests for CORS.
   // CORS preflight: don't require a token; return 204 with CORS headers so the
   // browser can follow the cross-origin 302 redirect from the edge-gateway Worker.
   return new NextResponse(null, {

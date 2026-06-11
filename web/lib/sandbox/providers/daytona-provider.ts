@@ -1,4 +1,5 @@
 import { Daytona } from '@daytonaio/sdk'
+import { createLogger } from '@/lib/utils/logger';
 import { resolve, relative } from 'node:path'
 import type { ToolResult, PreviewInfo } from '../types'
 
@@ -49,7 +50,7 @@ export class DaytonaProvider implements SandboxProvider {
       apiKey,
     })
     
-    console.log(`[Daytona] Initialized - API Key configured: ${!!apiKey}`)
+    logger.info(`[Daytona] Initialized - API Key configured: ${!!apiKey}`)
   }
 
   /**
@@ -67,7 +68,7 @@ export class DaytonaProvider implements SandboxProvider {
       return { healthy, latency }
     } catch (error: any) {
       const latency = Date.now() - startTime
-      console.error('[Daytona] Health check failed:', error.message)
+      logger.error('[Daytona] Health check failed:', error.message)
       return { healthy: false, latency, details: { error: error.message } }
     }
   }
@@ -131,7 +132,7 @@ export class DaytonaProvider implements SandboxProvider {
     };
     const image = imageMap[config.language ?? 'typescript'] || 'node:20-slim'
 
-    console.log(`[Daytona] Creating sandbox - Language: "${config.language || 'default'}", Image: "${image}"`)
+    logger.info(`[Daytona] Creating sandbox - Language: "${config.language || 'default'}", Image: "${image}"`)
 
     // Build sandbox creation params
     const createParams: any = {
@@ -162,9 +163,9 @@ export class DaytonaProvider implements SandboxProvider {
         }
       ]
       createParams.envVars.SANDBOX_CACHE_ENABLED = 'true'
-      console.log(`[Daytona] Persistent cache volume enabled: ${cacheVolumeId}`)
+      logger.info(`[Daytona] Persistent cache volume enabled: ${cacheVolumeId}`)
     } else if (USE_PERSISTENT_CACHE) {
-      console.warn(
+      logger.warn(
         `[Daytona] Persistent cache requested but SANDBOX_CACHE_VOLUME_ID is missing or not a valid UUID ` +
         `(got: "${cacheVolumeId || CACHE_VOLUME_NAME}"). ` +
         `Skipping volume mount to avoid sandbox creation failure. ` +
@@ -174,13 +175,13 @@ export class DaytonaProvider implements SandboxProvider {
 
     try {
       const sandbox = await this.client.create(createParams)
-      console.log(`[Daytona] ✓ Created sandbox ${sandbox.id} (image: ${image})`)
+      logger.info(`[Daytona] ✓ Created sandbox ${sandbox.id} (image: ${image})`)
 
       await sandbox.process.executeCommand(`mkdir -p ${WORKSPACE_DIR}`)
       return new DaytonaSandboxHandle(sandbox, this.client)
     } catch (error: any) {
-      console.error(`[Daytona] ✗ Failed to create sandbox:`, error.message)
-      console.error(`[Daytona] Error details:`, {
+      logger.error(`[Daytona] ✗ Failed to create sandbox:`, error.message)
+      logger.error(`[Daytona] Error details:`, {
         name: error.name,
         message: error.message,
       })
@@ -208,13 +209,15 @@ export class DaytonaProvider implements SandboxProvider {
         labels: sbx.labels,
       }))
     } catch (error) {
-      console.error('[Daytona] Failed to list sandboxes:', error)
+      logger.error('[Daytona] Failed to list sandboxes:', error)
       return []
     }
   }
 }
 
 import { SandboxSecurityManager } from '../security-manager'
+
+const logger = createLogger('Sandbox:Daytona');
 
 class DaytonaSandboxHandle implements SandboxHandle {
   readonly id: string
@@ -238,7 +241,7 @@ class DaytonaSandboxHandle implements SandboxHandle {
   getComputerUseService(): { takeRegion?(config: { x?: number; y?: number; width?: number; height?: number }): Promise<{ image: string }>; startRecording?(): Promise<{ recordingId: string }>; stopRecording?(recordingId: string): Promise<{ video: string }> } | undefined {
     const apiKey = process.env.DAYTONA_API_KEY
     if (!apiKey) {
-      console.warn('[Daytona] DAYTONA_API_KEY not set, Computer Use Service unavailable')
+      logger.warn('[Daytona] DAYTONA_API_KEY not set, Computer Use Service unavailable')
       return undefined
     }
 
@@ -261,7 +264,7 @@ class DaytonaSandboxHandle implements SandboxHandle {
   getLSPService(): LSPService | null {
     const apiKey = process.env.DAYTONA_API_KEY
     if (!apiKey) {
-      console.warn('[Daytona] DAYTONA_API_KEY not set, LSP Service unavailable')
+      logger.warn('[Daytona] DAYTONA_API_KEY not set, LSP Service unavailable')
       return null
     }
     
@@ -278,7 +281,7 @@ class DaytonaSandboxHandle implements SandboxHandle {
   getObjectStorageService(): ObjectStorageService | null {
     const apiKey = process.env.DAYTONA_API_KEY
     if (!apiKey) {
-      console.warn('[Daytona] DAYTONA_API_KEY not set, Object Storage unavailable')
+      logger.warn('[Daytona] DAYTONA_API_KEY not set, Object Storage unavailable')
       return null
     }
     
@@ -340,7 +343,7 @@ class DaytonaSandboxHandle implements SandboxHandle {
     } catch (error: any) {
       // Security exceptions should be logged but not expose details
       if (error.message?.includes('Security Exception')) {
-        console.warn('[Daytona] Security validation failed:', error.message)
+        logger.warn('[Daytona] Security validation failed:', error.message)
         return {
           success: false,
           output: 'Security validation failed',
@@ -377,7 +380,7 @@ class DaytonaSandboxHandle implements SandboxHandle {
     } catch (error: any) {
       // Security exceptions should be logged but not expose details
       if (error.message?.includes('Security Exception')) {
-        console.warn('[Daytona] Security validation failed:', error.message)
+        logger.warn('[Daytona] Security validation failed:', error.message)
         return {
           success: false,
           output: 'Security validation failed',
@@ -403,7 +406,7 @@ class DaytonaSandboxHandle implements SandboxHandle {
     } catch (error: any) {
       // Security exceptions should be logged but not expose details
       if (error.message?.includes('Security Exception')) {
-        console.warn('[Daytona] Security validation failed:', error.message)
+        logger.warn('[Daytona] Security validation failed:', error.message)
         return {
           success: false,
           output: 'Security validation failed',
@@ -430,7 +433,7 @@ class DaytonaSandboxHandle implements SandboxHandle {
     } catch (error: any) {
       // Security exceptions should be logged but not expose details
       if (error.message?.includes('Security Exception')) {
-        console.warn('[Daytona] Security validation failed:', error.message)
+        logger.warn('[Daytona] Security validation failed:', error.message)
         return {
           success: false,
           output: 'Security validation failed',
@@ -468,7 +471,7 @@ class DaytonaSandboxHandle implements SandboxHandle {
 
       return previewInfo;
     } catch (error: any) {
-      console.error('[Daytona] Get preview link error:', error);
+      logger.error('[Daytona] Get preview link error:', error);
 
       return {
         port,

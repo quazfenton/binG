@@ -1,3 +1,7 @@
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('Database:Migration');
+
 // Note: fs and path modules are lazy-loaded to avoid Edge Runtime issues
 // They are only used at runtime, not at module load time
 // This file is server-only - do not import in Client Components
@@ -82,7 +86,7 @@ export class MigrationRunner {
 
     // Only run migrations in Node.js runtime
     if (process.env.NEXT_RUNTIME !== 'nodejs') {
-      console.log('[MigrationRunner] Skipping initialization in Edge Runtime');
+      logger.info('[MigrationRunner] Skipping initialization in Edge Runtime');
       this.migrationsPath = './lib/database/migrations';
       this.initialized = true;
       return;
@@ -139,7 +143,7 @@ export class MigrationRunner {
   private async getMigrationFiles(): Promise<Migration[]> {
     // Only read migration files in Node.js runtime
     if (process.env.NEXT_RUNTIME !== 'nodejs') {
-      console.log('[MigrationRunner] Skipping file read in Edge Runtime');
+      logger.info('[MigrationRunner] Skipping file read in Edge Runtime');
       return [];
     }
     
@@ -163,7 +167,7 @@ export class MigrationRunner {
         return { version, filename, sql };
       });
     } catch (error) {
-      console.warn('Migrations directory not found, skipping migrations');
+      logger.warn('Migrations directory not found, skipping migrations');
       return [];
     }
   }
@@ -182,15 +186,15 @@ export class MigrationRunner {
     );
 
     if (pendingMigrations.length === 0) {
-      console.log('No pending migrations');
+      logger.info('No pending migrations');
       return;
     }
 
-    console.log(`Running ${pendingMigrations.length} pending migrations...`);
+    logger.info(`Running ${pendingMigrations.length} pending migrations...`);
 
     for (const migration of pendingMigrations) {
       try {
-        console.log(`Executing migration ${migration.version}: ${migration.filename}`);
+        logger.info(`Executing migration ${migration.version}: ${migration.filename}`);
 
         // Check if migration is already executed
         const alreadyExecuted = this.db.prepare(
@@ -198,7 +202,7 @@ export class MigrationRunner {
         ).get(migration.version);
 
         if (alreadyExecuted) {
-          console.log(`Migration ${migration.version} already executed, skipping`);
+          logger.info(`Migration ${migration.version} already executed, skipping`);
         } else {
           // Wrap migration execution in a transaction to ensure atomicity.
           // Strip transaction-control and PRAGMA statements from the migration SQL
@@ -228,7 +232,7 @@ export class MigrationRunner {
               /duplicate column name/i.test(msg) ||
               /already exists/i.test(msg)
             ) {
-              console.warn(
+              logger.warn(
                 `Migration ${migration.version} already applied (schema present): ${msg}. Marking as executed.`
               );
               alreadyApplied = true;
@@ -239,7 +243,7 @@ export class MigrationRunner {
               // Schema not yet fully bootstrapped — skip this migration for now.
               // It will be re-attempted on the next startup after schema init
               // has created the missing tables/columns.
-              console.warn(
+              logger.warn(
                 `Migration ${migration.version} skipped (missing schema prerequisite: ${msg}). Will retry next startup.`
               );
               continue; // Skip to next migration without marking as executed
@@ -256,19 +260,19 @@ export class MigrationRunner {
           `);
           stmt.run(migration.version, migration.filename);
 
-          console.log(
+          logger.info(
             alreadyApplied
               ? `Migration ${migration.version} recorded (schema already present)`
               : `Migration ${migration.version} completed successfully`
           );
         }
       } catch (error) {
-        console.error(`Migration ${migration.version} failed:`, error);
+        logger.error(`Migration ${migration.version} failed:`, error);
         throw error;
       }
     }
 
-    console.log('All migrations completed successfully');
+    logger.info('All migrations completed successfully');
   }
 
   public async runMigrations(): Promise<void> {
@@ -284,14 +288,14 @@ export class MigrationRunner {
     }
 
     // Note: This is a basic rollback - in production you'd want proper rollback scripts
-    console.warn(`Rollback requested for migration ${version}`);
-    console.warn('Manual rollback required - check migration file for rollback instructions');
+    logger.warn(`Rollback requested for migration ${version}`);
+    logger.warn('Manual rollback required - check migration file for rollback instructions');
     
     // Remove from migrations table
     const stmt = this.db.prepare('DELETE FROM schema_migrations WHERE version = ?');
     stmt.run(version);
     
-    console.log(`Migration ${version} marked as not executed`);
+    logger.info(`Migration ${version} marked as not executed`);
   }
 
   public async getExecutedMigrationsList(): Promise<any[]> {

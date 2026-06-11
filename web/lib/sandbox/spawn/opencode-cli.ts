@@ -46,7 +46,6 @@
  */
 
 import { spawn, type ChildProcess } from 'child_process';
-import { createLogger } from '../../utils/logger';
 import { findOpencodeBinarySync } from '@/lib/drivers/opencode/find-opencode-binary';
 import { createAgentFilesystem, type AgentFilesystem } from '@/lib/drivers/agent-bins/agent-filesystem';
 import type { ToolResult } from '../types';
@@ -62,6 +61,7 @@ import { openCodeV2SessionManager, type V2SessionConfig, type OpenCodeV2Session 
 import { nullclawMCPBridge } from '../../mcp/nullclaw-mcp-bridge';
 import { v4 as uuidv4 } from 'uuid';
 import { sandboxFilesystemSync } from '@/lib/virtual-filesystem/sync/sandbox-filesystem-sync';
+import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('OpenCode:V2Provider');
 
@@ -240,12 +240,12 @@ export class OpencodeV2Provider implements LLMProvider {
       });
 
       // Debug: Log what we're sending to OpenCode
-      console.log('[OpencodeV2Provider] === SENDING TO OPENCODE (LOCAL) ===');
-      console.log('[OpencodeV2Provider] Prompt:', userMessage.substring(0, 200) + (userMessage.length > 200 ? '...' : ''));
-      console.log('[OpencodeV2Provider] Tools available:', tools.map(t => t.name).join(', '));
-      console.log('[OpencodeV2Provider] Workspace:', localWorkspaceDir);
-      console.log('[OpencodeV2Provider] Temp file:', promptFile);
-      console.log('[OpencodeV2Provider] ==============================');
+      logger.info('[OpencodeV2Provider] === SENDING TO OPENCODE (LOCAL) ===');
+      logger.info('[OpencodeV2Provider] Prompt:', userMessage.substring(0, 200) + (userMessage.length > 200 ? '...' : ''));
+      logger.info('[OpencodeV2Provider] Tools available:', tools.map(t => t.name).join(', '));
+      logger.info('[OpencodeV2Provider] Workspace:', localWorkspaceDir);
+      logger.info('[OpencodeV2Provider] Temp file:', promptFile);
+      logger.info('[OpencodeV2Provider] ==============================');
 
       await this.writeLocalFile(promptFile, promptPayload);
 
@@ -288,7 +288,7 @@ export class OpencodeV2Provider implements LLMProvider {
         command = `OPENCODE_SYSTEM_PROMPT=${escapedSystemPrompt} ${commandBin} chat --json ${modelFlag} < ${escapedPromptFile}`;
       }
       
-      console.log('[OpencodeV2Provider] Executing command:', command.substring(0, 300) + '...');
+      logger.info('[OpencodeV2Provider] Executing command:', command.substring(0, 300) + '...');
       
       // Execute locally without sandbox
       const result = await this.executeLocalCommand(
@@ -298,12 +298,12 @@ export class OpencodeV2Provider implements LLMProvider {
       );
 
       // Debug: Log raw output from OpenCode
-      console.log('[OpencodeV2Provider] === OPENCODE OUTPUT ===');
-      console.log('[OpencodeV2Provider] Exit code:', result.exitCode);
-      console.log('[OpencodeV2Provider] Success:', result.success);
-      console.log('[OpencodeV2Provider] Output length:', result.output?.length || 0);
-      console.log('[OpencodeV2Provider] Output preview:', result.output?.substring(0, 500));
-      console.log('[OpencodeV2Provider] =========================');
+      logger.info('[OpencodeV2Provider] === OPENCODE OUTPUT ===');
+      logger.info('[OpencodeV2Provider] Exit code:', result.exitCode);
+      logger.info('[OpencodeV2Provider] Success:', result.success);
+      logger.info('[OpencodeV2Provider] Output length:', result.output?.length || 0);
+      logger.info('[OpencodeV2Provider] Output preview:', result.output?.substring(0, 500));
+      logger.info('[OpencodeV2Provider] =========================');
 
       const nullclawTasks: Array<{ tool: string; status: string; result?: any }> = [];
 
@@ -311,7 +311,7 @@ export class OpencodeV2Provider implements LLMProvider {
         // Parse output and execute tools
         const lines = result.output.split('\n').filter(Boolean);
         
-        console.log('[OpencodeV2Provider] Parsed', lines.length, 'lines from output');
+        logger.info('[OpencodeV2Provider] Parsed', lines.length, 'lines from output');
         
         for (const line of lines) {
           try {
@@ -319,7 +319,7 @@ export class OpencodeV2Provider implements LLMProvider {
             
             // Text response
             if (parsed.text) {
-              console.log('[OpencodeV2Provider] Got text response:', parsed.text.substring(0, 100) + '...');
+              logger.info('[OpencodeV2Provider] Got text response:', parsed.text.substring(0, 100) + '...');
               finalResponse += parsed.text;
               onStreamChunk?.(parsed.text);
             }
@@ -328,9 +328,9 @@ export class OpencodeV2Provider implements LLMProvider {
             const toolInvocation = this.extractToolInvocation(parsed);
             if (toolInvocation && steps.length < maxSteps) {
               const { name: toolName, args: toolArgs } = toolInvocation;
-              console.log('[OpencodeV2Provider] === TOOL CALL ===');
-              console.log('[OpencodeV2Provider] Tool:', toolName);
-              console.log('[OpencodeV2Provider] Args:', JSON.stringify(toolArgs).substring(0, 200));
+              logger.info('[OpencodeV2Provider] === TOOL CALL ===');
+              logger.info('[OpencodeV2Provider] Tool:', toolName);
+              logger.info('[OpencodeV2Provider] Args:', JSON.stringify(toolArgs).substring(0, 200));
 
               // Check if it's a Nullclaw tool
               const toolStartTime = Date.now();
@@ -372,11 +372,11 @@ export class OpencodeV2Provider implements LLMProvider {
                   logger.error(`onToolExecution failed for ${toolName}`, callbackError);
                 }
 
-                console.log('[OpencodeV2Provider] === TOOL RESULT ===');
-                console.log('[OpencodeV2Provider] Tool:', toolName, '- Success:', toolResult.success);
-                console.log('[OpencodeV2Provider] Output length:', toolResult.output?.length ?? 0);
-                console.log('[OpencodeV2Provider] Exit code:', toolResult.exitCode);
-                console.log('[OpencodeV2Provider] ===================');
+                logger.info('[OpencodeV2Provider] === TOOL RESULT ===');
+                logger.info('[OpencodeV2Provider] Tool:', toolName, '- Success:', toolResult.success);
+                logger.info('[OpencodeV2Provider] Output length:', toolResult.output?.length ?? 0);
+                logger.info('[OpencodeV2Provider] Exit code:', toolResult.exitCode);
+                logger.info('[OpencodeV2Provider] ===================');
 
                 // Record metrics
                 openCodeV2SessionManager.recordMetrics(
@@ -543,9 +543,9 @@ export class OpencodeV2Provider implements LLMProvider {
     try {
       const sessionId = this.currentSession?.id || uuidv4();
       sandboxFilesystemSync.startSync(handle.id, sessionId);
-      console.log(`[OpencodeV2] VFS sync started for sandbox: ${handle.id}`);
+      logger.info(`[OpencodeV2] VFS sync started for sandbox: ${handle.id}`);
     } catch (syncErr: any) {
-      console.warn(`[OpencodeV2] Failed to start VFS sync:`, syncErr.message);
+      logger.warn(`[OpencodeV2] Failed to start VFS sync:`, syncErr.message);
     }
     
     return handle;
@@ -740,7 +740,7 @@ export class OpencodeV2Provider implements LLMProvider {
 
     for (const pattern of dangerousPatterns) {
       if (pattern.test(command)) {
-        console.error('[OpencodeV2Provider] Command blocked by security filter:', command.substring(0, 200));
+        logger.error('[OpencodeV2Provider] Command blocked by security filter:', command.substring(0, 200));
         return {
           success: false,
           output: 'Command rejected: contains dangerous patterns',
@@ -763,7 +763,7 @@ export class OpencodeV2Provider implements LLMProvider {
       // Try using npx to run opencode
       finalCommand = opencodeCmd;
 
-      console.log('[OpencodeV2Provider] Windows detected, command:', finalCommand.substring(0, 100));
+      logger.info('[OpencodeV2Provider] Windows detected, command:', finalCommand.substring(0, 100));
     }
 
     return this.executeCommandDirect(finalCommand, cwd, timeoutSeconds);
@@ -1178,14 +1178,14 @@ export class OpencodeV2Provider implements LLMProvider {
           const combinedOutput = stdout + stderr;
           
           if (err) {
-            console.log(`[OpencodeV2Provider] Local command error after ${duration}ms: ${err.message}`);
+            logger.info(`[OpencodeV2Provider] Local command error after ${duration}ms: ${err.message}`);
             resolve({
               success: false,
               output: combinedOutput + '\n' + err.message,
               exitCode: err.code || 1,
             });
           } else {
-            console.log(`[OpencodeV2Provider] Local command completed in ${duration}ms, exit code: ${err?.code || 0}`);
+            logger.info(`[OpencodeV2Provider] Local command completed in ${duration}ms, exit code: ${err?.code || 0}`);
             resolve({
               success: true,
               output: combinedOutput,

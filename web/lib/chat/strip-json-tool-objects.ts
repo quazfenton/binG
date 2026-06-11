@@ -112,7 +112,12 @@ export function stripJsonToolObjects(content: string): string {
   }
 
   // Clean up: remove lines that are now empty (just whitespace after stripping)
+  // NOTE: .trim() is intentionally avoided here — stripping leading/trailing
+  // spaces causes words to be mushed together when JSON objects are removed
+  // from partial streaming content. Only collapse excess newlines and trim
+  // leading/trailing newlines.
   let result = parts.join('');
-  result = result.replace(/\n{3,}/g, '\n\n').trim();
+  result = result.replace(/\n{3,}/g, '\n\n');
+  result = result.replace(/^\n+/, '').replace(/\n+$/, '');
   return result;
 }

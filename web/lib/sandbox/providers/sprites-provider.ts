@@ -30,11 +30,14 @@ import type {
   EnvServiceConfig,
 } from './sandbox-provider'
 import { quotaManager } from '@/lib/management/quota-manager'
+import { createLogger } from '@/lib/utils/logger';
 import { SandboxSecurityManager } from '../security-manager'
 import { syncVfsSnapshotToSprite, syncChangedFilesToSprite, type TarSyncFile } from './sprites-tar-sync'
 import { SpritesCheckpointManager, createCheckpointManager, type RetentionPolicy } from './sprites-checkpoint-manager'
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+
+const logger = createLogger('Sandbox:Sprites');
 
 // SECURITY: Centralized execFile promise wrapper for consistent security
 const execFilePromise = promisify(execFile);
@@ -65,7 +68,7 @@ setInterval(() => {
   const now = Date.now()
   for (const [id, instance] of sandboxInstances.entries()) {
     if (now - instance.lastActive > INSTANCE_TTL_MS) {
-      console.log(`[Sprites] Removing stale handle: ${id} (Sprite persists)`)
+      logger.info(`[Sprites] Removing stale handle: ${id} (Sprite persists)`)
       sandboxInstances.delete(id)
     }
   }
@@ -90,10 +93,10 @@ export class SpritesProvider implements SandboxProvider {
     this.enableAutoSuspend = process.env.SPRITES_ENABLE_AUTO_SUSPEND !== 'false'
 
     if (!this.token) {
-      console.warn('[Sprites] SPRITES_TOKEN not configured. Provider will fail on first use.')
+      logger.warn('[Sprites] SPRITES_TOKEN not configured. Provider will fail on first use.')
     }
     
-    console.log(`[Sprites] Initialized - Region: "${this.defaultRegion}", Plan: "${this.defaultPlan}", Checkpoints: ${this.enableCheckpoints}`)
+    logger.info(`[Sprites] Initialized - Region: "${this.defaultRegion}", Plan: "${this.defaultPlan}", Checkpoints: ${this.enableCheckpoints}`)
   }
 
   private async ensureClient(): Promise<any> {
@@ -130,7 +133,7 @@ export class SpritesProvider implements SandboxProvider {
       }
     } catch (error: any) {
       const latency = Date.now() - startTime
-      console.error('[Sprites] Health check failed:', error.message)
+      logger.error('[Sprites] Health check failed:', error.message)
       return { 
         healthy: false, 
         latency, 
@@ -143,7 +146,7 @@ export class SpritesProvider implements SandboxProvider {
     const client = await this.ensureClient()
 
     try {
-      console.log(`[Sprites] Creating sandbox - User: ${config.labels?.userId || 'unknown'}, Language: ${config.language || 'default'}, Region: ${this.defaultRegion}`)
+      logger.info(`[Sprites] Creating sandbox - User: ${config.labels?.userId || 'unknown'}, Language: ${config.language || 'default'}, Region: ${this.defaultRegion}`)
     
       // Enforce max instances (handles, not actual Sprites which are persistent)
       if (sandboxInstances.size >= MAX_INSTANCES) {
@@ -156,7 +159,7 @@ export class SpritesProvider implements SandboxProvider {
           }
         }
         if (oldestId) {
-          console.log(`[Sprites] Removing oldest handle: ${oldestId}`)
+          logger.info(`[Sprites] Removing oldest handle: ${oldestId}`)
           sandboxInstances.delete(oldestId)
         }
       }
@@ -187,9 +190,9 @@ export class SpritesProvider implements SandboxProvider {
 
       createConfig.config = { services }
 
-      console.log(`[Sprites] Services configured for Sprite: ${spriteName} (auto-suspend: ${this.enableAutoSuspend})`)
+      logger.info(`[Sprites] Services configured for Sprite: ${spriteName} (auto-suspend: ${this.enableAutoSuspend})`)
 
-      console.log(`[Sprites] Creating Sprite "${spriteName}"`)
+      logger.info(`[Sprites] Creating Sprite "${spriteName}"`)
       
       // Create Sprite with config
       const sprite = await client.createSprite(spriteName, createConfig)
@@ -216,7 +219,7 @@ export class SpritesProvider implements SandboxProvider {
       sandboxInstances.set(spriteName, instance)
       quotaManager.recordUsage('sprites')
 
-      console.log(`[Sprites] ✓ Created Sprite: ${spriteName}, URL: ${metadata.url}`)
+      logger.info(`[Sprites] ✓ Created Sprite: ${spriteName}, URL: ${metadata.url}`)
 
       const handle = new SpritesSandboxHandle(
         sprite,
@@ -232,8 +235,8 @@ export class SpritesProvider implements SandboxProvider {
 
       return handle
     } catch (error: any) {
-      console.error(`[Sprites] ✗ Failed to create Sprite:`, error.message)
-      console.error(`[Sprites] Error details:`, {
+      logger.error(`[Sprites] ✗ Failed to create Sprite:`, error.message)
+      logger.error(`[Sprites] Error details:`, {
         name: error.name,
         message: error.message,
       })
@@ -287,9 +290,9 @@ export class SpritesProvider implements SandboxProvider {
         // Note: This actually deletes the Sprite permanently
         // Sprites are persistent by default, so this should be used carefully
         await instance.sprite.delete()
-        console.log(`[Sprites] Destroyed Sprite: ${sandboxId}`)
+        logger.info(`[Sprites] Destroyed Sprite: ${sandboxId}`)
       } catch (error: any) {
-        console.warn(`[Sprites] Failed to destroy Sprite ${sandboxId}:`, error.message)
+        logger.warn(`[Sprites] Failed to destroy Sprite ${sandboxId}:`, error.message)
       } finally {
         sandboxInstances.delete(sandboxId)
       }
@@ -409,10 +412,10 @@ export class SpritesSandboxHandle implements SandboxHandle {
       // Users can call configureService() or createService() to set up services
       // that will auto-restart when the Sprite wakes from hibernation.
       if (this.enableAutoServices) {
-        console.log('[Sprites] Auto-start services enabled. Call configureService() to set up services.')
+        logger.info('[Sprites] Auto-start services enabled. Call configureService() to set up services.')
       }
     } catch (error) {
-      console.warn('[Sprites] Workspace setup failed:', error)
+      logger.warn('[Sprites] Workspace setup failed:', error)
       // Non-fatal, continue
     }
   }
@@ -460,7 +463,7 @@ export class SpritesSandboxHandle implements SandboxHandle {
         }
       }
     } catch (error: any) {
-      console.error('[Sprites] VFS sync failed:', error.message)
+      logger.error('[Sprites] VFS sync failed:', error.message)
       return {
         success: false,
         filesSynced: 0,
@@ -532,7 +535,7 @@ export class SpritesSandboxHandle implements SandboxHandle {
     } catch (error: any) {
       // Security exceptions should be logged but not expose details
       if (error.message?.includes('Security Exception')) {
-        console.warn('[Sprites] Security validation failed:', error.message)
+        logger.warn('[Sprites] Security validation failed:', error.message)
         return {
           success: false,
           output: 'Security validation failed',
@@ -588,7 +591,7 @@ export class SpritesSandboxHandle implements SandboxHandle {
     } catch (error: any) {
       // Security exceptions should be logged but not expose details
       if (error.message?.includes('Security Exception')) {
-        console.warn('[Sprites] Security validation failed:', error.message)
+        logger.warn('[Sprites] Security validation failed:', error.message)
         return {
           success: false,
           output: 'Security validation failed',
@@ -618,7 +621,7 @@ export class SpritesSandboxHandle implements SandboxHandle {
     } catch (error: any) {
       // Security exceptions should be logged but not expose details
       if (error.message?.includes('Security Exception')) {
-        console.warn('[Sprites] Security validation failed:', error.message)
+        logger.warn('[Sprites] Security validation failed:', error.message)
         return {
           success: false,
           output: 'Security validation failed',
@@ -644,7 +647,7 @@ export class SpritesSandboxHandle implements SandboxHandle {
     } catch (error: any) {
       // Security exceptions should be logged but not expose details
       if (error.message?.includes('Security Exception')) {
-        console.warn('[Sprites] Security validation failed:', error.message)
+        logger.warn('[Sprites] Security validation failed:', error.message)
         return {
           success: false,
           output: 'Security validation failed',
@@ -714,7 +717,7 @@ export class SpritesSandboxHandle implements SandboxHandle {
 
     try {
       await this.sprite.restore(checkpointId)
-      console.log(`[Sprites] Restored checkpoint: ${checkpointId}`)
+      logger.info(`[Sprites] Restored checkpoint: ${checkpointId}`)
     } catch (error: any) {
       throw new Error(`Failed to restore checkpoint: ${error.message}`)
     }
@@ -737,7 +740,7 @@ export class SpritesSandboxHandle implements SandboxHandle {
         createdAt: cp.created_at,
       }))
     } catch (error: any) {
-      console.warn('[Sprites] Failed to list checkpoints:', error.message)
+      logger.warn('[Sprites] Failed to list checkpoints:', error.message)
       return []
     }
   }
@@ -797,7 +800,7 @@ export class SpritesSandboxHandle implements SandboxHandle {
         url: config.port ? `${this.metadata.url}:${config.port}` : undefined,
       };
     } catch (error: any) {
-      console.error('[Sprites] Service creation failed:', error.message)
+      logger.error('[Sprites] Service creation failed:', error.message)
       throw new Error(`Failed to create service: ${error.message}`)
     }
   }
@@ -858,7 +861,7 @@ export class SpritesSandboxHandle implements SandboxHandle {
         url: service.url,
       }
     } catch (error: any) {
-      console.error('[Sprites] Failed to configure service:', error)
+      logger.error('[Sprites] Failed to configure service:', error)
       throw error
     }
   }
@@ -877,7 +880,7 @@ export class SpritesSandboxHandle implements SandboxHandle {
         port: s.port,
       }))
     } catch (error: any) {
-      console.warn('[Sprites] Failed to list services:', error.message)
+      logger.warn('[Sprites] Failed to list services:', error.message)
       return []
     }
   }
@@ -1002,7 +1005,7 @@ export class SpritesSandboxHandle implements SandboxHandle {
         isAttached: s.is_attached,
       }))
     } catch (error: any) {
-      console.warn('[Sprites] Failed to list sessions:', error.message)
+      logger.warn('[Sprites] Failed to list sessions:', error.message)
       return []
     }
   }
@@ -1099,7 +1102,7 @@ export class SpritesSandboxHandle implements SandboxHandle {
         }, 10000)
       })
     } catch (error: any) {
-      console.error('[Sprites] Proxy creation failed:', error.message)
+      logger.error('[Sprites] Proxy creation failed:', error.message)
       throw new Error(`Failed to create proxy: ${error.message}`)
     }
   }
@@ -1123,9 +1126,9 @@ export class SpritesSandboxHandle implements SandboxHandle {
         { timeout: 30000 }
       );
 
-      console.log(`[Sprites] URL auth updated to: ${mode}`);
+      logger.info(`[Sprites] URL auth updated to: ${mode}`);
     } catch (error: any) {
-      console.error('[Sprites] URL auth update failed:', error.message);
+      logger.error('[Sprites] URL auth update failed:', error.message);
       throw new Error(`Failed to update URL auth: ${error.message}`);
     }
   }
@@ -1167,7 +1170,7 @@ export class SpritesSandboxHandle implements SandboxHandle {
         status: 'running',
       };
     } catch (error: any) {
-      console.error('[Sprites] Env service creation failed:', error.message);
+      logger.error('[Sprites] Env service creation failed:', error.message);
       throw new Error(`Failed to create env service: ${error.message}`);
     }
   }
@@ -1193,7 +1196,7 @@ export class SpritesSandboxHandle implements SandboxHandle {
         autoStart: s.autoStart,
       })) : []
     } catch (error: any) {
-      console.warn('[Sprites] Failed to list env services:', error.message)
+      logger.warn('[Sprites] Failed to list env services:', error.message)
       return []
     }
   }
@@ -1218,7 +1221,7 @@ export class SpritesSandboxHandle implements SandboxHandle {
         message: `Service ${name} started`,
       };
     } catch (error: any) {
-      console.error('[Sprites] Service start failed:', error.message);
+      logger.error('[Sprites] Service start failed:', error.message);
       return {
         success: false,
         message: `Failed to start service: ${error.message}`,
@@ -1246,7 +1249,7 @@ export class SpritesSandboxHandle implements SandboxHandle {
         message: `Service ${name} stopped`,
       };
     } catch (error: any) {
-      console.error('[Sprites] Service stop failed:', error.message);
+      logger.error('[Sprites] Service stop failed:', error.message);
       return {
         success: false,
         message: `Failed to stop service: ${error.message}`,
@@ -1267,7 +1270,7 @@ export class SpritesSandboxHandle implements SandboxHandle {
         `sprite-env services remove ${name} -s ${this.id}`
       )
     } catch (error: any) {
-      console.error('[Sprites] Env service removal failed:', error.message)
+      logger.error('[Sprites] Env service removal failed:', error.message)
       throw new Error(`Failed to remove service: ${error.message}`)
     }
   }
@@ -1278,9 +1281,9 @@ export class SpritesSandboxHandle implements SandboxHandle {
   async upgrade(): Promise<void> {
     try {
       await this.sprite.upgrade()
-      console.log(`[Sprites] Upgraded sprite: ${this.id}`)
+      logger.info(`[Sprites] Upgraded sprite: ${this.id}`)
     } catch (error: any) {
-      console.error('[Sprites] Upgrade failed:', error.message)
+      logger.error('[Sprites] Upgrade failed:', error.message)
       throw new Error(`Failed to upgrade Sprite: ${error.message}`)
     }
   }
@@ -1316,7 +1319,7 @@ export class SpritesSandboxHandle implements SandboxHandle {
         })
       })
     } catch (error: any) {
-      console.error('[Sprites] Session kill failed:', error.message)
+      logger.error('[Sprites] Session kill failed:', error.message)
       throw new Error(`Failed to kill session: ${error.message}`)
     }
   }
@@ -1343,7 +1346,7 @@ export class SpritesSandboxHandle implements SandboxHandle {
         cwd: s.cwd,
       }))
     } catch (error: any) {
-      console.warn('[Sprites] Failed to list detailed sessions:', error.message)
+      logger.warn('[Sprites] Failed to list detailed sessions:', error.message)
       return []
     }
   }

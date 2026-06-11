@@ -126,6 +126,9 @@ import {
 
 import { createDebugLogger } from "../.bing-infra-config/config/features";
 import { clipboard } from "@bing/platform/clipboard";
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('UI:VisualEditor');
 
 // Use any for VFSProject type since the import path doesn't work well with TypeScript
 type VFSProject = any;
@@ -4643,7 +4646,7 @@ class ComponentInstallerErrorBoundary extends React.Component<
   }
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
-    console.error("[ComponentInstaller] Error:", error, errorInfo);
+    logger.error("[ComponentInstaller] Error:", error, errorInfo);
   }
 
   render() {
@@ -5796,10 +5799,10 @@ function CanvasPane({
         // The nodes will be added to the canvas automatically
         const nodesArray = Object.values(initialNodes).filter(Boolean);
         if (nodesArray.length > 0) {
-          console.log("[CanvasPane] Loading initial nodes:", nodesArray.length);
+          logger.info("[CanvasPane] Loading initial nodes:", nodesArray.length);
         }
       } catch (e) {
-        console.warn("[CanvasPane] Failed to load initial nodes:", e);
+        logger.warn("[CanvasPane] Failed to load initial nodes:", e);
       }
     }
   }, [initialNodes, actions]);
@@ -5877,7 +5880,7 @@ export function VisualEditorMain({
       try {
         return jsxToCraftNodes(mainJSX);
       } catch (e) {
-        console.warn("[VisualEditorMain] Failed to parse JSX:", e);
+        logger.warn("[VisualEditorMain] Failed to parse JSX:", e);
       }
     }
     return undefined;
@@ -5903,7 +5906,7 @@ export function VisualEditorMain({
     // Only require craft nodes for visual/design mode saves
     // Code mode can save without craft nodes (user edits code directly)
     if (editorMode === 'design' && (!craftNodes || Object.keys(craftNodes).length <= 1)) {
-      console.warn("[VisualEditor] No nodes to save");
+      logger.warn("[VisualEditor] No nodes to save");
       toast.error("No changes to save. Add some components first.");
       logWarn('[handleSave] aborted - no craft nodes in design mode');
       return;
@@ -5914,7 +5917,7 @@ export function VisualEditorMain({
     if (craftNodes && Object.keys(craftNodes).length > 1) {
       jsxString = craftNodesToJSX(craftNodes as Record<string, any>);
       log(`[handleSave] generated JSX, length=${jsxString.length}`);
-      console.log("[VisualEditor] Generated JSX:", jsxString.substring(0, 500) + "...");
+      logger.info("[VisualEditor] Generated JSX:", jsxString.substring(0, 500) + "...");
     }
     // For code mode without craft nodes, use existing file content
 
@@ -5936,7 +5939,7 @@ export function VisualEditorMain({
     if (mainFile && jsxString) {
       updatedFiles[mainFile] = jsxString;
       log(`[handleSave] updating main file "${mainFile}" with JSX`);
-      console.log("[VisualEditor] Saving to file:", mainFile);
+      logger.info("[VisualEditor] Saving to file:", mainFile);
     }
 
     // Dispatch VFS save event for code-preview-panel to receive
@@ -5984,7 +5987,7 @@ export function VisualEditorMain({
       });
 
       if (result.warnings.length > 0) {
-        console.warn('[Figma Import] Warnings:', result.warnings);
+        logger.warn('[Figma Import] Warnings:', result.warnings);
         toast.info(`Imported with ${result.warnings.length} warnings`);
       }
 
@@ -6008,7 +6011,7 @@ export function VisualEditorMain({
       setShowFigmaModal(false);
 
     } catch (error) {
-      console.error('[Figma Import] Error:', error);
+      logger.error('[Figma Import] Error:', error);
       toast.error('Failed to import from Figma');
     } finally {
       setIsImportingFigma(false);
@@ -6034,7 +6037,7 @@ export function VisualEditorMain({
       
       toast.success('Design copied to clipboard as JSX. Paste into Figma plugin or save as file.');
     } catch (error) {
-      console.error('[Figma Export] Error:', error);
+      logger.error('[Figma Export] Error:', error);
       toast.error('Failed to export design');
     } finally {
       setIsImportingFigma(false);
@@ -6049,7 +6052,7 @@ export function VisualEditorMain({
         // Capture serialized nodes on every change (drag, drop, edit, delete)
         const serialized = query.getSerializedNodes() as Record<string, unknown>;
         craftJsonRef.current = serialized;
-        console.log("[VisualEditor] Nodes changed:", Object.keys(serialized).length, "nodes");
+        logger.info("[VisualEditor] Nodes changed:", Object.keys(serialized).length, "nodes");
       }}
     >
       <div

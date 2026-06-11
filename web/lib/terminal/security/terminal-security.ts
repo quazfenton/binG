@@ -28,9 +28,10 @@ interface DangerPattern {
 
 const DANGEROUS_PATTERNS: DangerPattern[] = [
   // === Shell metacharacter injection (CRIT-1 fix) ===
-  // These patterns allow command chaining/substitution which bypass single-command security
-  { pattern: /&&/, reason: 'Command chaining with && — potential command injection', severity: 'high' },
-  { pattern: /\|\|/, reason: 'Command chaining with || — potential command injection', severity: 'high' },
+  // Only flag &&/|| when chained with a dangerous command, not benign chaining
+  // like `cd dir && npm install` or `make || echo failed`.
+  { pattern: /&&\s*(rm|curl|wget|bash|sh|cat|nc|ncat|ssh|python|perl|ruby|chmod|chown|sudo|su)\b/, reason: 'Command chaining with && — potentially malicious sequence', severity: 'high' },
+  { pattern: /\|\|\s*(rm|curl|wget|bash|sh|cat|nc|ncat|ssh|python|perl|ruby|chmod|chown|sudo|su)\b/, reason: 'Command chaining with || — potentially malicious sequence', severity: 'high' },
   { pattern: /;\s*(rm|curl|wget|bash|sh|cat|nc|ncat|ssh|python|perl|ruby|chmod|chown|sudo|su)\b/, reason: 'Command chaining with ; — potential command injection', severity: 'high' },
   { pattern: /\$\(/, reason: 'Command substitution $() — potential command injection', severity: 'critical' },
   { pattern: /`[^`]+`/, reason: 'Backtick command substitution — potential command injection', severity: 'critical' },

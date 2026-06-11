@@ -24,6 +24,10 @@ import {
   getWorkspaceSnapshot,
 } from './opfs-api-client';
 
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('VFS:OPFSAdapter');
+
 export interface SyncOptions {
   direction?: 'to-opfs' | 'to-server' | 'bidirectional';
   includePatterns?: string[];
@@ -130,7 +134,7 @@ export class OPFSAdapter {
     // If already enabled for the same workspace, just increment reference count
     if (this.enabled && this.currentWorkspaceId === wsId) {
       this.enableCount++;
-      console.log('[OPFS] Already enabled for workspace, incrementing ref count to:', this.enableCount);
+      logger.info('[OPFS] Already enabled for workspace, incrementing ref count to:', this.enableCount);
       return Promise.resolve();
     }
 
@@ -140,7 +144,7 @@ export class OPFSAdapter {
         // After waiting, check again in case it completed for the same workspace
         if (this.enabled && this.currentWorkspaceId === wsId) {
           this.enableCount++;
-          console.log('[OPFS] Concurrent enable completed, incrementing ref count to:', this.enableCount);
+          logger.info('[OPFS] Concurrent enable completed, incrementing ref count to:', this.enableCount);
           return;
         }
         // Otherwise, start a new enable for this workspace
@@ -167,7 +171,7 @@ export class OPFSAdapter {
         try {
           // If enabled for a different workspace, we need to reinitialize
           if (this.enabled && this.currentWorkspaceId !== workspaceId) {
-            console.log('[OPFS] Switching workspace from', this.currentWorkspaceId, 'to', workspaceId);
+            logger.info('[OPFS] Switching workspace from', this.currentWorkspaceId, 'to', workspaceId);
             await this.core.close();
           }
 
@@ -176,15 +180,15 @@ export class OPFSAdapter {
           this.usingFallback = false;
           this.ownerId = ownerId;
           this.currentWorkspaceId = workspaceId;
-          console.log('[OPFS] Enabled with OPFS backend for workspace:', workspaceId);
+          logger.info('[OPFS] Enabled with OPFS backend for workspace:', workspaceId);
         } catch (opfsError) {
           // OPFS failed, fall back to IndexedDB
-          console.warn('[OPFS] Initialization failed, falling back to IndexedDB:', opfsError);
+          logger.warn('[OPFS] Initialization failed, falling back to IndexedDB:', opfsError);
           await this.enableFallback(ownerId, workspaceId);
         }
       } else {
         // OPFS not supported, use IndexedDB
-        console.log('[OPFS] Not supported, using IndexedDB fallback');
+        logger.info('[OPFS] Not supported, using IndexedDB fallback');
         await this.enableFallback(ownerId, workspaceId);
       }
     } catch (enableError) {
@@ -210,10 +214,10 @@ export class OPFSAdapter {
 
     // Initial sync from server (non-blocking)
     this.syncFromServer(this.ownerId!).catch(err => {
-      console.warn('[OPFS] Initial sync failed:', err);
+      logger.warn('[OPFS] Initial sync failed:', err);
     });
 
-    console.log('[OPFS] Enabled for owner:', ownerId, '(fallback:', this.usingFallback + ')');
+    logger.info('[OPFS] Enabled for owner:', ownerId, '(fallback:', this.usingFallback + ')');
   }
 
   /**
@@ -230,9 +234,9 @@ export class OPFSAdapter {
       this.usingFallback = true;
       this.ownerId = ownerId;
       this.currentWorkspaceId = workspaceId;
-      console.log('[OPFS] Enabled with IndexedDB fallback for workspace:', workspaceId);
+      logger.info('[OPFS] Enabled with IndexedDB fallback for workspace:', workspaceId);
     } catch (fallbackError) {
-      console.error('[OPFS] Fallback to IndexedDB failed:', fallbackError);
+      logger.error('[OPFS] Fallback to IndexedDB failed:', fallbackError);
       throw new Error(
         `Failed to enable storage backend: ${fallbackError instanceof Error ? fallbackError.message : 'Unknown error'}`
       );
@@ -282,11 +286,11 @@ export class OPFSAdapter {
     // Guard against negative reference count
     if (this.enableCount <= 0) {
       if (this.enabled) {
-        console.log('[OPFS] disable() called with ref count', this.enableCount, 'but still enabled - forcing disable');
+        logger.info('[OPFS] disable() called with ref count', this.enableCount, 'but still enabled - forcing disable');
         // Force disable since we're in inconsistent state
         this.performDisable();
       } else {
-        console.log('[OPFS] disable() called with non-positive ref count, ignoring');
+        logger.info('[OPFS] disable() called with non-positive ref count, ignoring');
       }
       return;
     }
@@ -295,7 +299,7 @@ export class OPFSAdapter {
 
     // Only disable if all components have called disable
     if (this.enableCount > 0) {
-      console.log('[OPFS] Postponing disable, ref count now:', this.enableCount);
+      logger.info('[OPFS] Postponing disable, ref count now:', this.enableCount);
       return;
     }
 
@@ -320,10 +324,10 @@ export class OPFSAdapter {
 
     // Close OPFS core (non-blocking)
     this.core.close().catch(err => {
-      console.warn('[OPFS] Failed to close core:', err);
+      logger.warn('[OPFS] Failed to close core:', err);
     });
     
-    console.log('[OPFS] Disabled');
+    logger.info('[OPFS] Disabled');
   }
 
   /**
@@ -360,7 +364,7 @@ export class OPFSAdapter {
 
     // Use IndexedDB fallback when OPFS is unavailable
     if (this.usingFallback && this.fallbackBackend) {
-      console.log('[OPFS] Read from IndexedDB fallback:', path);
+      logger.info('[OPFS] Read from IndexedDB fallback:', path);
       return this.fallbackBackend.readFile(ownerId, path);
     }
 
@@ -371,7 +375,7 @@ export class OPFSAdapter {
       // Get version from tracking
       const versions = this.fileVersions.get(path);
 
-      console.log('[OPFS] Read cache hit:', path);
+      logger.info('[OPFS] Read cache hit:', path);
 
       return {
         path,
@@ -384,7 +388,7 @@ export class OPFSAdapter {
       };
     } catch (error) {
       // Fallback to server via API
-      console.log('[OPFS] Read cache miss, fetching from server:', path);
+      logger.info('[OPFS] Read cache miss, fetching from server:', path);
       const serverFile = await fetchFileFromServer(path);
       
       if (!serverFile) {
@@ -393,7 +397,7 @@ export class OPFSAdapter {
 
       // Cache in OPFS for next time (non-blocking)
       this.cacheInOPFS(path, serverFile.content).catch(err => {
-        console.warn('[OPFS] Failed to cache file:', path, err);
+        logger.warn('[OPFS] Failed to cache file:', path, err);
       });
 
       return serverFile;
@@ -438,7 +442,7 @@ export class OPFSAdapter {
 
     // Use IndexedDB fallback when OPFS is unavailable
     if (this.usingFallback && this.fallbackBackend) {
-      console.log('[OPFS] Write to IndexedDB fallback:', path);
+      logger.info('[OPFS] Write to IndexedDB fallback:', path);
       const idbFile = await this.fallbackBackend.writeFile(ownerId, path, content, { language });
       // Still queue for server sync even when using IndexedDB
       this.queueWrite(ownerId, path, content, idbFile.version);
@@ -456,7 +460,7 @@ export class OPFSAdapter {
     // Queue server sync
     this.queueWrite(ownerId, path, content, versions.opfs);
 
-    console.log('[OPFS] Write complete:', path, 'version:', versions.opfs);
+    logger.info('[OPFS] Write complete:', path, 'version:', versions.opfs);
 
     return {
       path,
@@ -482,7 +486,7 @@ export class OPFSAdapter {
 
     // Use IndexedDB fallback when OPFS is unavailable
     if (this.usingFallback && this.fallbackBackend) {
-      console.log('[OPFS] Delete from IndexedDB fallback:', path);
+      logger.info('[OPFS] Delete from IndexedDB fallback:', path);
       await this.fallbackBackend.deleteFile(ownerId, path);
       this.fileVersions.delete(path);
       return;
@@ -506,14 +510,14 @@ export class OPFSAdapter {
     options: { recursive?: boolean } = {}
   ): Promise<void> {
     if (!this.enabled) {
-      console.warn('[OPFS] createDirectory called but OPFS not enabled');
+      logger.warn('[OPFS] createDirectory called but OPFS not enabled');
       return;
     }
 
     try {
       await this.core.createDirectory(path, options);
     } catch (error: any) {
-      console.error('[OPFS] createDirectory failed for path:', path, error);
+      logger.error('[OPFS] createDirectory failed for path:', path, error);
       throw error;
     }
   }
@@ -526,13 +530,13 @@ export class OPFSAdapter {
    */
   async listDirectory(path: string): Promise<OPFSDirectoryEntry[]> {
     if (!this.enabled) {
-      console.warn('[OPFS] listDirectory called but storage not enabled - returning empty array');
+      logger.warn('[OPFS] listDirectory called but storage not enabled - returning empty array');
       return [];
     }
 
     // Use IndexedDB fallback when OPFS is unavailable
     if (this.usingFallback && this.fallbackBackend) {
-      console.log('[OPFS] List directory from IndexedDB fallback:', path);
+      logger.info('[OPFS] List directory from IndexedDB fallback:', path);
       const files = await this.fallbackBackend.listDirectory(this.ownerId!, path);
       return files.map((f): OPFSDirectoryEntry => ({
         name: f.path.split('/').pop() || f.path,
@@ -546,7 +550,7 @@ export class OPFSAdapter {
     try {
       return await this.core.listDirectory(path);
     } catch (error: any) {
-      console.error('[OPFS] listDirectory failed for path:', path, error);
+      logger.error('[OPFS] listDirectory failed for path:', path, error);
       // Re-throw to let caller handle (use-opfs.ts logs and returns empty array)
       throw error;
     }
@@ -572,7 +576,7 @@ export class OPFSAdapter {
     try {
       // FIX: Check if using IndexedDB fallback or if OPFS is not initialized
       if (this.usingFallback) {
-        console.log('[OPFS] Skipping sync - using IndexedDB fallback');
+        logger.info('[OPFS] Skipping sync - using IndexedDB fallback');
         return {
           success: true,
           filesSynced: 0,
@@ -585,18 +589,18 @@ export class OPFSAdapter {
 
       // CRITICAL FIX: Initialize OPFS core if not already initialized (prevents "OPFS not initialized" errors)
       if (!this.core.isInitialized()) {
-        console.log('[OPFS] OPFS core not initialized, initializing before sync...');
+        logger.info('[OPFS] OPFS core not initialized, initializing before sync...');
         // Use tracked workspaceId to maintain consistency with enable() tracking
         const workspaceId = this.currentWorkspaceId ?? ownerId;
         try {
           await this.core.initialize(workspaceId);
-          console.log('[OPFS] Core initialization successful');
+          logger.info('[OPFS] Core initialization successful');
         } catch (initError: any) {
-          console.warn('[OPFS] Core initialization failed, enabling IndexedDB fallback:', initError.message);
+          logger.warn('[OPFS] Core initialization failed, enabling IndexedDB fallback:', initError.message);
           // TRULY enable fallback by calling enableFallback to initialize IndexedDB backend
           try {
             await this.enableFallback(ownerId, workspaceId);
-            console.log('[OPFS] IndexedDB fallback enabled successfully');
+            logger.info('[OPFS] IndexedDB fallback enabled successfully');
             // Return immediately to prevent continuing into OPFS writes
             return {
               success: true,
@@ -607,7 +611,7 @@ export class OPFSAdapter {
               duration: Date.now() - startTime,
             };
           } catch (fallbackError: any) {
-            console.error('[OPFS] Failed to enable IndexedDB fallback:', fallbackError.message);
+            logger.error('[OPFS] Failed to enable IndexedDB fallback:', fallbackError.message);
             return {
               success: false,
               filesSynced: 0,
@@ -637,13 +641,13 @@ export class OPFSAdapter {
         };
       }
 
-      console.log('[OPFS] Syncing from server:', snapshot.files.length, 'files');
+      logger.info('[OPFS] Syncing from server:', snapshot.files.length, 'files');
 
       // Sync files from snapshot to OPFS
       for (const file of snapshot.files) {
         // Bail out if adapter was disabled during sync (e.g., React cleanup)
         if (!this.enabled || !this.core.isInitialized()) {
-          console.log('[OPFS] Sync cancelled: adapter no longer enabled');
+          logger.info('[OPFS] Sync cancelled: adapter no longer enabled');
           return {
             success: true,
             filesSynced,
@@ -689,7 +693,7 @@ export class OPFSAdapter {
       };
     } catch (error: any) {
       errors.push(error.message);
-      console.error('[OPFS] Sync from server failed:', error);
+      logger.error('[OPFS] Sync from server failed:', error);
 
       return {
         success: false,
@@ -726,7 +730,7 @@ export class OPFSAdapter {
       // Get OPFS stats
       const stats = await this.core.getStats();
 
-      console.log('[OPFS] Syncing to server. Stats:', stats);
+      logger.info('[OPFS] Syncing to server. Stats:', stats);
 
       // Walk OPFS tree and sync files that differ from server
       await this.syncOPFSToServerRecursive(
@@ -738,7 +742,7 @@ export class OPFSAdapter {
         { filesSynced, bytesTransferred }
       );
 
-      console.log('[OPFS] Sync to server complete:', filesSynced, 'files');
+      logger.info('[OPFS] Sync to server complete:', filesSynced, 'files');
 
       return {
         success: errors.length === 0 && conflicts.length === 0,
@@ -750,7 +754,7 @@ export class OPFSAdapter {
       };
     } catch (error: any) {
       errors.push(error.message);
-      console.error('[OPFS] Sync to server failed:', error);
+      logger.error('[OPFS] Sync to server failed:', error);
       
       return {
         success: false,
@@ -783,7 +787,7 @@ export class OPFSAdapter {
       version,
     });
 
-    console.log('[OPFS] Queued write:', path, 'queue size:', this.writeQueue.length);
+    logger.info('[OPFS] Queued write:', path, 'queue size:', this.writeQueue.length);
 
     // Trigger immediate sync if queue is small
     if (this.writeQueue.length <= 5) {
@@ -804,7 +808,7 @@ export class OPFSAdapter {
     try {
       const pendingWrites = this.writeQueue.filter(w => !w.synced);
 
-      console.log('[OPFS] Flushing', pendingWrites.length, 'pending writes to server');
+      logger.info('[OPFS] Flushing', pendingWrites.length, 'pending writes to server');
 
       for (const write of pendingWrites) {
         try {
@@ -818,10 +822,10 @@ export class OPFSAdapter {
 
             write.synced = true;
 
-            console.log('[OPFS] Synced to server:', write.path);
+            logger.info('[OPFS] Synced to server:', write.path);
           }
         } catch (error: any) {
-          console.error('[OPFS] Failed to sync to server:', write.path, error);
+          logger.error('[OPFS] Failed to sync to server:', write.path, error);
         }
       }
 
@@ -883,14 +887,14 @@ export class OPFSAdapter {
       }
     }, this.options.autoSyncInterval);
 
-    console.log('[OPFS] Background sync started (interval:', this.options.autoSyncInterval, 'ms)');
+    logger.info('[OPFS] Background sync started (interval:', this.options.autoSyncInterval, 'ms)');
   }
 
   private async cacheInOPFS(path: string, content: string): Promise<void> {
     try {
       await this.core.writeFile(path, content);
     } catch (error) {
-      console.warn('[OPFS] Failed to cache file:', path, error);
+      logger.warn('[OPFS] Failed to cache file:', path, error);
     }
   }
 
@@ -1007,7 +1011,7 @@ export class OPFSAdapter {
               stats.filesSynced++;
               stats.bytesTransferred += opfsFile.size;
 
-              console.log('[OPFS] Synced to server:', entry.path);
+              logger.info('[OPFS] Synced to server:', entry.path);
             }
           } catch (error: any) {
             errors.push(`Failed to sync ${entry.path}: ${error.message}`);

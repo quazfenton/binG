@@ -3,6 +3,9 @@
  */
 
 import { generateSecureId } from '@/lib/utils/utils';
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('Integration:Composio');
 
 // Composio uses its own internal LLM handling, so we just need to set up the service
 export interface ComposioService {
@@ -521,7 +524,7 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
 
         return false;
       } catch (error) {
-        console.error('[ComposioService] Health check failed:', error);
+        logger.error('[ComposioService] Health check failed:', error);
         return false;
       }
     },
@@ -856,7 +859,7 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
         };
 
       } catch (error: any) {
-        console.error('[ComposioService] Error processing request:', error);
+        logger.error('[ComposioService] Error processing request:', error);
 
         // Check if it's an auth error using specific error codes/types
         // Composio SDK uses specific error codes for auth failures
@@ -914,7 +917,7 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
         const composio = new Composio({ apiKey: config.apiKey });
         return await loadToolsForRequest(composio, 'default', [toolkit]);
       } catch (error: any) {
-        console.error('[ComposioService] Failed to get tools for toolkit:', toolkit, error.message);
+        logger.error('[ComposioService] Failed to get tools for toolkit:', toolkit, error.message);
         return [];
       }
     },
@@ -958,7 +961,7 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
         }
         return result;
       } catch (error) {
-        console.error('[ComposioService] Execute tool failed:', error);
+        logger.error('[ComposioService] Execute tool failed:', error);
         throw error;
       }
     },
@@ -979,7 +982,7 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
         }
         return Array.from(toolkitMap.values());
       } catch (error: any) {
-        console.error('[ComposioService] Failed to get toolkits:', error.message);
+        logger.error('[ComposioService] Failed to get toolkits:', error.message);
         return [];
       }
     },
@@ -991,7 +994,7 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
         const accounts = await composio.connectedAccounts.list({ userIds: [userId] });
         return accounts?.items || [];
       } catch (error: any) {
-        console.error('[ComposioService] Failed to get connected accounts:', error.message);
+        logger.error('[ComposioService] Failed to get connected accounts:', error.message);
         return [];
       }
     },
@@ -1018,7 +1021,7 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
             const directUrl = (connectionRequest as any)?.redirectUrl || (connectionRequest as any)?.url;
             if (directUrl) return directUrl;
           } catch (secondaryErr: any) {
-            console.warn(
+            logger.warn(
               '[ComposioService] Direct initiate failed, using provider auth fallback:',
               secondaryErr?.message || initErr?.message,
             );
@@ -1026,7 +1029,7 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
         }
         return buildFallbackAuthUrl(toolkit);
       } catch (error: any) {
-        console.error('[ComposioService] Failed to get auth URL:', error.message);
+        logger.error('[ComposioService] Failed to get auth URL:', error.message);
         return buildFallbackAuthUrl(toolkit);
       }
     },

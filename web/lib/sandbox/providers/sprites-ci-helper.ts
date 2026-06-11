@@ -30,13 +30,16 @@
  * })
  *
  * if (result.success) {
- *   console.log(`CI passed in ${result.duration}ms`)
- *   console.log(`Checkpoint created: ${result.checkpointId}`)
+ *   logger.info(`CI passed in ${result.duration}ms`)
+ *   logger.info(`Checkpoint created: ${result.checkpointId}`)
  * }
  * ```
  */
 
 import { SpritesClient } from '@fly/sprites'
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('Sandbox:SpritesCI');
 
 export interface CiConfig {
   /** Sprite name to use for CI */
@@ -182,7 +185,7 @@ export class SpritesCiHelper {
           installCmd = 'npm ci'
       }
 
-      console.log(`[Sprites CI] Installing dependencies with ${packageManager}...`)
+      logger.info(`[Sprites CI] Installing dependencies with ${packageManager}...`)
 
       const installResult = await this.sprite.exec(`cd ${dir} && ${installCmd}`)
 
@@ -220,7 +223,7 @@ export class SpritesCiHelper {
     const start = Date.now()
 
     try {
-      console.log(`[Sprites CI] Running build: ${config.buildCommand}`)
+      logger.info(`[Sprites CI] Running build: ${config.buildCommand}`)
 
       const result = await this.sprite.exec(
         `cd ${config.workingDir} && ${config.buildCommand}`
@@ -254,7 +257,7 @@ export class SpritesCiHelper {
     const start = Date.now()
 
     try {
-      console.log(`[Sprites CI] Running tests: ${config.testCommand}`)
+      logger.info(`[Sprites CI] Running tests: ${config.testCommand}`)
 
       const result = await this.sprite.exec(
         `cd ${config.workingDir} && ${config.testCommand}`
@@ -303,7 +306,7 @@ export class SpritesCiHelper {
       }
 
       // Step 1: Initialize/update repo
-      console.log(`[Sprites CI] Step 1: Initializing repository...`)
+      logger.info(`[Sprites CI] Step 1: Initializing repository...`)
       const initResult = await this.initializeRepo({
         repoUrl: config.repoUrl,
         branch: config.branch,
@@ -334,7 +337,7 @@ export class SpritesCiHelper {
       })
 
       // Step 2: Install dependencies
-      console.log(`[Sprites CI] Step 2: Installing dependencies...`)
+      logger.info(`[Sprites CI] Step 2: Installing dependencies...`)
       const installStart = Date.now()
       const installResult = await this.installDependencies(workingDir)
 
@@ -358,7 +361,7 @@ export class SpritesCiHelper {
 
       // Step 3: Run build (if configured)
       if (config.buildCommand) {
-        console.log(`[Sprites CI] Step 3: Running build...`)
+        logger.info(`[Sprites CI] Step 3: Running build...`)
         const buildResult = await this.runBuild({
           buildCommand: config.buildCommand,
           workingDir
@@ -378,7 +381,7 @@ export class SpritesCiHelper {
       }
 
       // Step 4: Run tests
-      console.log(`[Sprites CI] Step 4: Running tests...`)
+      logger.info(`[Sprites CI] Step 4: Running tests...`)
       const testCommand = config.testCommand || 'npm test'
       const testResult = await this.runTests({
         testCommand,
@@ -399,12 +402,12 @@ export class SpritesCiHelper {
       }
 
       // Step 5: Create checkpoint on success ("golden state")
-      console.log(`[Sprites CI] Step 5: Creating checkpoint...`)
+      logger.info(`[Sprites CI] Step 5: Creating checkpoint...`)
       try {
         const checkpointName = `ci-passed-${Date.now()}`
         const checkpoint = await this.sprite.createCheckpoint(checkpointName)
 
-        console.log(`[Sprites CI] Checkpoint created: ${checkpoint.id}`)
+        logger.info(`[Sprites CI] Checkpoint created: ${checkpoint.id}`)
 
         return {
           success: true,
@@ -414,7 +417,7 @@ export class SpritesCiHelper {
           steps
         }
       } catch (checkpointError: any) {
-        console.warn('[Sprites CI] Failed to create checkpoint:', checkpointError.message)
+        logger.warn('[Sprites CI] Failed to create checkpoint:', checkpointError.message)
         // Non-fatal, still return success
       }
 
@@ -445,7 +448,7 @@ export class SpritesCiHelper {
   }> {
     try {
       await this.sprite.restore(checkpointId)
-      console.log(`[Sprites CI] Restored checkpoint: ${checkpointId}`)
+      logger.info(`[Sprites CI] Restored checkpoint: ${checkpointId}`)
       return { success: true }
     } catch (error: any) {
       return {
@@ -485,7 +488,7 @@ export class SpritesCiHelper {
         createdAt: latest.created_at
       }
     } catch (error: any) {
-      console.warn('[Sprites CI] Failed to get latest checkpoint:', error.message)
+      logger.warn('[Sprites CI] Failed to get latest checkpoint:', error.message)
       return {}
     }
   }
@@ -546,10 +549,10 @@ export class SpritesCiHelper {
         try {
           // Note: Sprites SDK doesn't expose deleteCheckpoint directly yet
           // This would need CLI or API call
-          console.log(`[Sprites CI] Would delete old checkpoint: ${checkpoint.name}`)
+          logger.info(`[Sprites CI] Would delete old checkpoint: ${checkpoint.name}`)
           deletedCount++
         } catch (error: any) {
-          console.warn(`[Sprites CI] Failed to delete checkpoint ${checkpoint.id}:`, error.message)
+          logger.warn(`[Sprites CI] Failed to delete checkpoint ${checkpoint.id}:`, error.message)
         }
       }
 
@@ -558,7 +561,7 @@ export class SpritesCiHelper {
         kept: keepCount
       }
     } catch (error: any) {
-      console.error('[Sprites CI] Cleanup failed:', error.message)
+      logger.error('[Sprites CI] Cleanup failed:', error.message)
       return { deleted: 0, kept: 0 }
     }
   }

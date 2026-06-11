@@ -15,6 +15,9 @@
  */
 
 import { z } from 'zod';
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('Integration:Arcade');
 
 export interface ArcadeConfig {
   apiKey: string;
@@ -90,10 +93,10 @@ export class ArcadeService {
           ...(this.config.baseUrl ? { baseURL: this.config.baseUrl } : {}),
         });
         this.initialized = true;
-        console.log('[ArcadeService] Initialized with SDK');
+        logger.info('[ArcadeService] Initialized with SDK');
       } catch (importError: any) {
         sdkImportError = importError;
-        console.warn(
+        logger.warn(
           `[ArcadeService] Arcade SDK import failed: ${importError.message}. ` +
           `Falling back to HTTP API. ` +
           `Make sure @arcadeai/arcadejs is installed: npm install @arcadeai/arcadejs`
@@ -101,7 +104,7 @@ export class ArcadeService {
         this.initialized = true;
       }
     } catch (error: any) {
-      console.error('[ArcadeService] initialize failed:', error.message);
+      logger.error('[ArcadeService] initialize failed:', error.message);
       this.initialized = false;
     }
   }
@@ -133,7 +136,7 @@ export class ArcadeService {
       const data = await response.json();
       return data.toolkits?.map((t: any) => t.name) || [];
     } catch (error: any) {
-      console.error('[ArcadeService] getToolkits failed:', error.message);
+      logger.error('[ArcadeService] getToolkits failed:', error.message);
       return [];
     }
   }
@@ -181,7 +184,7 @@ export class ArcadeService {
             this.disabledReason = 'Invalid API credentials';
             arcadeServiceDisabled = true;
             const maskedKey = `${this.config.apiKey.slice(0, 8)}...${this.config.apiKey.slice(-4)}`;
-            console.warn(
+            logger.warn(
               `[ArcadeService] Disabling: SDK returned 401 (key ${maskedKey}). ` +
               `Fix ARCADE_API_KEY and call reenableArcadeService() to re-enable, ` +
               `or restart the server. Local tools continue to work.`
@@ -239,7 +242,7 @@ export class ArcadeService {
         this.disabledReason = 'Invalid API credentials';
         arcadeServiceDisabled = true;
         const maskedKey = `${this.config.apiKey.slice(0, 8)}...${this.config.apiKey.slice(-4)}`;
-        console.warn(
+        logger.warn(
           `[ArcadeService] Disabling: API returned 401 (key ${maskedKey}). ` +
           `Fix ARCADE_API_KEY and call reenableArcadeService() to re-enable, ` +
           `or restart the server. Local tools continue to work.`
@@ -273,7 +276,7 @@ export class ArcadeService {
       }
 
       if (mappedTools.length === 0) {
-        console.warn(
+        logger.warn(
           `[ArcadeService] getTools returned 0 tools. ` +
           `This may mean: (1) no tools are enabled in your Arcade account, ` +
           `(2) the toolkit filter "${filters?.toolkit}" matched nothing, or ` +
@@ -284,7 +287,7 @@ export class ArcadeService {
 
       return mappedTools;
     } catch (error: any) {
-      console.error('[ArcadeService] getTools failed:', error.message);
+      logger.error('[ArcadeService] getTools failed:', error.message);
       return [];
     }
   }
@@ -332,7 +335,7 @@ export class ArcadeService {
 
       return results;
     } catch (error: any) {
-      console.error('[ArcadeService] searchTools failed:', error.message);
+      logger.error('[ArcadeService] searchTools failed:', error.message);
       return [];
     }
   }
@@ -414,7 +417,7 @@ export class ArcadeService {
         context: result.context,
       };
     } catch (error: any) {
-      console.error('[ArcadeService] getContextualAuth failed:', error.message);
+      logger.error('[ArcadeService] getContextualAuth failed:', error.message);
       return {
         authorized: false,
         error: error.message,
@@ -542,7 +545,7 @@ export class ArcadeService {
         connectionId: connection.id,
       };
     } catch (error: any) {
-      console.error('[ArcadeService] executeTool failed:', error.message);
+      logger.error('[ArcadeService] executeTool failed:', error.message);
       return {
         success: false,
         error: error.message,
@@ -618,7 +621,7 @@ export class ArcadeService {
 
       return null;
     } catch (error: any) {
-      console.error('[ArcadeService] getConnection failed:', error.message);
+      logger.error('[ArcadeService] getConnection failed:', error.message);
       return null;
     }
   }
@@ -661,7 +664,7 @@ export class ArcadeService {
       const data = await response.json();
       return data.url;
     } catch (error: any) {
-      console.error('[ArcadeService] getAuthUrl failed:', error.message);
+      logger.error('[ArcadeService] getAuthUrl failed:', error.message);
       // Fallback to direct Arcade auth URL
       return `https://auth.arcade.dev/authorize?toolkit=${toolkit}&user_id=${userId}`;
     }
@@ -813,7 +816,7 @@ export class ArcadeService {
         error: 'No token or auth URL returned from Arcade',
       };
     } catch (error: any) {
-      console.error('[ArcadeService] startProviderAuth failed:', error.message);
+      logger.error('[ArcadeService] startProviderAuth failed:', error.message);
       return {
         status: 'error',
         error: error.message,
@@ -916,7 +919,7 @@ export class ArcadeService {
         error: `Authorization timed out after ${timeoutMs / 1000}s`,
       };
     } catch (error: any) {
-      console.error('[ArcadeService] waitForProviderAuth failed:', error.message);
+      logger.error('[ArcadeService] waitForProviderAuth failed:', error.message);
       return {
         status: 'error',
         error: error.message,
@@ -1098,7 +1101,7 @@ export class ArcadeService {
       
       return mappedConnections;
     } catch (error: any) {
-      console.error('[ArcadeService] getConnections failed:', error.message);
+      logger.error('[ArcadeService] getConnections failed:', error.message);
       return [];
     }
   }
@@ -1121,7 +1124,7 @@ export class ArcadeService {
     if (!userId) {
       // Clear all connections
       this.connections.clear();
-      console.log('[ArcadeService] Cleared all connections cache');
+      logger.info('[ArcadeService] Cleared all connections cache');
       return;
     }
 
@@ -1135,7 +1138,7 @@ export class ArcadeService {
     for (const key of keysToRemove) {
       this.connections.delete(key);
     }
-    console.log(`[ArcadeService] Cleared connections cache for user ${userId}`);
+    logger.info(`[ArcadeService] Cleared connections cache for user ${userId}`);
   }
 
   /**
@@ -1143,7 +1146,7 @@ export class ArcadeService {
    */
   invalidateToolsCache(): void {
     this.tools.clear();
-    console.log('[ArcadeService] Cleared tools cache');
+    logger.info('[ArcadeService] Cleared tools cache');
   }
 
   /**
@@ -1189,7 +1192,7 @@ export function isArcadeServiceDisabled(): boolean {
 export function reenableArcadeService(): void {
   arcadeServiceDisabled = false;
   arcadeServiceInstance = null;
-  console.log('[ArcadeService] Re-enabled — service will re-initialize on next use');
+  logger.info('[ArcadeService] Re-enabled — service will re-initialize on next use');
 }
 
 /**
@@ -1204,7 +1207,7 @@ export function getArcadeService(): ArcadeService | null {
     if (!apiKey) {
       return null;
     }
-    console.log(`[ArcadeService] Initializing with key: ${apiKey.slice(0, 8)}...${apiKey.slice(-4)}`);
+    logger.info(`[ArcadeService] Initializing with key: ${apiKey.slice(0, 8)}...${apiKey.slice(-4)}`);
 
     arcadeServiceInstance = createArcadeService({
       apiKey,
@@ -1230,7 +1233,7 @@ export function initializeArcadeService(config?: Partial<ArcadeConfig>): ArcadeS
   if (!apiKey) {
     return null;
   }
-  console.log(`[ArcadeService] Initializing with key: ${apiKey.slice(0, 8)}...${apiKey.slice(-4)}`);
+  logger.info(`[ArcadeService] Initializing with key: ${apiKey.slice(0, 8)}...${apiKey.slice(-4)}`);
 
   arcadeServiceInstance = createArcadeService({
     apiKey,

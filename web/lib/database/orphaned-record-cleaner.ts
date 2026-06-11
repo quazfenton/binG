@@ -9,6 +9,9 @@
  */
 
 import { getDatabase } from '@/lib/database/connection';
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('Database:OrphanedCleaner');
 
 export interface OrphanedRecordInfo {
   table: string;
@@ -106,7 +109,7 @@ export class OrphanedRecordCleaner {
        // Validate identifiers to prevent SQL injection
        if (!this.isValidIdentifier(table) || !this.isValidIdentifier(column)) {
          if (this.config.verbose) {
-           console.log(`[OrphanCleaner] Invalid identifier: ${table}.${column}, skipping`);
+           logger.info(`[OrphanCleaner] Invalid identifier: ${table}.${column}, skipping`);
          }
          continue;
        }
@@ -119,7 +122,7 @@ export class OrphanedRecordCleaner {
 
          if (!tableExists) {
            if (this.config.verbose) {
-             console.log(`[OrphanCleaner] Table ${table} does not exist, skipping`);
+             logger.info(`[OrphanCleaner] Table ${table} does not exist, skipping`);
            }
            continue;
          }
@@ -166,13 +169,13 @@ export class OrphanedRecordCleaner {
            });
 
            if (this.config.verbose) {
-             console.log(
+             logger.info(
                `[OrphanCleaner] Found ${countResult.count} orphaned records in ${table}.${column}`
              );
            }
          }
        } catch (error: any) {
-         console.error(`[OrphanCleaner] Error scanning ${table}:`, error.message);
+         logger.error(`[OrphanCleaner] Error scanning ${table}:`, error.message);
        }
      }
 
@@ -224,7 +227,7 @@ export class OrphanedRecordCleaner {
          totalDeleted += batchDeleted;
 
          if (this.config.verbose && batchDeleted > 0) {
-           console.log(`[OrphanCleaner] ${table}: deleted batch of ${batchDeleted} records`);
+           logger.info(`[OrphanCleaner] ${table}: deleted batch of ${batchDeleted} records`);
          }
        }
 
@@ -252,11 +255,11 @@ export class OrphanedRecordCleaner {
     const results: CleanupResult[] = [];
 
     if (this.config.dryRun) {
-      console.log('[OrphanCleaner] DRY RUN - No records will be deleted');
+      logger.info('[OrphanCleaner] DRY RUN - No records will be deleted');
     }
 
     if (!this.config.enabled) {
-      console.log('[OrphanCleaner] Cleanup is disabled');
+      logger.info('[OrphanCleaner] Cleanup is disabled');
       return {
         success: true,
         totalOrphansFound: 0,
@@ -272,7 +275,7 @@ export class OrphanedRecordCleaner {
     const orphans = this.scanForOrphans();
     const totalOrphans = orphans.reduce((sum, o) => sum + o.orphanedCount, 0);
 
-    console.log(`[OrphanCleaner] Starting cleanup of ${totalOrphans} orphaned records`);
+    logger.info(`[OrphanCleaner] Starting cleanup of ${totalOrphans} orphaned records`);
 
     // Clean up each table
     for (const { table, column } of this.config.tables) {
@@ -288,13 +291,13 @@ export class OrphanedRecordCleaner {
       const orphanInfo = orphans.find(o => o.table === table);
       if (!orphanInfo || orphanInfo.orphanedCount === 0) {
         if (this.config.verbose) {
-          console.log(`[OrphanCleaner] Skipping ${table} - no orphans found`);
+          logger.info(`[OrphanCleaner] Skipping ${table} - no orphans found`);
         }
         continue;
       }
 
       if (this.config.dryRun) {
-        console.log(`[OrphanCleaner] DRY RUN: Would delete ${orphanInfo.orphanedCount} records from ${table}`);
+        logger.info(`[OrphanCleaner] DRY RUN: Would delete ${orphanInfo.orphanedCount} records from ${table}`);
         results.push({
           table,
           deletedCount: 0,
@@ -308,9 +311,9 @@ export class OrphanedRecordCleaner {
       results.push(result);
 
       if (result.error) {
-        console.error(`[OrphanCleaner] Error cleaning ${table}:`, result.error);
+        logger.error(`[OrphanCleaner] Error cleaning ${table}:`, result.error);
       } else if (result.deletedCount > 0) {
-        console.log(`[OrphanCleaner] Cleaned ${result.deletedCount} orphaned records from ${table}`);
+        logger.info(`[OrphanCleaner] Cleaned ${result.deletedCount} orphaned records from ${table}`);
       }
     }
 
@@ -351,7 +354,7 @@ export class OrphanedRecordCleaner {
     ).get(userId);
 
     if (!userExists) {
-      console.log(`[OrphanCleaner] User ${userId} does not exist, returning early`);
+      logger.info(`[OrphanCleaner] User ${userId} does not exist, returning early`);
       return { cleanedTables, skippedTables, totalCleaned, orphansFound, userExists: false };
     }
 
@@ -359,7 +362,7 @@ export class OrphanedRecordCleaner {
       try {
         // Validate table and column names against whitelist
         if (!this.isValidIdentifier(table) || !this.isValidIdentifier(column)) {
-          console.warn(`[OrphanCleaner] Invalid identifier: ${table}.${column}, skipping`);
+          logger.warn(`[OrphanCleaner] Invalid identifier: ${table}.${column}, skipping`);
           skippedTables.push(`${table}.${column} (invalid identifier)`);
           continue;
         }
@@ -412,7 +415,7 @@ export class OrphanedRecordCleaner {
           totalCleaned += deleteResult.changes;
         }
       } catch (error: any) {
-        console.error(`[OrphanCleaner] Error cleaning ${table} for user ${userId}:`, error.message);
+        logger.error(`[OrphanCleaner] Error cleaning ${table} for user ${userId}:`, error.message);
         skippedTables.push(`${table} (${error.message})`);
       }
     }

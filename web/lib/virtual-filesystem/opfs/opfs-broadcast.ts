@@ -16,6 +16,10 @@ import { opfsAdapter } from './opfs-adapter';
 import { opfsCore } from './opfs-core';
 import type { OPFSDirectoryEntry } from './opfs-core';
 
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('VFS:OPFSBroadcast');
+
 export type OPFSBroadcastMessageType =
   | 'file-created'
   | 'file-updated'
@@ -135,7 +139,7 @@ export class OPFSBroadcast {
     this.broadcastPresence();
 
     this.enabled = true;
-    console.log('[OPFS Broadcast] Enabled for workspace:', this.options.workspaceId, 'tab:', this.tabId);
+    logger.info('[OPFS Broadcast] Enabled for workspace:', this.options.workspaceId, 'tab:', this.tabId);
   }
 
   /**
@@ -170,7 +174,7 @@ export class OPFSBroadcast {
     this.handlers.clear();
 
     this.enabled = false;
-    console.log('[OPFS Broadcast] Disabled');
+    logger.info('[OPFS Broadcast] Disabled');
   }
 
   /**
@@ -275,7 +279,7 @@ export class OPFSBroadcast {
         data: { entries },
       });
     } catch (error) {
-      console.error('[OPFS Broadcast] Sync response failed:', error);
+      logger.error('[OPFS Broadcast] Sync response failed:', error);
     }
   }
 
@@ -385,7 +389,7 @@ export class OPFSBroadcast {
       try {
         handler(message);
       } catch (error) {
-        console.error('[OPFS Broadcast] Handler error:', error);
+        logger.error('[OPFS Broadcast] Handler error:', error);
       }
     }
   }
@@ -393,14 +397,14 @@ export class OPFSBroadcast {
   private async handleFileCreated(message: OPFSBroadcastMessage): Promise<void> {
     if (!message.path) return;
     
-    console.log('[OPFS Broadcast] File created in another tab:', message.path);
+    logger.info('[OPFS Broadcast] File created in another tab:', message.path);
     
     // Optionally sync the file locally
     if (message.content !== undefined) {
       try {
         await this.core.writeFile(message.path, message.content);
       } catch (error) {
-        console.error('[OPFS Broadcast] Failed to sync created file:', error);
+        logger.error('[OPFS Broadcast] Failed to sync created file:', error);
       }
     }
   }
@@ -408,14 +412,14 @@ export class OPFSBroadcast {
   private async handleFileUpdated(message: OPFSBroadcastMessage): Promise<void> {
     if (!message.path) return;
     
-    console.log('[OPFS Broadcast] File updated in another tab:', message.path);
+    logger.info('[OPFS Broadcast] File updated in another tab:', message.path);
     
     // Optionally sync the file locally
     if (message.content !== undefined) {
       try {
         await this.core.writeFile(message.path, message.content);
       } catch (error) {
-        console.error('[OPFS Broadcast] Failed to sync updated file:', error);
+        logger.error('[OPFS Broadcast] Failed to sync updated file:', error);
       }
     }
   }
@@ -423,41 +427,41 @@ export class OPFSBroadcast {
   private async handleFileDeleted(message: OPFSBroadcastMessage): Promise<void> {
     if (!message.path) return;
     
-    console.log('[OPFS Broadcast] File deleted in another tab:', message.path);
+    logger.info('[OPFS Broadcast] File deleted in another tab:', message.path);
     
     try {
       await this.core.deleteFile(message.path);
     } catch (error) {
-      console.error('[OPFS Broadcast] Failed to sync deleted file:', error);
+      logger.error('[OPFS Broadcast] Failed to sync deleted file:', error);
     }
   }
 
   private async handleDirectoryCreated(message: OPFSBroadcastMessage): Promise<void> {
     if (!message.path) return;
     
-    console.log('[OPFS Broadcast] Directory created in another tab:', message.path);
+    logger.info('[OPFS Broadcast] Directory created in another tab:', message.path);
     
     try {
       await this.core.createDirectory(message.path, { recursive: true });
     } catch (error) {
-      console.error('[OPFS Broadcast] Failed to sync created directory:', error);
+      logger.error('[OPFS Broadcast] Failed to sync created directory:', error);
     }
   }
 
   private async handleDirectoryDeleted(message: OPFSBroadcastMessage): Promise<void> {
     if (!message.path) return;
     
-    console.log('[OPFS Broadcast] Directory deleted in another tab:', message.path);
+    logger.info('[OPFS Broadcast] Directory deleted in another tab:', message.path);
     
     try {
       await this.core.deleteDirectory(message.path, { recursive: true });
     } catch (error) {
-      console.error('[OPFS Broadcast] Failed to sync deleted directory:', error);
+      logger.error('[OPFS Broadcast] Failed to sync deleted directory:', error);
     }
   }
 
   private handleSyncResponse(message: OPFSBroadcastMessage): void {
-    console.log('[OPFS Broadcast] Received sync response from tab:', message.tabId);
+    logger.info('[OPFS Broadcast] Received sync response from tab:', message.tabId);
     
     if (message.data?.entries) {
       // Process sync response entries
@@ -466,7 +470,7 @@ export class OPFSBroadcast {
   }
 
   private handleTabClosing(message: OPFSBroadcastMessage): void {
-    console.log('[OPFS Broadcast] Tab closing:', message.tabId);
+    logger.info('[OPFS Broadcast] Tab closing:', message.tabId);
     this.tabs.delete(message.tabId);
   }
 
@@ -526,7 +530,7 @@ export class OPFSBroadcast {
         if (now - tab.lastSeen > this.options.presenceTimeout * 2) {
           // Remove tabs that haven't been seen for 2x timeout
           this.tabs.delete(tabId);
-          console.log('[OPFS Broadcast] Removed dead tab:', tabId);
+          logger.info('[OPFS Broadcast] Removed dead tab:', tabId);
         }
       }
     }, this.options.presenceTimeout);
@@ -581,7 +585,7 @@ export const opfsBroadcast = getOPFSBroadcast('default', 'default');
  */
 export function useOPFSBroadcast_DEPRECATED(workspaceId: string, ownerId: string) {
   // This is a simplified version - use the proper hook from hooks/ directory
-  console.warn('useOPFSBroadcast is deprecated, use the hook from hooks/use-opfs-broadcast.ts');
+  logger.warn('useOPFSBroadcast is deprecated, use the hook from hooks/use-opfs-broadcast.ts');
   
   const broadcast = getOPFSBroadcast(workspaceId, ownerId);
   

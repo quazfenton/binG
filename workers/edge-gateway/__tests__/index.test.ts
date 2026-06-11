@@ -26,10 +26,15 @@ vi.mock('../src/url-store', () => ({
 vi.mock('../src/r2-storage', () => ({
   handleFileRequest: vi.fn(),
 }));
+// Use a class so `new TraceLog(env.TRACE_R2)` works in the source.
+// Arrow functions can't be constructors; vi.fn().mockImplementation(arrowFn)
+// throws `... is not a constructor` when invoked with `new`.
 vi.mock('../src/trace-log', () => ({
-  TraceLog: vi.fn().mockImplementation(() => ({
-    log: vi.fn(),
-  })),
+  TraceLog: class {
+    write = vi.fn();
+    flush = vi.fn().mockResolvedValue(undefined);
+    constructor(_r2: unknown) {}
+  },
 }));
 
 // Provide a fake authenticateRequest that respects a special header
@@ -57,6 +62,7 @@ import { decodeJwtUnverified } from '@bing/shared/auth/jwt';
 const env = {
   BACKEND_URL: 'https://mock-backend.example.com',
   JWT_SECRET: 'test-secret-for-smoke-test',
+  ALLOWED_ORIGINS: 'https://app.example.com',
   KV: {} as any,
   TRACE_R2: {} as any,
 } as any;
@@ -72,7 +78,12 @@ describe('index.ts 302 redirect (smoke)', () => {
   });
 
   it('OPTIONS preflight to /api/chat returns 204 with CORS headers', async () => {
-    const req = new Request('https://edge.example.com/api/chat', { method: 'OPTIONS' });
+    // Real preflights include an Origin header. Without one, the early
+    // OPTIONS handler's getCorsHeaders() correctly omits Allow-Origin.
+    const req = new Request('https://edge.example.com/api/chat', {
+      method: 'OPTIONS',
+      headers: { Origin: 'https://app.example.com' },
+    });
     const res = await worker.fetch(req, env);
     expect(res.status).toBe(204);
     expect(res.headers.get('Access-Control-Allow-Origin')).toBeTruthy();
@@ -149,5 +160,17 @@ describe('index.ts 302 redirect (smoke)', () => {
     const location = res.headers.get('Location') || '';
     expect(location).toContain('foo=bar');
     expect(location).toContain('token=');
+  });
+
+  it('302 redirect includes Cache-Control: private, max-age=4', async () => {
+    const req = new Request('https://edge.example.com/api/chat', {
+      method: 'GET',
+      headers: { Authorization: 'Bearer test-user-cache' },
+    });
+    const res = await worker.fetch(req, env);
+    expect(res.status).toBe(302);
+    const cacheControl = res.headers.get('Cache-Control') || '';
+    expect(cacheControl).toContain('private');
+    expect(cacheControl).toContain('max-age=4');
   });
 });

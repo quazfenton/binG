@@ -342,6 +342,9 @@ import { CronJobsPanel } from "@/components/cron-jobs-panel";
 import FrontierFeedPlugin from "@/components/plugins/frontier-feed-plugin";
 import CommandDeckPlugin from "@/components/plugins/command-deck-plugin";
 import { PROVIDERS } from "@/lib/providers/llm-providers-types";
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('UI:WorkspacePanel');
 
 // ---------------------------------------------------------------------------
 // Tab definitions - single source of truth for the workspace tab bar
@@ -624,7 +627,7 @@ class TabErrorBoundary extends React.Component<
   }
 
   componentDidCatch(error: Error) {
-    console.error(`[Workspace] Error in tab "${this.props.tabName}":`, error);
+    logger.error(`[Workspace] Error in tab "${this.props.tabName}":`, error);
   }
 
   render() {
@@ -935,7 +938,7 @@ export function WorkspacePanel() {
           setActiveThreadId(activeId);
         }
       } catch (e) {
-        console.error('Failed to load chat threads:', e);
+        logger.error('Failed to load chat threads:', e);
       }
     } else {
       // Create default thread for backward compatibility
@@ -1020,7 +1023,7 @@ export function WorkspacePanel() {
       try {
         setThinkingNotes(JSON.parse(savedNotes));
       } catch (e) {
-        console.error('Failed to load thinking notes:', e);
+        logger.error('Failed to load thinking notes:', e);
       }
     }
   }, []);
@@ -1042,7 +1045,7 @@ export function WorkspacePanel() {
       try {
         setPlaylist(JSON.parse(savedPlaylist));
       } catch (e) {
-        console.error('Failed to load playlist:', e);
+        logger.error('Failed to load playlist:', e);
       }
     }
   }, []);
@@ -1143,7 +1146,7 @@ export function WorkspacePanel() {
         const parsed = JSON.parse(savedPosts);
         setForumPosts(parsed);
       } catch (e) {
-        console.error('Failed to load forum posts:', e);
+        logger.error('Failed to load forum posts:', e);
       }
     }
   }, []);
@@ -1339,7 +1342,7 @@ export function WorkspacePanel() {
           }
         }
       } catch (error) {
-        console.error('Failed to load LLM providers from API:', error);
+        logger.error('Failed to load LLM providers from API:', error);
         setAvailableProviders([]);
       }
     };
@@ -1362,7 +1365,7 @@ export function WorkspacePanel() {
           files: snapshot?.files || [],
         });
       } catch (error) {
-        console.error('Failed to fetch VFS snapshot:', error);
+        logger.error('Failed to fetch VFS snapshot:', error);
       }
     };
     fetchSnapshot();
@@ -1592,7 +1595,7 @@ export function WorkspacePanel() {
 
       if (!response.ok) {
         const errorText = await response.text().catch(() => '');
-        console.error('[ExperimentalWorkspace] Chat API error:', response.status, errorText);
+        logger.error('[ExperimentalWorkspace] Chat API error:', response.status, errorText);
         throw new Error(`API request failed: ${response.status} - ${errorText.slice(0, 200)}`);
       }
 
@@ -1680,7 +1683,7 @@ export function WorkspacePanel() {
                 case SSE_EVENT_TYPES.FILESYSTEM:
                   // Handle filesystem operations
                   if (data.data?.applied && data.data.applied.length > 0) {
-                    console.log('[ExperimentalWorkspace] Filesystem operations:', data.data.applied);
+                    logger.info('[ExperimentalWorkspace] Filesystem operations:', data.data.applied);
 
                     // Refresh VFS snapshot
                     const snapshot = await vfs.getSnapshot();
@@ -1705,7 +1708,7 @@ export function WorkspacePanel() {
                     toast.success(`Applied ${data.data.applied.length} file changes`);
                   }
                   if (data.data?.errors?.length > 0) {
-                    console.warn('[ExperimentalWorkspace] Filesystem errors:', data.data.errors);
+                    logger.warn('[ExperimentalWorkspace] Filesystem errors:', data.data.errors);
                     toast.error(`Errors: ${data.data.errors[0]}`);
                   }
                   break;
@@ -1754,7 +1757,7 @@ export function WorkspacePanel() {
 
                 case SSE_EVENT_TYPES.ERROR:
                   // Handle errors
-                  console.error('[ExperimentalWorkspace] Stream error:', data.data);
+                  logger.error('[ExperimentalWorkspace] Stream error:', data.data);
                   toast.error(data.data?.message || 'Stream error occurred');
                   break;
 
@@ -1813,7 +1816,7 @@ export function WorkspacePanel() {
               }
             } catch (parseError) {
               // Skip malformed JSON
-              console.warn('[ExperimentalWorkspace] Failed to parse SSE data:', dataStr);
+              logger.warn('[ExperimentalWorkspace] Failed to parse SSE data:', dataStr);
             }
           }
         }
@@ -1829,14 +1832,14 @@ export function WorkspacePanel() {
     } catch (error: any) {
       // Check if aborted
       if (error?.name === 'AbortError') {
-        console.log('[ExperimentalWorkspace] Chat aborted by user');
+        logger.info('[ExperimentalWorkspace] Chat aborted by user');
         setThreadMessages(chatMessages.map((msg) =>
           msg.id === assistantMessageId
             ? { ...msg, content: streamedContent || "Response stopped by user" }
             : msg
         ));
       } else {
-        console.error('[ExperimentalWorkspace] Chat error:', error);
+        logger.error('[ExperimentalWorkspace] Chat error:', error);
         toast.error('Chat failed. Check console for details.');
         setThreadMessages(chatMessages.filter((msg) => msg.id !== assistantMessageId));
       }
@@ -2269,7 +2272,7 @@ export function WorkspacePanel() {
     const newPath = `${normalizedParentPath}/${renameValue.trim()}`;
 
     // DEBUG: Log rename paths
-    console.log('[WorkspacePanel] Rename operation:', {
+    logger.info('[WorkspacePanel] Rename operation:', {
       renamingFile,
       newPath,
       vfsCurrentPath: vfs?.currentPath,
@@ -2295,7 +2298,7 @@ export function WorkspacePanel() {
         }),
       });
 
-      console.log('[WorkspacePanel] Rename API response status:', response.status);
+      logger.info('[WorkspacePanel] Rename API response status:', response.status);
 
       if (response.status === 409) {
         // Conflict detected - show confirmation dialog
@@ -2659,7 +2662,7 @@ export function WorkspacePanel() {
         onContextMenu={(e) => {
           e.preventDefault();
           e.stopPropagation();
-          console.log('[File Context Menu] Right-click detected:', { path: node.path, x: e.clientX, y: e.clientY });
+          logger.info('[File Context Menu] Right-click detected:', { path: node.path, x: e.clientX, y: e.clientY });
           setContextMenu({ x: e.clientX, y: e.clientY, path: node.path, isDirectory: false });
           return false;
         }}
@@ -2760,7 +2763,7 @@ export function WorkspacePanel() {
         setGithubRepos(data.repos);
       }
     } catch (err) {
-      console.error('Failed to fetch repos:', err);
+      logger.error('Failed to fetch repos:', err);
     } finally {
       setIsLoadingRepos(false);
     }
@@ -2797,7 +2800,7 @@ export function WorkspacePanel() {
           await vfs.writeFile(normalizedPath, content as string);
           importedCount++;
         } catch (err) {
-          console.error(`Failed to write ${path}:`, err);
+          logger.error(`Failed to write ${path}:`, err);
         }
       }
 
@@ -4827,7 +4830,7 @@ export function WorkspacePanel() {
           <div
             className="fixed inset-0 z-[100]"
             onClick={() => {
-              console.log('[Context Menu] Dismissed by clicking outside');
+              logger.info('[Context Menu] Dismissed by clicking outside');
               setContextMenu(null);
             }}
             onContextMenu={(e) => {
@@ -4841,7 +4844,7 @@ export function WorkspacePanel() {
             onContextMenu={(e) => {
               e.preventDefault();
               e.stopPropagation();
-              console.log('[Context Menu] Prevented context menu on menu itself');
+              logger.info('[Context Menu] Prevented context menu on menu itself');
             }}
           >
             {!contextMenu.isDirectory && (
@@ -5009,7 +5012,7 @@ export function WorkspacePanel() {
                               await vfs.writeFile(normalizedPath, content as string);
                               importedCount++;
                             } catch (err) {
-                              console.error(`Failed to write ${path}:`, err);
+                              logger.error(`Failed to write ${path}:`, err);
                             }
                           }
                           const snapshot = await vfs.getSnapshot();
@@ -5190,7 +5193,7 @@ export function WorkspacePanel() {
                                 await vfs.writeFile(normalizedPath, content as string);
                                 importedCount++;
                               } catch (err) {
-                                console.error(`Failed to write ${path}:`, err);
+                                logger.error(`Failed to write ${path}:`, err);
                               }
                             }
                             const snapshot = await vfs.getSnapshot();

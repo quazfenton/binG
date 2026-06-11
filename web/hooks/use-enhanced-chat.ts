@@ -12,6 +12,9 @@ import { isValidExtractedPath } from '@/lib/chat/file-edit-parser';  // NEW: Ser
 import { useStreamControl } from './use-stream-control';
 import { voiceService } from '@/lib/voice/voice-service';
 import { streamingSpeaker } from '@/lib/voice/streaming-speaker';
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('UI:EnhancedChat');
 
 export interface UseChatOptions {
   api: string;
@@ -165,7 +168,7 @@ export async function rotateProviderModel(
         ? (currentIdx + 1) % providerModels.length
         : 0;
       selectedModel = providerModels[nextIdx];
-      console.warn(`[Chat] Rotating to next model [${context}]: ${selectedProvider}/${selectedModel}`);
+      logger.warn(`[Chat] Rotating to next model [${context}]: ${selectedProvider}/${selectedModel}`);
     }
     if (selectedProvider === origProvider && selectedModel === origModel) {
       try {
@@ -175,7 +178,7 @@ export async function rotateProviderModel(
           selectedProvider = fallbackChain[0];
           const fallbackModels = PROVIDER_MODELS[selectedProvider.toLowerCase()];
           selectedModel = fallbackModels?.[0] || 'mistral-small-latest';
-          console.warn(`[Chat] Falling back to provider [${context}]: ${selectedProvider}/${selectedModel}`);
+          logger.warn(`[Chat] Falling back to provider [${context}]: ${selectedProvider}/${selectedModel}`);
         }
       } catch {}
     }
@@ -189,7 +192,7 @@ export async function rotateProviderModel(
         selectedProvider = fallbackChain[providerIdx];
         const fallbackModels = PROVIDER_MODELS[selectedProvider.toLowerCase()];
         selectedModel = fallbackModels?.[0] || 'mistral-small-latest';
-        console.warn(`[Chat] Rotating to fallback provider [${context}]: ${selectedProvider}/${selectedModel} (retry ${retryCount + 1})`);
+        logger.warn(`[Chat] Rotating to fallback provider [${context}]: ${selectedProvider}/${selectedModel} (retry ${retryCount + 1})`);
       }
     } catch {}
   }
@@ -235,7 +238,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
     
     // Log summary instead of individual warnings when limit exceeded
     if (invalidPathWarningCount.current === INVALID_PATH_WARNING_LIMIT) {
-      console.warn('[Chat] Rate limit reached for invalid path warnings. Further invalid paths will be silently skipped.', {
+      logger.warn('[Chat] Rate limit reached for invalid path warnings. Further invalid paths will be silently skipped.', {
         path,
         limit: INVALID_PATH_WARNING_LIMIT,
         windowMs: INVALID_PATH_WARNING_WINDOW,
@@ -311,14 +314,14 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
       // FIX: Check if streamControl (WebSocket) is actually enabled before trusting WS signal
       // If WebSocket is not enabled, try SSE-based continue via setStreamId (from init event)
       if (!streamId) {
-        console.warn('[StreamControl] WebSocket not connected, cannot process need_more_turns');
+        logger.warn('[StreamControl] WebSocket not connected, cannot process need_more_turns');
         return;
       }
       // Server sent structured continue signal via WebSocket
       const toolSummary = payload?.toolSummary || '';
       const implicitFiles = payload?.implicitFiles || [];
 
-      console.log('[StreamControl] Server signaled need_more_turns', {
+      logger.info('[StreamControl] Server signaled need_more_turns', {
         contextHint,
         toolSummary: !!toolSummary,
         implicitFileCount: implicitFiles.length,
@@ -344,10 +347,10 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
       }, 100);
     },
     onStreamComplete: (stats) => {
-      console.log('[StreamControl] Stream complete', stats);
+      logger.info('[StreamControl] Stream complete', stats);
     },
     onError: (error) => {
-      console.warn('[StreamControl] WebSocket error:', error);
+      logger.warn('[StreamControl] WebSocket error:', error);
       // Non-falling — SSE still works even if WS control channel fails
     },
   });
@@ -371,7 +374,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
       
       // Process queued prompts when user stops generation
       if (inputQueue.length > 0) {
-        console.log('[InputQueue] User stopped generation, processing next queued prompt');
+        logger.info('[InputQueue] User stopped generation, processing next queued prompt');
         setTimeout(() => processQueue(), 100);
       }
     }
@@ -405,7 +408,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
     // Queue input if already loading (streaming response in progress)
     if (isLoading) {
       const queuedInput = prompt.trim();
-      console.log('[InputQueue] Queueing input (stream in progress):', {
+      logger.info('[InputQueue] Queueing input (stream in progress):', {
         queueLength: inputQueue.length + 1,
         inputPreview: queuedInput.substring(0, 50),
       });
@@ -479,7 +482,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
     // Get next queued input (FIFO - oldest first)
     const nextInput = inputQueue[0];
     
-    console.log('[InputQueue] Processing queued prompt:', {
+    logger.info('[InputQueue] Processing queued prompt:', {
       queueLength: inputQueue.length,
       nextInputPreview: nextInput.substring(0, 50),
     });
@@ -511,7 +514,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
     // The queued input will auto-send when the current response completes
     if (isLoading) {
       const queuedInput = input.trim();
-      console.log('[InputQueue] Queueing input (stream in progress):', {
+      logger.info('[InputQueue] Queueing input (stream in progress):', {
         queueLength: inputQueue.length + 1,
         inputPreview: queuedInput.substring(0, 50),
       });
@@ -727,7 +730,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
         const maxRetries = 3;
 
         if (retryCount < maxRetries) {
-          console.warn(`[Chat] Pre-stream HTTP ${statusCode} error, auto-retrying with rotated provider/model (attempt ${retryCount + 1}/${maxRetries})`);
+          logger.warn(`[Chat] Pre-stream HTTP ${statusCode} error, auto-retrying with rotated provider/model (attempt ${retryCount + 1}/${maxRetries})`);
 
           const origProvider = String(resolvedBody?.provider ?? '');
           const origModel = String(resolvedBody?.model ?? '');
@@ -810,7 +813,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
             await handleStreamingResponse(retryResponse.body, retryAssistantMessage, retryAbortController);
             return;
           } catch (retryError) {
-            console.error('[Chat] Pre-stream retry failed:', retryError);
+            logger.error('[Chat] Pre-stream retry failed:', retryError);
             setMessages(prev => prev.map(msg =>
               msg.id === retryAssistantMessage.id
                 ? { ...msg, content: '⚠️ _Retry failed. Please try resending your message._',
@@ -846,7 +849,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
         // We have accumulated content, so the response is partially usable.
         // Log the original error and still surface it as a non-blocking warning
         // so the user knows the response may be incomplete.
-        console.warn('Chat streaming interrupted (partial content preserved):', error);
+        logger.warn('Chat streaming interrupted (partial content preserved):', error);
 
         if (hasContent && currentMessage) {
           // Append a subtle indicator that the response was truncated
@@ -902,7 +905,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
       }
       timeoutRef.current = setTimeout(() => {
         if (!isMountedRef.current) return;
-      console.warn('[Chat] Streaming timeout after 3min, finalizing', {
+      logger.warn('[Chat] Streaming timeout after 3min, finalizing', {
         accumulatedContentLength: accumulatedContent?.length,
         tokenCount,
       });
@@ -925,7 +928,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
           }),
           partialResponse: accumulatedContent ? accumulatedContent.slice(0, 1000) : undefined,
         };
-        console.warn('[Chat] Saved timeout recovery context', {
+        logger.warn('[Chat] Saved timeout recovery context', {
           toolCount: streamingToolInvocations.length,
           partialResponseLength: accumulatedContent?.length,
         });
@@ -1052,7 +1055,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
             try {
               parsedObjects = parser.parse(dataString + '\n');
             } catch (parseError) {
-              console.warn('[SSE] Parse error:', parseError);
+              logger.warn('[SSE] Parse error:', parseError);
               continue;
             }
           }
@@ -1065,7 +1068,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
               switch (determinedType) {
                 case 'init':
                   // Initialization event - update agent status and connect WebSocket control channel
-                  console.log('Chat stream initialized:', eventData);
+                  logger.info('Chat stream initialized:', eventData);
                   if (eventData.agent === 'planner') {
                     setAgentType('planner');
                   } else if (eventData.agent === 'executor') {
@@ -1091,7 +1094,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   // Extract streamId for WebSocket control channel (same port as app)
                   if (eventData.streamId) {
                     setStreamId(eventData.streamId);
-                    console.log('[StreamControl] Received streamId from SSE init', {
+                    logger.info('[StreamControl] Received streamId from SSE init', {
                       streamId: eventData.streamId,
                     });
                   }
@@ -1182,7 +1185,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   const hasContentMismatch = eventData.content && accumulatedContent &&
                     eventData.content.length !== accumulatedContent.length;
                   if (process.env.NODE_ENV === 'development') {
-                    console.log('[Chat] Done event received:', {
+                    logger.info('[Chat] Done event received:', {
                       contentSource,
                       hasEventDataContent: !!eventData.content,
                       hasAccumulatedContent: !!accumulatedContent,
@@ -1240,7 +1243,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                           }),
                       partialResponse: doneContent ? doneContent.slice(0, 1000) : undefined,
                     };
-                    console.warn('[Chat] Server-side truncated response detected, saved recovery context', {
+                    logger.warn('[Chat] Server-side truncated response detected, saved recovery context', {
                       toolCount: timeoutRecoveryRef.current.toolInvocations.length,
                       partialToolsInMetadata: Array.isArray(raw.partialToolResults),
                       partialResponseLength: doneContent?.length,
@@ -1327,7 +1330,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                     (!doneContent.trim() && !hasSuccessfulToolInvocations && !hasFileSystemEdits);
 
                   if (isEmptyResponse) {
-                    console.warn('[Chat] Empty response detected - content, tools, and filesystem edits all missing:', {
+                    logger.warn('[Chat] Empty response detected - content, tools, and filesystem edits all missing:', {
                       messageId: assistantMessage.id,
                       doneContentLength: doneContent?.length,
                       streamingToolInvocationCount: streamingToolInvocations.length,
@@ -1397,7 +1400,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                       const lastUserMsg = userMessages[userMessages.length - 1];
 
                       if (lastUserMsg?.content) {
-                        console.warn(`[Chat] Empty response detected, auto-retrying (attempt ${assistantRetryCount + 1}/${maxRetries})`);
+                        logger.warn(`[Chat] Empty response detected, auto-retrying (attempt ${assistantRetryCount + 1}/${maxRetries})`);
 
                         clearTimeout(timeoutRef.current);
                         timeoutRef.current = null;
@@ -1533,7 +1536,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                           await handleStreamingResponse(retryResponse.body, retryAssistantMessage, retryAbortController);
                           return; // Don't continue with normal flow
                         } catch (retryError) {
-                          console.error('[Chat] Retry failed:', retryError);
+                          logger.error('[Chat] Retry failed:', retryError);
                           setMessages(prev => prev.map(msg =>
                             msg.id === retryAssistantMessage.id
                               ? {
@@ -1553,11 +1556,11 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                       }
                     } else {
                       // Max retries reached — update the SAME bubble, don't create a new one
-                      console.warn('[Chat] Empty response after retry, stopping retries');
+                      logger.warn('[Chat] Empty response after retry, stopping retries');
                       
                       // Process queued prompts when max retries reached
                       if (inputQueue.length > 0) {
-                        console.log('[InputQueue] Max retries reached, processing next queued prompt');
+                        logger.info('[InputQueue] Max retries reached, processing next queued prompt');
                         setTimeout(() => processQueue(), 100);
                       }
                       
@@ -1588,7 +1591,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   // Only process if we're not in a retry loop (retryCount check)
                   const isRetrying = (Number(doneMetadata.retryCount) || 0) > 0 && isEmptyResponse;
                   if (!isRetrying && inputQueue.length > 0) {
-                    console.log('[InputQueue] Response complete, processing next queued prompt:', {
+                    logger.info('[InputQueue] Response complete, processing next queued prompt:', {
                       queueLength: inputQueue.length,
                     });
                     // Use setTimeout to ensure state settles before processing next
@@ -1673,13 +1676,13 @@ ${toolFailureContext.summary}
 ` +
                         `Original instruction:
 ${stepReprompt}`;
-                      console.warn('[StepReprompt] Enhanced with tool failure context:', {
+                      logger.warn('[StepReprompt] Enhanced with tool failure context:', {
                         failedTools: toolFailureContext.failedToolCalls.map(t => ({ name: t.name, error: t.error })),
                         continuationNumber: stepRepromptCountRef.current + 1,
                       });
                     }
                   }
-                  console.log('[StepReprompt] Auto-continuing multi-step flow', {
+                  logger.info('[StepReprompt] Auto-continuing multi-step flow', {
                       stepRepromptPreview: enhancedReprompt.slice(0, 80),
                       primaryRole: routing?.primaryRole,
                       estimatedSteps: routing?.estimatedSteps,
@@ -1704,7 +1707,7 @@ ${stepReprompt}`;
                           } as React.FormEvent<HTMLFormElement>
                         );
                       } catch (err) {
-                        console.error('[Auto-continue] handleSubmit failed:', err);
+                        logger.error('[Auto-continue] handleSubmit failed:', err);
                         setIsLoading(false);
                         setAgentStatus('error');
                       }
@@ -1717,7 +1720,7 @@ ${stepReprompt}`;
                     const { suggestedRole, planSteps, classification } = routing;
                     
                     if (planSteps && planSteps.length > 0 && suggestedRole && stepRepromptCount < MAX_STEP_REPROMPTS) {
-                      console.log('[RoleRedirect] Role handoff detected', {
+                      logger.info('[RoleRedirect] Role handoff detected', {
                         suggestedRole,
                         planStepsCount: planSteps.length,
                         classification,
@@ -1734,7 +1737,7 @@ ${stepReprompt}`;
                         try {
                           submitWithPrompt(rolePrompt);
                         } catch (err) {
-                          console.error('[RoleRedirect] submitWithPrompt failed:', err);
+                          logger.error('[RoleRedirect] submitWithPrompt failed:', err);
                           setIsLoading(false);
                           setAgentStatus('error');
                         }
@@ -1747,7 +1750,7 @@ ${stepReprompt}`;
                 case 'error': {
                   // Check if this is a V2 session failure that should trigger fallback to v1
                   if (eventData.fallbackToV1) {
-                    console.warn('V2 execution failed, will retry with v1 mode:', eventData);
+                    logger.warn('V2 execution failed, will retry with v1 mode:', eventData);
 
                     // Clear timeout from failed V2 stream
                     clearTimeout(timeoutRef.current);
@@ -1774,7 +1777,7 @@ ${stepReprompt}`;
                     ? accumulatedContent + errorSuffix
                     : `⚠️ ${errMsg}${canRetry ? ' Please retry your request.' : ''}`;
 
-                  console.warn('[Chat] Server error event — preserving partial content', {
+                  logger.warn('[Chat] Server error event — preserving partial content', {
                     errMsg,
                     canRetry,
                     accumulatedContentLength: accumulatedContent.length,
@@ -1903,7 +1906,7 @@ ${stepReprompt}`;
                     }));
                   }
                   if (process.env.NODE_ENV === 'development') {
-                    console.log('[Chat] Received diffs event:', {
+                    logger.info('[Chat] Received diffs event:', {
                       count: eventData.count,
                       files: diffFiles.map(f => f.path),
                     });
@@ -1954,14 +1957,14 @@ ${stepReprompt}`;
 
                   // CRITICAL FIX #1: Validate path exists
                   if (!eventData.path) {
-                    console.warn('[Chat] Skipping file_edit event: missing path');
+                    logger.warn('[Chat] Skipping file_edit event: missing path');
                     break;
                   }
 
                   // CRITICAL FIX #2: Reject empty content/diff to prevent infinite loops
                   const editContent = eventData.content || eventData.diff || '';
                   if (!editContent || editContent.trim().length === 0) {
-                    console.warn('[Chat] Skipping file_edit event: empty diff/content (prevents infinite loop)', {
+                    logger.warn('[Chat] Skipping file_edit event: empty diff/content (prevents infinite loop)', {
                       path: eventData.path,
                     });
                     break;
@@ -1972,7 +1975,7 @@ ${stepReprompt}`;
                   if (!isValidExtractedPath(eventData.path)) {
                     // Rate limit warnings to prevent log spam (malformed LLM output can trigger many)
                     if (shouldShowInvalidPathWarning(eventData.path)) {
-                      console.warn('[Chat] Skipping file_edit event: invalid path (failed server-side validation)', {
+                      logger.warn('[Chat] Skipping file_edit event: invalid path (failed server-side validation)', {
                         path: eventData.path,
                       });
                     }
@@ -2057,7 +2060,7 @@ ${stepReprompt}`;
                   // wait for more streaming content before showing the diff viewer
                   if (eventData.isFinal) {
                     if (process.env.NODE_ENV === 'development') {
-                      console.log('[Chat] Final file edit received - stream should complete soon', {
+                      logger.info('[Chat] Final file edit received - stream should complete soon', {
                         path: eventData.path,
                       });
                     }
@@ -2078,7 +2081,7 @@ ${stepReprompt}`;
                   }
 
                   if (process.env.NODE_ENV === 'development') {
-                    console.log('[Chat] Progressive file edit detected:', {
+                    logger.info('[Chat] Progressive file edit detected:', {
                       path: eventData.path,
                       operation: fileEditData.operation,
                       hasDiff: !!fileEditData.diff,
@@ -2159,13 +2162,13 @@ ${stepReprompt}`;
                       allEdits = eventData.fileEdits.filter((edit: any) => {
                         // Check path exists
                         if (!edit.path) {
-                          console.warn('[Chat] Filtering out fileEdit with missing path');
+                          logger.warn('[Chat] Filtering out fileEdit with missing path');
                           return false;
                         }
                         // Check content/diff is not empty
                         const content = edit.content || edit.diff || '';
                         if (!content || content.trim().length === 0) {
-                          console.warn('[Chat] Filtering out fileEdit with empty content (prevents infinite loop)', {
+                          logger.warn('[Chat] Filtering out fileEdit with empty content (prevents infinite loop)', {
                             path: edit.path,
                           });
                           return false;
@@ -2174,7 +2177,7 @@ ${stepReprompt}`;
                         if (!isValidExtractedPath(edit.path)) {
                           // Rate limit warnings
                           if (shouldShowInvalidPathWarning(edit.path)) {
-                            console.warn('[Chat] Filtering out fileEdit with invalid path (failed server-side validation)', {
+                            logger.warn('[Chat] Filtering out fileEdit with invalid path (failed server-side validation)', {
                               path: edit.path,
                             });
                           }
@@ -2182,7 +2185,7 @@ ${stepReprompt}`;
                         }
                         return true;
                       });
-                      console.log('[Chat] Using server-provided fileEdits for task:', allEdits.length, 'files');
+                      logger.info('[Chat] Using server-provided fileEdits for task:', allEdits.length, 'files');
                     } else if (eventData.content) {
                       // Fallback: extract from content (may fail with strict validation)
                       const { extractCompactFileEdits, extractFileWriteEdits } = await import('@/lib/chat/file-edit-parser');
@@ -2190,13 +2193,13 @@ ${stepReprompt}`;
                       const writeEdits = extractFileWriteEdits(eventData.content);
                       allEdits = [...compactEdits, ...writeEdits];
                       if (allEdits.length > 0) {
-                        console.log('[Chat] Extracted fileEdits from task content:', allEdits.length, 'files');
+                        logger.info('[Chat] Extracted fileEdits from task content:', allEdits.length, 'files');
                       } else {
-                        console.log('[Chat] No fileEdits extracted, content length:', eventData.content.length);
+                        logger.info('[Chat] No fileEdits extracted, content length:', eventData.content.length);
                       }
                     }
 
-                    console.log('[Chat] Creating refinement message, edits:', allEdits.length, 'content length:', eventData.content?.length);
+                    logger.info('[Chat] Creating refinement message, edits:', allEdits.length, 'content length:', eventData.content?.length);
 
                     setMessages(prev => {
                       // Remove pending message if it exists
@@ -2229,12 +2232,12 @@ ${stepReprompt}`;
                         // Update existing task message
                         const updated = [...withoutPending];
                         updated[existingTaskIndex] = refinementMessage;
-                        console.log('[Chat] Updated existing refinement message at index:', existingTaskIndex);
+                        logger.info('[Chat] Updated existing refinement message at index:', existingTaskIndex);
                         return updated;
                       }
 
                       // Add new task message
-                      console.log('[Chat] Adding new refinement message');
+                      logger.info('[Chat] Adding new refinement message');
                       return withoutPending.concat(refinementMessage);
                     });
                   }
@@ -2251,13 +2254,13 @@ ${stepReprompt}`;
                       allEdits = eventData.fileEdits.filter((edit: any) => {
                         // Check path exists
                         if (!edit.path) {
-                          console.warn('[Chat] Filtering out fileEdit with missing path');
+                          logger.warn('[Chat] Filtering out fileEdit with missing path');
                           return false;
                         }
                         // Check content/diff is not empty
                         const content = edit.content || edit.diff || '';
                         if (!content || content.trim().length === 0) {
-                          console.warn('[Chat] Filtering out fileEdit with empty content (prevents infinite loop)', {
+                          logger.warn('[Chat] Filtering out fileEdit with empty content (prevents infinite loop)', {
                             path: edit.path,
                           });
                           return false;
@@ -2266,7 +2269,7 @@ ${stepReprompt}`;
                         if (!isValidExtractedPath(edit.path)) {
                           // Rate limit warnings
                           if (shouldShowInvalidPathWarning(edit.path)) {
-                            console.warn('[Chat] Filtering out fileEdit with invalid path (failed server-side validation)', {
+                            logger.warn('[Chat] Filtering out fileEdit with invalid path (failed server-side validation)', {
                               path: edit.path,
                             });
                           }
@@ -2274,7 +2277,7 @@ ${stepReprompt}`;
                         }
                         return true;
                       });
-                      console.log('[Chat] Using server-provided fileEdits:', allEdits.length, 'files');
+                      logger.info('[Chat] Using server-provided fileEdits:', allEdits.length, 'files');
                     } else if (eventData.refinedContent) {
                       // Fallback: extract from content (may fail with strict validation)
                       const { extractCompactFileEdits, extractFileWriteEdits } = await import('@/lib/chat/file-edit-parser');
@@ -2282,11 +2285,11 @@ ${stepReprompt}`;
                       const writeEdits = extractFileWriteEdits(eventData.refinedContent);
                       allEdits = [...compactEdits, ...writeEdits];
                       if (allEdits.length > 0) {
-                        console.log('[Chat] Extracted fileEdits from content:', allEdits.length, 'files');
+                        logger.info('[Chat] Extracted fileEdits from content:', allEdits.length, 'files');
                       }
                     }
 
-                    console.log('[Chat] Creating refinement summary message, edits:', allEdits.length, 'content length:', eventData.refinedContent?.length);
+                    logger.info('[Chat] Creating refinement summary message, edits:', allEdits.length, 'content length:', eventData.refinedContent?.length);
 
                     setMessages(prev => {
                       // Remove pending message if it exists
@@ -2318,12 +2321,12 @@ ${stepReprompt}`;
                         // Update existing summary
                         const updated = [...withoutPending];
                         updated[existingSummaryIndex] = refinementMessage;
-                        console.log('[Chat] Updated existing refinement summary at index:', existingSummaryIndex);
+                        logger.info('[Chat] Updated existing refinement summary at index:', existingSummaryIndex);
                         return updated;
                       }
 
                       // Add new summary message
-                      console.log('[Chat] Adding new refinement summary message');
+                      logger.info('[Chat] Adding new refinement summary message');
                       return withoutPending.concat(refinementMessage);
                     });
                   }
@@ -2384,7 +2387,7 @@ ${stepReprompt}`;
                   }
 
                   if (process.env.NODE_ENV === 'development') {
-                    console.log('[Chat] Tool call detected:', {
+                    logger.info('[Chat] Tool call detected:', {
                       toolCallId: eventData.toolCallId,
                       toolName: eventData.toolName,
                       args: eventData.args ? Object.keys(eventData.args) : 'none',
@@ -2665,7 +2668,7 @@ ${stepReprompt}`;
                 case 'commands':
                 case 'softTimeout':
                   if (process.env.NODE_ENV === 'development') {
-                    console.log(`Chat stream event (${eventType}):`, eventData);
+                    logger.info(`Chat stream event (${eventType}):`, eventData);
                   }
                   break;
 
@@ -2677,7 +2680,7 @@ ${stepReprompt}`;
                   // Guard: skip if already loading (prevents race condition on rapid auto-continues)
                   // Extend streaming timeout — auto-continue means server is still processing\                  resetStreamingTimeout();
                   if (isLoading) {
-                    console.log('[Auto-continue] Skipping - already loading');
+                    logger.info('[Auto-continue] Skipping - already loading');
                     break;
                   }
                   const contextHint = eventData.contextHint || '';
@@ -2708,7 +2711,7 @@ ${stepReprompt}`;
                     ));
                   }
 
-                  console.log('[Auto-continue] Triggering next request', {
+                  logger.info('[Auto-continue] Triggering next request', {
                     viaWS: eventType === 'need_more_turns',
                     toolSummary: !!toolSummary,
                     implicitFileCount: implicitFiles.length,
@@ -2722,7 +2725,7 @@ ${stepReprompt}`;
                     // overwriting user input that may have been typed during the 100ms delay
                     if (!isMountedRef.current) return;
                     if (inputQueue.length > 0) {
-                      console.log('[Auto-continue] Skipping - user typed during delay');
+                      logger.info('[Auto-continue] Skipping - user typed during delay');
                       return;
                     }
                     // FIX: Add error handling for auto-continue request failures
@@ -2735,7 +2738,7 @@ ${stepReprompt}`;
                         } as React.FormEvent<HTMLFormElement>
                       );
                     } catch (err) {
-                      console.error('[Auto-continue] handleSubmit failed:', err);
+                      logger.error('[Auto-continue] handleSubmit failed:', err);
                       setIsLoading(false);
                       setAgentStatus('error');
                     }
@@ -2751,7 +2754,7 @@ ${stepReprompt}`;
                   const reason = eventData.reason || '';
                   const listedPath = eventData.listedPath || '';
 
-                  console.log('[Auto-continue] List-files completed, nudging LLM to proceed', {
+                  logger.info('[Auto-continue] List-files completed, nudging LLM to proceed', {
                     reason,
                     listedPath,
                     continuationCount: eventData.continuationCount,
@@ -2817,7 +2820,7 @@ ${stepReprompt}`;
                 default:
                   // Handle unknown event types gracefully
                   if (process.env.NODE_ENV === 'development') {
-                    console.warn('Unknown event type:', eventType, eventData);
+                    logger.warn('Unknown event type:', eventType, eventData);
                   }
                   break;
               }
@@ -2836,7 +2839,7 @@ timeoutRef.current = null;
             : [];
           const isToolsInterrupted = streamingToolInvocations.length > 0;
 
-          console.warn('[Chat] Stream ended without DONE event', {
+          logger.warn('[Chat] Stream ended without DONE event', {
             isToolsInterrupted,
             toolNames: toolNameSet,
             toolCount: streamingToolInvocations.length,
@@ -2847,7 +2850,7 @@ timeoutRef.current = null;
           // indicate recovery is possible by setting autoContinueOnNextStream flag on metadata
           if (isToolsInterrupted && accumulatedContent.length === 0) {
             const toolNamesStr = toolNameSet.join(', ');
-            console.log('[Chat] Stream ended with tools but no content - marking for auto-continue recovery', {
+            logger.info('[Chat] Stream ended with tools but no content - marking for auto-continue recovery', {
               toolNames: toolNameSet,
             });
             setMessages(prev => prev.map(msg =>
@@ -2927,7 +2930,7 @@ timeoutRef.current = null;
     };
     
     // Log fallback attempt
-    console.log('[Chat] Attempting V1 fallback with messages:', {
+    logger.info('[Chat] Attempting V1 fallback with messages:', {
       messageCount: filteredMessages.length,
       api: options.api,
       hasBody: !!resolvedBody,
@@ -2945,7 +2948,7 @@ timeoutRef.current = null;
     } catch (fetchError) {
       // Handle network errors gracefully
       const errorMessage = fetchError instanceof Error ? fetchError.message : 'Network error during V1 fallback';
-      console.error('[Chat] V1 fallback fetch failed:', errorMessage);
+      logger.error('[Chat] V1 fallback fetch failed:', errorMessage);
       
       // If fetch failed, show a user-friendly error but preserve any accumulated content
       setError(new Error('Connection failed. Please check your network and try again.'));
@@ -2958,7 +2961,7 @@ timeoutRef.current = null;
     
     if (!v1Response.ok) {
       const errorText = await v1Response.text().catch(() => 'Unable to read error');
-      console.error('[Chat] V1 fallback HTTP error:', { status: v1Response.status, body: errorText });
+      logger.error('[Chat] V1 fallback HTTP error:', { status: v1Response.status, body: errorText });
       
       // Handle HTTP errors gracefully
       setError(new Error(`Server error: ${v1Response.status}`));
@@ -2970,16 +2973,16 @@ timeoutRef.current = null;
     }
     
     if (!v1Response.body) {
-      console.error('[Chat] V1 fallback returned empty response body');
+      logger.error('[Chat] V1 fallback returned empty response body');
       throw new Error('No response body from v1 fallback');
     }
     
-    console.log('[Chat] V1 fallback request successful, processing stream...');
+    logger.info('[Chat] V1 fallback request successful, processing stream...');
     
     // Wrap onFinish to add fallback metadata
     const originalOnFinish = options.onFinish;
     const fallbackOnFinish = (message: Message) => {
-      console.log('[Chat] V1 fallback completed successfully', {
+      logger.info('[Chat] V1 fallback completed successfully', {
         contentLength: message.content?.length,
         hasMetadata: !!message.metadata,
       });
@@ -2995,7 +2998,7 @@ timeoutRef.current = null;
     try {
       await processV1Stream(v1Response.body, assistantMessage, abortController, fallbackOnFinish);
     } catch (streamError) {
-      console.error('[Chat] V1 fallback stream processing error:', streamError);
+      logger.error('[Chat] V1 fallback stream processing error:', streamError);
       throw streamError;
     }
   };
@@ -3070,7 +3073,7 @@ timeoutRef.current = null;
           try {
             parsedObjects = parser.parse(dataString + '\n');
           } catch (parseError) {
-            console.warn('V1 stream parsing error:', parseError);
+            logger.warn('V1 stream parsing error:', parseError);
             continue;
           }
           
@@ -3105,7 +3108,7 @@ timeoutRef.current = null;
     setIsLoading(false);
 
     if (!receivedDoneMarker) {
-      console.warn('[Chat] V1 stream ended without [DONE] marker', {
+      logger.warn('[Chat] V1 stream ended without [DONE] marker', {
         accumulatedContentLength: accumulatedContent.length,
       });
       setMessages(prev => prev.map(msg =>

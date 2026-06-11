@@ -26,6 +26,9 @@
 import { parsePatch, applyPatch, createTwoFilesPatch } from 'diff';
 import diff_match_patch from 'diff-match-patch';
 import { withRetry, isRetryableError } from '@/lib/vector-memory/retry';
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('Chat:FileDiff');
 
 export interface DiffEdit {
   path: string;
@@ -111,7 +114,7 @@ export function applyUnifiedDiffToContent(currentContent: string, path: string, 
   try {
     const parsed = parsePatch(unifiedDiff);
     if (!parsed || !parsed.length) {
-      console.warn('[applyUnifiedDiffToContent] parsePatch returned no results');
+      logger.warn('[applyUnifiedDiffToContent] parsePatch returned no results');
       return null;
     }
     
@@ -119,20 +122,20 @@ export function applyUnifiedDiffToContent(currentContent: string, path: string, 
     
     // Validate patch has required hunks
     if (!patch.hunks || !patch.hunks.length) {
-      console.warn('[applyUnifiedDiffToContent] No hunks in patch');
+      logger.warn('[applyUnifiedDiffToContent] No hunks in patch');
       return null;
     }
     
     const patched = applyPatch(currentContent, patch);
     if (patched === false) {
-      console.warn('[applyUnifiedDiffToContent] applyPatch returned false - diff may not match content');
+      logger.warn('[applyUnifiedDiffToContent] applyPatch returned false - diff may not match content');
       return null;
     }
     
     return patched;
   } catch (error: any) {
     // More detailed error logging for debugging
-    console.error('[applyUnifiedDiffToContent] Failed to apply unified diff:', {
+    logger.error('[applyUnifiedDiffToContent] Failed to apply unified diff:', {
       error: error.message,
       path,
       diffLength: diffBody.length,
@@ -278,7 +281,7 @@ export function applySearchAndReplace(currentContent: string, diffBody: string):
   }
 
   if (appliedCount === 0) {
-    console.warn('[applySearchAndReplace] No SEARCH blocks matched current content', {
+    logger.warn('[applySearchAndReplace] No SEARCH blocks matched current content', {
       blocksFound: (diffBody.match(sarPattern) || []).length,
       contentLength: currentContent.length,
     });
@@ -312,7 +315,7 @@ export function applyDiffMatchPatch(currentContent: string, diffBody: string): s
     const allSuccess = successes.every(s => s);
     
     if (!allSuccess) {
-      console.warn('[applyDiffMatchPatch] Some patches failed to apply', {
+      logger.warn('[applyDiffMatchPatch] Some patches failed to apply', {
         totalPatches: diffs.length,
         successfulPatches: successes.filter(s => s).length,
         failedPatches: successes.filter(s => !s).length,
@@ -327,13 +330,13 @@ export function applyDiffMatchPatch(currentContent: string, diffBody: string): s
     
     // Verify result is not empty unless original was empty
     if (result.trim().length === 0 && currentContent.trim().length > 0) {
-      console.warn('[applyDiffMatchPatch] Result would empty non-empty file, rejecting');
+      logger.warn('[applyDiffMatchPatch] Result would empty non-empty file, rejecting');
       return null;
     }
     
     return result;
   } catch (error: any) {
-    console.error('[applyDiffMatchPatch] Failed:', {
+    logger.error('[applyDiffMatchPatch] Failed:', {
       error: error.message,
       diffLength: diffBody.length,
       contentLength: currentContent.length,
@@ -352,7 +355,7 @@ export function applyDiffMatchPatch(currentContent: string, diffBody: string): s
 export function applyDiffToContent(currentContent: string, path: string, diffBody: string): string | null {
   // CRITICAL FIX: Reject empty diffs immediately to prevent infinite loops
   if (!diffBody || diffBody.trim().length === 0) {
-    console.debug('[applyDiffToContent] Empty diff body - skipping (prevents infinite loop)');
+    logger.debug('[applyDiffToContent] Empty diff body - skipping (prevents infinite loop)');
     return null;
   }
 
@@ -369,7 +372,7 @@ export function applyDiffToContent(currentContent: string, path: string, diffBod
   // STRATEGY 0: If content looks like a complete file, use it directly
   // This handles LLM responses that send full file content instead of diffs
   if (isLikelyFullFileContent && looksLikeCompleteFile(diffBody)) {
-    console.log('[applyDiffToContent] Content appears to be full file, using directly', {
+    logger.info('[applyDiffToContent] Content appears to be full file, using directly', {
       path,
       contentLength: diffBody.length,
     });
@@ -385,7 +388,7 @@ export function applyDiffToContent(currentContent: string, path: string, diffBod
     if (sarResult !== null) {
       // SAFETY CHECK: Verify result is not empty unless original was empty
       if (sarResult.trim().length === 0 && currentContent.trim().length > 0) {
-        console.warn('[applyDiffToContent] Search-and-replace would empty non-empty file, rejecting', {
+        logger.warn('[applyDiffToContent] Search-and-replace would empty non-empty file, rejecting', {
           path,
           diffPreviewLength: Math.min(diffBody.length, 200),
         });
@@ -402,7 +405,7 @@ export function applyDiffToContent(currentContent: string, path: string, diffBod
   // Search-and-replace format (handled above) is exempted.
   if (!hasRealDiffMarkers && !hasUnifiedDiffHeader && diffBody.length > 100 && !looksLikeCompleteFile(diffBody)) {
     // Long content with no diff markers and no file structure - likely malformed
-    console.warn('[applyDiffToContent] Content appears malformed (no diff markers, not recognizable file), rejecting for safety', {
+    logger.warn('[applyDiffToContent] Content appears malformed (no diff markers, not recognizable file), rejecting for safety', {
       path,
       diffPreviewLength: Math.min(diffBody.length, 200),
     });
@@ -414,7 +417,7 @@ export function applyDiffToContent(currentContent: string, path: string, diffBod
   if (unifiedResult !== null) {
     // SAFETY CHECK 2: Verify result is not empty unless original was empty
     if (unifiedResult.trim().length === 0 && currentContent.trim().length > 0) {
-      console.warn('[applyDiffToContent] Unified diff would empty non-empty file, rejecting', {
+      logger.warn('[applyDiffToContent] Unified diff would empty non-empty file, rejecting', {
         path,
         diffPreviewLength: Math.min(diffBody.length, 200),
       });
@@ -428,7 +431,7 @@ export function applyDiffToContent(currentContent: string, path: string, diffBod
   if (dmpResult !== null) {
     // SAFETY CHECK 3: Verify result is not empty unless original was empty
     if (dmpResult.trim().length === 0 && currentContent.trim().length > 0) {
-      console.warn('[applyDiffToContent] diff-match-patch would empty non-empty file, rejecting', {
+      logger.warn('[applyDiffToContent] diff-match-patch would empty non-empty file, rejecting', {
         path,
         diffPreviewLength: Math.min(diffBody.length, 200),
       });
@@ -442,7 +445,7 @@ export function applyDiffToContent(currentContent: string, path: string, diffBod
   if (lineDiffResult !== null) {
     // SAFETY CHECK 4: Verify result is not empty unless original was empty
     if (lineDiffResult.trim().length === 0 && currentContent.trim().length > 0) {
-      console.warn('[applyDiffToContent] Line diff would empty non-empty file, rejecting', {
+      logger.warn('[applyDiffToContent] Line diff would empty non-empty file, rejecting', {
         path,
         diffPreviewLength: Math.min(diffBody.length, 200),
       });
@@ -453,7 +456,7 @@ export function applyDiffToContent(currentContent: string, path: string, diffBod
 
   // All strategies failed - DO NOT fall back to full file replacement
   // This is intentional for safety - better to fail than corrupt files
-  console.error('[applyDiffToContent] All diff application strategies failed (safely rejected)', {
+  logger.error('[applyDiffToContent] All diff application strategies failed (safely rejected)', {
     path,
     diffLength: diffBody.length,
     contentLength: currentContent.length,
@@ -504,7 +507,7 @@ export function applySymbolPatch(
   const lines = content.split('\n');
 
   if (symbol.startLine < 0 || symbol.endLine >= lines.length) {
-    console.warn('[applySymbolPatch] Symbol range out of bounds', {
+    logger.warn('[applySymbolPatch] Symbol range out of bounds', {
       symbol: symbol.name,
       startLine: symbol.startLine,
       endLine: symbol.endLine,
@@ -745,7 +748,7 @@ export async function repairDiff(opts: {
         };
       }
     } catch (error) {
-      console.warn(`[repairDiff] Attempt ${attempt + 1} failed`, {
+      logger.warn(`[repairDiff] Attempt ${attempt + 1} failed`, {
         error: error instanceof Error ? error.message : String(error),
       });
     }

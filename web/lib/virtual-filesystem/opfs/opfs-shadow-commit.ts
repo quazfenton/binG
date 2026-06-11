@@ -19,6 +19,10 @@ import { opfsAdapter } from './opfs-adapter';
 import { generateUnifiedDiff } from './diff-utils';
 import { getWorkspaceSnapshot, writeFileToServer } from './opfs-api-client';
 
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('VFS:OPFSShadowCommit');
+
 // Generate UUID for commit IDs
 function generateUUID(): string {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
@@ -113,7 +117,7 @@ export class OPFSShadowCommitManager {
     await this.loadMetadata();
 
     this.initialized = true;
-    console.log('[OPFS ShadowCommit] Initialized for workspace:', workspaceId);
+    logger.info('[OPFS ShadowCommit] Initialized for workspace:', workspaceId);
   }
 
   /**
@@ -216,12 +220,12 @@ export class OPFSShadowCommitManager {
 
       await this.saveMetadata();
 
-      console.log('[OPFS ShadowCommit] Created commit:', commitId, filesChanged, 'files');
+      logger.info('[OPFS ShadowCommit] Created commit:', commitId, filesChanged, 'files');
 
       // Auto-sync to server if enabled
       if (options.autoSync) {
         this.syncCommitToServer(commitId).catch(err => {
-          console.warn('[OPFS ShadowCommit] Auto-sync failed:', err);
+          logger.warn('[OPFS ShadowCommit] Auto-sync failed:', err);
         });
       }
 
@@ -233,7 +237,7 @@ export class OPFSShadowCommitManager {
         timestamp,
       };
     } catch (error: any) {
-      console.error('[OPFS ShadowCommit] Commit failed:', error.message);
+      logger.error('[OPFS ShadowCommit] Commit failed:', error.message);
       return {
         success: false,
         committedFiles: 0,
@@ -277,11 +281,11 @@ export class OPFSShadowCommitManager {
       this.metadata.lastSyncTime = Date.now();
       await this.saveMetadata();
 
-      console.log('[OPFS ShadowCommit] Synced commit to server:', commitId);
+      logger.info('[OPFS ShadowCommit] Synced commit to server:', commitId);
 
       return true;
     } catch (error: any) {
-      console.error('[OPFS ShadowCommit] Sync failed:', error.message);
+      logger.error('[OPFS ShadowCommit] Sync failed:', error.message);
       return false;
     }
   }
@@ -316,19 +320,19 @@ export class OPFSShadowCommitManager {
               restoredFiles++;
             }
           } catch (error: any) {
-            console.warn('[OPFS ShadowCommit] Failed to restore file:', entry.name, error.message);
+            logger.warn('[OPFS ShadowCommit] Failed to restore file:', entry.name, error.message);
           }
         }
       }
 
-      console.log('[OPFS ShadowCommit] Restored commit:', commitId, restoredFiles, 'files');
+      logger.info('[OPFS ShadowCommit] Restored commit:', commitId, restoredFiles, 'files');
 
       return {
         success: true,
         restoredFiles,
       };
     } catch (error: any) {
-      console.error('[OPFS ShadowCommit] Restore failed:', error.message);
+      logger.error('[OPFS ShadowCommit] Restore failed:', error.message);
       return {
         success: false,
         restoredFiles: 0,
@@ -381,11 +385,11 @@ export class OPFSShadowCommitManager {
       this.metadata.commits.splice(commitIndex, 1);
       await this.saveMetadata();
 
-      console.log('[OPFS ShadowCommit] Deleted commit:', commitId);
+      logger.info('[OPFS ShadowCommit] Deleted commit:', commitId);
 
       return true;
     } catch (error: any) {
-      console.error('[OPFS ShadowCommit] Delete failed:', error.message);
+      logger.error('[OPFS ShadowCommit] Delete failed:', error.message);
       return false;
     }
   }
@@ -444,9 +448,9 @@ export class OPFSShadowCommitManager {
       this.metadata = { commits: [], lastSyncTime: 0 };
       await this.saveMetadata();
 
-      console.log('[OPFS ShadowCommit] Cleared all commits');
+      logger.info('[OPFS ShadowCommit] Cleared all commits');
     } catch (error: any) {
-      console.error('[OPFS ShadowCommit] Clear failed:', error.message);
+      logger.error('[OPFS ShadowCommit] Clear failed:', error.message);
     }
   }
 }

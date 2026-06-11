@@ -19,6 +19,10 @@
 import type { SandboxHandle } from './sandbox-provider'
 import type { BatchTask, BatchJobConfig } from './sandbox-provider'
 
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('Sandbox:BlaxelMCP');
+
 function sanitizeSandboxPath(inputPath: string, basePath: string = '/workspace'): string {
   if (!inputPath || typeof inputPath !== 'string') {
     return basePath;
@@ -550,8 +554,8 @@ export class BlaxelMcpServer {
       StdioServerTransport = stdio.StdioServerTransport;
     } catch (error: any) {
       const msg = error instanceof Error ? error.message : String(error);
-      console.error('[BlaxelMCP] Failed to import MCP SDK:', msg);
-      console.error('[BlaxelMCP] Install with: npm install @modelcontextprotocol/sdk');
+      logger.error('[BlaxelMCP] Failed to import MCP SDK:', msg);
+      logger.error('[BlaxelMCP] Install with: npm install @modelcontextprotocol/sdk');
       throw new Error(`MCP SDK not available: ${msg}`);
     }
 
@@ -567,21 +571,21 @@ export class BlaxelMcpServer {
       await this.server.connect(transport);
 
       this.connected = true;
-      console.error('[BlaxelMCP] Server running on stdio');
-      console.error('[BlaxelMCP] Available tools:');
-      console.error('[BlaxelMCP]   - execute_command');
-      console.error('[BlaxelMCP]   - write_file');
-      console.error('[BlaxelMCP]   - read_file');
-      console.error('[BlaxelMCP]   - list_directory');
-      console.error('[BlaxelMCP]   - get_sandbox_info');
+      logger.error('[BlaxelMCP] Server running on stdio');
+      logger.error('[BlaxelMCP] Available tools:');
+      logger.error('[BlaxelMCP]   - execute_command');
+      logger.error('[BlaxelMCP]   - write_file');
+      logger.error('[BlaxelMCP]   - read_file');
+      logger.error('[BlaxelMCP]   - list_directory');
+      logger.error('[BlaxelMCP]   - get_sandbox_info');
       if (this.sandboxHandle.runBatchJob) {
-        console.error('[BlaxelMCP]   - run_batch_job');
+        logger.error('[BlaxelMCP]   - run_batch_job');
       }
       if (this.sandboxHandle.executeAsync) {
-        console.error('[BlaxelMCP]   - execute_async');
+        logger.error('[BlaxelMCP]   - execute_async');
       }
     } catch (error: any) {
-      console.error('[BlaxelMCP] Failed to start server:', error.message);
+      logger.error('[BlaxelMCP] Failed to start server:', error.message);
       throw error;
     }
   }
@@ -611,8 +615,8 @@ export class BlaxelMcpServer {
       StreamableHTTPServerTransport = http.StreamableHTTPServerTransport;
     } catch (error: any) {
       const msg = error instanceof Error ? error.message : String(error);
-      console.error('[BlaxelMCP] Failed to import MCP SDK:', msg);
-      console.error('[BlaxelMCP] Install with: npm install @modelcontextprotocol/sdk');
+      logger.error('[BlaxelMCP] Failed to import MCP SDK:', msg);
+      logger.error('[BlaxelMCP] Install with: npm install @modelcontextprotocol/sdk');
       throw new Error(`MCP SDK not available: ${msg}`);
     }
 
@@ -633,11 +637,11 @@ export class BlaxelMcpServer {
 
       this.connected = true;
       const url = `http://localhost:${port}/mcp`;
-      console.error(`[BlaxelMCP] HTTP server running on ${url}`);
+      logger.error(`[BlaxelMCP] HTTP server running on ${url}`);
 
       return url;
     } catch (error: any) {
-      console.error('[BlaxelMCP] Failed to start HTTP server:', error.message);
+      logger.error('[BlaxelMCP] Failed to start HTTP server:', error.message);
       throw error;
     }
   }
@@ -656,7 +660,7 @@ export class BlaxelMcpServer {
     if (this.server && this.connected) {
       await this.server.close()
       this.connected = false
-      console.error('[BlaxelMCP] Server closed')
+      logger.error('[BlaxelMCP] Server closed')
     }
   }
 }

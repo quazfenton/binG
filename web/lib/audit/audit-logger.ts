@@ -1,3 +1,7 @@
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('Audit:AuditLogger');
+
 /**
  * Audit logging utility for critical actions.
  * Logs user identity, timestamp, action, and outcome for compliance and forensics.
@@ -44,7 +48,7 @@ export class AuditLogger {
     };
 
     // Log to console with structured format for log aggregation
-    console.log('[AUDIT]', JSON.stringify(logEntry));
+    logger.info('[AUDIT]', JSON.stringify(logEntry));
 
     // Also emit as structured log for potential external audit sinks
     this.emitToAuditSink(logEntry);

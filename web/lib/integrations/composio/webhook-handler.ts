@@ -91,6 +91,9 @@ export function parseWebhookPayload(body: string): WebhookPayload {
  * ```typescript
  * // app/api/webhooks/composio/route.ts
  * import { handleComposioWebhook } from '@/lib/integrations/composio/webhook-handler';
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('Integration:ComposioWebhook');
  *
  * export async function POST(request: NextRequest) {
  *   return handleComposioWebhook(request);
@@ -125,7 +128,7 @@ export async function handleComposioWebhook(request: NextRequest): Promise<NextR
     // Process the parsed payload
     return processWebhookPayload(payload);
   } catch (error: any) {
-    console.error('[ComposioWebhook] Error:', error.message);
+    logger.error('[ComposioWebhook] Error:', error.message);
     return NextResponse.json(
       { error: error.message },
       { status: 400 }
@@ -145,7 +148,7 @@ export async function handleComposioWebhookWithPayload(payload: WebhookPayload):
  */
 async function processWebhookPayload(payload: WebhookPayload): Promise<NextResponse> {
   // Log event (sanitized)
-  console.log('[ComposioWebhook] Received event:', {
+  logger.info('[ComposioWebhook] Received event:', {
     type: payload.event_type,
     triggerSlug: payload.metadata.trigger_slug,
     appName: payload.metadata.app_name,
@@ -170,7 +173,7 @@ async function processWebhookPayload(payload: WebhookPayload): Promise<NextRespo
       break;
 
     default:
-      console.warn('[ComposioWebhook] Unknown event type:', payload.event_type);
+      logger.warn('[ComposioWebhook] Unknown event type:', payload.event_type);
   }
 
   return NextResponse.json({ success: true });
@@ -192,7 +195,7 @@ async function handleTriggerMessage(payload: WebhookPayload): Promise<void> {
   const { trigger_slug, connected_account_id, app_name } = payload.metadata;
   const eventData = payload.data;
 
-  console.log('[ComposioWebhook] Trigger message:', {
+  logger.info('[ComposioWebhook] Trigger message:', {
     trigger: trigger_slug,
     account: connected_account_id,
     dataKeys: Object.keys(eventData),
@@ -202,7 +205,7 @@ async function handleTriggerMessage(payload: WebhookPayload): Promise<void> {
   if (handler) {
     await handler(eventData);
   } else {
-    console.log(`[ComposioWebhook] No handler registered for trigger: ${trigger_slug}`);
+    logger.info(`[ComposioWebhook] No handler registered for trigger: ${trigger_slug}`);
   }
 }
 
@@ -213,7 +216,7 @@ async function handleTriggerState(payload: WebhookPayload): Promise<void> {
   const { trigger_slug } = payload.metadata;
   const state = payload.data.state;
 
-  console.log('[ComposioWebhook] Trigger state changed:', {
+  logger.info('[ComposioWebhook] Trigger state changed:', {
     trigger: trigger_slug,
     state,
   });
@@ -233,7 +236,7 @@ const connectedAccounts = new Map<string, {
 async function handleAccountConnected(payload: WebhookPayload): Promise<void> {
   const { app_name, app_slug, connected_account_id } = payload.metadata;
 
-  console.log('[ComposioWebhook] Account connected:', {
+  logger.info('[ComposioWebhook] Account connected:', {
     app: app_name,
     account: connected_account_id,
   });
@@ -246,7 +249,7 @@ async function handleAccountConnected(payload: WebhookPayload): Promise<void> {
     status: 'connected',
   });
 
-  console.log(`[ComposioWebhook] Updated connected account: ${connected_account_id} for app: ${app_name}`);
+  logger.info(`[ComposioWebhook] Updated connected account: ${connected_account_id} for app: ${app_name}`);
 }
 
 /**
@@ -255,7 +258,7 @@ async function handleAccountConnected(payload: WebhookPayload): Promise<void> {
 async function handleAccountDisconnected(payload: WebhookPayload): Promise<void> {
   const { app_name, connected_account_id } = payload.metadata;
 
-  console.log('[ComposioWebhook] Account disconnected:', {
+  logger.info('[ComposioWebhook] Account disconnected:', {
     app: app_name,
     account: connected_account_id,
   });
@@ -266,7 +269,7 @@ async function handleAccountDisconnected(payload: WebhookPayload): Promise<void>
     connectedAccounts.set(connected_account_id, account);
   }
 
-  console.log(`[ComposioWebhook] Updated disconnected account: ${connected_account_id} for app: ${app_name}`);
+  logger.info(`[ComposioWebhook] Updated disconnected account: ${connected_account_id} for app: ${app_name}`);
 }
 
 /**
@@ -290,5 +293,5 @@ export function registerWebhookHandler(
 ): void {
   // Store handlers in a map for routing
   // This would be implemented based on your application's architecture
-  console.log('[ComposioWebhook] Handler registered for:', eventType);
+  logger.info('[ComposioWebhook] Handler registered for:', eventType);
 }

@@ -19,6 +19,7 @@
 
 import { resolve, relative, dirname } from 'node:path'
 import { quotaManager } from '@/lib/management/quota-manager'
+import { createLogger } from '@/lib/utils/logger';
 import { SandboxSecurityManager } from '../security-manager'
 import type { ToolResult, PreviewInfo } from '../types'
 import type {
@@ -60,7 +61,7 @@ export class CodeSandboxProvider implements SandboxProvider {
     this.commandTimeout = parseInt(process.env.CSB_COMMAND_TIMEOUT || '600000', 10)
 
     if (!this.apiKey) {
-      console.warn('[CodeSandbox] CSB_API_KEY not set. CodeSandbox sandboxes will not be available.')
+      logger.warn('[CodeSandbox] CSB_API_KEY not set. CodeSandbox sandboxes will not be available.')
     }
   }
 
@@ -73,7 +74,7 @@ export class CodeSandboxProvider implements SandboxProvider {
       return this.sdkModule
     } catch (error: any) {
       this.moduleLoadError = '@codesandbox/sdk not installed. Run: npm install @codesandbox/sdk'
-      console.error('[CodeSandbox]', this.moduleLoadError)
+      logger.error('[CodeSandbox]', this.moduleLoadError)
       throw new Error(this.moduleLoadError)
     }
   }
@@ -108,14 +109,14 @@ export class CodeSandboxProvider implements SandboxProvider {
           'svelte': 'svelte',
         }
         createOpts.id = templateMap[config.language] || this.defaultTemplate || 'node'
-        console.log('[CodeSandbox] Using template:', createOpts.id, 'for language:', config.language)
+        logger.info('[CodeSandbox] Using template:', createOpts.id, 'for language:', config.language)
       } else if (this.defaultTemplate) {
         createOpts.id = this.defaultTemplate
-        console.log('[CodeSandbox] Using default template:', this.defaultTemplate)
+        logger.info('[CodeSandbox] Using default template:', this.defaultTemplate)
       } else {
         // Default to node template if nothing specified
         createOpts.id = 'node'
-        console.log('[CodeSandbox] Using fallback template: node')
+        logger.info('[CodeSandbox] Using fallback template: node')
       }
       
       if (config.labels?.userId) {
@@ -137,10 +138,10 @@ export class CodeSandboxProvider implements SandboxProvider {
         createOpts.vmTier = VMTier[this.vmTier as keyof typeof VMTier] || VMTier.Micro
       }
 
-      console.log(`[CodeSandbox] Creating sandbox - User: ${config.labels?.userId || 'unknown'}, Template: ${createOpts.id}, Privacy: ${this.privacy || 'default'}`)
+      logger.info(`[CodeSandbox] Creating sandbox - User: ${config.labels?.userId || 'unknown'}, Template: ${createOpts.id}, Privacy: ${this.privacy || 'default'}`)
 
       const sandbox: CSBSandbox = await sdk.sandboxes.create(createOpts)
-      console.log(`[CodeSandbox] ✓ Created sandbox ${sandbox.id}`)
+      logger.info(`[CodeSandbox] ✓ Created sandbox ${sandbox.id}`)
 
       const client: CSBClient = await sandbox.connect()
 
@@ -157,14 +158,14 @@ export class CodeSandboxProvider implements SandboxProvider {
       }
 
       quotaManager.recordUsage('codesandbox', 1)
-      console.log(`[CodeSandbox] Created sandbox ${sandbox.id}`)
+      logger.info(`[CodeSandbox] Created sandbox ${sandbox.id}`)
 
       return new CodeSandboxHandle(sandbox.id, client, sdk, {
         commandTimeout: this.commandTimeout,
       })
     } catch (error: any) {
-      console.error('[CodeSandbox] Failed to create sandbox:', error)
-      console.error('[CodeSandbox] Error details:', JSON.stringify({
+      logger.error('[CodeSandbox] Failed to create sandbox:', error)
+      logger.error('[CodeSandbox] Error details:', JSON.stringify({
         message: error.message,
         stack: error.stack,
         name: error.name,
@@ -191,13 +192,13 @@ export class CodeSandboxProvider implements SandboxProvider {
       try {
         sandbox = await sdk.sandboxes.resume(sandboxId)
         wasHibernated = true
-        console.log(`[CodeSandbox] Resumed hibernated sandbox ${sandboxId}`)
+        logger.info(`[CodeSandbox] Resumed hibernated sandbox ${sandboxId}`)
       } catch (resumeError: any) {
         // If resume fails because it's already running, get the sandbox directly
         if (resumeError.message?.includes('already running') ||
             resumeError.message?.includes('not hibernated')) {
           sandbox = await sdk.sandboxes.get(sandboxId)
-          console.log(`[CodeSandbox] Connected to running sandbox ${sandboxId}`)
+          logger.info(`[CodeSandbox] Connected to running sandbox ${sandboxId}`)
         } else {
           // Re-throw the error - let the outer catch block handle it
           throw resumeError
@@ -211,7 +212,7 @@ export class CodeSandboxProvider implements SandboxProvider {
         await this.waitForSandboxReady(client)
       }
 
-      console.log(`[CodeSandbox] Connected to sandbox ${sandboxId}`)
+      logger.info(`[CodeSandbox] Connected to sandbox ${sandboxId}`)
       return new CodeSandboxHandle(sandboxId, client, sdk)
     } catch (error: any) {
       // Handle specific hibernation errors
@@ -223,14 +224,14 @@ export class CodeSandboxProvider implements SandboxProvider {
           const sandbox = await sdk.sandboxes.resume(sandboxId)
           const client: CSBClient = await sandbox.connect()
           await this.waitForSandboxReady(client)
-          console.log(`[CodeSandbox] Woke and connected to sandbox ${sandboxId}`)
+          logger.info(`[CodeSandbox] Woke and connected to sandbox ${sandboxId}`)
           return new CodeSandboxHandle(sandboxId, client, sdk)
         } catch (wakeError: any) {
-          console.error(`[CodeSandbox] Wake failed:`, wakeError.message)
+          logger.error(`[CodeSandbox] Wake failed:`, wakeError.message)
         }
       }
 
-      console.error(`[CodeSandbox] Failed to get sandbox ${sandboxId}:`, error)
+      logger.error(`[CodeSandbox] Failed to get sandbox ${sandboxId}:`, error)
       throw error
     }
   }
@@ -246,7 +247,7 @@ export class CodeSandboxProvider implements SandboxProvider {
     while (Date.now() - start < timeoutMs) {
       try {
         await client.commands.run('echo ready', { cwd: WORKSPACE_DIR, timeout: 2000 })
-        console.log(`[CodeSandbox] Sandbox became ready after ${Date.now() - start}ms`)
+        logger.info(`[CodeSandbox] Sandbox became ready after ${Date.now() - start}ms`)
         return
       } catch {
         // Sandbox not ready yet, wait and retry
@@ -259,7 +260,7 @@ export class CodeSandboxProvider implements SandboxProvider {
 
   async destroySandbox(sandboxId: string): Promise<void> {
     if (!this.apiKey) {
-      console.warn('[CodeSandbox] Cannot destroy sandbox: CSB_API_KEY not configured')
+      logger.warn('[CodeSandbox] Cannot destroy sandbox: CSB_API_KEY not configured')
       return
     }
 
@@ -269,13 +270,13 @@ export class CodeSandboxProvider implements SandboxProvider {
     try {
       const sdk: CodeSandboxSDK = new CodeSandbox(this.apiKey)
       await sdk.sandboxes.shutdown(sandboxId)
-      console.log(`[CodeSandbox] Shutdown sandbox ${sandboxId}`)
+      logger.info(`[CodeSandbox] Shutdown sandbox ${sandboxId}`)
     } catch (error: any) {
       if (error.message?.includes('not found') || error.message?.includes('not running')) {
-        console.log(`[CodeSandbox] Sandbox ${sandboxId} already stopped`)
+        logger.info(`[CodeSandbox] Sandbox ${sandboxId} already stopped`)
         return
       }
-      console.error(`[CodeSandbox] Failed to destroy sandbox ${sandboxId}:`, error)
+      logger.error(`[CodeSandbox] Failed to destroy sandbox ${sandboxId}:`, error)
       throw error
     }
   }
@@ -286,6 +287,8 @@ interface CodeSandboxHandleOptions {
 }
 
 import { CodeSandboxAdvancedIntegration } from './codesandbox-advanced'
+
+const logger = createLogger('Sandbox:CodeSandbox');
 
 class CodeSandboxHandle implements SandboxHandle {
   readonly id: string
@@ -320,7 +323,7 @@ class CodeSandboxHandle implements SandboxHandle {
   async deleteSnapshot(snapshotId: string): Promise<void> {
     // Advanced integration doesn't have delete, but we can clear the map entry if we had access
     // For now, this is a placeholder
-    console.warn('[CodeSandbox] deleteSnapshot not fully implemented')
+    logger.warn('[CodeSandbox] deleteSnapshot not fully implemented')
   }
 
   async executeCommand(command: string, cwd?: string, timeout?: number): Promise<ToolResult> {
@@ -341,7 +344,7 @@ class CodeSandboxHandle implements SandboxHandle {
     } catch (error: any) {
       // Security exceptions should be logged but not expose details
       if (error.message?.includes('Security Exception')) {
-        console.warn('[CodeSandbox] Security validation failed:', error.message)
+        logger.warn('[CodeSandbox] Security validation failed:', error.message)
         return {
           success: false,
           output: 'Security validation failed',
@@ -392,14 +395,14 @@ class CodeSandboxHandle implements SandboxHandle {
     } catch (error: any) {
       // Security exceptions should be logged but not expose details
       if (error.message?.includes('Security Exception')) {
-        console.warn('[CodeSandbox] Security validation failed:', error.message)
+        logger.warn('[CodeSandbox] Security validation failed:', error.message)
         return {
           success: false,
           output: 'Security validation failed',
         }
       }
       
-      console.error('[CodeSandbox] Write file error:', error)
+      logger.error('[CodeSandbox] Write file error:', error)
       return {
         success: false,
         output: error.message || 'Failed to write file',
@@ -417,7 +420,7 @@ class CodeSandboxHandle implements SandboxHandle {
         output: content,
       }
     } catch (error: any) {
-      console.error('[CodeSandbox] Read file error:', error)
+      logger.error('[CodeSandbox] Read file error:', error)
       return {
         success: false,
         output: error.message || 'Failed to read file',
@@ -439,7 +442,7 @@ class CodeSandboxHandle implements SandboxHandle {
         output: formatted || '(empty directory)',
       }
     } catch (error: any) {
-      console.error('[CodeSandbox] List directory error:', error)
+      logger.error('[CodeSandbox] List directory error:', error)
       return {
         success: false,
         output: error.message || 'Failed to list directory',
@@ -467,7 +470,7 @@ class CodeSandboxHandle implements SandboxHandle {
         output: `Binary file written: ${resolved}`,
       }
     } catch (error: any) {
-      console.error('[CodeSandbox] Write binary file error:', error)
+      logger.error('[CodeSandbox] Write binary file error:', error)
       return {
         success: false,
         output: error.message || 'Failed to write binary file',
@@ -486,7 +489,7 @@ class CodeSandboxHandle implements SandboxHandle {
         binary: content,
       }
     } catch (error: any) {
-      console.error('[CodeSandbox] Read binary file error:', error)
+      logger.error('[CodeSandbox] Read binary file error:', error)
       return {
         success: false,
         output: error.message || 'Failed to read binary file',
@@ -508,7 +511,7 @@ class CodeSandboxHandle implements SandboxHandle {
         output: `Batch wrote ${files.length} files`,
       }
     } catch (error: any) {
-      console.error('[CodeSandbox] Batch write error:', error)
+      logger.error('[CodeSandbox] Batch write error:', error)
       return {
         success: false,
         output: error.message || 'Failed to batch write files',
@@ -528,7 +531,7 @@ class CodeSandboxHandle implements SandboxHandle {
         output: `Copied ${resolvedSrc} to ${resolvedDest}`,
       }
     } catch (error: any) {
-      console.error('[CodeSandbox] Copy file error:', error)
+      logger.error('[CodeSandbox] Copy file error:', error)
       return {
         success: false,
         output: error.message || 'Failed to copy file',
@@ -548,7 +551,7 @@ class CodeSandboxHandle implements SandboxHandle {
         output: `Renamed ${resolvedOld} to ${resolvedNew}`,
       }
     } catch (error: any) {
-      console.error('[CodeSandbox] Rename file error:', error)
+      logger.error('[CodeSandbox] Rename file error:', error)
       return {
         success: false,
         output: error.message || 'Failed to rename file',
@@ -567,7 +570,7 @@ class CodeSandboxHandle implements SandboxHandle {
         output: `Removed ${resolved}`,
       }
     } catch (error: any) {
-      console.error('[CodeSandbox] Remove file error:', error)
+      logger.error('[CodeSandbox] Remove file error:', error)
       return {
         success: false,
         output: error.message || 'Failed to remove file',
@@ -581,7 +584,7 @@ class CodeSandboxHandle implements SandboxHandle {
       const { downloadUrl } = await this.client.fs.download(resolved)
       return { downloadUrl }
     } catch (error: any) {
-      console.error('[CodeSandbox] Download error:', error)
+      logger.error('[CodeSandbox] Download error:', error)
       throw new Error(`Failed to generate download URL: ${error.message}`)
     }
   }
@@ -612,7 +615,7 @@ class CodeSandboxHandle implements SandboxHandle {
         },
       }
     } catch (error: any) {
-      console.error('[CodeSandbox] Background command error:', error)
+      logger.error('[CodeSandbox] Background command error:', error)
       throw error
     }
   }
@@ -623,7 +626,7 @@ class CodeSandboxHandle implements SandboxHandle {
       const url = this.client.hosts.getUrl(port)
       return { port, url }
     } catch (error: any) {
-      console.error('[CodeSandbox] Wait for port error:', error)
+      logger.error('[CodeSandbox] Wait for port error:', error)
       throw new Error(`Port ${port} did not open within ${timeoutMs}ms: ${error.message}`)
     }
   }
@@ -655,7 +658,7 @@ class CodeSandboxHandle implements SandboxHandle {
     try {
       return await this.client.tasks.get(taskName)
     } catch (error: any) {
-      console.error('[CodeSandbox] Get task error:', error)
+      logger.error('[CodeSandbox] Get task error:', error)
       return null
     }
   }
@@ -669,7 +672,7 @@ class CodeSandboxHandle implements SandboxHandle {
         status: t.status,
       }))
     } catch (error: any) {
-      console.error('[CodeSandbox] List tasks error:', error)
+      logger.error('[CodeSandbox] List tasks error:', error)
       return []
     }
   }
@@ -688,7 +691,7 @@ class CodeSandboxHandle implements SandboxHandle {
 
       return { success: true, port: portInfo.port, url }
     } catch (error: any) {
-      console.error('[CodeSandbox] Run task error:', error)
+      logger.error('[CodeSandbox] Run task error:', error)
       return { success: false }
     }
   }
@@ -706,7 +709,7 @@ class CodeSandboxHandle implements SandboxHandle {
         })),
       }
     } catch (error: any) {
-      console.error('[CodeSandbox] Get setup status error:', error)
+      logger.error('[CodeSandbox] Get setup status error:', error)
       return { status: 'unknown', steps: [] }
     }
   }
@@ -716,7 +719,7 @@ class CodeSandboxHandle implements SandboxHandle {
       await this.client.setup.waitUntilComplete({ timeout: timeoutMs })
       return true
     } catch (error: any) {
-      console.error('[CodeSandbox] Setup wait error:', error)
+      logger.error('[CodeSandbox] Setup wait error:', error)
       return false
     }
   }
@@ -747,9 +750,9 @@ class CodeSandboxHandle implements SandboxHandle {
   async hibernate(): Promise<void> {
     try {
       await this.sdk.sandboxes.hibernate(this.id)
-      console.log(`[CodeSandbox] Hibernated sandbox ${this.id}`)
+      logger.info(`[CodeSandbox] Hibernated sandbox ${this.id}`)
     } catch (error: any) {
-      console.error('[CodeSandbox] Hibernate error:', error)
+      logger.error('[CodeSandbox] Hibernate error:', error)
       throw error
     }
   }
@@ -758,9 +761,9 @@ class CodeSandboxHandle implements SandboxHandle {
     try {
       const sandbox = await this.sdk.sandboxes.resume(this.id)
       this.client = await sandbox.connect()
-      console.log(`[CodeSandbox] Resumed sandbox ${this.id}`)
+      logger.info(`[CodeSandbox] Resumed sandbox ${this.id}`)
     } catch (error: any) {
-      console.error('[CodeSandbox] Resume error:', error)
+      logger.error('[CodeSandbox] Resume error:', error)
       throw error
     }
   }
@@ -798,11 +801,11 @@ class CodeSandboxHandle implements SandboxHandle {
 
       this.terminalSessions.set(sessionId, { terminal, outputBuffer: [] })
 
-      console.log(`[CodeSandbox] Created PTY session ${sessionId} (shell: ${terminal.id})`)
+      logger.info(`[CodeSandbox] Created PTY session ${sessionId} (shell: ${terminal.id})`)
 
       return new CodeSandboxPtyHandle(sessionId, terminal, cols, rows)
     } catch (error: any) {
-      console.error('[CodeSandbox] Create PTY error:', error)
+      logger.error('[CodeSandbox] Create PTY error:', error)
       throw error
     }
   }
@@ -828,7 +831,7 @@ class CodeSandboxHandle implements SandboxHandle {
       options.onData(new TextEncoder().encode(currentOutput))
     }
 
-    console.log(`[CodeSandbox] Reconnected to PTY session ${sessionId}`)
+    logger.info(`[CodeSandbox] Reconnected to PTY session ${sessionId}`)
     return new CodeSandboxPtyHandle(sessionId, terminal, 120, 30)
   }
 
@@ -842,7 +845,7 @@ class CodeSandboxHandle implements SandboxHandle {
       // Terminal may already be killed
     }
     this.terminalSessions.delete(sessionId)
-    console.log(`[CodeSandbox] Killed PTY session ${sessionId}`)
+    logger.info(`[CodeSandbox] Killed PTY session ${sessionId}`)
   }
 
   async watchDirectory(

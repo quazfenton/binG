@@ -46,10 +46,13 @@ import {
   ImageOff,
 } from "lucide-react";
 import { cn } from '@/lib/utils/utils';
+import { createLogger } from '@/lib/utils/logger';
 import { clipboard } from "@bing/platform/clipboard";
 import { useApiKeys } from '@/hooks/use-api-keys';
 import { useBYOKFallback } from '@/hooks/use-byok-fallback';
 import BYOKFadeInInput, { BYOKFadeInWrapper } from '@/components/byok-fade-in-input';
+
+const logger = createLogger('UI:ImageGen');
 
 
 /**
@@ -239,7 +242,7 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
           }
         }
       } catch (e) {
-        console.warn('[ImageGenerationTab] Failed to load images from localStorage:', e);
+        logger.warn('[ImageGenerationTab] Failed to load images from localStorage:', e);
       }
     }
     return [];
@@ -259,7 +262,7 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
           }
         }
       } catch (e) {
-        console.warn('[ImageGenerationTab] Failed to load history from localStorage:', e);
+        logger.warn('[ImageGenerationTab] Failed to load history from localStorage:', e);
       }
     }
     return [];
@@ -302,7 +305,7 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
     try {
       localStorage.setItem('generated-images', JSON.stringify(generatedImages));
     } catch (e) {
-      console.warn('[ImageGenerationTab] Failed to save images to localStorage:', e);
+      logger.warn('[ImageGenerationTab] Failed to save images to localStorage:', e);
     }
   }, [generatedImages]);
 
@@ -311,7 +314,7 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
     try {
       localStorage.setItem('generation-history', JSON.stringify(generationHistory));
     } catch (e) {
-      console.warn('[ImageGenerationTab] Failed to save history to localStorage:', e);
+      logger.warn('[ImageGenerationTab] Failed to save history to localStorage:', e);
     }
   }, [generationHistory]);
 
@@ -366,7 +369,7 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
 
       const data = await response.json();
 
-      console.log('[ImageGenerationTab] API Response:', data);
+      logger.info('[ImageGenerationTab] API Response:', data);
 
       if (!response.ok) {
         throw new Error(data.error || "Failed to generate image");
@@ -375,7 +378,7 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
       // Handle different response structures
       const images = data?.data?.images || data?.images || [];
       
-      console.log('[ImageGenerationTab] Extracted images:', images);
+      logger.info('[ImageGenerationTab] Extracted images:', images);
 
       if (images && images.length > 0) {
         // Append new images to the front (newest first), limit to 50 images
@@ -394,14 +397,14 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
 
         onImageGenerated?.(images[0].url);
       } else {
-        console.error('[ImageGenerationTab] No images in response:', data);
+        logger.error('[ImageGenerationTab] No images in response:', data);
         throw new Error("No images were generated");
       }
     } catch (error: any) {
       if (error.name === "AbortError") {
         toast.info("Generation cancelled");
       } else {
-        console.error("Generation error:", error);
+        logger.error("Generation error:", error);
         const errorMessage = error.message || "Failed to generate image";
         toast.error(errorMessage);
         
@@ -501,7 +504,7 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
             fetchSucceeded = true;
           }
         } catch (fetchError) {
-          console.warn('Proxy fetch failed:', fetchError);
+          logger.warn('Proxy fetch failed:', fetchError);
         }
         if (!fetchSucceeded) {
           try {
@@ -510,7 +513,7 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
               blob = await response.blob();
             }
           } catch (directError) {
-            console.warn('Direct fetch also failed:', directError);
+            logger.warn('Direct fetch also failed:', directError);
           }
         }
       }
@@ -530,7 +533,7 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
       }
 
       // Fallback: Open image in new tab and let user save manually
-      console.log('[ImageGenerationTab] Opening image in new tab for manual save');
+      logger.info('[ImageGenerationTab] Opening image in new tab for manual save');
       // Security: Add noopener,noreferrer to prevent reverse-tabnabbing
       const newWindow = window.open(imageUrl, '_blank', 'noopener,noreferrer');
       if (newWindow) {
@@ -541,12 +544,12 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
           await clipboard.writeText(imageUrl);
           toast.success("Image URL copied to clipboard (paste in browser to download)");
         } catch (clipboardError) {
-          console.error('Clipboard write failed:', clipboardError);
+          logger.error('Clipboard write failed:', clipboardError);
           toast.error("Failed to copy URL to clipboard");
         }
       }
     } catch (error) {
-      console.error("Download error:", error);
+      logger.error("Download error:", error);
       // Final fallback: open in new tab
       // Security: Add noopener,noreferrer to prevent reverse-tabnabbing
       const newWindow = window.open(imageUrl, '_blank', 'noopener,noreferrer');
@@ -564,7 +567,7 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
       await clipboard.writeText(params.prompt);
       toast.success("Prompt copied to clipboard");
     } catch (error) {
-      console.error('Clipboard write failed:', error);
+      logger.error('Clipboard write failed:', error);
       toast.error("Failed to copy prompt to clipboard");
     }
   }, [params.prompt]);
@@ -591,7 +594,7 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
   // Image error handler
   const handleImageError = useCallback((imageUrl: string) => {
     setImageErrors(prev => new Set(prev).add(imageUrl));
-    console.warn('[ImageGenerationTab] Image failed to load:', imageUrl);
+    logger.warn('[ImageGenerationTab] Image failed to load:', imageUrl);
   }, []);
 
   return (

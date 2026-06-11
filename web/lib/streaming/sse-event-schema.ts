@@ -435,10 +435,36 @@ export function sseEncode(eventType: SSEEventTypeName, payload: Record<string, u
  *   const emit = createSSEEmitter(controller);
  *   emit('token', { content: 'Hello', timestamp: Date.now() });
  */
-export function createSSEEmitter(controller: ReadableStreamDefaultController<Uint8Array>) {
+const HEARTBEAT_INTERVAL_MS = 25_000;
+
+export function createSSEEmitter(
+  controller: ReadableStreamDefaultController<Uint8Array>,
+  abortSignal?: AbortSignal,
+) {
   const encoder = new TextEncoder();
-  return function emit(eventType: SSEEventTypeName, payload: Record<string, unknown>) {
+  const baseEmit = (eventType: SSEEventTypeName, payload: Record<string, unknown>) => {
     controller.enqueue(encoder.encode(sseEncode(eventType, payload)));
+  };
+
+  if (!abortSignal) return baseEmit;
+
+  let lastActivity = Date.now();
+  const heartbeatId = setInterval(() => {
+    // Cleanup on signal abort OR stream close/error
+    if (abortSignal.aborted || controller.desiredSize === null) {
+      clearInterval(heartbeatId);
+      return;
+    }
+    if (Date.now() - lastActivity >= HEARTBEAT_INTERVAL_MS) {
+      baseEmit('heartbeat', { t: Date.now() });
+    }
+  }, HEARTBEAT_INTERVAL_MS);
+
+  abortSignal.addEventListener('abort', () => clearInterval(heartbeatId), { once: true });
+
+  return (eventType: SSEEventTypeName, payload: Record<string, unknown>) => {
+    lastActivity = Date.now();
+    baseEmit(eventType, payload);
   };
 }
 

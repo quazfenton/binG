@@ -17,6 +17,10 @@ import { pack, extract as unpack } from 'tar-stream';
 import { randomBytes } from 'crypto';
 import { sandboxMetrics } from '../../backend/metrics';
 
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('VFS:SnapshotManager');
+
 export interface RetryConfig {
   maxRetries: number;
   baseDelay: number; // ms
@@ -71,15 +75,15 @@ async function withRetry<T>(
 
   for (let attempt = 1; attempt <= config.maxRetries; attempt++) {
     try {
-      console.log(`${operationName}: attempt ${attempt}/${config.maxRetries}`);
+      logger.info(`${operationName}: attempt ${attempt}/${config.maxRetries}`);
       return await func();
     } catch (error: any) {
       lastError = error;
       if (attempt === config.maxRetries) {
-        console.error(`${operationName}: failed after ${config.maxRetries} attempts: ${error.message}`);
+        logger.error(`${operationName}: failed after ${config.maxRetries} attempts: ${error.message}`);
         throw error;
       }
-      console.warn(
+      logger.warn(
         `${operationName}: attempt ${attempt} failed (${error.message}), retrying in ${(delay / 1000).toFixed(1)}s`
       );
       await new Promise(resolve => setTimeout(resolve, delay));
@@ -165,7 +169,7 @@ export class SnapshotManager extends EventEmitter {
 
     const duration = (Date.now() - startTime) / 1000;
 
-    console.log(`Snapshot created: ${snapshotPath} (${result.sizeBytes} bytes)`);
+    logger.info(`Snapshot created: ${snapshotPath} (${result.sizeBytes} bytes)`);
     this.emit('snapshot_created', result);
     sandboxMetrics.snapshotCreatedTotal.inc({ status: 'success' }, 1);
     sandboxMetrics.snapshotSizeBytes.observe(result.sizeBytes);
@@ -176,9 +180,9 @@ export class SnapshotManager extends EventEmitter {
       try {
         const remoteKey = `${userId}/${snapshotId}.tar.gz`;
         await this.storageBackend.upload(snapshotPath, remoteKey);
-        console.log(`[SnapshotManager] Uploaded to storage: ${remoteKey}`);
+        logger.info(`[SnapshotManager] Uploaded to storage: ${remoteKey}`);
       } catch (uploadError: any) {
-        console.warn('[SnapshotManager] Upload to storage failed:', uploadError.message);
+        logger.warn('[SnapshotManager] Upload to storage failed:', uploadError.message);
       }
     }
 
@@ -251,7 +255,7 @@ export class SnapshotManager extends EventEmitter {
 
     const duration = (Date.now() - startTime) / 1000;
 
-    console.log(`Snapshot restored: ${snapshotPath} -> ${workspace}`);
+    logger.info(`Snapshot restored: ${snapshotPath} -> ${workspace}`);
     this.emit('snapshot_restored', { userId, snapshotId });
     sandboxMetrics.snapshotRestoredTotal.inc({ status: 'success' }, 1);
     sandboxMetrics.snapshotRestorationDuration.observe(duration, { userId });
@@ -273,7 +277,7 @@ export class SnapshotManager extends EventEmitter {
       extractor.on('entry', (header: any, stream: any, next: any) => {
         // Path safety checks
         if (header.name.includes('..') || header.name.startsWith('/')) {
-          console.warn(`Skipping unsafe path in archive: ${header.name}`);
+          logger.warn(`Skipping unsafe path in archive: ${header.name}`);
           stream.resume();
           next();
           return;
@@ -281,7 +285,7 @@ export class SnapshotManager extends EventEmitter {
 
         // Ensure member is within expected archive root
         if (!header.name.startsWith(`${userId}/`) && header.name !== userId) {
-          console.warn(`Skipping member outside expected archive root '${userId}': ${header.name}`);
+          logger.warn(`Skipping member outside expected archive root '${userId}': ${header.name}`);
           stream.resume();
           next();
           return;
@@ -293,7 +297,7 @@ export class SnapshotManager extends EventEmitter {
         // Check if destination is within temp directory (symlink attack prevention)
         const realDestPath = require('path').resolve(destPath);
         if (!realDestPath.startsWith(tempDir)) {
-          console.warn(`Skipping path outside target directory (symlink attack?): ${header.name} -> ${realDestPath}`);
+          logger.warn(`Skipping path outside target directory (symlink attack?): ${header.name} -> ${realDestPath}`);
           stream.resume();
           next();
           return;
@@ -381,7 +385,7 @@ export class SnapshotManager extends EventEmitter {
           }
         }
       } catch (error: any) {
-        console.warn('[SnapshotManager] Failed to list remote snapshots:', error.message);
+        logger.warn('[SnapshotManager] Failed to list remote snapshots:', error.message);
       }
     }
 
@@ -395,12 +399,12 @@ export class SnapshotManager extends EventEmitter {
 
     const snapshotPath = this.snapshotPath(userId, snapshotId);
     if (!existsSync(snapshotPath)) {
-      console.warn(`Snapshot not found for deletion: ${snapshotPath}`);
+      logger.warn(`Snapshot not found for deletion: ${snapshotPath}`);
       return false;
     }
 
     unlinkSync(snapshotPath);
-    console.log(`Deleted snapshot: ${snapshotPath}`);
+    logger.info(`Deleted snapshot: ${snapshotPath}`);
     this.emit('snapshot_deleted', { userId, snapshotId });
 
     return true;
@@ -412,13 +416,13 @@ export class SnapshotManager extends EventEmitter {
 
     for (const snap of toDelete) {
       await this.deleteSnapshot(userId, snap.snapshotId);
-      console.log(`Retention: deleted ${userId}/${snap.snapshotId}`);
+      logger.info(`Retention: deleted ${userId}/${snap.snapshotId}`);
     }
   }
 
   async uploadToStorage(userId: string, snapshotId: string): Promise<void> {
     if (!this.storageBackend) {
-      console.warn('No storage backend configured; skipping upload');
+      logger.warn('No storage backend configured; skipping upload');
       return;
     }
 
@@ -426,13 +430,13 @@ export class SnapshotManager extends EventEmitter {
     const remoteKey = `${userId}/${snapshotId}.tar.gz`;
     
     await this.storageBackend.upload(snapshotPath, remoteKey);
-    console.log(`Uploaded snapshot to remote storage: ${remoteKey}`);
+    logger.info(`Uploaded snapshot to remote storage: ${remoteKey}`);
     this.emit('snapshot_uploaded', { userId, snapshotId, remoteKey });
   }
 
   async downloadFromStorage(userId: string, snapshotId: string): Promise<void> {
     if (!this.storageBackend) {
-      console.warn('No storage backend configured; skipping download');
+      logger.warn('No storage backend configured; skipping download');
       return;
     }
 
@@ -443,7 +447,7 @@ export class SnapshotManager extends EventEmitter {
     const success = await this.storageBackend.download(remoteKey, snapshotPath);
     
     if (success) {
-      console.log(`Downloaded snapshot from remote storage: ${remoteKey}`);
+      logger.info(`Downloaded snapshot from remote storage: ${remoteKey}`);
       this.emit('snapshot_downloaded', { userId, snapshotId, remoteKey });
     }
   }

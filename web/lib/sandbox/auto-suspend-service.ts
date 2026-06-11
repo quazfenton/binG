@@ -21,6 +21,10 @@ import type { SandboxProviderType } from './providers';
 import type { WorkspaceSession, SandboxConfig } from './types';
 import { sandboxBridge } from './sandbox-service-bridge';
 
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('Sandbox:AutoSuspend');
+
 export interface AutoSuspendConfig {
   /** Idle timeout in ms before suspension (default: 30 minutes) */
   idleTimeout: number;
@@ -119,7 +123,7 @@ export class AutoSuspendService extends EventEmitter {
       this.checkIdleSandboxes();
     }, this.config.checkInterval);
 
-    console.log(`[AutoSuspend] Started with ${this.config.idleTimeout / 60000}min idle timeout`);
+    logger.info(`[AutoSuspend] Started with ${this.config.idleTimeout / 60000}min idle timeout`);
   }
 
   /**
@@ -130,7 +134,7 @@ export class AutoSuspendService extends EventEmitter {
       clearInterval(this.checkTimer);
       this.checkTimer = undefined;
     }
-    console.log('[AutoSuspend] Stopped');
+    logger.info('[AutoSuspend] Stopped');
   }
 
   /**
@@ -229,7 +233,7 @@ export class AutoSuspendService extends EventEmitter {
       }
 
       if (!provider) {
-        console.warn(`[AutoSuspend] Provider not found for sandbox ${sandboxId}`);
+        logger.warn(`[AutoSuspend] Provider not found for sandbox ${sandboxId}`);
         return false;
       }
 
@@ -238,7 +242,7 @@ export class AutoSuspendService extends EventEmitter {
       if (this.config.preserveState) {
         state = await this.captureSandboxState(sandboxId, provider);
         if (state) {
-          console.log(`[AutoSuspend] Captured state for ${sandboxId}: ${state.files.length} files, cwd=${state.cwd}`);
+          logger.info(`[AutoSuspend] Captured state for ${sandboxId}: ${state.files.length} files, cwd=${state.cwd}`);
         }
       }
 
@@ -249,11 +253,11 @@ export class AutoSuspendService extends EventEmitter {
         } else if ('shutdownSandbox' in provider && typeof provider.shutdownSandbox === 'function') {
           await provider.shutdownSandbox(sandboxId);
         } else {
-          console.warn(`[AutoSuspend] Provider ${providerName} has no suspension method`);
+          logger.warn(`[AutoSuspend] Provider ${providerName} has no suspension method`);
           return false;
         }
       } catch (suspendError: any) {
-        console.error(`[AutoSuspend] Suspension failed for ${sandboxId}:`, suspendError.message);
+        logger.error(`[AutoSuspend] Suspension failed for ${sandboxId}:`, suspendError.message);
         throw suspendError;
       }
 
@@ -279,11 +283,11 @@ export class AutoSuspendService extends EventEmitter {
       };
 
       this.emit('suspend', event);
-      console.log(`[AutoSuspend] Suspended ${sandboxId}: ${event.reason}${state ? ' (state preserved)' : ''}`);
+      logger.info(`[AutoSuspend] Suspended ${sandboxId}: ${event.reason}${state ? ' (state preserved)' : ''}`);
 
       return true;
     } catch (error: any) {
-      console.error(`[AutoSuspend] Failed to suspend ${sandboxId}:`, error.message);
+      logger.error(`[AutoSuspend] Failed to suspend ${sandboxId}:`, error.message);
       this.emit('error', { sandboxId, error: error.message });
       return false;
     }
@@ -300,7 +304,7 @@ export class AutoSuspendService extends EventEmitter {
       // Check if sandbox is active (not suspended)
       const activity = this.activities.get(sandboxId);
       if (activity) {
-        console.log(`[AutoSuspend] ${sandboxId} is already active`);
+        logger.info(`[AutoSuspend] ${sandboxId} is already active`);
         return true;
       }
       return false;
@@ -309,12 +313,12 @@ export class AutoSuspendService extends EventEmitter {
     try {
       const provider = this.providers.get(suspended.provider);
       if (!provider) {
-        console.error(`[AutoSuspend] Provider ${suspended.provider} not found`);
+        logger.error(`[AutoSuspend] Provider ${suspended.provider} not found`);
         return false;
       }
 
       // Create new sandbox
-      console.log(`[AutoSuspend] Creating new sandbox for ${sandboxId}`);
+      logger.info(`[AutoSuspend] Creating new sandbox for ${sandboxId}`);
       // @ts-ignore - ownerId may not be in SandboxCreateConfig type
       const newSandbox = await provider.createSandbox({ ownerId: sandboxId });
 
@@ -322,14 +326,14 @@ export class AutoSuspendService extends EventEmitter {
       try {
         const { sandboxFilesystemSync } = await import('../virtual-filesystem/sync/sandbox-filesystem-sync');
         sandboxFilesystemSync.startSync(newSandbox.id, sandboxId);
-        console.log(`[AutoSuspend] Started VFS sync for resumed sandbox`);
+        logger.info(`[AutoSuspend] Started VFS sync for resumed sandbox`);
       } catch (syncErr: any) {
-        console.warn(`[AutoSuspend] Failed to start VFS sync on resume:`, syncErr.message);
+        logger.warn(`[AutoSuspend] Failed to start VFS sync on resume:`, syncErr.message);
       }
 
       // Restore state if available and enabled
       if (suspended.state && this.config.restoreState) {
-        console.log(`[AutoSuspend] Restoring state for ${sandboxId}`);
+        logger.info(`[AutoSuspend] Restoring state for ${sandboxId}`);
         await this.restoreSandboxState(newSandbox, suspended.state);
       }
 
@@ -343,11 +347,11 @@ export class AutoSuspendService extends EventEmitter {
         timestamp: Date.now(),
         stateRestored: !!suspended.state,
       });
-      console.log(`[AutoSuspend] Resumed ${sandboxId}${suspended.state ? ' with state restoration' : ''}`);
+      logger.info(`[AutoSuspend] Resumed ${sandboxId}${suspended.state ? ' with state restoration' : ''}`);
 
       return true;
     } catch (error: any) {
-      console.error(`[AutoSuspend] Failed to resume ${sandboxId}:`, error.message);
+      logger.error(`[AutoSuspend] Failed to resume ${sandboxId}:`, error.message);
       this.emit('error', { sandboxId, error: error.message });
       return false;
     }
@@ -436,7 +440,7 @@ export class AutoSuspendService extends EventEmitter {
         provider: provider.name,
       };
     } catch (error: any) {
-      console.error(`[AutoSuspend] Failed to capture state for ${sandboxId}:`, error.message);
+      logger.error(`[AutoSuspend] Failed to capture state for ${sandboxId}:`, error.message);
       return null;
     }
   }
@@ -469,19 +473,19 @@ export class AutoSuspendService extends EventEmitter {
             await sandbox.executeCommand(`export ${key}='${value.replace(/'/g, "'\\''")}'`, workspaceDir, 2000);
             restoredCount++;
           } catch (envError: any) {
-            console.warn(`[AutoSuspend] Failed to restore env var ${key}:`, envError.message);
+            logger.warn(`[AutoSuspend] Failed to restore env var ${key}:`, envError.message);
           }
         }
-        console.log(`[AutoSuspend] Restored ${restoredCount} environment variables`);
+        logger.info(`[AutoSuspend] Restored ${restoredCount} environment variables`);
       }
 
       // Restore working directory
       if (state.cwd && state.cwd !== workspaceDir) {
         try {
           await sandbox.executeCommand(`cd ${state.cwd}`, workspaceDir, 2000);
-          console.log(`[AutoSuspend] Restored working directory: ${state.cwd}`);
+          logger.info(`[AutoSuspend] Restored working directory: ${state.cwd}`);
         } catch (cwdError: any) {
-          console.warn(`[AutoSuspend] Failed to restore cwd:`, cwdError.message);
+          logger.warn(`[AutoSuspend] Failed to restore cwd:`, cwdError.message);
         }
       }
 
@@ -489,30 +493,30 @@ export class AutoSuspendService extends EventEmitter {
       // Some providers (Sprites, Blaxel) have persistent volumes
       // Others need VFS sync to restore files
       if (state.files && state.files.length > 0) {
-        console.log(`[AutoSuspend] Sandbox had ${state.files.length} files before suspension`);
-        console.log(`[AutoSuspend] Files: ${state.files.slice(0, 10).join(', ')}${state.files.length > 10 ? '...' : ''}`);
+        logger.info(`[AutoSuspend] Sandbox had ${state.files.length} files before suspension`);
+        logger.info(`[AutoSuspend] Files: ${state.files.slice(0, 10).join(', ')}${state.files.length > 10 ? '...' : ''}`);
         
         // Trigger VFS sync if available
         try {
           const { sandboxFilesystemSync } = await import('../virtual-filesystem/sync/sandbox-filesystem-sync');
           // This will sync files from VFS to sandbox
           sandboxFilesystemSync.startSync(sandbox.id, sandbox.id);
-          console.log(`[AutoSuspend] Started VFS sync for file restoration`);
+          logger.info(`[AutoSuspend] Started VFS sync for file restoration`);
         } catch (syncError: any) {
-          console.warn(`[AutoSuspend] VFS sync not available:`, syncError.message);
+          logger.warn(`[AutoSuspend] VFS sync not available:`, syncError.message);
         }
       }
 
       // Log processes that were running (informational only)
       if (state.processes && state.processes.length > 0) {
-        console.log(`[AutoSuspend] Processes before suspension: ${state.processes.length}`);
-        console.log(`[AutoSuspend] Note: Processes cannot be restored, but these were running:`);
-        state.processes.slice(0, 5).forEach(p => console.log(`  ${p}`));
+        logger.info(`[AutoSuspend] Processes before suspension: ${state.processes.length}`);
+        logger.info(`[AutoSuspend] Note: Processes cannot be restored, but these were running:`);
+        state.processes.slice(0, 5).forEach(p => logger.info(`  ${p}`));
       }
 
-      console.log(`[AutoSuspend] State restoration complete for ${sandbox.id}`);
+      logger.info(`[AutoSuspend] State restoration complete for ${sandbox.id}`);
     } catch (error: any) {
-      console.error(`[AutoSuspend] State restoration failed:`, error.message);
+      logger.error(`[AutoSuspend] State restoration failed:`, error.message);
       // Don't throw - partial restoration is better than none
     }
   }

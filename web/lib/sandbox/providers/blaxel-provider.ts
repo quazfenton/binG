@@ -35,6 +35,7 @@ import { quotaManager } from '@/lib/management/quota-manager'
 import { blaxelAsyncManager, verifyWebhookFromRequest } from './blaxel-async'
 import { getDatabase } from '@/lib/database/connection'
 import { encryptSecret, decryptSecret, generateSecureSecret } from '@/lib/utils/crypto'
+import { createLogger } from '@/lib/utils/logger';
 
 const WORKSPACE_DIR = '/workspace'
 const MAX_INSTANCES = 50
@@ -61,14 +62,14 @@ function getEncryptionKeyEnv(): string | null {
   
   // Skip validation during build
   if (isBuildEnvironment()) {
-    console.warn('[Blaxel] Skipping BLAXEL_SECRET_ENCRYPTION_KEY validation during build');
+    logger.warn('[Blaxel] Skipping BLAXEL_SECRET_ENCRYPTION_KEY validation during build');
     encryptionKeyEnv = 'dummy-key-for-build';
     return encryptionKeyEnv;
   }
   
   if (!encryptionKeyEnv && env.NODE_ENV === 'production') {
     // SECURITY: Fail closed in production - but not during build
-    console.warn('[Blaxel] BLAXEL_SECRET_ENCRYPTION_KEY not set in production');
+    logger.warn('[Blaxel] BLAXEL_SECRET_ENCRYPTION_KEY not set in production');
   }
   
   return encryptionKeyEnv;
@@ -97,9 +98,9 @@ async function initializeBlaxelDatabase(): Promise<void> {
       CREATE INDEX IF NOT EXISTS idx_blaxel_secrets_sandbox
       ON blaxel_callback_secrets(sandbox_id)
     `);
-    console.log('[Blaxel] Database initialized for callback secrets (encrypted)');
+    logger.info('[Blaxel] Database initialized for callback secrets (encrypted)');
   } catch (error) {
-    console.warn('[Blaxel] Database init failed:', error);
+    logger.warn('[Blaxel] Database init failed:', error);
   }
 }
 
@@ -130,7 +131,7 @@ setInterval(() => {
   const now = Date.now()
   for (const [id, instance] of sandboxInstances.entries()) {
     if (now - instance.lastActive > INSTANCE_TTL_MS) {
-      console.log(`[Blaxel] Cleaning up stale instance: ${id}`)
+      logger.info(`[Blaxel] Cleaning up stale instance: ${id}`)
       instance.sandbox.delete().catch(console.error)
       sandboxInstances.delete(id)
     }
@@ -156,7 +157,7 @@ export class BlaxelProvider implements SandboxProvider {
     this.defaultTtl = process.env.BLAXEL_DEFAULT_TTL || '24h'
 
     if (!this.apiKey) {
-      console.warn('[Blaxel] BLAXEL_API_KEY not configured. Provider will fail on first use.')
+      logger.warn('[Blaxel] BLAXEL_API_KEY not configured. Provider will fail on first use.')
     }
   }
 
@@ -182,13 +183,13 @@ export class BlaxelProvider implements SandboxProvider {
           workspace: this.workspace,
         });
       } else {
-        console.warn('[Blaxel] SDK does not have initialize method, using as-is');
+        logger.warn('[Blaxel] SDK does not have initialize method, using as-is');
       }
       
       this.client = blaxelClient;
       return this.client;
     } catch (error: any) {
-      console.error('[Blaxel] Failed to initialize client:', error.message);
+      logger.error('[Blaxel] Failed to initialize client:', error.message);
       throw new Error(`Blaxel SDK not available. Install with: pnpm add @blaxel/core. Error: ${error.message}`);
     }
   }
@@ -256,7 +257,7 @@ export class BlaxelProvider implements SandboxProvider {
     sandboxInstances.set(sandbox.id, instance)
     quotaManager.recordUsage('blaxel', 1)
 
-    console.log(`[Blaxel] Created sandbox ${sandbox.id} with volume template: ${volumeTemplate || 'none'}`)
+    logger.info(`[Blaxel] Created sandbox ${sandbox.id} with volume template: ${volumeTemplate || 'none'}`)
 
     return new BlaxelSandboxHandle(sandbox, metadata)
   }
@@ -291,10 +292,10 @@ export class BlaxelProvider implements SandboxProvider {
         files,
       })
 
-      console.log(`[Blaxel] Created volume template: ${name}`)
+      logger.info(`[Blaxel] Created volume template: ${name}`)
       return template.id
     } catch (error: any) {
-      console.error('[Blaxel] Failed to create volume template:', error.message)
+      logger.error('[Blaxel] Failed to create volume template:', error.message)
       throw error
     }
   }
@@ -318,7 +319,7 @@ export class BlaxelProvider implements SandboxProvider {
         createdAt: new Date(t.created_at).getTime(),
       }))
     } catch (error: any) {
-      console.error('[Blaxel] Failed to list volume templates:', error.message)
+      logger.error('[Blaxel] Failed to list volume templates:', error.message)
       return []
     }
   }
@@ -337,9 +338,9 @@ export class BlaxelProvider implements SandboxProvider {
         workspace: this.workspace,
       })
 
-      console.log(`[Blaxel] Deleted volume template: ${templateId}`)
+      logger.info(`[Blaxel] Deleted volume template: ${templateId}`)
     } catch (error: any) {
-      console.error('[Blaxel] Failed to delete volume template:', error.message)
+      logger.error('[Blaxel] Failed to delete volume template:', error.message)
       throw error
     }
   }
@@ -359,7 +360,7 @@ export class BlaxelProvider implements SandboxProvider {
           }
         }
         if (oldestId) {
-          console.log(`[Blaxel] Evicting oldest instance: ${oldestId}`)
+          logger.info(`[Blaxel] Evicting oldest instance: ${oldestId}`)
           await sandboxInstances.get(oldestId)?.sandbox.delete()
           sandboxInstances.delete(oldestId)
         }
@@ -441,11 +442,11 @@ export class BlaxelProvider implements SandboxProvider {
       sandboxInstances.set(sandboxName, instance)
       quotaManager.recordUsage('blaxel')
 
-      console.log(`[Blaxel] Created sandbox: ${sandboxName}, URL: ${metadata.url}`)
+      logger.info(`[Blaxel] Created sandbox: ${sandboxName}, URL: ${metadata.url}`)
 
       return new BlaxelSandboxHandle(sandbox, metadata)
     } catch (error: any) {
-      console.error('[Blaxel] Failed to create sandbox:', error.message)
+      logger.error('[Blaxel] Failed to create sandbox:', error.message)
       throw new Error(`Blaxel sandbox creation failed: ${error.message}`)
     }
   }
@@ -464,9 +465,9 @@ export class BlaxelProvider implements SandboxProvider {
     if (instance) {
       try {
         await instance.sandbox.delete()
-        console.log(`[Blaxel] Destroyed sandbox: ${sandboxId}`)
+        logger.info(`[Blaxel] Destroyed sandbox: ${sandboxId}`)
       } catch (error: any) {
-        console.warn(`[Blaxel] Failed to destroy sandbox ${sandboxId}:`, error.message)
+        logger.warn(`[Blaxel] Failed to destroy sandbox ${sandboxId}:`, error.message)
       } finally {
         sandboxInstances.delete(sandboxId)
       }
@@ -490,7 +491,7 @@ export class BlaxelProvider implements SandboxProvider {
     try {
       return await client.codegen.codebaseSearch(query, options)
     } catch (error: any) {
-      console.error('[Blaxel] codegenCodebaseSearch failed:', error.message)
+      logger.error('[Blaxel] codegenCodebaseSearch failed:', error.message)
       throw new Error(`Codebase search failed: ${error.message}`)
     }
   }
@@ -507,7 +508,7 @@ export class BlaxelProvider implements SandboxProvider {
     try {
       return await client.codegen.fileSearch(pattern, options)
     } catch (error: any) {
-      console.error('[Blaxel] codegenFileSearch failed:', error.message)
+      logger.error('[Blaxel] codegenFileSearch failed:', error.message)
       throw new Error(`File search failed: ${error.message}`)
     }
   }
@@ -525,7 +526,7 @@ export class BlaxelProvider implements SandboxProvider {
     try {
       return await client.codegen.grepSearch(pattern, options)
     } catch (error: any) {
-      console.error('[Blaxel] codegenGrepSearch failed:', error.message)
+      logger.error('[Blaxel] codegenGrepSearch failed:', error.message)
       throw new Error(`Grep search failed: ${error.message}`)
     }
   }
@@ -543,7 +544,7 @@ export class BlaxelProvider implements SandboxProvider {
     try {
       return await client.codegen.listDir(path, options)
     } catch (error: any) {
-      console.error('[Blaxel] codegenListDir failed:', error.message)
+      logger.error('[Blaxel] codegenListDir failed:', error.message)
       throw new Error(`List directory failed: ${error.message}`)
     }
   }
@@ -559,7 +560,7 @@ export class BlaxelProvider implements SandboxProvider {
     try {
       return await client.codegen.readFileRange(filePath, startLine, endLine, options)
     } catch (error: any) {
-      console.error('[Blaxel] codegenReadFileRange failed:', error.message)
+      logger.error('[Blaxel] codegenReadFileRange failed:', error.message)
       throw new Error(`Read file range failed: ${error.message}`)
     }
   }
@@ -576,7 +577,7 @@ export class BlaxelProvider implements SandboxProvider {
     try {
       return await client.codegen.rerank(query, directory, options)
     } catch (error: any) {
-      console.error('[Blaxel] codegenRerank failed:', error.message)
+      logger.error('[Blaxel] codegenRerank failed:', error.message)
       throw new Error(`Rerank failed: ${error.message}`)
     }
   }
@@ -598,7 +599,7 @@ export class BlaxelProvider implements SandboxProvider {
     try {
       return await client.codegen.parallelApply(edits, options)
     } catch (error: any) {
-      console.error('[Blaxel] codegenParallelApply failed:', error.message)
+      logger.error('[Blaxel] codegenParallelApply failed:', error.message)
       throw new Error(`Parallel apply failed: ${error.message}`)
     }
   }
@@ -615,7 +616,7 @@ export class BlaxelProvider implements SandboxProvider {
     try {
       return await client.codegen.reapply(editId, options)
     } catch (error: any) {
-      console.error('[Blaxel] codegenReapply failed:', error.message)
+      logger.error('[Blaxel] codegenReapply failed:', error.message)
       throw new Error(`Reapply failed: ${error.message}`)
     }
   }
@@ -647,7 +648,7 @@ export class BlaxelProvider implements SandboxProvider {
         concurrency: config.concurrency,
       })
     } catch (error: any) {
-      console.error('[Blaxel] createBatchJob failed:', error.message)
+      logger.error('[Blaxel] createBatchJob failed:', error.message)
       throw new Error(`Batch job creation failed: ${error.message}`)
     }
   }
@@ -661,7 +662,7 @@ export class BlaxelProvider implements SandboxProvider {
     try {
       return await client.jobs.trigger(jobId, { data: inputData })
     } catch (error: any) {
-      console.error('[Blaxel] triggerBatchExecution failed:', error.message)
+      logger.error('[Blaxel] triggerBatchExecution failed:', error.message)
       throw new Error(`Batch trigger failed: ${error.message}`)
     }
   }
@@ -696,7 +697,7 @@ export class BlaxelProvider implements SandboxProvider {
         resources: config.resources,
       })
     } catch (error: any) {
-      console.error('[Blaxel] deployAgent failed:', error.message)
+      logger.error('[Blaxel] deployAgent failed:', error.message)
       throw new Error(`Agent deployment failed: ${error.message}`)
     }
   }
@@ -709,7 +710,7 @@ export class BlaxelProvider implements SandboxProvider {
     try {
       return await client.agents.getStatus(agentId)
     } catch (error: any) {
-      console.error('[Blaxel] getAgentStatus failed:', error.message)
+      logger.error('[Blaxel] getAgentStatus failed:', error.message)
       throw new Error(`Get agent status failed: ${error.message}`)
     }
   }
@@ -722,7 +723,7 @@ export class BlaxelProvider implements SandboxProvider {
     try {
       return await client.agents.destroy(agentId)
     } catch (error: any) {
-      console.error('[Blaxel] destroyAgent failed:', error.message)
+      logger.error('[Blaxel] destroyAgent failed:', error.message)
       throw new Error(`Destroy agent failed: ${error.message}`)
     }
   }
@@ -740,7 +741,7 @@ export class BlaxelProvider implements SandboxProvider {
     try {
       return await client.ports.create({ port, protocol })
     } catch (error: any) {
-      console.error('[Blaxel] createPort failed:', error.message)
+      logger.error('[Blaxel] createPort failed:', error.message)
       throw new Error(`Port creation failed: ${error.message}`)
     }
   }
@@ -753,7 +754,7 @@ export class BlaxelProvider implements SandboxProvider {
     try {
       return await client.ports.list()
     } catch (error: any) {
-      console.error('[Blaxel] listPorts failed:', error.message)
+      logger.error('[Blaxel] listPorts failed:', error.message)
       throw new Error(`List ports failed: ${error.message}`)
     }
   }
@@ -766,7 +767,7 @@ export class BlaxelProvider implements SandboxProvider {
     try {
       return await client.ports.delete(port)
     } catch (error: any) {
-      console.error('[Blaxel] deletePort failed:', error.message)
+      logger.error('[Blaxel] deletePort failed:', error.message)
       throw new Error(`Delete port failed: ${error.message}`)
     }
   }
@@ -783,7 +784,7 @@ export class BlaxelProvider implements SandboxProvider {
     try {
       return await client.previews.create({ port, ...options })
     } catch (error: any) {
-      console.error('[Blaxel] createPreview failed:', error.message)
+      logger.error('[Blaxel] createPreview failed:', error.message)
       throw new Error(`Preview creation failed: ${error.message}`)
     }
   }
@@ -796,7 +797,7 @@ export class BlaxelProvider implements SandboxProvider {
     try {
       return await client.previews.list()
     } catch (error: any) {
-      console.error('[Blaxel] listPreviews failed:', error.message)
+      logger.error('[Blaxel] listPreviews failed:', error.message)
       throw new Error(`List previews failed: ${error.message}`)
     }
   }
@@ -809,13 +810,15 @@ export class BlaxelProvider implements SandboxProvider {
     try {
       return await client.previews.delete(previewUrl)
     } catch (error: any) {
-      console.error('[Blaxel] deletePreview failed:', error.message)
+      logger.error('[Blaxel] deletePreview failed:', error.message)
       throw new Error(`Delete preview failed: ${error.message}`)
     }
   }
 }
 
 import { SandboxSecurityManager } from '../security-manager'
+
+const logger = createLogger('Sandbox:Blaxel');
 
 export class BlaxelSandboxHandle implements SandboxHandle {
   readonly id: string
@@ -864,7 +867,7 @@ export class BlaxelSandboxHandle implements SandboxHandle {
         executionId: result.executionId,
       };
     } catch (error: any) {
-      console.error('[Blaxel] Async execution failed:', error);
+      logger.error('[Blaxel] Async execution failed:', error);
       return {
         success: false,
         error: error.message,
@@ -894,7 +897,7 @@ export class BlaxelSandboxHandle implements SandboxHandle {
 
       return { secret, success: true };
     } catch (error: any) {
-      console.error('[Blaxel] Callback registration failed:', error);
+      logger.error('[Blaxel] Callback registration failed:', error);
       return { secret: '', success: false };
     }
   }
@@ -946,12 +949,12 @@ export class BlaxelSandboxHandle implements SandboxHandle {
       stmt.run(this.id, key, encryptedSecret);
 
       if (encKey) {
-        console.log('[Blaxel] Callback secret encrypted and persisted');
+        logger.info('[Blaxel] Callback secret encrypted and persisted');
       } else {
-        console.warn('[Blaxel] Callback secret stored UNENCRYPTED (development mode only)');
+        logger.warn('[Blaxel] Callback secret stored UNENCRYPTED (development mode only)');
       }
     } catch (error: any) {
-      console.error('[Blaxel] Failed to persist callback secret:', error.message);
+      logger.error('[Blaxel] Failed to persist callback secret:', error.message);
       throw error; // Re-throw to fail closed
     }
   }
@@ -978,7 +981,7 @@ export class BlaxelSandboxHandle implements SandboxHandle {
       // Check if it's in encrypted format
       // If not, it's from old unencrypted storage (migration path)
       if (!encryptedSecret.includes(':')) {
-        console.warn('[Blaxel] Found unencrypted secret, migrating to encrypted storage');
+        logger.warn('[Blaxel] Found unencrypted secret, migrating to encrypted storage');
         // Re-encrypt and update
         if (encKey) {
           const reEncrypted = encryptSecret(encryptedSecret, encKey);
@@ -994,16 +997,16 @@ export class BlaxelSandboxHandle implements SandboxHandle {
           const decrypted = decryptSecret(encryptedSecret, encKey);
           return decrypted;
         } catch (decryptError: any) {
-          console.error('[Blaxel] Failed to decrypt callback secret:', decryptError.message);
+          logger.error('[Blaxel] Failed to decrypt callback secret:', decryptError.message);
           return null;
         }
       } else {
         // Dev mode without encryption key
-        console.warn('[Blaxel] Loading encrypted secret without encryption key (dev mode)');
+        logger.warn('[Blaxel] Loading encrypted secret without encryption key (dev mode)');
         return encryptedSecret;
       }
     } catch (error) {
-      console.error('[Blaxel] Failed to load callback secret:', error);
+      logger.error('[Blaxel] Failed to load callback secret:', error);
       return null;
     }
   }
@@ -1030,7 +1033,7 @@ export class BlaxelSandboxHandle implements SandboxHandle {
     } catch (error: any) {
       // Security exceptions should be logged but not expose details
       if (error.message?.includes('Security Exception')) {
-        console.warn('[Blaxel] Security validation failed:', error.message)
+        logger.warn('[Blaxel] Security validation failed:', error.message)
         return {
           success: false,
           output: 'Security validation failed',
@@ -1110,11 +1113,11 @@ export class BlaxelSandboxHandle implements SandboxHandle {
     } catch (error: any) {
       // Security exceptions should be logged but not expose details
       if (error.message?.includes('Security Exception')) {
-        console.warn('[Blaxel] Security validation failed:', error.message)
+        logger.warn('[Blaxel] Security validation failed:', error.message)
         throw new Error('Security validation failed')
       }
       
-      console.error('[Blaxel] Async execution failed:', error.message)
+      logger.error('[Blaxel] Async execution failed:', error.message)
       throw new Error(`Async execution failed: ${error.message}`)
     }
   }
@@ -1143,7 +1146,7 @@ export class BlaxelSandboxHandle implements SandboxHandle {
         error: status.error,
       };
     } catch (error: any) {
-      console.error('[Blaxel] Failed to get async status:', error);
+      logger.error('[Blaxel] Failed to get async status:', error);
       throw error;
     }
   }
@@ -1157,7 +1160,7 @@ export class BlaxelSandboxHandle implements SandboxHandle {
     try {
       await this.sandbox.cancelExecution(executionId);
     } catch (error: any) {
-      console.error('[Blaxel] Failed to cancel execution:', error);
+      logger.error('[Blaxel] Failed to cancel execution:', error);
       throw error;
     }
   }
@@ -1181,7 +1184,7 @@ export class BlaxelSandboxHandle implements SandboxHandle {
     } catch (error: any) {
       // Security exceptions should be logged but not expose details
       if (error.message?.includes('Security Exception')) {
-        console.warn('[Blaxel] Security validation failed:', error.message)
+        logger.warn('[Blaxel] Security validation failed:', error.message)
         return {
           success: false,
           output: 'Security validation failed',
@@ -1211,7 +1214,7 @@ export class BlaxelSandboxHandle implements SandboxHandle {
     } catch (error: any) {
       // Security exceptions should be logged but not expose details
       if (error.message?.includes('Security Exception')) {
-        console.warn('[Blaxel] Security validation failed:', error.message)
+        logger.warn('[Blaxel] Security validation failed:', error.message)
         return {
           success: false,
           output: 'Security validation failed',
@@ -1237,7 +1240,7 @@ export class BlaxelSandboxHandle implements SandboxHandle {
     } catch (error: any) {
       // Security exceptions should be logged but not expose details
       if (error.message?.includes('Security Exception')) {
-        console.warn('[Blaxel] Security validation failed:', error.message)
+        logger.warn('[Blaxel] Security validation failed:', error.message)
         return {
           success: false,
           output: 'Security validation failed',
@@ -1313,7 +1316,7 @@ export class BlaxelSandboxHandle implements SandboxHandle {
         results: result.taskResults || [],
       }
     } catch (error: any) {
-      console.error('[Blaxel] Batch job failed:', error.message)
+      logger.error('[Blaxel] Batch job failed:', error.message)
       throw new Error(`Batch job failed: ${error.message}`)
     }
   }
@@ -1356,7 +1359,7 @@ export class BlaxelSandboxHandle implements SandboxHandle {
         verified: !!config.callbackSecret
       }
     } catch (error: any) {
-      console.error('[Blaxel] Verified async execution failed:', error.message)
+      logger.error('[Blaxel] Verified async execution failed:', error.message)
       throw error
     }
   }
@@ -1393,7 +1396,7 @@ export class BlaxelSandboxHandle implements SandboxHandle {
 
       return this.createLogStreamIterator(response.body)
     } catch (error: any) {
-      console.error('[Blaxel] Log streaming failed:', error.message)
+      logger.error('[Blaxel] Log streaming failed:', error.message)
       throw error
     }
   }
@@ -1468,7 +1471,7 @@ export class BlaxelSandboxHandle implements SandboxHandle {
       
       return result
     } catch (error: any) {
-      console.error('[Blaxel] Agent handoff failed:', error.message)
+      logger.error('[Blaxel] Agent handoff failed:', error.message)
       throw new Error(`Agent handoff failed: ${error.message}`)
     }
   }
@@ -1482,7 +1485,7 @@ export class BlaxelSandboxHandle implements SandboxHandle {
       const { verifyWebhookFromRequest } = await import('@blaxel/core')
       return verifyWebhookFromRequest(request, secret)
     } catch (error: any) {
-      console.error('[Blaxel] Callback signature verification failed:', error.message)
+      logger.error('[Blaxel] Callback signature verification failed:', error.message)
       return false
     }
   }
@@ -1510,7 +1513,7 @@ export class BlaxelSandboxHandle implements SandboxHandle {
         
         next()
       } catch (error: any) {
-        console.error('[Blaxel] Callback verification error:', error.message)
+        logger.error('[Blaxel] Callback verification error:', error.message)
         res.status(500).json({ error: 'Verification failed' })
       }
     }
@@ -1535,7 +1538,7 @@ export class BlaxelSandboxHandle implements SandboxHandle {
         }
       } catch (error) {
         // Continue polling on transient errors
-        console.warn('[Blaxel] Polling error:', error)
+        logger.warn('[Blaxel] Polling error:', error)
       }
 
       await new Promise(resolve => setTimeout(resolve, 2000))

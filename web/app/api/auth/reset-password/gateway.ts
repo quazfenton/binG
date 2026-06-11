@@ -4,6 +4,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { initializeDatabase } from '@/lib/database/db';
 import { generateToken } from '@/lib/auth/jwt';
 import { hashValue } from '@/lib/utils/crypto';
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('Auth:ResetPassword');
 
 interface EmailService {
   sendPasswordReset(email: string, resetToken: string, resetUrl: string): Promise<boolean>;
@@ -11,10 +14,10 @@ interface EmailService {
 
 const emailService: EmailService = {
   async sendPasswordReset(email: string, resetToken: string, resetUrl: string): Promise<boolean> {
-    console.log(`[Email] Sending password reset to ${email}`);
+    logger.info(`[Email] Sending password reset to ${email}`);
     // Log only a masked token reference for security (never log the full URL or token)
     const maskedToken = resetToken ? `${resetToken.substring(0, 8)}...` : 'N/A';
-    console.log(`[Email] Reset token: ${maskedToken}`);
+    logger.info(`[Email] Reset token: ${maskedToken}`);
 
     // In production, integrate with email provider (SendGrid, AWS SES, etc.)
     const emailProvider = process.env.EMAIL_PROVIDER;
@@ -26,12 +29,12 @@ const emailService: EmailService = {
       //   subject: 'Password Reset Request',
       //   html: `Click <a href="${resetUrl}">here</a> to reset your password.`,
       // });
-      console.log('[Email] Would send via SendGrid');
+      logger.info('[Email] Would send via SendGrid');
     } else if (emailProvider === 'ses') {
       // await ses.sendEmail({ ... });
-      console.log('[Email] Would send via AWS SES');
+      logger.info('[Email] Would send via AWS SES');
     } else {
-      console.log('[Email] No email provider configured, logging only');
+      logger.info('[Email] No email provider configured, logging only');
     }
 
     return true;
@@ -81,7 +84,7 @@ export async function POST(req: NextRequest) {
       const { logPasswordResetRequest } = await import('@/lib/auth/auth-audit-logger');
       logPasswordResetRequest(String(user.id), email, req);
     } catch (auditError) {
-      console.warn('[ResetPassword] Audit log failed:', auditError);
+      logger.warn('[ResetPassword] Audit log failed:', auditError);
     }
 
     return NextResponse.json({
@@ -93,7 +96,7 @@ export async function POST(req: NextRequest) {
       })
     });
   } catch (error) {
-    console.error('Password reset error:', error);
+    logger.error('Password reset error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

@@ -16,6 +16,9 @@
 
 import { getDatabase } from '@/lib/database/connection';
 import { execSchemaFile } from '@/lib/database/schema';
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('Chat:RequestLogger');
 
 // Dynamic import to avoid circular dependency with model-ranker
 // model-ranker imports chatRequestLogger, so we import recordModelAttempt lazily
@@ -28,7 +31,7 @@ async function recordModelAttemptAsync(provider: string, model: string, success:
     const { recordModelAttempt } = await import('@/lib/providers/model-ranker');
     recordModelAttempt(provider, model, success);
   } catch (error) {
-    console.warn('[ChatRequestLogger] Failed to record model attempt:', error);
+    logger.warn('[ChatRequestLogger] Failed to record model attempt:', error);
   }
 }
 
@@ -43,7 +46,7 @@ async function recordRateLimitErrorAsync(provider: string, model: string): Promi
     // FIX: Also record as a failed attempt so rotation tracking knows this model failed
     recordModelAttempt(provider, model, false);
   } catch (error) {
-    console.warn('[ChatRequestLogger] Failed to record rate limit error:', error);
+    logger.warn('[ChatRequestLogger] Failed to record rate limit error:', error);
   }
 }
 
@@ -130,9 +133,9 @@ export class ChatRequestLogger {
       execSchemaFile(this.db, 'logging-schema');
 
       this.initialized = true;
-      console.log('[ChatRequestLogger] Database initialized');
+      logger.info('[ChatRequestLogger] Database initialized');
     } catch (error) {
-      console.warn('[ChatRequestLogger] DB init failed, logging disabled:', error);
+      logger.warn('[ChatRequestLogger] DB init failed, logging disabled:', error);
       this.db = null;
       this.initialized = true; // Prevent infinite retry loops on every call
     }
@@ -175,7 +178,7 @@ export class ChatRequestLogger {
         metadata ? JSON.stringify(metadata) : null
       );
     } catch (error: any) {
-      console.error('[ChatRequestLogger] Failed to log request start:', error);
+      logger.error('[ChatRequestLogger] Failed to log request start:', error);
     }
   }
 
@@ -293,7 +296,7 @@ export class ChatRequestLogger {
 
       // Log telemetry summary to console for real-time monitoring
       if (toolCalls && toolCalls.length > 0) {
-        console.log(
+        logger.info(
           `[Telemetry] ${requestId}: ${toolCallCount} tools (${toolCallSuccessCount}✓/${toolCallFailCount}✗), ` +
           `scores: latency=${(telemetryScores?.latencyScore || 0).toFixed(2)} ` +
           `efficiency=${(telemetryScores?.tokenEfficiency || 0).toFixed(2)} ` +
@@ -312,7 +315,7 @@ export class ChatRequestLogger {
          });
       }
     } catch (error) {
-      console.error('[ChatRequestLogger] Failed to log request complete:', error);
+      logger.error('[ChatRequestLogger] Failed to log request complete:', error);
     }
   }
 
@@ -423,7 +426,7 @@ export class ChatRequestLogger {
         metadata: row.metadata ? JSON.parse(row.metadata) : undefined,
       }));
     } catch (error) {
-      console.error('[ChatRequestLogger] Failed to query logs:', error);
+      logger.error('[ChatRequestLogger] Failed to query logs:', error);
       return [];
     }
   }
@@ -481,7 +484,7 @@ export class ChatRequestLogger {
         successRate: total > 0 ? Math.round((successful / total) * 100) : 0,
       };
     } catch (error) {
-      console.error('[ChatRequestLogger] Failed to get stats:', error);
+      logger.error('[ChatRequestLogger] Failed to get stats:', error);
       return {
         totalRequests: 0,
         successfulRequests: 0,
@@ -557,7 +560,7 @@ export class ChatRequestLogger {
         };
       });
     } catch (error) {
-      console.error('[ChatRequestLogger] Failed to get model performance:', error);
+      logger.error('[ChatRequestLogger] Failed to get model performance:', error);
       return [];
     }
   }
@@ -579,10 +582,10 @@ export class ChatRequestLogger {
       `);
 
       const result = stmt.run(cutoffDate.toISOString());
-      console.log(`[ChatRequestLogger] Cleaned up ${result.changes} old logs`);
+      logger.info(`[ChatRequestLogger] Cleaned up ${result.changes} old logs`);
       return result.changes;
     } catch (error) {
-      console.error('[ChatRequestLogger] Failed to cleanup old logs:', error);
+      logger.error('[ChatRequestLogger] Failed to cleanup old logs:', error);
       return 0;
     }
   }

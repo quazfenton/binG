@@ -936,7 +936,7 @@ export async function* streamWithVercelAI(
     smoothStreaming = true,
     maxRetries = 0,
     maxSteps = 12,
-    timeoutMs = parseInt(process.env.LLM_STREAM_TIMEOUT_MS || '60000', 10), // Flat 60s for all providers. Per-provider tuning removed; replaced by the self-correcting derank loop in llm-provider-health.ts.
+    timeoutMs = parseInt(process.env.LLM_STREAM_TIMEOUT_MS || '120000', 10), // Flat 120s for all providers. Increased from 60s to handle slow NVIDIA TTFT and multi-tool processing. Per-provider tuning removed; replaced by the self-correcting derank loop in llm-provider-health.ts.
     speculativeFallbackMs = parseInt(process.env.LLM_STREAM_SPECULATIVE_MS || '20000', 10), // Default 20s, 0 to disable
     providerOptions,
     system: systemOverride,

@@ -60,6 +60,10 @@ import type {
   PtyConnectOptions,
 } from './sandbox-provider'
 
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('Sandbox:E2B');
+
 // Dynamic import type for E2B Sandbox
 type E2BSandboxType = any
 type E2BSandboxOpts = any
@@ -117,13 +121,13 @@ export class E2BProvider implements SandboxProvider {
     if (this.apiKey) {
       process.env.E2B_API_KEY = this.apiKey
     } else {
-      console.warn('[E2BProvider] E2B_API_KEY not set. E2B sandboxes will not be available.')
+      logger.warn('[E2BProvider] E2B_API_KEY not set. E2B sandboxes will not be available.')
     }
 
     this.defaultTemplate = process.env.E2B_DEFAULT_TEMPLATE || 'base'
     this.defaultTimeout = parseInt(process.env.E2B_DEFAULT_TIMEOUT || E2B_DEFAULT_TIMEOUT.toString())
     
-    console.log(`[E2BProvider] Initialized - Template: "${this.defaultTemplate}", Timeout: ${this.defaultTimeout}ms`)
+    logger.info(`[E2BProvider] Initialized - Template: "${this.defaultTemplate}", Timeout: ${this.defaultTimeout}ms`)
   }
 
   /**
@@ -139,7 +143,7 @@ export class E2BProvider implements SandboxProvider {
       return { healthy: true, latency, details: { activeSandboxes: sandboxes.length } }
     } catch (error: any) {
       const latency = Date.now() - startTime
-      console.error('[E2BProvider] Health check failed:', error.message)
+      logger.error('[E2BProvider] Health check failed:', error.message)
       return { healthy: false, latency, details: { error: error.message } }
     }
   }
@@ -155,7 +159,7 @@ export class E2BProvider implements SandboxProvider {
       this.e2bModule = await import('@e2b/code-interpreter')
     } catch (error: any) {
       this.moduleLoadError = `@e2b/code-interpreter not installed. Run: npm install @e2b/code-interpreter`
-      console.error('[E2BProvider]', this.moduleLoadError)
+      logger.error('[E2BProvider]', this.moduleLoadError)
       throw new Error(this.moduleLoadError)
     }
   }
@@ -185,7 +189,7 @@ export class E2BProvider implements SandboxProvider {
         ? (E2B_TEMPLATE_MAP[config.language] || this.defaultTemplate)
         : this.defaultTemplate
 
-      console.log(`[E2BProvider] Creating sandbox - Language: "${config.language || 'default'}", Template: "${template}"`)
+      logger.info(`[E2BProvider] Creating sandbox - Language: "${config.language || 'default'}", Template: "${template}"`)
 
       // Build sandbox options
       const sandboxOpts: E2BSandboxOpts = {
@@ -205,12 +209,12 @@ export class E2BProvider implements SandboxProvider {
       // Record sandbox creation in quota (count as 1 session)
       quotaManager.recordUsage('e2b', 1)
 
-      console.log(`[E2BProvider] ✓ Created sandbox ${sandbox.sandboxId} (template: ${template}, timeout: ${this.defaultTimeout}ms)`)
+      logger.info(`[E2BProvider] ✓ Created sandbox ${sandbox.sandboxId} (template: ${template}, timeout: ${this.defaultTimeout}ms)`)
 
       return new E2BSandboxHandle(sandbox, config, this.e2bModule)
     } catch (error: any) {
-      console.error(`[E2BProvider] ✗ Failed to create sandbox:`, error.message)
-      console.error(`[E2BProvider] Error details:`, {
+      logger.error(`[E2BProvider] ✗ Failed to create sandbox:`, error.message)
+      logger.error(`[E2BProvider] Error details:`, {
         name: error.name,
         message: error.message,
         stack: error.stack?.split('\n').slice(0, 3).join('\n'),
@@ -244,11 +248,11 @@ export class E2BProvider implements SandboxProvider {
       // Connect to existing sandbox
       const sandbox: E2BSandboxType = await Sandbox.connect(sandboxId)
       
-      console.log(`[E2BProvider] Connected to existing sandbox ${sandboxId}`)
+      logger.info(`[E2BProvider] Connected to existing sandbox ${sandboxId}`)
       
       return new E2BSandboxHandle(sandbox, {}, this.e2bModule)
     } catch (error: any) {
-      console.error('[E2BProvider] Failed to get sandbox:', error)
+      logger.error('[E2BProvider] Failed to get sandbox:', error)
       throw error
     }
   }
@@ -258,7 +262,7 @@ export class E2BProvider implements SandboxProvider {
    */
   async destroySandbox(sandboxId: string): Promise<void> {
     if (!this.apiKey) {
-      console.warn('[E2BProvider] Cannot destroy sandbox: E2B_API_KEY not configured')
+      logger.warn('[E2BProvider] Cannot destroy sandbox: E2B_API_KEY not configured')
       return
     }
 
@@ -271,14 +275,14 @@ export class E2BProvider implements SandboxProvider {
       const sandbox = await Sandbox.connect(sandboxId)
       await sandbox.kill()
       
-      console.log(`[E2BProvider] Destroyed sandbox ${sandboxId}`)
+      logger.info(`[E2BProvider] Destroyed sandbox ${sandboxId}`)
     } catch (error: any) {
       // Sandbox might already be destroyed
       if (error.message?.includes('not found') || error.message?.includes('closed')) {
-        console.log(`[E2BProvider] Sandbox ${sandboxId} already destroyed`)
+        logger.info(`[E2BProvider] Sandbox ${sandboxId} already destroyed`)
         return
       }
-      console.error('[E2BProvider] Failed to destroy sandbox:', error)
+      logger.error('[E2BProvider] Failed to destroy sandbox:', error)
       throw error
     }
   }
@@ -306,7 +310,7 @@ export class E2BProvider implements SandboxProvider {
         labels: sbx.metadata,
       }))
     } catch (error) {
-      console.error('[E2BProvider] Failed to list sandboxes:', error)
+      logger.error('[E2BProvider] Failed to list sandboxes:', error)
       return []
     }
   }
@@ -338,7 +342,7 @@ class E2BSandboxHandle implements SandboxHandle {
   getAmpService(): E2BAmpService | null {
     const apiKey = process.env.AMP_API_KEY
     if (!apiKey) {
-      console.warn('[E2B] AMP_API_KEY not set, Amp service unavailable')
+      logger.warn('[E2B] AMP_API_KEY not set, Amp service unavailable')
       return null
     }
 
@@ -359,7 +363,7 @@ class E2BSandboxHandle implements SandboxHandle {
   getCodexService(): E2BCodexService | null {
     const apiKey = process.env.CODEX_API_KEY || process.env.OPENAI_API_KEY
     if (!apiKey) {
-      console.warn('[E2B] CODEX_API_KEY not set, Codex service unavailable')
+      logger.warn('[E2B] CODEX_API_KEY not set, Codex service unavailable')
       return null
     }
 
@@ -378,7 +382,7 @@ class E2BSandboxHandle implements SandboxHandle {
    * const result = await handle.executeAmp({
    *   prompt: 'Fix all TODO comments in the codebase',
    *   streamJson: true,
-   *   onStdout: (data) => console.log(data)
+   *   onStdout: (data) => logger.info(data)
    * });
    * ```
    */
@@ -423,7 +427,7 @@ class E2BSandboxHandle implements SandboxHandle {
    *   workingDir: '/home/user/repo'
    * })) {
    *   if (event.type === 'assistant') {
-   *     console.log(`Tokens: ${event.message.usage?.output_tokens}`)
+   *     logger.info(`Tokens: ${event.message.usage?.output_tokens}`)
    *   }
    * }
    * ```
@@ -447,7 +451,7 @@ class E2BSandboxHandle implements SandboxHandle {
    *   workingDir: '/home/user/repo'
    * })) {
    *   if (event.type === 'tool_call') {
-   *     console.log(`Tool: ${event.data.tool_name}`)
+   *     logger.info(`Tool: ${event.data.tool_name}`)
    *   }
    * }
    * ```
@@ -494,7 +498,7 @@ class E2BSandboxHandle implements SandboxHandle {
     } catch (error: any) {
       // Security exceptions should be logged but not expose details
       if (error.message?.includes('Security Exception')) {
-        console.warn('[E2B] Security validation failed:', error.message)
+        logger.warn('[E2B] Security validation failed:', error.message)
         return {
           success: false,
           output: 'Security validation failed',
@@ -502,7 +506,7 @@ class E2BSandboxHandle implements SandboxHandle {
         }
       }
       
-      console.error('[E2B] Command execution error:', error)
+      logger.error('[E2B] Command execution error:', error)
       return {
         success: false,
         output: error.message || 'Command failed',
@@ -566,14 +570,14 @@ class E2BSandboxHandle implements SandboxHandle {
     } catch (error: any) {
       // Security exceptions should be logged but not expose details
       if (error.message?.includes('Security Exception')) {
-        console.warn('[E2B] Security validation failed:', error.message)
+        logger.warn('[E2B] Security validation failed:', error.message)
         return {
           success: false,
           output: 'Security validation failed',
         }
       }
       
-      console.error('[E2B] Write file error:', error)
+      logger.error('[E2B] Write file error:', error)
       return {
         success: false,
         output: error.message || 'Failed to write file',
@@ -597,14 +601,14 @@ class E2BSandboxHandle implements SandboxHandle {
     } catch (error: any) {
       // Security exceptions should be logged but not expose details
       if (error.message?.includes('Security Exception')) {
-        console.warn('[E2B] Security validation failed:', error.message)
+        logger.warn('[E2B] Security validation failed:', error.message)
         return {
           success: false,
           output: 'Security validation failed',
         }
       }
       
-      console.error('[E2B] Read file error:', error)
+      logger.error('[E2B] Read file error:', error)
       return {
         success: false,
         output: error.message || 'Failed to read file',
@@ -640,14 +644,14 @@ class E2BSandboxHandle implements SandboxHandle {
     } catch (error: any) {
       // Security exceptions should be logged but not expose details
       if (error.message?.includes('Security Exception')) {
-        console.warn('[E2B] Security validation failed:', error.message)
+        logger.warn('[E2B] Security validation failed:', error.message)
         return {
           success: false,
           output: 'Security validation failed',
         }
       }
 
-      console.error('[E2B] List directory error:', error)
+      logger.error('[E2B] List directory error:', error)
       return {
         success: false,
         output: error.message || 'Failed to list directory',
@@ -676,14 +680,14 @@ class E2BSandboxHandle implements SandboxHandle {
     } catch (error: any) {
       // Security exceptions should be logged but not expose details
       if (error.message?.includes('Security Exception')) {
-        console.warn('[E2B] Security validation failed:', error.message)
+        logger.warn('[E2B] Security validation failed:', error.message)
         return {
           success: false,
           output: 'Security validation failed',
         }
       }
       
-      console.error('[E2B] Upload file error:', error)
+      logger.error('[E2B] Upload file error:', error)
       return {
         success: false,
         output: error.message || 'Failed to upload file',
@@ -707,14 +711,14 @@ class E2BSandboxHandle implements SandboxHandle {
     } catch (error: any) {
       // Security exceptions should be logged but not expose details
       if (error.message?.includes('Security Exception')) {
-        console.warn('[E2B] Security validation failed:', error.message)
+        logger.warn('[E2B] Security validation failed:', error.message)
         return {
           success: false,
           output: 'Security validation failed',
         }
       }
       
-      console.error('[E2B] Download file error:', error)
+      logger.error('[E2B] Download file error:', error)
       return {
         success: false,
         output: error.message || 'Failed to download file',
@@ -886,7 +890,7 @@ class E2BSandboxHandle implements SandboxHandle {
 
       return previewInfo;
     } catch (error: any) {
-      console.error('[E2B] Get preview link error:', error)
+      logger.error('[E2B] Get preview link error:', error)
 
       return {
         port,
@@ -943,10 +947,10 @@ class E2BSandboxHandle implements SandboxHandle {
         rows
       )
       
-      console.log(`[E2B] Created PTY session ${sessionId} with PID: ${ptyHandle.pid}`)
+      logger.info(`[E2B] Created PTY session ${sessionId} with PID: ${ptyHandle.pid}`)
       return e2bPtyHandle
     } catch (error: any) {
-      console.error('[E2B] Create PTY error:', error)
+      logger.error('[E2B] Create PTY error:', error)
       throw error
     }
   }
@@ -971,11 +975,11 @@ class E2BSandboxHandle implements SandboxHandle {
         },
       })
 
-      console.log(`[E2B] Reconnected to PTY session ${sessionId} (PID: ${session.pid})`)
+      logger.info(`[E2B] Reconnected to PTY session ${sessionId} (PID: ${session.pid})`)
       
       return new E2BPtyHandle(sessionId, session.pid, ptyHandle, this.sandbox, 120, 30)
     } catch (error: any) {
-      console.error('[E2B] Connect PTY error:', error)
+      logger.error('[E2B] Connect PTY error:', error)
       throw error
     }
   }
@@ -987,14 +991,14 @@ class E2BSandboxHandle implements SandboxHandle {
     try {
       const session = this.ptySessions.get(sessionId)
       if (!session) {
-        console.warn(`[E2B] PTY session ${sessionId} not found`)
+        logger.warn(`[E2B] PTY session ${sessionId} not found`)
         return
       }
       await this.sandbox.pty.kill(session.pid)
       this.ptySessions.delete(sessionId)
-      console.log(`[E2B] Killed PTY session ${sessionId} (PID: ${session.pid})`)
+      logger.info(`[E2B] Killed PTY session ${sessionId} (PID: ${session.pid})`)
     } catch (error: any) {
-      console.error('[E2B] Kill PTY error:', error)
+      logger.error('[E2B] Kill PTY error:', error)
       throw error
     }
   }
@@ -1006,13 +1010,13 @@ class E2BSandboxHandle implements SandboxHandle {
     try {
       const session = this.ptySessions.get(sessionId)
       if (!session) {
-        console.warn(`[E2B] PTY session ${sessionId} not found`)
+        logger.warn(`[E2B] PTY session ${sessionId} not found`)
         return
       }
       await this.sandbox.pty.resize(session.pid, { cols, rows })
-      console.log(`[E2B] Resized PTY ${sessionId} to ${cols}x${rows}`)
+      logger.info(`[E2B] Resized PTY ${sessionId} to ${cols}x${rows}`)
     } catch (error: any) {
-      console.error('[E2B] Resize PTY error:', error)
+      logger.error('[E2B] Resize PTY error:', error)
       throw error
     }
   }
@@ -1028,7 +1032,7 @@ class E2BSandboxHandle implements SandboxHandle {
         success: true,
       }
     } catch (error: any) {
-      console.error('[E2B] Run code error:', error)
+      logger.error('[E2B] Run code error:', error)
       return {
         text: error.message || 'Code execution failed',
         success: false,
@@ -1091,7 +1095,7 @@ class E2BPtyHandle implements PtyHandle {
         new TextEncoder().encode(data)
       )
     } catch (error: any) {
-      console.error('[E2B PTY] Send input error:', error)
+      logger.error('[E2B PTY] Send input error:', error)
       throw error
     }
   }
@@ -1106,7 +1110,7 @@ class E2BPtyHandle implements PtyHandle {
     try {
       await this.sandbox.pty.resize(this.pid, { cols, rows })
     } catch (error: any) {
-      console.error('[E2B PTY] Resize error:', error)
+      logger.error('[E2B PTY] Resize error:', error)
       throw error
     }
   }
@@ -1117,7 +1121,7 @@ class E2BPtyHandle implements PtyHandle {
    */
   async waitForConnection(): Promise<void> {
     this.connected = true
-    console.log('[E2B PTY] Connection established')
+    logger.info('[E2B PTY] Connection established')
   }
 
   /**
@@ -1130,7 +1134,7 @@ class E2BPtyHandle implements PtyHandle {
         exitCode: result.exitCode,
       }
     } catch (error: any) {
-      console.error('[E2B PTY] Wait error:', error)
+      logger.error('[E2B PTY] Wait error:', error)
       throw error
     }
   }
@@ -1143,9 +1147,9 @@ class E2BPtyHandle implements PtyHandle {
     try {
       await this.handle.disconnect()
       this.connected = false
-      console.log('[E2B PTY] Disconnected (session still running)')
+      logger.info('[E2B PTY] Disconnected (session still running)')
     } catch (error: any) {
-      console.error('[E2B PTY] Disconnect error:', error)
+      logger.error('[E2B PTY] Disconnect error:', error)
       throw error
     }
   }
@@ -1158,9 +1162,9 @@ class E2BPtyHandle implements PtyHandle {
     try {
       await this.sandbox.pty.kill(this.pid)
       this.connected = false
-      console.log('[E2B PTY] Session killed')
+      logger.info('[E2B PTY] Session killed')
     } catch (error: any) {
-      console.error('[E2B PTY] Kill error:', error)
+      logger.error('[E2B PTY] Kill error:', error)
       throw error
     }
   }

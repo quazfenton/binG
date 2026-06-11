@@ -18,6 +18,10 @@
 import type { OPFSCore } from './opfs-core';
 import { opfsCore } from './opfs-core';
 
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('VFS:OPFSGit');
+
 // isomorphic-git types
 declare module 'isomorphic-git' {
   export interface GitFsClient {
@@ -252,7 +256,7 @@ export class OPFSGitIntegration {
     this.fs = createOPFSFsClient(this.core);
 
     this.initialized = true;
-    console.log('[OPFS Git] Initialized for workspace:', this.options.workspaceId);
+    logger.info('[OPFS Git] Initialized for workspace:', this.options.workspaceId);
   }
 
   /**
@@ -278,7 +282,7 @@ export class OPFSGitIntegration {
       gitdir: `${this.options.workspaceId}/${this.gitdir}`,
     });
 
-    console.log('[OPFS Git] Repository initialized');
+    logger.info('[OPFS Git] Repository initialized');
   }
 
   /**
@@ -311,11 +315,11 @@ export class OPFSGitIntegration {
         singleBranch,
         corsProxy: this.options.corsProxy || undefined,
         onMessage: (message) => {
-          console.log('[OPFS Git] Clone:', message);
+          logger.info('[OPFS Git] Clone:', message);
         },
         onProgress: (progress) => {
           if (progress.phase === 'Receiving objects:') {
-            console.log('[OPFS Git] Clone progress:', progress.loaded, '/', progress.total);
+            logger.info('[OPFS Git] Clone progress:', progress.loaded, '/', progress.total);
           }
         },
       });
@@ -347,7 +351,7 @@ export class OPFSGitIntegration {
         // Ignore
       }
 
-      console.log('[OPFS Git] Clone complete:', defaultBranch, commits, 'commits');
+      logger.info('[OPFS Git] Clone complete:', defaultBranch, commits, 'commits');
 
       return {
         success: true,
@@ -356,7 +360,7 @@ export class OPFSGitIntegration {
         commits,
       };
     } catch (error: any) {
-      console.error('[OPFS Git] Clone failed:', error.message);
+      logger.error('[OPFS Git] Clone failed:', error.message);
       return {
         success: false,
         dir: this.options.workspaceId,
@@ -476,7 +480,7 @@ export class OPFSGitIntegration {
         behind,
       };
     } catch (error: any) {
-      console.error('[OPFS Git] Status failed:', error.message);
+      logger.error('[OPFS Git] Status failed:', error.message);
       return {
         branch: 'unknown',
         isClean: true,
@@ -503,7 +507,7 @@ export class OPFSGitIntegration {
       });
     }
 
-    console.log('[OPFS Git] Added:', pathList);
+    logger.info('[OPFS Git] Added:', pathList);
   }
 
   /**
@@ -524,7 +528,7 @@ export class OPFSGitIntegration {
       });
     }
 
-    console.log('[OPFS Git] Removed:', pathList);
+    logger.info('[OPFS Git] Removed:', pathList);
   }
 
   /**
@@ -554,7 +558,7 @@ export class OPFSGitIntegration {
       parent: options.parent,
     });
 
-    console.log('[OPFS Git] Committed:', oid, message);
+    logger.info('[OPFS Git] Committed:', oid, message);
 
     return oid;
   }
@@ -592,11 +596,11 @@ export class OPFSGitIntegration {
         corsProxy: this.options.corsProxy || undefined,
         force,
         onMessage: (message) => {
-          console.log('[OPFS Git] Push:', message);
+          logger.info('[OPFS Git] Push:', message);
         },
       });
 
-      console.log('[OPFS Git] Push complete to', remote, branch);
+      logger.info('[OPFS Git] Push complete to', remote, branch);
 
       return {
         success: true,
@@ -604,7 +608,7 @@ export class OPFSGitIntegration {
         branch,
       };
     } catch (error: any) {
-      console.error('[OPFS Git] Push failed:', error.message);
+      logger.error('[OPFS Git] Push failed:', error.message);
       return {
         success: false,
         remote,
@@ -647,18 +651,18 @@ export class OPFSGitIntegration {
         singleBranch,
         corsProxy: this.options.corsProxy || undefined,
         onMessage: (message) => {
-          console.log('[OPFS Git] Pull:', message);
+          logger.info('[OPFS Git] Pull:', message);
         },
       });
 
-      console.log('[OPFS Git] Pull complete');
+      logger.info('[OPFS Git] Pull complete');
 
       return {
         success: true,
         commitsPulled: (result as any).oid ? 1 : 0,
       };
     } catch (error: any) {
-      console.error('[OPFS Git] Pull failed:', error.message);
+      logger.error('[OPFS Git] Pull failed:', error.message);
       return {
         success: false,
         error: error.message,
@@ -692,7 +696,7 @@ export class OPFSGitIntegration {
         payload: entry.payload,
       }));
     } catch (error: any) {
-      console.error('[OPFS Git] Log failed:', error.message);
+      logger.error('[OPFS Git] Log failed:', error.message);
       return [];
     }
   }
@@ -713,7 +717,7 @@ export class OPFSGitIntegration {
       checkout,
     });
 
-    console.log('[OPFS Git] Created branch:', branch);
+    logger.info('[OPFS Git] Created branch:', branch);
   }
 
   /**
@@ -731,7 +735,7 @@ export class OPFSGitIntegration {
       ref: branch,
     });
 
-    console.log('[OPFS Git] Deleted branch:', branch);
+    logger.info('[OPFS Git] Deleted branch:', branch);
   }
 
   /**
@@ -767,7 +771,7 @@ export class OPFSGitIntegration {
         current: name === currentBranch,
       }));
     } catch (error: any) {
-      console.error('[OPFS Git] List branches failed:', error.message);
+      logger.error('[OPFS Git] List branches failed:', error.message);
       return [];
     }
   }
@@ -814,7 +818,7 @@ export class OPFSGitIntegration {
 
       return diffResult.filter(Boolean) as GitDiffEntry[];
     } catch (error: any) {
-      console.error('[OPFS Git] Diff failed:', error.message);
+      logger.error('[OPFS Git] Diff failed:', error.message);
       return [];
     }
   }
@@ -841,7 +845,7 @@ export class OPFSGitIntegration {
 
       return new TextDecoder().decode(diffResult);
     } catch (error: any) {
-      console.error('[OPFS Git] Diff text failed:', error.message);
+      logger.error('[OPFS Git] Diff text failed:', error.message);
       return '';
     }
   }
@@ -861,7 +865,7 @@ export class OPFSGitIntegration {
       ref,
     });
 
-    console.log('[OPFS Git] Checkout:', ref);
+    logger.info('[OPFS Git] Checkout:', ref);
   }
 
   /**
@@ -880,7 +884,7 @@ export class OPFSGitIntegration {
       url,
     });
 
-    console.log('[OPFS Git] Added remote:', name, url);
+    logger.info('[OPFS Git] Added remote:', name, url);
   }
 
   /**
@@ -900,7 +904,7 @@ export class OPFSGitIntegration {
 
       return remotes;
     } catch (error: any) {
-      console.error('[OPFS Git] List remotes failed:', error.message);
+      logger.error('[OPFS Git] List remotes failed:', error.message);
       return [];
     }
   }

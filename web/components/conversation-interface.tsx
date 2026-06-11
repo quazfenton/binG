@@ -120,6 +120,9 @@ const buildFilesystemHeaders = (): HeadersInit => buildApiHeaders();
 
 // Use shared file diff utilities - smartApply supersedes applyDiffToContent
 import { smartApply } from '@/lib/chat/file-diff-utils';
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('UI:ConversationInterface');
 
 export default function ConversationInterface() {
   const { user } = useAuth();
@@ -261,7 +264,7 @@ export default function ConversationInterface() {
           if (storedPrefix === expectedPrefix) {
             // Same user/anon mode — restore to keep files visible
             setCompositeSessionId(storedSessionId);
-            console.log('[ConversationInterface] Restored composite session ID:', storedSessionId);
+            logger.info('[ConversationInterface] Restored composite session ID:', storedSessionId);
             return;
           }
           // Prefix mismatch (user logged in/out) — clear stale
@@ -276,7 +279,7 @@ export default function ConversationInterface() {
             // Logged-in user: composite format "userId$sessionNumber" (e.g., "12345$001")
             const compositeId = `${user.id}$${newId}`;
             setCompositeSessionId(compositeId);
-            console.log('[ConversationInterface] Using composite session ID (authenticated):', compositeId);
+            logger.info('[ConversationInterface] Using composite session ID (authenticated):', compositeId);
           } else {
             // Anonymous user: composite format "anonUserId$sessionNumber" (e.g., "anon_<uuid>$001")
             // Uses the unique anonymous user ID (from getOrCreateAnonymousSessionId)
@@ -285,7 +288,7 @@ export default function ConversationInterface() {
             const anonUserId = getOrCreateAnonymousSessionId();
             const compositeId = `${anonUserId}$${newId}`;
             setCompositeSessionId(compositeId);
-            console.log('[ConversationInterface] Using composite session ID (anonymous):', compositeId);
+            logger.info('[ConversationInterface] Using composite session ID (anonymous):', compositeId);
           }
         }
       });
@@ -441,7 +444,7 @@ export default function ConversationInterface() {
           setAvailableProviders(providers);
         }
       } catch (e) {
-        console.error('[ConversationInterface] Failed to refresh providers after key change:', e);
+        logger.error('[ConversationInterface] Failed to refresh providers after key change:', e);
       }
     };
 
@@ -486,7 +489,7 @@ export default function ConversationInterface() {
         currentProvider: persisted.currentProvider,
         currentModel: persisted.currentModel,
       });
-      console.log('[ConversationInterface] Cleared stale persisted compositeSessionId:', persisted.compositeSessionId);
+      logger.info('[ConversationInterface] Cleared stale persisted compositeSessionId:', persisted.compositeSessionId);
     }
   }, []);
 
@@ -561,10 +564,10 @@ export default function ConversationInterface() {
   // Enhanced streaming state management
   const streamingState = useStreamingState({
     onSessionComplete: (sessionId) => {
-      console.log(`Streaming session ${sessionId} completed`);
+      logger.info(`Streaming session ${sessionId} completed`);
     },
     onSessionError: (sessionId, error) => {
-      console.error(`Streaming session ${sessionId} error:`, error);
+      logger.error(`Streaming session ${sessionId} error:`, error);
       toast.error(`Streaming error: ${error.message}`);
     },
     onBackpressureChange: (active) => {
@@ -667,7 +670,7 @@ export default function ConversationInterface() {
   // Debug BYOK trigger state
   useEffect(() => {
     if (showBYOKInput) {
-      console.log('[BYOK] Triggered visible with context:', byokTriggerContext);
+      logger.info('[BYOK] Triggered visible with context:', byokTriggerContext);
     }
   }, [showBYOKInput, byokTriggerContext]);
 
@@ -841,7 +844,7 @@ export default function ConversationInterface() {
       hasLoadedInitialMessagesRef.current = true;
       // Mark all existing messages as processed to prevent re-processing on page reload
       messages.forEach(m => processedMessageIdsRef.current.add(m.id));
-      console.log('[ConversationInterface] Initial load - marked', messages.length, 'messages as processed');
+      logger.info('[ConversationInterface] Initial load - marked', messages.length, 'messages as processed');
       return;
     }
 
@@ -920,26 +923,26 @@ export default function ConversationInterface() {
     const validEntries = newEntries.filter(entry => {
       const path = entry.path?.trim();
       if (!path) {
-        console.warn('[ConversationInterface] Filtering out entry with empty path');
+        logger.warn('[ConversationInterface] Filtering out entry with empty path');
         return false;
       }
 
       // Reject paths ending with quotes (likely extracted from JSX/HTML attributes)
       if (path.endsWith('"') || path.endsWith("'") || path.endsWith('`')) {
-        console.warn('[ConversationInterface] Filtering out path ending with quote (JSX/HTML fragment):', path);
+        logger.warn('[ConversationInterface] Filtering out path ending with quote (JSX/HTML fragment):', path);
         return false;
       }
 
       // Reject paths with spaces in the last segment (likely not a real file path)
       const lastSegment = path.split('/').pop() || path;
       if (/\s/.test(lastSegment)) {
-        console.warn('[ConversationInterface] Filtering out path with space in filename:', path);
+        logger.warn('[ConversationInterface] Filtering out path with space in filename:', path);
         return false;
       }
 
       // Reject paths that are too short or too long
       if (path.length < 3 || path.length > 500) {
-        console.warn('[ConversationInterface] Filtering out path with invalid length:', path);
+        logger.warn('[ConversationInterface] Filtering out path with invalid length:', path);
         return false;
       }
 
@@ -954,7 +957,7 @@ export default function ConversationInterface() {
         /^\s*function\s+/,   // Function declaration
       ];
       if (codeFragmentPatterns.some(pattern => pattern.test(path))) {
-        console.warn('[ConversationInterface] Filtering out path that looks like code fragment:', path);
+        logger.warn('[ConversationInterface] Filtering out path that looks like code fragment:', path);
         return false;
       }
 
@@ -962,12 +965,12 @@ export default function ConversationInterface() {
     });
 
     if (validEntries.length === 0) {
-      console.log('[ConversationInterface] All entries filtered out as invalid - skipping diff application');
+      logger.info('[ConversationInterface] All entries filtered out as invalid - skipping diff application');
       return;
     }
 
     if (validEntries.length !== newEntries.length) {
-      console.log(`[ConversationInterface] Filtered from ${newEntries.length} to ${validEntries.length} valid entries`);
+      logger.info(`[ConversationInterface] Filtered from ${newEntries.length} to ${validEntries.length} valid entries`);
     }
 
     if (validEntries.length === 0) return;
@@ -1004,14 +1007,14 @@ export default function ConversationInterface() {
           } else if (listResponse.status === 429) {
             // Rate limited - skip conflict check for NOW, use attached files as fallback
             // DO NOT permanently reject - rate limits are transient
-            console.warn('[ConflictCheck] Rate limited, using cached filesystem state');
+            logger.warn('[ConflictCheck] Rate limited, using cached filesystem state');
             existingFilePaths = Object.keys(attachedFilesystemFiles);
           } else {
             // Non-OK response - treat as error
             throw new Error(`Filesystem list failed: ${listResponse.status}`);
           }
         } catch (listError) {
-          console.warn('Failed to query filesystem for conflict detection:', listError);
+          logger.warn('Failed to query filesystem for conflict detection:', listError);
           // Fall back to attached files if API fails
           existingFilePaths = Object.keys(attachedFilesystemFiles);
         }
@@ -1028,7 +1031,7 @@ export default function ConversationInterface() {
         // If all files being edited already exist, this is expected behavior - auto-apply
         // This allows AI to fix bugs, update code, etc. in existing sessions
         if (allFilesExist && newFilePaths.length > 0) {
-          console.log('[ConflictCheck] All files exist - this is an edit operation, auto-applying');
+          logger.info('[ConflictCheck] All files exist - this is an edit operation, auto-applying');
           queueCommandDiffs(validEntries);
           // Auto-apply the detected diffs immediately
           if (applyDiffsRef.current) {
@@ -1081,7 +1084,7 @@ export default function ConversationInterface() {
     processedMessageIdsRef.current.clear();
     hasLoadedInitialMessagesRef.current = false;
     
-    console.log('[ConversationInterface] Conversation changed - reset processed tracking');
+    logger.info('[ConversationInterface] Conversation changed - reset processed tracking');
   }, [currentConversationId]);
 
   // Persist commands map by conversation id
@@ -1183,7 +1186,7 @@ export default function ConversationInterface() {
         }
       })
       .catch((error) => {
-        console.error("Failed to fetch providers:", error);
+        logger.error("Failed to fetch providers:", error);
         toast.error(
           "Failed to load AI providers. Check your API configuration.",
         );
@@ -1496,7 +1499,7 @@ export default function ConversationInterface() {
       sessionId?: string | null;
     } | null = null;
 
-    console.debug('[applyDiffsToFilesystem] Starting diff application', {
+    logger.debug('[applyDiffsToFilesystem] Starting diff application', {
       entryCount: entries.length,
       entries: entries.map(e => ({ path: e.path, diffLength: e.diff.length, diffPreview: e.diff.slice(0, 200) })),
       filesystemScopePath: scopePath,
@@ -1515,7 +1518,7 @@ export default function ConversationInterface() {
 
       // CRITICAL: Reject paths ending with quotes (JSX/HTML fragments)
       if (path.endsWith('"') || path.endsWith("'") || path.endsWith('`')) {
-        console.warn('[applyDiffsToFilesystem] Rejecting path ending with quote (JSX fragment):', path);
+        logger.warn('[applyDiffsToFilesystem] Rejecting path ending with quote (JSX fragment):', path);
         return false;
       }
 
@@ -1540,7 +1543,7 @@ export default function ConversationInterface() {
       const diffKey = `${resolvedPath}::${hashDiff(entry.diff)}`;
       const failureCount = rejectedDiffsRef.current.get(diffKey) || 0;
       if (failureCount >= MAX_RETRY_ATTEMPTS) {
-        console.warn('[applyDiffsToFilesystem] Skipping permanently rejected diff (exceeded retry limit):', {
+        logger.warn('[applyDiffsToFilesystem] Skipping permanently rejected diff (exceeded retry limit):', {
           path: resolvedPath,
           failureCount,
           diffLength: entry.diff.length,
@@ -1551,7 +1554,7 @@ export default function ConversationInterface() {
       // CRITICAL FIX: Skip obviously invalid paths BEFORE attempting read
       // This prevents infinite retry loops on CSS values, SCSS variables, etc.
       if (!isValidFilePath(resolvedPath)) {
-        console.warn('[applyDiffsToFilesystem] Skipping invalid path (CSS value, SCSS var, etc.):', resolvedPath);
+        logger.warn('[applyDiffsToFilesystem] Skipping invalid path (CSS value, SCSS var, etc.):', resolvedPath);
         // Mark as permanently rejected to prevent retry
         rejectedDiffsRef.current.set(diffKey, MAX_RETRY_ATTEMPTS);
         failed[entry.path] = failed[entry.path] || [];
@@ -1562,7 +1565,7 @@ export default function ConversationInterface() {
       // CRITICAL FIX: Skip empty diffs entirely - don't add to failed list, just ignore
       // This prevents infinite loops on malformed LLM output
       if (!entry.diff || entry.diff.trim().length === 0) {
-        console.debug('[applyDiffsToFilesystem] Skipping empty diff (prevents infinite loop):', resolvedPath);
+        logger.debug('[applyDiffsToFilesystem] Skipping empty diff (prevents infinite loop):', resolvedPath);
         continue;
       }
       
@@ -1586,7 +1589,7 @@ export default function ConversationInterface() {
           readErrorMsg = null; // Clear error for 404 - it's expected for new files
         } else if (readResponse.status === 400 || readResponse.status === 429) {
           // Invalid path or rate limited - skip this file to prevent retry loop
-          console.warn('[applyDiffsToFilesystem] Skipping path due to server rejection:', resolvedPath, 'status:', readResponse.status);
+          logger.warn('[applyDiffsToFilesystem] Skipping path due to server rejection:', resolvedPath, 'status:', readResponse.status);
           // Mark as permanently rejected for 429 (rate limit) or 400 (invalid path)
           rejectedDiffsRef.current.set(diffKey, MAX_RETRY_ATTEMPTS);
           failed[entry.path] = failed[entry.path] || [];
@@ -1630,7 +1633,7 @@ export default function ConversationInterface() {
       const nextContent = patchResult.content;
 
       if (patchResult.strategy !== 'unified') {
-        console.debug('[applyDiffsToFilesystem] Used strategy:', patchResult.strategy, {
+        logger.debug('[applyDiffsToFilesystem] Used strategy:', patchResult.strategy, {
           path: resolvedPath,
           confidence: patchResult.confidence,
           attempts: patchResult.attempts,
@@ -1643,7 +1646,7 @@ export default function ConversationInterface() {
         
         failed[entry.path] = failed[entry.path] || [];
         failed[entry.path].push(entry.diff);
-        console.warn('[applyDiffsToFilesystem] Diff application returned null', {
+        logger.warn('[applyDiffsToFilesystem] Diff application returned null', {
           path: resolvedPath,
           currentContentLength: currentContent.length,
           currentContentPreview: currentContent.slice(0, 300),
@@ -1661,7 +1664,7 @@ export default function ConversationInterface() {
 
       if (nextContent === currentContent) {
         appliedCount += 1;
-        console.debug('[applyDiffsToFilesystem] Diff produced no change (already applied or no-op)', {
+        logger.debug('[applyDiffsToFilesystem] Diff produced no change (already applied or no-op)', {
           path: resolvedPath,
           contentLength: currentContent.length,
         });
@@ -1694,7 +1697,7 @@ export default function ConversationInterface() {
           sessionId: payload?.data?.sessionId,
         };
         appliedCount += 1;
-        console.debug('[applyDiffsToFilesystem] Diff applied successfully', {
+        logger.debug('[applyDiffsToFilesystem] Diff applied successfully', {
           path: resolvedPath,
           previousContentLength: currentContent.length,
           newContentLength: nextContent.length,
@@ -1705,7 +1708,7 @@ export default function ConversationInterface() {
         
         failed[entry.path] = failed[entry.path] || [];
         failed[entry.path].push(entry.diff);
-        console.warn('[applyDiffsToFilesystem] Write failed', {
+        logger.warn('[applyDiffsToFilesystem] Write failed', {
           path: resolvedPath,
           error: writeError.message,
           nextContentLength: nextContent.length,
@@ -1720,7 +1723,7 @@ export default function ConversationInterface() {
       // This prevents infinite read loops where:
       // 1. We apply diffs â†’ emit event â†’ trigger refresh â†’ re-read files â†’ apply diffs again
       // The files are already updated in the VFS, no need to trigger refresh
-      console.debug('[applyDiffsToFilesystem] Skipping emitFilesystemUpdated for self-applied diffs (prevents infinite loop)', {
+      logger.debug('[applyDiffsToFilesystem] Skipping emitFilesystemUpdated for self-applied diffs (prevents infinite loop)', {
         appliedCount,
         scopePath: filesystemScopePath,
       });
@@ -1761,7 +1764,7 @@ export default function ConversationInterface() {
       const totalFailedDiffs = failedCount;
       
       toast.error(`Diff application failed: ${totalFailedDiffs} edit(s) could not be applied to ${failedPaths.length} file(s). This usually means the file content has changed since the diff was generated. Please review the files and try again.`);
-      console.error('[Diff Application Failed]', {
+      logger.error('[Diff Application Failed]', {
         failedFiles: failedPaths,
         failedDiffs: failed,
         reason: 'Search blocks not found or patches could not be applied',

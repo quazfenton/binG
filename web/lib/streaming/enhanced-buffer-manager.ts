@@ -494,10 +494,13 @@ class StreamSession extends BrowserEventEmitter {
     }
 
     // Remove null bytes and other problematic characters
+    // NOTE: .trim() is intentionally NOT used here. Trimming individual chunks
+    // strips leading/trailing spaces that are needed for correct word spacing
+    // when chunks are coalesced together. Spaces at chunk boundaries are the
+    // only thing separating words that straddle chunk boundaries.
     return content
       .replace(/\0/g, '') // Remove null bytes
-      .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '') // Remove control characters except \t, \n, \r
-      .trim();
+      .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, ''); // Remove control characters except \t, \n, \r
   }
 
   private shouldProcessBuffer(): boolean {

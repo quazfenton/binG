@@ -20,6 +20,10 @@ import { promisify } from 'util'
 import { existsSync, mkdirSync } from 'fs'
 import { join } from 'path'
 
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('Sandbox:SpritesSSHFS');
+
 // SECURITY: Use execFile instead of exec for safer execution
 const execFilePromise = promisify(execFile)
 
@@ -238,7 +242,7 @@ export class SpritesSSHFS {
         })
       })
 
-      console.log(`[SpritesSSHFS] Mounted ${config.spriteName} at ${mountPoint}`)
+      logger.info(`[SpritesSSHFS] Mounted ${config.spriteName} at ${mountPoint}`)
 
       // Create unmount function
       const unmount = async () => {
@@ -295,13 +299,13 @@ export class SpritesSSHFS {
           }).catch(() => { /* Ignore unmount errors */ })
         }
       } catch (error: any) {
-        console.warn('[SpritesSSHFS] Unmount warning:', error.message)
+        logger.warn('[SpritesSSHFS] Unmount warning:', error.message)
       }
 
       this.mounted = false
-      console.log('[SpritesSSHFS] Unmounted')
+      logger.info('[SpritesSSHFS] Unmounted')
     } catch (error: any) {
-      console.error('[SpritesSSHFS] Unmount error:', error.message)
+      logger.error('[SpritesSSHFS] Unmount error:', error.message)
       throw error
     }
   }
@@ -364,7 +368,7 @@ export class SpritesSSHFS {
       ).catch(() => ({ stdout: 'not_installed' }))
 
       if (checkStdout.includes('not_installed') || !checkStdout.trim()) {
-        console.log(`[SpritesSSHFS] Installing OpenSSH on ${validatedSpriteName}...`)
+        logger.info(`[SpritesSSHFS] Installing OpenSSH on ${validatedSpriteName}...`)
 
         // Install openssh-server using execFile with args
         await execFilePromise(
@@ -380,14 +384,14 @@ export class SpritesSSHFS {
           { timeout: 30000 }
         )
 
-        console.log(`[SpritesSSHFS] SSH server installed and configured`)
+        logger.info(`[SpritesSSHFS] SSH server installed and configured`)
         return true
       }
 
-      console.log(`[SpritesSSHFS] SSH server already installed`)
+      logger.info(`[SpritesSSHFS] SSH server already installed`)
       return false
     } catch (error: any) {
-      console.warn('[SpritesSSHFS] SSH installation warning:', error.message)
+      logger.warn('[SpritesSSHFS] SSH installation warning:', error.message)
       return false
     }
   }
@@ -417,7 +421,7 @@ export class SpritesSSHFS {
       const trimmedPubKeys = pubKeys.trim()
 
       if (!trimmedPubKeys) {
-        console.warn('[SpritesSSHFS] No SSH public keys found. You may need to create one.')
+        logger.warn('[SpritesSSHFS] No SSH public keys found. You may need to create one.')
         return
       }
 
@@ -428,7 +432,7 @@ export class SpritesSSHFS {
       for (const key of keys) {
         // Validate key format (should start with ssh-rsa, ssh-ed25519, etc.)
         if (!/^(ssh-rsa|ssh-ed25519|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ecdsa-sha2-nistp521)\s/.test(key)) {
-          console.warn('[SpritesSSHFS] Skipping invalid SSH key format')
+          logger.warn('[SpritesSSHFS] Skipping invalid SSH key format')
           continue
         }
 
@@ -448,9 +452,9 @@ export class SpritesSSHFS {
         }
       }
 
-      console.log('[SpritesSSHFS] SSH keys authorized')
+      logger.info('[SpritesSSHFS] SSH keys authorized')
     } catch (error: any) {
-      console.warn('[SpritesSSHFS] SSH key authorization warning:', error.message)
+      logger.warn('[SpritesSSHFS] SSH key authorization warning:', error.message)
     }
   }
 
@@ -520,8 +524,8 @@ export async function unmountSpriteSSHFS(mountPoint: string): Promise<void> {
       }
     }
 
-    console.log(`[SpritesSSHFS] Unmounted ${validatedMountPoint}`)
+    logger.info(`[SpritesSSHFS] Unmounted ${validatedMountPoint}`)
   } catch (error: any) {
-    console.error('[SpritesSSHFS] Unmount error:', error.message)
+    logger.error('[SpritesSSHFS] Unmount error:', error.message)
   }
 }

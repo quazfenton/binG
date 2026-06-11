@@ -3641,7 +3641,6 @@ Based on what you have learned, continue working on the original task. Take the 
         }
 
         const injectedFeedback = injectFeedback(enrichedContext, getFeedbackInjectionBudget(enrichedContext));
-        const injectedFeedback = injectFeedback(enrichedContext, getFeedbackInjectionBudget(enrichedContext));
 
         log.info('\x1b[32m[V1-API-WITH-TOOLS]\x1b[0m [SelfHeal] 🩹 Injected feedback for retry', {
           failures: feedbackContext.recentFailures.length,

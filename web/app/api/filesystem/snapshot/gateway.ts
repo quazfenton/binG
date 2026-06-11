@@ -5,6 +5,9 @@ import { fsBridge, isUsingLocalFS } from '@bing/shared/FS/fs-bridge';
 import { stripWorkspacePrefixes } from '@/lib/virtual-filesystem/scope-utils';
 import { resolveFilesystemOwner, virtualFilesystem, withAnonSessionCookie } from '@/lib/virtual-filesystem/index.server';
 import type { FilesystemOwnerResolution } from '@/lib/virtual-filesystem/resolve-filesystem-owner';
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('API:VFS:Snapshot');
 
 
 
@@ -56,7 +59,7 @@ function startPeriodicCleanup() {
     }
 
     if (deleted > 0) {
-      console.log('[VFS SNAPSHOT] Periodic cache cleanup:', deleted, 'entries removed');
+      logger.info('[VFS SNAPSHOT] Periodic cache cleanup:', deleted, 'entries removed');
     }
 
     // Also enforce max size - remove oldest entries if over limit
@@ -76,7 +79,7 @@ function startPeriodicCleanup() {
           latestSeenVersion.delete(ownerFromKey);
         }
       }
-      console.log('[VFS SNAPSHOT] Size limit cleanup:', toDelete.length, 'entries removed');
+      logger.info('[VFS SNAPSHOT] Size limit cleanup:', toDelete.length, 'entries removed');
     }
   }, 60000).unref(); // Run every 60 seconds, unref to allow process exit
 }
@@ -107,7 +110,7 @@ if (!globalThis.__snapshotListenerRegistered__) {
         const cached = snapshotCache.get(key);
         if (cached && cached.version < version) {
           snapshotCache.delete(key);
-          console.log('[VFS SNAPSHOT] Cache invalidated for owner:', ownerId, 'version:', version);
+          logger.info('[VFS SNAPSHOT] Cache invalidated for owner:', ownerId, 'version:', version);
         }
       }
     }
@@ -153,7 +156,7 @@ function startRequestTrackerCleanup() {
     }
 
     if (deleted > 0 && DEBUG) {
-      console.log('[VFS SNAPSHOT] Request tracker cleanup:', deleted, 'entries removed');
+      logger.info('[VFS SNAPSHOT] Request tracker cleanup:', deleted, 'entries removed');
     }
   }, 120000).unref(); // Run every 2 minutes, unref to allow process exit
 }
@@ -193,9 +196,9 @@ const snapshotRequestSchema = z.object({
       'Absolute paths must start with /home/, /workspace/, or /tmp/'
     ),
 });
-const log = (...args: any[]) => DEBUG && console.log('[VFS SNAPSHOT]', ...args);
-const logWarn = (...args: any[]) => console.warn('[VFS SNAPSHOT WARN]', ...args);
-const logError = (...args: any[]) => console.error('[VFS SNAPSHOT ERROR]', ...args);
+const log = (...args: any[]) => DEBUG && logger.info('[VFS SNAPSHOT]', ...args);
+const logWarn = (...args: any[]) => logger.warn('[VFS SNAPSHOT WARN]', ...args);
+const logError = (...args: any[]) => logger.error('[VFS SNAPSHOT ERROR]', ...args);
 
 /**
  * Track request frequency to detect polling loops

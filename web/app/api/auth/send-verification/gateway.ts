@@ -4,6 +4,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDatabase } from '@/lib/database/connection';
 import { checkUserRateLimit } from '@/lib/middleware/rate-limiter';
 import { hashValue } from '@/lib/utils/crypto';
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('Auth:SendVerification');
 
 export async function POST(request: NextRequest) {
   try {
@@ -78,11 +81,11 @@ export async function POST(request: NextRequest) {
 
     // DEV LOGGING: Log verification sent (without exposing sensitive data)
     if (process.env.NODE_ENV === 'development') {
-      console.log('\n🔐 VERIFICATION EMAIL SENT (Development):');
-      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-      console.log(`📧 To: ${email.substring(0, 2)}***@${email.split('@')[1]}`);
-      console.log(`⏰ Token expires: ${expiresAt.toLocaleString()}`);
-      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+      logger.info('\n🔐 VERIFICATION EMAIL SENT (Development):');
+      logger.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+      logger.info(`📧 To: ${email.substring(0, 2)}***@${email.split('@')[1]}`);
+      logger.info(`⏰ Token expires: ${expiresAt.toLocaleString()}`);
+      logger.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
     }
 
     const response = NextResponse.json({
@@ -100,7 +103,7 @@ export async function POST(request: NextRequest) {
     return response;
 
   } catch (error) {
-    console.error('Send verification API error:', error);
+    logger.error('Send verification API error:', error);
     return NextResponse.json(
       { success: false, error: 'Internal server error' },
       { status: 500 }

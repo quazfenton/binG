@@ -10,6 +10,9 @@
  */
 
 import { secureRandom } from '@/lib/utils';
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('Chat:EnhancedAPIClient');
 
 export interface RetryOptions {
   maxAttempts: number;
@@ -269,17 +272,17 @@ export class EnhancedAPIClient {
       return await this.request<T>(primaryConfig);
     } catch (error) {
       errors.push(error as APIError);
-      console.warn(`Primary endpoint failed: ${primaryConfig.url}`, error);
+      logger.warn(`Primary endpoint failed: ${primaryConfig.url}`, error);
     }
 
     // Try fallback endpoints
     for (const fallbackConfig of fallbackConfigs) {
       try {
-        console.log(`Trying fallback endpoint: ${fallbackConfig.url}`);
+        logger.info(`Trying fallback endpoint: ${fallbackConfig.url}`);
         return await this.request<T>(fallbackConfig);
       } catch (error) {
         errors.push(error as APIError);
-        console.warn(`Fallback endpoint failed: ${fallbackConfig.url}`, error);
+        logger.warn(`Fallback endpoint failed: ${fallbackConfig.url}`, error);
       }
     }
 
@@ -317,7 +320,7 @@ export class EnhancedAPIClient {
 
         // Calculate delay for next attempt
         const delay = this.calculateDelay(attempt, retryOptions);
-        console.log(`Request failed (attempt ${attempt}/${retryOptions.maxAttempts}). Retrying in ${delay}ms...`);
+        logger.info(`Request failed (attempt ${attempt}/${retryOptions.maxAttempts}). Retrying in ${delay}ms...`);
         
         await this.sleep(delay);
       }

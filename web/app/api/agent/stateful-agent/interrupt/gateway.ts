@@ -3,6 +3,9 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { hitlManager, requireApproval } from '@/lib/orchestra/stateful-agent/human-in-the-loop';
 import { verifyAuth } from '@/lib/auth/verify-auth';
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('API:Agent:Interrupt');
 
 /**
  * POST /api/stateful-agent/interrupt
@@ -68,7 +71,7 @@ export async function POST(request: NextRequest) {
     });
 
   } catch (error) {
-    console.error('[Interrupt API] Error:', error);
+    logger.error('[Interrupt API] Error:', error);
     return NextResponse.json(
       { error: 'Internal server error' },
       { status: 500 }
@@ -106,7 +109,7 @@ export async function GET(request: NextRequest) {
       count: pending.length,
     });
   } catch (error) {
-    console.error('[Interrupt API] Error:', error);
+    logger.error('[Interrupt API] Error:', error);
     return NextResponse.json(
       { error: 'Internal server error' },
       { status: 500 }

@@ -1,3 +1,7 @@
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('Database:PerfIndexes');
+
 /**
  * Performance Index Migration
  * 
@@ -42,28 +46,28 @@ export function addPerformanceIndexes(db: any): void {
     try {
       db.exec(sql);
       const indexName = sql.split(' ')[5];
-      console.log(`[Performance Indexes] ✓ Added: ${indexName}`);
+      logger.info(`[Performance Indexes] ✓ Added: ${indexName}`);
       success++;
     } catch (error: any) {
       // Ignore "already exists" errors
       if (error.message?.includes('already exists')) {
         const indexName = sql.split(' ')[5];
-        console.log(`[Performance Indexes] ✓ Exists: ${indexName}`);
+        logger.info(`[Performance Indexes] ✓ Exists: ${indexName}`);
         success++;
       } else {
-        console.error(`[Performance Indexes] ✗ Failed: ${sql}`);
-        console.error(`[Performance Indexes] Error: ${error.message}`);
+        logger.error(`[Performance Indexes] ✗ Failed: ${sql}`);
+        logger.error(`[Performance Indexes] Error: ${error.message}`);
         errors++;
       }
     }
   }
 
-  console.log(`\n[Performance Indexes] Complete!`);
-  console.log(`[Performance Indexes] Success: ${success}/${indexes.length}`);
-  console.log(`[Performance Indexes] Errors: ${errors}/${indexes.length}`);
+  logger.info(`\n[Performance Indexes] Complete!`);
+  logger.info(`[Performance Indexes] Success: ${success}/${indexes.length}`);
+  logger.info(`[Performance Indexes] Errors: ${errors}/${indexes.length}`);
   
   if (errors === 0) {
-    console.log('[Performance Indexes] Expected performance improvement: 40-60% faster queries');
+    logger.info('[Performance Indexes] Expected performance improvement: 40-60% faster queries');
   }
 }
 

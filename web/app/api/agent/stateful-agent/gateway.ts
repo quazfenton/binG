@@ -11,6 +11,9 @@ import { runAgentLoop } from '@/lib/orchestra/agent-loop';
 import { generateSecureId } from '@/lib/utils/utils';
 import type { SandboxProviderType } from '@/lib/sandbox/providers/index';
 import { getAllTools } from '@/lib/chat/vercel-ai-tools';
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('Agent:Stateful');
 
 const USE_STATEFUL_AGENT = process.env.USE_STATEFUL_AGENT !== 'false';
 const USE_CREWAI = process.env.USE_CREWAI === 'true';
@@ -30,7 +33,7 @@ export async function POST(request: NextRequest) {
   const userId = authResult.userId;
   const requestId = generateSecureId('agent');
 
-  console.log(
+  logger.info(
     `[StatefulAgent API] Request ${requestId} - User: ${userId} - Mode: ${
       USE_CREWAI ? 'CrewAI' : USE_STATEFUL_AGENT ? 'StatefulAgent' : 'Legacy Agent'
     }`,
@@ -165,10 +168,10 @@ export async function POST(request: NextRequest) {
         tools,
         temperature,
         onError: ({ error }) => {
-          console.error('[StatefulAgent AI SDK] Stream error:', error);
+          logger.error('[StatefulAgent AI SDK] Stream error:', error);
         },
         onFinish: ({ text, toolCalls, toolResults, finishReason }) => {
-          console.log('[StatefulAgent AI SDK] Stream completed:', {
+          logger.info('[StatefulAgent AI SDK] Stream completed:', {
             textLength: text?.length || 0,
             toolCallsCount: toolCalls?.length || 0,
             toolResultsCount: toolResults?.length || 0,
@@ -208,7 +211,7 @@ export async function POST(request: NextRequest) {
         
         // Verify the authenticated user owns this sandbox
         if (session.userId !== userId) {
-          console.warn(`[StatefulAgent API] Unauthorized sandbox access attempt: user ${userId} tried to access sandbox ${sandboxId} owned by ${session.userId}`);
+          logger.warn(`[StatefulAgent API] Unauthorized sandbox access attempt: user ${userId} tried to access sandbox ${sandboxId} owned by ${session.userId}`);
           return NextResponse.json(
             { error: 'You do not have access to this sandbox' },
             { status: 403 }
@@ -223,7 +226,7 @@ export async function POST(request: NextRequest) {
             : sandboxBridge.inferProviderFromSandboxId(sandboxId);
 
         if (!inferredProvider) {
-          console.warn(`[StatefulAgent API] Unable to determine provider for sandbox ${sandboxId}`);
+          logger.warn(`[StatefulAgent API] Unable to determine provider for sandbox ${sandboxId}`);
           return NextResponse.json(
             { error: 'Sandbox provider not recognized' },
             { status: 400 }
@@ -238,7 +241,7 @@ export async function POST(request: NextRequest) {
           const isUnknown = error?.message?.includes('Unknown sandbox provider') || 
                            error?.message?.includes('not supported') ||
                            error?.message?.includes('not recognized');
-          console.warn(
+          logger.warn(
             `[StatefulAgent API] Failed to initialize provider ${inferredProvider} for sandbox ${sandboxId}: ${error?.message || error}`,
           );
           return NextResponse.json(
@@ -314,7 +317,7 @@ export async function POST(request: NextRequest) {
     });
 
   } catch (error) {
-    console.error(`[StatefulAgent API] Error:`, error);
+    logger.error(`[StatefulAgent API] Error:`, error);
 
     return NextResponse.json({
       success: false,

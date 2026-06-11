@@ -92,3 +92,8 @@ desktop/src-tauri/web-assets/
 **/.jwt-secret
 
 **/novnc-auth.txt
+
+# Local-only / rotating
+current-tunnel-url.txt
+secrets/
+logs/

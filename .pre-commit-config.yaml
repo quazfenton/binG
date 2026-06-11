@@ -1,0 +1,11 @@
+# Pre-commit framework config. Install with: pip install pre-commit && pre-commit install
+# For users who don't use the framework, see scripts/git-hooks/pre-commit (a standalone
+# shell script that does the same job).
+repos:
+  - repo: local
+    hooks:
+      - id: validate-caddyfile
+        name: Validate Caddyfile (parse + semantic checks)
+        entry: scripts/validate-caddyfile.sh
+        language: script
+        files: ^infra/oracle/Caddyfile$

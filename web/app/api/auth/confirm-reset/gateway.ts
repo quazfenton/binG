@@ -4,6 +4,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDatabase } from '@/lib/database/connection';
 import { z } from 'zod';
 import { hashValue } from '@/lib/utils/crypto';
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('Auth:ConfirmReset');
 
 // Lazy-loaded JWT module and secret to avoid build failures
 // CRITICAL: These must be at module scope for use in route handlers
@@ -37,13 +40,13 @@ function getJwtSecret(): string {
                   env.NEXT_PHASE === 'build';
 
   if (isBuild) {
-    console.warn('[Auth] Skipping JWT_SECRET validation during build');
+    logger.warn('[Auth] Skipping JWT_SECRET validation during build');
     jwtSecret = 'dummy-key-for-build';
     return jwtSecret;
   }
 
   if (!JWT_SECRET) {
-    console.error('[Security] JWT_SECRET environment variable is not set');
+    logger.error('[Security] JWT_SECRET environment variable is not set');
     throw new Error('JWT_SECRET is required but not configured');
   }
 
@@ -155,7 +158,7 @@ export async function POST(req: NextRequest) {
     // SECURITY: Check if reset token has already been used or doesn't exist
     // A consumed token will have reset_token_hash set to NULL
     if (!user.reset_token_hash) {
-      console.warn(`[Security] Password reset token replay attempt for user ${user.email} (ID: ${userId})`);
+      logger.warn(`[Security] Password reset token replay attempt for user ${user.email} (ID: ${userId})`);
       return NextResponse.json(
         { 
           success: false, 
@@ -214,7 +217,7 @@ export async function POST(req: NextRequest) {
       await incrementUserTokenVersion(userId);
     } catch (tokenVersionError) {
       // Log but don't fail — session deletion is the primary invalidation
-      console.error('[Security] Failed to increment token version on password reset:', tokenVersionError);
+      logger.error('[Security] Failed to increment token version on password reset:', tokenVersionError);
     }
 
     // MED-5 fix: Log successful password reset
@@ -222,11 +225,11 @@ export async function POST(req: NextRequest) {
       const { logPasswordResetComplete } = await import('@/lib/auth/auth-audit-logger');
       await logPasswordResetComplete(userId);
     } catch (auditError) {
-      console.warn('[ConfirmReset] Audit log failed:', auditError);
+      logger.warn('[ConfirmReset] Audit log failed:', auditError);
     }
 
     // Log security event
-    console.log(`[Security] Password reset successful for user ID: ${userId}`);
+    logger.info(`[Security] Password reset successful for user ID: ${userId}`);
 
     return NextResponse.json({
       success: true,
@@ -234,7 +237,7 @@ export async function POST(req: NextRequest) {
     });
 
   } catch (error: any) {
-    console.error('Confirm password reset error:', error);
+    logger.error('Confirm password reset error:', error);
     
     // SECURITY: Don't leak internal error details
     return NextResponse.json(
@@ -307,7 +310,7 @@ export async function GET(req: NextRequest) {
     }
 
   } catch (error: any) {
-    console.error('Token validation error:', error);
+    logger.error('Token validation error:', error);
     return NextResponse.json(
       { valid: false, error: 'Token validation failed' },
       { status: 500 }

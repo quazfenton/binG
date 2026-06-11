@@ -1,0 +1,21 @@
+#!/bin/bash
+# Git pre-commit hook: validate the Caddyfile before allowing a commit.
+# Install (one-time per clone): ln -s ../../scripts/git-hooks/pre-commit .git/hooks/pre-commit
+#
+# Bypass: `git commit --no-verify` (use sparingly, only for WIP commits).
+#
+# To regenerate the noVNC auth file (basic_auth credentials live in a Docker
+# volume, not in git), run:  scripts/seed-novnc-auth.sh [username] [password]
+# Defaults: admin / (random 18-char base64, printed once to stdout)
+
+set -e
+
+if git diff --cached --name-only | grep -qE 'infra/oracle/Caddyfile$'; then
+    echo '[pre-commit] Validating infra/oracle/Caddyfile...'
+    /opt/bing/scripts/validate-caddyfile.sh infra/oracle/Caddyfile || {
+        echo '[pre-commit] Caddyfile validation FAILED — commit blocked.' >&2
+        echo '[pre-commit] Fix the parse/semantic error and try again.' >&2
+        echo '[pre-commit] Or use `git commit --no-verify` to bypass (WIP only).' >&2
+        exit 1
+    }
+fi

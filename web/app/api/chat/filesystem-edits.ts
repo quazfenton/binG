@@ -5,7 +5,7 @@ import {
   type ParsedFilesystemResponse,
   isValidFilePath,
 } from '@/lib/chat/file-edit-parser';
-import { applyUnifiedDiffToContent } from '@/lib/chat/file-diff-utils';
+import { applyUnifiedDiffToContent, applyDiffToContent } from '@/lib/chat/file-diff-utils';
 import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-service';
 import { filesystemEditSessionService } from '@/lib/virtual-filesystem/filesystem-edit-session-service';
 import { ShadowCommitManager } from '@/lib/orchestra/stateful-agent/commit/shadow-commit';
@@ -385,9 +385,13 @@ export async function applyFilesystemEditsFromResponse(input: {
           existedBefore = true;
         } catch {}
 
-        const patchedContent = applyUnifiedDiffToContent(currentContent, targetPath, diffOperation.diff);
+        let patchedContent = applyUnifiedDiffToContent(currentContent, targetPath, diffOperation.diff);
         if (patchedContent === null) {
-          result.errors.push(`Failed to apply unified diff for ${targetPath}: patch could not be applied`);
+          // Fallback: try multi-strategy applyDiffToContent (search/replace, fuzzy, etc.)
+          patchedContent = applyDiffToContent(currentContent, targetPath, diffOperation.diff);
+        }
+        if (patchedContent === null) {
+          result.errors.push(`Failed to apply diff for ${targetPath}: all strategies exhausted`);
           continue;
         }
 

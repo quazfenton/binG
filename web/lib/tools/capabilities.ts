@@ -110,7 +110,7 @@ export const FILE_READ_CAPABILITY: CapabilityDefinition = {
   category: 'file',
   description: 'Read contents of a file from the filesystem. Supports line ranges for reading partial files and various encodings.',
   inputSchema: z.object({
-    path: z.string().describe('File path to read'),
+    path: z.string().min(1).describe('File path to read'),
     encoding: z.enum(['utf-8', 'base64', 'binary']).optional().default('utf-8'),
     maxBytes: z.number().optional().describe('Maximum bytes to read'),
     startLine: z.number().int().min(1).optional().describe('First line to return (1-based, inclusive). Omit to read from line 1.'),
@@ -134,7 +134,7 @@ export const FILE_WRITE_CAPABILITY: CapabilityDefinition = {
   category: 'file',
   description: 'Write content to a file. Creates new file or overwrites existing. Supports atomic writes and backup.',
   inputSchema: z.object({
-    path: z.string().describe('File path to write'),
+    path: z.string().min(1).describe('File path to write'),
     content: z.string().describe('Content to write'),
     encoding: z.enum(['utf-8', 'base64', 'binary']).optional().default('utf-8'),
     createDirs: z.boolean().optional().default(true),
@@ -156,7 +156,7 @@ export const FILE_APPEND_CAPABILITY: CapabilityDefinition = {
   category: 'file',
   description: 'Append content to an existing file. Creates file if it does not exist.',
   inputSchema: z.object({
-    path: z.string().describe('File path to append to'),
+    path: z.string().min(1).describe('File path to append to'),
     content: z.string().describe('Content to append'),
     encoding: z.enum(['utf-8', 'base64', 'binary']).optional().default('utf-8'),
     createDirs: z.boolean().optional().default(true),
@@ -176,7 +176,7 @@ export const FILE_DELETE_CAPABILITY: CapabilityDefinition = {
   category: 'file',
   description: 'Delete a file or directory. Supports recursive deletion for directories.',
   inputSchema: z.object({
-    path: z.string().describe('Path to delete'),
+    path: z.string().min(1).describe('Path to delete'),
     recursive: z.boolean().optional().default(false),
     force: z.boolean().optional().default(false),
   }),
@@ -194,7 +194,7 @@ export const FILE_LIST_CAPABILITY: CapabilityDefinition = {
   category: 'file',
   description: 'List contents of a directory with optional filtering and sorting.',
   inputSchema: z.object({
-    path: z.string().describe('Directory path to list'),
+    path: z.string().min(1).describe('Directory path to list'),
     pattern: z.string().optional().describe('Glob pattern to filter'),
     recursive: z.boolean().optional().default(false),
     includeHidden: z.boolean().optional().default(false),
@@ -1406,7 +1406,7 @@ export const CODE_AST_DIFF_CAPABILITY: CapabilityDefinition = {
   category: 'file',
   description: 'Apply an AST-aware structural diff to TypeScript/JavaScript files. Preserves formatting while making targeted changes.',
   inputSchema: z.object({
-    path: z.string().describe('File path (.ts, .tsx, .js, .jsx)'),
+    path: z.string().min(1).describe('File path (.ts, .tsx, .js, .jsx)'),
     operation: z.enum(['insert', 'update', 'delete', 'replace']).describe('AST operation'),
     nodeSelector: z.string().describe('AST node selector'),
     newContent: z.string().optional().describe('New content for insert/update'),
@@ -1453,7 +1453,7 @@ export const FILE_BATCH_WRITE_CAPABILITY: CapabilityDefinition = {
   description: 'Write multiple files atomically (up to 50 files). Returns per-file success/failure.',
   inputSchema: z.object({
     files: z.array(z.object({
-      path: z.string(),
+      path: z.string().min(1),
       content: z.string(),
     })).max(50),
     commitMessage: z.string().optional().describe('Commit message for audit'),
@@ -1486,7 +1486,7 @@ export const FILE_STR_REPLACE_CAPABILITY: CapabilityDefinition = {
     'Returns error if oldString is not unique (multiple matches with allowMultiple=false) ' +
     'or not found. Use for targeted edits without rewriting the entire file.',
   inputSchema: z.object({
-    path: z.string().describe('File path to edit'),
+    path: z.string().min(1).describe('File path to edit'),
     oldString: z.string().min(1).describe('Exact string to find and replace'),
     newString: z.string().describe('Replacement string (can be empty to delete)'),
     allowMultiple: z.boolean().optional().default(false).describe('If true, replace all occurrences. If false (default), replace exactly one occurrence and error if >1 matches.'),

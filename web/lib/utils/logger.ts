@@ -93,6 +93,46 @@ const SENSITIVE_PATTERNS: RegExp[] = [
 
 const REDACTED = '[REDACTED]';
 
+/**
+ * Human-friendly ISO-like timestamp with explicit timezone offset.
+ *
+ * Format: `YYYY-MM-DD HH:MM:SS.sss ±HH:MM`
+ * Example: `2026-06-11 00:05:26.748 +00:00` (UTC) or
+ *          `2026-06-10 16:05:26.748 -08:00` (America/Los_Angeles)
+ *
+ * Why this and not `new Date().toISOString()`:
+ * - Space separator between date and time (vs `T`) makes the time-of-day
+ *   visually distinct from the millisecond fraction — eliminates the
+ *   "are these a few minutes apart?" confusion when reading adjacent lines.
+ * - Local time + explicit offset means devs see their own wall-clock time
+ *   AND know what timezone it is in (no ambiguity, no mental UTC math).
+ * - Three-digit millisecond fraction is unchanged from ISO so log
+ *   diffing tools that parse up to `.sss` still work.
+ */
+function formatTimestamp(d: Date = new Date()): string {
+  const pad = (n: number, w = 2) => String(n).padStart(w, '0');
+  const yyyy = d.getFullYear();
+  const mm = pad(d.getMonth() + 1);
+  const dd = pad(d.getDate());
+  const hh = pad(d.getHours());
+  const mi = pad(d.getMinutes());
+  const ss = pad(d.getSeconds());
+  const mss = pad(d.getMilliseconds(), 3);
+
+  // getTimezoneOffset() returns the difference between UTC and local time
+  // in minutes, with the SIGN REVERSED: positive for behind-UTC zones
+  // (PST → 480), negative for ahead-of-UTC zones (JST → -540). We flip
+  // it here so the output matches the standard ISO `±HH:MM` convention
+  // where + means ahead of UTC and - means behind.
+  const offsetMin = d.getTimezoneOffset();
+  const sign = offsetMin <= 0 ? '+' : '-';
+  const absMin = Math.abs(offsetMin);
+  const oh = pad(Math.floor(absMin / 60));
+  const om = pad(absMin % 60);
+
+  return `${yyyy}-${mm}-${dd} ${hh}:${mi}:${ss}.${mss} ${sign}${oh}:${om}`;
+}
+
 // ============================================================================
 // DEFAULT CONFIGURATION
 // ============================================================================
@@ -518,7 +558,7 @@ export class Logger {
 
   private formatEntry(level: LogLevel, message: string, data?: any, error?: Error): LogEntry {
     return {
-      timestamp: new Date().toISOString(),
+      timestamp: formatTimestamp(),
       level,
       source: this.source,
       message: this.config.secure ? this.redact(message) : message,
@@ -763,7 +803,12 @@ export const loggers = {
 if (typeof process !== 'undefined' && typeof window === 'undefined' && process.env.NEXT_RUNTIME !== 'edge') {
   // process.on('exit') fires when the event loop empties. At that point
   // async operations won't complete, but our sync fsync+close will.
+  // Mirror the signal handlers' stdio flush: `process.exit()` from app
+  // code can drop bytes sitting in Node's 8 KB stdout/stderr block buffer
+  // (non-TTY pipe). The synchronous setBlocking + empty-write in
+  // _forceFlushStdStreams() closes that gap before the process terminates.
   process.on('exit', () => {
+    _forceFlushStdStreams();
     _closeLogFd();
   });
 
@@ -781,8 +826,42 @@ if (typeof process !== 'undefined' && typeof window === 'undefined' && process.e
   // We also flush stdout/stderr synchronously — when output is piped to
   // a file Node.js switches from line-buffered to 8 KB block-buffered
   // mode, and Ctrl+C kills the process before the buffer empties.
+  //
+  // _forceFlushStdStreams() below is the implementation. It's called
+  // from _flushAndMaybeExit() (and therefore from the SIGINT/SIGTERM/
+  // SIGHUP handlers) so the dev server's cleanup output — e.g. Next.js
+  // "Compiling…" → "Compiled" lines or HMR shutdown messages — actually
+  // reaches the terminal / pipe before the framework's own exit handler
+  // kills the process. The initial setBlocking at module load is best
+  // effort; this is the reliable one.
+
+  /**
+   * Force stdout/stderr to drain any pending output. Re-applies
+   * setBlocking on the underlying handles (defense in depth: the
+   * initial call at module load might not stick if the stream was
+   * re-piped by Next.js dev, pm2, or any supervisor script that
+   * re-opens file descriptors), then writes an empty string to force
+   * any block-buffered bytes to flush to the OS.
+   */
+  function _forceFlushStdStreams(): void {
+    try {
+      if (!(process.stdout as any).isTTY && (process.stdout as any)._handle?.setBlocking) {
+        (process.stdout as any)._handle.setBlocking(true);
+      }
+      if (!(process.stderr as any).isTTY && (process.stderr as any)._handle?.setBlocking) {
+        (process.stderr as any)._handle.setBlocking(true);
+      }
+    } catch {
+      // Best effort — _handle may not exist on some runtimes (Edge,
+      // Deno, certain bundlers). The empty-string writes below still
+      // attempt a flush via the public API.
+    }
+    try { process.stdout.write(''); } catch { /* ignore */ }
+    try { process.stderr.write(''); } catch { /* ignore */ }
+  }
 
   const _flushAndMaybeExit = (shouldExit: boolean, exitCode: number) => {
+    _forceFlushStdStreams();
     _closeLogFd();
     if (shouldExit) {
       process.exit(exitCode);

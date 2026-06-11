@@ -27,6 +27,16 @@ account_id = "69131dbe7a982d6e0ded89318103b605"
 # causes the router to fall back to FRONTEND_URL instead of a dead tunnel URL.
 BACKEND_URL = ""
 FRONTEND_URL = "https://web-eight-ashen-83.vercel.app"
+# Cloudflare account ID (also at the top of this file as `account_id`).
+# Used by the IP flood monitor's scheduled handler to query the Analytics
+# Engine dataset via the HTTP SQL API. The scheduled handler reads both
+# this and CLOUDFLARE_API_TOKEN (a secret) and no-ops if either is missing.
+CF_ACCOUNT_ID = "69131dbe7a982d6e0ded89318103b605"
+# IP flood threshold: req/min over which an IP is added to the deny list.
+# Default 500 (the in-worker IP rate limiter is 100/min, so anything well
+# above 500 is clearly abusive). Override at deploy time with
+# `--var IP_FLOOD_THRESHOLD="1000"`.
+IP_FLOOD_THRESHOLD = "500"
 
 # === KV Namespace (Session Cache + Rate Limiting + Runtime Config) ===
 [[kv_namespaces]]
@@ -48,6 +58,23 @@ preview_bucket_name = "bing-storage-dev"
 binding = "TRACE_R2"
 bucket_name = "trace-logs"
 preview_bucket_name = "trace-logs-dev"
+
+# === Analytics Engine Dataset (IP Flood Monitor) ===
+# Free tier: 100,000 events/day written, 30-day retention, SQL queryable.
+# Replaces what would otherwise be a Cloudflare WAF rate-limit rule
+# (not available on the Free plan). One row written per request via
+# `analytics.writeDataPoint()`; a scheduled handler (see [triggers] below)
+# queries the dataset every minute and rebuilds a deny list in KV.
+[[analytics_engine_datasets]]
+binding = "IP_FLOOD_MONITOR"
+dataset = "ip_flood_monitor"
+
+# === Cron Triggers ===
+# `*/1 * * * *` — every minute. Runs the scheduled() handler in src/index.ts
+# which queries the Analytics Engine dataset for IPs that exceeded the
+# flood threshold in the last 60s and writes the resulting deny list to KV.
+[triggers]
+crons = ["*/1 * * * *"]
 
 # === D1 Database (Lightweight SQL — replaces parts of PostgreSQL) ===
 # Created via setup.sh — uncomment when D1 database is needed

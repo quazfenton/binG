@@ -2,6 +2,9 @@
 // All Node.js modules are lazy-loaded inside functions, not at module load time
 // This file is server-only - do not import in Client Components
 import { createRequire } from 'node:module';
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('Database:Connection');
 const require = createRequire(import.meta.url);
 export const runtime = 'nodejs';
 
@@ -50,14 +53,14 @@ function getSchemaSql(): string {
       return _cachedSchemaSql;
     }
 
-    console.warn(`[DB] schema.sql not found (tried cwd + __dirname walk-up)`);
+    logger.warn(`[DB] schema.sql not found (tried cwd + __dirname walk-up)`);
     _cachedSchemaSql = '';
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     // During build, missing schema.sql is non-fatal (db init is mocked anyway).
     // At runtime this is a real error — warn but don't throw so the caller can
     // decide how to handle a missing schema.
-    console.error(`[DB] Could not read schema.sql (path: ${schemaPath ?? 'unresolved'}): ${msg}`);
+    logger.error(`[DB] Could not read schema.sql (path: ${schemaPath ?? 'unresolved'}): ${msg}`);
     _cachedSchemaSql = '';
   }
 
@@ -135,7 +138,7 @@ function getEncryptionKey(): Buffer {
   // Skip validation during build/Edge
   if (shouldSkipDbInit() || isEdgeRuntime()) {
     // Return a dummy key for build/Edge - actual key loaded at runtime
-    console.warn('[DB] Skipping ENCRYPTION_KEY validation during build/Edge');
+    logger.warn('[DB] Skipping ENCRYPTION_KEY validation during build/Edge');
     return Buffer.alloc(32, 'dummy-key-for-build');
   }
 
@@ -143,21 +146,21 @@ function getEncryptionKey(): Buffer {
     if (process.env.NODE_ENV === 'production') {
       // Don't throw during build - use dummy key
       if (shouldSkipDbInit()) {
-        console.warn('[DB] ENCRYPTION_KEY not set - using dummy key for build');
+        logger.warn('[DB] ENCRYPTION_KEY not set - using dummy key for build');
         return Buffer.alloc(32, 'dummy-key-for-build');
       }
       throw new Error('ENCRYPTION_KEY must be set in production for data security');
     }
     // In development, generate random key per session (not persistent)
-    console.warn('⚠️  WARNING: ENCRYPTION_KEY not set! Using random dev key.');
-    console.warn('API keys will NOT persist across restarts in development.');
-    console.warn('Set ENCRYPTION_KEY environment variable to a secure 32+ character random string.');
+    logger.warn('⚠️  WARNING: ENCRYPTION_KEY not set! Using random dev key.');
+    logger.warn('API keys will NOT persist across restarts in development.');
+    logger.warn('Set ENCRYPTION_KEY environment variable to a secure 32+ character random string.');
     return crypto.randomBytes(32);
   }
 
   // Validate key strength
   if (!ENCRYPTION_KEY || typeof ENCRYPTION_KEY !== 'string') {
-    console.warn('[DB] ENCRYPTION_KEY is missing or invalid, using fallback');
+    logger.warn('[DB] ENCRYPTION_KEY is missing or invalid, using fallback');
     return crypto.randomBytes(32);
   }
 
@@ -348,7 +351,7 @@ function parseSetPair(pair: string): { col: string; value: any; rawValue?: strin
           const stmt = {
             run: (...params: any[]) => {
               if (!tables[actualTable]) {
-                console.warn(`[MockDB] Table '${actualTable}' does not exist`);
+                logger.warn(`[MockDB] Table '${actualTable}' does not exist`);
                 return { lastInsertRowid: 1, changes: 0 };
               }
 
@@ -893,11 +896,11 @@ function initializeDatabaseSync(): void {
     try {
       initializeSchemaSync();
     } catch (schemaError: any) {
-      console.error('[database] Schema initialization failed:', schemaError);
+      logger.error('[database] Schema initialization failed:', schemaError);
       if (process.env.NODE_ENV === 'production') {
         throw schemaError;
       }
-      console.warn('[database] Continuing with partial schema (development only)');
+      logger.warn('[database] Continuing with partial schema (development only)');
     }
 
     // Run migrations synchronously
@@ -908,16 +911,16 @@ function initializeDatabaseSync(): void {
         const migrationRunner = migrationModule?.migrationRunner;
         if (migrationRunner && typeof migrationRunner.runMigrationsSync === 'function') {
           migrationRunner.runMigrationsSync();
-          console.log('[database] Migrations completed successfully');
+          logger.info('[database] Migrations completed successfully');
 
           // Also run performance index migration
           try {
             const { addPerformanceIndexesSync } = require('./performance-indexes');
             addPerformanceIndexesSync(db);
-            console.log('[database] Performance indexes added successfully');
+            logger.info('[database] Performance indexes added successfully');
           } catch (indexError: any) {
             if (!indexError.message?.includes('already exists')) {
-              console.warn('[database] Performance index migration failed (indexes may already exist):', indexError);
+              logger.warn('[database] Performance index migration failed (indexes may already exist):', indexError);
             }
           }
         }
@@ -929,10 +932,10 @@ function initializeDatabaseSync(): void {
         // with an outdated schema, causing runtime errors on missing columns/indexes.
         // In development, continue with base schema for convenience.
         if (process.env.NODE_ENV === 'production') {
-          console.error('[database] FATAL: Migrations failed in production — cannot continue with outdated schema:', migrationError);
+          logger.error('[database] FATAL: Migrations failed in production — cannot continue with outdated schema:', migrationError);
           throw migrationError;
         }
-        console.warn('[database] Migrations failed (continuing with base schema — development only):', migrationError);
+        logger.warn('[database] Migrations failed (continuing with base schema — development only):', migrationError);
       }
     }
 
@@ -943,7 +946,7 @@ function initializeDatabaseSync(): void {
   // Belt-and-suspenders: re-persist after init completes successfully
   (globalThis as any).__binG_dbInstance = db;
 
-  console.log('[DB] Database initialized successfully (synchronous)');
+  logger.info('[DB] Database initialized successfully (synchronous)');
 }
 
 /**
@@ -994,7 +997,7 @@ function executeSchemaStatements(sql: string): void {
       // columns/tables into existence.
       if (/no such column/i.test(msg) || /no such table/i.test(msg)) {
         skipped++;
-        console.warn(`[schema-init] Skipping statement (schema drift — migration will add): ${msg}`);
+        logger.warn(`[schema-init] Skipping statement (schema drift — migration will add): ${msg}`);
         continue;
       }
       // SQLITE_BUSY is transient — let the caller's retry loop handle it.
@@ -1002,12 +1005,12 @@ function executeSchemaStatements(sql: string): void {
         throw err;
       }
       // All other errors (syntax, constraint violations, etc.) are real.
-      console.error(`[schema-init] Statement failed: ${stmt.substring(0, 120)} — ${msg}`);
+      logger.error(`[schema-init] Statement failed: ${stmt.substring(0, 120)} — ${msg}`);
       throw err;
     }
   }
 
-  console.log(`[schema-init] Executed ${created} statements, skipped ${skipped} (schema drift)`);
+  logger.info(`[schema-init] Executed ${created} statements, skipped ${skipped} (schema drift)`);
 }
 
 /**
@@ -1036,12 +1039,12 @@ function initializeSchemaSync(): void {
         executeSchemaStatements(schemaSql);
       }
 
-      console.log('Database base schema initialized');
+      logger.info('Database base schema initialized');
       return;
     } catch (error: any) {
       if (error.code === 'SQLITE_BUSY' && attempt < maxRetries) {
         const delayMs = Math.pow(2, attempt) * 100; // Exponential backoff
-        console.warn(`Database is locked (SQLITE_BUSY), retrying in ${delayMs}ms... (Attempt ${attempt}/${maxRetries})`);
+        logger.warn(`Database is locked (SQLITE_BUSY), retrying in ${delayMs}ms... (Attempt ${attempt}/${maxRetries})`);
         // Synchronous sleep — the old `await setTimeout` was never awaited.
         // SQLITE_BUSY is extremely rare with WAL mode; a brief busy-wait is
         // acceptable for these short delays (200–3200 ms).
@@ -1049,7 +1052,7 @@ function initializeSchemaSync(): void {
         while (Date.now() < end) { /* spin */ }
         continue;
       }
-      console.error('Failed to initialize database schema after retries', error);
+      logger.error('Failed to initialize database schema after retries', error);
       throw error;
     }
   }
@@ -1063,9 +1066,9 @@ async function initializeSchema() {
     const { migrationRunner } = await import('./migration-runner');
     await migrationRunner.runMigrations();
 
-    console.log('Database migrations completed');
+    logger.info('Database migrations completed');
   } catch (error: unknown) {
-    console.error('Failed to run migrations:', error);
+    logger.error('Failed to run migrations:', error);
     throw error;
   }
 }
@@ -1123,7 +1126,7 @@ export function decryptApiKey(encryptedData: string): string {
       decrypted += decipher.final('utf8');
       return decrypted;
     } catch (error: unknown) {
-      console.error('[decryptApiKey] New format decryption failed:', error);
+      logger.error('[decryptApiKey] New format decryption failed:', error);
     }
   }
   
@@ -1137,7 +1140,7 @@ export function decryptApiKey(encryptedData: string): string {
     decrypted += decipher.final('utf8');
     return decrypted;
   } catch (legacyError) {
-    console.error('[decryptApiKey] Legacy format decryption failed:', legacyError);
+    logger.error('[decryptApiKey] Legacy format decryption failed:', legacyError);
     throw new Error('Failed to decrypt API key: data may be corrupted');
   }
 }
@@ -1198,17 +1201,17 @@ export async function migrateLegacyEncryptedKeys(): Promise<{ migrated: number; 
           const updateStmt = db.prepare('UPDATE api_credentials SET api_key_encrypted = ? WHERE id = ?');
           updateStmt.run(newEncrypted, cred.id);
           migrated++;
-          console.log(`[MigrateKeys] Migrated API key for user ${cred.user_id}, provider ${cred.provider}`);
+          logger.info(`[MigrateKeys] Migrated API key for user ${cred.user_id}, provider ${cred.provider}`);
         }
       } catch (err: unknown) {
         errors++;
-        console.error(`[MigrateKeys] Failed to migrate key for user ${cred.user_id}, provider ${cred.provider}:`, err);
+        logger.error(`[MigrateKeys] Failed to migrate key for user ${cred.user_id}, provider ${cred.provider}:`, err);
       }
     }
 
-    console.log(`[MigrateKeys] Migration complete: ${migrated} migrated, ${errors} errors`);
+    logger.info(`[MigrateKeys] Migration complete: ${migrated} migrated, ${errors} errors`);
   } catch (error: unknown) {
-    console.error('[MigrateKeys] Migration failed:', error);
+    logger.error('[MigrateKeys] Migration failed:', error);
     errors++;
   }
 
@@ -1255,7 +1258,7 @@ export class DatabaseOperations {
     } else {
       // Fallback: DB truly failed to init (shouldn't happen with sync init)
       this.db = getMockDatabase();
-      console.error('[DatabaseOperations] Real DB unavailable, using mock');
+      logger.error('[DatabaseOperations] Real DB unavailable, using mock');
     }
   }
 
@@ -1277,7 +1280,7 @@ export class DatabaseOperations {
         const stmt = this.db.prepare(sql);
         this.preparedStatements.set(name, stmt);
       } catch (error: any) {
-        console.warn(`[DatabaseOperations] Statement '${name}' unavailable: ${error.message}`);
+        logger.warn(`[DatabaseOperations] Statement '${name}' unavailable: ${error.message}`);
       }
     };
 
