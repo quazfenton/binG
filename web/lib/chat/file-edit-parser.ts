@@ -118,9 +118,8 @@ export function sanitizeExtractedPath(
 
   if (!path) return null;
 
-  // Reject paths that are too short after cleanup (likely remnants, not real paths)
-  if (path.length < 2) return null;
-  // Reject paths still containing JSON structural characters
+  // Reject paths still containing JSON structural characters (quotes/braces).
+  // Downstream isValidExtractedPath/isValidFilePath already reject {}[] but not quotes.
   if (/[{}[\]"']/.test(path)) return null;
 
   if (options.isFolder) {

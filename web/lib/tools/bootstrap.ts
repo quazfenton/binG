@@ -26,6 +26,7 @@
 import { ToolRegistry } from './registry';
 import { getCapabilityRouter, type CapabilityRouter } from './router';
 import { createLogger } from '../utils/logger';
+import { logToolCount } from './bootstrap-health';
 
 const logger = createLogger('Tools:Bootstrap');
 
@@ -230,7 +231,7 @@ export async function bootstrapToolSystem(config: BootstrapConfig): Promise<Boot
       const { registerMCPTools } = await import('./bootstrap/bootstrap-mcp');
       const count = await registerMCPTools(registry, config);
       toolCount += count;
-      logger.info(`Registered ${count} MCP tools`);
+      logToolCount(logger, { registry: 'MCP', count });
     } catch (error: any) {
       logger.warn('MCP tools not available', error.message);
       errors.push(`MCP tools: ${error.message}`);
@@ -243,7 +244,7 @@ export async function bootstrapToolSystem(config: BootstrapConfig): Promise<Boot
       const { registerComposioTools } = await import('./bootstrap/bootstrap-composio');
       const count = await registerComposioTools(registry, config);
       toolCount += count;
-      logger.info(`Registered ${count} Composio tools`);
+      logToolCount(logger, { registry: 'Composio', count });
     } catch (error: any) {
       logger.warn('Composio tools not available', error.message);
       errors.push(`Composio tools: ${error.message}`);
@@ -306,7 +307,7 @@ export async function bootstrapToolSystem(config: BootstrapConfig): Promise<Boot
       const { registerOAuthTools } = await import('./bootstrap/bootstrap-oauth');
       const count = await registerOAuthTools(registry, config);
       toolCount += count;
-      logger.info(`Registered ${count} OAuth integration tools`);
+      logToolCount(logger, { registry: 'OAuth', count });
     } catch (error: any) {
       logger.warn('OAuth tools not available', error.message);
       errors.push(`OAuth tools: ${error.message}`);
@@ -342,7 +343,7 @@ export async function bootstrapToolSystem(config: BootstrapConfig): Promise<Boot
       const { registerArcadeTools } = await import('./bootstrap/bootstrap-arcade');
       const count = await registerArcadeTools(registry, config);
       toolCount += count;
-      logger.info(`Registered ${count} Arcade tools`);
+      logToolCount(logger, { registry: 'Arcade', count });
     } catch (error: any) {
       logger.warn('Arcade tools not available', error.message);
       errors.push(`Arcade tools: ${error.message}`);
@@ -354,14 +355,26 @@ export async function bootstrapToolSystem(config: BootstrapConfig): Promise<Boot
     try {
       const { registerGatewayTools } = await import('./bootstrap-gateway');
       const count = await registerGatewayTools();
-      if (count > 0) {
-        toolCount += count;
-        logger.info(`Registered ${count} MCP gateway tools`);
-      }
+      toolCount += count;
+      // Bug #12/#13/#24/#34: gateway configured but returned 0 tools → [WARN]
+      logToolCount(logger, { registry: 'MCP gateway', count });
     } catch (error: any) {
       logger.warn('MCP gateway tools not available', error.message);
       errors.push(`MCP gateway: ${error.message}`);
     }
+  }
+
+  // Register Mem0 persistent memory tools (if configured).
+  // Bug #12/#13/#24/#34: user explicitly listed Mem0 alongside Composio /
+  // MCP-gateway / Arcade. When MEM0_API_KEY is unset OR the breaker is OPEN
+  // we surface a [WARN] (not a [DEBUG]) so the degraded case is visible.
+  try {
+    const { registerMem0Tools } = await import('./bootstrap/bootstrap-mem0');
+    const count = await registerMem0Tools(registry, config);
+    toolCount += count;
+  } catch (error: any) {
+    logger.warn('Mem0 tools not available', error.message);
+    errors.push(`Mem0: ${error.message}`);
   }
 
   // Get router instance (auto-registers built-in providers)

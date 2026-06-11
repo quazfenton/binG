@@ -220,12 +220,36 @@ export interface VercelStreamOptions {
   toolCallStreaming?: boolean;
   smoothStreaming?: boolean;
   maxRetries?: number;
-  maxSteps?: number;
-  /**
-   * Request timeout in milliseconds.    * Defaults to LLM_STREAM_TIMEOUT_MS env var, or 60000 (60s) if unset.
-   * Controls both TTFT (time-to-first-token) and rolling idle timeout.
+  maxSteps?: number;  /**
+   * Time-to-first-token (TTFT) timeout in milliseconds.
+   * Fires when NO content (text, reasoning, tool-call, tool-result) arrives
+   * within this window from stream start.
+   * Defaults to LLM_STREAM_FIRST_TOKEN_TIMEOUT_MS env var, or 30000 (30s).
+   *
+   * Kept tight (30s) so a misbehaving provider fails fast and the speculative
+   * fallback chain can take over.
    */
-  timeoutMs?: number;
+  firstTokenTimeoutMs?: number;
+  /**
+   * Rolling idle timeout in milliseconds.
+   * Resets on every chunk after the first token. Fires when the stream goes
+   * silent for this long (no text, tool, reasoning, or step activity).
+   * Defaults to LLM_STREAM_IDLE_TIMEOUT_MS env var, or 75000 (75s — the
+   * midpoint of the 60–90s band). Extends 2x during tool execution.
+   *
+   * Wider than the TTFT window because the model is allowed to "think"
+   * between tool rounds and during long bash runs.
+   */
+  idleTimeoutMs?: number;
+  /**
+   * 'Model thinking' client-ping interval in milliseconds.
+   * After this many ms of silence (no text/tool/reasoning/step activity),
+   * the server yields a `thinking_ping` chunk so the client UI can show
+   * a 'Model is thinking…' indicator instead of looking hung.
+   * Defaults to LLM_STREAM_THINK_PING_MS env var, or 20000 (20s).
+   * Set to 0 to disable. Must be < idleTimeoutMs to fire before the timeout.
+   */
+  thinkPingMs?: number;
   /** Provider-specific settings (e.g., Anthropic cache control) */
   providerOptions?: Record<string, any>;
   /**
@@ -260,6 +284,28 @@ interface OpenAICompatibleConfig {
 // PROVIDER_TIMEOUT_OVERRIDES removed — replaced by the self-correcting derank loop in llm-provider-health.ts.
 // Slow providers are now detected dynamically (3+ bad calls in last 5min) and moved to the end of the
 // fallback chain in getConfiguredFallbackChain(), instead of being given extra timeout budget here.
+
+/**
+ * Split streaming timeouts (Bug #17, #23).
+ *
+ * Bug #17 split what was a single `timeoutMs` into:
+ *   - firstTokenTimeoutMs — TTFT, kept tight (30s) so a slow provider fails
+ *     fast and the speculative fallback chain can take over.
+ *   - idleTimeoutMs       — Rolling idle window (60–90s; default 75s) that
+ *     resets on every chunk. Wider than TTFT to allow the model to "think"
+ *     between tool rounds.
+ *   - thinkPingMs         — 'Model thinking' client-ping interval (20s).
+ *     Fires a `thinking_ping` chunk so the client UI can show a "Model is
+ *     thinking…" indicator during long thinking pauses. Must be < idleTimeoutMs.
+ *
+ * Per-provider tuning has been removed — replaced by the self-correcting
+ * derank loop in `llm-provider-health.ts`.
+ */
+export const STREAM_TIMEOUTS = {
+  firstTokenTimeoutMs: parseInt(process.env.LLM_STREAM_FIRST_TOKEN_TIMEOUT_MS || '30000', 10),
+  idleTimeoutMs: parseInt(process.env.LLM_STREAM_IDLE_TIMEOUT_MS || '75000', 10),
+  thinkPingMs: parseInt(process.env.LLM_STREAM_THINK_PING_MS || '20000', 10),
+} as const;
 
 /**
  * Configuration for all OpenAI-compatible providers.
@@ -936,7 +982,9 @@ export async function* streamWithVercelAI(
     smoothStreaming = true,
     maxRetries = 0,
     maxSteps = 12,
-    timeoutMs = parseInt(process.env.LLM_STREAM_TIMEOUT_MS || '120000', 10), // Flat 120s for all providers. Increased from 60s to handle slow NVIDIA TTFT and multi-tool processing. Per-provider tuning removed; replaced by the self-correcting derank loop in llm-provider-health.ts.
+    firstTokenTimeoutMs = STREAM_TIMEOUTS.firstTokenTimeoutMs,
+    idleTimeoutMs = STREAM_TIMEOUTS.idleTimeoutMs,
+    thinkPingMs = STREAM_TIMEOUTS.thinkPingMs,
     speculativeFallbackMs = parseInt(process.env.LLM_STREAM_SPECULATIVE_MS || '20000', 10), // Default 20s, 0 to disable
     providerOptions,
     system: systemOverride,
@@ -975,18 +1023,19 @@ export async function* streamWithVercelAI(
   let toolResultFailCount = 0;          // failed tool results
   let totalTokensReceived = 0;          // total text tokens received
 
-  if (timeoutMs > 0) {
+  if (firstTokenTimeoutMs > 0) {
     timeoutController = new AbortController();
-    
+
     // Chain with existing signal if present
     if (signal) {
       signal.addEventListener('abort', () => {
         timeoutController?.abort(signal.reason);
         if (ttftTimeoutId) clearTimeout(ttftTimeoutId);
         if (idleTimeoutId) clearTimeout(idleTimeoutId);
+        stopThinkPingInterval();
       }, { once: true });
     }
-    
+
     // Set time-to-first-token timeout
     ttftTimeoutId = setTimeout(() => {
       if (!firstTokenReceived) {
@@ -994,19 +1043,19 @@ export async function* streamWithVercelAI(
         chatLogger.warn('[TIMEOUT-TTFT] No first token received', {
           provider,
           model: modelName,
-          timeoutMs,
+          firstTokenTimeoutMs,
           ttftLatencyMs,
           timeoutCategory: 'NO_INITIAL_TOKEN',
           startTime,
           healthCheckPassed: true,
         });
         timeoutController?.abort(new Error(
-          `No response within ${timeoutMs}ms (time-to-first-token timeout). ` +
+          `No response within ${firstTokenTimeoutMs}ms (time-to-first-token timeout). ` +
           `Provider=${provider}, model=${modelName}, elapsed=${ttftLatencyMs}ms. ` +
           `Possible causes: provider outage, incorrect API key, model unavailability, or network issue.`
         ));
       }
-    }, timeoutMs);
+    }, firstTokenTimeoutMs);
   }
 
   const effectiveSignal = timeoutController?.signal || signal;
@@ -1019,6 +1068,11 @@ export async function* streamWithVercelAI(
         clearTimeout(ttftTimeoutId);
         ttftTimeoutId = null;
       }
+      // Bug #17: Start the 'model thinking' client-ping interval now that
+      // the first token has arrived. Long thinking pauses (tool execution,
+      // multi-step reasoning) will now produce periodic ping chunks so the
+      // client UI can show "Model is thinking…" instead of looking hung.
+      startThinkPingInterval();
     }
   };
 
@@ -1026,8 +1080,51 @@ export async function* streamWithVercelAI(
   // Once the first token arrives, the TTFT is replaced by this rolling timeout.
   // If no activity arrives for `idleTimeoutMs`, we abort -- this prevents hung
   // streams while allowing arbitrarily long multi-tool sessions.
+  //
+  // Bug #17: split out from the old single `timeoutMs` (which conflated TTFT
+  // and idle). The split lets us keep TTFT tight (30s) for fast fallback while
+  // giving the model a much wider idle window (60–90s) for legitimate "thinking"
+  // pauses (tool execution, multi-step reasoning, etc.).
   let idleTimeoutId: NodeJS.Timeout | null = null;
-  const IDLE_TIMEOUT_MS = timeoutMs;
+  const IDLE_TIMEOUT_MS = idleTimeoutMs;
+
+  // 'Model thinking' client-ping queue: an interval pushes a ping onto the
+  // queue when the stream has been silent for `thinkPingMs`. The main iterator
+  // loop yields pings before pulling the next chunk, so the client UI sees
+  // a periodic "model is thinking…" signal during long thinking pauses.
+  //
+  // Bug #17: previously, a 60+ second thinking pause looked identical to a hung
+  // stream to the client (no chunks, no progress). The think-ping fixes that
+  // without changing abort semantics.
+  const thinkPingQueue: Array<{ type: 'thinking_ping'; elapsedMs: number; lastActivityType: string }> = [];
+  let thinkPingIntervalId: NodeJS.Timeout | null = null;
+  const THINK_PING_MS = thinkPingMs;
+
+  const startThinkPingInterval = () => {
+    if (thinkPingIntervalId || THINK_PING_MS <= 0) return;
+    thinkPingIntervalId = setInterval(() => {
+      const silenceMs = Date.now() - lastActivityTime;
+      if (silenceMs >= THINK_PING_MS) {
+        thinkPingQueue.push({
+          type: 'thinking_ping',
+          elapsedMs: silenceMs,
+          lastActivityType: lastActivityType,
+        });
+        chatLogger.debug('[THINK-PING] Model has been silent; emitting ping', {
+          silenceMs,
+          lastActivityType,
+          lastActivityDetail: lastActivityDetail.slice(0, 40),
+        });
+      }
+    }, THINK_PING_MS);
+  };
+
+  const stopThinkPingInterval = () => {
+    if (thinkPingIntervalId) {
+      clearInterval(thinkPingIntervalId);
+      thinkPingIntervalId = null;
+    }
+  };
 
   // Dynamic extension multiplier: when a successful tool result arrives, the
   // idle timeout gets extended by 2x to give the model time to process the
@@ -1065,7 +1162,8 @@ export async function* streamWithVercelAI(
           `toolResultsOK=${toolResultSuccessCount}`,
           `toolResultsFAIL=${toolResultFailCount}`,
           `extensionMultiplier=${effectiveMultiplier}`,
-          `timeoutMs=${IDLE_TIMEOUT_MS}`,
+          `firstTokenTimeoutMs=${firstTokenTimeoutMs}`,
+          `idleTimeoutMs=${IDLE_TIMEOUT_MS}`,
         ].join(' | ');
         chatLogger.warn('[TIMEOUT] ' + diagnosticMsg, {
           provider,
@@ -1585,6 +1683,26 @@ export async function* streamWithVercelAI(
     // If the primary was silent for 20s+, the fallback generator transparently takes over.
     // Abort check uses the user's signal (not effectiveSignal) so that aborting the primary
     // controller (when fallback wins) doesn't kill the merged generator mid-stream.
+    //
+    // Bug #17: Before pulling the next chunk from the stream, drain any pending
+    // 'thinking' pings first. Pings accumulate when the stream has been silent
+    // for thinkPingMs — yielding them here keeps the client UI responsive
+    // without changing abort semantics.
+    while (thinkPingQueue.length > 0) {
+      if (signal?.aborted) return;
+      const ping = thinkPingQueue.shift()!;
+      yield {
+        content: '',
+        isComplete: false,
+        timestamp: new Date(),
+        metadata: {
+          type: 'thinking_ping',
+          elapsedMs: ping.elapsedMs,
+          lastActivityType: ping.lastActivityType,
+        },
+      };
+    }
+
     for await (const streamChunk of streamToIterate) {
       if (signal?.aborted) return;
       const chunk = streamChunk as any;
@@ -2017,6 +2135,7 @@ resetIdleTimeout(TOOL_SUCCESS_EXTENSION_MULTIPLIER);
     // Cleanup timeout
     if (ttftTimeoutId) clearTimeout(ttftTimeoutId);
         if (idleTimeoutId) clearTimeout(idleTimeoutId);
+        stopThinkPingInterval();
 
     // Collect all tool calls from steps (multi-step support)
     const allToolCalls: Array<{ id: string; name: string; arguments: Record<string, any> }> = [];

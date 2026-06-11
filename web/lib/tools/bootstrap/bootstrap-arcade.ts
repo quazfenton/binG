@@ -12,6 +12,7 @@
 import type { ToolRegistry } from '../registry';
 import type { BootstrapConfig } from '../bootstrap';
 import { createLogger } from '../../utils/logger';
+import { logToolCount } from '../bootstrap-health';
 
 const logger = createLogger('Tools:Arcade-Bootstrap');
 
@@ -112,7 +113,8 @@ export async function registerArcadeTools(registry: ToolRegistry, config: Bootst
     }
 
     arcadeInitialized = true;
-    logger.info(`Registered ${count} Arcade tools`);
+    // Bug #12/#13/#24/#34: emit [WARN] when Arcade returned 0 tools
+    logToolCount(logger, { registry: 'Arcade', count });
   } catch (error: any) {
     logger.error('Failed to register Arcade tools', error);
   }

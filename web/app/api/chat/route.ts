@@ -715,7 +715,7 @@ export async function POST(request: NextRequest) {
         const correctedModel = autoCorrectModel(model, availableModelIds, PROVIDER_DEFAULT_MODELS[provider]);
 
         if (correctedModel) {
-          chatLogger.warn('Model auto-corrected', { requestId, provider }, {
+          chatLogger.debug('Model auto-corrected', { requestId, provider }, {
             originalModel: model,
             correctedModel,
             availableModels: availableModelIds.slice(0, 10),

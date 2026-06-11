@@ -2388,6 +2388,22 @@ export class CapabilityRouter {
       if ((result as any).authRequired) return result;
       if (lastError.startsWith('Invalid input')) return result;
 
+      // Skip LLM self-healing when no Mistral key is configured
+      // (the call would just fail and waste time)
+      if (!process.env.MISTRAL_API_KEY) {
+        logger.debug(`[CapabilityRouter] Skipping self-heal for ${capabilityId}: no Mistral API key`);
+        break;
+      }
+
+      // Skip self-healing when the error is about provider availability,
+      // not about input validity — fixing the input won't help.
+      if (lastError.includes('All providers failed') ||
+          lastError.includes('ENOENT') ||
+          lastError.includes('Tool not found')) {
+        logger.debug(`[CapabilityRouter] Skipping self-heal for ${capabilityId}: provider-level error, not input issue`);
+        break;
+      }
+
       // Last attempt — return the error
       if (attempt >= maxAttempts) break;
 

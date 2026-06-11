@@ -2255,6 +2255,8 @@ export default function ConversationInterface() {
         onProviderChange={handleProviderChange}
         hasCodeBlocks={hasCodeBlocks}
         hasMcpFileEdits={hasMcpFileEdits}
+        messageCount={messages.length}
+        lastUserPrompt={messages.filter(m => m.role === 'user').pop()?.content}
         activeTab={activeTab}
         onActiveTabChange={setActiveTab as any}
         userId={user?.id?.toString() || getStableSessionId()}

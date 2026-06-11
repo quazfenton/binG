@@ -770,7 +770,13 @@ export default function Settings({
   };
 
   return (
-    <div className="fixed top-0 right-0 h-full w-80 bg-black/80 backdrop-blur-md p-6 border-l border-white/10 overflow-y-auto custom-scrollbar z-50">
+    <>
+      {/* Backdrop - click outside to close */}
+      <div
+        className="fixed inset-0 z-40"
+        onClick={onClose}
+      />
+      <div className="fixed top-0 right-0 h-full w-80 bg-black/80 backdrop-blur-md p-6 border-l border-white/10 overflow-y-auto custom-scrollbar z-50" onClick={(e) => e.stopPropagation()}>
       <style jsx>{`
         .custom-scrollbar::-webkit-scrollbar {
           width: 8px;
@@ -2126,5 +2132,6 @@ export default function Settings({
         </>
       )}
     </div>
+    </>
   );
 }

@@ -39,6 +39,10 @@ export interface LLMBashRouterConfig {
 const SIMULATABLE_COMMANDS = new Set([
   'ls', 'pwd', 'cat', 'head', 'tail', 'tree', 'find', 'grep', 'wc',
   'whoami', 'date', 'echo', 'history', 'which', 'type', 'man',
+  // Navigation — cd is a shell builtin, not a binary; simulates instantly
+  'cd',
+  // File creation — mkdir can be modeled against VFS state
+  'mkdir',
   // Read-only variants
   'ls -la', 'ls -l', 'ls -a', 'ls -R', 'ls --color=auto',
   'cat -n', 'cat -b', 'cat -s',
@@ -54,6 +58,8 @@ const SANDBOX_ONLY_COMMANDS = new Set([
   'apt', 'apt-get', 'yum', 'dnf', 'pip', 'npm', 'yarn', 'pnpm',
   'curl', 'wget', 'ssh', 'scp', 'rsync', 'git',
   'chmod', 'chown', 'ln', 'nc', 'ncat',
+  // Language runtimes — require real execution environment
+  'python', 'python3', 'node', 'make', 'cargo', 'go', 'rustc',
 ]);
 
 /**
@@ -275,6 +281,11 @@ function simulateCommand(
   const fs = getFilesystem() || {};
   
   switch (cmd) {
+    case 'cd':
+      // cd is a shell builtin, not an external binary. The simulated
+      // environment is stateless (no cwd tracking), so always succeed.
+      return '';
+      
     case 'pwd':
       return '/workspace';
       
@@ -319,6 +330,12 @@ function simulateCommand(
       return content || '(empty file)';
     }
     
+    case 'mkdir': {
+      const targetDir = args.find(a => !a.startsWith('-'));
+      if (!targetDir) return 'mkdir: missing operand';
+      return targetDir ? '' : 'mkdir: missing operand';
+    }
+      
     case 'echo': {
       // echo "text" [>> file]
       const text = args[0] || '';

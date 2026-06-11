@@ -12,6 +12,7 @@
 import type { ToolRegistry } from '../registry';
 import type { BootstrapConfig } from '../bootstrap';
 import { createLogger } from '../../utils/logger';
+import { logToolCount } from '../bootstrap-health';
 
 const logger = createLogger('Tools:MCP-Bootstrap');
 
@@ -37,6 +38,13 @@ export async function registerMCPTools(registry: ToolRegistry, config: Bootstrap
 
     // Import MCP client
     const { MCPClient } = await import('../../mcp/client');
+
+    // Bug-fix: gateway and CLI tool counts are tracked in separate locals so
+    // the per-branch `logToolCount` call reports the right number. Previously
+    // a single shared `count` variable caused the MCP-CLI line to report the
+    // combined gateway+CLI total.
+    let gatewayCount = 0;
+    let cliCount = 0;
 
     // Try to connect to MCP gateway
     if (mcpGatewayUrl) {
@@ -95,11 +103,13 @@ export async function registerMCPTools(registry: ToolRegistry, config: Bootstrap
           });
 
           count++;
+          gatewayCount++;
           logger.debug(`Registered MCP tool: ${tool.name} → ${capability}`);
         }
 
         await client.disconnect();
-        logger.info(`Registered ${count} MCP tools from gateway`);
+        // Bug #12/#13/#24/#34: emit [WARN] when MCP gateway returned 0 tools
+        logToolCount(logger, { registry: 'MCP gateway', count: gatewayCount });
       } catch (error: any) {
         logger.debug('Failed to connect to MCP gateway (optional infrastructure)', error.message);
       }
@@ -149,11 +159,13 @@ export async function registerMCPTools(registry: ToolRegistry, config: Bootstrap
           });
 
           count++;
+          cliCount++;
           logger.debug(`Registered MCP CLI tool: ${tool.name} → ${capability}`);
         }
 
         await client.disconnect();
-        logger.info(`Registered ${count} MCP CLI tools`);
+        // Bug #12/#13/#24/#34: consistent [INFO]/[WARN] shape with the other registries
+        logToolCount(logger, { registry: 'MCP CLI', count: cliCount });
       } catch (error: any) {
         logger.debug('Failed to connect to MCP CLI (optional infrastructure)', error.message);
       }

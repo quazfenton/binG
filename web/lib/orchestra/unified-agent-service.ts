@@ -740,7 +740,131 @@ type V1RouteDecision = {
   mode: 'v1-api' | 'v1-agent-loop';
   reason: string;
   signals: Record<string, unknown>;
+  /** Agentic score in [0, 1]. Used by tests and telemetry to compare runs. */
+  agenticScore?: number;
 };
+
+/**
+ * Heuristics for "this request is a follow-up that benefits from prior context
+ * (code, errors, tool results, or an injected steer) rather than a fresh user
+ * message." Each detector returns true when the conversation history shows
+ * evidence of the corresponding context type.
+ *
+ * Why these signals matter: the prior classifier (Bug #9/#32) keyed off
+ * `rawLength` alone, which caused a 55-char follow-up like "yes, do that" to
+ * be routed to v1-api even when the conversation had 18 tools, a stack trace,
+ * and an injected steer — the user-perceived "abrupt demotion" bug.
+ */
+type ContextualSignals = {
+  hasCodeContext: boolean;
+  hasErrorContext: boolean;
+  hasToolResultContext: boolean;
+  hasReprompt: boolean;
+};
+
+/**
+ * Read the conversation history and detect the contextual signals above.
+ *
+ * Cheap, deterministic regex/structural checks. The history is small
+ * (typically <50 messages for a chat session) so O(n) is fine.
+ *
+ * IMPORTANT: signal regexes are intentionally conservative to avoid
+ * false-positives on casual chat. A prose sentence like "I have a class
+ * today" or "do NOT retry the install" must NOT trigger hasCodeContext or
+ * hasReprompt — those phrasings occur naturally in normal conversation.
+ */
+function deriveContextualSignals(
+  conversationHistory?: Array<{ role: string; content: string }>,
+): ContextualSignals {
+  if (!Array.isArray(conversationHistory) || conversationHistory.length === 0) {
+    return {
+      hasCodeContext: false,
+      hasErrorContext: false,
+      hasToolResultContext: false,
+      hasReprompt: false,
+    };
+  }
+
+  // Look at assistant + tool + user messages (skip system).
+  const corpus = conversationHistory
+    .filter((m) => m && m.role && m.role !== 'system')
+    .map((m) => (typeof m.content === 'string' ? m.content : ''))
+    .join('\n');
+
+  // hasCodeContext: require BOTH a fenced code block AND a file-extension/path
+  // mention. Either alone is too noisy — a fenced snippet is needed to confirm
+  // this is a programming context, not just a sentence that mentions 'class'.
+  const hasFencedCode = /```[\s\S]*?```/.test(corpus);
+  const hasFileMention =
+    /[\w./-]+\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs|java|rb|php|c|cpp|h|json|md|css|scss|html|yml|yaml|sql|sh|toml|env)\b/i.test(
+      corpus,
+    );
+  const hasCodeContext = hasFencedCode && hasFileMention;
+
+  const hasErrorContext =
+    /\b(error|exception|traceback|stack trace|failed|failure|panic|TypeError|ReferenceError|SyntaxError|RangeError|ENOENT|EACCES|EAGAIN|ETIMEDOUT|ECONNRESET|undefined is not|cannot read|cannot find|unhandled|unhandledrejection)\b/i.test(
+      corpus,
+    );
+
+  // hasToolResultContext: a `tool` role message OR a payload with a `success`
+  // field. The latter is broad enough to catch most real tool result shapes
+  // (`{"success":true,"output":...}`, `{"bash":{"success":true}}`, etc.) without
+  // requiring a nested object that the old regex demanded.
+  const hasToolResultContext = conversationHistory.some(
+    (m) =>
+      m &&
+      (m.role === 'tool' ||
+        (typeof m.content === 'string' && /"success"\s*:/i.test(m.content))),
+  );
+
+  // hasReprompt: only the bracketed sentinels. Phrases like "do NOT retry"
+  // or "try a different approach" appear in normal English and caused
+  // false-positives (review #1) — keep this strict.
+  const hasReprompt =
+    /\[INCOMPLETE-RESPONSE-FEEDBACK\]|\[STEER\]|\[REPROMPT\]|\[SELF-HEAL\]|\[AUTO-CONTINUE\]|\[BUILD_COMPLETE\]/i.test(
+      corpus,
+    );
+
+  return { hasCodeContext, hasErrorContext, hasToolResultContext, hasReprompt };
+}
+
+/**
+ * Tooling richness — a coarse score in [0, 1] reflecting how much real
+ * tool capability is available. Used to escalate follow-ups to v1-agent-loop
+ * when the toolset is rich even if the raw task text is short.
+ *
+ *   - 0.0 → no tools (treated as chat-only)
+ *   - 0.4 → 1–3 tools (limited)
+ *   - 0.7 → 4–10 tools, or 1+ write capability
+ *   - 1.0 → 10+ tools with mix of read + write
+ */
+function computeToolingRichness(
+  externalTools: ReadonlyArray<{ name?: string }>,
+): number {
+  const names = externalTools
+    .map((t) => (t && typeof t.name === 'string' ? t.name.toLowerCase() : ''))
+    .filter(Boolean);
+  const count = names.length;
+  if (count === 0) return 0;
+
+  const WRITE_HINT = [
+    'write', 'edit', 'apply_diff', 'str_replace', 'replace_in_file',
+    'delete', 'batch_write', 'write_files', 'bash', 'shell', 'terminal',
+    'execute', 'sandbox_execute', 'sandbox_shell', 'mcp_tool', 'mcp_execute',
+  ];
+  const READ_HINT = [
+    'read', 'list', 'search', 'grep', 'glob', 'find', 'web_search', 'web_fetch',
+  ];
+  const hasWrite = names.some((n) => WRITE_HINT.some((h) => n.includes(h)));
+  const hasRead = names.some((n) => READ_HINT.some((h) => n.includes(h)));
+
+  if (count >= 10 && hasWrite && hasRead) return 1.0;
+  if (count >= 10) return 0.85;
+  if (count >= 4) return 0.7;
+  if (count >= 1 && hasWrite) return 0.6;
+  if (count >= 1) return 0.4;
+  return 0.2;
+}
 
 /**
  * Classify an auto-mode request into one of the two v1 execution paths.
@@ -780,10 +904,14 @@ function classifyV1Route(config: UnifiedAgentConfig): V1RouteDecision {
   );
   const hasExternalTools = externalTools.length > 0;
 
+  const contextual = deriveContextualSignals(config.conversationHistory);
+  const toolingRichness = computeToolingRichness(externalTools);
+
   const signals = {
     rawLength: rawTask.length,
     hasExternalTools,
     toolCount: externalTools.length,
+    toolingRichness,
     hasCodeFence: /```|~~~/.test(rawTask),
     hasFilePath:
       /[\w./-]+\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs|java|rb|php|c|cpp|h|json|md|css|scss|html|yml|yaml|sql|sh|toml|env)\b/i.test(
@@ -803,17 +931,21 @@ function classifyV1Route(config: UnifiedAgentConfig): V1RouteDecision {
       ),
     hasDiagnosticVerb:
       /\b(fix|debug|investigate|diagnose|trace|resolve|repair|troubleshoot)\b/i.test(rawTask),
+    hasCodeContext: contextual.hasCodeContext,
+    hasErrorContext: contextual.hasErrorContext,
+    hasToolResultContext: contextual.hasToolResultContext,
+    hasReprompt: contextual.hasReprompt,
   };
 
   // Without external tools the orchestrator degrades to a plain (less resilient)
   // LLM call — always prefer v1-api.
   if (!hasExternalTools) {
-    return { mode: 'v1-api', reason: 'no_external_tools', signals };
+    return { mode: 'v1-api', reason: 'no_external_tools', signals, agenticScore: 0 };
   }
 
   // Empty task → nothing to orchestrate.
   if (signals.rawLength === 0) {
-    return { mode: 'v1-api', reason: 'empty_task', signals };
+    return { mode: 'v1-api', reason: 'empty_task', signals, agenticScore: 0 };
   }
 
   // Strong agentic intent: a mutation/diagnostic over real code/workspace, or an
@@ -825,11 +957,83 @@ function classifyV1Route(config: UnifiedAgentConfig): V1RouteDecision {
     (signals.hasMultiStep && (signals.hasFilePath || signals.hasWorkspaceNoun)) ||
     (signals.hasDiagnosticVerb && (signals.hasWorkspaceNoun || signals.hasFilePath));
 
+  // Contextual escalation: a follow-up in a code/error/tool/steer context with
+  // a rich toolset MUST NOT be permanently demoted. The previous classifier
+  // (Bug #9/#32) keyed off `rawLength` alone and dropped a 55-char follow-up
+  // into v1-api even when 18 tools and an error context were present, breaking
+  // the user-perceived "v1-api every time" bug.
+  //
+  // We compute a continuous agentic score in [0, 1] so telemetry can compare
+  // runs and the boundary doesn't become brittle. Thresholds are env-tunable
+  // so production can tighten/loosen without a code change.
+  //
+  // NOTE: `agenticScore` is currently telemetry-only — the decision is
+  // still driven by the explicit rules below, not by a single score
+  // threshold. Keep this in mind before wiring it in: a single threshold
+  // creates a brittle knob that re-introduces the kind of over-escalation
+  // this classifier was patched to avoid.
+  const RICH_TOOLING_THRESHOLD = Number.parseFloat(
+    process.env.AGENT_CLASSIFIER_RICH_TOOLING_THRESHOLD ?? '0.6',
+  );
+  const AGENTIC_VERB_THRESHOLD = Number.parseFloat(
+    process.env.AGENT_CLASSIFIER_AGENTIC_VERB_THRESHOLD ?? '0.25',
+  );
+
+  const contextualBoost =
+    (contextual.hasCodeContext ? 0.25 : 0) +
+    (contextual.hasErrorContext ? 0.2 : 0) +
+    (contextual.hasToolResultContext ? 0.15 : 0) +
+    (contextual.hasReprompt ? 0.1 : 0);
+  const rawTextScore =
+    (signals.hasMutationVerb ? 0.25 : 0) +
+    (signals.hasDiagnosticVerb ? 0.2 : 0) +
+    (signals.hasMultiStep ? 0.2 : 0) +
+    (signals.hasFilePath ? 0.2 : 0) +
+    (signals.hasWorkspaceNoun ? 0.15 : 0) +
+    (signals.hasCodeFence ? 0.15 : 0);
+  const toolingComponent = toolingRichness * 0.3; // 0–0.3
+  const agenticScore = Math.min(
+    1,
+    rawTextScore + contextualBoost + toolingComponent,
+  );
+
   if (stronglyAgentic) {
-    return { mode: 'v1-agent-loop', reason: 'agentic_task_with_tools', signals };
+    return {
+      mode: 'v1-agent-loop',
+      reason: 'agentic_task_with_tools',
+      signals,
+      agenticScore,
+    };
   }
 
-  return { mode: 'v1-api', reason: 'not_agentic_enough', signals };
+  // Escalation order rationale: rule (b) "contextual follow-up + rich tooling"
+  // is checked BEFORE rule (c) "rich tooling + any agentic verb" because a
+  // follow-up with grounded context is a stronger escalation signal than a
+  // bare verb. If both happen to match (rare), the more specific reasoning is
+  // preferred for telemetry.
+  if (contextualBoost > 0 && toolingRichness >= RICH_TOOLING_THRESHOLD) {
+    return {
+      mode: 'v1-agent-loop',
+      reason: 'contextual_followup_with_rich_tooling',
+      signals,
+      agenticScore,
+    };
+  }
+
+  // Soft escalation: if tooling is rich AND the raw task mentions any
+  // agentic indicator (mutation/diagnostic/multi-step), prefer the orchestrator
+  // even without code/workspace nouns. This catches terse commands like
+  // "rename that file" sent after a workspace listing.
+  if (toolingRichness >= RICH_TOOLING_THRESHOLD + 0.1 && rawTextScore >= AGENTIC_VERB_THRESHOLD) {
+    return {
+      mode: 'v1-agent-loop',
+      reason: 'rich_tooling_with_agentic_verb',
+      signals,
+      agenticScore,
+    };
+  }
+
+  return { mode: 'v1-api', reason: 'not_agentic_enough', signals, agenticScore };
 }
 
 /**
@@ -3159,9 +3363,26 @@ async function runV1ApiWithTools(
         }
       }
 
-      // Empty-completion guard: if no response and no tool invocations, throw to trigger fallback
+      // Empty-completion guard: if no response and no tool invocations, return gracefully
+      // instead of throwing. Throwing triggers the provider-fallback chain (other models
+      // get tried), which wastes API calls. A graceful empty return lets Phase 2 text-mode
+      // fallback kick in immediately at the caller level.
       if (!response.trim() && toolInvocations.length === 0) {
-        throw new Error(`Empty completion from ${providerName}/${modelForProvider} — no text and no tool calls`);
+        log.warn(`[V1-API-WITH-TOOLS] Empty completion from ${providerName}/${modelForProvider} — no text and no tool calls, falling back to text-mode`);
+        return {
+          success: true,
+          response: '',
+          steps: [],
+          totalSteps: 0,
+          mode: 'v1-api',
+          metadata: {
+            provider: providerName,
+            model: modelForProvider,
+            duration: Date.now() - startTime,
+            isEmptyResponse: true,
+            emptyReason: `model returned no text and no tool calls`,
+          },
+        };
       }
 
       // AUTO-CONTINUATION: When the model used read-only tools (read, search, list, glob)

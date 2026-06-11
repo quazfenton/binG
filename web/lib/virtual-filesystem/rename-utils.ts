@@ -12,7 +12,14 @@
 
 import { virtualFilesystem } from './virtual-filesystem-service';
 import { emitFilesystemUpdated } from './sync/sync-events';
+import { wouldLoseSessionId } from './scope-utils';
+import { toolResultCache } from '@/lib/utils/cache';
 import { createLogger } from '@/lib/utils/logger';
+
+// Re-export for callers that want a single import surface for rename
+// operations and the session-id-loss guard. The authoritative definition
+// lives in scope-utils.ts; this is a thin re-export.
+export { wouldLoseSessionId };
 
 const logger = createLogger('FilesystemRename');
 
@@ -117,6 +124,51 @@ export async function checkRenameConflicts(
 }
 
 /**
+ * Invalidate cached scopePath entries for a given owner.
+ *
+ * Removes all toolResultCache keys scoped to the given scopePath, plus the
+ * `search:` prefix for the same owner. Called when a rename threatens the
+ * session boundary so subsequent reads don't see stale directory listings
+ * or search results pointing at the old path.
+ */
+function invalidateScopePathCache(ownerId: string, scopePath: string | undefined): void {
+  if (!scopePath) return;
+  const normalized = scopePath.replace(/\\/g, '/').replace(/\/+$/, '');
+  if (!normalized) return;
+
+  // Drop direct directory listing cache for the scope, its trailing-slash
+  // variants, and every ancestor up to the root namespace. A blocked rename
+  // means the cached directory listings for the scope, its parent sessions
+  // directory, and the workspace root are all stale.
+  const scopeKeys = new Set<string>([normalized]);
+  let ancestor = normalized;
+  while (ancestor && ancestor !== '.' && ancestor !== '/') {
+    scopeKeys.add(`${ancestor}/`);
+    scopeKeys.add(`${ancestor}/.`);
+    const parent = ancestor.includes('/') ? ancestor.slice(0, ancestor.lastIndexOf('/')) : '';
+    if (!parent || parent === ancestor) break;
+    ancestor = parent;
+  }
+  scopeKeys.add('.');
+  scopeKeys.add('/');
+  for (const candidate of scopeKeys) {
+    toolResultCache.delete(`${ownerId}:${candidate}`);
+  }
+  // Drop root-level wildcard entries.
+  toolResultCache.delete(`${ownerId}:`);
+  toolResultCache.delete(`${ownerId}:.`);
+  toolResultCache.delete(`${ownerId}:/`);
+
+  // Drop any search results for this owner (they may contain stale paths).
+  const searchPrefix = `search:${ownerId}:`;
+  for (const key of toolResultCache.keys()) {
+    if (key.startsWith(searchPrefix)) {
+      toolResultCache.delete(key);
+    }
+  }
+}
+
+/**
  * Safely rename/move a file or directory
  *
  * @returns RenameResult with success status and any errors
@@ -148,6 +200,49 @@ export async function safeRename(options: RenameOptions): Promise<RenameResult> 
       sourcePath,
       destinationPath,
       overwritten: false,
+    };
+  }
+
+  // ── Session id loss guard ─────────────────────────────────────────────
+  // Block any rename that would REPLACE the session id segment under
+  // workspace/sessions/ with a non-session-id value. This prevents the
+  // observed bug where workspace/sessions/001 gets renamed to
+  // workspace/sessions/ai_terminal, orphaning every subsequent tool call
+  // that scopes to workspace/sessions/001.
+  //
+  // NOTE: This is a check-then-write. Two concurrent safeRename() calls
+  // for the same owner can both pass the guard and both write — the
+  // session-scope write path itself doesn't take a per-owner lock.
+  // Callers that need strict serialization should serialize renames
+  // upstream (e.g. via a per-owner mutex in the orchestrator).
+  const lostSessionId = wouldLoseSessionId(sourcePath, destinationPath);
+  if (lostSessionId) {
+    logger.error(
+      `[CRITICAL] Refusing rename: would lose session id segment "${lostSessionId}". ` +
+      `Source: "${sourcePath}" → Dest: "${destinationPath}". ` +
+      `Session-scoped renames must preserve the workspace/sessions/<id> prefix. ` +
+      `If this rename is intentional, do not target a sibling under workspace/sessions/.`,
+      { sourcePath, destinationPath, lostSessionId, sessionId, ownerId },
+    );
+
+    // Invalidate any cached scopePath so callers see the guard rather than
+    // a stale directory listing that hints the rename succeeded.
+    invalidateScopePathCache(ownerId, scopePath);
+    invalidateScopePathCache(
+      ownerId,
+      `workspace/sessions/${lostSessionId}`,
+    );
+
+    return {
+      success: false,
+      sourcePath,
+      destinationPath,
+      error:
+        `Refusing rename: would lose session id "${lostSessionId}". ` +
+        `Renaming workspace/sessions/${lostSessionId} to a non-session-id path ` +
+        `is not allowed because it orphans every tool call scoped to that session. ` +
+        `Move the folder inside a session (e.g. workspace/sessions/${lostSessionId}/<name>) ` +
+        `or pick a different destination that keeps the session id segment intact.`,
     };
   }
 

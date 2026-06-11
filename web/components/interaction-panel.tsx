@@ -122,6 +122,7 @@ import { useVirtualFilesystem, type AttachedVirtualFile } from "../hooks/use-vir
 import { usePanel } from "../contexts/panel-context";
 import { pluginMigrationService, PluginCategorizer } from "../lib/plugins/plugin-migration";
 import { secureRandom } from "../lib/utils";
+import { useChatSuggestions } from "@/hooks/use-chat-suggestions";
 import Layout from "lucide-react/dist/esm/icons/layout";
 import DevOpsCommandCenterPlugin from "./plugins/devops-command-center-plugin";
 import AIPromptLibraryPlugin from "./plugins/ai-prompt-library-plugin";
@@ -343,6 +344,10 @@ interface InteractionPanelProps {
   hasCodeBlocks?: boolean;
   /** VFS MCP tool file edits (lights up code preview button even without markdown code blocks) */
   hasMcpFileEdits?: boolean;
+  /** Number of chat messages sent, used to tier suggestion levels */
+  messageCount?: number;
+  /** Last user prompt text, used to categorize no-files suggestions */
+  lastUserPrompt?: string;
   activeTab?: "chat" | "extras" | "integrations" | "shell" | "images" | "vnc";
   onActiveTabChange?: (tab: "chat" | "extras" | "integrations" | "shell" | "images" | "vnc") => void;
   userId?: string;
@@ -425,7 +430,14 @@ const ProviderSelector = React.memo(function ProviderSelector({
   return (
     <div className="flex flex-col gap-1 mb-2">
       <div className="flex items-center gap-2 text-xs text-white/60">
-      <Select value={selectValue} onOpenChange={setIsOpen} onValueChange={(value) => {
+      <Select value={selectValue} onOpenChange={(open) => {
+        // On mobile the virtual keyboard opening triggers a resize that
+        // causes Radix to call onOpenChange(false), immediately closing
+        // the dropdown. Prevent close while the search input is focused
+        // so users can type to filter models without the list disappearing.
+        if (!open && document.activeElement === searchInputRef.current) return;
+        setIsOpen(open);
+      }} onValueChange={(value) => {
         if (!value || value === "none") return;
         const [provider, ...modelParts] = value.split(":");
         const model = modelParts.join(":");
@@ -637,6 +649,8 @@ export default function InteractionPanel({
   onAttachedFilesChange,
   filesystemScopePath,
   showResponseStyle = false,
+  messageCount = 0,
+  lastUserPrompt = '',
   // Note: useDiffsPoller removed - file changes synced via filesystem-updated events + SSE
 }: InteractionPanelProps) {
   const { togglePanel, isOpen: isPanelOpen } = usePanel();
@@ -1343,24 +1357,12 @@ export default function InteractionPanel({
   const [showMultiModelComparison, setShowMultiModelComparison] =
     useState(false);
 
-  // Simple chat suggestions (randomized on mount)
-  const chatSuggestions = useMemo(() => {
-    const suggestions = [
-      "unique app ideas",
-      "code a basic web app",
-      "make an addicting web game",
-      "show me something interesting",
-      "explain quantum computing simply",
-      "create a business plan",
-      "write a short story",
-      "design a logo concept",
-      "plan a workout routine",
-      "suggest healthy recipes",
-      "debug this error",
-      "optimize my workflow",
-    ];
-    return [...suggestions].sort(() => 0.5 - secureRandom()).slice(0, 4);
-  }, []);
+  // Tiered chat suggestions based on thread state
+  const chatSuggestions = useChatSuggestions({
+    hasFiles: hasCodeBlocks || hasMcpFileEdits,
+    messageCount,
+    lastUserPrompt,
+  });
 
   // Extra modules for Extras tab (prompt templates, not full plugins)
   const extraModules = useMemo(() => {

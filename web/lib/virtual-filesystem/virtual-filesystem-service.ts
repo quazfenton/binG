@@ -22,6 +22,14 @@ import { createGitBackedVFS, getGitBackedVFSForOwner, type GitBackedVFS, type Gi
 import { getDatabase } from '@/lib/database/connection';
 import { compress, decompress, isCompressed } from '@/lib/utils/compression';
 import { getContentAddressableStorage } from '@/lib/storage/content-addressable-storage';
+// Bug #10/#25: import the shared error classes directly. Previously these
+// were pulled in via `require('@/lib/vfs/transactional-vfs')` which created
+// a circular import; the errors now live in `@/lib/vfs/errors.ts` and can be
+// statically imported.
+import {
+  VersionMismatchError,
+  ConcurrentModificationError,
+} from '@/lib/vfs/errors';
 // Caching for repeated directory listings (used by smart-context)
 import { toolResultCache, toolCacheKey } from '@/lib/utils/cache';
 // import { emitFilesystemUpdated } from './sync/sync-events'; // Imported but not used - central emit deferred for now
@@ -286,7 +294,7 @@ export class VirtualFilesystemService {
     filePath: string,
     content: string,
     language?: string,
-    options?: { failIfExists?: boolean; append?: boolean; bypassSync?: boolean },
+    options?: { failIfExists?: boolean; append?: boolean; bypassSync?: boolean; expectedVersion?: number; strictConcurrency?: boolean },
     _sessionId?: string // optional: for GitBackedVFS session scoping (unused in base VFS)
   ): Promise<VirtualFile> {
     // Desktop mode: Use local filesystem instead of VFS
@@ -383,7 +391,35 @@ export class VirtualFilesystemService {
           previousVersion: previous.version,
           timestamp: now,
         });
+
+        // Bug #25: in strict-concurrency mode (set by the transactional layer),
+        // throw instead of just logging. The default mode preserves the legacy
+        // behavior so existing callers see no change.
+        if (options?.strictConcurrency) {
+          throw new ConcurrentModificationError(
+            filePath,
+            timeSinceLastWrite,
+            threshold,
+            previous.version,
+          );
+        }
       }
+    }
+
+    // Bug #10: optimistic-concurrency check. When the caller passes
+    // `expectedVersion` and the file's current version doesn't match, throw
+    // VersionMismatchError so the transactional layer can re-run its diff.
+    if (
+      typeof options?.expectedVersion === 'number' &&
+      previous &&
+      previous.version !== options.expectedVersion
+    ) {
+      throw new VersionMismatchError(
+        filePath,
+        options.expectedVersion,
+        previous.version,
+        1,
+      );
     }
 
     // Validate file size

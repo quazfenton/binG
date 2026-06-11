@@ -227,17 +227,17 @@ const FRAMEWORK_TO_TEMPLATE: Record<AppFramework, string> = {
   'vite-react': 'react',
   next: 'nextjs',
   gatsby: 'react',
-  remix: 'remix',
+  remix: 'vite-react',
   // Vue-based
   vue: 'vue',
-  nuxt: 'nuxt',
+  nuxt: 'vite-vue',
   // Other frameworks
   svelte: 'svelte',
   angular: 'angular',
   solid: 'solid',
   astro: 'astro',
   // Non-framework
-  vite: 'vanilla',
+  vite: 'vite',
   vanilla: 'vanilla',
   node: 'vanilla',  // Node.js -> use vanilla template (WebContainer handles runtime)
   unknown: 'vanilla',
@@ -1734,7 +1734,7 @@ export class LivePreviewOffloading {
     const templateMap: Record<AppFramework, string> = {
       // JavaScript/TypeScript frameworks
       'react': 'react',
-      'vite-react': 'react',
+  'vite-react': 'vite-react',
       'next': 'nextjs',
       'nuxt': 'nuxt',
       'vue': 'vue',

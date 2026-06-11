@@ -313,9 +313,89 @@ export function getVfsScopeBasePath(sessionId?: string): string {
 }
 
 /**
+ * Detect if a rename would drop the session id segment of a VFS scope path.
+ *
+ * The session id is the segment immediately under `workspace/sessions/`. A
+ * rename that REPLACES this segment with a non-session-id value (e.g. a
+ * project name like `ai_terminal`) breaks the session boundary — every
+ * subsequent tool call that scopes to `workspace/sessions/<id>` can no
+ * longer find the session files, causing the user-perceived "session
+ * rename" bug where files appear to vanish and a stray folder replaces
+ * the real session.
+ *
+ * Rules (both source and dest must be under `workspace/sessions/`):
+ *   1. If the source session segment is a valid session id
+ *      (3-digit numeric, or a stock word like `alpha`, `alpha-1`) and
+ *   2. The dest session segment is NOT a valid session id, and is not
+ *      equal to the source session id (no-op rename),
+ *   → returns the dropped session id; the rename should be rejected.
+ *
+ * If the source is not under `workspace/sessions/`, this is not a
+ * session-scope rename and the function returns null (caller may proceed).
+ *
+ * @returns The session id that would be lost, or null if no loss.
+ *
+ * @example
+ *   wouldLoseSessionId(
+ *     'workspace/sessions/001',
+ *     'workspace/sessions/ai_terminal',
+ *   ) // → '001'
+ *
+ *   wouldLoseSessionId(
+ *     'workspace/sessions/alpha-1/src',
+ *     'workspace/sessions/portfolio-app/src',
+ *   ) // → 'alpha-1'
+ *
+ *   wouldLoseSessionId(
+ *     'workspace/sessions/001/src',
+ *     'workspace/sessions/002/src',
+ *   ) // → null (legitimate cross-session move)
+ */
+export function wouldLoseSessionId(
+  sourcePath: string,
+  destinationPath: string,
+): string | null {
+  const SESSION_SEGMENT_RE = /^[a-z0-9_-]+$/i;
+  const SESSION_ID_RE = /^(\d{3}(-\d+)?|[a-z]+-?\d*)$/i;
+
+  const norm = (p: string): string =>
+    (p || '').replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
+
+  const src = norm(sourcePath);
+  const dest = norm(destinationPath);
+
+  if (!src || !dest) return null;
+  if (src === dest) return null; // no-op
+
+  const srcMatch = src.match(/^workspace\/sessions\/([^/]+)(\/.*)?$/i);
+  const destMatch = dest.match(/^workspace\/sessions\/([^/]+)(\/.*)?$/i);
+
+  // If either side isn't under workspace/sessions/, not a session-scope rename.
+  if (!srcMatch || !destMatch) return null;
+
+  const srcSession = srcMatch[1];
+  const destSession = destMatch[1];
+
+  // Same id — no loss (legitimate rename within the same session).
+  if (srcSession === destSession) return null;
+
+  // Both must look like path segments (defensive — should always be true here).
+  if (!SESSION_SEGMENT_RE.test(srcSession) || !SESSION_SEGMENT_RE.test(destSession)) {
+    return null;
+  }
+
+  // Source is a session id AND destination is not — this is the bug.
+  if (SESSION_ID_RE.test(srcSession) && !SESSION_ID_RE.test(destSession)) {
+    return srcSession;
+  }
+
+  return null;
+}
+
+/**
  * Get the VFS scope path, preferring explicit sessionId over inferred.
  * This is the recommended function for getting scopePath in MCP tools.
- * 
+ *
  * @param options - Object with sessionId and optional override scopePath
  * @returns The appropriate VFS scope path
  */

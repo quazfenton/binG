@@ -71,6 +71,17 @@ export interface BashToolConfig {
   rtkMaxChars?: number;
   /** RTK: Track token savings */
   rtkTrackSavings?: boolean;
+  /**
+   * Maximum wall-clock duration (ms) for which a bash_execute result may be
+   * persisted to VFS. Outputs from commands that ran longer than this cap
+   * are dropped to prevent the VFS from filling up with multi-MB logs from
+   * long-running build/test commands. Default: 30000 (30s).
+   *
+   * Long-running daemons (nohup, `&`, `pm2 start`, `systemctl start`, …) are
+   * never persisted regardless of this cap, since their output streams
+   * indefinitely and persisting them would exhaust VFS quota within minutes.
+   */
+  maxPersistMs?: number;
 }
 
 const DEFAULT_CONFIG: BashToolConfig = {
@@ -79,6 +90,7 @@ const DEFAULT_CONFIG: BashToolConfig = {
   maxRetries: 3,
   workingDir: process.env.BASH_WORKING_DIR || '/workspace',
   defaultTimeout: 30000,
+  maxPersistMs: parseInt(process.env.BASH_MAX_PERSIST_MS || '30000', 10),
   // RTK settings - enable token reduction by default
   rtkEnableRewrite: process.env.RTK_ENABLE_REWRITE !== 'false',
   rtkEnableFilter: process.env.RTK_ENABLE_FILTER !== 'false',
@@ -399,6 +411,59 @@ export async function executeBashCommand(
 }
 
 /**
+ * Patterns indicating a long-running daemon / persistent service.
+ * When matched, the command is NEVER persisted to VFS regardless of
+ * `maxPersistMs` because its output stream is unbounded and would
+ * exhaust VFS quota within minutes.
+ */
+const DAEMON_PERSIST_PATTERNS: RegExp[] = [
+  /\bnohup\b/,
+  /&\s*(?:\||&|$)/,              // backgrounded with `&` (followed by pipe, another &, or EOL)
+  /\bdisown\b/,
+  /\bpm2\s+(start|restart|reload)\b/,
+  /\bsystemctl\s+(start|restart|enable)\b/,
+  /\bservice\s+\S+\s+(start|restart)\b/,
+  /\b(flask|django|uvicorn|gunicorn|fastapi)\s+run\b/,
+  /\b(npm|pnpm|yarn)\s+run\s+(dev|start|serve|watch)\b/,
+  /\b(next|vite|nuxt|remix|svelte-kit)\s+(dev|start)\b/,
+  /\b(docker|podman)\s+(run|start)\b.*--detach/,
+  /\b(docker|podman)\s+(run|start)\b.*-[a-zA-Z]*d[a-zA-Z]*\b/,
+  /\btail\s+-[a-zA-Z]*f\b/,     // tail -f blocks indefinitely
+  /\bwatch\s+/,
+  /\bwhile\s+true\b/,
+  /\bsleep\s+(\d{3,}|infinity)\b/,
+  // `ping` without `-c` (count) runs until interrupted — refuse unconditionally.
+  // Common forms: `ping host` is refused; `ping -c 3 host` is fine.
+  /\bping\b(?![^\n]*\s-[a-zA-Z]*c\b)/,
+];
+
+/**
+ * Decide whether a bash command's output should be persisted to VFS.
+ *
+ * Bug #28: cap persistence to commands that finished within `maxPersistMs`,
+ * and never persist long-running daemons. Without this, a single
+ * `npm run dev &` or a multi-hour `find /` would silently fill the VFS.
+ *
+ * Returns `{ persist: boolean, reason?: string }`. When `persist` is false,
+ * `reason` is a short code (e.g. 'daemon_detected', 'duration_exceeded_cap')
+ * suitable for log/UX surfacing.
+ */
+export function shouldPersistBashOutput(
+  command: string,
+  result: Pick<BashExecutionResult, 'duration' | 'success'>,
+  config: Pick<BashToolConfig, 'maxPersistMs'>,
+): { persist: boolean; reason?: string } {
+  if (DAEMON_PERSIST_PATTERNS.some((re) => re.test(command))) {
+    return { persist: false, reason: 'daemon_detected' };
+  }
+  const cap = config.maxPersistMs ?? 30000;
+  if (result.duration > cap) {
+    return { persist: false, reason: 'duration_exceeded_cap' };
+  }
+  return { persist: true };
+}
+
+/**
  * Persist command output to VFS
  */
 async function persistToVFS(
@@ -634,11 +699,23 @@ export function createBashTool(config: Partial<BashToolConfig> = {}) {
             logger.debug('Direct command executed (skipped self-healing)', { command });
           }
 
-          // Persist to VFS if requested
+          // Persist to VFS if requested — but cap the duration and refuse
+          // long-running daemons. See shouldPersistBashOutput() for the
+          // policy and bug #28.
           if (persist) {
-            const outputPath = await persistToVFS(cfg.persistToVFS, agentId, actualCommand, result);
-            if (outputPath) {
-              result.outputPath = outputPath;
+            const decision = shouldPersistBashOutput(actualCommand, result, cfg);
+            if (decision.persist) {
+              const outputPath = await persistToVFS(cfg.persistToVFS, agentId, actualCommand, result);
+              if (outputPath) {
+                result.outputPath = outputPath;
+              }
+            } else {
+              logger.warn('Skipped VFS persist for bash output', {
+                command: actualCommand.slice(0, 80),
+                duration: result.duration,
+                maxPersistMs: cfg.maxPersistMs,
+                reason: decision.reason,
+              });
             }
           }
 
@@ -709,18 +786,25 @@ export function createBashTool(config: Partial<BashToolConfig> = {}) {
             rtkStats,
           };
         } catch (error: any) {
-          logger.error('Bash execution failed', {
-            command,
-            error: error.message,
-          });
+          let errorMessage = error.message || 'Unknown error';
+
+          // Detect ENOENT (command not found) and give a clear diagnostic
+          // so the LLM stops retrying the same missing binary.
+          if (errorMessage.includes('ENOENT')) {
+            const baseCmd = command.trim().split(/\s+/)[0] || command;
+            errorMessage = `Command not found: "${baseCmd}" is not available in this environment. ` +
+              `Available tools: use "which <cmd>" to check, or use write_file/read_file for file operations. ` +
+              `Do NOT retry "${baseCmd}" — it will keep failing.`;
+            logger.warn('ENOENT caught — providing diagnostic', { command, baseCmd });
+          }
 
           // PATCH 2: Trigger onError hooks
-          await triggerHooks('onError', { ...hookCtx, error: error.message });
+          await triggerHooks('onError', { ...hookCtx, error: errorMessage });
 
           return {
             success: false,
             output: '',
-            error: error.message || 'Unknown error',
+            error: errorMessage,
             exitCode: -1,
             duration: 0,
           };
@@ -763,11 +847,21 @@ export async function executeBashViaEvent(
       });
     }
 
-    // Persist to VFS if requested
+    // Persist to VFS if requested — capped at maxPersistMs; never persist daemons.
     if (event.persist) {
-      const outputPath = await persistToVFS(DEFAULT_CONFIG.persistToVFS, event.agentId, event.command, result);
-      if (outputPath) {
-        result.outputPath = outputPath;
+      const decision = shouldPersistBashOutput(event.command, result, DEFAULT_CONFIG);
+      if (decision.persist) {
+        const outputPath = await persistToVFS(DEFAULT_CONFIG.persistToVFS, event.agentId, event.command, result);
+        if (outputPath) {
+          result.outputPath = outputPath;
+        }
+      } else {
+        logger.warn('Skipped VFS persist for bash output (event path)', {
+          command: event.command.slice(0, 80),
+          duration: result.duration,
+          maxPersistMs: DEFAULT_CONFIG.maxPersistMs,
+          reason: decision.reason,
+        });
       }
     }
 

@@ -12,6 +12,7 @@
 import type { ToolRegistry } from '../registry';
 import type { BootstrapConfig } from '../bootstrap';
 import { createLogger } from '../../utils/logger';
+import { logToolCount } from '../bootstrap-health';
 import type { ComposioService } from '../../integrations/composio-service';
 
 const logger = createLogger('Tools:Composio-Bootstrap');
@@ -59,7 +60,12 @@ export async function registerComposioTools(registry: ToolRegistry, config: Boot
       }
     }
 
-    logger.info(`Registered ${count} Composio tools from ${toolkits.length} toolkits`);
+    // Bug #12/#13/#24/#34: emit [WARN] when Composio returned 0 tools
+    logToolCount(logger, {
+      registry: 'Composio',
+      count,
+      extra: { toolkits: toolkits.length },
+    });
   } catch (error: any) {
     logger.error('Failed to register Composio tools', error);
   }

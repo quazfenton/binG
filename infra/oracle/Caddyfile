@@ -29,7 +29,7 @@
     # NOTE: The Host header is passed through as the original tunnel host so
     #       9Router returns dashboard configuration for the correct hostname.
     #       The -l flag is just --log (server logs), NOT "require localhost".
-    @ninerouter_api path /api/auth/* /api/keys* /api/settings* /api/combos* /api/init /api/locale /api/tags /api/pricing /api/tunnel/* /api/cli-tools/* /api/usage/* /api/oauth/* /api/mcp/* /api/provider-nodes/* /api/proxy-pools/* /api/translator/* /api/version* /api/media-providers/* /api/shutdown
+    @ninerouter_api path /api/auth/* /api/combos* /api/init /api/keys* /api/locale /api/mcp/* /api/media-providers/* /api/models* /api/oauth/* /api/pricing /api/provider-nodes/* /api/providers* /api/proxy-pools/* /api/cli-tools/* /api/settings* /api/shutdown /api/tags /api/translator/* /api/tunnel/* /api/usage/* /api/version*
     handle @ninerouter_api {
         reverse_proxy ninerouter:3000 {
             flush_interval -1

@@ -58,7 +58,6 @@ import { clipboard } from "@bing/platform/clipboard";
 // Import live preview offloading functions
 import {
   detectProject,
-  getSandpackConfig,
   injectLocalDependencySources,
   livePreviewOffloading,
   isBackendOnlyProject,
@@ -120,6 +119,44 @@ interface CodePreviewPanelProps {
 // Use CodeBlock from the parser module
 type CodeBlock = ParsedCodeBlock;
 
+function detectFrameworkFromFiles(filePaths: string[], files: Record<string, string>): string {
+  const hasNuxtConfig = filePaths.some(p => p.includes('nuxt.config'));
+  const hasNextConfig = filePaths.some(p => p.includes('next.config'));
+  const hasVue = filePaths.some(p => p.endsWith('.vue'));
+  const hasSvelte = filePaths.some(p => p.endsWith('.svelte'));
+  const hasReact = filePaths.some(p => p.endsWith('.tsx') || p.endsWith('.jsx'));
+  const hasAngular = filePaths.some(p => p.includes('.component.') || p.includes('.module.'));
+  const hasAstro = filePaths.some(p => p.endsWith('.astro'));
+  const hasPython = filePaths.some(p => p.endsWith('.py'));
+
+  const packageJsonPath = filePaths.find(p => p === 'package.json' || p.endsWith('/package.json'));
+  const packageJson = packageJsonPath ? files[packageJsonPath] : '';
+  if (packageJson) {
+    try {
+      const pkg = JSON.parse(packageJson);
+      const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+      if (deps.next || deps['next']) return 'next';
+      if (deps.nuxt || deps['@nuxt/core']) return 'nuxt';
+      if (deps.vue || deps['@vue/core']) return 'vue';
+      if (deps.svelte || deps['@sveltejs/kit']) return 'svelte';
+      if (deps.react) return 'react';
+      if (deps['@angular/core']) return 'angular';
+      if (deps.astro) return 'astro';
+    } catch {}
+  }
+
+  if (hasNuxtConfig) return 'nuxt';
+  if (hasNextConfig) return 'next';
+  if (hasAstro) return 'astro';
+  if (hasAngular) return 'angular';
+  if (hasSvelte) return 'svelte';
+  if (hasVue) return 'vue';
+  if (hasReact) return 'react';
+  if (hasPython) return 'python';
+
+  return 'vanilla';
+}
+
 const previewLogger = createDebugLogger('CodePreviewPanel', 'DEBUG_CODE_PREVIEW');
 
 // =============================================================================
@@ -174,7 +211,10 @@ interface ProjectStructure {
     | "flask"
     | "fastapi"
     | "django"
-    | "vite-react";
+    | "vite-react"
+    | "python"
+    | "node"
+    | "vanilla-ts";
   bundler?: "webpack" | "vite" | "parcel" | "rollup" | "esbuild";
   packageManager?: "npm" | "yarn" | "pnpm" | "bun";
   entryFile?: string | null;
@@ -1984,7 +2024,10 @@ export default function CodePreviewPanel({
       return {
         name: 'filesystem-workspace',
         files: scopedRelativeFiles,
-        framework: 'react',
+        framework: detectFrameworkFromFiles(
+          Object.keys(scopedRelativeFiles),
+          scopedRelativeFiles,
+        ),
         bundler: 'vite',
         packageManager: 'npm',
         filesystemScopePath: normalizeProjectPath(filesystemScopePath || normalizedFilesystemPath),
@@ -2049,46 +2092,6 @@ export default function CodePreviewPanel({
     return filePaths[0] || null;
   }, []);
 
-  // Detect framework from files
-  const detectFrameworkFromFiles = useCallback((filePaths: string[], files: Record<string, string>): string => {
-    const hasNuxtConfig = filePaths.some(p => p.includes('nuxt.config'));
-    const hasNextConfig = filePaths.some(p => p.includes('next.config'));
-    const hasVue = filePaths.some(p => p.endsWith('.vue'));
-    const hasSvelte = filePaths.some(p => p.endsWith('.svelte'));
-    const hasReact = filePaths.some(p => p.endsWith('.tsx') || p.endsWith('.jsx'));
-    const hasAngular = filePaths.some(p => p.includes('.component.') || p.includes('.module.'));
-    const hasAstro = filePaths.some(p => p.endsWith('.astro'));
-    const hasPython = filePaths.some(p => p.endsWith('.py'));
-
-    // Check package.json for framework detection
-    const packageJsonPath = filePaths.find(p => p === 'package.json' || p.endsWith('/package.json'));
-    const packageJson = packageJsonPath ? files[packageJsonPath] : '';
-    if (packageJson) {
-      try {
-        const pkg = JSON.parse(packageJson);
-        const deps = { ...pkg.dependencies, ...pkg.devDependencies };
-        if (deps.next || deps['next']) return 'next';
-        if (deps.nuxt || deps['@nuxt/core']) return 'nuxt';
-        if (deps.vue || deps['@vue/core']) return 'vue';
-        if (deps.svelte || deps['@sveltejs/kit']) return 'svelte';
-        if (deps.react) return 'react';
-        if (deps['@angular/core']) return 'angular';
-        if (deps.astro) return 'astro';
-      } catch {}
-    }
-
-    if (hasNuxtConfig) return 'nuxt';
-    if (hasNextConfig) return 'next';
-    if (hasAstro) return 'astro';
-    if (hasAngular) return 'angular';
-    if (hasSvelte) return 'svelte';
-    if (hasVue) return 'vue';
-    if (hasReact) return 'react';
-    if (hasPython) return 'python';
-
-    return 'vanilla';
-  }, []);
-
   // Memoize scopedPreviewFiles serialization to prevent visualEditorProjectData recalculation
   const scopedPreviewFilesSerialized = useMemo(() => {
     return JSON.stringify(
@@ -2106,7 +2109,7 @@ export default function CodePreviewPanel({
       structure = {
         name: 'filesystem-workspace',
         files: scopedPreviewFiles,
-        framework: 'react',
+        framework: 'vanilla',
         bundler: 'vite',
         packageManager: 'npm',
         filesystemScopePath: normalizeProjectPath(filesystemScopePath || normalizedFilesystemPath)
@@ -2117,7 +2120,7 @@ export default function CodePreviewPanel({
       structure = {
         name: 'filesystem-workspace',
         files: projectFiles,
-        framework: 'react',
+        framework: 'vanilla',
         bundler: 'vite',
         packageManager: 'npm',
         filesystemScopePath: normalizeProjectPath(filesystemScopePath || normalizedFilesystemPath)
@@ -2166,6 +2169,7 @@ export default function CodePreviewPanel({
 
     const result = {
       ...structure,
+      framework: detectedFramework,
       filesystemScopePath: normalizeProjectPath(filesystemScopePath || normalizedFilesystemPath),
       bundler: inferredBundler,
       entryFile,
@@ -2189,7 +2193,6 @@ export default function CodePreviewPanel({
     projectStructureWithScopedFiles,
     scopedPreviewFilesSerialized,
     detectEntryFile,
-    detectFrameworkFromFiles
   ]);
 
   const applySimpleLineDiff = (
@@ -2687,11 +2690,16 @@ Generated on: ${new Date().toLocaleString()}
       ? projectDetection.framework
       : useStructure?.framework || 'vanilla';
     
-    // Get template using centralized mapping
-    const getSandpackTemplate = (framework: string) => {
-      const config = getSandpackConfig({ framework: framework as any, bundler: 'unknown', normalizedFiles: {} } as any);
-      return config.template;
+    // Map framework to valid Sandpack template
+    const FRAMEWORK_SANDPACK_TEMPLATE: Record<string, string> = {
+      react: 'react', 'vite-react': 'vite-react', next: 'nextjs',
+      gatsby: 'gatsby', vue: 'vue', svelte: 'svelte',
+      angular: 'angular', solid: 'solid', astro: 'astro',
+      vite: 'vite', vanilla: 'vanilla', 'vanilla-ts': 'vanilla-ts',
+      node: 'node', parcel: 'parcel', static: 'static',
     };
+    const getSandpackTemplate = (framework: string) =>
+      FRAMEWORK_SANDPACK_TEMPLATE[framework] || 'vanilla';
 
     const sandpackDependencySourceFiles = useMemo(() => {
       if (useStructure?.files && Object.keys(useStructure.files).length > 0) {
@@ -2810,6 +2818,9 @@ Generated on: ${new Date().toLocaleString()}
         "remix",
         "gatsby",
         "vite",
+        "vanilla",
+        "unknown",
+        "python",
       ].includes(effectiveFramework)
     ) {
       try {
@@ -2853,195 +2864,6 @@ Generated on: ${new Date().toLocaleString()}
           },
           {} as Record<string, { code: string }>,
         );
-
-        // Framework-specific entry file detection and handling
-        const addEntryFileIfMissing = () => {
-          // Define framework-specific entry file priorities (relative paths without leading slash)
-          const entryPriorityMap: Record<string, string[]> = {
-            react: ['src/main.tsx', 'src/main.jsx', 'src/index.tsx', 'src/index.jsx', 'src/App.tsx', 'src/App.jsx', 'index.tsx', 'index.jsx', 'App.tsx', 'App.jsx'],
-            next: ['src/app/page.tsx', 'src/app/page.jsx', 'pages/index.tsx', 'pages/index.jsx', 'src/pages/index.tsx', 'src/pages/index.jsx', 'src/index.tsx'],
-            vue: ['src/main.ts', 'src/main.js', 'src/App.vue', 'main.ts', 'main.js', 'index.ts', 'index.js'],
-            nuxt: ['src/main.ts', 'src/main.js', 'src/App.vue', 'app.vue', 'pages/index.ts', 'pages/index.js'],
-            svelte: ['src/main.ts', 'src/main.js', 'src/App.svelte', 'App.svelte', 'main.ts', 'main.js'],
-            angular: ['src/main.ts', 'src/main.js', 'src/app/app.component.ts', 'src/app/app.component.js'],
-            solid: ['src/index.tsx', 'src/index.jsx', 'src/App.tsx', 'src/App.jsx', 'index.tsx', 'index.jsx'],
-            astro: ['src/pages/index.astro', 'pages/index.astro', 'index.astro'],
-            remix: ['app/routes/_index.tsx', 'app/routes/_index.jsx', 'app/root.tsx', 'app/root.jsx'],
-            gatsby: ['src/pages/index.js', 'src/pages/index.tsx', 'pages/index.js'],
-          };
-
-          const framework = effectiveFramework;
-          const priorities = entryPriorityMap[framework] || [];
-          
-          // Check if any of the priority entry files exist
-          const existingEntryFile = priorities.find(p => 
-            Object.keys(sandpackFiles).some(path => path === p || path.endsWith(p))
-          );
-
-          if (existingEntryFile) {
-            log(`[addEntryFileIfMissing] Found existing entry file: ${existingEntryFile}`);
-            return; // Entry file exists, don't add stub
-          }
-
-          // Check for any existing entry-like files (more permissive for user projects)
-          const hasRealEntryFile = Object.keys(sandpackFiles).some(path => {
-            const fileName = path.split('/').pop() || '';
-            return /^index\.(js|jsx|ts|tsx|mjs|cjs)$/.test(fileName) ||
-                   /^main\.(js|jsx|ts|tsx|mjs|cjs)$/.test(fileName) ||
-                   /^App\.(js|jsx|ts|tsx)$/.test(fileName) ||
-                   /^page\.(js|jsx|ts|tsx)$/.test(fileName);
-          });
-
-          if (hasRealEntryFile) {
-            log(`[addEntryFileIfMissing] Found entry-like file, not adding stub`);
-            return;
-          }
-
-          // No entry file found - add framework-specific stub
-          log(`[addEntryFileIfMissing] No entry file found, adding stub for ${framework}`);
-
-          switch (framework) {
-            case "react":
-            case "next":
-            case "gatsby":
-              // Use index.tsx as entry for React/Next.js projects
-              sandpackFiles["src/index.tsx"] = {
-                code: `import React from 'react';
-import ReactDOM from 'react-dom/client';
-
-function App() {
-  return (
-    <div className="App">
-      <h1>Hello React!</h1>
-      <p>This is a generated React application.</p>
-    </div>
-  );
-}
-
-const root = ReactDOM.createRoot(document.getElementById('root'));
-root.render(<App />);`,
-              };
-              sandpackFiles["index.html"] = {
-                code: `<!doctype html>
-<html>
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Preview</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="src/index.tsx"></script>
-  </body>
-</html>`,
-              };
-              break;
-            case "vue":
-            case "nuxt":
-              sandpackFiles["src/App.vue"] = {
-                code: `<template>
-  <div id="app">
-    <h1>Hello Vue!</h1>
-    <p>This is a generated Vue application.</p>
-  </div>
-</template>
-
-<script>
-export default {
-  name: 'App'
-}
-</script>
-
-<style>
-#app {
-  font-family: Avenir, Helvetica, Arial, sans-serif;
-  text-align: center;
-  color: #2c3e50;
-  margin-top: 60px;
-}
-</style>`,
-              };
-              sandpackFiles["src/main.ts"] = {
-                code: `import { createApp } from 'vue';
-import App from './App.vue';
-createApp(App).mount('#app');`,
-              };
-              sandpackFiles["index.html"] = {
-                code: `<!doctype html>
-<html>
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Preview</title>
-  </head>
-  <body>
-    <div id="app"></div>
-    <script type="module" src="src/main.ts"></script>
-  </body>
-</html>`,
-              };
-              break;
-            case "svelte":
-              sandpackFiles["src/App.svelte"] = {
-                code: `<script>
-  let name = 'Svelte';
-</script>
-
-<main>
-  <h1>Hello {name}!</h1>
-  <p>This is a generated Svelte application.</p>
-</main>
-
-<style>
-  main {
-    text-align: center;
-    padding: 1em;
-    max-width: 240px;
-    margin: 0 auto;
-  }
-</style>`,
-              };
-              sandpackFiles["src/main.ts"] = {
-                code: `import App from './App.svelte';
-const app = new App({ target: document.getElementById('app') });
-export default app;`,
-              };
-              sandpackFiles["index.html"] = {
-                code: `<!doctype html>
-<html>
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Preview</title>
-  </head>
-  <body>
-    <div id="app"></div>
-    <script type="module" src="src/main.ts"></script>
-  </body>
-</html>`,
-              };
-              break;
-            default:
-              // vanilla or unknown framework - use index.js
-              sandpackFiles["src/index.js"] = {
-                code: `logger.info('Hello from ${framework}!');`,
-              };
-              sandpackFiles["index.html"] = {
-                code: `<!doctype html>
-<html>
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Preview</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script src="src/index.js"></script>
-  </body>
-</html>`,
-              };
-          }
-        };
 
         // Handle build output directories (dist, build, .next, etc.)
         const normalizeFilesForSandpack = (files: Record<string, { code: string }>) => {
