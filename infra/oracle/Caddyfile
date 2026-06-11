@@ -4,9 +4,7 @@
 #
 # Routes based on URL path prefixes:
 #   /api/*, /health*  → bing backend (Hono orchestrator)
-#   /novnc/*          → noVNC web-based VNC client (on Docker host)
 #   /nocturne/*       → nocturne FastAPI backend
-#   /nocturne-n8n/*   → nocturne n8n automation
 #   /copa/*           → CopaMundial (Next.js + Socket.IO)
 #   /*                → 9Router (LLM gateway)
 
@@ -62,15 +60,6 @@
         }
     }
 
-    # Nocturne n8n routes (must come before nocturne catch-all)
-    # Use handle_path to also match the bare prefix /nocturne-n8n (without trailing path)
-    # handle_path automatically strips the matched prefix — no manual uri strip_prefix needed.
-    handle_path /nocturne-n8n/* {
-        reverse_proxy nocturne_n8n:5678 {
-            flush_interval -1
-        }
-    }
-
     # Nocturne backend routes (FastAPI) — all /nocturne/* paths
     # Use handle_path to also match the bare prefix /nocturne (without trailing path)
     # handle_path automatically strips the matched prefix — no manual uri strip_prefix needed.
@@ -96,15 +85,6 @@
                 write_timeout 30m
             }
         }
-    }
-
-    # noVNC web-based VNC client (on Docker host at 172.18.0.1:6080)
-    # handle_path matches both /novnc and /novnc/*
-    handle_path /novnc/* {
-        basic_auth {
-            import /data/novnc-auth.txt
-        }
-        reverse_proxy 172.18.0.1:6080
     }
 
     # Everything else goes to 9router dashboard
