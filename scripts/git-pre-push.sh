@@ -19,7 +19,10 @@ while read -r local_ref local_sha remote_ref remote_sha; do
 
   echo "🔍 Checking commits in range: $range"
 
-  changed_files=$(git diff --name-only "$range" | grep -vE '\.(png|jpg|jpeg|gif|ico|svg|woff2?|ttf|eot|mp4|mp3|webp|zip|tar|gz|lock)$' || :)
+  changed_files=$(git diff --name-only "$range" \
+    | grep -vE '\.(png|jpg|jpeg|gif|ico|svg|woff2?|ttf|eot|mp4|mp3|webp|zip|tar|gz|lock|heapsnapshot|map|br)$' \
+    | grep -vE '(^|/)(\.git/hooks/pre-push|scripts/git-pre-push\.sh)$' \
+    || :)
 
   if [ -z "$changed_files" ]; then
     continue
@@ -27,21 +30,27 @@ while read -r local_ref local_sha remote_ref remote_sha; do
 
   # ── Layer 1: Truncation / corruption markers ──────────────────────────
   # Explicit markers that LLMs emit when they clip output or leave
-  # placeholder artifacts.
-  marker_hits=$(echo "$changed_files" | xargs grep -nE \
-    '\.\.\.\[TRUNCATED\]|TODO_RESTORE|CUT_HERE|\[REST_OF_FILE\]|\[CODE_CONTINUES\]|\.\.\\. remainder omitted|\.\.\. \d+ more lines?\.\.\.|\[OUTPUT_TRUNCATED\]|\[FILE_TRUNCATED\]|\[CONTENT_SKIPPED\]' \
-    2>/dev/null || :)
-  if [ -n "$marker_hits" ]; then
-    echo "❌ Layer 1 — Truncation/corruption markers found:"
-    echo "$marker_hits"
-    FAILURES+=("truncation-markers")
+  # placeholder artifacts. Skip test files — they may legitimately assert
+  # truncation behavior (e.g. `expect(truncate(s, 100)).toBe('...')`).
+  prod_files=$(echo "$changed_files" | grep -vE '(^|/)(__tests__/|\.test\.|\.spec\.)' || :)
+  if [ -n "$prod_files" ]; then
+    marker_hits=$(echo "$prod_files" | xargs grep -nE \
+      '\.\.\.\[TRUNCATED\]|TODO_RESTORE|CUT_HERE|\[REST_OF_FILE\]|\[CODE_CONTINUES\]|\.\.\\. remainder omitted|\.\.\. \d+ more lines?\.\.\.|\[OUTPUT_TRUNCATED\]|\[FILE_TRUNCATED\]|\[CONTENT_SKIPPED\]' \
+      2>/dev/null || :)
+    if [ -n "$marker_hits" ]; then
+      echo "❌ Layer 1 — Truncation/corruption markers found:"
+      echo "$marker_hits"
+      FAILURES+=("truncation-markers")
+    fi
   fi
 
   # ── Layer 2: AI artifact / placeholder patterns ───────────────────────
   # Patterns that indicate an LLM hallucinated content instead of
-  # preserving real code.
+  # preserving real code. NOTE: `__PLACEHOLDER__` (with double underscores)
+  # is the LLM artifact marker. Single-word `PLACEHOLDER` in legitimate
+  # variable names like `PLACEHOLDER_REGEX` is allowed.
   artifact_hits=$(echo "$changed_files" | xargs grep -nE \
-    'YOUR_API_KEY_HERE|INSERT_CODE_HERE|PLACEHOLDER|FIXME_AUTO|REPLACE_WITH|\[IMPLEMENTATION_DETAILS\]|\[ADD YOUR|\[FILL IN\]' \
+    'YOUR_API_KEY_HERE|INSERT_CODE_HERE|__PLACEHOLDER__|FIXME_AUTO|REPLACE_WITH|\[IMPLEMENTATION_DETAILS\]|\[ADD YOUR|\[FILL IN\]' \
     2>/dev/null || :)
   if [ -n "$artifact_hits" ]; then
     echo "⚠️  Layer 2 — AI artifact/placeholder patterns found:"
@@ -70,8 +79,15 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     else
       base_ref="$remote_sha"
     fi
-    old_lines=$(git show "$base_ref:$f" 2>/dev/null | wc -l || echo 0)
-    new_lines=$(git show "$local_sha:$f" 2>/dev/null | wc -l || echo 0)
+    # Robust line count: `head -1` discards any extra lines, `tr` strips all
+    # whitespace, and the `[[ =~ ]]` check + default guard handle edge cases
+    # where `git show` fails (new file in commit, missing in base, etc.).
+    old_lines=$(git show "$base_ref:$f" 2>/dev/null | wc -l | head -1 | tr -d '[:space:]' || true)
+    new_lines=$(git show "$local_sha:$f" 2>/dev/null | wc -l | head -1 | tr -d '[:space:]' || true)
+    old_lines=${old_lines:-0}
+    new_lines=${new_lines:-0}
+    [[ "$old_lines" =~ ^[0-9]+$ ]] || old_lines=0
+    [[ "$new_lines" =~ ^[0-9]+$ ]] || new_lines=0
     if [ "$old_lines" -gt 200 ] && [ "$new_lines" -lt 20 ] && [ "$new_lines" -gt 0 ]; then
       echo "❌ Layer 4 — $f: ${old_lines} → ${new_lines} lines (likely full-file overwrite)"
       FAILURES+=("overwrite:$f")
