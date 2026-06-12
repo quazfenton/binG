@@ -1106,7 +1106,16 @@ export async function* streamWithVercelAI(
     }, firstTokenTimeoutMs);
   }
 
-  const effectiveSignal = timeoutController?.signal || signal;
+  // Bug fix: wire the internal timeoutController into the provider's HTTP
+  // call via AbortSignal.any so firstTokenTimeoutMs / idleTimeoutMs actually
+  // abort the network request. The provider (and fetch) sees an aborted
+  // signal the moment we call timeoutController.abort(); without this
+  // merge, the SDK could keep reading the stream after the timeout fires.
+  // AbortSignal.any is a no-op (returns `signal` unchanged) when
+  // timeoutController is absent, so this is safe in the disabled path too.
+  const effectiveSignal = timeoutController
+    ? AbortSignal.any([signal, timeoutController.signal])
+    : signal;
   
   // Helper to clear TTFT timeout once first token arrives
   const onFirstToken = () => {
@@ -1671,16 +1680,27 @@ export async function* streamWithVercelAI(
               }
             }, fbTimeoutMs);
 
-            const fbStreamOpts: any = {
-              model: fbVercelModel,
-              messages: chatMessages,
-              temperature: temp,
-              maxOutputTokens: maxT,
-              maxRetries: 0,
-              stopWhen: stepCountIs(maxSteps),
-              toolCallStreaming,
-              abortSignal: fbController.signal,
-            };
+    // Bug fix: the fallback's network request previously only honored
+    // fbController.signal (the speculative-race cancel), so the global
+    // firstTokenTimeoutMs / idleTimeoutMs never aborted it. Merge all
+    // three signals so the provider sees the abort from ANY source:
+    //   - fbController.signal  → primary wins the race, cancel fallback
+    //   - signal               → user cancelled the request
+    //   - timeoutController.signal → global TTFT/idle timeout fired
+    // AbortSignal.any is a no-op (returns the single signal) when only
+    // one source exists, so this is safe across the disabled paths too.
+    const fallbackAbortSources: AbortSignal[] = [fbController.signal, signal];
+    if (timeoutController) fallbackAbortSources.push(timeoutController.signal);
+    const fbStreamOpts: any = {
+      model: fbVercelModel,
+      messages: chatMessages,
+      temperature: temp,
+      maxOutputTokens: maxT,
+      maxRetries: 0,
+      stopWhen: stepCountIs(maxSteps),
+      toolCallStreaming,
+      abortSignal: AbortSignal.any(fallbackAbortSources),
+    };
             if (systemPrompt) fbStreamOpts.system = systemPrompt;
             if (tools && Object.keys(tools).length > 0) fbStreamOpts.tools = tools;
 

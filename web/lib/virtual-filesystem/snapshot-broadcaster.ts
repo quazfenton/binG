@@ -50,7 +50,7 @@
  */
 
 import Redis from 'ioredis';
-import { getRedisClient } from '@/lib/redis/client';
+import { getRedisClient, isRedisEnabled } from '@/lib/redis/client';
 import { createLogger } from '@/lib/utils/logger';
 // Pass-2 cross-cutting theme: record EPIPE / publish failures into the
 // per-session degradation chain so run.log shows the broadcaster failure
@@ -95,6 +95,8 @@ interface BroadcasterState {
   redisErrorStartedAt: number | null;
   /** Polling interval handle (Bug #38 graceful degrade to polling). */
   pollingHandle: NodeJS.Timeout | null;
+  /** True once we've emitted the one-time "Redis disabled" debug log. */
+  redisDisabledLogged: boolean;
   /** Cached API object so getSnapshotBroadcaster() is referentially stable. */
   api?: SnapshotBroadcasterApi;
 }
@@ -139,6 +141,7 @@ export function getSnapshotBroadcaster(): SnapshotBroadcasterApi {
       reconnectCount: 0,
       redisErrorStartedAt: null,
       pollingHandle: null,
+      redisDisabledLogged: false,
     };
   }
   const state = globalThis.__vfsSnapshotBroadcaster__;
@@ -154,6 +157,21 @@ export function getSnapshotBroadcaster(): SnapshotBroadcasterApi {
   function ensureSubscribed(): boolean {
     if (state.subscribed) return true;
     if (state.subscriber) return true; // in-flight init
+
+    // Bug: graceful degrade when Redis is disabled (set REDIS_ENABLED=true
+    // to enable). Without this, the dev server spammed ioredis logs trying
+    // to connect to the production Redis cluster on every startup.
+    if (!isRedisEnabled()) {
+      // One-time debug log so operators can see at a glance that the
+      // broadcaster is intentionally in local-only mode.
+      if (!state.redisDisabledLogged) {
+        state.redisDisabledLogged = true;
+        logger.debug(
+          '[VFS Snapshot Broadcaster] Redis disabled in this environment — broadcaster is local-only (set REDIS_ENABLED=true to enable cross-process pub/sub)',
+        );
+      }
+      return false;
+    }
 
     let sub: Redis;
     try {
@@ -306,6 +324,12 @@ export function getSnapshotBroadcaster(): SnapshotBroadcasterApi {
      */
     publish(ownerId: string, version: number): void {
       if (typeof ownerId !== 'string' || typeof version !== 'number') {
+        return;
+      }
+      // Graceful degrade: when Redis is disabled, publish() is a silent
+      // no-op. The local in-process listener (registered on
+      // onSnapshotChange) still fires, so the single-process path works.
+      if (!isRedisEnabled()) {
         return;
       }
       const message: SnapshotChangedMessage = {

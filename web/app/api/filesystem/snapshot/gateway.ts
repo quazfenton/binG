@@ -505,8 +505,31 @@ export async function GET(req: NextRequest) {
         // WorkspaceState in the map + DB) and the NEXT read sees success
         // with 0 files, breaking the loop.
         try {
-          if (typeof (virtualFilesystem as any).ensureWorkspaceForOwner === 'function') {
-            await (virtualFilesystem as any).ensureWorkspaceForOwner(owner.ownerId);
+          // 5s in-memory cooldown to prevent hammering the DB when the
+          // snapshot is polled faster than the init can complete. After
+          // the cooldown expires, the next request retries the init.
+          const initAttemptKey = `__vfsEagerInitAttempted__:${owner.ownerId}`;
+          const lastAttempt = (globalThis as any)[initAttemptKey] || 0;
+          const EAGER_INIT_COOLDOWN_MS = 5000;
+          if (Date.now() - lastAttempt < EAGER_INIT_COOLDOWN_MS) {
+            log(`[${requestId}] Eager-init cooldown active for anonymous owner — returning WORKSPACE_NOT_READY`);
+            const cooldownResponse = NextResponse.json({
+              success: false,
+              error: 'Workspace not yet initialized. Please retry shortly.',
+              errorCode: 'WORKSPACE_NOT_READY',
+              retryable: true,
+              ownerId: owner.ownerId,
+              source: owner.source,
+            }, { status: 202 });
+            return withAnonSessionCookie(cooldownResponse, owner);
+          }
+          (globalThis as any)[initAttemptKey] = Date.now();
+          // `ensureWorkspace` is public on VirtualFileSystemService since
+          // the Bug #14 follow-up. The typeof guard is preserved as a
+          // defense-in-depth fallback in case the deployed build predates
+          // the change (matches the Bug #36 pattern).
+          if (typeof (virtualFilesystem as any).ensureWorkspace === 'function') {
+            await (virtualFilesystem as any).ensureWorkspace(owner.ownerId);
             log(`[${requestId}] Eagerly initialized workspace for anonymous owner — breaking WORKSPACE_NOT_READY loop`);
             // Re-export the now-initialized snapshot and return success
             // with 0 files instead of WORKSPACE_NOT_READY. This unblocks
