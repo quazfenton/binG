@@ -89,6 +89,8 @@ interface BroadcasterState {
   subscribed: boolean;
   /** Last time we logged a "Redis unavailable" warning (ms epoch). 0 = never. */
   lastWarnedAt: number;
+  /** Number of EPIPE/retryable-error reconnects (Bug #38). */
+  reconnectCount: number;
   /** Cached API object so getSnapshotBroadcaster() is referentially stable. */
   api?: SnapshotBroadcasterApi;
 }
@@ -130,6 +132,7 @@ export function getSnapshotBroadcaster(): SnapshotBroadcasterApi {
       listeners: new Set(),
       subscribed: false,
       lastWarnedAt: 0,
+      reconnectCount: 0,
     };
   }
   const state = globalThis.__vfsSnapshotBroadcaster__;
@@ -164,9 +167,31 @@ export function getSnapshotBroadcaster(): SnapshotBroadcasterApi {
 
       sub.on('error', (err) => {
         const now = Date.now();
-        if (now - state.lastWarnedAt > WARN_COOLDOWN_MS) {
-          logger.warn('[VFS Snapshot Broadcaster] Subscriber connection error:', err.message);
-          state.lastWarnedAt = now;
+        const errMsg = err instanceof Error ? err.message : String(err);
+        const isRetryable = /EPIPE|ECONNRESET|ECONNREFUSED|ETIMEDOUT/.test(errMsg);
+        if (isRetryable) {
+          // Bug #38: reset subscriber state so the next publish() or
+          // subscribe() call lazily creates a fresh connection. Without
+          // this, a broken subscriber silently stops receiving messages
+          // for the rest of the process lifetime.
+          state.subscriber = null;
+          state.subscribed = false;
+          state.reconnectCount = (state.reconnectCount || 0) + 1;
+          if (now - state.lastWarnedAt > WARN_COOLDOWN_MS) {
+            logger.warn(
+              '[VFS Snapshot Broadcaster] Subscriber disconnected (retryable), will reconnect:',
+              errMsg,
+            );
+            state.lastWarnedAt = now;
+          }
+        } else {
+          // Non-retryable errors (NOAUTH, WRONGPASS, etc.) still get
+          // logged but we do NOT reset the subscriber — the credentials
+          // won't change on reconnect.
+          if (now - state.lastWarnedAt > WARN_COOLDOWN_MS) {
+            logger.warn('[VFS Snapshot Broadcaster] Subscriber error (non-retryable):', errMsg);
+            state.lastWarnedAt = now;
+          }
         }
         // Pass-2 cross-cutting theme: record the EPIPE / connection error.
         // sessionId is 'default' because the broadcaster is process-wide and
@@ -176,7 +201,7 @@ export function getSnapshotBroadcaster(): SnapshotBroadcasterApi {
             'default',
             'broadcaster_epipe',
             'snapshot-broadcaster',
-            { error: err.message, kind: 'subscriber_error' },
+            { error: errMsg, kind: 'subscriber_error' },
           );
         } catch { /* best-effort */ }
       });

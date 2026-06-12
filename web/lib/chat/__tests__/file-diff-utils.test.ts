@@ -136,28 +136,79 @@ describe('applySimpleLineDiff', () => {
     expect(result).toBe('a\nadded\nc');
   });
 
-  it('does not treat `+++` header as an added line (preserved as context)', () => {
-    const result = applySimpleLineDiff(
-      'old content',
-      '+++ b/path\n-old content\n+new content'
-    );
-    // `+++` is NOT treated as added line (startsWith("++") guard prevents that).
-    // It's preserved as context via the else clause since it has no diff prefix.
-    expect(result).toContain('+++ b/path');
-    expect(result).toContain('new content');
-    // 'old content' was removed
-    expect(result).not.toContain('old content');
-  });
+  // ── Bug #46 — Unified-diff file headers must NOT leak into the file ──
 
-  it('does not treat `---` header as a removed line (preserved as context)', () => {
+  it('Bug #46: SKIPS `--- a/path` header (does not leak it into result)', () => {
+    // Pre-fix behavior would preserve `--- a/path` as context, corrupting the file.
+    // Post-fix: the line is skipped via `continue`, so the result contains only
+    // the actual diff content.
     const result = applySimpleLineDiff(
       'old\ncontent',
       '--- a/path\n-old\n+new\n content'
     );
-    // `---` is not treated as removed (startsWith("--") guard), preserved via else clause
-    expect(result).toContain('--- a/path');
+    expect(result).not.toContain('--- a/path');
+    expect(result).not.toContain('--- ');
     expect(result).toContain('new');
     expect(result).toContain('content');
+  });
+
+  it('Bug #46: SKIPS `+++ b/path` header (does not leak it into result)', () => {
+    const result = applySimpleLineDiff(
+      'old content',
+      '+++ b/path\n-old content\n+new content'
+    );
+    expect(result).not.toContain('+++ b/path');
+    expect(result).not.toContain('+++ ');
+    expect(result).toContain('new content');
+    expect(result).not.toContain('old content');
+  });
+
+  it('Bug #46: full unified diff with `--- a/path` + `+++ b/path` + `@@` produces clean file content', () => {
+    // Real-world scenario: LLM sends a unified diff block.
+    // Pre-fix: ---/+++ headers leak as literal lines into the output file.
+    // Post-fix: only the actual additions/removals survive.
+    const current = 'line1\nline2\nline3';
+    const unifiedDiff =
+      '--- a/foo.ts\n' +
+      '+++ b/foo.ts\n' +
+      '@@ -1,3 +1,3 @@\n' +
+      '-line2\n' +
+      '+LINE_TWO_REPLACED';
+    const result = applySimpleLineDiff(current, unifiedDiff);
+    expect(result).toBe('line1\nLINE_TWO_REPLACED\nline3');
+    expect(result).not.toContain('--- ');
+    expect(result).not.toContain('+++ ');
+  });
+
+  it('Bug #46: defense-in-depth REJECTS results containing `--- ` / `+++ ` headers (strict)', () => {
+    // Review fix (tighter): the main loop skips `--- ` and `+++ ` (with trailing
+    // space) via `continue`. The defense-in-depth check at the END of
+    // applySimpleLineDiff rejects any result that still contains those headers
+    // (they could come from a `--- path` with no trailing space that the main
+    // loop's startsWith("--- ") check missed). This test asserts both:
+    //   (1) for an input that would leak a `--- ` line, the result is EITHER
+    //       null (defense-in-depth rejected) OR a string that contains zero
+    //       lines matching the `--- `/`+++ ` pattern.
+    //   (2) the main loop + defense-in-depth BOTH contributed — verified by
+    //       asserting that for the standard `--- a/path` case (which the main
+    //       loop handles), the result is NOT null and contains only file content.
+    const sneakyDiff = 'line1\n--- foo\n+line2';
+    const result = applySimpleLineDiff('line1', sneakyDiff);
+    if (result !== null) {
+      const lines = result.split('\n');
+      for (const line of lines) {
+        // Post-condition: NO result line can start with `--- ` or `+++ `.
+        // If any does, the defense-in-depth check failed to reject.
+        expect(/^(--- |\+\+\+ )/.test(line)).toBe(false);
+      }
+    }
+    // (2) Standard case: main loop handles it, result is non-null and clean.
+    const standardResult = applySimpleLineDiff(
+      'old\ncontent',
+      '--- a/path\n-old\n+new\n content'
+    );
+    expect(standardResult).not.toBeNull();
+    expect(standardResult).toBe('new\ncontent');
   });
 
   it('handles a single bare `+` line (no space, no content)', () => {

@@ -2667,6 +2667,7 @@ export class ResponseRouter {
             lastUserMessage: '',
             attachedPaths: [],
             responseContent: refinedOutput,
+        alreadyWrittenPaths: new Set<string>(),
           })
           logger.debug('Refinement filesystem edits result', {
             appliedCount: filesystemEdits?.applied?.length,

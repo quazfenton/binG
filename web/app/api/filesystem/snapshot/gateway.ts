@@ -470,7 +470,15 @@ export async function GET(req: NextRequest) {
     
     // Log if we're getting empty results - helps debug session ID mismatches
     if (files.length === 0 && snapshot.files.length === 0) {
-      logWarn(`[${requestId}] EMPTY WORKSPACE: ownerId="${owner.ownerId}", source="${owner.source}", path="${pathFilter}"`);
+      // Bug #44: for anonymous users an empty workspace is EXPECTED (the
+      // WORKSPACE_NOT_READY path below handles it). Log at debug so operators
+      // don't think #14 is broken. For authenticated users it's genuinely
+      // suspicious and worth a warn.
+      if (owner.source === 'authenticated') {
+        logWarn(`[${requestId}] EMPTY WORKSPACE: ownerId="${owner.ownerId}", source="${owner.source}", path="${pathFilter}"`);
+      } else {
+        log(`[${requestId}] EMPTY WORKSPACE (expected): ownerId="${owner.ownerId}", source="${owner.source}", path="${pathFilter}"`);
+      }
 
       // Bug #14 (audit) — when an anonymous user hits an empty
       // workspace, the LLM previously saw `{success: true, files: []}`

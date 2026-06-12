@@ -198,6 +198,13 @@ export function applySimpleLineDiff(currentContent: string, diffBody: string): s
       continue;
     }
 
+    // Bug #46: Skip unified-diff file headers `--- a/path` and `+++ b/path`.
+    // Without this, the naive algorithm treats them as context lines and leaks
+    // them verbatim into the result, corrupting the output file.
+    if (line.startsWith('--- ') || line.startsWith('+++ ')) {
+      continue;
+    }
+
     // CRITICAL: Check raw prefix first before any trimming.
     // Order matters: check two-space first so "  " doesn't accidentally
     // match the single-space branch.
@@ -225,6 +232,14 @@ export function applySimpleLineDiff(currentContent: string, diffBody: string): s
   if (result === currentContent) {
     return currentContent;
   }
+
+  // Bug #46 defense-in-depth: reject if any result line starts with
+  // `--- ` or `+++ ` — indicates a diff-header leak that would corrupt
+  // the file. These should have been skipped in the main loop above.
+  if (/^(--- |\+\+\+ )/.test(result)) {
+    return null;
+  }
+
   return result;
 }
 

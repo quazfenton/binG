@@ -85,7 +85,7 @@ export interface ProcessMemoryMonitorConfig {
 }
 
 const DEFAULT_CONFIG: ProcessMemoryMonitorConfig = {
-  softThrottleMb: 1228,       // 1.2 GB
+  softThrottleMb: 1024,       // 1 GB (Bug #43: down from 1228 — observed steady-state 890 MB)
   criticalMb: 1843,           // 1.8 GB
   tickIntervalMs: 10_000,     // 10 s
   snapshotCooldownMs: 300_000, // 5 min

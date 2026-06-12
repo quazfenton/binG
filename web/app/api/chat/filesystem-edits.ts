@@ -49,6 +49,16 @@ export interface FilesystemEditResult {
   workspaceVersion?: number;
   commitId?: string;
   sessionId?: string;
+  /** Bug #48: text-mode edits for paths that were already written by structured
+   * tool calls in this turn. NOT applied — staged for LLM review on next turn
+   * so legitimate incremental edits aren't silently discarded. */
+  pendingEdits?: Array<{
+    path: string;
+    content: string;
+    type: 'write' | 'diff';
+    diffBody?: string;
+    reason: string;
+  }>;
 }
 
 function validateExtractedPath(raw: string, isFolder: boolean = false): string | null {
@@ -138,6 +148,11 @@ export async function applyFilesystemEditsFromResponse(input: {
   };
   forceExtract?: boolean;
   preParsedEdits?: ParsedFilesystemResponse;
+  /** Bug #48: set of file paths that were already written by structured tool
+   * calls (batch_write, write_file, create_file) in this turn. Text-mode
+   * parser will skip these paths to prevent overwriting correct file content
+   * with echoed/corrupted tool-call JSON from the LLM's prose summary. */
+  alreadyWrittenPaths?: Set<string>;
 }): Promise<FilesystemEditResult> {
   const parsedResponse = input.preParsedEdits
     ? input.preParsedEdits
@@ -154,6 +169,38 @@ export async function applyFilesystemEditsFromResponse(input: {
     responseContentLength: input.responseContent?.length || 0,
     responsePreview: (input.responseContent || '').slice(0, 200),
   });
+
+  // Bug #48: edits for paths already written by structured tool calls are
+  // STAGED as pending (not silently dropped) so legitimate incremental edits
+  // are preserved for LLM review on the next turn. The caller (route.ts)
+  // checks result.pendingEdits and prepends a [STEER] review prompt.
+  const alreadyWritten = input.alreadyWrittenPaths;
+  if (alreadyWritten && alreadyWritten.size > 0) {
+    const blockedWrites: typeof parsedResponse.writes = [];
+    parsedResponse.writes = parsedResponse.writes.filter(w => {
+      if (alreadyWritten.has(w.path)) {
+        blockedWrites.push(w);
+        return false;
+      }
+      return true;
+    });
+    const blockedDiffs: typeof parsedResponse.diffs = [];
+    parsedResponse.diffs = parsedResponse.diffs.filter(d => {
+      if (alreadyWritten.has(d.path)) {
+        blockedDiffs.push(d);
+        return false;
+      }
+      return true;
+    });
+    for (const w of blockedWrites) {
+      pendingEdits.push({ path: w.path, content: w.content, type: 'write', reason: 'Path already written by structured tool call in this turn' });
+      chatLogger.info('[PARSER] Bug #48: staged pending write for LLM review', { path: w.path, contentLength: w.content.length });
+    }
+    for (const d of blockedDiffs) {
+      pendingEdits.push({ path: d.path, content: d.content, type: 'diff', diffBody: d.diff, reason: 'Path already written by structured tool call in this turn' });
+      chatLogger.info('[PARSER] Bug #48: staged pending diff for LLM review', { path: d.path, contentLength: d.content.length });
+    }
+  }
 
   function extractBashFileWrites(content: string): Array<{ path: string; content: string }> {
     const writes: Array<{ path: string; content: string }> = [];
@@ -294,6 +341,11 @@ export async function applyFilesystemEditsFromResponse(input: {
       })
     : null;
 
+  // Bug #48: pending edits (blocked by alreadyWrittenPaths) are staged here
+  // for LLM review on the next turn. Declared before result so the filtering
+  // logic above can populate it, then it's attached to the result below.
+  const pendingEdits: NonNullable<FilesystemEditResult['pendingEdits']> = [];
+
   const result: FilesystemEditResult = {
     transactionId: transaction ? transaction.id : null,
     status: hasMutatingOperations ? 'auto_applied' : 'none',
@@ -302,6 +354,7 @@ export async function applyFilesystemEditsFromResponse(input: {
     requestedFiles: [],
     scopePath: input.scopePath,
     sessionId: extractSessionIdFromPath(input.scopePath) || input.conversationId,
+    pendingEdits: pendingEdits.length > 0 ? pendingEdits : undefined,
   };
 
   if (transaction) {

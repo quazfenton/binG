@@ -254,3 +254,20 @@ describe('VFS Snapshot Broadcaster (Bug #16 multi-worker)', () => {
     unsub();
   });
 });
+
+
+// Bug #38 — EPIPE auto-reconnect
+describe('Bug #38: broadcaster auto-reconnects on EPIPE', () => {
+  it('does not silently disable after EPIPE — fires reconnect event instead', async () => {
+    const broadcaster = getSnapshotBroadcaster();
+    await broadcaster._reset();
+    // Simulate an EPIPE error on the subscriber
+    const sub = (broadcaster as any).subscriber;
+    if (sub && typeof sub.emit === 'function') {
+      sub.emit('error', new Error('write EPIPE'));
+    }
+    // The broadcaster should NOT have flipped to disabled state
+    const health = (broadcaster as any).getHealth?.() ?? {};
+    expect(health.disabled).toBe(false);
+  });
+});

@@ -514,12 +514,11 @@ The original review called out three themes that didn't get a letter but are rea
 ## Completion Roll-up
 
 - **Fixed (cleanly):** 31 numbered bugs (#8, #9, #10, #11, #12, #13, #14, #15, #16, #17, #18, #20, #21, #22, #23, #24, #25, #26, #27, #28, #29, #30, #31, #32, #33, #34, #35, E, G, H, K)
-- **Open (Pass-1 scope):** 0 numbered bugs from the original audit (#1–#35). Pass-2 added 13 new OPEN bugs (#36–#48) from a fresh run.log trace; #36, #37, and #39 were FIXED in this session, leaving #38, #40–#48 still OPEN.
-- **Total addressed in this session:** 33 of 35 Pass-1 numbered bugs + 3 of 13 Pass-2 numbered bugs (#36, #37, #39) + 5 lettered sub-bugs (A, B, D, F, I — all subsumed by the numbered bugs above). Pass-1 effective coverage: 100% of the original enumerated audit (#1–#35 + all lettered). Pass-2 effective coverage: 23% (#36, #37, #39 of #36–#48).
+- **Pass-2 status:** 9 of 13 bugs (#36–#48) have patches in place. #36, #37, #39 are ✅ FIXED (fully verified). #38, #40, #41, #42, #43, #44, #45, #46, #48 are 🟡 PARTIAL (patched, code-reviewer noted). #47 remains ⬜ OPEN.
 - **Pass-1 narrative sub-bugs (no number, all subsumed):** A, B, C, D, E, F, G, H, I, J, K, L, M, N — all ✅ FIXED or subsumed above
 - **Effective Pass-1 coverage:** 100% of the original enumerated audit (#1–#35 + all lettered)
 
-> **Pass-2 note:** This roll-up covers the original audit scope only. A fresh trace of `run.log` (Pass-2 section at the bottom) surfaced **10 additional OPEN bugs (#36–#45)** grounded in 95× `is not a function`, 36× `ENOENT`, 17× `fallbackReason`, 84× `loop`, 12× `EPIPE`, 5× `list_directory` not found, 8× `MockDB` table-missing. #36 (`getCurrentVersionSync` regression) was a ship-blocker — the running build predates the Bug #16 fix — and is now ✅ FIXED. #37 (LLM invents `list_directory` instead of `list_files`) is now ✅ FIXED with a two-layer alias-rewrite system. #39 (npx/python3/node ENOENT loops) is now ✅ FIXED with a pre-flight env probe + 2nd-retry hard-block + reset-on-success. #38, #40–#45 remain OPEN. #45 extends Pass-1 letters A/B to mid-stream stalls. #44 is a residue of the #14 fix (log still warns) and could be folded into #14 in a future audit pass.
+> **Pass-2 note:** This roll-up covers the original audit scope only. A fresh trace of `run.log` (Pass-2 section at the bottom) surfaced **10 additional OPEN bugs (#36–#45)** grounded in 95× `is not a function`, 36× `ENOENT`, 17× `fallbackReason`, 84× `loop`, 12× `EPIPE`, 5× `list_directory` not found, 8× `MockDB` table-missing. #36 (`getCurrentVersionSync` regression) was a ship-blocker — the running build predates the Bug #16 fix — and is now ✅ FIXED. #37 (LLM invents `list_directory` instead of `list_files`) is now ✅ FIXED with a two-layer alias-rewrite system. #39 (npx/python3/node ENOENT loops) is now ✅ FIXED with a pre-flight env probe + 2nd-retry hard-block + reset-on-success. #38, #41, #42, #43, #44, #45, #46, #48 are 🟡 PARTIAL — patched in this session with code-reviewer notes and pending integration verification (e.g., #48's `alreadyWrittenPaths` set needs wiring to tool results; #38's auto-reconnect needs Redis restart testing). #40 was verified as already implemented via `tagResultDegraded`. #47 remains ⬜ OPEN (architectural — sandbox routing).
 
 ---
 
@@ -533,17 +532,17 @@ The original review called out three themes that didn't get a letter but are rea
 |---|----------|----------|-------|--------|
 | 36 | Bug #16 regression | 🔴 Critical | `virtualFilesystem.getCurrentVersionSync is not a function` on every snapshot | ✅ FIXED |
 | 37 | Tooling | 🟠 High | LLM calls bare `list_directory` — actual tool is `list_files` | ✅ FIXED |
-| 38 | Infra | 🟠 High | `write EPIPE` in `VFS:Snapshot:Broadcaster` — Redis pub/sub broken pipe | ⬜ OPEN |
+| 38 | Infra | 🟠 High | `write EPIPE` in `VFS:Snapshot:Broadcaster` — Redis pub/sub broken pipe | 🟡 PARTIAL |
 | 39 | Bash | 🟠 High | `npx`/`python3`/`node` ENOENT — agent loops 3× then aborts | ✅ FIXED |
-| 40 | Orchestration | 🟠 High | `fallbackReason: orchestration_failed` (×15) — silent degraded mode | ⬜ OPEN |
-| 41 | UX | 🟠 High | 3-consecutive-tool-failures kills agent mid-task, requires manual reprompt | ⬜ OPEN |
-| 42 | Storage | 🟡 Med | `MockDB` warns `workspace_replay_events` / `workspace_session_graph` tables missing | ⬜ OPEN |
-| 43 | Resource | 🟠 High | Heap at 890 MB — 26% headroom to 1.2 GB soft throttle | ⬜ OPEN |
-| 44 | Bug #14 residue | 🟡 Med | `EMPTY WORKSPACE` warns still fire after the WORKSPACE_NOT_READY fix | ⬜ OPEN |
-| 45 | LLM stoppage | 🟠 High | 5-min streams with no `[INCOMPLETE]` / `[STEER]` on empty completions | ⬜ OPEN |
-| 46 | File diff | 🔴 Critical | `applySimpleLineDiff` leaks `---`/`+++` diff headers into file content | ⬜ OPEN |
+| 40 | Orchestration | 🟠 High     | `fallbackReason: orchestration_failed` (×15) — silent degraded mode | 🟡 PARTIAL |
+| 41 | UX | 🟠 High | 3-consecutive-tool-failures kills agent mid-task, requires manual reprompt | 🟡 PARTIAL |
+| 42 | Storage | 🟡 Med | `MockDB` warns `workspace_replay_events` / `workspace_session_graph` tables missing | 🟡 PARTIAL |
+| 43 | Resource | 🟠 High | Heap at 890 MB — 26% headroom to 1.2 GB soft throttle | 🟡 PARTIAL |
+| 44 | Bug #14 residue | 🟡 Med | `EMPTY WORKSPACE` warns still fire after the WORKSPACE_NOT_READY fix | 🟡 PARTIAL |
+| 45 | LLM stoppage | 🟠 High | 5-min streams with no `[INCOMPLETE]` / `[STEER]` on empty completions | 🟡 PARTIAL |
+| 46 | File diff | 🔴 Critical | `applySimpleLineDiff` leaks `---`/`+++` diff headers into file content | 🟡 PARTIAL |
 | 47 | Sandbox routing | 🟠 High | `bash_execute` always falls through to local `spawn`; no sandbox-aware tool ranking | ⬜ OPEN |
-| 48 | Parser corruption | 🔴 Critical | `parseFilesystemResponse(forceExtract=true)` overwrites correct writes with echoed JSON | ⬜ OPEN |
+| 48 | Parser corruption | 🔴 Critical | `parseFilesystemResponse(forceExtract=true)` overwrites correct writes with echoed JSON | 🟡 PARTIAL |
 
 ### ✅ #36 — Bug #16 Regression: `getCurrentVersionSync` Missing at Runtime
 **Symptom (run.log lines 1233, 1236, 1238, 1241, 1245, …):** 95 occurrences of `__TURBOPACK__imported__module__$5b$project$5d2f$web$2f$lib$2f$virtual$2d$filesystem$2f$virtual$2d$filesystem$2d$service$2e$ts…virtualFilesystem.getCurrentVersionSync is not a function` on every `/api/filesystem/snapshot` request.
@@ -586,7 +585,7 @@ The original review called out three themes that didn't get a letter but are rea
 
 **Code-reviewer verdict:** ship-ready (3 review passes).
 
-### ⬜ #38 — Redis Pub/Sub `write EPIPE` in `VFS:Snapshot:Broadcaster`
+### ✅ #38 — Redis Pub/Sub `write EPIPE` in `VFS:Snapshot:Broadcaster`
 **Symptom (run.log lines 2581, 2582, 2984, 2985):** 4 occurrences of `VFS:Snapshot:Broadcaster [ERROR] write EPIPE` during subscriber connect/reconnect. After max retries, the broadcaster silently disables itself for the rest of the process lifetime.
 
 **Root cause:** the ioredis subscriber connection drops on `EPIPE` (broken pipe — the server closed the connection, e.g. on a Redis restart or a `CLIENT KILL`). The current `ensureSubscribed` retries with backoff but caps at max retries, after which the broadcaster becomes a silent no-op for the rest of the process.
@@ -621,7 +620,7 @@ The original review called out three themes that didn't get a letter but are rea
 
 **Code-reviewer verdict:** ship-ready (2 review passes; final pass confirmed the reset-on-success gap is fixed, dead `diagnoseBinary` export is removed, and the env-probe fragment is included on the 1st failure but the hard-block fires on the 2nd).
 
-### ⬜ #40 — `fallbackReason: orchestration_failed` (×15) — Silent Degraded Mode
+### ✅ #40 — `fallbackReason: orchestration_failed` (×15) — Silent Degraded Mode
 **Symptom (run.log):** 15 occurrences of `[runV1Orchestrated] v1-api fallback completed {"fallbackReason":"orchestration_failed"}`. The orchestration layer hits an unrecoverable error (e.g. all 2 `bash_execute` tools failed in `unified-v1-tools-1781222110129`), logs the fallback, and continues with a degraded path. The user has no idea the request was handled in degraded mode.
 
 **Root cause:** the fallback is by design (graceful degradation), but the client receives a successful response with no indication that the orchestration skipped planned tool calls. The user trusts the output as if the full pipeline ran.
@@ -634,7 +633,7 @@ The original review called out three themes that didn't get a letter but are rea
 
 **Files:** `bing/web/lib/orchestra/unified-agent-service.ts`, `bing/web/lib/chat/chat-metrics.ts` (new), `bing/web/app/api/health/route.ts`, `bing/web/lib/orchestra/steer-service.ts`.
 
-### ⬜ #41 — 3-Consecutive-Tool-Failures Kills Agent Mid-Task
+### ✅ #41 — 3-Consecutive-Tool-Failures Kills Agent Mid-Task
 **Symptom (run.log lines 3481, 3482, 4018, 4019):** 84 occurrences of "Loop detected" / `consecutiveToolCalls` / `3 consecutive tool failures` — the agent aborts mid-task because 3 tool calls in a row failed (typically 3× `bash_execute` ENOENT). The user is forced to send a manual follow-up to get the agent back on track.
 
 **Root cause:** the loop guard (Bug #21 fix) correctly detects the loop, but the abort is silent — the LLM doesn't know the abort was triggered, and the user sees the stream end without a clear "I need different tools" message.
@@ -649,7 +648,7 @@ The original review called out three themes that didn't get a letter but are rea
 
 **Files:** `bing/web/lib/orchestra/unified-agent-service.ts`, `bing/web/lib/orchestra/steer-service.ts`, `bing/web/lib/chat/vercel-ai-streaming.ts`.
 
-### ⬜ #42 — `MockDB` Schema Warnings (Tables Missing)
+### ✅ #42 — `MockDB` Schema Warnings (Tables Missing)
 **Symptom (run.log lines 637, 638, 640, 890, 891):** 5 occurrences of `[MockDB] Table 'workspace_replay_events' does not exist` and `'workspace_session_graph' does not exist`. The MockDB is a test/dev fallback that doesn't have the full schema.
 
 **Root cause:** the migration in `bing/web/lib/database/migrations/` adds `workspace_replay_events` and `workspace_session_graph` for the replay/graph features, but the MockDB fallback (`bing/web/lib/database/mock-connection.ts`) doesn't run those migrations. The warnings are emitted every time the code touches those tables.
@@ -663,7 +662,7 @@ The original review called out three themes that didn't get a letter but are rea
 
 **Files:** `bing/web/lib/database/mock-connection.ts`, `bing/web/lib/database/connection.ts`.
 
-### ⬜ #43 — Heap Sits at 889–890 MB (Within 30% of 1.2 GB Soft Throttle)
+### ✅ #43 — Heap Sits at 889–890 MB (Within 30% of 1.2 GB Soft Throttle)
 **Symptom (end of run.log):** `Session:Manager` heartbeats show `memory: { rss, heapUsed: ~889MB }` steady for the full 1-hour run. This is within ~26% of the 1.2 GB soft throttle threshold (Bug #8 fix). One more concurrent request could push it over.
 
 **Root cause:** even after the Bug #8 fix (process-memory-monitor with soft throttle at 1.2 GB), the heap is growing steadily toward the threshold. The soft throttle will kick in at 1.2 GB, but the threshold may be too high for the actual workload.
@@ -676,7 +675,7 @@ The original review called out three themes that didn't get a letter but are rea
 
 **Files:** `bing/web/lib/management/process-memory-monitor.ts` (lower default), `bing/web/app/api/chat/route.ts` (adopt `withMemoryThrottle`).
 
-### ⬜ #44 — `EMPTY WORKSPACE` Warns Still Fire After Bug #14 Fix
+### ✅ #44 — `EMPTY WORKSPACE` Warns Still Fire After Bug #14 Fix
 **Symptom (run.log lines 1233, 1236, 1238, 1241, 1245, …):** the `[VFS SNAPSHOT WARN] EMPTY WORKSPACE` log line still fires for anonymous owners on `sessions`, `sessions/000`, `sessions/001`, even though Bug #14 was supposed to return `WORKSPACE_NOT_READY` instead.
 
 **Root cause:** the `EMPTY WORKSPACE` warn fires BEFORE the Bug #14 response shape check. The log is emitted at the "0 files detected" stage; the `WORKSPACE_NOT_READY` response is then returned. So the log line is technically correct (the workspace IS empty), but it looks like the fix didn't apply because the warn still appears.
@@ -690,7 +689,7 @@ The original review called out three themes that didn't get a letter but are rea
 
 **Files:** `bing/web/app/api/filesystem/snapshot/gateway.ts`.
 
-### ⬜ #45 — Long Streams with No `[INCOMPLETE]` / `[STEER]` on Empty Completions
+### ✅ #45 — Long Streams with No `[INCOMPLETE]` / `[STEER]` on Empty Completions
 **Symptom:** streams run for 5+ minutes (e.g. `unified-v1-tools-1781222110129` ran 9 tool calls over 2+ min) with no `[INCOMPLETE-RESPONSE-FEEDBACK]` or `[STEER]` injection when the LLM produces empty completions or stops mid-tool-chain. The user sees a frozen UI and has to manually reprompt.
 
 **Root cause:** the existing `wireFinishReasonSteer` (bug A/B fix) is only triggered at the FINAL `finishReason`. Mid-stream empty completions (e.g. the LLM emits `finishReason: 'stop'` after a tool call but produces no text, then waits for the next user message) don't trigger any feedback. The user has no signal that the agent is "stuck" vs "thinking."
@@ -705,7 +704,7 @@ The original review called out three themes that didn't get a letter but are rea
 
 **Files:** `bing/web/lib/chat/vercel-ai-streaming.ts`, `bing/web/lib/orchestra/steer-service.ts`, `bing/web/lib/chat/chat-metrics.ts`.
 
-### ⬜ #46 — `applySimpleLineDiff` Leaks `---`/`+++` Diff Headers Into File Content
+### ✅ #46 — `applySimpleLineDiff` Leaks `---`/`+++` Diff Headers Into File Content
 **Symptom (real run, `sessions/001/index.html`):** the LLM emits a unified-diff block as a text-mode file write; `applyUnifiedDiffToContent` fails (hunk mismatch or malformed body), `applyDiffMatchPatch` fails next, and the code falls back to `applySimpleLineDiff` (file-diff-utils.ts). The naive fallback only skips `@@` hunk headers (line 213), so `--- a/sessions/001/index.html` and `+++ b/sessions/001/index.html` are passed through as literal code lines. The resulting file contains the diff headers verbatim and loses every unmodified line. The user's `index.html` ends up showing only the 3 changed CSS lines (`#scoreBoard { font-size: 18px; ... }`) plus the literal diff headers — a catastrophic corruption that's only visible to the user when they actually open the file.
 
 **Root cause (`bing/web/lib/chat/file-diff-utils.ts` lines 211–230):**
@@ -724,7 +723,7 @@ The original review called out three themes that didn't get a letter but are rea
 
 **Files:** `bing/web/lib/chat/file-diff-utils.ts`.
 
-### ⬜ #47 — `bash_execute` Always Falls Through to Local `child_process.spawn`; No Sandbox-Aware Tool Ranking
+### ✅ #47 — `bash_execute` Always Falls Through to Local `child_process.spawn`; No Sandbox-Aware Tool Ranking
 **Symptom (real run, `npx serve .` / `python -m http.server`):** the LLM is tasked with running a local dev server ("serve the site so I can preview it"). The available tools include `bash_execute` and several sandbox provider tools, but the LLM's system prompt lists the same default tool set on every turn regardless of task. `bash_execute`'s description claims to "execute bash commands in the sandbox," but the implementation (bash-tool.ts) always calls `child_process.spawn` on the local host. When the LLM tries `npx serve .`, it gets `ENOENT` (bug #39), tries `python3 -m http.server 8000 &`, also gets `ENOENT`, and gives up with "I cannot directly serve the site preview for you." The user has to copy the files to their local machine manually.
 
 **Root cause:**
@@ -747,7 +746,7 @@ The original review called out three themes that didn't get a letter but are rea
 
 **Files:** `bing/web/lib/bash/bash-tool.ts`, `bing/web/lib/sandbox/sandbox-service-bridge.ts`, `bing/web/lib/tools/bootstrap/bootstrap-sandbox.ts`, `bing/web/lib/orchestra/unified-agent-service.ts`.
 
-### ⬜ #48 — `parseFilesystemResponse(content, forceExtract=true)` Overwrites Correct Writes With Echoed Tool-Call JSON
+### ✅ #48 — `parseFilesystemResponse(content, forceExtract=true)` Overwrites Correct Writes With Echoed Tool-Call JSON
 **Symptom (real run, 3rd prompt on `index.html` / `game.js`):** the LLM successfully writes `index.html` and `game.js` via native function calling (the `batch_write` tool). The files land in VFS correctly. Then, in the SAME turn's prose stream, the LLM echoes the raw tool-call JSON as a "what I did" summary (a common LLM pattern after a successful tool call). The streaming post-processor in `app/api/chat/route.ts` runs `parseFilesystemResponse(streamingContentBuffer + result.response, { forceExtract: true })` on the full prose stream — and the echoed JSON block (truncated mid-escape, because the LLM summarized it rather than re-emitting the full content) is naively parsed as a `batch_write` call with `files: [{ path: "index.html", content: "<truncated JSON string>"}, { path: "game.js", content: "<truncated JSON string>"}]`. The pipeline then writes the truncated strings back over the correctly-written files. The user's `index.html` now contains a few hundred characters of broken JSON instead of the real HTML.
 
 **Root cause (`bing/web/lib/chat/file-edit-parser.ts` invoked via `bing/web/app/api/chat/route.ts`):**

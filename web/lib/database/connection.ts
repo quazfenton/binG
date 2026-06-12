@@ -220,6 +220,11 @@ function getMockDatabase() {
         hitl_audit_logs: [],
         // Workspace snapshot tables (from migration 025)
         workspace_snapshots: [],
+        // Replay & graph tables (from migrations 021, 023) —
+        // loaded by execSchemaFile for real DB, but MockDB needs them
+        // explicitly to avoid [MockDB] Table does not exist warnings.
+        workspace_replay_events: [],
+        workspace_session_graph: [],
       };
 
       // Initialize tables from schema immediately
@@ -351,7 +356,7 @@ function parseSetPair(pair: string): { col: string; value: any; rawValue?: strin
           const stmt = {
             run: (...params: any[]) => {
               if (!tables[actualTable]) {
-                logger.warn(`[MockDB] Table '${actualTable}' does not exist`);
+                logger.debug(`[MockDB] Table '${actualTable}' does not exist in mock`);
                 return { lastInsertRowid: 1, changes: 0 };
               }
 

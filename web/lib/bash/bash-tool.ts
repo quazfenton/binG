@@ -587,6 +587,75 @@ async function getVFSSnapshot(
 // ============================================================================
 
 /**
+ * Bug #47 — Sandbox-aware bash routing.
+ *
+ * If the user has an active sandbox session (created via
+ * `sandboxBridge.getOrCreateSession(userId)`), route the bash command through
+ * the sandbox provider instead of falling through to local `child_process.spawn`.
+ *
+ * This closes the gap where bash_execute always ran on the local host, causing
+ * ENOENT for sandbox-only binaries (e.g. `npx serve`, `node` in a fresh sandbox
+ * with no dev deps) and breaking tasks that need a development environment.
+ *
+ * Falls back to local spawn when no sandbox is active (dev mode without a
+ * sandbox provider, or sandbox creation failed). The `routed: false` signal
+ * tells the caller to proceed with the existing local-execution path.
+ *
+ * Lazy-loads the sandboxBridge to keep bash-tool.ts import-light and avoid
+ * pulling the sandbox stack into the module-init path.
+ */
+async function trySandboxRoute(
+  agentId: string,
+  command: string,
+  workingDir: string,
+  timeout?: number,
+): Promise<{
+  routed: boolean;
+  sandboxId?: string;
+  result: BashExecutionResult;
+}> {
+  try {
+    const { sandboxBridge } = await import('@/lib/sandbox/sandbox-service-bridge');
+    const session = sandboxBridge.getSessionByUserId(agentId);
+    if (!session || !session.sandboxId) {
+      return { routed: false, result: { success: false, stdout: '', stderr: '', exitCode: -1, duration: 0, command, workingDir } };
+    }
+    const startTime = Date.now();
+    const execResult = await sandboxBridge.executeCommand(session.sandboxId, command, workingDir);
+    const duration = Date.now() - startTime;
+    // Map sandbox-provider result to BashExecutionResult shape.
+    // CRITICAL (review fix): do NOT short-circuit on truthy `success` — some
+    // sandbox providers return `{ success: true, exitCode: 1 }` for soft-fail
+    // states. Treat `success` as authoritative; fall back to exitCode only
+    // when `success` is undefined. Also default missing exitCode to -1 (not 0)
+    // so sandbox crashes are not silently masked as success.
+    const sx = (execResult as any) ?? {};
+    const hasSuccess = typeof sx.success === 'boolean';
+    const result: BashExecutionResult = {
+      success: hasSuccess ? Boolean(sx.success) : (typeof sx.exitCode === 'number' ? sx.exitCode === 0 : false),
+      stdout: typeof sx.stdout === 'string' ? sx.stdout : '',
+      stderr: typeof sx.stderr === 'string' ? sx.stderr : '',
+      exitCode: typeof sx.exitCode === 'number' ? sx.exitCode : -1,
+      duration,
+      command,
+      workingDir,
+    };
+    // Bug #39: clear the hard-block retry counter for this binary on success
+    const baseCmd = command.trim().split(/\s+/)[0]?.toLowerCase();
+    if (result.success && baseCmd) {
+      resetMissingBinaryRetry(baseCmd);
+    }
+    return { routed: true, sandboxId: session.sandboxId, result };
+  } catch (err: any) {
+    logger.debug('Bug #47: sandboxBridge unavailable or executeCommand failed, falling back to local spawn', {
+      error: err?.message,
+      agentId,
+    });
+    return { routed: false, result: { success: false, stdout: '', stderr: '', exitCode: -1, duration: 0, command, workingDir } };
+  }
+}
+
+/**
  * Create bash tool for LLM
  */
 export function createBashTool(config: Partial<BashToolConfig> = {}) {
@@ -621,6 +690,37 @@ export function createBashTool(config: Partial<BashToolConfig> = {}) {
         }
 
         const commandToUse = actualCommand;
+
+        // Bug #47: route through sandboxBridge when an active sandbox session
+        // exists for this user. Closes the gap where bash_execute always fell
+        // through to local `child_process.spawn`, causing ENOENT for sandbox-
+        // specific binaries (npx serve, etc.) and breaking tasks that need a
+        // development environment. Falls back to local spawn if no sandbox is
+        // active (e.g. dev mode without a sandbox provider configured).
+        const sandboxRoute = await trySandboxRoute(agentId, commandToUse, wd, timeout);
+        if (sandboxRoute.routed) {
+          logger.info('Bug #47: routed bash_execute through sandboxBridge', {
+            agentId,
+            sandboxId: sandboxRoute.sandboxId,
+            command: commandToUse.slice(0, 80),
+          });
+          if (persist) {
+            const decision = shouldPersistBashOutput(actualCommand, sandboxRoute.result, cfg);
+            if (decision.persist) {
+              const outputPath = await persistToVFS(cfg.persistToVFS, agentId, actualCommand, sandboxRoute.result);
+              if (outputPath) sandboxRoute.result.outputPath = outputPath;
+            }
+          }
+          return {
+            success: sandboxRoute.result.success,
+            output: sandboxRoute.result.stdout,
+            error: sandboxRoute.result.stderr,
+            exitCode: sandboxRoute.result.exitCode,
+            duration: sandboxRoute.result.duration,
+            outputPath: sandboxRoute.result.outputPath,
+            _routed: 'sandbox',
+          };
+        }
 
         if (!isCommandSafe(commandToUse)) {
           throw new Error(`Command blocked by safety filter: ${commandToUse.slice(0, 100)}`);

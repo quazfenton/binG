@@ -73,7 +73,7 @@ import {
   generateTrackerSummary,
 } from '@bing/shared/agent/successive-tracker';    // [STEER] wiring: when the consecutive/total tool-call cap fires, give the LLM
 // an explicit text-mode fallback instead of an abrupt cutoff. Closes #21.
-import { wireConsecutiveToolCapSteer, wireOrchestrationFallbackSteer, safeSteer } from './steer-service';
+import { wireConsecutiveToolCapSteer, wireOrchestrationFallbackSteer, wireLoopAbortSteer, safeSteer } from './steer-service';
 // Bug #40: per-session orchestration-fallback counter. Incremented in
 // tagResultDegraded so /api/health?detailed can surface the count.
 import { incrementOrchestrationFallback } from '@/lib/observability/degradation-tracker';
@@ -3425,12 +3425,24 @@ async function runV1ApiWithTools(
             const loopMsg = recordStepAndCheckLoop(loopState, toolDef.name, args, toolResult.success);
             if (loopMsg) {
               log.warn(`[V1-API-WITH-TOOLS] Loop detected: ${loopMsg}`);
+              // Bug #41: emit categorized loop-abort steer so the LLM knows WHY
+              // the loop was triggered (binary_missing, wrong_tool_name, timeout, unknown)
+              // and gets a concrete suggestion for what to do next.
+              const abortSteer = wireLoopAbortSteer({
+                consecutive: loopState.consecutiveFailures,
+                recentFailures: loopState.recentFailures.slice(-3).map((f: any) => ({
+                  name: f.toolName || toolDef.name,
+                  error: f.error || 'unknown',
+                })),
+              });
+              const steerSuffix = abortSteer ? `\n\n${abortSteer.steer}` : '';
               return {
                 success: false,
-                output: loopMsg,
+                output: loopMsg + steerSuffix,
                 exitCode: 1,
-                error: loopMsg,
+                error: loopMsg + steerSuffix,
                 _agentShouldStop: true,
+                _loopAbort: abortSteer?.abort,
               };
             }
 
