@@ -12,7 +12,7 @@ import {
   extractFileEditsWithStatus,
   extractFileEdits,
   isValidExtractedPath,
-} from './file-edit-parser';
+} from '../file-edit-parser';
 
 // ============================================================================
 // Backward compat — extractFileEdits still returns FileEdit[]

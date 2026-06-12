@@ -56,6 +56,9 @@ export const SSE_EVENT_TYPES = {
   NEXT: 'next',
   /** Progressive build loop iteration progress */
   PROGRESSIVE_BUILD: 'progressive_build',
+  /** Bug #41: loop-guard abort — emitted when the 3-consecutive-tool-failures
+   *  kill fires. UI surfaces this as a banner with the categorized reason. */
+  LOOP_ABORT: 'loop_abort',
 } as const;
 
 export type SSEEventTypeName = typeof SSE_EVENT_TYPES[keyof typeof SSE_EVENT_TYPES];
@@ -347,6 +350,29 @@ export interface SSENexPayload {
   timestamp: number;
 }
 
+/**
+ * Bug #41: loop-guard abort payload. Emitted as the FINAL SSE event when the
+ * 3-consecutive-tool-failures kill fires. The UI shows a banner with the
+ * categorized reason (binary_missing | wrong_tool_name | timeout | unknown),
+ * the failed tool list, and the recovery suggestion.
+ */
+export interface SSELoopAbortPayload {
+  /** Categorized abort reason for the UI banner. */
+  abortReason: 'binary_missing' | 'wrong_tool_name' | 'timeout' | 'unknown';
+  /** Number of consecutive failures that triggered the kill. */
+  consecutive: number;
+  /** Last N failed tool calls (name + error preview) so the UI can show details. */
+  failedTools: Array<{ name: string; error: string }>;
+  /** Human-readable recovery suggestion. */
+  suggestion: string;
+  /** Auto-recovery target tool (e.g. 'write_file' for binary_missing aborts). */
+  autoRecoverTo?: string;
+  /** The [STEER] prompt the LLM received — useful for log/grep correlation. */
+  steer?: string;
+  /** Timestamp */
+  timestamp: number;
+}
+
 /** Progressive build loop event — emitted at each iteration and completion */
 export interface SSEProgressiveBuildPayload {
   /** Stage of the build loop */
@@ -409,7 +435,8 @@ export type SSEEvent =
   | { type: typeof SSE_EVENT_TYPES.HEARTBEAT; data: Record<string, unknown> }
   | { type: typeof SSE_EVENT_TYPES.AUTO_CONTINUE; data: SSEAutoContinuePayload }
   | { type: typeof SSE_EVENT_TYPES.NEXT; data: SSENexPayload }
-  | { type: typeof SSE_EVENT_TYPES.PROGRESSIVE_BUILD; data: SSEProgressiveBuildPayload };
+  | { type: typeof SSE_EVENT_TYPES.PROGRESSIVE_BUILD; data: SSEProgressiveBuildPayload }
+  | { type: typeof SSE_EVENT_TYPES.LOOP_ABORT; data: SSELoopAbortPayload };
 
 // ---------------------------------------------------------------------------
 // Encoder helpers (backend)

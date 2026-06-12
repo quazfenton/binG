@@ -12,7 +12,7 @@
  * regress the 5-min "agent stuck on `npx`" loop.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // Lazy-load to ensure `_resetEnvProbeForTests()` runs before module init
 const loadProbe = async () => {
@@ -168,6 +168,165 @@ describe('env-probe (Bug #39)', () => {
       // — both forms satisfy the cache invariant, but contents is what
       // callers care about.
       expect(Array.from(result2.entries())).toEqual(Array.from(result1.entries()));
+    });
+  });
+
+  /**
+   * Bug #39 follow-up: `resetMissingBinaryRetry` was wired into the LLM
+   * tool's success path but NOT into `executeBashCommand` itself. Direct
+   * callers (executeBashViaEvent, test harnesses, future entry points) would
+   * leave the hard-block retry counter stale, so a transient PATH issue
+   * could permanently block a binary. The fix pushes the reset one line
+   * before `resolve(result)` in `executeBashCommand`'s close handler, gated
+   * on `exitCode === 0`.
+   *
+   * Test strategy: mock `child_process.spawn` via `vi.mock` so we can fire
+   * the `close` handler with a controlled `exitCode` and assert the reset
+   * fires deterministically. This avoids the test-env fragility of the
+   * earlier `/bin/true` approach (workingDir/safeEnv/POIX path layout all
+   * vary between dev, CI, and containers).
+   */
+  describe('executeBashCommand cross-caller reset (Bug #39 follow-up)', () => {
+    /**
+     * Build a fake ChildProcess-like EventEmitter that fires `close` with
+     * the given `exitCode` on the next tick. Returns the emitter so the
+     * test can inspect `spawn` call args.
+     */
+    function makeFakeChild(exitCode: number | null): {
+      proc: any;
+      onSpy: ReturnType<typeof vi.fn>;
+    } {
+      const { EventEmitter } = require('node:events');
+      const proc = new EventEmitter();
+      // Fire `close` on next tick so the `await` in executeBashCommand
+      // has a chance to attach its handlers first.
+      process.nextTick(() => proc.emit('close', exitCode, null));
+      return { proc, onSpy: vi.fn() };
+    }
+
+    it('clears the hard-block retry counter on exitCode===0 (success path)', async () => {
+      vi.resetModules();
+      const {
+        incrementMissingBinaryRetry,
+        getMissingBinaryRetryCount,
+        _resetEnvProbeForTests,
+      } = await import('@/lib/bash/env-probe');
+      _resetEnvProbeForTests();
+
+      // Mock child_process.spawn to return a fake child that fires close(0).
+      // NOTE: bash-tool.ts uses `await import('child_process')` (no `node:`
+      // prefix), so the mock must match that exact specifier.
+      const spawnSpy = vi.fn(() => makeFakeChild(0).proc);
+      vi.doMock('child_process', () => ({ spawn: spawnSpy }));
+
+      const { executeBashCommand } = await import('@/lib/bash/bash-tool');
+
+      // Simulate the counter hitting the 2nd-ENOENT hard-block threshold.
+      incrementMissingBinaryRetry('npm');
+      incrementMissingBinaryRetry('npm');
+      expect(getMissingBinaryRetryCount('npm')).toBe(2);
+
+      // Direct call to executeBashCommand. The fake child fires close(0).
+      const result = await executeBashCommand('npm test');
+      expect(result.exitCode).toBe(0);
+      expect(result.success).toBe(true);
+
+      // Counter must be cleared.
+      expect(getMissingBinaryRetryCount('npm')).toBe(0);
+
+      vi.doUnmock('child_process');
+      vi.resetModules();
+    });
+
+    it('does NOT clear the counter when exitCode !== 0 (failure path)', async () => {
+      vi.resetModules();
+      const {
+        incrementMissingBinaryRetry,
+        getMissingBinaryRetryCount,
+        _resetEnvProbeForTests,
+      } = await import('@/lib/bash/env-probe');
+      _resetEnvProbeForTests();
+
+      const spawnSpy = vi.fn(() => makeFakeChild(1).proc);
+      vi.doMock('child_process', () => ({ spawn: spawnSpy }));
+
+      const { executeBashCommand } = await import('@/lib/bash/bash-tool');
+
+      incrementMissingBinaryRetry('npm');
+      incrementMissingBinaryRetry('npm');
+      expect(getMissingBinaryRetryCount('npm')).toBe(2);
+
+      const result = await executeBashCommand('npm test');
+      expect(result.exitCode).toBe(1);
+      expect(result.success).toBe(false);
+
+      // Counter preserved on failure.
+      expect(getMissingBinaryRetryCount('npm')).toBe(2);
+
+      vi.doUnmock('child_process');
+      vi.resetModules();
+    });
+
+    it('only clears the counter for the binary in the command, leaves others alone', async () => {
+      vi.resetModules();
+      const {
+        incrementMissingBinaryRetry,
+        getMissingBinaryRetryCount,
+        _resetEnvProbeForTests,
+      } = await import('@/lib/bash/env-probe');
+      _resetEnvProbeForTests();
+
+      const spawnSpy = vi.fn(() => makeFakeChild(0).proc);
+      vi.doMock('child_process', () => ({ spawn: spawnSpy }));
+
+      const { executeBashCommand } = await import('@/lib/bash/bash-tool');
+
+      incrementMissingBinaryRetry('npm');
+      incrementMissingBinaryRetry('npm');
+      incrementMissingBinaryRetry('node');
+      incrementMissingBinaryRetry('node');
+      expect(getMissingBinaryRetryCount('npm')).toBe(2);
+      expect(getMissingBinaryRetryCount('node')).toBe(2);
+
+      // `npm test` — node counter must NOT be touched.
+      const result = await executeBashCommand('npm test');
+      expect(result.exitCode).toBe(0);
+
+      expect(getMissingBinaryRetryCount('npm')).toBe(0);
+      expect(getMissingBinaryRetryCount('node')).toBe(2);
+
+      vi.doUnmock('child_process');
+      vi.resetModules();
+    });
+
+    it('is case-insensitive on the reset key (NPM and npm share the slot)', async () => {
+      vi.resetModules();
+      const {
+        incrementMissingBinaryRetry,
+        getMissingBinaryRetryCount,
+        _resetEnvProbeForTests,
+      } = await import('@/lib/bash/env-probe');
+      _resetEnvProbeForTests();
+
+      const spawnSpy = vi.fn(() => makeFakeChild(0).proc);
+      vi.doMock('child_process', () => ({ spawn: spawnSpy }));
+
+      const { executeBashCommand } = await import('@/lib/bash/bash-tool');
+
+      // Increment with uppercase — stored as lowercase per the env-probe contract.
+      incrementMissingBinaryRetry('NPM');
+      incrementMissingBinaryRetry('NPM');
+      expect(getMissingBinaryRetryCount('npm')).toBe(2);
+
+      const result = await executeBashCommand('npm test');
+      expect(result.exitCode).toBe(0);
+
+      // Same case-insensitive lookup — cleared.
+      expect(getMissingBinaryRetryCount('npm')).toBe(0);
+      expect(getMissingBinaryRetryCount('NPM')).toBe(0);
+
+      vi.doUnmock('child_process');
+      vi.resetModules();
     });
   });
 });

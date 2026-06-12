@@ -10,6 +10,10 @@ export default defineConfig({
       // doesn't trip on the package.json exports conditions. This is test-only
       // and does not affect production builds (Wrangler uses its own resolver).
       '@bing/shared': path.resolve(__dirname, 'packages/shared'),
+      // Same for @bing/platform — needed for unified-agent-service tests.
+      // Use full subpath aliases since @bing/platform isn't linked in node_modules.
+      '@bing/platform/env': path.resolve(__dirname, 'packages/platform/src/env.ts'),
+      '@bing/platform': path.resolve(__dirname, 'packages/platform/src'),
     },
   },
   test: {

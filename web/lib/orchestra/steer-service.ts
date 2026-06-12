@@ -153,6 +153,34 @@ export type SteerTrigger =
         canonical: string;
         tool?: string;
       };
+    }
+  | {
+      // Bug #41: emitted by wireLoopAbortSteer when the 3-consecutive-tool-failures
+      // loop-guard kills the agent. Categorizes the abort so the LLM knows
+      // whether to switch tools (binary_missing) or fix its tool-name (wrong_tool_name).
+      kind: 'loop_abort';
+      detail: {
+        abortReason: 'binary_missing' | 'wrong_tool_name' | 'timeout' | 'unknown';
+        consecutive: number;
+        failedTools: Array<{ name: string; error: string }>;
+        suggestion: string;
+      };
+    }
+  | {
+      // Bug #40: emitted by wireOrchestrationFallbackSteer when the orchestrator
+      // (PlanActVerify / StatefulAgent) degrades to v1-api text-mode fallback.
+      // The LLM on the next turn sees this hint and knows the previous turn
+      // was a degraded response, so it can adapt (e.g., not re-try the same
+      // complex multi-step plan that just exhausted the orchestrator budget).
+      kind: 'orchestration_fallback';
+      detail: {
+        fromMode: string;
+        toMode: string;
+        fallbackReason: string;
+        /** True when the orchestrator hit its budget cap (most common case). */
+        budgetExhausted: boolean;
+        suggestion: string;
+      };
     };
 
 export type SteerTriggerKind = SteerTrigger['kind'];
@@ -271,6 +299,38 @@ function renderBody(trigger: SteerTrigger): string {
         `summarize what you have so far in plain prose and stop emitting tool calls for this turn. ` +
         `If you need more tool calls to finish, say so explicitly so the orchestrator can ` +
         `start a follow-up turn with a fresh budget.`;
+    }
+
+    case 'capability_not_found': {
+      const { capabilityId, availableCapabilities, tool } = trigger.detail;
+      const known = (availableCapabilities || ['write_file', 'apply_diff', 'read_file', 'read_files', 'list_files', 'search_files', 'grep_code', 'batch_write', 'delete_file']).slice(0, 9);
+      return `Tool \`${tool}\` requested unknown capability \`${capabilityId}\`. ` +
+        `Available capabilities include: ${known.map(c => `\`${c}\``).join(', ')}. ` +
+        `Use one of the canonical tool names above (note the underscore, not camelCase).`;
+    }
+
+    case 'tool_name_alias_rewrite': {
+      const { alias, canonical, tool } = trigger.detail;
+      const src = tool ? ` (in ${tool})` : '';
+      return `Tool name \`${alias}\`${src} was auto-rewritten to canonical \`${canonical}\`. ` +
+        `On your next turn, use the canonical name \`${canonical}\` directly so the rewrite step is skipped.`;
+    }
+
+    case 'loop_abort': {
+      const { abortReason, consecutive, failedTools, suggestion } = trigger.detail;
+      const toolList = failedTools.length > 0
+        ? failedTools.map(t => `${t.name} (${truncate(t.error, 60)})`).join(', ')
+        : 'no tool details';
+      return `Loop-guard killed the agent after ${consecutive} consecutive tool failures ` +
+        `(abortReason=\`${abortReason}\`). Failed tools: ${toolList}. ${suggestion}`;
+    }
+
+    case 'orchestration_fallback': {
+      const { fromMode, toMode, fallbackReason, budgetExhausted, suggestion } = trigger.detail;
+      const reasonLabel = budgetExhausted ? 'budget exhausted' : 'orchestrator degraded';
+      return `Your previous turn ran in \`${fromMode}\` mode but degraded to \`${toMode}\` (${reasonLabel}: ${truncate(fallbackReason, 200)}). ` +
+        `The previous response is DEGRADED — do NOT continue the multi-step plan that failed. ` +
+        `${suggestion}`;
     }
   }
 }
@@ -582,6 +642,8 @@ export const ALL_STEER_TRIGGER_KINDS: readonly SteerTriggerKind[] = [
   'consecutive_tool_cap',
   'capability_not_found',
   'tool_name_alias_rewrite',
+  'loop_abort',
+  'orchestration_fallback',
 ] as const;
 
 // ============================================================================
@@ -838,6 +900,118 @@ export const incompleteConfidenceThreshold = {
   get: getIncompleteConfidenceThreshold,
 };
 
+// ============================================================================
+// Bug #41: categorizeAbortReason + wireLoopAbortSteer
+//
+// When the 3-consecutive-tool-failures loop-guard kills the agent, we need
+// to (a) categorize the abort so the LLM knows what went wrong, (b) emit
+// a [STEER] that tells it what to do next, and (c) surface the abort
+// reason to the UI as a final SSE event so it can show a banner.
+//
+// categorizeAbortReason() inspects the last N failed tool calls and picks
+// the dominant failure mode:
+//   - binary_missing    — all N failures are ENOENT for the same binary
+//   - wrong_tool_name   — all N failures are capability_not_found / alias_rewrite
+//   - timeout           — all N failures are idle_timeout / TIMEOUT-TTFT
+//   - unknown           — anything else (mixed, or unclassifiable)
+//
+// wireLoopAbortSteer() builds the [STEER] prompt + a structured abort
+// payload (for the SSE event) in one call. The suggestion is tailored
+// to the abort reason so the LLM gets a specific, actionable next step.
+// ============================================================================
+
+/**
+ * Categorize the abort reason for a 3-consecutive-tool-failures kill.
+ * Inspects the recent failure history and picks the dominant failure mode.
+ *
+ * @param recentFailures — The last N tool-call failures, each with name + error.
+ * @returns The dominant abort reason. `unknown` if mixed or unclassifiable.
+ */
+export function categorizeAbortReason(
+  recentFailures: ReadonlyArray<{ name: string; error: string }>,
+): 'binary_missing' | 'wrong_tool_name' | 'timeout' | 'unknown' {
+  if (recentFailures.length === 0) return 'unknown';
+
+  let enoentCount = 0;
+  let notFoundCount = 0;
+  let timeoutCount = 0;
+
+  for (const f of recentFailures) {
+    const err = (f.error || '').toLowerCase();
+    if (/enoent/.test(err) || /not found/.test(err) && /spawn/.test(err)) {
+      enoentCount += 1;
+    } else if (/capability not found|unknown capability|no such tool|tool not registered/.test(err)) {
+      notFoundCount += 1;
+    } else if (/timeout|timed out|stall/.test(err) || /TIMEOUT-TTFT/.test(f.error)) {
+      timeoutCount += 1;
+    }
+  }
+
+  const total = recentFailures.length;
+  // Dominant: at least half the failures match the category.
+  if (enoentCount >= total / 2) return 'binary_missing';
+  if (notFoundCount >= total / 2) return 'wrong_tool_name';
+  if (timeoutCount >= total / 2) return 'timeout';
+  return 'unknown';
+}
+
+/**
+ * Get the recovery suggestion for a given abort reason. The suggestion is
+ * a short, actionable sentence the LLM can use to self-correct on the next
+ * turn (e.g. "switch to write_file" for binary_missing).
+ */
+function abortReasonSuggestion(abortReason: 'binary_missing' | 'wrong_tool_name' | 'timeout' | 'unknown'): string {
+  switch (abortReason) {
+    case 'binary_missing':
+      return 'Switch to `write_file` / `read_file` / `apply_diff` for file operations — the binary you were calling is not installed. See the "Available Binaries" list in your system prompt.';
+    case 'wrong_tool_name':
+      return 'Check the canonical tool names in your system prompt (underscore, not camelCase). The tool you were calling is not registered.';
+    case 'timeout':
+      return 'Break the request into smaller pieces. The current task is too large for a single turn.';
+    case 'unknown':
+      return 'Review the recent tool-call errors and try a different approach. The same pattern of failures triggered the loop-guard.';
+  }
+}
+
+/**
+ * Build a [STEER] prompt for a 3-consecutive-tool-failures kill. Categorizes
+ * the abort reason, generates a recovery suggestion, and returns both the
+ * steer prompt AND a structured abort payload for the SSE event.
+ *
+ * @returns `{ steer, abort }` where `steer` is the [STEER] prompt and
+ *          `abort` is the structured payload for the final SSE event.
+ */
+export function wireLoopAbortSteer(input: {
+  consecutive: number;
+  recentFailures: ReadonlyArray<{ name: string; error: string }>;
+}): { steer: string; abort: { abortReason: 'binary_missing' | 'wrong_tool_name' | 'timeout' | 'unknown'; consecutive: number; failedTools: Array<{ name: string; error: string }>; suggestion: string; promptLength: number } } | null {
+  const { consecutive, recentFailures } = input;
+  if (consecutive < 1) return null;
+
+  const abortReason = categorizeAbortReason(recentFailures);
+  const suggestion = abortReasonSuggestion(abortReason);
+  const failedTools = recentFailures.map(f => ({ name: f.name, error: f.error }));
+
+  const trigger: SteerTrigger = {
+    kind: 'loop_abort',
+    detail: { abortReason, consecutive, failedTools: [...failedTools], suggestion },
+  };
+
+  const steer = buildSteerPrompt(trigger);
+  // Bug #41: record the fire in the dedicated loop_abort bucket. The other
+  // wire* helpers all call recordFire after buildSteerPrompt; loop_abort must
+  // too so the steer metrics surface counts the kill in run.log audits.
+  steerMetrics.recordFire('loop_abort');
+  const abort = {
+    abortReason,
+    consecutive,
+    failedTools,
+    suggestion,
+    promptLength: steer.length,
+  };
+  return { steer, abort };
+}
+
 /**
  * Build a steer from an ENOENT/EACCES bash error. Returns null for
  * non-environmental error codes. Records the fire in `steerMetrics`
@@ -851,6 +1025,43 @@ export function wireBashErrorSteer(input: {
   const trigger = steerFromBashError(input);
   if (!trigger) return null;
   steerMetrics.recordFire(trigger.kind);
+  return buildSteerPrompt(trigger);
+}
+
+/**
+ * Bug #40: build a [STEER] orchestration_fallback prompt when the
+ * orchestrator degrades to v1-api text-mode fallback. Emitted on the
+ * NEXT turn so the LLM knows the previous response was degraded and
+ * can adapt (e.g., not re-try the same plan that just exhausted the
+ * orchestrator budget).
+ *
+ * The suggestion is tailored to the fallback reason:
+ *   - budgetExhausted: simplify the plan, fewer tool calls
+ *   - orchestrator crash / empty: re-state the request concisely
+ *
+ * @returns the [STEER] prompt string, or null on invalid input.
+ */
+export function wireOrchestrationFallbackSteer(input: {
+  fromMode: string;
+  toMode: string;
+  fallbackReason: string;
+  budgetExhausted: boolean;
+}): string | null {
+  if (!input.fromMode || !input.toMode) return null;
+  const suggestion = input.budgetExhausted
+    ? 'Simplify your plan and use fewer tool calls per turn, or batch independent steps into a single turn. The orchestrator can only run a limited number of plan steps before the budget is exhausted.'
+    : 'Re-state your request concisely with explicit tool names. The previous orchestrator run did not produce a usable response; a fresh, focused request works better than retrying the same complex plan.';
+  const trigger: SteerTrigger = {
+    kind: 'orchestration_fallback',
+    detail: {
+      fromMode: input.fromMode,
+      toMode: input.toMode,
+      fallbackReason: input.fallbackReason || 'unknown',
+      budgetExhausted: input.budgetExhausted,
+      suggestion,
+    },
+  };
+  steerMetrics.recordFire('orchestration_fallback');
   return buildSteerPrompt(trigger);
 }
 

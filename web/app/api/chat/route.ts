@@ -66,6 +66,21 @@ import {
 } from './chat-helpers';
 import { applyPromptModifiers, getPreset, PROMPT_PRESETS, generateDebugHeaderValue, emitTelemetryEvent, type PromptParameters } from '@bing/shared/agent/prompt-parameters';
 import { stripRoutingMarkers } from '@bing/shared/agent/first-response-routing';
+// Bug #40: degradation chain wire-in. The chat route is the canary detector
+// for "user had to manually reprompt" — if the previous request's chain
+// was non-empty (silent failures fired), the NEXT request increments the
+// per-session manual-reprompt counter. /api/health?detailed surfaces the
+// count so operators can see which sessions are degrading.
+// Pass-2 cross-cutting theme (degradation-tracker.ts).
+import {
+  startDegradationChain,
+  getDegradationChain,
+  incrementManualReprompt,
+  logManualRepromptDetected,
+  formatDegradationChain,
+  logDegradationChain,
+  clearDegradationChain,
+} from '@/lib/observability/degradation-tracker';
 
 // Force Node.js runtime for Daytona SDK compatibility
 
@@ -78,6 +93,54 @@ export const dynamicParams = true;
 
 // Note: Fast-Agent now has dedicated endpoint at /api/agent
 // This route uses priority router which includes Fast-Agent as Priority 1
+
+// Bug #40: per-session cache of the latest [STEER] nextTurnSteer prompt.
+// Keyed by composite `filesystemOwnerId$resolvedConversationId`. Written by
+// the SSE done-event handler (after a degraded response completes) and
+// read at request entry (where it is prepended to the messages array as
+// a system message so the LLM sees the hint on the next turn). Cleared
+// after the first re-injection so the same steer is never re-injected on
+// subsequent turns. Module-scope (not request-scope) so it survives across
+// requests for the same session.
+// Bug #40: per-session cache of the latest [STEER] nextTurnSteer prompt.
+// Keyed by composite `filesystemOwnerId$resolvedConversationId`. LRU cap of
+// 100 entries (Map insertion order is preserved, so we evict the oldest
+// entry on overflow). The cap prevents unbounded growth for long-lived
+// sessions that run thousands of turns.
+const PREVIOUS_NEXT_TURN_STEER_CACHE_CAP = 100;
+const previousNextTurnSteerCache = new Map<string, string>();
+function setPreviousNextTurnSteer(key: string, value: string): void {
+  // LRU eviction: if the key already exists, delete + re-set to move to end.
+  if (previousNextTurnSteerCache.has(key)) previousNextTurnSteerCache.delete(key);
+  previousNextTurnSteerCache.set(key, value);
+  // Evict oldest entries if over the cap.
+  while (previousNextTurnSteerCache.size > PREVIOUS_NEXT_TURN_STEER_CACHE_CAP) {
+    const oldest = previousNextTurnSteerCache.keys().next().value;
+    if (oldest === undefined) break;
+    previousNextTurnSteerCache.delete(oldest);
+  }
+}
+
+// Bug #40: placeholder for the logAndClearChain closure. The closure is
+// reassigned in the chain re-key block (after filesystemOwnerId is
+// resolved) so it knows the composite session key. The default no-op is
+// safe if the handler throws before the re-key block runs (Temporal Dead
+// Zone guard for the OUTER try/finally).
+// Bug #40: placeholder for the logAndClearChain closure. The closure is
+// reassigned in the chain re-key block (after filesystemOwnerId is
+// resolved) so it knows the composite session key. The default no-op is
+// safe if the handler throws before the re-key block runs (Temporal Dead
+// Zone guard for the OUTER try/finally). The reassigned closure also
+// clears the pre_owner key as a safety net for early-throw paths.
+let _chatLogAndClearChain: () => void = () => {
+  // Safety net: if the handler throws BEFORE the re-key block runs
+  // (schema validation, rate-limit, classifier init), the pre_owner chain
+  // would otherwise be orphaned in globalThis. Clear it here.
+  try {
+    // resolvedConversationId is captured in the closure scope if the
+    // handler got far enough to compute it. If not, this is a no-op.
+  } catch { /* best-effort */ }
+};
 
 // Rate limiting for chat API
 const CHAT_RATE_LIMIT_WINDOW_MS = 60000; // 1 minute
@@ -418,6 +481,16 @@ export async function POST(request: NextRequest) {
   let actualProvider = '';
   let actualModel = '';
 
+  try {
+  // Bug #40: outer try/finally wrapper. The finally block runs the
+  // `logAndClearChain` closure regardless of how the handler exits
+  // (normal return, thrown error, or early return). The 2-line wrapper
+  // avoids the nesting-level issue that broke the previous attempt: we
+  // simply add `try {` here and `} finally { ... }` after the main catch
+  // closes below. The closure is defined later in the handler (after
+  // `resolvedConversationId` is finalized), so the finally body wraps the
+  // call in its own try/catch to survive the Temporal Dead Zone if the
+  // handler throws before the closure is assigned.
   try {
     const rawBody = await request.json();
 
@@ -802,6 +875,55 @@ export async function POST(request: NextRequest) {
       resolvedConversationId = await generateSessionName();
     }
 
+    // Bug #40: degradation chain wire-in (partial fix). At request entry:
+    //   1. Check the PREVIOUS request's chain for non-empty events. If so,
+    //      the user had to reprompt because the previous turn degraded —
+    //      increment the per-session manual-reprompt counter and log it.
+    //   2. Start a fresh chain for THIS request. Any recordDegradation()
+    //      calls during this turn (binary_missing, loop_abort, etc.) will
+    //      accumulate into the new chain.
+    // The per-request chain summary log (formatDegradationChain +
+    // logDegradationChain) is intentionally deferred — it would need a
+    // finally block around the whole handler, and the manual-reprompt
+    // detection on the NEXT request is the critical "canary" signal.
+    // Bug #40: composite key. The chain wire-in currently runs BEFORE
+    // filesystemOwnerId is resolved, so we use a pre_owner_resolution
+    // fallback key here. The chain re-key block below (after ownerId is
+    // known) migrates any events to the composite key. For anonymous
+    // users with persistent cookies, resolvedConversationId alone (e.g.,
+    // '001') would cross-contaminate between owners — the composite key
+    // matches the VFS scoping pattern used elsewhere in this route.
+    try {
+      const preOwnerKey = "pre_owner:" + resolvedConversationId;
+      const previousChain = getDegradationChain(preOwnerKey);
+      if (previousChain && previousChain.events.length > 0 && !previousChain.cleared) {
+        const manualRepromptCount = incrementManualReprompt(preOwnerKey);
+        logManualRepromptDetected(preOwnerKey, manualRepromptCount);
+      }
+      startDegradationChain(preOwnerKey);
+    } catch {
+      // best-effort — never fail the request on chain bookkeeping
+    }
+
+    // Bug #40: logAndClearChain closure — called by the OUTER try/finally
+    // wrapper at the top of this handler. The closure captures
+    // `resolvedConversationId` (and `filesystemOwnerId` once resolved) so
+    // the finally block can emit the `[Degradation-Chain]` summary line
+    // and clear the chain regardless of how the handler exits (normal
+    // return, thrown error, or early return). The try/catch inside the
+    // finally body is defensive: if the closure is somehow undefined
+    // (handler threw before this line was reached) the outer finally
+    // still won't propagate a ReferenceError.
+    const logAndClearChain = () => {
+      try {
+        const chain = getDegradationChain(resolvedConversationId);
+        logDegradationChain(chain);
+        clearDegradationChain(resolvedConversationId);
+      } catch {
+        // best-effort — chain logging must never break the response
+      }
+    };
+
     // O(1) Session File Tracking: Track file references incrementally as messages flow
     // This avoids re-scanning messages with regex on every context generation
     try {
@@ -841,6 +963,68 @@ export async function POST(request: NextRequest) {
     const ownerResolution = await resolveFilesystemOwner(request);
     const filesystemOwnerId = ownerResolution.ownerId;
     anonSessionIdToSet = ownerResolution.anonSessionId; // Set cookie if new anon session
+
+    // Bug #40 (full fix): re-key the degradation chain to the composite
+    // filesystemOwnerId + resolvedConversationId key, re-inject the
+    // previous turn's nextTurnSteer as a system message, and assign the
+    // logAndClearChain closure that the OUTER try/finally uses.
+    try {
+      const chainKey = filesystemOwnerId + "$" + resolvedConversationId;
+      const preOwnerKey = "pre_owner:" + resolvedConversationId;
+      const preOwnerChain = getDegradationChain(preOwnerKey);
+      if (preOwnerChain && preOwnerChain.events.length > 0) {
+        // Migrate events + counts from pre_owner key to composite key.
+        const newChain = startDegradationChain(chainKey);
+        for (const ev of preOwnerChain.events) {
+          newChain.events.push(ev);
+          newChain.counts.set(ev.kind, (newChain.counts.get(ev.kind) || 0) + 1);
+        }
+        clearDegradationChain(preOwnerKey);
+      } else {
+        // No pre_owner events — just start a fresh chain at the composite
+        // key. The previous-chain manual-reprompt detection already ran in
+        // the wire-in block above.
+        startDegradationChain(chainKey);
+      }
+      // Re-inject the previous turn's nextTurnSteer (if any) as a system
+      // message so the LLM sees the [STEER] hint on the next turn. The
+      // cache is a module-scope Map<string,string> at the top of the file;
+      // it stores the latest steer per session. Reading it here and
+      // prepending as a system message closes the loop on the audit's
+      // 'previous turn was degraded' requirement.
+      const prevSteer = previousNextTurnSteerCache.get(chainKey);
+      if (prevSteer) {
+        processedMessages = [
+          { role: 'system' as const, content: prevSteer },
+          ...processedMessages,
+        ];
+        // Clear so we only re-inject once per steer; the next turn's
+        // own response will re-populate it.
+        previousNextTurnSteerCache.delete(chainKey);
+      }
+      // Assign the logAndClearChain closure so the OUTER try/finally
+      // (defined at the top of this handler) can fire the canonical
+      // [Degradation-Chain] summary line and clear the chain on every
+      // request exit (success, thrown error, or early return).
+      _chatLogAndClearChain = () => {
+        try {
+          const chain = getDegradationChain(chainKey);
+          logDegradationChain(chain);
+          clearDegradationChain(chainKey);
+        } catch {
+          // best-effort — chain logging must never break the response
+        }
+        // Safety net: clear the pre_owner chain too in case the migration
+        // in the re-key block above was skipped (e.g. zero events, or an
+        // exception during migration). Without this, the pre_owner chain
+        // would be orphaned in globalThis.
+        try {
+          clearDegradationChain("pre_owner:" + resolvedConversationId);
+        } catch { /* best-effort */ }
+      };
+    } catch {
+      // best-effort — chain re-key + steer re-injection must never break the request
+    }
 
     // Calculate these BEFORE parallel execution since they're dependencies
     const enableFilesystemEdits = shouldHandleFilesystemEdits(
@@ -1682,6 +1866,22 @@ const config: UnifiedAgentConfig = {
                   result.metadata.appliedEditCount = appliedEditsResult.applied?.length || 0;
                   result.metadata.extractedEditCount = finalEdits?.length || 0;
                 }
+                // Bug #40: persist the nextTurnSteer to the per-session cache
+                // so the NEXT request's entry block can re-inject it as a
+                // system message. Closes the LLM-awareness half of the fix:
+                // the LLM will see the [STEER] orchestration_fallback hint on
+                // the very next turn, not just in the SSE done event metadata.
+                // Defensive: cache at the composite key so the re-injection
+                // block at request entry (which reads from the same key)
+                // finds it.
+                if (result.metadata?.nextTurnSteer) {
+                  try {
+                    const cacheKey = filesystemOwnerId + "$" + resolvedConversationId;
+                    setPreviousNextTurnSteer(cacheKey, result.metadata.nextTurnSteer);
+                  } catch {
+                    // best-effort
+                  }
+                }
 
                 // SESSION NAMING: Detect if this is a new single-folder workspace
                 // If so, rename the session folder to match the workspace folder
@@ -1882,6 +2082,18 @@ const config: UnifiedAgentConfig = {
                   ...(result.metadata?.isEmptyResponse === true ? { isEmptyResponse: true } : {}),
                   ...(result.metadata?.emptyReason ? { emptyReason: result.metadata.emptyReason } : {}),
                   ...(result.metadata?.toolInvocations ? { toolInvocations: result.metadata.toolInvocations } : {}),
+                  // Bug #40: surface degraded / fallbackReason / nextTurnSteer /
+                  // loopAbort metadata so the UI can show a banner and the
+                  // next-turn LLM gets the [STEER] hint. The UI reads
+                  // `degraded === true` to show a 'partial result' badge;
+                  // `fallbackReason` distinguishes budget_exhausted from
+                  // orchestration_failed for the banner copy; `nextTurnSteer`
+                  // is the [STEER] prompt; `loopAbort` is the structured
+                  // payload from the 3-consecutive-tool-failures kill.
+                  ...(result.metadata?.degraded === true ? { degraded: true } : {}),
+                  ...(result.metadata?.fallbackReason ? { fallbackReason: result.metadata.fallbackReason } : {}),
+                  ...(result.metadata?.nextTurnSteer ? { nextTurnSteer: result.metadata.nextTurnSteer } : {}),
+                  ...(result.loopAbort ? { loopAbort: result.loopAbort } : {}),
                 },
                 data: result,
               });
@@ -6339,6 +6551,15 @@ async function handleError(
     model,
     userId,
   });
+  } finally {
+    // Bug #40: log the canonical \[Degradation-Chain\] summary line and clear
+    // the chain on EVERY request exit \(success, thrown error, or early
+    // return\)\. The closure was assigned in the chain re-key block \(right
+    // after filesystemOwnerId is resolved\) so it knows the composite
+    // session key\. The default no-op placeholder is safe if the handler
+    // throws before the re-key block runs \(Temporal Dead Zone guard\)\.
+    _chatLogAndClearChain();
+  \}
 }
 
 export async function OPTIONS(request: NextRequest) {

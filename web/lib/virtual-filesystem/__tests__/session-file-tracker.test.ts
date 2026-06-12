@@ -24,7 +24,7 @@ import {
   getSessionFileDetails,
   clearAllSessions,
   getSessionStats,
-} from './session-file-tracker';
+} from '../session-file-tracker';
 
 describe('SessionFileTracker — Bug #27 + #33 (file count + byte tracking)', () => {
   const sessionA = 'session-a-' + Date.now();
@@ -139,14 +139,13 @@ describe('SessionFileTracker — Bug #27 + #33 (file count + byte tracking)', ()
       }
       fileList.push('/tmp/old-ephemeral.json');
 
-      trackSessionFiles(sessionA, [
-        { role: 'user', content: fileList.join(' ') },
-      ]);
+      const msg1 = { role: 'user', content: fileList.join(' ') };
+      trackSessionFiles(sessionA, [msg1]);
 
       // At cap. Add a NEW ephemeral file (must be a path not already tracked).
-      trackSessionFiles(sessionA, [
-        { role: 'user', content: 'src/file0.ts /tmp/old-ephemeral.json /tmp/new-ephemeral2.json' },
-      ]);
+      // Accumulate both messages so the tracker processes the new content.
+      const msg2 = { role: 'user', content: 'src/file0.ts /tmp/old-ephemeral.json /tmp/new-ephemeral2.json' };
+      trackSessionFiles(sessionA, [msg1, msg2]);
 
       const details = getSessionFileDetails(sessionA);
       const paths = new Set(details.map(d => d.path));
@@ -183,12 +182,10 @@ describe('SessionFileTracker — Bug #27 + #33 (file count + byte tracking)', ()
       for (let i = 0; i < 25; i++) {
         fileList.push(`src/file${i}.ts`);
       }
-      trackSessionFiles(sessionA, [
-        { role: 'user', content: fileList.join(' ') },
-      ]);
-      trackSessionFiles(sessionA, [
-        { role: 'user', content: fileList.join(' ') + ' src/file-newest.ts' },
-      ]);
+      const msg1 = { role: 'user', content: fileList.join(' ') };
+      trackSessionFiles(sessionA, [msg1]);
+      const msg2 = { role: 'user', content: fileList.join(' ') + ' src/file-newest.ts' };
+      trackSessionFiles(sessionA, [msg1, msg2]);
 
       const paths = new Set(getSessionFileDetails(sessionA).map(d => d.path));
       // The newest file must be present.
@@ -212,13 +209,11 @@ describe('SessionFileTracker — Bug #27 + #33 (file count + byte tracking)', ()
       const hugeF = oneMB('f');
 
       // Track 5 huge files (5 MB total, exactly at the cap).
-      trackSessionFiles(sessionA, [
-        { role: 'user', content: `${hugeA} ${hugeB} ${hugeC} ${hugeD} ${hugeE}` },
-      ]);
+      const msg1 = { role: 'user', content: `${hugeA} ${hugeB} ${hugeC} ${hugeD} ${hugeE}` };
+      trackSessionFiles(sessionA, [msg1]);
       // Add a 6th — should evict at least one to make room.
-      trackSessionFiles(sessionA, [
-        { role: 'user', content: `${hugeA} ${hugeB} ${hugeC} ${hugeD} ${hugeE} ${hugeF}` },
-      ]);
+      const msg2 = { role: 'user', content: `${hugeA} ${hugeB} ${hugeC} ${hugeD} ${hugeE} ${hugeF}` };
+      trackSessionFiles(sessionA, [msg1, msg2]);
 
       const stats = getSessionStats();
       // totalBytes should be at or under 5 MB.

@@ -28,6 +28,8 @@ import {
   buildAgentSystemPrompt,
   createLoopDetectorState,
   recordStepAndCheckLoop,
+  extractToolError,
+  isLoopDetectorResult,
   type LoopDetectorState,
 } from '@/lib/orchestra/shared-agent-context';
 import { workspaceReplayService } from '@/lib/workspace/workspace-replay-service';
@@ -78,6 +80,18 @@ export interface AgentResult {
   // New fields for ToolLoopAgent integration
   toolInvocations?: ToolInvocation[];
   reasoning?: string;
+  // Bug #41: structured loop-abort payload surfaced when the 3-consecutive
+  // tool-failures kill fires. The route layer reads this to emit a final
+  // `loop_abort` SSE event for the UI banner. Plain `error` field still
+  // carries the abort message for backward compat.
+  loopAbort?: {
+    abortReason: 'binary_missing' | 'wrong_tool_name' | 'timeout' | 'unknown';
+    consecutive: number;
+    failedTools: Array<{ name: string; error: string }>;
+    suggestion: string;
+    autoRecoverTo?: string;
+    steer?: string;
+  };
 }
 
 export interface AgentIterationResult {
@@ -605,8 +619,22 @@ export class AgentLoop {
             if (invocation.state === 'result') {
               const isSuccess = invocation.result?.success !== false;
 
-              // Track with shared loop detector
-              const loopMsg = recordStepAndCheckLoop(this.loopState, invocation.toolName, invocation.args, isSuccess);
+              // Track with shared loop detector. Bug #41: pass the real error
+              // string so the [STEER] loop_abort payload can categorize the
+              // abort reason correctly (binary_missing vs wrong_tool_name vs
+              // timeout). Without the 5th arg, categorizeAbortReason only sees
+              // placeholder "repeated failure" strings and always returns
+              // 'unknown'. Uses the shared `extractToolError` helper so the
+              // v1-api path in unified-agent-service.ts derives errors the
+              // same way.
+              const invocationError = extractToolError((invocation as any).result?.error);
+              const loopMsg = recordStepAndCheckLoop(
+                this.loopState,
+                invocation.toolName,
+                invocation.args,
+                isSuccess,
+                invocationError,
+              );
 
               // Update the tool call record with result
               const existingCall = allToolCalls.find(tc => tc.toolCallId === invocation.toolCallId);
@@ -646,13 +674,23 @@ export class AgentLoop {
 
               // Check no-progress guard after each tool result
               if (loopMsg) {
-                log.warn(`No-progress loop detected: ${loopMsg}`);
+                const loopMsgText = typeof loopMsg === 'string' ? loopMsg : loopMsg.message;
+                // Bug #41: when the kill returns a structured LoopDetectorResult,
+                // bubble the abort payload to the caller via result.loopAbort so
+                // the route layer can emit a `loop_abort` SSE event for the UI
+                // banner. The plain `error` field still gets the message for
+                // backward compat with every existing call site.
+                const loopAbort = isLoopDetectorResult(loopMsg) ? loopMsg.abort : undefined;
+                log.warn(`No-progress loop detected: ${loopMsgText}`);
                 return {
                   success: false,
                   results,
                   iterations: allToolCalls.length,
                   message: allText.join(''),
-                  error: loopMsg,
+                  error: loopMsgText,
+                  // Bug #41: structured abort payload for the route layer to
+                  // emit as a final SSE `loop_abort` event.
+                  ...(loopAbort ? { loopAbort } : {}),
                   toolInvocations: allToolCalls.map(tc => normalizeToolInvocation({
                     toolCallId: tc.toolCallId,
                     toolName: tc.toolName,

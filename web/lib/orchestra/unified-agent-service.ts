@@ -71,10 +71,12 @@ import {
   checkReEvalTrigger,
   recordReEval,
   generateTrackerSummary,
-} from '@bing/shared/agent/successive-tracker';
-// [STEER] wiring: when the consecutive/total tool-call cap fires, give the LLM
+} from '@bing/shared/agent/successive-tracker';    // [STEER] wiring: when the consecutive/total tool-call cap fires, give the LLM
 // an explicit text-mode fallback instead of an abrupt cutoff. Closes #21.
-import { wireConsecutiveToolCapSteer } from './steer-service';
+import { wireConsecutiveToolCapSteer, wireOrchestrationFallbackSteer, safeSteer } from './steer-service';
+// Bug #40: per-session orchestration-fallback counter. Incremented in
+// tagResultDegraded so /api/health?detailed can surface the count.
+import { incrementOrchestrationFallback } from '@/lib/observability/degradation-tracker';
 
 // Mirrors successive-tracker.ts internal constants. The package doesn't
 // export them; keep these in sync with DEFAULT_CONSECUTIVE_TOOL_THRESHOLD = 7
@@ -98,6 +100,9 @@ import {
   normalizeToolArgs,
   createLoopDetectorState,
   recordStepAndCheckLoop,
+  extractToolError,
+  isLoopDetectorResult,
+  type LoopAbortPayload,
 } from '@/lib/orchestra/shared-agent-context';
 import { composeRoleWithTools } from '@bing/shared/agent/prompt-composer';
 
@@ -590,8 +595,7 @@ export interface UnifiedAgentResult {
     content?: string;
     diff?: string;
     action?: string;
-  }>;
-  metadata?: {
+  }>;      metadata?: {
     model?: string;
     provider?: string;
     duration?: number;
@@ -616,8 +620,29 @@ export interface UnifiedAgentResult {
       /** Auto-re-prompt message for the next plan step (consumed by route.ts or client) */
       stepReprompt?: string;
     };
+    /** Bug #40: True when this response is a degraded (fallback) response
+     *  — the orchestrator / v1-agent-loop failed and the request was
+     *  completed by a less-resilient path. The UI surfaces a banner; the
+     *  route layer injects `nextTurnSteer` on the user's next turn. */
+    degraded?: boolean;
+    /** Bug #40: the specific reason for the fallback. Free-form string
+     *  (e.g. "budget_exhausted", "orchestrator_crash", "all_modes_failed").
+     *  Carries through from the inner fallback paths (fallbackFrom +
+     *  fallbackReason in attemptFallback) and is set by tagResultDegraded. */
+    fallbackReason?: string;
+    /** Bug #40: the [STEER] orchestration_fallback prompt the LLM should
+     *  see on the next turn so it knows the previous response was degraded
+     *  and can adapt (e.g., not re-try the same complex plan that just
+     *  exhausted the orchestrator budget). The chat route layer is
+     *  responsible for prepending this to the next user message. */
+    nextTurnSteer?: string;
     [key: string]: any;
   };
+  // Bug #41: structured loop-abort payload surfaced when the 3-consecutive
+  // tool-failures kill fires (on the v1-api path). The route layer reads
+  // this to emit a final `loop_abort` SSE event for the UI banner. Plain
+  // `error` field still carries the abort message for backward compat.
+  loopAbort?: LoopAbortPayload;
 }
 
 // Note: StartupCapabilities is imported from ./startup-capabilities
@@ -1523,13 +1548,30 @@ export async function processUnifiedAgentRequest(
         fallbackProvider: fallbackResult.metadata?.provider,
         fallbackModel: fallbackResult.metadata?.model,
       });
-      return {
+      // Bug #40: tag the response as `degraded:true` so the UI/route can
+      // show a banner and the next-turn LLM sees the [STEER] orchestration_
+      // fallback hint. The `fallbackReason` carries the precise failure
+      // (budget exhausted, orchestrator crash, all-modes-failed) so the UI
+      // can surface a specific banner. We do this on the OUTER fallback
+      // path (the one that rescues the request) — the inner attemptFallback
+      // already set fallbackReason / fallbackChain metadata.
+      const degradedResult = tagResultDegraded({
         ...fallbackResult,
         metadata: {
           ...fallbackResult.metadata,
           fallbackFrom: mode,
         },
-      };
+      }, {
+        fromMode: mode,
+        toMode: fallbackResult.mode,
+        fallbackReason: fallbackResult.error || `${mode} failed, fell back to ${fallbackResult.mode}`,
+        // Use the composite key (filesystemOwnerId + conversationId) when
+        // available, matching the chat route's chain key.
+        sessionId: config.filesystemOwnerId
+          ? `${config.filesystemOwnerId}$${config.conversationId || 'default'}`
+          : (config.conversationId || config.userId || 'default'),
+      });
+      return degradedResult;
     }
 
     // All modes failed
@@ -1548,6 +1590,77 @@ export async function processUnifiedAgentRequest(
       },
     };
   }
+}
+
+/**
+ * Bug #40: tag a UnifiedAgentResult as degraded and emit a [STEER] hint
+ * for the next turn. Used by the orchestrator fallback path (Phase 2 of
+ * runV1Orchestrated) and the outer attemptFallback rescue to mark the
+ * response so:
+ *   1. The UI can surface a banner (`metadata.degraded === true`).
+ *   2. The chat route can prepend the steer to the next user message
+ *      (`metadata.nextTurnSteer`).
+ *   3. The /api/health?detailed endpoint can count fallbacks per session
+ *      (increments `orchestrationFallbackCounts[sessionId]`).
+ *
+ * The function is pure-functional on the result shape — it does not throw
+ * and never mutates the input. The counter increment is fire-and-forget.
+ */
+export function tagResultDegraded(
+  result: UnifiedAgentResult,
+  input: {
+    fromMode: string;
+    toMode: string;
+    fallbackReason: string;
+    sessionId: string;
+    /**
+     * Pass-through typed boolean. When the caller has a `budgetExhausted`
+     * flag in scope (e.g. `runV1Orchestrated` Phase-2 fallback), prefer
+     * passing it explicitly so the steer prompt is accurate. Falls back
+     * to substring detection on `fallbackReason` for callers that don't
+     * (e.g. the outer attemptFallback rescue, which derives the reason
+     * from `error.message`).
+     */
+    budgetExhausted?: boolean;
+  }
+): UnifiedAgentResult {
+  const { fromMode, toMode, fallbackReason, sessionId } = input;
+  if (!fromMode || !toMode) return result;
+
+  // Bug #40: build the [STEER] orchestration_fallback prompt for the next turn.
+  // Safe wrapper so a steer-service failure never breaks the response.
+  // Prefer the explicit typed boolean; fall back to substring detection
+  // when the caller didn't pass one (e.g. outer rescue where the flag
+  // is not in scope).
+  const budgetExhaustedFlag =
+    typeof input.budgetExhausted === 'boolean'
+      ? input.budgetExhausted
+      : (fallbackReason || '').toLowerCase().includes('budget');
+  const nextTurnSteer = safeSteer(() =>
+    wireOrchestrationFallbackSteer({
+      fromMode,
+      toMode,
+      fallbackReason: fallbackReason || 'unknown',
+      budgetExhausted: budgetExhaustedFlag,
+    })
+  );
+
+  // Bug #40: increment the per-session counter. The /api/health?detailed
+  // endpoint reads this so operators can see how often the orchestrator
+  // is degrading to v1-api text-mode. Fire-and-forget; never throws.
+  try {
+    incrementOrchestrationFallback(sessionId || 'default');
+  } catch { /* best-effort */ }
+
+  return {
+    ...result,
+    metadata: {
+      ...(result.metadata || {}),
+      degraded: true,
+      fallbackReason: fallbackReason || result.metadata?.fallbackReason || 'unknown',
+      nextTurnSteer: nextTurnSteer || result.metadata?.nextTurnSteer,
+    },
+  };
 }
 
 /**
@@ -4637,7 +4750,15 @@ async function runV1Orchestrated(
       try {
         const fallbackResult = await runV1Api(config);
         log.info('[runV1Orchestrated] v1-api fallback completed', { fallbackReason });
-        return {
+        // Bug #40: tag the response as degraded:true so the UI/route can
+        // show a banner and the next-turn LLM sees the [STEER] orchestration_
+        // fallback hint. This is the PRIMARY orchestration_fallback site —
+        // the outer attemptFallback rescue only fires on thrown errors, but
+        // this normal internal cascade is the bug-reproduction case. The
+        // typed budgetExhausted boolean is in scope here (no substring
+        // detection needed). sessionId is composite-keyed so the counter
+        // is scoped to the same key the chat route uses.
+        return tagResultDegraded({
           ...fallbackResult,
           metadata: {
             ...fallbackResult.metadata,
@@ -4657,7 +4778,19 @@ async function runV1Orchestrated(
               reviewReason: (config as any)._reviewReason || undefined,
             }} : {}),
           },
-        };
+        }, {
+          fromMode: 'v1-agent-loop',
+          toMode: fallbackResult.mode || 'v1-api',
+          fallbackReason,
+          // Use the composite key (filesystemOwnerId + conversationId) when
+          // available, matching the chat route's chain key. Falls back to
+          // the bare conversationId/userId key for callers that don't set
+          // filesystemOwnerId (tests, internal callers).
+          sessionId: config.filesystemOwnerId
+            ? `${config.filesystemOwnerId}$${config.conversationId || 'default'}`
+            : (config.conversationId || config.userId || 'default'),
+          budgetExhausted,
+        });
       } catch (fbError: any) {
         log.error('[runV1Orchestrated] v1-api fallback also failed', { error: fbError?.message || String(fbError) });
 

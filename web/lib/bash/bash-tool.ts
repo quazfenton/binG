@@ -407,6 +407,16 @@ export async function executeBashCommand(
           stderrLength: stderr.length,
         });
 
+        // Bug #39 follow-up: clear the hard-block retry counter for this binary
+        // on success, so a transient PATH issue doesn't permanently block it.
+        // Pushed into executeBashCommand itself (not just the LLM tool) so ALL
+        // bash entry points — direct callers, executeBashViaEvent, etc. —
+        // benefit from the "blocked only while broken" recovery.
+        if (exitCode === 0) {
+          const baseCmd = command.trim().split(/\s+/)[0]?.toLowerCase();
+          if (baseCmd) resetMissingBinaryRetry(baseCmd);
+        }
+
         resolve(result);
       });
 

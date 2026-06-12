@@ -87,7 +87,7 @@ vi.mock('@/lib/utils/logger', () => ({
 }));
 
 // Import the handler AFTER the mocks are in place.
-import { GET } from './gateway';
+import { GET } from '../gateway';
 
 function makeRequest(path: string = 'workspace'): Request {
   return new Request(`http://localhost/api/filesystem/snapshot?path=${encodeURIComponent(path)}`);
@@ -167,7 +167,7 @@ describe('GET /api/filesystem/snapshot — Bug #14 (empty workspace on anonymous
         version: 2,
         updatedAt: new Date().toISOString(),
         files: [
-          { path: 'sessions/000/index.html', content: '<html></html>', size: 13, lastModified: Date.now() },
+          { path: 'workspace/sessions/000/index.html', content: '<html></html>', size: 13, lastModified: Date.now() },
         ],
       });
 

@@ -36,6 +36,23 @@ export async function GET(request: NextRequest) {
       const { vfsSnapshotCacheMetrics: vfsCacheMetrics } = await import('@/app/api/filesystem/snapshot/cache-metrics');
       const snapshotCache = vfsCacheMetrics.snapshot();
 
+      // Bug #40: surface the per-session orchestration-fallback counters
+      // (incremented by tagResultDegraded in unified-agent-service.ts).
+      // Operators use these to detect chronic orchestrator degradation —
+      // a steady stream of fallbacks means the orchestrator is hitting
+      // its budget cap or crashing, and the v1-api text-mode path is
+      // shouldering the load. Importing here (not at module top) keeps
+      // the cold-start path free of the degradation-tracker import graph.
+      const { getTotalOrchestrationFallbackCount, getOrchestrationFallbackSnapshot } =
+        await import('@/lib/observability/degradation-tracker');
+      const orchestrationFallback = {
+        total: getTotalOrchestrationFallbackCount(),
+        // Top 5 sessions by count — sessionId can be PII so we cap the
+        // list to a small number and don't echo it verbatim in operator
+        // dashboards without redaction.
+        topSessions: getOrchestrationFallbackSnapshot().slice(0, 5),
+      };
+
       return NextResponse.json({
         ...health,
         providers: {
@@ -48,6 +65,10 @@ export async function GET(request: NextRequest) {
           stats: errorStats,
           frequent: errorHandler.getFrequentErrors(3)
         },
+        // Bug #40: orchestration-fallback counts (per-session + aggregate).
+        // Surfaced here so /api/health?detailed can detect chronic
+        // orchestrator degradation without needing to grep run.log.
+        orchestrationFallback,
         system: {
           memory: process.memoryUsage(),
           memoryMonitor: memoryStatus,

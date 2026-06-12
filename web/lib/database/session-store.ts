@@ -83,7 +83,6 @@ class DatabaseSessionStore {
         }
         this.db = null;
       }
-      const Database = require('better-sqlite3');
       this.db = new Database(this.dbPath);
 
       // Enable WAL mode for better concurrency

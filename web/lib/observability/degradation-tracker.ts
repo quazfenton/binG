@@ -86,6 +86,11 @@ export interface DegradationTrackerState {
   chains: Map<string, DegradationChain>;
   /** Cumulative manual-reprompt counter per session. */
   manualRepromptCounts: Map<string, number>;
+  /** Bug #40: cumulative orchestration-fallback counter per session.
+   *  Incremented by the chat route when a request returns degraded:true.
+   *  Surfaced via /api/health?detailed so operators can see how often
+   *  the orchestrator is degrading to v1-api text-mode. */
+  orchestrationFallbackCounts: Map<string, number>;
   /** Last log line for the chain summary (for throttling). */
   lastChainLogAtMs: number;
   /** Last time we logged "manual reprompt detected" (for throttling). */
@@ -100,6 +105,7 @@ function getState(): DegradationTrackerState {
     g[STATE_KEY] = {
       chains: new Map(),
       manualRepromptCounts: new Map(),
+      orchestrationFallbackCounts: new Map(),
       lastChainLogAtMs: 0,
       lastManualRepromptLogAtMs: 0,
     };
@@ -150,6 +156,29 @@ export function clearDegradationChain(sessionId: string): void {
   const chain = state.chains.get(sessionId);
   if (chain) {
     chain.cleared = true;
+  }
+}
+
+/**
+ * Atomic "log the chain summary, then clear it" primitive used by the
+ * chat route's outer `try/finally` wrapper. Composing these two steps
+ * into a single call keeps the call site small and makes it impossible
+ * to clear-without-logging or log-without-clearing by accident.
+ *
+ * The function is best-effort — it never throws. It is safe to call when
+ * no chain exists for the session (the log line is emitted at debug level
+ * and the clear is a no-op).
+ */
+export function logAndClearChain(sessionId: string): void {
+  try {
+    if (typeof sessionId !== 'string' || sessionId.length === 0) {
+      sessionId = 'default';
+    }
+    const chain = getDegradationChain(sessionId);
+    logDegradationChain(chain);
+    clearDegradationChain(sessionId);
+  } catch {
+    // best-effort — chain logging must never break the response
   }
 }
 
@@ -245,6 +274,78 @@ export function resetManualRepromptCount(sessionId: string): void {
     sessionId = 'default';
   }
   state.manualRepromptCounts.delete(sessionId);
+}
+
+// ---------------------------------------------------------------------------
+// Bug #40: per-session orchestration-fallback counter
+// ---------------------------------------------------------------------------
+
+/**
+ * Increment the orchestration-fallback counter for a session. Called by the
+ * chat route (or the unified-agent-service) when a request returns
+ * `metadata.degraded === true` (orchestrator degraded to v1-api). Returns
+ * the new count. Counter is cumulative since process start; reset only by
+ * `_resetDegradationTrackerForTests()` or session-expiry paths.
+ */
+export function incrementOrchestrationFallback(sessionId: string): number {
+  const state = getState();
+  if (typeof sessionId !== 'string' || sessionId.length === 0) {
+    sessionId = 'default';
+  }
+  const next = (state.orchestrationFallbackCounts.get(sessionId) ?? 0) + 1;
+  state.orchestrationFallbackCounts.set(sessionId, next);
+  return next;
+}
+
+/**
+ * Read the orchestration-fallback count without mutating. Returns 0 when
+ * the session has not had any fallbacks. Used by the /api/health endpoint
+ * and by tests.
+ */
+export function getOrchestrationFallbackCount(sessionId: string): number {
+  const state = getState();
+  if (typeof sessionId !== 'string' || sessionId.length === 0) {
+    sessionId = 'default';
+  }
+  return state.orchestrationFallbackCounts.get(sessionId) ?? 0;
+}
+
+/**
+ * Read the aggregate (sum-across-sessions) orchestration-fallback count.
+ * The /api/health?detailed endpoint surfaces this so operators see the
+ * fleet-wide degradation rate without needing per-session correlation.
+ */
+export function getTotalOrchestrationFallbackCount(): number {
+  const state = getState();
+  let total = 0;
+  for (const v of state.orchestrationFallbackCounts.values()) {
+    total += v;
+  }
+  return total;
+}
+
+/**
+ * Read the per-session fallback counts as a snapshot. The /api/health
+ * endpoint returns the top N sessions by count, not every session
+ * (sessionId can be PII). Tests can inspect the full map.
+ */
+export function getOrchestrationFallbackSnapshot(): { sessionId: string; count: number }[] {
+  const state = getState();
+  return Array.from(state.orchestrationFallbackCounts.entries())
+    .map(([sessionId, count]) => ({ sessionId, count }))
+    .sort((a, b) => b.count - a.count);
+}
+
+/**
+ * Reset the orchestration-fallback counter for a session. Useful for
+ * tests and session-expiry paths. Not called from the hot path.
+ */
+export function resetOrchestrationFallbackCount(sessionId: string): void {
+  const state = getState();
+  if (typeof sessionId !== 'string' || sessionId.length === 0) {
+    sessionId = 'default';
+  }
+  state.orchestrationFallbackCounts.delete(sessionId);
 }
 
 // ---------------------------------------------------------------------------

@@ -2,8 +2,11 @@
 **/data/virtual-filesystem/*
 **/.agent-commits/
 **/.agent-vfs/
+**/heap-snapshots/
+
 # dependencies
 **/node_modules/
+
 
 # next.js
 **/.next/

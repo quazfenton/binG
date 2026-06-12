@@ -514,8 +514,8 @@ The original review called out three themes that didn't get a letter but are rea
 ## Completion Roll-up
 
 - **Fixed (cleanly):** 31 numbered bugs (#8, #9, #10, #11, #12, #13, #14, #15, #16, #17, #18, #20, #21, #22, #23, #24, #25, #26, #27, #28, #29, #30, #31, #32, #33, #34, #35, E, G, H, K)
-- **Open (Pass-1 scope):** 0 numbered bugs from the original audit (#1–#35). Pass-2 added 10 new OPEN bugs (#36–#45) from a fresh run.log trace; #36, #37, and #39 were FIXED in this session, leaving #38, #40–#45 still OPEN.
-- **Total addressed in this session:** 33 of 35 Pass-1 numbered bugs + 3 of 10 Pass-2 numbered bugs (#36, #37, #39) + 5 lettered sub-bugs (A, B, D, F, I — all subsumed by the numbered bugs above). Pass-1 effective coverage: 100% of the original enumerated audit (#1–#35 + all lettered). Pass-2 effective coverage: 30% (#36, #37, #39 of #36–#45).
+- **Open (Pass-1 scope):** 0 numbered bugs from the original audit (#1–#35). Pass-2 added 13 new OPEN bugs (#36–#48) from a fresh run.log trace; #36, #37, and #39 were FIXED in this session, leaving #38, #40–#48 still OPEN.
+- **Total addressed in this session:** 33 of 35 Pass-1 numbered bugs + 3 of 13 Pass-2 numbered bugs (#36, #37, #39) + 5 lettered sub-bugs (A, B, D, F, I — all subsumed by the numbered bugs above). Pass-1 effective coverage: 100% of the original enumerated audit (#1–#35 + all lettered). Pass-2 effective coverage: 23% (#36, #37, #39 of #36–#48).
 - **Pass-1 narrative sub-bugs (no number, all subsumed):** A, B, C, D, E, F, G, H, I, J, K, L, M, N — all ✅ FIXED or subsumed above
 - **Effective Pass-1 coverage:** 100% of the original enumerated audit (#1–#35 + all lettered)
 
@@ -542,7 +542,7 @@ The original review called out three themes that didn't get a letter but are rea
 | 44 | Bug #14 residue | 🟡 Med | `EMPTY WORKSPACE` warns still fire after the WORKSPACE_NOT_READY fix | ⬜ OPEN |
 | 45 | LLM stoppage | 🟠 High | 5-min streams with no `[INCOMPLETE]` / `[STEER]` on empty completions | ⬜ OPEN |
 | 46 | File diff | 🔴 Critical | `applySimpleLineDiff` leaks `---`/`+++` diff headers into file content | ⬜ OPEN |
-| 47 | Sandbox routing | 🔴 Critical | `bash_execute` always falls through to local `spawn`; no sandbox-aware tool ranking | ⬜ OPEN |
+| 47 | Sandbox routing | 🟠 High | `bash_execute` always falls through to local `spawn`; no sandbox-aware tool ranking | ⬜ OPEN |
 | 48 | Parser corruption | 🔴 Critical | `parseFilesystemResponse(forceExtract=true)` overwrites correct writes with echoed JSON | ⬜ OPEN |
 
 ### ✅ #36 — Bug #16 Regression: `getCurrentVersionSync` Missing at Runtime

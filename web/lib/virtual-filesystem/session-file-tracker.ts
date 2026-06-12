@@ -82,14 +82,14 @@ const CONFIG = {
   /** Session TTL in milliseconds (1 hour) */
   SESSION_TTL_MS: 60 * 60 * 1000,
   /** File pattern regex - matches common code file extensions */
-  FILE_PATTERN: /[\w\-/.]+\.(?:tsx?|jsx?|py|rs|go|java|css|scss|json|md|yaml|yml|toml|sh|bash|html|sql|graphql|proto|tf|hcl)/gi,
+  FILE_PATTERN: /[\w\-/.]+\.(?:tsx?|json|jsx?|py|rs|go|java|css|scss|md|yaml|yml|toml|sh|bash|html|sql|graphql|proto|tf|hcl)/gi,
   /**
    * Bug #27 (audit) — paths matching this regex are flagged
    * `ephemeral: true` and evicted before persistent files when the
    * session is at capacity. Source files in the workspace are
    * `ephemeral: false` and survive eviction.
    */
-  EPHEMERAL_PATH_REGEX: /(?:\/tmp\/|\.cache\/|\.npm\/|\.next\/|\.log|\/node_modules\/|\/dist\/|\.tmp$|\.bak$)/i,
+  EPHEMERAL_PATH_REGEX: /(?:\/tmp\/|\.cache\/|\.npm\/|\.next\/|\.log|(?:\/|^)node_modules\/|\/dist\/|\.tmp$|\.bak$)/i,
 } as const;
 
 /**

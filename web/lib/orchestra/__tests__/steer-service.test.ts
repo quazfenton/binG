@@ -91,6 +91,35 @@ describe('buildSteerPrompt — every trigger kind produces a [STEER] prompt', ()
           model: 'mistral-large-latest',
         },
       },
+      capability_not_found: {
+        kind: 'capability_not_found',
+        detail: {
+          capabilityId: 'list_directory',
+          availableCapabilities: ['file.list', 'file.read', 'file.write'],
+          tool: 'VFSProvider',
+        },
+      },
+      tool_name_alias_rewrite: {
+        kind: 'tool_name_alias_rewrite',
+        detail: {
+          alias: 'list_directory',
+          canonical: 'file.list',
+          tool: 'CapabilityRouter',
+        },
+      },
+      loop_abort: {
+        kind: 'loop_abort',
+        detail: {
+          abortReason: 'binary_missing',
+          consecutive: 3,
+          failedTools: [
+            { name: 'bash_execute', error: 'ENOENT: npx not found' },
+            { name: 'bash_execute', error: 'ENOENT: npx not found' },
+            { name: 'bash_execute', error: 'ENOENT: npx not found' },
+          ],
+          suggestion: 'Switch to write_file / read_file / apply_diff rather than bash_execute.',
+        },
+      },
     };
 
     const prompt = buildSteerPrompt(samples[kind]);
